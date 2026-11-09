@@ -49,6 +49,7 @@ func (l *Loop) load(ctx context.Context) error {
 			e := l.monitor.of(r.ID)
 			e.mu.Lock()
 			e.record = r
+			e.stored = max(e.stored, r.Epoch)
 			e.loaded = true
 			e.mu.Unlock()
 		}
@@ -100,9 +101,12 @@ func (l *Loop) writeWith(ctx context.Context, c change, barrier func()) error {
 	e.pending--
 	// A reset adopted while this change was being written has replaced the state it was built on, and changes may
 	// already be queued on the reset: the row read back here must not overwrite them.
-	if current != c.record && c.generation == e.generation {
+	switch {
+	case current == c.record:
+		e.stored = max(e.stored, current.Epoch)
+	case c.generation == e.generation:
 		e.generation++
-		e.synced++
+		e.stored = max(e.stored, current.Epoch)
 		e.record = current
 		e.window = window{}
 	}
@@ -185,10 +189,8 @@ func (l *Loop) claim(ctx context.Context, e *State, now time.Time) (healthRecord
 	}
 	e.mu.Lock()
 	if e.pending == 0 && e.record.Epoch == r.Epoch {
-		if e.record != current {
-			e.synced++
-		}
 		e.record = current
+		e.stored = max(e.stored, current.Epoch)
 	} else {
 		won = false
 	}
@@ -350,7 +352,7 @@ func (l *Loop) restore(ctx context.Context, e *State) error {
 		defer e.mu.Unlock()
 		if found && e.pending == 0 {
 			e.record = r
-			e.synced++
+			e.stored = max(e.stored, r.Epoch)
 		}
 		e.loaded = true
 		return nil
@@ -360,9 +362,6 @@ func (l *Loop) restore(ctx context.Context, e *State) error {
 // HealthReset is a reset ResetHealth wrote in a transaction, for AdoptReset once that transaction has committed.
 type HealthReset struct {
 	record healthRecord
-	// synced is the endpoint's State.synced when the reset was written; known is whether the node held state for it.
-	synced uint64
-	known  bool
 	done   bool
 }
 
@@ -373,15 +372,6 @@ type HealthReset struct {
 // clears the offline mark, the backoff and the probe lease, starts the slow start at at and records a reset event; when
 // the stored breaker was open in enforce mode, it resolves the incident's signals in the same transaction.
 func (m *Monitor) ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.EndpointID, at time.Time) (HealthReset, error) {
-	var reset HealthReset
-	m.mu.RLock()
-	e := m.endpoints[id]
-	m.mu.RUnlock()
-	if e != nil {
-		e.mu.Lock()
-		reset.synced, reset.known = e.synced, true
-		e.mu.Unlock()
-	}
 	var open bool
 	err := tx.QueryRow(ctx, `SELECT opened_at>0 FROM quality.endpoint_health WHERE endpoint_id=$1 FOR UPDATE`, id).Scan(&open)
 	if err != nil && !errors.Is(err, pg.ErrNoRows) {
@@ -406,13 +396,13 @@ func (m *Monitor) ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.Endpoi
 			return HealthReset{}, fmt.Errorf("quality: resolve the reset endpoint's signals: %w", err)
 		}
 	}
-	reset.record, reset.done = r, true
-	return reset, nil
+	return HealthReset{record: r, done: true}, nil
 }
 
 // AdoptReset makes this node's breaker the one a committed ResetHealth wrote, and voids the transitions it had queued
-// on the old state. It steps aside when this node has since read a row at or after the reset from the store: it then
-// already holds the reset, or state built on it, which the reset must not replace. Other nodes, and this one in that
+// on the old state. It steps aside when this node has already read the reset's row, or a later one, from the store: it
+// then holds the reset, or state built on it, which the reset must not replace. A row read before the reset says
+// nothing of the kind, whatever epoch the changes queued on it have reached. Other nodes, and this one in that
 // case, take the reset from the store when a transition built on the old state loses on the epoch. An endpoint this
 // node holds no state for reads the row when it reappears.
 func (m *Monitor) AdoptReset(r HealthReset) {
@@ -427,13 +417,13 @@ func (m *Monitor) AdoptReset(r HealthReset) {
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	// Without a read from the store since the reset was written, everything held here, queued changes included,
-	// predates it. After one, a record older than the reset still predates it; one at or past its epoch may not.
-	if (!r.known || e.synced != r.synced) && e.record.Epoch >= r.record.Epoch {
+	// Stored epochs only advance and the reset's row is the only one at its epoch, so a node that has not stored that
+	// epoch holds only state from before the reset, queued changes included.
+	if e.stored >= r.record.Epoch {
 		return
 	}
 	e.generation++
-	e.synced++
+	e.stored = r.record.Epoch
 	e.record = r.record
 	e.window = window{}
 	e.successes = 0

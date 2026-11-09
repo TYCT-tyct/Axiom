@@ -123,6 +123,40 @@ func TestResetHealthKeepsATripAfterIt(t *testing.T) {
 	})
 }
 
+// TestAdoptResetAfterAReadFromBeforeIt: a node that read the breaker from the store before the reset was written, here by
+// claiming its probe, and queued a change on it whose epoch reaches the reset's, still adopts the reset at once; the
+// probe it was running and the queued change then lose to it.
+func TestAdoptResetAfterAReadFromBeforeIt(t *testing.T) {
+	m, l, f, now := fixtureLoop(t, Enforce)
+	id := addProbeEndpoint(f)
+	removeEndpoint(t, m, id, *now)
+	tick(t, l)
+	*now = now.Add(30 * time.Second)
+	tick(t, l) // claims the probe: the node reads the stored breaker back
+	<-f.calls
+	e := m.Live(id, 1)
+	e.mu.Lock()
+	queued := e.record
+	queued.Backoff = maxProbeBackoff
+	if !m.transition(e, queued, "", false) {
+		e.mu.Unlock()
+		t.Fatal("the change was not queued")
+	}
+	e.mu.Unlock()
+
+	m.AdoptReset(resetIn(t, m, l, id, *now, true))
+	if at, _ := e.Routing(*now); !at.IsZero() {
+		t.Fatal("a read from before the reset kept the node from adopting it")
+	}
+	f.mu.Lock()
+	f.result = suppliers.TestResult{Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.UpstreamError{}}}
+	f.mu.Unlock()
+	finishProbe(t, l, f)
+	if at, _ := e.Routing(*now); !at.IsZero() || e.Offline(*now) || storedOpened(t, l, id) {
+		t.Fatal("the probe or the change from before the reset was written over it")
+	}
+}
+
 // checkTrippedAfterReset checks that the trip after the reset is held in memory and, once flushed, stored.
 func checkTrippedAfterReset(t *testing.T, m *Monitor, l *Loop, id suppliers.EndpointID, now time.Time) {
 	t.Helper()
