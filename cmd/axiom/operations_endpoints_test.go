@@ -104,3 +104,36 @@ func TestOperationsEndpointSwitch(t *testing.T) {
 		t.Errorf("the switches were made by %s", got)
 	}
 }
+
+// TestEnablingAnEndpointResetsItsBreaker: a person turning an endpoint on in the admin closes its breaker in the same
+// transaction and records the reset; the agent turning it on, or a person turning it off, leaves the breaker open.
+func TestEnablingAnEndpointResetsItsBreaker(t *testing.T) {
+	t.Parallel()
+	f, supplier, endpoint, token := endpointFixture(t)
+	breaker := func() string {
+		return f.text(`SELECT format('%s %s %s', opened_at > 0, warned, backoff) FROM quality.endpoint_health WHERE endpoint_id = '` + endpoint + `'`)
+	}
+	f.text(`INSERT INTO quality.endpoint_health (endpoint_id,epoch,opened_at,next_probe_at,backoff,failures,sources,warned,cause,
+		request_id,probe_owner,probe_credential,mode) VALUES ('` + endpoint + `',3,1,2,4,5,2,true,'upstream_error','00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000','00000000-0000-0000-0000-000000000000','enforce')
+		RETURNING 'tripped'`)
+	switchAsOwner := func(enabled bool) {
+		t.Helper()
+		body := fmt.Sprintf(`{"enabled":%t,"reason":"checked by hand"}`, enabled)
+		expectAdmin(t, "setSupplierEndpointEnabled", f.change(f.s, http.MethodPut, "/suppliers/"+supplier+"/endpoints/"+endpoint+"/enabled", body, newKey()), http.StatusOK, "")
+	}
+
+	if rec := f.switchEndpointAs(token, supplier, endpoint, true, newKey(), ""); rec.Code != http.StatusOK || breaker() != "t t 4" {
+		t.Errorf("the agent turning it on: %d, breaker %s", rec.Code, breaker())
+	}
+	switchAsOwner(false)
+	if got := breaker(); got != "t t 4" {
+		t.Errorf("a person turning it off changed the breaker: %s", got)
+	}
+	switchAsOwner(true)
+	if got := breaker(); got != "f f 0" {
+		t.Errorf("a person turning it on left the breaker: %s", got)
+	}
+	if got := f.text(`SELECT string_agg(kind || ':' || epoch, ',') FROM quality.health_events WHERE endpoint_id = '` + endpoint + `'`); got != "reset:4" {
+		t.Errorf("the events are %s", got)
+	}
+}

@@ -3,6 +3,7 @@ package quality
 import (
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"io/fs"
 	"time"
@@ -339,4 +340,62 @@ func (l *Loop) restore(ctx context.Context, e *State) error {
 		e.loaded = true
 		return nil
 	})
+}
+
+// HealthReset is a breaker ResetHealth closed in a transaction, for AdoptReset once that transaction has committed.
+type HealthReset struct {
+	record healthRecord
+	done   bool
+}
+
+// ResetHealth closes the endpoint's breaker in tx: a person turning it on says it is well again, so the old failure
+// evidence no longer holds it out (docs/domains/quality.md「三条摘除通道，各归各的主人」). It advances the epoch, so a
+// transition or probe result based on the old state loses its conditional write on every node; clears the offline
+// mark and the backoff; starts the slow start at at; records a reset event; and, in enforce mode, resolves the
+// incident's signals in the same transaction. A breaker that is not open is left as it is.
+func ResetHealth(ctx context.Context, tx pg.Tx, id suppliers.EndpointID, at time.Time) (HealthReset, error) {
+	r, err := scanHealth(tx.QueryRow(ctx, `UPDATE quality.endpoint_health SET epoch=epoch+1,opened_at=0,restored_at=$2,
+ next_probe_at=0,probe_lease_until=0,backoff=0,failures=0,sources=0,probe_owner=$3,warned=false
+ WHERE endpoint_id=$1 AND opened_at>0 RETURNING `+healthColumns, id, at.UnixNano(), uuid.UUID{}))
+	if errors.Is(err, pg.ErrNoRows) {
+		return HealthReset{}, nil
+	}
+	if err != nil {
+		return HealthReset{}, fmt.Errorf("quality: reset health: %w", err)
+	}
+	// Its own kind and row: recordEvent would fold a reset into a group of automatic transitions as flapping.
+	if _, err := tx.Exec(ctx, `INSERT INTO quality.health_events (endpoint_id,epoch,at,kind,cause,failures,sources,request_id,signal_epoch,signal_kind,mode)
+   VALUES ($1,$2,$3,'reset',$4,0,0,$5,$2,'reset',$6)`, r.ID, r.Epoch, r.Restored, r.Cause, r.Request, r.Mode); err != nil {
+		return HealthReset{}, fmt.Errorf("quality: record the reset: %w", err)
+	}
+	if r.Mode == Enforce {
+		if err := persistHealthSignal(ctx, tx, change{record: r, kind: "restored"}); err != nil {
+			return HealthReset{}, fmt.Errorf("quality: resolve the reset endpoint's signals: %w", err)
+		}
+	}
+	return HealthReset{record: r, done: true}, nil
+}
+
+// AdoptReset makes this node's breaker the one a committed ResetHealth wrote, and drops the transitions it had queued on
+// the old state. Other nodes adopt it from the store when their next probe claim or transition loses on the epoch. An
+// endpoint this node holds no state for reads the row when it reappears.
+func (m *Monitor) AdoptReset(r HealthReset) {
+	if !r.done {
+		return
+	}
+	m.mu.RLock()
+	e := m.endpoints[r.record.ID]
+	m.mu.RUnlock()
+	if e == nil {
+		return
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.record.Epoch > r.record.Epoch && e.pending == 0 {
+		return // a later transition, built on the reset, has already been written and adopted
+	}
+	e.generation++
+	e.record = r.record
+	e.window = window{}
+	e.successes = 0
 }
