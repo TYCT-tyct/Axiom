@@ -224,12 +224,12 @@ func stopNode(ctx context.Context, timeout time.Duration, health *httpserver.Hea
 }
 
 // awaitEnd waits until the node is asked to stop (nil), a listener stops, the billing loop ends because this node's
-// holder was reaped, or the node loses its name (kv.Client.Lost), and says which of the last three it was. A node that
-// lost its name may no longer be the only one of its name, and stops serving rather than count on it.
+// holder was reaped, or another process takes the node's name (kv.Client.Lost), and says which of the last three it was.
+// A database out of reach is none of them: the node serves through it and takes its name back after.
 func awaitEnd(ctx context.Context, served <-chan error, reaped <-chan error, lost <-chan struct{}) error {
 	select {
 	case <-lost:
-		return errors.New("this node lost its name in the database: its connection to the database was cut, so another process may now run as this node")
+		return errors.New("another process took this node's name in the database while this one could not reach it: two processes must not run as one node")
 	case err := <-served:
 		return fmt.Errorf("a listener stopped: %w", err)
 	case err := <-reaped:

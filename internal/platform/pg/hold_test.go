@@ -104,3 +104,44 @@ func TestHoldEndsWithItsConnection(t *testing.T) {
 		t.Fatalf("release: %v", err)
 	}
 }
+
+// TestRetakeTakesTheNameBackOnlyFromItself: a holder whose connection was lost takes its name back, also while the server
+// still keeps its old session, as it does after a network cut until its keepalive finds out; it is refused with ErrHeld
+// only when another session took the name in between, never because the database cannot be reached.
+func TestRetakeTakesTheNameBackOnlyFromItself(t *testing.T) {
+	t.Parallel()
+	url := pgtest.New(t).App
+	holder, other := open(t, url), open(t, url)
+	held, err := holder.Hold(t.Context(), "node:a", time.Minute)
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // its session was ended by the retake
+	unreachable, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := held.Retake(unreachable); err == nil || errors.Is(err, pg.ErrHeld) {
+		t.Fatalf("retake without a database to reach: %v, want an error other than ErrHeld, which would end the holder", err)
+	}
+	again, err := held.Retake(t.Context())
+	if err != nil {
+		t.Fatalf("retake while the server keeps the holder's old session: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // cut below
+	err = other.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `SELECT pg_terminate_backend(l.pid, 30000) FROM pg_locks l
+			WHERE l.locktype = 'advisory' AND l.granted AND l.pid <> pg_backend_pid()
+			AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+		return err
+	})
+	if err != nil {
+		t.Fatalf("cut the retaken connection: %v", err)
+	}
+	taken, err := other.Hold(t.Context(), "node:a", time.Minute)
+	if err != nil {
+		t.Fatalf("another session taking the freed name: %v", err)
+	}
+	t.Cleanup(func() { _ = taken.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the test is over
+	if _, err := again.Retake(t.Context()); !errors.Is(err, pg.ErrHeld) {
+		t.Fatalf("retake of a name another session holds: %v, want ErrHeld", err)
+	}
+}

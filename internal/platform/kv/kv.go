@@ -60,8 +60,11 @@ type Client struct {
 	slots      *semaphore.Weighted // the commands sent and not yet answered, below what a connection's ring holds (maxOutstanding)
 	writeSlots *semaphore.Weighted // a subset of slots: sticky writes cannot fill the foreground budget
 	hear       *heartbeat          // nil without a database: a test's client
-	hold       *pg.Hold            // the node's name, held by a session of the database; nil when hear is
-	timeout    time.Duration       // the deadline of an access
+	// hold is the node's name, held by a session of the database; nil when hear is. keepName replaces it while the loop
+	// runs, and only then: Close and Crash read it after the loop has ended.
+	hold    *pg.Hold
+	lost    chan struct{} // closed when another session took the name (Lost); nil when hold is
+	timeout time.Duration // the deadline of an access
 	// beatTimeout bounds one round of the heartbeat's database work.
 	beatTimeout time.Duration
 
@@ -125,6 +128,9 @@ func open(ctx context.Context, cfg Config, deps Deps, testClock bool) (*Client, 
 			c.done.Go(func() { c.writeLater(loop) })
 		}
 		c.done.Go(func() { c.watch(loop) })
+		if c.hold != nil {
+			c.done.Go(func() { c.keepName(loop) })
+		}
 	}
 	return c, nil
 }
@@ -143,20 +149,60 @@ func (c *Client) register(ctx context.Context, cfg Config, deps Deps) error {
 	if err != nil {
 		return fmt.Errorf("kv: hold this node's name: %w", err)
 	}
-	c.hold, c.hear = hold, newHeartbeat(deps.DB, deps.Scope, id, cfg.Keys)
+	c.hold, c.lost, c.hear = hold, make(chan struct{}), newHeartbeat(deps.DB, deps.Scope, id, cfg.Keys)
 	if err := c.hear.start(ctx, cfg.Nodes, &c.live, c.m); err != nil {
 		return errors.Join(err, hold.Release(ctx))
 	}
 	return nil
 }
 
-// Lost is closed when the node has lost its name: the connection that holds it is gone, so another process may already
-// run as this node and this one must stop serving. It never closes for a client without a database.
-func (c *Client) Lost() <-chan struct{} {
-	if c.hold == nil {
-		return nil
+// Lost is closed when the node has lost its name: another process runs as this node, so this one must stop serving. It
+// never closes for a client without a database, nor because the database was out (keepName).
+func (c *Client) Lost() <-chan struct{} { return c.lost }
+
+// keepName keeps the node's name for as long as the loop runs. A connection that is lost does not lose the name: the
+// database restarted or was cut off, which the node serves through on what it holds in memory (docs/performance.md), and
+// nobody can take the name from a database nobody reaches. So the node takes the name back on a new connection once the
+// database answers, and only a name another session holds by then closes Lost.
+func (c *Client) keepName(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-c.hold.Lost():
+		}
+		c.logger.WarnContext(ctx, "kv: the connection that holds this node's name was lost; the node serves on and takes the name back once the database answers")
+		hold, err := c.retake(ctx)
+		if errors.Is(err, pg.ErrHeld) {
+			c.logger.ErrorContext(ctx, "kv: another process took this node's name while the database was out of reach")
+			close(c.lost)
+			return
+		}
+		if err != nil { // the loop ended
+			return
+		}
+		c.hold = hold
+		c.logger.InfoContext(ctx, "kv: this node holds its name again")
 	}
-	return c.hold.Lost()
+}
+
+// retake tries to take the name back every holdEvery until it does, another session holds it (pg.ErrHeld), or ctx ends.
+func (c *Client) retake(ctx context.Context) (*pg.Hold, error) {
+	ticker := time.NewTicker(holdEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+		attempt, cancel := context.WithTimeout(ctx, holdEvery)
+		hold, err := c.hold.Retake(attempt)
+		cancel()
+		if err == nil || errors.Is(err, pg.ErrHeld) {
+			return hold, err
+		}
+	}
 }
 
 // fillDefaults gives the settings a test leaves out their production values.
