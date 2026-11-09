@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # The backup rehearsal: a stack of its own, a local S3 server in place of the bucket, the database and the key ring wiped
-# and restored from a set, and what came back compared with what was there (docs/ops/backup-restore.md「恢复演练」).
+# and restored from a set, and what came back compared with what was there (docs/ops/backup-restore.md「恢复演练」). The
+# set is taken after the call log's writer fell behind and with the audit replica running ahead of it afterwards, and the
+# second restore replaces a database whose call log holds calls served after its set.
 #
 #   just backup-rehearsal
 #
 # Nothing here reaches a real bucket or a deployment, and everything it creates is removed again, volumes included. It
 # owns the project axiom-rehearsal, so it runs one at a time on a machine, and it needs what `just up` needs (go, node,
-# pnpm, docker compose) plus about ten minutes.
+# pnpm, docker compose) plus about twenty minutes, most of it waiting for the audit chain's minutely jobs.
 set -euo pipefail
 
 project=axiom-rehearsal
@@ -67,31 +69,94 @@ bucket_sets() {
     sed "s|^$prefix/||" | cut -d/ -f1 | sed '/^$/d' | sort -u
 }
 
-# Everything that writes into the bucket goes through here: a backup, and the move that stands in for a set somebody moved
-# to a new prefix. The check runs in the job's own container on the values compose resolved for it — not on what this
-# script meant to write — and it runs before the command, because an upload and the pruning after it cannot be undone.
-# Reads are not guarded: a wrong target there fails on the way in and changes nothing.
-storage_guard='
-for want in AXIOM_BACKUP_BUCKET=axiom-rehearsal AXIOM_BACKUP_PREFIX=axiom \
-  AXIOM_OBJECTSTORE_BUCKET=axiom-rehearsal AXIOM_OBJECTSTORE_ENDPOINT=http://s3:9000 \
-  AXIOM_OBJECTSTORE_ACCESS_KEY_ID=rehearsal; do
-  name=${want%%=*} value=${want#*=} got=${!name-}
-  if [ "$got" != "$value" ]; then
-    printf "rehearsal: %s is %s, not %s: refusing to write\n" "$name" "${got:-<empty>}" "$value" >&2
-    exit 1
-  fi
-done
-exec "$@"'
-# The guard is the -c script and the command follows it as bash's $0 and $1...: nothing between them that compose could
-# read as an option of its own.
+# Everything that writes into a bucket goes through scripts/ops/rehearsal-guard.sh, which deploy/compose.rehearsal.yaml
+# mounts and makes the backup job's entrypoint: a backup, the rehearsal's own writes here, and the move that stands in for
+# a set somebody moved to a new prefix. Reads are not guarded: a wrong target there fails on the way in and changes
+# nothing. The guard is bash's script and the command follows it as its arguments: nothing between them that compose
+# could read as an option of its own.
 write() {
-  compose run --rm --no-deps --entrypoint bash backup -c "$storage_guard" rehearsal "$@"
+  compose run --rm --no-deps --entrypoint bash backup /rehearsal/guard.sh "$@"
+}
+
+# The audit replica's bucket NAME through the ops image's S3 client, with the rehearsal's endpoint and key; a create is
+# guarded as every write is.
+audit_bucket() {
+  local bucket=$1 verb=$2
+  shift 2
+  if [ "$verb" = create ]; then
+    compose run --rm --no-deps --env AXIOM_OBJECTSTORE_BUCKET="$bucket" --entrypoint bash backup /rehearsal/guard.sh \
+      axiom objectstore create "$@"
+  else
+    compose run --rm --no-deps --env AXIOM_OBJECTSTORE_BUCKET="$bucket" --entrypoint axiom backup objectstore "$verb" "$@"
+  fi
+}
+# replica_keys BUCKET: the audit chain's objects in BUCKET, in the chain's order; replica_last BUCKET: the last link they
+# hold, from the last key's name (audit-chain/v1/<first>-<last>.jsonl), 0 for none.
+replica_keys() { audit_bucket "$1" list --prefix audit-chain/v1/ --names | sort; }
+replica_last() {
+  local last
+  last=$(replica_keys "$1" | tail -n 1 | sed -n 's|^audit-chain/v1/[0-9]*-0*\([0-9][0-9]*\)\.jsonl$|\1|p')
+  printf '%s\n' "${last:-0}"
+}
+psql_value() { compose exec -T postgres psql -X -q -A -t -v ON_ERROR_STOP=1 -U postgres -d axiom -c "$1"; }
+chain_head() { psql_value 'SELECT coalesce(max(seq), 0) FROM operations.audit_chain'; }
+# wait_replica BUCKET: until every audit entry is chained and BUCKET holds the whole chain. Entries are chained once a
+# minute when they are a minute old, and copied a minute later, so this takes up to about three minutes.
+wait_replica() {
+  local bucket=$1 entries head
+  for _ in $(seq 1 60); do
+    entries=$(psql_value 'SELECT count(*) FROM platform.audit_log')
+    head=$(chain_head)
+    if [ "$head" -gt 0 ] && [ "$head" = "$entries" ] && [ "$(replica_last "$bucket")" = "$head" ]; then
+      return 0
+    fi
+    sleep 5
+  done
+  die "$bucket never caught up with the audit chain: $entries entries, $head chained, $(replica_last "$bucket") copied"
+}
+
+# The program's call log volume, filled with a spill from internal/observability/testdata/spill: the files a node leaves
+# that accepted those calls and stopped before its database took them (TestRehearsalSpillsReplay keeps them replayable).
+# They replace whatever the volume held, as the node's own directory would be, and belong to the program's user.
+load_spill() {
+  compose stop axiom > /dev/null
+  compose run --rm --no-deps -T --entrypoint sh \
+    --volume "$(docker_path "$PWD/internal/observability/testdata/spill/$1"):/from:ro" \
+    --volume "${project}_call_log:/to" restore -c \
+    'find /to -mindepth 1 -delete && cp -R /from/. /to/ && chown -R 65532:65532 /to &&
+     find /to -type d -exec chmod 700 {} + && find /to -type f -exec chmod 600 {} +'
+}
+# spill_check VOLUME: the program's own check of a call log volume, its message on stdout whether it passes or not (it
+# fails on a volume with records, which is what some callers expect).
+spill_check() {
+  compose run --rm --no-deps -T --entrypoint axiom --volume "$1:/check:ro" backup call-log check /check 2>&1 || true
+}
+call_rows() { psql_value 'SELECT count(*) FROM observability.call_log'; }
+# grown: the tables that the restored program may add rows to on its own while the set's rows must all come back:
+# platform.discarded_jobs and the alert event it raises, when River's rescuer discards a job the set caught running whose
+# kind the restored node has no worker for (the audit replica's, once the restore turned the replica off). rows TABLE is
+# one hash per row.
+grown="observability.alert_events platform.discarded_jobs"
+rows() { psql_value "SELECT md5(to_jsonb(t)::text) FROM $1 t ORDER BY 1"; }
+# The calls a spill holds, by request ID, as the database would store them: settled records are in the segments, parked
+# ones in pending/ by name.
+spill_ids() {
+  local dir=internal/observability/testdata/spill/$1
+  { grep -aoh '"id":"[0-9a-f-]\{36\}"' "$dir"/call-*.wal | cut -d'"' -f4
+    find "$dir/pending" -name '*.rec' -exec basename {} .rec \; 2>/dev/null; } | sort -u
+}
+backup() {
+  bash scripts/ops/backup.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml -f deploy/compose.rehearsal.yaml \
+    --env-file "$env_file"
 }
 
 teardown() {
   status=$?
   # By project name and without the environment file, which a failed run may already have deleted.
   docker compose --project-name "$project" down --volumes --timeout 5 > /dev/null 2>&1 || true
+  # The call logs a restore set aside are volumes of their own, outside the project's.
+  docker volume ls --quiet --filter "name=^${project}_call_log_before_" | xargs -r docker volume rm > /dev/null 2>&1 || true
+  rm -f "$env_file.backup-lock" # scripts/ops/backup.sh's, next to the environment file
   docker image rm --force "$DEPLOY_IMAGE" "$DEPLOY_OPS_IMAGE" > /dev/null 2>&1 || true
   rm -rf "$work"
   exit "$status"
@@ -100,8 +165,9 @@ trap teardown EXIT
 trap 'exit 130' INT
 
 # Before deploy/.env.rehearsal exists there is nothing to interpolate, so this one names the project only.
-echo "== 1/10 write the environment file and clear a stack a killed run left behind"
+echo "== 1/12 write the environment file and clear a stack a killed run left behind"
 docker compose --project-name "$project" down --volumes --timeout 5 > /dev/null 2>&1 || true
+docker volume ls --quiet --filter "name=^${project}_call_log_before_" | xargs -r docker volume rm > /dev/null 2>&1 || true
 rm -f "$env_file"
 # Everything this script writes holds a password or a private key, so it is all owner-only by default; the one exception is
 # the binary below, whose mode is set after the build.
@@ -122,6 +188,14 @@ AXIOM_BACKUP_S3_REGION=us-east-1
 # Two sets make the retention check cheap: the fourth run has to drop the second.
 AXIOM_BACKUP_KEEP_SETS=2
 AXIOM_BACKUP_KEEP_DAYS=30
+# The audit chain's replica, in a bucket of its own on the same server: the set is taken while it holds the chain, it
+# runs ahead of the set afterwards, and the restored program must leave it alone.
+AXIOM_AUDIT_REPLICA_ENDPOINT=http://s3:9000
+AXIOM_AUDIT_REPLICA_BUCKET=axiom-rehearsal-audit
+AXIOM_AUDIT_REPLICA_REGION=us-east-1
+AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=rehearsal
+AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=$s3_password
+AXIOM_AUDIT_REPLICA_PATH_STYLE=true
 # The stack's own environment file is what the backup archives.
 AXIOM_BACKUP_ENV_FILE=./.env.rehearsal
 # The edge, with the same file a deployment uses. The hostnames are not real: no request leaves this machine.
@@ -135,7 +209,7 @@ EOF
 # so the restore below still exercises adding it.
 export AXIOM_BACKUP_WAL_BUCKET=
 
-echo "== 2/10 build the images just up builds, plus the backup job's"
+echo "== 2/12 build the images just up builds, plus the backup job's"
 # The Caddyfile names its issuer as a module, and Caddy substitutes the variable before parsing, so the shape of what it
 # parses depends on the value — a bare `tls` is a parse error. The rehearsal runs with `internal`, so `acme` is the
 # configuration it would otherwise never load, and it is the one every deployment with public certificates gets: compose has
@@ -176,7 +250,7 @@ for service in backup restore; do
   [ "$got" = 24h ] || die "$service did not get AXIOM_BACKUP_TRANSFER_TIMEOUT=24h (got ${got:-nothing})"
 done
 
-echo "== 3/10 generate the two identities, and put their recipients in the environment file"
+echo "== 3/12 generate the two identities, and put their recipients in the environment file"
 mkdir -p "$work/identities" "$work/before" "$work/after" "$work/set"
 compose --profile ops run --rm --no-deps --user "$(id -u):$(id -g)" --volume "$(docker_path "$work/identities"):/out" \
   --entrypoint age-keygen backup -o /out/db.key
@@ -194,7 +268,7 @@ AXIOM_BACKUP_SECRETS_RECIPIENT=$keys_recipient
 # rehearsal marker: $(openssl rand -hex 8)
 EOF
 
-echo "== 4/10 start the stack and seed it"
+echo "== 4/12 start the stack and seed it"
 compose up --detach --wait --wait-timeout 60 postgres
 compose exec -T postgres sh < deploy/postgres/roles.sh
 compose up --detach --build --wait --wait-timeout 240
@@ -203,6 +277,7 @@ for _ in $(seq 1 60); do
   sleep 1
 done
 ops axiom objectstore check > /dev/null || die "the S3 server never answered"
+audit_bucket axiom-rehearsal-audit create > /dev/null
 compose run --rm --no-deps axiom site init --name Rehearsal --currency USD \
   --console console.rehearsal.example --api api.rehearsal.example --admin admin.rehearsal.example
 printf '%s\n' "$(openssl rand -hex 16)" | compose run --rm --no-deps -T axiom user create --email owner@rehearsal.example
@@ -254,24 +329,60 @@ edge() {
   edge_body=${out%$'\n'*}
 }
 
-echo "== 5/10 record the state the set has to preserve"
+echo "== 5/12 the call log's writer falls behind: the backup refuses until it drains"
+# The audit replica holds the seed's chain before anything else happens, so the set below is taken with it caught up.
+wait_replica axiom-rehearsal-audit
+# A node that stopped while its database refused the call log's writes: settled calls, and a pending one, whose records
+# are on this machine only. A backup now would hold whatever the ledger has without those records.
+load_spill behind
+behind_records=$(spill_ids behind | wc -l | tr -d ' ')
+[ "$behind_records" -eq 4 ] || die "the behind spill names $behind_records calls, not 4"
+rows=$(call_rows)
+status=0
+out=$(backup 2>&1) || status=$?
+[ "$status" -eq 1 ] || die "a backup over an undrained call log exited $status, not 1: $out"
+printf '%s\n' "$out" | grep -q "holds 4 call records" || die "the refused backup did not say what it found: $out"
+[ -z "$(bucket_sets)" ] || die "a refused backup left something in the bucket"
+# Started, the program writes the records it finds; stopped, it drains: then the check passes.
+compose up --detach --wait --wait-timeout 180 axiom
+for _ in $(seq 1 60); do
+  [ "$(call_rows)" -eq $((rows + 4)) ] && break
+  sleep 1
+done
+[ "$(call_rows)" -eq $((rows + 4)) ] || die "the program did not write the four records it found"
 compose stop axiom
+spill_check "${project}_call_log" | grep -q "holds no call record" || die "a stopped program left its call log undrained"
+
+echo "== 6/12 record the state the set has to preserve, back up, and check the guards around it"
 fingerprint | sort > "$work/before/fingerprint.txt"
+for table in $grown; do rows "$table" > "$work/before/$table.rows"; done
 roles > "$work/before/roles.txt"
 keys_hash > "$work/before/keys.txt"
 cp "$env_file" "$work/before/deploy.env"
 # A comparison of two empty databases passes, so the seed has to be in the set by name: the site that was registered and
-# the user that was created, with the rows they bring.
+# the user that was created, with the rows they bring; and the calls of the call log, in whichever partitions hold them.
 for table in accounts.sites accounts.users; do
   grep -q -E "^$table\|[1-9]" "$work/before/fingerprint.txt" || die "the seed left no row in $table"
 done
 seeded=$(awk -F'|' '$2 > 0' "$work/before/fingerprint.txt" | wc -l | tr -d ' ')
 [ "$seeded" -ge 3 ] || die "only $seeded tables have rows: the seed did not happen"
-
-echo "== 6/10 back up, and check the guards around it"
-write /ops/backup.sh
+calls_before=$(awk -F'|' '$1 ~ /^observability\.call_log_/ {sum += $2} END {print sum + 0}' "$work/before/fingerprint.txt")
+[ "$calls_before" -eq 4 ] || die "the database holds $calls_before calls, not the four of the spill"
+# The program is stopped, so scripts/ops/backup.sh leaves it so.
+backup
 set_name=$(bucket_sets | tail -n 1)
 [ -n "$set_name" ] || die "the bucket holds no set"
+[ -z "$(compose ps --status running --quiet axiom)" ] || die "the backup started a program that was not running"
+replica_at_set=$(replica_last axiom-rehearsal-audit)
+
+# The job refuses a running program before it dumps anything, whoever starts it.
+compose up --detach --wait --wait-timeout 180 axiom
+status=0
+out=$(write /ops/backup.sh 2>&1) || status=$?
+[ "$status" -eq 1 ] && printf '%s\n' "$out" | grep -q "holds the call log" ||
+  die "a backup with the program running exited $status: $out"
+compose stop axiom
+[ "$(bucket_sets)" = "$set_name" ] || die "the refused backup changed the bucket"
 
 # A limit of zero is refused before the lock is taken and before anything is written, rather than uploaded and then
 # pruned to nothing; either of these runs would empty the bucket if the check were missing.
@@ -309,10 +420,21 @@ compose run --rm --no-deps --volume "$(docker_path "$work/set"):/work" \
   --volume "$(docker_path "$work/identities"):/identities:ro" --entrypoint bash \
   backup -c 'age --decrypt --identity /identities/keys.key --output /dev/null /work/keys.tar.age'
 
-echo "== 7/10 wipe the database and the key ring, then restore the set into the blank environment"
-# Only the containers that use those volumes: the S3 server holds the set and has to stay up for the restore to fetch it.
+echo "== 7/12 the audit replica runs ahead of the set"
+# The lost database goes on after its set: another user, so the chain has a link the set does not, which the replica
+# copies. The restored database will not have it.
+compose up --detach --wait --wait-timeout 180 axiom
+printf '%s\n' "$(openssl rand -hex 16)" | compose run --rm --no-deps -T axiom user create --email later@rehearsal.example
+wait_replica axiom-rehearsal-audit
+[ "$(replica_last axiom-rehearsal-audit)" -gt "$replica_at_set" ] || die "the replica did not get past the set"
+replica_keys axiom-rehearsal-audit > "$work/before/replica.txt"
+compose stop axiom
+
+echo "== 8/12 the machine is lost: restore the set into a blank environment"
+# Its database, key ring and call log go with it. Only the containers that use those volumes are removed: the S3 server
+# holds the set and has to stay up for the restore to fetch it.
 compose rm --stop --force axiom postgres keys > /dev/null
-docker volume rm "${project}_postgres" "${project}_keys" > /dev/null
+docker volume rm "${project}_postgres" "${project}_keys" "${project}_call_log" > /dev/null
 sed -i '/^# rehearsal marker:/d' "$env_file"
 started=$(date +%s)
 AXIOM_RESTORE_DB_IDENTITY="$work/identities/db.key" AXIOM_RESTORE_SECRETS_IDENTITY="$work/identities/keys.key" \
@@ -320,7 +442,7 @@ AXIOM_RESTORE_DB_IDENTITY="$work/identities/db.key" AXIOM_RESTORE_SECRETS_IDENTI
   --env-file "$env_file" "$set_name"
 rto=$(($(date +%s) - started))
 
-echo "== 8/10 compare what came back"
+echo "== 9/12 compare what came back"
 # First the edge, while the program the restore started is still running: it is where a deployment is reached, and the
 # program's own loopback ports answer whether or not it can. Each surface under its own name, then the other one's path,
 # which a domain of two surfaces cannot refuse: the console's site answers on a console domain and 404s on any other, and
@@ -335,9 +457,21 @@ edge api.rehearsal.example /api/console/v1/site
 edge api.rehearsal.example /v1/models
 [ "$edge_status" = 401 ] || die "the model API answered $edge_status through the edge, not the 401 a keyless one gets"
 echo "   both surfaces answer through the edge"
+# The restored program copies the chain nowhere: the bucket the set names holds the history past the set.
+compose logs --no-color axiom | grep "the audit chain is not copied off-site" > /dev/null ||
+  die "the restored program copies the audit chain somewhere"
+grep -q "^# .*: restored set $set_name; the audit replica http://s3:9000/axiom-rehearsal-audit holds" "$env_file" ||
+  die "the installed environment file does not record which replica held the earlier history"
+for name in ENDPOINT BUCKET REGION ACCESS_KEY_ID SECRET_ACCESS_KEY PATH_STYLE; do
+  grep -qx "AXIOM_AUDIT_REPLICA_$name=" "$env_file" || die "the restore left AXIOM_AUDIT_REPLICA_$name set"
+done
 
 compose stop axiom
 fingerprint | sort > "$work/after/fingerprint.txt"
+for table in $grown; do
+  missing=$(rows "$table" | comm -23 "$work/before/$table.rows" -)
+  [ -z "$missing" ] || die "a row of $table in the set did not come back"
+done
 roles > "$work/after/roles.txt"
 keys_hash > "$work/after/keys.txt"
 # A table has to come back, whatever happens to its rows: the comparison below skips some tables, this does not.
@@ -348,27 +482,39 @@ diff -u "$work/before/tables.txt" "$work/after/tables.txt" || die "the restored 
 # library's, whose version the startup check verifies), billing.holders (one row per start of a core process, so the
 # restored database has the set's row and the new process' too), billing.expiry_cursor (where the expiry job's scan of
 # accounts stopped, written every minute), platform.alert_signals (the startup's own signals are added after the set),
-# platform.credential_share_departures (the new process garbage-collects the set's stale node row) and catalog.sync_state
-# (the catalog job's progress). billing.price_policies stays in the comparison: fingerprint.sql leaves out only its
+# platform.credential_share_departures (the new process garbage-collects the set's stale node row), catalog.sync_state
+# (the catalog job's progress) and the two rollout flags platform.billing_preference_readiness and
+# platform.model_prices_public_readiness (every node's heartbeat rewrites them with its own time). billing.price_policies stays in the comparison: fingerprint.sql leaves out only its
 # confirmed_at timestamp, so its rev and multipliers are checked.
-skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|' -e '^platform\.alert_signals|' -e '^platform\.credential_share_departures|' -e '^catalog\.sync_state|'; }
+# installed: an environment file as the restore installs it, without the lines a restore changes on purpose: the WAL
+# bucket it turns off, the audit replica it turns off and the line recording which replica that was.
+installed() { grep -v -e '^AXIOM_BACKUP_WAL_BUCKET=' -e '^AXIOM_AUDIT_REPLICA_' -e '^# .*: restored set '; }
+skip() { grep -v -e '^river\.' -e '^billing\.holders|' -e '^billing\.expiry_cursor|' -e '^platform\.alert_signals|' -e '^platform\.credential_share_departures|' -e '^catalog\.sync_state|' \
+  -e '^platform\.billing_preference_readiness|' -e '^platform\.model_prices_public_readiness|' \
+  -e '^observability\.alert_events|' -e '^platform\.discarded_jobs|'; }
 skip < "$work/before/fingerprint.txt" > "$work/before/state.txt"
 skip < "$work/after/fingerprint.txt" > "$work/after/state.txt"
 diff -u "$work/before/state.txt" "$work/after/state.txt" || die "the restored database differs from the backup"
 diff -u "$work/before/roles.txt" "$work/after/roles.txt" || die "the restored roles differ from the backup"
 diff -u "$work/before/keys.txt" "$work/after/keys.txt" || die "the restored key ring differs from the backup"
-# The restore adds AXIOM_BACKUP_WAL_BUCKET= so the new system identifier stays out of the old stanza; everything else in
-# the installed file must match the set's copy, and the switch must be there from this first restore onwards.
-cmp -s <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$work/before/deploy.env") \
-  <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file") || die "the restored environment file differs from the backup"
+# The restore adds AXIOM_BACKUP_WAL_BUCKET= so the new system identifier stays out of the old stanza, and turns the audit
+# replica off with a line naming it (checked above); everything else in the installed file must match the set's copy,
+# and the WAL switch must be there from this first restore onwards.
+cmp -s <(installed < "$work/before/deploy.env") <(installed < "$env_file") ||
+  die "the restored environment file differs from the backup"
 grep -qx 'AXIOM_BACKUP_WAL_BUCKET=' "$env_file" || die "the restore did not disable WAL archiving in the installed file"
+replica_keys axiom-rehearsal-audit | diff -u "$work/before/replica.txt" - || die "the restore changed the old replica"
 tables=$(grep -c . "$work/before/state.txt" || true)
 rows=$(awk -F'|' '{sum += $2} END {print sum}' "$work/before/state.txt")
-echo "   $tables tables and $rows rows, the roles, the key ring and the environment file came back identical"
+echo "   $tables tables and $rows rows, the four calls of the call log among them, the roles, the key ring and the"
+echo "   environment file came back identical; the replica that ran ahead is untouched"
 
-echo "== 9/10 retention: three more sets, so the first has to go"
-write /ops/backup.sh
-write /ops/backup.sh
+echo "== 10/12 retention: three more sets, so the first has to go, taken with the program running"
+# scripts/ops/backup.sh stops the program for each and starts it again.
+compose up --detach --wait --wait-timeout 180 axiom
+backup
+backup
+[ -n "$(compose ps --status running --quiet axiom)" ] || die "the backup did not start the program again"
 sets=$(bucket_sets)
 count=$(printf '%s\n' "$sets" | grep -c . || true)
 [ "$count" -eq 2 ] || die "retention left $count sets, not 2"
@@ -376,7 +522,7 @@ if printf '%s\n' "$sets" | grep -q -x -e "$set_name"; then
   die "the oldest set survived retention"
 fi
 
-echo "== 10/10 the sets moved and the credentials rotated since the set was written"
+echo "== 11/12 the sets moved, the credentials rotated and the call log holds calls served after the set"
 # A restore that installed the set's own copy of the environment file and then re-read it would go back to the location and
 # the credentials of the day of the backup here, after it had already replaced the database.
 newest=$(printf '%s\n' "$sets" | tail -n 1)
@@ -404,21 +550,56 @@ axiom objectstore list --prefix "$from/" --names | while IFS= read -r key; do
 done
 ' rehearsal "$prefix" axiom-moved
 sed -i "s/^AXIOM_BACKUP_PREFIX=.*/AXIOM_BACKUP_PREFIX=axiom-moved/" "$env_file"
-compose rm --stop --force axiom postgres keys > /dev/null
-docker volume rm "${project}_postgres" "${project}_keys" > /dev/null
+# This time the restore replaces the database on the same machine, whose call log holds two calls the set has never
+# seen: replayed into the restored database, they would be calls it never charged.
+load_spill after
+calls_set=$(call_rows)
+status=0
 AXIOM_RESTORE_DB_IDENTITY="$work/identities/db.key" AXIOM_RESTORE_SECRETS_IDENTITY="$work/identities/keys.key" \
   bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml -f deploy/compose.rehearsal.yaml \
-  --env-file "$env_file" "$newest"
+  --env-file "$env_file" "$newest" > /dev/null 2>&1 || status=$?
+[ "$status" -eq 1 ] || die "a restore over an existing database and call log without --overwrite exited $status, not 1"
+AXIOM_RESTORE_DB_IDENTITY="$work/identities/db.key" AXIOM_RESTORE_SECRETS_IDENTITY="$work/identities/keys.key" \
+  bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml -f deploy/compose.rehearsal.yaml \
+  --env-file "$env_file" --overwrite "$newest"
+aside=$(docker volume ls --quiet --filter "name=^${project}_call_log_before_" | tail -n 1)
+[ -n "$aside" ] || die "the restore did not set the call log aside"
+spill_check "$aside" | grep -q "holds 2 call records" || die "the call log set aside does not hold the two later calls"
+spill_check "${project}_call_log" | grep -q "holds no call record" || die "the restored program got a call log with records"
+[ "$(call_rows)" = "$calls_set" ] || die "the restored database has $(call_rows) calls, not the set's $calls_set"
+for id in $(spill_ids after); do
+  [ "$(psql_value "SELECT count(*) FROM observability.call_log WHERE id = '$id'")" = 0 ] ||
+    die "the call $id served after the set reached the restored database"
+done
 # The installed file is the set's own, so it names the old location and the revoked credentials: that is the deployment's
 # configuration as of the backup, which is what a restore installs and what the next step of the runbook replaces. The
 # restore also adds AXIOM_BACKUP_WAL_BUCKET= (the restored cluster must not push into the old stanza); compare the rest and
 # require that line, so the permanent switch off is what the rehearsal exercises rather than a compose override.
-cmp -s <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$work/before/deploy.env") \
-  <(grep -v '^AXIOM_BACKUP_WAL_BUCKET=' "$env_file") || die "the second restore did not install the set's environment file"
+cmp -s <(installed < "$work/before/deploy.env") <(installed < "$env_file") ||
+  die "the second restore did not install the set's environment file"
 grep -qx 'AXIOM_BACKUP_WAL_BUCKET=' "$env_file" || die "the restore did not disable WAL archiving in the installed file"
-echo "   restored $newest from the new prefix with the rotated credentials"
+echo "   restored $newest from the new prefix with the rotated credentials; the two later calls stayed in $aside"
+
+echo "== 12/12 the restored chain goes to a new replica bucket, from its first link"
+# The installed file has the credentials of the day of the set, revoked since; putting the current ones back is the
+# runbook's step after a restore, and the new bucket is made with them.
+sed -i "s/^AXIOM_BACKUP_S3_SECRET_ACCESS_KEY=.*/AXIOM_BACKUP_S3_SECRET_ACCESS_KEY=$rotated/" "$env_file"
+audit_bucket axiom-rehearsal-audit-2 create > /dev/null
+sed -i -e "s|^AXIOM_AUDIT_REPLICA_ENDPOINT=.*|AXIOM_AUDIT_REPLICA_ENDPOINT=http://s3:9000|" \
+  -e "s|^AXIOM_AUDIT_REPLICA_BUCKET=.*|AXIOM_AUDIT_REPLICA_BUCKET=axiom-rehearsal-audit-2|" \
+  -e "s|^AXIOM_AUDIT_REPLICA_REGION=.*|AXIOM_AUDIT_REPLICA_REGION=us-east-1|" \
+  -e "s|^AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=.*|AXIOM_AUDIT_REPLICA_ACCESS_KEY_ID=rehearsal|" \
+  -e "s|^AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=.*|AXIOM_AUDIT_REPLICA_SECRET_ACCESS_KEY=$rotated|" \
+  -e "s|^AXIOM_AUDIT_REPLICA_PATH_STYLE=.*|AXIOM_AUDIT_REPLICA_PATH_STYLE=true|" "$env_file"
+# The restore exported the six empty so that this run's compose would agree with the file; this shell never had them.
+compose up --detach --wait --wait-timeout 180 axiom
+wait_replica axiom-rehearsal-audit-2
+first=$(replica_keys axiom-rehearsal-audit-2 | head -n 1)
+[ "$first" = "audit-chain/v1/$(printf '%020d' 1)-${first##*-}" ] || die "the new replica does not start at the first link: $first"
+replica_keys axiom-rehearsal-audit | diff -u "$work/before/replica.txt" - || die "the restored chain reached the old replica"
+echo "   the new bucket holds the restored chain from link 1 to $(chain_head); the old one holds what it held"
 
 echo
 echo "the rehearsal passed. Row for docs/ops/backup-restore.md「恢复演练记录」:"
-printf '| %s | %s | %ss | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |\n' \
+printf '| %s | %s | %ss | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |\n' \
   "$(date -u '+%Y-%m-%d %H:%M')" "$set_name" "$rto"

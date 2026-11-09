@@ -66,6 +66,23 @@ func (b *bucket) Put(ctx context.Context, up objectstore.Upload) (objectstore.Ob
 	return objectstore.ObjectInfo{Key: up.Key, Size: int64(len(body))}, err
 }
 
+// List pages the keys in order, after StartAfter and under Prefix, as S3's list-type=2 does.
+func (b *bucket) List(ctx context.Context, opts objectstore.ListOptions) (objectstore.ListPage, error) {
+	b.mu.Lock()
+	down := b.down
+	b.mu.Unlock()
+	if down {
+		return objectstore.ListPage{}, errors.New("bucket down")
+	}
+	var page objectstore.ListPage
+	for _, key := range b.keys() {
+		if strings.HasPrefix(key, opts.Prefix) && key > opts.StartAfter && len(page.Objects) < opts.MaxKeys {
+			page.Objects = append(page.Objects, objectstore.ObjectInfo{Key: key})
+		}
+	}
+	return page, nil
+}
+
 // keys are the objects' keys in order.
 func (b *bucket) keys() []string {
 	b.mu.Lock()
@@ -284,6 +301,48 @@ func TestAuditReplicaFollowsItsBucket(t *testing.T) {
 	}
 	db.expect(t, "the progress", `SELECT string_agg(target || ' ' || replicated_seq, ',' ORDER BY target) FROM operations.audit_replica`,
 		"https://s3.example.com/a 2,https://s3.example.com/b 3")
+}
+
+// TestAuditReplicaKeepsToOneHistory: a database restored to an earlier point carries on from its own copy while the
+// bucket holds the abandoned history beyond it. A batch cut at other boundaries than that history's objects is a
+// conflict, alerted, with nothing written, and stays one after the chain has grown; an object that starts right after
+// a batch is no overlap, and a new bucket copies the restored chain from its first link.
+func TestAuditReplicaKeepsToOneHistory(t *testing.T) {
+	t.Parallel()
+	db := openOps(t)
+	db.backdated(t, "6 minutes")
+	db.backdated(t, "5 minutes")
+	db.chain(t, time.Minute)
+	b := newBucket()
+	if n, err := db.replicate(t, b); n != 2 || err != nil {
+		t.Fatalf("copied %d: %v", n, err)
+	}
+	b.objects[objectKey(3, 5)] = []byte("the abandoned history\n")
+	db.backdated(t, "4 minutes")
+	db.backdated(t, "3 minutes")
+	db.chain(t, time.Minute)
+	for range 2 {
+		if n, err := db.replicate(t, b); n != 0 || !errors.Is(err, operations.ErrReplicaConflict) {
+			t.Fatalf("copied %d over another history: %v", n, err)
+		}
+		db.backdated(t, "2 minutes")
+		db.chain(t, time.Minute)
+	}
+	if keys := b.keys(); !slices.Equal(keys, []string{objectKey(1, 2), objectKey(3, 5)}) {
+		t.Errorf("objects %v over another history", keys)
+	}
+	db.expect(t, "the conflict", `SELECT string_agg(DISTINCT body->>'key', ',') FROM platform.alert_signals
+		WHERE body->>'kind' = 'operations.audit_replica_conflict'`, operations.ReplicaAlertKey(b.target)+"/"+objectKey(3, 4))
+
+	fresh := newBucket()
+	fresh.target = "https://s3.example.com/fresh"
+	fresh.objects[objectKey(7, 9)] = []byte("starts after the chain\n")
+	if n, err := db.replicate(t, fresh); n != 6 || err != nil {
+		t.Fatalf("copied %d to a new bucket: %v", n, err)
+	}
+	if keys := fresh.keys(); !slices.Equal(keys, []string{objectKey(1, 6), objectKey(7, 9)}) {
+		t.Errorf("objects %v in the new bucket", keys)
+	}
 }
 
 // TestAuditReplicaFinishesItsPlan: a batch whose upload landed but whose answer was lost is finished as planned after

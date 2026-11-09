@@ -15,5 +15,12 @@ services:
     volumes:
       - s3:/data
 
+  # Every backup the rehearsal runs, through scripts/ops/backup.sh or directly, passes its guard first: the job's
+  # entrypoint becomes the guard, which then runs it.
+  backup:
+    entrypoint: [bash, /rehearsal/guard.sh, /ops/backup.sh]
+    volumes:
+      - ../scripts/ops/rehearsal-guard.sh:/rehearsal/guard.sh:ro
+
 volumes:
   s3:

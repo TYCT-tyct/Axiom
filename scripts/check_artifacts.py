@@ -42,6 +42,9 @@ ALLOWED = (
     ("internal/platform/*api/*.gen.go",
      "the Go just generate writes from api/*.yaml, where a change is reviewed; the generated check writes it again and "
      "fails on any difference, and the admin contract's server passed 1 MB with its operations"),
+    ("internal/observability/testdata/spill/*",
+     "call log spills an earlier version wrote, framed in binary lengths and checksums; TestRehearsalSpillsReplay "
+     "proves this version still replays them and go test -update rewrites them, and the backup rehearsal loads them"),
 )
 
 

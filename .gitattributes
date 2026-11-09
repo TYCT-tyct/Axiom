@@ -2,3 +2,5 @@
 * text=auto eol=lf
 # Recorded upstream streams are kept byte for byte: a stream whose lines end in CRLF must stay that way.
 *.sse -text
+# Call log spills are binary frames with checksums (internal/observability/testdata/spill): byte for byte as well.
+internal/observability/testdata/spill/** -text

@@ -112,3 +112,21 @@ backup_root() {
 object_prefix() {
   printf '%s%s/' "$(backup_root)" "$1"
 }
+
+# hold_call_log DIR: a shared lock on the call log's spill directory DIR, on fd 8 until the caller closes it. A running
+# node holds the lock exclusively, so taking it proves none runs, and a node that starts while it is held cannot open
+# the spill (internal/observability/spill.go, lockDir). A directory where no node has run yet has no lock file to take,
+# and an unlocked check there would let a first start slip in between the check and the dump; so the file is made here,
+# owned like the directory (the node's user, whom the keys service gives it) and readable by that user alone, as the
+# node makes it. It is made under another name and linked into place, so a node that made its own meanwhile keeps it.
+hold_call_log() {
+  local dir=$1 lock=$1/call-log.lock made
+  if [ ! -e "$lock" ]; then
+    made="$dir/.call-log.lock.$$"
+    install -o "$(stat -c %u "$dir")" -g "$(stat -c %g "$dir")" -m 600 /dev/null "$made" || die "cannot create $lock"
+    ln "$made" "$lock" 2>/dev/null || [ -e "$lock" ] || die "cannot create $lock"
+    rm -f "$made"
+  fi
+  exec 8<"$lock"
+  flock -n -s 8 || die "the program holds the call log: a set is taken with it stopped (scripts/ops/backup.sh)"
+}

@@ -365,8 +365,11 @@ services:
       valkey: {condition: service_started}
     <<: *hardened
 
-  # The scheduled backup (docs/ops/backup-restore.md): `docker compose run --rm backup`. It sees the key ring read-only,
-  # the environment file it archives, and a volume for the lock file that keeps two runs from overlapping.
+  # The scheduled backup (docs/ops/backup-restore.md), which scripts/ops/backup.sh runs with the program stopped. It
+  # sees the key ring read-only, the call log, the environment file it archives, and a volume for the lock file that
+  # keeps two runs from overlapping. The call log is there for its lock and for the check that it drained: a dump is
+  # taken only while no record waits in it for the database. It is writable for one file alone, the lock a directory no
+  # node has opened yet does not have (hold_call_log in deploy/ops/common.sh).
   backup:
     <<: *ops
     entrypoint: [/ops/backup.sh]
@@ -378,8 +381,10 @@ services:
       AXIOM_BACKUP_KEEP_SETS: ${AXIOM_BACKUP_KEEP_SETS:-30}
       AXIOM_BACKUP_KEEP_DAYS: ${AXIOM_BACKUP_KEEP_DAYS:-30}
       AXIOM_BACKUP_APP_IMAGE: ${DEPLOY_IMAGE:-axiom:local}
+      AXIOM_CALL_LOG_DIR: /call-log
     volumes:
       - keys:/keys:ro
+      - call_log:/call-log
       - ${AXIOM_BACKUP_ENV_FILE:-./.env}:/deploy/.env:ro
       - backup_state:/state
     depends_on:

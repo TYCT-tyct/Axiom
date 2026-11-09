@@ -30,6 +30,29 @@
   泄露也不该同时打开两者。私钥只以文件形式留在别处，不在这台机器上，也不在桶里。
 - 转储用超级用户 `postgres` 读：每张表都 `FORCE ROW LEVEL SECURITY`，按行安全策略导出的备份会静默丢行。版本清单也从 `db.dump` 内用同一镜像的 `pg_restore` 读出，不再用备份前后的实时查询：只有转储快照里的 `platform.key_versions` 决定归档必须含哪些密钥。
 
+### 停写备份
+
+set 只在程序停着、调用日志写完之后转储。一次调用的收费在结算时就进了账本，它的记录却先 fsync 到本机的调用日志（`call_log`
+卷里的 spill），再由写协程入库（[observability 的「写入」](../../internal/observability/README.md#写入)）。写协程落后时转储，
+set 里有这些调用的收费，却没有它们的记录；之后机器一丢，这些记录就再也找不回来。所以一次备份是：
+
+1. `scripts/ops/backup.sh` 在看程序之前先对环境文件旁的 `<环境文件>.backup-lock` 取 `flock`：上一次运行还在上传时，第二次
+   直接退出 75，不去停刚被重启的程序；作业自己的锁仍然挡住直接 `docker compose run --rm backup` 的并发。
+2. 包装脚本把 `--env-file` 给的那个文件（绝对路径，经 `AXIOM_BACKUP_ENV_FILE`）交给作业归档，而不是 compose 默认挂载的
+   `deploy/.env`：归档成别的部署的配置，恢复就会装上那个部署的域名、镜像和凭证；文件读不到时在停程序之前就退出 1。然后停掉程序：`compose stop` 发 SIGTERM，程序排空监听，`Close` 把 spill 写进库再退出（`stop_grace_period`
+   170 秒内）。原来就没在跑的程序不动它。
+3. 备份作业挂载调用日志，先对 `call-log.lock` 取共享锁（`deploy/ops/common.sh` 的 `hold_call_log`）：运行中的程序持有排他锁，
+   这时作业退出 1；作业持锁期间程序也启动不了，转储时不会有新的结算。还没有节点打开过的目录里没有锁文件，作业就自己建一个
+   （属主与目录相同、0600，与节点自己建的一样；先用别的名字建好再链接过去，节点抢先建了就用节点的），所以首次启动也插不进
+   检查和转储之间；它对调用日志只写这一个文件。再跑 `axiom call-log check`（`observability.SpillBacklog`，只读）：检查点之后的记录和停放的
+   待定记录，不是 0 就退出 1，此时还没转储、没上传，桶里什么也不留。
+4. 转储完成后作业释放锁并打印 `backup: dumped the database; the program may start`，包装脚本看到这一行就启动程序；加密、
+   打包密钥环和上传在程序运行时进行。作业在哪一步失败，包装脚本都会把它停掉的程序再启动起来。
+
+停机时间是程序退出（在途调用最多 170 秒）、转储和重启，不含上传。写不完（数据库不可用、超过宽限被杀）时记录留在 spill 里，
+作业拒绝转储：先让程序起来把它们写进库，再备份一次。多个核心节点各有自己的调用日志，要全部停下、逐个检查；这个脚本只管
+compose 里的这一个。`docker compose run --rm backup` 仍然直接跑作业，程序在跑时它退出 1。
+
 加密用 [age](https://age-encryption.org)：备份侧只需要公钥，因此这台机器被攻破也解不开历史 set。上传、列举、删除和
 恢复时的下载都调程序自己的 S3 客户端（`axiom objectstore`，见 [platform/objectstore](../../internal/platform/objectstore/README.md)）：
 运维镜像从发布镜像里取同一个 `/axiom` 二进制，用 `AXIOM_BACKUP_S3_*` 映射出的 `AXIOM_OBJECTSTORE_*` 配它自己的桶。
@@ -81,14 +104,16 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env exec axiom axiom ob
 ### 运行
 
 ```bash
-# 一次备份（镜像与桶的配置在 deploy/.env，见 deploy/.env.example）
-docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
+# 一次备份：停程序、写完调用日志、转储、启动程序、上传（镜像与桶的配置在 deploy/.env，见 deploy/.env.example）
+bash scripts/ops/backup.sh
+# 带生产入口的部署：-f 与恢复脚本一样，传平时启动用的那组文件
+bash scripts/ops/backup.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml
 
-# 定时：宿主的 cron 或 systemd timer 每天调一次，非 0 退出码就是要看的信号（75 是"上一次还没跑完"）
-17 3 * * * cd /srv/axiom && docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm backup
+# 定时：宿主的 cron 或 systemd timer 每天调一次，非 0 退出码就是要看的信号（75 是"上一次还没跑完"，1 包括调用日志没写完）
+17 3 * * * cd /srv/axiom && bash scripts/ops/backup.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml
 ```
 
-`run` 直接点名服务，不需要 `--profile ops`；`up` 会按 profile 跳过这两个服务，所以 `just up` 与 CI 的部署检查都不会备份
+作业的 `run` 直接点名服务，不需要 `--profile ops`；`up` 会按 profile 跳过这两个服务，所以 `just up` 与 CI 的部署检查都不会备份
 或恢复任何东西。
 
 ## WAL 连续归档与时间点恢复
@@ -193,8 +218,19 @@ install -m 600 /path/to/historical-master "$work/master"
 确认正确后，先停掉恢复实例，再停源库，把恢复卷的内容换进 `postgres` 卷。旧卷先复制一份到 `axiom_postgres_before_pitr`，确认
 新库没问题再删；不要在没有任何副本的情况下直接覆盖旧卷：
 
+换卷的库回到了目标时刻，可程序的调用日志和审计副本还停在之后：调用日志里可能有目标时刻之后结算的调用，重放进去就是库里
+没有收费的调用；副本桶里有目标时刻之后的链，恢复的链接着自己的位置写，复制会在第一批上冲突停下（[运营的「审计」](../domains/operations.md#审计)）。
+所以换卷前停掉程序，把 `call_log` 卷挪开（和恢复脚本一样：复制到一个新卷再删掉原卷），并把 `deploy/.env` 里的
+`AXIOM_AUDIT_REPLICA_*` 换成一个新桶（旧桶保留，在部署记录里写明两者的关系）：
+
 ```bash
 # 先 Ctrl-C 停掉上一步的 pitr run，再：
+docker compose -f deploy/compose.yaml --env-file deploy/.env stop axiom
+aside=axiom_call_log_before_$(date -u +%Y%m%d%H%M%S)
+docker volume create "$aside"
+docker run --rm --entrypoint sh -v axiom_call_log:/from:ro -v "$aside":/to postgres:18.6-alpine -c 'cp -a /from/. /to/'
+docker compose -f deploy/compose.yaml --env-file deploy/.env rm --force axiom keys
+docker volume rm axiom_call_log
 docker compose -f deploy/compose.yaml --env-file deploy/.env stop postgres
 # 名字已存在时先删掉旧的或换一个名字，不要往非空的副本卷里再 cp 一遍
 docker volume create axiom_postgres_before_pitr
@@ -270,7 +306,7 @@ API key 哈希用的 HMAC `hash` 和派生用的 `identity` 文件不在此命�
 
 ## 恢复
 
-恢复只支持**空白环境**：没有数据库、没有密钥环。这样 initdb 才会用 set 里的口令建集群、建两个登录角色
+恢复只支持**空白环境**：没有数据库、没有密钥环、没有调用日志。这样 initdb 才会用 set 里的口令建集群、建两个登录角色
 （`deploy/postgres/roles.sh`），程序和库的口令自然一致。就地覆盖一台正在运行的库不在支持范围里（口令、角色和正在进行
 的写入都不是 set 能决定的）。
 
@@ -334,8 +370,17 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 
 恢复完要做的：
 
-- 用 `--overwrite` 重跑一次之前失败的恢复时，脚本会先删掉这个项目的库卷和密钥卷，再从头来一遍（它只删用这两个卷的容器，
-  同项目里别的容器——演练的 S3——留着，因为 set 还在那里）。
+- 用 `--overwrite` 重跑一次之前失败的恢复、或在原机上覆盖时，脚本会先删掉这个项目的库卷和密钥卷，再从头来一遍（它只删用这两个卷的容器，
+  同项目里别的容器——演练的 S3——留着，因为 set 还在那里）。调用日志卷不删，而是复制进 `<项目>_call_log_before_<UTC 时间>`
+  再删掉原卷：里面可能有 set 之后结算的调用，重放进恢复的库就是库里没有收费的调用；留下它，是那段时间服务过什么的证据。
+  恢复的程序从空的调用日志开始。没有 `--overwrite` 时，库卷或调用日志卷任一存在就拒绝。
+- set 里配了审计副本（`AXIOM_AUDIT_REPLICA_*`）时，第 1 步把这六个变量在装好的 `deploy/.env` 里清空，并追加一行注释记下旧桶
+  （`# <时间>: restored set <set>; the audit replica <端点>/<桶> holds the history this restore abandoned ...`）。旧桶里有
+  丢掉的库在 set 之后接上的链，恢复的链接着 set 写，不能再进这个桶（程序也会拒绝：见[运营的「审计」](../domains/operations.md#审计)）。
+  清空按部署支持的所有写法识别（`export `、名字前的空白、等号两边的空白、引号，与 `scripts/ops/up.sh` 共用
+  `scripts/ops/env-file.sh`）：删掉每个变量的所有赋值，再在文件末尾各留一行空值；WAL 桶也这样处理。所以恢复的程序启动时不复制，日志里有 `the audit chain is not copied off-site`。核对完恢复，新建一个开版本控制和对象锁的桶，
+  把六个变量填成新桶，`docker compose ... up --detach --wait axiom`：新桶没有进度，从第一条起复制整条恢复的链。旧桶保持原样，
+  注释行随以后的 set 一起留着两者的关系。
 - 恢复之后核对 `manifest.txt` 里的镜像引用与本机部署的 digest 是否一致；不一致的话，先让程序在第 5 步的迁移上跑通再对外。
 - 换掉泄露的口令与桶凭证后，重新做一次备份：set 里的 `deploy/.env` 是旧的。
 
@@ -352,25 +397,36 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 - 上传、删除和建桶（备份、第 10 步的搬迁，以及第 4 步的 `create`）先在容器里断言 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_PREFIX`、
   `AXIOM_OBJECTSTORE_BUCKET`、`AXIOM_OBJECTSTORE_ENDPOINT`、`AXIOM_OBJECTSTORE_ACCESS_KEY_ID` 确实是演练 S3 和它的专用桶、
   前缀，不是就退出；
-- 种一个站点、一个用户和一条非默认的价格政策，停程序，记录全库内容指纹（含每张表的行数）、角色与成员关系、密钥环哈希、`deploy/.env`；种数验证
-  按名断言 `accounts.sites` 与 `accounts.users` 各有行——空表也有一行指纹，只数"有指纹的表"证明不了种子发生过；
-- 备份；验证保留为 0（份数和天数各一次）在写任何东西之前退出 1 且桶不变；验证持锁时第二个运行退出 75；验证密钥环用库的
-  身份解不开、用密钥环的身份解得开；
-- 删掉库卷和密钥卷（S3 容器留着，set 在它这里），删掉 `deploy/.env` 里的一行标记，再走一遍上面的恢复脚本，文件组合带上
-  `deploy/compose.edge.yaml`；
-- 比对表清单与指纹（下列行除外，见下）、角色、密钥环、环境文件，并经入口各打一次控制台域名和 API 域名；
-- 连续再备份两次，验证保留只留下最新两份、最早那份被删；
-- 轮换 S3 凭证（重建演练的 S3 容器，卷不动）并把整个前缀搬到 `axiom-moved`、把 `AXIOM_BACKUP_PREFIX` 改过去，再恢复一次：
-  这一遍只有"固定使用启动时的位置和凭证"才能走完，因为 set 里的配置写的是搬走之前的位置和已吊销的凭证；
+- 种一个站点、一个用户和一条非默认的价格政策，审计副本配到演练 S3 的 `axiom-rehearsal-audit` 桶，等它复制完整条链；
+- 写协程落后：停程序，把 `internal/observability/testdata/spill/behind`（三条已结算、一条停放的待定记录，数据库都没有）放进
+  调用日志卷，`scripts/ops/backup.sh` 必须退出 1、说出 4 条、桶里什么也没有；启动程序把它们写进库，再停下，检查通过；
+- 记录全库内容指纹（含每张表的行数，调用日志的四条在里面）、角色与成员关系、密钥环哈希、`deploy/.env`；种数验证按名断言
+  `accounts.sites` 与 `accounts.users` 各有行——空表也有一行指纹，只数"有指纹的表"证明不了种子发生过；
+- 经 `scripts/ops/backup.sh` 备份；验证程序在跑时作业退出 1、桶不变；验证保留为 0（份数和天数各一次）在写任何东西之前退出 1
+  且桶不变；验证持锁时第二个运行退出 75；验证密钥环用库的身份解不开、用密钥环的身份解得开；
+- 副本领先：set 之后再建一个用户，等副本桶复制到 set 之后的链，记下桶里的对象；
+- 机器丢失：删掉库卷、密钥卷和调用日志卷（S3 容器留着，set 在它这里），删掉 `deploy/.env` 里的一行标记，再走一遍上面的恢复
+  脚本，文件组合带上 `deploy/compose.edge.yaml`；
+- 比对表清单与指纹（下列行除外，见下）、角色、密钥环、环境文件（恢复有意改动的 WAL 与副本变量、记录旧副本的那行除外），经入口
+  各打一次控制台域名和 API 域名，并验证副本变量已清空、记下了旧桶、程序日志说不复制、旧桶的对象一个没变；
+- 程序在跑时经 `scripts/ops/backup.sh` 连续再备份两次，验证程序又起来了、保留只留下最新两份、最早那份被删；
+- 轮换 S3 凭证（重建演练的 S3 容器，卷不动）并把整个前缀搬到 `axiom-moved`、把 `AXIOM_BACKUP_PREFIX` 改过去，再把
+  `testdata/spill/after`（set 之后服务的两条调用）放进调用日志卷，在原机上恢复：不带 `--overwrite` 必须退出 1，带上之后
+  这一遍只有"固定使用启动时的位置和凭证"才能走完，因为 set 里的配置写的是搬走之前的位置和已吊销的凭证；恢复后库里的调用
+  与 set 一样多、没有那两条，调用日志卷是空的，挪开的卷里检查出那两条；
+- 把副本变量填成新桶 `axiom-rehearsal-audit-2` 再启动程序：新桶从第一条起复制到链头，旧桶的对象仍然一个没变；
 - 打印一行可直接粘到下表的记录，含 RTO（从执行恢复脚本到 `compose up --wait` 返回）。
 
 指纹比较按行内容，跳过会被程序自己改动的行：River 的队列表（库自己的迁移版本由程序的启动检查核对）、
 `billing.holders`（每次核心进程启动插一行，恢复后的库里既有 set 里的那行也有新的）、`billing.expiry_cursor`（到期任务每分钟
 更新自己扫到哪）、`platform.alert_signals`（启动产生的新告警）、`platform.credential_share_departures`（新进程清理 set 里过期的
-节点行）和 `catalog.sync_state`（目录同步的进度）。`billing.price_policies` 不整表跳过：只有发布任务每次改写的 `confirmed_at`
+节点行）、`catalog.sync_state`（目录同步的进度），以及 `platform.billing_preference_readiness` 和
+`platform.model_prices_public_readiness`（两个灰度开关，每个节点的心跳都用自己的时间改写）。`observability.alert_events` 和
+`platform.discarded_jobs` 不比整表，只要求 set 里的每一行都回来：set 抓到一个正在跑的副本任务时，恢复的节点没有这个任务的
+worker（副本已关），River 的 rescuer 会把它丢弃，多出一行丢弃记录和它触发的一条告警。`billing.price_policies` 不整表跳过：只有发布任务每次改写的 `confirmed_at`
 列不进哈希，`rev` 和三个乘数仍然要逐行一致。表本身少一张就失败，所以跳过的是行，不是表。
 
-它要 Docker、go、node、pnpm 和约十五分钟，并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
+它要 Docker、go、node、pnpm 和约二十五分钟（多半在等审计链每分钟一轮的接链和复制），并且会删掉自己创建的东西（`trap` 里 `compose down --volumes` 加删镜像）。同一台
 机器上只能跑一个。入口在演练里用 `AXIOM_EDGE_TLS_ISSUER=internal`（自己的 CA，所以检查带 `--insecure`），域名是 `.example`，
 没有任何请求离开这台机器；发布的端口由内核分配，检查用 `--connect-to` 指过去而请求仍走 443，免得端口进了 `Host` 头（程序按它
 比对站点域名）；网络换成 `172.29.0.0/24`，免得和这台机器上真在跑的入口抢。
@@ -390,6 +446,10 @@ bash scripts/ops/restore.sh -f deploy/compose.yaml -f deploy/compose.edge.yaml 2
 | 2026-10-30 11:47 | 20261030114440-bb2802 | 91s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-10-30 12:45 | 20261030124404-0967c4 | 27s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
 | 2026-10-31 08:50 | 20261031084908-c274fc | 29s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确 | 通过 |
+| 2026-11-09 13:15 | 20261109130615-f4c580 | 66s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
+| 2026-11-09 14:15 | 20261109140626-2e4007 | 67s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
+| 2026-11-09 14:49 | 20261109143915-31f13c | 76s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
+| 2026-11-09 15:34 | 20261109152340-d53f82 | 81s | 数据库、角色、密钥环、配置一致，入口两个域名应答正确；日志积压时拒绝备份、排空后的四条调用随 set 恢复，覆盖恢复隔离后来的两条；副本领先时旧桶不动、新桶从第一条复制 | 通过 |
 
 ## 生产入口
 
