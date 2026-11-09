@@ -47,11 +47,13 @@ type Rule struct {
 	Classes  ClassSet
 	Policies PolicySet
 	// MinScore is the product score (the fixed benchmark against the official direct run, 0 to 100) and
-	// MinScoreConfidence its confidence (0 to 1) an endpoint needs. They are not the operations quality ranking reads:
-	// an endpoint without a score has 0 and 0, so a preset that sets either keeps none of it (docs/domains/routing.md
+	// MinScoreConfidence its confidence (0 to 1) an endpoint needs. They are not the operations quality ranking reads.
+	// Scored is whether the rule or one it inherits writes either, at any value: an endpoint without a score has 0 and
+	// 0, which a minimum of 0 would let through, so Scored is what keeps it out (docs/domains/routing.md
 	// 「产品质量与来源类别」).
 	MinScore           float64
 	MinScoreConfidence float64
+	Scored             bool
 	VerifiedOnly       bool
 	MaxPrice           PriceLimit
 }
@@ -284,6 +286,7 @@ func (j ruleJSON) narrowLimits(r *Rule, parent Rule, where string) (err error) {
 	if r.MinScoreConfidence, err = atLeast(j.MinScoreConfidence, parent.MinScoreConfidence, 1, where+".min_score_confidence"); err != nil {
 		return err
 	}
+	r.Scored = parent.Scored || j.MinScore != nil || j.MinScoreConfidence != nil
 	if j.VerifiedOnly != nil {
 		if parent.VerifiedOnly && !*j.VerifiedOnly {
 			return fmt.Errorf("%w: %s.verified_only cannot turn off what it inherits", ErrRules, where)

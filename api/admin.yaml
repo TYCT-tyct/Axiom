@@ -8666,8 +8666,8 @@ components:
             type: string
             enum: ["*", no_retention, retained, may_train]
           description: The data policies kept, or `["*"]` for every one.
-        min_score: {type: number, nullable: true, minimum: 0, maximum: 100, description: "The product score an endpoint needs (official direct = 100); an endpoint with none has 0."}
-        min_score_confidence: {type: number, nullable: true, minimum: 0, maximum: 1, description: "The confidence of that score an endpoint needs."}
+        min_score: {type: number, nullable: true, minimum: 0, maximum: 100, description: "The product score an endpoint needs (official direct = 100). An endpoint without a valid score never meets it, even at 0."}
+        min_score_confidence: {type: number, nullable: true, minimum: 0, maximum: 1, description: "The confidence of that score an endpoint needs. An endpoint without a valid score never meets it, even at 0."}
         verified_only: {type: boolean, nullable: true, description: "Only endpoints verified as the model they claim; an override cannot turn it off."}
         max_price:
           allOf: [{$ref: "#/components/schemas/RoutingPriceLimit"}]

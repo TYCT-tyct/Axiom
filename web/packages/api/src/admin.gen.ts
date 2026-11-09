@@ -4686,9 +4686,9 @@ export interface components {
             classes?: string[] | null;
             /** @description The data policies kept, or `["*"]` for every one. */
             policies?: ("*" | "no_retention" | "retained" | "may_train")[] | null;
-            /** @description The product score an endpoint needs (official direct = 100); an endpoint with none has 0. */
+            /** @description The product score an endpoint needs (official direct = 100). An endpoint without a valid score never meets it, even at 0. */
             min_score?: number | null;
-            /** @description The confidence of that score an endpoint needs. */
+            /** @description The confidence of that score an endpoint needs. An endpoint without a valid score never meets it, even at 0. */
             min_score_confidence?: number | null;
             /** @description Only endpoints verified as the model they claim; an override cannot turn it off. */
             verified_only?: boolean | null;

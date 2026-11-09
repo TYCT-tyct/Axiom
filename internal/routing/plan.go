@@ -471,9 +471,17 @@ func (c *candidate) full() bool {
 // limit that the request's override may lower.
 func (n *need) presetAllows(c *candidate, price *candidatePrice, spec Spec) bool {
 	p, r := n.preset, n.rule
-	return r.Classes.Has(c.Class) && r.Policies.Has(c.Policy) && c.Score >= r.MinScore && c.ScoreConfidence >= r.MinScoreConfidence &&
+	return r.Classes.Has(c.Class) && r.Policies.Has(c.Policy) && n.scoreAllows(c) &&
 		(!r.VerifiedOnly || c.Verified) && c.Quality >= p.MinQuality && c.Confidence >= p.MinConfidence &&
 		n.withinLimit(r.MaxPrice, c, price, spec) && (!p.NoFallbacks || slices.Contains(p.OrderNames, c.Codename))
+}
+
+// scoreAllows holds the endpoint to the rule's product score minimums. A score with no confidence left (never measured,
+// expired, or an interval as wide as the scale) is no evidence, so a rule that asks for a score at all keeps such an
+// endpoint out even at a minimum of 0 (docs/domains/quality.md「产品成绩」).
+func (n *need) scoreAllows(c *candidate) bool {
+	r := n.rule
+	return !r.Scored || c.ScoreConfidence > 0 && c.Score >= r.MinScore && c.ScoreConfidence >= r.MinScoreConfidence
 }
 
 // overrideAllows applies the request's filters. They only narrow what the preset allows: they are checked after it,
