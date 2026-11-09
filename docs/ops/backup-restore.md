@@ -419,7 +419,7 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
 
 **密钥环只在第一次启动时生成。** `keys` 服务只在 `keys` 卷里 `master`、`hash`、`identity` 三个文件都没有、且
 `AXIOM_KEYRING_GENERATE=true` 时一起生成整套；卷里只有其中一部分时，不论这个值，它报出有哪几个、缺哪几个后退出 1，
-程序不会启动。这个值不是 `true` 或 `false`（例如 `yes`、`False`、`0`）也一样退出。生产部署第一次启动成功后，把
+程序不会启动。这个值不是 `true` 或 `false`（例如 `yes`、`False`、`0`，或写了 `AXIOM_KEYRING_GENERATE=` 的空值）也一样退出；只有完全没设时才按 `true`。生产部署第一次启动成功后，把
 `deploy/.env` 里的它改成 `false` 并一直保持：之后卷丢了或换了机器，`keys` 拒绝空卷，要按[恢复](#恢复)把同一个 set 里的
 整套密钥环放回。缺文件时不要手工补生成，也不要从别处拷单个文件：新的哈希密钥让库里所有 API key 的哈希都对不上，节点
 却照常启动。

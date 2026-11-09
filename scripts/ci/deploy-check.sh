@@ -223,6 +223,7 @@ keys_refuse() {
 }
 compose stop axiom
 AXIOM_KEYRING_GENERATE=yes keys_refuse "AXIOM_KEYRING_GENERATE must be true or false, not 'yes'" "AXIOM_KEYRING_GENERATE=yes"
+AXIOM_KEYRING_GENERATE= keys_refuse "AXIOM_KEYRING_GENERATE must be true or false, not ''" "an empty AXIOM_KEYRING_GENERATE"
 compose run --rm --no-deps -T --entrypoint sh keys -c 'rm -f /keys/hash'
 keys_refuse "keys: /keys has master identity but not hash" "a key ring without its hashing key"
 [ "$(compose run --rm --no-deps -T --entrypoint sh keys -c 'ls /keys')" = "$(printf '%s\n' identity master valkey-password)" ] \

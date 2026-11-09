@@ -204,7 +204,8 @@ services:
         chown 999:1000 /cache/password /cache/users.acl
         chmod 755 /cache
     environment:
-      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE:-true}
+      # Only an unset variable defaults: an empty one reaches the check above and is refused like any other non-boolean.
+      AXIOM_KEYRING_GENERATE: ${AXIOM_KEYRING_GENERATE-true}
     volumes:
       - keys:/keys
       - cache:/cache
