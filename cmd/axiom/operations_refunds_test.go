@@ -113,34 +113,15 @@ func (f refundFixture) conclude() {
 func TestOperationsRefund(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		outcome, want, state string
+		outcome, want string
 	}{
-		{"succeeded", "committed:10000000000 0+10000000000#1 succeeded:5000000000:true", "succeeded"},
-		{"failed", "released:10000000000 0+0#1 failed:5000000000:true", "failed"},
+		{"succeeded", "committed:10000000000 0+10000000000#1 succeeded:5000000000:true succeeded"},
+		{"failed", "released:10000000000 0+0#1 failed:5000000000:true failed"},
 	} {
 		t.Run(c.outcome, func(t *testing.T) {
 			t.Parallel()
 			f := refundReady(t)
-			key := newKey()
-			rec := f.proposeRefund(f.token, "5000000000", key, "")
-			expectAdmin(t, "the proposal", rec, http.StatusAccepted, "")
-			op := agentOperation(t, rec)
-			if op.Risk != operationsapi.Refund || op.Approval == nil {
-				t.Fatalf("the proposal: %s", rec.Body)
-			}
-			if rec := f.proposeRefund(f.token, "5000000000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *op.OperationId {
-				t.Errorf("the retry: %d %s", rec.Code, rec.Body)
-			}
-			// 5 of the 10 credits bought with 20.00 net of the fee return 10.00, which the caps count.
-			if got := f.refunds(); got != "reserved:10000000000 10000000000+0#1 -" {
-				t.Errorf("while it waits: %s", got)
-			}
-			rec = f.do(http.MethodGet, "/operations/approvals/"+op.Approval.ApprovalId, "", as(f.s))
-			for _, want := range []string{`"order_id":"` + f.order + `"`, `"email":"alice@example.com"`, `"cash":"1000"`, `"credits":"5000000000"`, `"hard_single_max":"20000000000"`} {
-				if !strings.Contains(rec.Body.String(), want) {
-					t.Errorf("the owner does not see %s in %s", want, rec.Body)
-				}
-			}
+			op := f.proposedRefund()
 			var approved adminapi.OperationsApproval
 			decode(t, f.decide(op, "approve"), &approved)
 			if approved.OperationState != adminapi.OperationStateExecuting {
@@ -150,14 +131,39 @@ func TestOperationsRefund(t *testing.T) {
 			f.run(fmt.Sprintf(`UPDATE payments.refunds SET state = '%s', sent_at = now(), finished_at = now()`, c.outcome))
 			f.conclude()
 			f.conclude()
-			if got := f.refunds(); got != c.want {
+			if got := f.refunds() + " " + f.text(`SELECT state FROM operations.operations WHERE id = '`+*op.OperationId+`'`); got != c.want {
 				t.Errorf("after the outcome: %s, want %s", got, c.want)
-			}
-			if got := f.text(`SELECT state FROM operations.operations WHERE id = '` + *op.OperationId + `'`); got != c.state {
-				t.Errorf("the operation is %s, want %s", got, c.state)
 			}
 		})
 	}
+}
+
+// proposedRefund proposes refunding 5 of the 10, checks the proposal, its retry, its reservation and what the owner
+// is shown, and returns it.
+func (f refundFixture) proposedRefund() operationsapi.Operation {
+	t := f.t
+	t.Helper()
+	key := newKey()
+	rec := f.proposeRefund(f.token, "5000000000", key, "")
+	expectAdmin(t, "the proposal", rec, http.StatusAccepted, "")
+	op := agentOperation(t, rec)
+	if op.Risk != operationsapi.Refund || op.Approval == nil {
+		t.Fatalf("the proposal: %s", rec.Body)
+	}
+	if rec := f.proposeRefund(f.token, "5000000000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *op.OperationId {
+		t.Errorf("the retry: %d %s", rec.Code, rec.Body)
+	}
+	// 5 of the 10 credits bought with 20.00 net of the fee return 10.00, which the caps count.
+	if got := f.refunds(); got != "reserved:10000000000 10000000000+0#1 -" {
+		t.Errorf("while it waits: %s", got)
+	}
+	rec = f.do(http.MethodGet, "/operations/approvals/"+op.Approval.ApprovalId, "", as(f.s))
+	for _, want := range []string{`"order_id":"` + f.order + `"`, `"email":"alice@example.com"`, `"cash":"1000"`, `"credits":"5000000000"`, `"hard_single_max":"20000000000"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Errorf("the owner does not see %s in %s", want, rec.Body)
+		}
+	}
+	return op
 }
 
 // expectRefundShown checks the refund op made: approved by the owner as the payments review, requested by the

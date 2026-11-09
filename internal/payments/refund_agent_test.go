@@ -64,6 +64,14 @@ func TestAgentRefund(t *testing.T) {
 		t.Errorf("a second refund while the first is in flight: %v", err)
 	}
 	w.dueRefunds()
+	w.expectAgentRefundsOf(o)
+}
+
+// expectAgentRefundsOf checks what AgentRefundOf reads of o after the agent's refund under op-1 succeeded: it, nothing
+// under a key without a refund, and nothing for a user's refund.
+func (w *world) expectAgentRefundsOf(o Order) {
+	t := w.t
+	t.Helper()
 	if got, found, err := w.p.AgentRefundOf(t.Context(), o.ID, "op-1"); err != nil || !found || got.State != "succeeded" {
 		t.Errorf("the outcome: %+v %v %v", got, found, err)
 	}

@@ -30,29 +30,10 @@ func TestRefundOutcome(t *testing.T) {
 				t.Fatal(err)
 			}
 			op := r.executing()
-			if got, found, err := r.reservation(op); err != nil || !found || got.State != "reserved" || got.Expires != nil {
-				t.Fatalf("while the refund is sent: %+v %v %v", got, found, err)
-			}
-			if n := r.expireReservations(t); n != 0 {
-				t.Errorf("the sweep released %d reservations of executing refunds", n)
-			}
-			if listed := r.listExecuting(); len(listed) != 1 || listed[0].ID != op.ID {
-				t.Errorf("the executing refunds: %+v", listed)
-			}
-			for range 2 {
-				if _, err := r.in(t, func(tx pg.Tx) (operations.Operation, error) {
-					return operations.Conclude(t.Context(), tx, op.ID, c.succeeded, "rfd_1")
-				}); err != nil {
-					t.Fatal(err)
-				}
-			}
-			got := r.text(t, `SELECT o.state || ' ' || coalesce(o.error_code, '-') || ' ' || m.state FROM operations.operations o
-				JOIN operations.money_actions m ON m.operation_id = o.id WHERE o.id = '`+op.ID.String()+`'`) + " " +
-				r.text(t, `SELECT reserved || '+' || committed || '#' || count FROM operations.cap_counters
-					WHERE category = 'money.refund' AND window_kind = 'day' AND object_kind = ''`) + " " +
-				r.text(t, `SELECT string_agg(action || ':' || actor_kind, ',' ORDER BY id) FROM platform.audit_log
-					WHERE action IN ('operation.execute', 'operation.succeed', 'operation.fail') OR action LIKE 'reservation.%'`)
-			if got != c.want {
+			r.expectHeld(op)
+			r.conclude(op, c.succeeded)
+			r.conclude(op, c.succeeded)
+			if got := r.outcome(op); got != c.want {
 				t.Errorf("after the outcome: %s, want %s", got, c.want)
 			}
 			if listed := r.listExecuting(); len(listed) != 0 {
@@ -60,6 +41,42 @@ func TestRefundOutcome(t *testing.T) {
 			}
 		})
 	}
+}
+
+// conclude ends op by its refund's outcome, as the outcome job does.
+func (r reservations) conclude(op operations.Operation, succeeded bool) {
+	r.t.Helper()
+	if _, err := r.in(r.t, func(tx pg.Tx) (operations.Operation, error) {
+		return operations.Conclude(r.t.Context(), tx, op.ID, succeeded, "rfd_1")
+	}); err != nil {
+		r.t.Fatal(err)
+	}
+}
+
+// expectHeld checks the reservation of op, an executing refund, is held with no expiry, no sweep releases it, and op
+// is listed as executing.
+func (r reservations) expectHeld(op operations.Operation) {
+	t := r.t
+	t.Helper()
+	if got, found, err := r.reservation(op); err != nil || !found || got.State != "reserved" || got.Expires != nil {
+		t.Fatalf("while the refund is sent: %+v %v %v", got, found, err)
+	}
+	if n := r.expireReservations(t); n != 0 {
+		t.Errorf("the sweep released %d reservations of executing refunds", n)
+	}
+	if listed := r.listExecuting(); len(listed) != 1 || listed[0].ID != op.ID {
+		t.Errorf("the executing refunds: %+v", listed)
+	}
+}
+
+// outcome is op's state, error code and reservation, the refund day's counter and the audit of the run and outcome.
+func (r reservations) outcome(op operations.Operation) string {
+	return r.text(r.t, `SELECT o.state || ' ' || coalesce(o.error_code, '-') || ' ' || m.state FROM operations.operations o
+		JOIN operations.money_actions m ON m.operation_id = o.id WHERE o.id = '`+op.ID.String()+`'`) + " " +
+		r.text(r.t, `SELECT reserved || '+' || committed || '#' || count FROM operations.cap_counters
+			WHERE category = 'money.refund' AND window_kind = 'day' AND object_kind = ''`) + " " +
+		r.text(r.t, `SELECT string_agg(action || ':' || actor_kind, ',' ORDER BY id) FROM platform.audit_log
+			WHERE action IN ('operation.execute', 'operation.succeed', 'operation.fail') OR action LIKE 'reservation.%'`)
 }
 
 // executing proposes a refund of 5, which waits for the owner, approves it and hands it to its target as the approval

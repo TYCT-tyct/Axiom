@@ -41,21 +41,6 @@ const (
 // refuse.
 func (c Category) autonomous() bool { return c == CategoryTopUp }
 
-// untilOutcome is the expiry of a reservation that ends with its money's outcome rather than with its day: a refund
-// is sent after the approval's transaction and may end on a later day, and the money that left must stay counted in the
-// windows it was approved in until the channel says (「失败、重试与回滚」). No sweep reaches it, an older node's
-// included, which knows nothing of the rule; while the proposal waits, the approval's own expiry, never past the end of
-// its day, releases it.
-var untilOutcome = time.Date(9999, 12, 31, 0, 0, 0, 0, time.UTC)
-
-// expiry is when a reservation of c made in windows w ends unless it is settled first.
-func (c Category) expiry(w CapWindowsRow) time.Time {
-	if c == CategoryRefund {
-		return untilOutcome
-	}
-	return w.DayEnd
-}
-
 var (
 	// ErrNoCapPolicy is a scope and category the owner set no caps for: no money moves there.
 	ErrNoCapPolicy = errors.New("operations: no cap policy for this scope and category, so no money moves")
@@ -279,21 +264,6 @@ func capDetail(p CapPolicy, c counters, amount int64) map[string]any {
 	}
 }
 
-// Reservation is a money operation's reservation as it is now. Expires is nil for one that ends with its money's
-// outcome, not at a time.
-type Reservation struct {
-	Operation uuid.UUID
-	Category  Category
-	Object    Target
-	Amount    int64
-	Currency  string
-	Basis     []byte
-	State     string
-	Expires   *time.Time
-	Proof     string
-	Settled   *time.Time
-}
-
 // CheckReservation is what an approval of op, a money operation tx has locked, rechecks before it runs: the reservation
 // is still held (otherwise ErrNotReserved) and still within the hard limits of the policy as it is now, the windows
 // holding it already (otherwise ErrPolicyChanged): a policy loosened since the proposal leaves it alone, one tightened
@@ -500,24 +470,4 @@ func recordReservation(ctx context.Context, tx pg.Tx, actor audit.Actor, action 
 			"amount": m.Amount, "currency": m.Currency, "state": m.State, "day_start": m.DayStart, "week_start": m.WeekStart,
 		},
 	})
-}
-
-// ReservationOf reads operation id's reservation; found is false when it moves no money.
-func ReservationOf(ctx context.Context, tx pg.Tx, id uuid.UUID) (Reservation, bool, error) {
-	rows, err := New().MoneyActionOf(ctx, tx, id)
-	if err != nil || len(rows) == 0 {
-		return Reservation{}, false, err
-	}
-	return reservationOf(rows[0]), true, nil
-}
-
-func reservationOf(m OperationsMoneyAction) Reservation {
-	r := Reservation{
-		Operation: m.OperationID, Category: Category(m.Category), Object: Target{Kind: m.ObjectKind, ID: m.ObjectID},
-		Amount: m.Amount, Currency: m.Currency, Basis: m.Basis, State: m.State, Proof: deref(m.Proof), Settled: m.SettledAt,
-	}
-	if !m.ExpiresAt.Equal(untilOutcome) {
-		r.Expires = &m.ExpiresAt
-	}
-	return r
 }
