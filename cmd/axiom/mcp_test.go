@@ -53,7 +53,7 @@ func TestBridgeToolsFollowTheContract(t *testing.T) {
 		"audit_list", "call_get", "calls_list", "caps_get", "credit_grant", "endpoint_set_enabled", "model_get", "model_set_status",
 		"models_list", "operation_get", "operation_log_list",
 		"operations_list", "pending_mappings_list", "price_publish", "prices_list", "pricing_rule_create", "pricing_rule_update",
-		"pricing_rules_list", "supplier_group_select", "supplier_model_map",
+		"pricing_rules_list", "refund_request", "supplier_group_select", "supplier_model_map",
 		"supplier_top_up_confirm", "supplier_top_up_propose", "suppliers_get", "suppliers_list", "whoami",
 	}
 	if names := slices.Sorted(maps.Keys(tools)); !slices.Equal(names, want) {

@@ -357,22 +357,22 @@ func (e CallRouteExclusionReason) Valid() bool {
 
 // Defines values for CashMovementKind.
 const (
-	Chargeback        CashMovementKind = "chargeback"
-	ChargebackReverse CashMovementKind = "chargeback_reverse"
-	Credit            CashMovementKind = "credit"
-	Refund            CashMovementKind = "refund"
+	CashMovementKindChargeback        CashMovementKind = "chargeback"
+	CashMovementKindChargebackReverse CashMovementKind = "chargeback_reverse"
+	CashMovementKindCredit            CashMovementKind = "credit"
+	CashMovementKindRefund            CashMovementKind = "refund"
 )
 
 // Valid indicates whether the value is a known member of the CashMovementKind enum.
 func (e CashMovementKind) Valid() bool {
 	switch e {
-	case Chargeback:
+	case CashMovementKindChargeback:
 		return true
-	case ChargebackReverse:
+	case CashMovementKindChargebackReverse:
 		return true
-	case Credit:
+	case CashMovementKindCredit:
 		return true
-	case Refund:
+	case CashMovementKindRefund:
 		return true
 	default:
 		return false
@@ -1041,6 +1041,7 @@ const (
 	OperationRiskDelisting OperationRisk = "delisting"
 	OperationRiskGift      OperationRisk = "gift"
 	OperationRiskPrice     OperationRisk = "price"
+	OperationRiskRefund    OperationRisk = "refund"
 	OperationRiskRoutine   OperationRisk = "routine"
 	OperationRiskTopUp     OperationRisk = "top_up"
 )
@@ -1053,6 +1054,8 @@ func (e OperationRisk) Valid() bool {
 	case OperationRiskGift:
 		return true
 	case OperationRiskPrice:
+		return true
+	case OperationRiskRefund:
 		return true
 	case OperationRiskRoutine:
 		return true
@@ -1201,6 +1204,7 @@ func (e OperationsApprovalTier) Valid() bool {
 // Defines values for OperationsCapCategory.
 const (
 	MoneyCredit OperationsCapCategory = "money.credit"
+	MoneyRefund OperationsCapCategory = "money.refund"
 	MoneyTopUp  OperationsCapCategory = "money.top_up"
 )
 
@@ -1208,6 +1212,8 @@ const (
 func (e OperationsCapCategory) Valid() bool {
 	switch e {
 	case MoneyCredit:
+		return true
+	case MoneyRefund:
 		return true
 	case MoneyTopUp:
 		return true
@@ -3988,7 +3994,7 @@ type OperationsApproval struct {
 	DecidedBy      *string `json:"decided_by,omitempty"`
 	DecisionReason *string `json:"decision_reason,omitempty"`
 
-	// ErrorCode Why the operation ended `rejected` after the approval: the code the target refused it with.
+	// ErrorCode Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day.
 	ErrorCode *string   `json:"error_code,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
 
@@ -4050,7 +4056,7 @@ type OperationsApprovalTier string
 // OperationsCapAmount An amount in billionths of one unit of the policy's currency, as integer text.
 type OperationsCapAmount = string
 
-// OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
+// OperationsCapCategory A kind of money the agent moves, each with its own caps; top-ups of suppliers, credit grants to accounts and refunds of orders.
 type OperationsCapCategory string
 
 // OperationsCapDetail The cap a transfer was weighed against when the agent asked (docs/domains/operations.md「转账的累计金额上限」): each limit and what its window held before it. Amounts are in billionths of `currency`.
@@ -4125,7 +4131,7 @@ type OperationsCapLimits struct {
 
 // OperationsCapPolicy defines model for OperationsCapPolicy.
 type OperationsCapPolicy struct {
-	// Category A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
+	// Category A kind of money the agent moves, each with its own caps; top-ups of suppliers, credit grants to accounts and refunds of orders.
 	Category OperationsCapCategory `json:"category"`
 	Currency string                `json:"currency"`
 
@@ -4805,8 +4811,11 @@ type PaymentRefund struct {
 	// Reason Why the user asked for the refund.
 	Reason *string `json:"reason,omitempty"`
 
-	// RequestedBy A user's ID (TypeID).
+	// RequestedBy The person who asked for the refund; absent when the operations agent did (`requested_by_agent`).
 	RequestedBy *UserId `json:"requested_by,omitempty"`
+
+	// RequestedByAgent The operations credential that asked for the refund, which the owner approved as an operation (docs/domains/operations.md「运营接口」).
+	RequestedByAgent *OperationsCredentialId `json:"requested_by_agent,omitempty"`
 
 	// SecondRequired Whether this refund needs two operators; the first is in `first_approved_by`.
 	SecondRequired *bool `json:"second_required,omitempty"`

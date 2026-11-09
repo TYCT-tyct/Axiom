@@ -10,6 +10,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/platform"
+	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 )
 
@@ -25,17 +26,20 @@ var (
 )
 
 // RefundRequest identifies the original payment and unused credits. User comes from authenticated authorization,
-// never from a request body. An account may only request a channel refund when its merchant enables user_refund.
+// never from a request body; Agent says it is an operations credential's ID rather than a person's. An account may
+// only request a channel refund when its merchant enables user_refund.
 type RefundRequest struct {
 	Order            OrderID
 	Credits          int64
 	Key, Reason, Via string
 	User             uuid.UUID
+	Agent            bool
 }
 
 // Refund is the durable state, including the actual frozen credits and original-payment cash quote. Approved says
 // whether the refund may be sent; SecondRequired is the approval rule snapshotted when it was frozen, and
-// FirstApprovedBy is the first of the two operators on a refund above the limit. RequestedBy never approves.
+// FirstApprovedBy is the first of the two operators on a refund above the limit. RequestedBy never approves; with
+// ByAgent it is the operations credential that asked for it, not a user.
 type Refund struct {
 	ID              RefundID
 	Order           OrderID
@@ -46,6 +50,7 @@ type Refund struct {
 	Amount          Money
 	Reason          string
 	RequestedBy     uuid.UUID
+	ByAgent         bool
 	ApprovedBy      *uuid.UUID
 	FirstApprovedBy *uuid.UUID
 	SecondRequired  bool
@@ -63,6 +68,14 @@ func (r RefundRequest) check() error {
 		return &FieldError{"/refund", "a reason and channel or offline route are required"}
 	}
 	return nil
+}
+
+// requester is who asked for the refund, as the audit names them.
+func (r RefundRequest) requester() audit.Actor {
+	if r.Agent {
+		return audit.OperationsAgent(r.User)
+	}
+	return audit.User(r.User)
 }
 
 func validReason(s string, maxLen int) bool {
@@ -169,7 +182,7 @@ func (p *Payments) reserveRefund(ctx context.Context, o Order, r RefundRequest, 
 }
 
 func refundReplay(row PaymentsRefund, r RefundRequest, o Order) (Refund, error) {
-	if row.RequestedCredits != r.Credits || row.Via != r.Via || row.Reason != r.Reason || row.RequestedBy != r.User {
+	if row.RequestedCredits != r.Credits || row.Via != r.Via || row.Reason != r.Reason || row.RequestedBy != r.User || row.RequestedByAgent != r.Agent {
 		return Refund{}, ErrKeyReused
 	}
 	return refundOf(row, o.Total.Currency), nil
@@ -212,12 +225,12 @@ func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	row, err := queries.InsertRefund(ctx, tx, InsertRefundParams{
 		ID: uuid.NewV7(), OrderID: o.ID, SiteID: o.SiteID, AccountID: o.AccountID,
 		Via: r.Via, Credits: f.Amount, RequestedCredits: r.Credits, Amount: amount.Returned, WithFee: withFee, RefundKey: caps.Has(CapRefundKey),
-		Reason: r.Reason, RequestedBy: r.User, IdemKey: r.Key, SecondRequired: limits.needsSecondApproval(f.Amount),
+		Reason: r.Reason, RequestedBy: r.User, RequestedByAgent: r.Agent, IdemKey: r.Key, SecondRequired: limits.needsSecondApproval(f.Amount),
 	})
 	if err != nil {
 		return row, err
 	}
-	return row, refundAudit(ctx, tx, row, r.User, "refund.request", r.Reason, "")
+	return row, refundAuditAs(ctx, tx, row, r.requester(), "refund.request", r.Reason, "")
 }
 
 func checkRefundTerms(t RefundTermsRow, o LockOrderRow, r RefundRequest, isAdmin bool) error {
@@ -263,7 +276,7 @@ func refundOf(row PaymentsRefund, currency platform.Currency) Refund {
 	return Refund{
 		ID: RefundID(row.ID), Order: OrderID(row.OrderID), SiteID: row.SiteID, AccountID: row.AccountID, State: row.State, Via: row.Via,
 		Credits: row.Credits, Amount: Money{Currency: currency, Minor: row.Amount}, Reason: row.Reason,
-		RequestedBy: row.RequestedBy, ApprovedBy: row.ApprovedBy, FirstApprovedBy: row.FirstApprovedBy,
+		RequestedBy: row.RequestedBy, ByAgent: row.RequestedByAgent, ApprovedBy: row.ApprovedBy, FirstApprovedBy: row.FirstApprovedBy,
 		SecondRequired: row.SecondRequired, ProviderRef: row.ProviderRef, Approved: row.ApprovedBy != nil,
 		CreatedAt: row.CreatedAt, FinishedAt: finished,
 	}

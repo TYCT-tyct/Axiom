@@ -20,11 +20,15 @@ import (
 // not started; executing has; the others are where it ended, and a finished operation is never reused.
 type State string
 
-// The states an operation is in today; executing, failed, unknown and reverted come with the external calls.
+// The states an operation is in today; unknown and reverted come with later tools. An operation is executing when its
+// target took it in the approval's transaction and finishes it outside, as a refund the payment channel sends; it
+// ends succeeded or failed by that outcome (Conclude).
 const (
 	StatePending   State = "pending_approval"
 	StateApproved  State = "approved"
+	StateExecuting State = "executing"
 	StateSucceeded State = "succeeded"
+	StateFailed    State = "failed"
 	StateCanceled  State = "canceled"
 	StateExpired   State = "expired"
 	StateRejected  State = "rejected"

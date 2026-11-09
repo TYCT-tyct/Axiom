@@ -229,6 +229,11 @@ func (a adminAPI) GetOperationsApproval(ctx context.Context, r adminapi.GetOpera
 
 // ApproveOperationsApproval approves what the agent asked for and runs it, in one transaction.
 func (a adminAPI) ApproveOperationsApproval(ctx context.Context, r adminapi.ApproveOperationsApprovalRequestObject) (adminapi.ApproveOperationsApprovalResponseObject, error) {
+	if id, err := approvalIDOf(r.ApprovalId); err == nil { // a malformed ID is answered by decide
+		if err := a.prepareRefundRun(ctx, id); err != nil {
+			return nil, err
+		}
+	}
 	body, replayed, err := a.decide(ctx, "approveOperationsApproval", r.ApprovalId, r.Params.IdempotencyKey, r.Body.Reason, true)
 	if err != nil {
 		return nil, err

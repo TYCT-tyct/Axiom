@@ -25,6 +25,10 @@ export function useNow() {
   return now;
 }
 
+// ranOutside are the states of an approved operation that ran and is finished outside the approval: a refund the
+// channel is sending, or one it reported failed.
+const ranOutside = new Set<string>(["executing", "failed"]);
+
 // ApprovalState is where an approval is, in words: one still pending that the server says can no longer be decided is
 // past its expiry, though the sweep has not marked it yet; one still open says how long it has left, which matters more
 // than the clock time.
@@ -40,9 +44,16 @@ export function ApprovalState({ approval, now }: { approval: Approval; now: numb
       <State tone="neutral">{t("approvals.lapsed")}</State>
     );
   }
-  // An approval stands even when its operation then did not run (the target changed): that is not a success.
+  // An approval stands even when its operation then did not run (the target changed): that is not a success. One that
+  // ran and is finished by its target later, as a refund the channel sends, is in its operation's own state.
   if (approval.state === "approved" && approval.operation_state !== "succeeded") {
-    return <State tone="warn">{t("approvals.approvedNotRun")}</State>;
+    return ranOutside.has(approval.operation_state) ? (
+      <State tone={approval.operation_state === "failed" ? "bad" : "warn"}>
+        {t(`approvals.operationState.${approval.operation_state as "executing" | "failed"}`)}
+      </State>
+    ) : (
+      <State tone="warn">{t("approvals.approvedNotRun")}</State>
+    );
   }
   return (
     <State tone={approval.state === "approved" ? "good" : "neutral"}>{t(`approvals.state.${approval.state}`)}</State>
@@ -61,7 +72,7 @@ export function Minute({ at }: { at: string | undefined }) {
 
 // Target names what an approval acts on as a person knows it, with the ID below to copy; an approval from an older
 // node that read no name has the ID alone.
-const kinds = ["account", "supplier", "model"] as const;
+const kinds = ["account", "supplier", "model", "order"] as const;
 const isKind = (kind: string): kind is (typeof kinds)[number] => (kinds as readonly string[]).includes(kind);
 
 export function Target({ approval }: { approval: Approval }) {

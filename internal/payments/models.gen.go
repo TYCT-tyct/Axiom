@@ -122,6 +122,7 @@ type PaymentsRefund struct {
 	FinishedAt       pgtype.Timestamptz
 	SecondRequired   bool
 	FirstApprovedBy  *uuid.UUID
+	RequestedByAgent bool
 }
 
 type PaymentsResolution struct {

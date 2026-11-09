@@ -46,6 +46,7 @@ func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 		"operations.audit_digest":         QueueArchive,
 		"operations.audit_replica":        QueueArchive,
 		"operations.cap_reconcile":        QueueMoney,
+		"operations.refund_outcome":       QueueMoney,
 		"payments.reconcile":              QueueReconcile,
 		"payments.poll":                   QueueMoney,
 		"queue.discard_scan":              QueueArchive,

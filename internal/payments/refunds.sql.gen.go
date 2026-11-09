@@ -43,7 +43,7 @@ func (q *Queries) ApproveResolution(ctx context.Context, db DBTX, arg ApproveRes
 const claimRefund = `-- name: ClaimRefund :one
 UPDATE payments.refunds SET state = 'sending', sent_at = coalesce(sent_at, clock_timestamp()), attempts = attempts + 1,
     next_query_at = clock_timestamp() + interval '1 minute'
-WHERE id = $1 RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by
+WHERE id = $1 RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by, requested_by_agent
 `
 
 // The future due time is also a lease: the five-second call finishes before another worker can claim this attempt.
@@ -75,6 +75,7 @@ func (q *Queries) ClaimRefund(ctx context.Context, db DBTX, id uuid.UUID) (Payme
 		&i.FinishedAt,
 		&i.SecondRequired,
 		&i.FirstApprovedBy,
+		&i.RequestedByAgent,
 	)
 	return i, err
 }
@@ -145,9 +146,9 @@ func (q *Queries) FirstApproveRefund(ctx context.Context, db DBTX, arg FirstAppr
 
 const insertRefund = `-- name: InsertRefund :one
 INSERT INTO payments.refunds(id, order_id, site_id, account_id, state, via, credits, requested_credits, amount,
-    with_fee, refund_key, reason, requested_by, idem_key, second_required)
+    with_fee, refund_key, reason, requested_by, requested_by_agent, idem_key, second_required)
 VALUES ($1, $2, $3, $4, 'frozen', $5, $6, $7, $8,
-    $9, $10, $11, $12, $13, $14) RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by
+    $9, $10, $11, $12, $13, $14, $15) RETURNING id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by, requested_by_agent
 `
 
 type InsertRefundParams struct {
@@ -163,6 +164,7 @@ type InsertRefundParams struct {
 	RefundKey        bool
 	Reason           string
 	RequestedBy      uuid.UUID
+	RequestedByAgent bool
 	IdemKey          string
 	SecondRequired   bool
 }
@@ -181,6 +183,7 @@ func (q *Queries) InsertRefund(ctx context.Context, db DBTX, arg InsertRefundPar
 		arg.RefundKey,
 		arg.Reason,
 		arg.RequestedBy,
+		arg.RequestedByAgent,
 		arg.IdemKey,
 		arg.SecondRequired,
 	)
@@ -210,6 +213,7 @@ func (q *Queries) InsertRefund(ctx context.Context, db DBTX, arg InsertRefundPar
 		&i.FinishedAt,
 		&i.SecondRequired,
 		&i.FirstApprovedBy,
+		&i.RequestedByAgent,
 	)
 	return i, err
 }
@@ -255,7 +259,7 @@ func (q *Queries) InsertResolution(ctx context.Context, db DBTX, arg InsertResol
 }
 
 const listRefunds = `-- name: ListRefunds :many
-SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, r.second_required, r.first_approved_by, o.pay_currency FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
+SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, r.second_required, r.first_approved_by, r.requested_by_agent, o.pay_currency FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
 WHERE r.order_id = ANY ($1::uuid[])
 ORDER BY r.created_at, r.id
 `
@@ -301,6 +305,7 @@ func (q *Queries) ListRefunds(ctx context.Context, db DBTX, orderIds []uuid.UUID
 			&i.PaymentsRefund.FinishedAt,
 			&i.PaymentsRefund.SecondRequired,
 			&i.PaymentsRefund.FirstApprovedBy,
+			&i.PaymentsRefund.RequestedByAgent,
 			&i.PayCurrency,
 		); err != nil {
 			return nil, err
@@ -314,7 +319,7 @@ func (q *Queries) ListRefunds(ctx context.Context, db DBTX, orderIds []uuid.UUID
 }
 
 const listSiteRefunds = `-- name: ListSiteRefunds :many
-SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, r.second_required, r.first_approved_by, o.pay_currency AS pay_currency
+SELECT r.id, r.order_id, r.site_id, r.account_id, r.state, r.via, r.credits, r.requested_credits, r.amount, r.with_fee, r.refund_key, r.manual_only, r.provider_ref, r.reason, r.requested_by, r.approved_by, r.idem_key, r.attempts, r.sent_at, r.next_query_at, r.created_at, r.finished_at, r.second_required, r.first_approved_by, r.requested_by_agent, o.pay_currency AS pay_currency
 FROM payments.refunds r JOIN payments.orders o ON o.id = r.order_id
 WHERE r.site_id = $1
     AND ($2::text IS NULL OR r.state = $2::text)
@@ -379,6 +384,7 @@ func (q *Queries) ListSiteRefunds(ctx context.Context, db DBTX, arg ListSiteRefu
 			&i.PaymentsRefund.FinishedAt,
 			&i.PaymentsRefund.SecondRequired,
 			&i.PaymentsRefund.FirstApprovedBy,
+			&i.PaymentsRefund.RequestedByAgent,
 			&i.PayCurrency,
 		); err != nil {
 			return nil, err
@@ -392,7 +398,7 @@ func (q *Queries) ListSiteRefunds(ctx context.Context, db DBTX, arg ListSiteRefu
 }
 
 const lockRefund = `-- name: LockRefund :one
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by, requested_by_agent FROM payments.refunds WHERE id = $1 AND order_id = $2 FOR UPDATE
 `
 
 type LockRefundParams struct {
@@ -428,6 +434,7 @@ func (q *Queries) LockRefund(ctx context.Context, db DBTX, arg LockRefundParams)
 		&i.FinishedAt,
 		&i.SecondRequired,
 		&i.FirstApprovedBy,
+		&i.RequestedByAgent,
 	)
 	return i, err
 }
@@ -453,7 +460,7 @@ func (q *Queries) PaymentAdministrator(ctx context.Context, db DBTX, siteID uuid
 }
 
 const readRefund = `-- name: ReadRefund :many
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by FROM payments.refunds WHERE id = $1
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by, requested_by_agent FROM payments.refunds WHERE id = $1
 `
 
 func (q *Queries) ReadRefund(ctx context.Context, db DBTX, id uuid.UUID) ([]PaymentsRefund, error) {
@@ -490,6 +497,7 @@ func (q *Queries) ReadRefund(ctx context.Context, db DBTX, id uuid.UUID) ([]Paym
 			&i.FinishedAt,
 			&i.SecondRequired,
 			&i.FirstApprovedBy,
+			&i.RequestedByAgent,
 		); err != nil {
 			return nil, err
 		}
@@ -546,7 +554,7 @@ func (q *Queries) ReadResolution(ctx context.Context, db DBTX, arg ReadResolutio
 }
 
 const refundByKey = `-- name: RefundByKey :many
-SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by FROM payments.refunds WHERE order_id = $1 AND idem_key = $2
+SELECT id, order_id, site_id, account_id, state, via, credits, requested_credits, amount, with_fee, refund_key, manual_only, provider_ref, reason, requested_by, approved_by, idem_key, attempts, sent_at, next_query_at, created_at, finished_at, second_required, first_approved_by, requested_by_agent FROM payments.refunds WHERE order_id = $1 AND idem_key = $2
 `
 
 type RefundByKeyParams struct {
@@ -588,6 +596,7 @@ func (q *Queries) RefundByKey(ctx context.Context, db DBTX, arg RefundByKeyParam
 			&i.FinishedAt,
 			&i.SecondRequired,
 			&i.FirstApprovedBy,
+			&i.RequestedByAgent,
 		); err != nil {
 			return nil, err
 		}

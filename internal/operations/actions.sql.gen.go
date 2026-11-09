@@ -180,6 +180,57 @@ func (q *Queries) DecideApproval(ctx context.Context, db DBTX, arg DecideApprova
 	return decided_at, err
 }
 
+const executingOperations = `-- name: ExecutingOperations :many
+SELECT id, credential_id, idempotency_key, request_hash, tool, target_kind, target_id, params, risk, state, reason, run_id, result, error_code, created_at, updated_at FROM operations.operations
+WHERE state = 'executing' AND tool = $1 AND id > $2::uuid
+ORDER BY id
+LIMIT $3
+`
+
+type ExecutingOperationsParams struct {
+	Tool  string
+	After uuid.UUID
+	Batch int32
+}
+
+// The operations of a tool waiting for their target's outcome, in ID order after @after (operations_executing).
+func (q *Queries) ExecutingOperations(ctx context.Context, db DBTX, arg ExecutingOperationsParams) ([]OperationsOperation, error) {
+	rows, err := db.Query(ctx, executingOperations, arg.Tool, arg.After, arg.Batch)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []OperationsOperation
+	for rows.Next() {
+		var i OperationsOperation
+		if err := rows.Scan(
+			&i.ID,
+			&i.CredentialID,
+			&i.IdempotencyKey,
+			&i.RequestHash,
+			&i.Tool,
+			&i.TargetKind,
+			&i.TargetID,
+			&i.Params,
+			&i.Risk,
+			&i.State,
+			&i.Reason,
+			&i.RunID,
+			&i.Result,
+			&i.ErrorCode,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertApproval = `-- name: InsertApproval :one
 INSERT INTO operations.approvals (id, operation_id, tier, state, summary, reasons, requested_at, expires_at)
 SELECT $1, $2, 'human', 'pending', $3, $4::text[], c.at,

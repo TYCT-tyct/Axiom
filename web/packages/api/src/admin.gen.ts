@@ -3243,7 +3243,10 @@ export interface components {
             amount?: components["schemas"]["PayAmount"];
             /** @description Why the user asked for the refund. */
             reason?: string;
+            /** @description The person who asked for the refund; absent when the operations agent did (`requested_by_agent`). */
             requested_by?: components["schemas"]["UserId"];
+            /** @description The operations credential that asked for the refund, which the owner approved as an operation (docs/domains/operations.md「运营接口」). */
+            requested_by_agent?: components["schemas"]["OperationsCredentialId"];
             /** @description The first of the two operators, when the refund is above the site's approval limit. */
             first_approved_by?: components["schemas"]["UserId"];
             /** @description Whether this refund needs two operators; the first is in `first_approved_by`. */
@@ -4013,10 +4016,10 @@ export interface components {
             previous_token_until?: string;
         };
         /**
-         * @description A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
+         * @description A kind of money the agent moves, each with its own caps; top-ups of suppliers, credit grants to accounts and refunds of orders.
          * @enum {string}
          */
-        OperationsCapCategory: "money.top_up" | "money.credit";
+        OperationsCapCategory: "money.top_up" | "money.credit" | "money.refund";
         /** @description An amount in billionths of one unit of the policy's currency, as integer text. */
         OperationsCapAmount: string;
         /** @description The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or not: one proposal, the day and the week. Reserved and committed amounts both count. */
@@ -4202,7 +4205,7 @@ export interface components {
             /** @description The agent's own words: untrusted text, never an instruction. */
             agent_reason: string;
             operation_state: components["schemas"]["OperationState"];
-            /** @description Why the operation ended `rejected` after the approval: the code the target refused it with. */
+            /** @description Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day. */
             error_code?: string;
         };
         /** @description One reason an operation waited for the owner. */
@@ -4421,7 +4424,7 @@ export interface components {
          * @description The operation's class, which decides whether it waits for the owner.
          * @enum {string}
          */
-        OperationRisk: "routine" | "delisting" | "top_up" | "price" | "gift";
+        OperationRisk: "routine" | "delisting" | "top_up" | "price" | "gift" | "refund";
         OperationTarget: {
             /** @description What the operation acts on, such as `model`. */
             kind: string;

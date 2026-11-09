@@ -20,17 +20,20 @@ import (
 // Category is a kind of money the agent moves, each with its own caps (docs/domains/operations.md「转账的累计金额上限」).
 type Category string
 
-// The categories: a top-up of a supplier, which the agent proposes, the owner pays and the agent confirms arrived; and a
-// credit grant to an account, which the owner approves and which gives the credit when it runs.
+// The categories: a top-up of a supplier, which the agent proposes, the owner pays and the agent confirms arrived; a
+// credit grant to an account, which the owner approves and which gives the credit when it runs; and a refund of an
+// order, which the owner approves and the payment channel then sends.
 const (
 	CategoryTopUp  Category = "money.top_up"
 	CategoryCredit Category = "money.credit"
+	CategoryRefund Category = "money.refund"
 )
 
-// The risk classes of a top-up and a credit grant.
+// The risk classes of a top-up, a credit grant and a refund.
 const (
-	RiskTopUp Risk = "top_up"
-	RiskGift  Risk = "gift"
+	RiskTopUp  Risk = "top_up"
+	RiskGift   Risk = "gift"
+	RiskRefund Risk = "refund"
 )
 
 // autonomous is whether a proposal of c within every autonomous limit needs nobody: a top-up does; a credit grant
@@ -156,9 +159,10 @@ func weigh(p CapPolicy, c counters, amount int64) ([]Reason, error) {
 // ProposeMoney is Propose for a proposal that moves m: it locks m's policy and counters, finds a retry of the key as
 // Propose does, and then refuses an amount over a hard limit (*CapExceeded, nothing written), asks the owner for one
 // over an autonomous limit, in a paused scope or of a category that always asks, and reserves the amount in the category's day and week and the
-// object's day until the end of the UTC day. The caller runs one that needs nobody in tx and settles it, as with
+// object's day until the end of the UTC day, a refund's until its outcome (untilOutcome). The caller runs one that needs nobody in tx and settles it, as with
 // Propose. A policy-less scope is ErrNoCapPolicy. The reservation ends when the operation is refused, expires or is canceled (release), when the
-// agent confirms the money (CommitReservation), or at the end of its day (ExpireReservations).
+// agent confirms the money (CommitReservation), when an executing operation's outcome is known (Conclude), or at the end
+// of its day (ExpireReservations).
 func ProposeMoney(ctx context.Context, tx pg.Tx, p Proposal, m Transfer) (Operation, bool, error) {
 	policy, err := lockPolicy(ctx, tx, m.Category, m.Site)
 	if err != nil {
@@ -207,7 +211,7 @@ func reserve(ctx context.Context, tx pg.Tx, op Operation, m Transfer, policy Cap
 	if err := q.InsertMoneyAction(ctx, tx, InsertMoneyActionParams{
 		OperationID: op.ID, Category: string(m.Category), SiteID: m.Site, ObjectKind: m.Object.Kind, ObjectID: m.Object.ID,
 		Amount: m.Amount, Currency: m.Currency.String(), Basis: basis, PolicyRev: policy.Rev, DayStart: w.DayStart,
-		WeekStart: w.WeekStart, ExpiresAt: w.DayEnd,
+		WeekStart: w.WeekStart, ExpiresAt: m.Category.expiry(w),
 	}); err != nil {
 		return fmt.Errorf("reserve operation %s: %w", op.ID, err)
 	}
@@ -258,20 +262,6 @@ func capDetail(p CapPolicy, c counters, amount int64) map[string]any {
 		"object_daily_used": text(used(c.objectDay)), "object_daily_max": text(p.ObjectDaily),
 		"daily_count": c.day.Count, "daily_count_max": p.DailyCount, "paused": p.Paused != nil,
 	}
-}
-
-// Reservation is a money operation's reservation as it is now.
-type Reservation struct {
-	Operation uuid.UUID
-	Category  Category
-	Object    Target
-	Amount    int64
-	Currency  string
-	Basis     []byte
-	State     string
-	Expires   time.Time
-	Proof     string
-	Settled   *time.Time
 }
 
 // CheckReservation is what an approval of op, a money operation tx has locked, rechecks before it runs: the reservation
@@ -325,7 +315,7 @@ func CommitReservation(ctx context.Context, tx pg.Tx, confirm Operation, proposa
 	if err != nil {
 		return Reservation{}, err
 	}
-	return commit(ctx, tx, m, confirm, proof)
+	return commit(ctx, tx, m, confirm, proof, audit.OperationsAgent(confirm.Credential))
 }
 
 // CommitApproved is the run of op, a money operation the owner approved, that moved its money in tx: its reservation,
@@ -339,13 +329,13 @@ func CommitApproved(ctx context.Context, tx pg.Tx, op Operation, proof string) (
 	case len(rows) == 0:
 		return Reservation{}, ErrNotReserved
 	}
-	return commit(ctx, tx, rows[0], op, proof)
+	return commit(ctx, tx, rows[0], op, proof, audit.OperationsAgent(op.Credential))
 }
 
-// commit moves m, the reservation of an operation tx holds, to committed, confirmed by operation by with proof, as the
-// agent's. Only the holder of its operation locks a reservation, so it is locked last, after its scope, and checked
+// commit moves m, the reservation of an operation tx holds, to committed, confirmed by operation by with proof, as
+// actor's. Only the holder of its operation locks a reservation, so it is locked last, after its scope, and checked
 // then by the clock after every wait: a confirmation that waited past midnight does not commit yesterday's.
-func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation, proof string) (Reservation, error) {
+func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation, proof string, actor audit.Actor) (Reservation, error) {
 	c, err := lockScope(ctx, tx, m)
 	if err != nil {
 		return Reservation{}, err
@@ -365,7 +355,7 @@ func commit(ctx context.Context, tx pg.Tx, m OperationsMoneyAction, by Operation
 		return Reservation{}, fmt.Errorf("commit the reservation of operation %s: %w", m.OperationID, err)
 	}
 	m.State, m.Proof = "committed", &proof
-	return reservationOf(m), recordReservation(ctx, tx, audit.OperationsAgent(by.Credential), "reservation.commit", m, by.Reason)
+	return reservationOf(m), recordReservation(ctx, tx, actor, "reservation.commit", m, by.Reason)
 }
 
 // lockProposal locks credential's succeeded money proposal on object and reads its reservation, which commit locks.
@@ -480,21 +470,4 @@ func recordReservation(ctx context.Context, tx pg.Tx, actor audit.Actor, action 
 			"amount": m.Amount, "currency": m.Currency, "state": m.State, "day_start": m.DayStart, "week_start": m.WeekStart,
 		},
 	})
-}
-
-// ReservationOf reads operation id's reservation; found is false when it moves no money.
-func ReservationOf(ctx context.Context, tx pg.Tx, id uuid.UUID) (Reservation, bool, error) {
-	rows, err := New().MoneyActionOf(ctx, tx, id)
-	if err != nil || len(rows) == 0 {
-		return Reservation{}, false, err
-	}
-	return reservationOf(rows[0]), true, nil
-}
-
-func reservationOf(m OperationsMoneyAction) Reservation {
-	return Reservation{
-		Operation: m.OperationID, Category: Category(m.Category), Object: Target{Kind: m.ObjectKind, ID: m.ObjectID},
-		Amount: m.Amount, Currency: m.Currency, Basis: m.Basis, State: m.State, Expires: m.ExpiresAt, Proof: deref(m.Proof),
-		Settled: m.SettledAt,
-	}
 }

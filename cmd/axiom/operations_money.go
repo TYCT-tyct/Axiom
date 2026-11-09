@@ -305,20 +305,21 @@ func currentRate(ctx context.Context, tx pg.Tx, from string, to platform.Currenc
 			return r.Basis(), factor, nil
 		}
 	}
-	return platform.ExchangeRate{}, nil, &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "no exchange rate from the supplier's currency to the cap's"}
+	return platform.ExchangeRate{}, nil, &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: "no exchange rate from the money's currency to the cap's"}
 }
 
 // moneyResult is what a money operation answers: the amount its caps count, in which currency, what it was computed
-// from, and where its reservation is.
+// from, where its reservation is and until when.
 func moneyResult(r operations.Reservation) (map[string]any, error) {
 	var basis map[string]any
 	if err := jsonx.Unmarshal(r.Basis, &basis); err != nil {
 		return nil, fmt.Errorf("the basis of operation %s: %w", r.Operation, err)
 	}
-	return map[string]any{
-		"amount": strconv.FormatInt(r.Amount, 10), "currency": r.Currency, "basis": basis, "reservation": r.State,
-		"reserved_until": r.Expires.UTC().Format(time.RFC3339),
-	}, nil
+	result := map[string]any{"amount": strconv.FormatInt(r.Amount, 10), "currency": r.Currency, "basis": basis, "reservation": r.State}
+	if r.Expires != nil { // a refund's is held until its outcome
+		result["reserved_until"] = r.Expires.UTC().Format(time.RFC3339)
+	}
+	return result, nil
 }
 
 // runOf is the request's X-Axiom-Run-ID, or "" without one.

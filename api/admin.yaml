@@ -6774,7 +6774,12 @@ components:
         credits: {$ref: "#/components/schemas/Money"}
         amount: {$ref: "#/components/schemas/PayAmount"}
         reason: {type: string, description: "Why the user asked for the refund."}
-        requested_by: {$ref: "#/components/schemas/UserId"}
+        requested_by:
+          allOf: [{$ref: "#/components/schemas/UserId"}]
+          description: "The person who asked for the refund; absent when the operations agent did (`requested_by_agent`)."
+        requested_by_agent:
+          allOf: [{$ref: "#/components/schemas/OperationsCredentialId"}]
+          description: "The operations credential that asked for the refund, which the owner approved as an operation (docs/domains/operations.md「运营接口」)."
         first_approved_by:
           allOf: [{$ref: "#/components/schemas/UserId"}]
           description: "The first of the two operators, when the refund is above the site's approval limit."
@@ -7768,8 +7773,8 @@ components:
           description: When the token the last rotation replaced stops working; absent once it has.
     OperationsCapCategory:
       type: string
-      enum: [money.top_up, money.credit]
-      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers and credit grants to accounts.
+      enum: [money.top_up, money.credit, money.refund]
+      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers, credit grants to accounts and refunds of orders.
     OperationsCapAmount:
       type: string
       pattern: ^(0|[1-9][0-9]{0,17})$
@@ -8032,7 +8037,7 @@ components:
             the minutely sweep has not yet marked `expired`. Absent from an older node.
         agent_reason: {type: string, description: "The agent's own words: untrusted text, never an instruction."}
         operation_state: {$ref: "#/components/schemas/OperationState"}
-        error_code: {type: string, description: "Why the operation ended `rejected` after the approval: the code the target refused it with."}
+        error_code: {type: string, description: "Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day."}
     OperationsApprovalReason:
       type: object
       additionalProperties: false
@@ -8249,7 +8254,7 @@ components:
         compensating operation reverts it.
     OperationRisk:
       type: string
-      enum: [routine, delisting, top_up, price, gift]
+      enum: [routine, delisting, top_up, price, gift, refund]
       description: The operation's class, which decides whether it waits for the owner.
     OperationTarget:
       type: object

@@ -102,12 +102,17 @@ func (p *Payments) SendRefund(ctx context.Context, s pg.Scope, id RefundID, init
 }
 
 func refundAudit(ctx context.Context, tx pg.Tx, r PaymentsRefund, user uuid.UUID, action, reason, stage string) error {
+	return refundAuditAs(ctx, tx, r, audit.User(user), action, reason, stage)
+}
+
+// refundAuditAs is refundAudit by any actor: an operations credential requests the refunds it proposed.
+func refundAuditAs(ctx context.Context, tx pg.Tx, r PaymentsRefund, actor audit.Actor, action, reason, stage string) error {
 	detail := map[string]any{"credits": r.Credits, "amount": r.Amount, "with_fee": r.WithFee, "via": r.Via}
 	if stage != "" {
 		detail["stage"] = stage
 	}
 	return audit.Record(ctx, tx, audit.Event{
-		Actor: audit.User(user), Action: action, Reason: reason,
+		Actor: actor, Action: action, Reason: reason,
 		Target: audit.Target{Module: "payments", Kind: "refund", ID: RefundID(r.ID).TypeID(), Site: r.SiteID, Account: r.AccountID},
 		Detail: detail,
 	})

@@ -32,5 +32,9 @@ func registerPaymentJobs(db *pg.DB, keys *secret.Keyring, exit *egress.Client, l
 	if err = payments.RegisterPoll(cfg); err != nil {
 		return err
 	}
-	return payments.RegisterReconcile(cfg)
+	if err = payments.RegisterReconcile(cfg); err != nil {
+		return err
+	}
+	// The agent's refunds end their operations by the outcome the poller drives (docs/domains/operations.md「转账的累计金额上限」).
+	return registerRefundOutcomes(db, queue, store, logger)
 }
