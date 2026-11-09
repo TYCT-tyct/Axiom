@@ -112,8 +112,10 @@ func (o operationsAPI) proposeRefund(ctx context.Context, tx pg.Tx, service *pay
 		return operations.Operation{}, false, err
 	}
 	if quote.Credits != credits { // the batch has less left than the order's terms allow: the refund would shrink
-		return operations.Operation{}, false, &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable,
-			message: fmt.Sprintf("only %d billionths of the order's credits are unused now", quote.Credits)}
+		return operations.Operation{}, false, &apiError{
+			status: http.StatusUnprocessableEntity, code: codeUnprocessable,
+			message: fmt.Sprintf("only %d billionths of the order's credits are unused now", quote.Credits),
+		}
 	}
 	m, err := refundTransfer(ctx, tx, account, currency, quote)
 	if err != nil {

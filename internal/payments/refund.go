@@ -70,6 +70,14 @@ func (r RefundRequest) check() error {
 	return nil
 }
 
+// requester is who asked for the refund, as the audit names them.
+func (r RefundRequest) requester() audit.Actor {
+	if r.Agent {
+		return audit.OperationsAgent(r.User)
+	}
+	return audit.User(r.User)
+}
+
 func validReason(s string, maxLen int) bool {
 	return strings.TrimSpace(s) != "" && len(s) <= maxLen && !invalidPaymentText(s)
 }
@@ -222,11 +230,7 @@ func (p *Payments) freezeRefund(ctx context.Context, tx pg.Tx, o LockOrderRow, r
 	if err != nil {
 		return row, err
 	}
-	requester := audit.User(r.User)
-	if r.Agent {
-		requester = audit.OperationsAgent(r.User)
-	}
-	return row, refundAuditAs(ctx, tx, row, requester, "refund.request", r.Reason, "")
+	return row, refundAuditAs(ctx, tx, row, r.requester(), "refund.request", r.Reason, "")
 }
 
 func checkRefundTerms(t RefundTermsRow, o LockOrderRow, r RefundRequest, isAdmin bool) error {

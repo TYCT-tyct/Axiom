@@ -34,21 +34,8 @@ var quoteAgent, requestAgent agentRequest = (*Payments).QuoteAgentRefundTx, (*Pa
 // its outcome is read back by the key.
 func TestAgentRefund(t *testing.T) {
 	w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
-	var owner OrderOwner
-	if err := w.tx(w.p.platform, func(tx pg.Tx) (err error) {
-		owner, err = OrderOwnerTx(t.Context(), tx, o.ID)
-		return err
-	}); err != nil || owner.Site != w.siteA || owner.Account != w.account {
-		t.Fatalf("the order's owner: %+v %v", owner, err)
-	}
 	r := agentRefund(o, o.Credits/2, "op-1")
-	quote, err := w.requestAgentRefund(quoteAgent, r)
-	if err != nil || quote.Credits != o.Credits/2 || quote.Amount.Minor <= 0 {
-		t.Fatalf("the quote: %+v %v", quote, err)
-	}
-	if n := w.count(w.p.platform, "SELECT count(*) FROM payments.refunds") + w.count(w.p.platform, "SELECT count(*) FROM platform.audit_log WHERE action LIKE 'refund.%'"); n != 0 {
-		t.Fatalf("the quote left %d rows", n)
-	}
+	quote := w.quoted(o, r)
 	refund, err := w.requestAgentRefund(requestAgent, r)
 	if err != nil || refund.Credits != quote.Credits || refund.Amount != quote.Amount || !refund.Approved || !refund.ByAgent || refund.RequestedBy != r.Agent || *refund.ApprovedBy != r.Approver {
 		t.Fatalf("the request: %+v %v", refund, err)
@@ -65,6 +52,27 @@ func TestAgentRefund(t *testing.T) {
 	}
 	w.dueRefunds()
 	w.expectAgentRefundsOf(o)
+}
+
+// quoted checks whose order o is and quotes r of it, which must leave no refund and no audit entry.
+func (w *world) quoted(o Order, r AgentRefund) Refund {
+	t := w.t
+	t.Helper()
+	var owner OrderOwner
+	if err := w.tx(w.p.platform, func(tx pg.Tx) (err error) {
+		owner, err = OrderOwnerTx(t.Context(), tx, o.ID)
+		return err
+	}); err != nil || owner.Site != w.siteA || owner.Account != w.account {
+		t.Fatalf("the order's owner: %+v %v", owner, err)
+	}
+	quote, err := w.requestAgentRefund(quoteAgent, r)
+	if err != nil || quote.Credits != r.Credits || quote.Amount.Minor <= 0 {
+		t.Fatalf("the quote: %+v %v", quote, err)
+	}
+	if n := w.count(w.p.platform, "SELECT count(*) FROM payments.refunds") + w.count(w.p.platform, "SELECT count(*) FROM platform.audit_log WHERE action LIKE 'refund.%'"); n != 0 {
+		t.Fatalf("the quote left %d rows", n)
+	}
+	return quote
 }
 
 // expectAgentRefundsOf checks what AgentRefundOf reads of o after the agent's refund under op-1 succeeded: it, nothing

@@ -122,3 +122,23 @@ func (r reservations) listExecuting() []operations.Operation {
 	}
 	return ops
 }
+
+// refund is pm as a refund of an order of an account: the same amounts in the money.refund caps, counted on the account.
+func refund(pm proposal) proposal {
+	account := pm.p.Target.ID
+	pm.p.Tool, pm.p.Risk, pm.p.Target = "refund_request", operations.RiskRefund, operations.Target{Kind: "order", ID: "ord_" + account}
+	pm.m.Category, pm.m.Object = operations.CategoryRefund, operations.Target{Kind: "account", ID: account}
+	return pm
+}
+
+// as is pm in category: a top-up, a credit grant or a refund.
+func as(category operations.Category, pm proposal) proposal {
+	switch category {
+	case operations.CategoryCredit:
+		return gift(pm)
+	case operations.CategoryRefund:
+		return refund(pm)
+	case operations.CategoryTopUp:
+	}
+	return pm
+}
