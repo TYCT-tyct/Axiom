@@ -3,12 +3,15 @@ package main
 import (
 	"encoding/json/v2" //nolint:depguard // decodes the node's own responses; jsonx guards input from outside
 	"fmt"
+	"hash/fnv"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+	"uuid"
 
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/pgtest"
@@ -368,5 +371,66 @@ func TestANodeExitsWhenItsHolderIsReaped(t *testing.T) {
 		}
 	case <-time.After(40 * time.Second):
 		t.Fatal("the node kept running with a reaped holder")
+	}
+}
+
+// TestANodeServesThroughADatabaseOutage: a database the node cannot reach is no reason to stop (docs/performance.md
+// 「怎么验证」, CONTRIBUTING.md「检查清单」). The node reaches it through a proxy that cuts every connection and refuses new
+// ones, as scenario 6 of the load test does; the session that holds the node's name goes with them. Once the database answers again the node holds
+// its name on a new session, still runs, is ready, and serves a call that settles.
+func TestANodeServesThroughADatabaseOutage(t *testing.T) {
+	t.Parallel()
+	w := newCallWorld(t)
+	through, err := url.Parse(w.database.App)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := newFaultProxy(t, through.Host)
+	through.Host = proxy.addr()
+	id := uuid.New().String()
+	w.price()
+	n := w.start("AXIOM_DATABASE_URL="+through.String(), "AXIOM_NODE_ID="+id)
+	awaitWhileRunning(t, n, "the node to be ready", func() bool { return n.ready(t) })
+	held := func() string { return w.nameSession(id) }
+	before := held()
+	if before == "" {
+		t.Fatal("no session holds the node's name")
+	}
+	proxy.setDown(true)
+	awaitWhileRunning(t, n, "the database to end the node's sessions", func() bool { return held() == "" })
+	proxy.setDown(false)
+	awaitWhileRunning(t, n, "the node to hold its name again", func() bool { s := held(); return s != "" && s != before })
+	awaitWhileRunning(t, n, "the node to be ready again", func() bool { return n.ready(t) })
+	r := w.call(n, "/v1/responses", w.richKey, responsesCall)
+	if r.status != http.StatusOK {
+		t.Fatalf("a call after the outage: %d %s", r.status, r.body)
+	}
+	w.checkSettled(r, responsesCharge)
+}
+
+// nameSession is the server process that holds the name of node id, or "" when none does. The name is an advisory lock
+// whose 64-bit key is the FNV-1a hash of "axiom node " and the id (pg.DB.Hold, kv's register); the server shows its two
+// halves.
+func (w *callWorld) nameSession(id string) string {
+	sum := fnv.New64a()
+	_, _ = sum.Write([]byte("axiom node " + id)) // a hash never fails to take bytes
+	key := sum.Sum64()
+	return w.query(`SELECT pid::text FROM pg_locks WHERE locktype = 'advisory' AND granted AND objsubid = 1
+		AND classid = $1::bigint::oid AND objid = $2::bigint::oid`, int64(key>>32), int64(key&0xffffffff))
+}
+
+// awaitWhileRunning waits until done holds, and fails the test if the node ends first. The minute only catches a wait
+// that never ends.
+func awaitWhileRunning(t *testing.T, n runningNode, what string, done func() bool) {
+	t.Helper()
+	for deadline := time.Now().Add(time.Minute); !done(); time.Sleep(100 * time.Millisecond) {
+		select {
+		case <-n.finished:
+			t.Fatalf("the node ended while waiting for %s: %v", what, n.ended())
+		default:
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("waited a minute for %s", what)
+		}
 	}
 }

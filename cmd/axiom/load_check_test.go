@@ -101,6 +101,9 @@ func (lw *loadWorld) finish(n *loadNode) {
 		lw.probe()
 	} else {
 		lw.t.Errorf("the node exited during the scenario: %v", n.result)
+		for _, line := range n.log.said() {
+			lw.note("node output", "%s", line)
+		}
 	}
 	if err := n.stop(); err != nil {
 		lw.t.Errorf("the node's shutdown: %v", err)

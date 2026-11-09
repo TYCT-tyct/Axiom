@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -102,5 +104,80 @@ func TestHoldEndsWithItsConnection(t *testing.T) {
 	}
 	if err := next.Release(t.Context()); err != nil {
 		t.Fatalf("release: %v", err)
+	}
+}
+
+// TestRetakeTakesTheNameBackOnlyFromItself: a holder whose connection was lost takes its name back while the server still
+// keeps its old session, as it does after a network cut until its keepalive finds out, and while the server keeps a
+// session of an earlier retake that got the lock though its answer never arrived. It is refused with ErrHeld only when
+// another session took the name in between, never because the database cannot be reached.
+func TestRetakeTakesTheNameBackOnlyFromItself(t *testing.T) {
+	t.Parallel()
+	url := pgtest.New(t).App
+	holder, other := open(t, url), open(t, url)
+	held, err := holder.Hold(t.Context(), "node:a", time.Minute)
+	if err != nil {
+		t.Fatalf("hold: %v", err)
+	}
+	t.Cleanup(func() { _ = held.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // its session was ended by the retake
+	unreachable, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := held.Retake(unreachable); err == nil || errors.Is(err, pg.ErrHeld) {
+		t.Fatalf("retake without a database to reach: %v, want an error other than ErrHeld, which would end the holder", err)
+	}
+	tag, key := nameHolder(t, other)
+	if _, err := held.Retake(t.Context()); err != nil {
+		t.Fatalf("retake while the server keeps the holder's old session: %v", err)
+	}
+	cutNameHolders(t, other)
+	// A retake's session the holder never heard back from: it carries the hold's name and got the lock.
+	orphan, err := pgx.Connect(t.Context(), url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = orphan.Close(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the retake ends its session
+	if _, err := orphan.Exec(t.Context(), `SELECT set_config('application_name', $1, false), pg_advisory_lock($2)`, tag, key); err != nil {
+		t.Fatalf("lock as a session of the hold: %v", err)
+	}
+	again, err := held.Retake(t.Context())
+	if err != nil {
+		t.Fatalf("retake while a session of the hold that the holder lost holds the name: %v", err)
+	}
+	t.Cleanup(func() { _ = again.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // cut below
+	cutNameHolders(t, other)
+	taken, err := other.Hold(t.Context(), "node:a", time.Minute)
+	if err != nil {
+		t.Fatalf("another session taking the freed name: %v", err)
+	}
+	t.Cleanup(func() { _ = taken.Release(context.WithoutCancel(t.Context())) }) //nolint:errcheck // the test is over
+	if _, err := again.Retake(t.Context()); !errors.Is(err, pg.ErrHeld) {
+		t.Fatalf("retake of a name another session holds: %v, want ErrHeld", err)
+	}
+}
+
+// nameHolder is the application_name of the one session that holds a name, and the name's lock key.
+func nameHolder(t *testing.T, db *pg.DB) (tag string, key int64) {
+	t.Helper()
+	if err := db.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT a.application_name, (l.classid::bigint << 32) | l.objid::bigint
+			FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+			WHERE l.locktype = 'advisory' AND l.granted AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`).Scan(&tag, &key)
+	}); err != nil {
+		t.Fatalf("read the session that holds the name: %v", err)
+	}
+	return tag, key
+}
+
+// cutNameHolders ends every other session that holds a name, as a database restart or a cut network ends it, and waits
+// until they are gone.
+func cutNameHolders(t *testing.T, db *pg.DB) {
+	t.Helper()
+	if err := db.Tx(t.Context(), pg.Scope{}, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), `SELECT pg_terminate_backend(l.pid, 30000) FROM pg_locks l
+			WHERE l.locktype = 'advisory' AND l.granted AND l.pid <> pg_backend_pid()
+			AND l.database = (SELECT oid FROM pg_database WHERE datname = current_database())`)
+		return err
+	}); err != nil {
+		t.Fatalf("cut the sessions that hold names: %v", err)
 	}
 }
