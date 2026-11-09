@@ -37,8 +37,10 @@ if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
   registry_args+=(--cgroup-parent "$AXIOM_TEST_CGROUP_PARENT")
   builder_args+=(--driver-opt "cgroup-parent=$AXIOM_TEST_CGROUP_PARENT")
 fi
-docker run -d --name "$registry" "${registry_args[@]}" -p 127.0.0.1::5000 registry:3.0.0 > /dev/null
-repo="$(docker port "$registry" 5000/tcp)/axiom-signing"
+# shellcheck source=scripts/ci/publish.sh
+. scripts/ci/publish.sh
+address="127.0.0.1:$(run_published "$registry" 5000 "${registry_args[@]}" registry:3.0.0)"
+repo="$address/axiom-signing"
 # Host networking is confined to the builder so it can reach this loopback registry.
 docker buildx create --name "$builder" --driver docker-container --driver-opt network=host "${builder_args[@]}"
 

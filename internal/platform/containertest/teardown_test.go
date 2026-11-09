@@ -51,15 +51,18 @@ func TestCleanupStopFails(t *testing.T) {
 
 func stopFailsOnce(t *testing.T) {
 	var failed atomic.Bool
-	c, err := testcontainers.Run(t.Context(), "nginx:alpine", WithHostPolicy(),
-		testcontainers.WithAdditionalLifecycleHooks(testcontainers.ContainerLifecycleHooks{
-			PreStops: []testcontainers.ContainerHook{func(context.Context, testcontainers.Container) error {
-				if failed.CompareAndSwap(false, true) {
-					return errors.New("injected: Post /stop?t=10: context deadline exceeded")
-				}
-				return nil
-			}},
-		}))
+	c, err := Start(t.Context(), func() (*testcontainers.DockerContainer, error) {
+		return testcontainers.Run(t.Context(), "nginx:alpine", testcontainers.WithExposedPorts("80/tcp"),
+			testcontainers.WithAdditionalLifecycleHooks(testcontainers.ContainerLifecycleHooks{
+				PreStops: []testcontainers.ContainerHook{func(context.Context, testcontainers.Container) error {
+					if failed.CompareAndSwap(false, true) {
+						return errors.New("injected: Post /stop?t=10: context deadline exceeded")
+					}
+					return nil
+				}},
+			}),
+			WithHostPolicy(t.Context()))
+	})
 	if err != nil {
 		t.Fatalf("start the container: %v", err)
 	}
