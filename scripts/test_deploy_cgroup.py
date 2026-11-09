@@ -36,11 +36,11 @@ class DeploymentCgroup(unittest.TestCase):
 class RehearsalInspection(unittest.TestCase):
     def test_all_containers_including_setup_are_checked_before_removal(self):
         script = (ROOT / "scripts" / "ci" / "deploy-check.sh").read_text()
-        start = re.search(r"^start\(\).*?^}", script, re.M | re.S)[0]
+        start = "\n".join(re.search(rf"^{name}\(\).*?^}}", script, re.M | re.S)[0] for name in ("write_env", "start"))
         stubs = r'''
+bash() { [ "$1" = scripts/ops/up.sh ]; }
 compose() {
   case "$*" in
-    'up --detach --no-build '*|'exec -T postgres sh') return 0 ;;
     'ps --all --quiet')
       [ "$INVENTORY_STATUS" = 0 ] || return "$INVENTORY_STATUS"
       printf '%s\n' postgres valkey axiom migrate keys ;;

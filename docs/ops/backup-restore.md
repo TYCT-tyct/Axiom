@@ -114,12 +114,9 @@ WAL 仓库读不出来；逻辑 set 仍能用 age 私钥恢复。仓库里已经
 1. `deploy/.env` 设 `AXIOM_BACKUP_BUCKET`、`AXIOM_BACKUP_S3_*`、`AXIOM_BACKUP_CIPHER_PASS`（前缀不是 `axiom` 时还有
    `AXIOM_BACKUP_PREFIX`；WAL 用单独的桶时设 `AXIOM_BACKUP_WAL_BUCKET`，否则跟随备份桶；AWS S3 把
    `AXIOM_BACKUP_S3_URI_STYLE` 改成 `host`）。WAL 桶非空却不设口令时数据库拒绝启动并列出缺的变量。
-2. 数据库镜像从本仓库构建，不像程序镜像那样按 digest 拉取：
-
-   ```bash
-   docker compose -f deploy/compose.yaml --env-file deploy/.env build postgres
-   docker compose -f deploy/compose.yaml --env-file deploy/.env up --detach --wait postgres
-   ```
+2. 这些设置改的是数据库的环境，所以是一次数据库升级：按[生产入口](#生产入口)的部署命令加 `--database`，先停（排空）节点，
+   再从本仓库构建并替换数据库。节点在跑时不带 `--database` 的部署会失败，不会在节点底下换掉数据库。还没有部署过的机器
+   （没有节点在跑）照常部署即可。
 
 3. 第一次启动后马上建 stanza。之前 archive-push 会失败（仓库里还没有 `archive.info`），这是预期的，不是数据损坏：
 
@@ -412,15 +409,24 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
   -f deploy/compose.yaml -f deploy/compose.edge.yaml --env-file deploy/.env tmp/release/release.json
 ```
 
-入口按顺序拉取该 digest、发布本构建的前端资源、从本仓库构建数据库镜像、启动数据库、重放 `deploy/postgres/roles.sh`
-的角色授权、再以 `--no-build` 启动整套栈。任何一步失败即停：验签失败时没有 pull，也没有启动。不要把它拆成手工的
-`sed`、验签、`pull`、`up`：只从 `deploy/.env` 取镜像会验文件里的 A 而 Compose 拉环境变量里的 B，分成几段执行也没有
-失败控制。三份数据库口令须已在 `deploy/.env` 中，否则启动数据库或重放角色授权会失败并停下。
+入口按顺序拉取该 digest、发布本构建的前端资源，再交给 `scripts/ops/up.sh` 启动（CI 的部署检查也走它）。任何一步失败即停：
+验签失败时没有 pull，也没有启动。不要把它拆成手工的 `sed`、验签、`pull`、`up`：只从 `deploy/.env` 取值会验文件里的 A
+而 Compose 拉环境变量里的 B，分成几段执行也没有失败控制。三份数据库口令须已在 `deploy/.env` 中，否则启动数据库或重放
+角色授权会失败并停下。
+
+**应用发布不动数据库。** 节点在跑、数据库也在跑时，`up.sh` 要求数据库容器与这次的配置一致（同一个镜像，Compose 对
+`postgres` 服务算出的哈希与容器标签相同），重放角色授权，再用 `--no-deps` 启动除数据库以外的服务：迁移跑完才换节点，
+数据库容器不换。数据库的镜像（`deploy/postgres/` 有改动）或环境（`deploy/.env` 里归档桶、口令这类数据库读的值）变了，
+这一步什么都不改就失败：在旧节点还接流量时换掉数据库，在途调用会失去连接、结算受阻、节点持有的会话锁丢失，而节点的
+170 秒退出宽限只保护它自己收到停止信号之后的排空。数据库升级单独做，部署命令加 `--database`：先停节点（`stop` 给它
+`stop_grace_period` 排空：在途调用在共享期限内结束并结算，还没写进数据库的调用记录留在本地 spill、下次启动重放），再构建并替换数据库，最后启动整套栈。这期间服务中断，
+入口回 502；先停掉宿主上定时的备份作业，做完再恢复。没有节点在跑时（首次部署、整套栈已停）没有要排空的东西，直接走同一条
+构建数据库的路径。数据库镜像只在这条路径上构建：即使缓存命中，重新构建也会得到新的镜像 ID，Compose 会因此替换数据库（#605）。
 
 迁移和程序使用同一 digest；备份 manifest 的镜像字段也因此记录这个引用。恢复和回滚沿用发布记录里的摘要，不能将
 本地开发的 `axiom:local` 当生产交付物。数据库镜像不是发布产物：它的 Dockerfile 钉住 PostgreSQL 的基础 tag，pgBackRest 和
-三个入口脚本随本仓库走，所以 `scripts/ops/deploy.sh` 在启动数据库前先 `build postgres`，再用 `--no-build` 启动；升级它的
-内容和升级程序是两件事，升级后跑一次 `pgbackrest check` 和 `deploy/postgres` 的恢复测试。
+三个入口脚本随本仓库走，所以由 `scripts/ops/up.sh` 在替换数据库的路径上 `build postgres`，再用 `--no-build` 启动；升级它的
+内容和升级程序是两件事（见上文的 `--database`），升级后跑一次 `pgbackrest check` 和 `deploy/postgres` 的恢复测试。
 
 单独一个文件，是因为入口用的网络钉了子网（程序只认地址/CIDR，入口得有固定地址），而钉死的子网在跑多个项目的机器上可能
 撞车：没有入口的部署（`just up`、CI 的部署检查）不该带上它。
@@ -499,6 +505,11 @@ PATH="$tools:$PATH" bash scripts/ops/deploy.sh \
 - **入口分两个公开域名**：`accounts.site_domains` 的域名是主键，一个域名只属于一种 surface，所以控制台与模型 API 只能各用
   一个域名。代价是每个部署要三份 DNS 与证书，注册站点时也要三个 host；换来的是每种 surface 的来源限制能分开设，程序自己
   的拒绝逻辑不必改动。
+- **应用发布与数据库升级分开，而不是每次发布都重建数据库**：数据库镜像从本仓库构建，即使内容没变，重新构建也是新的镜像 ID，
+  旧入口因此每次发布都在旧节点接流量时替换数据库。选「节点在跑时数据库必须与配置一致、否则失败并要求 `--database`」：
+  普通发布只换节点、不碰数据库，数据库升级有明确的排空和停机。不选「按 Compose 自己判断是否重建」：它在镜像 ID 变化时就会重建，
+  正是要避免的；不选「普通发布照常构建、只在 Dockerfile 变了才重建」：部署机拿不到上次构建的输入，只能靠镜像 ID 判断。
+  代价是改了 `deploy/postgres/` 或数据库读的环境后，部署要显式加 `--database` 并承受一次停机；忘了加时失败，什么都不改。
 
 ## 待定
 
