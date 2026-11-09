@@ -32,7 +32,8 @@ type refundFixture struct {
 
 func newRefundFixture(t *testing.T) refundFixture {
 	t.Helper()
-	f := refundFixture{grantee: newGrantee(t)}
+	var f refundFixture
+	f.grantee = newGrantee(t)
 	f.token = f.creditAgent(`"refunds.manage","operations.money"`, `"platform":true`)
 	merchantBody := strings.NewReplacer(`"refund_enabled": false`, `"refund_enabled": true`, `"mode": "redirect"`, `"mode": "redirect", "refund": true`).
 		Replace(merchantJSON(f.siteID(), "Gateway", false, 0, "0", true))
