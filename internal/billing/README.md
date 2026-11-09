@@ -284,7 +284,7 @@ type LedgerEntry struct{ Book string; Amount int64; Currency string } // 已实�
 - **写入栅栏**：准入、追加在锁余额行之后，以 `FOR KEY SHARE` 读自己的持有者行，要求 `reaped_at IS NULL AND expires_at > clock_timestamp()`。
 - **实现**：`Start` 登记持有者，并建一条池外的专用连接（`pg.DB.Dedicated`）交给持有者；`Heartbeat`、`Reap` 在平台范围的事务里执行，都走这条连接，各自的重试仍是下一次调用。`Run` 把心跳和清理放在各自的 goroutine 里，每次心跳有以心跳周期为限的期限（重连也算在内）；心跳与回收可能同时到达，连接一次只跑一个事务，后来的排队，不再开第二条连接。`Run` 结束时关掉它。
 - **心跳**：每 10s `UPDATE … SET expires_at = clock_timestamp() + TTL WHERE holder=$h AND reaped_at IS NULL`，不检查是否已过期：库短暂不可用后，没被回收的仍能续上。普通更新不与 `FOR KEY SHARE` 冲突。影响 0 行即已被回收：`Run` 返回 `ErrReaped`，节点退出重启、换新持有者。连接不在任何一个池里，所以被调用占满的池不会推迟一次心跳（#217）：这条连接上的任何失败都丢掉连接，下一次调用重新连，数据库重启或网络断开后下一拍就落在新会话上（`TestHeartbeatBeatsWhileThePoolIsExhausted`、`TestDedicatedReconnectsAfterItsSessionIsKilled`）。
-- **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。这一次事务以半个心跳周期为限：它和心跳共用那条专用连接，等锁的回收不能占掉一拍；等不到锁就失败，30 秒后的下一轮再来，挂起的预留只是多等一轮（`TestTheReapDoesNotTakeABeat`）。
+- **回收**：清理先 `SELECT … FOR UPDATE` 持有者行（等在途的写事务结束、挡住新的），条件 `reaped_at IS NULL AND expires_at < clock_timestamp() − 宽限`，置 `reaped_at` 并提交；之后再逐个处理它名下的挂起预留，这时已不可能有新的。这一次事务以半个心跳周期为限：它和心跳共用那条专用连接，等锁的回收不能占掉一拍；等不到锁就失败，30 秒后的下一轮再来，挂起的预留只是多等一轮（`TestTheReapDoesNotTakeABeat`）。一轮清理只在本进程的持有者活着（`Alive`）、并且已连续 TTL + 宽限没有失效时才回收别人：数据库中断之后，每个持有者的上次心跳都旧了，活着的也一样，先连上数据库的那一轮若立刻回收，会赶在别的节点（和它自己）下一拍之前把它们都回收掉，每个节点都得退出，在途结算交给清理、不收费。刚启动的进程也先等这么久，崩溃前任的回收只因此推迟约等于重启所用的时间：前任的持有者在它最后一拍之后 TTL + 宽限才可回收，后继在自己启动之后 TTL + 宽限开始回收（`TestASweepReapsOnlyHoldersSilentWhileItHeardTheDatabase`）。
 - **截止时间**：每笔预留带 `deadline`（准入 + 单次调用最长 + 结算宽限）。过了截止时间仍挂起的，不论持有者是否活着都由清理处理（漏 `Settle`、永久性错误、panic）。节点身份只作诊断。
 
 ## 预留的状态
