@@ -1,11 +1,13 @@
 package operations_test
 
 import (
+	"errors"
 	"testing"
 	"uuid"
 
 	"axiom/internal/operations"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 // TestRefundOutcome: an approved refund is executing with its reservation held, out of every sweep's reach, until its
@@ -23,12 +25,7 @@ func TestRefundOutcome(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			r := newReservations(t)
-			policy := r.policy
-			policy.Category = operations.CategoryRefund
-			if _, err := r.setPolicy(t, policy, 0); err != nil {
-				t.Fatal(err)
-			}
+			r := newRefundReservations(t)
 			op := r.executing()
 			r.expectHeld(op)
 			r.conclude(op, c.succeeded)
@@ -41,6 +38,62 @@ func TestRefundOutcome(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestRefundAfterMidnight: an approval whose run waited past the end of the day its refund was reserved in does not
+// start it: the run is undone, the operation expires window_ended and the reservation is released, as the system's.
+// The day ends as the clock would, by moving the reservation and its day's counters to the day before.
+func TestRefundAfterMidnight(t *testing.T) {
+	t.Parallel()
+	r := newRefundReservations(t)
+	op, _, err := r.proposeMoney(t, refund(topUp(r.credential, uuid.NewV7(), nil, "acct_1", 5)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.Run(t.Context(), r.superuser, `UPDATE operations.money_actions SET day_start = day_start - interval '1 day'`,
+		`UPDATE operations.cap_counters SET window_start = window_start - interval '1 day' WHERE window_kind = 'day'`); err != nil {
+		t.Fatal(err)
+	}
+	var executed error
+	if _, err := r.in(t, func(tx pg.Tx) (operations.Operation, error) {
+		op, err := operations.Decide(t.Context(), tx, owner, op.Approval.ID, true, "ok")
+		if err != nil {
+			return op, err
+		}
+		if _, err := operations.CheckReservation(t.Context(), tx, op); err != nil {
+			return op, err
+		}
+		if _, err := tx.Exec(t.Context(), "SAVEPOINT operation_run"); err != nil {
+			return op, err
+		}
+		if _, executed = operations.Execute(t.Context(), tx, op, map[string]any{"refund_id": "rfd_1"}); executed == nil {
+			return op, nil
+		}
+		if _, err := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT operation_run"); err != nil {
+			return op, err
+		}
+		return operations.ExpireApproved(t.Context(), tx, op)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(executed, operations.ErrWindowEnded) {
+		t.Errorf("a run past midnight: %v", executed)
+	}
+	if got, want := r.outcome(op), "expired window_ended released 0+0#1 operation.expire:system,reservation.release:system"; got != want {
+		t.Errorf("after the run: %s, want %s", got, want)
+	}
+}
+
+// newRefundReservations is newReservations with the same limits for refunds on the platform.
+func newRefundReservations(t *testing.T) reservations {
+	t.Helper()
+	r := newReservations(t)
+	policy := r.policy
+	policy.Category = operations.CategoryRefund
+	if _, err := r.setPolicy(t, policy, 0); err != nil {
+		t.Fatal(err)
+	}
+	return r
 }
 
 // conclude ends op by its refund's outcome, as the outcome job does.
@@ -76,7 +129,7 @@ func (r reservations) outcome(op operations.Operation) string {
 		r.text(r.t, `SELECT reserved || '+' || committed || '#' || count FROM operations.cap_counters
 			WHERE category = 'money.refund' AND window_kind = 'day' AND object_kind = ''`) + " " +
 		r.text(r.t, `SELECT string_agg(action || ':' || actor_kind, ',' ORDER BY id) FROM platform.audit_log
-			WHERE action IN ('operation.execute', 'operation.succeed', 'operation.fail') OR action LIKE 'reservation.%'`)
+			WHERE action IN ('operation.execute', 'operation.succeed', 'operation.fail', 'operation.expire') OR action LIKE 'reservation.%'`)
 }
 
 // executing proposes a refund of 5, which waits for the owner, approves it and hands it to its target as the approval

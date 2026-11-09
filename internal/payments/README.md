@@ -38,6 +38,7 @@ func (p *Payments) PrepareRejectRefund(ctx context.Context, s pg.Scope, id Refun
 func RejectRefundTx(ctx context.Context, tx pg.Tx, id RefundID, user uuid.UUID, reason string) (Refund, error) // 调用方已 PrepareRejectRefund；在调用方事务里解冻并审计
 func (p *Payments) ListRefunds(ctx context.Context, s pg.Scope, orders []OrderID) (map[OrderID][]Refund, error) // 一页订单的退款，按退款创建顺序，一次查询
 type AgentRefund struct{} // 运营 agent 的渠道退款：订单、额度、理由、凭证、键（运营操作的 ID）、批准它的负责人和理由
+func (p *Payments) PrepareAgentRefund(ctx context.Context, order OrderID) error                         // 在报价和请求的事务之外推进账户的额度分配（billing.PrepareRefund），不做决定
 func (p *Payments) QuoteAgentRefundTx(ctx context.Context, tx pg.Tx, r AgentRefund) (Refund, error)   // 在回滚的保存点里跑一遍请求：同样的拒绝和报价，什么都不留
 func (p *Payments) RequestAgentRefundTx(ctx context.Context, tx pg.Tx, r AgentRefund) (Refund, error) // 在审批的事务里按管理员的渠道退款冻结，申请人是凭证，再以负责人 ApproveRefundTx；键幂等
 func (p *Payments) AgentRefundOf(ctx context.Context, order OrderID, key string) (Refund, bool, error) // 按订单和键读 agent 的退款，运营的结局任务用

@@ -47,6 +47,9 @@ func (o operationsAPI) RefundRequest(ctx context.Context, r operationsapi.Refund
 	if err != nil {
 		return nil, err
 	}
+	if err := service.PrepareAgentRefund(ctx, order); err != nil {
+		return nil, err
+	}
 	c, b := callOf(ctx), r.Body
 	p := operations.Proposal{
 		Credential: uuid.UUID(c.agent.ID()), Key: key, Tool: refundTool, Target: operations.Target{Kind: "order", ID: r.OrderId},
@@ -224,6 +227,29 @@ func (a adminAPI) runRefundRequest(ctx context.Context, tx pg.Tx, op operations.
 	}
 	result["refund_id"], result["refund_approved"] = refund.ID.TypeID(), refund.Approved
 	return result, nil
+}
+
+// prepareRefundRun advances the ledger of the order a refund operation, approval id's, would refund, before the
+// approval's transaction holds the order and the account's balance (payments.PrepareAgentRefund). Any other operation
+// needs nothing.
+func (a adminAPI) prepareRefundRun(ctx context.Context, id uuid.UUID) error {
+	var op operations.Operation
+	err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		op, err = operations.ApprovalOperation(ctx, tx, id)
+		return err
+	})
+	if err != nil || op.Tool != refundTool {
+		return err
+	}
+	order, err := payments.ParseOrderID(op.Target.ID)
+	if err != nil {
+		return fmt.Errorf("the order of operation %s: %w", op.ID, err)
+	}
+	service, err := a.paymentsService(ctx)
+	if err != nil {
+		return err
+	}
+	return service.PrepareAgentRefund(ctx, order)
 }
 
 // refundOutcomeBatch bounds one read of the executing refunds.

@@ -211,9 +211,22 @@ func (a adminAPI) runApproved(ctx context.Context, tx pg.Tx, op operations.Opera
 		return op, err
 	}
 	if op.Tool == refundTool { // the channel sends it once tx commits, and its outcome ends it (concludeRefunds)
-		return operations.Execute(ctx, tx, op, result)
+		return a.execute(ctx, tx, op, result)
 	}
 	return operations.Settle(ctx, tx, op, result, "")
+}
+
+// execute hands op, whose run made its change in tx, to the target that finishes it after tx commits; a run that
+// waited past the end of its reservation's day is undone to the savepoint and op expires, nothing started.
+func (a adminAPI) execute(ctx context.Context, tx pg.Tx, op operations.Operation, result map[string]any) (operations.Operation, error) {
+	executing, err := operations.Execute(ctx, tx, op, result)
+	if !errors.Is(err, operations.ErrWindowEnded) {
+		return executing, err
+	}
+	if _, err := tx.Exec(ctx, "ROLLBACK TO SAVEPOINT operation_run"); err != nil {
+		return op, fmt.Errorf("undo operation %s: %w", op.ID, err)
+	}
+	return operations.ExpireApproved(ctx, tx, op)
 }
 
 // errPreviewed rolls back the transaction of a previewed write, which ran to its end so that every check ran.

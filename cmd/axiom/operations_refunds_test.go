@@ -254,6 +254,25 @@ func TestOperationsRefundOutcomes(t *testing.T) {
 	}
 }
 
+// TestOperationsRefundAfterMidnight: an approval whose run waited past the end of the day the refund was reserved in
+// freezes nothing: the operation expires window_ended and the reservation is released. The day ends as the clock
+// would, by moving the reservation and its day's counters to the day before.
+func TestOperationsRefundAfterMidnight(t *testing.T) {
+	t.Parallel()
+	f := refundReady(t)
+	op := f.askedRefund()
+	f.run(`UPDATE operations.money_actions SET day_start = day_start - interval '1 day'`,
+		`UPDATE operations.cap_counters SET window_start = window_start - interval '1 day' WHERE window_kind = 'day'`)
+	var approved adminapi.OperationsApproval
+	decode(t, f.decide(op, "approve"), &approved)
+	if approved.OperationState != adminapi.OperationStateExpired || valueOf(approved.ErrorCode) != "window_ended" {
+		t.Errorf("the approval: %+v", approved)
+	}
+	if got := f.refunds(); got != "released:10000000000 0+0#1 -" {
+		t.Errorf("after the approval: %s", got)
+	}
+}
+
 // must is v, failing the program on err; for values a test built itself.
 func must[T any](v T, err error) T {
 	if err != nil {

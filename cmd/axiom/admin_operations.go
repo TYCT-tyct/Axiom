@@ -252,6 +252,11 @@ func (a adminAPI) decide(ctx context.Context, operation, approval, key, reason s
 	if err != nil {
 		return adminapi.OperationsApproval{}, false, err
 	}
+	if approve {
+		if err := a.prepareRefundRun(ctx, id); err != nil {
+			return adminapi.OperationsApproval{}, false, err
+		}
+	}
 	succeeded := false
 	body, replayed, err := idempotently(ctx, a.db, operation, key, []any{approval, reason}, func(tx pg.Tx) (adminapi.OperationsApproval, error) {
 		if approve {

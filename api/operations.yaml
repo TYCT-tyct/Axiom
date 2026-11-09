@@ -771,7 +771,8 @@ paths:
         operation ends `succeeded`, its reservation committed, or `failed` with `target_failed`, its reservation
         released; the reservation stays in the day it was approved in whatever day the outcome comes. When the order
         changed under the proposal so that the approval would freeze or return another amount, the approval ends it
-        `rejected` with `stale_revision` and nothing is frozen. Over a hard limit, or without a policy, it is a 422
+        `rejected` with `stale_revision` and nothing is frozen; an approval whose run waited past UTC midnight of the
+        day the proposal was reserved in ends it `expired` with `window_ended`, nothing frozen, and it is proposed again. Over a hard limit, or without a policy, it is a 422
         `cap_exceeded` and nothing is written. An amount in another currency than the site's is a 400; more than the
         order's unused credits, an order that is not paid, or a currency pair without a rate is a 422
         `unprocessable`; a merchant account that does not refund through its channel, or a refund of the order still
@@ -1530,7 +1531,7 @@ components:
           description: >-
             What the change answered, once it succeeded; for a preview of `pricingRuleCreate` or `pricingRuleUpdate`,
             the sale prices the change would move now.
-        error_code: {type: string, description: "Why it ended `rejected`, the code the target refused the change with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return)."}
+        error_code: {type: string, description: "Why it ended `rejected`, the code the target refused the change with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day."}
         next_check_after_seconds: {type: integer, minimum: 1, description: "While it waits: when to read it again."}
         created_at: {type: string, format: date-time}
         updated_at: {type: string, format: date-time}

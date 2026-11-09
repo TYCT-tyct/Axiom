@@ -31,7 +31,10 @@ func (c Category) expiry(w CapWindowsRow) time.Time {
 
 // Execute moves op, which its caller locked as approved and handed in tx to a target that finishes it after tx
 // commits, to executing with what the target answered. Its reservation stays held, in the windows it was approved in,
-// until Conclude learns the outcome.
+// until Conclude learns the outcome. It is checked last, once every lock the run waited for is held, the signal's
+// included: when the UTC day the reservation was made in has ended by then, it is ErrWindowEnded, and the caller undoes
+// the run and ends op with ExpireApproved, so a run that waited past midnight does not start today's money on
+// yesterday's caps (「失败、重试与回滚」).
 func Execute(ctx context.Context, tx pg.Tx, op Operation, result map[string]any) (Operation, error) {
 	if op.State != StateApproved {
 		return Operation{}, fmt.Errorf("execute operation %s: it is %s, not approved", op.ID, op.State)
@@ -44,6 +47,45 @@ func Execute(ctx context.Context, tx pg.Tx, op Operation, result map[string]any)
 		return Operation{}, err
 	}
 	if err := record(ctx, tx, audit.OperationsAgent(op.Credential), "operation.execute", op, op.Reason, nil); err != nil {
+		return Operation{}, err
+	}
+	if op.Approval != nil {
+		if err := resolve(ctx, tx, op.Approval.ID); err != nil {
+			return Operation{}, err
+		}
+	}
+	q := New()
+	rows, err := q.MoneyActionOf(ctx, tx, op.ID)
+	if err != nil || len(rows) == 0 {
+		return op, err
+	}
+	ended, err := q.WindowEnded(ctx, tx, rows[0].DayStart)
+	switch {
+	case err != nil:
+		return Operation{}, fmt.Errorf("check the cap windows of operation %s: %w", op.ID, err)
+	case ended:
+		return Operation{}, ErrWindowEnded
+	}
+	return op, nil
+}
+
+// codeWindowEnded is the error code of an approved operation whose run waited past the end of its reservation's day.
+const codeWindowEnded = "window_ended"
+
+// ExpireApproved ends op, which its caller locked as approved and whose run Execute refused with ErrWindowEnded and the
+// caller undid, expired with the code window_ended: its reservation is released and its approval's signal resolved,
+// as the system's. The agent proposes it again on the new day.
+func ExpireApproved(ctx context.Context, tx pg.Tx, op Operation) (Operation, error) {
+	if op.State != StateApproved {
+		return Operation{}, fmt.Errorf("expire operation %s: it is %s, not approved", op.ID, op.State)
+	}
+	if err := setState(ctx, tx, &op, StateExpired, nil, codeWindowEnded); err != nil {
+		return Operation{}, err
+	}
+	if err := record(ctx, tx, reservationExpiryActor, "operation.expire", op, "", nil); err != nil {
+		return Operation{}, err
+	}
+	if err := release(ctx, tx, reservationExpiryActor, op); err != nil {
 		return Operation{}, err
 	}
 	if op.Approval != nil {

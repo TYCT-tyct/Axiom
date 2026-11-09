@@ -192,14 +192,15 @@ export const capOver = (approval: Approval) =>
 export const envelopeOver = (approval: Approval) =>
   new Set((reasonsOf(approval) ?? []).flatMap((reason) => (reason.kind === "envelope" ? [reason.limit] : [])));
 
-// Who or what an approval acts on, in the words the server read when the agent asked: an account by its name and its
-// owner's email, a supplier by its name, a model by its public name or slug. An approval asked on an older node may
+// Who or what an approval acts on, in the words the server read when the agent asked: an account, or the account an
+// order to refund is of, by its name and its owner's email, a supplier by its name, a model by its public name or slug. An approval asked on an older node may
 // have none of them; the page shows the ID alone then.
 export function targetName(approval: Approval): { name: string; detail?: string } | undefined {
   const summary = record(approval.summary);
   const text = (key: string) => (typeof summary?.[key] === "string" && summary[key] !== "" ? summary[key] : undefined);
   const names: Record<string, [string | undefined, string | undefined]> = {
     account: [text("account"), text("email")],
+    order: [text("account"), text("email")],
     supplier: [text("supplier"), undefined],
     model: [text("name") ?? text("slug"), text("name") ? text("slug") : undefined],
   };

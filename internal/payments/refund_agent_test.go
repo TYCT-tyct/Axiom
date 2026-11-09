@@ -127,3 +127,34 @@ func TestAgentRefundAboveTheLimit(t *testing.T) {
 		t.Errorf("sent before the second approval: %+v", got)
 	}
 }
+
+// TestAgentRefundPrepares: preparing advances the ledger of the order's account in transactions of its own, before
+// the quote's and the request's, which hold the balance's lock; a quote alone keeps nothing it replayed, as its
+// savepoint rolls the replay back with the freeze. An order that does not exist is left for the request to refuse.
+func TestAgentRefundPrepares(t *testing.T) {
+	w, o := refundWorld(t, fakePlugin{caps: CapRefund, refund: refundSucceeds})
+	allocated := func() int {
+		return w.count(w.p.platform, "SELECT allocated_seq FROM billing.balances WHERE account_id = $1", o.AccountID)
+	}
+	before := allocated()
+	r := agentRefund(o, o.Credits/2, "op-1")
+	if _, err := w.requestAgentRefund(quoteAgent, r); err != nil {
+		t.Fatal(err)
+	}
+	if got := allocated(); got != before {
+		t.Errorf("a quote kept an advance of the ledger: %d, was %d", got, before)
+	}
+	if err := w.p.PrepareAgentRefund(t.Context(), o.ID); err != nil {
+		t.Fatal(err)
+	}
+	prepared := allocated()
+	if prepared <= before {
+		t.Fatalf("preparing did not advance the ledger: %d, was %d", prepared, before)
+	}
+	if refund, err := w.requestAgentRefund(requestAgent, r); err != nil || refund.Credits != r.Credits {
+		t.Errorf("the request after preparing: %+v %v", refund, err)
+	}
+	if err := w.p.PrepareAgentRefund(t.Context(), OrderID(uuid.NewV7())); err != nil {
+		t.Errorf("preparing an order that does not exist: %v", err)
+	}
+}

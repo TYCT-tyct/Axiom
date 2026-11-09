@@ -146,6 +146,9 @@ export default {
   request: {
     title: "What is asked",
     amount: "Amount",
+    credits: "Credits to refund",
+    cash: "Cash returned, as paid",
+    capAmount: "Counted against the refund caps",
     native: "Top-up at the supplier",
     unitValue: "Value of one unit of balance",
     expires: "Credit expires",

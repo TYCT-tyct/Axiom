@@ -3994,7 +3994,7 @@ type OperationsApproval struct {
 	DecidedBy      *string `json:"decided_by,omitempty"`
 	DecisionReason *string `json:"decision_reason,omitempty"`
 
-	// ErrorCode Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return).
+	// ErrorCode Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day.
 	ErrorCode *string   `json:"error_code,omitempty"`
 	ExpiresAt time.Time `json:"expires_at"`
 

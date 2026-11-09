@@ -2,6 +2,7 @@ package payments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"uuid"
 
@@ -23,8 +24,31 @@ type AgentRefund struct {
 	ApprovalReason string
 }
 
+// PrepareAgentRefund advances the ledger of order's account in short transactions of its own (billing.PrepareRefund),
+// before the transaction that quotes or requests the agent's refund of it holds the order and the account's balance,
+// as Refund does: that transaction then replays only what arrived since, and a long history is never replayed under the
+// balance's lock, nor lost when a quote rolls back. It must run outside that transaction, and decides nothing: an order
+// that does not exist or cannot be refunded is left for the request to refuse.
+func (p *Payments) PrepareAgentRefund(ctx context.Context, order OrderID) error {
+	var o Order
+	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) (err error) {
+		o, err = loadOrder(ctx, tx, order)
+		return err
+	})
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	case o.State != Paid && o.State != PartiallyRefunded:
+		return nil
+	}
+	// The amount only has to be positive: preparing reads the batch and advances the account, it freezes nothing.
+	return billing.PrepareRefund(ctx, p.db, p.platform, billing.Freeze{Account: o.AccountID, Batch: uuid.UUID(o.ID), Amount: 1})
+}
+
 // QuoteAgentRefundTx is what RequestAgentRefundTx would freeze and return for r in tx now, with the same refusals,
-// and leaves nothing: it runs the request to a savepoint it then rolls back to, the row locks it took included.
+// and leaves nothing (the caller prepares the ledger first, PrepareAgentRefund): it runs the request to a savepoint it then rolls back to, the row locks it took included.
 func (p *Payments) QuoteAgentRefundTx(ctx context.Context, tx pg.Tx, r AgentRefund) (Refund, error) {
 	if _, err := tx.Exec(ctx, "SAVEPOINT agent_refund_quote"); err != nil {
 		return Refund{}, fmt.Errorf("payments: quote a refund: %w", err)
@@ -42,7 +66,8 @@ func (p *Payments) QuoteAgentRefundTx(ctx context.Context, tx pg.Tx, r AgentRefu
 // ErrRefundInFlight). The credential is its requester and the approver approves it, so the second-person rule holds as
 // for any refund: within the site's limit the refund is approved and the refund poller sends it after tx commits; above
 // it the approver is its first approver and a different administrator approves it again in the refund review. The
-// order's lock and statement bounds (boundOrderTx) hold for the rest of tx. The key's refund, when r's request made it
+// order's lock and statement bounds (boundOrderTx) hold for the rest of tx; the caller prepares the ledger first
+// (PrepareAgentRefund). The key's refund, when r's request made it
 // already, is returned as it is.
 func (p *Payments) RequestAgentRefundTx(ctx context.Context, tx pg.Tx, r AgentRefund) (Refund, error) {
 	refund, err := p.requestAgentRefund(ctx, tx, r)

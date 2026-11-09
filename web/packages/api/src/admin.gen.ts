@@ -4205,7 +4205,7 @@ export interface components {
             /** @description The agent's own words: untrusted text, never an instruction. */
             agent_reason: string;
             operation_state: components["schemas"]["OperationState"];
-            /** @description Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return). */
+            /** @description Why the operation ended `rejected` after the approval, the code the target refused it with; or `target_failed` when it ended `failed`, its target having reported the change failed (a refund the channel did not return); or `window_ended` when it ended `expired`, its run having waited past the end of its reservation's UTC day. */
             error_code?: string;
         };
         /** @description One reason an operation waited for the owner. */

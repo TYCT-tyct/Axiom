@@ -140,6 +140,9 @@ export default {
   request: {
     title: "请求内容",
     amount: "金额",
+    credits: "退回的额度",
+    cash: "退回的现金（原付款币种）",
+    capAmount: "计入退款上限的金额",
     native: "供应商那边的充值数",
     unitValue: "1 单位余额的价值",
     expires: "额度到期",

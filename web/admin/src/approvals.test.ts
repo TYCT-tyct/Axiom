@@ -177,6 +177,11 @@ describe("targetName", () => {
     ],
     ["supplier", { supplier: "Relay One" }, { name: "Relay One", detail: undefined }],
     [
+      "order",
+      { account: "Northwind", email: "ops@northwind.example", order_id: "ord_1" },
+      { name: "Northwind", detail: "ops@northwind.example" },
+    ],
+    [
       "model",
       { name: "Claude Opus", slug: "anthropic/claude-opus" },
       { name: "Claude Opus", detail: "anthropic/claude-opus" },

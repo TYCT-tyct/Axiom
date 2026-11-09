@@ -114,11 +114,30 @@ const facts: FactOf[] = [
     const value = field(summary, "unit_value");
     return value ? [t("approvals.request.unitValue"), format.decimal(value)] : undefined;
   },
-  (t, format, { summary }) => {
+  // A refund's credits, in the site's currency, and the cash it returns, in the currency the order was paid in: the
+  // amount after them is what its caps count, converted.
+  (t, format, { risk, summary }) => {
+    const amount = field(summary, "credits");
+    const currency = field(summary, "site_currency");
+    return risk === "refund" && amount && /^\d+$/.test(amount) && currency
+      ? [t("approvals.request.credits"), format.money({ amount, currency })]
+      : undefined;
+  },
+  (t, format, { risk, summary }) => {
+    const amount = field(summary, "cash");
+    const currency = field(summary, "pay_currency");
+    return risk === "refund" && amount && /^\d+$/.test(amount) && currency
+      ? [t("approvals.request.cash"), format.pay({ amount, currency })]
+      : undefined;
+  },
+  (t, format, { risk, summary }) => {
     const amount = field(summary, "amount");
     const currency = field(summary, "currency");
     return amount && /^\d+$/.test(amount) && currency
-      ? [t("approvals.request.amount"), format.money({ amount, currency })]
+      ? [
+          t(risk === "refund" ? "approvals.request.capAmount" : "approvals.request.amount"),
+          format.money({ amount, currency }),
+        ]
       : undefined;
   },
   (t, format, { risk, summary }) => {
