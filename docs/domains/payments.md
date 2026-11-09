@@ -180,7 +180,7 @@
 
 **查单与关单**：`Query` 对 Session ID 取回 Session（`complete` 且 `payment_status=paid` 记已支付，`expired` 记已关闭，其余待支付），对入账后的 PaymentIntent ID 直接取回 PaymentIntent（`succeeded` 已支付、`canceled` 已关闭、其余待支付），两种都返回 PaymentIntent ID 作为交易号；金额为 0 或币种缺失用无效哨兵，交给核心转待处理。`Close` 先读 Session：已过期视为成功（Stripe 的 `expire` 对已过期 Session 返回 4xx，不能靠重试变幂等），已完成返回确定拒绝，只有未完成才调 `expire`；失败由核心记日志，订单本地状态不受影响。Stripe 的 Session 最长 24 小时，订单有效期可以更长或更短；查单和过期后补查仍按核心的排期执行。
 
-**对账**：Stripe 声明 `CapQuery`，所以每个 Stripe 商户自动进入现有的每日对账：逐单核对订单、付费批次、退款和现金，并核对当天的用量计数；拒付的扣款和冲正也计入现金侧（见「对账」）。**账单下载（`Statements`）本次不实现**：`Caps` 里虽然预留了 `Statements`，但渠道接口还没有这个方法、库里也没有 `statement_lines` 表；第一个声明它的插件再一起交付。Stripe 的 Balance Transactions 和实际手续费因此还没有逐笔核对，渠道实际扣的手续费也没有入账口径，这是本插件上线前的已知缺口，不假装已经对平。
+**对账**：Stripe 声明 `CapQuery`，所以每个 Stripe 商户自动进入现有的每日对账：逐单核对订单、付费批次、退款和现金，并核对当天的用量计数；拒付的扣款和冲正也计入现金侧（见「对账」）。**账单下载（`Statements`）本次不实现**：`Caps` 里虽然预留了 `Statements`，但渠道接口还没有这个方法、库里也没有 `statement_lines` 表；第一个声明它的插件再一起交付。Stripe 的 Balance Transactions 和实际手续费因此还没有逐笔核对，渠道实际扣的手续费也没有入账口径，渠道账单与实际手续费对账待定（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）：不在 `product.md` 第一版，手续费入账政策要负责人定；现在只有逐单日对账，不假装已经对平。
 
 **失败、重试与晚回调**：
 
