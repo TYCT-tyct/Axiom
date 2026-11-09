@@ -298,3 +298,77 @@ func TestTheReapDoesNotTakeABeat(t *testing.T) {
 		t.Fatalf("the fencing transaction: %v", err)
 	}
 }
+
+// TestASweepReapsOnlyHoldersSilentWhileItHeardTheDatabase: after a database outage every holder's last beat is old, the
+// live ones' too, so a sweep reaps another holder only once this process has itself beaten without a lapse for a whole
+// TTL and grace: not right after its start, not after an outage before its first beat or right after it. A holder that
+// stays silent through that is reaped.
+func TestASweepReapsOnlyHoldersSilentWhileItHeardTheDatabase(t *testing.T) {
+	t.Parallel()
+
+	b := newBank(t, 0, 0, Config{HolderTTL: 15 * time.Second, ReapGrace: 15 * time.Second, Lifetime: time.Hour})
+	synctest.Test(t, func(t *testing.T) {
+		startInBubble(t, b)
+		window := b.billing.config.HolderTTL + b.billing.config.ReapGrace
+
+		first := silentHolder(t, b)
+		if reapedAfterSweep(t, b, first) {
+			t.Error("a process that has just started reaped a holder")
+		}
+		beatFor(t, b, window)
+		if !reapedAfterSweep(t, b, first) {
+			t.Fatal("a holder silent for a whole TTL and grace while this process beat was not reaped")
+		}
+
+		time.Sleep(b.billing.config.HolderTTL) // an outage: no beat gets through, and this process's own holder lapses
+		second := silentHolder(t, b)
+		if reapedAfterSweep(t, b, second) {
+			t.Error("a sweep after an outage reaped a holder before this process's own first beat")
+		}
+		beatFor(t, b, b.billing.config.Heartbeat)
+		if reapedAfterSweep(t, b, second) {
+			t.Error("a sweep right after the first beat after an outage reaped a holder that had no time to beat")
+		}
+		beatFor(t, b, window)
+		if !reapedAfterSweep(t, b, second) {
+			t.Error("a holder that stayed silent for a whole TTL and grace after the outage was not reaped")
+		}
+	})
+}
+
+// beatFor beats at the heartbeat's period for d, on the bubble's clock.
+func beatFor(t *testing.T, b *bank, d time.Duration) {
+	t.Helper()
+	for range d / b.billing.config.Heartbeat {
+		time.Sleep(b.billing.config.Heartbeat)
+		if err := b.billing.Heartbeat(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// silentHolder adds a holder whose last beat is long past by the database's clock, through the bubble's pool.
+func silentHolder(t *testing.T, b *bank) uuid.UUID {
+	t.Helper()
+	id := uuid.NewV7()
+	if err := b.billing.db.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+		_, err := tx.Exec(t.Context(), "INSERT INTO billing.holders (id, expires_at) VALUES ($1, clock_timestamp() - interval '1 hour')", id)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+// reapedAfterSweep runs a sweep and says whether the holder id is reaped.
+func reapedAfterSweep(t *testing.T, b *bank, id uuid.UUID) bool {
+	t.Helper()
+	b.billing.sweep(t.Context(), uuid.UUID{})
+	var reaped bool
+	if err := b.billing.db.Tx(t.Context(), b.platform, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT reaped_at IS NOT NULL FROM billing.holders WHERE id = $1", id).Scan(&reaped)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return reaped
+}
