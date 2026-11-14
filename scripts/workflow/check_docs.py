@@ -25,7 +25,9 @@ CONFIG = ".github/project-workflow.toml"
 SOURCE = re.compile(r"[0-9a-f]{40}")
 LIMITS = {
     "doc_lines": 300,  # split a longer doc by subtopic
+    "doc_chars": 30000,  # a line can hold a paragraph, so lines alone miss a doc no agent can read whole
     "always_loaded_lines": 150,  # AGENTS.md + CONTRIBUTING.md, read in every session
+    "always_loaded_chars": 6000,  # the same two files: 115 lines once held 9,600 characters
     "lesson_days": 30,  # a lesson not seen again for this long is dropped
 }
 
@@ -105,6 +107,10 @@ def links(path, root):
 
 def line_count(path):
     return len(path.read_text(encoding="utf-8").splitlines()) if path.exists() else 0
+
+
+def char_count(path):
+    return len(path.read_text(encoding="utf-8")) if path.exists() else 0
 
 
 def limits(root):
@@ -202,6 +208,8 @@ def check(root, today=None):
                     errors.append(f"{rel(path)}:{number}: no heading for #{anchor} in {rel(target)}")
         if line_count(path) > limit["doc_lines"]:
             warnings.append(f"{rel(path)}: {line_count(path)} lines, over {limit['doc_lines']}; split it by subtopic")
+        elif char_count(path) > limit["doc_chars"]:
+            warnings.append(f"{rel(path)}: {char_count(path)} characters, over {limit['doc_chars']}; split it by subtopic")
 
     docs_map = root / "docs" / "README.md"
     mapped = {target for _, target, _ in links(docs_map, root)} if docs_map.exists() else set()
@@ -213,6 +221,8 @@ def check(root, today=None):
     loaded = line_count(root / "AGENTS.md") + line_count(root / "CONTRIBUTING.md")
     if loaded > limit["always_loaded_lines"]:
         warnings.append(f"AGENTS.md + CONTRIBUTING.md: {loaded} lines, over {limit['always_loaded_lines']}; both load in every session")
+    elif (loaded := char_count(root / "AGENTS.md") + char_count(root / "CONTRIBUTING.md")) > limit["always_loaded_chars"]:
+        warnings.append(f"AGENTS.md + CONTRIBUTING.md: {loaded} characters, over {limit['always_loaded_chars']}; both load in every session")
     lessons = root / "docs" / "lessons.md"
     if lessons.exists():
         found = check_lessons(lessons, rel(lessons), limit["lesson_days"], today or date.today())

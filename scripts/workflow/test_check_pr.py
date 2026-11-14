@@ -213,6 +213,9 @@ class ClosingTest(unittest.TestCase):
                          ([("owner/repo", 1)], ["this PR closes more than 100 issues; the check reads only the first 100"]))
 
     def test_the_issues_come_from_github_and_a_failed_request_fails(self):
+        template = Path(self.enterContext(tempfile.TemporaryDirectory())) / "pull_request_template.md"
+        template.write_text(TEMPLATE, encoding="utf-8")  # main() reads the project's template; the test brings its own
+        self.enterContext(mock.patch.object(check_pr, "TEMPLATE", template))
         graphql = b'{"data":{"repository":{"pullRequest":{"closingIssuesReferences":{"pageInfo":{"hasNextPage":false},"nodes":[{"number":1,"repository":{"nameWithOwner":"owner/repo"}}]}}}}}'
         replies = [subprocess.CompletedProcess([], 0, graphql), subprocess.CompletedProcess([], 0, b'{}')]
         env = {"PR_TITLE": "Bad title", "PR_BODY": BODY, "PR_AUTHOR": "someone", "REPO": "owner/repo", "NUMBER": "9"}
@@ -231,6 +234,26 @@ class ClosingTest(unittest.TestCase):
             self.assertEqual(check_pr.main(), 1)
         self.assertIn("title 'Bad title'", out.getvalue())  # the other problems are kept
         self.assertIn("could not read the issues this PR closes: HTTP 502", out.getvalue())
+
+    def test_before_the_pr_exists_only_the_text_is_checked(self):
+        local = {"PR_TITLE": "fix: keep the retry bounded", "PR_BODY": BODY, "PR_AUTHOR": "someone", "NUMBER": "", "GITHUB_ACTIONS": ""}
+        with tempfile.TemporaryDirectory() as tmp:
+            # the project's own template decides which sections a description needs, so the test brings its own
+            template = Path(tmp) / "pull_request_template.md"
+            template.write_text(TEMPLATE, encoding="utf-8")
+            patched = (mock.patch.object(check_pr, "TEMPLATE", template), mock.patch.object(sys, "argv", ["check_pr.py", "describe"]))
+            with patched[0], patched[1]:
+                with mock.patch.dict(os.environ, local), mock.patch("subprocess.run") as run, redirect_stdout(io.StringIO()) as out:
+                    self.assertEqual(check_pr.main(), 0)
+                run.assert_not_called()
+                self.assertIn("no PR number", out.getvalue())
+                with (mock.patch.dict(os.environ, local | {"PR_TITLE": "Bad title"}), mock.patch("subprocess.run"),
+                      redirect_stdout(io.StringIO())):
+                    self.assertEqual(check_pr.main(), 1)  # the text is still checked
+                failing = subprocess.CalledProcessError(1, ["gh"], stderr=b"no number\n")
+                with (mock.patch.dict(os.environ, local | {"GITHUB_ACTIONS": "true", "REPO": "owner/repo"}),
+                      mock.patch("subprocess.run", side_effect=failing), redirect_stdout(io.StringIO())):
+                    self.assertEqual(check_pr.main(), 1)  # in CI a missing number is not a way past the check
 
 
 class ReviewTest(unittest.TestCase):

@@ -4,7 +4,9 @@ unticked, or when its head commit has no passing independent review.
 
 Managed by project-workflow: changed only by upgrades.
   check_pr.py describe   reads PR_TITLE, PR_BODY, PR_AUTHOR, REPO and NUMBER to ask GitHub which issues the PR closes,
-                         then reads each as GitHub renders it: the boxes come from the rendered HTML, never from Markdown text
+                         then reads each as GitHub renders it: the boxes come from the rendered HTML, never from Markdown text.
+                         Outside GitHub Actions, without NUMBER, it checks the title and description alone: a writer or
+                         a pipeline runs it on the text before the PR exists, instead of learning the same from CI
   check_pr.py review     reads PR_HEAD, PR_BODY, PR_AUTHOR, BASE_REF, the PR's comments as JSON lines on stdin, and git history
 Values arrive through the environment, never the command line, so a title or description cannot inject shell.
 The review check reads the first lines the review method asks reviewers and authors to write. With one account shared by
@@ -228,7 +230,9 @@ def main():
         problems = describe(env("PR_TITLE"), env("PR_BODY"), env("PR_AUTHOR"), TEMPLATE.read_text(encoding="utf-8-sig"))
         for warning in title_warnings(env("PR_TITLE"), env("PR_AUTHOR")):
             print(f"::warning::{warning}" if env("GITHUB_ACTIONS") == "true" else f"warning: {warning}")
-        if env("PR_AUTHOR") not in EXEMPT:  # a failed request is a problem, so an outage fails the check instead of passing it
+        if not env("NUMBER") and env("GITHUB_ACTIONS") != "true":  # no PR yet; in CI a missing number stays a failure
+            print("no PR number: the issues this PR would close are not checked")
+        elif env("PR_AUTHOR") not in EXEMPT:  # a failed request is a problem, so an outage fails the check instead of passing it
             # body_html is GitHub's own rendering: that is what a reader sees, so the acceptance boxes are read from it
             gh = lambda *args: subprocess.run(["gh", *args], capture_output=True, check=True).stdout
             issue = lambda repo, number: json.loads(gh("api", "-H", "Accept: application/vnd.github.html+json", f"repos/{repo}/issues/{number}"))
