@@ -49,7 +49,7 @@
 | 发布前：目录规格要补全（请求写法的键怎么写进库、怎么检查），发布前的其他确认 | [ops/release.md](ops/release.md) | 发布或部署之前 |
 | 示例法律文本（demo）：服务条款、隐私政策、OpenRouter 对照、在开发站点发布 | [legal/README.md](legal/README.md) | 准备演示条款/隐私政策、在开发站点发布 demo 版本、负责人审阅前 |
 | 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
-| 通用开发规则：四条硬约束、记录、对外文字、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
+| 通用开发规则：五条硬约束、记录、对外文字、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 | 本项目的补充：角色、谁拍板、产品设计基线、任务与一个 PR、评审、合并队列与迁移、CI 与检查、验收与关账、代码质量标准、检查清单、审计与发布、重新讨论的条件 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
 
 ## 文档怎么组织

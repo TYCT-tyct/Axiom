@@ -2,7 +2,7 @@
 # source: the project-workflow commit the managed files were copied from; only upgrades change it.
 # The checks' limits use the defaults in scripts/workflow/check_docs.py. To change one, add it under [limits]
 # with a comment saying why, for example:  doc_lines = 400  # the API reference is generated
-source = "5f814443a481a478b48e6eddca300ef94b02c6be"
+source = "afd90a6a4e81df85702399c50daae59aaf6e088c"
 modules = ["secrets", "docs", "pr", "review", "lanes"]
 
 [merge]

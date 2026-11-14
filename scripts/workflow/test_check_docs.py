@@ -60,6 +60,12 @@ class CheckDocsTest(unittest.TestCase):
             "docs/README.md: 301 lines, over 300; split it by subtopic",
             "AGENTS.md + CONTRIBUTING.md: 151 lines, over 150; both load in every session",
         ]))
+        # few lines can still be too much to read: characters are counted where the line count passes
+        long = {"AGENTS.md": "规" * 4000 + "\n", "CONTRIBUTING.md": "则" * 2001 + "\n", "docs/README.md": "文" * 30001 + "\n"}
+        self.assertEqual(run_check(long), ([], [
+            "docs/README.md: 30002 characters, over 30000; split it by subtopic",
+            "AGENTS.md + CONTRIBUTING.md: 6003 characters, over 6000; both load in every session",
+        ]))
         config = '\ufeffsource = "' + "a" * 40 + '"\n[limits]\nalways_loaded_lines = 200 # why\n'
         self.assertEqual(run_check({**files, ".github/project-workflow.toml": config}), ([], [
             "docs/README.md: 301 lines, over 300; split it by subtopic",
@@ -77,7 +83,7 @@ class CheckDocsTest(unittest.TestCase):
             "bad values": ('source = "abc"\n[limits]\ndoc_lines = 0\ndoc_line = 4\n', [
                 f"{config}: source must be a full 40-character commit hash",
                 f"{config}: limit doc_lines must be a positive whole number, not 0",
-                f"{config}: unknown limit doc_line; known: always_loaded_lines, doc_lines, lesson_days",
+                f"{config}: unknown limit doc_line; known: always_loaded_chars, always_loaded_lines, doc_chars, doc_lines, lesson_days",
             ]),
             "not a table": ("limits = 5\n", [f"{config}: limits must be a table: [limits]"]),
         }
