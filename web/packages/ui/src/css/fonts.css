@@ -4,16 +4,18 @@
 
    Chinese is set in MiSans (licence: fonts/LICENSE-MiSans.txt), cut per page, one face per app: each app serves its own
    copy of the files, and text from the API can hold any character, so a page may load every slice of its app's face;
-   a face shared with another app would put that app's characters in this one's worst case. Each app points its sans
-   font at its stack (its src/main.css); --family-ui, which the shared styles default to, loads none of them. While a
+   a face shared with another app would put that app's characters in this one's worst case. Each app sets --family-ui,
+   which the shared styles' sans font and its utility read, to its stack (its src/main.css); left alone it is
+   --family-local, which loads none of them. While a
    slice loads, its characters show in "Axiom CJK Fallback", fonts visitors have resized to MiSans's line metrics, so
    the swap moves nothing (docs/frontend.md「字体」). Switching the Chinese body font is its source in
    web/scripts/fonts/sources.json, the local name in --family-cjk-local, then `pnpm fonts`. */
 :root {
   --family-cjk-local: "MiSans", "Axiom CJK Fallback", "PingFang SC", "Microsoft YaHei";
-  --family-ui: "Axiom Sans", var(--family-cjk-local), system-ui, -apple-system, sans-serif;
-  --family-console: "Axiom Sans", "Axiom CJK Console", var(--family-ui);
-  --family-admin: "Axiom Sans", "Axiom CJK Admin", var(--family-ui);
+  --family-local: "Axiom Sans", var(--family-cjk-local), system-ui, -apple-system, sans-serif;
+  --family-ui: var(--family-local);
+  --family-console: "Axiom Sans", "Axiom CJK Console", var(--family-local);
+  --family-admin: "Axiom Sans", "Axiom CJK Admin", var(--family-local);
   --family-site: "Axiom Sans", "Axiom CJK", var(--family-cjk-local), sans-serif;
   --family-mono: "Axiom Mono", "JetBrains Mono", ui-monospace, "SF Mono", Consolas, "PingFang SC", monospace;
   /* the website's display headings, and the italic its key words are set in */
