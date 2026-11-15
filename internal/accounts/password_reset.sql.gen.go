@@ -251,7 +251,7 @@ func (q *Queries) RequestPasswordReset(ctx context.Context, db DBTX, arg Request
 
 const resetUser = `-- name: ResetUser :many
 SELECT id, account_id
-FROM accounts.users WHERE site_id = $1 AND email = $2
+FROM accounts.users WHERE site_id = $1 AND email = $2 FOR UPDATE
 `
 
 type ResetUserParams struct {
@@ -264,6 +264,8 @@ type ResetUserRow struct {
 	AccountID uuid.UUID
 }
 
+// Lock during address resolution so a concurrent confirmed email change cannot leave this worker mailing the old
+// address a new reset token. PostgreSQL rechecks the email predicate after waiting for the updater.
 func (q *Queries) ResetUser(ctx context.Context, db DBTX, arg ResetUserParams) ([]ResetUserRow, error) {
 	rows, err := db.Query(ctx, resetUser, arg.SiteID, arg.Email)
 	if err != nil {

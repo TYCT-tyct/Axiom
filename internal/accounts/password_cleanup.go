@@ -33,7 +33,10 @@ func (r *PasswordRecovery) purge(ctx context.Context) error {
 		if err := New().PurgePasswordResetTokens(ctx, tx); err != nil {
 			return err
 		}
-		return New().PurgePasswordResetRequests(ctx, tx)
+		if err := New().PurgePasswordResetRequests(ctx, tx); err != nil {
+			return err
+		}
+		return New().PurgeEmailChanges(ctx, tx)
 	})
 }
 
