@@ -1,71 +1,12 @@
-/* The design system's tokens and base rules: design 1 (docs/frontend.md「视觉方向」). Every colour, radius and shadow a
-   component uses comes from here; Tailwind's own palette is cleared, so a hard-coded colour has no utility to use. */
+/* The current pages' Tailwind theme and base rules. The colours come from the redesign's tokens (css/tokens.css) under
+   the old names (css/legacy.css), the families from css/fonts.css; Tailwind's own palette is cleared, so a hard-coded
+   colour has no utility to use. */
 @import "tailwindcss";
-@import "@fontsource-variable/inter/wght.css";
+@import "./css/fonts.css";
+@import "./css/tokens.css";
+@import "./css/legacy.css";
 
 @source "./";
-
-/* Each colour is written once with light-dark(): the light value, then the dark one. The page follows the system
-   unless the root carries data-theme, which the appearance preference sets. */
-:root {
-  color-scheme: light dark;
-
-  /* surfaces, from the page up, each a step lighter (dark) or darker (light) */
-  --bg: light-dark(#ffffff, #08090a);
-  --s1: light-dark(#f7f8f9, #0f1012);
-  --s2: light-dark(#f0f1f3, #151619);
-  --s3: light-dark(#e8eaed, #1c1d21);
-  --s4: light-dark(#dfe1e5, #24252a);
-  /* lines: dividers and card edges, control edges, hover */
-  --b1: light-dark(rgb(13 14 16 / 0.07), rgb(255 255 255 / 0.07));
-  --b2: light-dark(rgb(13 14 16 / 0.11), rgb(255 255 255 / 0.11));
-  --b3: light-dark(rgb(13 14 16 / 0.16), rgb(255 255 255 / 0.16));
-  --hl: light-dark(rgb(255 255 255 / 0.9), rgb(255 255 255 / 0.045));
-  /* text: titles and values, body, meta, labels; every level is at least 4.5:1 on bg through s2 */
-  --t1: light-dark(#0d0e10, #f7f8f8);
-  --t2: light-dark(#3c4047, #b4b8bf);
-  --t3: light-dark(#54575e, #8a8f98);
-  --t4: light-dark(#676d75, #7c8189);
-  /* the one accent: the current selection, the key number, the focus ring */
-  --accent: light-dark(#335ddf, #7aa2ff);
-  --accent-ink: light-dark(#ffffff, #08090a);
-  --accent-soft: light-dark(rgb(51 93 223 / 0.09), rgb(122 162 255 / 0.13));
-  --accent-line: light-dark(rgb(51 93 223 / 0.4), rgb(122 162 255 / 0.42));
-  /* states, always paired with words */
-  --ok: light-dark(#146b45, #4cc38a);
-  --warn: light-dark(#8e5d16, #e5b44c);
-  --bad: light-dark(#c2262a, #f2555a);
-  --ok-soft: light-dark(rgb(22 117 76 / 0.1), rgb(76 195 138 / 0.12));
-  --warn-soft: light-dark(rgb(142 93 22 / 0.1), rgb(229 180 76 / 0.12));
-  --bad-soft: light-dark(rgb(194 38 42 / 0.09), rgb(242 85 90 / 0.12));
-  --bad-ink: light-dark(#ffffff, #08090a);
-  /* the primary button: black on light, white on dark */
-  --btn: light-dark(#0d0e10, #f7f8f8);
-  --btn-ink: light-dark(#ffffff, #08090a);
-  /* the button's edge: only a brand colour too close to the page needs one (brand.ts) */
-  --btn-line: transparent;
-  /* a code a phone scans: dark on light whatever the theme */
-  --paper: #ffffff;
-  --ink: #000000;
-  --shade: light-dark(rgb(13 14 16 / 0.2), rgb(0 0 0 / 0.55));
-  /* behind a modal */
-  --scrim: light-dark(rgb(13 14 16 / 0.32), rgb(0 0 0 / 0.6));
-
-  --r-xs: 4px;
-  --r-sm: 6px;
-  --r-md: 10px;
-  --r-btn: 8px;
-  --r-card: 12px;
-  --r-frame: 16px;
-}
-
-:root[data-theme="light"] {
-  color-scheme: light;
-}
-
-:root[data-theme="dark"] {
-  color-scheme: dark;
-}
 
 @theme inline {
   --color-*: initial;
@@ -85,9 +26,10 @@
   --color-accent-ink: var(--accent-ink);
   --color-accent-soft: var(--accent-soft);
   --color-accent-line: var(--accent-line);
-  --color-ok: var(--ok);
-  --color-warn: var(--warn);
-  --color-bad: var(--bad);
+  /* the old status colours were text colours */
+  --color-ok: var(--okT);
+  --color-warn: var(--warnT);
+  --color-bad: var(--badT);
   --color-ok-soft: var(--ok-soft);
   --color-warn-soft: var(--warn-soft);
   --color-bad-soft: var(--bad-soft);
@@ -112,9 +54,8 @@
   --shadow-pop: 0 0 0 1px var(--b2), 0 8px 24px -8px var(--shade);
   --shadow-modal: 0 0 0 1px var(--b2), 0 24px 64px -16px var(--shade);
 
-  /* Latin and digits in Inter, self-hosted; Chinese in the system's font (docs/frontend.md「前端性能指标」) */
-  --font-sans: "Inter Variable", system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, "PingFang SC", "Microsoft YaHei", monospace;
+  --font-sans: var(--family-ui);
+  --font-mono: var(--family-mono);
 
   /* the product's base size, and table headers */
   --text-ui: 13px;
@@ -130,7 +71,6 @@
     background: var(--bg);
     color: var(--t1);
     font-family: var(--font-sans);
-    font-feature-settings: "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }

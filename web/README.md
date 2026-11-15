@@ -9,14 +9,15 @@
 | `site/` | 官网 | 公网监听的 `/` |
 | `console/` | 用户控制台 | 公网监听的 `/console/` |
 | `admin/` | 管理后台 | 只在管理监听上，不进公网 |
-| `packages/ui/` | 设计系统：变量（`src/styles.css`）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
+| `packages/ui/` | 设计系统：令牌和字体（`src/css/`，旧页面经 `src/styles.css` 用它们）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
 | `theme.js` | 在首次绘制前应用保存的外观；构建时按内容哈希命名，插到每个入口页 `<head>` 的开头 | 各应用的 `assets/` |
 | `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端（`consoleApi`、`adminApi`）；`@axiom/api/auth` 是两个界面的登录、两步验证调用，形状相同，登录页面只对着它写 | — |
 | `packages/app/` | 控制台和后台共用、又不属于设计系统的部分：会话与 `Gate`、登录、第二步、强制开启两步验证、恢复码、外壳、新版本提示、错误译文、路由预设的规则编辑器和规则摘要（`presets/`，文字在 `packages/ui/src/locales/preset-rules.ts`）。设计系统不依赖路由，所以它们不放进 `packages/ui/` | — |
 | `e2e/` | Playwright 端到端测试 | — |
 | `journey/` | 对着真实 Axiom 进程的旅程测试和启动它的 `node.ts`（[测试](#测试)） | — |
 | `scripts/embed.ts`、`scripts/compress.ts` | 把构建产物复制到 Go 代码树供程序嵌入，附预压缩的副本和内容安全策略；压缩函数只有这一个，体积预算也用它 | — |
-| `scripts/budget.ts` | 体积预算检查 | — |
+| `scripts/budget.ts`、`scripts/font-budget.ts` | 体积预算检查 | — |
+| `scripts/fonts/` | 字体管线：按翻译文件里的字把源字体裁成 woff2，写进 `packages/ui/src/css/fonts/` 和 `fonts.css`（见下文「字体」） | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |
 | `scripts/vitals.ts` | 三次目标页 LCP 各按前后两次概览页的平均值折算成一个值（[前端性能指标](../docs/frontend.md#前端性能指标)）；不需要浏览器，单独用 vitest 测 | — |
 
@@ -36,6 +37,7 @@
 | `just web-journey` | 构建、嵌入并运行真实服务的旅程（要 Docker）；不含在 `just web` 里，CI 的 `journey` 作业只在列车和 `main` 上跑 |
 | `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
+| `pnpm --dir web fonts` | 重新裁剪字体（要 Python 3 和网络；第一次下载源字体），产物入库；见下文「字体」 |
 
 ## 规则
 
@@ -43,7 +45,7 @@
 |---|---|
 | 页面上的文字全部来自翻译文件；中文是源文件，英文的键与中文完全一致 | Biome 的 `noJsxLiterals` 拒绝写在 JSX 里的文字；`Messages<typeof zh>` 让缺键、多键都编译不过；`t()` 的键有类型。属性里的文字（`aria-label` 等）这条规则查不到，靠评审 |
 | 共用包里组件写的类名在每个用到它的应用里都生效：Tailwind 只生成 `@source` 指到的文件里的类，且跳过链接到 `node_modules` 的工作区包 | 各应用的 `src/main.css` 用 `@source` 指到它用的每个带组件的包（`ui` 由自己的 `styles.css` 指）；`scripts/sources.test.ts` 按 `package.json` 的依赖核对 |
-| 颜色、圆角、阴影只用 `styles.css` 的变量 | Tailwind 自带的调色板已清空，写死的颜色没有对应的类可用 |
+| 颜色只写在 `packages/ui/src/css/tokens.css`，字体族名只写在同目录的 `fonts.css`；页面只用变量 | Tailwind 自带的调色板已清空，写死的颜色没有对应的类可用；`legacy.css` 把旧变量名指到新令牌，自己不写颜色；`scripts/tokens.test.ts` 从 `tokens.css` 读值，检查文字在每个底色上不低于 4.5:1、控件边界和焦点不低于 3:1 |
 | 页面在 `vite.shared.ts` 的内容安全策略下工作：没有内联脚本，没有 `<style>` 元素 | 端到端测试在 Go 服务发送的同一策略下加载三个应用，违规会成为控制台错误，测试失败；`embed.ts` 把 `vite.shared.ts` 的字符串交给 Go 服务原样发送，测试核对响应头与它完全一致，且不含 `unsafe-` |
 | 保存的外观在首次绘制前生效，不先闪一下系统的外观 | `theme.js` 作为同源的普通脚本在 `<head>` 开头同步运行，读 `preferences.ts` 的同一个键；端到端测试拦下应用脚本后检查 |
 | 构建产物的文件名带内容哈希，可以长期缓存 | Vite 给打包的文件命名；它不打包的 `theme.js` 由 `vite.shared.ts` 按内容算哈希。端到端测试检查入口页的每个脚本 |
@@ -73,8 +75,18 @@
 | 认知复杂度不超过 15，圈复杂度不超过 12，函数不超过 60 行，文件不超过 500 行，与 Go 一侧相同 | 认知复杂度由 Biome 的 `noExcessiveCognitiveComplexity`（`biome.json`）查；圈复杂度和长度由 `scripts/limits.ts` 查，覆盖 git 不忽略的每个 TypeScript 和 JavaScript 文件（生成的 `*.gen.ts` 除外），长度不计空行和注释，测试不限函数长度。理由见[前端的「决策与理由」](../docs/frontend.md#决策与理由) |
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
-| 首屏脚本、每多开一页增加的脚本、西文字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页） |
+| 首屏脚本、每多开一页增加的脚本、每页字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页）。每页字体是这一页可能加载的字体文件去重后的和（`scripts/font-budget.ts` 读 `fonts.json`），超出时列出每个文件；首屏预载的字体单独打印；构建里缺了 `fonts.json` 列出的文件也失败 |
+| 翻译文件里的每个字都在裁好的字体里 | `scripts/fonts/coverage.test.ts` 用和管线同一份取字代码（`scripts/fonts/text.ts`）比对 `fonts.json`，缺字就失败并提示重跑 `pnpm --dir web fonts`；源字体本来就没有的字记在 `fonts.json` 的 `absent`，落到后备字体 |
 | 主要页面的 LCP、CLS，常用操作的 INP，调用日志和用户列表各 1000 行滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 和概览页的主线程 CPU 时间超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）把其余页面各测三次，每次夹在前后两次概览页加载之间，按这两次概览页 LCP 的平均值折算到设定上限的基线 run 后取中位数，折算系数最多为 1；概览页在不降 CPU 下（降速的忙等会按宿主机调度往 `tdur` 里加空转）从 Chrome trace 取主线程任务的 `tdur`（不含被换下的时间）：PR 和列车里与 `BASE` 提交的概览页（`playwright.vitals.config.ts` 用 `scripts/ci/vitals-base.sh` 并排提供）交替加载五对，本树中位数比基准中位数不超过 1.25，本树中位数另有绝对兜底 1020/1200 毫秒（干净构建的三倍）；`main` 上没有基准，只报告；它的 LCP 和 CLS 另取三次按本档降速的加载，只报告；原始值、参照值、折算结果和 CPU 时长写进输出；INP 在 CPU 降速 4 倍下取该操作的最差值 |
+
+## 字体
+
+字体都自己托管，按页面用到的字裁剪；字体族名只写在 `packages/ui/src/css/fonts.css`。
+
+- `scripts/fonts/sources.json` 是源字体清单：每个源的下载地址（固定到提交）和 SHA-256；页面（`pages`：每个命名空间选哪些翻译键）；字形（`faces`：字体族、字重、轴、哪些页面用、取哪些字）。
+- `pnpm --dir web fonts` 在 `~/.cache/axiom-fonts` 建虚拟环境、按 `requirements.txt` 的哈希装 fontTools，下载并核对源字体（不入库），运行 `build.py`。它重写 `packages/ui/src/css/fonts/` 下的 woff2、`fonts.json`、`coverage.txt`，以及 `fonts.css` 标记行以下的 `@font-face`；重跑结果逐字节相同。改了翻译文件里的中文或 `sources.json`，就重跑并提交产物；CI 不跑 Python。
+- 标了 `split` 的字形（中文）按「哪些页面用到这个字」切片：一个字只在一个文件里，`unicode-range` 让页面只下载它用到的切片。
+- 换中文正文字体：改 `sources.json` 里 `cjk-body` 的地址和哈希，和 `fonts.css` 里 `--family-cjk` 那一行（装在本机的同款字体的名字），再重跑。
 
 ## 测试
 

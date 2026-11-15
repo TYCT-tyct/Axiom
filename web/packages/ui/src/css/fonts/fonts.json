@@ -1,0 +1,96 @@
+{
+  "faces": [
+    {
+      "family": "Axiom Sans",
+      "weight": "400 600",
+      "pages": ["console", "admin", "site/home", "site/models"],
+      "style": "normal",
+      "script": "latin",
+      "absent": "",
+      "files": [
+        {
+          "file": "axiom-sans-400-600.woff2",
+          "pages": ["console", "admin", "site/home", "site/models"],
+          "bytes": 20036,
+          "sha256": "01906220de6b4660cbeef00a447bfa19e62e5957121c72368a287c028120c975",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~©·×÷–—’“”…→−"
+        }
+      ]
+    },
+    {
+      "family": "Axiom Mono",
+      "weight": "400",
+      "pages": ["console", "admin", "site/home", "site/models"],
+      "style": "normal",
+      "script": "latin",
+      "absent": "",
+      "files": [
+        {
+          "file": "axiom-mono-400.woff2",
+          "pages": ["console", "admin", "site/home", "site/models"],
+          "bytes": 16384,
+          "sha256": "500133a22858944b7b7cd629a0f5fec8a2fbd2e2452e759d05c129ec2278705c",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~©·×÷–—’“”…→−"
+        }
+      ]
+    },
+    {
+      "family": "Axiom Serif",
+      "weight": "400",
+      "pages": ["site/home"],
+      "style": "italic",
+      "script": "latin",
+      "absent": "",
+      "files": [
+        {
+          "file": "axiom-serif-400-italic.woff2",
+          "pages": ["site/home"],
+          "bytes": 3828,
+          "sha256": "2aa082382462cec29a64ca5b4958701b965052d1ec6a0ca17a6d3c133a32bfaf",
+          "chars": "EKYekrvy"
+        }
+      ]
+    },
+    {
+      "family": "Axiom CJK",
+      "weight": "400 500",
+      "pages": ["site/home", "site/models"],
+      "style": "normal",
+      "script": "han",
+      "absent": "",
+      "files": [
+        {
+          "file": "axiom-cjk-400-500.site-home_site-models.woff2",
+          "pages": ["site/home", "site/models"],
+          "bytes": 17908,
+          "sha256": "dfdd3c99e7d8d53faa47cfe1eb78daa6f9af72985c5311497f16dcca1e14ce10",
+          "chars": "。一上与个主之价出刷前务取在型外字实导就已录所按换新更有服本条格模每流浅测深版用登的第系线经统能航色获观言计语调费跟路都错际随面页首，"
+        },
+        {
+          "file": "axiom-cjk-400-500.site-models.woff2",
+          "pages": ["site/models"],
+          "bytes": 47316,
+          "sha256": "796b3ecea8e9f86db88d7230253df76f1de76a0054cdf70414c4927f56b79271",
+          "chars": "、万下不中为也于些仅他付代以件份优位你供便先入全公其具内再写准分列刚删到制力加化匹匿厂原及发口可台号各同名后否哪售商器回因图基大失如存它完定宜容对小工布应开式引张弹当径快性情成或户执找把持指据排接推提搜擎支收数整文断旧时明是显暂最未权构析果查标档检次正求没游点片理生由百目直相看码础确示秒称移稍稳站端符等筛精索级组结络缓网置联自行表被要见解认设证试详误请读败账走起超转载输过还这连选速部配里重量链附限除音项预频额验默（）；"
+        }
+      ]
+    },
+    {
+      "family": "Axiom CJK Serif",
+      "weight": "600",
+      "pages": ["site/home"],
+      "style": "normal",
+      "script": "han",
+      "absent": "",
+      "files": [
+        {
+          "file": "axiom-cjk-serif-600.site-home.woff2",
+          "pages": ["site/home"],
+          "bytes": 3476,
+          "sha256": "12e0d5c3a5aa4186a1b5a67f9de2d4655c9755ac7c3637cb2a33f0d15fdef952",
+          "chars": "一个主型所有模流用调，"
+        }
+      ]
+    }
+  ]
+}

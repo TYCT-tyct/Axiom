@@ -1,0 +1,108 @@
+{
+  "sources": {
+    "instrument-sans": {
+      "url": "https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/instrumentsans/InstrumentSans%5Bwdth,wght%5D.ttf",
+      "sha256": "b24f1812584816958afcf22e22d08e44318c5e51651e25d2438efdde389b33b1"
+    },
+    "instrument-serif-italic": {
+      "url": "https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/instrumentserif/InstrumentSerif-Italic.ttf",
+      "sha256": "08939b8bdf534afec24ae0ef5e03f948940cd9a8fe08e7fecbad040e62327385"
+    },
+    "jetbrains-mono": {
+      "url": "https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/jetbrainsmono/JetBrainsMono%5Bwght%5D.ttf",
+      "sha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda"
+    },
+    "cjk-body": {
+      "url": "https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
+      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da"
+    },
+    "cjk-serif": {
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/7889f11bf31170b5d092a083b357c8c8130f89e0/SubsetOTF/CN/SourceHanSerifCN-SemiBold.otf",
+      "sha256": "50d3f12201ce2dd840650b6bfa47ebb8572ecf767eec0e5ccb20a247b5bfa805"
+    }
+  },
+  "pages": {
+    "console": {
+      "common": [""],
+      "console": [""]
+    },
+    "admin": {
+      "common": [""],
+      "admin": [""]
+    },
+    "site/home": {
+      "common": ["brand", "preferences", "newVersion"],
+      "site": [""]
+    },
+    "site/models": {
+      "common": ["brand", "preferences", "newVersion", "publicModels", "state"],
+      "site": [""]
+    }
+  },
+  "faces": [
+    {
+      "family": "Axiom Sans",
+      "source": "instrument-sans",
+      "weight": "400 600",
+      "axes": {
+        "wdth": 100,
+        "wght": [400, 600]
+      },
+      "descriptors": {
+        "size-adjust": "105%"
+      },
+      "pages": ["console", "admin", "site/home", "site/models"],
+      "text": {
+        "script": "latin"
+      }
+    },
+    {
+      "family": "Axiom Mono",
+      "source": "jetbrains-mono",
+      "weight": "400",
+      "axes": {
+        "wght": 400
+      },
+      "pages": ["console", "admin", "site/home", "site/models"],
+      "text": {
+        "script": "latin"
+      }
+    },
+    {
+      "family": "Axiom Serif",
+      "source": "instrument-serif-italic",
+      "weight": "400",
+      "style": "italic",
+      "pages": ["site/home"],
+      "text": {
+        "chars": "keyvrKEY"
+      }
+    },
+    {
+      "family": "Axiom CJK",
+      "source": "cjk-body",
+      "weight": "400 500",
+      "axes": {
+        "wght": [400, 500]
+      },
+      "split": true,
+      "pages": ["site/home", "site/models"],
+      "text": {
+        "script": "han"
+      }
+    },
+    {
+      "family": "Axiom CJK Serif",
+      "source": "cjk-serif",
+      "weight": "600",
+      "split": true,
+      "pages": ["site/home"],
+      "text": {
+        "script": "han",
+        "keys": {
+          "site": ["hero.title"]
+        }
+      }
+    }
+  ]
+}
