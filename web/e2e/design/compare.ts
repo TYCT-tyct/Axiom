@@ -9,14 +9,17 @@ type Rect = { x: number; y: number; width: number; height: number };
 // The colour a ruled region is blanked with on both shots: one no board or page uses, so a region is plain to see.
 const blank = "#ff00ff";
 
-// Differences up to anti-aliasing: text rasterised in two documents differs in a few edge pixels.
-const maxDiffPixelRatio = 0.002;
+// No differing pixel is allowed outside the ruled regions, and no share of the page excuses one: a missing 40px icon is
+// 0.12% of a 1440x900 shot. Anti-aliasing is left to Playwright's comparator, which skips the pixels it detects as
+// anti-aliased and counts a pixel only past its per-pixel colour threshold.
+const maxDiffPixels = 0;
 
 export type Comparison = {
   board: string;
   page: string;
   diff?: string;
-  // The share of pixels that differ outside the ruled regions; 0 when within anti-aliasing.
+  // The pixels that differ outside the ruled regions, and their share of the shot; -1 when the sizes differ.
+  differentPixels: number;
   differentRatio: number;
   rulings: string[];
   error?: string;
@@ -82,6 +85,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
   const result: Comparison = {
     board: reference,
     page: join(dirname(reference), "page.png"),
+    differentPixels: 0,
     differentRatio: 0,
     rulings: scene.map((ruling) => ruling.basis),
   };
@@ -90,11 +94,15 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
   const actual = await shot(page, blanks);
   writeFileSync(result.page, actual);
   try {
-    expect(actual).toMatchSnapshot([key, "board.png"], { maxDiffPixelRatio });
+    expect(actual).toMatchSnapshot([key, "board.png"], { maxDiffPixels });
   } catch (error) {
     result.error = error instanceof Error ? error.message : String(error);
-    // Playwright says "N pixels (ratio 0.12 of all image pixels) are different", or that the sizes differ.
-    result.differentRatio = Number(result.error.match(/ratio ([\d.]+) of all image pixels/)?.[1] ?? 1);
+    // Playwright says "N pixels (ratio 0.12 of all image pixels) are different", or that the sizes differ. The ratio it
+    // prints is rounded to hundredths; the shot's size from its PNG header (width and height at bytes 16 and 20) gives
+    // the exact one.
+    const pixels = Number(result.error.match(/(\d+) pixels \(ratio/)?.[1] ?? -1);
+    result.differentPixels = pixels;
+    result.differentRatio = pixels < 0 ? -1 : pixels / (actual.readUInt32BE(16) * actual.readUInt32BE(20));
     const diff = info.attachments.find((attachment) => attachment.name.endsWith("diff.png"))?.path;
     if (diff) {
       result.diff = join(dirname(reference), "diff.png");

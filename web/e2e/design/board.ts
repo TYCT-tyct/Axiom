@@ -104,21 +104,40 @@ function render(text: string, scope: Record<string, unknown>, refs: unknown[]): 
   const inner = text.slice(tagEnd + 1, at - 9);
   const list = (look(tag.match(/list="\{\{\s*([\w.]+)\s*\}\}"/)?.[1] ?? "", scope) ?? []) as unknown[];
   const as = tag.match(/as="(\w+)"/)?.[1] ?? "item";
-  const items = list.map((item, index) => render(inner, { ...scope, [as]: item, $index: index }, refs)).join("");
+  // Each copy of the loop's body gets marks of its own (k.index, nested k.inner.outer), so patch pairs every copy with
+  // its live element instead of all of them with the first.
+  const items = list
+    .map((item, index) =>
+      render(inner, { ...scope, [as]: item, $index: index }, refs).replace(
+        / data-k="([\d.]+)"/g,
+        (_, k) => ` data-k="${k}.${index}"`,
+      ),
+    )
+    .join("");
   return fill(text.slice(0, start), scope, refs) + items + render(text.slice(at), scope, refs);
 }
 
-// patch carries what a re-render changed onto the live elements the mark numbers pair up.
+// patch carries what a re-render changed onto the live elements the marks pair up, and says false without changing
+// anything when the marked elements differ, as when a loop's list grew or shrank: the caller then renders anew.
 function patch(root: HTMLElement, next: HTMLElement) {
+  const marks = (tree: HTMLElement) => [...tree.querySelectorAll<HTMLElement>("[data-k]")].map((el) => el.dataset.k);
+  if (marks(root).join() !== marks(next).join()) return false;
   for (const fresh of next.querySelectorAll<HTMLElement>("[data-k]")) {
-    const live = root.querySelector(`[data-k="${fresh.dataset.k}"]`);
-    if (!live) continue;
+    const live = root.querySelector(`[data-k="${fresh.dataset.k}"]`) as Element;
     for (const name of ["class", "style", "aria-hidden", "aria-pressed", "lang", "title"]) {
       const value = fresh.getAttribute(name);
       if (value !== null && live.getAttribute(name) !== value) live.setAttribute(name, value);
     }
     const leaf = fresh.children.length === 0 && live.children.length === 0 && live.tagName !== "CANVAS";
     if (leaf && live.textContent !== fresh.textContent) live.textContent = fresh.textContent;
+  }
+  return true;
+}
+
+// bind hands each ref hole its element.
+function bind(root: HTMLElement, refs: unknown[]) {
+  for (const element of root.querySelectorAll<HTMLElement>("[data-ref]")) {
+    (refs[Number(element.dataset.ref)] as ((el: Element) => void) | undefined)?.(element);
   }
 }
 
@@ -130,13 +149,15 @@ function mount(template: string, actions: [string, ...unknown[]][]) {
   const root = document.getElementById("root") as HTMLElement;
   const refs: unknown[] = [];
   root.innerHTML = render(template, values(), refs);
-  for (const element of root.querySelectorAll<HTMLElement>("[data-ref]")) {
-    (refs[Number(element.dataset.ref)] as ((el: Element) => void) | undefined)?.(element);
-  }
+  bind(root, refs);
   (window as unknown as { __patch: () => void }).__patch = () => {
     const next = document.createElement("div");
-    next.innerHTML = render(template, values(), []);
-    patch(root, next);
+    const fresh: unknown[] = [];
+    next.innerHTML = render(template, values(), fresh);
+    if (!patch(root, next)) {
+      root.replaceChildren(...next.childNodes);
+      bind(root, fresh);
+    }
   };
   (c.componentDidMount as (() => void) | undefined)?.call(c);
   for (const [name, ...args] of actions) {
@@ -156,7 +177,7 @@ function boardDocument(board: BoardScene, directory: string) {
 ${dcLogic}</script></head><body><div id="root"></div>
 <script>${script}</script>
 <script>(() => {
-${[look, fill, render, patch, mount].join("\n")}
+${[look, fill, render, patch, bind, mount].join("\n")}
 mount(${inline(mark(template))}, ${inline(board.actions ?? [])});
 })();</script></body></html>`,
   };

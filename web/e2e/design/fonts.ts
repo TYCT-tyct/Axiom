@@ -26,7 +26,7 @@ type Built = {
 const built: { faces: Built[] } = JSON.parse(readFileSync(join(web, "packages/ui/src/css/fonts/fonts.json"), "utf8"));
 
 // The board's families and the source each stands for. The board names its own families; the build names them in
-// fonts.css. A board family missing here that the board's CSS uses makes boardFonts fail rather than fall back.
+// fonts.css. A family the board's CSS uses that is missing here makes boardFonts fail rather than fall back.
 const boardSources: Record<string, { source: string; sample: string }> = {
   "Axiom Sans": { source: "instrument-sans", sample: "Axiom 0123" },
   "Axiom Mono": { source: "jetbrains-mono", sample: "sk-0123" },
@@ -56,36 +56,60 @@ export function fontRoute(route: Route, name: string) {
   return route.fulfill({ contentType: "font/ttf", body });
 }
 
-const descriptor = (rule: string, name: string) => rule.match(new RegExp(`${name}:([^;}]+)`))?.[1]?.trim();
+const descriptor = (rule: string, name: string) =>
+  rule
+    .match(new RegExp(`${name}\\s*:\\s*([^;}]+)`))?.[1]
+    ?.trim()
+    .replace(/^(['"])(.*)\1$/, "$2");
+
+// System fonts a board's stacks name after one of its own, for characters its own lack. Only these may stay without a
+// source font, and only behind another family.
+const systemFallbacks = new Set(["PingFang SC"]);
+
+const fontFace = /@font-face\s*\{[^}]*\}/g;
+
+// used lists the quoted families in the font and font-family declarations of the board's CSS, without @font-face rules,
+// failing on one with no source font: the board would be drawn in a fallback. Stacks of custom properties (var(--mono))
+// name no family here.
+function used(css: string) {
+  const families = new Set<string>();
+  for (const [, value] of css.matchAll(/font(?:-family)?\s*:\s*([^;}]+)/g)) {
+    for (const [index, [, , family]] of [...(value as string).matchAll(/(['"])([^'"]+)\1/g)].entries()) {
+      if (boardSources[family as string]) families.add(family as string);
+      else if (index === 0 || !systemFallbacks.has(family as string)) {
+        throw new Error(`the board uses the font ${family}, which has no source font`);
+      }
+    }
+  }
+  return families;
+}
 
 // boardFonts replaces the board's @font-face rules (they point at the design tool's blob store, unreachable here) with
-// one rule per family it declares, keeping its weight, style and size-adjust, on the source font served from base.
+// one rule per family it uses or declares that has a source font, keeping the board's weight, style and size-adjust, on
+// the source font served from base. Every such family is a face fontsLoaded must load.
 export function boardFonts(helmet: string, base: string) {
-  const rules = helmet.match(/@font-face\{[^}]*\}/g) ?? [];
   const declared = new Map<string, string>();
-  for (const rule of rules) {
-    const family = descriptor(rule, "font-family")?.replace(/^'|'$/g, "");
+  for (const rule of helmet.match(fontFace) ?? []) {
+    const family = descriptor(rule, "font-family");
     if (family && !declared.has(family)) declared.set(family, rule);
   }
-  const rest = helmet.replace(/@font-face\{[^}]*\}/g, "").replace(/<link[^>]*>/g, "");
+  const rest = helmet.replace(fontFace, "").replace(/<link[^>]*>/g, "");
+  // Declared but unused families without a source are dropped: some boards carry the design tool's whole font list.
+  const families = new Set([...used(rest), ...[...declared.keys()].filter((family) => boardSources[family])]);
   const faces: FontFace[] = [];
   const css: string[] = [];
-  for (const [family, rule] of declared) {
-    const known = boardSources[family];
-    if (!known) {
-      if (rest.includes(family)) throw new Error(`the board uses the font ${family}, which has no source font`);
-      continue; // declared but never used: some boards carry the design tool's whole font list
-    }
+  for (const family of families) {
+    const rule = declared.get(family) ?? "";
     const face = {
       family,
       style: descriptor(rule, "font-style") ?? "normal",
       weight: descriptor(rule, "font-weight") ?? "400",
-      sample: known.sample,
+      sample: (boardSources[family] as { sample: string }).sample,
     };
     const sizeAdjust = descriptor(rule, "size-adjust");
     css.push(
       `@font-face{font-family:'${family}';font-style:${face.style};font-weight:${face.weight};font-display:block;` +
-        `${sizeAdjust ? `size-adjust:${sizeAdjust};` : ""}src:url(${base}${known.source})}`,
+        `${sizeAdjust ? `size-adjust:${sizeAdjust};` : ""}src:url(${base}${boardSources[family]?.source})}`,
     );
     faces.push(face);
   }

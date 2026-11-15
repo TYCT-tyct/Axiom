@@ -4,7 +4,7 @@ import { type Browser, expect, type Page, type TestInfo, test } from "@playwrigh
 import { adminUrl, apps } from "./apps.ts";
 import { type BoardScene, openBoard } from "./design/board.ts";
 import { type Comparison, compare, shot } from "./design/compare.ts";
-import { boardFonts, fontsLoaded, pageFonts } from "./design/fonts.ts";
+import { fontsLoaded, pageFonts } from "./design/fonts.ts";
 import { rulings } from "./design/rulings.ts";
 import { type Stage, settle, stage } from "./design/stage.ts";
 import { type DesignScene, demoTime, designScenes } from "./design-map.ts";
@@ -131,27 +131,32 @@ test.describe("the tool", () => {
     expect(boards[1]).toMatchSnapshot(["tool-determinism", "board.png"], { maxDiffPixels: 0 });
   });
 
-  // A board of the design tool's form: a font, a region whose colour is a prop, and a script that reaches for the network.
-  const fixture = (font: string) => `<x-dc><helmet><style>
-@font-face{font-family:'${font}';font-weight:400;src:url(/_blob/0) format('woff2')}
-p{margin:0;font:32px '${font}'} .note{width:200px;height:50px} .a{background:#000} .b{background:#fff}
-</style></helmet><div class="board"><p>Axiom</p><p class="note {{note}}"></p></div></x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"note":{"default":"a"}}'>
+  // A board of the design tool's form: its font CSS, a 40px icon whose colour is a prop, a list drawn by a loop that
+  // two methods change, and a script that reaches for the network.
+  const usualFonts = "@font-face{font-family:'Axiom Sans';font-weight:400;src:url(/_blob/0)} p{font:32px 'Axiom Sans'}";
+  const fixture = (fonts: string) => `<x-dc><helmet><style>
+${fonts} p{margin:0} .icon{width:40px;height:40px} .a{background:#000} .b{background:#fff}
+</style></helmet><div class="board"><p>Axiom</p><p class="icon {{icon}}"></p>
+<ul><sc-for list="{{items}}" as="item"><li>{{item}}</li></sc-for></ul></div></x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"icon":{"default":"a"}}'>
 class Component extends DCLogic {
-  renderVals() { return { note: this.props.note }; }
+  state = { items: ["A", "B"], n: 0 };
+  renderVals() { return { icon: this.props.icon, items: this.state.items }; }
   componentDidMount() { fetch("https://example.com/beacon").catch(() => {}); new Image().src = "https://example.com/pixel.png"; }
+  bump() { this.setState({ n: this.state.n + 1 }); }
+  grow() { this.setState({ items: [...this.state.items, "C"] }); }
 }</script>`;
 
   async function openFixture(
     browser: Browser,
     info: TestInfo,
-    props: Record<string, string> = {},
-    font = "Axiom Sans",
+    board: Omit<BoardScene, "file"> = {},
+    fonts = usualFonts,
   ) {
     const directory = info.outputPath("boards");
     mkdirSync(directory, { recursive: true });
-    writeFileSync(join(directory, "Fixture.dc.html"), fixture(font));
-    const opened = await openBoard(browser, { file: "Fixture.dc.html", props }, directory, staged);
+    writeFileSync(join(directory, "Fixture.dc.html"), fixture(fonts));
+    const opened = await openBoard(browser, { file: "Fixture.dc.html", ...board }, directory, staged);
     await fontsLoaded(opened.page, opened.fonts);
     await settle(opened.page, staged.time);
     return opened;
@@ -166,9 +171,41 @@ class Component extends DCLogic {
     await opened.close();
   });
 
+  test("keeps every copy of a loop through a re-render, and redraws a loop whose list changed", async ({
+    browser,
+  }, info) => {
+    for (const [actions, items] of [
+      [[["bump"]], ["A", "B"]],
+      [[["grow"]], ["A", "B", "C"]],
+      [
+        [["grow"], ["bump"]],
+        ["A", "B", "C"],
+      ],
+    ] as [[string][], string[]][]) {
+      const opened = await openFixture(browser, info, { actions });
+      await expect(opened.page.locator("li")).toHaveText(items);
+      await opened.close();
+    }
+  });
+
   test("fails instead of shooting a font that fell back", async ({ browser, page }, info) => {
-    await expect(openFixture(browser, info, {}, "AX Maple")).rejects.toThrow("the board uses the font AX Maple");
-    expect(() => boardFonts("<style>@font-face{font-family:'AX Smiley';src:url(x)}</style>", "/")).not.toThrow();
+    // A family the CSS uses with no source font, declared or not, fails the board; one only declared does not.
+    for (const fonts of [
+      "p{font-family:'Missing'}",
+      "@font-face{font-family:'AX Maple';src:url(/_blob/0)} p{font:32px 'AX Maple'}",
+      "p{font-family:'PingFang SC',sans-serif}",
+    ]) {
+      await expect(openFixture(browser, info, {}, fonts)).rejects.toThrow("which has no source font");
+    }
+    // Spaced CSS, an undeclared family with a source, a system fallback behind it, an unused declaration: each family
+    // with a source is served and must load.
+    const fonts =
+      "@font-face {font-family: 'Axiom Sans'; font-weight: 400; src: url(/_blob/0)} @font-face{font-family:'AX Smiley';src:url(/_blob/1)}" +
+      " p{font:32px 'Axiom Sans','PingFang SC'} li{font-family:\"Axiom Mono\"}";
+    const opened = await openFixture(browser, info, {}, fonts);
+    expect(opened.fonts.map((face) => face.family).toSorted()).toEqual(["Axiom Mono", "Axiom Sans"]);
+    await opened.close();
+    // A face that fails to load, or a family with no face, is caught where document.fonts.ready would pass.
     await page.setContent(
       "<style>@font-face{font-family:'Broken';src:url(https://example.invalid/broken.woff2)}</style><p>Axiom</p>",
     );
@@ -179,21 +216,22 @@ class Component extends DCLogic {
     }
   });
 
-  test("excuses a difference only inside a ruled region", async ({ browser }, info) => {
-    const board = await openFixture(browser, info, { note: "a" });
-    const page = await openFixture(browser, info, { note: "b" });
-    const note = { selector: ".note" };
+  test("excuses a difference only inside a ruled region, however small", async ({ browser }, info) => {
+    const board = await openFixture(browser, info, { props: { icon: "a" } });
+    const page = await openFixture(browser, info, { props: { icon: "b" } });
+    const icon = { selector: ".icon" };
     const ruled = await compare(
       board.page,
       page.page,
-      [{ scene: "", basis: "test", board: note, page: note }],
+      [{ scene: "", basis: "test", board: icon, page: icon }],
       "tool-ruled",
       info,
     );
     expect(ruled.error).toBeUndefined();
+    // A missing 40px icon is 0.12% of the shot, under the 0.2% a page-wide allowance would have excused.
     const unruled = await compare(board.page, page.page, [], "tool-unruled", info);
     expect(unruled.error).toContain("pixels");
-    expect(unruled.differentRatio).toBeGreaterThan(0.002);
+    expect(unruled.differentPixels).toBe(40 * 40);
     await board.close();
     await page.close();
   });
