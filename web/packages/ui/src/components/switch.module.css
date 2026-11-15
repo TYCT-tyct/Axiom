@@ -1,0 +1,64 @@
+/* The board's .sw2.qsw: a track and a knob; on is the darkest step with the knob in the page colour. Off, the track is
+   edged in --ctl-line (docs/frontend.md「对比度令牌」), since the board's line2 fill alone is under 3:1. */
+.root {
+  all: unset;
+  position: relative;
+  flex: none;
+  box-sizing: border-box;
+  width: 36px;
+  height: 22px;
+  border-radius: var(--rPill);
+  background: var(--line2);
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
+  cursor: pointer;
+}
+
+.root::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 44px;
+  height: 44px;
+  transform: translate(-50%, -50%);
+}
+
+.knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--cardBg);
+}
+
+.root[aria-checked="true"] {
+  background: var(--t1);
+  box-shadow: none;
+}
+
+.root[aria-checked="true"] .knob {
+  background: var(--page);
+  transform: translateX(14px);
+}
+
+.root:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.root:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .root {
+    transition: background-color var(--dur) var(--ease);
+  }
+
+  .knob {
+    transition: transform var(--dur) var(--easeB);
+  }
+}

@@ -1,0 +1,97 @@
+/* The board's .qtbl inside .qtw: headers 40px, rows 52px, ruled apart by a decorative 0.5px line; no header and no
+   cell wraps, and the table scrolls sideways inside its own box instead of widening the page. A fixed table gives each
+   column the width it is told, which is what lets a long identifier truncate in the middle (Id) instead of widening
+   its column. */
+.scroll {
+  overflow-x: auto;
+}
+
+.scroll:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+}
+
+.fixed {
+  table-layout: fixed;
+}
+
+.col {
+  width: var(--w);
+}
+
+.caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.th {
+  height: 40px;
+  padding: 0 16px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-weight: 400;
+  color: var(--t3);
+  text-align: left;
+  white-space: nowrap;
+  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
+}
+
+.td {
+  height: 52px;
+  padding: 0 16px;
+  white-space: nowrap;
+  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
+}
+
+.table tr:last-child > .td {
+  box-shadow: none;
+}
+
+.table tr > :first-child {
+  padding-left: 24px;
+}
+
+.table tr > :last-child {
+  padding-right: 24px;
+}
+
+.end {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--t2);
+}
+
+@media (max-width: 767px) {
+  .th,
+  .td {
+    padding: 0 8px;
+  }
+
+  .td {
+    font-size: var(--fs12);
+    line-height: var(--lh12);
+  }
+
+  .table tr > :first-child {
+    padding-left: 16px;
+  }
+
+  .table tr > :last-child {
+    padding-right: 16px;
+  }
+}
