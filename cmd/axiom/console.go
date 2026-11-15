@@ -24,13 +24,15 @@ import (
 // consoleAPI implements the console's API (api/console.yaml). It stands behind the guard, which has found the site,
 // the session and its permission before a method runs, and kept the request to the contract's schemas.
 type consoleAPI struct {
-	charges  *billing.ChargeReader
-	exit     *egress.Client
-	version  string
-	accounts *accounts.Service
-	payments *payments.Payments
-	catalog  *catalog.Catalog
-	db       *pg.DB
+	logger    *slog.Logger
+	upstreams *suppliers.Service
+	charges   *billing.ChargeReader
+	exit      *egress.Client
+	version   string
+	accounts  *accounts.Service
+	payments  *payments.Payments
+	catalog   *catalog.Catalog
+	db        *pg.DB
 	// models is the public projection built with the last routing snapshot, so the page and a call charge one price.
 	models modelProjection
 	// search is the node's enabled engines: the model pages show what one search through each costs.
