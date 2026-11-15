@@ -203,16 +203,17 @@ function blocks(text: string, offset = 0): Block[] {
   return out;
 }
 
-// Every style rule of a stylesheet, inside @media, @supports, @container and @layer; keyframes hold no selectors.
-function styleRules(text: string, offset = 0): Block[] {
+// Every style rule of a stylesheet, inside @media, @supports, @container and @layer. A keyframe (from, to, 50%) is a
+// rule too when keyframes is set: it holds declarations but no selector.
+function styleRules(text: string, offset = 0, keyframes = false): Block[] {
   return blocks(text, offset).flatMap((block) => {
     if (!block.prelude.startsWith("@")) {
       return [block];
     }
     if (/^@(media|supports|container|layer)\b/.test(block.prelude)) {
-      return styleRules(block.body, block.open);
+      return styleRules(block.body, block.open, keyframes);
     }
-    return [];
+    return keyframes && block.prelude.startsWith("@keyframes") ? blocks(block.body, block.open) : [];
   });
 }
 
@@ -267,8 +268,9 @@ const colorLiteral = new RegExp(
 
 type Declaration = { property: string; value: string; at: number };
 
+// Every declaration of a stylesheet, custom properties and keyframes included.
 function declarations(text: string): Declaration[] {
-  return styleRules(text).flatMap((rule) => {
+  return styleRules(text, 0, true).flatMap((rule) => {
     return [...rule.body.matchAll(/([\w-]+)\s*:\s*([^;]+)/g)].map((m) => ({
       property: m[1] ?? "",
       value: (m[2] ?? "").trim(),
@@ -280,10 +282,9 @@ function declarations(text: string): Declaration[] {
 function colorFindings(path: string, text: string): Finding[] {
   return declarations(text)
     .filter(({ property, value }) => {
-      const bare = value.replace(/var\([^)]*\)|--[\w-]+|"[^"]*"|'[^']*'/g, "");
-      return (
-        !property.startsWith("--") && property !== "content" && property !== "font-family" && colorLiteral.test(bare)
-      );
+      // A var() keeps its fallback, which can be a literal; names and strings go.
+      const bare = value.replace(/var\(\s*--[\w-]+\s*,?|--[\w-]+|"[^"]*"|'[^']*'/g, " ");
+      return property !== "font-family" && colorLiteral.test(bare);
     })
     .map(({ value, at }) => ({
       rule: "color" as const,
@@ -319,41 +320,77 @@ function tokens(css: string) {
       ? ([1, 3, 5].map((i) => Number.parseInt(text.slice(i, i + 2), 16)) as Rgb)
       : undefined;
   };
-  return { schemes, color };
+  return { schemes, color, raw: base };
 }
 
 const edges = /^(border(-(top|right|bottom|left|block|inline)(-(start|end))?)?(-color)?|outline(-color)?|box-shadow)$/;
 const surfaces = ["--n1", "--n2", "--n3", "--n4"];
+type Palette = ReturnType<typeof tokens>;
 
-// The weakest contrast of a token against the surfaces a control sits on, over both schemes and neutral scales.
-function weakest(name: string, palette: ReturnType<typeof tokens>) {
+// The weakest contrast of a token against the surfaces a control sits on, over both schemes and neutral scales;
+// undefined when the token is not one colour in every scheme (a mix, a shadow, a name nothing defines), which cannot
+// be measured.
+function weakest(name: string, palette: Palette) {
   let low = Number.POSITIVE_INFINITY;
   for (const scheme of palette.schemes) {
     const edge = palette.color(name, scheme);
+    if (!edge) {
+      return undefined;
+    }
     for (const surface of surfaces) {
       const under = palette.color(surface, scheme);
-      if (edge && under) {
-        low = Math.min(low, contrast(edge, under));
-      }
+      low = under ? Math.min(low, contrast(edge, under)) : low;
     }
   }
   return low;
 }
 
-function edgeFindings(path: string, text: string, palette: ReturnType<typeof tokens>): Finding[] {
-  return declarations(text)
+// The edges a value draws, with the module's own custom properties put in for every value the module gives them and
+// a layer that is only a shadow token (--sh1) put in by the token's value, so an alias is measured as what it stands
+// for.
+function expand(value: string, local: Map<string, string[]>, palette: Palette, depth = 0): string[] {
+  const alias = [...value.matchAll(/var\((--[\w-]+)\)/g)].map((m) => m[1] ?? "").find((name) => local.has(name));
+  if (alias && depth < 8) {
+    return (local.get(alias) ?? []).flatMap((v) =>
+      expand(value.replaceAll(`var(${alias})`, v), local, palette, depth + 1),
+    );
+  }
+  return splitTop(value, /,/).flatMap((layer) => {
+    const only = /^var\((--[\w-]+)\)$/.exec(layer)?.[1] ?? "";
+    const shadow = palette.raw[only];
+    return shadow && /\d(px)?\s/.test(shadow) && depth < 8 ? expand(shadow, local, palette, depth + 1) : [layer];
+  });
+}
+
+// A layer is decoration when drawn --bw wide, and no edge when it is a blurred shadow: its third length is the blur.
+function isEdge(layer: string) {
+  const lengths = layer.replace(/var\([^)]*\)|[\w-]+\([^)]*\)/g, "c").split(/\s+/);
+  const numbers = lengths.filter((part) => /^-?[\d.]+(px)?$/.test(part));
+  return !layer.includes("--bw") && !(numbers.length >= 3 && Number.parseFloat(numbers[2] ?? "0") !== 0);
+}
+
+function edgeFindings(path: string, text: string, palette: Palette): Finding[] {
+  const all = declarations(text);
+  const local = new Map<string, string[]>();
+  for (const { property, value } of all.filter((d) => d.property.startsWith("--"))) {
+    local.set(property, [...(local.get(property) ?? []), value]);
+  }
+  return all
     .filter(({ property }) => edges.test(property))
     .flatMap(({ value, at }) =>
-      splitTop(value, /,/)
-        .filter((layer) => !layer.includes("--bw"))
+      expand(value, local, palette)
+        .filter(isEdge)
         .flatMap((layer) => [...layer.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1] ?? ""))
         .map((name) => ({ name, low: weakest(name, palette) }))
-        .filter(({ low }) => low < 3)
+        .filter(({ low }) => low === undefined || low < 3)
         .map(({ name, low }) => ({
           rule: "edge-contrast" as const,
           path,
           line: lineOf(text, at),
-          message: `edge in ${name} is ${low.toFixed(2)}:1 on a surface, under 3:1; use --ctl-line, or --bw if decoration`,
+          message:
+            low === undefined
+              ? `edge in ${name}, which is not one colour token, so its contrast cannot be measured; use --ctl-line`
+              : `edge in ${name} is ${low.toFixed(2)}:1 on a surface, under 3:1; use --ctl-line, or --bw if decoration`,
         })),
     );
 }

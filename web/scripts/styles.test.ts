@@ -55,6 +55,19 @@ describe("app code", () => {
 });
 
 describe("a component's module", () => {
+  // A local alias is measured as the token it stands for, under every value the module gives it.
+  it.each([
+    { css: ".input {\n  border: 1px solid var(--line2);\n}", fails: true },
+    { css: ".input {\n  --edge: var(--line2);\n  border: 1px solid var(--edge);\n}", fails: true },
+    {
+      css: ".input {\n  --edge: var(--ctl-line);\n}\n.input:hover {\n  --edge: var(--line2);\n}\n.input {\n  border: 1px solid var(--edge);\n}",
+      fails: true,
+    },
+    { css: ".input {\n  --edge: var(--ctl-line);\n  border: 1px solid var(--edge);\n}", fails: false },
+  ])("measures an edge through a local alias as directly: fails $fails", ({ css, fails }) => {
+    expect(run(component(css)).some((f) => f.includes(": edge-contrast"))).toBe(fails);
+  });
+
   it.each([
     { name: "an element first", css: "div .root { color: var(--t1); }" },
     { name: "another global class", css: ":global(.btn) .root { color: var(--t1); }" },
@@ -84,6 +97,15 @@ describe("a component's module", () => {
     ).toContain("console/src/x.module.css:1: module-place");
   });
 
+  // A literal behind a local custom property, in a var() fallback or in a keyframe is still a literal.
+  it.each([
+    ".root {\n  --local: #fff;\n  color: var(--local);\n}",
+    ".root {\n  color: var(--missing, #fff);\n}",
+    "@keyframes pulse {\n  from {\n    color: white;\n  }\n}\n.root {\n  animation: pulse 1s;\n}",
+  ])("fails on a colour literal however it is written: %s", (css) => {
+    expect(run(component(css)).join("\n")).toMatch(/box\.module\.css:\d+: color/);
+  });
+
   it.each(["#fff", "rgb(0 0 0 / 0.1)", "white", "oklch(0.5 0.1 200)"])("fails on the colour literal %s", (literal) => {
     expect(run(component(`.root {\n  color: ${literal};\n}`)).join("\n")).toContain("box.module.css:2: color");
   });
@@ -102,6 +124,11 @@ describe("a component's module", () => {
     { edge: "outline: 2px solid var(--focus)", fails: false },
     { edge: "box-shadow: inset 0 0 0 var(--bw) var(--line2)", fails: false },
     { edge: "box-shadow: var(--shPop)", fails: false },
+    { edge: "box-shadow: var(--sh1)", fails: false },
+    { edge: "box-shadow: 0 1px 3px var(--line2)", fails: false },
+    // A colour that is no single token (a mix) or a name nothing defines cannot be measured, so it fails.
+    { edge: "border: 1px solid var(--accentWash)", fails: true },
+    { edge: "border: 1px solid var(--missing)", fails: true },
   ])("$edge: under 3:1 in light or dark fails $fails", ({ edge, fails }) => {
     const failures = run(component(`.input {\n  ${edge};\n}`));
     expect(failures.some((f) => f.includes("box.module.css:2: edge-contrast"))).toBe(fails);
