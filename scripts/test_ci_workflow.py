@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -38,7 +39,6 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "inputs.base": base,
         "inputs.release": release,
         "needs.changes.result": results.get("changes", "success"),
-        "needs.changes.outputs.docs_only": "true" if docs else "false",
         "needs.changes.outputs.light": "true" if docs or light else "false",
         "needs.changes.outputs.web": "false" if light else "true",
         "needs.changes.outputs.deploy": "false" if light else "true",
@@ -167,7 +167,7 @@ class BuildChecks(unittest.TestCase):
                 subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
                 self.assertEqual(values["vitals"], expected)
-                self.assertEqual(values["docs_only"], "true" if md == "0" else "false")
+                self.assertEqual(values["light"], "true" if md == "0" else "false")
 
     def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
@@ -210,7 +210,7 @@ class BuildChecks(unittest.TestCase):
         self.assertIn("fail-fast: false", job("e2e"))
         self.assertIn("name: e2e-test-results-${{ matrix.shard }}", job("e2e"))
 
-    def test_build_rejects_non_successful_shards_except_docs_only_and_pull_requests(self):
+    def test_build_rejects_non_successful_shards_except_light_and_pull_requests(self):
         check = re.search(r"- if: (needs.changes.outputs.light .+)\n        run: (.+)", job("build"))
         self.assertIsNotNone(check)
         for docs in (False, True):
@@ -234,7 +234,22 @@ class BuildChecks(unittest.TestCase):
                 self.assertTrue(enabled("build", event, light=True))
                 for condition in re.findall(r"- if: (needs.changes.outputs.light .+)", job("build")):
                     self.assertFalse(expression(condition, event=event, light=True))
-        self.assertIn("run: just script-tests docs secrets", job("static"))
+        self.assertIn("run: just md-checks scope", job("static"))
+
+    @unittest.skipUnless(BASH and shutil.which("just"), "Bash or just is unavailable")
+    def test_light_static_includes_checks_that_read_light_files(self):
+        step = re.search(r"- if: (needs.changes.outputs.light == 'true')\n        run: (.+)", job("static"))
+        self.assertIsNotNone(step)
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(expression(step[1], event=event, light=True))
+                command = re.sub(r"\$\{\{ (.+?) \}\}", lambda match: expression(match[1], event=event), step[2])
+                result = subprocess.run([BASH, "-e", "-c", command.replace("just ", "just --dry-run ", 1)],
+                                        cwd=ROOT, capture_output=True, text=True, check=True)
+                for consumer in ("unittest discover -s scripts", "./checkdocnames", "./checkmodules",
+                                 "check_artifacts.py", "check_scope.py", "TestModuleOrderFollowsArchitecture"):
+                    self.assertIn(consumer, result.stderr)
+                self.assertEqual("gitleaks" in result.stderr, event != "pull_request")
 
     def test_diagnostic_requires_web_and_unsharded_e2e(self):
         self.assertIn("needs: [changes, web, e2e]", job("gate-stress"))

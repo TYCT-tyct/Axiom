@@ -13,5 +13,5 @@ strict = false # PRs merge through the merge train (docs/ops/merge-train.md), wh
 # Preserve the existing Markdown-only path even outside docs/.
 light = ["*.[mM][dD]", "scripts/test_*.py", "scripts/check_*.py", "scripts/ci_skips.py", "scripts/train.py",
          "scripts/workflow/*", "scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh"]
-# Runner provisioning is also a page-build input, so it must take the full lane.
-code = ["scripts/ci/runner-host.sh"]
+# Provisioning feeds the page build; the allocation comparison must exercise its train-only consumer.
+code = ["scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh"]

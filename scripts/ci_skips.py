@@ -1,6 +1,6 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
-Light changes run only repository script, docs and secrets checks; Markdown-only keeps its cheaper checks. Outside the
+Light changes run Markdown checks (including repository script tests), scope checks and train secrets checks. Outside the
 light lane, a benchmark comparison is skipped only for Markdown-only and web/-only changes, the deployment check only
 when every changed file is clearly outside the container, and the web vitals only when nothing the pages are built from
 changed. The decisions come from the file list, never a guess about what reads what. A failed diff runs the build, the

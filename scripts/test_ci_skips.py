@@ -27,10 +27,10 @@ class LightOnly(unittest.TestCase):
         upgrade = [".github/project-workflow.toml", "scripts/workflow/check_pr.py",
                    "scripts/workflow/test_check_pr.py"]
         cases = [(upgrade, True), ([], False), (["README.md"], True), (["notes.MD"], True),
-                 (["scripts/check_scope.py", "scripts/test_ci_skips.py", "scripts/ci/bench-compare.sh"], True)]
+                 (["scripts/check_scope.py", "scripts/test_ci_skips.py"], True)]
         cases += [(upgrade + [path], False) for path in (
             "internal/billing/ledger.go", "web/site/src/app.ts", "deploy/compose.yaml", "go.mod", "justfile",
-            "scripts/web_cache.py", "scripts/ci/runner-host.sh")]
+            "scripts/web_cache.py", "scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh")]
         for paths, light in cases:
             with self.subTest(paths=paths), mock.patch.object(ci_skips, "changed_paths", return_value=paths):
                 self.assertEqual(ci_skips.main(["light-only", "base"]), 0 if light else 1)
@@ -52,6 +52,10 @@ class LightOnly(unittest.TestCase):
             ("workflow_dispatch", "base", upgrade, True), ("pull_request", "base", upgrade, True),
             ("push", "", upgrade, False), ("workflow_dispatch", "", upgrade, False),
             ("workflow_dispatch", "base", [], False),
+            ("workflow_dispatch", "base", ["docs/architecture.md", "scripts/test_ci_skips.py"], True),
+            ("workflow_dispatch", "base", ["internal/gateway/README.md", "scripts/test_ci_skips.py"], True),
+            ("workflow_dispatch", "base", ["scripts/check_scope.py", "scripts/check_artifacts.py"], True),
+            ("workflow_dispatch", "base", ["scripts/ci/bench-compare.sh"], False),
             ("workflow_dispatch", "base", upgrade + ["scripts/web_cache.py"], False),
         ):
             # Run the workflow's actual shell and CLI decisions with a controlled diff.
@@ -65,6 +69,8 @@ class LightOnly(unittest.TestCase):
                                env={**os.environ, "BASE": base, "GITHUB_OUTPUT": str(output)})
                 result = dict(line.split("=", 1) for line in output.read_text().splitlines())
                 self.assertEqual(result["light"], str(light).lower())
+                if paths == ["scripts/ci/bench-compare.sh"]:
+                    self.assertEqual(result["bench"], "true")
                 if light or not base:
                     for job in ("deploy", "bench", "web", "vitals"):
                         self.assertEqual(result[job], str(not light).lower())

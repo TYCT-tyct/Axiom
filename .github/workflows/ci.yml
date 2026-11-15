@@ -33,7 +33,7 @@ on:
 permissions:
   contents: read
 
-# A newer event on a pull request makes the run for the older one pointless; runs on main always finish.
+# New pull request events supersede older runs; in-progress main runs always finish.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -45,7 +45,7 @@ env:
   WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
 
 jobs:
-  # Light PRs and trains run repository script, docs and secrets checks; Markdown-only keeps its cheaper checks.
+  # Light PRs and trains run md-checks and scope, including script tests; trains also scan secrets.
   # Without a base (main pushes and release dispatches), all checks run. Other PRs select web by build inputs, and trains
   # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
   # run on trains or main alone.
@@ -53,7 +53,6 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     outputs:
-      docs_only: ${{ steps.decide.outputs.docs_only }}
       light: ${{ steps.decide.outputs.light }}
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
@@ -67,11 +66,10 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          docs_only=false; light=false; deploy=true; bench=true; web=true; vitals=true
+          light=false; deploy=true; bench=true; web=true; vitals=true
           if [ -n "$BASE" ]; then
             if python3 scripts/ci_skips.py light-only "$BASE"; then
               light=true; deploy=false; bench=false; web=false; vitals=false
-              if python3 scripts/ci_skips.py md-only "$BASE"; then docs_only=true; fi
             else
               status=0
               python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
@@ -107,7 +105,7 @@ jobs:
               web=false
             fi
           fi
-          printf 'light=%s\ndocs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$light" "$docs_only" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
+          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
@@ -131,10 +129,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
       # A train adds `secrets`, which check-secrets.yml runs for a PR but nothing dispatches for a train.
-      - if: needs.changes.outputs.docs_only == 'true'
-        run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
-      - if: needs.changes.outputs.light == 'true' && needs.changes.outputs.docs_only != 'true'
-        run: just script-tests docs secrets
+      # Documents and check scripts also change the rules applied to the whole tree.
+      - if: needs.changes.outputs.light == 'true'
+        run: just md-checks scope ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
       - if: needs.changes.outputs.light != 'true' && github.event_name == 'pull_request'
         run: just script-tests check-static pr
       # `train` is explicit: a batch can improve a number by more than the tolerance with no single PR crossing it, so

@@ -69,6 +69,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
    dispatch 解析 `main` 时可能已有新提交，必须核对运行的 `headSha` 就是选定提交，并确认 **整个 ci 工作流成功**
    （不能只看 deploy 成功），记录 run ID、attempt、源码 SHA；也可在该 Actions 运行的 Artifacts 区下载同名产物。
+   发布 dispatch 与 main push 共用并发组；等待中的发布可能被后到的 push 取消。结论为 `cancelled` 时重新调起，重新核对 main tip 和运行的 `headSha`，只使用整个工作流成功的那次产物。
    普通 `main` push、未设置 `release=true` 的 dispatch、带 `base` 的列车运行和非 `main` ref 都不上传发布产物。
    不支持重新构建任意旧提交来发布：保持签名身份固定为 `ci.yml@refs/heads/main`，并让发布基于当前完整检查的树。
    旧版本回滚使用此前成功发布并归档的 digest；没有归档的旧提交若需要恢复，先经评审和列车把所需改动恢复到 main tip，再发布。
