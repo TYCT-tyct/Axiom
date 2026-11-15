@@ -18,6 +18,7 @@ func (r *Recorder) Close(ctx context.Context) error       // 写完 spill；ctx 
 func (r *Recorder) Done() <-chan struct{}                 // 写入协程退出时关闭；Close 返回前已等待它，测试据此断言没有写入协程留下
 func SpillBacklog(dir string) (int64, error)              // spill 里数据库还没确认的记录数（检查点之后的段内记录加停放的记录），只读、不取锁；备份停机后持锁调用（`axiom call-log check`）
 func ListOwn(ctx, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error)
+func ListOwnSessions(ctx, tx pg.Tx, q OwnQuery) ([]OwnSession, *Cursor, error) // 最多 31 天，过滤后按非空会话/币种归组
 func CheckOwnExportSize(ctx, tx pg.Tx, q OwnQuery) error // 同一 ReadTx 内、开始输出前检查最多 10001 个匹配键；超过 10000 返回 ErrExportSize
 func StreamContentMeta(ctx, tx pg.Tx, q ContentQuery, each func(ContentMeta) error) (ContentStats, error) // 一个只读快照里的正文引用；平台范围
 func ReadContentKey(ctx, tx pg.Tx, keys *secret.Keyring, account uuid.UUID) ([32]byte, error) // 调用方须传平台范围事务；AAD 绑定账户
@@ -193,6 +194,14 @@ HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers �
 游标参数的 UTC 转换使用 `timezone('UTC', @after_at::timestamptz)`，避免 `@` 简写的运算符优先级把整个 `AT TIME ZONE` 表达式当作另一个参数；跨分区回填测试验证位置实际推进。回填从 `(at,id)` 位置继续，复用 `call_log_admin_time` 的 UTC 表达式正向扫描，并有 `at` 下界裁剪分区；迁移记录旧数据的末尾，扫描不越过它，不扫描之后的新数据。只把 `usage_rollup_live=false` 且已结算的行送入 journal，跳过的待结算行仍推进位置。位置与入 journal 同事务提交，最后不足一批标记完成。已归档的历史不在首次回填内；之后汇总独立保留，不随调用分区删除。`backfill_complete` 只表示历史回填完成，不表示尚未消费的 journal 或本机 WAL 已清空。
 
 不变量：每条已结算调用仅由“迁移前回填”或“迁移后触发器”之一进入 journal；每个事件恰好累加一次；已消费事件的价格和等于小时行的 spend；HTTP 请求从不回扫明细。旧 `AggregateOwn` 保留原筛选与窗口，不能替用量统计查询。
+
+### 会话列表
+
+`ListOwnSessions` 复用 `OwnQuery`、账户 RLS 和 custom plan，使用迁移 `00047` 的账户/时间部分覆盖索引及既有稀疏筛选索引，在父表按 `[Since,Until)` 裁剪分区后，只聚合非空会话、已结算的匹配调用；不读正文、路由、尝试或成本。模块边界也拒绝空窗、超过 31 天和不合法页长。`OwnSession` 每个会话/币种一行，计数和金额为 numeric 求和后的精确文本；主模型按次数倒序、模型字节序取第一，应用名取最新调用。先按会话/模型统计，再合并会话，避免逐会话往返。最新调用的 `(at,id)` 唯一标记一组，复用 `Cursor` 排序翻页，同一时间不漏第二个会话。
+
+HTTP 入口签名绑定游标位置、账户、所有筛选和时间窗；使用节点共享身份密钥并加独立用途前缀，不增加密钥配置。签名失败返回既有 `invalid_request`。后续页必须携带响应时间窗；新调用可能让会话越过游标，需刷新首页看最新结果，不承诺跨请求快照。没有新增异步任务或汇总延迟：下一次读取包含已提交的调用，新旧写者都无需变更。热记录归档后不在此视图；统计口径见[领域文档](../../docs/domains/observability.md#用户调用记录查询与导出)。
+
+`TestOwnSessionsGroupFilterAndRefresh` 验证模型多数、精确费用、无会话排除、跨月、账户与工作区筛选及刷新；`TestOwnSessionsPagesCurrenciesAndTies` 验证默认分区、同时间翻页、币种隔离、主模型同次数及超过 int64 的和；`TestOwnSessionsPlanBoundsCallRecords` 在 12 万行上检查窗口走索引，短窗不超过 1500 块。每页聚合成本随窗口内候选数增长，仅非空已结算会话维护的部分覆盖索引包含聚合、筛选与 RLS 所需列，避免完整窗口退回明细顺扫（既有索引在 12 万条夹具读取约 7750 块），不复制小时汇总的 journal、触发器和回填；不改变用量统计只读汇总表的不变量。
 
 ## 后台检索
 

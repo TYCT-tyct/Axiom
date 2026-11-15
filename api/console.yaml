@@ -2427,6 +2427,50 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls/sessions:
+    get:
+      operationId: listCallSessions
+      tags: [Calls]
+      summary: Client-named sessions grouped from visible calls
+      description: >-
+        Groups nonempty client-named session IDs within the selected hot call-record window, with currencies
+        separate. The same filters and authorization as listCalls apply. Default last 30 days, maximum 31 days;
+        since inclusive, until exclusive. Calls and billionth charges are exact text. main_model is the most
+        frequent model, ties by bytewise model name; client_app comes from the newest matching call.
+        Newest last_at first, ties by newest call UUID. Cursor is signed and bound to the filters and window;
+        malformed or modified cursors return 400 invalid_request. Use returned since/until for subsequent pages.
+        Concurrent arrivals may move a session ahead of the cursor; refresh the first page to see updates.
+        Reads reflect committed call-log inserts without an additional rollup delay. Archived calls are absent.
+        No content, cost, supplier or routing data. Ten-second deadline. All new response members are optional;
+        old nodes return 404.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallClientApp"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - $ref: "#/components/parameters/CallStatus"
+        - $ref: "#/components/parameters/CallRequestId"
+        - name: fell_back
+          in: query
+          schema: {type: boolean}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of sessions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CallSessionList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/calls/aggregate:
     get:
       operationId: aggregateCalls
@@ -3536,6 +3580,31 @@ components:
         output: {type: string, pattern: '^[0-9]+$'}
         cache_read: {type: string, pattern: '^[0-9]+$'}
         cache_write: {type: string, pattern: '^[0-9]+$'}
+    CallSessionList:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CallSession"}
+        next_cursor:
+          type: string
+          nullable: true
+          x-omitempty: false
+          description: Null on the last page; optional on older nodes.
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+    CallSession:
+      type: object
+      additionalProperties: false
+      properties:
+        session_id: {type: string}
+        client_app: {type: string}
+        calls: {type: string, pattern: '^[0-9]+$'}
+        price: {$ref: "#/components/schemas/CallAggregateMoney"}
+        main_model: {type: string}
+        first_at: {type: string, format: date-time}
+        last_at: {type: string, format: date-time}
     CallAggregateMoney:
       type: object
       additionalProperties: false

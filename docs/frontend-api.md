@@ -168,6 +168,7 @@ signIn ──200 status=signed_in──────────────▶ �
 - **权限**：用 `getSession.permissions` 决定显示或隐藏操作，别按角色名猜；403 才是准确的答案。
 - **名字**：模型用公开名和作者（`listPublicModels`、`listAccountModels`），端点用稳定的公开代号；不显示供应商名、上游名、成本（这些接口也不会给）。
 - **价格**：模型页的价格用 `pricing`（售价，含每个端点自己的价格）；列表里一个计费项显示哪条单价读 `headline`，显示的数和单位读 `display_amount`、`display_per`（token 项是每百万 token），不自己挑服务等级和档位、不自己移小数点；旧节点不带这些字段时列表价显示「不可用」，明细按 `amount` 每单位原样显示。后台的售价用定价规则、`previewPricing` 的试算和发布列表（`listPricePublications`：当前价格版本、待确认与暂停状态都是接口给的）。调用记录的费用旁边有冻结的价格版本（`price_version`），旧节点不返回时显示「不可用」，不去重算。
+- **调用会话**：`listCallSessions`（`/api/console/v1/calls/sessions`）返回非空客户端会话的次数、费用、主模型和窗口内起止时间；最多 31 天，翻页保留返回的 `since` / `until`，刷新首页查看新调用。所有响应字段可选，旧节点 404 时显示不可用。分组、币种和筛选口径见[调用记录查询](domains/observability.md#用户调用记录查询与导出)。
 - **调用尝试与路由**：`getCall` 的可选 `attempts`、`route` 和 `listCalls` 的 `attempt_count`、`fell_back` 筛选口径见[调用记录查询](domains/observability.md#用户调用记录查询与导出)。缺 `endpoint_code` 或 `charged` 显示未知；旧节点缺字段不在页面推算。
 - **筛选结果**：接口筛过的，要看它回显的筛选（如调用列表的 `status_filter`）才展示；旧节点没回显，就显示「不可用」，不在浏览器里筛一页普通数据冒充。
 - **预设**：路由预设的规则（`RoutingRules`，契约里逐项有类型）、默认链、能不能选（`preset_not_selectable`）、被几把 key 用着（`keys`）、是否停用，以接口为准；规则内容的含义见[路由的「规则内容」](domains/routing.md)。列表的一行摘要读预设的 `summary`，旧节点或本节点读不懂的规则没有它，页面说读不到；编辑时用 `checkRoutingRules`（后台 `checkLayerRoutingRules`）问哪些规则找不到端点（`unmatched`，带下标和单独就排除了所有端点的条件），回答说找不到时不让保存，回答没到或检查失败时不拦（写入接口照收这种规则）。
