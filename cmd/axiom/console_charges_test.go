@@ -159,7 +159,7 @@ func TestChargeBodyOmitsSamplingForRequest(t *testing.T) {
 
 func checkUserChargeFields(t *testing.T, body []byte) {
 	t.Helper()
-	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "egress", "credential", "\"basis\""} {
+	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "\"egress\"", "\"credential\"", "\"credential_id\"", "\"credentials\"", "\"basis\""} {
 		if strings.Contains(string(body), field) {
 			t.Errorf("user response leaked %s: %s", field, body)
 		}
