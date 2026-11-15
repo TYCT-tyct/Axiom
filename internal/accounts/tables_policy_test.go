@@ -11,7 +11,7 @@ import (
 )
 
 // TestApplicationChangesOnlyUpdatableColumns: the application may update exactly the columns the README lists, and
-// delete nothing except expired password reset data and dispatched notices; the other tables refuse the privilege, not just the rows.
+// delete nothing except expired password reset data, pending email changes and dispatched notices; the other tables refuse the privilege, not just the rows.
 func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 	t.Parallel()
 	db, _ := open(t)
@@ -29,7 +29,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"site_billing_preferences": {"preference"},
 		"workspaces":               {"name", "status", "budget", "budget_reset", "deleted_at"},
 		"users": {
-			"password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
+			"email", "email_verified_at", "password_hash", "factor_version", "status", "totp_ciphertext", "totp_nonce", "totp_wrapped_dek",
 			"totp_key_version", "totp_last_step", "mfa_enabled_at",
 		},
 		"members":                 nil,
@@ -47,6 +47,7 @@ func TestApplicationChangesOnlyUpdatableColumns(t *testing.T) {
 		"security_failures":       {"started_at", "failures", "completed_peak", "sampled_at", "reported"},
 		"password_reset_requests": {"id", "email", "domain", "language", "expires_at"},
 		"password_reset_tokens":   {"used_at"},
+		"email_changes":           {"email", "token_hash", "factor_version", "language", "expires_at"},
 		"registration_requests":   {"tier_id", "domain", "language", "expires_at", "token_hash"},
 		"agent_credentials":       {"revoked_at", "last_used_at"},
 		"agent_credential_tokens": {"retires_at"},
@@ -85,7 +86,7 @@ func assertDeniedDeletes(t *testing.T, db *pg.DB, updatable map[string][]string)
 // deletable is the tables a site's data may delete from: reset data, dispatched notices, and the records of a
 // credential or a one-time flow. Everything else must refuse DELETE.
 func deletable(table string) bool {
-	return strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "user_notices" ||
+	return strings.HasPrefix(table, "password_reset_") || table == "registration_requests" || table == "email_changes" || table == "user_notices" ||
 		table == "site_oauth_providers" || table == "user_identities" || table == "passkey_credentials" ||
 		table == "oauth_flows" || table == "webauthn_flows" || table == "site_billing_preferences"
 }
@@ -102,7 +103,7 @@ func TestOnePolicyPerCommand(t *testing.T) {
 		WHERE n.nspname = 'accounts' AND c.relkind = 'r' GROUP BY c.relname ORDER BY c.relname`)
 	var want []string
 	for _, table := range []string{
-		"accounts", "agent_credential_tokens", "agent_credentials", "announcements", "api_keys", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
+		"accounts", "agent_credential_tokens", "agent_credentials", "announcements", "api_keys", "email_changes", "legal_acceptances", "legal_documents", "members", "notification_preferences", "oauth_flows", "passkey_credentials",
 		"password_reset_requests", "password_reset_tokens", "platform_grants", "presets", "recovery_codes",
 		"registration_requests", "roles", "security_failures", "sessions", "site_billing_preferences", "site_domains", "site_logos",
 		"site_oauth_providers", "site_settings", "sites", "tiers", "user_identities", "user_notices", "users",

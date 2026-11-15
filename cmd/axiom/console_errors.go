@@ -44,6 +44,9 @@ type refusal struct {
 // refusals are how the modules' refusals are answered, in the order they are tried. The message is English for logs
 // and developers, and never repeats what the client sent.
 var refusals = []refusal{
+	{accounts.ErrProfileName, http.StatusBadRequest, codeInvalidRequest, "display name must be 1 to 100 characters after trimming"},
+	{accounts.ErrEmailChangeExpired, http.StatusUnprocessableEntity, codeInvalidVerification, "email change link expired; request another"},
+	{accounts.ErrEmailChangeInvalid, http.StatusUnprocessableEntity, codeInvalidVerification, "email change link invalid, replaced or already used"},
 	{accounts.ErrPreset, http.StatusUnprocessableEntity, codeUnprocessable, "invalid preset configuration"},
 	{accounts.ErrPresetConflict, http.StatusConflict, codeConflict, "preset slug exists or limit reached"},
 	{accounts.ErrNotificationPreferences, http.StatusUnprocessableEntity, codeUnprocessable, "invalid notification preferences"},

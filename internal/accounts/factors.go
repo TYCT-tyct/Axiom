@@ -410,7 +410,7 @@ type factorFinish struct {
 // finishFactorChange ends a factor change under the user's lock: it raises the factor version, makes new recovery
 // codes when TOTP is on, and issues the replacement session with the new version. The version bump stops every other
 // session and every old recovery code, so the codes returned here are the only ones that work. Every path that ends
-// such a change goes through this function — TOTP enable, replace and regenerate, password change, provider link and
+// such a change goes through this function — TOTP enable, replace and regenerate, password change, email confirmation, provider link and
 // unlink, passkey add and remove — so none can leave the user with codes the bump stopped and no replacements.
 func (s *Service) finishFactorChange(ctx context.Context, tx pg.Tx, locked LockUserRow, f factorFinish) (Issued, []string, error) {
 	if err := s.queries.BumpFactorVersion(ctx, tx, f.session.user); err != nil {

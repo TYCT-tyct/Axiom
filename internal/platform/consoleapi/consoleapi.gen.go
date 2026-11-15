@@ -1266,6 +1266,24 @@ func (e ChangePasswordJSONBodyLanguage) Valid() bool {
 	}
 }
 
+// Defines values for RequestEmailChangeJSONBodyLanguage.
+const (
+	RequestEmailChangeJSONBodyLanguageEn RequestEmailChangeJSONBodyLanguage = "en"
+	RequestEmailChangeJSONBodyLanguageZh RequestEmailChangeJSONBodyLanguage = "zh"
+)
+
+// Valid indicates whether the value is a known member of the RequestEmailChangeJSONBodyLanguage enum.
+func (e RequestEmailChangeJSONBodyLanguage) Valid() bool {
+	switch e {
+	case RequestEmailChangeJSONBodyLanguageEn:
+		return true
+	case RequestEmailChangeJSONBodyLanguageZh:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for GetUsageStatisticsParamsGranularity.
 const (
 	GetUsageStatisticsParamsGranularityDay  GetUsageStatisticsParamsGranularity = "day"
@@ -3349,6 +3367,27 @@ type ListPresetsParams struct {
 	Offset *int `form:"offset,omitempty" json:"offset,omitempty"`
 }
 
+// RequestEmailChangeJSONBody defines parameters for RequestEmailChange.
+type RequestEmailChangeJSONBody struct {
+	CurrentPassword string                              `json:"current_password"`
+	Email           string                              `json:"email"`
+	Language        *RequestEmailChangeJSONBodyLanguage `json:"language,omitempty"`
+}
+
+// RequestEmailChangeJSONBodyLanguage defines parameters for RequestEmailChange.
+type RequestEmailChangeJSONBodyLanguage string
+
+// ConfirmEmailChangeJSONBody defines parameters for ConfirmEmailChange.
+type ConfirmEmailChangeJSONBody struct {
+	Token string `json:"token"`
+}
+
+// ChangeDisplayNameJSONBody defines parameters for ChangeDisplayName.
+type ChangeDisplayNameJSONBody struct {
+	// Name Trimmed length must be 1 to 100 Unicode characters.
+	Name string `json:"name"`
+}
+
 // ListRedemptionsParams defines parameters for ListRedemptions.
 type ListRedemptionsParams struct {
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
@@ -3490,6 +3529,15 @@ type CreatePresetJSONRequestBody = PresetRequest
 
 // UpdatePresetJSONRequestBody defines body for UpdatePreset for application/json ContentType.
 type UpdatePresetJSONRequestBody = PresetReplacement
+
+// RequestEmailChangeJSONRequestBody defines body for RequestEmailChange for application/json ContentType.
+type RequestEmailChangeJSONRequestBody RequestEmailChangeJSONBody
+
+// ConfirmEmailChangeJSONRequestBody defines body for ConfirmEmailChange for application/json ContentType.
+type ConfirmEmailChangeJSONRequestBody ConfirmEmailChangeJSONBody
+
+// ChangeDisplayNameJSONRequestBody defines body for ChangeDisplayName for application/json ContentType.
+type ChangeDisplayNameJSONRequestBody ChangeDisplayNameJSONBody
 
 // CreateProviderKeyJSONRequestBody defines body for CreateProviderKey for application/json ContentType.
 type CreateProviderKeyJSONRequestBody = ProviderKeyCreate
@@ -3821,6 +3869,18 @@ type ServerInterface interface {
 	// UpdatePreset updatePreset
 	// (PUT /api/console/v1/presets/{slug})
 	UpdatePreset(w http.ResponseWriter, r *http.Request, slug string)
+	// RequestEmailChange Request a verified email change
+	// (POST /api/console/v1/profile/email)
+	RequestEmailChange(w http.ResponseWriter, r *http.Request)
+	// ConfirmEmailChange Confirm the email change
+	// (POST /api/console/v1/profile/email/confirm)
+	ConfirmEmailChange(w http.ResponseWriter, r *http.Request)
+	// GetDisplayName Read the current display name
+	// (GET /api/console/v1/profile/name)
+	GetDisplayName(w http.ResponseWriter, r *http.Request)
+	// ChangeDisplayName Change the display name
+	// (POST /api/console/v1/profile/name)
+	ChangeDisplayName(w http.ResponseWriter, r *http.Request)
 	// ListProviderKeys The account's own provider keys
 	// (GET /api/console/v1/provider-keys)
 	ListProviderKeys(w http.ResponseWriter, r *http.Request)
@@ -5745,6 +5805,62 @@ func (siw *ServerInterfaceWrapper) UpdatePreset(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// RequestEmailChange operation middleware
+func (siw *ServerInterfaceWrapper) RequestEmailChange(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestEmailChange(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ConfirmEmailChange operation middleware
+func (siw *ServerInterfaceWrapper) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConfirmEmailChange(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetDisplayName operation middleware
+func (siw *ServerInterfaceWrapper) GetDisplayName(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetDisplayName(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ChangeDisplayName operation middleware
+func (siw *ServerInterfaceWrapper) ChangeDisplayName(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ChangeDisplayName(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListProviderKeys operation middleware
 func (siw *ServerInterfaceWrapper) ListProviderKeys(w http.ResponseWriter, r *http.Request) {
 
@@ -6763,6 +6879,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 		ErrorHandlerFunc:   options.ErrorHandlerFunc,
 	}
 
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/profile/name", wrapper.GetDisplayName)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/profile/name", wrapper.ChangeDisplayName)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/profile/email", wrapper.RequestEmailChange)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/profile/email/confirm", wrapper.ConfirmEmailChange)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/console/v1/provider-keys", wrapper.ListProviderKeys)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/console/v1/provider-keys", wrapper.CreateProviderKey)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/console/v1/provider-keys/{provider_key_id}", wrapper.DeleteProviderKey)
@@ -12496,6 +12616,405 @@ func (response UpdatePresetdefaultJSONResponse) VisitUpdatePresetResponse(w http
 	return err
 }
 
+type RequestEmailChangeRequestObject struct {
+	Body *RequestEmailChangeJSONRequestBody
+}
+
+type RequestEmailChangeResponseObject interface {
+	VisitRequestEmailChangeResponse(w http.ResponseWriter) error
+}
+
+type RequestEmailChange202Response struct {
+}
+
+func (response RequestEmailChange202Response) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+	w.WriteHeader(202)
+	return nil
+}
+
+type RequestEmailChange400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RequestEmailChange400JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChange401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RequestEmailChange401JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChange403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RequestEmailChange403JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChange409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RequestEmailChange409JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChange422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response RequestEmailChange422JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChange429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response RequestEmailChange429JSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestEmailChangedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RequestEmailChangedefaultJSONResponse) VisitRequestEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChangeRequestObject struct {
+	Body *ConfirmEmailChangeJSONRequestBody
+}
+
+type ConfirmEmailChangeResponseObject interface {
+	VisitConfirmEmailChangeResponse(w http.ResponseWriter) error
+}
+
+type ConfirmEmailChange200ResponseHeaders struct {
+	SetCookie string
+}
+
+type ConfirmEmailChange200JSONResponse struct {
+	Body struct {
+		CsrfToken *string `json:"csrf_token,omitempty"`
+
+		// RecoveryCodes Replacement codes, returned only when TOTP is enabled.
+		RecoveryCodes *[]string `json:"recovery_codes,omitempty"`
+	}
+	Headers ConfirmEmailChange200ResponseHeaders
+}
+
+func (response ConfirmEmailChange200JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Set-Cookie", fmt.Sprint(response.Headers.SetCookie))
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ConfirmEmailChange400JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ConfirmEmailChange401JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ConfirmEmailChange403JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConfirmEmailChange409JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ConfirmEmailChange422JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChange429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response ConfirmEmailChange429JSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConfirmEmailChangedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConfirmEmailChangedefaultJSONResponse) VisitConfirmEmailChangeResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDisplayNameRequestObject struct {
+}
+
+type GetDisplayNameResponseObject interface {
+	VisitGetDisplayNameResponse(w http.ResponseWriter) error
+}
+
+type GetDisplayName200JSONResponse struct {
+	// Name Optional so older nodes can be handled as unavailable.
+	Name *string `json:"name,omitempty"`
+}
+
+func (response GetDisplayName200JSONResponse) VisitGetDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDisplayName401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetDisplayName401JSONResponse) VisitGetDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDisplayName403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetDisplayName403JSONResponse) VisitGetDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetDisplayNamedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetDisplayNamedefaultJSONResponse) VisitGetDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDisplayNameRequestObject struct {
+	Body *ChangeDisplayNameJSONRequestBody
+}
+
+type ChangeDisplayNameResponseObject interface {
+	VisitChangeDisplayNameResponse(w http.ResponseWriter) error
+}
+
+type ChangeDisplayName204Response struct {
+}
+
+func (response ChangeDisplayName204Response) VisitChangeDisplayNameResponse(w http.ResponseWriter) error {
+	w.WriteHeader(204)
+	return nil
+}
+
+type ChangeDisplayName400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ChangeDisplayName400JSONResponse) VisitChangeDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDisplayName401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ChangeDisplayName401JSONResponse) VisitChangeDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDisplayName403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ChangeDisplayName403JSONResponse) VisitChangeDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ChangeDisplayNamedefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ChangeDisplayNamedefaultJSONResponse) VisitChangeDisplayNameResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListProviderKeysRequestObject struct {
 }
 
@@ -15645,6 +16164,18 @@ type StrictServerInterface interface {
 	// UpdatePreset updatePreset
 	// (PUT /api/console/v1/presets/{slug})
 	UpdatePreset(ctx context.Context, request UpdatePresetRequestObject) (UpdatePresetResponseObject, error)
+	// RequestEmailChange Request a verified email change
+	// (POST /api/console/v1/profile/email)
+	RequestEmailChange(ctx context.Context, request RequestEmailChangeRequestObject) (RequestEmailChangeResponseObject, error)
+	// ConfirmEmailChange Confirm the email change
+	// (POST /api/console/v1/profile/email/confirm)
+	ConfirmEmailChange(ctx context.Context, request ConfirmEmailChangeRequestObject) (ConfirmEmailChangeResponseObject, error)
+	// GetDisplayName Read the current display name
+	// (GET /api/console/v1/profile/name)
+	GetDisplayName(ctx context.Context, request GetDisplayNameRequestObject) (GetDisplayNameResponseObject, error)
+	// ChangeDisplayName Change the display name
+	// (POST /api/console/v1/profile/name)
+	ChangeDisplayName(ctx context.Context, request ChangeDisplayNameRequestObject) (ChangeDisplayNameResponseObject, error)
 	// ListProviderKeys The account's own provider keys
 	// (GET /api/console/v1/provider-keys)
 	ListProviderKeys(ctx context.Context, request ListProviderKeysRequestObject) (ListProviderKeysResponseObject, error)
@@ -17413,6 +17944,123 @@ func (sh *strictHandler) UpdatePreset(w http.ResponseWriter, r *http.Request, sl
 	}
 }
 
+// RequestEmailChange operation middleware
+func (sh *strictHandler) RequestEmailChange(w http.ResponseWriter, r *http.Request) {
+	var request RequestEmailChangeRequestObject
+
+	var body RequestEmailChangeJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestEmailChange(ctx, request.(RequestEmailChangeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestEmailChange")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestEmailChangeResponseObject); ok {
+		if err := validResponse.VisitRequestEmailChangeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ConfirmEmailChange operation middleware
+func (sh *strictHandler) ConfirmEmailChange(w http.ResponseWriter, r *http.Request) {
+	var request ConfirmEmailChangeRequestObject
+
+	var body ConfirmEmailChangeJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConfirmEmailChange(ctx, request.(ConfirmEmailChangeRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConfirmEmailChange")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConfirmEmailChangeResponseObject); ok {
+		if err := validResponse.VisitConfirmEmailChangeResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetDisplayName operation middleware
+func (sh *strictHandler) GetDisplayName(w http.ResponseWriter, r *http.Request) {
+	var request GetDisplayNameRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetDisplayName(ctx, request.(GetDisplayNameRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetDisplayName")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetDisplayNameResponseObject); ok {
+		if err := validResponse.VisitGetDisplayNameResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ChangeDisplayName operation middleware
+func (sh *strictHandler) ChangeDisplayName(w http.ResponseWriter, r *http.Request) {
+	var request ChangeDisplayNameRequestObject
+
+	var body ChangeDisplayNameJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ChangeDisplayName(ctx, request.(ChangeDisplayNameRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ChangeDisplayName")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ChangeDisplayNameResponseObject); ok {
+		if err := validResponse.VisitChangeDisplayNameResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListProviderKeys operation middleware
 func (sh *strictHandler) ListProviderKeys(w http.ResponseWriter, r *http.Request) {
 	var request ListProviderKeysRequestObject
@@ -18955,129 +19603,141 @@ var swaggerSpec = []string{
 	"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",
-	"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",
+	"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",
+	"lpJiv4BYGlWlkwh147/+4uv//wA=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,
