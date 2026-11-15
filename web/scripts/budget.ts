@@ -1,12 +1,13 @@
 // Fails when a built app loads more than its budget (docs/frontend.md「前端性能指标」): the script the first screen
 // loads, the script each further page adds, and the fonts each page can load (font-budget.ts). Scripts count at their
 // brotli size, the transfer size (scripts/compress.ts, as the program sends them); fonts are already compressed. The
-// fonts the first screen preloads are reported beside them. Run after `pnpm build`.
+// fonts the first screen preloads are reported beside them, and must be the ones fonts.json marks. Run after
+// `pnpm build`.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { brotli } from "./compress.ts";
-import { type FontManifest, fontBudget } from "./font-budget.ts";
+import { type FontFile, type FontManifest, fontBudget } from "./font-budget.ts";
 
 const kB = 1000;
 // firstPage names the lazily loaded page the entry address opens (its manifest key): the first screen loads it too.
@@ -93,18 +94,25 @@ for (const [app, budget] of Object.entries(budgets)) {
   // Vite names an emitted file after its source, then a hash: a page's font missing from the build means fonts.css is
   // not part of it, and the budget below would count fonts the app never ships.
   const assets = readdirSync(join(dist, "assets"));
-  for (const file of fonts.faces.flatMap((face) => face.files)) {
-    const stem = file.file.replace(/\.woff2$/, "");
-    if (
-      file.pages.some((page) => page.split("/")[0] === app) &&
-      !assets.some((asset) => asset.startsWith(`${stem}-`))
-    ) {
+  const ofApp = (file: FontFile) => file.pages.some((page) => page.split("/")[0] === app);
+  const stem = (file: FontFile) => `${file.file.replace(/\.woff2$/, "")}-`;
+  for (const file of fonts.faces.flatMap((face) => face.files).filter(ofApp)) {
+    if (!assets.some((asset) => asset.startsWith(stem(file)))) {
       failures.push(`${app}: the build has no ${file.file}; is css/fonts.css imported?`);
     }
   }
+  // The entry page preloads exactly the fonts fonts.json marks for the app's first screen (vite.shared.ts): the
+  // website's first-screen Chinese slice, nothing on the console and the admin, whose slices load as pages show them.
   const preloads = [...readFileSync(join(dist, "index.html"), "utf8").matchAll(/<link\b[^>]*\brel="preload"[^>]*>/g)]
     .filter(([tag]) => /\bas="font"/.test(tag))
     .map(([tag]) => /\bhref="([^"]+)"/.exec(tag)?.[1]?.slice(base.length) ?? "");
+  const marked = fonts.faces.flatMap((face) => face.files).filter((file) => file.preload && ofApp(file));
+  for (const href of preloads.filter((href) => !marked.some((file) => href.startsWith(`assets/${stem(file)}`)))) {
+    failures.push(`${app}: the entry page preloads ${href}, which fonts.json does not mark for preloading`);
+  }
+  for (const file of marked.filter((file) => !preloads.some((href) => href.startsWith(`assets/${stem(file)}`)))) {
+    failures.push(`${app}: the entry page does not preload ${file.file}, which fonts.json marks for preloading`);
+  }
   const preloaded = preloads.reduce((total, file) => total + readFileSync(join(dist, file)).length, 0);
   console.log(`${`${app}: first screen font preload`.padEnd(36)} ${(preloaded / kB).toFixed(1).padStart(6)} kB`);
 }

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { names, routeLiterals } from "./routes.ts";
 
 const web = join(import.meta.dirname, "..", "..");
 
@@ -22,8 +23,9 @@ type Selection = Record<string, string[]>;
 // keys it selects (a heading face covers the headings only).
 type FaceText = { chars: string } | { script: Script; keys?: Selection };
 type Script = "latin" | "han";
+// A face's pages name pages, or "<app>/*" for each page of an app the manifest's routes name (routePages).
 type Face = { family: string; weight: string; style?: string; pages: string[]; text: FaceText };
-export type Manifest = { pages: Record<string, Selection>; faces: Face[] };
+export type Manifest = { pages: Record<string, Selection>; routes?: Record<string, string>; faces: Face[] };
 
 const manifestPath = join(import.meta.dirname, "sources.json");
 
@@ -43,7 +45,14 @@ function flatten(value: unknown, prefix: string, out: Map<string, string>) {
   return out;
 }
 
-async function messages(namespace: string) {
+const loaded = new Map<string, Promise<[string, string][]>>();
+const messages = (namespace: string) => {
+  const cached = loaded.get(namespace) ?? load(namespace);
+  loaded.set(namespace, cached);
+  return cached;
+};
+
+async function load(namespace: string) {
   const files = namespaces[namespace];
   if (!files) {
     throw new Error(`${manifestPath}: no namespace ${namespace}; known: ${Object.keys(namespaces).join(", ")}`);
@@ -56,14 +65,28 @@ async function messages(namespace: string) {
   return out;
 }
 
-const selected = (key: string, prefixes: string[]) =>
-  prefixes.some((p) => p === "" || key === p || key.startsWith(`${p}.`));
+// selected tells whether a key is one of the prefixes or under one; a plural form (keys_one) counts as its base key,
+// which is what code names when it passes a count, and as itself, which is how a route's selection lists it.
+function selected(key: string, prefixes: Set<string>) {
+  if (prefixes.has("") || prefixes.has(key)) {
+    return true;
+  }
+  for (let k = key.replace(/_(zero|one|two|few|many|other)$/, ""); ; k = k.slice(0, k.lastIndexOf("."))) {
+    if (prefixes.has(k)) {
+      return true;
+    }
+    if (!k.includes(".")) {
+      return false;
+    }
+  }
+}
 
 async function selectedText(selection: Selection) {
   let text = "";
   for (const [namespace, prefixes] of Object.entries(selection)) {
+    const set = new Set(prefixes);
     for (const [key, value] of await messages(namespace)) {
-      if (selected(key, prefixes)) {
+      if (selected(key, set)) {
         text += value;
       }
     }
@@ -71,16 +94,52 @@ async function selectedText(selection: Selection) {
   return text;
 }
 
+// routePages returns an app's pages ("console/pages/keys") and the keys each can show, in each of its namespaces.
+async function routePages(app: string, entry: string, namespaces: string[]) {
+  const pages = new Map<string, Selection>();
+  for (const [page, literals] of routeLiterals(app, entry)) {
+    const selection: Selection = {};
+    for (const namespace of namespaces) {
+      selection[namespace] = (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
+    }
+    pages.set(page, selection);
+  }
+  return pages;
+}
+
+// pageSelections returns every page the manifest names with its selection, an app's routed pages included.
+async function pageSelections(manifest: Manifest) {
+  const pages = new Map(Object.entries(manifest.pages));
+  for (const [app, entry] of Object.entries(manifest.routes ?? {})) {
+    const selection = manifest.pages[app];
+    if (!selection) {
+      throw new Error(`${manifestPath}: routes names ${app}, which pages does not define`);
+    }
+    for (const [page, routed] of await routePages(app, entry, Object.keys(selection))) {
+      pages.set(page, routed);
+    }
+  }
+  return pages;
+}
+
 const uniqueSorted = (text: string) =>
   [...new Set(text)].sort((a, b) => (a.codePointAt(0) ?? 0) - (b.codePointAt(0) ?? 0)).join("");
 
 // faceTexts returns, for each face in order, the sorted characters it must cover on each of its pages.
 export async function faceTexts(manifest: Manifest): Promise<Record<string, string>[]> {
+  const selections = await pageSelections(manifest);
+  const expand = (page: string) => {
+    const pages = page.endsWith("/*") ? [...selections.keys()].filter((p) => p.startsWith(page.slice(0, -1))) : [page];
+    if (pages.length === 0) {
+      throw new Error(`${manifestPath}: ${page} names no page; routes names the apps whose pages it finds`);
+    }
+    return pages;
+  };
   return Promise.all(
     manifest.faces.map(async (face) => {
       const perPage: Record<string, string> = {};
-      for (const page of face.pages) {
-        const selection = manifest.pages[page];
+      for (const page of face.pages.flatMap(expand)) {
+        const selection = selections.get(page);
         if (!selection) {
           throw new Error(`${manifestPath}: ${face.family} ${face.weight} names the unknown page ${page}`);
         }

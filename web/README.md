@@ -17,7 +17,7 @@
 | `journey/` | 对着真实 Axiom 进程的旅程测试和启动它的 `node.ts`（[测试](#测试)） | — |
 | `scripts/embed.ts`、`scripts/compress.ts` | 把构建产物复制到 Go 代码树供程序嵌入，附预压缩的副本和内容安全策略；压缩函数只有这一个，体积预算也用它 | — |
 | `scripts/budget.ts`、`scripts/font-budget.ts` | 体积预算检查 | — |
-| `scripts/fonts/` | 字体管线：按翻译文件里的字把源字体裁成 woff2，写进 `packages/ui/src/css/fonts/` 和 `fonts.css`（见下文「字体」） | — |
+| `scripts/fonts/` | 字体管线：按翻译文件里的字（控制台和后台按每个路由页的代码用到的键，`routes.ts`）把源字体裁成 woff2，写进 `packages/ui/src/css/fonts/` 和 `fonts.css`（见下文「字体」） | — |
 | `scripts/limits.ts` | 函数的圈复杂度和长度、文件长度检查 | — |
 | `scripts/vitals.ts` | 三次目标页 LCP 各按前后两次概览页的平均值折算成一个值（[前端性能指标](../docs/frontend.md#前端性能指标)）；不需要浏览器，单独用 vitest 测 | — |
 
@@ -76,18 +76,19 @@
 | 认知复杂度不超过 15，圈复杂度不超过 12，函数不超过 60 行，文件不超过 500 行，与 Go 一侧相同 | 认知复杂度由 Biome 的 `noExcessiveCognitiveComplexity`（`biome.json`）查；圈复杂度和长度由 `scripts/limits.ts` 查，覆盖 git 不忽略的每个 TypeScript 和 JavaScript 文件（生成的 `*.gen.ts` 除外），长度不计空行和注释，测试不限函数长度。理由见[前端的「决策与理由」](../docs/frontend.md#决策与理由) |
 | 没有没人用的文件、导出和依赖 | knip（`knip.jsonc`）；包只给本仓库的应用用，入口文件的导出也要有应用引用 |
 | 没有重复代码 | jscpd（`.jscpd.json`），50 个词法单元以上算重复；测试和端到端的模拟（`e2e/`）不查 |
-| 首屏脚本、每多开一页增加的脚本、每页字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页）。每页字体是这一页可能加载的字体文件去重后的和（`scripts/font-budget.ts` 读 `fonts.json`），超出时列出每个文件；首屏预载的字体单独打印；构建里缺了 `fonts.json` 列出的文件也失败 |
-| 翻译文件里的每个字都在裁好的字体里 | `scripts/fonts/coverage.test.ts` 用和管线同一份取字代码（`scripts/fonts/text.ts`）比对 `fonts.json`，缺字就失败并提示重跑 `pnpm --dir web fonts`；`sources.json`、`build.py` 或 `requirements.txt` 改了而产物没重生成（`fonts.json` 记着它们的指纹）也失败；源字体本来就没有的字记在 `fonts.json` 的 `absent`，落到后备字体 |
+| 首屏脚本、每多开一页增加的脚本、每页字体不超过[前端性能指标](../docs/frontend.md#前端性能指标) | `scripts/budget.ts` 按程序发送时的压缩（`scripts/compress.ts`，brotli q11）后的大小计脚本，字体取 woff2 文件本身的大小；首屏算入口页加载的每个脚本和它们的静态依赖，再加入口地址打开的页面（控制台的概览、后台的首页）。每页字体是这一页可能加载的字体文件去重后的和（`scripts/font-budget.ts` 读 `fonts.json`）：这一页所用字形的全部文件，因为接口返回的文字能触发任何分片，另列本页文案用到的部分，超出时列出每个文件；首屏预载的字体单独打印，入口页预载的必须正好是 `fonts.json` 标了 `preload` 的本应用文件（控制台和后台为空）；构建里缺了 `fonts.json` 列出的文件也失败 |
+| 每页能显示的字都在这一页的分片里 | `scripts/fonts/coverage.test.ts` 用和管线同一份取字代码（`scripts/fonts/text.ts`、`routes.ts`）比对 `fonts.json`，缺字就失败并提示重跑 `pnpm --dir web fonts`：翻译文件添了字，或控制台、后台的某页代码开始用一个它原来不用的键，都会触发；`sources.json`、`build.py`、`text.ts`、`routes.ts` 或 `requirements.txt` 改了而产物没重生成（`fonts.json` 记着它们的指纹）也失败；源字体本来就没有的字记在 `fonts.json` 的 `absent`，落到后备字体 |
 | 主要页面的 LCP、CLS，常用操作的 INP，调用日志和用户列表各 1000 行滚动的掉帧和长任务不超过[前端性能指标](../docs/frontend.md#前端性能指标)：只有 LCP 和概览页的主线程 CPU 时间超出上限才失败，CLS、INP、长列表滚动只报告（INP 和掉帧随共享 CI 机器的负载摆动，CLS 同一页在两次测量之间差别很大），数字写进测试的注解；它是计时，单独在 CI 的 `vitals` 任务里用 `just web-vitals` 一次一个测试地跑，普通分片排除它（`playwright.vitals.config.ts`） | `e2e/vitals.spec.ts`：web-vitals 的 IIFE 构建在页面脚本之前注入；手机档（Pixel 5、慢速 4G、CPU 降速 4 倍）和电脑档（10 Mbps）把其余页面各测三次，每次夹在前后两次概览页加载之间，按这两次概览页 LCP 的平均值折算到设定上限的基线 run 后取中位数，折算系数最多为 1；概览页在不降 CPU 下（降速的忙等会按宿主机调度往 `tdur` 里加空转）从 Chrome trace 取主线程任务的 `tdur`（不含被换下的时间）：PR 和列车里与 `BASE` 提交的概览页（`playwright.vitals.config.ts` 用 `scripts/ci/vitals-base.sh` 并排提供）交替加载五对，本树中位数比基准中位数不超过 1.25，本树中位数另有绝对兜底 1020/1200 毫秒（干净构建的三倍）；`main` 上没有基准，只报告；它的 LCP 和 CLS 另取三次按本档降速的加载，只报告；原始值、参照值、折算结果和 CPU 时长写进输出；INP 在 CPU 降速 4 倍下取该操作的最差值 |
 
 ## 字体
 
 字体都自己托管，按页面用到的字裁剪；字体族名只写在 `packages/ui/src/css/fonts.css`。
 
-- `scripts/fonts/sources.json` 是源字体清单：每个源的下载地址（固定到提交）和 SHA-256；页面（`pages`：每个命名空间选哪些翻译键）；字形（`faces`：字体族、字重、轴、哪些页面用、取哪些字）。
-- `pnpm --dir web fonts` 在 `~/.cache/axiom-fonts` 建虚拟环境、按 `requirements.txt` 的哈希装 fontTools，下载并核对源字体（不入库），运行 `build.py`。它重写 `packages/ui/src/css/fonts/` 下的 woff2、`fonts.json`、`coverage.txt`，以及 `fonts.css` 标记行以下的 `@font-face`；重跑结果逐字节相同。改了翻译文件里的中文或 `sources.json`，就重跑并提交产物；CI 不跑 Python。
-- 标了 `split` 的字形（中文）按「哪些页面用到这个字」切片：一个字只在一个文件里，`unicode-range` 让页面只下载它用到的切片。
-- 换中文正文字体：改 `sources.json` 里 `cjk-body` 的地址和哈希，和 `fonts.css` 里 `--family-cjk` 那一行（装在本机的同款字体的名字），再重跑。
+- `scripts/fonts/sources.json` 是源字体清单：每个源的下载地址和 SHA-256（源是压缩包时再写 `member`：取出哪个文件）；页面（`pages`：每个命名空间选哪些翻译键）；路由（`routes`：应用的入口，`routes.ts` 从它找出每个按需加载的页面和它能显示的键，字形用 `console/*` 指这个应用的所有页）；字形（`faces`：字体族、字重、轴、哪些页面用、取哪些字、`preload` 哪些页面的首屏预载它）；回退字体（`fallbacks`：本机字体，管线按源字体的度量写上覆盖值）。
+- `pnpm --dir web fonts` 在 `~/.cache/axiom-fonts` 建虚拟环境、按 `requirements.txt` 的哈希装 fontTools，下载并核对源字体（不入库；MiSans 的压缩包约 217MB，只下载一次），运行 `build.py`，约一分钟。它重写 `packages/ui/src/css/fonts/` 下的 woff2、`fonts.json`、`coverage.txt`，以及 `fonts.css` 标记行以下的 `@font-face`；同目录的 `LICENSE-MiSans.txt` 是手写的，管线不动它。重跑结果逐字节相同。改了翻译文件里的中文、`sources.json`，或检查说某页缺字，就重跑并提交产物；CI 不跑 Python。
+- 标了 `split` 的字形（中文）先按「哪些页面用到这个字」切开，再把分片按代价合并（见[字体](../docs/frontend.md#字体)）：一个字只在一个文件里，`unicode-range` 让页面只下载它用到的分片。
+- MiSans 的版权声明和协议在 `packages/ui/src/css/fonts/LICENSE-MiSans.txt`，官网页脚的「使用了 MiSans 字体」是许可要求的，不能删（[字体](../docs/frontend.md#字体)）。
+- 换中文正文字体：改 `sources.json` 里 `cjk-body` 的地址和哈希，和 `fonts.css` 里 `--family-cjk-local` 的第一个名字（装在本机的同款字体），再重跑。
 
 ## 测试
 
