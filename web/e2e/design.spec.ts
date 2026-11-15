@@ -135,7 +135,7 @@ test.describe("the tool", () => {
   // two methods change, and a script that reaches for the network.
   const usualFonts = "@font-face{font-family:'Axiom Sans';font-weight:400;src:url(/_blob/0)} p{font:32px 'Axiom Sans'}";
   const fixture = (fonts: string) => `<x-dc><helmet><style>
-${fonts} p{margin:0} .icon{width:40px;height:40px} .a{background:#000} .b{background:#fff}
+.board{font-family:'Axiom Sans'} ${fonts} p{margin:0} .icon{width:40px;height:40px} .a{background:#000} .b{background:#fff}
 </style></helmet><div class="board"><p>Axiom</p><p class="icon {{icon}}"></p>
 <ul><sc-for list="{{items}}" as="item"><li>{{item}}</li></sc-for></ul></div></x-dc>
 <script type="text/x-dc" data-dc-script data-props='{"icon":{"default":"a"}}'>
@@ -189,19 +189,22 @@ class Component extends DCLogic {
   });
 
   test("fails instead of shooting a font that fell back", async ({ browser, page }, info) => {
-    // A family the CSS uses with no source font, declared or not, fails the board; one only declared does not.
+    // A family text is drawn in with no source font fails the board, however the CSS names it: quoted or not, declared
+    // or not, through a custom property, or a system fallback first in its stack. One only declared does not.
     for (const fonts of [
       "p{font-family:'Missing'}",
+      "p{font-family:Missing}",
+      "@font-face{font-family:'AX Maple';src:url(/_blob/0)} :root{--body:'AX Maple'} p{font-family:var(--body)}",
       "@font-face{font-family:'AX Maple';src:url(/_blob/0)} p{font:32px 'AX Maple'}",
       "p{font-family:'PingFang SC',sans-serif}",
     ]) {
       await expect(openFixture(browser, info, {}, fonts)).rejects.toThrow("which has no source font");
     }
-    // Spaced CSS, an undeclared family with a source, a system fallback behind it, an unused declaration: each family
-    // with a source is served and must load.
+    // Spaced CSS, a family through a custom property, a system fallback behind one with a source, an unused declaration:
+    // each family text is drawn in that has a source is served and must load.
     const fonts =
       "@font-face {font-family: 'Axiom Sans'; font-weight: 400; src: url(/_blob/0)} @font-face{font-family:'AX Smiley';src:url(/_blob/1)}" +
-      " p{font:32px 'Axiom Sans','PingFang SC'} li{font-family:\"Axiom Mono\"}";
+      " p{font:32px 'Axiom Sans','PingFang SC'} :root{--mono:\"Axiom Mono\"} li{font-family:var(--mono),monospace}";
     const opened = await openFixture(browser, info, {}, fonts);
     expect(opened.fonts.map((face) => face.family).toSorted()).toEqual(["Axiom Mono", "Axiom Sans"]);
     await opened.close();

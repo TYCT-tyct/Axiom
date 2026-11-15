@@ -26,7 +26,7 @@ type Built = {
 const built: { faces: Built[] } = JSON.parse(readFileSync(join(web, "packages/ui/src/css/fonts/fonts.json"), "utf8"));
 
 // The board's families and the source each stands for. The board names its own families; the build names them in
-// fonts.css. A family the board's CSS uses that is missing here makes boardFonts fail rather than fall back.
+// fonts.css. A family the board draws text in that is missing here makes usedFaces fail rather than fall back.
 const boardSources: Record<string, { source: string; sample: string }> = {
   "Axiom Sans": { source: "instrument-sans", sample: "Axiom 0123" },
   "Axiom Mono": { source: "jetbrains-mono", sample: "sk-0123" },
@@ -64,56 +64,73 @@ const descriptor = (rule: string, name: string) =>
 
 // System fonts a board's stacks name after one of its own, for characters its own lack. Only these may stay without a
 // source font, and only behind another family.
-const systemFallbacks = new Set(["PingFang SC"]);
+const systemFallbacks = ["PingFang SC"];
 
 const fontFace = /@font-face\s*\{[^}]*\}/g;
 
-// used lists the quoted families in the font and font-family declarations of the board's CSS, without @font-face rules,
-// failing on one with no source font: the board would be drawn in a fallback. Stacks of custom properties (var(--mono))
-// name no family here.
-function used(css: string) {
-  const families = new Set<string>();
-  for (const [, value] of css.matchAll(/font(?:-family)?\s*:\s*([^;}]+)/g)) {
-    for (const [index, [, , family]] of [...(value as string).matchAll(/(['"])([^'"]+)\1/g)].entries()) {
-      if (boardSources[family as string]) families.add(family as string);
-      else if (index === 0 || !systemFallbacks.has(family as string)) {
-        throw new Error(`the board uses the font ${family}, which has no source font`);
-      }
-    }
-  }
-  return families;
-}
-
 // boardFonts replaces the board's @font-face rules (they point at the design tool's blob store, unreachable here) with
-// one rule per family it uses or declares that has a source font, keeping the board's weight, style and size-adjust, on
-// the source font served from base. Every such family is a face fontsLoaded must load.
+// one rule for each family that has a source font, keeping the board's weight, style and size-adjust where it declares
+// the family, on the source font served from base. A browser fetches a face only when text uses it; which families the
+// board uses is read from the rendered page (usedFaces), not from its CSS, which can name them through custom
+// properties, without quotes or from script.
 export function boardFonts(helmet: string, base: string) {
   const declared = new Map<string, string>();
   for (const rule of helmet.match(fontFace) ?? []) {
     const family = descriptor(rule, "font-family");
     if (family && !declared.has(family)) declared.set(family, rule);
   }
-  const rest = helmet.replace(fontFace, "").replace(/<link[^>]*>/g, "");
-  // Declared but unused families without a source are dropped: some boards carry the design tool's whole font list.
-  const families = new Set([...used(rest), ...[...declared.keys()].filter((family) => boardSources[family])]);
   const faces: FontFace[] = [];
   const css: string[] = [];
-  for (const family of families) {
+  for (const [family, { source, sample }] of Object.entries(boardSources)) {
     const rule = declared.get(family) ?? "";
     const face = {
       family,
       style: descriptor(rule, "font-style") ?? "normal",
       weight: descriptor(rule, "font-weight") ?? "400",
-      sample: (boardSources[family] as { sample: string }).sample,
+      sample,
     };
     const sizeAdjust = descriptor(rule, "size-adjust");
     css.push(
       `@font-face{font-family:'${family}';font-style:${face.style};font-weight:${face.weight};font-display:block;` +
-        `${sizeAdjust ? `size-adjust:${sizeAdjust};` : ""}src:url(${base}${boardSources[family]?.source})}`,
+        `${sizeAdjust ? `size-adjust:${sizeAdjust};` : ""}src:url(${base}${source})}`,
     );
     faces.push(face);
   }
+  const rest = helmet.replace(fontFace, "").replace(/<link[^>]*>/g, "");
   return { helmet: `<style>${css.join("\n")}</style>${rest}`, faces };
+}
+
+// usedFaces reads the computed font-family of every element that draws text, so var(), unquoted names and styles set
+// by script are all resolved by the browser (text with no font of its own reports the browser's default, which fails), and returns the faces of the families with a source font that are used. It
+// fails on a family with no source font, unless it is a generic family or a system fallback behind another: that text
+// would be drawn in a font the reference does not have.
+export async function usedFaces(page: Page, faces: FontFace[]) {
+  const stacks = await page.evaluate(() => {
+    const drawsText = (el: Element) =>
+      el.matches("input, textarea, select") ||
+      (!el.matches("script, style, template, noscript") &&
+        [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()));
+    return [
+      ...new Set(
+        [...document.body.querySelectorAll("*")].filter(drawsText).map((el) => getComputedStyle(el).fontFamily),
+      ),
+    ];
+  });
+  const generic =
+    /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|emoji|math|fangsong|ui-(serif|sans-serif|monospace|rounded))$/;
+  const used = new Set<string>();
+  for (const stack of stacks) {
+    for (const [index, family] of stack
+      .split(",")
+      .map((name) => name.trim().replace(/^(['"])(.*)\1$/, "$2"))
+      .entries()) {
+      if (boardSources[family]) used.add(family);
+      else if (!generic.test(family) && (index === 0 || !systemFallbacks.includes(family))) {
+        throw new Error(`the board uses the font ${family}, which has no source font`);
+      }
+    }
+  }
+  return faces.filter((face) => used.has(face.family));
 }
 
 // The faces fonts.json gives a page of the build ("console", "site/home"...), each asked for with characters it holds.

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "@playwright/test";
-import { boardFonts, type FontFace, fontRoute } from "./fonts.ts";
+import { boardFonts, type FontFace, fontRoute, usedFaces } from "./fonts.ts";
 import { type Stage, stage } from "./stage.ts";
 
 // The reference half of a comparison (docs/frontend.md「截图对比」): the board's own Component class, run in a browser context
@@ -18,6 +18,7 @@ export type BoardScene = { file: string; props?: Record<string, string>; actions
 
 export type OpenBoard = {
   page: Page;
+  // The faces the board draws text in, each to be loaded before the shot (fontsLoaded).
   fonts: FontFace[];
   // The requests the board made outside board.local, each aborted.
   blocked: string[];
@@ -221,5 +222,10 @@ export async function openBoard(
     await context.close();
     throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);
   }
-  return { page, fonts, blocked, close: () => context.close() };
+  try {
+    return { page, fonts: await usedFaces(page, fonts), blocked, close: () => context.close() };
+  } catch (error) {
+    await context.close();
+    throw error;
+  }
 }
