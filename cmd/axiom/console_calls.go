@@ -154,9 +154,13 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 		return nil, accounts.ErrNotFound
 	}
 	var call observability.OwnCall
+	var detail observability.OwnCallDetail
 	var charges map[uuid.UUID]billing.ChargeDetails
 	if err := c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
 		call, err = observability.GetOwn(ctx, tx, id)
+		if err == nil {
+			detail, err = observability.ReadOwnDetail(ctx, tx, call, c.logger)
+		}
 		if err == nil {
 			charges, err = c.charges.ReadCharges(ctx, tx, []uuid.UUID{id})
 		}
@@ -171,7 +175,7 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 		// ChargeReader emits canonical decimals; corrections can change the logged charge.
 		charged = d.Charged != "0"
 	}
-	c.callRoutingBody(call, &body, charged)
+	c.callRoutingBody(detail, &body, charged)
 	return consoleapi.GetCall200JSONResponse(body), nil
 }
 

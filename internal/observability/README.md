@@ -48,6 +48,7 @@ func ValidateUsageWindow(since, until time.Time, granularity string) error
 func RegisterUsage(db *pg.DB, scope pg.Scope, q *pg.Queue) error
 var ErrUsageWindow error // 范围为空、未对齐整点或超过对应粒度上限
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
+func ReadOwnDetail(ctx, tx pg.Tx, call OwnCall, logger *slog.Logger) (OwnCallDetail, error) // 同一账户事务中，只给控制台读取已确认可见调用的可选明细
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
 func (c Cursor) String() string; func ParseCursor(s string) (Cursor, error) // 控制台翻页用的不透明游标；格式不对 ErrBadCursor
 func HashEndUser(key []byte, account uuid.UUID, id string) EndUserHash // 账户和标识的 HMAC-SHA256；EndUserHash 的数组是私有的，包外只能经它得到非零值，零值表示没有终端用户；gateway 用由身份密钥派生的密钥调用
@@ -111,7 +112,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 归档之后的迟到写入不丢 | 调用记录只有 INSERT（应用没有 UPDATE/DELETE），删除事务先对现存分区加 `ACCESS EXCLUSIVE` 锁并精确 `count(*)`；行数与清单不符就回滚重写整月，锁一直持到 DROP 提交，所以计数和删除之间没有写入窗口。一次运行最多重写三次，仍变化就报错留给下一轮，绝不删未归档的行。测试：确认失败后补写旧月记录再重试，新行在清单和 CSV 里 |
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
 | 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
-| 用户只读脱敏的尝试与路由 | `GetOwn` 先按账户范围查调用，再用 `(request_id, at)` 读尝试并按序号排列；`OwnRoute` 只投影预设、过滤原因计数、省略数量和标志，不透传原始 JSON；HTTP 层只把端点映成公开代号，不返回内部 ID、供应商、成本或出口 |
+| 用户只读脱敏的尝试与路由 | `GetOwn` 只读基础调用；控制台另用 `ReadOwnDetail` 按 `(request_id, at)` 读路由与有序尝试；`OwnRoute` 只投影预设、过滤原因计数、省略数量和标志，不透传原始 JSON；HTTP 层只把端点映成公开代号，不返回内部 ID、供应商、成本或出口 |
 | 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.2 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由不超过同一上界（`TestRecordIsBounded`），恰好等于上界的路由能写进真实数据库、存下的文本与预测一致（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
@@ -158,7 +159,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用、key、工作区、成功/报错和请求 ID 组合筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
-`ListOwn` 直接读调用行的 `attempt_count`，`OwnQuery.FellBack` 为真时在游标和 LIMIT 之前筛选 `attempt_count > 1`（包括模型侧循环）。不访问尝试表，不因页大小增加 SQL 次数；沿用账户有序索引，无新增索引。`GetOwn` 的额外尝试查询同时使用调用的分区键 `at`，只有详情带 `Attempts` 和 `Route`。旧记录没有尝试时返回非 nil 空切片，`route={}` 时省略摘要；旧的字符串 `preset` 不冒充带版本的预设。`excluded_reasons` 已存在时直接使用，没有时只数实际记录的 `excluded`，不推测 `excluded_more` 的原因；省略数量原样保留。
+`ListOwn` 直接读调用行的 `attempt_count`，`OwnQuery.FellBack` 为真时在游标和 LIMIT 之前筛选 `attempt_count > 1`（包括模型侧循环）。不访问尝试表，不因页大小增加 SQL 次数；迁移 `00046` 的 `(account_id, at DESC, id DESC) WHERE attempt_count > 1` 部分索引服务稀疏与空回退页。`GetOwn` 不读取或解析路由，不查尝试，供公开 `/generation` 复用；控制台在同一账户事务内另调用 `ReadOwnDetail`，路由和尝试查询都使用调用的分区键 `at`。`OwnCallDetail` 才包含 `Attempts` 和 `Route`，其内部 ID 必须由 HTTP 层替换，不能直接序列化。路由形状不兼容时省略摘要，日志只记请求 ID，不记录原始 JSON 或解析值；基础调用与尝试仍可读。旧记录没有尝试时返回非 nil 空切片，`route={}` 时省略摘要；旧的字符串 `preset` 不冒充带版本的预设。`excluded_reasons` 已存在时直接使用，没有时只数实际记录的 `excluded`，不推测 `excluded_more` 的原因；省略数量原样保留。
 
 HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers 的当前可路由快照解析，退休端点或快照不可用时省略代号，不拿内部 ID 代替。`selected_endpoint` 是计划的第一个端点，实际执行顺序读 `attempts`。`charged` 为用户实收费标记（有账单明细时取其校正后的实收，否则取调用行）：整次实收为零时全为 false；普通不同端点回退只有最后一次为 true，其他为 false。日志未记录 billing 的模型循环成员；重复最终端点时这组尝试省略 `charged`，不按成功或错误类型猜测账单归属。
 
@@ -212,7 +213,7 @@ HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers �
 一条调用、它的每次尝试和它的账本交易只靠一个键相连：请求 ID（调用编号）。它已经是 `call_log.id`、`call_attempt.request_id`、`billing.reservations.request_id` 和 `billing.transactions.request_id`，suppliers 的扣费也按请求 ID 加尝试序号关联（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）。
 
 - **调用和尝试**：`GetTrace(ctx, tx, id)` 按请求 ID 读调用行，再按同一个 ID 和调用的 `at` 读尝试，按 `attempt_seq` 排序；返回的就是写进去的 `CallRecord`，带 `Attempts` 和 `Route`。**调用行只按 `id` 查、不带 `at`，所以每个分区各探查一次主键索引**（和 `GetOwn` 一样，次数随保留的月份增长）；返回的 `at` 再用来只读尝试所在的那一个分区。调用行不存在时返回 `pg.ErrNoRows`。
-- **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户读 `ListOwn`/`GetOwn`，那两个没有这些字段）。
+- **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户的基础读取走 `ListOwn`/`GetOwn`，不含成本、出口或内部端点 ID；控制台另读 `ReadOwnDetail` 的白名单摘要，并在 HTTP 层将内部 ID 替换为公开代号）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
 - **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列已由迁移 `00020` 删除（#204）：Axiom 从未部署到生产，没有节点写过它，[平台的「晚一个版本再删」规则](../platform/README.md#迁移)针对的滚动发布窗口不存在；Go 代码和 sqlc 查询里都没有它。`ALTER TABLE` 对分区表的列删除会作用到每个分区，`TestDropLedgerEntryIDsReachesPartitions` 在真实 PostgreSQL 上逐个核对父表、月分区和默认分区，迁移前写入的调用也还在。
@@ -242,13 +243,14 @@ HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers �
 
 ## 索引
 
-`call_log` 在每个分区上有九个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；迁移 `00011` 的全局后台检索 `call_log_admin_time`（UTC 时间表达式与 id）；迁移 `00014` 检测器专用的 `(at, account_id)` 部分索引，谓词 `price_nano >= 0` 让按账户的控制台查询不会选中它。这些新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
+`call_log` 在每个分区上有十个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；迁移 `00011` 的全局后台检索 `call_log_admin_time`（UTC 时间表达式与 id）；迁移 `00014` 检测器专用的 `(at, account_id)` 部分索引，谓词 `price_nano >= 0` 让按账户的控制台查询不会选中它。迁移 `00046` 的回退部分索引只为 `attempt_count > 1` 的调用增加索引项；其他这些新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
 
 `call_attempt` 只有主键索引 `(request_id, at, attempt_seq)`：按请求查它的尝试走这个前缀，保留任务按分区整块处理；没有按尝试的列表查询，所以暂不加别的索引。它的写入量是调用行乘以每次尝试，见下文的写入放大。
 
 - **选择**：比较了四种做法，量的是 36 万条（表 83 MB，原有索引 50 MB）。(a) 不加：稀疏和零命中读整个分区（7,059 缓冲，随表增长）。(b) 在账户索引上加 `INCLUDE (model, client_app)`：计划不变，仍然读整个分区，没有用。(c) 只加模型索引：模型筛选解决，应用筛选仍读整个分区。(d) 模型和应用各一个：两种筛选都读命中的行（见上表）。取 (d)，是让两个筛选都有界的最小做法。
 - **写入放大**：每个索引每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。spill 满时准入拒绝新调用，所以写入持续跟不上时会拒绝而不是少记录；代价是 `call_attempt` 的每个尝试一行和它的主键索引，筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
-- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002`、`00009`、`00011` 与 `00014` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
+- **回退筛选**：`TestListPlansFollowTheIndexes` 用 12 万条记录、heavy 账户 6 万条且其中 0.2% 回退的数据，在同一隔离库中删建 `00046` 索引，对比稀疏和空页的 EXPLAIN 缓冲读取量；实测稀疏页从 1923 块降到 52 块、空页从 610 块降到 1 块，不设时间窗口为 106 块；回归守住首/次页 400 块、空页 20 块的预算。部分索引避免按账户时间索引逐条过滤整个历史；不覆盖普通调用，也不增加每次尝试的索引项。该索引的持续写入吞吐仍随整体压测验证。
+- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002`、`00009`、`00011`、`00014` 与 `00046` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
 
 ## 决策与理由
 

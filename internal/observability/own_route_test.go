@@ -1,7 +1,9 @@
 package observability
 
 import (
+	"bytes"
 	"errors"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
@@ -45,8 +47,16 @@ func TestOwnAttemptDetails(t *testing.T) {
 
 func checkOwnAttemptDetail(t *testing.T, db *pg.DB, rec CallRecord, wantRoute *OwnRoute) {
 	t.Helper()
-	var got OwnCall
-	err := db.ReadTx(t.Context(), accountScope(rec.Account), func(tx pg.Tx) (err error) { got, err = GetOwn(t.Context(), tx, rec.ID); return err })
+	var got OwnCallDetail
+	var basic OwnCall
+	err := db.ReadTx(t.Context(), accountScope(rec.Account), func(tx pg.Tx) (err error) {
+		basic, err = GetOwn(t.Context(), tx, rec.ID)
+		if err != nil {
+			return err
+		}
+		got, err = ReadOwnDetail(t.Context(), tx, basic, quiet)
+		return err
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,8 +70,8 @@ func checkOwnAttemptDetail(t *testing.T, db *pg.DB, rec CallRecord, wantRoute *O
 	if diff := cmp.Diff(wantAttempts, got.Attempts); diff != "" {
 		t.Fatalf("attempts (-want +got): %s", diff)
 	}
-	if got.AttemptCount != len(rec.Attempts) {
-		t.Fatalf("count: %d", got.AttemptCount)
+	if basic.AttemptCount != len(rec.Attempts) {
+		t.Fatalf("count: %d", basic.AttemptCount)
 	}
 	if diff := cmp.Diff(wantRoute, got.Route); diff != "" {
 		t.Fatalf("route (-want +got): %s", diff)
@@ -69,6 +79,43 @@ func checkOwnAttemptDetail(t *testing.T, db *pg.DB, rec CallRecord, wantRoute *O
 	err = db.ReadTx(t.Context(), accountScope(uuid.NewV7()), func(tx pg.Tx) error { _, err := GetOwn(t.Context(), tx, rec.ID); return err })
 	if !errors.Is(err, pg.ErrNoRows) {
 		t.Fatalf("foreign detail: %v", err)
+	}
+	err = db.ReadTx(t.Context(), accountScope(uuid.NewV7()), func(tx pg.Tx) error {
+		_, err := ReadOwnDetail(t.Context(), tx, basic, quiet)
+		return err
+	})
+	if !errors.Is(err, pg.ErrNoRows) {
+		t.Fatalf("foreign optional detail: %v", err)
+	}
+}
+
+func TestOwnDetailKeepsMalformedRouteOptional(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	rec := record(uuid.NewV7(), now)
+	rec.Route = []byte(`{"preset":{"version":"private-secret"}}`)
+	keep(t, db, rec)
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	err := db.ReadTx(t.Context(), accountScope(rec.Account), func(tx pg.Tx) error {
+		call, err := GetOwn(t.Context(), tx, rec.ID)
+		if err != nil {
+			return err
+		}
+		detail, err := ReadOwnDetail(t.Context(), tx, call, logger)
+		if err != nil {
+			return err
+		}
+		if call.ID != rec.ID || len(detail.Attempts) != 2 || detail.Route != nil {
+			t.Fatalf("optional route broke call: %+v / %+v", call, detail)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), rec.ID.String()) || strings.Contains(logs.String(), "private-secret") {
+		t.Fatalf("route diagnostics: %s", logs.String())
 	}
 }
 
@@ -94,7 +141,7 @@ func TestOwnFallbackPaginationAndPlan(t *testing.T) {
 	var got []uuid.UUID
 	for _, c := range calls {
 		got = append(got, c.ID)
-		if c.AttemptCount != 2 || c.Attempts != nil || c.Route != nil {
+		if c.AttemptCount != 2 {
 			t.Fatalf("list detail: %+v", c)
 		}
 	}

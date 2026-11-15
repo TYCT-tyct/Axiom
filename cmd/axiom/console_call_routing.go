@@ -5,7 +5,7 @@ import (
 	"axiom/internal/platform/consoleapi"
 )
 
-func (c consoleAPI) callRoutingBody(call observability.OwnCall, body *consoleapi.Call, charged bool) {
+func (c consoleAPI) callRoutingBody(call observability.OwnCallDetail, body *consoleapi.Call, charged bool) {
 	codes := map[string]string{}
 	if c.upstreams != nil {
 		// A retired endpoint or stale snapshot has no current public identity. Keep the
@@ -42,7 +42,7 @@ func (c consoleAPI) callRoutingBody(call observability.OwnCall, body *consoleapi
 
 // The log lacks billing's loop membership. Distinct-endpoint fallback attempts
 // cannot share the final model-side loop; repeated final endpoints are unknown.
-func attemptCharged(call observability.OwnCall, i int, charged bool) *bool {
+func attemptCharged(call observability.OwnCallDetail, i int, charged bool) *bool {
 	if !charged {
 		return new(false)
 	}

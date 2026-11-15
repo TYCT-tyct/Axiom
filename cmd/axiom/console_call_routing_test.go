@@ -85,7 +85,7 @@ func TestAttemptChargeAttribution(t *testing.T) {
 		{"loop attribution unknown", 1, []string{"a", "b", "b"}, []*bool{new(false), nil, nil}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			call := observability.OwnCall{PriceNano: tc.price}
+			call := observability.OwnCallDetail{}
 			for _, e := range tc.endpoints {
 				call.Attempts = append(call.Attempts, observability.OwnAttempt{Endpoint: e})
 			}
@@ -101,7 +101,7 @@ func TestAttemptChargeAttribution(t *testing.T) {
 
 func TestOwnRouteJSONAllowlist(t *testing.T) {
 	body := consoleapi.Call{}
-	call := observability.OwnCall{Route: &observability.OwnRoute{Preset: &observability.OwnRoutePreset{ID: "p", Version: 2}, SelectedEndpoint: "internal"}}
+	call := observability.OwnCallDetail{Route: &observability.OwnRoute{Preset: &observability.OwnRoutePreset{ID: "p", Version: 2}, SelectedEndpoint: "internal"}}
 	(consoleAPI{}).callRoutingBody(call, &body, false)
 	raw, err := jsonx.MarshalCanonical(body)
 	if err != nil {

@@ -31,7 +31,7 @@ ON CONFLICT (id, at) DO NOTHING;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count, ''::text AS route
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
@@ -91,9 +91,15 @@ LIMIT @group_limit;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count, route::text AS route
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count
 FROM observability.call_log
 WHERE id = (@id::text)::uuid AND NOT billing_pending;
+
+-- name: GetOwnRoute :one
+-- The visible call supplies its partition key; basic GetOwn never loads optional routing JSON.
+SELECT route::text AS route
+FROM observability.call_log
+WHERE id = (@id::text)::uuid AND at = @at AND NOT billing_pending;
 
 -- name: GetCallTrace :one
 -- One call in full, for the chain read (README.md「追溯」): route included, and its request ID is the key the attempts,

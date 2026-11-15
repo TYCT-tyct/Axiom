@@ -15,8 +15,6 @@ import (
 // OwnCall is the account-visible metadata of a call, without supplier costs or credentials.
 type OwnCall struct {
 	AttemptCount                        int
-	Attempts                            []OwnAttempt
-	Route                               *OwnRoute
 	PriceVersion                        string
 	ID, Workspace, Key                  uuid.UUID
 	At                                  time.Time
@@ -143,34 +141,7 @@ func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
 	if err != nil {
 		return OwnCall{}, fmt.Errorf("get call %s: %w", id, err)
 	}
-	call, err := ownCall(store.ListOwnCallsRow(r))
-	if err != nil {
-		return OwnCall{}, err
-	}
-	rows, err := store.New().ListTraceAttempts(ctx, tx, store.ListTraceAttemptsParams{RequestID: id.String(), At: call.At})
-	if err != nil {
-		return OwnCall{}, fmt.Errorf("get own attempts: %w", err)
-	}
-	call.Attempts = make([]OwnAttempt, len(rows))
-	for i, a := range rows {
-		call.Attempts[i] = OwnAttempt{
-			Sequence: int(a.AttemptSeq), Endpoint: a.EndpointID, SourceClass: a.SourceClass,
-			StartedAt: a.StartedAt, FinishedAt: a.FinishedAt, FirstTokenMs: int(a.FirstTokenMs), Result: a.Outcome, ErrorKind: a.ErrorKind,
-		}
-	}
-	if r.Route != "{}" {
-		call.Route, err = ownRoute(r.Route)
-		if err != nil {
-			return OwnCall{}, fmt.Errorf("get own route: %w", err)
-		}
-	}
-	if call.ErrorKind == "preset_unavailable" {
-		if call.Route == nil {
-			call.Route = &OwnRoute{ExcludedReasons: map[string]int{}}
-		}
-		call.Route.PresetUnavailable = true
-	}
-	return call, nil
+	return ownCall(store.ListOwnCallsRow(r))
 }
 
 func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
