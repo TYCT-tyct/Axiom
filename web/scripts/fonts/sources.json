@@ -81,9 +81,9 @@
     {
       "family": "Axiom CJK",
       "source": "cjk-body",
-      "weight": "400 500",
+      "weight": "400",
       "axes": {
-        "wght": [400, 500]
+        "wght": 400
       },
       "split": true,
       "pages": ["site/home", "site/models"],
