@@ -1,0 +1,175 @@
+/* The design tokens of the redesign (#747): the only file that writes a colour. Values are the design board's
+   (AxApp.dc.html renderVals, its last Object.assign) on the Radix scales it names; deviations say why.
+
+   Each colour is written once with light-dark(): the light value, then the dark one. The page follows the system
+   unless the root carries data-theme (theme.js applies it before the first paint). The neutral scale is sand, the
+   console's and the admin's; a root with data-neutral="slate" (the website) swaps in slate, and every token built on
+   --n1…--n12 follows. */
+:root {
+  color-scheme: light dark;
+
+  /* the neutral scale: Radix sand */
+  --n1: light-dark(#fdfdfc, #111110);
+  --n2: light-dark(#f9f9f8, #191918);
+  --n3: light-dark(#f1f0ef, #222221);
+  --n4: light-dark(#e9e8e6, #2a2a28);
+  --n5: light-dark(#e2e1de, #31312e);
+  --n6: light-dark(#dad9d6, #3b3a37);
+  --n7: light-dark(#cfceca, #494844);
+  --n8: light-dark(#bcbbb5, #62605b);
+  --n9: light-dark(#8d8d86, #6f6d66);
+  --n10: light-dark(#82827c, #7c7b74);
+  --n11: light-dark(#63635e, #b5b3ad);
+  --n12: light-dark(#21201c, #eeeeec);
+
+  /* surfaces: the page, the panels on it, raised cards and popovers, and the hover and selected states */
+  --page: light-dark(var(--n2), var(--n1));
+  --panel: light-dark(var(--n2), var(--n1));
+  --glass: light-dark(var(--n2), var(--n1));
+  --cardBg: light-dark(var(--n1), var(--n2));
+  --raised: light-dark(var(--n1), var(--n3));
+  --pop: light-dark(var(--n1), var(--n3));
+  --hover: var(--n3);
+  --selected: var(--n4);
+
+  /* lines: decorative separators only (card outlines, table rules), drawn --bw wide */
+  --line: var(--n6);
+  --line2: var(--n7);
+  --line3: var(--n8);
+
+  /* text: titles and values, body, meta */
+  --t1: var(--n12);
+  --t2: var(--n11);
+  --t3: var(--n11);
+
+  /* the primary button is neutral, not the brand colour */
+  --priBg: var(--n12);
+  --priFg: var(--n1);
+  --priHover: var(--n11);
+
+  /* The accent. brandStyle (brand.ts) will replace --accentSolid (fills, at least 3:1) and --accentT (text, at least
+     4.5:1); the rest derive from them here, mixed to match the board's cyan3 (wash) and cyan5/cyan6 (soft).
+     --accentT is cyan11 moved 15% toward cyan12 in light: cyan11 itself is 4.18:1 on --hover and 4.26:1 on the wash. */
+  --accentSolid: light-dark(#00a2c7, #00a2c7);
+  --accentT: light-dark(#10738c, #4ccce6);
+  --accentWash: light-dark(
+    color-mix(in oklab, var(--accentSolid) 12%, var(--n1)),
+    color-mix(in oklab, var(--accentSolid) 21%, var(--n1))
+  );
+  --accentSoft: light-dark(
+    color-mix(in oklab, var(--accentSolid) 30%, var(--n1)),
+    color-mix(in oklab, var(--accentSolid) 50%, var(--n1))
+  );
+
+  /* States: the solid (step 9) for dots and fills, the text one (step 11) for words. In light the text ones move 15%
+     toward step 12: the board's amber11 is 4.38:1 on the page, and all three fall under 4.5:1 on --hover and on their
+     own 12% tint. --okT is added beside the board's --warnT and --badT for the same reason. */
+  --ok: light-dark(#46a758, #46a758);
+  --okT: light-dark(#287438, #71d083);
+  --warn: light-dark(#ffc53d, #ffc53d);
+  --warnT: light-dark(#9d5d05, #ffca16);
+  --bad: light-dark(#e54d2e, #e54d2e);
+  --badT: light-dark(#bf3216, #ff977d);
+
+  /* Control boundary, focus and selection (WCAG 2.2 1.4.11, 2.4.13). Ratios against the adjacent surfaces,
+     n1/n2/n3/n4, by the WCAG relative luminance formula (brand.ts contrast; web/scripts/tokens.test.ts checks them):
+       --ctl-line  sand10   light 3.80/3.67/3.40/3.16   dark 4.45/4.14/3.75/3.38
+                   slate10  light 3.69/3.60/3.33/3.10   dark 4.45/4.15/3.75/3.40
+       --focus     light 5.35/5.17/4.79/4.45 (sand), 5.32/5.18/4.80/4.46 (slate)
+                   dark 9.97/9.29/8.41/7.59 (sand), 9.96/9.29/8.40/7.62 (slate)
+       --sel-ind   = --t1, 13.31 (light) and 12.38 (dark) on --selected
+     The board's cyan8 focus (2.28:1 on sand1) and sand8 line (1.89:1) fail, so neither marks a control. Controls are
+     edged 1px in --ctl-line; selection always adds --sel-ind, since --selected alone differs from the page by <3:1. */
+  --ctl-line: var(--n10);
+  --focus: var(--accentT);
+  --sel-ind: var(--t1);
+
+  /* category colours for charts (--c0…--c4) and the four workspaces (--w0…--w3), and the team */
+  --c0: light-dark(#654dc4, #6e56cf);
+  --c1: light-dark(#12a594, #12a594);
+  --c2: light-dark(#cb1d63, #b0436e);
+  --c3: light-dark(#ef5f00, #f76b15);
+  --c4: light-dark(#0090ff, #0090ff);
+  --w0: var(--accentSolid);
+  --w1: light-dark(#6e56cf, #6e56cf);
+  --w2: light-dark(#29a383, #29a383);
+  --w3: light-dark(#f76b15, #f76b15);
+  --team: light-dark(#5b5bd6, #5b5bd6);
+
+  /* outlines and shadows */
+  --bw: 0.5px;
+  --sh1: 0 0 0 var(--bw) var(--n6);
+  --cardSh: 0 0 0 var(--bw) var(--n6);
+  --shPop: 0 0 0 var(--bw) var(--n7), 0 8px 24px light-dark(rgb(0 0 0 / 0.1), rgb(0 0 0 / 0.4));
+  /* behind a modal */
+  --scrim: light-dark(rgb(0 0 0 / 0.24), rgb(0 0 0 / 0.56));
+  /* a code a phone scans: dark on light whatever the theme */
+  --paper: #ffffff;
+  --ink: #000000;
+  /* the shadow under the current popovers and dialogs, until they are rebuilt (F2a) */
+  --shade: light-dark(rgb(13 14 16 / 0.2), rgb(0 0 0 / 0.55));
+
+  /* Type: the product's four sizes with their line heights (#747), and the website's display size, which
+     steps with the width below. */
+  --fs12: 12px;
+  --lh12: 18px;
+  --fs14: 14px;
+  --lh14: 22px;
+  --fs16: 16px;
+  --lh16: 24px;
+  --fs24: 24px;
+  --lh24: 32px;
+  --dsp: 80px;
+  --dlh: 84px;
+
+  /* radii */
+  --r2: 2px;
+  --r4: 4px;
+  --r6: 6px;
+  --r8: 8px;
+  --r12: 12px;
+  --r16: 16px;
+  --rPill: 999px;
+
+  /* motion */
+  --dur: 250ms;
+  --ease: ease-out;
+  --easeB: ease-out;
+}
+
+:root[data-neutral="slate"] {
+  --n1: light-dark(#fcfcfd, #111113);
+  --n2: light-dark(#f9f9fb, #18191b);
+  --n3: light-dark(#f0f0f3, #212225);
+  --n4: light-dark(#e8e8ec, #272a2d);
+  --n5: light-dark(#e0e1e6, #2e3135);
+  --n6: light-dark(#d9d9e0, #363a3f);
+  --n7: light-dark(#cdced6, #43484e);
+  --n8: light-dark(#b9bbc6, #5a6169);
+  --n9: light-dark(#8b8d98, #696e77);
+  --n10: light-dark(#80838d, #777b84);
+  --n11: light-dark(#60646c, #b0b4ba);
+  --n12: light-dark(#1c2024, #edeef0);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
+
+@media (max-width: 1279px) {
+  :root {
+    --dsp: 64px;
+    --dlh: 68px;
+  }
+}
+
+@media (max-width: 767px) {
+  :root {
+    --dsp: 40px;
+    --dlh: 44px;
+  }
+}

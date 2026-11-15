@@ -1,10 +1,12 @@
 // Fails when a built app loads more than its budget (docs/frontend.md「前端性能指标」): the script the first screen
-// loads, the script each further page adds, and the font Latin text and digits need. Scripts count at their brotli
-// size, the transfer size (scripts/compress.ts, as the program sends them); fonts are already compressed. Run after `pnpm build`.
+// loads, the script each further page adds, and the fonts each page can load (font-budget.ts). Scripts count at their
+// brotli size, the transfer size (scripts/compress.ts, as the program sends them); fonts are already compressed. The
+// fonts the first screen preloads are reported beside them. Run after `pnpm build`.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { brotli } from "./compress.ts";
+import { type FontManifest, fontBudget } from "./font-budget.ts";
 
 const kB = 1000;
 // firstPage names the lazily loaded page the entry address opens (its manifest key): the first screen loads it too.
@@ -13,9 +15,9 @@ const budgets: Record<string, { firstScreen: number; perPage?: number; firstPage
   console: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/overview.tsx" },
   admin: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/home.tsx" },
 };
-const fontBudget = 60 * kB;
-// Fontsource names each file by its Unicode subset; the basic Latin one carries Latin letters and digits.
-const latinFont = /-latin-wght-normal-[\w-]+\.woff2$/;
+const fonts: FontManifest = JSON.parse(
+  readFileSync(join(import.meta.dirname, "..", "packages/ui/src/css/fonts/fonts.json"), "utf8"),
+);
 
 type Chunk = { file: string; isEntry?: boolean; isDynamicEntry?: boolean; imports?: string[] };
 
@@ -88,13 +90,28 @@ for (const [app, budget] of Object.entries(budgets)) {
     }
   }
 
-  const fonts = readdirSync(join(dist, "assets")).filter((file) => latinFont.test(file));
-  if (fonts.length === 0) {
-    failures.push(`${app}: no Latin font file matches ${latinFont}; update the pattern`);
+  // Vite names an emitted file after its source, then a hash: a page's font missing from the build means fonts.css is
+  // not part of it, and the budget below would count fonts the app never ships.
+  const assets = readdirSync(join(dist, "assets"));
+  for (const file of fonts.faces.flatMap((face) => face.files)) {
+    const stem = file.file.replace(/\.woff2$/, "");
+    if (
+      file.pages.some((page) => page.split("/")[0] === app) &&
+      !assets.some((asset) => asset.startsWith(`${stem}-`))
+    ) {
+      failures.push(`${app}: the build has no ${file.file}; is css/fonts.css imported?`);
+    }
   }
-  const fontSize = fonts.reduce((total, file) => total + readFileSync(join(dist, "assets", file)).length, 0);
-  measure(`${app}: Latin font`, fontSize, fontBudget);
+  const preloads = [...readFileSync(join(dist, "index.html"), "utf8").matchAll(/<link\b[^>]*\brel="preload"[^>]*>/g)]
+    .filter(([tag]) => /\bas="font"/.test(tag))
+    .map(([tag]) => /\bhref="([^"]+)"/.exec(tag)?.[1]?.slice(base.length) ?? "");
+  const preloaded = preloads.reduce((total, file) => total + readFileSync(join(dist, file)).length, 0);
+  console.log(`${`${app}: first screen font preload`.padEnd(36)} ${(preloaded / kB).toFixed(1).padStart(6)} kB`);
 }
+
+const font = fontBudget(fonts);
+console.log(font.lines.join("\n"));
+failures.push(...font.failures);
 
 if (failures.length > 0) {
   console.error(`\nover budget:\n${failures.join("\n")}`);

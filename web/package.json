@@ -17,6 +17,7 @@
     "test": "vitest run",
     "budget": "node scripts/budget.ts",
     "embed": "node scripts/embed.ts",
+    "fonts": "sh scripts/fonts/run.sh",
     "e2e": "playwright test",
     "vitals": "playwright test -c playwright.vitals.config.ts",
     "journey": "playwright test -c playwright.journey.config.ts"
