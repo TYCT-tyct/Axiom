@@ -7,6 +7,9 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
+	"axiom/internal/accounts"
 	"axiom/internal/observability"
 	"axiom/internal/platform/consoleapi"
 )
@@ -93,5 +96,39 @@ func checkUsageResponseIDs(t *testing.T, group string, b consoleapi.UsageBucket)
 		if b.Group != nil {
 			t.Fatal(b.Group)
 		}
+	}
+}
+
+func TestUsageIgnoresUndeclaredCallParameters(t *testing.T) {
+	t.Parallel()
+	c := newCallsFixture(t)
+	path := "/usage/statistics?since=2026-01-01T00:00:00Z&until=2026-01-02T00:00:00Z"
+	base := c.f.do(http.MethodGet, path, "", as(c.s))
+	if base.Code != http.StatusOK {
+		t.Fatal(base.Body)
+	}
+	for _, extra := range []string{"cursor=x", "request_id=bad", "status=error", "client_app=foo"} {
+		t.Run(extra, func(t *testing.T) {
+			rec := c.f.do(http.MethodGet, path+"&"+extra, "", as(c.s))
+			if rec.Code != base.Code || rec.Body.String() != base.Body.String() {
+				t.Fatalf("unsupported parameter affected response: %d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestUsageQueryUsesDeclaredFilters(t *testing.T) {
+	t.Parallel()
+	account, key, workspace := accounts.AccountID(uuid.NewV7()), uuid.NewV7(), uuid.NewV7()
+	model, keyID, workspaceID := "public/model", accounts.KeyID(key).TypeID(), accounts.WorkspaceID(workspace).TypeID()
+	since := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	until := since.Add(time.Hour)
+	got, err := usageQuery(account, consoleapi.GetUsageStatisticsParams{Model: &model, KeyId: &keyID, WorkspaceId: &workspaceID, Since: &since, Until: &until})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := observability.UsageQuery{Account: uuid.UUID(account), Model: model, Key: &key, Workspace: &workspace, Since: since, Until: until, Granularity: "day"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Fatal(diff)
 	}
 }

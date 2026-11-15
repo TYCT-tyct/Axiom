@@ -16,12 +16,45 @@ func (c consoleAPI) GetUsageStatistics(ctx context.Context, request consoleapi.G
 	ctx, cancel := context.WithTimeout(ctx, callReportTimeout)
 	defer cancel()
 	cl := callOf(ctx)
-	own, err := ownCallQuery(cl)
+	q, err := usageQuery(cl.principal.AccountID(), request.Params)
+	if errors.Is(err, observability.ErrUsageWindow) {
+		return nil, invalidField("since", err.Error())
+	}
 	if err != nil {
 		return nil, err
 	}
-	p := request.Params
-	q := observability.UsageQuery{Account: own.Account, Model: own.Model, Key: own.Key, Workspace: own.Workspace, Granularity: "day"}
+	var result observability.UsageStatistics
+	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) { result, err = observability.ReadUsageStatistics(ctx, tx, q); return err })
+	if errors.Is(err, observability.ErrAggregateSize) {
+		return nil, invalidField("group_by", "too many groups; narrow the window or filters")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.GetUsageStatistics200JSONResponse(usageBody(result, q)), nil
+}
+
+func usageQuery(account accounts.AccountID, p consoleapi.GetUsageStatisticsParams) (observability.UsageQuery, error) {
+	q := observability.UsageQuery{Account: uuid.UUID(account), Granularity: "day"}
+	if p.Model != nil {
+		q.Model = *p.Model
+	}
+	if p.KeyId != nil {
+		id, err := accounts.ParseKeyID(*p.KeyId)
+		if err != nil {
+			return q, invalidField("key_id", "invalid identifier")
+		}
+		value := uuid.UUID(id)
+		q.Key = &value
+	}
+	if p.WorkspaceId != nil {
+		id, err := accounts.ParseWorkspaceID(*p.WorkspaceId)
+		if err != nil {
+			return q, invalidField("workspace_id", "invalid identifier")
+		}
+		value := uuid.UUID(id)
+		q.Workspace = &value
+	}
 	if p.Granularity != nil {
 		q.Granularity = string(*p.Granularity)
 	}
@@ -41,18 +74,7 @@ func (c consoleAPI) GetUsageStatistics(ctx context.Context, request consoleapi.G
 	if p.Since != nil {
 		q.Since = *p.Since
 	}
-	if err := observability.ValidateUsageWindow(q.Since, q.Until, q.Granularity); err != nil {
-		return nil, invalidField("since", err.Error())
-	}
-	var result observability.UsageStatistics
-	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) { result, err = observability.ReadUsageStatistics(ctx, tx, q); return err })
-	if errors.Is(err, observability.ErrAggregateSize) {
-		return nil, invalidField("group_by", "too many groups; narrow the window or filters")
-	}
-	if err != nil {
-		return nil, err
-	}
-	return consoleapi.GetUsageStatistics200JSONResponse(usageBody(result, q)), nil
+	return q, observability.ValidateUsageWindow(q.Since, q.Until, q.Granularity)
 }
 
 func usageBody(result observability.UsageStatistics, q observability.UsageQuery) consoleapi.UsageStatistics {

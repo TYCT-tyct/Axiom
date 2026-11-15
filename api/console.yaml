@@ -2258,13 +2258,15 @@ paths:
         invalid_request. Day buckets start at UTC midnight; weeks start Monday UTC. Partial day/week edge buckets
         contain only hours inside [since,until). Missing buckets and groups are omitted, meaning zero requests and
         spend; empty totals arrays also mean zero. Currencies stay separate. Tokens sum only reported fields;
-        an absent token kind means no reports, and a present sum may cover only some requests. cache_write combines
+        an absent token kind means no reports, and a present sum may cover only some requests. input includes
+        non-cache text, audio and image tokens; output includes reasoning, audio and image tokens. cache_write combines
         five-minute and one-hour writes. Cache hit rate is cache_read divided by physical input, using only calls
         reporting both; cache_rate_requests states their count. Missing or zero denominators omit the rate.
         Success means empty error_kind. Pending billing records are excluded, as in listCalls. compare=previous
         returns totals for [since-(until-since),since) from the same snapshot with the same filters. Historical
         backfill covers existing hot call records, not already archived records; backfill_complete=false means
-        history is still incomplete. Rollups survive call-log archival. No content, supplier identity, cost or routing
+        history is still incomplete; recent data may also lag while backfill and live ingestion compete for capacity.
+        Each batch can consume its backfilled events plus another batch of live events. Rollups survive call-log archival. No content, supplier identity, cost or routing
         data. New response members are optional for rolling release; old nodes return 404 for this operation.
         Ten-second request deadline.
       security:

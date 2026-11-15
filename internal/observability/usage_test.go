@@ -71,7 +71,7 @@ func TestUsageRollupRetryLateArrivalAndMoney(t *testing.T) {
 	a.PriceNano, b.PriceNano = math.MaxInt64, math.MaxInt64
 	physical := int64(200)
 	a.PhysicalInput = &physical
-	a.Usage = map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30, catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 5, catalog.ItemCacheWrite1h: 6}
+	a.Usage = map[catalog.Item]int64{catalog.ItemInput: 120, catalog.ItemOutput: 30, catalog.ItemReasoning: 900, catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 5, catalog.ItemCacheWrite1h: 6}
 	b.Usage = map[catalog.Item]int64{}
 	keep(t, db, a, b)
 	q := UsageQuery{Account: account, Since: at, Until: at.Add(24 * time.Hour), Granularity: "day", GroupBy: "workspace"}
@@ -104,7 +104,7 @@ func TestUsageRollupRetryLateArrivalAndMoney(t *testing.T) {
 	hit, success := 0.4, 0.5
 	want := UsageMetrics{
 		Currency: "USD", Requests: "2", Successes: "1", Spend: "18446744073709551614",
-		Input: "120", Output: "30", CacheRead: "80", CacheWrite: "11", CacheRateRequests: "1", CacheHitRate: &hit, SuccessRate: &success,
+		Input: "120", Output: "930", CacheRead: "80", CacheWrite: "11", CacheRateRequests: "1", CacheHitRate: &hit, SuccessRate: &success,
 	}
 	if diff := cmp.Diff(want, first.Totals[0]); diff != "" {
 		t.Fatal(diff)
@@ -192,15 +192,7 @@ func TestUsageFiltersComparisonAndBuckets(t *testing.T) {
 
 func TestUsageBackfillResumesAcrossPartitions(t *testing.T) {
 	// Migrations change cluster-wide role grants, so do not race template creation in parallel tests.
-	database := pgtest.New(t)
-	if err := pg.Migrate(t.Context(), database.Migrator, migrationsBeforeObservability(t, "00042")); err != nil {
-		t.Fatal(err)
-	}
-	db, err := pg.Open(t.Context(), database.App)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(db.Close)
+	db, database := usageDBBeforeRollup(t)
 	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	account := uuid.NewV7()
 	a, b := record(account, at.Add(-time.Minute)), record(account, at.Add(time.Minute))

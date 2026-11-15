@@ -27,6 +27,7 @@ WITH batch AS MATERIALIZED (
         (site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano)
     SELECT site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano
     FROM batch WHERE NOT billing_pending
+    RETURNING 1
 ), last_row AS (
     SELECT at,id FROM batch ORDER BY at DESC,id DESC LIMIT 1
 )
@@ -35,7 +36,7 @@ UPDATE observability.usage_backfill SET
     id = coalesce((SELECT id FROM last_row), usage_backfill.id),
     done = (SELECT count(*) FROM batch) < $1::int
 WHERE singleton
-RETURNING done
+RETURNING done, (SELECT count(*)::int FROM enqueued) AS enqueued
 `
 
 type BackfillUsageParams struct {
@@ -44,12 +45,17 @@ type BackfillUsageParams struct {
 	AfterID   string
 }
 
+type BackfillUsageRow struct {
+	Done     bool
+	Enqueued int32
+}
+
 // The expression and ordering match call_log_admin_time; the scalar bound also prunes old partitions.
-func (q *Queries) BackfillUsage(ctx context.Context, db DBTX, arg BackfillUsageParams) (bool, error) {
+func (q *Queries) BackfillUsage(ctx context.Context, db DBTX, arg BackfillUsageParams) (BackfillUsageRow, error) {
 	row := db.QueryRow(ctx, backfillUsage, arg.BatchSize, arg.AfterAt, arg.AfterID)
-	var done bool
-	err := row.Scan(&done)
-	return done, err
+	var i BackfillUsageRow
+	err := row.Scan(&i.Done, &i.Enqueued)
+	return i, err
 }
 
 const consumeUsageJournal = `-- name: ConsumeUsageJournal :one
@@ -63,7 +69,13 @@ WITH batch AS (
         input,output,cache_read,cache_write,cache_rate_requests,cache_rate_read,cache_rate_input,spend)
     SELECT site_id,account_id,date_trunc('hour',at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
         workspace_id,key_id,model,currency,count(*),count(*) FILTER (WHERE success),
-        sum((usage->>'input')::numeric),sum((usage->>'output')::numeric),sum((usage->>'cache_read')::numeric),
+        sum(CASE WHEN usage ? 'input' OR usage ? 'audio_in' OR usage ? 'image_in'
+            THEN coalesce((usage->>'input')::numeric,0) + coalesce((usage->>'audio_in')::numeric,0)
+                + coalesce((usage->>'image_in')::numeric,0) END),
+        sum(CASE WHEN usage ? 'output' OR usage ? 'reasoning' OR usage ? 'audio_out' OR usage ? 'image_out'
+            THEN coalesce((usage->>'output')::numeric,0) + coalesce((usage->>'reasoning')::numeric,0)
+                + coalesce((usage->>'audio_out')::numeric,0) + coalesce((usage->>'image_out')::numeric,0) END),
+        sum((usage->>'cache_read')::numeric),
         sum(CASE WHEN usage ? 'cache_write' OR usage ? 'cache_write_1h'
             THEN coalesce((usage->>'cache_write')::numeric,0) + coalesce((usage->>'cache_write_1h')::numeric,0) END),
         count(*) FILTER (WHERE usage ? 'cache_read' AND physical_input >= 0),

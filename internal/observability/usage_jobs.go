@@ -70,12 +70,17 @@ func rollupUsageBatch(ctx context.Context, tx pg.Tx, size int32) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	consumeSize := size
 	if !done {
-		done, err = store.New().BackfillUsage(ctx, tx, store.BackfillUsageParams{AfterAt: at, AfterID: id, BatchSize: size})
+		var backfill store.BackfillUsageRow
+		backfill, err = store.New().BackfillUsage(ctx, tx, store.BackfillUsageParams{AfterAt: at, AfterID: id, BatchSize: size})
 		if err != nil {
 			return false, err
 		}
+		done = backfill.Done
+		// Backfill must not consume the capacity reserved for live arrivals.
+		consumeSize += backfill.Enqueued
 	}
-	n, err := store.New().ConsumeUsageJournal(ctx, tx, size)
-	return !done || n == size, err
+	n, err := store.New().ConsumeUsageJournal(ctx, tx, consumeSize)
+	return !done || n == consumeSize, err
 }

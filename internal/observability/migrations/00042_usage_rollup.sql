@@ -15,8 +15,8 @@ CREATE TABLE observability.usage_hourly (
     currency text NOT NULL,
     requests numeric NOT NULL,
     successes numeric NOT NULL,
-    input numeric,
-    output numeric,
+    input numeric, -- Non-cache input, including audio and image tokens.
+    output numeric, -- Includes reasoning, audio and image tokens.
     cache_read numeric,
     cache_write numeric,
     cache_rate_requests numeric NOT NULL,
