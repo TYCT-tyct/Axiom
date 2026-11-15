@@ -203,11 +203,12 @@ class Component extends DCLogic {
       await expect(openFixture(browser, info, {}, fonts)).rejects.toThrow("which has no source font");
     }
     // Spaced CSS, a family through a custom property, a system fallback behind one with a source, generated text, an
-    // unused declaration: each family text is drawn in that has a source is served and must load.
+    // unused declaration, a decorative pseudo-element with empty content: each family text is drawn in that has a
+    // source is served and must load.
     const fonts =
       "@font-face {font-family: 'Axiom Sans'; font-weight: 400; src: url(/_blob/0)} @font-face{font-family:'AX Smiley';src:url(/_blob/1)}" +
       " p{font:32px 'Axiom Sans','PingFang SC'} :root{--mono:\"Axiom Mono\"} li{font-family:var(--mono),monospace}" +
-      " .icon::after{content:'key';font-family:'AX Serif Latin'}";
+      " .icon::after{content:'key';font-family:'AX Serif Latin'} p::after{content:'';display:block;font-family:'Missing'}";
     const opened = await openFixture(browser, info, {}, fonts);
     expect(opened.fonts.map((face) => face.family).toSorted()).toEqual(["AX Serif Latin", "Axiom Mono", "Axiom Sans"]);
     await opened.close();

@@ -110,11 +110,12 @@ export async function usedFaces(page: Page, faces: FontFace[]) {
     const ownText = (el: Element) =>
       el.matches("input, textarea, select") ||
       [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
-    // Generated text is no text node: content with a string, counter() or attr() draws characters.
+    // Generated text is no text node: content with a non-empty string, counter() or attr() draws characters (computed
+    // style serializes strings in double quotes); an empty string only makes a decorative box.
     const generated = (el: Element) =>
       ["::before", "::after"]
         .map((pseudo) => getComputedStyle(el, pseudo))
-        .filter((style) => /["']|counters?\(|attr\(/.test(style.content));
+        .filter((style) => /"(?:[^"\\]|\\.)+"|counters?\(|attr\(/.test(style.content));
     const marker = (el: Element) => {
       const style = getComputedStyle(el);
       return style.display === "list-item" && style.listStyleType !== "none" ? [getComputedStyle(el, "::marker")] : [];
