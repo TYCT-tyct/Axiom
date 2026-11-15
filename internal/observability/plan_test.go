@@ -20,6 +20,7 @@ const (
 )
 
 // seedForPlans fills the table as the superuser: one heavy account and 100 light ones over eight hours.
+// Every 1000th row falls back: 120 calls, or 0.2% of the heavy account.
 // Every 1200th call is of the model "rare" and from the application "codex", all of them the heavy account's; the others are of "m" and "cli" (a dense one); "absent" matches nothing.
 func seedForPlans(t *testing.T, database pgtest.Database, sparseSuccess bool) {
 	t.Helper()
@@ -37,7 +38,7 @@ func seedForPlans(t *testing.T, database pgtest.Database, sparseSuccess bool) {
 			CASE WHEN n % 1200 = 0 THEN '00000000-0000-4000-8000-000000000112'::uuid ELSE '00000000-0000-4000-8000-000000000111'::uuid END,
             CASE WHEN n % 1200 = 0 THEN '00000000-0000-4000-8000-000000000122'::uuid ELSE '00000000-0000-4000-8000-000000000121'::uuid END,
             '203.0.113.7', CASE WHEN n % 1200 = 0 THEN 'codex' ELSE 'cli' END, 'chat', false, false,
-			false, CASE WHEN n % 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), 1, '{}', 'standard', 1, 1,
+			false, CASE WHEN n % 1200 = 0 THEN 'rare' ELSE 'm' END, uuidv7(), CASE WHEN n % 1000 = 0 THEN 2 ELSE 1 END, '{}', 'standard', 1, 1,
 			'USD', false, 1, 0, 'v', true, `+errorKind+`
 		FROM generate_series(1, 120000) n`, "ANALYZE observability.call_log"); err != nil {
 		t.Fatal(err)
@@ -54,7 +55,7 @@ func listCall(q OwnQuery, size int) (string, []any) {
 	at, id := cursorOf(q)
 	return store.ListQuery, []any{
 		q.Account.String(), at, id, q.Since, q.Until, q.Model, q.ClientApp,
-		uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), size + 1,
+		uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), q.FellBack, size + 1,
 	}
 }
 
@@ -165,16 +166,23 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 	t.Parallel()
 	db, database := openDBWithURL(t)
 	seedForPlans(t, database, false)
+	checkFallbackIndexPlans(t, db, database)
 	heavy, light := uuid.MustParse(heavyAccount), uuid.MustParse(lightAccount)
 	since, until := window()
 	base := func(account uuid.UUID) OwnQuery { return OwnQuery{Account: account, Since: since, Until: until} }
 	with := func(q OwnQuery, model, app string) OwnQuery { q.Model, q.ClientApp = model, app; return q }
+	fallback := func(q OwnQuery) OwnQuery { q.FellBack = true; return q }
+	allTimeFallback := OwnQuery{Account: heavy, FellBack: true, Until: time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)}
 	cases := []struct {
 		name  string
 		q     OwnQuery
 		later bool // the page after the first
 		max   int  // the most buffers it may touch
 	}{
+		{"fallback, full retention", allTimeFallback, false, 400},
+		{"fallback, sparse", fallback(base(heavy)), false, 400},
+		{"fallback, sparse, later page", fallback(base(heavy)), true, 400},
+		{"fallback, no match", fallback(base(light)), false, 20},
 		{"heavy, first page", base(heavy), false, 40},
 		{"heavy, later page", base(heavy), true, 40},
 		{"light, first page", base(light), false, 800},
@@ -200,7 +208,7 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 		if !strings.Contains(plan, "Index Cond: ((account_id") || strings.Contains(plan, "Seq Scan") {
 			t.Errorf("%s: not read through an index of the account:\n%s", c.name, plan)
 		}
-		if strings.Contains(plan, "Sort") || !strings.Contains(plan, "Index Scan using") {
+		if hasSortNode(plan) || !strings.Contains(plan, "Index Scan using") {
 			t.Errorf("%s: not an ordered index scan under the limit:\n%s", c.name, plan)
 		}
 		if n := buffers(t, plan); n > c.max {
@@ -210,6 +218,45 @@ func TestListPlansFollowTheIndexes(t *testing.T) {
 	checkListDeepPagesReadInIndexOrder(t, db)
 	checkOwnFilterPlans(t, db)
 	checkOwnExportFilters(t, db)
+}
+
+// checkFallbackIndexPlans measures the same sparse data with and without the
+// migration's index. This database belongs only to the enclosing test.
+func checkFallbackIndexPlans(t *testing.T, db *pg.DB, database pgtest.Database) {
+	t.Helper()
+	since, until := window()
+	cases := []struct {
+		name, account string
+		max           int
+	}{
+		{"sparse", heavyAccount, 400}, {"no match", lightAccount, 20},
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, "DROP INDEX observability.call_log_account_fallback_at"); err != nil {
+		t.Fatal(err)
+	}
+	before := make([]int, len(cases))
+	for i, c := range cases {
+		q := OwnQuery{Account: uuid.MustParse(c.account), Since: since, Until: until, FellBack: true}
+		plan := explain(t, db, q, accountScope(q.Account))
+		before[i] = buffers(t, plan)
+		t.Logf("fallback %s before index: %d buffers\n%s", c.name, before[i], plan)
+	}
+	migration, err := migrations.ReadFile("migrations/00046_own_fallback.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, string(migration)); err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range cases {
+		q := OwnQuery{Account: uuid.MustParse(c.account), Since: since, Until: until, FellBack: true}
+		plan := explain(t, db, q, accountScope(q.Account))
+		after := buffers(t, plan)
+		t.Logf("fallback %s after index: %d buffers\n%s", c.name, after, plan)
+		if after > c.max || after >= before[i] {
+			t.Errorf("fallback %s: before %d, after %d, budget %d", c.name, before[i], after, c.max)
+		}
+	}
 }
 
 // TestFilteredListsReturnTheMatches: the list filters return what they should, also when the match is sparse or
