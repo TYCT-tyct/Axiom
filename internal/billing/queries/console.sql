@@ -81,3 +81,13 @@ SELECT k.key_id,
 FROM k CROSS JOIN t
 LEFT JOIN billing.spend s ON s.subject = k.key_id
 GROUP BY k.key_id, k.reset, t.now;
+
+-- name: ReadKeyDailySpend :many
+-- Only the visible page's keys and fourteen UTC days, including today. No call history is read.
+WITH t AS MATERIALIZED (SELECT date_trunc('day', clock_timestamp(), 'UTC') AS today)
+SELECT s.subject, s.window_start, s.spent
+FROM billing.spend s CROSS JOIN t
+WHERE s.subject = ANY(@keys::uuid[]) AND s.spent > 0
+  AND s.window_start >= t.today - interval '312 hours'
+  AND s.window_start < t.today + interval '24 hours'
+ORDER BY s.subject, s.window_start;

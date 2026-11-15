@@ -44,7 +44,7 @@
 | `agent_credentials` | `name`、`permissions`、`sites`（NULL 为全部站点）、`platform`、`proposer_vendors`、`created_by`、`created_at`、`expires_at`、`revoked_at`、`last_used_at` | CHECK：含 `operations.read`，不含 `operations.manage`、`operations.approve`、`platform_grants.manage` | 平台 | `revoked_at`（终态）、`last_used_at` |
 | `agent_credential_tokens` | `secret_hash`（主键）、`secret_version`、`credential_id`、`last4`、`created_at`、`retires_at` | 部分唯一索引：每张凭证一个 `retires_at IS NULL` 的当前令牌 | 平台 | `retires_at` |
 | `presets` | `site_id`、`account_id`、slug、name、config、created_at、updated_at、deleted_at | 活跃 `(account_id,slug)` 唯一、复合账户外键 | 账户 | name、config、updated_at、deleted_at（终态） |
-| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`、`rate_requests` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态）、`rate_requests` |
+| `api_keys` | `site_id`、`account_id`、`workspace_id`、`kind`（call / management）、`name`、`prefix`、`last4`、`secret_hash`、`secret_version`、`created_by`、`created_at`、`last_used_at`（可空的异步活动提示）、`updated_at`、`management_window`、`management_requests`、`expires_at`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`、`rate_requests` | `(site_id, account_id, workspace_id) → workspaces(site_id, account_id, id)`；`(site_id, created_by) → users(site_id, id)`；`UNIQUE (secret_hash)`；管理 key 必须有 `expires_at`；请求计数 0–61（61 为已超限）；`limit_reset` 同工作区的 `budget_reset` | 账户 | `last_used_at`、`updated_at`、`management_window`、`management_requests`、`name`、`status`、`spend_limit`、`limit_reset`、`preset_id`、`models`、`ip_allow`、`deleted_at`（终态）、`rate_requests` |
 | `sessions` | `site_id`、`account_id`（个人账户）、`user_id`、`surface`（console / admin）、`token_hash`、`csrf_token`、`level`（pending_mfa / password / mfa）、`factor_version`、`mfa_attempts`、`created_at`、`last_seen_at`、`expires_at`、`idle_timeout`、`revoked_at`、`ip`、`user_agent` | `UNIQUE (token_hash)`；`(site_id, account_id, user_id) → users(site_id, account_id, id)` | 账户 | `last_seen_at`、`mfa_attempts`、`expires_at` 和 `idle_timeout`（只往小改，见「站点缩短会话时长」）、`revoked_at`（终态）、`recovery_codes_ciphertext`、`recovery_codes_nonce`（用会话令牌派生的密钥加密，读出后同事务清空，撤销时由触发器清空） |
 | `recovery_codes` | `site_id`、`account_id`、`user_id`、`factor_version`、`code_hash`、`used_at` | 同上外键；`UNIQUE (user_id, code_hash)`，也是消费时的查找 | 账户 | `used_at`（终态） |
 | `security_failures` | `site_id`、`started_at`、`failures`、`completed_peak`、`sampled_at`、`reported` | 每站点一行；当前 UTC 分钟计数、尚未采样完整窗口峰值、最后采样时间及是否待恢复；部分索引只含有计数或待恢复的站点 | 站点 | 仅平台可写计数与采样状态 |
@@ -155,6 +155,10 @@ func (s *Service) SpendAgentAlert(a Agent, perHour int) error            // 发�
 - `axiom_lookup` 由迁移的第一步建立（见[平台的「角色」](../platform/README.md#角色)）。迁移以 `axiom_owner` 建函数，`REVOKE EXECUTE … FROM PUBLIC`、`GRANT EXECUTE … TO axiom_app`，再 `ALTER FUNCTION … OWNER TO axiom_lookup`：改所有者要求新所有者对 schema 有 CREATE，所以只在这一句前后授予、随即收回。平台的测试用非超级用户的迁移管理员照这个写法执行通过。
 
 ## API key
+
+控制台 `ListKeys` / `GetKey` 在原来的权限范围内批读 `ReadKeyMetadata`，创建人名字使用可见个人账户名，缺失返回 `Unknown user` 并保留用户编号；不要求创建人仍是成员。列表只对当前页编号读一次，详情只对已经找到的编号读一次，空页不查。花费由组装层调用 billing 的 `KeyDailySpend`，只读已授权 key 的每日已结算数，最近 14 个 UTC 日（含今天），缺日为零、无记录为空数组，不读调用记录。
+
+准入检查成功后向节点内容量 4096 的通道发送一次非阻塞观测；`Load` 启动的后台写者每秒消费当时已排队的一批，数据库事务最多一秒。通道满则丢弃新观测，写失败记错误并丢弃本批，退出不等待冲刷；这是活动提示，不是调用审计。`TouchKeys` 合并同批重复编号，并用 `greatest` 更新可空的 `last_used_at`，乱序、并发节点与时钟回拨均不能让已存时间倒退；已删除 key 不再更新。成功是准入身份检查通过，不要求预留或上游成功；检查本身失败不发信号。旧节点不写新列，旧 key 读到空值无需回填。上述语义见领域文档的「API key」和「决策与理由」。
 
 ### 格式与哈希
 

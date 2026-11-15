@@ -150,3 +150,17 @@ SELECT preset_id::uuid AS preset_id, count(*) AS keys FROM accounts.api_keys
 WHERE preset_id = ANY (@presets::uuid[]) AND preset_id <> '00000000-0000-0000-0000-000000000000' AND deleted_at IS NULL
   AND account_id = @account_id
 GROUP BY preset_id;
+
+-- name: ReadKeyMetadata :many
+SELECT k.id, k.last_used_at, coalesce(a.name, 'Unknown user')::text AS creator_name
+FROM accounts.api_keys k
+LEFT JOIN accounts.users u ON u.site_id = k.site_id AND u.id = k.created_by
+LEFT JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
+WHERE k.id = ANY(@keys::uuid[]) AND k.deleted_at IS NULL;
+
+-- name: TouchKeys :exec
+UPDATE accounts.api_keys k
+SET last_used_at = greatest(k.last_used_at, uses.at)
+FROM (SELECT (@keys::uuid[])[i] AS id, max((@used_at::text[])[i]::timestamptz) AS at FROM generate_subscripts(@keys::uuid[], 1) AS i GROUP BY (@keys::uuid[])[i]) uses
+WHERE k.id = uses.id AND k.deleted_at IS NULL
+  AND (k.last_used_at IS NULL OR k.last_used_at < uses.at);

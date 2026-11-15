@@ -351,3 +351,43 @@ func TestKeysOfAnotherAccount(t *testing.T) {
 		t.Errorf("the owner's key after the attempts: %+v", kept)
 	}
 }
+
+func TestKeyActivityAndDailySpend(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	unused := f.createKey(s, `{"name":"unused"}`).Key
+
+	workspace := f.workspace(s, "Usage").Id
+	used := f.createKey(s, `{"name":"used","workspace_id":"`+workspace+`"}`).Key
+	if err := pgtest.Run(t.Context(), f.database.Superuser, `
+ UPDATE accounts.api_keys SET last_used_at = '2026-11-15T12:00:00Z' WHERE name = 'used';
+ INSERT INTO billing.spend(subject,window_start,site_id,account_id,spent,reserved)
+ SELECT id,date_trunc('day',clock_timestamp(),'UTC'),site_id,account_id,9007199254740993,999 FROM accounts.api_keys WHERE name = 'used';`); err != nil {
+		t.Fatal(err)
+	}
+	var one consoleapi.Key
+	decode(t, f.do(http.MethodGet, "/keys/"+used.Id, "", as(s)), &one)
+	if one.LastUsedAt == nil || one.CreatedBy == nil || one.DailySpend == nil || len(*one.DailySpend) != 1 || (*one.DailySpend)[0].Amount.Amount != "9007199254740993" {
+		t.Fatalf("settled usage: %+v", one)
+	}
+	var list consoleapi.KeyList
+	decode(t, f.do(http.MethodGet, "/keys?workspace_id="+workspace, "", as(s)), &list)
+	if diff := cmp.Diff([]consoleapi.Key{one}, list.Data); diff != "" {
+		t.Fatalf("workspace metadata (-want +got): %s", diff)
+	}
+	one = consoleapi.Key{}
+	decode(t, f.do(http.MethodGet, "/keys/"+unused.Id, "", as(s)), &one)
+	if diff := cmp.Diff(unused, one); diff != "" {
+		t.Fatalf("another workspace's activity leaked (-want +got): %s", diff)
+	}
+}
+
+func TestUnusedKeyActivity(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	unused := f.createKey(f.owner(), `{"name":"unused"}`).Key
+	if unused.CreatedBy == nil || unused.CreatedBy.DisplayName == "" || unused.LastUsedAt != nil || unused.DailySpend == nil || len(*unused.DailySpend) != 0 {
+		t.Fatalf("unused key fields: %+v", unused)
+	}
+}

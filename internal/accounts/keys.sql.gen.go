@@ -655,6 +655,40 @@ func (q *Queries) LockKey(ctx context.Context, db DBTX, id uuid.UUID) (LockKeyRo
 	return i, err
 }
 
+const readKeyMetadata = `-- name: ReadKeyMetadata :many
+SELECT k.id, k.last_used_at, coalesce(a.name, 'Unknown user')::text AS creator_name
+FROM accounts.api_keys k
+LEFT JOIN accounts.users u ON u.site_id = k.site_id AND u.id = k.created_by
+LEFT JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
+WHERE k.id = ANY($1::uuid[]) AND k.deleted_at IS NULL
+`
+
+type ReadKeyMetadataRow struct {
+	ID          uuid.UUID
+	LastUsedAt  *time.Time
+	CreatorName string
+}
+
+func (q *Queries) ReadKeyMetadata(ctx context.Context, db DBTX, keys []uuid.UUID) ([]ReadKeyMetadataRow, error) {
+	rows, err := db.Query(ctx, readKeyMetadata, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadKeyMetadataRow
+	for rows.Next() {
+		var i ReadKeyMetadataRow
+		if err := rows.Scan(&i.ID, &i.LastUsedAt, &i.CreatorName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recentKeys = `-- name: RecentKeys :one
 WITH recent AS (
     SELECT created_at FROM accounts.api_keys
@@ -686,6 +720,24 @@ func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams)
 	var i RecentKeysRow
 	err := row.Scan(&i.Made, &i.WaitSeconds)
 	return i, err
+}
+
+const touchKeys = `-- name: TouchKeys :exec
+UPDATE accounts.api_keys k
+SET last_used_at = greatest(k.last_used_at, uses.at)
+FROM (SELECT ($1::uuid[])[i] AS id, max(($2::text[])[i]::timestamptz) AS at FROM generate_subscripts($1::uuid[], 1) AS i GROUP BY ($1::uuid[])[i]) uses
+WHERE k.id = uses.id AND k.deleted_at IS NULL
+  AND (k.last_used_at IS NULL OR k.last_used_at < uses.at)
+`
+
+type TouchKeysParams struct {
+	Keys   []uuid.UUID
+	UsedAt []string
+}
+
+func (q *Queries) TouchKeys(ctx context.Context, db DBTX, arg TouchKeysParams) error {
+	_, err := db.Exec(ctx, touchKeys, arg.Keys, arg.UsedAt)
+	return err
 }
 
 const updateKey = `-- name: UpdateKey :exec

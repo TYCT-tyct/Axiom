@@ -2482,6 +2482,16 @@ export interface components {
             /** @description The current legal documents the person accepted, shown on the verification page. Required on a site that publishes any; a missing or stale version is `consent_required`. */
             consent?: components["schemas"]["LegalDocumentVersion"][];
         };
+        /** @description Creator identity; unavailable names use the explicit placeholder Unknown user. */
+        KeyCreator: {
+            user_id: components["schemas"]["UserId"];
+            display_name: string;
+        };
+        KeyDailySpend: {
+            /** Format: date */
+            date: string;
+            amount: components["schemas"]["Money"];
+        };
         /** @description A call or management key as the page shows it. The text is `prefix` and 49 more characters, of which only `last4` is kept besides the hash, so the page shows `prefix…last4`. `limit_remaining` is what is left of `spend_limit` in the current window; both are absent for a key without a limit. */
         Key: {
             id: components["schemas"]["KeyId"];
@@ -2496,6 +2506,14 @@ export interface components {
             workspace_id: components["schemas"]["WorkspaceId"];
             /** Format: date-time */
             created_at: string;
+            created_by?: components["schemas"]["KeyCreator"];
+            /**
+             * Format: date-time
+             * @description Latest successful key admission check observed by an upgraded node. Absent when never observed. Asynchronous best-effort activity hint; may lag or miss observations during overload, failure or rolling upgrades.
+             */
+            last_used_at?: string;
+            /** @description Settled spend for the last 14 UTC days including today, oldest first. Missing days mean zero; an unused key returns an empty array. Absent on older nodes. Reservations are excluded. */
+            daily_spend?: components["schemas"]["KeyDailySpend"][];
             /**
              * Format: date-time
              * @description Absent for a key that does not expire.

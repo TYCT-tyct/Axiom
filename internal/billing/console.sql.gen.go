@@ -51,6 +51,43 @@ func (q *Queries) ReadBalance(ctx context.Context, db DBTX, accountID uuid.UUID)
 	return items, nil
 }
 
+const readKeyDailySpend = `-- name: ReadKeyDailySpend :many
+WITH t AS MATERIALIZED (SELECT date_trunc('day', clock_timestamp(), 'UTC') AS today)
+SELECT s.subject, s.window_start, s.spent
+FROM billing.spend s CROSS JOIN t
+WHERE s.subject = ANY($1::uuid[]) AND s.spent > 0
+  AND s.window_start >= t.today - interval '312 hours'
+  AND s.window_start < t.today + interval '24 hours'
+ORDER BY s.subject, s.window_start
+`
+
+type ReadKeyDailySpendRow struct {
+	Subject     uuid.UUID
+	WindowStart time.Time
+	Spent       int64
+}
+
+// Only the visible page's keys and fourteen UTC days, including today. No call history is read.
+func (q *Queries) ReadKeyDailySpend(ctx context.Context, db DBTX, keys []uuid.UUID) ([]ReadKeyDailySpendRow, error) {
+	rows, err := db.Query(ctx, readKeyDailySpend, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ReadKeyDailySpendRow
+	for rows.Next() {
+		var i ReadKeyDailySpendRow
+		if err := rows.Scan(&i.Subject, &i.WindowStart, &i.Spent); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const readKeyUsages = `-- name: ReadKeyUsages :many
 WITH k AS (
     SELECT ($1::uuid[])[i]::uuid AS key_id, ($2::text[])[i]::text AS reset

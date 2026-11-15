@@ -90,12 +90,14 @@ func (k KeySettings) Equal(other KeySettings) bool {
 // Key is a key as the console shows it. Its text is not here: only its hash is kept, and the last four characters
 // to tell keys apart.
 type Key struct {
-	Kind      string
-	CreatedBy UserID
-	ID        KeyID
-	Workspace WorkspaceID
-	Prefix    string
-	Last4     string
+	Kind        string
+	CreatedBy   UserID
+	CreatorName string
+	LastUsedAt  *time.Time
+	ID          KeyID
+	Workspace   WorkspaceID
+	Prefix      string
+	Last4       string
 	// CreatedAt is when the database stamped the key, on the clock that also judges the hour's limit.
 	CreatedAt time.Time
 	UpdatedAt *time.Time
@@ -301,7 +303,8 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q K
 	for i, r := range rows {
 		keys[i] = keyOf(r)
 	}
-	return keys, more, nil
+	err = s.readKeyMetadata(ctx, tx, keys)
+	return keys, more, err
 }
 
 // GetKey is the key in tx's scope with this ID, or ErrKeyNotFound.
@@ -313,7 +316,11 @@ func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
 	if len(rows) == 0 {
 		return Key{}, ErrKeyNotFound
 	}
-	return keyOf(rows[0]), nil
+	keys := []Key{keyOf(rows[0])}
+	if err := s.readKeyMetadata(ctx, tx, keys); err != nil {
+		return Key{}, err
+	}
+	return keys[0], nil
 }
 
 // PresetKeys counts the keys bound to each of presets that are not deleted, disabled and expired ones included: those

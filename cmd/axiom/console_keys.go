@@ -6,6 +6,8 @@ import (
 	"time"
 	"uuid"
 
+	openapi_types "github.com/oapi-codegen/runtime/types"
+
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
@@ -36,19 +38,39 @@ func keyID(s string) (accounts.KeyID, error) {
 	return id, nil
 }
 
-// keysUsed is what each of keys that has a spend limit has used in the window of its reset: the figure admission
-// subtracts from the limit.
-func keysUsed(ctx context.Context, tx pg.Tx, keys []accounts.Key) (map[uuid.UUID]int64, error) {
+type keyStats struct {
+	used  int64
+	daily []billing.DailySpend
+}
+
+// keysUsed reads the page's limit usage and recent settled spend in two batch queries.
+func keysUsed(ctx context.Context, tx pg.Tx, keys []accounts.Key) (map[uuid.UUID]keyStats, error) {
+	if len(keys) == 0 {
+		return nil, nil //nolint:nilnil // an empty page has no usage to read
+	}
 	var windows []billing.KeyWindow
 	for _, k := range keys {
 		if k.SpendLimit != nil {
 			windows = append(windows, billing.KeyWindow{Key: uuid.UUID(k.ID), Reset: billing.Reset(k.LimitReset)})
 		}
 	}
-	if len(windows) == 0 {
-		return nil, nil //nolint:nilnil // nothing has a limit to measure against
+	used, err := billing.KeysUsed(ctx, tx, windows)
+	if err != nil {
+		return nil, err
 	}
-	return billing.KeysUsed(ctx, tx, windows)
+	ids := make([]uuid.UUID, len(keys))
+	for i, k := range keys {
+		ids[i] = uuid.UUID(k.ID)
+	}
+	daily, err := billing.KeyDailySpend(ctx, tx, ids)
+	if err != nil {
+		return nil, err
+	}
+	stats := make(map[uuid.UUID]keyStats, len(keys))
+	for _, id := range ids {
+		stats[id] = keyStats{used[id], daily[id]}
+	}
+	return stats, nil
 }
 
 // textOf is a query parameter's text, empty when the request did not send it: an absent filter and an empty one both
@@ -92,15 +114,25 @@ func retiredModels(snap *catalog.Snapshot, models []string) []string {
 // zero: a key that a late charge pushed past its limit has nothing left. retired_models is the hint that some of the
 // key's model restrictions point at models the catalog has retired; it is absent when the node has no snapshot.
 // presets are the routing presets the keys are bound to (keyPresets).
-func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]int64, presets map[uuid.UUID]routing.StoredPreset, snap *catalog.Snapshot) consoleapi.Key {
+func keyBody(k accounts.Key, currency platform.Currency, used map[uuid.UUID]keyStats, presets map[uuid.UUID]routing.StoredPreset, snap *catalog.Snapshot) consoleapi.Key {
 	kind := consoleapi.KeyKind(k.Kind)
 	body := consoleapi.Key{
 		Kind: &kind,
 		Id:   k.ID.TypeID(), Name: k.Name, Prefix: k.Prefix, Last4: k.Last4, WorkspaceId: k.Workspace.TypeID(),
 		CreatedAt: k.CreatedAt, ExpiresAt: k.ExpiresAt, Disabled: k.Disabled,
 	}
+	if k.CreatorName != "" {
+		body.CreatedBy = &consoleapi.KeyCreator{UserId: k.CreatedBy.TypeID(), DisplayName: k.CreatorName}
+	}
+	body.LastUsedAt = k.LastUsedAt
+	daily := make([]consoleapi.KeyDailySpend, 0, len(used[uuid.UUID(k.ID)].daily))
+	for _, day := range used[uuid.UUID(k.ID)].daily {
+		daily = append(daily, consoleapi.KeyDailySpend{Date: openapi_types.Date{Time: day.Day}, Amount: moneyOf(day.Spent, currency)})
+	}
+	body.DailySpend = &daily
+
 	if k.SpendLimit != nil {
-		limit, left := moneyOf(*k.SpendLimit, currency), moneyOf(max(0, *k.SpendLimit-used[uuid.UUID(k.ID)]), currency)
+		limit, left := moneyOf(*k.SpendLimit, currency), moneyOf(max(0, *k.SpendLimit-used[uuid.UUID(k.ID)].used), currency)
 		body.SpendLimit, body.LimitRemaining = &limit, &left
 		if k.LimitReset != "" {
 			reset := consoleapi.LimitReset(k.LimitReset)
@@ -189,7 +221,7 @@ func (c consoleAPI) ListKeys(ctx context.Context, request consoleapi.ListKeysReq
 		return nil, err
 	}
 	var keys []accounts.Key
-	var used map[uuid.UUID]int64
+	var used map[uuid.UUID]keyStats
 	var presets map[uuid.UUID]routing.StoredPreset
 	var more bool
 	err = c.db.ReadTx(ctx, cl.scope, func(tx pg.Tx) (err error) {
@@ -303,7 +335,7 @@ func (c consoleAPI) UpdateKey(ctx context.Context, request consoleapi.UpdateKeyR
 
 // readKey is the key get gives, in a read-only transaction or one that writes, with what its body shows besides: the
 // spend left in its window and its routing preset.
-func (c consoleAPI) readKey(ctx context.Context, cl call, get func(pg.Tx) (accounts.Key, error), readOnly bool) (key accounts.Key, used map[uuid.UUID]int64, presets map[uuid.UUID]routing.StoredPreset, err error) {
+func (c consoleAPI) readKey(ctx context.Context, cl call, get func(pg.Tx) (accounts.Key, error), readOnly bool) (key accounts.Key, used map[uuid.UUID]keyStats, presets map[uuid.UUID]routing.StoredPreset, err error) {
 	run := c.db.Tx
 	if readOnly {
 		run = c.db.ReadTx
