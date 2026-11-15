@@ -44,3 +44,32 @@ func TestConsoleDisplayNameReadsBack(t *testing.T) {
 		t.Fatalf("name did not survive refresh: %+v", body.Name)
 	}
 }
+
+func TestConsoleEmailChangeReplacesSession(t *testing.T) {
+	t.Parallel()
+	f := passwordConsole(t)
+	current, other := f.owner(), f.owner()
+	request := `{"email":"next@example.com","current_password":"` + ownerPassword + `"}`
+	expect(t, "request email change", f.do(http.MethodPost, "/profile/email", request, as(current)), http.StatusAccepted, "")
+	token := strings.Repeat("e", 43)
+	f.run("UPDATE accounts.email_changes SET token_hash=sha256(convert_to('" + token + "','UTF8'))")
+	response := f.do(http.MethodPost, "/profile/email/confirm", `{"token":"`+token+`"}`, as(current))
+	expect(t, "confirm email", response, http.StatusOK, "")
+	replacement := f.sessionOf(response)
+	if replacement.csrf == current.csrf {
+		t.Fatal("CSRF token was not replaced")
+	}
+	expect(t, "replacement session", f.do(http.MethodGet, "/session", "", as(replacement)), http.StatusOK, "")
+	for _, old := range []session{current, other} {
+		expect(t, "old session", f.do(http.MethodGet, "/session", "", as(old)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	}
+}
+
+func TestConsoleEmailChangeRejectsInvalidCurrentEmail(t *testing.T) {
+	t.Parallel()
+	f := passwordConsole(t)
+	current := f.owner()
+	f.run("UPDATE accounts.users SET email='a@b@c' WHERE email='" + ownerEmail + "'")
+	request := `{"email":"next@example.com","current_password":"` + ownerPassword + `"}`
+	expect(t, "invalid current email", f.do(http.MethodPost, "/profile/email", request, as(current)), http.StatusUnprocessableEntity, consoleapi.ErrorCodeUnprocessable)
+}

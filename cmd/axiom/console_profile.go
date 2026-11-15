@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"axiom/internal/accounts"
 	"axiom/internal/platform/consoleapi"
 )
 
@@ -21,10 +22,19 @@ func (c consoleAPI) RequestEmailChange(ctx context.Context, r consoleapi.Request
 }
 
 func (c consoleAPI) ConfirmEmailChange(ctx context.Context, r consoleapi.ConfirmEmailChangeRequestObject) (consoleapi.ConfirmEmailChangeResponseObject, error) {
-	if err := c.accounts.ConfirmEmailChange(ctx, callOf(ctx).principal, r.Body.Token); err != nil {
+	cl := callOf(ctx)
+	changed, err := c.sessions().changed(cl, func() (accounts.Issued, []string, error) {
+		return c.accounts.ConfirmEmailChange(ctx, cl.principal, accounts.EmailChangeConfirmation{Token: r.Body.Token, ClientIP: cl.ip, UserAgent: cl.r.UserAgent()})
+	})
+	if err != nil {
 		return nil, err
 	}
-	return consoleapi.ConfirmEmailChange204Response{}, nil
+	response := consoleapi.ConfirmEmailChange200JSONResponse{Headers: consoleapi.ConfirmEmailChange200ResponseHeaders{SetCookie: changed.cookie}}
+	response.Body.CsrfToken = &changed.csrf
+	if changed.codes != nil {
+		response.Body.RecoveryCodes = &changed.codes
+	}
+	return response, nil
 }
 
 func (c consoleAPI) GetDisplayName(ctx context.Context, _ consoleapi.GetDisplayNameRequestObject) (consoleapi.GetDisplayNameResponseObject, error) {

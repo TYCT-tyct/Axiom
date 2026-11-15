@@ -21,21 +21,6 @@ func (q *Queries) DeleteEmailChange(ctx context.Context, db DBTX, userID uuid.UU
 	return err
 }
 
-const invalidateEmailResetTokens = `-- name: InvalidateEmailResetTokens :exec
-UPDATE accounts.password_reset_tokens SET used_at = $1
-WHERE user_id = $2 AND used_at IS NULL
-`
-
-type InvalidateEmailResetTokensParams struct {
-	UsedAt *time.Time
-	UserID uuid.UUID
-}
-
-func (q *Queries) InvalidateEmailResetTokens(ctx context.Context, db DBTX, arg InvalidateEmailResetTokensParams) error {
-	_, err := db.Exec(ctx, invalidateEmailResetTokens, arg.UsedAt, arg.UserID)
-	return err
-}
-
 const lockEmailChange = `-- name: LockEmailChange :many
 SELECT email, token_hash, factor_version, language, expires_at > CAST(CAST($1 AS text) AS timestamptz) AS unexpired
 FROM accounts.email_changes WHERE user_id = $2 FOR UPDATE

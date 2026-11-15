@@ -20,10 +20,6 @@ DELETE FROM accounts.email_changes WHERE user_id = @user_id;
 -- name: SetProfileEmail :exec
 UPDATE accounts.users SET email = @email, email_verified_at = @verified_at WHERE id = @user_id;
 
--- name: InvalidateEmailResetTokens :exec
-UPDATE accounts.password_reset_tokens SET used_at = @used_at
-WHERE user_id = @user_id AND used_at IS NULL;
-
 -- name: PurgeEmailChanges :exec
 DELETE FROM accounts.email_changes WHERE user_id IN (
     SELECT user_id FROM accounts.email_changes WHERE expires_at <= clock_timestamp() ORDER BY expires_at LIMIT 1000

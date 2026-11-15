@@ -35,6 +35,12 @@ func emailChangeToken(t *testing.T, x recoveryWorld, p accounts.Principal, email
 	return token
 }
 
+func confirmEmailChange(t *testing.T, x recoveryWorld, p accounts.Principal, token string) error {
+	t.Helper()
+	_, _, err := x.s.ConfirmEmailChange(t.Context(), p, accounts.EmailChangeConfirmation{Token: token, ClientIP: client, UserAgent: "profile test"})
+	return err
+}
+
 func profileEmail(t *testing.T, x recoveryWorld) string {
 	t.Helper()
 	return texts(t, x.db, platform, "SELECT email FROM accounts.users WHERE id = '"+uuid.UUID(x.user).String()+"'")[0]
@@ -81,21 +87,25 @@ func TestEmailChangeLifecycle(t *testing.T) {
 	}
 	// Both login and recovery continue to use the old confirmed address while pending.
 	x.signIn(t, console)
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); err != nil {
+	replacement, _, err := x.s.ConfirmEmailChange(t.Context(), p, accounts.EmailChangeConfirmation{Token: token, ClientIP: client})
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err := x.principal(t, console, replacement); err != nil {
+		t.Fatalf("replacement session: %v", err)
 	}
 	if got := profileEmail(t, x); got != "new@example.com" {
 		t.Fatal(got)
 	}
 	for _, session := range []accounts.Issued{issued, other} {
-		if _, err := x.principal(t, console, session); err != nil {
-			t.Fatalf("session lost: %v", err)
+		if _, err := x.principal(t, console, session); !errors.Is(err, accounts.ErrNoSession) {
+			t.Fatalf("old session survived: %v", err)
 		}
 	}
 	if err := x.reset(t, console, reset, changedPassword); !errors.Is(err, accounts.ErrInvalidReset) {
 		t.Fatalf("old mailbox reset: %v", err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
+	if err := confirmEmailChange(t, x, p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 		t.Fatal(err)
 	}
 	checkEmailChangeResult(t, x)
@@ -143,11 +153,11 @@ func TestEmailChangeRefusals(t *testing.T) {
 	}
 	first := emailChangeToken(t, x, p, "first@example.com")
 	second := emailChangeToken(t, x, p, "second@example.com")
-	if err := x.s.ConfirmEmailChange(t.Context(), p, first); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
+	if err := confirmEmailChange(t, x, p, first); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 		t.Fatal(err)
 	}
 	x.clock.Advance(24 * time.Hour)
-	if err := x.s.ConfirmEmailChange(t.Context(), p, second); !errors.Is(err, accounts.ErrEmailChangeExpired) {
+	if err := confirmEmailChange(t, x, p, second); !errors.Is(err, accounts.ErrEmailChangeExpired) {
 		t.Fatal(err)
 	}
 	if got := profileEmail(t, x); got != strings.ToLower(x.email) {
@@ -179,7 +189,7 @@ func TestEmailChangeConcurrentConfirmation(t *testing.T) {
 	}
 	result := make(chan error, 2)
 	for range 2 {
-		go func() { result <- x.s.ConfirmEmailChange(t.Context(), p, token) }()
+		go func() { result <- confirmEmailChange(t, x, p, token) }()
 	}
 	waited := waitForProfileLocks(t, x, "-- name: LockUser%", 2)
 	close(release)
@@ -210,7 +220,7 @@ func TestEmailChangeConcurrentConfirmation(t *testing.T) {
 
 func TestEmailChangeConfirmationConflictAndRollback(t *testing.T) {
 	t.Parallel()
-	for _, scenario := range []string{"taken meanwhile", "outbox", "audit"} {
+	for _, scenario := range []string{"taken meanwhile", "outbox", "audit", "session"} {
 		t.Run(scenario, func(t *testing.T) { testEmailChangeRollback(t, scenario) })
 	}
 }
@@ -219,23 +229,30 @@ func testEmailChangeRollback(t *testing.T, scenario string) {
 	t.Helper()
 
 	x := recoverySite(t)
-	p, _ := profilePrincipal(t, x)
+	p, original := profilePrincipal(t, x)
+	version := x.factorVersion(t)
 	token := emailChangeToken(t, x, p, "next@example.com")
 	setup := map[string]string{
 		"taken meanwhile": ids.Replace("UPDATE accounts.users SET email='next@example.com' WHERE id=:u1"),
 		"outbox":          "ALTER TABLE platform.mail_outbox ADD CONSTRAINT reject_profile_mail CHECK (false) NOT VALID",
 		"audit":           "ALTER TABLE platform.audit_log ADD CONSTRAINT reject_profile_audit CHECK (action <> 'user.email_changed') NOT VALID",
+		"session":         "ALTER TABLE accounts.sessions ADD CONSTRAINT reject_profile_session CHECK (id = '" + uuid.UUID(original.SessionID()).String() + "') NOT VALID",
 	}
 	if err := pgtest.Run(t.Context(), x.database.Superuser, setup[scenario]); err != nil {
 		t.Fatal(err)
 	}
-	err := x.s.ConfirmEmailChange(t.Context(), p, token)
+	err := confirmEmailChange(t, x, p, token)
 	if err == nil {
 		t.Fatal("confirmation succeeded")
 	}
 	if scenario == "taken meanwhile" && !errors.Is(err, accounts.ErrEmailTaken) {
 		t.Fatal(err)
 	}
+	assertEmailChangeRolledBack(t, x, original, version)
+}
+
+func assertEmailChangeRolledBack(t *testing.T, x recoveryWorld, original accounts.Issued, version string) {
+	t.Helper()
 	if got := profileEmail(t, x); got != strings.ToLower(x.email) {
 		t.Fatal(got)
 	}
@@ -244,6 +261,12 @@ func testEmailChangeRollback(t *testing.T, scenario string) {
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action='user.email_changed'"); got[0] != "0" {
 		t.Fatal(got)
+	}
+	if x.factorVersion(t) != version {
+		t.Fatal("failed confirmation changed the factor version")
+	}
+	if _, err := x.principal(t, console, original); err != nil {
+		t.Fatalf("failed confirmation ended the session: %v", err)
 	}
 }
 
@@ -284,10 +307,10 @@ func TestEmailChangeMFAAndTenant(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), accounts.Principal{}, token); !errors.Is(err, accounts.ErrNoSession) {
+	if err := confirmEmailChange(t, x, accounts.Principal{}, token); !errors.Is(err, accounts.ErrNoSession) {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); err != nil {
+	if err := confirmEmailChange(t, x, p, token); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -306,7 +329,7 @@ func TestEmailChangeExpiryCleanup(t *testing.T) {
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM accounts.email_changes"); got[0] != "0" {
 		t.Fatal(got)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
+	if err := confirmEmailChange(t, x, p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -317,7 +340,7 @@ func TestEmailChangeSameAddressOnAnotherSite(t *testing.T) {
 	p, _ := profilePrincipal(t, x)
 	email := texts(t, x.db, platform, ids.Replace("SELECT email FROM accounts.users WHERE site_id=:s2 LIMIT 1"))[0]
 	token := emailChangeToken(t, x, p, email)
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); err != nil {
+	if err := confirmEmailChange(t, x, p, token); err != nil {
 		t.Fatal(err)
 	}
 	if got := profileEmail(t, x); got != email {
@@ -347,7 +370,7 @@ func TestEmailChangeRequiresProvedMFA(t *testing.T) {
 	if err := x.s.RequestEmailChange(t.Context(), p, "next@example.com", password, "en"); !errors.Is(err, accounts.ErrMFARequired) {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); !errors.Is(err, accounts.ErrMFARequired) {
+	if err := confirmEmailChange(t, x, p, token); !errors.Is(err, accounts.ErrMFARequired) {
 		t.Fatal(err)
 	}
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != "1" {
@@ -365,7 +388,7 @@ func TestEmailChangeFactorChangeInvalidatesPending(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
+	if err := confirmEmailChange(t, x, p, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 		t.Fatal(err)
 	}
 }
@@ -384,7 +407,7 @@ func TestEmailChangeRequestRollback(t *testing.T) {
 	if err := pgtest.Run(t.Context(), x.database.Superuser, "ALTER TABLE platform.mail_outbox DROP CONSTRAINT reject_profile_mail"); err != nil {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), p, first); err != nil {
+	if err := confirmEmailChange(t, x, p, first); err != nil {
 		t.Fatal(err)
 	}
 	if got := profileEmail(t, x); got != "first@example.com" {
@@ -408,7 +431,7 @@ func TestEmailChangeCannotConfirmAnotherUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := x.s.ConfirmEmailChange(t.Context(), peer, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
+	if err := confirmEmailChange(t, x, peer, token); !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 		t.Fatal(err)
 	}
 	if got := profileEmail(t, x); got != strings.ToLower(x.email) {
