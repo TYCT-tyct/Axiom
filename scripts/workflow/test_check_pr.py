@@ -34,6 +34,17 @@ class DescribeTest(unittest.TestCase):
             "fix: a": True,
             "fix(two words): spaces in the scope": False,
             "Fix: capitalised": False,
+            "fix: Capitalised first word": False,
+            "fix(gateway): API keys keep their scope after rotation": True,
+            "feat: GitHub releases carry the checksum": True,
+            "fix: OAuth2 state survives a restart": True,
+            "fix: A record lookups time out": True,
+            'Revert "fix(ci): upload release artifacts only on release"': True,
+            'Revert "Revert "fix: a""': True,
+            'Reapply "feat(skill): add a script"': True,
+            "Revert fix(ci): without the quotes git writes": False,
+            'Revert " "': False,
+            "fix: Docker image builds again": False,  # indistinguishable from Fix; the summary opens with another word
             "fix: ends with a period.": False,
             "feature: unknown type": False,
             "docs: " + "x" * 70: True,  # too long only warns

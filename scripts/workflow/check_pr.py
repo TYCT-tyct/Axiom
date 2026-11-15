@@ -25,7 +25,13 @@ from html.parser import HTMLParser
 from pathlib import Path
 
 TYPES = ("feat", "fix", "docs", "refactor", "test", "chore", "ci")
-TITLE = re.compile(rf"^(?:{'|'.join(TYPES)})(?:\([^()\s]+\))?!?: [^A-Z\s](?:.*[^.\s])?$")
+TITLE = re.compile(rf"^(?:{'|'.join(TYPES)})(?:\([^()\s]+\))?!?: (\S(?:.*[^.\s])?)$")
+# "Fix the bug": a capital followed only by lowercase letters. API, GitHub, OAuth2 and a lone A are names and may lead.
+# Docker or Go looks the same as Fix and is turned away with it: the summary can open with another word.
+SENTENCE_CASE = re.compile(r"[A-Z][a-z]+(?![A-Za-z0-9])")
+# What git revert and GitHub's Revert button write, nested ones included. A revert is opened while main is broken:
+# it must not wait on a title rewritten by hand, so what stands between the quotes is not checked, only that it is there.
+REVERT = re.compile(r'^(?:Revert|Reapply) ".*\S.*"$')
 TITLE_CHARS = 72
 COMMENT = re.compile(r"<!--.*?-->", re.DOTALL)
 # GitHub closes an issue on merge wherever a keyword precedes a reference to it, even in "does not close #12". The check
@@ -63,9 +69,11 @@ def describe(title, body, author, template):
     if author in EXEMPT:
         return []
     problems = []
-    if not TITLE.match(title):
-        problems.append(f"title {title!r}: write type(scope): summary — type one of {', '.join(TYPES)}, lowercase start, "
-                        "no trailing period")
+    summary = TITLE.match(title)
+    if not REVERT.match(title) and (not summary or SENTENCE_CASE.match(summary.group(1))):
+        problems.append(f"title {title!r}: write type(scope): summary — type one of {', '.join(TYPES)}, lowercase start "
+                        "(API, GitHub or OAuth2 may lead; a capitalised word such as Docker may not), no trailing period; a title git "
+                        "revert wrote passes as it is")
     for match in CLOSING.finditer(body):
         if not LINE_START.fullmatch(body, body.rfind("\n", 0, match.start()) + 1, match.start()):
             problems.append(f"description: {match.group(0)!r}: a closing keyword may only start a line, in code and comments too "
