@@ -1,9 +1,9 @@
+export { useErrors } from "@axiom/ui";
 export { type Attempt, failed, failedFrom, opened, refused, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
 export { AuthFrame, OtherAccount } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
-export { useErrors } from "./errors";
 export { readForm, toInstant, toLocalInput } from "./forms";
 export { LoadMore, Stat } from "./parts";
 export { useRulesCheck } from "./presets/check";

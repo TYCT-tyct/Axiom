@@ -1,3 +1,4 @@
+import { ApiError } from "@axiom/api";
 import { type ReactNode, useState } from "react";
 import { glyphNames } from "./components/glyph";
 import {
@@ -5,7 +6,10 @@ import {
   Avatar,
   Card,
   Cluster,
+  CreateDialog,
+  DataState,
   DataTable,
+  EditPanel,
   Field,
   Glyph,
   Grid,
@@ -17,10 +21,18 @@ import {
   SegmentedControl,
   Select,
   SettingRow,
+  Sheet,
   Stack,
+  StateBlock,
+  SubmitFailed,
   Switch,
   Tag,
   TextArea,
+  ToastProvider,
+  useExplicitSave,
+  useLiveSave,
+  useToast,
+  useUndo,
 } from "./index";
 
 // The primitives in their variants, one demo per component, for the screenshot comparison against AxSpec's component
@@ -54,7 +66,88 @@ const text = {
   day: "天",
   week: "周",
   month: "月",
+  createLede: "Key 只在创建后显示一次。",
+  created: "已创建 ci-runner",
+  shownOnce: "现在复制它，关掉之后就看不到了。",
+  edit: "编辑 key",
+  editLive: "通知",
+  balance: "余额不足时通知我",
+  digest: "每周发一封用量汇总",
+  sheet: "筛选",
+  saved: "已保存",
+  disabled: "已停用 ci-runner",
+  failed: "没保存成功",
+  stateTitle: "还没有 key",
+  stateBody: "建一把 key，就能在你的工具里调用模型。",
 } as const;
+
+// Opener renders a button that mounts an overlay, which unmounts it again when it closes.
+function Opener({ label, overlay }: { label: string; overlay: (close: () => void) => ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <ActionButton onClick={() => setOpen(true)}>{label}</ActionButton>
+      {open ? overlay(() => setOpen(false)) : null}
+    </>
+  );
+}
+
+// A fake API for the demos: it answers after a moment with what it was sent.
+const answer = <T,>(value: T) => new Promise<T>((resolve) => setTimeout(() => resolve(value), 600));
+
+function ExplicitDemo({ close }: { close: () => void }) {
+  const write = useExplicitSave({ initial: { name: "ci-runner" }, save: answer });
+  return (
+    <EditPanel title={text.edit} subtitle={rows[0]?.id} write={write} onClose={close}>
+      <Field label={text.name} value={write.draft.name} onChange={(e) => write.set({ name: e.target.value })} />
+    </EditPanel>
+  );
+}
+
+function LiveDemo({ close }: { close: () => void }) {
+  const write = useLiveSave({ initial: { balance: true, digest: false }, write: answer });
+  return (
+    <EditPanel title={text.editLive} write={write} onClose={close}>
+      <Stack gap={12}>
+        <Switch
+          label={text.balance}
+          checked={write.value.balance}
+          onChange={(balance) => write.change((p) => ({ ...p, balance }))}
+        />
+        <Switch
+          label={text.digest}
+          checked={write.value.digest}
+          onChange={(digest) => write.change((p) => ({ ...p, digest }))}
+        />
+      </Stack>
+    </EditPanel>
+  );
+}
+
+function ToastDemo() {
+  const say = useToast();
+  const undo = useUndo();
+  return (
+    <Stack>
+      <Cluster>
+        <ActionButton onClick={() => say(text.saved)}>{text.saved}</ActionButton>
+        <ActionButton onClick={() => say(text.failed, { bad: true })}>{text.failed}</ActionButton>
+        <ActionButton onClick={() => undo.offer(text.disabled, () => answer(null))}>{text.disabled}</ActionButton>
+      </Cluster>
+      {undo.failed}
+    </Stack>
+  );
+}
+
+const query = <T,>(status: "pending" | "error" | "success", data?: T, error: unknown = null) => ({
+  status,
+  data,
+  error,
+  errorUpdatedAt: Date.UTC(2026, 9, 24, 2, 30),
+  refetch: () => {},
+});
+
+const failure = new ApiError(503, "req_k7Hc2pQ9xWm4");
 
 const rows = [
   { id: "call_01JD8Z5Q7W3M2K9X4C6V8B0N1P", model: "deepseek-v4", cost: "¥0.0123" },
@@ -196,6 +289,80 @@ export const demos: Record<string, () => ReactNode> = {
         {(close) => <ActionButton onClick={close}>{text.cancel}</ActionButton>}
       </Popover>
     </Cluster>
+  ),
+  "create-dialog": () => (
+    <Opener
+      label={text.create}
+      overlay={(close) => (
+        <CreateDialog
+          title={text.create}
+          subtitle={text.createLede}
+          initial={{ name: "" }}
+          create={(draft) => answer(`sk-ax-v1-${draft.name}-7Hc2pQ9xWm4k`)}
+          result={(secret) => ({ title: text.created, subtitle: text.shownOnce, body: <Id value={secret} /> })}
+          onClose={close}
+        >
+          {(draft, set) => (
+            <Field label={text.name} value={draft.name} onChange={(e) => set({ name: e.target.value })} />
+          )}
+        </CreateDialog>
+      )}
+    />
+  ),
+  "edit-panel": () => (
+    <Cluster>
+      <Opener label={text.edit} overlay={(close) => <ExplicitDemo close={close} />} />
+      <Opener label={text.editLive} overlay={(close) => <LiveDemo close={close} />} />
+    </Cluster>
+  ),
+  sheet: () => (
+    <Opener
+      label={text.sheet}
+      overlay={(close) => (
+        <Sheet
+          title={text.sheet}
+          dismissible
+          onClose={close}
+          footer={(leave) => (
+            <ActionButton variant="pri" onClick={leave}>
+              {text.sheet}
+            </ActionButton>
+          )}
+        >
+          <SegmentDemo />
+        </Sheet>
+      )}
+    />
+  ),
+  toast: () => (
+    <ToastProvider>
+      <ToastDemo />
+    </ToastProvider>
+  ),
+  "submit-failed": () => <SubmitFailed error={failure} />,
+  "state-block": () => (
+    <Grid columns={2}>
+      <StateBlock
+        icon="keys"
+        title={text.stateTitle}
+        level={2}
+        compact
+        actions={
+          <ActionButton variant="pri" icon="plus">
+            {text.create}
+          </ActionButton>
+        }
+      >
+        {text.stateBody}
+      </StateBlock>
+      <DataState query={query<string>("error", undefined, failure)} compact>
+        {(data) => data}
+      </DataState>
+      <DataState query={query<string>("error", undefined, new ApiError(403, null))} compact>
+        {(data) => data}
+      </DataState>
+      <DataState query={query<string>("pending")}>{(data) => data}</DataState>
+    </Grid>
   ),
 };
 

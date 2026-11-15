@@ -62,7 +62,10 @@
 | 浏览器的会话由所有标签页共用：页面重新读到的会话换了用户或账户时，取消并清掉上一个账户加载的数据，页面从头开始（打开着的对话框和填了一半的表单不留）；同一账户的权限变了时页面保留（恢复码对话框不丢），但没人看的账户数据清掉、正在看的重新请求，失去权限的按「没有权限」显示；重新读会话失败时保留已有的会话，不把正在用的页面换成错误页 | `packages/app/src/session.tsx` 的 `sessionQuery`（比较前后会话的身份）、`Gate`（按身份重建、失败时保留）；端到端测试覆盖 |
 | 只显示一次的内容和导出只回到发起请求的会话：发起时记下当时的用户、账户和会话，回答到达时绑定的对象变了就不显示、不下载，并取消请求；因素变更自己换会话，恢复码只按人判断 | `packages/app/src/session.tsx` 的 `claimSession`/`holdsSession`/`holdsIdentity`/`useSessionBound`；`totp-dialogs.tsx`、`console/src/pages/security.tsx`、`calls.tsx`、`statement.tsx`；端到端测试覆盖换人后不显示、不下载 |
 | 退出登录失败要说清：没有退出、原因、可以重试 | `packages/app/src/parts.tsx` 的 `SignOutError`，侧栏和第二步页都用；端到端测试覆盖 |
-| 失败只按契约的错误码翻译，服务端的英文 `message` 不给用户看；每个错误码都有译文 | `packages/ui/src/locales/zh.ts` 的 `satisfies Record<ErrorCode, string>`：契约加一个码，不写译文就编译不过 |
+| 控制台的浮层（居中的 `CreateDialog`、右侧的 `EditPanel`，手机上都是底部面板 `Sheet`）是原生模态 `<dialog>`：背后的页面不可操作、Tab 出不去，打开时焦点进第一个控件、背后页面不滚动，关闭后焦点回到打开它的按钮；有没保存的内容或请求在路上时 Esc 和点遮罩不关；只显示一次的结果只有「完成」能关；减少动态时不播放动画 | `packages/ui/src/components/sheet.tsx`，`CreateDialog`、`EditPanel` 组合它；`overlays.test.tsx` 测焦点进出、Esc 与遮罩、两步、锁定，并检查这些组件的样式在减少动态下没有动画和过渡 |
+| 控制台表单的写入由业务对象选策略（[前端工程的「写入策略」](../docs/frontend.md#前端工程)）：显式提交整个对象，保存中锁表单、重复点击只发一次，失败保留草稿并用 `SubmitFailed` 说明原因和下一步；改一项就生效的写入排成队列，每次在上一次返回的对象上改，409 `stale_revision` 时重新读取并提示、不覆盖别人的改动 | `packages/ui/src/write.ts` 的 `useExplicitSave`、`useLiveSave`；`write.test.tsx` 用假接口测两次快速修改、409、失败和重发同一请求 |
+| 撤销是发反向请求，不在页面上回滚；反向请求失败时在原处用 `SubmitFailed` 说明 | `packages/ui/src/components/toast.tsx` 的 `useUndo` |
+| 失败只按契约的错误码翻译，服务端的英文 `message` 不给用户看；每个错误码都有译文 | `packages/ui/src/errors.ts` 的 `useErrors`；`packages/ui/src/locales/zh.ts` 的 `satisfies Record<ErrorCode, string>`：契约加一个码，不写译文就编译不过 |
 | 金额是精确的整数文本，显示和输入都不经过浮点数 | `useFormat().money`、`parseMoney`、`moneyInput`；单元测试含 int64 的上下界 |
 | 只显示一次的内容（key 明文、恢复码）放在不能用 Esc 或点背景关掉的对话框里，用户确认后才关；生成恢复码的请求还没回来时，发起请求的对话框也不能关；确认时读新会话失败，恢复码仍留在屏幕上并说明原因，可以重试 | `Dialog` 的 `dismissible`、`packages/app/src/totp-dialogs.tsx`；端到端测试覆盖 |
 | 两步验证的二维码在本地用 `qrcode-generator` 画成 SVG 的 `<path>`，不拼 HTML 字符串，也不把密钥交给外部服务 | `packages/app/src/qr.tsx` |

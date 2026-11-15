@@ -5,6 +5,23 @@ import { Icon } from "./icon";
 
 type CopyState = "idle" | "copied" | "failed";
 
+// useCopy puts text on the clipboard and tracks the outcome. The clipboard needs a secure page and a permission, so
+// it can refuse.
+export function useCopy(text: string) {
+  const [state, setState] = useState<CopyState>("idle");
+  const copy = () => {
+    if (!navigator.clipboard) {
+      setState("failed");
+      return;
+    }
+    navigator.clipboard.writeText(text).then(
+      () => setState("copied"),
+      () => setState("failed"),
+    );
+  };
+  return [state, copy] as const;
+}
+
 const icons = { idle: "copy", copied: "check", failed: "alert" } as const;
 
 // The compact form is an icon inside a table cell. A failure adds a visible line beside it, because the words are the
@@ -46,17 +63,7 @@ function CompactCopyButton({
 // room the value needs; the outcome is still announced and a failure is visible too.
 export function CopyButton({ text, label, compact = false }: { text: string; label?: string; compact?: boolean }) {
   const { t } = useTranslation("common");
-  const [state, setState] = useState<CopyState>("idle");
-  const copy = () => {
-    if (!navigator.clipboard) {
-      setState("failed");
-      return;
-    }
-    navigator.clipboard.writeText(text).then(
-      () => setState("copied"),
-      () => setState("failed"),
-    );
-  };
+  const [state, copy] = useCopy(text);
   const name = label ?? t("copy.copy");
   const messages = { idle: "", copied: t("copy.copied"), failed: t("copy.failed") };
   if (compact) {

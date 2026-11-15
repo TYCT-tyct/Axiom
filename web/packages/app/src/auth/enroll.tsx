@@ -1,7 +1,6 @@
-import { Button, FormError, Icon } from "@axiom/ui";
+import { Button, FormError, Icon, useErrors } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "../errors";
 import { Gate } from "../session";
 import { TotpSetupDialog, useBeginTotp } from "../totp-dialogs";
 import { AuthFrame, type Brand, OtherAccount } from "./frame";

@@ -1,0 +1,303 @@
+/* The board's .nkdlg and .nkscrim (AxApp.dc.html, ppDlg): a modal surface centred on the page, or (.side) a panel
+   down the right edge; at phone widths either is a sheet from the bottom. The header holds the title, its line and
+   the close button (or, on a result, the check); the body scrolls inside; the footer holds the actions. The board's
+   scrim is the dialog's ::backdrop. Every motion sits under no-preference, so reduced motion shows and hides it at
+   once. */
+.root {
+  position: fixed;
+  inset: 50% auto auto 50%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 48px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r16);
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: var(--pop);
+  box-shadow:
+    var(--shPop),
+    0 0 0 var(--bw) light-dark(transparent, color-mix(in srgb, var(--t1) 16%, transparent));
+  color: var(--t1);
+  transform: translate(-50%, -50%);
+}
+
+.root::backdrop {
+  background: var(--scrim);
+}
+
+/* the browser sizes a dialog to its content; the panel runs from the top inset to the bottom one */
+.side {
+  inset: 8px 8px 8px auto;
+  width: 440px;
+  height: auto;
+  max-height: none;
+  transform: none;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 20px 24px 4px;
+}
+
+.heading {
+  flex: 1;
+  min-width: 0;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs16);
+  line-height: var(--lh16);
+  font-weight: 500;
+}
+
+.subtitle {
+  margin: 2px 0 0;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.ok {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--ok) 16%, var(--cardBg));
+  color: var(--okT);
+}
+
+.close {
+  all: unset;
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--r6);
+  color: var(--t2);
+  cursor: pointer;
+}
+
+.close:hover {
+  background: var(--hover);
+  color: var(--t1);
+  --icon-hover: 1;
+}
+
+.close:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* the form inside: a fieldset that locks every control while a write is out, with no frame of its own */
+.form {
+  display: contents;
+}
+
+.lock {
+  display: contents;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.body {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 12px 24px 4px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 16px 24px 20px;
+}
+
+.start {
+  margin-right: auto;
+}
+
+.status {
+  margin-right: auto;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+}
+
+.start + .status {
+  margin-right: 0;
+}
+
+.saved {
+  color: var(--okT);
+}
+
+/* the board's .ppspin, in a button while its request is out: a ring with a quarter in the button's text colour */
+.spin {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  margin-right: 2px;
+  border-radius: 50%;
+  background: conic-gradient(currentColor 0 25%, color-mix(in srgb, currentColor 30%, transparent) 0);
+  mask: radial-gradient(farthest-side, transparent calc(100% - 1.5px), currentColor calc(100% - 1.5px));
+}
+
+@media (max-width: 600px) {
+  .root,
+  .side {
+    inset: auto 0 0;
+    width: auto;
+    max-width: none;
+    max-height: 92dvh;
+    border-radius: var(--r16) var(--r16) 0 0;
+    transform: none;
+  }
+
+  .head,
+  .body,
+  .foot {
+    padding-right: 16px;
+    padding-left: 16px;
+  }
+
+  .foot {
+    flex-wrap: wrap;
+  }
+
+  .start,
+  .status {
+    flex: 0 0 100%;
+    margin: 0 0 4px;
+    text-align: center;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .root {
+    animation: enter var(--dur) var(--ease) both;
+  }
+
+  .root::backdrop {
+    animation: fade var(--dur) var(--ease) both;
+  }
+
+  .side {
+    animation-name: enterSide;
+  }
+
+  .leaving {
+    animation: leave var(--dur) var(--ease) both;
+  }
+
+  .leaving::backdrop {
+    animation: fade var(--dur) var(--ease) reverse both;
+  }
+
+  .side.leaving {
+    animation-name: leaveSide;
+  }
+
+  .stepped {
+    animation: step var(--dur) var(--ease) both;
+  }
+
+  .close {
+    transition:
+      background-color var(--dur) var(--ease),
+      color var(--dur) var(--ease);
+  }
+
+  .spin {
+    animation: spin 0.8s linear infinite;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) and (max-width: 600px) {
+  .root,
+  .side {
+    animation-name: enterUp;
+  }
+
+  .leaving,
+  .side.leaving {
+    animation-name: leaveDown;
+  }
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+
+@keyframes leave {
+  to {
+    opacity: 0;
+    transform: translate(-50%, -48%) scale(0.98);
+  }
+}
+
+@keyframes enterSide {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes leaveSide {
+  to {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+}
+
+@keyframes enterUp {
+  from {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+}
+
+@keyframes leaveDown {
+  to {
+    opacity: 0;
+    transform: translateY(32px);
+  }
+}
+
+@keyframes step {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

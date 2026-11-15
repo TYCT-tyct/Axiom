@@ -1,7 +1,6 @@
-import { FormError, SubmitButton, TextField } from "@axiom/ui";
+import { FormError, SubmitButton, TextField, useErrors } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "../errors";
 import { readForm } from "../forms";
 import { Gate, useSignIn } from "../session";
 import { AuthFrame, type Brand } from "./frame";

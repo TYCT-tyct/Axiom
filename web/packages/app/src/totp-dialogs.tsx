@@ -1,9 +1,8 @@
 import type { Schemas } from "@axiom/api";
-import { Button, CopyButton, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
+import { Button, CopyButton, Dialog, FormError, SubmitButton, TextField, useErrors } from "@axiom/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { createContext, type ReactNode, use, useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "./errors";
 import { readForm } from "./forms";
 import { QrCode } from "./qr";
 import { claimSession, holdsIdentity, identityOf, useAuth, useCachedSession, useStartSession } from "./session";

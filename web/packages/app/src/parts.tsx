@@ -1,7 +1,6 @@
-import { Button, Icon, Panel } from "@axiom/ui";
+import { Button, Icon, Panel, useErrors } from "@axiom/ui";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { useErrors } from "./errors";
 import { useSession, useSignOut } from "./session";
 
 // LoadMore asks for the next page of a list, which is only there while the last page gave a cursor.

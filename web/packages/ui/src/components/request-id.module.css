@@ -1,0 +1,31 @@
+/* The board's .stbid and .fxrid: the request ID a failure carries, to quote to support, with a quiet copy button. */
+.root {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+}
+
+.id {
+  font-family: var(--family-mono);
+  user-select: all;
+  overflow-wrap: anywhere;
+}
+
+.copy {
+  all: unset;
+  color: var(--t2);
+  cursor: pointer;
+}
+
+.copy:hover {
+  color: var(--t1);
+}
+
+.copy:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}

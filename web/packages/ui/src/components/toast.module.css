@@ -1,0 +1,119 @@
+/* The board's final toast (.fxt; its first .tst is hidden there): one line of feedback after an action, at the
+   bottom centre on the primary button's colours, with at most one action and a bar that runs out with the time left.
+   Higher on a phone, above the tab bar. */
+.root {
+  position: fixed;
+  right: 16px;
+  bottom: 24px;
+  left: 16px;
+  z-index: 90;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  max-width: 520px;
+  min-height: 40px;
+  margin: 0 auto;
+  padding: 0 14px;
+  border-radius: var(--r12);
+  background: var(--priBg);
+  box-shadow: var(--shPop);
+  color: var(--priFg);
+  font-size: var(--fs14);
+  line-height: 20px;
+}
+
+.icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.bad .icon {
+  color: color-mix(in srgb, var(--bad) 55%, var(--priFg));
+}
+
+.text {
+  padding: 10px 0;
+}
+
+.action {
+  all: unset;
+  flex: none;
+  height: 28px;
+  margin: 0 -6px 0 6px;
+  padding: 0 10px;
+  border-radius: var(--r8);
+  box-shadow: inset 0 0 0 var(--bw) color-mix(in srgb, var(--priFg) 34%, transparent);
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.action:hover {
+  background: color-mix(in srgb, var(--priFg) 14%, transparent);
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.bar {
+  position: absolute;
+  right: 12px;
+  bottom: 0;
+  left: 12px;
+  height: 1.5px;
+  border-radius: 1px;
+  background: color-mix(in srgb, var(--priFg) 40%, transparent);
+  transform-origin: 0 50%;
+}
+
+@media (max-width: 600px) {
+  .root {
+    bottom: 76px;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .root {
+    animation: enter var(--dur) var(--ease) both;
+  }
+
+  .leaving {
+    animation: leave var(--dur) var(--ease) both;
+  }
+
+  .action {
+    transition: background-color var(--dur) var(--ease);
+  }
+
+  .bar {
+    animation: drain var(--ms) linear forwards;
+  }
+
+  .root:hover .bar,
+  .root:focus-within .bar {
+    animation-play-state: paused;
+  }
+}
+
+@keyframes enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes leave {
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes drain {
+  to {
+    transform: scaleX(0);
+  }
+}

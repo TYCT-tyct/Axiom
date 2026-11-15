@@ -12,7 +12,8 @@ beforeAll(async () => {
   await i18n.init({ lng: "zh", defaultNS: "common", resources: { zh: { common: zh } } });
 });
 
-// The demo page shows every primitive of port-design §3.1 that F1b owns, so the screenshot comparison has each of them.
+// The demo page shows every component of port-design §3.1 that F1b and F2a own, so the screenshot comparison has each
+// of them.
 it("renders a demo of every primitive and every icon", () => {
   const html = renderToStaticMarkup(
     <I18nextProvider i18n={i18n}>
@@ -23,6 +24,9 @@ it("renders a demo of every primitive and every icon", () => {
     expect.arrayContaining(["icon", "page-head", "button", "card", "setting-row", "table", "segmented", "switch"]),
   );
   expect(Object.keys(demos)).toEqual(expect.arrayContaining(["tag", "avatar", "field", "note", "popover"]));
+  expect(Object.keys(demos)).toEqual(
+    expect.arrayContaining(["create-dialog", "edit-panel", "sheet", "toast", "submit-failed", "state-block"]),
+  );
   for (const name of Object.keys(demos)) {
     expect(html).toContain(`data-demo="${name}"`);
   }
