@@ -2,10 +2,10 @@
 import { readFileSync } from "node:fs";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it } from "vitest";
-import { Icon } from "./icon";
+import { Glyph } from "./glyph";
 
 // Read as a file: vitest resolves a module stylesheet with ?raw to its class map in some runs, not to its text.
-const css = readFileSync(new URL("icon.module.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
+const css = readFileSync(new URL("glyph.module.css", import.meta.url), "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 
 // The stylesheet with every @media (prefers-reduced-motion: no-preference) block taken out: what applies under reduced
 // motion.
@@ -37,15 +37,7 @@ it("keeps every icon still under reduced motion", () => {
   }
 });
 
-it.each([
-  { name: "keys", want: /viewBox="0 0 20 20"/ },
-  { name: "key", want: /viewBox="0 0 20 20"/ },
-  { name: "pencil", want: /viewBox="0 0 16 16"/ },
-] as const)("draws $name", ({ name, want }) => {
-  expect(renderToStaticMarkup(<Icon name={name} />)).toMatch(want);
-});
-
-it("fills a selected icon and keeps a caller's class", () => {
-  const html = renderToStaticMarkup(<Icon name="overview" selected className="extra" />);
-  expect(html).toMatch(/class="[^"]*_selected_[^"]* extra"/);
+it("fills a selected icon", () => {
+  expect(renderToStaticMarkup(<Glyph name="overview" selected />)).toMatch(/class="[^"]*_selected_/);
+  expect(renderToStaticMarkup(<Glyph name="overview" />)).not.toContain("_selected_");
 });

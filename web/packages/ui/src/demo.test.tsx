@@ -2,7 +2,7 @@ import { createInstance } from "i18next";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, expect, it } from "vitest";
-import { iconNames } from "./components/icon";
+import { glyphNames } from "./components/glyph";
 import { ComponentDemo, demos } from "./demo";
 import zh from "./locales/zh";
 
@@ -26,8 +26,8 @@ it("renders a demo of every primitive and every icon", () => {
   for (const name of Object.keys(demos)) {
     expect(html).toContain(`data-demo="${name}"`);
   }
-  expect(iconNames).toHaveLength(27);
-  for (const name of iconNames) {
+  expect(glyphNames).toHaveLength(27);
+  for (const name of glyphNames) {
     expect(html).toContain(`_${name}_`);
   }
 });

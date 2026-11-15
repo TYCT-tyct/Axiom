@@ -1,4 +1,4 @@
-/* The board's icon layers and hover motions (AxIcons.dc.html, "icon layers" and "hover micro-actions").
+/* Glyph: the board's icon layers and hover motions (AxIcons.dc.html, "icon layers" and "hover micro-actions").
    Every motion is a function of --icon-go, 0 at rest and 1 on hover. It becomes 1 only under
    prefers-reduced-motion: no-preference, from the icon's own hover or from --icon-hover, which a control sets on its
    root while hovered: the board starts the motion when the whole button or menu item is under the pointer, and a

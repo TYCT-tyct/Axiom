@@ -11,6 +11,7 @@ export { DataTable } from "./components/data-table";
 export { Dialog } from "./components/dialog";
 export { Field, Select, TextArea } from "./components/field";
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
+export { Glyph } from "./components/glyph";
 export { Icon, type IconName } from "./components/icon";
 export { Id, IdText } from "./components/id";
 export { Cluster, Grid, Stack } from "./components/layout";

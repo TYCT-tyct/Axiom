@@ -1,5 +1,5 @@
 import { type ReactNode, useState } from "react";
-import { iconNames } from "./components/icon";
+import { glyphNames } from "./components/glyph";
 import {
   ActionButton,
   Avatar,
@@ -7,8 +7,8 @@ import {
   Cluster,
   DataTable,
   Field,
+  Glyph,
   Grid,
-  Icon,
   Id,
   Menu,
   Note,
@@ -81,13 +81,13 @@ export const demos: Record<string, () => ReactNode> = {
   icon: () => (
     <Stack gap={12}>
       <Cluster gap={12}>
-        {iconNames.map((name) => (
-          <Icon key={name} name={name} size={20} />
+        {glyphNames.map((name) => (
+          <Glyph key={name} name={name} size={20} />
         ))}
       </Cluster>
       <Cluster gap={12}>
-        {iconNames.map((name) => (
-          <Icon key={name} name={name} size={20} selected />
+        {glyphNames.map((name) => (
+          <Glyph key={name} name={name} size={20} selected />
         ))}
       </Cluster>
     </Stack>

@@ -1,12 +1,12 @@
 import type { KeyboardEvent, ReactNode } from "react";
 import { classes } from "../classes";
-import { Icon, type IconName } from "./icon";
+import { Glyph, type GlyphName } from "./glyph";
 import s from "./menu.module.css";
 import { Popover, type TriggerProps } from "./popover";
 
 type MenuItem = {
   label: string;
-  icon?: IconName;
+  icon?: GlyphName;
   onSelect: () => void;
   danger?: boolean;
   // A menu of choices (a language, a workspace) marks the chosen one; a screen reader hears it as checked.
@@ -64,13 +64,13 @@ export function Menu({
           >
             {item.icon ? (
               <span className={s.icon}>
-                <Icon name={item.icon} />
+                <Glyph name={item.icon} />
               </span>
             ) : null}
             {item.label}
             {item.checked ? (
               <span className={s.check}>
-                <Icon name="check" />
+                <Glyph name="check" />
               </span>
             ) : null}
           </button>

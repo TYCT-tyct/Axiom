@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { Icon, type IconName } from "./icon";
+import { Glyph, type GlyphName } from "./glyph";
 import s from "./segmented-control.module.css";
 
 // SegmentedControl is a choice among a few options, as radio buttons in a named group: arrow keys move the choice and
@@ -12,7 +12,7 @@ export function SegmentedControl<T extends string>({
 }: {
   label: string;
   value: T;
-  options: readonly { value: T; label: string; icon?: IconName }[];
+  options: readonly { value: T; label: string; icon?: GlyphName }[];
   onChange: (value: T) => void;
 }) {
   const name = useId();
@@ -38,7 +38,7 @@ export function SegmentedControl<T extends string>({
             onChange={() => onChange(option.value)}
             className={s.input}
           />
-          {option.icon ? <Icon name={option.icon} /> : null}
+          {option.icon ? <Glyph name={option.icon} /> : null}
           <span className={option.icon ? s.hidden : undefined}>{option.label}</span>
         </label>
       ))}
