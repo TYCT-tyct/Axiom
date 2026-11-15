@@ -100,21 +100,30 @@ export function boardFonts(helmet: string, base: string) {
   return { helmet: `<style>${css.join("\n")}</style>${rest}`, faces };
 }
 
-// usedFaces reads the computed font-family of every element that draws text, so var(), unquoted names and styles set
-// by script are all resolved by the browser (text with no font of its own reports the browser's default, which fails), and returns the faces of the families with a source font that are used. It
-// fails on a family with no source font, unless it is a generic family or a system fallback behind another: that text
-// would be drawn in a font the reference does not have.
+// usedFaces reads the computed font-family of everything that draws text: elements with text of their own, form
+// controls, ::before and ::after whose content is text, and list markers. var(), unquoted names and styles set by script
+// are all resolved by the browser; text with no font of its own reports the browser's default, which fails. It returns
+// the faces of the used families with a source font, and fails on a family with no source font unless it is a generic
+// family or a system fallback behind another: that text would be drawn in a font the reference does not have.
 export async function usedFaces(page: Page, faces: FontFace[]) {
   const stacks = await page.evaluate(() => {
-    const drawsText = (el: Element) =>
+    const ownText = (el: Element) =>
       el.matches("input, textarea, select") ||
-      (!el.matches("script, style, template, noscript") &&
-        [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()));
-    return [
-      ...new Set(
-        [...document.body.querySelectorAll("*")].filter(drawsText).map((el) => getComputedStyle(el).fontFamily),
-      ),
-    ];
+      [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
+    // Generated text is no text node: content with a string, counter() or attr() draws characters.
+    const generated = (el: Element) =>
+      ["::before", "::after"]
+        .map((pseudo) => getComputedStyle(el, pseudo))
+        .filter((style) => /["']|counters?\(|attr\(/.test(style.content));
+    const marker = (el: Element) => {
+      const style = getComputedStyle(el);
+      return style.display === "list-item" && style.listStyleType !== "none" ? [getComputedStyle(el, "::marker")] : [];
+    };
+    const drawn = (el: Element) => [...(ownText(el) ? [getComputedStyle(el)] : []), ...generated(el), ...marker(el)];
+    const elements = [...document.body.querySelectorAll("*")].filter(
+      (el) => !el.matches("script, style, template, noscript"),
+    );
+    return [...new Set(elements.flatMap(drawn).map((style) => style.fontFamily))];
   });
   const generic =
     /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|emoji|math|fangsong|ui-(serif|sans-serif|monospace|rounded))$/;
