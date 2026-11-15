@@ -21,6 +21,10 @@ on:
         description: the commit a train branch was assembled on
         type: string
         default: ""
+      release:
+        description: retain the release artifact (main tip only, without base or gate_stress)
+        type: boolean
+        default: false
       gate_stress:
         description: "web-only diagnostic (four admin scenes x50); use main or a throwaway branch with its own commit, never a PR head (build fails)"
         type: boolean
@@ -29,7 +33,7 @@ on:
 permissions:
   contents: read
 
-# A newer event on a pull request makes the run for the older one pointless; runs on main always finish.
+# New pull request events supersede older runs; in-progress main runs always finish.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -41,16 +45,15 @@ env:
   WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
 
 jobs:
-  # One cheap job decides what the others skip, so a Markdown-only change starts no job that would only stop again, and
-  # the rules that read paths diff the base once. A Markdown-only PR or train runs `just md-checks` only; main, and
-  # other trains run the full checks below; PRs run static and select web by frontend/build inputs, and PRs and trains
+  # Light PRs and trains run md-checks and scope, including script tests; trains also scan secrets.
+  # Without a base (main pushes and release dispatches), all checks run. Other PRs select web by build inputs, and trains
   # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
   # run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     outputs:
-      docs_only: ${{ steps.decide.outputs.docs_only }}
+      light: ${{ steps.decide.outputs.light }}
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
       web: ${{ steps.decide.outputs.web }}
@@ -63,10 +66,10 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          docs_only=false; deploy=true; bench=true; web=true; vitals=true
+          light=false; deploy=true; bench=true; web=true; vitals=true
           if [ -n "$BASE" ]; then
-            if python3 scripts/ci_skips.py md-only "$BASE"; then
-              docs_only=true; deploy=false; bench=false; vitals=false
+            if python3 scripts/ci_skips.py light-only "$BASE"; then
+              light=true; deploy=false; bench=false; web=false; vitals=false
             else
               status=0
               python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
@@ -102,7 +105,7 @@ jobs:
               web=false
             fi
           fi
-          printf 'docs_only=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$docs_only" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
+          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
@@ -120,23 +123,24 @@ jobs:
           fetch-depth: 0 # the migrations check reads the base commit
       - uses: ./.github/actions/setup
         with:
-          node: ${{ needs.changes.outputs.docs_only != 'true' }}
+          node: ${{ needs.changes.outputs.light != 'true' }}
       # Each known-flaky test names an open issue; once the issue closes the entry must go (CONTRIBUTING.md「合并队列」)
       - run: python3 scripts/train.py flaky-check
         env:
           GH_TOKEN: ${{ github.token }}
       # A train adds `secrets`, which check-secrets.yml runs for a PR but nothing dispatches for a train.
-      - if: needs.changes.outputs.docs_only == 'true'
-        run: just md-checks ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name == 'pull_request'
+      # Documents and check scripts also change the rules applied to the whole tree.
+      - if: needs.changes.outputs.light == 'true'
+        run: just md-checks scope ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
+      - if: needs.changes.outputs.light != 'true' && github.event_name == 'pull_request'
         run: just script-tests check-static pr
       # `train` is explicit: a batch can improve a number by more than the tolerance with no single PR crossing it, so
       # the ratchet reports the improvement instead of failing; the PR branch above passes `pr` and keeps it strict.
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: just docs check-static train secrets
       # A PR or train is checked like a pull request from its base: merged migrations never change, and a schema does not
       # newly require a field that old nodes or pages lack during a rolling release. Main has no base.
-      - if: env.BASE != ''
+      - if: env.BASE != '' && needs.changes.outputs.light != 'true'
         run: just migrations "$BASE" && just api-compat "$BASE"
 
   # The Go tests only. `just test` depends on `web-embed`, the frontend the program embeds, so this job installs pnpm and
@@ -145,7 +149,7 @@ jobs:
   # owner: 「能优化则优化吧。甚至跳过」 — every PR's tests ran twice, once alone and once in its train).
   go-test:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 40
     steps:
@@ -175,7 +179,7 @@ jobs:
   # Keep frontend checks parallel to the browser suite; neither waits for the other's build.
   web:
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true' && needs.changes.outputs.web == 'true')
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true')
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -217,7 +221,7 @@ jobs:
   e2e:
     name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request')
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && github.event_name != 'pull_request')
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
       matrix:
@@ -265,7 +269,7 @@ jobs:
   # keeps the browser's trace and the node's log.
   journey:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.docs_only != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 20
     steps:
@@ -334,7 +338,7 @@ jobs:
   # A train or main only, as for the benchmark: a deployment regression is caught by the train, which ejects the PR that
   # broke it (scripts/train.py). The skip rule is the one ci.yml always had: only files clearly outside the container.
   # A train builds the release too, so a step only main uses cannot wait until main to fail (the 2026-10-29 buildx
-  # failure); only main keeps the artifact.
+  # failure); only a deliberate release dispatch on main keeps the artifact.
   deploy:
     needs: changes
     if: >-
@@ -367,13 +371,14 @@ jobs:
           GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
           RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Retain release image, signature and provenance
-        if: github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' && inputs.release && !inputs.base && !inputs.gate_stress
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: release-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: error
-          retention-days: 30
+          # Deliberate releases are rare; keep the default GitHub maximum for retrieval before long-term archiving.
+          retention-days: 90
           compression-level: 0
 
   # Signs a throwaway image with the release's keyless flow and proves the verifier accepts that digest and its SBOM
@@ -387,7 +392,7 @@ jobs:
       github.event_name != 'pull_request' &&
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
-      needs.changes.outputs.docs_only != 'true'
+      needs.changes.outputs.light != 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 15
     permissions:
@@ -401,7 +406,7 @@ jobs:
           GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub. Markdown-only builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
+  # check counts as passed on GitHub. Light builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
   # select web and the vitals by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
@@ -419,16 +424,16 @@ jobs:
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
-      # `needs.e2e.result` aggregates the whole matrix. Only Markdown-only builds and pull requests may skip its shards.
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+      # `needs.e2e.result` aggregates the whole matrix. Only light builds and pull requests may skip its shards.
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.e2e.result }}' = success
       - if: needs.changes.outputs.vitals == 'true'
         run: test '${{ needs.vitals.result }}' = success
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
-      - if: needs.changes.outputs.docs_only != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.signing.result }}' = success
-      - if: github.ref == 'refs/heads/main' && !inputs.gate_stress
+      - if: github.ref == 'refs/heads/main' && !inputs.base && !inputs.gate_stress
         run: test '${{ needs.deploy.result }}' = success
       - run: echo "every required job passed; only optional jobs were skipped"
 
