@@ -5,3 +5,6 @@ package store
 
 // ListQuery is the production query for EXPLAIN regression tests.
 const ListQuery = listOwnCalls
+
+// UsageQuery is the production rollup read for EXPLAIN regression tests.
+const UsageQuery = readUsageStatistics

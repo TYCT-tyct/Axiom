@@ -1260,6 +1260,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/usage/statistics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Usage trends and totals from hourly rollups
+         * @description Account-scoped, eventually consistent statistics; never scans call detail. Defaults to the last 30 days ending at the latest closed UTC hour, or 7 days for hour granularity. Both bounds must be whole UTC hours; partial hours, empty windows, ranges over 90 days (7 days for hour), and over 10000 result rows return 400 invalid_request. Day buckets start at UTC midnight; weeks start Monday UTC. Partial day/week edge buckets contain only hours inside [since,until). Missing buckets and groups are omitted, meaning zero requests and spend; empty totals arrays also mean zero. Currencies stay separate. Tokens sum only reported fields; an absent token kind means no reports, and a present sum may cover only some requests. cache_write combines five-minute and one-hour writes. Cache hit rate is cache_read divided by physical input, using only calls reporting both; cache_rate_requests states their count. Missing or zero denominators omit the rate. Success means empty error_kind. Pending billing records are excluded, as in listCalls. compare=previous returns totals for [since-(until-since),since) from the same snapshot with the same filters. Historical backfill covers existing hot call records, not already archived records; backfill_complete=false means history is still incomplete. Rollups survive call-log archival. No content, supplier identity, cost or routing data. New response members are optional for rolling release; old nodes return 404 for this operation. Ten-second request deadline.
+         */
+        get: operations["getUsageStatistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls/aggregate": {
         parameters: {
             query?: never;
@@ -1825,6 +1845,45 @@ export interface components {
             until?: string;
             /** @enum {string} */
             group_by?: "day" | "model" | "key";
+        };
+        UsageStatistics: {
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+            /** @enum {string} */
+            granularity?: "hour" | "day" | "week";
+            /** @enum {string} */
+            group_by?: "model" | "key" | "workspace";
+            backfill_complete?: boolean;
+            buckets?: components["schemas"]["UsageBucket"][];
+            totals?: components["schemas"]["UsageMetrics"][];
+            /** @description Present only for compare=previous; currencies remain separate. */
+            previous?: components["schemas"]["UsageMetrics"][];
+        };
+        UsageBucket: {
+            /** Format: date-time */
+            at?: string;
+            /** @description Public model name or key/workspace TypeID; absent without group_by. */
+            group?: string;
+            metrics?: components["schemas"]["UsageMetrics"];
+        };
+        UsageMetrics: {
+            spend?: components["schemas"]["CallAggregateMoney"];
+            requests?: string;
+            successes?: string;
+            tokens?: components["schemas"]["UsageTokens"];
+            cache_rate_requests?: string;
+            /** Format: double */
+            cache_hit_rate?: number;
+            /** Format: double */
+            success_rate?: number;
+        };
+        UsageTokens: {
+            input?: string;
+            output?: string;
+            cache_read?: string;
+            cache_write?: string;
         };
         /** @description A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits. */
         CallAggregateMoney: {
@@ -5129,6 +5188,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CallList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getUsageStatistics: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                granularity?: "hour" | "day" | "week";
+                group_by?: "model" | "key" | "workspace";
+                compare?: "previous";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Complete rollup result for the selected window, subject to asynchronous ingestion and backfill */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageStatistics"];
                 };
             };
             400: components["responses"]["BadRequest"];

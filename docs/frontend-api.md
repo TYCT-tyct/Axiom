@@ -134,7 +134,7 @@ signIn ──200 status=signed_in──────────────▶ �
 
 ## 分页
 
-列表接口统一用键集游标：查询参数 `cursor`（不透明，原样传回，只对同一组筛选有效，格式不对是 400）和 `limit`（默认 50，最大 200）；响应 `{data, next_cursor}`，最后一页的 `next_cursor` 是 `null`（整个契约里唯一显式的 null）。没有总数和页码；要「共多少条」用专门的聚合接口（如 `aggregateCalls`）。导出（`exportCalls`、`exportStatement`）返回 `text/csv`，不分页。
+列表接口统一用键集游标：查询参数 `cursor`（不透明，原样传回，只对同一组筛选有效，格式不对是 400）和 `limit`（默认 50，最大 200）；响应 `{data, next_cursor}`，最后一页的 `next_cursor` 是 `null`（整个契约里唯一显式的 null）。没有总数和页码；要「共多少条」用专门的聚合接口（如 `aggregateCalls`）。用量趋势使用 `getUsageStatistics`（`/api/console/v1/usage/statistics`），小时汇总、空桶省略、报告缺失和前期对比的口径见[记录与告警](domains/observability.md#用户调用记录查询与导出)。范围必须对齐 UTC 整点，最多 90 天（小时粒度 7 天）；旧节点 404 或缺响应字段时显示不可用，`backfill_complete=false` 时提示历史仍在回填。导出（`exportCalls`、`exportStatement`）返回 `text/csv`，不分页。
 
 ## 幂等键与修订号
 

@@ -158,6 +158,18 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 调用记录的可空 `price_version` 是实际收费条目在预留时冻结的售价版本；由 billing 的 `Final.PriceVersion` 传入，随批量记录保存，`ListOwn`、`GetOwn` 与内部追溯原样返回。历史记录和旧节点没写的版本保持未知，控制台显示不可用。
 
+## 用量统计
+
+`ReadUsageStatistics` 只查询 `usage_hourly`，范围、精度、空值和授权见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。`UsageQuery` 的账户由控制台授权上下文给出，模型/key/工作区可选，RLS 与 `ListOwn` 相同；工作区仍按账户授权。时间必须为 UTC 整点，小时最多 7 天、日/周最多 90 天。`GROUPING SETS` 一次给当前桶、当前总计和可选的前期总计，货币分开，最多 10000 行，超限整体拒绝。缺失 token 不写成 0，缓存命中率只使用同时有物理输入与缓存读报告的记录，参与数和分子/分母也可相加。缓存写合并 `cache_write`、`cache_write_1h`；不计算百分位。
+
+迁移 `00042` 增加小时表、待汇总 `usage_journal` 和单例回填位置 `usage_backfill`。小时主键前缀 `(account_id,hour)` 对应读取；小时行包含站点、账户、工作区、key、公开模型和货币，不保存供应商、路由或正文。所有计数和金额使用 numeric，读取转十进制文本。租户只读小时行，写入仅平台范围；journal 仅平台可读与消费，插入沿用调用记录的租户范围以兼容现有写入；回填位置只向已授权范围只读，控制台仅返回完成标记。
+
+调用表新增 `usage_rollup_live`：加列时旧行是 false，随后默认改成 true，现有 INSERT 列表无需变更。`AFTER INSERT` 在同事务追加已结算调用的 journal，`ON CONFLICT DO NOTHING` 不触发；调用行只插入不修改，待结算行一直按现有规则排除。事件时间无高水位：迟到行即使落在已汇总小时也追加 journal。`RegisterUsage` 在队列启动前注册 `observability.usage`（archive 队列），每分钟运行，最多 30 秒/100 批。每批在单例位置行上 `FOR UPDATE SKIP LOCKED`，取不到说明别的节点在做本批，正常完成；每批最多回填 1000 行、消费 1000 行，独立事务提交。journal 删除与小时累加共用一个 SQL，回滚后 journal 仍在，提交后不会再读，重试不重计。关停通过任务 context 取消。
+
+游标参数的 UTC 转换使用 `timezone('UTC', @after_at::timestamptz)`，避免 `@` 简写的运算符优先级把整个 `AT TIME ZONE` 表达式当作另一个参数；跨分区回填测试验证位置实际推进。回填从 `(at,id)` 位置继续，复用 `call_log_admin_time` 的 UTC 表达式正向扫描，并有 `at` 下界裁剪分区；迁移记录旧数据的末尾，扫描不越过它，不扫描之后的新数据。只把 `usage_rollup_live=false` 且已结算的行送入 journal，跳过的待结算行仍推进位置。位置与入 journal 同事务提交，最后不足一批标记完成。已归档的历史不在首次回填内；之后汇总独立保留，不随调用分区删除。`backfill_complete` 只表示历史回填完成，不表示尚未消费的 journal 或本机 WAL 已清空。
+
+不变量：每条已结算调用仅由“迁移前回填”或“迁移后触发器”之一进入 journal；每个事件恰好累加一次；已消费事件的价格和等于小时行的 spend；HTTP 请求从不回扫明细。旧 `AggregateOwn` 保留原筛选与窗口，不能替用量统计查询。
+
 ## 后台检索
 
 `ListAdmin` 使用 `AdminQuery` 的请求 ID、账户、站点和 `[Since,Until)` 时间窗，按 `(at,id)` 倒序返回 `CallSummary` 和下一页 `Cursor`。`AdminQuery` 另可带精确模型名和结果（`ok`/`error`，错误即 `error_kind` 非空）；站点、模型、结果三个参数和列表的回显字段都可选，供看板下钻和旧节点滚动发布。HTTP 边界限制 31 天、200 条与 10 秒；SQL 仅选择客服可见字段，不读取成本、端点或 route。账户过滤复用既有账户有序索引；无账户且无请求 ID 过滤用迁移 00011 的 UTC 时间表达式索引；请求 ID 用主键。沿用列表的 custom plan、禁用排序和复合游标上界顺序，避免深页从窗口末端重扫。`TestAdminCallsFilterAndPage` 覆盖同时间 ID、账户/请求组合、站点、分页和 RLS；`TestAdminCallsPlansUseIndexOrder` 在既有 12 万行夹具检查全局与账户页的有序计划和读取预算。

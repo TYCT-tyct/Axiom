@@ -47,6 +47,9 @@ func registerNotifications(ctx context.Context, db *pg.DB, queue *pg.Queue, smtp
 	if err := observability.RegisterAlerts(db, pg.PlatformScope(), queue, mailer, keys, exit); err != nil {
 		return nil, nil, err
 	}
+	if err := observability.RegisterUsage(db, pg.PlatformScope(), queue); err != nil {
+		return nil, nil, err
+	}
 	if err := accounts.RegisterUserNotices(db, pg.PlatformScope(), queue, exit); err != nil {
 		return nil, nil, err
 	}
