@@ -337,7 +337,7 @@ const getOwnCall = `-- name: GetOwnCall :one
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count
 FROM observability.call_log
 WHERE id = ($1::text)::uuid AND NOT billing_pending
 `
@@ -369,6 +369,7 @@ type GetOwnCallRow struct {
 	Streamed      bool
 	CacheHit      bool
 	PhysicalInput int64
+	AttemptCount  int16
 }
 
 func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCallRow, error) {
@@ -401,8 +402,28 @@ func (q *Queries) GetOwnCall(ctx context.Context, db DBTX, id string) (GetOwnCal
 		&i.Streamed,
 		&i.CacheHit,
 		&i.PhysicalInput,
+		&i.AttemptCount,
 	)
 	return i, err
+}
+
+const getOwnRoute = `-- name: GetOwnRoute :one
+SELECT route::text AS route
+FROM observability.call_log
+WHERE id = ($1::text)::uuid AND at = $2 AND NOT billing_pending
+`
+
+type GetOwnRouteParams struct {
+	ID string
+	At time.Time
+}
+
+// The visible call supplies its partition key; basic GetOwn never loads optional routing JSON.
+func (q *Queries) GetOwnRoute(ctx context.Context, db DBTX, arg GetOwnRouteParams) (string, error) {
+	row := db.QueryRow(ctx, getOwnRoute, arg.ID, arg.At)
+	var route string
+	err := row.Scan(&route)
+	return route, err
 }
 
 const insertCallLogs = `-- name: InsertCallLogs :execrows
@@ -442,7 +463,7 @@ const listOwnCalls = `-- name: ListOwnCalls :many
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count
 FROM observability.call_log
 WHERE account_id = ($1::text)::uuid
     AND (at, id) < ($2::timestamptz, ($3::text)::uuid)
@@ -453,9 +474,10 @@ WHERE account_id = ($1::text)::uuid
     AND ($9::text = '' OR workspace_id = nullif($9, '')::uuid)
     AND ($10::text = '' OR (error_kind IS DISTINCT FROM '') = ($10 = 'error'))
     AND ($11::text = '' OR id = nullif($11, '')::uuid)
+    AND (NOT $12::boolean OR attempt_count > 1)
     AND NOT billing_pending
 ORDER BY call_log.at DESC, call_log.id DESC
-LIMIT $12
+LIMIT $13
 `
 
 type ListOwnCallsParams struct {
@@ -470,6 +492,7 @@ type ListOwnCallsParams struct {
 	WorkspaceID string
 	Status      string
 	RequestID   string
+	FellBack    bool
 	PageSize    int32
 }
 
@@ -500,6 +523,7 @@ type ListOwnCallsRow struct {
 	Streamed      bool
 	CacheHit      bool
 	PhysicalInput int64
+	AttemptCount  int16
 }
 
 // The reads an account makes skip a pending call (README「写入」): the log never knew its usage or price, and an account
@@ -521,6 +545,7 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 		arg.WorkspaceID,
 		arg.Status,
 		arg.RequestID,
+		arg.FellBack,
 		arg.PageSize,
 	)
 	if err != nil {
@@ -557,6 +582,7 @@ func (q *Queries) ListOwnCalls(ctx context.Context, db DBTX, arg ListOwnCallsPar
 			&i.Streamed,
 			&i.CacheHit,
 			&i.PhysicalInput,
+			&i.AttemptCount,
 		); err != nil {
 			return nil, err
 		}

@@ -1249,7 +1249,7 @@ export interface paths {
         };
         /**
          * The account's calls
-         * @description The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read. A filter by model or client application reads that filter's index, so a rare model costs what it matches, not what the account holds. `since` is inclusive and `until` exclusive.
+         * @description The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no supplier costs or credentials. attempt_count is read from the call row. A new call arriving does not shift the pages already read. A filter by model or client application reads that filter's index, so a rare model costs what it matches, not what the account holds. `since` is inclusive and `until` exclusive.
          */
         get: operations["listCalls"];
         put?: never;
@@ -1329,7 +1329,7 @@ export interface paths {
         };
         /**
          * One call
-         * @description The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields when the modules that keep them can serve users.
+         * @description The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. Includes attempts in sequence order and a safe routing summary. No supplier names, egress or credentials. New fields are optional across rolling releases; missing legacy attempts return an empty array and route may be absent.
          */
         get: operations["getCall"];
         put?: never;
@@ -2714,8 +2714,45 @@ export interface components {
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
+        CallAttempt: {
+            sequence?: number;
+            /** @description Public group codename; absent when no longer available in the routing snapshot. */
+            endpoint_code?: string;
+            source_class?: string;
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            first_token_ms?: number;
+            /** @enum {string} */
+            result?: "committed" | "failed" | "unknown";
+            error_kind?: string;
+            /** @description Whether this attempt was charged; absent when attribution is unavailable (including model-side loops). */
+            charged?: boolean;
+        };
+        OwnCallRoutePreset: {
+            id?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        OwnCallRoute: {
+            preset?: components["schemas"]["OwnCallRoutePreset"];
+            excluded_reasons?: {
+                [key: string]: number;
+            };
+            /** @description Count omitted by the writer; no individual candidates are reconstructed. */
+            excluded_more?: number;
+            /** @description Public codename of the first planned endpoint; absent if unavailable. */
+            selected_endpoint?: string;
+            fastest_unmeasured?: boolean;
+            preset_unavailable?: boolean;
+        };
         /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution members are absent when the client named no application, or when the call was recorded before they existed. */
         Call: {
+            attempt_count?: number;
+            /** @description Detail only; empty when no attempts were written. Optional on older nodes. */
+            attempts?: components["schemas"]["CallAttempt"][];
+            route?: components["schemas"]["OwnCallRoute"];
             charge_details?: components["schemas"]["ChargeDetails"];
             /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
             price_version?: string;
@@ -2800,6 +2837,8 @@ export interface components {
             estimated?: boolean;
         };
         CallList: {
+            /** @description Applied fell_back filter; absent on older nodes. */
+            fell_back_filter?: boolean;
             /** @description Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then. */
             status_filter?: components["schemas"]["CallStatus"];
             data: components["schemas"]["Call"][];
@@ -5178,6 +5217,8 @@ export interface operations {
     listCalls: {
         parameters: {
             query?: {
+                /** @description When true, only calls with attempt_count greater than one. */
+                fell_back?: boolean;
                 since?: components["parameters"]["CallSince"];
                 until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
