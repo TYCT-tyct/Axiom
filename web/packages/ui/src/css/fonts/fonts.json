@@ -1,5 +1,5 @@
 {
-  "inputs": "b9c0261936fd5b270be130a8ea01d0b05c8fbfd19729205acb033bb883a1121d",
+  "inputs": "a8a51c31aea715ed9b3ce62b41705c36e9da468b117a45a5e5ed1c821072131e",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -169,9 +169,9 @@
         {
           "file": "axiom-cjk-ui-400.f14a526c.woff2",
           "pages": ["admin/pages/redeem-codes"],
-          "bytes": 1168,
-          "sha256": "81c1f0b5356c9c62d943931b15057aa40228371c2e4a4875187ecfa37ecc33d1",
-          "chars": "秘粘贴"
+          "bytes": 1304,
+          "sha256": "e54d6b536fdeddb21f2e602738346034aadcaa7806de456d4e8667a92a1243a0",
+          "chars": "唯秘粘贴"
         },
         {
           "file": "axiom-cjk-ui-400.3ddde696.woff2",

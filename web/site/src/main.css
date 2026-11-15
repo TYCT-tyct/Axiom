@@ -1,3 +1,9 @@
 @import "@axiom/ui/styles.css";
 
+/* The website sets its text in its own stack, whose Chinese face is cut for the website's pages (fonts.css); the
+   shared styles give the console's. */
+:root {
+  --font-sans: var(--family-site);
+}
+
 @source "./";

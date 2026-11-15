@@ -66,9 +66,9 @@ async function load(namespace: string) {
 }
 
 // selected tells whether a key is one of the prefixes or under one; a plural form (keys_one) counts as its base key,
-// which is what code names when it passes a count.
+// which is what code names when it passes a count, and as itself, which is how a route's selection lists it.
 function selected(key: string, prefixes: Set<string>) {
-  if (prefixes.has("")) {
+  if (prefixes.has("") || prefixes.has(key)) {
     return true;
   }
   for (let k = key.replace(/_(zero|one|two|few|many|other)$/, ""); ; k = k.slice(0, k.lastIndexOf("."))) {
