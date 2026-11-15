@@ -26,9 +26,9 @@ function schemes(color: string) {
 }
 
 describe("brandStyle", () => {
-  // --bg, --s1 and --s2 of styles.css, light then dark; the rendered pages are checked against the real ones by
+  // --bg, --s1 and --s2 (css/legacy.css), light then dark; the rendered pages are checked against the real ones by
   // e2e/gate.spec.ts. A button sits on any of them: the page, a panel, a dialog.
-  const surfaces = [["#ffffff", "#f7f8f9", "#f0f1f3"].map(rgb), ["#08090a", "#0f1012", "#151619"].map(rgb)];
+  const surfaces = [["#f9f9f8", "#fdfdfc", "#f1f0ef"].map(rgb), ["#111110", "#191918", "#222221"].map(rgb)];
 
   it.each([...extremes, ...grid])("keeps %s readable in both schemes", (color) => {
     schemes(color).forEach((s, i) => {

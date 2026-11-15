@@ -109,6 +109,8 @@ export function appConfig({
       // Content-hashed names, so a deployment never serves a stale asset under a reused name; the manifest lets the
       // budget check find what the first screen loads.
       manifest: true,
+      // A font small enough to inline would become a data: URL, which the policy's font-src 'self' refuses.
+      assetsInlineLimit: (file) => (file.endsWith(".woff2") ? false : undefined),
       target: "es2023",
     },
     server: {

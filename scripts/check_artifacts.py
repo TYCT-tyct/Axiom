@@ -45,6 +45,9 @@ ALLOWED = (
     ("internal/observability/testdata/spill/*",
      "call log spills an earlier version wrote, framed in binary lengths and checksums; TestRehearsalSpillsReplay "
      "proves this version still replays them and go test -update rewrites them, and the backup rehearsal loads them"),
+    ("web/packages/ui/src/css/fonts/*.woff2",
+     "the font subsets web/scripts/fonts/build.py cuts, byte for byte the same on a rerun; CI has no Python, and "
+     "scripts/fonts/coverage.test.ts checks each against the SHA-256 fonts.json lists"),
 )
 
 

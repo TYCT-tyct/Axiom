@@ -12,24 +12,28 @@ const black: Rgb = [0, 0, 0];
 const white: Rgb = [255, 255, 255];
 
 // The surfaces accent text and the primary button sit on: the page, and the panels and dialogs on it (--bg, --s1 and
-// --s2 in styles.css; e2e/gate.spec.ts checks the rendered pages),
-// and the extreme the accent moves toward when it is too faint. line is the button's edge when the button is too close
-// to any of the surfaces (--t1).
+// --s2, which css/legacy.css points at --page, --cardBg and --hover of css/tokens.css; e2e/gate.spec.ts checks the
+// rendered pages), and the extreme the accent moves toward when it is too faint. line is the button's edge when the
+// button is too close to any of the surfaces (--t1).
 const light: Scheme = {
-  surfaces: [white, [247, 248, 249], [240, 241, 243]],
+  surfaces: [
+    [249, 249, 248],
+    [253, 253, 252],
+    [241, 240, 239],
+  ],
   extreme: black,
-  line: "#0d0e10",
+  line: "#21201c",
   softAlpha: 0.09,
   lineAlpha: 0.4,
 };
 const dark: Scheme = {
   surfaces: [
-    [8, 9, 10],
-    [15, 16, 18],
-    [21, 22, 25],
+    [17, 17, 16],
+    [25, 25, 24],
+    [34, 34, 33],
   ],
   extreme: white,
-  line: "#f7f8f8",
+  line: "#eeeeec",
   softAlpha: 0.13,
   lineAlpha: 0.42,
 };
