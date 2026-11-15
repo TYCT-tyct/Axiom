@@ -508,3 +508,9 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 `RecordSitePaymentNotice` 在商户配置保存的同一事务里，为二级站点的 owner account 的活跃用户写一条 `site_payment_changed`，主站没有 owner，不写；这一条在 `noticeEnabled` 里恒为开，不受偏好影响，正文带主站品牌、被改的二级站点名称（`detail`）、标题和处置建议，不含商户号、密钥或网关地址。保存失败时它和审计一起回滚；每次改动用新来源，唯一键挡住同一用户的重复行，接口幂等键挡住重放。
 
 `announcements` 对外使用 `AnnouncementID`（`ann_` TypeID），是站点公开数据，账户范围通过 home_site 读取本站；发布/撤下只限平台，内容不可更新，撤下为终态。控制台按服务端时间取 `[starts_at,ends_at)` 的前 100 条。管理写入经 MFA、sites.manage、幂等与审计；控制台不接受选择另一个站点。文本只渲染为 React 文本节点。
+
+## 邀请记录
+
+`Invitations` 只接受完整控制台会话。先按 Principal 的站点、个人账户和用户核对自己的码，再在站点范围显式按 `site_id` 和 `inviter_user_id` 读取邀请记录；不改变注册时写入且不可修改的关系。返回 `Invitee` 只含注册时间与遮掩邮箱，停用用户显示 `Unavailable user`，不增加姓名、完整邮箱或用户 ID 字段。注销流程尚未实现，保留停用用户行的占位可读，不新增注销规则。
+
+注册时间复用管理用户列表的 `uuid_extract_timestamp(id)`；UUIDv7 倒序加独占上界游标，同毫秒注册仍按完整 ID 排序，读页大小加一判断是否还有下一页。迁移 `00048_invitations.sql` 并发创建的 `users_of_inviter` 索引限定站点、邀请人并按 ID 排序，避免扫描全站用户；不新增关系副本和回填。控制台组装层复用登记域名的 `Origin`，拼接 `/console/register?invite=`；响应字段可选，末页游标为 null，旧节点 404 时页面应视为不可用。覆盖空记录、排序遮掩、调用者隔离、停用占位及分页的测试为 `TestInvitations`。

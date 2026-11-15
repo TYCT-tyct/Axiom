@@ -23,6 +23,32 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/invitations:
+    get:
+      operationId: getInvitations
+      tags: [Session]
+      summary: Read your invitation code and registrations
+      description: >-
+        Only the signed-in user's invitations, newest UUIDv7 registration first.
+        Disabled users remain as Unavailable user placeholders. No rebates or amounts.
+        Older nodes return 404; clients must treat that as unavailable.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - {$ref: "#/components/parameters/Cursor"}
+        - {$ref: "#/components/parameters/Limit"}
+      responses:
+        "200":
+          description: Your code, registered console origin link and masked invitees.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Invitations"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/profile/name:
     get:
       operationId: getDisplayName
@@ -4706,6 +4732,20 @@ components:
         inconclusive:
           type: boolean
           description: The provider could not be asked; the key's status did not change.
+    Invitations:
+      type: object
+      properties:
+        code: {type: string}
+        link: {type: string, format: uri}
+        invitees:
+          type: array
+          items: {$ref: "#/components/schemas/Invitee"}
+        next_cursor: {type: string, nullable: true, x-omitempty: false, description: "Null on the last page."}
+    Invitee:
+      type: object
+      properties:
+        registered_at: {type: string, format: date-time}
+        display: {type: string, description: "Masked email such as a***@g***.com, or Unavailable user; never a full email."}
     KeyList:
       type: object
       required: [data, next_cursor]
