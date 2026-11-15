@@ -16,6 +16,8 @@ export default {
     skipToContent: "Skip to content",
   },
   dialog: { close: "Close" },
+  filters: { clear: "Clear filters" },
+  chart: { time: "Time" },
   month: { month: "Month", year: "Year" },
   cancel: "Cancel",
   loadMore: "Load more",
