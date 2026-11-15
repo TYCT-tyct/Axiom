@@ -31,7 +31,7 @@ ON CONFLICT (id, at) DO NOTHING;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count, ''::text AS route
 FROM observability.call_log
 WHERE account_id = (@account_id::text)::uuid
     AND (at, id) < (@after_at::timestamptz, (@after_id::text)::uuid)
@@ -42,6 +42,7 @@ WHERE account_id = (@account_id::text)::uuid
     AND (@workspace_id::text = '' OR workspace_id = nullif(@workspace_id, '')::uuid)
     AND (@status::text = '' OR (error_kind IS DISTINCT FROM '') = (@status = 'error'))
     AND (@request_id::text = '' OR id = nullif(@request_id, '')::uuid)
+    AND (NOT @fell_back::boolean OR attempt_count > 1)
     AND NOT billing_pending
 -- Qualified names preserve UUID index order rather than sorting the output's id::text.
 ORDER BY call_log.at DESC, call_log.id DESC
@@ -90,7 +91,7 @@ LIMIT @group_limit;
 SELECT id::text AS id, at, workspace_id::text AS workspace_id, key_id::text AS key_id, host(ip) AS ip, client_app,
     session_id, subagent_id, app_referer, app_title, app_categories, request_class, model, usage::text AS usage,
     service_tier, coalesce(price_version::text, '')::text AS price_version, price_nano, currency,
-    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input
+    free_of_charge, latency_ms, first_token_ms, finish_reason, error_kind, streamed, cache_hit, physical_input, attempt_count, route::text AS route
 FROM observability.call_log
 WHERE id = (@id::text)::uuid AND NOT billing_pending;
 

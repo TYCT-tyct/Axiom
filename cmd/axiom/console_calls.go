@@ -100,7 +100,7 @@ func callBody(c observability.OwnCall) consoleapi.Call {
 		usage = map[string]int64{}
 	}
 	return consoleapi.Call{
-		Id: c.ID.String(), At: c.At, WorkspaceId: accounts.WorkspaceID(c.Workspace).TypeID(), KeyId: accounts.KeyID(c.Key).TypeID(),
+		AttemptCount: new(c.AttemptCount), Id: c.ID.String(), At: c.At, WorkspaceId: accounts.WorkspaceID(c.Workspace).TypeID(), KeyId: accounts.KeyID(c.Key).TypeID(),
 		Ip: c.IP, ClientApp: c.ClientApp, SessionId: c.SessionID, SubagentId: c.SubagentID, RequestClass: c.Class,
 		AppReferer: optionalText(c.AppReferer), AppTitle: optionalText(c.AppTitle), AppCategories: optionalText(c.AppCategories),
 		Model: c.Model, Usage: usage, ServiceTier: c.ServiceTier,
@@ -118,6 +118,7 @@ func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsR
 		return nil, err
 	}
 	q.PageSize = pageSize(request.Params.Limit)
+	q.FellBack = request.Params.FellBack != nil && *request.Params.FellBack
 	var calls []observability.OwnCall
 	var next *observability.Cursor
 	var charges map[uuid.UUID]billing.ChargeDetails
@@ -130,7 +131,7 @@ func (c consoleAPI) ListCalls(ctx context.Context, request consoleapi.ListCallsR
 	}); err != nil {
 		return nil, err
 	}
-	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls)), StatusFilter: request.Params.Status}
+	list := consoleapi.CallList{Data: make([]consoleapi.Call, len(calls)), StatusFilter: request.Params.Status, FellBackFilter: new(q.FellBack)}
 	for i, call := range calls {
 		list.Data[i] = callBody(call)
 		if d, ok := charges[call.ID]; ok {
@@ -164,9 +165,13 @@ func (c consoleAPI) GetCall(ctx context.Context, request consoleapi.GetCallReque
 		return nil, err
 	}
 	body := callBody(call)
+	charged := call.PriceNano > 0
 	if d, ok := charges[id]; ok {
 		body.ChargeDetails = chargeBody(d)
+		// ChargeReader emits canonical decimals; corrections can change the logged charge.
+		charged = d.Charged != "0"
 	}
+	c.callRoutingBody(call, &body, charged)
 	return consoleapi.GetCall200JSONResponse(body), nil
 }
 

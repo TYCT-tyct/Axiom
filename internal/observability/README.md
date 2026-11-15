@@ -54,7 +54,7 @@ func HashEndUser(key []byte, account uuid.UUID, id string) EndUserHash // 账户
 var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spill 满 / 已无法记录 / Close 仍有未写记录
 ```
 
-`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`），结算的金额（用量、档位、价格版本、实收、免单、物理输入）合在内嵌的 `Amounts` 里，待定记录没有它，补全时整组换上；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；尝试不向用户开放（用户看不到端点、成本和路由）。
+`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`），结算的金额（用量、档位、价格版本、实收、免单、物理输入）合在内嵌的 `Amounts` 里，待定记录没有它，补全时整组换上；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；详情通过 `OwnAttempt`、`OwnRoute` 白名单开放尝试和路由摘要；不公开供应商成本、真名、出口和凭证。
 
 ## 表（schema `observability`）
 
@@ -111,7 +111,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 | 归档之后的迟到写入不丢 | 调用记录只有 INSERT（应用没有 UPDATE/DELETE），删除事务先对现存分区加 `ACCESS EXCLUSIVE` 锁并精确 `count(*)`；行数与清单不符就回滚重写整月，锁一直持到 DROP 提交，所以计数和删除之间没有写入窗口。一次运行最多重写三次，仍变化就报错留给下一轮，绝不删未归档的行。测试：确认失败后补写旧月记录再重试，新行在清单和 CSV 里 |
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `observability.call_log_*` 与 `call_attempt_*` 的分区名，从不写 `billing` 的语句；测试在一个已归档月份旁边放另一 schema 的行，运行后仍在 |
 | 分区的建与删只由专用角色做 | 两张父表和全部分区归 `axiom_retention_job`（NOLOGIN）；`axiom_owner` 继承它，部署建的 `axiom_retention` 登录是它的成员，`axiom_app` 不是。应用仍只有 SELECT/INSERT，保留任务用 `AXIOM_RETENTION_DATABASE_URL` 独立连接，拿到分区 DDL 所需的所有权。测试：任务在独立登录下能建、删分区，应用不能改表 |
-| 用户看不到成本、端点和路由 | `OwnCall` 没有这些字段；尝试表不向用户开放，查询也不选尝试（[接入与对外接口的「用量与费用」](../../docs/domains/gateway.md#用量与费用)） |
+| 用户只读脱敏的尝试与路由 | `GetOwn` 先按账户范围查调用，再用 `(request_id, at)` 读尝试并按序号排列；`OwnRoute` 只投影预设、过滤原因计数、省略数量和标志，不透传原始 JSON；HTTP 层只把端点映成公开代号，不返回内部 ID、供应商、成本或出口 |
 | 文字能存进库 | `Commit` 在写 spill 前拒绝不合法的 UTF-8、NUL 和打印成 jsonb 文本后超过 8192 字节的路由 JSON（每个 `:`、`,` 后多一个空格，按此上界计），包括每次尝试的文字；这是 bug 或上游脏数据，不是可以跳过的行，进了 spill 它会在每次重放时被数据库拒绝。路由由 routing 有界编码：选定的路线、尝试（只有端点和结果，出口在 `call_attempt`）和每个原因的数量完整，被排除的端点最多逐个记 16 个，最坏情况约 5.2 KB，所以合法的 `openrouter/auto` 记录总能写进 `call_log.route`。记录计入 `records.lost{reason="invalid"}`，recorder 标记为不可记录，准入从此拒绝。测试：非法 UTF-8、NUL、未知 outcome、超过 jsonb 上限的路由（`TestEnqueueRejectsText`），逐项排除上千个候选的最大路由不超过同一上界（`TestRecordIsBounded`），恰好等于上界的路由能写进真实数据库、存下的文本与预测一致（`TestBoundedRouteFitsTheColumn`） |
 | 终端用户标识只以带密钥的哈希存放 | `EndUserHash` 是带私有数组的结构，包外无法构造非零值 |
 | 没有对话正文、密钥或凭证 | 两张表的列里没有这样的名字或字节类型，文字和 JSON 列都有长度或格式检查；测试读 `information_schema` 核对两张表。请求头只记应用归因的三个，由 gateway 去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后放入 `app_referer`、`app_title`、`app_categories`；其余请求头一律不记 |
@@ -158,9 +158,13 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用、key、工作区、成功/报错和请求 ID 组合筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
+`ListOwn` 直接读调用行的 `attempt_count`，`OwnQuery.FellBack` 为真时在游标和 LIMIT 之前筛选 `attempt_count > 1`（包括模型侧循环）。不访问尝试表，不因页大小增加 SQL 次数；沿用账户有序索引，无新增索引。`GetOwn` 的额外尝试查询同时使用调用的分区键 `at`，只有详情带 `Attempts` 和 `Route`。旧记录没有尝试时返回非 nil 空切片，`route={}` 时省略摘要；旧的字符串 `preset` 不冒充带版本的预设。`excluded_reasons` 已存在时直接使用，没有时只数实际记录的 `excluded`，不推测 `excluded_more` 的原因；省略数量原样保留。
+
+HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers 的当前可路由快照解析，退休端点或快照不可用时省略代号，不拿内部 ID 代替。`selected_endpoint` 是计划的第一个端点，实际执行顺序读 `attempts`。`charged` 为用户实收费标记（有账单明细时取其校正后的实收，否则取调用行）：整次实收为零时全为 false；普通不同端点回退只有最后一次为 true，其他为 false。日志未记录 billing 的模型循环成员；重复最终端点时这组尝试省略 `charged`，不按成功或错误类型猜测账单归属。
+
 所有筛选共用 `ListOwnCalls` 查询，可选条件由 `force_custom_plan` 按参数折叠，让优化器按实际筛选选择有序索引。模型、应用、key、工作区和 `(error_kind IS DISTINCT FROM '')` 各有 `(account_id, 筛选值, at DESC, id DESC)` 索引；请求 ID 复用主键。状态表达式使用 `IS DISTINCT FROM`（该列 NOT NULL，口径与原 `<>` 相同）：普通 `<>` 的假值在 custom plan 中会被折叠为 `error_kind = ''`，失去表达式索引；DistinctExpr 的取反保留为 NOT，成功与报错都能匹配同一布尔索引。组合筛选由选定索引读候选，再检查其余条件，因此读取量也受候选的选择性影响。`ORDER BY call_log.at, call_log.id` 保持 UUID 索引顺序，不能用输出列 `id::text`。不使用 OFFSET。列表事务另设 `enable_sort=off`：多个稀疏筛选相关时，custom plan 仍可能把 100 个真实命中低估为 1 行，选位图加排序而不是在索引上遇 LIMIT 停止。真实 12 万行的模型+应用稀疏组合曾走该计划；设置只在有序列表及 CSV 读取的事务内，聚合仍允许排序，由优化器按估算选择扫描方式；账户与状态高度相关时仍可能选择顺扫，不承诺聚合只读取匹配行。平台 RLS 的 InitPlan 修正不能消除筛选值之间的相关性。请求 ID 沿主键反向读 `at`，也是有序索引扫描；计划 helper 同时接受正向与反向扫描，保留无位图、无排序和块预算要求。
 
-`AggregateOwn` 复用同一组筛选及 custom plan，忽略游标与页大小；数据库按 UTC 日/模型/key 和货币分组，`sum(bigint)` 用 PostgreSQL numeric 再转文本，不溢出 int64，不将不同币种相加。多于 1000 组返回 `ErrAggregateSize`，处理器答 400。时间窗与 10 秒期限由 console HTTP 边界限制，调用路径不变。导出在 console 处理器里先调用 `CheckOwnExportSize`，再复用 `ListOwn`，两者在同一 `ReadTx` 快照内。探测只计有序前缀的键，SQL 的 LIMIT 为 `MaxOwnExportRows + 1`，超过上限返回 `ErrExportSize`，处理器在写 CSV 前答 400。成功流包含全部匹配行，不使用截断/完成 trailer；边界和安全规则见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。
+`AggregateOwn` 复用元数据筛选及 custom plan（不支持 `FellBack`），忽略游标与页大小；数据库按 UTC 日/模型/key 和货币分组，`sum(bigint)` 用 PostgreSQL numeric 再转文本，不溢出 int64，不将不同币种相加。多于 1000 组返回 `ErrAggregateSize`，处理器答 400。时间窗与 10 秒期限由 console HTTP 边界限制，调用路径不变。导出在 console 处理器里先调用 `CheckOwnExportSize`，再复用 `ListOwn`，两者在同一 `ReadTx` 快照内。探测只计有序前缀的键，SQL 的 LIMIT 为 `MaxOwnExportRows + 1`，超过上限返回 `ErrExportSize`，处理器在写 CSV 前答 400。成功流包含全部匹配行，不使用截断/完成 trailer；边界和安全规则见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。
 
 `TestListPlansFollowTheIndexes` 使用真实应用角色与 RLS，12 万条记录中一个大账户 6 万条、100 个小账户各 600 条。未筛选、模型、应用、key、工作区与状态页都要求索引顺序，不能有位图、顺序扫描或排序。原有筛选的读取预算：大账户首页和密集筛选最多 40 块，稀疏筛选最多 400 块，无匹配最多 20 块；小账户最多 800 块（候选只有 600 行），仍须索引顺序。深页及新筛选还由下面的共享 helper 检查更紧的首页/深页相对预算；组合筛选的剩余条件可能增加候选读取量，不能承诺所有组合都只碰一页。
 

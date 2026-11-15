@@ -54,7 +54,7 @@ func listCall(q OwnQuery, size int) (string, []any) {
 	at, id := cursorOf(q)
 	return store.ListQuery, []any{
 		q.Account.String(), at, id, q.Since, q.Until, q.Model, q.ClientApp,
-		uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), size + 1,
+		uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), q.FellBack, size + 1,
 	}
 }
 

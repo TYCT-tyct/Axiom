@@ -59,6 +59,9 @@ func generationCharges(t *testing.T, n runningNode, key, id string) billing.Char
 		t.Fatalf("generation: %s", body)
 	}
 	checkUserChargeFields(t, body)
+	if strings.Contains(string(body), "\"route\"") {
+		t.Error("generation response leaked route")
+	}
 	for _, item := range got.Data.Details.Items {
 		if item.PriceVersion != got.Data.Version {
 			t.Errorf("item version: %+v / %s", item, got.Data.Version)
@@ -156,7 +159,7 @@ func TestChargeBodyOmitsSamplingForRequest(t *testing.T) {
 
 func checkUserChargeFields(t *testing.T, body []byte) {
 	t.Helper()
-	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "\"route\"", "\"basis\""} {
+	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "egress", "credential", "\"basis\""} {
 		if strings.Contains(string(body), field) {
 			t.Errorf("user response leaked %s: %s", field, body)
 		}
