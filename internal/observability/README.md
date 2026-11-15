@@ -28,6 +28,25 @@ func GetRetention(ctx, tx pg.Tx) (Retention, error)         // 调用记录的�
 func SetRetention(ctx, tx pg.Tx, r Retention) error        // 校验并保存；范围 0 到 3650 天，0 表示全部留在 PostgreSQL
 func RegisterRetention(cfg RetentionConfig) error          // 在 archive 队列登记每天的预建、归档与删除
 func AggregateOwn(ctx, tx pg.Tx, q OwnQuery, groupBy string) ([]OwnAggregate, error) // day/model/key，最多 1000 组，收费与次数为精确文本
+type UsageQuery struct {
+    Account uuid.UUID
+    Since, Until time.Time
+    Granularity, GroupBy, Model string
+    Key, Workspace *uuid.UUID
+    Previous bool
+}
+type UsageMetrics struct {
+    Currency, Requests, Successes, Spend string
+    Input, Output, CacheRead, CacheWrite string
+    CacheRateRequests string
+    CacheHitRate, SuccessRate *float64
+}
+type UsageBucket struct { At time.Time; Group string; UsageMetrics }
+type UsageStatistics struct { Buckets []UsageBucket; Totals, Previous []UsageMetrics; BackfillComplete bool }
+func ReadUsageStatistics(ctx context.Context, tx pg.Tx, q UsageQuery) (UsageStatistics, error)
+func ValidateUsageWindow(since, until time.Time, granularity string) error
+func RegisterUsage(db *pg.DB, scope pg.Scope, q *pg.Queue) error
+var ErrUsageWindow error // 范围为空、未对齐整点或超过对应粒度上限
 func GetOwn(ctx, tx pg.Tx, id uuid.UUID) (OwnCall, error)
 func GetTrace(ctx, tx pg.Tx, id uuid.UUID) (CallRecord, error) // 一条调用、它的尝试和 route，按请求 ID；只从运营或管理的处理器调用，事务须是平台范围
 func (c Cursor) String() string; func ParseCursor(s string) (Cursor, error) // 控制台翻页用的不透明游标；格式不对 ErrBadCursor
@@ -157,6 +176,18 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 `TestOwnFiltersAndAggregates` 验证新筛选的单项、组合、游标页与账户隔离；`TestOwnAggregateKeepsCurrenciesSeparate` 保证不同货币不相加，`TestOwnAggregateRejectsPartialTotals` 守住组数上限。`TestListPlansFollowTheIndexes` 还复用 #408 的 `checkListPagePlans`，比较 key、工作区与状态筛选在平台/账户两种范围里的首页和深页，以及无匹配时的有序索引与块预算。跨分区测试也覆盖这些筛选。`TestSparseSuccessReadsFollowTheStatusIndex` 另外反转夹具分布，让 6 万条账户记录中只有 100 条成功，检查平台/账户范围的首页与深页块预算，以及导出探测只读取 100 条匹配记录；避免只用成功密集的样本掩盖反向条件失去索引的问题。
 
 调用记录的可空 `price_version` 是实际收费条目在预留时冻结的售价版本；由 billing 的 `Final.PriceVersion` 传入，随批量记录保存，`ListOwn`、`GetOwn` 与内部追溯原样返回。历史记录和旧节点没写的版本保持未知，控制台显示不可用。
+
+## 用量统计
+
+`ReadUsageStatistics` 只查询 `usage_hourly`，范围、精度、空值和授权见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。`UsageQuery` 的账户由控制台授权上下文给出，模型/key/工作区可选，RLS 与 `ListOwn` 相同；工作区仍按账户授权。时间必须为 UTC 整点，小时最多 7 天、日/周最多 90 天。`GROUPING SETS` 一次给当前桶、当前总计和可选的前期总计，货币分开，最多 10000 行，超限整体拒绝。缺失 token 不写成 0，缓存命中率只使用同时有物理输入与缓存读报告的记录，参与数和分子/分母也可相加。输入合并 `input + audio_in + image_in`，保留缓存读写单列；输出合并 `output + reasoning + audio_out + image_out`，与活动接口一样包含推理，Messages 已包含思考的输出不会重复加。任一组成项有报告才返回该合计，全缺失保持未知。缓存写合并 `cache_write`、`cache_write_1h`；不计算百分位。
+
+迁移 `00042` 增加小时表、待汇总 `usage_journal` 和单例回填位置 `usage_backfill`。小时主键前缀 `(account_id,hour)` 对应读取；小时行包含站点、账户、工作区、key、公开模型和货币，不保存供应商、路由或正文。所有计数和金额使用 numeric，读取转十进制文本。租户只读小时行，写入仅平台范围；journal 仅平台可读与消费，插入沿用调用记录的租户范围以兼容现有写入；回填位置只向已授权范围只读，控制台仅返回完成标记。
+
+调用表新增 `usage_rollup_live`：加列时旧行是 false，随后默认改成 true，现有 INSERT 列表无需变更。`AFTER INSERT` 在同事务追加已结算调用的 journal，`ON CONFLICT DO NOTHING` 不触发；调用行只插入不修改，待结算行一直按现有规则排除。事件时间无高水位：迟到行即使落在已汇总小时也追加 journal。`RegisterUsage` 在队列启动前注册 `observability.usage`（archive 队列），每分钟运行，最多 30 秒/100 批。每批在单例位置行上 `FOR UPDATE SKIP LOCKED`，取不到说明别的节点在做本批，正常完成；每批最多扫描回填 1000 行，消费上限是本批实际入 journal 的回填行数再加 1000，独立事务提交；因此回填不会占掉实时事件的消费余量。近期数据仍可能因总负载超出处理能力而延迟，不能把回填完成标记当作新鲜度保证。journal 删除与小时累加共用一个 SQL，回滚后 journal 仍在，提交后不会再读，重试不重计。关停通过任务 context 取消。
+
+游标参数的 UTC 转换使用 `timezone('UTC', @after_at::timestamptz)`，避免 `@` 简写的运算符优先级把整个 `AT TIME ZONE` 表达式当作另一个参数；跨分区回填测试验证位置实际推进。回填从 `(at,id)` 位置继续，复用 `call_log_admin_time` 的 UTC 表达式正向扫描，并有 `at` 下界裁剪分区；迁移记录旧数据的末尾，扫描不越过它，不扫描之后的新数据。只把 `usage_rollup_live=false` 且已结算的行送入 journal，跳过的待结算行仍推进位置。位置与入 journal 同事务提交，最后不足一批标记完成。已归档的历史不在首次回填内；之后汇总独立保留，不随调用分区删除。`backfill_complete` 只表示历史回填完成，不表示尚未消费的 journal 或本机 WAL 已清空。
+
+不变量：每条已结算调用仅由“迁移前回填”或“迁移后触发器”之一进入 journal；每个事件恰好累加一次；已消费事件的价格和等于小时行的 spend；HTTP 请求从不回扫明细。旧 `AggregateOwn` 保留原筛选与窗口，不能替用量统计查询。
 
 ## 后台检索
 

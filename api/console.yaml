@@ -2246,6 +2246,58 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/usage/statistics:
+    get:
+      operationId: getUsageStatistics
+      tags: [Calls]
+      summary: Usage trends and totals from hourly rollups
+      description: >-
+        Account-scoped, eventually consistent statistics; never scans call detail. Defaults to the last 30 days
+        ending at the latest closed UTC hour, or 7 days for hour granularity. Both bounds must be whole UTC hours;
+        partial hours, empty windows, ranges over 90 days (7 days for hour), and over 10000 result rows return 400
+        invalid_request. Day buckets start at UTC midnight; weeks start Monday UTC. Partial day/week edge buckets
+        contain only hours inside [since,until). Missing buckets and groups are omitted, meaning zero requests and
+        spend; empty totals arrays also mean zero. Currencies stay separate. Tokens sum only reported fields;
+        an absent token kind means no reports, and a present sum may cover only some requests. input includes
+        non-cache text, audio and image tokens; output includes reasoning, audio and image tokens. cache_write combines
+        five-minute and one-hour writes. Cache hit rate is cache_read divided by physical input, using only calls
+        reporting both; cache_rate_requests states their count. Missing or zero denominators omit the rate.
+        Success means empty error_kind. Pending billing records are excluded, as in listCalls. compare=previous
+        returns totals for [since-(until-since),since) from the same snapshot with the same filters. Historical
+        backfill covers existing hot call records, not already archived records; backfill_complete=false means
+        history is still incomplete; recent data may also lag while backfill and live ingestion compete for capacity.
+        Each batch can consume its backfilled events plus another batch of live events. Rollups survive call-log archival. No content, supplier identity, cost or routing
+        data. New response members are optional for rolling release; old nodes return 404 for this operation.
+        Ten-second request deadline.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - name: granularity
+          in: query
+          schema: {type: string, enum: [hour, day, week], default: day}
+        - name: group_by
+          in: query
+          schema: {type: string, enum: [model, key, workspace]}
+        - name: compare
+          in: query
+          schema: {type: string, enum: [previous]}
+      responses:
+        "200":
+          description: Complete rollup result for the selected window, subject to asynchronous ingestion and backfill
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/UsageStatistics"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/calls/aggregate:
     get:
       operationId: aggregateCalls
@@ -3311,6 +3363,51 @@ components:
         since: {type: string, format: date-time}
         until: {type: string, format: date-time}
         group_by: {type: string, enum: [day, model, key]}
+    UsageStatistics:
+      type: object
+      additionalProperties: false
+      properties:
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        granularity: {type: string, enum: [hour, day, week]}
+        group_by: {type: string, enum: [model, key, workspace]}
+        backfill_complete: {type: boolean}
+        buckets:
+          type: array
+          items: {$ref: "#/components/schemas/UsageBucket"}
+        totals:
+          type: array
+          items: {$ref: "#/components/schemas/UsageMetrics"}
+        previous:
+          type: array
+          description: Present only for compare=previous; currencies remain separate.
+          items: {$ref: "#/components/schemas/UsageMetrics"}
+    UsageBucket:
+      type: object
+      additionalProperties: false
+      properties:
+        at: {type: string, format: date-time}
+        group: {type: string, description: "Public model name or key/workspace TypeID; absent without group_by."}
+        metrics: {$ref: "#/components/schemas/UsageMetrics"}
+    UsageMetrics:
+      type: object
+      additionalProperties: false
+      properties:
+        spend: {$ref: "#/components/schemas/CallAggregateMoney"}
+        requests: {type: string, pattern: '^[0-9]+$'}
+        successes: {type: string, pattern: '^[0-9]+$'}
+        tokens: {$ref: "#/components/schemas/UsageTokens"}
+        cache_rate_requests: {type: string, pattern: '^[0-9]+$'}
+        cache_hit_rate: {type: number, format: double, minimum: 0, maximum: 1}
+        success_rate: {type: number, format: double, minimum: 0, maximum: 1}
+    UsageTokens:
+      type: object
+      additionalProperties: false
+      properties:
+        input: {type: string, pattern: '^[0-9]+$'}
+        output: {type: string, pattern: '^[0-9]+$'}
+        cache_read: {type: string, pattern: '^[0-9]+$'}
+        cache_write: {type: string, pattern: '^[0-9]+$'}
     CallAggregateMoney:
       type: object
       additionalProperties: false
