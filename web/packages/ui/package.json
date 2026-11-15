@@ -13,9 +13,9 @@
     "@axiom/api": "workspace:*",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
-    "i18next": "26.6.0",
+    "i18next": "27.0.1",
     "radix-ui": "1.8.1",
-    "react-i18next": "17.1.10",
+    "react-i18next": "18.0.0",
     "tailwind-merge": "3.7.0"
   },
   "peerDependencies": {
