@@ -212,7 +212,8 @@ func TestCallsPage(t *testing.T) {
 	}
 	notCached := false
 	want := consoleapi.Call{
-		Id: c.recent.ID.String(), At: c.recent.At, Model: "gpt-5", ClientApp: "claude-code", RequestClass: "chat", Ip: "203.0.113.7",
+		AttemptCount: new(0),
+		Id:           c.recent.ID.String(), At: c.recent.At, Model: "gpt-5", ClientApp: "claude-code", RequestClass: "chat", Ip: "203.0.113.7",
 		CacheHit:   &notCached,
 		AppReferer: optionalText("https://app.example.com"), AppTitle: optionalText("Example Chat"), AppCategories: optionalText("cli-agent,cloud-agent"),
 		Usage: map[string]int64{"input": 120, "output": 30}, Price: consoleapi.Money{Amount: "5000000", Currency: "USD"},

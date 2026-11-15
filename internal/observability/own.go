@@ -12,9 +12,9 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-// OwnCall is a call as its own account sees it: what the user did and was charged, and not what it cost us, which
-// endpoint served it, or how it was routed (docs/domains/gateway.md「用量与费用」).
+// OwnCall is the account-visible metadata of a call, without supplier costs or credentials.
 type OwnCall struct {
+	AttemptCount                        int
 	PriceVersion                        string
 	ID, Workspace, Key                  uuid.UUID
 	At                                  time.Time
@@ -37,7 +37,9 @@ type OwnCall struct {
 // OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
 // required: it is what the index is read by. Since is inclusive and Until exclusive; Model
 // and ClientApp, when not empty, must match exactly; After continues from a previous page.
+// FellBack applies only to ListOwn.
 type OwnQuery struct {
+	FellBack                  bool
 	Account                   uuid.UUID
 	Since, Until              time.Time
 	Model, ClientApp          string
@@ -68,7 +70,7 @@ func listRows(ctx context.Context, tx pg.Tx, q OwnQuery, size int) ([]store.List
 	return store.New().ListOwnCalls(ctx, tx, store.ListOwnCallsParams{
 		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, AfterAt: at, AfterID: id,
 		Model: q.Model, ClientApp: q.ClientApp, KeyID: uuidFilter(q.Key), WorkspaceID: uuidFilter(q.Workspace),
-		Status: q.Status, RequestID: uuidFilter(q.RequestID),
+		FellBack: q.FellBack, Status: q.Status, RequestID: uuidFilter(q.RequestID),
 		PageSize: int32(size) + 1, //nolint:gosec // ListOwn checks size is 1 to MaxPageSize
 	})
 }
@@ -144,7 +146,7 @@ func GetOwn(ctx context.Context, tx pg.Tx, id uuid.UUID) (OwnCall, error) {
 
 func ownCall(r store.ListOwnCallsRow) (OwnCall, error) {
 	c := OwnCall{
-		At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
+		AttemptCount: int(r.AttemptCount), At: r.At, IP: r.Ip, ClientApp: r.ClientApp, SessionID: r.SessionID, SubagentID: r.SubagentID,
 		AppReferer: r.AppReferer, AppTitle: r.AppTitle, AppCategories: r.AppCategories,
 		PriceVersion: r.PriceVersion, Class: r.RequestClass, Model: r.Model, ServiceTier: r.ServiceTier, PriceNano: r.PriceNano,
 		Currency: r.Currency, Free: r.FreeOfCharge, Latency: time.Duration(r.LatencyMs) * time.Millisecond,

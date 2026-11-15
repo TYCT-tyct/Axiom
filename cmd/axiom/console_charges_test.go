@@ -40,7 +40,24 @@ func TestCallChargeDetailsAcrossAPIs(t *testing.T) {
 	f := startNode(w.commandLine, &testClock{now: time.Now()})
 	session := f.signIn("rich@example.com", ownerPassword)
 	checkConsoleCharges(t, f, session, id, generation)
+	checkMalformedRouteAPIs(t, w, n, f, session, id)
 	checkUnavailableChargeAPIs(t, w, n, f, session, id)
+}
+
+func checkMalformedRouteAPIs(t *testing.T, w *callWorld, n runningNode, f consoleFixture, s session, id string) {
+	t.Helper()
+	mutation := fmt.Sprintf(`UPDATE observability.call_log SET route='{"preset":{"version":"private-secret"}}'::jsonb WHERE id='%s'`, uuid.MustParse(id).String())
+	if err := pgtest.Run(t.Context(), w.database.Superuser, mutation); err != nil {
+		t.Fatal(err)
+	}
+	generationBody(t, n, w.richKey, id)
+	response := f.do(http.MethodGet, "/calls/"+id, "", as(s))
+	expect(t, "malformed optional route", response, http.StatusOK, "")
+	var call consoleapi.Call
+	decode(t, response, &call)
+	if call.Id != id || call.Route != nil || call.Attempts == nil {
+		t.Fatalf("malformed route broke detail: %+v", call)
+	}
 }
 
 func generationCharges(t *testing.T, n runningNode, key, id string) billing.ChargeDetails {
@@ -59,6 +76,9 @@ func generationCharges(t *testing.T, n runningNode, key, id string) billing.Char
 		t.Fatalf("generation: %s", body)
 	}
 	checkUserChargeFields(t, body)
+	if strings.Contains(string(body), "\"route\"") {
+		t.Error("generation response leaked route")
+	}
 	for _, item := range got.Data.Details.Items {
 		if item.PriceVersion != got.Data.Version {
 			t.Errorf("item version: %+v / %s", item, got.Data.Version)
@@ -156,7 +176,7 @@ func TestChargeBodyOmitsSamplingForRequest(t *testing.T) {
 
 func checkUserChargeFields(t *testing.T, body []byte) {
 	t.Helper()
-	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "\"route\"", "\"basis\""} {
+	for _, field := range []string{"cost_nano", "supplier_id", "upstream_inference_cost", "endpoint_id", "\"egress\"", "\"credential\"", "\"credential_id\"", "\"credentials\"", "\"basis\""} {
 		if strings.Contains(string(body), field) {
 			t.Errorf("user response leaked %s: %s", field, body)
 		}
