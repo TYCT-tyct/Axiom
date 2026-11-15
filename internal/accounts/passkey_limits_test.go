@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -144,7 +145,7 @@ func TestPasskeyMFABeginSharesTheBudgetLock(t *testing.T) {
 		_, err := s.BeginPasskeyMFA(t.Context(), passkeyRequest(t, nil), p, client)
 		beginResult <- err
 	}()
-	awaitWaitingQuery(t, admin, "%webauthn_flows%")
+	awaitWaitingQuery(t, admin, "%webauthn_flows%", 1)
 
 	bad := reSign(t, auth.assert(t, flow.PublicKey), func(signature []byte) []byte {
 		signature[len(signature)-1] ^= 0xff
@@ -208,7 +209,7 @@ func TestPasskeyMFAConcurrentFinishesShareOneAttempt(t *testing.T) {
 	admin, release := lockFlow(t, x, first.FlowID)
 	defer release()
 	firstResult := finishMFAAsync(t.Context(), s, bad(first), p, first.FlowID)
-	awaitWaitingQuery(t, admin, "%webauthn_flows%")
+	awaitWaitingQuery(t, admin, "%webauthn_flows%", 1)
 	secondResult := finishMFAAsync(t.Context(), s, bad(second), p, second.FlowID)
 	early, finished := awaitFinishOrWaiting(t, admin, secondResult)
 	release()
@@ -282,12 +283,19 @@ func lockFlow(t *testing.T, x site, flowID string) (*pg.DB, func()) {
 	return admin, release
 }
 
-// awaitWaitingQuery waits until a backend is blocked on a query matching pattern, and fails rather than guessing.
-func awaitWaitingQuery(t *testing.T, admin *pg.DB, pattern string) {
+// awaitWaitingQuery waits for count backends to block on a query matching pattern, and fails rather than guessing.
+func awaitWaitingQuery(t *testing.T, admin *pg.DB, pattern string, count int) {
 	t.Helper()
-	for deadline := time.Now().Add(10 * time.Second); waitingQuery(t, admin, pattern) == "0"; {
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		waiting, err := strconv.Atoi(waitingQuery(t, admin, pattern))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting >= count {
+			return
+		}
 		if time.Now().After(deadline) {
-			t.Fatalf("no backend waited on %q", pattern)
+			t.Fatalf("fewer than %d backends waited on %q", count, pattern)
 		}
 		time.Sleep(10 * time.Millisecond)
 	}

@@ -4,6 +4,67 @@
  */
 
 export interface paths {
+    "/api/console/v1/profile/name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current display name */
+        get: operations["getDisplayName"];
+        put?: never;
+        /**
+         * Change the display name
+         * @description Trims the personal account name; accepts 1 to 100 Unicode characters after trimming. Audits changes without storing the name in the audit log.
+         */
+        post: operations["changeDisplayName"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/profile/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a verified email change
+         * @description Requires the current password and a session that passed MFA when a second factor is enabled. Returns 409 email_taken only to the authenticated owner. Sends a 24-hour verification link to the new address; a second request replaces the first. The current email and sessions stay unchanged until confirmation. An invalid current email returns 422 before sending or spending the sending budget.
+         */
+        post: operations["requestEmailChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/profile/email/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the email change
+         * @description Requires the same signed-in user and MFA when enabled. Consumes the token once, switches the verified email, audits masked before and after addresses and notifies the old address atomically. Raises the factor version, ends old sessions and recovery codes, and issues this device a replacement session at its existing level, with replacement recovery codes when TOTP is enabled. Invalid, replaced or used tokens return 422 invalid_verification; an expired current token returns the same code with an expiry message. If another user registered the address while pending, returns 409 email_taken.
+         */
+        post: operations["confirmEmailChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/provider-keys": {
         parameters: {
             query?: never;
@@ -3062,6 +3123,136 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getDisplayName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal account display name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Optional so older nodes can be handled as unavailable. */
+                        name?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    changeDisplayName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Trimmed length must be 1 to 100 Unicode characters. */
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                    current_password: string;
+                    /**
+                     * @default en
+                     * @enum {string}
+                     */
+                    language?: "zh" | "en";
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    confirmEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Email changed and current session replaced. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        csrf_token?: string;
+                        /** @description Replacement codes, returned only when TOTP is enabled. */
+                        recovery_codes?: string[];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listProviderKeys: {
         parameters: {
             query?: never;
