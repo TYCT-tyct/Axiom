@@ -1,7 +1,9 @@
 package accounts_test
 
 import (
+	"errors"
 	"fmt"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -63,6 +65,7 @@ func TestKeyMetadataPagePlan(t *testing.T) {
 	for i := range ids {
 		ids[i] = uuid.UUID(x.makeKey(t, p, accounts.KeySettings{Name: "page"}))
 	}
+	var plan []string
 	x.inAccount(t, p, func(tx pg.Tx) error {
 		keys, _, err := x.s.ListKeys(t.Context(), tx, p.AccountID(), accounts.KeyQuery{Limit: 50})
 		if err != nil {
@@ -76,7 +79,6 @@ func TestKeyMetadataPagePlan(t *testing.T) {
 			return err
 		}
 		defer rows.Close()
-		var plan []string
 		for rows.Next() {
 			var line string
 			if err := rows.Scan(&line); err != nil {
@@ -84,23 +86,15 @@ func TestKeyMetadataPagePlan(t *testing.T) {
 			}
 			plan = append(plan, line)
 		}
-		text := strings.Join(plan, "\n")
-		for _, table := range []string{"api_keys", "users", "accounts"} {
-			if strings.Contains(text, "Seq Scan on "+table+" ") {
-				t.Fatalf("metadata scanned all %s rows:\n%s", table, text)
-			}
-		}
-		indexed := false
-		for _, line := range plan {
-			if strings.Contains(line, "Index Scan using ") && strings.Contains(line, " on api_keys ") {
-				indexed = true
-			}
-		}
-		if !indexed {
-			t.Fatalf("metadata did not use the key index:\n%s", text)
-		}
 		return rows.Err()
 	})
+	text := strings.Join(plan, "\n")
+	if regexp.MustCompile(`Seq Scan on (api_keys|users|accounts)\b`).MatchString(text) {
+		t.Fatalf("metadata scanned a whole table:\n%s", text)
+	}
+	if !regexp.MustCompile(`Index Scan using \w+ on api_keys\b`).MatchString(text) {
+		t.Fatalf("metadata did not use the key index:\n%s", text)
+	}
 }
 
 func TestKeyUseAdmissionSignal(t *testing.T) {
@@ -197,12 +191,9 @@ func TestKeyUseLockOrder(t *testing.T) {
 		for _, keys := range [][]uuid.UUID{{k1, k2}, {k2, k1, k2}} {
 			pending++
 			go func() {
-				times := make([]string, len(keys))
-				for i := range times {
-					times[i] = at
-				}
+				times := []string{at, at, at}
 				results <- db.Tx(t.Context(), platform, func(writer pg.Tx) error {
-					return accounts.New().TouchKeys(t.Context(), writer, accounts.TouchKeysParams{Keys: keys, UsedAt: times})
+					return accounts.New().TouchKeys(t.Context(), writer, accounts.TouchKeysParams{Keys: keys, UsedAt: times[:len(keys)]})
 				})
 			}()
 		}
@@ -210,7 +201,7 @@ func TestKeyUseLockOrder(t *testing.T) {
 			select {
 			case err := <-results:
 				pending--
-				return fmt.Errorf("batch returned before both writers waited: %v", err)
+				return errors.Join(errors.New("batch returned before both writers waited"), err)
 			default:
 			}
 			waiting := texts(t, db, platform, `SELECT count(*)::text FROM pg_stat_activity
@@ -223,12 +214,11 @@ func TestKeyUseLockOrder(t *testing.T) {
 		}
 		return t.Context().Err()
 	})
-	if err != nil {
-		t.Error(err)
-	}
+	errs := []error{err}
 	for range pending {
-		if err := <-results; err != nil {
-			t.Error(err)
-		}
+		errs = append(errs, <-results)
+	}
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
 	}
 }
