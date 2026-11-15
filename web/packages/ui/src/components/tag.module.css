@@ -1,0 +1,35 @@
+/* The board's .qtag: a state in words on a 12–14% tint of its colour. The words carry the meaning; the tint only
+   groups (tokens.test.ts checks --okT, --warnT and --badT on such a tint; ok's words are --t1 as on the board). */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r6);
+  background: var(--hover);
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.ok {
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+  color: var(--t1);
+}
+
+.warn {
+  background: color-mix(in srgb, var(--warn) 12%, transparent);
+  color: var(--warnT);
+}
+
+.bad {
+  background: color-mix(in srgb, var(--bad) 12%, transparent);
+  color: var(--badT);
+}
+
+.accent {
+  background: var(--accentWash);
+  color: var(--accentT);
+}

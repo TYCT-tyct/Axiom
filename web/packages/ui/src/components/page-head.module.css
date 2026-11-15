@@ -1,0 +1,48 @@
+/* The board's .qph: the page's title and lede on the left, its actions on the right; stacked on a phone. */
+.root {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 32px;
+  margin-bottom: 20px;
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs24);
+  line-height: var(--lh24);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  color: var(--t1);
+}
+
+.lede {
+  max-width: 720px;
+  margin: 6px 0 0;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+}
+
+.actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin: -2px 0;
+}
+
+@media (max-width: 767px) {
+  .root {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .actions {
+    flex-wrap: wrap;
+    margin: 0;
+  }
+}
