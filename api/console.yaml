@@ -2218,7 +2218,7 @@ paths:
       summary: The account's calls
       description: >-
         The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no
-        cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read.
+        supplier costs or credentials. attempt_count is read from the call row. A new call arriving does not shift the pages already read.
         A filter by model or client application reads that filter's index, so a rare model costs what it matches, not
         what the account holds. `since` is inclusive and `until` exclusive.
       security:
@@ -2226,6 +2226,10 @@ paths:
       x-axiom-level: signed_in
       x-axiom-permission: calls.view
       parameters:
+        - name: fell_back
+          in: query
+          schema: {type: boolean}
+          description: When true, only calls with attempt_count greater than one.
         - $ref: "#/components/parameters/CallSince"
         - $ref: "#/components/parameters/CallUntil"
         - $ref: "#/components/parameters/CallModel"
@@ -2391,9 +2395,8 @@ paths:
       tags: [Calls]
       summary: One call
       description: >-
-        The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields
-        as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields
-        when the modules that keep them can serve users.
+        The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. Includes attempts in sequence order and a safe routing summary. No supplier names, egress or credentials.
+        New fields are optional across rolling releases; missing legacy attempts return an empty array and route may be absent.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -4588,6 +4591,37 @@ components:
           type: array
           items: {$ref: "#/components/schemas/Key"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    CallAttempt:
+      type: object
+      properties:
+        sequence: {type: integer, minimum: 1}
+        endpoint_code: {type: string, description: Public group codename; absent when no longer available in the routing snapshot.}
+        source_class: {type: string}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        first_token_ms: {type: integer, minimum: 0}
+        result:
+          type: string
+          enum: [committed, failed, unknown]
+          x-enum-varnames: [CallAttemptCommitted, CallAttemptFailed, CallAttemptUnknown]
+        error_kind: {type: string}
+        charged: {type: boolean, description: "Whether this attempt was charged; absent when attribution is unavailable (including model-side loops)."}
+    OwnCallRoutePreset:
+      type: object
+      properties:
+        id: {type: string}
+        version: {type: integer, format: int64}
+    OwnCallRoute:
+      type: object
+      properties:
+        preset: {$ref: "#/components/schemas/OwnCallRoutePreset"}
+        excluded_reasons:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
+        excluded_more: {type: integer, minimum: 0, description: Count omitted by the writer; no individual candidates are reconstructed.}
+        selected_endpoint: {type: string, description: Public codename of the first planned endpoint; absent if unavailable.}
+        fastest_unmeasured: {type: boolean}
+        preset_unavailable: {type: boolean}
     Call:
       type: object
       required:
@@ -4614,6 +4648,12 @@ components:
         have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution
         members are absent when the client named no application, or when the call was recorded before they existed.
       properties:
+        attempt_count: {type: integer, minimum: 0}
+        attempts:
+          type: array
+          description: Detail only; empty when no attempts were written. Optional on older nodes.
+          items: {$ref: "#/components/schemas/CallAttempt"}
+        route: {$ref: "#/components/schemas/OwnCallRoute"}
         charge_details:
           $ref: "#/components/schemas/ChargeDetails"
         price_version:
@@ -4715,6 +4755,7 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        fell_back_filter: {type: boolean, description: Applied fell_back filter; absent on older nodes.}
         status_filter:
           description: Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then.
           allOf:
