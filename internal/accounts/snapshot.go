@@ -135,6 +135,7 @@ func (s *Service) Load(ctx context.Context, logger *slog.Logger) error {
 	if err := s.reload(ctx); err != nil {
 		return err
 	}
+	go s.trackKeyUses(ctx, logger)
 	go func() {
 		ticker := time.NewTicker(reloadEvery)
 		defer ticker.Stop()

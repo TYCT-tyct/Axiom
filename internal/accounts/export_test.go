@@ -99,3 +99,11 @@ func PrincipalForTest(site SiteID, account AccountID, user UserID) Principal {
 // ObserveLookupJoins calls f after each request joins the shared key lookup, before it waits for the result, so a test
 // can wait until every target request is inside it instead of sleeping.
 func (s *Service) ObserveLookupJoins(f func()) { s.lookupJoined = f }
+
+// QueueKeyUse and FlushKeyUses let activity tests control observation and persistence independently.
+func (s *Service) QueueKeyUse(key KeyID, at time.Time) {
+	s.keyUses <- keyUse{uuid.UUID(key), at}
+}
+func (s *Service) FlushKeyUses(ctx context.Context) error { return s.flushKeyUses(ctx) }
+
+const ReadKeyMetadataQuery = readKeyMetadata

@@ -149,6 +149,7 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		if err != nil {
 			return err
 		}
+		s.observeKeyUse(c)
 		return fn(tx, a)
 	})
 }
@@ -174,6 +175,7 @@ func (s *Service) AdmitRead(ctx context.Context, c Caller, r AdmitRequest, fn fu
 		if err != nil {
 			return err
 		}
+		s.observeKeyUse(c)
 		return fn(tx, a)
 	})
 }
@@ -233,6 +235,11 @@ func (s *Service) AdmitBatch(ctx context.Context, calls []AdmitCall, fn func(tx 
 		admissions, refusals, err := checkKeys(ctx, tx, calls)
 		if err != nil {
 			return err
+		}
+		for i, a := range admissions {
+			if refusals[i] == nil {
+				s.observeKeyUse(a.caller)
+			}
 		}
 		return fn(tx, admissions, refusals)
 	})

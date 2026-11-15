@@ -78,6 +78,7 @@ func (s *Service) WithKeyManager(ctx context.Context, c Caller, r AdmitRequest, 
 		if err != nil {
 			return err
 		}
+		s.observeKeyUse(c)
 		return fn(KeyManager{s, tx, c, key}, tx)
 	})
 }

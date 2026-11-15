@@ -4371,6 +4371,19 @@ components:
             The current legal documents the person accepted, shown on the verification page. Required on a site that
             publishes any; a missing or stale version is `consent_required`.
           items: {$ref: "#/components/schemas/LegalDocumentVersion"}
+    KeyCreator:
+      type: object
+      description: Creator identity; unavailable names use the explicit placeholder Unknown user.
+      required: [user_id, display_name]
+      properties:
+        user_id: {$ref: "#/components/schemas/UserId"}
+        display_name: {type: string}
+    KeyDailySpend:
+      type: object
+      required: [date, amount]
+      properties:
+        date: {type: string, format: date}
+        amount: {$ref: "#/components/schemas/Money"}
     Key:
       type: object
       required: [id, name, prefix, last4, workspace_id, created_at, disabled]
@@ -4386,6 +4399,20 @@ components:
         last4: {type: string}
         workspace_id: {$ref: "#/components/schemas/WorkspaceId"}
         created_at: {type: string, format: date-time}
+        created_by: {$ref: "#/components/schemas/KeyCreator"}
+        last_used_at:
+          type: string
+          format: date-time
+          description: >-
+            Latest successful key admission check observed by an upgraded node. Absent when never observed.
+            Asynchronous best-effort activity hint; may lag or miss observations during overload, failure or rolling upgrades.
+        daily_spend:
+          type: array
+          maxItems: 14
+          description: >-
+            Settled spend for the last 14 UTC days including today, oldest first. Missing days mean zero;
+            an unused key returns an empty array. Absent on older nodes. Reservations are excluded.
+          items: {$ref: "#/components/schemas/KeyDailySpend"}
         expires_at: {type: string, format: date-time, description: "Absent for a key that does not expire."}
         disabled: {type: boolean}
         spend_limit: {$ref: "#/components/schemas/Money"}

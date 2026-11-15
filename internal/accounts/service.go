@@ -97,6 +97,7 @@ type Service struct {
 	// result; it is how a timing test observes every waiter instead of sleeping.
 	lookupJoined func()
 	guards       guards
+	keyUses      chan keyUse
 	queries      *Queries
 	// cache is where the attempts before sign-in are counted, and loginKey the HMAC key of their subjects.
 	cache    *kv.Client
@@ -147,7 +148,8 @@ func NewService(db *pg.DB, cfg Config) (*Service, error) {
 		slot: slot, gated: cfg.LookupSlot != nil,
 		known: newLRU[keyHash, Caller](cacheLimit), unknown: newLRU[keyHash, struct{}](cacheLimit), agentRequests: newAgentCounter(),
 		agentMoney: newAgentCounter(), agentMoneyHours: newAgentCounter(), agentAlerts: newAgentCounter(),
-		guards: newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
+		keyUses: make(chan keyUse, 4096),
+		guards:  newGuards(cfg.HashConcurrency, cfg.HashWait), queries: New(),
 		cache: cfg.Cache, loginKey: cfg.LoginKey,
 	}, nil
 }
