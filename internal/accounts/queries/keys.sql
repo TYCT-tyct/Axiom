@@ -159,8 +159,15 @@ LEFT JOIN accounts.accounts a ON a.site_id = u.site_id AND a.id = u.account_id
 WHERE k.id = ANY(@keys::uuid[]) AND k.deleted_at IS NULL;
 
 -- name: TouchKeys :exec
+-- Every writer locks the batch in ID order before updating, independent of aggregation/join plans.
+WITH locked AS MATERIALIZED (
+  SELECT id FROM accounts.api_keys
+  WHERE id = ANY(@keys::uuid[]) AND deleted_at IS NULL
+  ORDER BY id FOR NO KEY UPDATE
+)
 UPDATE accounts.api_keys k
-SET last_used_at = greatest(k.last_used_at, uses.at)
+SET last_used_at = uses.at
 FROM (SELECT (@keys::uuid[])[i] AS id, max((@used_at::text[])[i]::timestamptz) AS at FROM generate_subscripts(@keys::uuid[], 1) AS i GROUP BY (@keys::uuid[])[i]) uses
-WHERE k.id = uses.id AND k.deleted_at IS NULL
+JOIN locked ON locked.id = uses.id
+WHERE k.id = locked.id AND k.deleted_at IS NULL
   AND (k.last_used_at IS NULL OR k.last_used_at < uses.at);

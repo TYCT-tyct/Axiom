@@ -723,10 +723,16 @@ func (q *Queries) RecentKeys(ctx context.Context, db DBTX, arg RecentKeysParams)
 }
 
 const touchKeys = `-- name: TouchKeys :exec
+WITH locked AS MATERIALIZED (
+  SELECT id FROM accounts.api_keys
+  WHERE id = ANY($1::uuid[]) AND deleted_at IS NULL
+  ORDER BY id FOR NO KEY UPDATE
+)
 UPDATE accounts.api_keys k
-SET last_used_at = greatest(k.last_used_at, uses.at)
+SET last_used_at = uses.at
 FROM (SELECT ($1::uuid[])[i] AS id, max(($2::text[])[i]::timestamptz) AS at FROM generate_subscripts($1::uuid[], 1) AS i GROUP BY ($1::uuid[])[i]) uses
-WHERE k.id = uses.id AND k.deleted_at IS NULL
+JOIN locked ON locked.id = uses.id
+WHERE k.id = locked.id AND k.deleted_at IS NULL
   AND (k.last_used_at IS NULL OR k.last_used_at < uses.at)
 `
 
@@ -735,6 +741,7 @@ type TouchKeysParams struct {
 	UsedAt []string
 }
 
+// Every writer locks the batch in ID order before updating, independent of aggregation/join plans.
 func (q *Queries) TouchKeys(ctx context.Context, db DBTX, arg TouchKeysParams) error {
 	_, err := db.Exec(ctx, touchKeys, arg.Keys, arg.UsedAt)
 	return err
