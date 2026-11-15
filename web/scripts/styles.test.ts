@@ -77,6 +77,15 @@ describe("a component's module", () => {
     expect(run(component(`.root { color: var(--t1); }\n${css}`)).join("\n")).toMatch(/box\.module\.css:2: selector/);
   });
 
+  // A nested rule or an at-rule the check does not read could hide any selector, so a module writes neither.
+  it.each([
+    { name: "flat", css: ":global(.foreign) .root {\n  color: var(--t1);\n}" },
+    { name: "nested", css: ".root {\n  :global(.foreign) & {\n    color: var(--t1);\n  }\n}" },
+    { name: "scoped", css: "@scope (.x) {\n  :global(.foreign) .root {\n    color: var(--t1);\n  }\n}" },
+  ])("fails on a foreign selector written $name", ({ css }) => {
+    expect(run(component(css)).join("\n")).toMatch(/box\.module\.css:1: selector/);
+  });
+
   it("allows its own classes, states and the root's theme", () => {
     const css = `.root:hover > .a:has(:checked), .root [data-p~="a1"] { color: var(--t1); }
 :global(:root[data-theme="dark"]) .root { color: var(--t2); }
@@ -129,6 +138,13 @@ describe("a component's module", () => {
     // A colour that is no single token (a mix) or a name nothing defines cannot be measured, so it fails.
     { edge: "border: 1px solid var(--accentWash)", fails: true },
     { edge: "border: 1px solid var(--missing)", fails: true },
+    // The colour drawn is what is measured: a mix or the text colour is no token, whatever tokens it is made of.
+    { edge: "border: 1px solid color-mix(in srgb, var(--ctl-line) 10%, transparent)", fails: true },
+    { edge: "border: 1px solid currentColor", fails: true },
+    { edge: "border: 1px solid", fails: true },
+    { edge: "border: 1px solid transparent", fails: false },
+    { edge: "outline: none", fails: false },
+    { edge: "box-shadow: none", fails: false },
   ])("$edge: under 3:1 in light or dark fails $fails", ({ edge, fails }) => {
     const failures = run(component(`.input {\n  ${edge};\n}`));
     expect(failures.some((f) => f.includes("box.module.css:2: edge-contrast"))).toBe(fails);

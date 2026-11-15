@@ -246,17 +246,42 @@ function anchored(selector: string) {
   return /^[^(]*?\.[\w-]/.test(first.replace(/\([^)]*\)/g, ""));
 }
 
+// A module is flat: a rule inside a rule, or an at-rule the check does not read (@scope, @starting-style), could hide a
+// selector from it, so neither is allowed.
+function structureFindings(path: string, text: string, body = text, offset = 0): Finding[] {
+  return blocks(body, offset).flatMap((block) => {
+    const at = (message: string) => [{ rule: "selector" as const, path, line: lineOf(text, block.at), message }];
+    if (block.prelude.startsWith("@keyframes")) {
+      return [];
+    }
+    if (/^@(media|supports|container|layer)\b/.test(block.prelude)) {
+      return structureFindings(path, text, block.body, block.open);
+    }
+    if (block.prelude.startsWith("@")) {
+      return at(
+        `"${block.prelude}" is an at-rule this check does not read; a module uses @media, @supports, @container`,
+      );
+    }
+    return block.body.includes("{") ? at(`"${block.prelude}" nests a rule; a module writes its rules flat`) : [];
+  });
+}
+
 function selectorFindings(path: string, text: string): Finding[] {
-  return styleRules(text).flatMap((rule) =>
-    splitTop(rule.prelude, /,/)
-      .filter((selector) => !anchored(selector))
-      .map((selector) => ({
-        rule: "selector" as const,
-        path,
-        line: lineOf(text, rule.at),
-        message: `"${selector}" does not start at one of this module's classes`,
-      })),
-  );
+  return [
+    ...structureFindings(path, text),
+    ...styleRules(text).flatMap((rule) => ruleSelectorFindings(path, text, rule)),
+  ];
+}
+
+function ruleSelectorFindings(path: string, text: string, rule: Block): Finding[] {
+  return splitTop(rule.prelude, /,/)
+    .filter((selector) => !anchored(selector))
+    .map((selector) => ({
+      rule: "selector" as const,
+      path,
+      line: lineOf(text, rule.at),
+      message: `"${selector}" does not start at one of this module's classes`,
+    }));
 }
 
 const namedColors =
@@ -362,13 +387,26 @@ function expand(value: string, local: Map<string, string[]>, palette: Palette, d
   });
 }
 
-// A layer is decoration when drawn --bw wide, and no edge when it is a blurred shadow: its third length is the blur.
+const isLength = (part: string) => /^-?[\d.]+(px|r?em)?$/.test(part) || part.startsWith("calc(");
+const lineStyles = new Set(["solid", "dashed", "dotted", "double", "groove", "ridge", "inset", "outset", "hidden"]);
+
+// A layer draws no edge when it is none or 0, decoration when drawn --bw wide, and a cast shadow, not an edge, when it
+// is blurred: a shadow's third length is its blur.
 function isEdge(layer: string) {
-  const lengths = layer.replace(/var\([^)]*\)|[\w-]+\([^)]*\)/g, "c").split(/\s+/);
-  const numbers = lengths.filter((part) => /^-?[\d.]+(px)?$/.test(part));
-  return !layer.includes("--bw") && !(numbers.length >= 3 && Number.parseFloat(numbers[2] ?? "0") !== 0);
+  const lengths = splitTop(layer, /\s/).filter(isLength);
+  const blurred = lengths.length >= 3 && Number.parseFloat(lengths[2] ?? "0") !== 0;
+  return !/^(none|0)$/.test(layer) && !layer.includes("--bw") && !blurred;
 }
 
+// The colour a layer draws: what is left of it without its lengths and line style; "" when it names none, which draws
+// in the text colour.
+const edgeColor = (layer: string) =>
+  splitTop(layer, /\s/)
+    .filter((part) => !isLength(part) && !lineStyles.has(part))
+    .join(" ");
+
+// The colour of an edge is measured as drawn: it is one colour token or nothing visible (transparent). A mix, the text
+// colour or a name nothing defines cannot be measured, whatever tokens it is made of, so it fails.
 function edgeFindings(path: string, text: string, palette: Palette): Finding[] {
   const all = declarations(text);
   const local = new Map<string, string[]>();
@@ -380,17 +418,21 @@ function edgeFindings(path: string, text: string, palette: Palette): Finding[] {
     .flatMap(({ value, at }) =>
       expand(value, local, palette)
         .filter(isEdge)
-        .flatMap((layer) => [...layer.matchAll(/var\((--[\w-]+)/g)].map((m) => m[1] ?? ""))
-        .map((name) => ({ name, low: weakest(name, palette) }))
+        .map(edgeColor)
+        .filter((color) => color !== "transparent")
+        .map((color) => {
+          const name = /^var\((--[\w-]+)\)$/.exec(color)?.[1];
+          return { color: color || "currentColor", low: name ? weakest(name, palette) : undefined };
+        })
         .filter(({ low }) => low === undefined || low < 3)
-        .map(({ name, low }) => ({
+        .map(({ color, low }) => ({
           rule: "edge-contrast" as const,
           path,
           line: lineOf(text, at),
           message:
             low === undefined
-              ? `edge in ${name}, which is not one colour token, so its contrast cannot be measured; use --ctl-line`
-              : `edge in ${name} is ${low.toFixed(2)}:1 on a surface, under 3:1; use --ctl-line, or --bw if decoration`,
+              ? `edge in ${color}, which is not one colour token, so its contrast cannot be measured; use --ctl-line`
+              : `edge in ${color} is ${low.toFixed(2)}:1 on a surface, under 3:1; use --ctl-line, or --bw if decoration`,
         })),
     );
 }
