@@ -9,7 +9,7 @@
 | `site/` | 官网 | 公网监听的 `/` |
 | `console/` | 用户控制台 | 公网监听的 `/console/` |
 | `admin/` | 管理后台 | 只在管理监听上，不进公网 |
-| `packages/ui/` | 设计系统：变量（`src/styles.css`）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
+| `packages/ui/` | 设计系统：变量（`src/styles.css`；按新设计重做期间，新令牌、字体和组件样式的归属规则见[前端与设计的「前端工程」](../docs/frontend.md#前端工程)）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
 | `theme.js` | 在首次绘制前应用保存的外观；构建时按内容哈希命名，插到每个入口页 `<head>` 的开头 | 各应用的 `assets/` |
 | `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端（`consoleApi`、`adminApi`）；`@axiom/api/auth` 是两个界面的登录、两步验证调用，形状相同，登录页面只对着它写 | — |
 | `packages/app/` | 控制台和后台共用、又不属于设计系统的部分：会话与 `Gate`、登录、第二步、强制开启两步验证、恢复码、外壳、新版本提示、错误译文、路由预设的规则编辑器和规则摘要（`presets/`，文字在 `packages/ui/src/locales/preset-rules.ts`）。设计系统不依赖路由，所以它们不放进 `packages/ui/` | — |

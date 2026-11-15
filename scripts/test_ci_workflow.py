@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import textwrap
@@ -19,16 +20,16 @@ def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False, vitals=True):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False):
     folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
     if folded:
         condition = " ".join(line.strip() for line in folded.group(1).splitlines())
     else:
         condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs, vitals=vitals)
+    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False):
     results = results or {}
     values = {
         "always()": True,
@@ -36,9 +37,12 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "github.event.pull_request.draft": draft,
         "inputs.gate_stress": stress,
         "inputs.base": base,
+        "inputs.release": release,
         "needs.changes.result": results.get("changes", "success"),
-        "needs.changes.outputs.docs_only": "true" if docs else "false",
-        "needs.changes.outputs.web": "true",
+        "needs.changes.outputs.light": "true" if docs or light else "false",
+        "needs.changes.outputs.web": "false" if light else "true",
+        "needs.changes.outputs.deploy": "false" if light else "true",
+        "needs.changes.outputs.bench": "false" if light else "true",
         "needs.changes.outputs.vitals": "true" if vitals else "false",
     }
     for name, result in results.items():
@@ -124,7 +128,7 @@ class BuildChecks(unittest.TestCase):
     def test_web_selection_runs_only_for_prs_and_fails_open(self):
         decide = textwrap.dedent(re.search(
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
-        stub = "python3() { case \"$2\" in md-only) return 1;; web-needed) return \"$WEB_STATUS\";; *) return 0;; esac; }\n"
+        stub = "python3() { case \"$2\" in md-only|light-only) return 1;; web-needed) return \"$WEB_STATUS\";; *) return 0;; esac; }\n"
         for event in ("pull_request", "push", "workflow_dispatch"):
             for status in (0, 10, 37):
                 with self.subTest(event=event, status=status), tempfile.TemporaryDirectory() as tmp:
@@ -141,7 +145,7 @@ class BuildChecks(unittest.TestCase):
         decide = textwrap.dedent(re.search(
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
         stub = ("python3() { case \"$2\" in\n"
-                "  md-only) return \"$MD_STATUS\";;\n"
+                "  light-only|md-only) return \"$MD_STATUS\";;\n"
                 "  vitals-needed) return \"$VITALS_STATUS\";;\n"
                 "  *) return 0;;\n"
                 "esac; }\n")
@@ -163,7 +167,7 @@ class BuildChecks(unittest.TestCase):
                 subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
                 values = dict(line.split("=", 1) for line in output.read_text().splitlines())
                 self.assertEqual(values["vitals"], expected)
-                self.assertEqual(values["docs_only"], "true" if md == "0" else "false")
+                self.assertEqual(values["light"], "true" if md == "0" else "false")
 
     def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
@@ -206,8 +210,8 @@ class BuildChecks(unittest.TestCase):
         self.assertIn("fail-fast: false", job("e2e"))
         self.assertIn("name: e2e-test-results-${{ matrix.shard }}", job("e2e"))
 
-    def test_build_rejects_non_successful_shards_except_docs_only_and_pull_requests(self):
-        check = re.search(r"- if: (needs.changes.outputs.docs_only .+)\n        run: (.+)", job("build"))
+    def test_build_rejects_non_successful_shards_except_light_and_pull_requests(self):
+        check = re.search(r"- if: (needs.changes.outputs.light .+)\n        run: (.+)", job("build"))
         self.assertIsNotNone(check)
         for docs in (False, True):
             self.assertEqual(expression(check[1], event="workflow_dispatch", docs=docs), not docs)
@@ -220,6 +224,32 @@ class BuildChecks(unittest.TestCase):
         guard = re.search(r"- if: (contains\(needs.\*.result.+)\n", job("build"))[1]
         for result in ("failure", "cancelled"):
             self.assertTrue(expression(guard, results={"e2e": result}))
+
+    def test_light_lane_skips_heavy_jobs_and_accepts_their_skips(self):
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(enabled("static", event, light=True))
+                for name in ("go-test", "web", "e2e", "vitals", "journey", "bench", "deploy", "signing"):
+                    self.assertFalse(enabled(name, event, light=True, vitals=False), name)
+                self.assertTrue(enabled("build", event, light=True))
+                for condition in re.findall(r"- if: (needs.changes.outputs.light .+)", job("build")):
+                    self.assertFalse(expression(condition, event=event, light=True))
+        self.assertIn("run: just md-checks scope", job("static"))
+
+    @unittest.skipUnless(BASH and shutil.which("just"), "Bash or just is unavailable")
+    def test_light_static_includes_checks_that_read_light_files(self):
+        step = re.search(r"- if: (needs.changes.outputs.light == 'true')\n        run: (.+)", job("static"))
+        self.assertIsNotNone(step)
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(expression(step[1], event=event, light=True))
+                command = re.sub(r"\$\{\{ (.+?) \}\}", lambda match: expression(match[1], event=event), step[2])
+                result = subprocess.run([BASH, "-e", "-c", command.replace("just ", "just --dry-run ", 1)],
+                                        cwd=ROOT, capture_output=True, text=True, check=True)
+                for consumer in ("unittest discover -s scripts", "./checkdocnames", "./checkmodules",
+                                 "check_artifacts.py", "check_scope.py", "TestModuleOrderFollowsArchitecture"):
+                    self.assertIn(consumer, result.stderr)
+                self.assertEqual("gitleaks" in result.stderr, event != "pull_request")
 
     def test_diagnostic_requires_web_and_unsharded_e2e(self):
         self.assertIn("needs: [changes, web, e2e]", job("gate-stress"))
@@ -341,22 +371,24 @@ class ReleaseChecks(unittest.TestCase):
     def step_condition(self, name):
         return re.search(r"- name: " + name + r"\n        if: (.+)", job("deploy"))[1]
 
-    def runs(self, name, ref, base=""):
-        return expression(self.step_condition(name).replace("github.ref", repr(ref)), base=base)
+    def runs(self, name, ref, base="", release=False):
+        return expression(self.step_condition(name).replace("github.ref", repr(ref)), base=base, release=release)
 
     def test_every_build_rehearses_deployment_once_and_trains_build_releases(self):
         deploy = job("deploy")
-        for ref, base, rehearsal, retains in (
-            ("refs/heads/main", "", "release", True),           # main builds the release and keeps the artifact
-            ("refs/heads/train/main/1", "base", "release", False),  # a train exercises the release step too
-            ("refs/heads/topic", "", "deploy", False),          # a manual branch dispatch with no base
+        for ref, base, release, rehearsal, retains in (
+            ("refs/heads/main", "", False, "release", False),  # pushes build without retaining
+            ("refs/heads/main", "", True, "release", True),    # explicit releases retain the same files
+            ("refs/heads/main", "base", True, "release", False),
+            ("refs/heads/train/main/1", "base", True, "release", False),  # a train exercises the release step too
+            ("refs/heads/topic", "", True, "deploy", False),          # a manual branch dispatch with no base
         ):
             with self.subTest(ref=ref, base=base):
                 self.assertEqual(self.runs("Rehearse train deployment", ref, base), rehearsal == "deploy")
                 self.assertEqual(self.runs("Build and rehearse release by digest", ref, base), rehearsal == "release")
-                self.assertEqual(self.runs("Retain release image, signature and provenance", ref, base), retains)
+                self.assertEqual(self.runs("Retain release image, signature and provenance", ref, base, release), retains)
         self.assertIn("if-no-files-found: error", deploy)
-        self.assertIn("retention-days: 30", deploy)
+        self.assertIn("retention-days: 90", deploy)
         self.assertNotIn("secrets.", deploy)
 
     def test_main_cannot_pass_without_a_release(self):
