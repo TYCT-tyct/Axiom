@@ -10,6 +10,22 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+// GetKey is the key in tx's scope with this ID, or ErrKeyNotFound.
+func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
+	rows, err := s.queries.GetKey(ctx, tx, uuid.UUID(id))
+	if err != nil {
+		return Key{}, fmt.Errorf("get an API key: %w", err)
+	}
+	if len(rows) == 0 {
+		return Key{}, ErrKeyNotFound
+	}
+	keys := []Key{keyOf(rows[0])}
+	if err := s.readKeyMetadata(ctx, tx, keys); err != nil {
+		return Key{}, err
+	}
+	return keys[0], nil
+}
+
 type keyUse struct {
 	key uuid.UUID
 	at  time.Time

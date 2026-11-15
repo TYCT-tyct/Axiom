@@ -307,22 +307,6 @@ func (s *Service) ListKeys(ctx context.Context, tx pg.Tx, account AccountID, q K
 	return keys, more, err
 }
 
-// GetKey is the key in tx's scope with this ID, or ErrKeyNotFound.
-func (s *Service) GetKey(ctx context.Context, tx pg.Tx, id KeyID) (Key, error) {
-	rows, err := s.queries.GetKey(ctx, tx, uuid.UUID(id))
-	if err != nil {
-		return Key{}, fmt.Errorf("get an API key: %w", err)
-	}
-	if len(rows) == 0 {
-		return Key{}, ErrKeyNotFound
-	}
-	keys := []Key{keyOf(rows[0])}
-	if err := s.readKeyMetadata(ctx, tx, keys); err != nil {
-		return Key{}, err
-	}
-	return keys[0], nil
-}
-
 // PresetKeys counts the keys bound to each of presets that are not deleted, disabled and expired ones included: those
 // in tx's scope, or only account's when account is not nil. A preset no key is bound to is not in the map, nor is the
 // zero ID, which names every unbound key (routing's system preset). One indexed read whatever the number of presets.
