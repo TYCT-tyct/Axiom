@@ -1,16 +1,18 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
-Markdown-only changes run the cheap checks that read Markdown instead of the whole build; a benchmark comparison is
-skipped only for Markdown-only and web/-only changes, the deployment check only when every changed file is clearly
-outside the container, and the web vitals only when nothing the pages are built from changed. The decisions come from the
-file list, never a guess about what reads what. A failed diff runs the build, the frontend checks, the timings, the
-comparison and the deployment check; *-needed actions use exit code 10 for "not needed", so any other outcome runs them.
+Light changes run only repository script, docs and secrets checks; Markdown-only keeps its cheaper checks. Outside the
+light lane, a benchmark comparison is skipped only for Markdown-only and web/-only changes, the deployment check only
+when every changed file is clearly outside the container, and the web vitals only when nothing the pages are built from
+changed. The decisions come from the file list, never a guess about what reads what. A failed diff runs the build, the
+frontend checks, the timings, the comparison and the deployment check; *-needed actions use exit code 10 for "not needed", so any other outcome runs them.
 """
 
-import re
+import fnmatch
 import subprocess
 import sys
 from pathlib import PurePosixPath
+
+from workflow.changes import ROOT, code_changed, lanes
 
 NOT_NEEDED = 10
 
@@ -55,9 +57,9 @@ def needs_vitals(paths: list[str]) -> bool:
         path.startswith("web/") or (path.startswith("api/") and path.endswith(".yaml")) for path in paths)
 
 
-# Scripts that only check the repository or run CI; every other scripts/ file may be used by `just up`'s build
-# (scripts/web_cache.py) or by the deployment check (deploy-check.sh, deploy_name.py).
-IRRELEVANT_SCRIPT = re.compile(r"scripts/(test_[^/]*\.py|check_[^/]*\.py|ci_skips\.py|train\.py|workflow/.*|ci/(runner-host|bench-compare)\.sh)")
+def light_only(paths: list[str]) -> bool:
+    """Use the managed lane rules, preserving the existing Markdown-only lane."""
+    return not code_changed(paths, *lanes(ROOT))
 
 
 def irrelevant_to_deployment(path: str) -> bool:
@@ -69,7 +71,7 @@ def irrelevant_to_deployment(path: str) -> bool:
         or name.endswith("_test.go")
         or "testdata" in parts[:-1]
         or parts[0] == ".github"
-        or IRRELEVANT_SCRIPT.fullmatch(path) is not None
+        or (parts[0] == "scripts" and any(fnmatch.fnmatchcase(path, pattern) for pattern in lanes(ROOT)[0]))
         or parts[:2] in (("web", "e2e"), ("web", "journey"))
         or path in ("web/playwright.config.ts", "web/playwright.journey.config.ts")
     )
@@ -83,15 +85,17 @@ def needs_deploy_check(paths: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
-        print("usage: ci_skips.py md-only|bench-needed|deploy-needed|web-needed|vitals-needed BASE [HEAD]", file=sys.stderr)
+        print("usage: ci_skips.py md-only|light-only|bench-needed|deploy-needed|web-needed|vitals-needed BASE [HEAD]", file=sys.stderr)
         return 2
     action, base = argv[0], argv[1]
     head = argv[2] if len(argv) == 3 else "HEAD"
     try:
         paths = changed_paths(base, head)
-    except (subprocess.CalledProcessError, OSError) as error:
+        if action == "light-only":
+            return 0 if light_only(paths) else 1
+    except (subprocess.CalledProcessError, OSError, ValueError) as error:
         print(f"cannot diff {base}...{head}: {error}", file=sys.stderr)
-        return 1 if action == "md-only" else 0
+        return 1 if action in ("md-only", "light-only") else 0
     if action == "md-only":
         return 0 if all_md(paths) else 1
     if action == "bench-needed":

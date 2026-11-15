@@ -23,15 +23,15 @@
 
 ## 固定交付物与 digest
 
-`ci.yml` 的 `deploy` 作业在列车和 `main`（push 运行，或收尾旧版逐个合并的记录时调起的 dispatch）上都运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；只有 `main` 保留发布交付物，PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。
+`ci.yml` 的 `deploy` 作业在非轻量列车和 `main`（push 或不带 base 的 dispatch）上运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；普通 `main` 运行不保留交付物，只有在 `main` 当前 tip 上显式调起的发布运行才上传；PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。
 `release-check.sh` 构建一次 Linux/amd64 程序和 scratch 镜像，通过同一次 [Buildx 多 exporter 构建](https://docs.docker.com/build/exporters/#multiple-exporters)导出 OCI 归档并写入临时的 loopback
 registry（仅绑定 `127.0.0.1`，不上传外部仓库）。它按归档的 manifest digest 拉取镜像，迁移和服务都消费同一个
 `repository@sha256:…`，包括旧迁移角色升级后的再次启动；重启不重新构建。其他 CI 作业仍会构建自己的测试程序和前端。
 
 构建完成后，`release-check.sh` 按 digest 用 Sigstore cosign keyless 签名，再用 syft 从同一个 OCI 归档生成 SPDX JSON，并以同一身份作为 `spdxjson` attestation 附在该 digest 上。签名身份是这次运行的 GitHub OIDC 短期证书，即
-`https://github.com/<仓库>/.github/workflows/ci.yml@<ref>`；`main` 的发布是 `...@refs/heads/main`，没有保存的私钥，也没有私有透明度日志。列车用列车的 ref 演练同一流程，只有 `main` 保留交付物。
+`https://github.com/<仓库>/.github/workflows/ci.yml@<ref>`；`main` 的发布是 `...@refs/heads/main`，没有保存的私钥，也没有私有透明度日志。非轻量列车用列车的 ref 演练同一流程，不上传交付物。
 
-成功的部署作业保留 `release-<源码 SHA>-<run attempt>` Actions artifact，保留 30 天，内含：
+发布运行的部署作业保留 `release-<源码 SHA>-<run attempt>` Actions artifact，保留 90 天（GitHub 默认上限，留足下载并转存长期归档的时间），内含：
 
 - `image.oci.tar`：原始镜像字节；保留和核对用这份，不在部署机重新构建。
 - `sbom.spdx.json`：syft 对 `image.oci.tar` 生成的 SPDX 2.3 JSON；同一个文件是镜像 `spdxjson` attestation 的 predicate。
@@ -54,13 +54,26 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 `install-release-tools.sh` 把 cosign 和 syft 按版本与发布页 SHA-256 装进作业私有的 `RUNNER_TEMP` 目录，不写共享的 home；下载网址失败时经 `scripts/ci/release-asset.sh` 改走 GitHub REST API，校验和仍然裁决。
 
-`ci.yml` 的 `signing` 作业在列车和 `main` 上签一个一次性镜像，再证明 `verify-release.sh` 接受这个 digest 和它的 SBOM、`cosign save`/`load` 之后仍接受，并拒绝未签名或与记录不一致的 digest、tag、把 A 的签名搬到 B、错误 issuer、别的仓库/workflow/ref（元数据与期望身份一致，由 cosign 拒绝）、subject 指向别的 digest 的 SBOM attestation，以及同时替换 SBOM 和 `sbom_sha256`。它用与发布相同的脚本，所以签名流程坏了会在合并前失败，而不是等到发布。
+`ci.yml` 的 `signing` 作业在非轻量列车和 `main` 上签一个一次性镜像，再证明 `verify-release.sh` 接受这个 digest 和它的 SBOM、`cosign save`/`load` 之后仍接受，并拒绝未签名或与记录不一致的 digest、tag、把 A 的签名搬到 B、错误 issuer、别的仓库/workflow/ref（元数据与期望身份一致，由 cosign 拒绝）、subject 指向别的 digest 的 SBOM attestation，以及同时替换 SBOM 和 `sbom_sha256`。它用与发布相同的脚本，所以签名流程坏了会在合并前失败，而不是等到发布。
 
 ### 选择和核对
 
-1. 在 Actions 找到目标 `main` 提交的 **整个 ci 工作流成功**的运行（不能只看 deploy 成功），记录 run ID、attempt、源码 SHA；
-   下载该运行同 SHA/attempt 的 release artifact。失败运行、PR、列车产物都不能作为发布版本。
-2. 在该源码 SHA 的检出中，解压 artifact 到独立目录，例如 `tmp/release`。运行：
+1. 只发布 `main` 当前 tip：先确认它就是本次选定的提交，再调起完整发布运行，不传 `base` 或 `gate_stress`：
+
+   ```bash
+   gh workflow run ci.yml --ref main -f release=true
+   gh run list --workflow ci.yml --event workflow_dispatch --branch main
+   gh run view <run-id> --json headSha,conclusion,attempt,url
+   gh run download <run-id> --name release-<源码 SHA>-<run attempt> --dir tmp/release
+   ```
+
+   dispatch 解析 `main` 时可能已有新提交，必须核对运行的 `headSha` 就是选定提交，并确认 **整个 ci 工作流成功**
+   （不能只看 deploy 成功），记录 run ID、attempt、源码 SHA；也可在该 Actions 运行的 Artifacts 区下载同名产物。
+   普通 `main` push、未设置 `release=true` 的 dispatch、带 `base` 的列车运行和非 `main` ref 都不上传发布产物。
+   不支持重新构建任意旧提交来发布：保持签名身份固定为 `ci.yml@refs/heads/main`，并让发布基于当前完整检查的树。
+   旧版本回滚使用此前成功发布并归档的 digest；没有归档的旧提交若需要恢复，先经评审和列车把所需改动恢复到 main tip，再发布。
+   失败运行、PR、列车产物都不能作为发布版本。
+2. 在该源码 SHA 的检出中，使用上一步下载到独立目录 `tmp/release` 的文件（从 Actions 下载的 zip 先解压到该目录）。运行：
 
    ```bash
    python3 scripts/release_image.py verify tmp/release/release.json tmp/release/image.oci.tar
@@ -85,7 +98,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
    PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$digest" tmp/release/release.json
    ```
 
-   不允许通过重新构建或转换 manifest 来消除 digest 不一致。保留 release JSON、归档、签名、SBOM 及成功运行的引用到发布记录；30 天的
+   不允许通过重新构建或转换 manifest 来消除 digest 不一致。保留 release JSON、归档、签名、SBOM 及成功运行的引用到发布记录；90 天的
    Actions 保留期不能替代负责人维护的长期归档。provenance 和 digest 核对都不是签名证明；上面的 verify 才是。
 4. 在生产 `deploy/.env` 设置 `DEPLOY_IMAGE=<负责人选择的仓库>@sha256:<上一步的 digest>`；迁移和服务共用此值。部署走[生产入口](backup-restore.md#生产入口)的脚本，它在验签通过前不 pull、不启动：
 
@@ -104,7 +117,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 选择「CI 一次构建 + OCI 原件 + 本地 registry 按 digest 演练」，而不是「部署机按提交重建」或「直接发布外部 registry」。
 重建不能保证工具链和依赖环境一致；外部上传涉及费用与凭证且尚未获准。本地 registry 只用于证明与真实部署相同的 digest
-拉取路径；CI 结束删除 registry 和独占 builder，交付物由 Actions artifact 留存。代价是多一个临时 registry 和 BuildKit 容器，
+拉取路径；CI 结束删除 registry 和独占 builder，显式发布的交付物由 Actions artifact 留存，普通运行结束后不留交付物。代价是多一个临时 registry 和 BuildKit 容器，
 以及负责人发布前的复制步骤；不新增常驻基础设施、不决定生产 registry。
 
 - **keyless，而不是负责人保管私钥**：签名身份由 GitHub OIDC 换成 Fulcio 短期证书，记录 workflow 和 ref；私钥不落地、不用轮换，公开 Rekor 留下可审计的时间点。验证因此依赖 Fulcio、Rekor 和公开日志的可用性，发布也只能由该 workflow/ref 产生。生产私钥或私有透明度日志不是本阶段需要的；以后要离线验证或不让 digest 进公开日志，才换成负责人保管的密钥或私有 Sigstore，届时 `verify-release.sh` 的信任根要一起改。按[负责人授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地，独立评审仍执行。

@@ -1,4 +1,9 @@
+import os
+import shlex
 import subprocess
+import sys
+import tempfile
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -15,6 +20,54 @@ class MarkdownOnly(unittest.TestCase):
         for paths in ([], ["README.md", "main.go"], ["docs/a.md", "notes.txt"], ["web/a.md", "web/a.ts"]):
             with self.subTest(paths=paths):
                 self.assertFalse(ci_skips.all_md(paths))
+
+
+class LightOnly(unittest.TestCase):
+    def test_lane_decisions(self):
+        upgrade = [".github/project-workflow.toml", "scripts/workflow/check_pr.py",
+                   "scripts/workflow/test_check_pr.py"]
+        cases = [(upgrade, True), ([], False), (["README.md"], True), (["notes.MD"], True),
+                 (["scripts/check_scope.py", "scripts/test_ci_skips.py", "scripts/ci/bench-compare.sh"], True)]
+        cases += [(upgrade + [path], False) for path in (
+            "internal/billing/ledger.go", "web/site/src/app.ts", "deploy/compose.yaml", "go.mod", "justfile",
+            "scripts/web_cache.py", "scripts/ci/runner-host.sh")]
+        for paths, light in cases:
+            with self.subTest(paths=paths), mock.patch.object(ci_skips, "changed_paths", return_value=paths):
+                self.assertEqual(ci_skips.main(["light-only", "base"]), 0 if light else 1)
+        for config in ('[lanes]\nlight = "scripts/*"', '[lanes]\nunknown = []', '[lanes]\nlight = [1]',
+                       '[lanes]\nlight = [', '[lanes]\ncode = ["*.md"]'):
+            with self.subTest(config=config), mock.patch.object(ci_skips, "changed_paths", return_value=["README.md"]), \
+                    mock.patch("pathlib.Path.read_text", return_value=config):
+                self.assertEqual(ci_skips.main(["light-only", "base"]), 1)
+        for error in (OSError("git missing"), subprocess.CalledProcessError(1, ["git"])):
+            with self.subTest(error=error), mock.patch.object(ci_skips, "changed_paths", side_effect=error):
+                self.assertEqual(ci_skips.main(["light-only", "base"]), 1)
+
+    def test_workflow_changes_outputs(self):
+        workflow = (ci_skips.ROOT / ".github/workflows/ci.yml").read_text()
+        decision = workflow.split("      - id: decide\n        run: |\n", 1)[1].split("\n\n", 1)[0]
+        upgrade = [".github/project-workflow.toml", "scripts/workflow/check_pr.py",
+                   "scripts/workflow/test_check_pr.py"]
+        for event, base, paths, light in (
+            ("workflow_dispatch", "base", upgrade, True), ("pull_request", "base", upgrade, True),
+            ("push", "", upgrade, False), ("workflow_dispatch", "", upgrade, False),
+            ("workflow_dispatch", "base", [], False),
+            ("workflow_dispatch", "base", upgrade + ["scripts/web_cache.py"], False),
+        ):
+            # Run the workflow's actual shell and CLI decisions with a controlled diff.
+            cli = (f"import sys; sys.path.insert(0, {str(ci_skips.ROOT / 'scripts')!r}); import ci_skips; "
+                   f"ci_skips.changed_paths = lambda *args: {paths!r}; sys.exit(ci_skips.main(sys.argv[1:]))")
+            script = decision.replace("python3 scripts/ci_skips.py", shlex.join([sys.executable, "-c", cli]))
+            script = script.replace("${{ github.event_name }}", event)
+            with self.subTest(event=event, base=base, paths=paths), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "output"
+                subprocess.run(["bash", "-e", "-c", script], check=True, capture_output=True, text=True,
+                               env={**os.environ, "BASE": base, "GITHUB_OUTPUT": str(output)})
+                result = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                self.assertEqual(result["light"], str(light).lower())
+                if light or not base:
+                    for job in ("deploy", "bench", "web", "vitals"):
+                        self.assertEqual(result[job], str(not light).lower())
 
 
 class NeedsBenchmark(unittest.TestCase):

@@ -7,3 +7,11 @@ modules = ["secrets", "docs", "pr", "review", "lanes"]
 
 [merge]
 strict = false # PRs merge through the merge train (docs/ops/merge-train.md), which builds the queued PRs merged onto the latest main and gates main on its `merge-train` status, so a PR need not take in main first. manage.py metrics --since 2026-10-14 (measured 2026-10-18): ci median 19.9 min, 1.28 merges/hour, 143 merges; with strict each merge voided the other queued PRs' builds, and two PRs that passed alone broke main together (#150, #182). `merge-train` is added to the ruleset by hand until project-workflow can declare it.
+
+[lanes]
+# Repository checks and CI orchestration never enter the program or page build. Deployment skips read these too.
+# Preserve the existing Markdown-only path even outside docs/.
+light = ["*.[mM][dD]", "scripts/test_*.py", "scripts/check_*.py", "scripts/ci_skips.py", "scripts/train.py",
+         "scripts/workflow/*", "scripts/ci/runner-host.sh", "scripts/ci/bench-compare.sh"]
+# Runner provisioning is also a page-build input, so it must take the full lane.
+code = ["scripts/ci/runner-host.sh"]
