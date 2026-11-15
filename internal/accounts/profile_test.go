@@ -191,8 +191,10 @@ func TestEmailChangeConcurrentConfirmation(t *testing.T) {
 	for range 2 {
 		go func() { result <- confirmEmailChange(t, x, p, token) }()
 	}
-	waited := waitForProfileLocks(t, x, "-- name: LockUser%", 2)
-	close(release)
+	func() {
+		defer close(release)
+		awaitWaitingQuery(t, x.admin(t), "-- name: LockUser%", 2)
+	}()
 	if err := <-held; err != nil {
 		t.Fatal(err)
 	}
@@ -204,9 +206,6 @@ func TestEmailChangeConcurrentConfirmation(t *testing.T) {
 		} else if !errors.Is(err, accounts.ErrEmailChangeInvalid) {
 			t.Fatal(err)
 		}
-	}
-	if !waited {
-		t.Fatal("both confirmations did not wait for the user lock")
 	}
 	if wins != 1 {
 		t.Fatalf("successful confirmations: %d", wins)

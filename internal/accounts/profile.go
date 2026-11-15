@@ -82,14 +82,18 @@ func (s *Service) RequestEmailChange(ctx context.Context, p Principal, email, pa
 	if err := s.recoveryReady(); err != nil {
 		return err
 	}
-	limit := s.emailLimit(p.site, uuid.UUID(p.user).String(), s.snapshot.Load().sites[p.site].limits)
-	limit.bucket, limit.kind = s.guards.resets, "email_change"
-	if _, wait := takeAttempt(s, ctx, limit); wait > 0 {
-		return &TooManyAttempts{RetryAfter: wait}
-	}
 	email = normalEmail(email)
 	if !emailAllowed(email) {
 		return ErrBadEmail
+	}
+	site := s.snapshot.Load().sites[p.site]
+	if !domainPermitted(site, domainOf(email)) {
+		return ErrEmailDomainNotAllowed
+	}
+	limit := s.emailLimit(p.site, uuid.UUID(p.user).String(), site.limits)
+	limit.bucket, limit.kind = s.guards.resets, "email_change"
+	if _, wait := takeAttempt(s, ctx, limit); wait > 0 {
+		return &TooManyAttempts{RetryAfter: wait}
 	}
 	return s.db.Tx(ctx, pg.SiteScope(uuid.UUID(p.site)), func(tx pg.Tx) error {
 		return s.issueEmailChange(ctx, tx, p, email, language)
@@ -206,6 +210,9 @@ func (s *Service) consumeEmailChange(ctx context.Context, tx pg.Tx, p Principal,
 	change := pending[0]
 	if !change.Unexpired {
 		return Issued{}, nil, ErrEmailChangeExpired
+	}
+	if !domainPermitted(s.snapshot.Load().sites[p.site], domainOf(change.Email)) {
+		return Issued{}, nil, ErrEmailDomainNotAllowed
 	}
 	if err := s.applyEmailChange(ctx, tx, p, change, now); err != nil {
 		return Issued{}, nil, err

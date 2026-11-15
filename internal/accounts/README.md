@@ -78,9 +78,9 @@
 
 `ChangeDisplayName` 修改个人账户的 `accounts.name`，去除首尾空白并校验 1–100 字符；`user.name_changed` 只记前后长度，不把名字写进通用审计。`DisplayName` 在同一账户范围读取当前名，`GET /profile/name` 供页面刷新后读回；姓名写者先锁用户后读取改前值，因此纯读取不加行锁。无变化不写审计。
 
-`RequestEmailChange` 复用 `checkPasswordForChange` 的密码复核和用户失败桶，发送预算复用找回密码桶、按用户标识独立计数；扣预算前检查当前邮箱有效，无效返回 ErrBadEmail，不发信。锁用户后核对 MFA 与 factor_version。站点范围仅用于检查与注册相同的站点邮箱唯一性，写入始终使用 Principal 自己的用户、个人账户和站点。迁移 `00045_profile.sql` 新增 `email_changes`（复合用户外键、强制账户/站点 RLS），每用户一行，保存目标邮箱、令牌摘要、发起时 factor_version、语言和截止时间；重发覆盖，只有摘要入表。令牌、验证邮件和域名选择复用注册/找回机制，使用现有 SMTP outbox，不注册新任务；密码找回清理任务分批删除过期行。
+`RequestEmailChange` 复用 `checkPasswordForChange` 的密码复核和用户失败桶，发送预算复用找回密码桶、按用户标识独立计数；扣预算前检查当前及新邮箱有效，无效返回 ErrBadEmail，不发信；新邮箱还复用注册的域名名单，拒绝返回 ErrEmailDomainNotAllowed。锁用户后核对 MFA 与 factor_version。站点范围仅用于检查与注册相同的站点邮箱唯一性，写入始终使用 Principal 自己的用户、个人账户和站点。迁移 `00045_profile.sql` 新增 `email_changes`（复合用户外键、强制账户/站点 RLS），每用户一行，保存目标邮箱、令牌摘要、发起时 factor_version、语言和截止时间；重发覆盖，只有摘要入表。令牌、验证邮件和域名选择复用注册/找回机制，使用现有 SMTP outbox，不注册新任务；密码找回清理任务分批删除过期行。
 
-`ConfirmEmailChange` 要求同一用户的非 pending 控制台会话，已启用第二因素时须为 MFA。锁顺序为用户 → 待变更，重发和确认相同；比较摘要、factor_version、注入时钟的 24 小时截止时间。消费、设置 `users.email` 与 `email_verified_at`、作废旧邮箱找回令牌、`user.email_changed` 脱敏前后地址审计和旧地址通知同事务。并发确认仅一次成功，唯一约束覆盖与注册的竞争。复用 `finishFactorChange` 提升因素版本，返回当前设备的同等级新会话、CSRF 及 TOTP 用户的新恢复码；其他会话与旧恢复码失效。旧邮箱通知覆盖因素通知的邮件，按新版本标记已发，避免额外邮件；其他因素变更也会让未确认请求失效。接口、错误与理由见[账户域](../../docs/domains/accounts.md#登录与会话)。
+`ConfirmEmailChange` 要求同一用户的非 pending 控制台会话，已启用第二因素时须为 MFA。锁顺序为用户 → 待变更，重发和确认相同；比较摘要、factor_version、注入时钟的 24 小时截止时间，并重查最新站点域名名单；封禁后拒绝确认且保留原邮箱。消费、设置 `users.email` 与 `email_verified_at`、作废旧邮箱找回令牌、`user.email_changed` 脱敏前后地址审计和旧地址通知同事务。并发确认仅一次成功，唯一约束覆盖与注册的竞争。复用 `finishFactorChange` 提升因素版本，返回当前设备的同等级新会话、CSRF 及 TOTP 用户的新恢复码；其他会话与旧恢复码失效。旧邮箱通知覆盖因素通知的邮件，按新版本标记已发，避免额外邮件；其他因素变更也会让未确认请求失效。接口、错误与理由见[账户域](../../docs/domains/accounts.md#登录与会话)。
 
 ## 业务速率
 
