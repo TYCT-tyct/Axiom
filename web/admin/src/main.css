@@ -1,4 +1,9 @@
 @import "@axiom/ui/styles.css";
 
+/* The admin sets its text in its own stack, whose Chinese face is cut for its pages (fonts.css). */
+:root {
+  --font-sans: var(--family-admin);
+}
+
 @source "./";
 @source "../../packages/app/src";

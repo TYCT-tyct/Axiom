@@ -40,7 +40,7 @@ describe("faceTexts", () => {
   it("cuts a page's plural messages into its characters", async () => {
     // admin/pages/redeem-codes shows redeem.issuedIntro, which has only plural forms: 「这是唯一一次显示」.
     const manifest = readManifest();
-    const ui = manifest.faces.findIndex((face) => face.family === "Axiom CJK UI");
+    const ui = manifest.faces.findIndex((face) => face.family === "Axiom CJK Admin");
     const texts = await faceTexts(manifest);
     expect(texts[ui]?.["admin/pages/redeem-codes"]).toContain("唯");
   });

@@ -21,25 +21,32 @@ describe("fontBudget", () => {
       failures: ["console: Latin fonts", "  sans 40.0 kB", "  mono 20.0 kB"],
     },
     {
-      name: "Chinese over 100 kB on one site page only",
-      faces: [
-        face("han", [
-          ["shared", ["site/home", "site/models"], 60_000],
-          ["models", ["site/models"], 40_001],
-        ]),
-      ],
-      failures: ["site/models: Chinese fonts", "  shared 60.0 kB", "  models 40.0 kB"],
-    },
-    {
-      name: "Chinese over 100 kB on a console page, with the same budget as the website's",
+      name: "Chinese over 100 kB in every file of the face a page is set in, though its own text needs fewer",
       faces: [
         face("han", [
           ["shell", ["console/pages/keys", "console/pages/calls"], 90_000],
-          ["keys", ["console/pages/keys"], 10_001],
-          ["calls", ["console/pages/calls"], 10_000],
+          ["keys", ["console/pages/keys"], 5_000],
+          ["calls", ["console/pages/calls"], 5_001],
         ]),
       ],
-      failures: ["console/pages/keys: Chinese fonts", "  shell 90.0 kB", "  keys 10.0 kB"],
+      failures: [
+        "console/pages/calls: Chinese fonts",
+        "  shell 90.0 kB",
+        "  keys 5.0 kB",
+        "  calls 5.0 kB",
+        "console/pages/keys: Chinese fonts",
+        "  shell 90.0 kB",
+        "  keys 5.0 kB",
+        "  calls 5.0 kB",
+      ],
+    },
+    {
+      name: "another app's face, which its pages are not set in",
+      faces: [
+        face("han", [["console", ["console/pages/keys"], 99_000]]),
+        face("han", [["admin", ["admin/pages/users"], 99_000]]),
+      ],
+      failures: [],
     },
   ])("$name", ({ faces, failures }) => {
     const result = fontBudget({ faces });

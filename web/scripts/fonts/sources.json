@@ -98,14 +98,27 @@
       "preload": ["site/home"]
     },
     {
-      "family": "Axiom CJK UI",
+      "family": "Axiom CJK Console",
       "source": "cjk-body",
       "weight": "400",
       "axes": {
         "wght": 330
       },
       "split": true,
-      "pages": ["console/*", "admin/*"],
+      "pages": ["console/*"],
+      "text": {
+        "script": "han"
+      }
+    },
+    {
+      "family": "Axiom CJK Admin",
+      "source": "cjk-body",
+      "weight": "400",
+      "axes": {
+        "wght": 330
+      },
+      "split": true,
+      "pages": ["admin/*"],
       "text": {
         "script": "han"
       }
