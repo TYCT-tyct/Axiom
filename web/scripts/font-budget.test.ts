@@ -31,9 +31,15 @@ describe("fontBudget", () => {
       failures: ["site/models: Chinese fonts", "  shared 60.0 kB", "  models 40.0 kB"],
     },
     {
-      name: "any Chinese font outside the website, which uses the system's",
-      faces: [face("han", [["cjk", ["console"], 1]])],
-      failures: ["console: Chinese fonts", "  cjk 0.0 kB"],
+      name: "Chinese over 100 kB on a console page, with the same budget as the website's",
+      faces: [
+        face("han", [
+          ["shell", ["console/pages/keys", "console/pages/calls"], 90_000],
+          ["keys", ["console/pages/keys"], 10_001],
+          ["calls", ["console/pages/calls"], 10_000],
+        ]),
+      ],
+      failures: ["console/pages/keys: Chinese fonts", "  shell 90.0 kB", "  keys 10.0 kB"],
     },
   ])("$name", ({ faces, failures }) => {
     const result = fontBudget({ faces });

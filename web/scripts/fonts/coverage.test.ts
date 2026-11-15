@@ -16,15 +16,15 @@ const manifest = readManifest();
 const texts = await faceTexts(manifest);
 
 // The fingerprint build.py writes into fonts.json: anything in sources.json (a source's hash, an axis, a descriptor, a
-// page), the script or its pinned tools changes it, and with it what the pipeline would cut.
-const inputNames = ["sources.json", "build.py", "requirements.txt"];
+// page), the scripts or their pinned tools changes it, and with it what the pipeline would cut.
+const inputNames = ["sources.json", "build.py", "text.ts", "routes.ts", "requirements.txt"];
 const sha256 = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
 const fingerprint = (read: (name: string) => string | Buffer) =>
   sha256(inputNames.map((name) => `${name} ${sha256(read(name))}\n`).join(""));
 const readInput = (name: string) => readFileSync(join(import.meta.dirname, name));
 
 describe("the committed fonts", () => {
-  it(`were cut from the current sources.json, build.py and requirements.txt (${rerun})`, () => {
+  it(`were cut from the current sources.json, scripts and requirements.txt (${rerun})`, () => {
     expect(fingerprint(readInput)).toBe(built.inputs);
   });
 

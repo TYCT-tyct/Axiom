@@ -1,14 +1,14 @@
 // The per-page font budget (docs/frontend.md「前端性能指标」): the font files a page can load, each counted once, at
-// most 60 kB for Latin text and digits and, on the website, 100 kB for Chinese. The console and the admin set Chinese
-// in the system's font, so their Chinese budget is zero. Which files a page can load is fonts.json, which the font
-// pipeline (scripts/fonts/build.py) writes: a face's files carry the pages that show their characters.
+// most 60 kB for Latin text and digits and 100 kB for Chinese, on the website as on each page of the console and the
+// admin. Which files a page can load is fonts.json, which the font pipeline (scripts/fonts/build.py) writes: a face's
+// files carry the pages that show their characters.
 
 const kB = 1000;
 
-type FontFile = { file: string; pages: string[]; bytes: number };
+export type FontFile = { file: string; pages: string[]; bytes: number; preload?: boolean };
 export type FontManifest = { faces: { family: string; weight: string; script: "latin" | "han"; files: FontFile[] }[] };
 
-const budgets = (page: string) => ({ latin: 60 * kB, han: page.startsWith("site/") ? 100 * kB : 0 });
+const budgets = { latin: 60 * kB, han: 100 * kB };
 const scriptNames = { latin: "Latin", han: "Chinese" } as const;
 
 // pageFiles returns the files of one script a page can load, each once, by name.
@@ -34,7 +34,7 @@ export function fontBudget(manifest: FontManifest) {
         continue;
       }
       const total = [...files.values()].reduce((sum, bytes) => sum + bytes, 0);
-      const budget = budgets(page)[script];
+      const budget = budgets[script];
       const line = `${`${page}: ${scriptNames[script]} fonts`.padEnd(36)} ${(total / kB).toFixed(1).padStart(6)} kB of ${budget / kB} kB`;
       lines.push(line);
       if (total > budget) {
