@@ -94,7 +94,7 @@ PR 描述写明属于哪几类，跨类取并集，拿不准按更严的。负�
 ## CI 与检查
 
 - **分层**：PR 跑 `static`、按路径选择的 `web`、页面构建输入变动时的 `vitals`，以及 `docs`、`secrets`、`pr`、`review`、`docs-impact`；Go 测试、两个 e2e 分片、`journey`、`bench`、`deploy` 只在列车和 `main` 上跑；`main` 每次落地都跑全部，`vitals` 在 `main` 上总跑。`ci.yml` 里只有 `build` 进规则集，`check-*` 和 `docs-impact` 各自的任务也是必需检查。每个 PR 的 Go 测试和 e2e 只在它的列车里跑一次，失败由列车二分找出元凶。
-- **路径门禁**：`vitals` 只在 `web/` 或生成页面客户端所用的 `api/*.yaml` 变动时跑；`bench`、`deploy`、`web` 按各自路径跳过；整班只改 Markdown 时只跑 `just md-checks` 和 `secrets`。拿不准时让检查跑；PR 上跳过的作业不挡 `build`，列车按路径规则跑，`main` 上全跑。
+- **路径门禁**：`vitals` 只在 `web/` 或生成页面客户端所用的 `api/*.yaml` 变动时跑；`bench`、`deploy`、`web` 按各自路径跳过；轻量 PR 和列车（文档、受管文件及 `[lanes] light`，排除 `[lanes] code`）只跑 `static` 的 `just md-checks scope`（含 `script-tests`），列车另加 `secrets`；纯 Markdown 和混合轻量改动保持同一套检查。拿不准时让检查跑；PR 上跳过的作业不挡 `build`，列车按路径规则跑，`main` 上全跑。
 - **偶发失败**：只有失败全是 `.github/flaky.toml` 登记、且每条有开着的 Issue 的 Go 测试时，列车重跑失败的作业一次；编译、lint、前端、端到端和部署失败都不算。写手不重跑、不取消；未知失败先分类、留证据，不叫「偶发」，重复出现就修机制并把条目移出清单，Issue 关闭后 CI 会失败提醒删条目。
 
 ## 验收与关账
