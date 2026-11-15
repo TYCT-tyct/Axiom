@@ -1,0 +1,56 @@
+/* The board's .pmi: a row of the menu with its icon, a check at the end for the chosen one, danger in --badT. The row
+   under the keyboard is marked like the hovered one; the focus ring marks it too. */
+.item {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
+  border-radius: var(--r8);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+  cursor: pointer;
+}
+
+.item:hover,
+.item:focus-visible {
+  --icon-hover: 1;
+  background: var(--hover);
+}
+
+.item:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.icon {
+  display: inline-flex;
+  color: var(--t2);
+}
+
+.check {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--sel-ind);
+}
+
+.danger,
+.danger .icon {
+  color: var(--badT);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .item {
+    transition: background-color var(--dur) var(--ease);
+  }
+}
+
+@media (max-width: 767px) {
+  .item {
+    min-height: 44px;
+  }
+}
