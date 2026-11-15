@@ -26,3 +26,11 @@ func (c consoleAPI) ConfirmEmailChange(ctx context.Context, r consoleapi.Confirm
 	}
 	return consoleapi.ConfirmEmailChange204Response{}, nil
 }
+
+func (c consoleAPI) GetDisplayName(ctx context.Context, _ consoleapi.GetDisplayNameRequestObject) (consoleapi.GetDisplayNameResponseObject, error) {
+	name, err := c.accounts.DisplayName(ctx, callOf(ctx).principal)
+	if err != nil {
+		return nil, err
+	}
+	return consoleapi.GetDisplayName200JSONResponse{Name: &name}, nil
+}

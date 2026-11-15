@@ -11,7 +11,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** Read the current display name */
+        get: operations["getDisplayName"];
         put?: never;
         /**
          * Change the display name
@@ -3083,6 +3084,32 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getDisplayName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal account display name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Optional so older nodes can be handled as unavailable. */
+                        name?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
     changeDisplayName: {
         parameters: {
             query?: never;

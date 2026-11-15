@@ -1,5 +1,5 @@
 -- name: ProfileName :one
-SELECT name FROM accounts.accounts WHERE id = @account_id FOR UPDATE;
+SELECT name FROM accounts.accounts WHERE id = @account_id;
 
 -- name: SetProfileName :exec
 UPDATE accounts.accounts SET name = @name WHERE id = @account_id;

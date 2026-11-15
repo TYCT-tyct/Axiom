@@ -26,6 +26,18 @@ var (
 
 const emailChangeTTL = 24 * time.Hour
 
+// DisplayName reads the personal account name so a refreshed settings form uses the persisted value.
+func (s *Service) DisplayName(ctx context.Context, p Principal) (name string, err error) {
+	if p.user == (UserID{}) || p.Pending() || p.surface != Console {
+		return "", ErrNoSession
+	}
+	err = s.db.Tx(ctx, pg.AccountScope(uuid.UUID(p.account)), func(tx pg.Tx) error {
+		name, err = s.queries.ProfileName(ctx, tx, uuid.UUID(p.account))
+		return err
+	})
+	return name, err
+}
+
 // ChangeDisplayName updates the personal account name used by the console; no credential changes.
 func (s *Service) ChangeDisplayName(ctx context.Context, p Principal, name string) error {
 	if p.user == (UserID{}) || p.Pending() || p.surface != Console {

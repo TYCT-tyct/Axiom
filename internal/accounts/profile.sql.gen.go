@@ -81,7 +81,7 @@ func (q *Queries) LockEmailChange(ctx context.Context, db DBTX, arg LockEmailCha
 }
 
 const profileName = `-- name: ProfileName :one
-SELECT name FROM accounts.accounts WHERE id = $1 FOR UPDATE
+SELECT name FROM accounts.accounts WHERE id = $1
 `
 
 func (q *Queries) ProfileName(ctx context.Context, db DBTX, accountID uuid.UUID) (string, error) {

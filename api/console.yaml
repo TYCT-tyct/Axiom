@@ -24,6 +24,26 @@ tags:
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
   /api/console/v1/profile/name:
+    get:
+      operationId: getDisplayName
+      tags: [Session]
+      summary: Read the current display name
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The personal account display name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: {type: string, description: "Optional so older nodes can be handled as unavailable."}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
     post:
       operationId: changeDisplayName
       tags: [Session]

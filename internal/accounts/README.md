@@ -76,7 +76,7 @@
 
 ## 个人资料
 
-`ChangeDisplayName` 修改个人账户的 `accounts.name`，去除首尾空白并校验 1–100 字符；`user.name_changed` 只记前后长度，不把名字写进通用审计。无变化不写审计。
+`ChangeDisplayName` 修改个人账户的 `accounts.name`，去除首尾空白并校验 1–100 字符；`user.name_changed` 只记前后长度，不把名字写进通用审计。`DisplayName` 在同一账户范围读取当前名，`GET /profile/name` 供页面刷新后读回；姓名写者先锁用户后读取改前值，因此纯读取不加行锁。无变化不写审计。
 
 `RequestEmailChange` 复用 `checkPasswordForChange` 的密码复核和用户失败桶，发送预算复用找回密码桶、按用户标识独立计数；锁用户后核对 MFA 与 factor_version。站点范围仅用于检查与注册相同的站点邮箱唯一性，写入始终使用 Principal 自己的用户、个人账户和站点。迁移 `00045_profile.sql` 新增 `email_changes`（复合用户外键、强制账户/站点 RLS），每用户一行，保存目标邮箱、令牌摘要、发起时 factor_version、语言和截止时间；重发覆盖，只有摘要入表。令牌、验证邮件和域名选择复用注册/找回机制，使用现有 SMTP outbox，不注册新任务；密码找回清理任务分批删除过期行。
 

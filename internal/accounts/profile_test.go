@@ -53,9 +53,9 @@ func TestDisplayName(t *testing.T) {
 		if err := x.s.ChangeDisplayName(t.Context(), p, name); err != nil {
 			t.Fatal(err)
 		}
-		got := texts(t, x.db, platform, "SELECT name FROM accounts.accounts WHERE id = '"+uuid.UUID(p.AccountID()).String()+"'")[0]
-		if got != strings.TrimSpace(name) {
-			t.Fatalf("name: %q", got)
+		current, err := x.s.DisplayName(t.Context(), p)
+		if err != nil || current != strings.TrimSpace(name) {
+			t.Fatalf("display name: %q, %v", current, err)
 		}
 	}
 	if err := x.s.ChangeDisplayName(t.Context(), p, strings.Repeat("界", 100)); err != nil {
