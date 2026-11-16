@@ -1,11 +1,6 @@
 package protocol
 
-import (
-	"bytes"
-	"fmt"
-
-	"axiom/internal/protocol/internal/sse"
-)
+import "fmt"
 
 // chatAggregate builds a Chat completion from the chunks of a Chat stream, whether the upstream spoke Chat, Messages
 // or Responses (README.md「非流式聚合」, OpenAI《Create chat completion》, OpenRouter《Reasoning tokens》, read
@@ -13,20 +8,15 @@ import (
 // is made of them at the end. A piece that is copied to make the body is charged twice, and the reasoning details,
 // which are decoded, merged and written again, four times.
 type chatAggregate struct {
-	aggBase
-	ev      chatAggEvent
-	pending []chatSpan
-	curAt   int // the choice being applied, by its place in choices
-	tool    chatTool
-	// id, created and model are the first chunk's; usage, errored and axiom are those of the chunks that carry them.
-	id, created, model, usage, errored, axiom []byte
-	choices                                   []chatChoice
-	at                                        map[int64]int // a choice's place in choices, by its index
-	hadError                                  bool
-	legacy                                    bool
-	healing                                   bool
-	cited                                     bool // the reply gets url_citation annotations at the end
-	citeCharged                               bool // its extra working set has been drawn
+	choiceAggregate[chatSpan]
+	curAt       int // the choice being applied, by its place in choices
+	tool        chatTool
+	choices     []chatChoice
+	at          map[int64]int // a choice's place in choices, by its index
+	legacy      bool
+	healing     bool
+	cited       bool // the reply gets url_citation annotations at the end
+	citeCharged bool // its extra working set has been drawn
 }
 
 // The pieces of a choice that are strings.
@@ -63,31 +53,16 @@ type chatSpan struct {
 	delta, finish, logprobs []byte
 }
 
-// chatAggEvent is a chunk's members that are not choices, as written.
-type chatAggEvent struct {
-	span                                      chatSpan
-	id, created, model, usage, errored, axiom []byte
-}
-
 // mapSlot is what a choice or a tool call is charged for its place in the map that finds it, besides the struct in its
 // slice, as choiceSize works out.
 const mapSlot = 48
 
 var (
-	chatAggFields = map[string]func(*chatAggregate) error{ //nolint:dupl // legacy completions' aggregate mirrors these members
-		"id":      func(a *chatAggregate) error { return a.capture(&a.ev.id) },
-		"created": func(a *chatAggregate) error { return a.capture(&a.ev.created) },
-		"model":   func(a *chatAggregate) error { return a.capture(&a.ev.model) },
-		"choices": func(a *chatAggregate) error { return a.eachElement(a.readChoice) },
-		"usage":   func(a *chatAggregate) error { return a.capture(&a.ev.usage) },
-		"error":   func(a *chatAggregate) error { return a.capture(&a.ev.errored) },
-		"axiom":   func(a *chatAggregate) error { return a.capture(&a.ev.axiom) },
-	}
 	chatAggChoiceFields = map[string]func(*chatAggregate) error{
-		"index":         func(a *chatAggregate) error { return a.index(&a.ev.span.index) },
-		"delta":         func(a *chatAggregate) error { return a.capture(&a.ev.span.delta) },
-		"finish_reason": func(a *chatAggregate) error { return a.capture(&a.ev.span.finish) },
-		"logprobs":      func(a *chatAggregate) error { return a.capture(&a.ev.span.logprobs) },
+		"index":         func(a *chatAggregate) error { return a.index(&a.span.index) },
+		"delta":         func(a *chatAggregate) error { return a.capture(&a.span.delta) },
+		"finish_reason": func(a *chatAggregate) error { return a.capture(&a.span.finish) },
+		"logprobs":      func(a *chatAggregate) error { return a.capture(&a.span.logprobs) },
 	}
 	chatAggLogFields = map[string]func(*chatAggregate) error{
 		"content": func(a *chatAggregate) error { return a.logEntries(0) },
@@ -114,24 +89,10 @@ var (
 	}
 )
 
-// read reads a chunk into the event and its pending choices, unless it is [DONE] or has no data. Anything else is
-// the JSON of a chunk, whatever whitespace leads it.
-func (a *chatAggregate) read(data []byte) (bool, error) {
-	if t := bytes.TrimSpace(data); len(t) == 0 || string(t) == sse.Done {
-		return false, nil
-	}
-	a.begin(data)
-	a.ev, a.pending = chatAggEvent{}, a.pending[:0]
-	if err := walk(&a.reader, a, chatAggFields); err != nil {
-		return false, upstreamFailure(err)
-	}
-	return true, nil
-}
-
 // hold makes room, as the relay withholds a chunk until the normal end, for the choices it starts and their finish
 // reasons: Finish feeds the chunk when the charging has ended, so the cap and the node's budget are asked now.
 func (a *chatAggregate) hold(data []byte) error {
-	if ok, err := a.read(data); !ok || err != nil {
+	if ok, err := a.read(data, a.readChoice); !ok || err != nil {
 		return err
 	}
 	for _, s := range a.pending {
@@ -148,7 +109,7 @@ func (a *chatAggregate) hold(data []byte) error {
 }
 
 func (a *chatAggregate) event(data []byte) error {
-	if ok, err := a.read(data); !ok || err != nil {
+	if ok, err := a.read(data, a.readChoice); !ok || err != nil {
 		return err
 	}
 	if err := a.keep(); err != nil {
@@ -162,37 +123,9 @@ func (a *chatAggregate) event(data []byte) error {
 	return nil
 }
 
-// keep takes the members of the chunk that are not choices: the first chunk's identity, and the last usage, error
-// and axiom.
-//
-//nolint:dupl // legacy completions' aggregate mirrors this member list
-func (a *chatAggregate) keep() error {
-	e := &a.ev
-	for _, m := range [...]struct {
-		dst   *[]byte
-		v     []byte
-		first bool
-	}{
-		{&a.id, e.id, true},
-		{&a.created, e.created, true},
-		{&a.model, e.model, true},
-		{&a.usage, e.usage, false},
-		{&a.errored, e.errored, false},
-		{&a.axiom, e.axiom, false},
-	} {
-		if m.v != nil && (!m.first || len(*m.dst) == 0) {
-			if err := a.set(m.dst, m.v, 1); err != nil {
-				return err
-			}
-		}
-	}
-	a.hadError = a.hadError || e.errored != nil
-	return nil
-}
-
 // readChoice reads a choice of the chunk and queues it.
 func (a *chatAggregate) readChoice() error {
-	a.ev.span = chatSpan{}
+	a.span = chatSpan{}
 	if err := walk(&a.reader, a, chatAggChoiceFields); err != nil {
 		return err
 	}
@@ -200,7 +133,7 @@ func (a *chatAggregate) readChoice() error {
 	if a.pending, err = grow(&a.aggBase, a.pending, 1, 1); err != nil {
 		return err
 	}
-	a.pending = append(a.pending, a.ev.span)
+	a.pending = append(a.pending, a.span)
 	return nil
 }
 
@@ -267,15 +200,7 @@ func (a *chatAggregate) entry(dst *[]byte, factor int) error {
 	if err != nil {
 		return err
 	}
-	b, err := grow(&a.aggBase, *dst, len(v)+1, factor)
-	if err != nil {
-		return err
-	}
-	if len(b) > 0 {
-		b = append(b, ',')
-	}
-	*dst = append(b, v...)
-	return nil
+	return a.appendEntry(dst, v, factor)
 }
 
 // piece adds the string the delta has to the choice's piece i.
