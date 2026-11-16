@@ -39,35 +39,27 @@ func (c *cooldown) block(until time.Time) {
 func (c *cooldown) active(now time.Time) bool { return now.UnixNano() < c.until.Load() }
 
 func (s *state) supplier(id SupplierID) *cooldown {
-	s.mu.RLock()
-	c := s.suppliers[id]
-	s.mu.RUnlock()
-	if c != nil {
-		return c
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if c = s.suppliers[id]; c == nil {
-		c = new(cooldown)
-		s.suppliers[id] = c
-	}
-	return c
+	return stateOf(&s.mu, s.suppliers, id)
 }
 
 func (s *state) of(id EndpointID) *epState {
-	s.mu.RLock()
-	e, ok := s.endpoints[id]
-	s.mu.RUnlock()
-	if ok {
-		return e
+	return stateOf(&s.mu, s.endpoints, id)
+}
+
+func stateOf[K comparable, V any](mu *sync.RWMutex, states map[K]*V, id K) *V {
+	mu.RLock()
+	v := states[id]
+	mu.RUnlock()
+	if v != nil {
+		return v
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if e, ok = s.endpoints[id]; !ok {
-		e = new(epState)
-		s.endpoints[id] = e
+	mu.Lock()
+	defer mu.Unlock()
+	if v = states[id]; v == nil {
+		v = new(V)
+		states[id] = v
 	}
-	return e
+	return v
 }
 
 // Begin counts a request in flight at the endpoint; End, when the attempt ends. The gateway calls them around an

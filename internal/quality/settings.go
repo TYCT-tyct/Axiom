@@ -1,6 +1,7 @@
 package quality
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -56,12 +57,12 @@ func DefaultProbeSettings() ProbeSettings {
 func (s ProbeSettings) Effective() ProbeSettings {
 	d := DefaultProbeSettings()
 	return ProbeSettings{
-		HourlyBudget: cmpOr(s.HourlyBudget, d.HourlyBudget),
-		Concurrency:  cmpOr(s.Concurrency, d.Concurrency),
-		VerifyEvery:  cmpOr(s.VerifyEvery, d.VerifyEvery),
-		VerifyMaxAge: cmpOr(s.VerifyMaxAge, d.VerifyMaxAge),
-		VerifyRetry:  cmpOr(s.VerifyRetry, d.VerifyRetry),
-		ProbeBase:    cmpOr(s.ProbeBase, d.ProbeBase),
+		HourlyBudget: cmp.Or(s.HourlyBudget, d.HourlyBudget),
+		Concurrency:  cmp.Or(s.Concurrency, d.Concurrency),
+		VerifyEvery:  cmp.Or(s.VerifyEvery, d.VerifyEvery),
+		VerifyMaxAge: cmp.Or(s.VerifyMaxAge, d.VerifyMaxAge),
+		VerifyRetry:  cmp.Or(s.VerifyRetry, d.VerifyRetry),
+		ProbeBase:    cmp.Or(s.ProbeBase, d.ProbeBase),
 	}
 }
 
@@ -105,13 +106,6 @@ func (s ProbeSettings) Check() error {
 type SettingError struct{ Field, Reason string }
 
 func (e *SettingError) Error() string { return "quality: " + e.Field + " " + e.Reason }
-
-func cmpOr[T int | time.Duration](v, fallback T) T {
-	if v == 0 {
-		return fallback
-	}
-	return v
-}
 
 // currentSettings is the value in force. The loop writes it, and the monitoring path reads ProbeBase and the verify
 // age without its lock, so the value is immutable and swapped by pointer.

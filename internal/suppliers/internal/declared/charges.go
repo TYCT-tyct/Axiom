@@ -12,49 +12,16 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// The scan of the charge log. The declaration supplies the path and the fields; the pass algorithm is the module's,
-// because it is what makes a log read safely: a pass covers a fixed window, reads pages newest first, overlaps the
-// watermark for late records, and moves the watermark only over what it finished. A record that cannot be read stops
-// the pass; a charge dropped here is money nothing matches.
-const (
-	scanOverlap     = 5 * time.Minute
-	scanLag         = 30 * time.Second
-	scanInitialSpan = time.Hour
-	scanMinSpan     = time.Minute
-	scanMaxSpan     = 24 * time.Hour
-	scanLongPass    = 20
-	scanFastPasses  = 3
-	scanLateEvery   = 24 * time.Hour
-)
-
 const scanVersion = 1
 
 type scanState struct {
-	V         int       `json:"v"`
-	Watermark int64     `json:"watermark"`
-	Span      int64     `json:"span"`
-	Fast      int       `json:"fast"`
-	LastLate  int64     `json:"last_late"`
-	LateEnd   int64     `json:"late_end"`
-	Connected int64     `json:"connected"`
-	Size      int       `json:"size"`
-	Pass      *scanPass `json:"pass,omitempty"`
-}
-
-type scanPass struct {
-	Late  bool  `json:"late"`
-	Start int64 `json:"start"`
-	End   int64 `json:"end"`
-	Page  int   `json:"page"`
-	Pages int   `json:"pages"`
+	adapter.WindowScan
+	Size int `json:"size"`
 }
 
 func decodeScan(raw adapter.ScanState, now time.Time, size int) (scanState, error) {
 	if len(raw) == 0 {
-		return scanState{
-			V: 1, Watermark: now.Unix(), Span: int64(scanInitialSpan / time.Second),
-			LastLate: now.Unix(), LateEnd: now.Unix(), Connected: now.Unix(), Size: size,
-		}, nil
+		return scanState{WindowScan: adapter.NewWindowScan(now), Size: size}, nil
 	}
 	var s scanState
 	if err := jsonx.UnmarshalKnown(raw, &s); err != nil {
@@ -63,7 +30,7 @@ func decodeScan(raw adapter.ScanState, now time.Time, size int) (scanState, erro
 	if !s.valid() {
 		return scanState{}, fmt.Errorf("%w: the saved scan position", adapter.ErrUnrecognised)
 	}
-	if s.Pass != nil && !s.Pass.valid() {
+	if p := s.Pass; p != nil && (p.Start < 0 || p.End < 0 || p.Start > p.End || p.Page < 1 || p.Pages < 0) {
 		return scanState{}, fmt.Errorf("%w: the saved scan pass", adapter.ErrUnrecognised)
 	}
 	if s.Size != size {
@@ -79,17 +46,6 @@ func (s scanState) valid() bool {
 		s.LateEnd >= 0 && s.Connected >= 0 && s.Fast >= 0
 }
 
-func (p scanPass) valid() bool {
-	return p.Start >= 0 && p.End >= 0 && p.Start <= p.End && p.Page >= 1 && p.Pages >= 0
-}
-
-func (s scanState) lateEnd() int64 {
-	if s.LateEnd == 0 {
-		return s.Watermark
-	}
-	return s.LateEnd
-}
-
 func (s scanState) encode() (adapter.ScanState, error) { return jsonx.MarshalCanonical(s) }
 
 // Charges implements adapter.Manager: one page of the pass under way, or the start of the next one. The state returned
@@ -101,10 +57,15 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 		return adapter.ChargePage{}, scan, err
 	}
 	if s.Pass == nil {
-		if s.Pass = nextScanPass(s, now); s.Pass == nil {
+		s.Pass = s.Next(now)
+		if s.Pass != nil && s.Pass.End <= s.Pass.Start {
+			s.Pass = nil
+		}
+		if s.Pass == nil {
 			state, err := s.encode()
 			return adapter.ChargePage{Done: true, Through: time.Unix(s.Watermark, 0).UTC()}, state, err
 		}
+		s.Pass.Pages = 1
 	}
 	charges, pageLen, err := m.readCharges(ctx, s.Pass)
 	if err != nil {
@@ -112,7 +73,7 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	}
 	done := pageLen < m.a.charges.pageSize
 	if done {
-		s = finishScan(s, now)
+		s.WindowScan = s.Finish(now)
 	} else {
 		s.Pass.Page++
 		s.Pass.Pages++
@@ -128,45 +89,9 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	return page, state, nil
 }
 
-func nextScanPass(s scanState, now time.Time) *scanPass {
-	if now.Sub(time.Unix(s.LastLate, 0)) >= scanLateEvery {
-		start := max(s.lateEnd()-int64(scanLateEvery/time.Second), s.Connected)
-		end := now.Add(-scanLag).Unix()
-		if end <= start {
-			return nil
-		}
-		return &scanPass{Late: true, Start: start, End: end, Page: 1, Pages: 1}
-	}
-	end := min(s.Watermark+s.Span, now.Add(-scanLag).Unix())
-	if end-s.Watermark < int64(scanMinSpan/time.Second) {
-		return nil
-	}
-	start := max(s.Watermark-int64(scanOverlap/time.Second), s.Connected)
-	if end <= start {
-		return nil
-	}
-	return &scanPass{Start: start, End: end, Page: 1, Pages: 1}
-}
-
-func finishScan(s scanState, now time.Time) scanState {
-	p := s.Pass
-	s.Pass = nil
-	if p.Late {
-		s.LastLate, s.LateEnd = now.Unix(), max(s.lateEnd(), p.End)
-		return s
-	}
-	s.Watermark = max(s.Watermark, p.End)
-	if p.Pages > scanLongPass {
-		s.Span, s.Fast = max(s.Span/2, int64(scanMinSpan/time.Second)), 0
-	} else if s.Fast++; s.Fast >= scanFastPasses {
-		s.Span, s.Fast = min(s.Span*2, int64(scanMaxSpan/time.Second)), 0
-	}
-	return s
-}
-
 // readCharges reads one page and returns its charges and how many records the page held, which says whether it was the
 // last page.
-func (m *manager) readCharges(ctx context.Context, p *scanPass) ([]adapter.Charge, int, error) {
+func (m *manager) readCharges(ctx context.Context, p *adapter.WindowPass) ([]adapter.Charge, int, error) {
 	values := map[string]string{
 		"start": strconv.FormatInt(p.Start, 10),
 		"end":   strconv.FormatInt(p.End, 10),

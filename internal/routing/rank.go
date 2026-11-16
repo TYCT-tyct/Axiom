@@ -38,8 +38,6 @@ const stickyMinHealth = 0.5
 // (docs/domains/routing.md「排序的先后」).
 const exploreShare = 0.05
 
-// rank filters the endpoints of one model and orders those that pass. Every endpoint left out is recorded, with the
-// reason, except those the account cannot see.
 // noSharedCapacity says the platform's endpoints may not serve this model for this account: the account either forbade
 // fallback for the model, or one of its visible keys did.
 func noSharedCapacity(cands []*candidate, n *need) bool {
@@ -51,6 +49,8 @@ func noSharedCapacity(cands []*candidate, n *need) bool {
 	})
 }
 
+// rank filters the endpoints of one model and orders those that pass. Every endpoint left out is recorded, with the
+// reason, except those the account cannot see.
 func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 	out := make([]ranked, 0, len(cands))
 	strategy := n.strategy()
@@ -95,13 +95,10 @@ func (r *Router) sort(order []ranked, strategy Strategy) {
 }
 
 func (n *need) order(c *candidate) int {
-	if names := n.over.OrderNames; len(names) > 0 {
-		if i := slices.Index(names, c.Codename); i >= 0 {
-			return i
-		}
-		return len(names)
+	order := n.over.OrderNames
+	if len(order) == 0 {
+		order = n.preset.OrderNames
 	}
-	order := n.preset.OrderNames
 	if i := slices.Index(order, c.Codename); i >= 0 {
 		return i
 	}
