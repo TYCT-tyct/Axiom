@@ -1,0 +1,35 @@
+/* The board's filter row above the logs list (.lgq, .uschip): the controls side by side, wrapping on a narrow window,
+   with the search box taking the room that is left. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.item {
+  min-width: 140px;
+}
+
+.search {
+  flex: 1;
+  min-width: 200px;
+  max-width: 320px;
+}
+
+.clear {
+  margin-left: auto;
+}
+
+@media (max-width: 767px) {
+  .search {
+    flex-basis: 100%;
+    max-width: none;
+    order: -1;
+  }
+
+  .item {
+    flex: 1 1 140px;
+  }
+}

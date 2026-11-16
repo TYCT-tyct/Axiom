@@ -123,7 +123,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 		return nodeRoutes{}, err
 	}
 	public := withModelCalls(
-		publicRoutes(consoleAPI{charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List(), suppliers: supplierAdmin, classes: calls.health, router: calls.router},
+		publicRoutes(consoleAPI{sessionCursorKey: p.sessionCursorKey[:], logger: logger, upstreams: calls.upstreams, charges: billing.NewChargeReader(logger, tel.Metrics.Meter("axiom/billing")), exit: exit, version: version(), accounts: service, payments: pay, catalog: cat, db: db, models: calls.models, search: calls.search.List(), suppliers: supplierAdmin, classes: calls.health, router: calls.router},
 			&guard{contract: p.contract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger}, p.frontend, logger),
 		calls.handler)
 	public = withKeyManagement(public, managementAPI{accounts: service, proxies: p.cfg.trustedProxies, logger: logger, keyLookup: p.gate.KeyLookup})

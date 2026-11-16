@@ -47,6 +47,16 @@ func TestPrepareLargeRequestReservesAboutItsBody(t *testing.T) {
 // allocate, and what they keep when done is their output's capacity; the failures take nothing and the budget is whole
 // once the kept bodies are given back.
 func TestPrepareConcurrentLargeRequests(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		room int64
+	}{{"one preparation", 1}, {"every preparation", 8}} {
+		t.Run(c.name, func(t *testing.T) { checkPrepareConcurrentLargeRequests(t, c.room) })
+	}
+}
+
+func checkPrepareConcurrentLargeRequests(t *testing.T, room int64) {
+	t.Helper()
 	t.Parallel()
 	long := strings.Repeat("x", 1<<18)
 	body := []byte(`{"model":"m","max_tokens":1024,"messages":[{"role":"user","content":"` + long + `"}]}`)
@@ -55,7 +65,7 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := Target{Format: Chat, Model: "up", MaxOutput: 4096}
-	need := prepareNeed(t, &r, body, target)
+	need := room * prepareNeed(t, &r, body, target)
 	m := NewMemory(need)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
@@ -82,8 +92,8 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 	}
 	close(start)
 	wg.Wait()
-	if kept == 0 || failed == 0 {
-		t.Fatalf("%d bytes kept, %d refused; want both", kept, failed)
+	if kept == 0 || (failed > 0) != (room == 1) {
+		t.Fatalf("%d bytes kept, %d refused with room for %d preparations", kept, failed, room)
 	}
 	if kept > need {
 		t.Errorf("kept %d bytes of a %d-byte budget", kept, need)
@@ -94,6 +104,117 @@ func TestPrepareConcurrentLargeRequests(t *testing.T) {
 	m.Refund(kept) // the kept bodies are given back
 	if m.left.Load() != need {
 		t.Errorf("%d bytes left after giving back the bodies, want %d", m.left.Load(), need)
+	}
+}
+
+// TestPrepareBudgetedRefusesWithoutWaiting: an empty budget or one smaller than the body cannot serve the request,
+// even once another preparation finishes, so neither case waits for the preparation gate.
+func TestPrepareBudgetedRefusesWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	body := peakBody(1)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, size := range []int64{0, int64(len(body)) - 1} {
+		m := NewMemory(size)
+		m.preparing.Lock()
+		_, held, err := PrepareBudgeted(m, &r, body, Target{Format: Messages, Model: "up", MaxOutput: 4096}, Rewrites{})
+		m.preparing.Unlock()
+		if !errors.Is(err, ErrMemory) || held != 0 || m.left.Load() != size {
+			t.Fatalf("budget %d: held %d, left %d, error %v", size, held, m.left.Load(), err)
+		}
+	}
+}
+
+// TestPrepareBudgetedRefundsFailures: a failure after allocations returns the whole working set and its preparation
+// share, and the next request can use the same budget.
+func TestPrepareBudgetedRefundsFailures(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":["x"]}`)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := Target{Format: Responses, Model: "up", MaxOutput: 4096}
+	b := &budget{m: NewMemory(unlimited)}
+	if _, _, err := b.prepare(&r, body, target, Rewrites{}); err == nil {
+		t.Fatal("conversion with stop succeeded")
+	}
+	for _, size := range []int64{b.peak - 1, b.peak} {
+		m := NewMemory(size)
+		_, held, err := PrepareBudgeted(m, &r, body, target, Rewrites{})
+		if err == nil || held != 0 || m.left.Load() != size || m.preparationHeld != 0 {
+			t.Fatalf("budget %d: held %d, left %d, preparing %d, error %v", size, held, m.left.Load(), m.preparationHeld, err)
+		}
+		if errors.Is(err, ErrMemory) != (size < b.peak) {
+			t.Fatalf("budget %d: unexpected memory refusal: %v", size, err)
+		}
+		var unsupported *NotSupported
+		if errors.As(err, &unsupported) != (size == b.peak) {
+			t.Fatalf("budget %d: unexpected conversion refusal: %v", size, err)
+		}
+		_, held, err = PrepareBudgeted(m, &r, body, Target{Format: Chat, Model: "up"}, Rewrites{})
+		if err != nil {
+			t.Fatalf("request after failure: %v", err)
+		}
+		m.Refund(held)
+		if m.left.Load() != size {
+			t.Fatalf("after the next request: left %d, want %d", m.left.Load(), size)
+		}
+	}
+}
+
+// TestPrepareRetriesAfterCompetingPartialCharges forces the starvation interleaving: another preparation holds
+// part of a budget that fits one full preparation, and drops that partial charge only when the retry waits for it.
+func TestPrepareRetriesAfterCompetingPartialCharges(t *testing.T) {
+	t.Parallel()
+	body := peakBody(128)
+	r, err := Inspect(Chat, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := Target{Format: Messages, Model: "up", MaxOutput: 4096}
+	need := prepareNeed(t, &r, body, target)
+	m := NewMemory(need)
+	partial := need - int64(len(body))
+	competitor := &budget{m: m}
+	if err := competitor.draw(partial); err != nil {
+		t.Fatal(err)
+	}
+	m.preparing.RLock() // another preparation has charged only part of its tree
+	type result struct {
+		u    Upstream
+		held int64
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		u, held, err := PrepareBudgeted(m, &r, body, target, Rewrites{})
+		done <- result{u, held, err}
+	}()
+	func() {
+		defer m.preparing.RUnlock()
+		defer competitor.give(partial)
+		// A pending writer blocks new readers. Wait for that state, or for an early refusal,
+		// without relying on a scheduler delay or the time conversion happens to take.
+		for m.preparing.TryRLock() {
+			m.preparing.RUnlock()
+			select {
+			case got := <-done:
+				t.Fatalf("returned before the competing partial charge was released: %v", got.err)
+			default:
+				runtime.Gosched()
+			}
+		}
+	}()
+	got := <-done
+	if got.err != nil || got.held != int64(cap(got.u.Body)) {
+		t.Fatalf("retry: held %d, capacity %d, error %v", got.held, cap(got.u.Body), got.err)
+	}
+	m.Refund(got.held)
+	if m.left.Load() != need {
+		t.Fatalf("after the retry: left %d, want %d", m.left.Load(), need)
 	}
 }
 

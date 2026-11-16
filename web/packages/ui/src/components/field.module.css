@@ -1,0 +1,80 @@
+/* The board's .qfl and .qin: a label over the control, a hint or an error under it. The control is edged 1px in
+   --ctl-line, an invalid one in --badT, and the error is said in words. A control is 16px on a phone, below which iOS
+   zooms the page when it takes focus. A select has no arrow, as on the board. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.label {
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  font-weight: 500;
+  color: var(--t1);
+}
+
+.control {
+  all: unset;
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  border-radius: var(--r8);
+  background: var(--cardBg);
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+}
+
+.control::placeholder {
+  color: var(--t3);
+}
+
+.control:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.control[aria-invalid="true"] {
+  box-shadow: inset 0 0 0 1px var(--badT);
+}
+
+.control:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.select {
+  appearance: none;
+  cursor: pointer;
+}
+
+.area {
+  height: auto;
+  min-height: 88px;
+  padding: 8px 12px;
+  resize: vertical;
+}
+
+.hint {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.error {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--badT);
+}
+
+@media (max-width: 767px) {
+  .control {
+    font-size: var(--fs16);
+    line-height: var(--lh16);
+  }
+}

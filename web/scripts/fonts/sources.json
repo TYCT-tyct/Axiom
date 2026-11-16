@@ -13,8 +13,9 @@
       "sha256": "48715a42ec242c21e9f02692891e147d022299a52e48d5e413e1a942193ffeda"
     },
     "cjk-body": {
-      "url": "https://raw.githubusercontent.com/google/fonts/cc39c4c2c304bc368c9b7c311ea2bcc6013299fe/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf",
-      "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da"
+      "url": "https://hyperos.mi.com/font-download/MiSans.zip",
+      "sha256": "b6aa1fc827035922612df8edf36e5609bca1c5441e25cd57572204569b7b81d9",
+      "member": "MiSans/可变字体/MiSansVF.ttf"
     },
     "cjk-serif": {
       "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/7889f11bf31170b5d092a083b357c8c8130f89e0/SubsetOTF/CN/SourceHanSerifCN-SemiBold.otf",
@@ -38,6 +39,10 @@
       "common": ["brand", "preferences", "newVersion", "publicModels", "state"],
       "site": [""]
     }
+  },
+  "routes": {
+    "console": "console/src/main.tsx",
+    "admin": "admin/src/main.tsx"
   },
   "faces": [
     {
@@ -83,10 +88,37 @@
       "source": "cjk-body",
       "weight": "400",
       "axes": {
-        "wght": 400
+        "wght": 330
       },
       "split": true,
       "pages": ["site/home", "site/models"],
+      "text": {
+        "script": "han"
+      },
+      "preload": ["site/home"]
+    },
+    {
+      "family": "Axiom CJK Console",
+      "source": "cjk-body",
+      "weight": "400",
+      "axes": {
+        "wght": 330
+      },
+      "split": true,
+      "pages": ["console/*"],
+      "text": {
+        "script": "han"
+      }
+    },
+    {
+      "family": "Axiom CJK Admin",
+      "source": "cjk-body",
+      "weight": "400",
+      "axes": {
+        "wght": 330
+      },
+      "split": true,
+      "pages": ["admin/*"],
       "text": {
         "script": "han"
       }
@@ -103,6 +135,23 @@
           "site": ["hero.title"]
         }
       }
+    }
+  ],
+  "fallbacks": [
+    {
+      "family": "Axiom CJK Fallback",
+      "source": "cjk-body",
+      "local": [
+        "PingFang SC Regular",
+        "PingFangSC-Regular",
+        "Microsoft YaHei",
+        "MicrosoftYaHei",
+        "Noto Sans CJK SC",
+        "NotoSansCJKsc-Regular",
+        "Source Han Sans SC Regular",
+        "SourceHanSansSC-Regular"
+      ],
+      "unicode-range": "U+3000-303F, U+3400-4DBF, U+4E00-9FFF, U+F900-FAFF, U+FF00-FFEF"
     }
   ]
 }

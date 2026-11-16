@@ -3,7 +3,7 @@ import { type Language, locales } from "./i18n";
 
 // Money is an exact signed integer in billionths of one unit of a currency, as decimal text, because a JSON number would
 // round it in the browser (docs/domains/billing.md「钱的表示」).
-type Money = { amount: string; currency: string };
+export type Money = { amount: string; currency: string };
 const moneyDigits = 9;
 
 // decimalOf writes the integer as the decimal it stands for, "1500000000" as "1.500000000", which Intl formats without
@@ -17,6 +17,16 @@ function decimalOf(amount: string) {
 // moneyInput writes an amount the way a person would type it back into a field: "1.5", not "1.500000000".
 export function moneyInput(amount: string) {
   return decimalOf(amount).replace(/\.?0+$/, "");
+}
+
+// scaleAmount writes a chart's scale value, a floating point number of units, as an amount in billionths for money().
+// toFixed spells the double's decimal digits, where multiplying by 1e9 would add noise below the unit. The scale is for
+// drawing, never a balance; its values are finite and under 1e21, where toFixed turns to exponents.
+export function scaleAmount(value: number) {
+  return value
+    .toFixed(moneyDigits)
+    .replace(".", "")
+    .replace(/^0+(?=\d)/, "");
 }
 
 // minorOf writes an amount in minor units as the decimal it means: "1030" in USD as "10.30", "1000" in JPY as "1000".
@@ -106,6 +116,25 @@ function viewerZone() {
   return viewer;
 }
 
+// A chart's axis and tooltip name a day or an hour, not a full moment, so they carry no zone; a tooltip that needs one
+// uses dateTimeMinute. A change is a signed share: "+12.5%", "-3%", and a bare "0%" when nothing moved.
+function chartFormats(locale: string, zone: { timeZone: string }) {
+  const days = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", ...zone });
+  const daysFull = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", ...zone });
+  const hours = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...zone });
+  const shares = new Intl.NumberFormat(locale, {
+    style: "percent",
+    maximumFractionDigits: 1,
+    signDisplay: "exceptZero",
+  });
+  return {
+    percent: (ratio: number) => shares.format(ratio),
+    day: (value: Date) => days.format(value),
+    dayFull: (value: Date) => daysFull.format(value),
+    hour: (value: Date) => hours.format(value),
+  };
+}
+
 function build(language: Language, timeZone: string) {
   const locale = locales[language];
   const zone = { timeZone };
@@ -123,6 +152,7 @@ function build(language: Language, timeZone: string) {
   const payFormats = new Map<string, Intl.NumberFormat>();
   return {
     number: (value: number | bigint) => integers.format(value),
+    ...chartFormats(locale, zone),
     decimal: (text: string) => decimals.format(text as `${number}`),
     // A price in the currency a payment method is paid in, in that currency's minor units (cents, fen, or none): the
     // payment contract's PayAmount, not the site's billionths. The fraction digits are the currency's own.

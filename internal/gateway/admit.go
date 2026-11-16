@@ -114,9 +114,13 @@ func (h *Handler) admitBatch(ctx context.Context, batch []*gateItem) error {
 	if len(calls) == 0 {
 		return nil
 	}
-	return h.admitDBBatch(ctx, calls, func(tx pg.Tx, as []accounts.Admission, refusals []error) error {
+	err := h.admitBatchTx(ctx, calls, func(tx pg.Tx, as []accounts.Admission, refusals []error) error {
 		return h.reserveBatch(ctx, tx, live, as, refusals)
 	})
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
 }
 
 // reserveBatch plans every admitted request and writes the reservations of the planned ones under one balance lock.

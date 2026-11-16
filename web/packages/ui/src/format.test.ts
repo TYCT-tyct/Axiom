@@ -3,7 +3,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { describe, expect, it, vi } from "vitest";
-import { formatters, moneyInput, parseMoney, useFormat } from "./format";
+import { formatters, moneyInput, parseMoney, scaleAmount, useFormat } from "./format";
 
 describe("money", () => {
   // Amounts are billionths of a unit; none may pass through a floating point number.
@@ -113,4 +113,36 @@ it("follows the viewer's zone when the system's changes", async () => {
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+describe("chart formats", () => {
+  // 2026-11-09 20:00 UTC is the 10th in Shanghai: the zone decides the date and the hour, the language the words.
+  const moment = new Date(Date.UTC(2026, 10, 9, 20));
+  it.each([
+    { language: "zh" as const, zone: "Asia/Shanghai", day: "11月10日", full: "2026年11月10日", hour: "04:00" },
+    { language: "en" as const, zone: "America/New_York", day: "Nov 9", full: "Nov 9, 2026", hour: "15:00" },
+  ])("names a $language moment in $zone", ({ language, zone, day, full, hour }) => {
+    const format = formatters(language, zone);
+    expect(format.day(moment)).toBe(day);
+    expect(format.dayFull(moment)).toBe(full);
+    expect(format.hour(moment)).toBe(hour);
+  });
+
+  it.each([
+    { ratio: 0.125, zh: "+12.5%", en: "+12.5%" },
+    { ratio: -0.032, zh: "-3.2%", en: "-3.2%" },
+    { ratio: 0, zh: "0%", en: "0%" },
+  ])("writes a change of $ratio as a signed share", ({ ratio, zh, en }) => {
+    expect(formatters("zh").percent(ratio)).toBe(zh);
+    expect(formatters("en").percent(ratio)).toBe(en);
+  });
+
+  it.each([
+    { value: 20, want: "20000000000" },
+    { value: 0.0005, want: "500000" },
+    { value: 0.1 + 0.2, want: "300000000" },
+    { value: 1e16, want: "10000000000000000000000000" },
+  ])("writes the scale value $value as an amount in billionths", ({ value, want }) => {
+    expect(scaleAmount(value)).toBe(want);
+  });
 });

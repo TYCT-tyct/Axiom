@@ -1,0 +1,75 @@
+/* Spacing between blocks, on the design's 4px steps. A page composes these instead of writing margins. */
+.stack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.cluster {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  min-width: 0;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
+}
+
+.between {
+  justify-content: space-between;
+}
+
+.end {
+  justify-content: flex-end;
+}
+
+.g4 {
+  gap: 4px;
+}
+
+.g8 {
+  gap: 8px;
+}
+
+.g12 {
+  gap: 12px;
+}
+
+.g16 {
+  gap: 16px;
+}
+
+.g24 {
+  gap: 24px;
+}
+
+.g32 {
+  gap: 32px;
+}
+
+.c2 {
+  --columns: 2;
+}
+
+.c3 {
+  --columns: 3;
+}
+
+.c4 {
+  --columns: 4;
+}
+
+/* Four columns become two on a tablet; every grid is one column on a phone. */
+@media (max-width: 1023px) {
+  .c4 {
+    --columns: 2;
+  }
+}
+
+@media (max-width: 767px) {
+  .grid {
+    --columns: 1;
+  }
+}

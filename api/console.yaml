@@ -23,6 +23,157 @@ tags:
   - {name: Calls, description: "The account's call log."}
   - {name: Top-ups, description: "Buying credits through the site's payment channels."}
 paths:
+  /api/console/v1/invitations:
+    get:
+      operationId: getInvitations
+      tags: [Session]
+      summary: Read your invitation code and registrations
+      description: >-
+        Only the signed-in user's invitations, newest UUIDv7 registration first.
+        Disabled users remain with available=false; clients localize the placeholder. No rebates or amounts.
+        Older nodes return 404; clients must treat that as unavailable.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      parameters:
+        - {$ref: "#/components/parameters/Cursor"}
+        - {$ref: "#/components/parameters/Limit"}
+      responses:
+        "200":
+          description: Your code, registered console origin link and registration records without personal identifiers.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Invitations"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/profile/name:
+    get:
+      operationId: getDisplayName
+      tags: [Session]
+      summary: Read the current display name
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      responses:
+        "200":
+          description: The personal account display name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name: {type: string, description: "Optional so older nodes can be handled as unavailable."}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: changeDisplayName
+      tags: [Session]
+      summary: Change the display name
+      description: >-
+        Trims the personal account name; accepts 1 to 100 Unicode characters after trimming. Audits changes without storing the name in the audit log.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name]
+              properties:
+                name: {type: string, description: "Trimmed length must be 1 to 100 Unicode characters."}
+      responses:
+        "204": {description: "Accepted."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/profile/email:
+    post:
+      operationId: requestEmailChange
+      tags: [Session]
+      summary: Request a verified email change
+      description: >-
+        Requires the current password and a session that passed MFA when a second factor is enabled. Returns 409 email_taken only to the authenticated owner. Sends a 24-hour verification link to the new address; a second request replaces the first. The current email and sessions stay unchanged until confirmation. An invalid current email returns 422 before sending or spending the sending budget.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [email, current_password]
+              properties:
+                email: {type: string, minLength: 3, maxLength: 254}
+                current_password: {type: string, minLength: 1, maxLength: 256}
+                language: {type: string, enum: [zh, en], default: en}
+      responses:
+        "202": {description: "Accepted."}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/profile/email/confirm:
+    post:
+      operationId: confirmEmailChange
+      tags: [Session]
+      summary: Confirm the email change
+      description: >-
+        Requires the same signed-in user and MFA when enabled. Consumes the token once, switches the verified email, audits masked before and after addresses and notifies the old address atomically. Raises the factor version, ends old sessions and recovery codes, and issues this device a replacement session at its existing level, with replacement recovery codes when TOTP is enabled. Invalid, replaced or used tokens return 422 invalid_verification; an expired current token returns the same code with an expiry message. If another user registered the address while pending, returns 409 email_taken.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: signed_in
+      x-axiom-permission: none
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [token]
+              properties:
+                token: {type: string, minLength: 1, maxLength: 256}
+      responses:
+        "200":
+          description: Email changed and current session replaced.
+          headers:
+            Set-Cookie: {$ref: "#/components/headers/SetCookie"}
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  csrf_token: {type: string}
+                  recovery_codes:
+                    type: array
+                    items: {type: string}
+                    description: Replacement codes, returned only when TOTP is enabled.
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/provider-keys:
     get:
       operationId: listProviderKeys
@@ -2218,7 +2369,7 @@ paths:
       summary: The account's calls
       description: >-
         The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no
-        cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read.
+        supplier costs or credentials. attempt_count is read from the call row. A new call arriving does not shift the pages already read.
         A filter by model or client application reads that filter's index, so a rare model costs what it matches, not
         what the account holds. `since` is inclusive and `until` exclusive.
       security:
@@ -2226,6 +2377,7 @@ paths:
       x-axiom-level: signed_in
       x-axiom-permission: calls.view
       parameters:
+        - $ref: "#/components/parameters/CallFellBack"
         - $ref: "#/components/parameters/CallSince"
         - $ref: "#/components/parameters/CallUntil"
         - $ref: "#/components/parameters/CallModel"
@@ -2294,6 +2446,49 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/UsageStatistics"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/calls/sessions:
+    get:
+      operationId: listCallSessions
+      tags: [Calls]
+      summary: Client-named sessions grouped from visible calls
+      description: >-
+        Groups nonempty client-named session IDs within the selected hot call-record window, with currencies
+        separate. The same filters and authorization as listCalls apply. Default last 30 days, maximum 31 days;
+        since inclusive, until exclusive. More than 100000 matching nonempty-session calls returns 400
+        invalid_request before grouping; narrow the window or filters. No truncated totals are returned. Calls and billionth charges are exact text. main_model is the most
+        frequent model, ties by bytewise model name; client_app comes from the newest matching call.
+        Newest last_at first, ties by newest call UUID. Cursor is signed and bound to the filters and window;
+        malformed or modified cursors return 400 invalid_request. Use returned since/until for subsequent pages.
+        Concurrent arrivals may move a session ahead of the cursor; refresh the first page to see updates.
+        Reads reflect committed call-log inserts without an additional rollup delay. Archived calls are absent.
+        No content, cost, supplier or routing data. Ten-second deadline. All new response members are optional;
+        old nodes return 404.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: calls.view
+      parameters:
+        - $ref: "#/components/parameters/CallSince"
+        - $ref: "#/components/parameters/CallUntil"
+        - $ref: "#/components/parameters/CallModel"
+        - $ref: "#/components/parameters/CallClientApp"
+        - $ref: "#/components/parameters/CallKey"
+        - $ref: "#/components/parameters/CallWorkspace"
+        - $ref: "#/components/parameters/CallStatus"
+        - $ref: "#/components/parameters/CallRequestId"
+        - $ref: "#/components/parameters/CallFellBack"
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of sessions
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CallSessionList"}
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
@@ -2391,9 +2586,8 @@ paths:
       tags: [Calls]
       summary: One call
       description: >-
-        The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields
-        as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields
-        when the modules that keep them can serve users.
+        The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. Includes attempts in sequence order and a safe routing summary. No supplier names, egress or credentials.
+        New fields are optional across rolling releases; missing legacy attempts return an empty array and route may be absent.
       security:
         - session: []
       x-axiom-level: signed_in
@@ -2887,6 +3081,11 @@ components:
       name: workspace_id
       in: query
       schema: {$ref: "#/components/schemas/WorkspaceId"}
+    CallFellBack:
+      name: fell_back
+      in: query
+      schema: {type: boolean}
+      description: When true, only calls with attempt_count greater than one.
     CallStatus:
       name: status
       in: query
@@ -3408,6 +3607,31 @@ components:
         output: {type: string, pattern: '^[0-9]+$'}
         cache_read: {type: string, pattern: '^[0-9]+$'}
         cache_write: {type: string, pattern: '^[0-9]+$'}
+    CallSessionList:
+      type: object
+      additionalProperties: false
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CallSession"}
+        next_cursor:
+          type: string
+          nullable: true
+          x-omitempty: false
+          description: Null on the last page; optional on older nodes.
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+    CallSession:
+      type: object
+      additionalProperties: false
+      properties:
+        session_id: {type: string}
+        client_app: {type: string}
+        calls: {type: string, pattern: '^[0-9]+$'}
+        price: {$ref: "#/components/schemas/CallAggregateMoney"}
+        main_model: {type: string}
+        first_at: {type: string, format: date-time}
+        last_at: {type: string, format: date-time}
     CallAggregateMoney:
       type: object
       additionalProperties: false
@@ -4578,6 +4802,20 @@ components:
         inconclusive:
           type: boolean
           description: The provider could not be asked; the key's status did not change.
+    Invitations:
+      type: object
+      properties:
+        code: {type: string}
+        link: {type: string, format: uri}
+        invitees:
+          type: array
+          items: {$ref: "#/components/schemas/Invitee"}
+        next_cursor: {type: string, nullable: true, x-omitempty: false, description: "Null on the last page."}
+    Invitee:
+      type: object
+      properties:
+        registered_at: {type: string, format: date-time}
+        available: {type: boolean, description: "False for a disabled user; localize the placeholder on the client. No personal identifier is returned."}
     KeyList:
       type: object
       required: [data, next_cursor]
@@ -4588,6 +4826,37 @@ components:
           type: array
           items: {$ref: "#/components/schemas/Key"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    CallAttempt:
+      type: object
+      properties:
+        sequence: {type: integer, minimum: 1}
+        endpoint_code: {type: string, description: Public group codename; absent when no longer available in the routing snapshot.}
+        source_class: {type: string}
+        started_at: {type: string, format: date-time}
+        finished_at: {type: string, format: date-time}
+        first_token_ms: {type: integer, minimum: 0}
+        result:
+          type: string
+          enum: [committed, failed, unknown]
+          x-enum-varnames: [CallAttemptCommitted, CallAttemptFailed, CallAttemptUnknown]
+        error_kind: {type: string}
+        charged: {type: boolean, description: "Whether this attempt was charged; absent when attribution is unavailable (including model-side loops)."}
+    OwnCallRoutePreset:
+      type: object
+      properties:
+        id: {type: string}
+        version: {type: integer, format: int64}
+    OwnCallRoute:
+      type: object
+      properties:
+        preset: {$ref: "#/components/schemas/OwnCallRoutePreset"}
+        excluded_reasons:
+          type: object
+          additionalProperties: {type: integer, minimum: 0}
+        excluded_more: {type: integer, minimum: 0, description: Count omitted by the writer; no individual candidates are reconstructed.}
+        selected_endpoint: {type: string, description: Public codename of the first planned endpoint; absent if unavailable.}
+        fastest_unmeasured: {type: boolean}
+        preset_unavailable: {type: boolean}
     Call:
       type: object
       required:
@@ -4614,6 +4883,12 @@ components:
         have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution
         members are absent when the client named no application, or when the call was recorded before they existed.
       properties:
+        attempt_count: {type: integer, minimum: 0}
+        attempts:
+          type: array
+          description: Detail only; empty when no attempts were written. Optional on older nodes.
+          items: {$ref: "#/components/schemas/CallAttempt"}
+        route: {$ref: "#/components/schemas/OwnCallRoute"}
         charge_details:
           $ref: "#/components/schemas/ChargeDetails"
         price_version:
@@ -4715,6 +4990,7 @@ components:
       type: object
       required: [data, next_cursor]
       properties:
+        fell_back_filter: {type: boolean, description: Applied fell_back filter; absent on older nodes.}
         status_filter:
           description: Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then.
           allOf:

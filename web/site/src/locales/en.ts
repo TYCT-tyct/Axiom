@@ -11,5 +11,5 @@ export default {
     body: "Every route is measured, a failing one is swapped before the first token, and you pay for the route that served you.",
     start: "Get an API key",
   },
-  footer: "© Axiom",
+  footer: "© Axiom · Chinese text uses the MiSans font",
 } satisfies Messages<typeof zh>;

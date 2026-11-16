@@ -1,0 +1,40 @@
+/* The board's .qkpi: a raised block with a 12px label, a 24px value and a 12px change. The value is one line that never
+   wraps, so a row of metrics keeps its height; a long amount is cut by the block, not pushed out of it. */
+.root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 20px;
+  border-radius: var(--r12);
+  background: var(--cardBg);
+  box-shadow: var(--cardSh);
+  overflow: hidden;
+}
+
+.label {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.value {
+  height: 32px;
+  font-size: var(--fs24);
+  line-height: var(--lh24);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--t1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.delta {
+  font-style: normal;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-variant-numeric: tabular-nums;
+  color: var(--t2);
+}

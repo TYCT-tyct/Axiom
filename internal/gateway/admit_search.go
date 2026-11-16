@@ -58,13 +58,7 @@ func (h *Handler) resolveServerTool(c *Call, plan routing.Plan) (routing.Plan, e
 	if len(plan.Entries) == 0 {
 		return plan, nil
 	}
-	cap := tool.MaxUses
-	if cap == 0 {
-		cap = protocol.DefaultServerToolCalls
-	}
-	if c.Request.HasMaxToolCalls {
-		cap = min(cap, c.Request.MaxToolCalls)
-	}
+	cap := serverToolCap(&c.Request)
 	if cap <= 0 {
 		return plan, invalid("max_tool_calls is 0: the web search tool would have no step to run")
 	}
