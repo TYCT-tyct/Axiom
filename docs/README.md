@@ -62,6 +62,7 @@
 | 账户与租户的外部对照、被否决的方案、准入与限频的推导和测量 | [archive/accounts.md](archive/accounts.md) |
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
 | 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
+| 支付：参考实现对照、USDT 网关选择、Epusdt 兼容证据 | [archive/payments.md](archive/payments.md) |
 
 ## 文档怎么组织
 
