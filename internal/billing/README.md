@@ -14,7 +14,8 @@
 | 额度 | `OpenBalance`、`AddCredit`、`CreditPaid`、`CreditRedeem`、`CreditsFor`、`ReadCredit`、`ReadCredits`、`TopUpRate`、`MinorUnits` | 写入要平台范围事务（审计） |
 | 退款与拒付 | `PrepareRefund`、`FreezeRefund`、`QuoteRefund`、`SettleRefund`、`ReleaseRefund`、`RefundRecordedAt`、`ChargeBack`、`ReverseChargeBack` | 重复调用由 payments 的订单行挡住，失败须回滚整个事务 |
 | 套餐 | `CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans`、`CreditSubscription`、`RequestSubscriptionRefund`/`ApproveSubscriptionRefund`、`Subscriptions`、`RegisterSubscriptions` | 见[订阅套餐](#订阅套餐) |
-| 只读 | `ReadBalance`、`ReadFunds`、`KeysUsed`、`ReadKeyUsage(s)`、`ReadBudgetUsage`、`KeyDailySpend`、`AdvanceCreditBatches`、`ReadCreditBatches`、`ListStatement`、`NewChargeReader`（`ReadCharges`、`SettledFinals`）、`LedgerOf`、`ReadPlatformReport`、`ListCashMovements`、`MerchantCash`、`MerchantBatches` | 账户范围、不加锁；`LedgerOf` 含供应商成本，只在运营或管理处理器里用平台范围调用 |
+| 只读 | `ReadBalance`、`ReadFunds`、`KeysUsed`、`ReadKeyUsage(s)`、`ReadBudgetUsage`、`KeyDailySpend`、`ReadCreditBatches`、`ListStatement`、`NewChargeReader`（`ReadCharges`、`SettledFinals`）、`LedgerOf`、`ReadPlatformReport`、`ListCashMovements`、`MerchantCash`、`MerchantBatches` | 账户范围、不加锁；`LedgerOf` 含供应商成本，只在运营或管理处理器里用平台范围调用 |
+| 分配缓存 | `AdvanceCreditBatches(ctx, db, scope, account, pages)` | 写：按页在自己的短事务里锁余额行、推进重放并保存位置；不能在已持有该账户余额行锁的事务里调用 |
 | 定价 | `Rules`、`CreateRule`、`UpdateRule`、`Sell`、`PreviewPrices`、`RefreshPrices`、`PublishedPrices`、`PublishPrice`、`SetPricePolicy`、`PriceMove`、`ByokFee`、`SegmentPolicy`、`DefaultSegments` | 见[定价规则](#定价规则) |
 | 汇率 | `SetExchangeRate`、`ExchangeRates`、`ExchangeRateHistory`、`RegisterExchangeSync` | 见[汇率与成本依据](#汇率与成本依据) |
 | 周期任务 | `RegisterExpire`、`RegisterReconcile`、`Reconcile`、`RegisterCorrections`、`RegisterPrices`、`ConsumeBalanceNotices` | 在队列 Start 之前登记（`cmd/axiom`） |
@@ -65,7 +66,7 @@
 
 - 状态在 `credit_batches`（`consumed`、`expired`、`freeze_total`、`unfreeze_total`、`refunded`、`charged_back`）和 `balances`（`allocated_*` 位置、`unfunded`）。剩余 = 金额 − 已用 − 已作废 − 已退款 − 已拒付；冻结中 = 冻结累计 − 解冻累计 − 已退款。
 - 重放（`allocation.apply`）按序号读，`seq` 为空的老交易按 `(created_at, id)` 排在最前；一页的读量随页大小、不随历史增长。无锁预放在读批次之前固定可见的最大序号，读批次前后各读一次位置，变了就丢弃（`errStale`）。
-- 不变量：①重放到最新后 Σ 批次剩余 − `unfunded` = `balances.balance`；②每批已用 + 已作废 + 已退款 + 冻结中 ≤ 金额，已退款 + 已拒付 ≤ 金额，冻结中 ≥ 0；③`unfunded` > 0 时没有批次还剩未冻结额度；④作废不超过 `room`（余额 − 在途预留 − 全部冻结，与收费上限同一个函数、底线取 0）；⑤作废幂等；⑥一份扣费只落在一个批次；⑦Σ 批次冻结中 = `balances.frozen`；⑧从头重放与从任一存下的位置续放结果相同（`TestReplayProperty`）。
+- 不变量：①重放到最新后 Σ 批次剩余 − `unfunded` = `balances.balance`；②每批已用 + 已作废 + 已退款 + 冻结中 ≤ 金额，已退款 + 已拒付 ≤ 金额，冻结中 ≥ 0；③`unfunded` > 0 时没有批次还剩未冻结额度；④作废不超过 `room`（余额 − 在途预留 − 全部冻结，与收费上限同一个函数、底线取 0）；⑤作废幂等；⑥一笔扣费可以跨批次，每单位额度只分配一次；⑦Σ 批次冻结中 = `balances.frozen`；⑧从头重放与从任一存下的位置续放结果相同（`TestReplayProperty`）。
 - 冻结、解冻、退款以批次 ID 为 `request_id`，版本号是该类写入后的累计额（超过 int64 报错）；拒付的版本号是第几笔拒付。`FreezeRefund`、`ReleaseRefund`、`SettleRefund` 把调用方事务的 `enable_sort` 设为 `off` 直到结束（[pg 的计划取舍](../platform/pg/README.md#决策与理由)）；`PrepareRefund` 必须在取订单锁之前调用。
 
 ## 订阅套餐
