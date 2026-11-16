@@ -324,6 +324,19 @@ func (s *Service) Routable() ([]Routable, error) {
 	return out, nil
 }
 
+// EndpointCode reads only the public codename of an endpoint in the current snapshot.
+// Missing endpoints and stale snapshots have no current public identity.
+func (s *Service) EndpointCode(id EndpointID) string {
+	snap := s.snap.Load()
+	if s.now().Sub(snap.confirmed) > s.cfg.MaxStale {
+		return ""
+	}
+	if ep := snap.endpoints[id]; ep != nil {
+		return ep.codename
+	}
+	return ""
+}
+
 func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) (*endpoint, error) {
 	if ep, ok := next.endpoints[r.EndpointID]; ok {
 		return ep, nil

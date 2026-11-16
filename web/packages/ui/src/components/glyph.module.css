@@ -1,0 +1,225 @@
+/* Glyph: the board's icon layers and hover motions (AxIcons.dc.html, "icon layers" and "hover micro-actions").
+   Every motion is a function of --icon-go, 0 at rest and 1 on hover. It becomes 1 only under
+   prefers-reduced-motion: no-preference, from the icon's own hover or from --icon-hover, which a control sets on its
+   root while hovered: the board starts the motion when the whole button or menu item is under the pointer, and a
+   module may not select another component's root. Under reduced motion --icon-go stays 0 and nothing moves. */
+.icon {
+  --icon-go: 0;
+  flex: none;
+  overflow: visible;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: middle;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .icon {
+    --icon-go: var(--icon-hover, 0);
+  }
+
+  .icon:hover {
+    --icon-go: 1;
+  }
+
+  .icon g > *,
+  .icon [data-p] {
+    transition: transform var(--dur) var(--easeB);
+  }
+
+  .o,
+  .f {
+    transition: opacity var(--dur) var(--ease);
+  }
+}
+
+.icon g > *,
+.icon [data-p] {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.f {
+  opacity: 0;
+  fill: currentColor;
+}
+
+.selected .f {
+  opacity: 1;
+}
+
+.selected .o {
+  opacity: 0;
+}
+
+.o [data-p~="ff"],
+.f [data-p~="oo"] {
+  display: none;
+}
+
+/* A cut line is drawn in the colour behind the icon, so it reads as a gap in the fill. */
+.f [data-p~="cut"] {
+  fill: none;
+  stroke: var(--cut, var(--page));
+}
+
+.f [data-p~="nf"] {
+  fill: none;
+}
+
+.icon [data-p~="fo"] {
+  fill: currentColor;
+}
+
+.selected .f [data-p~="sig"] {
+  fill: var(--accentSolid);
+  stroke: var(--accentSolid);
+}
+
+/* one motion per meaning */
+.overview [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * -1px));
+}
+
+.overview [data-p~="a3"] {
+  transform: translateY(calc(var(--icon-go) * 1px));
+}
+
+.usage [data-p] {
+  transform-origin: bottom;
+}
+
+.usage [data-p~="a1"] {
+  transform: scaleY(calc(1 + var(--icon-go) * 0.3));
+}
+
+.usage [data-p~="a2"] {
+  transform: scaleY(calc(1 - var(--icon-go) * 0.25));
+}
+
+.usage [data-p~="a3"] {
+  transform: scaleY(calc(1 - var(--icon-go) * 0.14));
+}
+
+.logs [data-p~="a2"] {
+  transform: translateX(calc(var(--icon-go) * 1px));
+}
+
+.keys [data-p~="a1"] {
+  transform: rotate(calc(var(--icon-go) * -24deg));
+}
+
+.presets [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * -1.5px));
+}
+
+.presets [data-p~="a3"] {
+  transform: translateY(calc(var(--icon-go) * 1px));
+}
+
+.byok [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * 1px));
+}
+
+.budget [data-p~="gn"] {
+  transform-origin: 50% 100%;
+  transform: rotate(calc(var(--icon-go) * 24deg));
+}
+
+.privacy [data-p~="a2"] {
+  transform: scale(calc(1 + var(--icon-go) * 0.15));
+}
+
+.security [data-p~="a2"] {
+  transform: translateY(calc(var(--icon-go) * -1.5px));
+}
+
+.wallet [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * -1.5px)) rotate(calc(var(--icon-go) * -6deg));
+}
+
+.wallet [data-p~="a3"] {
+  transform: translateX(calc(var(--icon-go) * -1.5px));
+}
+
+.team [data-p~="a2"] {
+  transform: translateX(calc(var(--icon-go) * -1.5px));
+}
+
+.settings [data-p~="a1"] {
+  transform: translateX(calc(var(--icon-go) * 5px));
+}
+
+.settings [data-p~="a2"] {
+  transform: translateX(calc(var(--icon-go) * -5px));
+}
+
+.docs [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * -1px));
+}
+
+.status [data-p~="a1"] {
+  transform: scaleY(calc(1 + var(--icon-go) * 0.18));
+}
+
+.collapse [data-p~="a2"] {
+  transform: translateX(calc(var(--icon-go) * -1.5px));
+}
+
+.appearance [data-p~="a2"] {
+  transform: rotate(calc(var(--icon-go) * 180deg));
+}
+
+/* The magnifier turns about the centre of its lens, not of its box. */
+.search [data-p~="a1"] {
+  transform-box: view-box;
+  transform-origin: 8.75px 8.75px;
+  transform: rotate(calc(var(--icon-go) * -12deg));
+}
+
+.models [data-p~="a2"] {
+  transform: translateY(calc(var(--icon-go) * -1.5px));
+}
+
+.copy [data-p~="a2"] {
+  transform: translate(calc(var(--icon-go) * -1px), calc(var(--icon-go) * -1px));
+}
+
+.plus [data-p~="a1"],
+.close [data-p~="a1"] {
+  transform: rotate(calc(var(--icon-go) * 90deg));
+}
+
+.export [data-p~="a1"] {
+  transform: translateY(calc(var(--icon-go) * 1.5px));
+}
+
+.more circle:first-child {
+  transform: translateX(calc(var(--icon-go) * -1px));
+}
+
+.more circle:last-child {
+  transform: translateX(calc(var(--icon-go) * 1px));
+}
+
+.warn [data-p~="a2"] {
+  transform: translateY(calc(var(--icon-go) * -1px));
+}
+
+.updown [data-p~="a1"] {
+  transform: scaleY(calc(1 + var(--icon-go) * 0.12));
+}
+
+/* The route's outline line is dashed and runs along itself on hover; the filled one is solid. */
+.route .o [data-p~="a1"] {
+  stroke-dasharray: 3 2.2;
+  stroke-dashoffset: calc(var(--icon-go) * -10.4);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .route .o [data-p~="a1"] {
+    transition: stroke-dashoffset 900ms linear;
+  }
+}

@@ -4,6 +4,87 @@
  */
 
 export interface paths {
+    "/api/console/v1/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read your invitation code and registrations
+         * @description Only the signed-in user's invitations, newest UUIDv7 registration first. Disabled users remain with available=false; clients localize the placeholder. No rebates or amounts. Older nodes return 404; clients must treat that as unavailable.
+         */
+        get: operations["getInvitations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/profile/name": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the current display name */
+        get: operations["getDisplayName"];
+        put?: never;
+        /**
+         * Change the display name
+         * @description Trims the personal account name; accepts 1 to 100 Unicode characters after trimming. Audits changes without storing the name in the audit log.
+         */
+        post: operations["changeDisplayName"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/profile/email": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request a verified email change
+         * @description Requires the current password and a session that passed MFA when a second factor is enabled. Returns 409 email_taken only to the authenticated owner. Sends a 24-hour verification link to the new address; a second request replaces the first. The current email and sessions stay unchanged until confirmation. An invalid current email returns 422 before sending or spending the sending budget.
+         */
+        post: operations["requestEmailChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/profile/email/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Confirm the email change
+         * @description Requires the same signed-in user and MFA when enabled. Consumes the token once, switches the verified email, audits masked before and after addresses and notifies the old address atomically. Raises the factor version, ends old sessions and recovery codes, and issues this device a replacement session at its existing level, with replacement recovery codes when TOTP is enabled. Invalid, replaced or used tokens return 422 invalid_verification; an expired current token returns the same code with an expiry message. If another user registered the address while pending, returns 409 email_taken.
+         */
+        post: operations["confirmEmailChange"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/provider-keys": {
         parameters: {
             query?: never;
@@ -1249,7 +1330,7 @@ export interface paths {
         };
         /**
          * The account's calls
-         * @description The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no cost, endpoint or route, only what the user paid. A new call arriving does not shift the pages already read. A filter by model or client application reads that filter's index, so a rare model costs what it matches, not what the account holds. `since` is inclusive and `until` exclusive.
+         * @description The calls of the session's account, newest first, as the call log keeps them: no conversation content, and no supplier costs or credentials. attempt_count is read from the call row. A new call arriving does not shift the pages already read. A filter by model or client application reads that filter's index, so a rare model costs what it matches, not what the account holds. `since` is inclusive and `until` exclusive.
          */
         get: operations["listCalls"];
         put?: never;
@@ -1272,6 +1353,26 @@ export interface paths {
          * @description Account-scoped, eventually consistent statistics; never scans call detail. Defaults to the last 30 days ending at the latest closed UTC hour, or 7 days for hour granularity. Both bounds must be whole UTC hours; partial hours, empty windows, ranges over 90 days (7 days for hour), and over 10000 result rows return 400 invalid_request. Day buckets start at UTC midnight; weeks start Monday UTC. Partial day/week edge buckets contain only hours inside [since,until). Missing buckets and groups are omitted, meaning zero requests and spend; empty totals arrays also mean zero. Currencies stay separate. Tokens sum only reported fields; an absent token kind means no reports, and a present sum may cover only some requests. input includes non-cache text, audio and image tokens; output includes reasoning, audio and image tokens. cache_write combines five-minute and one-hour writes. Cache hit rate is cache_read divided by physical input, using only calls reporting both; cache_rate_requests states their count. Missing or zero denominators omit the rate. Success means empty error_kind. Pending billing records are excluded, as in listCalls. compare=previous returns totals for [since-(until-since),since) from the same snapshot with the same filters. Historical backfill covers existing hot call records, not already archived records; backfill_complete=false means history is still incomplete; recent data may also lag while backfill and live ingestion compete for capacity. Each batch can consume its backfilled events plus another batch of live events. Rollups survive call-log archival. No content, supplier identity, cost or routing data. New response members are optional for rolling release; old nodes return 404 for this operation. Ten-second request deadline.
          */
         get: operations["getUsageStatistics"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/console/v1/calls/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Client-named sessions grouped from visible calls
+         * @description Groups nonempty client-named session IDs within the selected hot call-record window, with currencies separate. The same filters and authorization as listCalls apply. Default last 30 days, maximum 31 days; since inclusive, until exclusive. More than 100000 matching nonempty-session calls returns 400 invalid_request before grouping; narrow the window or filters. No truncated totals are returned. Calls and billionth charges are exact text. main_model is the most frequent model, ties by bytewise model name; client_app comes from the newest matching call. Newest last_at first, ties by newest call UUID. Cursor is signed and bound to the filters and window; malformed or modified cursors return 400 invalid_request. Use returned since/until for subsequent pages. Concurrent arrivals may move a session ahead of the cursor; refresh the first page to see updates. Reads reflect committed call-log inserts without an additional rollup delay. Archived calls are absent. No content, cost, supplier or routing data. Ten-second deadline. All new response members are optional; old nodes return 404.
+         */
+        get: operations["listCallSessions"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1329,7 +1430,7 @@ export interface paths {
         };
         /**
          * One call
-         * @description The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. The same fields as the list for now; the attempts, route and cost breakdown the detail page will show come as further fields when the modules that keep them can serve users.
+         * @description The call with this ID (the `X-Request-ID` of its response), if it is the session's account's. Includes attempts in sequence order and a safe routing summary. No supplier names, egress or credentials. New fields are optional across rolling releases; missing legacy attempts return an empty array and route may be absent.
          */
         get: operations["getCall"];
         put?: never;
@@ -1884,6 +1985,26 @@ export interface components {
             output?: string;
             cache_read?: string;
             cache_write?: string;
+        };
+        CallSessionList: {
+            data?: components["schemas"]["CallSession"][];
+            /** @description Null on the last page; optional on older nodes. */
+            next_cursor?: string | null;
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+        };
+        CallSession: {
+            session_id?: string;
+            client_app?: string;
+            calls?: string;
+            price?: components["schemas"]["CallAggregateMoney"];
+            main_model?: string;
+            /** Format: date-time */
+            first_at?: string;
+            /** Format: date-time */
+            last_at?: string;
         };
         /** @description A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits. */
         CallAggregateMoney: {
@@ -2708,14 +2829,65 @@ export interface components {
             /** @description The provider could not be asked; the key's status did not change. */
             inconclusive?: boolean;
         };
+        Invitations: {
+            code?: string;
+            /** Format: uri */
+            link?: string;
+            invitees?: components["schemas"]["Invitee"][];
+            /** @description Null on the last page. */
+            next_cursor?: string | null;
+        };
+        Invitee: {
+            /** Format: date-time */
+            registered_at?: string;
+            /** @description False for a disabled user; localize the placeholder on the client. No personal identifier is returned. */
+            available?: boolean;
+        };
         KeyList: {
             filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
+        CallAttempt: {
+            sequence?: number;
+            /** @description Public group codename; absent when no longer available in the routing snapshot. */
+            endpoint_code?: string;
+            source_class?: string;
+            /** Format: date-time */
+            started_at?: string;
+            /** Format: date-time */
+            finished_at?: string;
+            first_token_ms?: number;
+            /** @enum {string} */
+            result?: "committed" | "failed" | "unknown";
+            error_kind?: string;
+            /** @description Whether this attempt was charged; absent when attribution is unavailable (including model-side loops). */
+            charged?: boolean;
+        };
+        OwnCallRoutePreset: {
+            id?: string;
+            /** Format: int64 */
+            version?: number;
+        };
+        OwnCallRoute: {
+            preset?: components["schemas"]["OwnCallRoutePreset"];
+            excluded_reasons?: {
+                [key: string]: number;
+            };
+            /** @description Count omitted by the writer; no individual candidates are reconstructed. */
+            excluded_more?: number;
+            /** @description Public codename of the first planned endpoint; absent if unavailable. */
+            selected_endpoint?: string;
+            fastest_unmeasured?: boolean;
+            preset_unavailable?: boolean;
+        };
         /** @description One call as its owner sees it. `price` is what the user paid, zero for a free call. Text that the call did not have is the empty string, and `first_token_ms` is 0 when no token came, as in the call log. The app-attribution members are absent when the client named no application, or when the call was recorded before they existed. */
         Call: {
+            attempt_count?: number;
+            /** @description Detail only; empty when no attempts were written. Optional on older nodes. */
+            attempts?: components["schemas"]["CallAttempt"][];
+            route?: components["schemas"]["OwnCallRoute"];
             charge_details?: components["schemas"]["ChargeDetails"];
             /** @description Published sale version locked at admission; absent for legacy or uncharged calls. */
             price_version?: string;
@@ -2800,6 +2972,8 @@ export interface components {
             estimated?: boolean;
         };
         CallList: {
+            /** @description Applied fell_back filter; absent on older nodes. */
+            fell_back_filter?: boolean;
             /** @description Echoes an applied status filter. Missing on old nodes; recent errors are unavailable then. */
             status_filter?: components["schemas"]["CallStatus"];
             data: components["schemas"]["Call"][];
@@ -2994,6 +3168,8 @@ export interface components {
         ModelAbility: components["schemas"]["ModelAbility"];
         CallKey: components["schemas"]["KeyId"];
         CallWorkspace: components["schemas"]["WorkspaceId"];
+        /** @description When true, only calls with attempt_count greater than one. */
+        CallFellBack: boolean;
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
         CallStatus: components["schemas"]["CallStatus"];
         CallRequestId: components["schemas"]["CallId"];
@@ -3023,6 +3199,165 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getInvitations: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Your code, registered console origin link and registration records without personal identifiers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitations"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getDisplayName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The personal account display name. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        /** @description Optional so older nodes can be handled as unavailable. */
+                        name?: string;
+                    };
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    changeDisplayName: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** @description Trimmed length must be 1 to 100 Unicode characters. */
+                    name: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    email: string;
+                    current_password: string;
+                    /**
+                     * @default en
+                     * @enum {string}
+                     */
+                    language?: "zh" | "en";
+                };
+            };
+        };
+        responses: {
+            /** @description Accepted. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    confirmEmailChange: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    token: string;
+                };
+            };
+        };
+        responses: {
+            /** @description Email changed and current session replaced. */
+            200: {
+                headers: {
+                    "Set-Cookie": components["headers"]["SetCookie"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        csrf_token?: string;
+                        /** @description Replacement codes, returned only when TOTP is enabled. */
+                        recovery_codes?: string[];
+                    };
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listProviderKeys: {
         parameters: {
             query?: never;
@@ -5178,6 +5513,8 @@ export interface operations {
     listCalls: {
         parameters: {
             query?: {
+                /** @description When true, only calls with attempt_count greater than one. */
+                fell_back?: components["parameters"]["CallFellBack"];
                 since?: components["parameters"]["CallSince"];
                 until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
@@ -5240,6 +5577,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageStatistics"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listCallSessions: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                /** @description When true, only calls with attempt_count greater than one. */
+                fell_back?: components["parameters"]["CallFellBack"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallSessionList"];
                 };
             };
             400: components["responses"]["BadRequest"];

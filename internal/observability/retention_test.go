@@ -246,66 +246,40 @@ func TestRetentionWindowZeroKeepsEverything(t *testing.T) {
 	}
 }
 
-// TestRetentionKeepsPartitionsWhenTheArchiveFails: a failed upload or an object that does not match its manifest never
-// lets the partition go, and the next run repairs it.
+// TestRetentionKeepsPartitionsWhenTheArchiveFails: neither upload nor confirmation failures let a partition go;
+// the next run repairs the archive and drops it.
 func TestRetentionKeepsPartitionsWhenTheArchiveFails(t *testing.T) {
 	t.Parallel()
-	db, database := openDBWithURL(t)
-	retention := openRetention(t, database)
-	account := uuid.NewV7()
-	keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return SetRetention(t.Context(), tx, Retention{HotDays: 30})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	at := time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)
-	store := newFakeStore()
-	store.putErr = errors.New("bucket down")
-	if err := newTestRetainer(t, retention, store).run(t.Context(), at); err == nil {
-		t.Fatal("a failed upload reported success")
-	}
-	if !partitionExists(t, db, "call_log_2026_10") {
-		t.Fatal("a partition was dropped although its upload failed")
-	}
+	for name, fault := range map[string]func(*fakeStore) *error{
+		"upload":       func(s *fakeStore) *error { return &s.putErr },
+		"confirmation": func(s *fakeStore) *error { return &s.headErr },
+	} {
+		db, database := openDBWithURL(t)
+		retention := openRetention(t, database)
+		account := uuid.NewV7()
+		keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
+		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+			return SetRetention(t.Context(), tx, Retention{HotDays: 30})
+		}); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		at := time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)
+		store := newFakeStore()
+		*fault(store) = errors.New("bucket down")
+		if err := newTestRetainer(t, retention, store).run(t.Context(), at); err == nil {
+			t.Fatalf("%s: a failed archive reported success", name)
+		}
+		if !partitionExists(t, db, "call_log_2026_10") {
+			t.Fatalf("%s: a partition was dropped although its archive failed", name)
+		}
 
-	store.putErr = nil
-	if err := newTestRetainer(t, retention, store).run(t.Context(), at); err != nil {
-		t.Fatal(err)
-	}
-	if partitionExists(t, db, "call_log_2026_10") {
-		t.Fatal("the repaired run did not drop the archived partition")
-	}
-}
-
-// TestRetentionDoesNotDropWhenConfirmationFails: a manifest plus objects that cannot be checked is not an archive the
-// job trusts; the partition stays until a later run sees every object at its recorded size.
-func TestRetentionDoesNotDropWhenConfirmationFails(t *testing.T) {
-	t.Parallel()
-	db, database := openDBWithURL(t)
-	retention := openRetention(t, database)
-	account := uuid.NewV7()
-	keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return SetRetention(t.Context(), tx, Retention{HotDays: 30})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	at := time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)
-	store := newFakeStore()
-	store.headErr = errors.New("bucket head down")
-	if err := newTestRetainer(t, retention, store).run(t.Context(), at); err == nil {
-		t.Fatal("a failed confirmation reported success")
-	}
-	if !partitionExists(t, db, "call_log_2026_10") {
-		t.Fatal("the partition was dropped although confirmation failed")
-	}
-	store.headErr = nil
-	if err := newTestRetainer(t, retention, store).run(t.Context(), at); err != nil {
-		t.Fatal(err)
-	}
-	if partitionExists(t, db, "call_log_2026_10") {
-		t.Error("the partition was not dropped after the confirmation succeeded")
+		*fault(store) = nil
+		if err := newTestRetainer(t, retention, store).run(t.Context(), at); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if partitionExists(t, db, "call_log_2026_10") {
+			t.Fatalf("%s: the repaired run did not drop the archived partition", name)
+		}
 	}
 }
 

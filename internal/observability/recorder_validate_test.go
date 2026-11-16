@@ -13,9 +13,9 @@ import (
 	"axiom/internal/platform"
 )
 
-// TestEnqueueRejectsText: text that cannot be stored is refused at the boundary and marks the recorder unrecordable;
+// TestEnqueueRejectsInvalidRecord: invalid text or an incomplete attempt is refused and marks the recorder unrecordable;
 // no other call may be served after it.
-func TestEnqueueRejectsText(t *testing.T) {
+func TestEnqueueRejectsInvalidRecord(t *testing.T) {
 	t.Parallel()
 	for name, edit := range map[string]func(*CallRecord){
 		"bad UTF-8 in the client app":        func(c *CallRecord) { c.ClientApp = "\xff" },
@@ -27,24 +27,6 @@ func TestEnqueueRejectsText(t *testing.T) {
 		"a route over the column's jsonb limit": func(c *CallRecord) {
 			c.Route = []byte(`{"a":[` + strings.Repeat(`1,`, 3000) + `1]}`)
 		},
-	} {
-		r := recorderOf(t, &sink{}, Config{Capacity: 1, BatchSize: 1, FlushInterval: time.Millisecond})
-		rec := record(uuid.NewV7(), now)
-		edit(&rec)
-		if err := r.Enqueue(rec); err == nil {
-			t.Errorf("%s was accepted", name)
-		}
-		if _, err := r.Admit(); !errors.Is(err, ErrBroken) {
-			t.Errorf("%s left admission open (%v)", name, err)
-		}
-	}
-}
-
-// TestEnqueueRejectsAnIncompleteAttempt: the log cannot say what happened without an endpoint, a supplier, times or a
-// sequence that runs from one; such a record is refused before it reaches the spill.
-func TestEnqueueRejectsAnIncompleteAttempt(t *testing.T) {
-	t.Parallel()
-	for name, edit := range map[string]func(*CallRecord){
 		"a nil endpoint":      func(c *CallRecord) { c.Attempts[0].Endpoint = uuid.Nil() },
 		"a nil supplier":      func(c *CallRecord) { c.Attempts[1].Supplier = uuid.Nil() },
 		"no start time":       func(c *CallRecord) { c.Attempts[0].StartedAt = time.Time{} },

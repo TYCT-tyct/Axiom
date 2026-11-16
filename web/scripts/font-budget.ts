@@ -1,26 +1,31 @@
 // The per-page font budget (docs/frontend.md「前端性能指标」): the font files a page can load, each counted once, at
-// most 60 kB for Latin text and digits and, on the website, 100 kB for Chinese. The console and the admin set Chinese
-// in the system's font, so their Chinese budget is zero. Which files a page can load is fonts.json, which the font
-// pipeline (scripts/fonts/build.py) writes: a face's files carry the pages that show their characters.
+// most 60 kB for Latin text and digits and 100 kB for Chinese, on the website as on each page of the console and the
+// admin. Which files a page can load is fonts.json, which the font pipeline (scripts/fonts/build.py) writes: a face's
+// files carry the pages whose own text needs them, but a page can load every file of a face it is set in, since text
+// from the API (a workspace's name) can hold any character and unicode-range loads the file that has it. The budget is
+// that worst case; the line also says what the page's own text loads.
 
 const kB = 1000;
 
-type FontFile = { file: string; pages: string[]; bytes: number };
+export type FontFile = { file: string; pages: string[]; bytes: number; preload?: boolean };
 export type FontManifest = { faces: { family: string; weight: string; script: "latin" | "han"; files: FontFile[] }[] };
 
-const budgets = (page: string) => ({ latin: 60 * kB, han: page.startsWith("site/") ? 100 * kB : 0 });
+const budgets = { latin: 60 * kB, han: 100 * kB };
 const scriptNames = { latin: "Latin", han: "Chinese" } as const;
 
-// pageFiles returns the files of one script a page can load, each once, by name.
+// pageFiles returns the files of one script a page can load, each once, by name: every file of each face whose files
+// name the page.
 function pageFiles(manifest: FontManifest, page: string, script: "latin" | "han") {
-  const files = new Map<string, number>();
-  for (const face of manifest.faces.filter((f) => f.script === script)) {
-    for (const file of face.files.filter((f) => f.pages.includes(page))) {
-      files.set(file.file, file.bytes);
+  const files = new Map<string, FontFile>();
+  for (const face of manifest.faces.filter((f) => f.script === script && f.files.some((x) => x.pages.includes(page)))) {
+    for (const file of face.files) {
+      files.set(file.file, file);
     }
   }
   return files;
 }
+
+const sum = (files: Iterable<FontFile>) => [...files].reduce((total, file) => total + file.bytes, 0);
 
 // fontBudget returns a line per page and script, and the lines over budget, each followed by the files it adds up.
 export function fontBudget(manifest: FontManifest) {
@@ -33,12 +38,13 @@ export function fontBudget(manifest: FontManifest) {
       if (files.size === 0) {
         continue;
       }
-      const total = [...files.values()].reduce((sum, bytes) => sum + bytes, 0);
-      const budget = budgets(page)[script];
-      const line = `${`${page}: ${scriptNames[script]} fonts`.padEnd(36)} ${(total / kB).toFixed(1).padStart(6)} kB of ${budget / kB} kB`;
+      const total = sum(files.values());
+      const own = sum([...files.values()].filter((file) => file.pages.includes(page)));
+      const budget = budgets[script];
+      const line = `${`${page}: ${scriptNames[script]} fonts`.padEnd(44)} ${(total / kB).toFixed(1).padStart(6)} kB of ${budget / kB} kB (its own text ${(own / kB).toFixed(1)} kB)`;
       lines.push(line);
       if (total > budget) {
-        failures.push(line, ...[...files].map(([file, bytes]) => `  ${file} ${(bytes / kB).toFixed(1)} kB`));
+        failures.push(line, ...[...files.values()].map((file) => `  ${file.file} ${(file.bytes / kB).toFixed(1)} kB`));
       }
     }
   }

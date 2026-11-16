@@ -21,8 +21,10 @@ WHERE s.id = @site_id AND s.status = 'active' AND d.surface = 'console' AND d.di
 ORDER BY (d.domain = @domain::text) DESC, d.domain LIMIT 1;
 
 -- name: ResetUser :many
+-- Lock during address resolution so a concurrent confirmed email change cannot leave this worker mailing the old
+-- address a new reset token. PostgreSQL rechecks the email predicate after waiting for the updater.
 SELECT id, account_id
-FROM accounts.users WHERE site_id = @site_id AND email = @email;
+FROM accounts.users WHERE site_id = @site_id AND email = @email FOR UPDATE;
 
 -- name: InsertPasswordResetToken :exec
 INSERT INTO accounts.password_reset_tokens (id, site_id, account_id, user_id, token_hash, factor_version, expires_at)

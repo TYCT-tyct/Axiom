@@ -2,7 +2,7 @@
 // served under, and the apps served under paths of its listener.
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type UserConfig } from "vite";
@@ -80,6 +80,39 @@ function themeScript(): Plugin {
   };
 }
 
+// fontPreload links, in the built entry page, the font files fonts.json (scripts/fonts/build.py) marks for preloading on
+// this app's pages, the website's first-screen Chinese slice, so they load beside the stylesheet instead of after it has
+// been applied. The console and the admin preload nothing: a page's slices load as it shows their characters. An app is
+// its directory's name, as fonts.json names pages ("site/home").
+function fontPreload(): Plugin {
+  let app = "";
+  let base = "/";
+  return {
+    name: "axiom:font-preload",
+    apply: "build",
+    configResolved(config) {
+      app = basename(config.root);
+      base = config.base;
+    },
+    transformIndexHtml(_, { bundle = {} }) {
+      const fonts: { faces: { files: { file: string; pages: string[]; preload?: boolean }[] }[] } = JSON.parse(
+        readFileSync(join(import.meta.dirname, "packages/ui/src/css/fonts/fonts.json"), "utf8"),
+      );
+      const stems = fonts.faces
+        .flatMap((face) => face.files)
+        .filter((file) => file.preload && file.pages.some((page) => page.split("/")[0] === app))
+        .map((file) => `${file.file.replace(/\.woff2$/, "")}-`);
+      return Object.values(bundle)
+        .filter((asset) => asset.type === "asset" && stems.some((stem) => basename(asset.fileName).startsWith(stem)))
+        .map((asset) => ({
+          tag: "link",
+          attrs: { rel: "preload", as: "font", type: "font/woff2", href: base + asset.fileName, crossorigin: true },
+          injectTo: "head" as const,
+        }));
+    },
+  };
+}
+
 // mounts maps a path to the dev server port of the app production serves there on the same listener, such as the
 // console under the website's /console/, so following a link between them works on the dev servers too.
 export function appConfig({
@@ -99,7 +132,7 @@ export function appConfig({
   return defineConfig({
     base,
     publicDir: false,
-    plugins: [react(), tailwindcss(), themeScript()],
+    plugins: [react(), tailwindcss(), themeScript(), fontPreload()],
     define: {
       // The version of the program this build ships in, exactly as `axiom version` prints it; `just web-build` sets it.
       // Empty when an app is built or served on its own, which turns the new-version prompt off.

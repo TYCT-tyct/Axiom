@@ -23,7 +23,7 @@
 
 - 主键 `id uuid`，由 Go 生成 UUIDv7。金额是 `bigint`，单位同[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)。`status` 取 `active` / `disabled`。
 - 类别的含义见[安全的「租户隔离」](../../docs/security.md#租户隔离)。站点数据的表用 `site_id`、账户数据的表用 `(site_id, account_id)` 与 [pg 的 InitPlan 范围参数](../platform/pg/README.md#决策与理由)比较；`sites` 自己用 `id` 当 `site_id`，`accounts` 用 `id` 当 `account_id`。
-- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，除密码找回请求、令牌、待验证注册请求和已派发用户提醒到期清理外，没有 `DELETE` 权限。
+- `axiom_app` 只对「可改的列」有 `UPDATE` 权限，除密码找回请求、令牌、待验证注册请求、邮箱待变更和已派发用户提醒到期清理外，没有 `DELETE` 权限。
 
 | 表 | 主要列 | 键与约束 | 类别 | 可改的列 |
 |---|---|---|---|---|
@@ -38,7 +38,7 @@
 | `roles` | `name`、`permissions text[]`、`additional_permissions text[]`、`builtin` | `UNIQUE (name)`；迁移写入默认角色 owner、admin、member、finance、viewer、support，权限为空，由在代码里声明权限的 PR 用迁移补上 | 平台 | `permissions`、`additional_permissions`（M1 只经迁移） |
 | `accounts` | `site_id`、`kind`（personal / organization）、`name`、`status`、`tier_id`，可空的 `max_workspaces`（账户自己的工作区上限，1 到 1000）、`max_keys`、`key_creations_per_hour`（账户自己的 key 限额，各 1 到 1 万，空表示用站点的）、`rate_requests`、`billing_preference`（账户自己的扣费顺序，可空，空表示用站点默认） | `UNIQUE (site_id, id)`、`UNIQUE (site_id, id, kind)`；`(site_id, tier_id) → tiers(site_id, id)`，它同时保证 `site_id` 是一个站点 | 账户 | `name`、`status`、`tier_id`、`max_keys`、`key_creations_per_hour`、`rate_requests`、`billing_preference` |
 | `workspaces` | `site_id`、`account_id`、`name`、`status`、`is_default`、`budget`、`budget_reset`、`deleted_at` | `UNIQUE (site_id, account_id, id)`；`(site_id, account_id) → accounts`；部分唯一 `(account_id) WHERE is_default`；部分唯一 `workspace_names (account_id, lower(name)) WHERE deleted_at IS NULL`（迁移 00038）；默认工作区的 `deleted_at` 为空；`budget_reset` 取 daily / weekly / monthly，空表示不重置的总额，有它就要有 `budget` | 账户 | `name`、`status`、`budget`、`budget_reset`、`deleted_at` |
-| `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`email_verified_at`（邀请码注册为空，点击验证链接时写入）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
+| `users` | `site_id`、`account_id`（个人账户）、`account_kind`（恒为 `personal` 的生成列）、`email`（规范化）、`email_verified_at`（邀请码注册为空，点击验证链接时写入）、`password_hash`（argon2id 的 PHC 串）、`factor_version`、`status`、`invite_code`、`inviter_user_id`、`totp_ciphertext`、`totp_nonce`、`totp_wrapped_dek`、`totp_key_version`（`secret.Sealed` 的四个字段，同为空或同不为空）、`totp_last_step`（默认 0）、`mfa_enabled_at` | `UNIQUE (site_id, id)`、`UNIQUE (site_id, account_id, id)`；`UNIQUE (account_id)`、`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`：个人账户只属于这一个用户，不能绑到企业账户上，两个登录身份不会共用一个账户范围；`UNIQUE (site_id, email)`；`UNIQUE (site_id, invite_code)`；`(site_id, inviter_user_id) → users(site_id, id)`；`inviter_user_id <> id` | 账户 | `email`、`email_verified_at`、`password_hash`、`factor_version`、`status`、四个 `totp_` 密文列、`totp_last_step`、`mfa_enabled_at` |
 | `members` | `site_id`、`account_id`、`account_kind`、`user_id`、`user_account_id`、`role_id`、`personal_owner`（`GENERATED ALWAYS AS (CASE WHEN account_kind = 'personal' THEN account_id END) STORED`） | 主键 `(account_id, user_id)`；`(site_id, account_id, account_kind) → accounts(site_id, id, kind)`；`(site_id, user_account_id, user_id) → users(site_id, account_id, id)`；`(site_id, personal_owner, user_id) → users(site_id, account_id, id)`：个人账户的成员只能是它唯一的用户，所以不需要另加部分唯一索引；`role_id → roles` | 账户 | 无，也没有 `UPDATE` 策略（移除成员随企业账户加 `removed_at`） |
 | `platform_grants` | `site_id`、`site_is_main`（恒为真）、`account_id`（被授予者的个人账户）、`user_id`、`role_id`、`granted_by`（授予者的用户 ID，命令行授予时为空）、`revoked_at` | `(site_id, site_is_main) → sites(id, is_main)`：只能授予主站用户；`(site_id, account_id, user_id) → users(site_id, account_id, id)`；部分唯一 `(user_id, role_id) WHERE revoked_at IS NULL`：一个用户同一角色只有一条有效授予 | 账户（被授予者的），写入另限平台范围 | `revoked_at`（终态；恢复插入新授予） |
 | `agent_credentials` | `name`、`permissions`、`sites`（NULL 为全部站点）、`platform`、`proposer_vendors`、`created_by`、`created_at`、`expires_at`、`revoked_at`、`last_used_at` | CHECK：含 `operations.read`，不含 `operations.manage`、`operations.approve`、`platform_grants.manage` | 平台 | `revoked_at`（终态）、`last_used_at` |
@@ -51,6 +51,7 @@
 | `password_reset_requests` | `site_id`、`email_hash`、`id`、可空 `email`、`domain`、`language`、`expires_at` | 主键 `(site_id, email_hash)`；唯一 `id`；摘要 32 字节；语言 zh/en | 站点 | `id`、`email`、`domain`、`language`、`expires_at`（重发替换，处理后清除邮箱） |
 | `password_reset_tokens` | `id`、`site_id`、`account_id`、`user_id`、`token_hash`、`factor_version`、`expires_at`、`used_at` | `token_hash` 唯一、32 字节；`(site_id, account_id, user_id) → users` | 账户 | `used_at`（终态） |
 | `registration_requests` | `id`、`site_id`、`email_hash`、`email`、`password_hash`、`tier_id`、`domain`、`language`、可空 `token_hash`、`expires_at` | 主键 `id`；`(site_id, email_hash)` 唯一，重复请求替换；`(site_id, tier_id) → tiers`；`token_hash` 唯一、32 字节；语言 zh/en；默认 24 小时到期 | 站点 | `password_hash`、`tier_id`、`domain`、`language`、`expires_at`、`token_hash`；可删除 |
+| `email_changes` | `site_id`、`account_id`、`user_id`、`email`、`token_hash`、`factor_version`、`language`、`expires_at` | 用户主键、复合用户外键；摘要 32 字节；每用户一行，重发替换；到期清理或成功消费后删除 | 账户 | `email`、`token_hash`、`factor_version`、`language`、`expires_at` |
 | `notification_preferences` | `site_id`、`account_id`、`user_id`；可空的 `low_balance`、`top_up`、`factor_changed`、`spend_anomaly`、`threshold`；`webhook_url`、`language` | 主键 `user_id`；复合用户外键；阈值非负、语言 zh/en | 账户 | 七项偏好列 |
 | `user_notices` | 来源、种类、数值、正文补充（`detail`）、时间、`email_done`、`dispatched`、冻结的 Webhook URL 与状态 | 主键 UUID；唯一 `(user_id,kind,source)`；复合用户外键；排队与终态分开索引 | 账户 | `email_done`、`email_failed`、`dispatched`、`webhook_url`、`webhook_state`；平台仅可删除已派发、非排队、超过 30 天的行 |
 | `announcements` | `site_id`、纯文本标题和正文、`starts_at`、`ends_at`、`withdrawn_at` | 站点外键、结束晚于开始；撤下为终态 | 站点公开配置 | 平台只能改 `withdrawn_at` |
@@ -72,6 +73,14 @@
 - 其他表：`FOR UPDATE USING (范围) WITH CHECK (范围)`。
 - `platform_grants` 的 `INSERT`、`UPDATE` 用 `(SELECT platform.in_platform_scope())`：平台范围包含所有账户，所以它比类别更严，不更宽。
 - 测试：首次撤销或删除成功，之后清除终态列、改其他列都影响 0 行；迁移测试查 `pg_policies`，有终态列的表上没有 `FOR ALL`，也没有第二条 `UPDATE` 策略。
+
+## 个人资料
+
+`ChangeDisplayName` 修改个人账户的 `accounts.name`，去除首尾空白并校验 1–100 字符；`user.name_changed` 只记前后长度，不把名字写进通用审计。`DisplayName` 在同一账户范围读取当前名，`GET /profile/name` 供页面刷新后读回；姓名写者先锁用户后读取改前值，因此纯读取不加行锁。无变化不写审计。
+
+`RequestEmailChange` 复用 `checkPasswordForChange` 的密码复核和用户失败桶，发送预算复用找回密码桶、按用户标识独立计数；扣预算前检查当前及新邮箱有效，无效返回 ErrBadEmail，不发信；新邮箱还复用注册的域名名单，拒绝返回 ErrEmailDomainNotAllowed。锁用户后核对 MFA 与 factor_version。站点范围仅用于检查与注册相同的站点邮箱唯一性，写入始终使用 Principal 自己的用户、个人账户和站点。迁移 `00045_profile.sql` 新增 `email_changes`（复合用户外键、强制账户/站点 RLS），每用户一行，保存目标邮箱、令牌摘要、发起时 factor_version、语言和截止时间；重发覆盖，只有摘要入表。令牌、验证邮件和域名选择复用注册/找回机制，使用现有 SMTP outbox，不注册新任务；密码找回清理任务分批删除过期行。
+
+`ConfirmEmailChange` 要求同一用户的非 pending 控制台会话，已启用第二因素时须为 MFA。锁顺序为用户 → 待变更，重发和确认相同；比较摘要、factor_version、注入时钟的 24 小时截止时间，并重查最新站点域名名单；封禁后拒绝确认且保留原邮箱。消费、设置 `users.email` 与 `email_verified_at`、作废旧邮箱找回令牌、`user.email_changed` 脱敏前后地址审计和旧地址通知同事务。并发确认仅一次成功，唯一约束覆盖与注册的竞争。复用 `finishFactorChange` 提升因素版本，返回当前设备的同等级新会话、CSRF 及 TOTP 用户的新恢复码；其他会话与旧恢复码失效。旧邮箱通知覆盖因素通知的邮件，按新版本标记已发，避免额外邮件；其他因素变更也会让未确认请求失效。接口、错误与理由见[账户域](../../docs/domains/accounts.md#登录与会话)。
 
 ## 业务速率
 
@@ -499,3 +508,9 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 `RecordSitePaymentNotice` 在商户配置保存的同一事务里，为二级站点的 owner account 的活跃用户写一条 `site_payment_changed`，主站没有 owner，不写；这一条在 `noticeEnabled` 里恒为开，不受偏好影响，正文带主站品牌、被改的二级站点名称（`detail`）、标题和处置建议，不含商户号、密钥或网关地址。保存失败时它和审计一起回滚；每次改动用新来源，唯一键挡住同一用户的重复行，接口幂等键挡住重放。
 
 `announcements` 对外使用 `AnnouncementID`（`ann_` TypeID），是站点公开数据，账户范围通过 home_site 读取本站；发布/撤下只限平台，内容不可更新，撤下为终态。控制台按服务端时间取 `[starts_at,ends_at)` 的前 100 条。管理写入经 MFA、sites.manage、幂等与审计；控制台不接受选择另一个站点。文本只渲染为 React 文本节点。
+
+## 邀请记录
+
+`Invitations` 只接受完整控制台会话。先按 Principal 的站点、个人账户和用户核对自己的码，再在站点范围显式按 `site_id` 和 `inviter_user_id` 读取邀请记录；不改变注册时写入且不可修改的关系。返回 `Invitee` 只含注册时间和 `Available`，查询只读取分页所需的内部 ID、状态和注册时间，不读取邮箱或姓名；响应不含遮掩邮箱或独立用户 ID 字段；停用用户的 `Available` 为 false，占位文案由客户端本地化。注销流程尚未实现，保留停用用户行的占位可读，不新增注销规则。
+
+注册时间复用管理用户列表的 `uuid_extract_timestamp(id)`；UUIDv7 倒序加独占上界游标，同毫秒注册仍按完整 ID 排序，读页大小加一判断是否还有下一页。迁移 `00048_invitations.sql` 并发创建的 `users_of_inviter` 索引限定站点、邀请人并按 ID 排序，避免扫描全站用户；不新增关系副本和回填。控制台组装层复用登记域名的 `Origin`，拼接 `/console/register?invite=`；响应字段可选，末页游标为 null，旧节点 404 时页面应视为不可用。当前只有邀请码注册会写入邀请关系，开放注册忽略邀请码、关闭注册拒绝注册，缺口见 [#763](https://github.com/TYCT-tyct/Axiom/issues/763)，本接口不改写入。覆盖空记录、排序、调用者隔离、停用状态及分页的测试为 `TestInvitations`。

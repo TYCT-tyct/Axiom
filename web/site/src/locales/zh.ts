@@ -9,5 +9,5 @@ export default {
     body: "每条线路都实测，出错在第一个字之前换线，按实际服务的线路计费。",
     start: "获取 API key",
   },
-  footer: "© Axiom",
+  footer: "© Axiom · 本站中文使用了 MiSans 字体",
 };
