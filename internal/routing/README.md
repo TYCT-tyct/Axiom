@@ -6,7 +6,7 @@
 
 ```go
 func New(cfg Config) (*Router, error)
-func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error)
+func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset, rules ...ByokRule) (*Snapshot, error)
 func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
 func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey // 只扫有界前缀
 func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale；ErrPresetUnavailable
@@ -56,7 +56,7 @@ func SetSuspension(ctx context.Context, tx pg.Tx, actor audit.Actor, suspend boo
 - **`SessionKey`** 最多读 `Config.SessionPrefix` 字节，顺序见[会话粘性](../../docs/domains/routing.md#会话粘性)；兜底的哈希只取第一条消息（最多 1 KiB），对话变长键不变；键总含账户。透传给上游的标识由 gateway 的 `Executor.identity` 派生。
 - **`Record`**：被排除的候选（存储时逐个列出最多 16 个，每个原因的个数全记）、路线、每次尝试（gateway 追加）、`Unmeasured`、`Preset`/`PresetVersion`、`Overrides`（位集合，不分配）；`JSON()` 是存储形式，契约模式是 `CallRoute`（`TestRecordKeepsItsContract`）。
 - **请求的名称选择**：`Override.OrderNames`、`OnlyNames`、`ExcludeNames` 和 `Preset.OrderNames` 在 `Endpoint.Codename` 上精确匹配，从不转成供应商 ID。`Override.RequiredParameters` 来自 `protocol.RequestParameters`，按选中格式的 `Endpoint.Specs[f].Parameters` 判定（`HasAll`），不过记 `OverrideFilter`。
-- **BYOK**：一个可见的 `Byok && !ByokFallback` 候选让同模型的其他候选以 `ByokNoFallback` 出局。
+- **BYOK**：账户的不回落选择（`ByokRule`，经 `NewSnapshot` 的 `rules` 传入，与凭证状态无关）或一个可见的 `Byok && !ByokFallback` 候选，让同模型的非 BYOK 候选以 `ByokNoFallback` 出局；其他 BYOK 候选不受影响。
 - **`KeyView`** 只问快照里有没有这把 key 看得见、可收费、预设留下的端点，不走 `Plan`，不看熔断、负载、暂停、预算和快照新旧；预设判定与 `Plan` 共用 `presetAllows`（经 `viewAllows`）。
 
 ## 输入类型

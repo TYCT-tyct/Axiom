@@ -191,7 +191,7 @@
 账户自带的供应商 key（BYOK，见[账户与租户](accounts.md#自带的供应商-keybyok)）在快照里是账户归属的端点：`Endpoint.Owner.Account` 等于这个账户，别的账户看不到，所以它们的路线不受影响。
 
 - **优先**：排序先比供应商顺序（`order`），同一 order 内 BYOK 端点先于平台端点，然后才比性能期望、粘性和策略；价格不参与这个先后。
-- **不回落**：key 上 `fallback=false` 时，这个账户在这个模型上不用非 BYOK 端点（原因 `byok_no_fallback`），BYOK 端点都被排除时按没有可用端点结束；只影响该 key 覆盖的模型。`fallback=true`（默认）先试自己的 key，失败后回落平台端点。被拒绝或停用的 key 不在快照里，不会挡住回落。
+- **不回落**：key 上 `fallback=false` 时，这个账户在这个模型上不用非 BYOK 端点（原因 `byok_no_fallback`），BYOK 端点都被排除时按没有可用端点结束；只影响该 key 覆盖的模型。`fallback=true`（默认）先试自己的 key，失败后回落平台端点。不回落的选择与凭证状态无关，单独读入快照：key 被拒绝（401）或停用后平台端点照样不用，直到用户改回落设置或删除 key。
 - **价格**：售价是参考价乘站点的 BYOK 费率（见[计费](billing.md#定价)），成本计划是 0；条目锁定的就是折后售价表，预留、结算、冲正和退款都按它走。
 - **失败**：供应商 401 让适配器返回 `CredentialRejected`，凭证标为 `rejected` 并立刻休息，以后不再选；`fallback=true` 时路线继续到平台端点，`false` 时请求失败。403 不标记 key，适配器返回端点范围的 `NotPermitted`，按端点失败回退。429、5xx 走既有的暂停、熔断和重试，不解绑、不删除 key。
 
