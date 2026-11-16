@@ -154,7 +154,7 @@
 
 ## 运维告警信号
 
-`alert.New` 的 `Raise`/`Resolve` 不等数据库：本机缓冲 1024 个，种类 128、键 256 字节，至多 16 个字段（名 64、值 512 字节），拒绝非法 UTF-8 和 NUL；写入期限 5 秒，`Close` 排空。`alert.Persist` 提交后才持久，UUID 防重写；`alert.Consume` 与生产共用一把锁。来源位置（`alert.LockPosition`、`SavePosition`、`ClaimSources`）与信号同事务提交。只放运维元数据，规则见 [observability](../observability/README.md#告警接口与不变量)。
+`alert.New` 的 `Raise`/`Resolve` 不等数据库：本机缓冲 1024 个，种类 128、键 256 字节，至多 16 个字段（名 64、值 512 字节），拒绝非法 UTF-8 和 NUL；写入期限 5 秒，`Close` 排空。`alert.Persist` 提交后才持久，UUID 防重写；`alert.Consume` 与生产共用一把锁。来源位置（`alert.LockPosition`、`SavePosition`、`ClaimSources`）与信号同事务提交。只放运维元数据，规则见 [记录与告警](../../docs/domains/observability.md#告警信号事件与规则e5-3)。
 
 ## 决策与理由
 
