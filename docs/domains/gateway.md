@@ -117,6 +117,10 @@
 
 `session.prepare` 先把请求交给 `protocol.PrepareBudgeted`，由它保证这次准备分配的每个字节都先记到节点的 `Memory` 上；记不到就返回 `ErrMemory`，网关回 503，不发起上游尝试。`Inspect` 读过的请求体在准入时已经计入预算，并一直留到调用结束（`Call.Done`）：解码后的树里，`jsontext.ReadValue` 返回的值是请求体的切片，不复制正文，所以请求体必须比树活得久。
 
+并发准备先共享本地准备闸门。只有失败时另有准备持有额度，且这些额度退回后可覆盖这次已经出现的峰值和失败的申请，才全退首试额度，再独占重试一次；否则立即返回 503 `memory`，不排写闸。份额由 `budget.draw/give` 在短锁中维护；成功交回的输出仍计入节点预算，但已移出可回收的准备份额，读体、发送缓冲和中继也不属于这个份额。预算在上述持有量之外够一份准备的峰值时，不会因准备之间瓜分额度而全部失败。预算充足仍并行；剩余额度小于正文或为零时在入闸前立即拒绝。锁不跨外部 I/O，也不等发送释放输出额度，最终不足沿用 503 `memory`。
+
+合格的失败请求可能在写闸上排队：除了在途读者，还会等待先取得写闸的重试和穿插放行的读者。gateway 的在途名额由 `Config.NodeInFlight` 限制（默认 5000），所以同一时刻等闸者至多为在途名额减一；锁不承诺 FIFO 或固定等待时长，持续新流量可延长等待。`PrepareBudgeted` 没有 context，断开和超时不能取消等闸，也不打断已经开始的本地准备；调用名额保留至收尾。保留现有接口与错误契约，接受仅在真实准备额度竞争时等待纯本地计算的限制，不把它描述成可取消或有排队期限。
+
 数据流：
 
 1. 同一格式：先按 `rewriteSize` 为输出缓冲申请容量，改写器去转义标识和 `previous_response_id` 时经同一个 budget 申请临时缓冲和字符串；结束后退回临时部分，只留输出缓冲的容量。
@@ -128,18 +132,18 @@
 
 不变量：
 
-- 分配之前已经申请：申请量按运行时的分配粒度算（`rounded`）；申请失败时已经申请的部分全部退回，`PrepareBudgeted` 返回 `ErrMemory`，之后不再分配。
+- 分配之前已经申请：申请量按运行时的分配粒度算（`rounded`）；每次准备申请失败时已经申请的部分全部退回；首试的内存拒绝仅在其他准备额度可覆盖已知峰值时独占重试一次，最终返回 `ErrMemory` 后不再分配。
 - 成功返回时只有 `Upstream.Body` 的容量还在账上，网关在 `Send` 返回后按这个值退还；失败返回时为 0。
 - 申请量：Chat 转出按实际，1 MiB 长文本约为请求体的 1.01 倍，base64 文件约 3 倍，2 万个小消息约 22 倍；Messages、Responses 转出仍是每字节 12、每个对象 3072、每个成员 768 的预留。
 
 发布与失败：
 
-- 没有存储或对外接口变化，新旧节点可以同时运行；同一请求在两种节点上写出的字节相同。旧节点在 Chat 转出时仍按形状上界申请，会比新节点更早地 503；滚动发布期间客户端可能遇到两种拒绝频率，这是唯一的可观察差异，不需要迁移或回滚脚本。
-- `ErrMemory` 只阻止**当前待发起的尝试**：它发生在这一次上游调用之前，所以这一次没有重试、没有供应商费用、没有迟到的回调。准入可能已经用 `ReserveMany` 写入了数据库资金预留；执行器仍会进入 `conclude`，已有尝试照常结算，预留按既有规则释放。若进程在准备期间退出，数据库预留不会随进程消失，由既有的过期预留清理机制处理。
+- 没有存储或对外接口变化，新旧节点可以同时运行；同一请求在两种节点上写出的字节相同。旧节点并发准备时可能互相瓜分额度而全部 503，新节点仅在竞争方准备额度可覆盖已知峰值时独占重试一次；滚动发布期间客户端可能遇到两种拒绝频率，不需要迁移或回滚脚本。
+- `ErrMemory` 只阻止**当前待发起的尝试**：它发生在这一次上游调用之前，所以这一次没有上游重试、没有供应商费用、没有迟到的回调。准入可能已经用 `ReserveMany` 写入了数据库资金预留；执行器仍会进入 `conclude`，已有尝试照常结算，预留按既有规则释放。若进程在准备期间退出，数据库预留不会随进程消失，由既有的过期预留清理机制处理。
 - 进程内的内存预算与数据库资金预留是两件事：前者限制这次准备和发送的峰值，后者保证账户余额；`ErrMemory` 不写账本，也不把这次 503 当成一次上游调用。
 - 钱：这条路径不写预留、账本或调用记录。被 503 拒绝的请求不计模型用量，也不产生供应商费用；成功的请求按原来的结算路径计费，内存预算不是资金。
 
-测试：`TestPrepareAllocatesOnlyWhatItDrew` 对每一对源、目标格式和最坏形状，在子进程里测准备分配的总字节数不超过申请总量加 32 KiB，再把预算随机压到峰值以下，核对每次都是 `ErrMemory` 且拒绝前的分配不超过已申请的（竞态构建里只核对拒绝）；`TestPrepareLargeRequestReservesAboutItsBody` 核对 Chat 转出的大请求申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对并发准备时失败方不占预算、成功方只留输出容量；`TestConcurrentLargeRequestsStayWithinTheBudget` 在子进程里核对并发准备的实际活堆峰值不超过预算加 368 KiB（每个请求的未计费额度、页取整和请求对象，加一次采样的 16 KiB），并以花不完的预算作对照，证明测量能看见超支；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
+测试：`TestPrepareAllocatesOnlyWhatItDrew` 对每一对源、目标格式和最坏形状，在子进程里测准备分配的总字节数不超过申请总量加 32 KiB，再把预算随机压到峰值以下，核对每次都是 `ErrMemory` 且拒绝前的分配不超过已申请的（竞态构建里只核对拒绝）；`TestPrepareLargeRequestReservesAboutItsBody` 核对 Chat 转出的大请求申请量不超过请求体的五倍；`TestPrepareConcurrentLargeRequests` 核对预算紧张时至少一份成功、足够时全部成功，失败方不占预算、成功方只留输出容量；`TestPrepareRetriesAfterCompetingPartialCharges` 固定部分额度占用与独占重试的交错；`TestPrepareBudgetedRefundsFailures` 核对中途失败全退和后续请求，`TestPrepareBudgetedRefusesWithoutWaiting` 核对零预算和正文超预算不等闸；`TestConcurrentLargeRequestsStayWithinTheBudget` 在子进程里核对并发准备的实际活堆峰值不超过预算加 368 KiB（每个请求的未计费额度、页取整和请求对象，加一次采样的 16 KiB），并以花不完的预算作对照，证明测量能看见超支；`TestMemoryErrorKeepsItsType` 核对旧版函数调用和 thinking 预算处耗尽预算仍是 `ErrMemory`；gateway 的 `TestMemoryIsAskedForBeforePrepareAllocates`、`TestMemoryHoldsARequestByItsCapacityWhileItIsSent`、`TestMemoryHoldsConcurrentRequestsToTheBudget` 核对预算的申请、持有和退还。
 
 ### 用量与费用
 
@@ -472,6 +476,7 @@ Axiom 有意对付费调用也施加后台配置的账户/等级/key 业务限�
 
 | 决策 | 理由 |
 |---|---|
+| 请求准备只为竞争方额度可覆盖的已知峰值独占重试一次 | [#768](https://github.com/TYCT-tyct/Axiom/issues/768)：逐项扣额度会互相瓜分。比较一次预留峰值、全部串行与共享首试加条件重试，选第三种，保留实际申请和充足预算下的并行，避免粗上界扩大长文本预留、精确预估复制转换逻辑。只在另有准备占用额度且失败的已知峰值可由退回这些额度覆盖时排写闸，形状预留超过总预算的请求直接 503；成功输出不计入可回收份额。用短锁保持失败快照与份额一致，普通读体和中继的原子记账不变。代价是最多两次本地准备，并可能排在其他合格重试和读者之后；等待人数受节点在途名额约束，但无固定等待时间，断开和超时不能取消等闸。保留现有接口及错误契约，接受这一仅涉及本地计算的限制，不承诺可取消或排队期限；不跨外部 I/O，不改费用规则。 |
 | 搜索后端用自托管 SearXNG 加付费 Firecrawl，不选 Tavily、Parallel | 按 [#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地 #311。Firecrawl 按「每次搜索 + 每条结果」计价（$0.005 + $0.0125，2026-11-01 核对其搜索文档），正好对应两个成本字段，HTTPS JSON、Bearer 密钥；2026-11-01 从部署节点核对 `api.firecrawl.dev` 根路径 200、`/v2/search` 对 GET 返回 405（端点存在且只收 POST）。SearXNG 可以自建在中国大陆，Firecrawl 作为公网付费后备；大陆侧的直连没有在本机验证，部署时用后台的测试按钮确认。Tavily 按请求扣 credit、不按结果，装不进两个成本字段；Parallel 的公开定价与国内可达性无法在不注册的情况下确认，不选。 |
 | 每个后端有自己的发布价，报价时替换该条目锁定的 `web_search` 单价；搜索价为 0 沿用模型价 | 成本乘（1 + 加价比例）用 `platform.UnitPrice` 精确计算、向上取整，和模型售价同一套钱的表示；价格和版本存在后端行，预留锁定的就是换过价的售价表，结算按同一份表收费，不会出现预留一个价、结算另一个价。不另建一套引擎价目表：模型售价表已经按条目锁定，换一个单价就够。0 表示沿用模型价，让旧的单后端和环境变量部署行为不变。 |
 | 原生搜索按目录的 `web_search` 能力和目标格式判断，不按厂商白名单；插件最多开 10 次 | 端点能不能原生搜索是目录数据，OpenRouter 文档列的 OpenAI、Anthropic、Google、Perplexity、xAI 只是它当时的代理范围，写死会随代理变化而误判。10 次是一次插件请求的花钱上限；Chat 的 `web_search_options` 没有次数成员，预留按 1 次、按上游报告的实际次数结算，超出部分按余额底线截断。 |

@@ -17,13 +17,34 @@ func Prepare(r *Request, body []byte, t Target, w Rewrites) (Upstream, error) {
 
 // PrepareBudgeted is Prepare drawing every allocation it makes from m first, and returning what it leaves charged:
 // the capacity of the body it made, which the caller gives back once the request is sent. A request that would surpass
-// the budget is ErrMemory and leaves nothing charged. A nil m charges nothing, as Prepare does.
-func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (u Upstream, held int64, err error) {
-	b := &noBudget
-	if m != nil {
-		b = &budget{m: m}
+// the budget is ErrMemory and leaves nothing charged. A memory refusal that competing preparations' charges could
+// cover is retried once exclusively. A nil m charges nothing, as Prepare does.
+func PrepareBudgeted(m *Memory, r *Request, body []byte, t Target, w Rewrites) (Upstream, int64, error) {
+	if m == nil {
+		return noBudget.prepare(r, body, t, w)
 	}
-	return b.prepare(r, body, t, w)
+	if m.left.Load() < int64(len(body)) {
+		return Upstream{}, 0, ErrMemory
+	}
+	retry := false
+	if u, held, err := func() (Upstream, int64, error) {
+		m.preparing.RLock()
+		defer m.preparing.RUnlock()
+		b := &budget{m: m}
+		u, held, err := b.prepare(r, body, t, w)
+		retry = b.retry
+		return u, held, err
+	}(); !errors.Is(err, ErrMemory) {
+		return u, held, err
+	}
+	if !retry {
+		return Upstream{}, 0, ErrMemory
+	}
+	// The failed preparation and its partial output are gone before the retry draws again.
+	// Taking the write gate drains competing partial charges and blocks new preparations.
+	m.preparing.Lock()
+	defer m.preparing.Unlock()
+	return (&budget{m: m}).prepare(r, body, t, w)
 }
 
 // prepare is PrepareBudgeted on a budget of the caller's, which the tests read what it drew from.
@@ -50,6 +71,11 @@ func (b *budget) prepare(r *Request, body []byte, t Target, w Rewrites) (u Upstr
 		}
 	}
 	b.give(b.held - held)
+	if b.m != nil {
+		b.m.preparationMu.Lock()
+		b.m.preparationHeld -= held // the sent body remains charged, but cannot be reclaimed by waiting for preparation
+		b.m.preparationMu.Unlock()
+	}
 	return u, held, nil
 }
 
