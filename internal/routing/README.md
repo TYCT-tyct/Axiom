@@ -2,7 +2,7 @@
 
 路由在调用路径上的接口：会话标识、回退路线、换不换端点的判定。路由的规则见[路由](../../docs/domains/routing.md)，一次调用的编排见 [gateway](../gateway/README.md)。
 
-> 已实现（[Issue #26](https://github.com/TYCT-tyct/Axiom/issues/26)，PR R1–R3 合为一个，见 [gateway 的「PR 拆分」](../gateway/README.md#pr-拆分)）：路由快照、`SessionKey`、`Plan`、`Decide`、按供应商的重试预算、进程内的端点负载与 429 降权、会话粘性存储、路由记录。快照由 `NewSnapshot` 从端点和预设的数据组装，这些数据由 suppliers、quality、billing、accounts 提供；它们的类型还没有公开，所以 routing 先用最窄的自有类型（见「现在的输入类型」），对方公开后在调用处换掉。代码与本文不一致时，在同一个 PR 里改本文。
+> 已实现（[Issue #26](https://github.com/TYCT-tyct/Axiom/issues/26)，PR R1–R3 合为一个）：路由快照、`SessionKey`、`Plan`、`Decide`、按供应商的重试预算、进程内的端点负载与 429 降权、会话粘性存储、路由记录。快照由 `NewSnapshot` 从端点和预设的数据组装，这些数据由 suppliers、quality、billing、accounts 提供；它们的类型还没有公开，所以 routing 先用最窄的自有类型（见「现在的输入类型」），对方公开后在调用处换掉。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 接口
 
