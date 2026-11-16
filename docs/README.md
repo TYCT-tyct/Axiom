@@ -55,8 +55,11 @@
 
 ## 存档
 
+不是现行规则：做决定时的外部对照、被否决的方案和推导，只在追问某个决定的来历时读，任务卡不引用。
+
 | 内容 | 文档 |
 |---|---|
+| 账户与租户的外部对照、被否决的方案、准入与限频的推导和测量 | [archive/accounts.md](archive/accounts.md) |
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
 | 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
 
