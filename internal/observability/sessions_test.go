@@ -167,12 +167,16 @@ func TestOwnSessionsPlanBoundsCallRecords(t *testing.T) {
 
 func explainSessions(t *testing.T, db *pg.DB, q OwnQuery) string {
 	t.Helper()
+	size, err := ownPageSize(q.PageSize)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var lines []string
 	if err := db.ReadTx(t.Context(), accountScope(q.Account), func(tx pg.Tx) error {
 		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Account.String(), q.Since, q.Until, "", "", "", "", "", "", false, maxOwnSessionCalls, q.Until, uuid.Nil().String(), 51)
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Account.String(), q.Since, q.Until, "", "", "", "", "", "", false, maxOwnSessionCalls, q.Until, uuid.Nil().String(), int64(size)+1)
 		if err != nil {
 			return err
 		}
