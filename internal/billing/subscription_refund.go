@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"time"
 	"uuid"
@@ -164,7 +165,7 @@ func readGrantValue(ctx context.Context, tx pg.Tx, req SubscriptionRefundRequest
 	if err != nil {
 		return ReadGrantRow{}, platform.Currency{}, nil, 0, 0, err
 	}
-	rate, err := readRate(ctx, tx, derefUUID(g.RateID))
+	rate, err := readRate(ctx, tx, orElse(g.RateID, uuid.UUID{}))
 	if err != nil {
 		return ReadGrantRow{}, platform.Currency{}, nil, 0, 0, err
 	}
@@ -298,7 +299,7 @@ func refundCash(req SubscriptionRefundRequest, rg refundCase) (int64, int64, err
 	// later windows still represent. A refund whose share is still below the smallest currency unit is refused rather
 	// than giving away a window for no money; the account can ask for a larger refund.
 	cumulative := rg.grant.RefundedValue + req.Credits
-	targetPaid := refundShare(cumulative, *rg.grant.Paid, rg.value)
+	targetPaid := mulDivFloor(cumulative, *rg.grant.Paid, rg.value)
 	paid := targetPaid - rg.grant.RefundedPaid
 	if paid <= 0 {
 		return 0, 0, fmt.Errorf("%w: these credits are below one unit of the grant's payment currency", ErrNotRefundable)
@@ -306,7 +307,7 @@ func refundCash(req SubscriptionRefundRequest, rg refundCase) (int64, int64, err
 	if paid > remainingPaid {
 		return 0, 0, fmt.Errorf("%w: the grant's refunds exceed what was paid", ErrNotRefundable)
 	}
-	targetFee := refundShare(targetPaid, *rg.grant.Fee, *rg.grant.Paid)
+	targetFee := mulDivFloor(targetPaid, *rg.grant.Fee, *rg.grant.Paid)
 	fee := targetFee - rg.grant.RefundedFee
 	if fee < 0 || fee > paid {
 		return 0, 0, fmt.Errorf("%w: the grant's fee refund does not fit the cash returned", ErrNotRefundable)
@@ -343,25 +344,24 @@ func sameSubscriptionRefund(old SubscriptionRefund, req SubscriptionRefundReques
 }
 
 // ceilMulDiv is ceil(a*b/c) without overflowing on the product; a, b and c are positive.
-func ceilMulDiv(a, b, c int64) int64 {
-	n := new(big.Int).Mul(big.NewInt(a), big.NewInt(b))
-	n.Add(n, big.NewInt(c-1))
-	n.Quo(n, big.NewInt(c))
-	if !n.IsInt64() {
-		return int64(^uint64(0) >> 1)
-	}
-	return n.Int64()
-}
+func ceilMulDiv(a, b, c int64) int64 { return mulDiv(a, b, c, true) }
 
 // mulDivFloor is floor(a*b/c) without overflowing on the product; a, b and c are non-negative.
 func mulDivFloor(a, b, c int64) int64 {
 	if a == 0 || b == 0 {
 		return 0
 	}
+	return mulDiv(a, b, c, false)
+}
+
+func mulDiv(a, b, c int64, roundUp bool) int64 {
 	n := new(big.Int).Mul(big.NewInt(a), big.NewInt(b))
+	if roundUp {
+		n.Add(n, big.NewInt(c-1))
+	}
 	n.Quo(n, big.NewInt(c))
 	if !n.IsInt64() {
-		return int64(^uint64(0) >> 1)
+		return math.MaxInt64
 	}
 	return n.Int64()
 }
