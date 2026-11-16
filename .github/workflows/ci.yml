@@ -148,10 +148,19 @@ jobs:
   # A pull request does not run it: the train runs it once for the batch, and finds the PR that broke it (2026-10-28,
   # owner: 「能优化则优化吧。甚至跳过」 — every PR's tests ran twice, once alone and once in its train).
   go-test:
+    name: go-test (${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 40
+    strategy:
+      fail-fast: false # the other shard's log still names its own failures for the train's flaky check
+      matrix:
+        shard: [1, 2]
+    # GITHUB_JOB is the same for both shards: the container label needs the shard, or one shard's cleanup removes the
+    # other's live containers
+    env:
+      AXIOM_TEST_SHARD: ${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,14 +168,14 @@ jobs:
       # Keep disabling Ryuk in the same job that supplies its replacement cleanup; runner .env owns the cgroup.
       - name: Configure test container policy
         run: |
-          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB${AXIOM_TEST_SHARD:+-$AXIOM_TEST_SHARD}" >> "$GITHUB_ENV"
           if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
             echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
           fi
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
-      - run: just test
+      - run: just test ${{ matrix.shard }}/2
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh
@@ -273,7 +282,7 @@ jobs:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - name: Configure test container policy
         run: |
-          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB${AXIOM_TEST_SHARD:+-$AXIOM_TEST_SHARD}" >> "$GITHUB_ENV"
           if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
             echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
           fi
@@ -315,7 +324,7 @@ jobs:
       # Ryuk that does not start within its wait on a loaded runner failed the whole job (train build 41569176679).
       - name: Configure test container policy
         run: |
-          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB" >> "$GITHUB_ENV"
+          echo "AXIOM_TEST_JOB=$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-$GITHUB_JOB${AXIOM_TEST_SHARD:+-$AXIOM_TEST_SHARD}" >> "$GITHUB_ENV"
           if [ -n "${AXIOM_TEST_CGROUP_PARENT:-}" ]; then
             echo "TESTCONTAINERS_RYUK_DISABLED=true" >> "$GITHUB_ENV"
           fi
