@@ -344,70 +344,43 @@ func TestAlipayQueryRefund(t *testing.T) {
 	})
 }
 
-//nolint:gocognit // one independent probe outcome per subtest; the subtests are the test
 func TestAlipayTestConfig(t *testing.T) {
-	t.Run("not exists is accepted", func(t *testing.T) {
-		var probe string
-		ch, _ := alipayChannelWith(t, func(method string, biz map[string]jsonx.Raw, _ url.Values) (string, bool) {
-			if method != "alipay.trade.query" {
-				t.Errorf("method %s", method)
+	const missing = `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`
+	for _, tc := range []struct {
+		name                  string
+		node                  string
+		signed, corrupt, omit bool
+		status                int
+		wantErr               bool
+	}{
+		{name: "not exists is accepted", node: missing, signed: true},
+		{name: "unsigned not exists fails", node: missing, wantErr: true},
+		{name: "wrongly signed not exists fails", node: missing, signed: true, corrupt: true, wantErr: true},
+		{name: "missing signature not exists fails", node: missing, signed: true, omit: true, wantErr: true},
+		{name: "bad credentials fail", node: `{"code":"40002","msg":"Invalid Arguments","sub_code":"isv.invalid-app-id"}`, wantErr: true},
+		{name: "trade found fails", node: alipayQueryNode("probe_x", "T1", "TRADE_SUCCESS", "1.00"), signed: true, wantErr: true},
+		{name: "gateway failure fails", status: http.StatusBadGateway, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var probe string
+			ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{
+				t: t, corruptSignature: tc.corrupt, omitSignature: tc.omit, status: tc.status,
+				respond: func(method string, biz map[string]jsonx.Raw, _ url.Values) (string, bool) {
+					probe = alipayBiz(t, biz, "out_trade_no")
+					if method != "alipay.trade.query" {
+						t.Errorf("probe %s %v", method, biz)
+					}
+					return tc.node, tc.signed
+				},
+			})
+			if err := ch.(*alipayChannel).testConfig(t.Context()); (err != nil) != tc.wantErr {
+				t.Fatalf("testConfig = %v, want error %v", err, tc.wantErr)
 			}
-			probe = alipayBiz(t, biz, "out_trade_no")
-			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, true
+			if !tc.wantErr && !strings.HasPrefix(probe, "probe_") {
+				t.Fatalf("probe %q", probe)
+			}
 		})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		if !strings.HasPrefix(probe, "probe_") {
-			t.Fatalf("probe %q", probe)
-		}
-	})
-	t.Run("unsigned not exists fails", func(t *testing.T) {
-		ch, _ := alipayChannelWith(t, func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
-			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, false
-		})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("unsigned not-exists accepted")
-		}
-	})
-	t.Run("wrongly signed not exists fails", func(t *testing.T) {
-		ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{t: t, corruptSignature: true, respond: func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
-			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, true
-		}})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("wrongly signed not-exists accepted")
-		}
-	})
-	t.Run("missing signature not exists fails", func(t *testing.T) {
-		ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{t: t, omitSignature: true, respond: func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
-			return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.TRADE_NOT_EXIST"}`, true
-		}})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("missing-signature not-exists accepted")
-		}
-	})
-	t.Run("bad credentials fail", func(t *testing.T) {
-		ch, _ := alipayChannelWith(t, func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
-			return `{"code":"40002","msg":"Invalid Arguments","sub_code":"isv.invalid-app-id"}`, false
-		})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("invalid credentials accepted")
-		}
-	})
-	t.Run("trade found fails", func(t *testing.T) {
-		ch, _ := alipayChannelWith(t, func(string, map[string]jsonx.Raw, url.Values) (string, bool) {
-			return alipayQueryNode("probe_x", "T1", "TRADE_SUCCESS", "1.00"), true
-		})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("a found trade accepted as a probe")
-		}
-	})
-	t.Run("gateway failure fails", func(t *testing.T) {
-		ch, _ := alipayChannelWithGateway(t, &alipayTestGateway{t: t, status: http.StatusBadGateway})
-		if err := ch.(*alipayChannel).testConfig(t.Context()); err == nil {
-			t.Fatal("gateway failure accepted")
-		}
-	})
+	}
 }
 
 func TestAlipayAck(t *testing.T) {

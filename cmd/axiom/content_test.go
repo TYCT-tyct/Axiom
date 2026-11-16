@@ -432,3 +432,22 @@ func TestContentDestinationValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestContentMissingFlagsHaveStableOrder(t *testing.T) {
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"approve"}, "--signing-key"},
+		{[]string{"approve", "--signing-key", "unused"}, "--second-signing-key"},
+		{[]string{"decrypt"}, "--key"},
+		{[]string{"decrypt", "--key", "unused"}, "--in"},
+	} {
+		for range 20 {
+			err := contentCommand(t.Context(), nil, c.args, io.Discard)
+			if err == nil || !strings.HasPrefix(err.Error(), c.want+" is required\n") {
+				t.Fatalf("%v: %v, want missing %s", c.args, err, c.want)
+			}
+		}
+	}
+}

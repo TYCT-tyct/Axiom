@@ -57,9 +57,10 @@
 
 调研、被否决的方案和较长的推导；不是现行规则，任务卡不引用。
 
-| 内容 | 文件 |
+| 内容 | 文档 |
 |---|---|
 | 运营：批准与委托的出处、运营接口的三个方案、几条较长的推导和否决的做法 | [archive/operations.md](archive/operations.md) |
+| 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
 
 ## 文档怎么组织
 
