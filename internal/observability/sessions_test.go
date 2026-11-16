@@ -7,6 +7,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/observability/internal/store"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
@@ -43,15 +45,17 @@ func TestOwnSessionsGroupFilterAndRefresh(t *testing.T) {
 		t.Fatalf("page: %+v %v", rows, next)
 	}
 	r := rows[0]
-	if r.Calls != "3" || r.PriceNano != "60" || r.MainModel != a.Model || !r.FirstAt.Equal(at) || !r.LastAt.Equal(c.At) {
-		t.Fatalf("aggregate: %+v", r)
+	want := OwnSession{SessionID: a.SessionID, ClientApp: a.ClientApp, Currency: "USD", Calls: "3", PriceNano: "60", MainModel: a.Model, FirstAt: at, LastAt: c.At}
+	if diff := cmp.Diff(want, r); diff != "" {
+		t.Fatalf("aggregate (-want +got):\n%s", diff)
 	}
 	d := a
 	d.ID, d.At, d.ClientApp = uuid.NewV7(), at.Add(3*time.Second), "codex"
 	keep(t, db, d)
 	rows, _ = sessionPage(t, db, accountScope(account), q)
-	if rows[0].Calls != "4" || !rows[0].LastAt.Equal(d.At) || rows[0].ClientApp != "codex" {
-		t.Fatalf("refresh: %+v", rows)
+	want.Calls, want.PriceNano, want.LastAt, want.ClientApp = "4", "70", d.At, "codex"
+	if diff := cmp.Diff(want, rows[0]); diff != "" {
+		t.Fatalf("refresh (-want +got):\n%s", diff)
 	}
 
 	for _, test := range []struct {
@@ -59,9 +63,12 @@ func TestOwnSessionsGroupFilterAndRefresh(t *testing.T) {
 		filter OwnQuery
 		calls  string
 	}{
-		{"key", OwnQuery{Key: &a.Key}, "4"}, {"model", OwnQuery{Model: "other"}, "1"},
-		{"app", OwnQuery{ClientApp: "codex"}, "1"}, {"request", OwnQuery{RequestID: &b.ID}, "1"},
-		{"status", OwnQuery{Status: "success"}, "0"}, {"fallback", OwnQuery{FellBack: true}, "4"},
+		{"key", OwnQuery{Key: &a.Key}, "4"},
+		{"model", OwnQuery{Model: "other"}, "1"},
+		{"app", OwnQuery{ClientApp: "codex"}, "1"},
+		{"request", OwnQuery{RequestID: &b.ID}, "1"},
+		{"status", OwnQuery{Status: "success"}, "0"},
+		{"fallback", OwnQuery{FellBack: true}, "4"},
 	} {
 		filter := test.filter
 		filter.Account, filter.Since, filter.Until, filter.Workspace = account, at, q.Until, &a.Workspace

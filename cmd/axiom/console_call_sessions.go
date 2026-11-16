@@ -43,8 +43,10 @@ func (c consoleAPI) ListCallSessions(ctx context.Context, request consoleapi.Lis
 	}
 	data := make([]consoleapi.CallSession, len(rows))
 	for i, row := range rows {
-		data[i] = consoleapi.CallSession{SessionId: &row.SessionID, ClientApp: &row.ClientApp, Calls: &row.Calls,
-			Price: &consoleapi.CallAggregateMoney{Amount: &row.PriceNano, Currency: &row.Currency}, MainModel: &row.MainModel, FirstAt: &row.FirstAt, LastAt: &row.LastAt}
+		data[i] = consoleapi.CallSession{
+			SessionId: &row.SessionID, ClientApp: &row.ClientApp, Calls: &row.Calls,
+			Price: &consoleapi.CallAggregateMoney{Amount: &row.PriceNano, Currency: &row.Currency}, MainModel: &row.MainModel, FirstAt: &row.FirstAt, LastAt: &row.LastAt,
+		}
 	}
 	body := consoleapi.CallSessionList{Data: &data, Since: &q.Since, Until: &q.Until}
 	if next != nil {
@@ -60,8 +62,10 @@ func (c consoleAPI) ListCallSessions(ctx context.Context, request consoleapi.Lis
 // Bind the cursor to the complete filter set, including account and fixed time bounds. The identity key is shared
 // across nodes; domain separation keeps these signatures independent of upstream identifier replacement.
 func (c consoleAPI) sessionCursorMAC(position string, q observability.OwnQuery) ([]byte, error) {
-	filters, err := jsonx.MarshalCanonical([]any{q.Account, q.Since.UTC(), q.Until.UTC(), q.Model, q.ClientApp,
-		q.Key, q.Workspace, q.RequestID, q.Status, q.FellBack})
+	filters, err := jsonx.MarshalCanonical([]any{
+		q.Account, q.Since.UTC(), q.Until.UTC(), q.Model, q.ClientApp,
+		q.Key, q.Workspace, q.RequestID, q.Status, q.FellBack,
+	})
 	if err != nil {
 		return nil, err
 	}

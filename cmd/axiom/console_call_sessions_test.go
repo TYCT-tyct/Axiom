@@ -9,6 +9,8 @@ import (
 	"time"
 	"uuid"
 
+	"github.com/google/go-cmp/cmp"
+
 	"axiom/internal/accounts"
 	"axiom/internal/observability"
 	"axiom/internal/platform/consoleapi"
@@ -40,8 +42,12 @@ func TestCallSessionsHTTP(t *testing.T) {
 		t.Fatalf("first page: %+v", first)
 	}
 	r := (*first.Data)[0]
-	if *r.SessionId != "named" || *r.Calls != "3" || *r.Price.Amount != "60" || *r.MainModel != "model-a" {
-		t.Fatalf("aggregate: %+v", r)
+	want := consoleapi.CallSession{
+		SessionId: new("named"), ClientApp: new("codex"), Calls: new("3"),
+		Price: &consoleapi.CallAggregateMoney{Amount: new("60"), Currency: new("USD")}, MainModel: new("model-a"), FirstAt: &a.At, LastAt: &d.At,
+	}
+	if diff := cmp.Diff(want, r); diff != "" {
+		t.Fatalf("aggregate (-want +got):\n%s", diff)
 	}
 	query.Set("cursor", *first.NextCursor)
 	second := read(query)
@@ -62,8 +68,9 @@ func TestCallSessionsHTTP(t *testing.T) {
 	query.Del("cursor")
 	query.Del("model")
 	fresh := read(query)
-	if *(*fresh.Data)[0].Calls != "4" || !(*fresh.Data)[0].LastAt.Equal(d.At) {
-		t.Fatalf("refresh: %+v", fresh)
+	want.Calls, want.Price.Amount, want.LastAt = new("4"), new("90"), &d.At
+	if diff := cmp.Diff(want, (*fresh.Data)[0]); diff != "" {
+		t.Fatalf("refresh (-want +got):\n%s", diff)
 	}
 }
 
