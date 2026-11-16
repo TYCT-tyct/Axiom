@@ -285,8 +285,10 @@ func retainedOnce(f func() any) uint64 {
 }
 
 // measurePeak returns the highest live heap f held while it ran: the heap after a collection before f, and after each
-// collection a sampler takes until f returns, the largest, minus that first reading. The reading after f returns, with
-// its result alive, is the last one, so a peak that is only what f keeps is always seen.
+// collection a sampler takes until f returns, the largest, minus that first reading. What f keeps is measured apart, as
+// the heap with its result alive minus the heap right after the result is dropped: memory the first reading counted
+// and the runtime freed while f ran (#754: 2.5 KB, which put a held 1 MiB under 1 MiB) lowers both of those readings
+// alike, so a peak that is only what f keeps is always seen whole.
 //
 // The sampler runs beside f rather than after it: a working set that exists only while goroutines run is gone once they
 // are done, so the heap has to be read as it happens. Each reading is exact for the instant it collects, and the
@@ -309,10 +311,11 @@ func measurePeak(f func() any) uint64 {
 	})
 	held := f()
 	close(done)
-	sampler.Wait() // the sampler's last reading happens before the one below
-	peak = max(peak, liveHeap())
+	sampler.Wait() // the sampler's last reading happens before the ones below
+	withResult := liveHeap()
 	runtime.KeepAlive(held)
-	return heapGrowth(live, peak)
+	kept := heapGrowth(liveHeap(), withResult) // held is dead here: this collection frees it
+	return max(heapGrowth(live, max(peak, withResult)), kept)
 }
 
 // liveHeap is the heap a collection marked live, in bytes: what was live when the collection stopped the world, not
