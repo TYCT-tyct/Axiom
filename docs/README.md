@@ -58,6 +58,7 @@
 | 内容 | 文档 |
 |---|---|
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
+| 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
 | 供应商的上游出处、CPA 的上游事实、被否决的方案、滚动发布的兼容推导、测量与样本 | [archive/suppliers.md](archive/suppliers.md) |
 
 ## 文档怎么组织
