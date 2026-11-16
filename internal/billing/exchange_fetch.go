@@ -97,7 +97,7 @@ func exchangeQuotes(rows []exchangeQuote) (map[string]*big.Rat, error) {
 }
 
 func crossExchangeQuotes(quotes map[string]*big.Rat, day string) ([]ExchangeInput, error) {
-	codes := slices.Sorted(maps.Keys(minorDigits))
+	codes := slices.Sorted(maps.Keys(exchangeCurrencies))
 	for _, code := range codes {
 		if quotes[code] == nil {
 			return nil, errors.New("billing: incomplete exchange source currencies")

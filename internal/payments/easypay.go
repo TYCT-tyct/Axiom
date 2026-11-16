@@ -103,7 +103,7 @@ func (EasyPay) Open(c MerchantConfig) (Channel, error) {
 }
 
 func (s easyPaySettings) withDefaults() easyPaySettings {
-	if s.Preset == "epusdt" || s.Preset == "ezpay" {
+	if _, ok := easyPayPresets[s.Preset]; ok {
 		if s.Mode == "" {
 			s.Mode = "redirect"
 		}
@@ -165,7 +165,7 @@ func (c *easyPayChannel) Caps() Caps {
 }
 
 func (c *easyPayChannel) Methods() []Method {
-	if c.settings.Preset == "epusdt" || c.settings.Preset == "ezpay" {
+	if _, ok := easyPayPresets[c.settings.Preset]; ok {
 		return []Method{"usdt.tron"}
 	}
 	return nil
@@ -180,7 +180,7 @@ func (c *easyPayChannel) Create(ctx context.Context, r CreateRequest) (Checkout,
 		result := Checkout{PayURL: c.settings.Gateway + "/submit.php?" + v.Encode()}
 		return easyPayCheckout(result)
 	}
-	body, err := c.post(ctx, "/mapi.php", v, false)
+	body, err := c.request(ctx, http.MethodPost, "/mapi.php", v, false)
 	if err != nil {
 		return Checkout{}, err
 	}
