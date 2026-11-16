@@ -48,48 +48,41 @@ func renderedUsage(t *testing.T, format protocol.Format) map[string]any {
 	return out.Axiom.Usage
 }
 
-// TestUsageTotals: Chat reports the input and output totals and BYOK, which is always false: we sell our own keys.
-func TestUsageTotals(t *testing.T) {
+// TestUsageDetails: Chat reports totals, modality and prediction splits, server tools and costs.
+func TestUsageDetails(t *testing.T) {
 	t.Parallel()
 	usage := renderedUsage(t, protocol.Chat)
-	if usage["prompt_tokens"] != 24.0 || usage["completion_tokens"] != 9.0 || usage["total_tokens"] != 33.0 {
-		t.Errorf("totals: %v", usage)
-	}
-	if usage["is_byok"] != false {
-		t.Errorf("is_byok: %v", usage["is_byok"])
-	}
-}
-
-// TestUsageModalityAndPredictionDetails: the modality splits and the prediction tokens that sit inside the output total
-// are echoed in the details objects.
-func TestUsageModalityAndPredictionDetails(t *testing.T) {
-	t.Parallel()
-	usage := renderedUsage(t, protocol.Chat)
-	in, _ := usage["prompt_tokens_details"].(map[string]any)
-	if in["cached_tokens"] != 4.0 || in["cache_write_tokens"] != 2.0 || in["audio_tokens"] != 3.0 || in["video_tokens"] != 5.0 {
-		t.Errorf("prompt details: %v", in)
-	}
-	details, _ := usage["completion_tokens_details"].(map[string]any)
-	if details["reasoning_tokens"] != 1.0 || details["audio_tokens"] != 2.0 ||
-		details["accepted_prediction_tokens"] != 2.0 || details["rejected_prediction_tokens"] != 1.0 {
-		t.Errorf("completion details: %v", details)
-	}
-}
-
-// TestUsageServerToolsAndCosts: the server tools the call ran and the price it paid for them, and what cache reads
-// saved against the input price.
-func TestUsageServerToolsAndCosts(t *testing.T) {
-	t.Parallel()
-	usage := renderedUsage(t, protocol.Chat)
-	tools, _ := usage["server_tool_use_details"].(map[string]any)
-	if tools["web_search_requests"] != 2.0 || tools["tool_calls_requested"] != 3.0 || tools["tool_calls_executed"] != 3.0 {
-		t.Errorf("server tools: %v", tools)
-	}
-	if costs, _ := usage["cost_details"].(map[string]any); costs["server_tool_cost"] != 0.25 {
-		t.Errorf("cost details: %v", usage)
-	}
-	if usage["cache_discount"] != 0.125 {
-		t.Errorf("cache discount: %v", usage)
+	for _, tc := range []struct {
+		group, member string
+		want          any
+	}{
+		{"", "prompt_tokens", 24.0},
+		{"", "completion_tokens", 9.0},
+		{"", "total_tokens", 33.0},
+		{"", "is_byok", false},
+		{"", "cache_discount", 0.125},
+		{"prompt_tokens_details", "cached_tokens", 4.0},
+		{"prompt_tokens_details", "cache_write_tokens", 2.0},
+		{"prompt_tokens_details", "audio_tokens", 3.0},
+		{"prompt_tokens_details", "video_tokens", 5.0},
+		{"completion_tokens_details", "reasoning_tokens", 1.0},
+		{"completion_tokens_details", "audio_tokens", 2.0},
+		{"completion_tokens_details", "accepted_prediction_tokens", 2.0},
+		{"completion_tokens_details", "rejected_prediction_tokens", 1.0},
+		{"server_tool_use_details", "web_search_requests", 2.0},
+		{"server_tool_use_details", "tool_calls_requested", 3.0},
+		{"server_tool_use_details", "tool_calls_executed", 3.0},
+		{"cost_details", "server_tool_cost", 0.25},
+	} {
+		t.Run(tc.group+"/"+tc.member, func(t *testing.T) {
+			fields := usage
+			if tc.group != "" {
+				fields, _ = usage[tc.group].(map[string]any)
+			}
+			if got := fields[tc.member]; got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 

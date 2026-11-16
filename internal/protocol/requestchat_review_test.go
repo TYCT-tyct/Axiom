@@ -1,7 +1,6 @@
 package protocol_test
 
 import (
-	"strings"
 	"testing"
 
 	"axiom/internal/protocol"
@@ -28,21 +27,26 @@ func TestResponsesOmittedStrictKeepsSchema(t *testing.T) {
 	}
 }
 
-func TestMessagesErrorToolResultsToChat(t *testing.T) {
+func TestMessagesToolResultsToChat(t *testing.T) {
 	t.Parallel()
-	for _, content := range []string{`"failed"`, `[{"type":"text","text":"failed"}]`, `[]`, `null`} {
-		body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":true,"content":` + content + `}]}]`)
+	for _, tc := range []struct {
+		content, isError, want string
+	}{
+		{`"failed"`, "true", `"Error: failed"`},
+		{`[{"type":"text","text":"failed"}]`, "true", `[{"type":"text","text":"Error: "},{"type":"text","text":"failed"}]`},
+		{`[]`, "true", `"Error: "`},
+		{`null`, "true", `"Error: "`},
+		{`"ok"`, "false", `"ok"`},
+	} {
+		body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":` + tc.isError + `,"content":` + tc.content + `}]}]`)
 		up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		messages := member(t, up.Body, "messages").([]any)
-		tool := messages[1].(map[string]any)
-		if tool["role"] != "tool" || tool["tool_call_id"] != "c1" || !strings.Contains(string(mustMarshal(t, tool["content"])), "Error: ") {
-			t.Fatalf("lost error signal or pairing: %s", up.Body)
-		}
-		if strings.Contains(content, "failed") && !strings.Contains(string(mustMarshal(t, tool["content"])), "failed") {
-			t.Fatalf("lost tool output: %s", up.Body)
+		tool := member(t, up.Body, "messages").([]any)[1].(map[string]any)
+		sameJSON(t, tc.want, mustMarshal(t, tool["content"]))
+		if tool["role"] != "tool" || tool["tool_call_id"] != "c1" {
+			t.Fatalf("content %s, is_error %s: lost output or pairing: %s", tc.content, tc.isError, up.Body)
 		}
 	}
 }
@@ -102,17 +106,4 @@ func TestResponsesDanglingReasoningInResolvedHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	sameJSON(t, `[{"role":"user","content":"old"},{"role":"assistant","content":"","reasoning_content":"why"},{"role":"user","content":"next"}]`, mustMarshal(t, member(t, up.Body, "messages")))
-}
-
-func TestSuccessfulToolResultHasNoErrorMarker(t *testing.T) {
-	t.Parallel()
-	body := chatBody(`"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"c1","name":"f","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"c1","is_error":false,"content":"ok"}]}]`)
-	up, err := prepareNativeChat(protocol.Messages, body, "up", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tool := member(t, up.Body, "messages").([]any)[1].(map[string]any)
-	if tool["content"] != "ok" {
-		t.Fatalf("successful result changed: %s", up.Body)
-	}
 }

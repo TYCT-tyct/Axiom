@@ -12,10 +12,7 @@ import (
 //nolint:cyclop // a table of accepted parameters
 func TestInspectWebSearchTool(t *testing.T) {
 	t.Parallel()
-	req, err := protocol.Inspect(protocol.Chat, []byte(`{"model":"m","max_tool_calls":7,"tools":[{"type":"openrouter:web_search","parameters":{"engine":"native","max_results":9,"max_uses":4,"max_total_results":12,"allowed_domains":["example.com"],"excluded_domains":["spam.example"]}}]}`))
-	if err != nil {
-		t.Fatal(err)
-	}
+	req := inspected(t, protocol.Chat, []byte(`{"model":"m","max_tool_calls":7,"tools":[{"type":"openrouter:web_search","parameters":{"engine":"native","max_results":9,"max_uses":4,"max_total_results":12,"allowed_domains":["example.com"],"excluded_domains":["spam.example"]}}]}`))
 	tool := req.ServerSearch
 	if tool == nil || tool.Engine != "native" || tool.MaxResults != 9 || tool.MaxUses != 4 ||
 		tool.MaxTotalResults != 12 || len(tool.IncludeDomains) != 1 || len(tool.ExcludeDomains) != 1 {
@@ -24,7 +21,7 @@ func TestInspectWebSearchTool(t *testing.T) {
 	if !req.HasMaxToolCalls || req.MaxToolCalls != 7 || !req.Needs.Has(protocol.Tools|protocol.WebSearch) || req.NativeWeb {
 		t.Fatalf("request = %+v", req)
 	}
-	req, err = protocol.Inspect(protocol.Responses, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
+	req, err := protocol.Inspect(protocol.Responses, []byte(`{"model":"m","tools":[{"type":"openrouter:web_search"}]}`))
 	if err != nil || req.ServerSearch == nil || req.ServerSearch.MaxResults != protocol.DefaultWebSearchResults || req.ServerSearch.MaxUses != 0 {
 		t.Fatalf("defaults: %+v, %v", req.ServerSearch, err)
 	}

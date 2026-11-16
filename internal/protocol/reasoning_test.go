@@ -50,10 +50,7 @@ func TestReasoningControlsAcrossFormats(t *testing.T) {
 				body = append(body, tc.setting...)
 			}
 			body = append(body, '}')
-			r, err := protocol.Inspect(protocol.Chat, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := inspected(t, protocol.Chat, body)
 			up, err := protocol.Prepare(&r, body, protocol.Target{Format: tc.target, Model: "up", Thinking: tc.mode}, protocol.Rewrites{})
 			if err != nil {
 				t.Fatal(err)
@@ -77,10 +74,7 @@ func TestAnEmptyEffortAsksForNoReasoning(t *testing.T) {
 		{`"reasoning":{"effort":"high"},"reasoning_effort":""`, true},
 	} {
 		body := []byte(`{"model":"m","messages":[{"role":"user","content":"Hi"}],` + tc.setting + `}`)
-		r, err := protocol.Inspect(protocol.Chat, body)
-		if err != nil {
-			t.Fatal(err)
-		}
+		r := inspected(t, protocol.Chat, body)
 		if got := r.Needs.Has(protocol.Reasoning); got != tc.want {
 			t.Errorf("%s: reasoning=%t, want %t", tc.setting, got, tc.want)
 		}
@@ -120,10 +114,7 @@ func TestReasoningEffortBudgets(t *testing.T) {
 	}{{"minimal", 1024}, {"low", 2000}, {"medium", 5000}, {"high", 8000}, {"xhigh", 9500}, {"max", 9500}} {
 		t.Run(tc.effort, func(t *testing.T) {
 			body := []byte(fmt.Sprintf(`{"model":"m","messages":[{"role":"user","content":"Hi"}],"max_tokens":10000,"reasoning":{"effort":%q,"exclude":true}}`, tc.effort))
-			r, err := protocol.Inspect(protocol.Chat, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := inspected(t, protocol.Chat, body)
 			up, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Messages, Model: "up", Thinking: catalog.ThinkingManual}, protocol.Rewrites{})
 			if err != nil {
 				t.Fatal(err)
@@ -262,10 +253,7 @@ func TestReasoningDisablePrecedenceAndVisibility(t *testing.T) {
 	} {
 		t.Run(tc.setting, func(t *testing.T) {
 			body := []byte(`{"model":"m",` + tc.setting + `}`)
-			r, err := protocol.Inspect(tc.f, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := inspected(t, tc.f, body)
 			if r.Needs.Has(protocol.Reasoning) {
 				t.Fatalf("disabled request requires reasoning: %s", body)
 			}
@@ -301,10 +289,7 @@ func TestNativeReasoningRequestsToChat(t *testing.T) {
 				content = `"input":"Hi","max_output_tokens":10000`
 			}
 			body := []byte(`{"model":"m",` + content + `,` + tc.setting + `}`)
-			r, err := protocol.Inspect(tc.f, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := inspected(t, tc.f, body)
 			up, err := protocol.Prepare(&r, body, protocol.Target{Format: protocol.Chat, Model: "up"}, protocol.Rewrites{})
 			if err != nil {
 				t.Fatal(err)

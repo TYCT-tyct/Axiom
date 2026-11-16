@@ -1,7 +1,6 @@
 package protocol_test
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"strings"
@@ -9,7 +8,6 @@ import (
 
 	"axiom/internal/platform/alloctest"
 	"axiom/internal/protocol"
-	"axiom/internal/protocol/internal/sse"
 )
 
 // aggregateDeltas is deltas with the events a reply that is aggregated needs to place them: the Messages block stays
@@ -108,41 +106,18 @@ func TestAggregateHoldsItsBudgetUntilReleased(t *testing.T) {
 	}
 }
 
-// drainAggregated is drain for a reply that is aggregated.
-func drainAggregated(tb testing.TB, f protocol.Format, stream []byte) {
-	o := protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30), Aggregate: true}
-	r := protocol.NewRelay(f, f, bytes.NewReader(stream), protocol.UsageContext{}, o)
-	for {
-		step, err := r.Next()
-		if err != nil {
-			tb.Fatal(err)
-		}
-		if step.Kind == protocol.StepUpstreamDone {
-			r.Finish(settled(r.Usage()))
-			return
-		}
-	}
-}
-
 // TestAggregateAllocs: aggregating allocates nothing per event beyond what reading it does, but the growth of the
 // buffers, which doubles, so the allocations a longer reply adds are logarithmic in its length and do not depend on
 // the size of its deltas (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so this
 // binary's other goroutines and their collections are not counted as the aggregator's.
 func TestAggregateAllocs(t *testing.T) {
 	t.Parallel()
-	read := func(stream []byte) func() {
-		return func() {
-			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
-			for _, err := r.Next(); err == nil; _, err = r.Next() {
-			}
-		}
-	}
 	check := func(t *testing.T, name string, f protocol.Format, ten, twoHundred []byte) {
 		got := alloctest.Measure(t,
-			alloctest.Function{Name: "read/10", F: read(ten)},
-			alloctest.Function{Name: "aggregate/10", F: func() { drainAggregated(t, f, ten) }},
-			alloctest.Function{Name: "read/200", F: read(twoHundred)},
-			alloctest.Function{Name: "aggregate/200", F: func() { drainAggregated(t, f, twoHundred) }},
+			alloctest.Function{Name: "read/10", F: readEvents(ten)},
+			alloctest.Function{Name: "aggregate/10", F: func() { drain(t, f, ten, true) }},
+			alloctest.Function{Name: "read/200", F: readEvents(twoHundred)},
+			alloctest.Function{Name: "aggregate/200", F: func() { drain(t, f, twoHundred, true) }},
 		)
 		few := got["aggregate/10"].Count - got["read/10"].Count
 		more := got["aggregate/200"].Count - got["read/200"].Count
@@ -177,7 +152,7 @@ func BenchmarkAggregate(b *testing.B) {
 					b.ReportAllocs()
 					b.SetBytes(int64(len(stream)))
 					for b.Loop() {
-						drainAggregated(b, format.f, stream)
+						drain(b, format.f, stream, true)
 					}
 				})
 			}
@@ -192,7 +167,7 @@ func BenchmarkAggregate(b *testing.B) {
 				b.ReportAllocs()
 				b.SetBytes(int64(len(stream)))
 				for b.Loop() {
-					drainAggregated(b, protocol.Completions, stream)
+					drain(b, protocol.Completions, stream, true)
 				}
 			})
 		}

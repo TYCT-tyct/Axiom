@@ -209,10 +209,7 @@ func sampleDirs(t *testing.T, dir string) []string {
 // checkNativeConvert prepares the sample's request for the other native format and compares it with its golden copy.
 func checkNativeConvert(t *testing.T, from protocol.Format, dir string, to protocol.Format, ext string) {
 	t.Helper()
-	r, err := protocol.Inspect(from, sample(t, dir+"/request.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, from, sample(t, dir+"/request.json"))
 	target := claudeLike(to)
 	target.MaxOutput = 4096
 	if to == protocol.Responses {
