@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -216,15 +217,10 @@ func escape(value string, keepSlash bool) string {
 // canonicalQuery encodes and sorts the query exactly as it is signed: by encoded name, then encoded value, with
 // spaces as %20 rather than url.Values' "+".
 func canonicalQuery(values url.Values) string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
 	var out strings.Builder
-	for _, key := range keys {
+	for _, key := range slices.Sorted(maps.Keys(values)) {
 		names := values[key]
-		sort.Strings(names)
+		slices.Sort(names)
 		for _, value := range names {
 			if out.Len() > 0 {
 				out.WriteByte('&')
