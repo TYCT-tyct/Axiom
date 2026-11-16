@@ -49,14 +49,14 @@ func (c *alipayChannel) post(ctx context.Context, method string, v url.Values) (
 		return nil, alipayFailure{}, errors.New("alipay: cannot construct request")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	resp, body, err := sendGateway(c.client, req, "alipay", "cannot read bounded gateway response")
+	resp, err := sendGateway(c.client, req, "alipay", "cannot read bounded gateway response")
 	if err != nil {
 		return nil, alipayFailure{}, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, alipayFailure{}, fmt.Errorf("alipay: gateway HTTP %d", resp.StatusCode)
+	if resp.status < 200 || resp.status >= 300 {
+		return nil, alipayFailure{}, fmt.Errorf("alipay: gateway HTTP %d", resp.status)
 	}
-	return c.response(body, method)
+	return c.response(resp.body, method)
 }
 
 // response verifies the signature over the method node's exact bytes before trusting any field, as the official

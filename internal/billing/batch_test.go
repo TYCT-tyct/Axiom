@@ -260,7 +260,6 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("reservation and settlement reads = %+v, want %+v", got, want)
 	}
-
 }
 
 func TestPostWaitsBeforeUpdatingBalanceAndNumbering(t *testing.T) {

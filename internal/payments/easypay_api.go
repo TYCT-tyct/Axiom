@@ -32,14 +32,14 @@ func (c *easyPayChannel) request(ctx context.Context, method, path string, v url
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	resp, data, err := sendGateway(c.client, req, "easypay", "cannot read bounded gateway response")
+	resp, err := sendGateway(c.client, req, "easypay", "cannot read bounded gateway response")
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("easypay: gateway HTTP %d", resp.StatusCode)
+	if resp.status < 200 || resp.status >= 300 {
+		return nil, fmt.Errorf("easypay: gateway HTTP %d", resp.status)
 	}
-	return data, nil
+	return resp.body, nil
 }
 
 func (c *easyPayChannel) credentials(act string) url.Values {

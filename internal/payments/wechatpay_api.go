@@ -79,20 +79,20 @@ func (c *wechatChannel) do(ctx context.Context, method, path, query string, body
 	if err != nil {
 		return 0, nil, err
 	}
-	resp, response, err := sendGateway(c.client, req, "wechatpay", "cannot read gateway response")
+	resp, err := sendGateway(c.client, req, "wechatpay", "cannot read gateway response")
 	if err != nil {
 		return 0, nil, err
 	}
-	if len(response) == 0 {
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return resp.StatusCode, nil, nil
+	if len(resp.body) == 0 {
+		if resp.status >= 200 && resp.status < 300 {
+			return resp.status, nil, nil
 		}
-		return 0, nil, &wechatFailure{Status: resp.StatusCode, Code: "empty_error"}
+		return 0, nil, &wechatFailure{Status: resp.status, Code: "empty_error"}
 	}
-	if err := c.verify(resp.Header, response); err != nil {
+	if err := c.verify(resp.header, resp.body); err != nil {
 		return 0, nil, err
 	}
-	return resp.StatusCode, response, nil
+	return resp.status, resp.body, nil
 }
 
 func (c *wechatChannel) request(ctx context.Context, method, path, query string, body []byte) (*http.Request, error) {

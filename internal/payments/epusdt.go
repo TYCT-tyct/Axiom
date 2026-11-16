@@ -55,7 +55,7 @@ func (c *easyPayChannel) probe(ctx context.Context) error {
 		return &FieldError{"/settings", preset.name + " query did not return protocol JSON"}
 	}
 	code, err := easyPayScalar(response.Code)
-	if err != nil || (code != "-1" && !(preset.zeroMissing && code == "0")) || !easyPayOrderMissing(response.Msg) {
+	if err != nil || (code != "-1" && (!preset.zeroMissing || code != "0")) || !easyPayOrderMissing(response.Msg) {
 		return &FieldError{"/settings", preset.name + " query must explicitly report the probe order missing"}
 	}
 	return nil
