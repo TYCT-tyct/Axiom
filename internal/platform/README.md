@@ -128,7 +128,7 @@
 ### 任务队列
 
 - `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（`default` 没有 worker），测试检查。
-- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（SMTP 未配置的节点不登记邮件 worker）。
+- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（没配 SMTP 就不登记邮件 worker）。
 - 任务最多 10 分钟，运行满 15 分钟算丢失；丢弃的任务每分钟扫描、在 `platform.discarded_jobs` 认领并告警，终态满 24 小时才删。
 - 租户数据不进任务参数和 worker 错误（River 的表没有策略）：数据放模块的表，参数只放 id，worker 用 `db.TenantTx` 换到该租户的范围。
 
@@ -169,4 +169,4 @@
 | 设置用 `PUT` 整体替换 | 生成类型分不清没写和 null |
 | 前端嵌入程序、构建时预压缩 | 一个文件部署，请求不占 CPU |
 | 指标用 OpenTelemetry、Prometheus 抓取 | 换导出方式不改模块；不依赖境外服务 |
-| 根证书由 `x509roots/fallback` 内嵌 | scratch 镜像没有证书库 |
+| 根证书由 `x509roots/fallback` 内嵌 | scratch 镜像没证书库 |
