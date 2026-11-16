@@ -1,0 +1,20 @@
+{
+  "name": "@axiom/boards",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./Login": "./src/Login/Board.tsx",
+    "./ClawdEgg": "./src/ClawdEgg/Board.tsx",
+    "./AxApp": "./src/AxApp/Board.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "dev": "vite",
+    "test": "vitest run --root ../.. packages/boards/src",
+    "build:demo": "vite build"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

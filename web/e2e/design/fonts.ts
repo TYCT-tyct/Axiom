@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
 import type { Page, Route } from "@playwright/test";
+import { sourceFont } from "../../packages/boards/fonts.ts";
 
 // The fonts of both halves of a comparison. The board is drawn with the unsubset source fonts the pipeline cuts from
 // (scripts/fonts/sources.json, checked by SHA-256), not with the build's subsets: a character a subset lacks then shows
@@ -35,25 +34,10 @@ const boardSources: Record<string, { source: string; sample: string }> = {
   "AX Serif Latin": { source: "instrument-serif-italic", sample: "key" },
 };
 
-const cache = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "axiom-fonts");
-
-// fontRoute answers a board's request for a source font from the pipeline's download cache, after checking its hash.
-export function fontRoute(route: Route, name: string) {
-  const source = sources[name];
-  if (!source) {
-    return route.abort("blockedbyclient");
-  }
-  const file = join(cache, `${source.sha256}-${name}`);
-  let body: Buffer;
-  try {
-    body = readFileSync(file);
-  } catch {
-    throw new Error(`${file} is missing: run pnpm --dir web fonts once to download the source fonts`);
-  }
-  if (createHash("sha256").update(body).digest("hex") !== source.sha256) {
-    throw new Error(`${file} does not match its SHA-256 in scripts/fonts/sources.json`);
-  }
-  return route.fulfill({ contentType: "font/ttf", body });
+// The pinned MiSans source is an archive; extract its declared member before serving it as a font.
+export async function fontRoute(route: Route, name: string) {
+  if (!sources[name]) return route.abort("blockedbyclient");
+  return route.fulfill({ contentType: "font/ttf", body: await sourceFont(name) });
 }
 
 const descriptor = (rule: string, name: string) =>

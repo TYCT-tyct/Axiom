@@ -9,11 +9,13 @@
 // each file had when the rules came in: a file may not have more, a file that has fewer must lower its count in the same
 // change (`node scripts/styles.ts --shrink`), so the number never sits above the truth, and a new file starts at 0. A
 // path in `migrated` (a file or a directory ending in /) may have none, whatever the counts say.
+
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 import { contrast } from "../packages/ui/src/brand.ts";
+import { generatedBoard } from "./boards.ts";
 
 type Rule =
   | "class-name"
@@ -547,7 +549,9 @@ function ratchet(here: Finding[], path: string, rule: Rule, was: number, migrate
 
 // The failures against the baseline, each as "path:line: rule: reason" or "path: rule: reason".
 export function check(files: Record<string, string>, baseline: Baseline): string[] {
-  const found = findings(files);
+  const found = findings(
+    Object.fromEntries(Object.entries(files).filter(([path, text]) => !generatedBoard(path, text))),
+  );
   const now = counts(found);
   const failures: string[] = [];
   const rules = new Set([...Object.keys(now), ...Object.keys(baseline.counts)] as Rule[]);

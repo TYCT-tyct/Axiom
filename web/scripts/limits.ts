@@ -3,10 +3,12 @@
 // Biome scores cognitive complexity (biome.json) but has no cyclomatic rule, and its length rules count no line inside
 // JSX (Biome 2.5.15: a function returning 66 lines of JSX measured 3 lines), so a component of any length would pass
 // them. Tests are exempt from the function length limit, as in Go: a table or a scenario is long by nature.
+
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
+import { generatedBoard } from "./boards.ts";
 
 const maxComplexity = 12;
 const maxFunctionLines = 60;
@@ -79,6 +81,7 @@ function codeMarks(source: ts.SourceFile) {
 
 // The failures of one file, each as "path:line: reason".
 export function check(path: string, text: string): string[] {
+  if (generatedBoard(path, text)) return [];
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   const marks = codeMarks(source);
   const codeLines = (start: number, end: number) =>
