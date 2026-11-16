@@ -1,0 +1,61 @@
+// @vitest-environment jsdom
+import type { Page } from "@playwright/test";
+import { afterEach, expect, it, vi } from "vitest";
+import { usedFaces } from "../e2e/design/fonts.ts";
+import { stage } from "../e2e/design/stage.ts";
+
+vi.mock("../packages/boards/fonts.ts", () => ({ sourceFont: vi.fn() }));
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  document.body.replaceChildren();
+  Reflect.deleteProperty(window, "AxiomOceanOrig");
+});
+
+it("checks text input fonts without treating checkbox chrome as text", async () => {
+  document.body.innerHTML = '<input type="checkbox"><input type="text">';
+  vi.spyOn(window, "getComputedStyle").mockImplementation((element, pseudo) => {
+    return {
+      fontFamily: element.getAttribute("type") === "checkbox" ? "Arial" : '"Axiom Sans"',
+      content: pseudo ? "none" : "normal",
+      display: "inline-block",
+    } as CSSStyleDeclaration;
+  });
+  const page = { evaluate: async (fn: () => unknown) => fn() } as unknown as Page;
+  const face = { family: "Axiom Sans", style: "normal", weight: "400", sample: "Axiom" };
+  expect(await usedFaces(page, [face])).toEqual([face]);
+  document.body.innerHTML = '<input type="text" style="font-family:Missing">';
+  vi.mocked(window.getComputedStyle).mockReturnValue({ fontFamily: "Missing", content: "none" } as CSSStyleDeclaration);
+  await expect(usedFaces(page, [face])).rejects.toThrow("the board uses the font Missing");
+});
+
+it("starts identical ocean worlds despite framework randomness before mounting", async () => {
+  const random = Math.random;
+  const page = {
+    addInitScript: async (fn: (seed: number) => void, seed: number) => fn(seed),
+    clock: { install: async () => {} },
+  } as unknown as Page;
+  const worlds: number[][] = [];
+  try {
+    for (const draws of [0, 2, 5]) {
+      await stage(page, {
+        viewport: { width: 1440, height: 900 },
+        colorScheme: "light",
+        timezoneId: "Asia/Shanghai",
+        time: new Date("2026-10-24T04:00:00Z"),
+      });
+      for (let i = 0; i < draws; i++) Math.random();
+      const ocean = {
+        Engine: class {
+          fish = [Math.random(), Math.random(), Math.random()];
+        },
+      };
+      Object.assign(window, { AxiomOceanOrig: ocean });
+      worlds.push(new ocean.Engine().fish);
+    }
+    expect(worlds[1]).toEqual(worlds[0]);
+    expect(worlds[2]).toEqual(worlds[0]);
+  } finally {
+    Math.random = random;
+  }
+});

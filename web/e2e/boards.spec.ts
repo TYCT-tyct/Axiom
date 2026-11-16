@@ -38,7 +38,7 @@ const test = base.extend<object, { boardsURL: string }>({
 const cases = [
   { name: "Login", engines: ["ocean-orig", "login-ui"], selector: ".lg-form .lg-step", prop: "mode" },
   { name: "ClawdEgg", engines: ["ocean-orig", "clawd", "clawd-egg"], selector: ".eg .mr", prop: "mode" },
-  { name: "AxApp", engines: [], selector: ".p-overview", prop: "theme" },
+  { name: "AxApp", engines: [], selector: ".p-ov", prop: "theme" },
 ];
 test.describe.configure({ timeout: 120_000 });
 test.use({ timezoneId: "Asia/Shanghai" });

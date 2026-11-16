@@ -92,8 +92,9 @@ export function boardFonts(helmet: string, base: string) {
 export async function usedFaces(page: Page, faces: FontFace[]) {
   const stacks = await page.evaluate(() => {
     const ownText = (el: Element) =>
-      el.matches("input, textarea, select") ||
-      [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
+      el.matches(
+        'input:not([type="checkbox"], [type="radio"], [type="range"], [type="color"], [type="hidden"]), textarea, select',
+      ) || [...el.childNodes].some((node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim());
     // Generated text is no text node: content with a non-empty string, counter() or attr() draws characters (computed
     // style serializes strings in double quotes); an empty string only makes a decorative box.
     const generated = (el: Element) =>
