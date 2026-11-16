@@ -24,7 +24,7 @@
 
 - 后续事务（追加、结算、`SettleOrphan`）的账户范围只能来自 `accounts.Admission.Scope()`；gateway 把 `accounts.Admission` 转成 `Admitted`。
 - `ReserveRequest.Segments` 是路由计划时冻结的值，热更新不改已计划请求的报价；`Segmentable` 由 routing 按条目算。
-- **输出上界**：字节上界 = 已读完事件里解码后的正文、推理、工具参数、签名和加密推理的 UTF-8 字节（[protocol 的「字节上界」](../protocol/README.md#转发草图)）+ 未读完事件已到的字节，加 `ToolCalls × ToolCallTokens`；`Final` 标明之前，输出 = max(已报告, 字节上界)，且不超过 `OutputCap()`。`Relay.Next` 每次至多读 16 KiB，两次计量之间漏计不超过一次读。
+- **输出上界**：字节上界 = 已读完事件里解码后的正文、推理、工具参数、签名和加密推理的 UTF-8 字节（[protocol 的「转发」](../protocol/README.md#转发)）+ 未读完事件已到的字节，加 `ToolCalls × ToolCallTokens`；`Final` 标明之前，输出 = max(已报告, 字节上界)，且不超过 `OutputCap()`。`Relay.Next` 每次至多读 16 KiB，两次计量之间漏计不超过一次读。
 - **只读接口的上限**：`KeyDailySpend` 只读最近 14 个 UTC 日；`ListStatement` 每页最多 200、一次最多读 8 轮候选，长段零变动可返回空页加游标，游标带下一行的余额和冻结额起点，序号之前的行 `Balance` 为 nil；`ExchangeRateHistory` 每页最多 100 行，`before_version` 是排他游标；`ConsumeBalanceNotices` 一次认领并删除最多 1000 行。
 - **`InputEstimate` ≤ `InputBound`**：每一项都不大于上界的对应项，暂估永远不超过预留（`TestInputEstimateNeverExceedsTheBound`）。
 
