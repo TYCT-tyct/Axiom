@@ -1,0 +1,147 @@
+/* The board's logs page: a list card (.lgl, .lgr rows) with a sticky detail card (.lgd) beside it, which becomes a sheet
+   on a phone (.lgsheet, .lgscrim). The rows are positioned by --at because only the ones near the viewport exist, so
+   the list's height is its row count times --row-h. A selected row carries a bar in --sel-ind as well as the tint,
+   since the tint alone differs from the card by under 3:1. */
+.root {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 16px;
+  align-items: start;
+}
+
+.list {
+  position: relative;
+  height: calc(var(--rows) * var(--row-h));
+  min-height: var(--row-h);
+  border-radius: var(--r12);
+  background: var(--cardBg);
+  box-shadow: var(--cardSh);
+}
+
+.row {
+  position: absolute;
+  top: calc(var(--at) * var(--row-h));
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  height: var(--row-h);
+  padding: 0 20px;
+  box-sizing: border-box;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  font-variant-numeric: tabular-nums;
+  color: var(--t1);
+  cursor: pointer;
+  box-shadow: inset 0 calc(-1 * var(--bw)) 0 var(--line);
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.row.on {
+  background: color-mix(in srgb, var(--accentSolid) 9%, var(--cardBg));
+  box-shadow:
+    inset 3px 0 0 var(--sel-ind),
+    inset 0 calc(-1 * var(--bw)) 0 var(--line);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.detail {
+  position: sticky;
+  top: 16px;
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: var(--r12);
+  background: var(--cardBg);
+  box-shadow: var(--cardSh);
+}
+
+.detail:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.placeholder {
+  margin: 0;
+  padding: 48px 20px;
+  text-align: center;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+}
+
+.bar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 8px 0;
+}
+
+@keyframes slide {
+  from {
+    transform: translateX(24px);
+    opacity: 0;
+  }
+}
+
+@keyframes rise {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+
+/* A tablet: the detail covers the right of the list. It scrolls inside itself; the page behind it does not. */
+@media (max-width: 1023px) {
+  .root {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel {
+    position: fixed;
+    inset: 0 0 0 auto;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    color: var(--t1);
+    width: min(440px, 100%);
+    max-width: none;
+    height: 100dvh;
+    max-height: none;
+    border-radius: var(--r12) 0 0 var(--r12);
+    animation: slide var(--dur) var(--ease) both;
+  }
+}
+
+/* A phone: the detail is a sheet from the bottom edge. */
+@media (max-width: 767px) {
+  .row {
+    padding: 0 16px;
+  }
+
+  .panel {
+    inset: auto 0 0 0;
+    width: auto;
+    height: auto;
+    max-width: none;
+    max-height: 80dvh;
+    border-radius: 16px 16px 0 0;
+    animation-name: rise;
+  }
+}
+
+.panel::backdrop {
+  background: var(--scrim);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel {
+    animation: none;
+  }
+}

@@ -6,17 +6,21 @@ export { AppShell, focusPage, PageHeader, routerDefaults, SideNavItem } from "./
 export { Avatar } from "./components/avatar";
 export { Button, SubmitButton } from "./components/button";
 export { Card } from "./components/card";
+export { BarChart, LineChart } from "./components/chart";
 export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
 export { Dialog } from "./components/dialog";
 export { Field, Select, TextArea } from "./components/field";
+export { type Filter, FilterBar, filterDefaults } from "./components/filter-bar";
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
 export { Glyph } from "./components/glyph";
 export { Icon, type IconName } from "./components/icon";
 export { Id, IdText } from "./components/id";
 export { Cluster, Grid, Stack } from "./components/layout";
+export { ListDetail } from "./components/list-detail";
 export { Logo } from "./components/logo";
 export { Menu } from "./components/menu";
+export { Metric } from "./components/metric";
 export {
   ModelCatalog,
   ModelFilterForm,
@@ -40,3 +44,4 @@ export { Tag } from "./components/tag";
 export { moneyInput, parseMoney, useFormat } from "./format";
 export type { CommonMessages, Messages } from "./i18n";
 export { startApp } from "./start";
+export { useUrlParams, useUrlSelection } from "./url-state";
