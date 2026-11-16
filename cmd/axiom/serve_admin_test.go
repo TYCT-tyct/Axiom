@@ -25,7 +25,11 @@ func TestServeAdminListener(t *testing.T) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serveForTest(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		var claimed []*listening
+		go func() {
+			done <- serveForTestBound(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil)),
+				func(servers []*listening) { claimed = servers })
+		}()
 		addrs := servingAddrs(t, logs, done)
 		return addrs.Admin, addrs.Public, func() {
 			cancel()
@@ -34,6 +38,7 @@ func TestServeAdminListener(t *testing.T) {
 				if err != nil {
 					t.Errorf("shutdown: %v", err)
 				}
+				assertListenersClosed(t, claimed)
 			case <-time.After(10 * time.Second):
 				t.Error("the node did not shut down")
 			}
@@ -57,7 +62,4 @@ func TestServeAdminListener(t *testing.T) {
 		}
 	}
 	stop()
-	if _, err := get(t, "http://"+admin+"/api/admin/v1/version"); err == nil {
-		t.Error("the admin listener still answers after shutdown")
-	}
 }

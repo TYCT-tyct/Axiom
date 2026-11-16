@@ -182,7 +182,7 @@ func TestAStateSurvivesBeingStored(t *testing.T) {
 		Plans:     map[string]string{"1/m": "ab12"},
 		Confirmed: map[string]string{"m": `{"v":1}`},
 		Scan:      adapter.ScanState([]byte{0, 255, 'x'}), ScanOpen: true,
-		Removal: syncer.RemovalStep(3), GraceUntil: at, RescanFrom: at, RemovalAt: at, Through: at,
+		Through: at,
 	}
 	if err := store.Commit(t.Context(), 0, syncer.Commit{State: want}); err != nil {
 		t.Fatal(err)

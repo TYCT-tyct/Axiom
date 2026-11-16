@@ -69,9 +69,9 @@
 - `Serving()` 缺必需键返回 false，不补默认值；`Dialect()` 缺的键是 `ClaimUnset` / `ThinkingUnset`，未设置不是 no。
 - 规格解析不了的行让整个快照加载失败（`axiom serve` 启动即退出），由 `axiom catalog check` 提前发现。
 
-### 新增计费项与滚动升级
+### 文件解析计费开关
 
-旧版本读到不认识的计费项名字会拒绝整张价目表，快照加载失败后节点对所有模型不就绪，所以新名字分两步：先发布能读的版本，全部节点升级后才在 `cmd/axiom` 的 `Config` 打开开关。`CountedItems`（按张、按秒、按字符）、`RequestPrices`（`request`）、`FileSearch`（价目表和规格里的 `file_search` 计费项、能力和 `max_uses` 键）、`FileParse`（价目表里的 `file_parse`，以及网关从按 `web_search` 改为按页计）默认关闭，彼此独立。关闭时发布、改选来源、规格保存和数据集同步都拒绝这些名字（`ErrCountedItems`、`ErrRequestPrices`、`ErrFileSearch`、`ErrFileParse`，同步记为 held）；billing 的固定售价规则保存前也经 `Catalog.AllowSchedule` 过同一组开关。回滚边界：listed 模型的价目表一旦含这些项，回滚到更早的二进制就加载不了目录，只能先撤下这些价格。供应商成本计划直接写进 billing，按同样的顺序写。
+`Config.FileParse` 默认关闭，同时管 `file_parse` 价格的写入和网关的计费口径：关闭时网关按文件数计入 `web_search`，发布、改选来源、数据集同步（记为 held）和 billing 的固定售价规则（经 `Catalog.AllowSchedule`）都拒绝含 `file_parse` 的价目表（`ErrFileParse`）；打开后网关按页计入 `file_parse`。按张、按秒、按字符、按请求和文件搜索的价格不设节点版本门禁，按规格、价格完整性和变化安全阀校验。
 
 ## 管理操作
 
@@ -153,7 +153,7 @@ type Config struct {
 	MaxStale, PollEvery time.Duration // 30 秒、5 秒
 	Logger              *slog.Logger
 	PriceChangeLimit    int // 25（百分比）
-	CountedItems, RequestPrices, FileSearch, FileParse bool // 见「新增计费项与滚动升级」
+	FileParse           bool // 见「文件解析计费开关」
 }
 func Open(db *pg.DB, scope pg.Scope, cfg Config) (*Catalog, error)
 func (c *Catalog) Current() (*Snapshot, error) // 一个请求只用一个快照

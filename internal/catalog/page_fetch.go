@@ -75,12 +75,6 @@ func pageURL(address string) (*url.URL, error) {
 type PageContent struct {
 	Text   string            `json:"text"`
 	SHA256 [sha256.Size]byte `json:"-"`
-	// LegacyText is the same section extracted with the version-1 algorithm. fetchPage carries it so an upgrade can
-	// prove that the stored snapshot saw the same page, rather than a text that merely collapses to the same characters.
-	// It is not evidence and is never serialized.
-	LegacyText string `json:"-"`
-	// LegacyOK reports whether LegacyText was extracted successfully.
-	LegacyOK bool `json:"-"`
 }
 
 // PageInspector shares a site's request spacing across read-only live acceptance inspections.
@@ -168,14 +162,9 @@ func fetchPage(ctx context.Context, client *egress.Client, target PageTarget, re
 	if err != nil {
 		return PageContent{}, err
 	}
-	// A failed legacy extraction is not fatal: the new extraction still succeeds, and a version upgrade must review
-	// conservatively rather than assume the content is unchanged.
-	legacy, legacyErr := legacyExtractPriceSection(body, target.SectionStart, target.SectionEnd)
 	return PageContent{
-		Text:       text,
-		SHA256:     sha256.Sum256([]byte(text)),
-		LegacyText: legacy,
-		LegacyOK:   legacyErr == nil,
+		Text:   text,
+		SHA256: sha256.Sum256([]byte(text)),
 	}, nil
 }
 
