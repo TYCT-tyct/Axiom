@@ -13,10 +13,7 @@ import (
 func TestInspectWebPlugin(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"m","plugins":[{"id":"web","max_results":7,"search_prompt":"Use these.","include_domains":["Example.COM"],"exclude_domains":["bad.example"]}]}`)
-	req, err := protocol.Inspect(protocol.Chat, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	req := inspected(t, protocol.Chat, body)
 	w := req.Web
 	if w == nil || w.MaxResults != 7 || w.SearchPrompt != "Use these." || w.Online {
 		t.Fatalf("web = %+v", w)

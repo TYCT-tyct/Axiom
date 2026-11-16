@@ -13,16 +13,16 @@ import (
 func TestConvertedStreamsKeepToolCalls(t *testing.T) {
 	t.Parallel()
 	messagesTool := messageStart(`{"input_tokens":10,"output_tokens":0}`) +
-		`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}` + "\n\n" +
+		toolMessageStart +
 		blockStop + messageDelta(`{}`) + messageStop
 	responsesTool := `event: response.created` + "\n" +
-		`data: {"type":"response.created","response":{"id":"resp_1","object":"response","model":"m","status":"in_progress"}}` + "\n\n" +
+		toolResponseCreated +
 		`event: response.output_item.added` + "\n" +
-		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"get_weather","arguments":""}}` + "\n\n" +
+		toolResponseAdded +
 		`event: response.completed` + "\n" +
 		`data: {"type":"response.completed","response":{"id":"resp_1","object":"response","model":"m","status":"completed"}}` + "\n\n"
-	chatTool := `data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"get_weather","arguments":""}}]}}]}` + "\n\n" +
-		`data: {"id":"c1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]}` + "\n\n" +
+	chatTool := toolChatStart +
+		toolChatStop +
 		"data: [DONE]\n\n"
 	for _, tc := range []struct {
 		name             string
