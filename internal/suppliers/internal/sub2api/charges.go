@@ -150,7 +150,7 @@ func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool
 }
 
 func (m *manager) listScanKeys(ctx context.Context, p *pass) error {
-	pos := keysProgress{V: keyListingVersion, Page: p.Page, Total: -1}
+	pos := keysProgress{Page: p.Page, Total: -1}
 	for _, id := range p.Keys {
 		pos.Keys = append(pos.Keys, listedKey{Ref: adapter.KeyRef(id)})
 	}
