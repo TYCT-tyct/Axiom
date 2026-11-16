@@ -77,7 +77,7 @@ func (o operationsAPI) proposeCredit(ctx context.Context, tx pg.Tx, id accounts.
 	if err != nil {
 		return operations.Operation{}, false, err
 	}
-	amount := adminapi.Money(b.Amount)
+	amount := b.Amount
 	g, err := grantOf(&adminapi.CreditGrantRequest{Amount: &amount, ExpiresAt: b.ExpiresAt, Reason: b.Reason}, currency, time.Now())
 	if err != nil {
 		return operations.Operation{}, false, err

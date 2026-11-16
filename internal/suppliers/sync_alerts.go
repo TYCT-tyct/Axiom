@@ -83,9 +83,7 @@ type syncAlertPosition struct {
 	Seq         int
 	Attention   map[string]syncAlertFault
 	Stopped     map[string]syncAlertFault
-	// PoolLow is the groups the bridge has reported low: it is compared with the projected rows each run, so a reading
-	// missed while nodes of an older version were consuming events still raises its alert. nil means a position written
-	// before this bridge kept the set, and the run then also resolves alerts of groups that are no longer low.
+	// PoolLow is the set of groups last reported low, used to resolve recovered groups.
 	PoolLow []string
 }
 
@@ -130,12 +128,12 @@ func forwardSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error 
 		return err
 	}
 	for _, e := range events {
-		if err = forwardSyncEvent(ctx, tx, supplier, e, state, &p); err != nil {
+		if err = forwardSyncEvent(ctx, tx, supplier, e, &p); err != nil {
 			return err
 		}
 		p.Version, p.Seq = e.version, e.seq
 	}
-	if err = finishSyncAlerts(ctx, tx, supplier, state, version, len(events), &p, first); err != nil {
+	if err = finishSyncAlerts(ctx, tx, supplier, state, version, len(events), &p); err != nil {
 		return err
 	}
 	return alert.SavePosition(ctx, tx, source, p)
@@ -143,13 +141,13 @@ func forwardSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error 
 
 // finishSyncAlerts closes the kinds whose recovery needs the whole page (a recovery is only claimed when nothing older is
 // still queued) and reconciles the pool's rows, which do not go through events.
-func finishSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID, state syncer.State, version int64, events int, p *syncAlertPosition, first bool) error {
+func finishSyncAlerts(ctx context.Context, tx pg.Tx, supplier uuid.UUID, state syncer.State, version int64, events int, p *syncAlertPosition) error {
 	if events < 1000 {
 		if err := recoverSyncAlerts(ctx, tx, supplier, state, version, p); err != nil {
 			return err
 		}
 	}
-	return reconcilePoolAlerts(ctx, tx, supplier, p, first)
+	return reconcilePoolAlerts(ctx, tx, supplier, p)
 }
 
 func readSyncAlertEvents(ctx context.Context, tx pg.Tx, id uuid.UUID, version int64, p syncAlertPosition) ([]syncAlertEvent, error) {
@@ -169,7 +167,7 @@ func readSyncAlertEvents(ctx context.Context, tx pg.Tx, id uuid.UUID, version in
 	return events, rows.Err()
 }
 
-func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncAlertEvent, state syncer.State, p *syncAlertPosition) error {
+func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncAlertEvent, p *syncAlertPosition) error {
 	kind, key, resolved := "", supplier.String(), false
 	switch e.kind {
 	case "needs_attention":
@@ -177,13 +175,13 @@ func forwardSyncEvent(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncA
 		if e.why == "the supplier rejected the account credentials" {
 			kind = "suppliers.login_expired"
 		}
-		fault, err := syncFailureBaseline(e, state.Tasks[syncer.TaskBalance].LastOK)
+		fault, err := syncFailureBaseline(e)
 		if err != nil {
 			return err
 		}
 		p.Attention[kind] = fault
 	case "task_halted":
-		return forwardStoppedTask(ctx, tx, supplier, e, state, p)
+		return forwardStoppedTask(ctx, tx, supplier, e, p)
 	case "balance_low", "balance_recovered":
 		kind, resolved = "suppliers.low_balance", e.kind == "balance_recovered"
 	default:
@@ -216,45 +214,32 @@ func recoverSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syncer
 
 func initializeSyncAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, state syncer.State, version int64, p *syncAlertPosition) error {
 	if state.Status == syncer.NeedsAttention {
-		if err := forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "needs_attention", why: state.Reason, version: version}, state, p); err != nil {
+		if err := forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "needs_attention", why: state.Reason, version: version, previous: state.Tasks[syncer.TaskBalance].LastOK.Format(time.RFC3339Nano)}, p); err != nil {
 			return err
 		}
 	}
 	for task := syncer.TaskBalance; task <= syncer.TaskCharges; task++ {
 		if state.Tasks[task].Halted {
-			if err := forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "task_halted", subject: task.String(), version: version}, state, p); err != nil {
+			if err := forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "task_halted", subject: task.String(), version: version, previous: state.Tasks[task].LastOK.Format(time.RFC3339Nano)}, p); err != nil {
 				return err
 			}
 		}
 	}
 	if state.LowNotified {
-		return forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "balance_low"}, state, p)
+		return forwardSyncEvent(ctx, tx, id, syncAlertEvent{kind: "balance_low"}, p)
 	}
 	return nil
 }
 
 // reconcilePoolAlerts raises an alert for each group the projection now marks low and resolves those it no longer does.
 // The pool's reading is observed state written beside the groups, not a listing change, so the bridge compares the rows
-// with the set it last reported instead of consuming an event: a transition that happened while an older version was
-// consuming events is still seen, and a group that left the answer is resolved.
-func reconcilePoolAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, p *syncAlertPosition, first bool) error {
+// with the set it last reported instead of consuming an event; a group that left the answer is resolved.
+func reconcilePoolAlerts(ctx context.Context, tx pg.Tx, id uuid.UUID, p *syncAlertPosition) error {
 	current, err := poolLowGroups(ctx, tx, id)
 	if err != nil {
 		return err
 	}
 	fire, resolve := poolChanges(current, p.PoolLow)
-	if !first && p.PoolLow == nil {
-		// The position was written by a version that did not keep this set (an older node): its consumer skipped the
-		// pool events, so close the alerts of every group the pool no longer calls low. It happens once per supplier
-		// after the upgrade, and once more if an older node writes the position again.
-		resting, err := poolRestingGroups(ctx, tx, id)
-		if err != nil {
-			return err
-		}
-		for _, ref := range resting {
-			resolve[ref] = true
-		}
-	}
 	for _, ref := range fire {
 		signal := alert.Signal{Kind: "suppliers.pool_capacity", Key: id.String() + "/" + ref, Severity: "warning", Fields: current[ref]}
 		if err = alert.Persist(ctx, tx, uuid.NewV7(), signal); err != nil {
@@ -330,25 +315,6 @@ FROM suppliers.supplier_groups WHERE supplier_id=$1 AND pool_low ORDER BY upstre
 		out[ref] = fields
 	}
 	return out, rows.Err()
-}
-
-// poolRestingGroups is the groups of the supplier the pool does not currently call low.
-func poolRestingGroups(ctx context.Context, tx pg.Tx, id uuid.UUID) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT upstream_ref FROM suppliers.supplier_groups
-WHERE supplier_id=$1 AND NOT coalesce(pool_low, false) ORDER BY upstream_ref`, id)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var refs []string
-	for rows.Next() {
-		var ref string
-		if err = rows.Scan(&ref); err != nil {
-			return nil, err
-		}
-		refs = append(refs, ref)
-	}
-	return refs, rows.Err()
 }
 
 func emitSupplierAvailability(ctx context.Context, tx pg.Tx, now time.Time) error {
@@ -432,24 +398,20 @@ func (f syncAlertFault) recovered(version int64, lastOK time.Time) bool {
 	return version > f.Version && !lastOK.IsZero() && !lastOK.Equal(f.LastOK)
 }
 
-func syncFailureBaseline(e syncAlertEvent, latest time.Time) (syncAlertFault, error) {
-	// Old nodes omit the baseline. Conservatively wait for one more success observed by this consumer.
-	if e.previous != "" {
-		var err error
-		latest, err = time.Parse(time.RFC3339Nano, e.previous)
-		if err != nil {
-			return syncAlertFault{}, fmt.Errorf("suppliers: invalid sync failure baseline: %w", err)
-		}
+func syncFailureBaseline(e syncAlertEvent) (syncAlertFault, error) {
+	lastOK, err := time.Parse(time.RFC3339Nano, e.previous)
+	if err != nil {
+		return syncAlertFault{}, fmt.Errorf("suppliers: invalid sync failure baseline: %w", err)
 	}
-	return syncAlertFault{Version: e.version, LastOK: latest}, nil
+	return syncAlertFault{Version: e.version, LastOK: lastOK}, nil
 }
 
-func forwardStoppedTask(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncAlertEvent, state syncer.State, p *syncAlertPosition) error {
+func forwardStoppedTask(ctx context.Context, tx pg.Tx, supplier uuid.UUID, e syncAlertEvent, p *syncAlertPosition) error {
 	for task := syncer.TaskBalance; task <= syncer.TaskCharges; task++ {
 		if task.String() != e.subject {
 			continue
 		}
-		fault, err := syncFailureBaseline(e, state.Tasks[task].LastOK)
+		fault, err := syncFailureBaseline(e)
 		if err != nil {
 			return err
 		}
