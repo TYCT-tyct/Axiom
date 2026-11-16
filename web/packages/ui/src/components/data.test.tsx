@@ -29,6 +29,14 @@ beforeEach(async () => {
     removeEventListener: () => {},
   })) as unknown as typeof window.matchMedia;
   window.scrollBy = scrollBy;
+  // jsdom has no modal dialogs: this one opens, and closing it fires the close event as a browser does.
+  HTMLDialogElement.prototype.showModal = function showModal() {
+    this.setAttribute("open", "");
+  };
+  HTMLDialogElement.prototype.close = function close() {
+    this.removeAttribute("open");
+    this.dispatchEvent(new Event("close"));
+  };
   host = document.body.appendChild(document.createElement("div"));
   root = createRoot(host);
 });
@@ -73,7 +81,7 @@ it("draws only the rows near the viewport of a 10,000-row list, and says how man
   expect(options().length).toBeGreaterThan(10);
   expect(options().length).toBeLessThan(100);
   expect(options()[0]?.getAttribute("aria-setsize")).toBe("10000");
-  expect(text('[role="region"]')).toBe("pick one");
+  expect(text("section[aria-label]")).toBe("pick one");
 });
 
 it("moves the selection with the arrow keys beside the list, and keeps the selected row drawn", () => {
@@ -81,7 +89,7 @@ it("moves the selection with the arrow keys beside the list, and keeps the selec
   render(<List selected="r2" onSelect={onSelect} />);
   const row = options().find((option) => option.dataset.at === "2");
   expect(row?.tabIndex).toBe(0);
-  expect(text('[role="region"]')).toBe("detail of row 2");
+  expect(text("section[aria-label]")).toBe("detail of row 2");
   press(row ?? null, "ArrowDown");
   expect(onSelect).toHaveBeenLastCalledWith("r3", "key");
   press(row ?? null, "End");
@@ -96,24 +104,45 @@ it("covers the list with a panel on a narrow window, and returns focus to its ro
   narrow = true;
   const onSelect = vi.fn();
   render(<List selected={null} onSelect={onSelect} />);
-  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.querySelector("dialog")).toBeNull();
   press(options()[4] ?? null, "ArrowDown");
   expect(onSelect).not.toHaveBeenCalled();
   press(options()[4] ?? null, "Enter");
   expect(onSelect).toHaveBeenLastCalledWith("r4", "pointer");
 
   render(<List selected="r4" onSelect={onSelect} />);
-  const panel = host.querySelector('[role="dialog"]');
-  expect(panel?.getAttribute("aria-modal")).toBe("true");
+  const panel = host.querySelector("dialog");
+  expect(panel?.hasAttribute("open")).toBe(true);
+  expect(panel?.getAttribute("aria-label")).toBe("call detail");
   expect(panel?.textContent).toContain("detail of row 4");
-  expect(document.activeElement).toBe(panel);
-  expect(host.querySelector('[role="listbox"]')?.hasAttribute("inert")).toBe(true);
 
-  press(panel, "Escape");
+  act(() => panel?.close());
   expect(onSelect).toHaveBeenLastCalledWith(null, "close");
   render(<List selected={null} onSelect={onSelect} />);
-  expect(host.querySelector('[role="dialog"]')).toBeNull();
+  expect(host.querySelector("dialog")).toBeNull();
   expect((document.activeElement as HTMLElement).dataset.at).toBe("4");
+});
+
+it("draws a list that shrinks, or empties, under a window measured for the long one", () => {
+  const show = (list: typeof rows) =>
+    render(
+      <ListDetail
+        label="calls"
+        detailLabel="d"
+        placeholder="p"
+        rows={list}
+        rowKey={(row) => row.id}
+        renderRow={(row) => row.name}
+        selected={null}
+        onSelect={() => {}}
+        detail={() => null}
+      />,
+    );
+  show(rows);
+  show(rows.slice(0, 1));
+  expect(options().map((option) => option.textContent)).toEqual(["row 0"]);
+  show([]);
+  expect(options()).toEqual([]);
 });
 
 // --- FilterBar ------------------------------------------------------------------------------------------------------
@@ -258,6 +287,26 @@ it("formats axis, tooltip and metric for the language, time zone and currency in
   expect(enNewYork).toContain("$1,500.00");
   expect(enNewYork).toContain("$1.50");
   await act(() => i18n.changeLanguage("zh"));
+});
+
+it("shows an exact amount as the server gave it, in the tooltip, the announcement and the table", () => {
+  const amount = "9223372036854775807";
+  render(
+    <BarChart
+      label="spend"
+      empty="-"
+      series={series}
+      points={[{ at: at(9), values: { a: { amount, currency: "USD" } } }]}
+      unit={{ currency: "USD" }}
+      step="day"
+    />,
+  );
+  const plot = host.querySelector<HTMLElement>('[role="group"]');
+  act(() => plot?.focus());
+  const exact = "US$9,223,372,036.854775807";
+  expect(cells()[0]?.[1]).toBe(exact);
+  expect(text('[role="status"]')).toContain(exact);
+  expect(host.textContent).toContain(exact);
 });
 
 it("draws a single line point as a dot and plays no entrance animation under reduced motion", () => {

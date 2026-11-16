@@ -1,7 +1,7 @@
 import { type KeyboardEvent, type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { classes } from "../classes";
-import { scaleAmount, useFormat } from "../format";
+import { type Money, scaleAmount, useFormat } from "../format";
 import s from "./chart.module.css";
 
 // The charts of the usage pages, drawn in SVG: stacked bars and lines over time. The shapes are stretched to the width
@@ -10,7 +10,10 @@ import s from "./chart.module.css";
 type Series = { key: string; label: string };
 // One time slot: its values by series key. A key it lacks is 0; a negative or non-finite value is drawn as 0, since a
 // usage chart has no such value and the scale must stay finite.
-type Point = { at: Date; values: Readonly<Record<string, number>> };
+// A money value is the exact amount text the API gave and is shown as it is; a number is for counts, or money already in
+// whole units. Either way the drawing uses an approximate number, never the text shown.
+type Value = number | Money;
+type Point = { at: Date; values: Readonly<Record<string, Value>> };
 // What a value counts: whole things (requests, tokens), or money in a currency, shown through format.ts.
 type Unit = "count" | { currency: string };
 // How coarse the slots are, which sets how the axis names them.
@@ -38,8 +41,10 @@ const maxBar = 64;
 
 type Vars = Record<`--${string}`, number>;
 
-const clean = (value: number | undefined) =>
-  value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, maxValue) : 0;
+const clean = (input: Value | undefined) => {
+  const value = typeof input === "object" ? Number(input.amount) / 10 ** 9 : input;
+  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, maxValue) : 0;
+};
 const colour = (order: number) => s[`s${order % colours}`];
 
 // niceStep rounds a step up to 1, 2, 5 times a power of ten, so the gridlines fall on round numbers.
@@ -61,9 +66,12 @@ function scaleOf(max: number, unit: Unit) {
 // the tooltip and the table, and short for the axis.
 function useChartWords(unit: Unit, step: Step, timeZone?: string) {
   const format = useFormat(timeZone);
+  const amount = (value: number) =>
+    unit === "count" ? format.number(value) : format.money({ amount: scaleAmount(value), currency: unit.currency });
   return {
-    amount: (value: number) =>
-      unit === "count" ? format.number(value) : format.money({ amount: scaleAmount(value), currency: unit.currency }),
+    amount,
+    // What a value reads as: exact for an amount, the scale's own digits for a number.
+    value: (input: Value | undefined) => (typeof input === "object" ? format.money(input) : amount(clean(input))),
     slot: (at: Date) => (step === "hour" ? format.dateTimeMinute(at) : format.dayFull(at)),
     tick: (at: Date) => (step === "hour" ? format.hour(at) : format.day(at)),
   };
@@ -149,7 +157,7 @@ function Tip({ point, x, series, words }: { point: Point; x: number; series: rea
         <span key={one.key}>
           <i className={colour(order)} />
           {one.label}
-          <b>{words.amount(clean(point.values[one.key]))}</b>
+          <b>{words.value(point.values[one.key])}</b>
         </span>
       ))}
     </div>
@@ -182,7 +190,7 @@ function ChartTable({
           <tr key={point.at.getTime()}>
             <th scope="row">{words.slot(point.at)}</th>
             {series.map((one) => (
-              <td key={one.key}>{words.amount(clean(point.values[one.key]))}</td>
+              <td key={one.key}>{words.value(point.values[one.key])}</td>
             ))}
           </tr>
         ))}
@@ -291,7 +299,7 @@ function Plot({
       <div className={s.sr} role="status" aria-live="polite">
         {shown === undefined
           ? ""
-          : `${words.slot(shown.at)}: ${series.map((one) => `${one.label} ${words.amount(clean(shown.values[one.key]))}`).join(", ")}`}
+          : `${words.slot(shown.at)}: ${series.map((one) => `${one.label} ${words.value(shown.values[one.key])}`).join(", ")}`}
       </div>
     </>
   );

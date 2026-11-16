@@ -58,8 +58,9 @@ function useRowWindow(list: RefObject<HTMLElement | null>, count: number, rowHei
   return range;
 }
 
-// The detail: a region beside the list, or on a tablet and phone a modal panel over it with a button, Esc and the scrim to
-// close it. A panel takes focus as it opens; the list gives it back to the row as it closes.
+// The detail: a region beside the list, or on a tablet and phone a native modal <dialog> over it, which traps focus and
+// makes the page behind it inert, closes on Esc and on a click on its backdrop, and has a button too. The list puts
+// focus back on its row as the panel closes.
 function DetailPane({
   label,
   overlay,
@@ -72,37 +73,44 @@ function DetailPane({
   children: ReactNode;
 }) {
   const { t } = useTranslation("common");
-  const pane = useRef<HTMLElement>(null);
+  const modal = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (overlay) {
-      pane.current?.focus();
+    if (modal.current && !modal.current.open) {
+      modal.current.showModal();
     }
-  }, [overlay]);
-  const kind = overlay ? ({ role: "dialog", "aria-modal": true } as const) : ({ role: "region" } as const);
-  return (
-    <>
-      {overlay ? <div className={s.scrim} onClick={onClose} aria-hidden="true" /> : null}
-      <aside
-        ref={pane}
-        tabIndex={-1}
-        {...kind}
-        aria-label={label}
-        className={classes(s.detail, overlay && s.panel)}
-        onKeyDown={(event) => {
-          if (overlay && event.key === "Escape") {
-            event.stopPropagation();
-            onClose();
-          }
-        }}
-      >
-        {overlay ? (
-          <div className={s.bar}>
-            <ActionButton variant="gho" size="sm" icon="close" aria-label={t("dialog.close")} onClick={onClose} />
-          </div>
-        ) : null}
+  }, []);
+  if (!overlay) {
+    return (
+      <section aria-label={label} className={s.detail}>
         {children}
-      </aside>
-    </>
+      </section>
+    );
+  }
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is the dialog's own Esc and the close button.
+    <dialog
+      ref={modal}
+      aria-label={label}
+      className={classes(s.detail, s.panel)}
+      onClose={onClose}
+      onClick={(event) => {
+        // A click on the backdrop lands on the dialog itself, not on its content.
+        if (event.target === modal.current) {
+          modal.current?.close();
+        }
+      }}
+    >
+      <div className={s.bar}>
+        <ActionButton
+          variant="gho"
+          size="sm"
+          icon="close"
+          aria-label={t("dialog.close")}
+          onClick={() => modal.current?.close()}
+        />
+      </div>
+      {children}
+    </dialog>
   );
 }
 
@@ -223,8 +231,11 @@ function Rows<Row>({
   setStopKey: (key: string) => void;
 }) {
   const drawn = useMemo(() => {
-    const at = Array.from({ length: Math.max(0, range.end - range.start) }, (_, n) => range.start + n);
-    if (rows.length > 0 && (stopAt < range.start || stopAt >= range.end)) {
+    // The window is from the last measure, so a list that has just shrunk may still hold the old one.
+    const end = Math.min(range.end, rows.length);
+    const start = Math.min(range.start, end);
+    const at = Array.from({ length: end - start }, (_, n) => start + n);
+    if (rows.length > 0 && (stopAt < start || stopAt >= end)) {
       at.push(stopAt);
       at.sort((a, b) => a - b);
     }
@@ -311,7 +322,6 @@ export function ListDetail<Row>({
         aria-label={label}
         className={s.list}
         style={{ "--rows": rows.length, "--row-h": `${rowHeight}px` } as Record<`--${string}`, string | number>}
-        inert={overlay && row !== undefined}
         onKeyDown={onKeyDown}
       >
         <Rows
