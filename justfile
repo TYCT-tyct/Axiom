@@ -66,9 +66,15 @@ lint:
 # coverage, whose suite does not run on a PR. The workflow chooses the mode explicitly; the script does not guess it.
 # With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
 # together; a base without the baseline is its first introduction. A static-only write keeps the recorded coverage.
-# The static half of the quality ratchet: nolint, complexity and file length may only fall.
+# The static half of the quality ratchet: nolint, complexity and file length may only fall. A gain is never required in
+# the PR that made it: every refactor PR rewrote the one baseline file, so the train ejected them on conflicts with each
+# other (#779-#786). Gains are recorded together by `just quality-ratchet-record` on main.
 quality-ratchet mode="pr":
-    {{ python }} scripts/ci/quality_ratchet.py {{ if mode == "train" { "--allow-unrecorded-gains" } else { "" } }}
+    {{ python }} scripts/ci/quality_ratchet.py --allow-unrecorded-gains
+
+# Lower the baseline to what main now measures; run on an up-to-date main and commit the result as its own PR.
+quality-ratchet-record:
+    {{ python }} scripts/ci/quality_ratchet.py --write-baseline
 
 # After `just test` wrote coverage.out: a package may not fall below its baseline by more than the tolerance, a new
 # package must start at or above the floor, and an improvement past the tolerance is recorded by the PR that made it, or
