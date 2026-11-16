@@ -18,35 +18,32 @@ import (
 	"axiom/internal/suppliers/internal/syncer"
 )
 
-// format is the number of the shape the state is stored in. A change to State that an old stored state would read
-// differently raises it, and Load then reads the old number too.
+// format identifies the stored state shape.
 const format = 1
 
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
 
-// listings keeps resumable reads outside the strictly decoded state for rolling releases.
-// Version invalidates positions when an older node commits without updating this column.
+// listings binds resumable reads to the supplier configuration they were started with.
 type listings struct {
-	Version int64           `json:"version"`
-	Gen     int64           `json:"gen"`
-	Offer   adapter.Listing `json:"offer"`
-	Keys    adapter.Listing `json:"keys"`
+	Gen   int64           `json:"gen"`
+	Offer adapter.Listing `json:"offer"`
+	Keys  adapter.Listing `json:"keys"`
 }
 
 func encodeListings(gen int64, st syncer.State) ([]byte, error) {
 	if len(st.OfferAt) == 0 && len(st.KeysAt) == 0 {
 		return nil, nil
 	}
-	return jsonx.MarshalCanonical(listings{Version: st.Version, Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
+	return jsonx.MarshalCanonical(listings{Gen: gen, Offer: st.OfferAt, Keys: st.KeysAt})
 }
 
-func decodeListings(row []byte, gen, version int64) (offer, keys adapter.Listing) {
+func decodeListings(row []byte, gen int64) (offer, keys adapter.Listing) {
 	if len(row) == 0 {
 		return nil, nil
 	}
 	var l listings
-	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen || l.Version != version {
+	if jsonx.Unmarshal(row, &l) != nil || l.Gen != gen {
 		return nil, nil
 	}
 	if len(l.Offer) == 0 {
@@ -72,7 +69,7 @@ func (st stateStore) Load(ctx context.Context) (syncer.State, error) {
 		if err != nil {
 			return err
 		}
-		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen, row.Version)
+		out.OfferAt, out.KeysAt = decodeListings(row.Listing, st.s.Supplier.ConfigGen)
 		rows, err := store.New().ListGroupPoolCapacities(ctx, tx, st.s.Supplier.ID)
 		if err != nil {
 			return err
@@ -372,13 +369,6 @@ func projectStatus(current string, st syncer.State) (status string, reason *stri
 			return "needs_attention", nil
 		}
 		return "needs_attention", &st.Reason
-	case syncer.Removing:
-		if current == "removed" {
-			return current, nil
-		}
-		return "removing", nil
-	case syncer.Removed:
-		return "removed", nil
 	}
 	panic("persist: a status the engine does not have")
 }

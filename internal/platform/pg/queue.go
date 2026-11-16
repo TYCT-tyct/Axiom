@@ -50,15 +50,10 @@ const (
 	// would hold back every metric of the process, not this gauge alone. A collection that runs out of time reports the
 	// error and no wait: the gauge keeps its last value, and the next collection asks again.
 	oldestWaitTimeout = 2 * time.Second
-	// defaultQueueWorkers is the one worker River's default queue gets, to finish the jobs an earlier version enqueued
-	// there before the split. No kind names it.
-	defaultQueueWorkers = 1
 )
 
 // The queues every node works. A job kind names its queue in InsertOpts, its only assignment, so a burst of one kind
-// waits behind that queue's workers alone (issue #321 E8-d). River's default queue is not one of them: it only drains
-// the jobs an earlier version left there (queueConfigs), and the table test in queue_kinds_test.go catches a kind added
-// without a queue or on a queue a kind may not name.
+// waits behind that queue's workers alone (issue #321 E8-d). queue_kinds_test.go checks each kind's assignment.
 const (
 	// QueueMoney is the queue of the jobs whose lateness costs money: the expiry of credit, and the reconciliation of
 	// charges and of the ledger.
@@ -88,12 +83,9 @@ var queues = []struct {
 	{QueueArchive, 1},
 }
 
-// queueConfigs is the table in the form River takes, built from it so the two cannot drift. River's default queue is
-// added too, with one worker: it holds the jobs an earlier version enqueued before the split, and working them frees
-// their unique keys, which would otherwise cover the periodic job that now names its own queue.
+// queueConfigs is the table in the form River takes, built from it so the two cannot drift.
 func queueConfigs() map[string]river.QueueConfig {
-	configs := make(map[string]river.QueueConfig, len(queues)+1)
-	configs[river.QueueDefault] = river.QueueConfig{MaxWorkers: defaultQueueWorkers}
+	configs := make(map[string]river.QueueConfig, len(queues))
 	for _, q := range queues {
 		configs[q.name] = river.QueueConfig{MaxWorkers: q.workers}
 	}
@@ -175,11 +167,7 @@ func (q *Queue) Start(ctx context.Context) error {
 		Logger: q.logger, Schema: queueSchema, Workers: q.workers, PeriodicJobs: q.periodic, JobTimeout: jobTimeout,
 		RescueStuckJobsAfter: rescueAfter, DiscardedJobRetentionPeriod: -1, // the scan deletes them, after claiming them
 		Queues: queueConfigs(),
-		// A node fetches only the kinds it has workers for: during a rolling deploy an older node would otherwise take a
-		// kind it does not know, spend an attempt on River's unknown-kind error and back off, and a unique job in that
-		// state lets no twin be enqueued. Every node registers the same workers within one version, so the mixed set
-		// lasts only as long as a deploy. This affects fetching alone: a leader's rescuer still discards stuck jobs of
-		// kinds it does not know, and only those that ran past rescueAfter.
+		// SMTP configuration determines which mail workers a node registers. Leave those jobs for a configured node.
 		FetchOnlyKnownKinds: true,
 	})
 	if err != nil {

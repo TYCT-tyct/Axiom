@@ -7,11 +7,7 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-const keyListingVersion = 3 // Version 2 stored adapter.KeyState, whose Name was not persisted.
-
-// listedKey is one key read in a resumable listing. It is deliberately not adapter.KeyState: that hides Name from the
-// stored state, which older nodes decode strictly, but a resumed listing needs the names of the pages already read so
-// the sync can adopt a key it made before the read was interrupted.
+// listedKey keeps names across interrupted reads so the sync can adopt a key it made before the read stopped.
 type listedKey struct {
 	Ref       adapter.KeyRef    `json:"ref"`
 	GroupRef  string            `json:"group_ref"`
@@ -42,7 +38,7 @@ type keysProgress = adapter.KeyProgress[listedKey]
 // each key's text; it is used by the reads that need it and never kept, since a position goes into the supplier's
 // state, which holds no credentials (manager).
 func (m *manager) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-	p := adapter.DecodeKeys[listedKey](from, keyListingVersion)
+	p := adapter.DecodeKeys[listedKey](from)
 	return adapter.Drain(func() (adapter.Page[adapter.KeyState], bool, error) {
 		return m.keysPage(ctx, &p)
 	})
@@ -82,7 +78,7 @@ func (m *manager) resumeKeyPage(ctx context.Context, p *keysProgress) ([]keyDTO,
 	if same {
 		p.Total = total
 	} else {
-		*p = keysProgress{V: keyListingVersion, Page: 1}
+		*p = keysProgress{Page: 1}
 	}
 	return m.keyPage(ctx, p.Page)
 }

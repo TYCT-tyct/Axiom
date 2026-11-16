@@ -87,11 +87,7 @@ const keyPageSize = 100
 // maxPages bounds a listing: a supplier whose pages never end would otherwise keep the task busy.
 const maxPages = 100
 
-const keyListingVersion = 3 // Version 2 stored adapter.KeyState, whose Name was not persisted.
-
-// listedKey is one key read in a resumable listing. It is deliberately not adapter.KeyState: that hides Name from the
-// stored state, which older nodes decode strictly, but a resumed listing needs the names of the pages already read so
-// the sync can adopt a key it made before the read was interrupted.
+// listedKey keeps names across interrupted reads so the sync can adopt a key it made before the read stopped.
 type listedKey struct {
 	Ref      adapter.KeyRef     `json:"ref"`
 	GroupRef string             `json:"group_ref"`
@@ -114,7 +110,7 @@ type keysProgress = adapter.KeyProgress[listedKey]
 // with no group follows the account's group, which the empty GroupRef says. The listing is read from the position in
 // from, as far as the global bucket allows; what it read is in the position it answers with.
 func (m *manager) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-	p := adapter.DecodeKeys[listedKey](from, keyListingVersion)
+	p := adapter.DecodeKeys[listedKey](from)
 	return adapter.Drain(func() (adapter.Page[adapter.KeyState], bool, error) {
 		return m.keysPage(ctx, &p)
 	})

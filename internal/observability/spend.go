@@ -171,10 +171,7 @@ func (w spendWindow) collect(ctx context.Context, tx pg.Tx) (map[anomalyID]spend
 	if err != nil {
 		return nil, err
 	}
-	if err = w.collectRegions(ctx, tx, found, baselineCalls); err != nil {
-		return nil, err
-	}
-	if err = w.collectModels(ctx, tx, found, baselineCalls); err != nil {
+	if err = w.collectNewValues(ctx, tx, found, baselineCalls); err != nil {
 		return nil, err
 	}
 	return found, nil
@@ -308,37 +305,34 @@ func callCounts(ctx context.Context, tx pg.Tx, query string, args ...any) (map[u
 	return byAccount, rows.Err()
 }
 
-// collectRegions flags networks absent from the account's baseline. Without a geolocation source the network allocation
-// is the closest stable stand-in for a region: /16 for IPv4 and /32 for IPv6, one hop wider than the gateway's groups so
-// a customer's own addresses do not look foreign to each other.
-func (w spendWindow) collectRegions(ctx context.Context, tx pg.Tx, found map[anomalyID]spendAnomaly, baselineCalls map[uuid.UUID]int64) error {
-	counts, err := callCounts(ctx, tx, `SELECT account_id,network,
+// collectNewValues flags networks and models absent from the account's baseline. Network allocations stand in for
+// regions: /16 for IPv4 and /32 for IPv6, one hop wider than the gateway's groups.
+func (w spendWindow) collectNewValues(ctx context.Context, tx pg.Tx, found map[anomalyID]spendAnomaly, baselineCalls map[uuid.UUID]int64) error {
+	for _, dimension := range []struct {
+		query, kind, field string
+		minimum            int
+	}{
+		{`SELECT account_id,network,
  count(*) FILTER (WHERE at >= $2),
  count(*) FILTER (WHERE at < $2)
  FROM (
   SELECT account_id,at,network(CASE WHEN family(ip)=4 THEN set_masklen(ip,16) ELSE set_masklen(ip,32) END)::text AS network
   FROM observability.call_log
   WHERE account_id = ANY($1) AND at >= $3 AND at < $4
- ) calls GROUP BY account_id,network`, w.accounts, w.recentStart, w.baselineStart, w.now)
-	if err != nil {
-		return err
-	}
-	addNewValues(found, counts, baselineCalls, "region", "networks", w.detection.MinNewRegionCalls)
-	return nil
-}
-
-// collectModels flags models the account had not called in its baseline.
-func (w spendWindow) collectModels(ctx context.Context, tx pg.Tx, found map[anomalyID]spendAnomaly, baselineCalls map[uuid.UUID]int64) error {
-	counts, err := callCounts(ctx, tx, `SELECT account_id,model,
+ ) calls GROUP BY account_id,network`, "region", "networks", w.detection.MinNewRegionCalls},
+		{`SELECT account_id,model,
  count(*) FILTER (WHERE at >= $2),
  count(*) FILTER (WHERE at < $2)
  FROM observability.call_log
  WHERE account_id = ANY($1) AND at >= $3 AND at < $4
- GROUP BY account_id,model`, w.accounts, w.recentStart, w.baselineStart, w.now)
-	if err != nil {
-		return err
+ GROUP BY account_id,model`, "model", "models", w.detection.MinNewModelCalls},
+	} {
+		counts, err := callCounts(ctx, tx, dimension.query, w.accounts, w.recentStart, w.baselineStart, w.now)
+		if err != nil {
+			return err
+		}
+		addNewValues(found, counts, baselineCalls, dimension.kind, dimension.field, dimension.minimum)
 	}
-	addNewValues(found, counts, baselineCalls, "model", "models", w.detection.MinNewModelCalls)
 	return nil
 }
 

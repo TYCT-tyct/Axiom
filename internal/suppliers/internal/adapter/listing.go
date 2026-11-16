@@ -28,17 +28,16 @@ func Drain[T any](step func() (Page[T], bool, error)) (Page[T], error) {
 // KeyProgress keeps the adapter's persisted key representation, which must not contain credentials.
 // A shrinking list restarts at page one because offset pagination could otherwise skip a key.
 type KeyProgress[K any] struct {
-	V     int `json:"v"`
 	Page  int `json:"page"`
 	Total int `json:"total"`
 	Keys  []K `json:"keys"`
 }
 
-// DecodeKeys restarts an invalid or obsolete position rather than resuming at an unknown offset.
-func DecodeKeys[K any](raw Listing, version int) KeyProgress[K] {
+// DecodeKeys restarts an invalid position rather than resuming at an unknown offset.
+func DecodeKeys[K any](raw Listing) KeyProgress[K] {
 	var p KeyProgress[K]
-	if len(raw) == 0 || jsonx.UnmarshalKnown(raw, &p) != nil || p.V != version || p.Page < 1 {
-		return KeyProgress[K]{V: version, Page: 1}
+	if len(raw) == 0 || jsonx.UnmarshalKnown(raw, &p) != nil || p.Page < 1 {
+		return KeyProgress[K]{Page: 1}
 	}
 	return p
 }
@@ -53,7 +52,7 @@ func KeyStep[K any](p *KeyProgress[K], read func() ([]KeyState, int, bool, error
 		return page, false, err
 	}
 	if p.Page > 1 && total < p.Total {
-		*p = KeyProgress[K]{V: p.V, Page: 1}
+		*p = KeyProgress[K]{Page: 1}
 		return page, true, nil
 	}
 	p.Total = total

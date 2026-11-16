@@ -136,16 +136,7 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		return ErrUnknownKey
 	}
 	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
-		rows, err := s.queries.AdmitKey(ctx, tx, AdmitKeyParams{
-			KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
-		})
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return ErrUnknownKey
-		}
-		a, err := admitRow(c, rows[0], CallKey)
+		a, err := s.checkKey(ctx, tx, c, r)
 		if err != nil {
 			return err
 		}
@@ -312,11 +303,8 @@ func admitRow(c Caller, row AdmitKeyRow, kind string) (Admission, error) {
 }
 
 // admissionConsent reads the accepted terms and privacy versions appended to the admission row, each a version and a
-// locale code (0 none, 1 zh, 2 en); a row without them, as an older query wrote, is none accepted.
+// locale code (0 none, 1 zh, 2 en).
 func admissionConsent(data []byte) Consent {
-	if len(data) < 54 {
-		return Consent{}
-	}
 	return Consent{Terms: acceptedVersion(LegalTerms, data[42:48]), Privacy: acceptedVersion(LegalPrivacy, data[48:54])}
 }
 
@@ -332,12 +320,8 @@ func acceptedVersion(kind string, data []byte) DocumentVersion {
 	return DocumentVersion{Kind: kind, Locale: locale, Version: int(version)}
 }
 
-// admissionPreference reads the order appended to the admission row; a row an older node wrote has no byte for it and
-// takes the code default.
+// admissionPreference reads the funding order in the admission row.
 func admissionPreference(data []byte) FundingPreference {
-	if len(data) < 42 {
-		return FundingSubscriptionFirst
-	}
 	switch binary.BigEndian.Uint16(data[40:42]) {
 	case uint16(FundingWalletFirst):
 		return FundingWalletFirst
