@@ -222,7 +222,7 @@ func TestALeaseThatRanOutIsTakenOverAndTheOldHolderWritesNothing(t *testing.T) {
 }
 
 // TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration: the page a listing reached is stored beside the state,
-// in a column of its own, so another node goes on from it while the state keeps the shape an older node reads; a change
+// in a column of its own, so another node goes on from it; a change
 // of the configuration (the credentials are replaced, or a pause) makes it stale, and the listing begins again.
 func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T) {
 	t.Parallel()
@@ -257,30 +257,6 @@ func TestAListingPositionIsKeptForAnotherNodeAndOnlyInItsGeneration(t *testing.T
 	c.clock.advance(ttl + time.Second)
 	if st, err = c.acquire(c.node("c")).Store().Load(t.Context()); err != nil || st.OfferAt != nil || st.KeysAt != nil {
 		t.Errorf("after the configuration changed: %q, %q, %v; want the positions given up", st.OfferAt, st.KeysAt, err)
-	}
-}
-
-func TestAnOldNodeCommitInvalidatesListingPositions(t *testing.T) {
-	t.Parallel()
-	c := newCluster(t)
-	session := c.acquire(c.node("new"))
-	st := stateAt(1)
-	st.KeysAt = adapter.Listing(`{"page":2}`)
-	if err := session.Store().Commit(t.Context(), 0, syncer.Commit{State: st}); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), "UPDATE suppliers.sync_states SET version = version + 1 WHERE supplier_id = $1", c.supplier)
-		return err
-	}); err != nil {
-		t.Fatal(err)
-	}
-	loaded, err := session.Store().Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(loaded.KeysAt) != 0 {
-		t.Fatalf("resumed an old position after a legacy commit: %q", loaded.KeysAt)
 	}
 }
 

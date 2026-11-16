@@ -1,9 +1,6 @@
 package catalog
 
-import (
-	"errors"
-	"slices"
-)
+import "errors"
 
 // ErrTierBasisChanged is returned by Lost when two schedules both have context tiers and their thresholds count
 // different items: one threshold then means different usage in each, and the schedules cannot be compared.
@@ -17,9 +14,6 @@ type PricePoint struct {
 	Item        Item
 }
 
-// band is a stretch of prompt lengths in which prices do not change: above is its lower threshold, length a prompt in it.
-type band struct{ above, length int64 }
-
 // Lost returns the prices prev has and s does not, for the items and service tiers of r (the standard tier always
 // counts), reasoning falling back to output on both sides as Cost does. Replacing a schedule with s must lose none:
 // a priority tier's price that only the old schedule had would make those requests unpriced. Missing cannot do this,
@@ -28,24 +22,17 @@ type band struct{ above, length int64 }
 // so two schedules that both have context tiers must count the same items, or Lost returns ErrTierBasisChanged. A
 // schedule without tiers does not use its basis, so it compares with any.
 func (s Schedule) Lost(prev Schedule, r Reportable) ([]PricePoint, error) {
-	if len(s.above) > 0 && len(prev.above) > 0 && s.basis != prev.basis {
-		return nil, ErrTierBasisChanged
-	}
-	thresholds := slices.Concat(s.above, prev.above)
-	slices.Sort(thresholds)
-	thresholds = slices.Compact(thresholds)
-	// A prompt of length 0 is in the first band, and one of length t+1 in the band above the threshold t.
-	bands := []band{{0, 0}}
-	for _, t := range thresholds {
-		bands = append(bands, band{t, t + 1})
+	bands, err := comparisonBands(s, prev)
+	if err != nil {
+		return nil, err
 	}
 	var lost []PricePoint
 	for st := range numServiceTiers {
 		if st != ServiceTierStandard && !r.ServiceTiers.Has(st) {
 			continue
 		}
-		for _, band := range bands {
-			lost = append(lost, s.lostIn(prev, st, band.above, band.length, r.Items)...)
+		for b, above := range bands {
+			lost = append(lost, s.lostIn(prev, st, above, bandLength(b, above), r.Items)...)
 		}
 	}
 	return lost, nil

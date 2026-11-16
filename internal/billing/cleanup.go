@@ -126,7 +126,12 @@ func (b *Billing) clean(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) 
 
 // lock locks the account's balance row and reads the reservation under it.
 func (b *Billing) lock(ctx context.Context, tx pg.Tx, id, accountID uuid.UUID) (*locked, error) {
-	balance, r, err := settlementRows(ctx, tx, id, accountID)
+	balance, err := queries.LockBalance(ctx, tx, accountID)
+	if err != nil {
+		return nil, balanceErr(err)
+	}
+	// Read in a fresh statement after waiting for the balance lock.
+	r, err := queries.LockReservation(ctx, tx, id)
 	if err != nil {
 		return nil, err
 	}

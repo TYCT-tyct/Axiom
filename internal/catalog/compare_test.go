@@ -1,10 +1,13 @@
 package catalog
 
 import (
+	"errors"
 	"fmt"
 	"math/big"
 	"math/rand/v2"
 	"testing"
+
+	"axiom/internal/platform"
 )
 
 func compareSchedule(t *testing.T, threshold int64, base, above string) Schedule {
@@ -112,5 +115,50 @@ func TestLargestChangeAndSmallestMargin(t *testing.T) {
 				t.Fatalf("margin %v measured %v err %v, want %q", margin, measured, err, c.margin)
 			}
 		})
+	}
+}
+
+func TestComparisonCurrencyAndBasisErrors(t *testing.T) {
+	old := compareSchedule(t, 0, "1", "2")
+	next := compareSchedule(t, 128, "1", "2")
+	currency, err := platform.ParseCurrency("EUR")
+	if err != nil {
+		t.Fatal(err)
+	}
+	next.currency = currency
+	for _, c := range []struct {
+		name  string
+		basis ItemSet
+		want  string
+	}{
+		{"currency", next.basis, "price schedules have different currencies"},
+		{"basis before currency", InputSide, ErrTierBasisChanged.Error()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			next.basis = c.basis
+			_, costErr := old.CoversCost(next)
+			_, _, changeErr := old.LargestChange(next)
+			_, _, marginErr := old.SmallestMargin(next)
+			for _, err := range []error{costErr, changeErr, marginErr} {
+				if err == nil || err.Error() != c.want {
+					t.Fatalf("error = %v, want %s", err, c.want)
+				}
+			}
+			checkPriceComparisonErrors(t, old, next, c.name != "currency")
+		})
+	}
+}
+
+func checkPriceComparisonErrors(t *testing.T, old, next Schedule, basisChanged bool) {
+	t.Helper()
+	for _, compare := range []func(Schedule, *big.Rat) (bool, error){old.PriceChange, old.PriceIncrease} {
+		_, err := compare(next, big.NewRat(1, 10))
+		if basisChanged {
+			if !errors.Is(err, ErrTierBasisChanged) {
+				t.Fatalf("price comparison error = %v", err)
+			}
+		} else if err != nil {
+			t.Fatalf("price comparison error = %v", err)
+		}
 	}
 }

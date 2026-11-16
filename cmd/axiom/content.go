@@ -140,10 +140,14 @@ func contentApproveCommand(args []string, out io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	if err := requireContentFlags(contentUsage, map[string]string{
-		"--signing-key": signingPath, "--second-signing-key": secondSigningPath,
-		"--encryption-key": encryptionPath, "--since": sinceText,
-		"--until": untilText, "--destination": destination, "--out": output,
+	if err := requireContentFlags(contentUsage, []contentFlag{
+		{"--signing-key", signingPath},
+		{"--second-signing-key", secondSigningPath},
+		{"--encryption-key", encryptionPath},
+		{"--since", sinceText},
+		{"--until", untilText},
+		{"--destination", destination},
+		{"--out", output},
 	}); err != nil {
 		return err
 	}
@@ -199,7 +203,7 @@ func contentDecryptCommand(args []string, out io.Writer) error {
 	}); err != nil {
 		return err
 	}
-	if err := requireContentFlags(contentUsage, map[string]string{"--key": keyPath, "--in": inPath, "--out": outPath}); err != nil {
+	if err := requireContentFlags(contentUsage, []contentFlag{{"--key", keyPath}, {"--in", inPath}, {"--out", outPath}}); err != nil {
 		return err
 	}
 	privateBytes, err := readContentPrivateKey(keyPath)
@@ -267,10 +271,12 @@ func readContentScope(sinceText, untilText, siteText, accountText string) (time.
 	return since, until, site, account, nil
 }
 
-func requireContentFlags(usage string, values map[string]string) error {
-	for name, value := range values {
-		if value == "" {
-			return fmt.Errorf("%s is required\n%s", name, usage)
+type contentFlag struct{ name, value string }
+
+func requireContentFlags(usage string, values []contentFlag) error {
+	for _, flag := range values {
+		if flag.value == "" {
+			return fmt.Errorf("%s is required\n%s", flag.name, usage)
 		}
 	}
 	return nil

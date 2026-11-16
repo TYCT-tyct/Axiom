@@ -20,7 +20,6 @@ import (
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/httpserver"
 	"axiom/internal/platform/kv"
-	"axiom/internal/platform/mail"
 	"axiom/internal/platform/objectstore"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -48,10 +47,10 @@ const defaultStartupTimeout = 30 * time.Second
 
 // listening is one of the node's HTTP servers and the address variable it listens on.
 type listening struct {
-	variable, addr string
-	server         *http.Server
-	listener       net.Listener
-	tls            bool // mutual TLS with the deployment's node certificates
+	variable, addr, key string
+	server              *http.Server
+	listener            net.Listener
+	tls                 bool // mutual TLS with the deployment's node certificates
 }
 
 // serve runs the node until ctx ends, then shuts down: the node reports not ready, its listeners stop accepting,
@@ -59,7 +58,7 @@ type listening struct {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig())
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig(), func([]*listening) {})
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -70,12 +69,13 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 // serveWith lets a test capture its recorder, opt into price syncing with local datasets, and choose the node's
 // in-process limits. A nil prices constructor disables the periodic price job, so tests of the listeners and call path
 // never download the production datasets; a test world passes limits sized for the shared machines it runs on, not
-// production's.
+// production's. bound observes the claimed listeners before the database check; tests read their actual addresses
+// and check closure on the same handles, without trying to reclaim ports another process may have taken.
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
-	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config,
+	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config, bound func([]*listening),
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -109,6 +109,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeListeners(servers)
+	bound(servers)
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
@@ -138,7 +139,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, replica, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, cfg, console, cache, exit, prices, archiveStore, replica, tel, logger, record)
 	if err != nil {
 		return err
 	}
@@ -312,26 +313,25 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 // reconciliation, the ledger's daily check and the expiry of credit on the money queue. Each queue has its own workers,
 // so a burst of syncs cannot hold a money job back (internal/platform/README.md「任务队列」). It reaches the suppliers and
 // the datasets through exit, the client the whole node shares.
-func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
-	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
-	logger *slog.Logger, signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
+func startSync(ctx context.Context, db, retentionDB *pg.DB, cfg nodeSettings, console consoleParts,
+	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
+	archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
+	logger *slog.Logger, signals *alert.Bus, paymentSignals *payments.SignalState,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
-	recovery, registration, err := registerNotifications(ctx, db, queue, smtp, cache, master, keys, exit, logger)
+	recovery, registration, err := registerNotifications(ctx, db, queue, cfg.smtp, cache, console.masterKeys, console.master, exit, logger)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
-		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
-		DirectFormats: directFormats,
+		DB: db, Scope: pg.PlatformScope(), Keys: console.master, Egress: exit, Queue: queue, Logger: logger,
 	}); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := registerCatalogJobs(ctx, db, queue, exit, prices, tel, logger); err != nil {
 		return nil, nil, nil, err
 	}
-	if err := registerExchangeSource(ctx, db, queue, exit, logger, exchangeSource); err != nil {
+	if err := registerExchangeSource(ctx, db, queue, exit, logger, cfg.exchangeSource); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := registerSalePrices(db, queue); err != nil {
@@ -367,7 +367,7 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}
 	// Orders past their deadline expire every minute, on whichever node leads the queue
 	// (docs/domains/payments.md「补单与过期」). Callbacks and polling register the same protocol plugins.
-	if err = registerPaymentJobs(db, keys, exit, logger, queue, signals, paymentSignals, nodeID); err != nil {
+	if err = registerPaymentJobs(db, console.master, exit, logger, queue, signals, paymentSignals, cfg.valkey.NodeID); err != nil {
 		return nil, nil, nil, err
 	}
 	if err := queue.Start(ctx); err != nil {
@@ -418,11 +418,16 @@ func registerBillingJobs(db *pg.DB, queue *pg.Queue, tel *telemetry.Telemetry, l
 	})
 }
 
-// stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
-func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logger *slog.Logger) {
+// closeWithin gives cleanup its own deadline after the node's context has ended.
+func closeWithin(ctx context.Context, timeout time.Duration, close func(context.Context) error) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
 	defer cancel()
-	if err := queue.Stop(ctx); err != nil {
+	return close(ctx)
+}
+
+// stopQueue stops the queue within timeout, on a context that outlives the one that ended the node.
+func stopQueue(ctx context.Context, queue *pg.Queue, timeout time.Duration, logger *slog.Logger) {
+	if err := closeWithin(ctx, timeout, queue.Stop); err != nil {
 		logger.Error("stopping the job queue", "err", err)
 	}
 }
@@ -453,9 +458,17 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 ) (*pg.DB, *secret.Keyring, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, cfg.startupTimeout, errNoAnswer)
 	defer cancel()
-	db, err := openNodeDatabase(ctx, cfg.databaseURL, cfg.startupTimeout, tel,
+	db, err := checkedDatabase(ctx, cfg.databaseURL, pg.WithTracerProvider(tel.Traces),
 		pg.WithCompletionReserve(cfg.completionReserve), pg.WithNodes(cfg.valkey.Nodes))
 	if err != nil {
+		return nil, nil, err
+	}
+	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return billing.CheckFallbacks(ctx, tx) })
+	if err != nil && errors.Is(context.Cause(ctx), errNoAnswer) {
+		err = errNoAnswer
+	}
+	if err != nil {
+		db.Close()
 		return nil, nil, err
 	}
 	logConnectionBudget(logger, db)
@@ -479,54 +492,29 @@ func logConnectionBudget(logger *slog.Logger, db *pg.DB) {
 	}
 }
 
-// openNodeDatabase opens the database for serving, traced, and refuses it when its fallback prices fail billing's check
-// (docs/domains/billing.md「价目表缺项」). One deadline covers the connection and the check, so a database that stops
-// answering, or a lock held on the fallbacks, fails the start instead of holding it. The other commands open the
-// database without the check: save-fallbacks is how a refused row is repaired.
-func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, tel *telemetry.Telemetry, opts ...pg.Option) (*pg.DB, error) {
-	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
-	defer cancel()
-	db, err := openDatabase(ctx, url, timeout, append(opts, pg.WithTracerProvider(tel.Traces))...)
-	if err != nil {
-		return nil, err
-	}
-	err = db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) error { return billing.CheckFallbacks(ctx, tx) })
-	if err != nil && errors.Is(context.Cause(ctx), errNoAnswer) {
-		err = errNoAnswer
-	}
-	if err != nil {
-		db.Close()
-		return nil, err
-	}
-	return db, nil
-}
-
 // startBackground starts what serves the call path and outlives it: the call-record writer and the job queue. Both are
-// closed on every way out (closeRecorder, stopQueue), before the database they use; a recorder that started before a
+// closed on every way out (closeWithin), before the database they use; a recorder that started before a
 // failing step, including the queue, is closed here, since the caller has no defer of its own yet.
-func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
-	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
-	logger *slog.Logger, nodeID string, timeout time.Duration, callLogDir string,
+func startBackground(ctx context.Context, db, retentionDB *pg.DB, cfg nodeSettings, console consoleParts,
+	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher,
+	archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry, logger *slog.Logger,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
-	recorder, err := record(ctx, db, tel, callLogDir, logger)
+	recorder, err := record(ctx, db, tel, cfg.callLogDir, logger)
 	if err != nil {
 		if recorder != nil {
-			closeRecorder(ctx, recorder, timeout, logger)
+			closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
 		}
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
 	paymentSignals := payments.NewSignalState()
-	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, replica, tel, logger, signals, paymentSignals, nodeID)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, cfg, console, cache, exit, prices, archive, replica, tel, logger, signals, paymentSignals)
 	if err != nil {
-		closeRecorder(ctx, recorder, timeout, logger)
-		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-		if closeErr := signals.Close(drain); closeErr != nil {
+		closeRecorder(ctx, recorder, cfg.shutdownTimeout, logger)
+		if closeErr := closeWithin(ctx, cfg.shutdownTimeout, signals.Close); closeErr != nil {
 			logger.Error("closing alert signals", "err", closeErr)
 		}
-		cancel()
 		return nil, nil, nil, nil, nil, nil, err
 	}
 	return queue, recorder, recovery, registration, signals, paymentSignals, nil
@@ -544,9 +532,7 @@ func startRecorder(ctx context.Context, db *pg.DB, tel *telemetry.Telemetry, dir
 
 // closeRecorder drains the recorder within timeout, on a context that outlives the one that ended the node.
 func closeRecorder(ctx context.Context, recorder *observability.Recorder, timeout time.Duration, logger *slog.Logger) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-	defer cancel()
-	if err := recorder.Close(ctx); err != nil {
+	if err := closeWithin(ctx, timeout, recorder.Close); err != nil {
 		logger.Error("closing the call-record writer", "err", err)
 	}
 }
@@ -611,13 +597,9 @@ func openBucket(cfg objectstore.Config) (*objectstore.Client, error) {
 	return client, err
 }
 
-// closeCache ends the cache's loops and deletes the node's heartbeat within timeout, on a context that outlives the one
-// that ended the node. A second call finds nothing to do, so the shutdown and the defer below may both make it.
+// closeCache removes the heartbeat within timeout; an error leaves the row to expire.
 func closeCache(ctx context.Context, cache *kv.Client, timeout time.Duration, logger *slog.Logger) {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
-	defer cancel()
-	if err := cache.Close(ctx); err != nil {
-		// The row goes stale by itself, and a node that has emptied itself is not a failed shutdown for it.
+	if err := closeWithin(ctx, timeout, cache.Close); err != nil {
 		logger.Error("closing the shared cache", "err", err)
 	}
 }
@@ -629,6 +611,11 @@ var errNoAnswer = errors.New("database: " + pg.DatabaseURLVar + ": no answer wit
 func openDatabase(ctx context.Context, url string, timeout time.Duration, opts ...pg.Option) (*pg.DB, error) {
 	ctx, cancel := context.WithTimeoutCause(ctx, timeout, errNoAnswer)
 	defer cancel()
+	return checkedDatabase(ctx, url, opts...)
+}
+
+// checkedDatabase uses its caller's deadline for the connection and startup checks.
+func checkedDatabase(ctx context.Context, url string, opts ...pg.Option) (*pg.DB, error) {
 	db, err := pg.Open(ctx, url, opts...)
 	if err != nil {
 		if errors.Is(context.Cause(ctx), errNoAnswer) {

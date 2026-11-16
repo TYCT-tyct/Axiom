@@ -244,7 +244,7 @@ func (c *locked) pricing(entry int) (catalog.Schedule, fallbacks, error) {
 	if err != nil {
 		return catalog.Schedule{}, fallbacks{}, fmt.Errorf("billing: read the locked price: %w", err)
 	}
-	f, err := parseLockedFallbacks(r.Fallbacks[entry])
+	f, err := parseFallbacks(r.Fallbacks[entry])
 	return s, f, err
 }
 

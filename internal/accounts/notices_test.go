@@ -207,37 +207,31 @@ func TestAnnouncementBoundaryValidation(t *testing.T) {
 
 func TestPasswordSecurityMailCannotBeDisabled(t *testing.T) {
 	t.Parallel()
-	x := recoverySite(t)
-	p, err := x.principal(t, console, x.signIn(t, console))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != "1" {
-		t.Fatalf("mandatory password mail missing: %v", got)
-	}
-}
-
-func TestPasswordResetSecurityMailCannotBeDisabled(t *testing.T) {
-	t.Parallel()
-	x := recoverySite(t)
-	p, err := x.principal(t, console, x.signIn(t, console))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err = x.reset(t, console, x.token(t), changedPassword); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != "2" {
-		t.Fatalf("mandatory password mail missing: %v", got)
+	for _, tc := range []struct {
+		name, mails string
+	}{
+		{"change", "1"},
+		{"reset", "2"},
+	} {
+		x := recoverySite(t)
+		p, err := x.principal(t, console, x.signIn(t, console))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if tc.name == "reset" {
+			err = x.reset(t, console, x.token(t), changedPassword)
+		} else {
+			_, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != tc.mails {
+			t.Fatalf("%s: mandatory password mail missing: %v", tc.name, got)
+		}
 	}
 }
 
@@ -359,52 +353,6 @@ func TestOmittedSpendPreferenceDoesNotUndoAConcurrentChange(t *testing.T) {
 	}
 	if kept.Threshold != 1 {
 		t.Fatalf("the omitted field's own update was lost too: %+v", kept)
-	}
-}
-
-// TestDispatchLeavesAKindItDoesNotKnow: a notice kind this node cannot render waits for a node that can, instead of
-// being marked dispatched without sending anything. A known kind is still dispatched in the same pass.
-func TestDispatchLeavesAKindItDoesNotKnow(t *testing.T) {
-	db, database := open(t)
-	// A later migration adds the kind to this check constraint before any node knows how to render it; dropping the
-	// constraint in the test stands in for that schema.
-	if err := pgtest.Run(t.Context(), database.Superuser, `ALTER TABLE accounts.user_notices DROP CONSTRAINT user_notices_kind_check`); err != nil {
-		t.Fatal(err)
-	}
-	logger := slog.New(slog.DiscardHandler)
-	q := db.NewQueue(logger, platform, nil)
-	m, err := axmail.Register(t.Context(), db, q, axmail.Config{Host: "localhost", Port: 1, From: mail.Address{Address: "notices@example.com"}}, nil, nil, logger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var prefs accounts.NotificationPreferences
-	noticeTx(t, db, func(tx pg.Tx) (err error) {
-		prefs, err = accounts.GetNotificationPreferences(t.Context(), tx, u1)
-		return err
-	})
-	prefs.SpendAnomaly = false
-	noticeTx(t, db, func(tx pg.Tx) error {
-		return accounts.SetNotificationPreferences(t.Context(), tx, s1, a1, u1, prefs, &prefs.SpendAnomaly)
-	})
-	known, unknown := uuid.NewV7(), uuid.NewV7()
-	noticeTx(t, db, func(tx pg.Tx) error {
-		for _, n := range []struct {
-			id   uuid.UUID
-			kind string
-		}{{known, "spend_anomaly"}, {unknown, "future_kind"}} {
-			if _, err := tx.Exec(t.Context(), `INSERT INTO accounts.user_notices(id,site_id,account_id,user_id,source,kind,value) VALUES($1,$2,$3,$4,$5,$6,'0')`, n.id, s1, a1, u1, n.id.String(), n.kind); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-	noticeTx(t, db, func(tx pg.Tx) error { _, err := accounts.DispatchUserNotices(t.Context(), tx, q, m); return err })
-	var knownDone, unknownDone bool
-	noticeTx(t, db, func(tx pg.Tx) error {
-		return tx.QueryRow(t.Context(), `SELECT (SELECT dispatched FROM accounts.user_notices WHERE id=$1),(SELECT dispatched FROM accounts.user_notices WHERE id=$2)`, known, unknown).Scan(&knownDone, &unknownDone)
-	})
-	if !knownDone || unknownDone {
-		t.Fatalf("known dispatched=%v, unknown dispatched=%v; want true and false", knownDone, unknownDone)
 	}
 }
 

@@ -76,30 +76,21 @@ func TestCountedItemMissingAtATierUsesItsUnitPrice(t *testing.T) {
 	checkChargePrices(t, items, "0.1", "", true)
 }
 
-// TestFileSearchWithoutAnyPriceFallsBackToTokens: a per-use item with no site default is never charged another tool's
-// price; a schedule that prices no file search at all charges it at the dearest token price and marks it estimated.
-func TestFileSearchWithoutAnyPriceFallsBackToTokens(t *testing.T) {
+// TestFileToolsWithoutAnyPriceFallBackToTokens: a per-use item with no site default is never charged another tool's
+// price; a schedule that prices neither file tool charges each at the dearest token price and marks it estimated.
+func TestFileToolsWithoutAnyPriceFallBackToTokens(t *testing.T) {
 	t.Parallel()
 	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002"}}`)
-	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemFileSearch: 2}, catalog.ServiceTierStandard, nil, nil)
-	items := chargeItems(s, fallbacks{}, seg, false, 0)
-	if len(items) != 1 || items[0].Item != "file_search" || items[0].UnitPrice != "0.0000000002" {
-		t.Fatalf("items: %+v", items)
+	for name, item := range map[string]catalog.Item{"file_search": catalog.ItemFileSearch, "file_parse": catalog.ItemFileParse} {
+		t.Run(name, func(t *testing.T) {
+			seg := chargeTestSegment(t, map[catalog.Item]int64{item: 2}, catalog.ServiceTierStandard, nil, nil)
+			items := chargeItems(s, fallbacks{}, seg, false, 0)
+			if len(items) != 1 || items[0].Item != name || items[0].UnitPrice != "0.0000000002" {
+				t.Fatalf("items: %+v", items)
+			}
+			checkChargePrices(t, items, "0.0000000004", "", true)
+		})
 	}
-	checkChargePrices(t, items, "0.0000000004", "", true)
-}
-
-// TestFileParseWithoutAnyPriceFallsBackToTokens: a per-use item with no site default is never charged another tool's
-// price; a schedule that prices no file parse at all charges it at the dearest token price and marks it estimated.
-func TestFileParseWithoutAnyPriceFallsBackToTokens(t *testing.T) {
-	t.Parallel()
-	s := mustSchedule(t, `{"v":1,"currency":"USD","rates":{"input":"0.0000000001","output":"0.0000000002"}}`)
-	seg := chargeTestSegment(t, map[catalog.Item]int64{catalog.ItemFileParse: 2}, catalog.ServiceTierStandard, nil, nil)
-	items := chargeItems(s, fallbacks{}, seg, false, 0)
-	if len(items) != 1 || items[0].Item != "file_parse" || items[0].UnitPrice != "0.0000000002" {
-		t.Fatalf("items: %+v", items)
-	}
-	checkChargePrices(t, items, "0.0000000004", "", true)
 }
 
 func TestReadChargesLocksSaleAndReconcilesDebit(t *testing.T) {

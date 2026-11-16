@@ -30,9 +30,6 @@ func (p *Payments) Verify(ctx context.Context, s pg.Scope, id OrderID) (Order, e
 			return err
 		}
 		allowed, err = queries.QueryAllowed(ctx, tx, uuid.UUID(id))
-		if err != nil || !allowed {
-			return err
-		}
 		return err
 	})
 	if err != nil || !allowed {

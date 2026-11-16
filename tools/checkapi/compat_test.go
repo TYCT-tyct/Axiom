@@ -86,3 +86,23 @@ func TestNewlyRequiredNested(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+func TestSharedSchemaSnapshots(t *testing.T) {
+	base := map[string][]byte{"admin.yaml": []byte(contract("admin")), "console.yaml": []byte(contract("console"))}
+	shared := strings.Replace(contract("console"), "    Page:\n      type: object\n      properties: {next_cursor: {type: string, nullable: true}}", "    Page:\n      $ref: 'admin.yaml#/components/schemas/Page'", 1)
+	after := map[string][]byte{"admin.yaml": base["admin.yaml"], "console.yaml": []byte(shared)}
+	if got := check(after); len(got) != 0 {
+		t.Fatalf("shared contract: %v", got)
+	}
+	if got := newlyRequired(base, after); len(got) != 0 {
+		t.Fatalf("moving schema: %v", got)
+	}
+	after["admin.yaml"] = []byte(strings.Replace(contract("admin"), "    Page:\n      type: object", "    Page:\n      required: [next_cursor]\n      type: object", 1))
+	got := newlyRequired(base, after)
+	if len(got) != 2 || !strings.HasPrefix(got[1], "console.yaml: Page: next_cursor is newly required") {
+		t.Fatalf("changed shared schema: %v", got)
+	}
+	if got := newlyRequired(after, after); len(got) != 0 {
+		t.Fatalf("unchanged shared snapshot: %v", got)
+	}
+}
