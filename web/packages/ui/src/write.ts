@@ -81,14 +81,15 @@ export type LiveSave<T> = {
   saved: boolean;
   // failed is why a write failed and where that left the object; the edits queued behind it are dropped.
   failed: Failed | null;
-  // locked is the object being read again after a write whose result is unknown, or that read failing too: until the
-  // server's object is known, no edit may be sent on a copy that may be wrong.
+  // locked is the object being read again after a 409, or a write whose result is unknown: no edit may be sent on a
+  // copy that may be wrong until the page is reloaded.
   locked: boolean;
 };
 
 // After a failed write: reverted when the server refused it (a 4xx, so nothing was done) and value is the object as
-// it was; reloaded when it may have been done or someone else changed the object (409 stale_revision), so the object
-// was read again; unconfirmed when that read failed too, so nothing more can be sent.
+// it was; reloaded when someone else changed the object (409 stale_revision, so nothing was done either) and it was
+// read again; unconfirmed when the write may still have been done, or the reading again failed, so nothing more can be
+// sent.
 export type Failed = { error: unknown; after: "reverted" | "reloaded" | "unconfirmed" };
 
 type View<T> = Omit<LiveSave<T>, "mode" | "change">;
@@ -102,7 +103,7 @@ export function useLiveSave<T>({
   // write sends the object with the edit applied (the whole body, or the one value an endpoint takes) and returns
   // the object as the server now has it.
   write: (next: T) => Promise<T>;
-  // reread fetches the object as the server has it now, after a write whose result is unknown or a 409.
+  // reread fetches the object as the server has it now, after a 409 stale_revision.
   reread: () => Promise<T>;
 }): LiveSave<T> {
   const confirmed = useRef(initial);
@@ -166,16 +167,20 @@ export function useLiveSave<T>({
   };
 }
 
-// afterFailure says where a failed write left the object. A refusal proves nothing was done; a stale revision proves
-// the copy is old; anything else (no answer, a 5xx, an unreadable response) may have been done. So only a refusal
-// keeps the confirmed object; otherwise it is read again, with edits held off (reading) until it is known.
+// afterFailure says where a failed write left the object. A refusal proves nothing was done, and so does a stale
+// revision, after which the object is read again (reading holds edits off meanwhile). Anything else (no answer, a 5xx,
+// an unreadable response) may have been done, or may still be: a timed-out write can land after a read that comes back
+// first, so no read confirms it, and nothing more is sent on any copy until the page is reloaded.
 async function afterFailure<T>(
   error: unknown,
   reread: () => Promise<T>,
   reading: () => void,
 ): Promise<{ failed: Failed } | { failed: Failed; current: T }> {
-  const stale = error instanceof ApiError && error.code === "stale_revision";
-  if (refused(error) && !stale) {
+  if (!refused(error)) {
+    reading();
+    return { failed: { error, after: "unconfirmed" } };
+  }
+  if (!(error instanceof ApiError && error.code === "stale_revision")) {
     return { failed: { error, after: "reverted" } };
   }
   reading();

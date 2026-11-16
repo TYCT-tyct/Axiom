@@ -1,4 +1,3 @@
-import { ApiError } from "@axiom/api";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { ExplicitSave, Failed, LiveSave } from "../write";
@@ -15,8 +14,9 @@ type PanelWrite =
 // EditPanel edits an object in a panel down the right edge, a sheet from the bottom on a phone. It only presents: the
 // page passes the write strategy and renders the fields from it. With explicit save the footer is Cancel and Save, the
 // fields are locked while the save is out, and it closes once saved; with save on change the footer says whether the
-// changes have landed and Done closes it. Esc and the backdrop close it only while nothing unsaved would be lost and
-// no write is out; while the object is unconfirmed after a write whose result is unknown, the fields are locked. start is a link at the start of the footer, such as delete.
+// changes have landed and Done closes it. While a write is out nothing closes it and start (a link at the start of the
+// footer, such as delete) is disabled; Esc and the backdrop also wait for nothing unsaved to be lost. While the object
+// is not known after a write whose result is unknown, the fields are locked.
 export function EditPanel({
   title,
   subtitle,
@@ -41,6 +41,7 @@ export function EditPanel({
       side
       dismissible={!write.saving && !(explicit && write.dirty)}
       locked={explicit ? write.saving : write.locked}
+      busy={write.saving}
       onSubmit={
         explicit
           ? (close) => {
@@ -87,10 +88,10 @@ export function EditPanel({
 }
 
 // LiveFailed says what a failed change left: someone else's change, shown now; the server's object again; or, when the
-// result is unknown, the object read again or nothing known until the page is reloaded.
+// result is unknown, nothing known until the page is reloaded.
 function LiveFailed({ failed }: { failed: Failed }) {
   const { t } = useTranslation("common");
-  if (failed.after === "reloaded" && failed.error instanceof ApiError && failed.error.code === "stale_revision") {
+  if (failed.after === "reloaded") {
     return <Note title={t("overlay.staleTitle")}>{t("overlay.staleBody")}</Note>;
   }
   return <SubmitFailed error={failed.error} next={t(`failed.${failed.after}`)} />;

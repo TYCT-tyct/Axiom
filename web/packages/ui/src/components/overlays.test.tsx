@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { ApiError } from "@axiom/api";
 import { createInstance } from "i18next";
-import { act, type ReactNode, useState } from "react";
+import { act, type ReactNode, StrictMode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
@@ -53,7 +53,15 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-const render = (node: ReactNode) => act(() => root.render(<I18nextProvider i18n={i18n}>{node}</I18nextProvider>));
+// StrictMode as the apps start (start.tsx): effects run, are cleaned up and run again on mount.
+const render = (node: ReactNode) =>
+  act(() =>
+    root.render(
+      <StrictMode>
+        <I18nextProvider i18n={i18n}>{node}</I18nextProvider>
+      </StrictMode>,
+    ),
+  );
 const dialog = () => document.querySelector("dialog");
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name) as HTMLButtonElement;
@@ -247,6 +255,53 @@ it("says so when a versioned object moved on, and shows the latest one", async (
   expect(dialog()?.textContent).toContain("这一项刚在别处被改过");
   expect(box.checked).toBe(false);
   expect(api.calls).toHaveLength(1);
+});
+
+it.each(["explicit", "live"])("lets nothing close or delete beside a %s write that is out", async (mode) => {
+  const api = fakeApi<Key>();
+  const remove = vi.fn();
+  function Panel() {
+    const explicit = useExplicitSave({ initial: { name: "ci" }, save: api.send });
+    const live = useLiveSave({ initial: { name: "ci" }, write: api.send, reread: api.send.bind(null, { name: "" }) });
+    const write = mode === "explicit" ? explicit : live;
+    return (
+      <EditPanel
+        title="编辑 key"
+        write={write}
+        start={
+          <button type="button" onClick={remove}>
+            {"删除"}
+          </button>
+        }
+        onClose={closed}
+      >
+        <input
+          aria-label="名称"
+          defaultValue="ci"
+          onChange={(e) =>
+            mode === "live" ? live.change(() => ({ name: e.target.value })) : explicit.set({ name: e.target.value })
+          }
+        />
+      </EditPanel>
+    );
+  }
+  render(<Opener overlay={() => <Panel />} />);
+  open();
+  type(field(), "ci-runner");
+  if (mode === "explicit") {
+    act(() => button("保存").click());
+  }
+  expect(api.calls).toHaveLength(1);
+  act(() => {
+    button("删除").click();
+    (document.querySelector('dialog button[aria-label="关闭"]') as HTMLButtonElement).click();
+  });
+  await pressEscape();
+  await settle();
+  expect(remove).not.toHaveBeenCalled();
+  expect(closed).not.toHaveBeenCalled();
+  expect(dialog()?.open).toBe(true);
+  expect(field().matches(":disabled")).toBe(mode === "explicit");
 });
 
 function Disable({ reverse }: { reverse: () => Promise<unknown> }) {

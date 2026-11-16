@@ -149,31 +149,26 @@ it("shows the server's object again when the server refused the change", async (
   expect(save.current.failed).toBeNull();
 });
 
-// The server applied the change but its answer was lost: the next change must be made on the server's object, or it
-// would send the old value back and undo the first.
+// The server may have applied the change, or still be applying it, when its answer is lost. A read can come back
+// before a timed-out write lands, so none confirms it: the next change would send the old value back and undo the first.
+// Nothing more is sent until the page is reloaded.
 it.each([
   { case: "no response", error: failed(0) },
   { case: "a server error", error: failed(500, "internal") },
-])("after $case, reads the object again before sending another change", async ({ error }) => {
-  const applied: Prefs = { revision: 2, balance: true, digest: false };
-  let answer = (_: Prefs) => {};
-  const { api, save } = live(() => new Promise<Prefs>((resolve) => (answer = resolve)));
+])("after $case, sends nothing more and does not trust a read", async ({ error }) => {
+  const { api, reread, save } = live();
   act(() => save.current.change((p) => ({ ...p, balance: true })));
   await act(async () => api.calls[0]?.reject(error));
-  expect(save.current).toMatchObject({ locked: true, saving: true });
+  expect(reread).not.toHaveBeenCalled();
+  expect(save.current).toMatchObject({ locked: true, saving: false, failed: { error, after: "unconfirmed" } });
   act(() => save.current.change((p) => ({ ...p, digest: true })));
   expect(api.calls).toHaveLength(1);
-
-  await act(async () => answer(applied));
-  expect(save.current).toMatchObject({ locked: false, value: applied, failed: { error, after: "reloaded" } });
-  act(() => save.current.change((p) => ({ ...p, digest: true })));
-  expect(api.calls[1]?.body).toEqual({ revision: 2, balance: true, digest: true });
 });
 
-it("sends nothing more when neither the write nor the reading again answered", async () => {
+it("sends nothing more when a 409 cannot be followed by reading again", async () => {
   const { api, save } = live(() => Promise.reject(failed(0)));
   act(() => save.current.change((p) => ({ ...p, balance: true })));
-  await act(async () => api.calls[0]?.reject(failed(0)));
+  await act(async () => api.calls[0]?.reject(failed(409, "stale_revision")));
   await settle();
   expect(save.current).toMatchObject({ locked: true, saving: false, failed: { after: "unconfirmed" } });
   act(() => save.current.change((p) => ({ ...p, digest: true })));

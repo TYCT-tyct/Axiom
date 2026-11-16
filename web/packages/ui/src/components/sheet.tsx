@@ -18,8 +18,11 @@ export type SheetProps = {
   done?: boolean;
   // dismissible lets Esc and a press on the backdrop close it: only while nothing would be lost or is on its way.
   dismissible: boolean;
-  // locked disables every control in the body and the close button, while a write is out.
+  // locked disables every control in the body: while an explicit save is out, or the object is not known.
   locked?: boolean;
+  // busy is a write being out: the close button and the footer's start (a delete) are disabled meanwhile, so nothing
+  // ends the sheet or acts beside the write; a save-on-change body stays editable, its edits queue.
+  busy?: boolean;
   // step changes when the body is replaced by the next one (form, then result), which enters with the step motion.
   step?: number;
   // onSubmit handles the form's submit (Enter, a submit button in the footer) and may close the sheet.
@@ -44,6 +47,7 @@ export function Sheet({
   done = false,
   dismissible,
   locked = false,
+  busy = false,
   step = 0,
   onSubmit,
   start,
@@ -105,13 +109,13 @@ export function Sheet({
       >
         {/* closing locks everything at once, for the time the exit motion plays */}
         <fieldset className={s.lock} disabled={leaving}>
-          <Head id={titleId} title={title} subtitle={subtitle} done={done} locked={locked} close={close} />
+          <Head id={titleId} title={title} subtitle={subtitle} done={done} busy={busy} close={close} />
           <fieldset className={s.lock} disabled={locked}>
             <div key={step} ref={body} className={classes(s.body, step > 0 && s.stepped)}>
               {children}
             </div>
           </fieldset>
-          <Foot start={start} status={status}>
+          <Foot start={start} busy={busy} status={status}>
             {footer(close)}
           </Foot>
         </fieldset>
@@ -128,6 +132,9 @@ function useModal(ref: RefObject<HTMLDialogElement | null>, leaving: boolean, la
   // A layout effect, so it is open before useStep moves the focus into it.
   useLayoutEffect(() => {
     const dialog = ref.current as HTMLDialogElement;
+    // Opening ends a previous unmount's mark below: StrictMode runs this setup, its cleanup and the setup again on the
+    // same sheet, and a mark left set would make it ignore its first submit.
+    latest.current.leaving = false;
     const opener = document.activeElement as HTMLElement | null;
     const root = document.documentElement;
     const overflow = root.style.overflow;
@@ -180,10 +187,19 @@ function useStep(
 }
 
 // Foot holds the footer's actions, after an optional start and a status line read out as it changes.
-function Foot({ start, status, children }: Pick<SheetProps, "start" | "status"> & { children: ReactNode }) {
+function Foot({
+  start,
+  busy,
+  status,
+  children,
+}: Pick<SheetProps, "start" | "status"> & { busy: boolean; children: ReactNode }) {
   return (
     <div className={s.foot}>
-      {start ? <div className={s.start}>{start}</div> : null}
+      {start ? (
+        <fieldset className={s.lock} disabled={busy}>
+          <div className={s.start}>{start}</div>
+        </fieldset>
+      ) : null}
       {status ? (
         <span role="status" className={classes(s.status, status.saved && s.saved)}>
           {status.text}
@@ -200,14 +216,14 @@ function Head({
   title,
   subtitle,
   done,
-  locked,
+  busy,
   close,
 }: {
   id: string;
   title: string;
   subtitle?: string;
   done: boolean;
-  locked: boolean;
+  busy: boolean;
   close: () => void;
 }) {
   const { t } = useTranslation("common");
@@ -225,7 +241,7 @@ function Head({
         {subtitle ? <p className={s.subtitle}>{subtitle}</p> : null}
       </div>
       {done ? null : (
-        <button type="button" className={s.close} aria-label={t("dialog.close")} disabled={locked} onClick={close}>
+        <button type="button" className={s.close} aria-label={t("dialog.close")} disabled={busy} onClick={close}>
           <Glyph name="close" />
         </button>
       )}

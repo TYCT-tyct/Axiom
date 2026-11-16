@@ -140,7 +140,7 @@
   color: var(--t3);
 }
 
-.start + .status {
+.lock + .status {
   margin-right: 0;
 }
 

@@ -42,6 +42,7 @@ export function CreateDialog<D, R>({
       done={shown !== null}
       dismissible={!created && !write.saving && !write.dirty}
       locked={write.saving}
+      busy={write.saving}
       step={shown ? 1 : 0}
       // the result step sends nothing: what was made is made once
       onSubmit={
