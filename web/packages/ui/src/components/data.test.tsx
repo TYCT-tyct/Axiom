@@ -123,6 +123,18 @@ it("covers the list with a panel on a narrow window, and returns focus to its ro
   expect((document.activeElement as HTMLElement).dataset.at).toBe("4");
 });
 
+it("opens the panel when a window with a selected row narrows past the breakpoint", () => {
+  render(<List selected="r4" onSelect={() => {}} />);
+  expect(host.querySelector("dialog")).toBeNull();
+  narrow = true;
+  render(<List selected="r4" onSelect={() => {}} />);
+  expect(host.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+  narrow = false;
+  render(<List selected="r4" onSelect={() => {}} />);
+  expect(host.querySelector("dialog")).toBeNull();
+  expect(text("section[aria-label]")).toContain("detail of row 4");
+});
+
 it("draws a list that shrinks, or empties, under a window measured for the long one", () => {
   const show = (list: typeof rows) =>
     render(

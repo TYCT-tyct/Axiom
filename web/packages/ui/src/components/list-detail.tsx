@@ -75,10 +75,10 @@ function DetailPane({
   const { t } = useTranslation("common");
   const modal = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    if (modal.current && !modal.current.open) {
+    if (overlay && modal.current && !modal.current.open) {
       modal.current.showModal();
     }
-  }, []);
+  }, [overlay]);
   if (!overlay) {
     return (
       <section aria-label={label} className={s.detail}>
