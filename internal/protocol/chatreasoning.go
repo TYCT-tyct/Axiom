@@ -14,11 +14,10 @@ func (s *chatStream) reasoningOf(m *reasoningMember) error {
 	if err != nil {
 		return err
 	}
-	to := int(s.dec.InputOffset())
 	if v == nil {
-		m.nullEnd = to
+		m.nullEnd = int(s.dec.InputOffset())
 	} else {
-		m.value = s.e.data[to-len(v) : to]
+		m.value = valueIn(s.dec, s.e.data, v)
 	}
 	return nil
 }

@@ -1,8 +1,6 @@
 package protocol
 
 import (
-	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // as in inspect.go: events are read token by token, in place
 	"fmt"
 	"strconv"
 
@@ -17,7 +15,7 @@ type converted struct {
 	chatWriter
 	inner upstream
 	walk  reader
-	src   bytes.Buffer
+	src   decoderBuffer
 	data  []byte // the event being converted
 	draft chatDelta
 	out   []byte // the chunk the event becomes, charged and reused
@@ -50,12 +48,8 @@ func (c *converted) begin(data []byte, m *meter) (event, error) {
 	if err != nil {
 		return event{}, err
 	}
-	c.data, c.src = data, *bytes.NewBuffer(data)
-	if c.walk.dec == nil {
-		c.walk.dec = jsontext.NewDecoder(&c.src)
-	} else {
-		c.walk.dec.Reset(&c.src)
-	}
+	c.data = data
+	c.walk.dec = c.src.reset(c.walk.dec, data)
 	c.draft = chatDelta{
 		content: c.draft.content[:0], refusal: c.draft.refusal[:0], reasoning: c.draft.reasoning[:0],
 		details: c.draft.details[:0], tools: c.draft.tools[:0],
@@ -69,8 +63,7 @@ func (c *converted) value() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	to := int(c.walk.dec.InputOffset())
-	return c.data[to-len(v) : to], nil
+	return valueIn(c.walk.dec, c.data, v), nil
 }
 
 // text reads a string as written, as value does, or nil for null.
@@ -179,7 +172,7 @@ func (c *converted) hold(reason string) []byte {
 // made of it. A role of heartbeat or end is the event's own; otherwise the delta decides, and finish, when set, is
 // the chunk to hold.
 func (c *converted) settle(e event, r role, finish []byte) (event, error) {
-	out := event{role: r, usageAt: -1, content: e.content, shape: e.shape, searches: e.searches, toolCalls: e.toolCalls, toolChecks: e.toolChecks, toolErrors: e.toolErrors, usage: e.usage, final: e.final}
+	out := event{role: r, usageAt: -1, eventCounts: e.eventCounts, usage: e.usage, final: e.final}
 	if r == heartbeat { // the client's own keep-alive, which the relay writes
 		return out, nil
 	}
@@ -207,7 +200,7 @@ func (c *converted) settle(e event, r role, finish []byte) (event, error) {
 
 func (c *converted) dropBuffers() {
 	c.inner.dropBuffers()
-	c.walk, c.src, c.data, c.draft, c.out = reader{}, bytes.Buffer{}, nil, chatDelta{}, nil
+	c.walk, c.src, c.data, c.draft, c.out = reader{}, decoderBuffer{}, nil, chatDelta{}, nil
 }
 
 // detailIndex is a reasoning detail's index member: the client merges the entries that share one.
