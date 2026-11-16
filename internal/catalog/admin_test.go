@@ -89,9 +89,8 @@ func TestPriceHistory(t *testing.T) {
 	}
 }
 
-// TestSourceSwitchHoldsRequestPrices: switching a source writes a new schedule through the same compatibility gate as
-// a publish, so a request price cannot enter through the source switch while an older node may still read the snapshot.
-func TestSourceSwitchHoldsRequestPrices(t *testing.T) {
+// TestSourceSwitchPublishesRequestPrices checks a per-request price alongside token prices.
+func TestSourceSwitchPublishesRequestPrices(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	id, _ := s.seed("acme/request-switch", basicSpec, basic)
@@ -100,8 +99,8 @@ func TestSourceSwitchHoldsRequestPrices(t *testing.T) {
 		Op: op(), Model: id, Rev: 0, Source: catalog.SourceManual, Bases: s.bases(t.Context(), id),
 		Prices: []catalog.SourcePrice{{Schedule: raw(request), Evidence: raw(evidence)}},
 	})
-	if !errors.Is(err, catalog.ErrRequestPrices) {
-		t.Fatalf("source switch: %v, want ErrRequestPrices", err)
+	if err != nil {
+		t.Fatalf("source switch: %v", err)
 	}
 }
 

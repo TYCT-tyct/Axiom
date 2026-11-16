@@ -56,10 +56,8 @@ type Config struct {
 	Holder string
 	// SweepEvery is how often suppliers that are due are looked for. Queue capacity decides when they start.
 	SweepEvery time.Duration
-	// DirectFormats writes embeddings and rerank; false until every node reads them.
-	DirectFormats bool
-	Now           func() time.Time
-	Logger        *slog.Logger
+	Now        func() time.Time
+	Logger     *slog.Logger
 }
 
 // SyncArgs is the job of one round of one supplier. At most one is waiting or running per supplier, and a finished one
@@ -118,7 +116,7 @@ func New(cfg Config) (*Schedule, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Schedule{cfg: cfg, node: node, settings: settings(cfg.DirectFormats)}
+	s := &Schedule{cfg: cfg, node: node, settings: settings()}
 	if err := river.AddWorkerSafely(cfg.Queue.Workers(), river.WorkFunc(s.workSync)); err != nil {
 		return nil, err
 	}
@@ -141,10 +139,9 @@ func (cfg Config) check() error {
 }
 
 // settings are the engine's defaults, with the backoff spread by a tenth so that suppliers that failed together do not
-// try again together, and the node's gate on the direct formats.
-func settings(directFormats bool) syncer.Settings {
+// try again together.
+func settings() syncer.Settings {
 	s := syncer.Defaults()
-	s.DirectFormats = directFormats
 	s.Jitter = func(d time.Duration) time.Duration { return d + rand.N(d/10+1) } //nolint:gosec // spreads retries in time; nothing depends on it being unpredictable
 	return s
 }
