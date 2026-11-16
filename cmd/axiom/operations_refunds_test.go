@@ -148,7 +148,7 @@ func (f refundFixture) proposedRefund() operationsapi.Operation {
 	rec := f.proposeRefund(f.token, "5000000000", key, "")
 	expectAdmin(t, "the proposal", rec, http.StatusAccepted, "")
 	op := agentOperation(t, rec)
-	if op.Risk != operationsapi.Refund || op.Approval == nil {
+	if op.Risk != adminapi.OperationRiskRefund || op.Approval == nil {
 		t.Fatalf("the proposal: %s", rec.Body)
 	}
 	if rec := f.proposeRefund(f.token, "5000000000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *op.OperationId {
@@ -220,7 +220,7 @@ func TestOperationsRefundRefusals(t *testing.T) {
 	rec = f.agentSend(f.token, http.MethodPost, "/orders/ord_00000000000000000000000000/refunds", `{"amount":{"amount":"1000000000","currency":"USD"},"reason":"r"}`, idempotent(newKey()))
 	expectAdmin(t, "no such order", rec, http.StatusNotFound, codeNotFound)
 	rec = f.proposeRefund(f.token, "1000000000", newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStatePendingApproval {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStatePendingApproval {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	f.run(`UPDATE payments.merchants SET refund_enabled = false`)

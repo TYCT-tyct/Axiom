@@ -95,10 +95,9 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	if err := <-stopped; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := get(t, n.ops+"/livez"); err == nil {
-		t.Error("the probes still answer after shutdown")
-	}
+	// Shutdown may finish before a Serve goroutine registers; its deferred listener close runs before it returns.
 	n.awaitClosed(t)
+	assertListenersClosed(t, n.servers)
 }
 
 // TestDrainRefusesNewRequests: while the node drains, a request that would start new work gets a retryable 503 from
@@ -240,35 +239,29 @@ func TestListenReleasesWhatItBound(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	free, logger := freePort(t), slog.New(slog.DiscardHandler)
+	logger := slog.New(slog.DiscardHandler)
 	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", free, "public", httpserver.New(http.NotFoundHandler(), logger), nil, false},
+		{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", "public", httpserver.New(http.NotFoundHandler(), logger), nil, false},
 		{"AXIOM_PROBES_ADDR", taken.Addr().String(), "ops", httpserver.New(http.NotFoundHandler(), logger), nil, false},
 	}
+	t.Cleanup(func() { closeListeners(servers) })
 	if err := listen(t.Context(), servers); err == nil {
 		t.Fatal("listen succeeded on a taken address")
 	}
-	again, err := new(net.ListenConfig).Listen(t.Context(), "tcp", free)
-	if err != nil {
-		t.Fatalf("the first address stayed bound: %v", err)
-	}
-	if err := again.Close(); err != nil {
-		t.Error(err)
-	}
+	assertListenersClosed(t, servers[:1])
 }
 
-// freePort returns an address nothing listens on right now.
-func freePort(t *testing.T) string {
+// assertListenersClosed checks the handles themselves: after Close, another process may own their old addresses.
+func assertListenersClosed(t *testing.T, servers []*listening) {
 	t.Helper()
-	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for _, s := range servers {
+		if s.listener == nil {
+			t.Fatalf("%s: no listener was claimed", s.variable)
+		}
+		if err := s.listener.Close(); !errors.Is(err, net.ErrClosed) {
+			t.Errorf("%s (%s) was left open: Close = %v", s.variable, s.listener.Addr(), err)
+		}
 	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
 }
 
 // waitFor polls until done holds, for at most five seconds.

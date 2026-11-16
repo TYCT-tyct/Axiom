@@ -58,7 +58,7 @@ type listening struct {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig())
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig(), func([]*listening) {})
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -69,12 +69,13 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 // serveWith lets a test capture its recorder, opt into price syncing with local datasets, and choose the node's
 // in-process limits. A nil prices constructor disables the periodic price job, so tests of the listeners and call path
 // never download the production datasets; a test world passes limits sized for the shared machines it runs on, not
-// production's.
+// production's. bound observes the claimed listeners before the database check; tests read their actual addresses
+// and check closure on the same handles, without trying to reclaim ports another process may have taken.
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
-	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config,
+	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config, bound func([]*listening),
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -108,6 +109,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeListeners(servers)
+	bound(servers)
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
@@ -323,7 +325,6 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, cfg nodeSettings, co
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: console.master, Egress: exit, Queue: queue, Logger: logger,
-		DirectFormats: cfg.directFormats,
 	}); err != nil {
 		return nil, nil, nil, err
 	}
