@@ -6,7 +6,7 @@ import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
 import { compare } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
-import { type Stage, stage } from "./design/stage.ts";
+import { canvasesReady, type Stage, stage } from "./design/stage.ts";
 
 const root = join(import.meta.dirname, "../packages/boards");
 const design = process.env.AXIOM_DESIGN_DIR;
@@ -84,6 +84,7 @@ for (const board of cases)
         try {
           await expect(reference.page.locator(board.selector).first()).toBeAttached();
           await fontsLoaded(reference.page, reference.fonts);
+          await Promise.all([canvasesReady(page), canvasesReady(reference.page)]);
           await page.clock.runFor(5000);
           await reference.page.clock.runFor(5000);
           const result = await compare(

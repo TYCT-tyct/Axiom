@@ -44,8 +44,9 @@ function markup(context: Element, html: string) {
       .reverse()
       .map((t) => `</${t}>`)
       .join("");
-  const doc = new DOMParser().parseFromString(source, "text/html");
-  const parent = tags.length ? (doc.querySelector(tags.join(" > ")) as Element) : doc.body;
+  const doc = new DOMParser().parseFromString(`<template>${source}</template>`, "text/html");
+  const template = doc.querySelector("template") as HTMLTemplateElement;
+  const parent = tags.length ? (template.content.querySelector(tags.join(" > ")) as Element) : template.content;
   const styles: [HTMLElement | SVGElement, string][] = [];
   for (const el of parent.querySelectorAll<HTMLElement | SVGElement>("[style]")) {
     styles.push([el, el.getAttribute("style") ?? ""]);
@@ -54,7 +55,8 @@ function markup(context: Element, html: string) {
   return { nodes: [...parent.childNodes], styles };
 }
 
-// Authored markup is parsed inertly, with its table/SVG context. Remove attributes before adoption, then use CSSOM.
+// Template contents have their own inert document. DOMParser inherits the page's CSP and reports style attributes
+// during parsing, before they can be removed. Strip them inside the template, then adopt nodes and use CSSOM.
 // Callers still own escaping interpolated text: this adapter preserves the board's behavior, not a sanitizer API.
 export function boardHTML(target: Element, html: string, mode: "inner" | "outer" | InsertPosition = "inner") {
   const context = ["outer", "beforebegin", "afterend"].includes(mode) ? (target.parentElement as Element) : target;

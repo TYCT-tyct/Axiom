@@ -1,6 +1,26 @@
 // @vitest-environment jsdom
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { boardCSS, boardHTML, boardStyle } from "./dom.ts";
+
+it("keeps style attributes out of the parsed document's active tree", () => {
+  const parse = DOMParser.prototype.parseFromString;
+  const activeStyles: string[] = [];
+  const spy = vi.spyOn(DOMParser.prototype, "parseFromString").mockImplementation(function (this: DOMParser, ...args) {
+    const doc = parse.apply(this, args);
+    // Capture at parse time: removing an attribute later cannot undo a CSP violation already reported by the parser.
+    for (const node of doc.querySelectorAll("[style]")) activeStyles.push(node.getAttribute("style") ?? "");
+    return doc;
+  });
+  try {
+    const target = document.createElement("div");
+    boardHTML(target, '<span style="--w: var(--w0);"><b style="font-weight:400">A</b></span>');
+    expect(activeStyles).toEqual([]);
+    expect(target.querySelector("span")?.style.getPropertyValue("--w")).toBe("var(--w0)");
+    expect(target.querySelector("b")?.style.fontWeight).toBe("400");
+  } finally {
+    spy.mockRestore();
+  }
+});
 
 it("preserves table and SVG structure, text and styles without assigning style attributes", () => {
   const row = document.createElement("tr");

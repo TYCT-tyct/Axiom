@@ -49,6 +49,39 @@ export async function stage(page: Page, view: Stage) {
   await page.clock.install({ time: view.time.getTime() - loading });
 }
 
+// Canvas engines resize and reschedule their first frame in native observers, outside Playwright's clock. Let those
+// initial deliveries finish while the clock is paused, so they cannot interrupt one side's simulated animation time.
+export async function canvasesReady(page: Page) {
+  await page.evaluate(async () => {
+    await Promise.all(
+      [...document.querySelectorAll("canvas")].map(
+        (canvas) =>
+          new Promise<void>((resolve) => {
+            let sized = false;
+            let intersected = false;
+            const ready = () => {
+              if (sized && intersected) {
+                resize.disconnect();
+                intersection.disconnect();
+                resolve();
+              }
+            };
+            const resize = new ResizeObserver(() => {
+              sized = true;
+              ready();
+            });
+            const intersection = new IntersectionObserver(() => {
+              intersected = true;
+              ready();
+            });
+            resize.observe(canvas);
+            intersection.observe(canvas);
+          }),
+      ),
+    );
+  });
+}
+
 // How long the clock runs before the shot: entrances and transitions driven by timers or animation frames reach their
 // end state. CSS animations and transitions are not on this clock; freeze stops them.
 const settleFor = 5_000;

@@ -71,6 +71,49 @@ export async function shot(page: Page, blanks: Rect[] = []) {
   return image;
 }
 
+// Keep the differing locations in the job log even when artifact storage is unavailable. Red is Playwright's
+// default diff colour; anti-aliased pixels are yellow and excluded from these bounds, as from the assertion.
+async function diffLocations(page: Page, diff: string) {
+  return page.evaluate(
+    async (bytes) => {
+      const bitmap = await createImageBitmap(new Blob([Uint8Array.from(bytes)], { type: "image/png" }));
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      const ctx = canvas.getContext("2d") as CanvasRenderingContext2D;
+      ctx.drawImage(bitmap, 0, 0);
+      bitmap.close();
+      const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      let left = canvas.width,
+        top = canvas.height,
+        right = -1,
+        bottom = -1;
+      const points: { x: number; y: number; elements: string[] }[] = [];
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] !== 255 || data[i + 1] !== 0 || data[i + 2] !== 0) continue;
+        const x = (i / 4) % canvas.width,
+          y = Math.floor(i / 4 / canvas.width);
+        left = Math.min(left, x);
+        top = Math.min(top, y);
+        right = Math.max(right, x);
+        bottom = Math.max(bottom, y);
+        if (points.length === 0) {
+          points.push({
+            x,
+            y,
+            elements: document
+              .elementsFromPoint(x, y)
+              .slice(0, 3)
+              .map((el) => `${el.localName}.${[...el.classList].join(".")}`),
+          });
+        }
+      }
+      return { left, top, right, bottom, points };
+    },
+    [...readFileSync(diff)],
+  );
+}
+
 // compare shoots both sides with the scene's ruled regions blanked, writes board.png and page.png to the scene's
 // directory (the board shot is the snapshot Playwright compares with), and compares them with Playwright's own image
 // comparison. On a difference it copies Playwright's diff image beside them. It never throws for a difference: the
@@ -107,6 +150,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     if (diff) {
       result.diff = join(dirname(reference), "diff.png");
       writeFileSync(result.diff, readFileSync(diff));
+      console.info(`${key}: diff locations ${JSON.stringify(await diffLocations(page, diff))}`);
     }
   }
   return result;

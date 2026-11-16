@@ -1,15 +1,56 @@
 // @vitest-environment jsdom
+import { setImmediate } from "node:timers/promises";
 import type { Page } from "@playwright/test";
 import { afterEach, expect, it, vi } from "vitest";
 import { usedFaces } from "../e2e/design/fonts.ts";
-import { stage } from "../e2e/design/stage.ts";
+import { canvasesReady, stage } from "../e2e/design/stage.ts";
 
 vi.mock("../packages/boards/fonts.ts", () => ({ sourceFont: vi.fn() }));
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   document.body.replaceChildren();
   Reflect.deleteProperty(window, "AxiomOceanOrig");
+});
+
+it("waits for both native canvas observers before advancing scene time", async () => {
+  document.body.innerHTML = "<canvas></canvas>";
+  let resize = () => {};
+  let intersect = () => {};
+  const disconnect = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: () => void) {
+        resize = callback;
+      }
+      observe() {}
+      disconnect = disconnect;
+    },
+  );
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      constructor(callback: () => void) {
+        intersect = callback;
+      }
+      observe() {}
+      disconnect = disconnect;
+    },
+  );
+  const page = { evaluate: async (fn: () => unknown) => fn() } as unknown as Page;
+  let ready = false;
+  const pending = canvasesReady(page).then(() => {
+    ready = true;
+  });
+  resize();
+  await setImmediate();
+  expect(ready).toBe(false);
+  intersect();
+  await pending;
+  expect(ready).toBe(true);
+  expect(disconnect).toHaveBeenCalledTimes(2);
 });
 
 it("checks text input fonts without treating checkbox chrome as text", async () => {
