@@ -47,21 +47,32 @@ func TestBestQualityOrdersByTheScore(t *testing.T) {
 	}
 }
 
-// TestBestQualityUnknownByPrice: among never-measured endpoints the order is balanced's price-weighted draw, not their
-// IDs, so an unknown endpoint is treated as neutral rather than as a score of zero that ties them all.
-func TestBestQualityUnknownByPrice(t *testing.T) {
+// TestUnmeasuredStrategiesByPrice: unknown endpoints retain Balanced's price-weighted draw.
+func TestUnmeasuredStrategiesByPrice(t *testing.T) {
 	t.Parallel()
-	half := func(e *routing.Endpoint) { e.Price.Schedule = schedule(t, "0.0000005", "0.000001", "0.00000005") }
-	h := newHarness(t, routing.Config{}, bestQualityPreset(),
-		endpoint(t, 1, scored(1, 0)), endpoint(t, 2, scored(1, 0)), endpoint(t, 3, scored(1, 0), half))
-	const n = 20000
-	firsts := map[routing.EndpointID]int{}
-	for range n {
-		firsts[first(h.plan(input()))]++
-	}
-	for e, want := range map[routing.EndpointID]float64{ep(1): 0.25, ep(2): 0.25, ep(3): 0.5} {
-		if got := float64(firsts[e]) / n; math.Abs(got-want) > 0.02 {
-			t.Errorf("endpoint %v first %.3f of the time, want %.2f", e, got, want)
-		}
+	for _, c := range []struct {
+		name    string
+		preset  routing.Preset
+		unknown func(*routing.Endpoint)
+	}{
+		{"best quality", bestQualityPreset(), scored(1, 0)},
+		{"fastest", fastestPreset(), unmeasured},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			half := func(e *routing.Endpoint) { e.Price.Schedule = schedule(t, "0.0000005", "0.000001", "0.00000005") }
+			h := newHarness(t, routing.Config{}, c.preset,
+				endpoint(t, 1, c.unknown), endpoint(t, 2, c.unknown), endpoint(t, 3, c.unknown, half))
+			const n = 20000
+			firsts := map[routing.EndpointID]int{}
+			for range n {
+				firsts[first(h.plan(input()))]++
+			}
+			for e, want := range map[routing.EndpointID]float64{ep(1): 0.25, ep(2): 0.25, ep(3): 0.5} {
+				if got := float64(firsts[e]) / n; math.Abs(got-want) > 0.02 {
+					t.Errorf("endpoint %v first %.3f of the time, want %.2f", e, got, want)
+				}
+			}
+		})
 	}
 }

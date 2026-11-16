@@ -35,17 +35,29 @@ func keyList(total *int) func(adapter.Request) adapter.Response {
 
 func TestAKeyListingResumesAcrossManagers(t *testing.T) {
 	t.Parallel()
-	for _, shrink := range []bool{false, true} {
-		t.Run(fmt.Sprint(shrink), func(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		total, blockedPage int
+		shrink, reopen     bool
+		want               []int
+	}{
+		{"resume", 250, 2, false, true, []int{1, 2, 2, 3}},
+		{"shrink", 250, 2, true, true, []int{1, 2, 2, 1}},
+		{"past a window", 9050, 90, false, false, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			resumeKeys(t, shrink)
+			asked := resumeKeys(t, c.total, c.blockedPage, c.shrink, c.reopen)
+			if c.want != nil && !slices.Equal(asked, c.want) {
+				t.Fatalf("pages %v, want %v", asked, c.want)
+			}
 		})
 	}
 }
 
-func resumeKeys(t *testing.T, shrink bool) {
+func resumeKeys(t *testing.T, total, blockedPage int, shrink, reopen bool) []int {
 	t.Helper()
-	total, asked, limited := 250, []int{}, true
+	asked, limited := []int{}, true
 	serve := keyList(&total)
 	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
 		page, err := keyPageOf(r.Path)
@@ -53,14 +65,15 @@ func resumeKeys(t *testing.T, shrink bool) {
 			return adapter.Response{}, err
 		}
 		asked = append(asked, page)
-		if limited && page == 2 {
+		if limited && page == blockedPage {
 			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
 		}
 		return serve(r), nil
 	})
 	openManager := func() adapter.Manager { return manager0(t, srv, login(t, epoch.Add(24*time.Hour))) }
 	until := epoch.Add(time.Minute)
-	first, err := openManager().Keys(t.Context(), nil)
+	m := openManager()
+	first, err := m.Keys(t.Context(), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,19 +81,18 @@ func resumeKeys(t *testing.T, shrink bool) {
 		t.Fatalf("no resumable position: %+v", first)
 	}
 	limited = false
-	want := []int{1, 2, 2, 3}
 	if shrink {
 		total = 50
-		want = []int{1, 2, 2, 1}
 	}
-	page, err := openManager().Keys(t.Context(), first.Next)
+	if reopen {
+		m = openManager()
+	}
+	page, err := m.Keys(t.Context(), first.Next)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertKeyListing(t, page, total)
-	if !slices.Equal(asked, want) {
-		t.Fatalf("pages %v, want %v", asked, want)
-	}
+	return asked
 }
 
 func assertKeyListing(t *testing.T, page adapter.Page[adapter.KeyState], total int) {
@@ -177,34 +189,4 @@ func TestLegacyKeyListingRestartsBeforeProjectingPolicies(t *testing.T) {
 			t.Fatalf("key %s lost its unrestricted policy", key.Ref)
 		}
 	}
-}
-
-// TestAKeyListingResumesPastAWindow: 9,050 keys need 91 pages, more than one 90-request window. The first run stops at
-// page 90 with the names of the pages it read; the second finishes and returns every key, so the sync can onboard.
-func TestAKeyListingResumesPastAWindow(t *testing.T) {
-	t.Parallel()
-	total := 9050
-	limited := true
-	serve := keyList(&total)
-	srv := newServer(func(r adapter.Request) (adapter.Response, error) {
-		page, err := keyPageOf(r.Path)
-		if err != nil {
-			return adapter.Response{}, err
-		}
-		if limited && page == 90 {
-			return adapter.Response{}, adapter.Blocked{Until: epoch.Add(time.Minute)}
-		}
-		return serve(r), nil
-	})
-	m := manager0(t, srv, login(t, epoch.Add(24*time.Hour)))
-	first, err := m.Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 {
-		t.Fatalf("first run: done %v, position %d, %v; want a resumable position", first.Done, len(first.Next), err)
-	}
-	limited = false
-	page, err := m.Keys(t.Context(), first.Next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertKeyListing(t, page, total)
 }
