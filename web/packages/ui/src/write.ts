@@ -1,4 +1,4 @@
-import { ApiError } from "@axiom/api";
+import { ApiError, refused } from "@axiom/api";
 import { useRef, useState } from "react";
 
 // The two ways a console form writes (docs/frontend.md「写入策略」). The contract has no PATCH and a PUT replaces the
@@ -74,19 +74,24 @@ export type LiveSave<T> = {
   // value is the object the server last returned with the changes still on their way applied to it.
   value: T;
   // change saves one edit. Edits are sent one at a time, each applied to the object the previous write returned, so
-  // two quick changes both land and neither is sent on a stale copy.
+  // two quick changes both land and neither is sent on a stale copy. While locked, a change is not taken.
   change: (edit: (current: T) => T) => void;
   saving: boolean;
   // saved is the last write succeeding, until the next change.
   saved: boolean;
-  // failure is why a write failed: it and the edits queued behind it are dropped, so value is the server's again.
-  failure: unknown;
-  // stale is a 409 stale_revision: someone changed the object meanwhile, so it was read again and the edits made on
-  // the old copy were not sent.
-  stale: boolean;
+  // failed is why a write failed and where that left the object; the edits queued behind it are dropped.
+  failed: Failed | null;
+  // locked is the object being read again after a write whose result is unknown, or that read failing too: until the
+  // server's object is known, no edit may be sent on a copy that may be wrong.
+  locked: boolean;
 };
 
-type Outcome = { saved?: boolean; failure?: unknown; stale?: boolean };
+// After a failed write: reverted when the server refused it (a 4xx, so nothing was done) and value is the object as
+// it was; reloaded when it may have been done or someone else changed the object (409 stale_revision), so the object
+// was read again; unconfirmed when that read failed too, so nothing more can be sent.
+export type Failed = { error: unknown; after: "reverted" | "reloaded" | "unconfirmed" };
+
+type View<T> = Omit<LiveSave<T>, "mode" | "change">;
 
 export function useLiveSave<T>({
   initial,
@@ -97,41 +102,30 @@ export function useLiveSave<T>({
   // write sends the object with the edit applied (the whole body, or the one value an endpoint takes) and returns
   // the object as the server now has it.
   write: (next: T) => Promise<T>;
-  // reread fetches the object again; given only for a body with a version, whose 409 stale_revision it answers.
-  reread?: () => Promise<T>;
+  // reread fetches the object as the server has it now, after a write whose result is unknown or a 409.
+  reread: () => Promise<T>;
 }): LiveSave<T> {
   const confirmed = useRef(initial);
   const queue = useRef<((current: T) => T)[]>([]);
   const running = useRef(false);
-  const [view, setView] = useState({
+  const locked = useRef(false);
+  const [view, setView] = useState<View<T>>({
     value: initial,
     saving: false,
     saved: false,
-    failure: null as unknown,
-    stale: false,
+    failed: null,
+    locked: false,
   });
 
-  const publish = (outcome: Outcome) =>
+  const publish = (outcome: Partial<View<T>>) =>
     setView({
       value: queue.current.reduce((value, edit) => edit(value), confirmed.current),
       saving: queue.current.length > 0,
       saved: false,
-      failure: null,
-      stale: false,
+      failed: null,
+      locked: locked.current,
       ...outcome,
     });
-
-  const recover = async (error: unknown): Promise<Outcome> => {
-    if (!reread || !(error instanceof ApiError) || error.code !== "stale_revision") {
-      return { failure: error };
-    }
-    try {
-      confirmed.current = await reread();
-      return { stale: true };
-    } catch (failure) {
-      return { failure };
-    }
-  };
 
   const drain = async () => {
     running.current = true;
@@ -142,7 +136,15 @@ export function useLiveSave<T>({
         publish({ saved: queue.current.length === 0 });
       } catch (error) {
         queue.current = [];
-        publish(await recover(error));
+        const result = await afterFailure(error, reread, () => {
+          locked.current = true;
+          publish({ saving: true });
+        });
+        if ("current" in result) {
+          confirmed.current = result.current;
+          locked.current = false;
+        }
+        publish({ failed: result.failed });
       }
     }
     running.current = false;
@@ -152,6 +154,9 @@ export function useLiveSave<T>({
     mode: "live",
     ...view,
     change: (edit) => {
+      if (locked.current) {
+        return;
+      }
       queue.current.push(edit);
       publish({});
       if (!running.current) {
@@ -159,4 +164,24 @@ export function useLiveSave<T>({
       }
     },
   };
+}
+
+// afterFailure says where a failed write left the object. A refusal proves nothing was done; a stale revision proves
+// the copy is old; anything else (no answer, a 5xx, an unreadable response) may have been done. So only a refusal
+// keeps the confirmed object; otherwise it is read again, with edits held off (reading) until it is known.
+async function afterFailure<T>(
+  error: unknown,
+  reread: () => Promise<T>,
+  reading: () => void,
+): Promise<{ failed: Failed } | { failed: Failed; current: T }> {
+  const stale = error instanceof ApiError && error.code === "stale_revision";
+  if (refused(error) && !stale) {
+    return { failed: { error, after: "reverted" } };
+  }
+  reading();
+  try {
+    return { failed: { error, after: "reloaded" }, current: await reread() };
+  } catch {
+    return { failed: { error, after: "unconfirmed" } };
+  }
 }

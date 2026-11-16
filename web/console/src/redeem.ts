@@ -1,5 +1,4 @@
-import { ApiError, type Schemas } from "@axiom/api";
-import { refused } from "@axiom/app";
+import { ApiError, refused, type Schemas } from "@axiom/api";
 
 // What the redeem form sends: the code as typed; the server removes its dashes and spaces and ignores case.
 export type RedeemRequest = Schemas["RedeemCodeRequest"];

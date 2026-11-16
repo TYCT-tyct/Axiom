@@ -1,4 +1,4 @@
-import { ApiError } from "@axiom/api";
+import { ApiError, refused } from "@axiom/api";
 
 // Where a change dialog stands with the one change it is for, which decides what its button does next. The server does
 // a change at most once per Idempotency-Key, and only for the request first sent with it: the same key with another
@@ -51,12 +51,4 @@ export function failedFrom<Request>(change: (attempt: Attempt<Request>) => void,
     setFailure(error);
     change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
   };
-}
-
-// refused is the only answer that proves a change was not done: the server's own refusal, a 4xx with its error body. No
-// answer, a server failure, a response that could not be read (a proxy's page after the change was made) and a success
-// without its result all leave it possible that it was. A form that keeps a secret out of its stored attempt applies the
-// same rule with it.
-export function refused(error: unknown) {
-  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
 }

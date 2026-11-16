@@ -1,3 +1,4 @@
+import { refused } from "@axiom/api";
 import { type CSSProperties, createContext, type ReactNode, useContext, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { classes } from "../classes";
@@ -48,6 +49,7 @@ const stay = { plain: 2600, action: 5200, after: 1600 };
 function Toast({ text, bad, action, onGone }: Omit<Shown, "id"> & { onGone: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [leaving, setLeaving] = useState(false);
+  const ran = useRef(false);
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const ms = action ? stay.action : stay.plain;
   const hold = () => clearTimeout(timer.current);
@@ -85,7 +87,13 @@ function Toast({ text, bad, action, onGone }: Omit<Shown, "id"> & { onGone: () =
           <button
             type="button"
             className={s.action}
+            disabled={leaving}
             onClick={() => {
+              // once: a second press before the toast is gone would send the request again
+              if (ran.current) {
+                return;
+              }
+              ran.current = true;
               hold();
               setLeaving(true);
               action.run();
@@ -121,5 +129,7 @@ export function useUndo() {
       },
     });
   };
-  return { offer, failed: failure ? <SubmitFailed error={failure} next={t("toast.undoFailed")} /> : null };
+  // Only a refusal proves the reverse request was not done; with no answer or a server failure it may have been.
+  const next = refused(failure) ? t("toast.undoFailed") : t("toast.undoUnknown");
+  return { offer, failed: failure ? <SubmitFailed error={failure} next={next} /> : null };
 }

@@ -105,7 +105,11 @@ function ExplicitDemo({ close }: { close: () => void }) {
 }
 
 function LiveDemo({ close }: { close: () => void }) {
-  const write = useLiveSave({ initial: { balance: true, digest: false }, write: answer });
+  const write = useLiveSave({
+    initial: { balance: true, digest: false },
+    write: answer,
+    reread: () => answer({ balance: true, digest: false }),
+  });
   return (
     <EditPanel title={text.editLive} write={write} onClose={close}>
       <Stack gap={12}>

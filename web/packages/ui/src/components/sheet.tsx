@@ -56,9 +56,12 @@ export function Sheet({
   const body = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const [leaving, setLeaving] = useState(false);
-  const close = () => setLeaving(true);
   const latest = useRef({ dismissible, leaving, onClose });
   latest.current = { dismissible, leaving, onClose };
+  const close = () => {
+    latest.current.leaving = true;
+    setLeaving(true);
+  };
   useModal(ref, leaving, latest);
   useStep(ref, body, step, side);
   return (
@@ -94,24 +97,24 @@ export function Sheet({
         noValidate
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit?.(close);
+          // Once closing has begun nothing more is sent: what it would make could not be shown.
+          if (!latest.current.leaving) {
+            onSubmit?.(close);
+          }
         }}
       >
-        <Head id={titleId} title={title} subtitle={subtitle} done={done} locked={locked} close={close} />
-        <fieldset className={s.lock} disabled={locked}>
-          <div key={step} ref={body} className={classes(s.body, step > 0 && s.stepped)}>
-            {children}
-          </div>
+        {/* closing locks everything at once, for the time the exit motion plays */}
+        <fieldset className={s.lock} disabled={leaving}>
+          <Head id={titleId} title={title} subtitle={subtitle} done={done} locked={locked} close={close} />
+          <fieldset className={s.lock} disabled={locked}>
+            <div key={step} ref={body} className={classes(s.body, step > 0 && s.stepped)}>
+              {children}
+            </div>
+          </fieldset>
+          <Foot start={start} status={status}>
+            {footer(close)}
+          </Foot>
         </fieldset>
-        <div className={s.foot}>
-          {start ? <div className={s.start}>{start}</div> : null}
-          {status ? (
-            <span role="status" className={classes(s.status, status.saved && s.saved)}>
-              {status.text}
-            </span>
-          ) : null}
-          {footer(close)}
-        </div>
       </form>
     </dialog>
   );
@@ -174,6 +177,21 @@ function useStep(
       });
     }
   }, [ref, body, step, side]);
+}
+
+// Foot holds the footer's actions, after an optional start and a status line read out as it changes.
+function Foot({ start, status, children }: Pick<SheetProps, "start" | "status"> & { children: ReactNode }) {
+  return (
+    <div className={s.foot}>
+      {start ? <div className={s.start}>{start}</div> : null}
+      {status ? (
+        <span role="status" className={classes(s.status, status.saved && s.saved)}>
+          {status.text}
+        </span>
+      ) : null}
+      {children}
+    </div>
+  );
 }
 
 // Head is the title with its line, and the close button, or on a result the check in its place.

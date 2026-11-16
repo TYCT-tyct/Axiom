@@ -1,6 +1,7 @@
+import { ApiError } from "@axiom/api";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import type { ExplicitSave, LiveSave } from "../write";
+import type { ExplicitSave, Failed, LiveSave } from "../write";
 import { ActionButton } from "./action-button";
 import { Note } from "./note";
 import { Sheet, SubmitActions } from "./sheet";
@@ -9,13 +10,13 @@ import { SubmitFailed } from "./submit-failed";
 // What EditPanel reads of a write strategy (write.ts); the business object chose the strategy.
 type PanelWrite =
   | Pick<ExplicitSave<unknown, unknown>, "mode" | "dirty" | "saving" | "failure" | "save">
-  | Pick<LiveSave<unknown>, "mode" | "saving" | "saved" | "failure" | "stale">;
+  | Pick<LiveSave<unknown>, "mode" | "saving" | "saved" | "failed" | "locked">;
 
 // EditPanel edits an object in a panel down the right edge, a sheet from the bottom on a phone. It only presents: the
 // page passes the write strategy and renders the fields from it. With explicit save the footer is Cancel and Save, the
 // fields are locked while the save is out, and it closes once saved; with save on change the footer says whether the
 // changes have landed and Done closes it. Esc and the backdrop close it only while nothing unsaved would be lost and
-// no write is out. start is a link at the start of the footer, such as delete.
+// no write is out; while the object is unconfirmed after a write whose result is unknown, the fields are locked. start is a link at the start of the footer, such as delete.
 export function EditPanel({
   title,
   subtitle,
@@ -39,7 +40,7 @@ export function EditPanel({
       subtitle={subtitle}
       side
       dismissible={!write.saving && !(explicit && write.dirty)}
-      locked={explicit && write.saving}
+      locked={explicit ? write.saving : write.locked}
       onSubmit={
         explicit
           ? (close) => {
@@ -73,9 +74,24 @@ export function EditPanel({
         )
       }
     >
-      {write.failure ? <SubmitFailed error={write.failure} next={explicit ? undefined : t("failed.reverted")} /> : null}
-      {!explicit && write.stale ? <Note title={t("overlay.staleTitle")}>{t("overlay.staleBody")}</Note> : null}
+      {explicit ? (
+        write.failure ? (
+          <SubmitFailed error={write.failure} />
+        ) : null
+      ) : write.failed ? (
+        <LiveFailed failed={write.failed} />
+      ) : null}
       {children}
     </Sheet>
   );
+}
+
+// LiveFailed says what a failed change left: someone else's change, shown now; the server's object again; or, when the
+// result is unknown, the object read again or nothing known until the page is reloaded.
+function LiveFailed({ failed }: { failed: Failed }) {
+  const { t } = useTranslation("common");
+  if (failed.after === "reloaded" && failed.error instanceof ApiError && failed.error.code === "stale_revision") {
+    return <Note title={t("overlay.staleTitle")}>{t("overlay.staleBody")}</Note>;
+  }
+  return <SubmitFailed error={failed.error} next={t(`failed.${failed.after}`)} />;
 }

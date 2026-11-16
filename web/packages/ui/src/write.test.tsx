@@ -2,7 +2,7 @@
 import { ApiError } from "@axiom/api";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { type ExplicitSave, type LiveSave, useExplicitSave, useLiveSave } from "./write";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -92,23 +92,30 @@ it("counts a change typed back as no change", () => {
 type Prefs = { revision: number; balance: boolean; digest: boolean };
 const initial: Prefs = { revision: 1, balance: false, digest: false };
 
-it("sends two quick changes one after another, the second on what the first returned", async () => {
+// live mounts useLiveSave on a fake API; reread answers with what the server holds now, or fails.
+function live(server: () => Promise<Prefs> = () => Promise.resolve(initial)) {
   const api = fakeApi<Prefs>();
-  const live = mount<LiveSave<Prefs>>(() => useLiveSave({ initial, write: api.send }));
+  const reread = vi.fn(server);
+  const save = mount<LiveSave<Prefs>>(() => useLiveSave({ initial, write: api.send, reread }));
+  return { api, reread, save };
+}
+
+it("sends two quick changes one after another, the second on what the first returned", async () => {
+  const { api, save } = live();
   act(() => {
-    live.current.change((p) => ({ ...p, balance: true }));
-    live.current.change((p) => ({ ...p, digest: true }));
+    save.current.change((p) => ({ ...p, balance: true }));
+    save.current.change((p) => ({ ...p, digest: true }));
   });
   expect(api.calls).toHaveLength(1);
   expect(api.calls[0]?.body).toEqual({ revision: 1, balance: true, digest: false });
-  expect(live.current).toMatchObject({ saving: true, value: { balance: true, digest: true } });
+  expect(save.current).toMatchObject({ saving: true, value: { balance: true, digest: true } });
 
   await act(async () => api.calls[0]?.resolve({ revision: 2, balance: true, digest: false }));
   expect(api.calls).toHaveLength(2);
   expect(api.calls[1]?.body).toEqual({ revision: 2, balance: true, digest: true });
 
   await act(async () => api.calls[1]?.resolve({ revision: 3, balance: true, digest: true }));
-  expect(live.current).toMatchObject({
+  expect(save.current).toMatchObject({
     saving: false,
     saved: true,
     value: { revision: 3, balance: true, digest: true },
@@ -116,34 +123,59 @@ it("sends two quick changes one after another, the second on what the first retu
 });
 
 it("reads the object again on 409 stale_revision and sends nothing made on the old copy", async () => {
-  const api = fakeApi<Prefs>();
   const fresh: Prefs = { revision: 5, balance: false, digest: true };
-  const live = mount<LiveSave<Prefs>>(() =>
-    useLiveSave({ initial, write: api.send, reread: () => Promise.resolve(fresh) }),
-  );
+  const { api, save } = live(() => Promise.resolve(fresh));
   act(() => {
-    live.current.change((p) => ({ ...p, balance: true }));
-    live.current.change((p) => ({ ...p, digest: false }));
+    save.current.change((p) => ({ ...p, balance: true }));
+    save.current.change((p) => ({ ...p, digest: false }));
   });
   await act(async () => api.calls[0]?.reject(failed(409, "stale_revision")));
   await settle();
   expect(api.calls).toHaveLength(1);
-  expect(live.current).toMatchObject({ saving: false, stale: true, failure: null, value: fresh });
+  expect(save.current).toMatchObject({ saving: false, locked: false, value: fresh, failed: { after: "reloaded" } });
 });
 
-it.each([
-  { case: "a server error", error: failed(500, "internal") },
-  { case: "no response", error: failed(0) },
-  { case: "a 409 with no way to read again", error: failed(409, "stale_revision") },
-])("on $case, says why and shows the server's object again", async ({ error }) => {
-  const api = fakeApi<Prefs>();
-  const live = mount<LiveSave<Prefs>>(() => useLiveSave({ initial, write: api.send }));
-  act(() => live.current.change((p) => ({ ...p, balance: true })));
-  expect(live.current.value.balance).toBe(true);
-  await act(async () => api.calls[0]?.reject(error));
-  expect(live.current).toMatchObject({ saving: false, saved: false, stale: false, failure: error, value: initial });
+it("shows the server's object again when the server refused the change", async () => {
+  const { api, reread, save } = live();
+  act(() => save.current.change((p) => ({ ...p, balance: true })));
+  expect(save.current.value.balance).toBe(true);
+  const refusal = failed(400, "invalid_request");
+  await act(async () => api.calls[0]?.reject(refusal));
+  expect(reread).not.toHaveBeenCalled();
+  expect(save.current).toMatchObject({ saving: false, value: initial, failed: { error: refusal, after: "reverted" } });
 
-  act(() => live.current.change((p) => ({ ...p, digest: true })));
+  act(() => save.current.change((p) => ({ ...p, digest: true })));
   expect(api.calls[1]?.body).toEqual({ ...initial, digest: true });
-  expect(live.current.failure).toBeNull();
+  expect(save.current.failed).toBeNull();
+});
+
+// The server applied the change but its answer was lost: the next change must be made on the server's object, or it
+// would send the old value back and undo the first.
+it.each([
+  { case: "no response", error: failed(0) },
+  { case: "a server error", error: failed(500, "internal") },
+])("after $case, reads the object again before sending another change", async ({ error }) => {
+  const applied: Prefs = { revision: 2, balance: true, digest: false };
+  let answer = (_: Prefs) => {};
+  const { api, save } = live(() => new Promise<Prefs>((resolve) => (answer = resolve)));
+  act(() => save.current.change((p) => ({ ...p, balance: true })));
+  await act(async () => api.calls[0]?.reject(error));
+  expect(save.current).toMatchObject({ locked: true, saving: true });
+  act(() => save.current.change((p) => ({ ...p, digest: true })));
+  expect(api.calls).toHaveLength(1);
+
+  await act(async () => answer(applied));
+  expect(save.current).toMatchObject({ locked: false, value: applied, failed: { error, after: "reloaded" } });
+  act(() => save.current.change((p) => ({ ...p, digest: true })));
+  expect(api.calls[1]?.body).toEqual({ revision: 2, balance: true, digest: true });
+});
+
+it("sends nothing more when neither the write nor the reading again answered", async () => {
+  const { api, save } = live(() => Promise.reject(failed(0)));
+  act(() => save.current.change((p) => ({ ...p, balance: true })));
+  await act(async () => api.calls[0]?.reject(failed(0)));
+  await settle();
+  expect(save.current).toMatchObject({ locked: true, saving: false, failed: { after: "unconfirmed" } });
+  act(() => save.current.change((p) => ({ ...p, digest: true })));
+  expect(api.calls).toHaveLength(1);
 });

@@ -43,16 +43,21 @@ export function CreateDialog<D, R>({
       dismissible={!created && !write.saving && !write.dirty}
       locked={write.saving}
       step={shown ? 1 : 0}
-      onSubmit={(close) => {
-        void write.save().then((done) => {
-          if (done) {
-            setCreated(done);
-            if (!result) {
-              close();
+      // the result step sends nothing: what was made is made once
+      onSubmit={
+        shown
+          ? undefined
+          : (close) => {
+              void write.save().then((done) => {
+                if (done) {
+                  setCreated(done);
+                  if (!result) {
+                    close();
+                  }
+                }
+              });
             }
-          }
-        });
-      }}
+      }
       onClose={() => onClose(created?.saved)}
       footer={(close) =>
         shown ? (

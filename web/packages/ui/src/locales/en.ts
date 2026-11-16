@@ -33,12 +33,18 @@ export default {
     title: "That didn’t go through",
     kept: "Everything you entered is still here, so you can try again.",
     reverted: "The setting is back to what it was, so you can change it again.",
+    reloaded:
+      "It’s unclear whether your change took effect, so this now shows the setting as the server has it. Check it before changing it again.",
+    unconfirmed:
+      "It’s unclear whether your change took effect, and the current setting couldn’t be read. Reload the page before changing it again.",
     requestId: "Request ID",
   },
   toast: {
     undo: "Undo",
     undone: "Undone",
     undoFailed: "The undo didn’t go through, so it is still as it was before. Change it back by hand if you need to.",
+    undoUnknown:
+      "It’s unclear whether the undo took effect. Reload the page to see the current state before changing it back.",
   },
   month: { month: "Month", year: "Year" },
   cancel: "Cancel",

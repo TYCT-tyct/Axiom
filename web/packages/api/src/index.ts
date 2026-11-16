@@ -75,6 +75,14 @@ export class ApiError extends Error {
   }
 }
 
+// refused is the only answer that proves a change was not done: the server's own refusal, a 4xx with its error body. No
+// answer, a server failure, a response that could not be read (a proxy's page after the change was made) and a success
+// without its result all leave it possible that it was. A form that keeps a secret out of its stored attempt applies the
+// same rule with it.
+export function refused(error: unknown) {
+  return error instanceof ApiError && error.status >= 400 && error.status < 500 && error.code !== undefined;
+}
+
 // fetch rejects with a TypeError when the network fails and with the signal's reason when the call is aborted or times
 // out; reading a body that stops arriving fails the same ways.
 function isLostResponse(error: unknown) {

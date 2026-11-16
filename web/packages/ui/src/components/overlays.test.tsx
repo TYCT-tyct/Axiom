@@ -50,6 +50,7 @@ afterEach(() => {
   act(() => root.unmount());
   host.remove();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 const render = (node: ReactNode) => act(() => root.render(<I18nextProvider i18n={i18n}>{node}</I18nextProvider>));
@@ -201,7 +202,7 @@ it("locks the panel while saving, keeps the draft on a failure and sends the sam
     (document.querySelector("dialog form") as HTMLFormElement).requestSubmit();
   });
   expect(api.calls).toHaveLength(1);
-  expect(document.querySelector("dialog fieldset")?.hasAttribute("disabled")).toBe(true);
+  expect(field().matches(":disabled")).toBe(true);
   await pressEscape();
   await pressBackdrop();
   expect(dialog()?.open).toBe(true);
@@ -260,7 +261,14 @@ function Disable({ reverse }: { reverse: () => Promise<unknown> }) {
   );
 }
 
-it("undoes with a reverse request, and says why when it fails", async () => {
+it.each([
+  {
+    case: "refused",
+    error: new ApiError(400, "req_2", { body: { error: { code: "invalid_request" } } }),
+    says: "撤销没有完成",
+  },
+  { case: "unanswered", error: new ApiError(0, null), says: "不确定撤销有没有生效" },
+])("undoes once with a reverse request, and says what a $case one left", async ({ error, says }) => {
   const api = fakeApi<undefined, unknown>();
   const reverse = vi.fn(() => api.send(undefined));
   render(
@@ -270,12 +278,53 @@ it("undoes with a reverse request, and says why when it fails", async () => {
   );
   act(() => button("disable").click());
   expect(document.querySelector('[role="status"]')?.textContent).toContain("已停用 ci");
-  act(() => button("撤销").click());
+  const undo = button("撤销");
+  act(() => {
+    undo.click();
+    undo.click();
+  });
   expect(reverse).toHaveBeenCalledTimes(1);
-  await act(async () => api.calls[0]?.reject(new ApiError(0, null)));
-  const failed = document.querySelector('[role="alert"]')?.textContent;
-  expect(failed).toContain("连不上 Axiom");
-  expect(failed).toContain("撤销没有完成");
+  await act(async () => api.calls[0]?.reject(error));
+  expect(document.querySelector('[role="alert"]')?.textContent).toContain(says);
+});
+
+// The exit motion takes a moment; while it plays the dialog is still on the page, and nothing in it may act.
+function exitPlaysOn() {
+  vi.spyOn(Element.prototype, "getAnimations").mockReturnValue([
+    { finished: new Promise(() => {}) } as unknown as Animation,
+  ]);
+}
+const submit = () => act(() => (document.querySelector("dialog form") as HTMLFormElement).requestSubmit());
+
+it("sends nothing from a dialog that is closing", async () => {
+  const api = fakeApi<{ name: string }, string>();
+  newKey(api.send);
+  exitPlaysOn();
+  type(field(), "ci");
+  act(() => button("取消").click());
+  submit();
+  expect(api.calls).toHaveLength(0);
+  expect(field().matches(":disabled")).toBe(true);
+});
+
+it("creates once when the dialog closes on success", async () => {
+  const api = fakeApi<{ name: string }, string>();
+  render(
+    <Opener
+      overlay={(close) => (
+        <CreateDialog title="新建工作区" initial={{ name: "ci" }} create={api.send} onClose={close}>
+          {(draft) => <input aria-label="名称" defaultValue={draft.name} />}
+        </CreateDialog>
+      )}
+    />,
+  );
+  open();
+  exitPlaysOn();
+  submit();
+  await act(async () => api.calls[0]?.resolve("ws_1"));
+  expect(dialog()).not.toBeNull();
+  submit();
+  expect(api.calls).toHaveLength(1);
 });
 
 it("lets a toast go after its time, and holds it while pointed at", async () => {
