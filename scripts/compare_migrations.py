@@ -13,7 +13,7 @@ import uuid
 from pathlib import Path
 
 SOURCE = "3ddbe584176d31727340dbfbe2bf1e6a094e384c"
-BASELINE = "00001_baseline.sql"
+BASELINE = "00049_baseline.sql"
 ROOT = Path(__file__).resolve().parents[1]
 
 

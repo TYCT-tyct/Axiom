@@ -59,8 +59,8 @@ git -C "$repo" merge-base --is-ancestor "$old_commit" HEAD || {
   exit 1
 }
 
-# No release predates the approved pre-production baseline. Its reset version
-# numbers intentionally cannot satisfy an old binary; static proves equivalence.
+# No release predates the approved pre-production baseline. Its replaced
+# migration history cannot satisfy an old binary; static proves equivalence.
 if python3 - "$repo" "$old_commit" <<'PYCODE'
 import os
 import sys

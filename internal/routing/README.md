@@ -78,7 +78,7 @@ suppliers、accounts、quality、billing 还没有公开 routing 要的类型，
 
 ## 路由预设
 
-预设是 routing 自己的数据（`migrations/00001_baseline.sql`），规则与理由见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
+预设是 routing 自己的数据（`migrations/00049_baseline.sql`），规则与理由见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
 
 - **表**：`routing.presets`（身份、层与归属、`current_version`、`revision`、`deleted_at` 停用）、`routing.preset_versions`（不可变的规则 JSON，≤16 KiB；平台带价预设的币种）、`routing.preset_defaults`（每层最多一行的默认指针）。`presets.(id, current_version)` 引用自己的版本（延迟到事务结束检查），所以预设总有它指向的版本。迁移写入零 ID 的系统 `allow-all`（规则 `{"default":{"classes":["*"],"policies":["*"]},"advanced":{"max_attempts":4}}`，与代码里的 `gateway.presets()` 相同）和指向它的平台默认。
 - **行级安全**：读沿默认链向下：平台行任何范围可读，站点行本站（站点范围或账户范围的所属站点）可读，账户与工作区行本账户和所属站点可读；写只写本层。`preset_versions` 的读写经子查询继承 `presets` 的策略。`pg.Scope` 没有工作区这一维，租户边界是账户，账户内谁能改哪个工作区由接口授权决定。系统预设只有迁移能写，`UPDATE` 策略排除它。

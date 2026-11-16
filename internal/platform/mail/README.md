@@ -14,7 +14,7 @@
 | `AXIOM_SMTP_PASSWORD` | — | 密码或服务商的应用专用密码；以 `secret.Secret` 保存，任何格式都不打印 |
 | `AXIOM_SMTP_FROM` | — | 发件人，一个地址，可带显示名：`Axiom <no-reply@example.com>` |
 
-平台管理员可用 `StoredConfig`、`SaveConfig` 保存共享的 SMTP 覆盖，组装层在启动注册 worker 前读取；无覆盖仍使用环境变量。保存不改变在跑的 sender，API 返回 `restart_required`，重启节点后生效。显式禁用也保存覆盖，因此不会意外回落到环境变量。迁移 platform 00001 的 `smtp_config` 只限平台范围；配置整包加密，AAD 是表名、全零单例 ID 与 purpose=config，纳入主密钥轮换清单。API 不返回密码，幂等指纹只保存非密设置、理由和是否提供密码，不形成离线密码猜测的校验器；审计只记 enabled；省略密码仅在连接目标未变时保留，改服务器、端口或用户名必须重填。保存校验失败返回 `ErrInvalidConfig`，数据库和解封失败原样上抛，不能误报为输入错误。
+平台管理员可用 `StoredConfig`、`SaveConfig` 保存共享的 SMTP 覆盖，组装层在启动注册 worker 前读取；无覆盖仍使用环境变量。保存不改变在跑的 sender，API 返回 `restart_required`，重启节点后生效。显式禁用也保存覆盖，因此不会意外回落到环境变量。迁移 platform 00049 的 `smtp_config` 只限平台范围；配置整包加密，AAD 是表名、全零单例 ID 与 purpose=config，纳入主密钥轮换清单。API 不返回密码，幂等指纹只保存非密设置、理由和是否提供密码，不形成离线密码猜测的校验器；审计只记 enabled；省略密码仅在连接目标未变时保留，改服务器、端口或用户名必须重填。保存校验失败返回 `ErrInvalidConfig`，数据库和解封失败原样上抛，不能误报为输入错误。
 
 `TestConfig` 使用原 sender 同步发固定测试邮件，返回 accepted/rejected/failed/disabled；错误原文、凭证与收件人不进入响应和审计。accepted 是 SMTP 接受；网络错误可能已送达，不能当作确定未送达。配置测试的临时 sender 使用独立会话预算，不占用普通邮件的共享收件人冷却；HTTP 层限会话频率、要求 MFA/CSRF/幂等/理由，重放已提交结果不重发；SMTP 接受后数据库提交失败仍可能重发，测试邮件可重复。测试复用 sender 的受控信任库连接真实 TLS 测试服务器，兼容各平台且不放松生产证书校验。幂等认领事务在网络调用期间保持开启，最多占一个连接；SMTP 测试 API 总预算 40 秒，sender 的整次会话期限 30 秒（含最多 10 秒拨号），认领避免已提交的重复请求再次发信。
 
@@ -50,7 +50,7 @@ SMTP 连接使用与 HTTP 相同的 egress 地址策略：保存管理配置时�
 
 邮件正文不进任务参数：River 的任务行不属于任何租户，没有策略覆盖，所以地址、主题和正文都存在 `platform.mail_outbox`，普通任务参数只有那一行的 id。这张表开了 `FORCE ROW LEVEL SECURITY`，策略使用 [pg 的账户范围表达式](../pg/README.md#决策与理由)：调用方在租户的事务里入队，`WITH CHECK` 挡住替别的租户写的可能，读取同样受它限制（[平台基础设施的「租户隔离」](../README.md#范围)）。
 
-工作进程手里只有 id，没有租户，所以先用 `platform.mail_tenant(id)` 查到这一行的 `site_id`、`account_id`，再在该租户的作用域里读正文——这个函数是 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用，只返回这两个租户列，而这个角色只被授予 `id`、`site_id`、`account_id` 三列（`id` 是函数按它匹配的那一列，不能少；与 accounts 模块的登录前查找同一套做法，见 [accounts 的迁移](../../accounts/migrations/00001_baseline.sql)）。`pg.TenantTx` 先以空作用域查一次，再换成查到的租户，`fn` 在其中运行。
+工作进程手里只有 id，没有租户，所以先用 `platform.mail_tenant(id)` 查到这一行的 `site_id`、`account_id`，再在该租户的作用域里读正文——这个函数是 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用，只返回这两个租户列，而这个角色只被授予 `id`、`site_id`、`account_id` 三列（`id` 是函数按它匹配的那一列，不能少；与 accounts 模块的登录前查找同一套做法，见 [accounts 的迁移](../../accounts/migrations/00049_baseline.sql)）。`pg.TenantTx` 先以空作用域查一次，再换成查到的租户，`fn` 在其中运行。
 
 - 任务开始时就查不到这一行，说明已经发过或已被删除：记 `mail skipped: the queued message is gone`，任务完成。
 - 网络错误、超时、4xx 回复由 River 重试，**消息留在表里**，重试时照样读得到；5xx 回复（`*textproto.Error` 500–599）用 `river.JobCancel` 结束，同样的消息再发一次也会被同样拒绝。读 outbox 行本身失败（数据库连不上、语句超时）也算可重试。
