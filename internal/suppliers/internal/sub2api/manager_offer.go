@@ -76,12 +76,9 @@ func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page
 	if err != nil {
 		return adapter.Page[adapter.Group]{}, err
 	}
-	for {
-		page, more, err := m.offerPage(ctx, &p)
-		if err != nil || !more {
-			return page, err
-		}
-	}
+	return adapter.Drain(func() (adapter.Page[adapter.Group], bool, error) {
+		return m.offerPage(ctx, &p)
+	})
 }
 
 func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
@@ -131,7 +128,7 @@ func (m *manager) keyPageStep(ctx context.Context, p *offerProgress) (page adapt
 		return page, true, nil
 	}
 	if !more {
-		return adapter.Page[adapter.Group]{Next: listing(*p), Until: keys.Until}, false, nil
+		return adapter.Page[adapter.Group]{Next: adapter.ListingOf(*p), Until: keys.Until}, false, nil
 	}
 	return page, true, nil
 }
@@ -156,7 +153,7 @@ func (m *manager) groupStep(ctx context.Context, p *offerProgress) (page adapter
 
 func stopped(err error, p offerProgress) (adapter.Page[adapter.Group], bool, error) {
 	if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
-		return adapter.Page[adapter.Group]{Next: listing(p), Until: blocked.Until}, false, nil
+		return adapter.Page[adapter.Group]{Next: adapter.ListingOf(p), Until: blocked.Until}, false, nil
 	}
 	return adapter.Page[adapter.Group]{}, false, err
 }

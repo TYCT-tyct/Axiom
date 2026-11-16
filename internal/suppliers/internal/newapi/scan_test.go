@@ -128,7 +128,7 @@ func scanOf(t *testing.T, raw adapter.ScanState) scanState {
 
 func startState(t *testing.T, watermark time.Time) adapter.ScanState {
 	t.Helper()
-	raw, err := scanState{V: 1, Watermark: watermark.Unix(), Span: int64(time.Hour / time.Second), LastLate: watermark.Unix(), Connected: watermark.Unix()}.encode()
+	raw, err := scanState{V: 1, Watermark: watermark.Unix(), Span: int64(time.Hour / time.Second), LastLate: watermark.Unix(), Connected: watermark.Unix()}.Encode()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func (s *scan) step() (idle bool) {
 	if st.Pass == nil && page.Done {
 		s.spans = append(s.spans, st.Span)
 	}
-	return st.Pass == nil && nextPass(st, s.clk.now()) == nil
+	return st.Pass == nil && st.Next(s.clk.now()) == nil
 }
 
 func (s *scan) run(limit int) {
@@ -242,7 +242,7 @@ func TestAScanLargerThanARateWindowReadsEveryRecord(t *testing.T) {
 	if run.spans[0] != int64(30*time.Minute/time.Second) {
 		t.Errorf("after a pass of 60 pages the next pass covers %d seconds, want half an hour", run.spans[0])
 	}
-	if w := scanOf(t, run.state).Watermark; w < clk.now().Add(-lag-time.Minute).Unix() {
+	if w := scanOf(t, run.state).Watermark; w < clk.now().Add(-30*time.Second-time.Minute).Unix() {
 		t.Errorf("the watermark stops %d seconds short of now", clk.now().Unix()-w)
 	}
 }
@@ -326,7 +326,7 @@ func TestPassEdges(t *testing.T) {
 	}
 	// Less than a minute beyond the watermark: nothing to ask.
 	before := len(srv.requests)
-	clk.set(time.Unix(scanOf(t, run.state).Watermark, 0).Add(lag + 59*time.Second))
+	clk.set(time.Unix(scanOf(t, run.state).Watermark, 0).Add(30*time.Second + 59*time.Second))
 	page, next, err := run.manager().Charges(t.Context(), run.state)
 	if err != nil || !page.Done || len(page.Charges) != 0 || len(srv.requests) != before || !bytes.Equal(next, run.state) {
 		t.Errorf("an idle call: %+v, %v, %d new requests", page, err, len(srv.requests)-before)
@@ -399,10 +399,10 @@ func TestTheWindowShrinksAfterALongPassAndGrowsAfterShortOnes(t *testing.T) {
 		}
 	}
 	// A backlog of many passes shrinks to the minimum and no further.
-	if got := finish(scanState{V: 1, Span: 60, Pass: &pass{Pages: 99}}, t0).Span; got != 60 {
+	if got := (scanState{V: 1, Span: 60, Pass: &pass{Pages: 99}}).Finish(t0).Span; got != 60 {
 		t.Errorf("a long pass at the minimum span gives %d", got)
 	}
-	if got := finish(scanState{V: 1, Span: 24 * 3600, Fast: 2, Pass: &pass{Pages: 1}}, t0).Span; got != 24*3600 {
+	if got := (scanState{V: 1, Span: 24 * 3600, Fast: 2, Pass: &pass{Pages: 1}}).Finish(t0).Span; got != 24*3600 {
 		t.Errorf("a short pass at the maximum span gives %d", got)
 	}
 }

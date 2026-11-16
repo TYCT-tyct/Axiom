@@ -3,7 +3,6 @@ package declared
 import (
 	"net/http"
 	"slices"
-	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -108,7 +107,7 @@ func (q quirks) ChargeRef(h http.Header) (adapter.ChargeRef, bool) {
 // declaration's rules come first and the shared defaults last. The supplier's own words never leave here: a cause is a
 // variant with a status and a time only.
 func (q quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
-	if isHTML(body) {
+	if adapter.IsHTML(body) {
 		return adapter.Failure{Scope: adapter.ScopeEgress, Cause: adapter.Unknown{Status: status, SuspectedEgressBlock: true}}
 	}
 	code := ""
@@ -175,10 +174,4 @@ func (q quirks) resetAt(body []byte) time.Time {
 	}
 	at, _ := readTime(raw)
 	return at
-}
-
-// isHTML reports whether a body is a web page rather than an API's answer: what a firewall or an anti-bot check shows.
-func isHTML(body []byte) bool {
-	head := strings.ToLower(strings.TrimSpace(string(body[:min(len(body), 64)])))
-	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html")
 }

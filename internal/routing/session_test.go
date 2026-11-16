@@ -2,6 +2,7 @@ package routing_test
 
 import (
 	"math"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -116,7 +117,7 @@ func TestRetryBudget(t *testing.T) {
 }
 
 // TestRetryBudgetInPlan: an exhausted supplier is left out of later entries and the leaving out is recorded; a first
-// entry is not a retry, so it stays.
+// entry is not a retry, so it stays. Exclusions remain recorded even past the attempt cap.
 func TestRetryBudgetInPlan(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t, routing.Config{RetryRatio: 0.5, RetryFloor: 1}, openPreset(), endpoint(t, 1), endpoint(t, 2))
@@ -124,19 +125,19 @@ func TestRetryBudgetInPlan(t *testing.T) {
 	}
 	in := input()
 	in.Override.OrderNames = []string{"g1", "g2"}
-	p := h.plan(in)
-	if len(p.Entries) != 1 || first(p) != ep(1) {
-		t.Errorf("route %v", p.Entries)
+	for _, fileRef := range []bool{false, true} {
+		in.FileRef = fileRef
+		p := h.plan(in)
+		if len(p.Entries) != 1 || first(p) != ep(1) {
+			t.Errorf("file reference %t: route %v", fileRef, p.Entries)
+		}
+		if !slices.Contains(p.Record.Excluded, routing.Excluded{Endpoint: ep(2), Reason: routing.RetryBudget}) {
+			t.Errorf("file reference %t: not recorded: %+v", fileRef, p.Record.Excluded)
+		}
 	}
-	var recorded bool
-	for _, e := range p.Record.Excluded {
-		recorded = recorded || e == (routing.Excluded{Endpoint: ep(2), Reason: routing.RetryBudget})
-	}
-	if !recorded {
-		t.Errorf("not recorded: %+v", p.Record.Excluded)
-	}
+	in.FileRef = false
 	in.Override.OrderNames = []string{"g2", "g1"}
-	if p = h.plan(in); first(p) != ep(2) {
+	if p := h.plan(in); first(p) != ep(2) {
 		t.Errorf("an exhausted supplier as the first entry: %v", p.Entries)
 	}
 }
