@@ -2,6 +2,8 @@
 
 端点评估模块。行为、阈值与决定见[端点评估](../../docs/domains/quality.md)，本文只写公开接口、调用约束与不变量。
 
+本模块的数据库结构与来源类别种子由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 初始化；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 接口
 
 ```go

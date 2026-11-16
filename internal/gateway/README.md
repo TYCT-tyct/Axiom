@@ -2,6 +2,8 @@
 
 编排一次模型调用。对外行为见[接入与对外接口](../../docs/domains/gateway.md)，格式转换见 [protocol](../protocol/README.md)，模块走向见[总体架构](../../docs/architecture.md#一次调用怎么走)；这里只写公开接口和一次调用内部的不变量。下层见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[accounts](../accounts/README.md#认出与准入)。
 
+响应缓存的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 公开接口
 
 - `NewHandler(Deps)` → `Handler`（外面套 `httpserver.Public`）：入口、准入、模型列表、辅助接口。`NewExecutor(ExecDeps)` → `Executor.Run`（即 `Deps.Run`）：准入后把 `Call` 做到结算。依赖缺一个不启动，没有生产 stub，由 `cmd/axiom/callpath.go` 接线。

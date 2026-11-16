@@ -14,6 +14,8 @@
 
 ## 数据
 
+本模块的结构与内置角色权限从 [`00049_baseline.sql`](migrations/00049_baseline.sql) 初始化；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ### 表（schema `accounts`）
 
 - 主键是 Go 生成的 UUIDv7；金额 `bigint`（[钱的表示](../../docs/domains/billing.md#钱的表示)）；名字 1 到 100 个字符。
