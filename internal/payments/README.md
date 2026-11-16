@@ -26,7 +26,7 @@ type MerchantConfig struct {
 	Client   *egress.Client
 }
 type Channel interface {
-	Caps() Caps // Query | Close | Refund | QueryRefund | RefundKey | Statements
+	Caps() Caps // Query | Close | Refund | QueryRefund | RefundKey
 	Methods() []Method // nil：管理员可配置任意付款方式
 	Create(ctx context.Context, r CreateRequest) (Checkout, error)
 	Verify(ctx context.Context, c Callback) (Notice, error) // 验签加商户身份；不相关的事件 Relevant=false
@@ -45,8 +45,8 @@ type Channel interface {
 ```
 
 - **错误只分两种**：`*Rejected` 是确定的失败或确定未发送；其他错误都是结果未知，调用方不得据此改为失败。
-- **能力**：调用没有声明的能力是程序错误，panic。只有声明 `RefundKey`（渠道把 `RefundCall.Refund` 当退款单号、重发只退一次）的渠道，未知退款才能重发。当前没有插件声明 `Statements`。
-- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关文本精确解析成最小单位：`Minor == 0` 表示缺失（留给补查），`Minor == -1` 表示无效付款（转待处理）；没有币种字段的渠道填商户币种。
+- **能力**：调用没有声明的能力是程序错误，panic。只有声明 `RefundKey`（渠道把 `RefundCall.Refund` 当退款单号、重发只退一次）的渠道，未知退款才能重发。还没有对账单能力：账单下载的接口、能力位和 `statement_lines` 表随第一个支持它的渠道一起加。
+- **金额**：`Notice.Paid`、`Payment.Paid` 由插件把网关文本精确解析成最小单位，位数统一取 `platform.Currency.MinorDigits`（可接收的币种仍由各渠道和 billing 校验）：`Minor == 0` 表示缺失（留给补查），`Minor == -1` 表示无效付款（转待处理）；没有币种字段的渠道填商户币种。
 - **链接**：核心检查 `PayURL`、`QRCode`，只放行 `https`、`alipays://`、`weixin://`、`wxp://`；插件只负责补全单个 `/` 开头的相对链接。存库前去掉 NUL。
 - **拒付**：插件把渠道状态归一成 `DisputeAction`；找订单、扣多少、改不改订单由核心和 billing 决定。
 - **插件拿不到数据库**，错误和日志不带查询串、表单、应答正文和密钥。
@@ -59,7 +59,7 @@ type Channel interface {
 
 ### 易支付配置与边界
 
-`EasyPay{}`，`Kind` 是 `easypay`，币种来自商户账户。`settings`：`preset`（省略为通用，或 `epusdt`、`ezpay`）、`gateway`、`pid`、`mode`（`redirect`/`api`）、`sign_type`（省略为 `MD5`）、`cids`（付款方式 → 通道号）、`query`、`close`、`refund`（省略为不支持）。密钥：`key`，轮换期可加 `old_key`（只验签）。能力按配置声明，从不声明 `RefundKey`、`QueryRefund`、`Statements`。身份字段：`preset`、`gateway`、`pid`、`sign_type`。
+`EasyPay{}`，`Kind` 是 `easypay`，币种来自商户账户。`settings`：`preset`（省略为通用，或 `epusdt`、`ezpay`）、`gateway`、`pid`、`mode`（`redirect`/`api`）、`sign_type`（省略为 `MD5`）、`cids`（付款方式 → 通道号）、`query`、`close`、`refund`（省略为不支持）。密钥：`key`，轮换期可加 `old_key`（只验签）。能力按配置声明，从不声明 `RefundKey`、`QueryRefund`。身份字段：`preset`、`gateway`、`pid`、`sign_type`。
 
 - `epusdt`：强制 `query`、`redirect`，拒绝接口下单、cid、关单和退款；币种 CNY/USD；`pid` 是无前导零的正 int64。
 - `ezpay`：只接受 `preset`、`gateway`、`pid`（1–32 位字母、数字、下划线或连字符）；币种 USD；`Methods()` 只返回 `usdt.tron`，`upstream` 必须是 `usdt_trc20`；`Caps` 只有 `Query`；创建签名用 `ezPayCreateSign`，回调仍用 `easyPaySign`。
@@ -133,4 +133,3 @@ schema `payments`，每张表 ENABLE 并 FORCE 行级安全（[平台的「范�
 
 - 订单、退款、订单事件与账本同寿命，不随账户删除。人工另行入账的批次 ID 用待处理记录的 ID。
 - 账户、站点、汇率版本只按 ID 引用，不建跨模块外键（[总体架构的规则 1](../../docs/architecture.md#模块边界规则)）。
-- `statement_lines` 随第一个声明 `Statements` 的插件加。

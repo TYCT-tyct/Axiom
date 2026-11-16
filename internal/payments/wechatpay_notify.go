@@ -134,9 +134,6 @@ func (c *wechatChannel) callbackNotice(plaintext []byte) (Notice, error) {
 }
 
 func (c *wechatChannel) decrypt(resource wechatResource) ([]byte, error) {
-	if len(c.apiV3) != 32 {
-		return nil, errors.New("wechatpay: APIv3 key is not 32 bytes")
-	}
 	if len(resource.Nonce) != 12 {
 		return nil, errors.New("wechatpay: callback nonce is not 12 bytes")
 	}

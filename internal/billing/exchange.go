@@ -39,16 +39,15 @@ func (e *ExchangeError) Error() string {
 // ErrStaleExchange refuses an adjustment decided against a superseded version.
 var ErrStaleExchange = errors.New("billing: the exchange rate changed since it was read")
 
-// minorDigits is every currency an exchange rate can be kept for (the CHECK of billing.exchange_rates lists the same),
-// with the number of decimals of its minor unit (ISO 4217), which a payment in it is counted in.
-var minorDigits = map[string]int{
-	"USD": 2, "CNY": 2, "EUR": 2, "GBP": 2, "JPY": 0, "HKD": 2, "SGD": 2, "AUD": 2, "CAD": 2, "CHF": 2,
+// exchangeCurrencies is the supported set, also checked by billing.exchange_rates.
+var exchangeCurrencies = map[string]bool{
+	"USD": true, "CNY": true, "EUR": true, "GBP": true, "JPY": true, "HKD": true, "SGD": true, "AUD": true, "CAD": true, "CHF": true,
 }
 
 // ExchangePair canonicalizes both directions to one history and one serialization point.
 func ExchangePair(base, quote string) (string, string, error) {
 	for _, f := range []struct{ name, value string }{{"base", base}, {"quote", quote}} {
-		if _, ok := minorDigits[f.value]; !ok {
+		if _, ok := exchangeCurrencies[f.value]; !ok {
 			return "", "", &ExchangeError{f.name, "is not a supported currency"}
 		}
 	}
@@ -167,7 +166,7 @@ func setExchangeRate(ctx context.Context, tx pg.Tx, actor audit.Actor, in Exchan
 
 // ExchangeRates reads all current pairs in one statement, so a build never mixes versions of a pair.
 func ExchangeRates(ctx context.Context, tx pg.Tx) ([]BillingExchangeRate, error) {
-	return queries.CurrentExchangeRates(ctx, tx, slices.Sorted(maps.Keys(minorDigits)))
+	return queries.CurrentExchangeRates(ctx, tx, slices.Sorted(maps.Keys(exchangeCurrencies)))
 }
 
 // ExchangeRateHistory reads at most 100 versions, newest first; before is an exclusive version cursor, zero for newest.
