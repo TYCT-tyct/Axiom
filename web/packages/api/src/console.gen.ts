@@ -4,6 +4,26 @@
  */
 
 export interface paths {
+    "/api/console/v1/invitations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Read your invitation code and registrations
+         * @description Only the signed-in user's invitations, newest UUIDv7 registration first. Disabled users remain with available=false; clients localize the placeholder. No rebates or amounts. Older nodes return 404; clients must treat that as unavailable.
+         */
+        get: operations["getInvitations"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/profile/name": {
         parameters: {
             query?: never;
@@ -2769,6 +2789,20 @@ export interface components {
             /** @description The provider could not be asked; the key's status did not change. */
             inconclusive?: boolean;
         };
+        Invitations: {
+            code?: string;
+            /** Format: uri */
+            link?: string;
+            invitees?: components["schemas"]["Invitee"][];
+            /** @description Null on the last page. */
+            next_cursor?: string | null;
+        };
+        Invitee: {
+            /** Format: date-time */
+            registered_at?: string;
+            /** @description False for a disabled user; localize the placeholder on the client. No personal identifier is returned. */
+            available?: boolean;
+        };
         KeyList: {
             filters?: components["schemas"]["KeyFilterEcho"];
             data: components["schemas"]["Key"][];
@@ -3123,6 +3157,35 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    getInvitations: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Your code, registered console origin link and registration records without personal identifiers. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Invitations"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
     getDisplayName: {
         parameters: {
             query?: never;
