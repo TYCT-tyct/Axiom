@@ -15,7 +15,7 @@ func TestRelayCountsToolErrors(t *testing.T) {
 	t.Parallel()
 	messages := func(stop string, pieces ...string) string {
 		s := messageStart(`{"input_tokens":10,"output_tokens":0}`) +
-			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}}` + "\n\n"
+			toolMessageStart
 		for _, p := range pieces {
 			s += `data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":` + p + `}}` + "\n\n"
 		}
@@ -37,7 +37,7 @@ func TestRelayCountsToolErrors(t *testing.T) {
 			details = `,"incomplete_details":{"reason":"max_output_tokens"}`
 		}
 		return `event: response.created` + "\n" +
-			`data: {"type":"response.created","response":{"id":"resp_1","object":"response","model":"m","status":"in_progress"}}` + "\n\n" +
+			toolResponseCreated +
 			`event: response.output_item.added` + "\n" +
 			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"f","arguments":""}}` + "\n\n" +
 			`event: response.output_item.done` + "\n" +

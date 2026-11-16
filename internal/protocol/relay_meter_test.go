@@ -468,8 +468,8 @@ func deltas(f protocol.Format, n, size int) []byte {
 }
 
 // drain relays stream as the gateway does, writing nowhere, so it allocates only what the relay does.
-func drain(tb testing.TB, f protocol.Format, stream []byte) {
-	r := protocol.NewRelay(f, f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30)})
+func drain(tb testing.TB, f protocol.Format, stream []byte, aggregate bool) {
+	r := protocol.NewRelay(f, f, bytes.NewReader(stream), protocol.UsageContext{}, protocol.RelayOptions{Memory: protocol.NewMemory(1 << 30), Aggregate: aggregate})
 	for {
 		step, err := r.Next()
 		if err != nil {
@@ -482,28 +482,30 @@ func drain(tb testing.TB, f protocol.Format, stream []byte) {
 	}
 }
 
+// readEvents is the reader-only baseline for relay and aggregation allocation measurements.
+func readEvents(stream []byte) func() {
+	return func() {
+		r := sse.NewReader(bytes.NewReader(stream), 1<<20)
+		for _, err := r.Next(); err == nil; _, err = r.Next() {
+		}
+	}
+}
+
 // TestRelayAllocs: beyond what reading the events allocates, which has a constant bound per event (README.md「读
 // SSE」), relaying them allocates nothing once the buffers have grown, in each format, so a longer reply costs the
 // relay no more allocations (docs/performance.md「调用路径上的规则」). The measurement runs in a child process, so
 // this binary's other goroutines and the collections they trigger are not counted as the relay's.
 func TestRelayAllocs(t *testing.T) {
 	t.Parallel()
-	read := func(stream []byte) func() {
-		return func() {
-			r := sse.NewReader(bytes.NewReader(stream), 1<<20)
-			for _, err := r.Next(); err == nil; _, err = r.Next() {
-			}
-		}
-	}
 	for _, format := range formats {
 		for _, size := range []int{1 << 10, 64 << 10} {
 			t.Run(fmt.Sprintf("%s-%d", format.dir, size), func(t *testing.T) {
 				ten, forty := deltas(format.f, 10, size), deltas(format.f, 40, size)
 				got := alloctest.Measure(t,
-					alloctest.Function{Name: "read/10", F: read(ten)},
-					alloctest.Function{Name: "relay/10", F: func() { drain(t, format.f, ten) }},
-					alloctest.Function{Name: "read/40", F: read(forty)},
-					alloctest.Function{Name: "relay/40", F: func() { drain(t, format.f, forty) }},
+					alloctest.Function{Name: "read/10", F: readEvents(ten)},
+					alloctest.Function{Name: "relay/10", F: func() { drain(t, format.f, ten, false) }},
+					alloctest.Function{Name: "read/40", F: readEvents(forty)},
+					alloctest.Function{Name: "relay/40", F: func() { drain(t, format.f, forty, false) }},
 				)
 				few := got["relay/10"].Count - got["read/10"].Count
 				many := got["relay/40"].Count - got["read/40"].Count
@@ -554,15 +556,15 @@ func BenchmarkRelay(b *testing.B) {
 // relayTimed relays the stream b.N times, warming up first and again after each collection, as the comment above says.
 func relayTimed(b *testing.B, f protocol.Format, stream []byte, warm int) {
 	for range warm {
-		drain(b, f, stream)
+		drain(b, f, stream, false)
 	}
 	for i := 1; b.Loop(); i++ {
-		drain(b, f, stream)
+		drain(b, f, stream, false)
 		if i%collectEvery == 0 {
 			b.StopTimer()
 			runtime.GC()
 			for range warm {
-				drain(b, f, stream)
+				drain(b, f, stream, false)
 			}
 			b.StartTimer()
 		}

@@ -198,10 +198,7 @@ func TestCompletionsPrepare(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			body := []byte(c.body)
-			r, err := protocol.Inspect(protocol.Completions, body)
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := inspected(t, protocol.Completions, body)
 			up, err := protocol.Prepare(&r, body, protocol.Target{
 				Format: protocol.Completions, Model: "up", Streams: true,
 				MaxOutput: c.maxOutput,
@@ -240,10 +237,7 @@ func TestCompletionsPrepare(t *testing.T) {
 func TestCompletionsSample(t *testing.T) {
 	t.Parallel()
 	body := sample(t, "completions/text/request.json")
-	r, err := protocol.Inspect(protocol.Completions, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, protocol.Completions, body)
 	up, err := protocol.Prepare(&r, body, protocol.Target{
 		Format: protocol.Completions, Model: "gpt-3.5-turbo-instruct",
 		Streams: true, MaxOutput: 16,

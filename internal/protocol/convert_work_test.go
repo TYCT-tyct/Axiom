@@ -97,10 +97,7 @@ func TestConvertManyItemIDs(t *testing.T) {
 func TestConvertCacheTTL(t *testing.T) {
 	t.Parallel()
 	body := []byte(chatBody(`"messages":[{"role":"user","content":[{"type":"text","text":"Hi","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]`))
-	r, err := protocol.Inspect(protocol.Chat, body)
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, protocol.Chat, body)
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses} {
 		u, err := protocol.Prepare(&r, body, protocol.Target{Format: f, Model: "up", MaxOutput: 1}, protocol.Rewrites{Identity: derive})
 		if err != nil || u.Usage.CacheTTL1h != (f == protocol.Messages) {

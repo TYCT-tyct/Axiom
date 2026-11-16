@@ -27,8 +27,8 @@
 | 对象存储：S3 客户端、配置、期限与重试、SeaweedFS 测试 | [internal/platform/objectstore/README.md](../internal/platform/objectstore/README.md) | 写归档、备份副本或对话正文之前 |
 | 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
 | 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
-| 供应商：适配器、接入流程、供应商别名与待映射、凭证、同步、号池 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
-| 供应商在调用路径上的代码接口：挑凭证、发请求、记尝试 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
+| 供应商：适配器、接入流程、管理操作、调用面、供应商别名与待映射、凭证、同步、号池、各适配器、对账 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
+| 供应商的公开接口与不变量：表、调用面、并发与速率、检测、管理接口 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 端点评估在调用路径上的代码接口：判定表、`Observe`、健康度与实测的延迟和吞吐 | [internal/quality/README.md](../internal/quality/README.md) | 实现或调用 `quality` 之前，或改动尝试的结束路径之前 |
 | 路由：挂 key 的路由预设与默认链、候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |
@@ -62,10 +62,12 @@
 | 账户与租户的外部对照、被否决的方案、准入与限频的推导和测量 | [archive/accounts.md](archive/accounts.md) |
 | 运营：批准与委托的出处、运营接口的三个方案、几条较长的推导和否决的做法 | [archive/operations.md](archive/operations.md) |
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
+| 计费：参考实现的做法与源码位置、官方价格、实测、暂估误差、分词器调查、被否决的方案 | [archive/billing.md](archive/billing.md) |
 | 路由：调研基线、路由预设的方案对比、开销与配额的推导、分步落地时的混跑规则、多出口的设计 | [archive/routing.md](archive/routing.md) |
 | 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
 | 支付：参考实现对照、USDT 网关选择、Epusdt 兼容证据 | [archive/payments.md](archive/payments.md) |
 | 平台层：测试设施、现有指标、出站地址策略、密钥与信封、连接池与迁移的推导、接口约定的取舍 | [archive/platform.md](archive/platform.md) |
+| 供应商的上游出处、CPA 的上游事实、被否决的方案、滚动发布的兼容推导、测量与样本 | [archive/suppliers.md](archive/suppliers.md) |
 | 模型目录：请求写法的键的出处、计价事实、条款取证、官方价格页的 live 运行 | [archive/catalog.md](archive/catalog.md) |
 
 ## 文档怎么组织
