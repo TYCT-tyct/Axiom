@@ -2,13 +2,10 @@ package billing
 
 import (
 	"errors"
-	"os"
-	"strings"
 	"testing"
 	"uuid"
 
 	"axiom/internal/platform/pg"
-	"axiom/internal/platform/pgtest"
 )
 
 func (b *bank) chargeback(batch uuid.UUID, cash int64) (ChargebackAmounts, error) {
@@ -206,23 +203,4 @@ func TestChargebackAfterTheBatchExpired(t *testing.T) {
 		t.Fatalf("balance after reversal = %d, want 0", got)
 	}
 	b.balanced()
-}
-
-func TestChargebackMigrationReruns(t *testing.T) {
-	db := pgtest.New(t, Migrations())
-	raw, err := os.ReadFile("migrations/00034_chargeback.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	up, _, ok := strings.Cut(string(raw), "-- +goose Down")
-	if !ok {
-		t.Fatal("the migration has no Down section")
-	}
-	// The first add of the two constraints can fail after an earlier statement committed (the file is NO TRANSACTION).
-	// Replaying the Up must replace the constraints rather than meet them by name.
-	for range 2 {
-		if err := pgtest.Run(t.Context(), db.Superuser, up); err != nil {
-			t.Fatalf("replay the chargeback migration: %v", err)
-		}
-	}
 }

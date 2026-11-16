@@ -6,7 +6,7 @@
 # The old program is the release this deployment replaces: BASE for a train (the commit the train was assembled on),
 # the base named by a main landing's Train trailer, or HEAD^ for a plain main commit. Older releases are not required
 # to start: a release may make a one-way change while no production node exists, and billing's
-# 00040_fallbacks_no_markup.sql is one (docs/domains/billing.md「决策与理由」). Such a change makes this check fail;
+# removal of the former fallback markup field is one (docs/domains/billing.md「决策与理由」). Such a change makes this check fail;
 # whether to accept that is a release decision.
 #
 # The old tree has no built frontend, and its pages cannot affect whether it reads the new schema. A minimal embedded
@@ -58,6 +58,21 @@ git -C "$repo" merge-base --is-ancestor "$old_commit" HEAD || {
   echo "::error::the old release is HEAD; there is no older release to start" >&2
   exit 1
 }
+
+# No release predates the approved pre-production baseline. Its reset version
+# numbers intentionally cannot satisfy an old binary; static proves equivalence.
+if python3 - "$repo" "$old_commit" <<'PYCODE'
+import os
+import sys
+os.chdir(sys.argv[1])
+sys.path.insert(0, sys.argv[1] + "/scripts")
+from migration_order import baseline_transition
+sys.exit(0 if baseline_transition(sys.argv[2]) else 1)
+PYCODE
+then
+  echo "old binary skipped for the frozen pre-production baseline; static checks schema and seed equivalence"
+  exit 0
+fi
 
 work="$(mktemp -d)"
 pg_name="axiom-old-binary-$$-$RANDOM"

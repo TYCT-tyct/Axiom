@@ -56,7 +56,7 @@ func HashEndUser(key []byte, account uuid.UUID, id string) EndUserHash // 账户
 var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spill 满 / 已无法记录 / Close 仍有未写记录
 ```
 
-`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`），结算的金额（用量、档位、价格版本、实收、免单、物理输入）合在内嵌的 `Amounts` 里，待定记录没有它，补全时整组换上；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00016_loop_attempts.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；详情通过 `OwnAttempt`、`OwnRoute` 白名单开放尝试和路由摘要；不公开供应商成本、真名、出口和凭证。
+`CallRecord` 带一个请求的元数据和它的每次尝试（`AttemptRecord`），结算的金额（用量、档位、价格版本、实收、免单、物理输入）合在内嵌的 `Amounts` 里，待定记录没有它，补全时整组换上；`call_log` 一行是调用，`call_attempt` 一行是尝试。尝试的 `Seq` 从 1 连续到最多 `platform.MaxAttemptSeq`（33：路由的 3 次回退加模型侧循环的每次采样，迁移 `00001_baseline.sql` 放宽了表上的 CHECK），写入时校验；调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 由最后一个尝试算出，因此不会与尝试表不一致。查询和生成的代码在 `internal/store`（sqlc，`sqlc.yaml` 的 `observability` 项），包外引用不到，所以所有写入都经过 `CallRecord`、`AttemptRecord`、`Recorder`，所有读取都经过下面按账户的查询和「追溯」的 `GetTrace`。`CallRecord` 只用本模块、`catalog`、`platform` 的类型和 `uuid.UUID`（`accounts` 的带类型 ID 随它的表加入后换上）；`AttemptRecord` 用 `uuid.UUID`、`platform.AttemptSeq` 和时间。HTTP 处理器随 gateway 加入，调用的就是 `ListOwn`、`GetOwn` 和按日/模型/工作区的 `ActivityOwn`；详情通过 `OwnAttempt`、`OwnRoute` 白名单开放尝试和路由摘要；不公开供应商成本、真名、出口和凭证。
 
 ## 表（schema `observability`）
 
@@ -66,7 +66,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 - **谁**：`site_id`、`account_id`（行级安全看这两列）、`workspace_id`、`key_id`、`end_user_hash`（HMAC-SHA256 的十六进制）、`ip`。
 - **走了哪**：`model`（客户端要的公开名字）；`endpoint_id`、`source_class`、`egress`、`attempt_count` 都取自最后一个 `AttemptRecord`（没有尝试时分别是全零 UUID、`''`、`''`、0）；`route`（路由过程，≤ 8 KiB 的 JSON 对象，结构由 routing 定）。**每次尝试在 `call_attempt`**，供应商的成本和对账键仍在 suppliers，按同一个请求 ID 和尝试序号关联；账本交易不抄在这里，按请求 ID 从 billing 读（见「追溯」）。
 - **结果**：`usage`（计费项名字到数量的 JSON，含原生 token）、`service_tier`、`price_nano`、`cost_nano`（计费的最小单位）、`currency`、`free_of_charge`、`streamed`、`physical_input`（写入时能确定的物理输入；未知为 −1 的库内哨兵，读取时转成可空）、`latency_ms`、`first_token_ms`、`finish_reason`、`error_kind`。
-- **待定**：`billing_pending`（迁移 `00021`，默认 false）：这条记录写在结算之前，入库时账本里也没有它已结算的收费（结算交给了清理，或节点死在结算提交之前），用量、`service_tier`、`price_version`、`price_nano`、`free_of_charge`、`physical_input` 都不是结算的数。结算已提交的待定记录入库时按账本补全，不再待定（「写入」）。账户的读取跳过它，运营的追溯和列表标出它（「写入」）。
+- **待定**：`billing_pending`（迁移 `00001`，默认 false）：这条记录写在结算之前，入库时账本里也没有它已结算的收费（结算交给了清理，或节点死在结算提交之前），用量、`service_tier`、`price_version`、`price_nano`、`free_of_charge`、`physical_input` 都不是结算的数。结算已提交的待定记录入库时按账本补全，不再待定（「写入」）。账户的读取跳过它，运营的追溯和列表标出它（「写入」）。
 - **权利**：`consent_version`、`training_allowed`，只能在写入时记下。
 - **写入标签**：`client_app`、`session_id`、`subagent_id`、`request_class`、`language`、`used_tools`、`has_image`、`has_file`；应用自己报的名字在 `app_referer`（URL，≤2048，只留 scheme、host 和 path）、`app_title`（≤200）、`app_categories`（最多两个小写连字符类别，≤64），由 gateway 从 `HTTP-Referer`、`X-OpenRouter-Title`（或旧的 `X-Title`）、`X-OpenRouter-Categories` 取出、去控制字符并截断后写入。分析标签随后台分类器加入，另表保存。
 
@@ -160,7 +160,7 @@ var ErrClosed, ErrBacklog, ErrBroken, ErrPending error     // Close 之后 / spi
 
 `ListOwn` 必须给账户（`OwnQuery.Account`），按 `(at, id)` 倒序、键集分页（不用 OFFSET：新记录到达时翻页不重不漏），可按时间、模型、客户端应用、key、工作区、成功/报错和请求 ID 组合筛选，一页最多 200 条。**范围就是全部访问控制**：调用方用授权通过后的账户范围打开事务，行级安全只放行这个账户的行；显式的账户条件只是让计划走索引，不是访问控制。站长看本站、平台运维看全部的查询随 operations 和 accounts 加入，用的是它们的范围。
 
-`ListOwn` 直接读调用行的 `attempt_count`，`OwnQuery.FellBack` 为真时在游标和 LIMIT 之前筛选 `attempt_count > 1`（包括模型侧循环）。不访问尝试表，不因页大小增加 SQL 次数；迁移 `00046` 的 `(account_id, at DESC, id DESC) WHERE attempt_count > 1` 部分索引服务稀疏与空回退页。`GetOwn` 不读取或解析路由，不查尝试，供公开 `/generation` 复用；控制台在同一账户事务内另调用 `ReadOwnDetail`，路由和尝试查询都使用调用的分区键 `at`。`OwnCallDetail` 才包含 `Attempts` 和 `Route`，其内部 ID 必须由 HTTP 层替换，不能直接序列化。路由形状不兼容时省略摘要，日志只记请求 ID，不记录原始 JSON 或解析值；基础调用与尝试仍可读。旧记录没有尝试时返回非 nil 空切片，`route={}` 时省略摘要；旧的字符串 `preset` 不冒充带版本的预设。`excluded_reasons` 已存在时直接使用，没有时只数实际记录的 `excluded`，不推测 `excluded_more` 的原因；省略数量原样保留。
+`ListOwn` 直接读调用行的 `attempt_count`，`OwnQuery.FellBack` 为真时在游标和 LIMIT 之前筛选 `attempt_count > 1`（包括模型侧循环）。不访问尝试表，不因页大小增加 SQL 次数；迁移 `00001` 的 `(account_id, at DESC, id DESC) WHERE attempt_count > 1` 部分索引服务稀疏与空回退页。`GetOwn` 不读取或解析路由，不查尝试，供公开 `/generation` 复用；控制台在同一账户事务内另调用 `ReadOwnDetail`，路由和尝试查询都使用调用的分区键 `at`。`OwnCallDetail` 才包含 `Attempts` 和 `Route`，其内部 ID 必须由 HTTP 层替换，不能直接序列化。路由形状不兼容时省略摘要，日志只记请求 ID，不记录原始 JSON 或解析值；基础调用与尝试仍可读。旧记录没有尝试时返回非 nil 空切片，`route={}` 时省略摘要；旧的字符串 `preset` 不冒充带版本的预设。`excluded_reasons` 已存在时直接使用，没有时只数实际记录的 `excluded`，不推测 `excluded_more` 的原因；省略数量原样保留。
 
 HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers 的当前可路由快照解析，退休端点或快照不可用时省略代号，不拿内部 ID 代替。`selected_endpoint` 是计划的第一个端点，实际执行顺序读 `attempts`。`charged` 为用户实收费标记（有账单明细时取其校正后的实收，否则取调用行）：整次实收为零时全为 false；普通不同端点回退只有最后一次为 true，其他为 false。日志未记录 billing 的模型循环成员；重复最终端点时这组尝试省略 `charged`，不按成功或错误类型猜测账单归属。
 
@@ -187,7 +187,7 @@ HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers �
 
 `ReadUsageStatistics` 只查询 `usage_hourly`，范围、精度、空值和授权见[用户调用记录查询与导出](../../docs/domains/observability.md#用户调用记录查询与导出)。`UsageQuery` 的账户由控制台授权上下文给出，模型/key/工作区可选，RLS 与 `ListOwn` 相同；工作区仍按账户授权。时间必须为 UTC 整点，小时最多 7 天、日/周最多 90 天。`GROUPING SETS` 一次给当前桶、当前总计和可选的前期总计，货币分开，最多 10000 行，超限整体拒绝。缺失 token 不写成 0，缓存命中率只使用同时有物理输入与缓存读报告的记录，参与数和分子/分母也可相加。输入合并 `input + audio_in + image_in`，保留缓存读写单列；输出合并 `output + reasoning + audio_out + image_out`，与活动接口一样包含推理，Messages 已包含思考的输出不会重复加。任一组成项有报告才返回该合计，全缺失保持未知。缓存写合并 `cache_write`、`cache_write_1h`；不计算百分位。
 
-迁移 `00042` 增加小时表、待汇总 `usage_journal` 和单例回填位置 `usage_backfill`。小时主键前缀 `(account_id,hour)` 对应读取；小时行包含站点、账户、工作区、key、公开模型和货币，不保存供应商、路由或正文。所有计数和金额使用 numeric，读取转十进制文本。租户只读小时行，写入仅平台范围；journal 仅平台可读与消费，插入沿用调用记录的租户范围以兼容现有写入；回填位置只向已授权范围只读，控制台仅返回完成标记。
+迁移 `00001` 增加小时表、待汇总 `usage_journal` 和单例回填位置 `usage_backfill`。小时主键前缀 `(account_id,hour)` 对应读取；小时行包含站点、账户、工作区、key、公开模型和货币，不保存供应商、路由或正文。所有计数和金额使用 numeric，读取转十进制文本。租户只读小时行，写入仅平台范围；journal 仅平台可读与消费，插入沿用调用记录的租户范围以兼容现有写入；回填位置只向已授权范围只读，控制台仅返回完成标记。
 
 调用表新增 `usage_rollup_live`：加列时旧行是 false，随后默认改成 true，现有 INSERT 列表无需变更。`AFTER INSERT` 在同事务追加已结算调用的 journal，`ON CONFLICT DO NOTHING` 不触发；调用行只插入不修改，待结算行一直按现有规则排除。事件时间无高水位：迟到行即使落在已汇总小时也追加 journal。`RegisterUsage` 在队列启动前注册 `observability.usage`（archive 队列），每分钟运行，最多 30 秒/100 批。每批在单例位置行上 `FOR UPDATE SKIP LOCKED`，取不到说明别的节点在做本批，正常完成；每批最多扫描回填 1000 行，消费上限是本批实际入 journal 的回填行数再加 1000，独立事务提交；因此回填不会占掉实时事件的消费余量。近期数据仍可能因总负载超出处理能力而延迟，不能把回填完成标记当作新鲜度保证。journal 删除与小时累加共用一个 SQL，回滚后 journal 仍在，提交后不会再读，重试不重计。关停通过任务 context 取消。
 
@@ -197,7 +197,7 @@ HTTP 响应的新字段均可选。公开端点代号由组装层从 suppliers �
 
 ### 会话列表
 
-`ListOwnSessions` 复用 `OwnQuery`、账户 RLS 和 `ListOwn` 的有序页计划（custom plan、禁用可避免的排序），有界输入按 `(at,id)` 倒序沿索引取前缀，使用迁移 `00047` 的账户/时间部分覆盖索引及既有稀疏筛选索引，在父表按 `[Since,Until)` 裁剪分区后，只聚合非空会话、已结算的匹配调用；不读正文、路由、尝试或成本。`ListOwn` 与本读取共用页长归一化。导出的模块读取边界也拒绝空窗与超过 31 天，防止 HTTP 之外的调用绕过索引时间窗前提；HTTP 先校验并给 400。SQL 的 `filtered` 有固定 LIMIT，先检查预算再归组；超限只返回拒绝标记，模块返回 `ErrSessionSize`。游标条件位于预算之后，后续页不能绕过它；对外预算和错误口径见[领域文档](../../docs/domains/observability.md#用户调用记录查询与导出)。`OwnSession` 每个会话/币种一行，计数和金额为 numeric 求和后的精确文本；主模型按次数倒序、模型字节序取第一，应用名取最新调用。先按会话/模型统计，再合并会话，避免逐会话往返。最新调用的 `(at,id)` 唯一标记一组，复用 `Cursor` 排序翻页，同一时间不漏第二个会话。
+`ListOwnSessions` 复用 `OwnQuery`、账户 RLS 和 `ListOwn` 的有序页计划（custom plan、禁用可避免的排序），有界输入按 `(at,id)` 倒序沿索引取前缀，使用迁移 `00001` 的账户/时间部分覆盖索引及既有稀疏筛选索引，在父表按 `[Since,Until)` 裁剪分区后，只聚合非空会话、已结算的匹配调用；不读正文、路由、尝试或成本。`ListOwn` 与本读取共用页长归一化。导出的模块读取边界也拒绝空窗与超过 31 天，防止 HTTP 之外的调用绕过索引时间窗前提；HTTP 先校验并给 400。SQL 的 `filtered` 有固定 LIMIT，先检查预算再归组；超限只返回拒绝标记，模块返回 `ErrSessionSize`。游标条件位于预算之后，后续页不能绕过它；对外预算和错误口径见[领域文档](../../docs/domains/observability.md#用户调用记录查询与导出)。`OwnSession` 每个会话/币种一行，计数和金额为 numeric 求和后的精确文本；主模型按次数倒序、模型字节序取第一，应用名取最新调用。先按会话/模型统计，再合并会话，避免逐会话往返。最新调用的 `(at,id)` 唯一标记一组，复用 `Cursor` 排序翻页，同一时间不漏第二个会话。
 
 HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](../../docs/domains/observability.md#决策与理由)。后续页必须携带响应时间窗；新调用可能让会话越过游标，需刷新首页看最新结果，不承诺跨请求快照。没有新增异步任务或汇总延迟：下一次读取包含已提交的调用，新旧写者都无需变更。热记录归档后不在此视图；统计口径见[领域文档](../../docs/domains/observability.md#用户调用记录查询与导出)。
 
@@ -205,15 +205,15 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 
 ## 后台检索
 
-`ListAdmin` 使用 `AdminQuery` 的请求 ID、账户、站点和 `[Since,Until)` 时间窗，按 `(at,id)` 倒序返回 `CallSummary` 和下一页 `Cursor`。`AdminQuery` 另可带精确模型名和结果（`ok`/`error`，错误即 `error_kind` 非空）；站点、模型、结果三个参数和列表的回显字段都可选，供看板下钻和旧节点滚动发布。HTTP 边界限制 31 天、200 条与 10 秒；SQL 仅选择客服可见字段，不读取成本、端点或 route。账户过滤复用既有账户有序索引；无账户且无请求 ID 过滤用迁移 00011 的 UTC 时间表达式索引；请求 ID 用主键。沿用列表的 custom plan、禁用排序和复合游标上界顺序，避免深页从窗口末端重扫。`TestAdminCallsFilterAndPage` 覆盖同时间 ID、账户/请求组合、站点、分页和 RLS；`TestAdminCallsPlansUseIndexOrder` 在既有 12 万行夹具检查全局与账户页的有序计划和读取预算。
+`ListAdmin` 使用 `AdminQuery` 的请求 ID、账户、站点和 `[Since,Until)` 时间窗，按 `(at,id)` 倒序返回 `CallSummary` 和下一页 `Cursor`。`AdminQuery` 另可带精确模型名和结果（`ok`/`error`，错误即 `error_kind` 非空）；站点、模型、结果三个参数和列表的回显字段都可选，供看板下钻和旧节点滚动发布。HTTP 边界限制 31 天、200 条与 10 秒；SQL 仅选择客服可见字段，不读取成本、端点或 route。账户过滤复用既有账户有序索引；无账户且无请求 ID 过滤用迁移 00001 的 UTC 时间表达式索引；请求 ID 用主键。沿用列表的 custom plan、禁用排序和复合游标上界顺序，避免深页从窗口末端重扫。`TestAdminCallsFilterAndPage` 覆盖同时间 ID、账户/请求组合、站点、分页和 RLS；`TestAdminCallsPlansUseIndexOrder` 在既有 12 万行夹具检查全局与账户页的有序计划和读取预算。
 
 完整 `GetTrace` 仅由 MFA 加平台 `calls.inspect` 的管理接口返回；客服平台 `calls.search` 不授予该权限。全局索引使用 `(at AT TIME ZONE 'UTC',id)`，全局查询以同一表达式排序和设游标上界，仍保留 at 时间窗做分区裁剪；UTC 无夏令时，因此顺序与原始时间一致。否决普通 at 索引：它会与账户索引竞争，真实 12 万行稀疏成功夹具曾读 2217 块、导出探测扫描 120003 行。账户和请求 ID 筛选继续用原始 at 排序，表达式索引不参与这些有序计划；既有稀疏和深页测试守住回退。
 
-内置 admin 在迁移 00017 通过 `additional_permissions` 得到 `calls.search`、`calls.inspect` 和 `audit.view`，旧节点忽略新权限，support 只得到 calls.search；不复用控制台 calls.view，防止平台 member 授予扩大为全平台检索。摘要与详情响应字段均可选，滚动发布期间旧节点没有这些入口时应显示不可用。
+内置 admin 在迁移 00001 通过 `additional_permissions` 得到 `calls.search`、`calls.inspect` 和 `audit.view`，旧节点忽略新权限，support 只得到 calls.search；不复用控制台 calls.view，防止平台 member 授予扩大为全平台检索。摘要与详情响应字段均可选，滚动发布期间旧节点没有这些入口时应显示不可用。
 
 ### 运营看板
 
-`ReadAdminOverview` 在一个事务里用同一站点和 `[Since,Until)` 窗口读三组数：总调用数与错误数（`error_kind IS DISTINCT FROM ''`），以及调用最多的前 10 个账户和模型（按调用数排序，同数分别按账户 ID、模型名）。三条 SQL 共用谓词：站点、`at` 范围，以及 `(at AT TIME ZONE 'UTC')` 的同一范围，让分区裁剪和迁移 `00011` 的表达式索引都生效。`TestReadAdminOverviewCountsGroupsAndLimits` 覆盖过滤、分组、前 10 截断和排序；`TestAdminOverviewPlansReadTheWindow` 在 12 万行夹具上要求无 Seq Scan、使用索引、读取预算不超过 1500 块。汇总字段与两个列表在合同里都可选，旧节点没有时页面显示不可用而不是 0。
+`ReadAdminOverview` 在一个事务里用同一站点和 `[Since,Until)` 窗口读三组数：总调用数与错误数（`error_kind IS DISTINCT FROM ''`），以及调用最多的前 10 个账户和模型（按调用数排序，同数分别按账户 ID、模型名）。三条 SQL 共用谓词：站点、`at` 范围，以及 `(at AT TIME ZONE 'UTC')` 的同一范围，让分区裁剪和迁移 `00001` 的表达式索引都生效。`TestReadAdminOverviewCountsGroupsAndLimits` 覆盖过滤、分组、前 10 截断和排序；`TestAdminOverviewPlansReadTheWindow` 在 12 万行夹具上要求无 Seq Scan、使用索引、读取预算不超过 1500 块。汇总字段与两个列表在合同里都可选，旧节点没有时页面显示不可用而不是 0。
 
 `CallCoverage` 给看板和调用列表同一套判断：它读 `call_log` 的叶子分区名，记下还在的月份和最老的那个（`Since`）。`Covers(since, until)` 逐个检查窗口触及的整月，缺任何一个月就说不完整；所以较老月份归档失败、较新月份仍被删除时，最老分区还在，窗口也会因中间的空洞标为不完整。响应带 `calls_incomplete` / `calls_available_since`（调用列表为 `incomplete` / `available_since`），`available_since` 是最老的剩余月分区，它之前确定已归档；页面据此说明数字或列表不完整而不是把归档当成零；收入、成本和现金来自预留与账本，不受这个判断影响。一个命名月分区都不剩时 `Known` 为 false，任何窗口都不算完整。`TestCallCoverageStartsAtTheOldestPartition` 删掉 10 月分区后核对边界、看板和列表都只统计 11 月并报不完整；`TestCallCoverageChecksTheWindowForGaps` 保留 10 月、删掉 11 月，核对最老分区仍是 10 月、只落在 10 月的窗口完整、跨过 11 月或整个落在 11 月的窗口不完整；`TestCallCoverageWithNoMonthLeft` 删光所有命名月分区，核对覆盖变为未知。
 
@@ -225,7 +225,7 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 - **谁能调用**：它是运营和管理读的链，不是用户的接口：它带成本、端点和路由。**调用方必须用平台范围，并且只在运营或管理的处理器里调用**；`pg` 没有能判断范围的接口，函数本身拦不住，账户范围在数据库层面读得到自己调用的这些字段（用户的基础读取走 `ListOwn`/`GetOwn`，不含成本、出口或内部端点 ID；控制台另读 `ReadOwnDetail` 的白名单摘要，并在 HTTP 层将内部 ID 替换为公开代号）。
 - **路由过程**：调用行的 `route` 列，内容是 routing 的 `Record.JSON()`：被排除的候选和原因、选定的路线、每次尝试的结局。尝试不重复存路由。
 - **账本交易**：由 billing 的 `LedgerOf(ctx, tx, id)` 按同一个请求 ID 读，每笔交易带自己的分录。observability 不读 billing 的表，也不引用 billing（依赖表里 observability 在 billing 之上），所以「串起」由调用方把两个函数的结果合起来：三个查询、两个模块，各读自己的表（[总体架构的「模块边界规则」](../../docs/architecture.md#模块边界规则)）。
-- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。这一列已由迁移 `00020` 删除（#204）：Axiom 从未部署到生产，没有节点写过它，[平台的「晚一个版本再删」规则](../platform/README.md#迁移)针对的滚动发布窗口不存在；Go 代码和 sqlc 查询里都没有它。`ALTER TABLE` 对分区表的列删除会作用到每个分区，`TestDropLedgerEntryIDsReachesPartitions` 在真实 PostgreSQL 上逐个核对父表、月分区和默认分区，迁移前写入的调用也还在。
+- **不在调用记录里存账本 ID**：`billing.entries` 没有自己的 ID，`ledger_entry_ids` 里的值从来不存在，也没有写入方。抄交易 ID 同样不行：调用记录异步写，校正还会在记录写好后再记交易，抄下来的链接会旧；记录在本地 spill 里等写库时账本已经提交，抄下来的交易看起来会比记录新。请求 ID 是账本自己的键（`transactions` 的唯一约束以它开头），按它读总是完整、最新。基线不含这一列（#204）：Axiom 从未部署到生产，没有节点写过它，[平台的「晚一个版本再删」规则](../platform/README.md#迁移)针对的滚动发布窗口不存在；Go 代码和 sqlc 查询里都没有它。`TestBaselineOmitsLedgerEntryIDs` 在真实 PostgreSQL 上逐个核对父表、月分区和默认分区，并检查重复执行迁移后调用仍在。
 - **不变量**：尝试序号从 1 连续到 `len(Attempts)`，调用行的 `attempt_count` 等于它（写入时算好）；`route` 是 JSON 对象；`LedgerOf` 的每笔交易 `request_id` 等于调用 ID、`attempt_seq` 是 0（请求本身）或 1 到 33（某次尝试），每笔交易的分录合计为 0（billing 写入时断言）。测试：`TestTraceReadsTheWholeChain`（cmd/axiom，走一次真实结算）与 `TestCallAndAttemptsRoundTrip`。
 
 ## 分区
@@ -238,7 +238,7 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 
 `RegisterRetention` 在 `archive` 队列每天运行一次（唯一键让上一轮未结束时下一轮跳过），每次：
 
-1. **预建**当月和未来 12 个月的分区，两张表各一次。先查 `to_regclass`，已存在的不建、不加锁、不重写策略；新建的在同一事务里 `ENABLE/FORCE ROW LEVEL SECURITY` 并建与迁移 `00005` 相同的 InitPlan 策略。超出预建的调用仍进默认分区，不丢。
+1. **预建**当月和未来 12 个月的分区，两张表各一次。先查 `to_regclass`，已存在的不建、不加锁、不重写策略；新建的在同一事务里 `ENABLE/FORCE ROW LEVEL SECURITY` 并建与迁移 `00001` 相同的 InitPlan 策略。超出预建的调用仍进默认分区，不丢。
 2. **读窗口**：`hot_days` 为 0 时只预建；没有对象存储时同样只预建，并记一条日志说明为什么不删。都不会删任何东西。
 3. **列出整月**已经早于 `now - hot_days` 的叶子分区（`pg_partition_tree`，只认 `call_log_YYYY_MM` / `call_attempt_YYYY_MM`；默认分区不认）。按时间从旧到新处理，每月一次。
 4. **归档**：用 `COPY (SELECT * FROM 分区) TO STDOUT` 以 CSV（带表头）导出，gzip 后按 `call-log/v1/<YYYY-MM>/call_log.csv.gz`、`call_attempt.csv.gz` 上传，最后写 `manifest.json`：版本、月份、格式、每张表的行数、字节数、SHA-256 和列名/类型。清单最后写，存在即证明两份对象都已上传；`confirm` 再逐个 HEAD 核对清单里的字节数。
@@ -252,15 +252,15 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 
 ## 索引
 
-`call_log` 在每个分区上有十一个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00002`），以及 key、工作区与报错布尔表达式筛选（迁移 `00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；迁移 `00011` 的全局后台检索 `call_log_admin_time`（UTC 时间表达式与 id）；迁移 `00014` 检测器专用的 `(at, account_id)` 部分索引，谓词 `price_nano >= 0` 让按账户的控制台查询不会选中它。迁移 `00047` 的会话部分覆盖索引为 `(account_id, at DESC, id DESC)`，INCLUDE 站点、会话、应用、模型、币种、价格、工作区、key、错误类型和尝试计数十列，仅排除空会话与待结算记录；首批 Claude Code/Codex 流量的容量预算按已结算行全部进入该索引计算，不能因它是部分索引就按稀疏流量估算。迁移 `00046` 的回退部分索引只为 `attempt_count > 1` 的调用增加索引项；其他这些新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
+`call_log` 在每个分区上有十一个索引：主键 `(id, at)`；不筛选的 `(account_id, at DESC, id DESC)`；模型和应用筛选（迁移 `00001`），以及 key、工作区与报错布尔表达式筛选（迁移 `00001`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；迁移 `00001` 的全局后台检索 `call_log_admin_time`（UTC 时间表达式与 id）；迁移 `00001` 检测器专用的 `(at, account_id)` 部分索引，谓词 `price_nano >= 0` 让按账户的控制台查询不会选中它。迁移 `00001` 的会话部分覆盖索引为 `(account_id, at DESC, id DESC)`，INCLUDE 站点、会话、应用、模型、币种、价格、工作区、key、错误类型和尝试计数十列，仅排除空会话与待结算记录；首批 Claude Code/Codex 流量的容量预算按已结算行全部进入该索引计算，不能因它是部分索引就按稀疏流量估算。迁移 `00001` 的回退部分索引只为 `attempt_count > 1` 的调用增加索引项；其他这些新增索引每次写入各增加一条索引项，不在 gateway 的同步调用路径里；持续写入吞吐与索引总体体积仍待压测。
 
 `call_attempt` 只有主键索引 `(request_id, at, attempt_seq)`：按请求查它的尝试走这个前缀，保留任务按分区整块处理；没有按尝试的列表查询，所以暂不加别的索引。它的写入量是调用行乘以每次尝试，见下文的写入放大。
 
 - **选择**：比较了四种做法，量的是 36 万条（表 83 MB，原有索引 50 MB）。(a) 不加：稀疏和零命中读整个分区（7,059 缓冲，随表增长）。(b) 在账户索引上加 `INCLUDE (model, client_app)`：计划不变，仍然读整个分区，没有用。(c) 只加模型索引：模型筛选解决，应用筛选仍读整个分区。(d) 模型和应用各一个：两种筛选都读命中的行（见上表）。取 (d)，是让两个筛选都有界的最小做法。
-- **写入放大**：迁移 `00002` 的模型/应用两个窄索引各为每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。这组测量只对应两个窄索引，不能外推为十一个索引等宽。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。spill 满时准入拒绝新调用，所以写入持续跟不上时会拒绝而不是少记录；代价是 `call_attempt` 的每个尝试一行和它的主键索引，筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
+- **写入放大**：迁移 `00001` 的模型/应用两个窄索引各为每行多一条索引项，36 万条各多约 41 MB（表加索引合计 133 MB 到 174 MB 到 215 MB，每个约 +31%）；批量写入 12 万条的最快一次是 4.6 s、3.9 s、7.9 s（无、一个、两个；机器噪声约三成，体积是确定的）。这组测量只对应两个窄索引，不能外推为十一个索引等宽。调用记录由后台按批写（满 500 条立即写，否则最多攒 200 ms），不在请求路径上；持续吞吐取决于调用到达的速率和数据库，没有固定上限。spill 满时准入拒绝新调用，所以写入持续跟不上时会拒绝而不是少记录；代价是 `call_attempt` 的每个尝试一行和它的主键索引，筛选索引在持续满批写入下的吞吐**待验证**，随[性能](../../docs/performance.md#怎么验证)的压测一起量。如果运营中发现应用筛选很少用，删掉 `call_log_account_app_at` 是一条只减不增的迁移。
 - **会话索引体积**：12 万行、全部带非空会话的夹具以叶子索引 `pg_relation_size` 求和测量；新索引合计 33,841,152 字节（约 32.3 MiB、282 字节/调用），同一夹具的调用堆为 63,488,000 字节，新索引约为堆体积的 53.3%。该夹具的会话和模型名较短，不能当作最大列宽的容量上界。首批以 Claude Code/Codex 为主，容量与写入放大按每次已结算调用多一个覆盖索引项计算；包含会话、模型等十列会增加每条索引项的宽度，不能只按索引数量外推。持续满批写入吞吐与真实标签长度分布仍待压测，入库跟不上仍会通过 spill 背压拒绝新调用。
-- **回退筛选**：`TestListPlansFollowTheIndexes` 用 12 万条记录、heavy 账户 6 万条且其中 0.2% 回退的数据，在同一隔离库中删建 `00046` 索引，对比稀疏和空页的 EXPLAIN 缓冲读取量；实测稀疏页从 1923 块降到 52 块、空页从 610 块降到 1 块，不设时间窗口为 106 块；回归守住首/次页 400 块、空页 20 块的预算。部分索引避免按账户时间索引逐条过滤整个历史；不覆盖普通调用，也不增加每次尝试的索引项。该索引的持续写入吞吐仍随整体压测验证。
-- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。`00002`、`00009`、`00011`、`00014`、`00046` 与 `00047` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
+- **回退筛选**：`TestListPlansFollowTheIndexes` 用 12 万条记录、heavy 账户 6 万条且其中 0.2% 回退的数据，在同一隔离库中删建 `00001` 索引，对比稀疏和空页的 EXPLAIN 缓冲读取量；实测稀疏页从 1923 块降到 52 块、空页从 610 块降到 1 块，不设时间窗口为 106 块；回归守住首/次页 400 块、空页 20 块的预算。部分索引避免按账户时间索引逐条过滤整个历史；不覆盖普通调用，也不增加每次尝试的索引项。该索引的持续写入吞吐仍随整体压测验证。
+- **迁移方式**：加索引兼容旧程序（旧程序的查询没有它也对），按平时的顺序先迁移再发新程序。分区表的 `CREATE INDEX` 在每个分区上建一个，建的时候对该分区加 SHARE 锁，挡住写入器的插入，时长随该分区的行数增长（12 万条约 1.7 秒）；分区表的父表不支持 `CONCURRENTLY`。基线 `00001` 用普通的 `CREATE INDEX`，只适合表还小的时候，也就是 `call_log` 第一次部署时。**已经有大量数据的调用记录再加索引**，迁移要这样写：标 `-- +goose NO TRANSACTION`；`CREATE INDEX 名 ON ONLY observability.call_log (...)`（建出无效的父索引，不锁写）；对每个分区 `CREATE INDEX CONCURRENTLY 分区索引名 ON 分区 (...)`（不挡写；`migrate` 的 5 秒 `lock_timeout` 对它等老事务也生效，超时就失败，留下无效索引，要先删掉再重跑）；再 `ALTER INDEX 父索引 ATTACH PARTITION 分区索引`，全部挂上后父索引才生效。新建的月分区自动带上父索引。
 
 ## 决策与理由
 
@@ -268,7 +268,7 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 |---|---|---|
 | 另建 `call_attempt`，每次尝试一行 | 调用记录要能串起每次尝试（[记录与告警的「追溯」](../../docs/domains/observability.md#追溯)）；suppliers 的 `attempt_costs` 只在结算事务里写，失败或崩溃的请求可能没有可查的尝试；单独的表让尝试有类型、时间和结果，并按 `(request_id, attempt_seq)` 连到供应商的扣费。负责人已在对话中把设计决定交给开发者（Issue #29） | 只存 `route` JSON：没有类型和耗时，查一次尝试要解 JSON；把尝试嵌进 `call_log`：一个请求一行会被撑大，按尝试查询和保留都更难；让 suppliers 直写：跨模块写同一张表，违反模块边界 |
 | 调用行的 `endpoint_id`、`source_class`、`egress`、`attempt_count` 取自最后一个尝试 | 一处事实：调用行与尝试表不可能不一致；网关也不用把同样的值填两遍 | 调用记录再带一份端点、来源和出口：两套值迟早对不上 |
-| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 已删除（迁移 `00020`） | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。Axiom 从未部署到生产，没有节点写过这一列，所以不必等停止使用它的版本再发布一次；真实 PostgreSQL 的迁移测试核对父表和每个分区都删掉了它 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界；再等一个发布：没有生产节点可等 |
+| 调用、尝试和账本交易只用请求 ID 关联，`ledger_entry_ids` 已删除（迁移 `00001`） | 分录没有 ID，这一列从来没有写入方；请求 ID 已经是账本自己的键，照抄一份会在调用记录丢失或校正追加交易时与账本不一致。Axiom 从未部署到生产，没有节点写过这一列，所以不必等停止使用它的版本再发布一次；真实 PostgreSQL 的迁移测试核对父表和每个分区都删掉了它 | 抄交易 ID：要结算把 ID 带进异步记录，仍会缺、会旧；让 observability 查 billing 的表：违反模块边界；再等一个发布：没有生产节点可等 |
 | 准入预占 + 本机 WAL + 顺序批量入库，spill 满时拒绝新调用 | 记录在响应结束前已追加到本机段文件，进程崩溃可重放，数据库慢不拖慢已完成调用；磁盘和接收量都有硬上限，满了拒绝而不是丢。`Commit` 等一轮组提交 fsync 才返回，主机断电也不丢已回复的调用；并发调用共用一次 fsync，调用路径的实测代价见[性能的「调用路径上的规则」](../../docs/performance.md#调用路径上的规则)。否决在结算事务里写调用记录：它虽然和结算同一原子提交，但会让一条日志记录的约束或磁盘故障失败整笔钱的结算，`SettleBatch` 还要为每笔调用多带一行日志，日志表因此进入钱的临界路径；也否决同步数据库插入：同样把数据库延迟放进调用路径，且崩溃会丢掉已结算未插入的记录。否决无界队列：内存无上限；否决队列满丢新记录：违反「全部保存」 |
 | 整批行作为一个 JSON 数组传给一条 `INSERT … SELECT` | 一次往返、一个参数；类型转换和检查留给表。sqlc 不认 30 多个参数的 `unnest`，也没有 `:copyfrom`（`pg.Tx` 没有 `CopyFrom`） | 逐行 `INSERT`：每条一次往返；列式 `unnest`：生成不了 |
 | 金额存最小单位的整数，币种单列 | 与 billing 的存储一致（[计费的「钱的表示」](../../docs/domains/billing.md#钱的表示)），汇总不丢精度 | 浮点数、字符串 |
@@ -288,7 +288,7 @@ HTTP 入口签名的理由、用途键派生与轮换语义见[领域决策表](
 
 账户的 `accounts.authentication_failures` 是账户后台按站点每分钟至多上报一次的完整分钟峰值，只有达到已配置规则阈值才创建事件。消费每条样本时立即评估该事件并持久安排符合规则的首通知，再处理后续低值或恢复；因此消费积压不会把已完成的攻击窗口覆盖掉。低于所有阈值的样本或零窗口结束事件，实际通知派发仍在消费事务之后。账户负责限速、计数和脱敏，本模块沿用持续时间、静默、重复和通知机制。
 
-`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00012` 保存待消费信号；observability `00004` 保存规则/渠道配置、事件和投递回执，`00008` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00014` 保存检测状态、阈值和按时间取账户的索引，`00017` 保存回执的展示字段快照；platform `00015` 保存来源消费位置。
+`platform/alert.Sink` 的 Raise/Resolve 是非阻塞、有界的本机入口；`alert.Persist` 才是数据库持久边界。`RegisterAlerts` 注册 River 周期消费者（告警、Webhook 和 `observability.spend`）；消费者的时钟字段供测试控制持续时间、静默和重复判断。迁移：platform `00001` 保存待消费信号；observability `00001` 保存规则/渠道配置、事件和投递回执，`00001` 扩展冻结的 Webhook 正文、封存签名密钥和渠道测试位置，`00001` 保存检测状态、阈值和按时间取账户的索引，`00001` 保存回执的展示字段快照；platform `00001` 保存来源消费位置。
 
 比较方案：直接让模块引用 observability 并同步建事件，接口较少，但倒置模块依赖且故障进入业务事务；选择平台信号表和 observability 消费，增加一跳延迟，换来独立事务和跨节点接管。消费锁覆盖信号转事件的有界数据库批次及完整安全样本和支付窗口样本的即时评估；事件字段保留当前样本供规则判断，回执在创建时冻结展示字段，后续低值可重置持续条件而不改写待发通知；常规周期评估、派发和保留清理另开事务，待发回执用 FOR UPDATE SKIP LOCKED 认领，邮件和 Webhook 网络请求在事务之外。Webhook 的 10 秒期限只包出站请求，回执读写使用外层作业期限。邮件回执由 mail 的注入回调写入本模块，mail 不引用 observability。
 

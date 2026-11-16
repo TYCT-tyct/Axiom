@@ -191,15 +191,13 @@ func TestUsageFiltersComparisonAndBuckets(t *testing.T) {
 }
 
 func TestUsageBackfillResumesAcrossPartitions(t *testing.T) {
-	// Migrations change cluster-wide role grants, so do not race template creation in parallel tests.
+	// Build the historical rows without journaling, then process the backfill and live rows together.
 	db, database := usageDBBeforeRollup(t)
 	at := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
 	account := uuid.NewV7()
 	a, b := record(account, at.Add(-time.Minute)), record(account, at.Add(time.Minute))
 	keep(t, db, a, pendingOf(record(account, at)), b)
-	if err := pg.Migrate(t.Context(), database.Migrator, Module()); err != nil {
-		t.Fatal(err)
-	}
+	beginUsageBackfill(t, database)
 	q := UsageQuery{Account: account, Since: at.Add(-time.Hour), Until: at.Add(time.Hour), Granularity: "hour"}
 	if !usageBatch(t, db, 1) {
 		t.Fatal("backfill ended before second row")

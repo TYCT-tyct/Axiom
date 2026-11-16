@@ -30,7 +30,7 @@
 | `audit` | 在改动自己的事务里写审计日志，并按授权范围只读检索，见下文「审计日志」 |
 | `idem` | 管理接口写操作的幂等键：`Once` 在改动自己的事务里占键、执行、存下响应，见下文「幂等」 |
 | `typeid` | 对外 ID 的写法：`Prefix` 把 `uuid.UUID` 编成 `前缀_` 加 26 个字符（TypeID 规范 v0.3.0），`Decode` 读回；前缀由各实体的所属模块定义，类型化的 ID（`SiteID` 等）随各自的表加入，见 [accounts 的「ID」](../accounts/README.md#id) |
-| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`；迁移 `00013` 增加凭证份额的进程启动身份、成员确认列表和离开节点的 RPM 分区保留表 `credential_share_departures`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与有限 RPM 通过注册表的完整成员确认按节点静态分份额，生产支持 N > 1（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
+| `kv` | Valkey 的访问层：每次访问的期限、熔断、与 Valkey 的时钟修正、节点心跳（`platform.nodes`；迁移 `00001` 增加凭证份额的进程启动身份、成员确认列表和离开节点的 RPM 分区保留表 `credential_share_departures`）和指标；限流计数（K1）和登录前的尝试次数（K2）已经在用，登录脚本由 accounts 持有，通过 `Login` 用途标签和 `LoginSpace` 键空间复用访问层；登录键的隐私、到期及按节点等分的故障兜底见 [kv 的每种用途](kv/README.md#每种用途)，会话粘性（K3）同批读取、经有界后台队列写回（后台最多占 32 个在途位置、不排在前台之前、不驱动熔断）；邮件收件人冷却（#399）用 `Mail` 用途标签和 `MailSpace`，由 mail 的脚本原子准入；缓存四类状态已共享，供应商并发与有限 RPM 通过注册表的完整成员确认按节点静态分份额，生产支持 N > 1（[状态核对](kv/README.md#多节点状态核对)）；`kvtest` 给测试一个按部署方式配好的真实 Valkey，见 [kv 的 README](kv/README.md) |
 | `mail` | 出站邮件：SMTP 发送、消息组装、任务队列（`mail.send`，`notifications` 队列）和按收件人的限流（Valkey 共享，故障退回各节点的进程内桶），见 [mail/README.md](mail/README.md) |
 | `objectstore` | S3 兼容对象存储：SigV4 签名、`Check`/`Put`/`Get`/`Head`/`Delete`/`List`、每次操作的期限与只对可恢复失败的重试；配置全空即关闭，设了一个就要设全。用自己的传输（自托管桶在私网，`egress` 的地址策略不适用），见 [objectstore/README.md](objectstore/README.md) |
 
@@ -321,7 +321,7 @@ M1 的契约没有的，以后加（向后兼容）：试运行（`dry_run`）�
 - **期限**：每个连接从域名解析到握手结束合计最多等 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒；一个主机有几个地址也合计，URL 里的 `connect_timeout` 只能让它更短），整次执行最多 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟，长 DDL 要的时间）。到期时迁移自己结束它在服务器上的会话：每个连接带着本次执行独有的 `application_name`，期限到后用一个独立的短连接（自己最多 5 秒）对这些会话执行 `pg_terminate_backend`，等它返回才返回。这样结果既不依赖 pgx 在后台发出的取消请求（进程退出可能抢在它前面，语句也可以写成吞掉取消），也不是每条语句各自重新计时的语句超时；按应用名而不是按进程号，是因为进程号可能被别的会话复用。事务回滚，会话级的 goose 锁随会话释放。goose 释放会话锁用的是取消不掉的 context，服务器不应答时解锁会一直等，所以终止之后再给 15 秒宽限，仍未返回就放弃等待、让进程退出。两者都在连接之前校验：必须是正的时长，连接期限必须短于执行期限，拼错的变量名报错。执行期限让一次卡住的迁移不会一直占着 goose 的会话锁，挡住下一次部署。
 - 任务队列 River 的表在 schema `river`，由 `migrate` 在建 schema 的同一个连接上、以 `axiom_owner` 迁移（River 自己的迁移，不是 goose 文件），随后把表、序列、函数授给 `axiom_app`，每次执行都重授一遍；它不是模块，不在 `moduleOrder` 里，所以启动检查对表的行级安全审计不包括它（任务行不属于任何租户，也不存租户的数据；要带租户的数据放模块自己的表，见下文），启动检查另核对 River 的迁移版本（缺了就让运行 `axiom migrate`）。
 - 数据库连不上时，错误只说明是哪个变量和哪类失败（SQLSTATE、网络原因、握手没在期限内完成），不带用户名、库名和主机：误填在这些位置的密钥不会进日志。脱敏只作用于连接这一步（迁移的连接、结束会话用的连接），迁移工作本身的错误和期限到后的错误原样带上下文传出；终止连接也失败时，两个错误合在一起返回，互不改写。
-- 合并后不改：CI 对比基准提交，`migrations/` 下只能新增文件（`just migrations <base>`）。
+- 每个模块从 `00001_baseline.sql` 起独立递增；基线直接创建最终结构，后续迁移只增不改（`just migrations <base>`）。首次生产部署前的这次压缩，以 `scripts/compare_migrations.py` 固定的历史提交为证：CI static 在两个空库分别执行历史和基线，按完整对象排序比较 `pg_dump --schema-only`，逐行比较全部初始数据和序列状态。临时库固定时间与 UUID 输入，导出前恢复内置函数，不忽略权限、策略、约束或数据字段。选择最终定义而非拼接历史 SQL，避免新库继续做回填和反复改表；不会升级已有开发数据库，开发库需重建。
 - **校验和**：`axiom migrate` 在 `platform.migration_checksums` 为每个已应用的迁移记下文件名和文件的 SHA-256，记录与 goose 的版本行在同一事务提交，已有的记录不覆盖。整轮迁移（核对、摘要登记、各模块执行）在同一个会话上持同一把迁移锁，会话丢失时运行失败、不会换连接继续；执行任何待应用的迁移之前，先核对所有模块已记录的历史：改过、改名或被删掉的已合并迁移在这时就停下，错误里有文件、记录的摘要和当前的摘要；待执行的非事务迁移先把文件记下再运行，失败后重试时先核对，文件变了就拒绝。记录出现之前就已迁移的数据库第一次运行 `axiom migrate` 以当时的文件为基线，此后才比对；已应用却没有记录的迁移让 `serve` 提示先运行 `axiom migrate`。核对只涉及本程序携带的版本，比程序新的版本不参与，所以滚动发布中旧节点照常启动；记录表同样启用并强制行级安全、有策略，旧版本的启动审计不认识它也不会拒绝。`TestThePreviousReleasesAuditAcceptsTheChecksumRecord` 只固定上一版本的审计条件；真的启动上一版本的二进制是部署检查里的 `scripts/ci/old-binary-check.sh`（[发布的「滚动发布」](../../docs/ops/release.md#滚动发布)）。
 - **收缩迁移晚一个版本**：列或表只在停止使用它的那个版本发布之后的版本里删除，这样滚动发布期间新旧节点可以同时运行（[CONTRIBUTING 的「发布与缓存」](../../CONTRIBUTING.md#检查清单)）。
 
@@ -340,7 +340,7 @@ SMTP 未配置的节点不注册 `mail.send`、`mail.send_tracked` 和 `accounts
 3. **验证没有遗留**：重跑上面的查询，`queue <> 'default'` 的行必须是 0；再看 `SELECT queue, kind, count(*) FROM river.river_job WHERE state IN ('available','scheduled','retryable','running') GROUP BY 1,2`，每个周期任务的种类（`billing.expire_credit`、`billing.reconcile`、`suppliers.sync_sweep`、`suppliers.reconcile`、`queue.discard_scan`）都只在 `default`，且每种至多一个，旧版本的下一次周期插入才不会被跳过。 另查 `SELECT count(*) FROM river.river_job WHERE kind = 'catalog.sync' AND state IN ('available','pending','scheduled','retryable','running')`，必须为 0；它不属于旧版本可执行种类。
 4. **新版本起不来、旧版本已经在跑时**：具名队列里又出现了任务（例如新节点停得晚），重做第 2 步和第 3 步；旧节点会在 `default` 里把它们做完。要再升级回新版本，直接部署即可：新版本留着 1 个 `default` 的 worker，会把 `default` 里剩下的任务做完。
 
-任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略用 [pg 的账户范围表达式](pg/README.md#决策与理由)，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../accounts/migrations/00002_lookup.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
+任务参数不属于任何租户（任务行的策略只看平台范围），所以**租户的数据不进参数**：要带租户数据的任务把数据放进模块自己的表，表上开 `FORCE ROW LEVEL SECURITY`、策略用 [pg 的账户范围表达式](pg/README.md#决策与理由)，参数里只放那一行的 id。工作进程手里只有 id，没有租户的作用域，所以用 `db.TenantTx(ctx, "schema.function", id, fn)` 换取作用域：先以空作用域调一个 `SECURITY DEFINER`、属主 `axiom_lookup`、只授权给应用的查找函数，它只返回那一行的 `site_id` 和 `account_id`（列级授权加 `lookup` 策略，与 [accounts 的登录前查找](../accounts/migrations/00001_baseline.sql) 同一套做法），`TenantTx` 再把这个租户设进作用域才运行 `fn`，查找不到时 `found` 为 false、`fn` 不运行。作用的构造因此仍只在 `pg` 里。第一个这样做的模块是 [mail](mail/README.md)（`platform.mail_outbox`、`platform.mail_tenant`）。
 
 worker 返回的错误也一样：River 把它的文本写进 `river.river_job.errors`（jsonb 数组，每次尝试一项），这一列和参数一样没有策略覆盖。所以 worker 交给 River 的只能是分类：成功、snooze，和「可重试」「永久失败」两种通用错误；收件人、正文和服务器回复只进日志行，日志本来就不属于任何租户。
 
@@ -355,7 +355,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
 
 ## 审计日志
 
-管理 API 使用 `audit.List`、`audit.Get` 读取不可变条目，需要独立平台 `audit.view`（MFA）。运营接口的 `audit_list`、`audit_get` 转给同一组管理处理器，要凭证持有 `audit.view` 和平台范围（见[运营的「审计」](../../docs/domains/operations.md#审计)）。列表提供账户、站点、请求 ID、操作者类别/ID、动作、模块和目标类别/ID 精确筛选；窗口与游标由 HTTP 边界校验，默认 24 小时、上限 31 天和 200 行、10 秒期限。审计 detail 以 `jsonx.Raw` 保留原始 JSON，避免大整数在通用对象解码中被 float64 舍入。按 `(at,id)` 倒序、复合游标上界优先，每个单项筛选由迁移 00017 的有序索引支持，组合筛选沿所选索引检查剩余条件；不承诺所有相关条件的读取量只是一页。custom plan 折叠空条件，列表禁用排序，不做 OFFSET 或清空。`TestAuditSearchFiltersPagesAndScope` 检查分页、精确过滤、RLS 和详情；`TestAuditPagesFollowIndexOrder` 在 2 万条记录中检查首页、深页、稀疏和无命中的索引计划及缓冲读取预算。
+管理 API 使用 `audit.List`、`audit.Get` 读取不可变条目，需要独立平台 `audit.view`（MFA）。运营接口的 `audit_list`、`audit_get` 转给同一组管理处理器，要凭证持有 `audit.view` 和平台范围（见[运营的「审计」](../../docs/domains/operations.md#审计)）。列表提供账户、站点、请求 ID、操作者类别/ID、动作、模块和目标类别/ID 精确筛选；窗口与游标由 HTTP 边界校验，默认 24 小时、上限 31 天和 200 行、10 秒期限。审计 detail 以 `jsonx.Raw` 保留原始 JSON，避免大整数在通用对象解码中被 float64 舍入。按 `(at,id)` 倒序、复合游标上界优先，每个单项筛选由迁移 00001 的有序索引支持，组合筛选沿所选索引检查剩余条件；不承诺所有相关条件的读取量只是一页。custom plan 折叠空条件，列表禁用排序，不做 OFFSET 或清空。`TestAuditSearchFiltersPagesAndScope` 检查分页、精确过滤、RLS 和详情；`TestAuditPagesFollowIndexOrder` 在 2 万条记录中检查首页、深页、稀疏和无命中的索引计划及缓冲读取预算。
 
 谁在何时对什么做了什么改动，记在 `platform.audit_log`，由 `audit.Record` 写入。所有模块都写这一张表，[运营](../../docs/domains/operations.md#审计)读取、检索和回放。它在平台，是因为 accounts、billing、catalog、payments 都要留审计，又都不能引用 `operations`。
 
@@ -364,7 +364,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
 
   | 列 | 内容 |
   |---|---|
-  | `actor_kind`、`actor_id` | 操作者：`audit.User(用户 ID)`、`audit.System("<模块>.<任务>")`、`audit.ManagementKey(key ID)`（种类 management_key，迁移 00016 放宽约束）或 `audit.OperationsAgent(凭证 ID)`（种类 operations_agent，迁移 00031 放宽约束）：运营 agent 提出的操作和批准后以它的名义执行的改动；审批 AI 用 `system:operations.ai_approval`，负责人审批用 `user`。 |
+  | `actor_kind`、`actor_id` | 操作者：`audit.User(用户 ID)`、`audit.System("<模块>.<任务>")`、`audit.ManagementKey(key ID)`（种类 management_key，迁移 00001 放宽约束）或 `audit.OperationsAgent(凭证 ID)`（种类 operations_agent，迁移 00001 放宽约束）：运营 agent 提出的操作和批准后以它的名义执行的改动；审批 AI 用 `system:operations.ai_approval`，负责人审批用 `user`。 |
   | `request_id` | 请求 ID，`Record` 从 context 读取（`httpserver.RequestID`）；后台任务没有 |
   | `action` | 稳定的动作名 `<对象>.<动作>`，如 `api_key.revoke`。检索和回放按它分类，改名就是另一种动作 |
   | `module`、`target_kind`、`target_id` | 改动的对象：所属模块、种类、ID |
@@ -375,7 +375,7 @@ worker 返回的错误也一样：River 把它的文本写进 `river.river_job.e
 
 - **不记什么**：密钥、密码、key、凭证的明文，对话内容，ID 之外的个人信息（邮箱、IP、姓名）；要指向它们就记 ID。8 KiB 的上限只限制条目的大小，挡不住这些内容（`{"text": "一段短对话"}` 照样写得进）；不记它们靠调用方只写允许的字段，由评审把关。
 - **谁能读写**：只追加，权限见上文「不变量」。读和写用同一个账户范围条件（[表达式](pg/README.md#决策与理由)）：租户范围的改动只能记到范围内的租户，没有租户的条目只有平台范围能读写。策略按站点或账户之一放行，所以只要 `site_id` 和 `account_id` 可能不属于同一租户，账户范围的事务就能记下（别的站点，本账户），那个站点的范围就读得到。所以两列由平台自己的租户登记表 `platform.tenants` 绑在一起（负责人定的做法，见「决策与理由」）：accounts 在创建站点、账户的同一个事务里调用 `audit.RegisterSite`、`audit.RegisterAccount` 登记，条目只能写已登记的组合。登记表是平台数据，只有平台范围能读；写入策略把 `tenant_id` 当作账户列比较范围，因为注册在新账户自己的范围里进行。登记是否与账户表一致，靠 accounts 在插入账户的同一个事务里登记，平台不知道账户表，也不对它建外键。以后租户在控制台看自己的条目时，显示哪些列由那个界面决定，因为理由可能是写给平台内部的。
-- **索引**：迁移 00017 在事务外并发建立十个检索索引，避免持有 SHARE 锁阻断登录、注册、MFA 等业务事务里的审计追加。代价是每次审计插入额外维护十条索引项，加上原主键共十一个索引；换取每个单项筛选沿有序索引提前停止，组合筛选仍可能读更多候选。未声称持续写入吞吐已压测。并发构建失败留下的无效索引须先 CONCURRENTLY 删除再重跑，已有有效索引可跳过。
+- **索引**：基线在空库事务内直接创建十个检索索引。代价是每次审计插入额外维护十条索引项，加上原主键共十一个索引；换取每个单项筛选沿有序索引提前停止，组合筛选仍可能读更多候选。未声称持续写入吞吐已压测。并发构建失败留下的无效索引须先 CONCURRENTLY 删除再重跑，已有有效索引可跳过。
 - **保留**：保留期待定，由负责人决定；与钱有关的条目至少与账本保留一样久。到期删除由一个后台任务角色执行，只授予它删除过期条目的权限，随删除任务一起做；在那之前不删除任何条目。
 - **防篡改**：数据库权限只挡住应用，拥有表的 `axiom_owner` 和数据库管理员仍能改。运营的哈希链和异地留存建在已提交的条目之上，由 `operations` 实现（[运营的「审计」](../../docs/domains/operations.md#审计)）：它用 `audit.Since` 按 `(at, id)` 从一个位置往后读条目（`TestSince`），哈希链已实现，异地留存尚未实现。
 
@@ -471,11 +471,11 @@ Session 标签以外的管理接口写操作带 `Idempotency-Key`（调用方为
 
 ## 运维告警信号
 
-`alert.Sink` 的 `Raise`/`Resolve` 不等待数据库：最多缓冲 1024 个信号，种类 128 字节、键 256 字节、最多 16 个字段（名字 64、值 512 字节），拒绝非法 UTF-8 和 NUL。返回 nil 仅表示本机接受；独立写协程失败后每秒重试，单次写入期限 5 秒，`Close` 用退出期限排空。`alert.Persist` 在后台事务里提交后才保证持久，UUID 让结果不明时重写不重复；原始信号与隔离的坏行在迁移 `00012` 的 `platform.alert_signals`。`alert.Consume` 的消费锁与持久写入锁一致，保证 seq 不越过尚未提交的生产事务；提交后其他节点可继续处理。只放运维元数据，不放正文、凭证或用户通知；规则和事件见 [observability](../observability/README.md#告警接口与不变量)。
+`alert.Sink` 的 `Raise`/`Resolve` 不等待数据库：最多缓冲 1024 个信号，种类 128 字节、键 256 字节、最多 16 个字段（名字 64、值 512 字节），拒绝非法 UTF-8 和 NUL。返回 nil 仅表示本机接受；独立写协程失败后每秒重试，单次写入期限 5 秒，`Close` 用退出期限排空。`alert.Persist` 在后台事务里提交后才保证持久，UUID 让结果不明时重写不重复；原始信号与隔离的坏行在迁移 `00001` 的 `platform.alert_signals`。`alert.Consume` 的消费锁与持久写入锁一致，保证 seq 不越过尚未提交的生产事务；提交后其他节点可继续处理。只放运维元数据，不放正文、凭证或用户通知；规则和事件见 [observability](../observability/README.md#告警接口与不变量)。
 
 `Queue.OnDiscard` 在清理前持久处理丢弃通知；`discarded_jobs.notified` 与通知同事务提交，旧节点已认领但尚未通知的行仍会由新节点处理。通知失败回滚，下一次扫描再处理。
 
-`alert.LockPosition`/`alert.SavePosition` 在迁移 `00015` 的平台范围位置表中锁定并推进来源的 JSON 位置；来源转出的信号及其位置必须同事务提交，回滚时一并退回。`pgtest.WorkJob` 为跨模块 worker 测试提供 River 官方事务执行器及受控时钟；只有 River 元数据走其原生事务，业务读写仍走 pg.DB 的范围事务。`pg.HasPendingJob` 按种类和参数的识别子集查询 River 的存活任务，供持久回执修复丢失或取消的任务；模块不直接读取 River 的表。
+`alert.LockPosition`/`alert.SavePosition` 在迁移 `00001` 的平台范围位置表中锁定并推进来源的 JSON 位置；来源转出的信号及其位置必须同事务提交，回滚时一并退回。`pgtest.WorkJob` 为跨模块 worker 测试提供 River 官方事务执行器及受控时钟；只有 River 元数据走其原生事务，业务读写仍走 pg.DB 的范围事务。`pg.HasPendingJob` 按种类和参数的识别子集查询 River 的存活任务，供持久回执修复丢失或取消的任务；模块不直接读取 River 的表。
 
 `alert.ClaimSources` 用来源身份在位置表中批量认领；首次启用可只种历史基线，其余认领必须和信号共用事务；`Signal.Source` 与 `Sink.RaiseOnce` 让即时生产者和补报认领同一身份，消费和人工关闭不删除认领。来源位置先于信号锁锁定；认领和写信号统一持有同一把信号锁，批次按身份排序，支持同一事务持久化多个来源身份；不可把只进入本机缓冲当作持久认领。
 

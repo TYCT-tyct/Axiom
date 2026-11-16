@@ -42,29 +42,14 @@ func callLogColumn(t *testing.T, db *pg.DB) []partitionColumn {
 	return relations
 }
 
-// TestDropLedgerEntryIDsReachesPartitions: migration 00020 drops the column from the parent, and PostgreSQL applies that
-// to every partition. The test reads the catalog on a real server before and after, and checks that a call written
-// before the drop survives it. Not parallel: pg.Migrate grants roles cluster-wide, which a template built at the same
-// time would race on.
-func TestDropLedgerEntryIDsReachesPartitions(t *testing.T) {
-	database := pgtest.New(t)
-	if err := pg.Migrate(t.Context(), database.Migrator, migrationsBeforeObservability(t, "00020")); err != nil {
-		t.Fatal(err)
-	}
+// TestBaselineOmitsLedgerEntryIDs checks the parent and every partition.
+func TestBaselineOmitsLedgerEntryIDs(t *testing.T) {
+	database := pgtest.New(t, Module())
 	db, err := pg.Open(t.Context(), database.App)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(db.Close)
-	before := callLogColumn(t, db)
-	if len(before) < 2 {
-		t.Fatalf("call_log's partition tree has %d relations, want the parent and at least one partition", len(before))
-	}
-	for _, relation := range before {
-		if !relation.present {
-			t.Fatalf("%s has no ledger_entry_ids before the drop: the migration has nothing to prove", relation.relation)
-		}
-	}
 	const id = "00000000-0000-4000-8000-000000000204"
 	if err := pgtest.Run(t.Context(), database.Superuser, `INSERT INTO observability.call_log (id, at, site_id, account_id,
 			workspace_id, key_id, ip, request_class, used_tools, has_image, has_file, model, endpoint_id, attempt_count,
@@ -81,7 +66,7 @@ func TestDropLedgerEntryIDsReachesPartitions(t *testing.T) {
 	}
 	for _, relation := range callLogColumn(t, db) {
 		if relation.present {
-			t.Errorf("%s still has ledger_entry_ids after the drop", relation.relation)
+			t.Errorf("%s has ledger_entry_ids", relation.relation)
 		}
 	}
 	var calls int
@@ -91,6 +76,6 @@ func TestDropLedgerEntryIDsReachesPartitions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if calls != 1 {
-		t.Errorf("%d calls survived the drop, want the call written before it", calls)
+		t.Errorf("%d calls survived the repeated migration, want 1", calls)
 	}
 }

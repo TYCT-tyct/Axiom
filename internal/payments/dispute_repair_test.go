@@ -2,26 +2,23 @@ package payments
 
 import (
 	"fmt"
-	"io/fs"
-	"strings"
 	"testing"
 	"time"
 	"uuid"
 
+	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
 )
 
-// TestDisputeSuspensionBackfillMarksOnlyBookedDisputes runs the migration's backfill over a warning that never suspended
-// the account and over disputes that did take money. The warning stays unmarked so its open event suspends; the booked
-// rows are marked so a later event does not suspend again.
+// TestBaselinePreservesDisputeSuspension keeps a warning unmarked and booked disputes marked across a repeat run.
 //
-//nolint:cyclop,gocognit // the migration fixture, the backfill and the warning's open are one event sequence.
-func TestDisputeSuspensionBackfillMarksOnlyBookedDisputes(t *testing.T) {
+//nolint:gocognit // the persisted states, repeat migration and warning's open are one event sequence.
+func TestBaselinePreservesDisputeSuspension(t *testing.T) {
 	w, merchant, o := disputeWorld(t)
 	insert := `INSERT INTO payments.order_disputes
 		(id, site_id, account_id, order_id, merchant_id, provider, provider_id, payment_intent, amount, currency,
-		 reason, status, state, credits, cash, fee, chargeback_revision, applied_at, reversed_at)
-		VALUES ($1,$2,$3,$4,$5,'stripe',$6,$7,$8,'USD','test',$9,$10,$11,$12,$13,$14,$15,$16)`
+		 reason, status, state, credits, cash, fee, chargeback_revision, applied_at, reversed_at, suspended_at)
+		VALUES ($1,$2,$3,$4,$5,'stripe',$6,$7,$8,'USD','test',$9,$10,$11,$12,$13,$14,$15,$16,$17)`
 	now := time.Now()
 	for _, row := range []struct {
 		id, providerID, state, status string
@@ -45,22 +42,15 @@ func TestDisputeSuspensionBackfillMarksOnlyBookedDisputes(t *testing.T) {
 		if err := w.tx(w.p.platform, func(tx pg.Tx) error {
 			_, err := tx.Exec(w.t.Context(), insert, uuid.NewV7(), o.SiteID, o.AccountID, o.ID, merchant.ID,
 				row.providerID, o.TradeNo, o.Total.Minor, row.status, row.state, int64(100), int64(100), int64(0),
-				revision, appliedAt, reversedAt)
+				revision, appliedAt, reversedAt, appliedAt)
 			return err
 		}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	raw, err := fs.ReadFile(Migrations().Migrations, "00012_refund_approval.sql")
-	if err != nil {
+	if err := pg.Migrate(t.Context(), w.super, billing.Migrations(), Migrations()); err != nil {
 		t.Fatal(err)
 	}
-	start := strings.Index(string(raw), "UPDATE payments.order_disputes SET suspended_at")
-	end := strings.Index(string(raw)[start:], ";")
-	if start < 0 || end < 0 {
-		t.Fatal("the dispute backfill is not in the migration")
-	}
-	w.exec(string(raw)[start : start+end+1])
 	for providerID, want := range map[string]bool{"dp_warn": false, "dp_applied": true, "dp_reversed": true} {
 		var marked bool
 		if err := w.tx(w.p.platform, func(tx pg.Tx) error {
