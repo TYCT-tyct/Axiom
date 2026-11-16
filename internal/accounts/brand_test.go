@@ -38,16 +38,11 @@ func TestSiteBrand(t *testing.T) {
 }
 
 // brandOf is a node on a seeded database and the means to read and write a site's brand colour and count audit entries.
-type brandOf struct {
-	t  *testing.T
-	db *pg.DB
-	s  *accounts.Service
-}
+type brandOf struct{ settingsOf }
 
 func newBrandOf(t *testing.T) brandOf {
 	t.Helper()
-	db, _ := open(t)
-	return brandOf{t, db, node(t, db, hashKeys(t, 1), nil)}
+	return brandOf{newSettingsOf(t)}
 }
 
 func (o brandOf) read(site uuid.UUID) (b accounts.SiteBrand, err error) {
@@ -64,16 +59,6 @@ func (o brandOf) write(site uuid.UUID, b accounts.SiteBrand) error {
 	})
 }
 
-func (o brandOf) entries() (n int) {
-	o.t.Helper()
-	if err := o.db.Tx(o.t.Context(), platform, func(tx pg.Tx) error {
-		return tx.QueryRow(o.t.Context(), `SELECT count(*) FROM platform.audit_log WHERE action = 'site_brand.update'`).Scan(&n)
-	}); err != nil {
-		o.t.Fatal(err)
-	}
-	return n
-}
-
 // TestSiteBrandIsReadAndAudited: a site with none reads as empty, a write stores it lower case and is audited once, and
 // clearing returns to the default palette.
 func TestSiteBrandIsReadAndAudited(t *testing.T) {
@@ -88,7 +73,7 @@ func TestSiteBrandIsReadAndAudited(t *testing.T) {
 	if b, err := o.read(s1); err != nil || b.Color != "#335ddf" {
 		t.Errorf("the colour as written: %+v, %v", b, err)
 	}
-	if n := o.entries(); n != 1 {
+	if n := o.entries("site_brand.update"); n != 1 {
 		t.Errorf("%d audit entries, want 1", n)
 	}
 	if err := o.write(s1, accounts.SiteBrand{}); err != nil {
@@ -97,7 +82,7 @@ func TestSiteBrandIsReadAndAudited(t *testing.T) {
 	if b, err := o.read(s1); err != nil || b.Color != "" {
 		t.Errorf("the colour after clearing: %+v, %v", b, err)
 	}
-	if n := o.entries(); n != 2 {
+	if n := o.entries("site_brand.update"); n != 2 {
 		t.Errorf("%d audit entries, want 2", n)
 	}
 }
@@ -107,8 +92,8 @@ func TestSiteBrandIsReadAndAudited(t *testing.T) {
 func TestSiteBrandRefusals(t *testing.T) {
 	t.Parallel()
 	o := newBrandOf(t)
-	if err := o.write(s1, accounts.SiteBrand{Color: "blue"}); !refuses(err, "brand_color") || o.entries() != 0 {
-		t.Errorf("a colour of another form: %v, %d entries", err, o.entries())
+	if err := o.write(s1, accounts.SiteBrand{Color: "blue"}); !refuses(err, "brand_color") || o.entries("site_brand.update") != 0 {
+		t.Errorf("a colour of another form: %v, %d entries", err, o.entries("site_brand.update"))
 	}
 	if _, err := o.read(uuid.NewV7()); !errors.Is(err, accounts.ErrNotFound) {
 		t.Errorf("reading a site that is not there: %v", err)

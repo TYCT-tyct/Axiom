@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -32,7 +33,7 @@ type recordingParser struct {
 func (p *recordingParser) Parse(_ context.Context, doc fileparse.Document, countPages bool) (string, int, error) {
 	p.docs = append(p.docs, doc)
 	p.countPages = countPages
-	return p.text, cmpOr(p.pages, 1), p.err
+	return p.text, cmp.Or(p.pages, 1), p.err
 }
 
 // fileBody is a Chat request that asks for the OCR engine and carries one inline PDF.
