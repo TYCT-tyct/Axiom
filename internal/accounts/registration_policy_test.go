@@ -97,7 +97,7 @@ func TestOpenRegistrationHumanCheck(t *testing.T) {
 	if _, err := x.register(t, "one@example.com", "", "en", client); !errors.Is(err, accounts.ErrHumanCheck) {
 		t.Fatalf("an empty proof: %v", err)
 	}
-	other := accounts.ProofNonce(accounts.SiteID(s1), "two@example.com", openBits)
+	other := accounts.ProofNonceNotFor(accounts.SiteID(s1), "two@example.com", "one@example.com", openBits)
 	if _, err := x.register(t, "one@example.com", other, "en", client); !errors.Is(err, accounts.ErrHumanCheck) {
 		t.Fatalf("another address's proof: %v", err)
 	}

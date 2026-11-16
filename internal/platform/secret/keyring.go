@@ -264,13 +264,8 @@ func parseKey(line string) (uint32, [32]byte, error) {
 
 func fileError(variable, operation string, err error) error {
 	// OS errors can carry the path, which may itself be an accidentally pasted key.
-	reason := "failed"
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		reason = "file not found"
-	case errors.Is(err, os.ErrPermission):
-		reason = "permission denied"
-	case errors.Is(err, bufio.ErrTooLong):
+	reason := privfile.Reason(err)
+	if reason == "failed" && errors.Is(err, bufio.ErrTooLong) {
 		reason = "line too long"
 	}
 	return fmt.Errorf("%s: %s: %s", variable, operation, reason)
