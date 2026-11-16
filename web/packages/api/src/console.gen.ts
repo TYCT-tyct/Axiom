@@ -1361,6 +1361,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/calls/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Client-named sessions grouped from visible calls
+         * @description Groups nonempty client-named session IDs within the selected hot call-record window, with currencies separate. The same filters and authorization as listCalls apply. Default last 30 days, maximum 31 days; since inclusive, until exclusive. More than 100000 matching nonempty-session calls returns 400 invalid_request before grouping; narrow the window or filters. No truncated totals are returned. Calls and billionth charges are exact text. main_model is the most frequent model, ties by bytewise model name; client_app comes from the newest matching call. Newest last_at first, ties by newest call UUID. Cursor is signed and bound to the filters and window; malformed or modified cursors return 400 invalid_request. Use returned since/until for subsequent pages. Concurrent arrivals may move a session ahead of the cursor; refresh the first page to see updates. Reads reflect committed call-log inserts without an additional rollup delay. Archived calls are absent. No content, cost, supplier or routing data. Ten-second deadline. All new response members are optional; old nodes return 404.
+         */
+        get: operations["listCallSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/calls/aggregate": {
         parameters: {
             query?: never;
@@ -1965,6 +1985,26 @@ export interface components {
             output?: string;
             cache_read?: string;
             cache_write?: string;
+        };
+        CallSessionList: {
+            data?: components["schemas"]["CallSession"][];
+            /** @description Null on the last page; optional on older nodes. */
+            next_cursor?: string | null;
+            /** Format: date-time */
+            since?: string;
+            /** Format: date-time */
+            until?: string;
+        };
+        CallSession: {
+            session_id?: string;
+            client_app?: string;
+            calls?: string;
+            price?: components["schemas"]["CallAggregateMoney"];
+            main_model?: string;
+            /** Format: date-time */
+            first_at?: string;
+            /** Format: date-time */
+            last_at?: string;
         };
         /** @description A sum of user charges, in billionths. Unlike a single charge, this can exceed int64 and 19 digits. */
         CallAggregateMoney: {
@@ -3128,6 +3168,8 @@ export interface components {
         ModelAbility: components["schemas"]["ModelAbility"];
         CallKey: components["schemas"]["KeyId"];
         CallWorkspace: components["schemas"]["WorkspaceId"];
+        /** @description When true, only calls with attempt_count greater than one. */
+        CallFellBack: boolean;
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
         CallStatus: components["schemas"]["CallStatus"];
         CallRequestId: components["schemas"]["CallId"];
@@ -5472,7 +5514,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description When true, only calls with attempt_count greater than one. */
-                fell_back?: boolean;
+                fell_back?: components["parameters"]["CallFellBack"];
                 since?: components["parameters"]["CallSince"];
                 until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
@@ -5535,6 +5577,47 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["UsageStatistics"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listCallSessions: {
+        parameters: {
+            query?: {
+                since?: components["parameters"]["CallSince"];
+                until?: components["parameters"]["CallUntil"];
+                /** @description Exactly the model name the client asked for. */
+                model?: components["parameters"]["CallModel"];
+                client_app?: components["parameters"]["CallClientApp"];
+                key_id?: components["parameters"]["CallKey"];
+                workspace_id?: components["parameters"]["CallWorkspace"];
+                /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
+                status?: components["parameters"]["CallStatus"];
+                request_id?: components["parameters"]["CallRequestId"];
+                /** @description When true, only calls with attempt_count greater than one. */
+                fell_back?: components["parameters"]["CallFellBack"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of sessions */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CallSessionList"];
                 };
             };
             400: components["responses"]["BadRequest"];

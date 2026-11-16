@@ -56,6 +56,8 @@ func TestServeReadsTheMasterKeyFileOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkSessionCursorKeySnapshot(t, console, master, cfg)
+
 	tel, err := telemetry.New()
 	if err != nil {
 		t.Fatal(err)
@@ -138,4 +140,23 @@ func secondKeyLine(t *testing.T, path string) string {
 	}
 	t.Fatal("the fixture's file has no version 2")
 	return ""
+}
+
+func checkSessionCursorKeySnapshot(t *testing.T, console consoleParts, master *secret.MasterKeys, cfg nodeSettings) {
+	t.Helper()
+	wantCursor, err := master.DeriveKey("axiom console call sessions cursor v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if console.sessionCursorKey != wantCursor || console.sessionCursorKey == [32]byte(console.loginKey) {
+		t.Fatal("cursor key did not use its independent master-key label")
+	}
+	cfg.identityKeyFile = keyFile(t, 'z')
+	changedIdentity, err := loadConsole(cfg, testGatewayConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedIdentity.sessionCursorKey != console.sessionCursorKey {
+		t.Fatal("identity rotation invalidated session cursors")
+	}
 }
