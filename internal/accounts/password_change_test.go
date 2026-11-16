@@ -80,7 +80,7 @@ func TestPasswordChangesPreserveMFA(t *testing.T) {
 	if err != nil || !p.Verified() {
 		t.Fatalf("replacement MFA: %v", err)
 	}
-	x.checkPasswordReplacementCodes(t, codes, replacements)
+	x.usesReplacementCodes(t, changedPassword, codes, replacements)
 	// Reset ends even the verified session, but leaves TOTP enabled and old recovery codes unusable.
 	if err := x.reset(t, console, x.token(t), password); err != nil {
 		t.Fatal(err)
@@ -201,22 +201,5 @@ func TestChangePasswordRequiresVerifiedMFASession(t *testing.T) {
 	}
 	if got := x.factorVersion(t); got != before {
 		t.Fatal("MFA refusal changed password state")
-	}
-}
-
-func (x recoveryWorld) checkPasswordReplacementCodes(t *testing.T, codes, replacements []string) {
-	t.Helper()
-	if len(replacements) != 10 {
-		t.Fatalf("replacement recovery codes: %d", len(replacements))
-	}
-	challenge, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: x.email, Password: changedPassword})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := x.verify(t, console, challenge, codes[0]); !errors.Is(err, accounts.ErrBadCode) {
-		t.Fatalf("old code survived change: %v", err)
-	}
-	if _, err := x.verify(t, console, challenge, replacements[0]); err != nil {
-		t.Fatalf("new code failed: %v", err)
 	}
 }
