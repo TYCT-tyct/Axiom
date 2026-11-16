@@ -78,7 +78,7 @@
 
 - `billing.fallbacks` 每币种一行，`body` 只含币种与 `web_search`、`code_execution` 的单价；`Start` 和 `serve` 要求有 USD 行、每项 0 < 单价 ≤ 1，不合格不启动。`ReserveMany` 用 `catalog.Schedule.Fill` 补默认价后锁进 `prices`，兜底行锁进 `reservations.fallbacks`；没有兜底行的币种 `ErrUnpriced`。
 - 映射不了的像 token 的字段（以 `tokens` 结尾、0 到 10¹⁰ 的整数）按最高 token 单价；其余按次数（十进制向上取整，最多 10¹⁰，非十进制按 1）× 最高按次默认价；应收按 int64 饱和。
-- 结算遇到映射不了的字段或未声明的已知服务档（`service_tier.<名称>`），按尝试的条目模型写 `unknown_items`，提交后告警并发 `billing.settlement_anomaly/unknown_items`；路由据此置 `routing.Endpoint.UnknownItem`。`parseLockedFallbacks` 读旧预留时只忽略 `markup`。
+- 结算遇到映射不了的字段或未声明的已知服务档（`service_tier.<名称>`），按尝试的条目模型写 `unknown_items`，提交后告警并发 `billing.settlement_anomaly/unknown_items`；路由据此置 `routing.Endpoint.UnknownItem`。设置行和预留锁定的兜底文本用同一个闭集解析器。
 
 ## 追加与结算
 

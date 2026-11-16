@@ -98,12 +98,12 @@ func credentialOf(id, group uuid.UUID, ref, status string, cooldown, expires *ti
 }
 
 // limited is a per-minute limit as the admin shows it: a column with no value is no ceiling of Axiom's, which stays no
-// value here. An old node may write above the cap during a rolling release; show the cap the new code applies.
+// value here.
 func limited(n *int32) *int {
 	if n == nil {
 		return nil
 	}
-	v := min(int(*n), MaxRequestsPerMinute)
+	v := int(*n)
 	return &v
 }
 

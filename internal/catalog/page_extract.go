@@ -8,39 +8,16 @@ import (
 	"golang.org/x/net/html"
 )
 
-// The version keys stored snapshots. An upgrade does not by itself create a change review: savePageContent keeps the
-// current snapshot when the version-1 extractor's exact view of the new response matches it, and refuses writes from an
-// older version.
+// The version keys stored snapshots.
 const pageExtractorVersion = 2
 
 // zeroWidth is what rendering engines hide inside a word: Docusaurus puts one after a heading to anchor a link, and it is
 // not content, so keeping it would change a page's hash when only the anchor moved.
 var zeroWidth = strings.NewReplacer("\u200b", "", "\u200c", "", "\u200d", "", "\ufeff", "")
 
-// samePageContent compares the stored snapshot with the old extractor's view of the new response. It must not delete
-// whitespace first: adjacent cells "1 23" and "12 3" would collapse to the same text and hide a price change. If the
-// old extraction is unavailable, only an exact text match is safe.
-func samePageContent(prior string, content PageContent) bool {
-	if content.LegacyOK {
-		return prior == content.LegacyText
-	}
-	return prior == content.Text
-}
-
 // Layout whitespace and scripts must not change price evidence; table cells still need a word boundary.
 func extractPriceSection(body []byte, start, end string) (string, error) {
 	normalized, err := normalizedPriceDocument(body)
-	if err != nil {
-		return "", err
-	}
-	return extractSection(normalized, start, end)
-}
-
-// legacyExtractPriceSection runs the pre-version-2 extractor on the same body. During an upgrade, comparing its exact
-// output with the stored snapshot proves that the page itself did not change; comparing the new text after deleting
-// whitespace cannot prove that.
-func legacyExtractPriceSection(body []byte, start, end string) (string, error) {
-	normalized, err := normalizedLegacyPriceDocument(body)
 	if err != nil {
 		return "", err
 	}
@@ -113,18 +90,6 @@ func normalizedPriceDocument(body []byte) (string, error) {
 	return strings.Join(strings.Fields(zeroWidth.Replace(text.String())), " "), nil
 }
 
-// normalizedLegacyPriceDocument is the version-1 normalization, kept only to compare an upgrade with an existing
-// snapshot. It deliberately retains the old adjacent-inline merge and zero-width behavior.
-func normalizedLegacyPriceDocument(body []byte) (string, error) {
-	root, err := html.Parse(bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	var text strings.Builder
-	appendLegacyPriceText(&text, priceDocumentRoot(root))
-	return strings.Join(strings.Fields(text.String()), " "), nil
-}
-
 func skipPriceNode(n *html.Node) bool {
 	if n.Type != html.ElementNode {
 		return false
@@ -139,26 +104,6 @@ func skipPriceNode(n *html.Node) bool {
 		}
 	}
 	return false
-}
-
-// appendLegacyPriceText is the version-1 walker. It reproduces the old output exactly, including the merge of
-// adjacent inline elements, so an upgrade can compare apples with apples.
-func appendLegacyPriceText(text *strings.Builder, n *html.Node) {
-	if skipPriceNode(n) {
-		return
-	}
-	if n.Type == html.TextNode {
-		text.WriteString(n.Data)
-	}
-	for c := n.FirstChild; c != nil; c = c.NextSibling {
-		appendLegacyPriceText(text, c)
-	}
-	if n.Type == html.ElementNode {
-		switch n.Data {
-		case "td", "th", "tr", "table", "div", "p", "br", "li", "h1", "h2", "h3", "h4", "section", "article":
-			text.WriteByte(' ')
-		}
-	}
 }
 
 func appendWordBoundary(text *strings.Builder) {

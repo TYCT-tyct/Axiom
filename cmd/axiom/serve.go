@@ -59,7 +59,7 @@ type listening struct {
 // login escapes row-level security, that lacks this program's migrations, or that does not answer within
 // AXIOM_STARTUP_TIMEOUT, with key files it cannot read, or with a console contract it cannot enforce.
 func serve(ctx context.Context, environ []string, logger *slog.Logger) error {
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig())
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, catalog.NewFetcher, gateway.DefaultConfig(), func([]*listening) {})
 }
 
 // directEgress is the client a node reaches its suppliers through in production.
@@ -70,12 +70,13 @@ func directEgress(tel *telemetry.Telemetry) (*egress.Client, error) {
 // serveWith lets a test capture its recorder, opt into price syncing with local datasets, and choose the node's
 // in-process limits. A nil prices constructor disables the periodic price job, so tests of the listeners and call path
 // never download the production datasets; a test world passes limits sized for the shared machines it runs on, not
-// production's.
+// production's. bound observes the claimed listeners before the database check; tests read their actual addresses
+// and check closure on the same handles, without trying to reclaim ports another process may have taken.
 //
 //nolint:funlen,cyclop // startup order is the contract: listeners drain before the recorder, the queue, the cache and the database.
 func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbound func(*telemetry.Telemetry) (*egress.Client, error),
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
-	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config,
+	prices func(*egress.Client) *catalog.Fetcher, limits gateway.Config, bound func([]*listening),
 ) error {
 	cfg, err := readSettings(environ)
 	if err != nil {
@@ -109,6 +110,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer closeListeners(servers)
+	bound(servers)
 	tel, db, master, err := openCoreNode(ctx, cfg, console.master, logger)
 	if err != nil {
 		return err
@@ -138,7 +140,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 		return err
 	}
 	defer stopCache()
-	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, cfg.directFormats, archiveStore, replica, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
+	queue, recorder, recovery, registration, signals, paymentSignals, err := startBackground(syncCtx, db, retentionDB, console.master, console.masterKeys, cfg.smtp, cache, exit, prices, cfg.exchangeSource, archiveStore, replica, tel, logger, cfg.valkey.NodeID, cfg.shutdownTimeout, cfg.callLogDir, record)
 	if err != nil {
 		return err
 	}
@@ -314,7 +316,7 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 // the datasets through exit, the client the whole node shares.
 func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, cache *kv.Client, master *secret.MasterKeys,
 	keys *secret.Keyring, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
+	archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
 	logger *slog.Logger, signals *alert.Bus, paymentSignals *payments.SignalState, nodeID string,
 ) (*pg.Queue, *accounts.PasswordRecovery, *accounts.Registration, error) {
 	queue := db.NewQueue(logger, pg.PlatformScope(), tel.Metrics.Meter("axiom/pg"))
@@ -324,7 +326,6 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, smtp mail.Config, ca
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
 		DB: db, Scope: pg.PlatformScope(), Keys: keys, Egress: exit, Queue: queue, Logger: logger,
-		DirectFormats: directFormats,
 	}); err != nil {
 		return nil, nil, nil, err
 	}
@@ -506,7 +507,7 @@ func openNodeDatabase(ctx context.Context, url string, timeout time.Duration, te
 // failing step, including the queue, is closed here, since the caller has no defer of its own yet.
 func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.Keyring, master *secret.MasterKeys, smtp mail.Config,
 	cache *kv.Client, exit *egress.Client, prices func(*egress.Client) *catalog.Fetcher, exchangeSource string,
-	directFormats bool, archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
+	archive observability.ArchiveStore, replica *operations.Replica, tel *telemetry.Telemetry,
 	logger *slog.Logger, nodeID string, timeout time.Duration, callLogDir string,
 	record func(context.Context, *pg.DB, *telemetry.Telemetry, string, *slog.Logger) (*observability.Recorder, error),
 ) (*pg.Queue, *observability.Recorder, *accounts.PasswordRecovery, *accounts.Registration, *alert.Bus, *payments.SignalState, error) {
@@ -519,7 +520,7 @@ func startBackground(ctx context.Context, db, retentionDB *pg.DB, keys *secret.K
 	}
 	signals := alert.New(ctx, db, pg.PlatformScope(), logger)
 	paymentSignals := payments.NewSignalState()
-	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, directFormats, archive, replica, tel, logger, signals, paymentSignals, nodeID)
+	queue, recovery, registration, err := startSync(ctx, db, retentionDB, smtp, cache, master, keys, exit, prices, exchangeSource, archive, replica, tel, logger, signals, paymentSignals, nodeID)
 	if err != nil {
 		closeRecorder(ctx, recorder, timeout, logger)
 		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)

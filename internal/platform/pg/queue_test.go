@@ -273,10 +273,8 @@ func runningHeldJob(t *testing.T) (q *pg.Queue, h *holder, endNode context.Cance
 	return q, h, endNode
 }
 
-// TestANodeWorksOnlyTheJobKindsItHasWorkersFor: during a rolling deploy an older node shares the queue with a kind it
-// has no worker for. It leaves that job available and spends no attempt on it, so the node that has the worker runs it;
-// River's default would fail it with an unknown-kind error, spend an attempt and back off, and a unique job in that
-// state keeps its twin from being enqueued.
+// TestANodeWorksOnlyTheJobKindsItHasWorkersFor: nodes without SMTP do not register mail workers.
+// A node leaves unhandled kinds for a peer with the required configuration.
 func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	t.Parallel()
 	db, err := pg.Open(t.Context(), pgtest.New(t).App)
@@ -285,10 +283,10 @@ func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	}
 	t.Cleanup(db.Close)
 
-	older := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil) // a node from before test.ping existed
-	startDiscardQueue(t, older)
-	// The row is what the newer node's InsertManyTx leaves: a queue that has the worker would work the job at once, and
-	// River refuses to insert a kind its own workers do not cover. It is on a queue the older node does work, so only
+	unconfigured := db.NewQueue(slog.New(slog.DiscardHandler), platform, nil) // a node without this worker configured
+	startDiscardQueue(t, unconfigured)
+	// The row is what a configured node's InsertManyTx leaves: a queue that has the worker would work the job at once, and
+	// River refuses to insert a kind its own workers do not cover. It is on a queue the unconfigured node does work, so only
 	// FetchOnlyKnownKinds keeps it off the unknown kind.
 	err = db.Tx(t.Context(), platform, func(tx pg.Tx) error {
 		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job (kind, args, state, queue, max_attempts)
@@ -298,7 +296,7 @@ func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(3 * time.Second) // three fetch intervals: the older node has had every chance to take the job
+	time.Sleep(3 * time.Second) // three fetch intervals: the unconfigured node has had every chance to take the job
 	if state, attempt := jobStateAndAttempt(t, db, "test.ping"); state != "available" || attempt != 0 {
 		t.Fatalf("the job is %q after attempt %d on a node without its worker, want available and no attempt", state, attempt)
 	}
@@ -314,25 +312,6 @@ func TestANodeWorksOnlyTheJobKindsItHasWorkersFor(t *testing.T) {
 	eventually(t, "the job to be completed", func() bool { return jobState(t, db, "test.ping") == "completed" })
 	if _, attempt := jobStateAndAttempt(t, db, "test.ping"); attempt != 1 {
 		t.Errorf("the job took %d attempts, want 1: the node without its worker spent none", attempt)
-	}
-}
-
-// TestAJobLeftOnTheDefaultQueueIsFinished: an earlier version enqueued every kind on River's default queue, which no
-// kind names now. The queue keeps one worker there, so such a job finishes and its unique key stops covering the
-// periodic job that now names its own queue.
-func TestAJobLeftOnTheDefaultQueueIsFinished(t *testing.T) {
-	t.Parallel()
-	db, _, worked := startQueue(t)
-	err := db.Tx(t.Context(), platform, func(tx pg.Tx) error {
-		_, err := tx.Exec(t.Context(), `INSERT INTO river.river_job (kind, args, state, queue, max_attempts)
-			VALUES ('test.ping', '{"n": 7}', 'available', 'default', 1)`)
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n := ran(t, worked); n != 7 {
-		t.Fatalf("job %d ran, want 7", n)
 	}
 }
 

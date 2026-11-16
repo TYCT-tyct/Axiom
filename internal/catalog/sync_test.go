@@ -180,42 +180,23 @@ func TestSyncHolds(t *testing.T) {
 	}
 }
 
-// TestSyncHoldsCountedPrices: a dataset price for an item counted per piece, second or character waits while a node
-// running an older release could still read the snapshot (Config.CountedItems off), and publishes once this release may
-// write it. The wait keeps the candidate like any other hold.
-func TestSyncHoldsCountedPrices(t *testing.T) {
+// TestSyncPublishesCountedPrices checks per-character dataset pricing.
+func TestSyncPublishesCountedPrices(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	id := s.follow("openai/tts-1", catalog.VersionFloating, catalog.SourceLiteLLM, ttsSpec, "", "openai/tts-1", "tts-1")
 	data := litellmMode("audio_speech", `"tts-1"="input_cost_per_character":1.5e-05`)
 	report, err := s.c.SyncDataset(t.Context(), data, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r := report.Results[0]; r.Outcome != catalog.OutcomeHeld || !strings.Contains(r.Reason, "counted items") {
-		t.Fatalf("result %+v, want held until every node reads counted items", r)
-	}
-	if s.priceCount(id) != 0 {
-		t.Error("a held model got a price")
-	}
-	// The release that opens the image, audio and speech endpoints turns this on, after the fleet runs this one.
-	c, err := catalog.Open(s.db, platformScope, catalog.Config{CountedItems: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err = c.SyncDataset(t.Context(), data, true)
 	if err != nil || report.Results[0].Outcome != catalog.OutcomePublished {
-		t.Fatalf("round with CountedItems on: %+v, %v", report, err)
+		t.Fatalf("published price: %+v, %v", report, err)
 	}
 	if got, want := s.usd(id), `{"currency":"USD","rates":{"character_in":"0.000015"},"v":1}`; got != want {
 		t.Errorf("schedule %s, want %s", got, want)
 	}
 }
 
-// TestSyncHoldsRequestPrices: a request price is held while nodes that cannot read the name may still load the
-// snapshot, even though the same schedule passes the listing gate for its token items. The request item has its own
-// switch, so opening counted items is not enough.
-func TestSyncHoldsRequestPrices(t *testing.T) {
+// TestSyncPublishesRequestPrices checks per-request dataset pricing.
+func TestSyncPublishesRequestPrices(t *testing.T) {
 	t.Parallel()
 	s := newStore(t)
 	id := s.follow("openai/req@20250101", catalog.VersionDated, catalog.SourceOpenRouter, xSpec, xCurrent,
@@ -224,22 +205,8 @@ func TestSyncHoldsRequestPrices(t *testing.T) {
 		"id":"req-2025","canonical_slug":"openai/req@20250101","architecture":{"output_modalities":["text"]},
 		"pricing":{"prompt":"0.000001","completion":"0.000002","input_cache_read":"0.0000001","request":"1"}}]}`)}
 	report, err := s.c.SyncDataset(t.Context(), data, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if r := report.Results[0]; r.Outcome != catalog.OutcomeHeld || !strings.Contains(r.Reason, "request prices") {
-		t.Fatalf("result %+v, want held until every node reads request prices", r)
-	}
-	if s.priceCount(id) != 1 {
-		t.Error("a held model got a price")
-	}
-	c, err := catalog.Open(s.db, platformScope, catalog.Config{RequestPrices: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	report, err = c.SyncDataset(t.Context(), data, true)
 	if err != nil || report.Results[0].Outcome != catalog.OutcomePublished {
-		t.Fatalf("round with RequestPrices on: %+v, %v", report, err)
+		t.Fatalf("published price: %+v, %v", report, err)
 	}
 	if got, want := s.usd(id), `{"currency":"USD","rates":{"cache_read":"0.0000001","input":"0.000001","output":"0.000002","request":"1"},"v":1}`; got != want {
 		t.Errorf("schedule %s, want %s", got, want)
