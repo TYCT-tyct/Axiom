@@ -189,7 +189,7 @@ func TestShutdownEndsRequestsPastTheLimit(t *testing.T) {
 			return tx.QueryRow(ctx, "SELECT 1 FROM pg_sleep(60)").Scan(new(int))
 		})
 	})
-	servers := []*listening{{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(stuck, slog.New(slog.DiscardHandler)), nil, false}}
+	servers := []*listening{{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", "public", httpserver.New(stuck, slog.New(slog.DiscardHandler)), nil, false}}
 	if err := listen(t.Context(), servers); err != nil {
 		t.Fatal(err)
 	}
@@ -241,8 +241,8 @@ func TestListenReleasesWhatItBound(t *testing.T) {
 	})
 	logger := slog.New(slog.DiscardHandler)
 	servers := []*listening{
-		{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", httpserver.New(http.NotFoundHandler(), logger), nil, false},
-		{"AXIOM_PROBES_ADDR", taken.Addr().String(), httpserver.New(http.NotFoundHandler(), logger), nil, false},
+		{"AXIOM_PUBLIC_ADDR", "127.0.0.1:0", "public", httpserver.New(http.NotFoundHandler(), logger), nil, false},
+		{"AXIOM_PROBES_ADDR", taken.Addr().String(), "ops", httpserver.New(http.NotFoundHandler(), logger), nil, false},
 	}
 	t.Cleanup(func() { closeListeners(servers) })
 	if err := listen(t.Context(), servers); err == nil {

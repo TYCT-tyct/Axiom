@@ -175,7 +175,7 @@ func (b *Billing) ExtendIn(ctx context.Context, tx pg.Tx, h *Hold, r ExtendReque
 	// Book to the windows the row holds, the same ones the limits were just checked in.
 	booked := Hold{
 		id: h.id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
-		funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+		funding: row.Funding, subscription: orElse(row.SubscriptionID, uuid.UUID{}), windowSeq: orElse(row.WindowSeq, 0),
 	}
 	return booked.addReserved(ctx, tx, delta)
 }
@@ -226,7 +226,7 @@ func (b *Billing) SettleOrphanIn(ctx context.Context, tx pg.Tx, a Admitted, id u
 	case err == nil && row.State == "pending":
 		h := &Hold{
 			id: id, admitted: a, workspaceWindow: row.WorkspaceWindow, keyWindow: row.KeyWindow,
-			funding: row.Funding, subscription: derefUUID(row.SubscriptionID), windowSeq: derefInt32(row.WindowSeq),
+			funding: row.Funding, subscription: orElse(row.SubscriptionID, uuid.UUID{}), windowSeq: orElse(row.WindowSeq, 0),
 		}
 		if _, err = queries.ReleaseReservation(ctx, tx, id); err == nil {
 			err = h.addReserved(ctx, tx, -row.Amount)
@@ -360,20 +360,4 @@ func reset(l *Limit) Reset {
 		return ResetNever
 	}
 	return l.Reset
-}
-
-// derefUUID is *p, or the zero UUID when p is nil.
-func derefUUID(p *uuid.UUID) uuid.UUID {
-	if p == nil {
-		return uuid.UUID{}
-	}
-	return *p
-}
-
-// derefInt32 is *p, or 0 when p is nil.
-func derefInt32(p *int32) int32 {
-	if p == nil {
-		return 0
-	}
-	return *p
 }

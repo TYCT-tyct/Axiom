@@ -45,3 +45,14 @@ func Open(path string, open Opener) (*os.File, error) {
 	}
 	return file, nil
 }
+
+// Reason describes an I/O failure without exposing a path that may contain a secret.
+func Reason(err error) string {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return "file not found"
+	case errors.Is(err, os.ErrPermission):
+		return "permission denied"
+	}
+	return "failed"
+}

@@ -15,6 +15,7 @@ require (
 	github.com/getkin/kin-openapi v0.152.0
 	github.com/google/go-cmp v0.7.0
 	github.com/uudashr/gocognit v1.3.0
+	golang.org/x/mod v0.41.0
 	golang.org/x/perf v0.0.0-20260929162123-406019bb8b68
 )
 
@@ -253,7 +254,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
-	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

@@ -71,7 +71,7 @@ func TestExchangeSyncDailyAtomicAndManual(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.run()
-	pairs := len(minorDigits) * (len(minorDigits) - 1) / 2
+	pairs := len(exchangeCurrencies) * (len(exchangeCurrencies) - 1) / 2
 	if got := f.count("SELECT count(*) FROM billing.exchange_rates"); got != pairs {
 		t.Fatalf("rows %d want %d", got, pairs)
 	}
