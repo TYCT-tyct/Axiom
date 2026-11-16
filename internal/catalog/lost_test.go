@@ -9,15 +9,6 @@ import (
 	"axiom/internal/catalog"
 )
 
-func schedule(t *testing.T, s string) catalog.Schedule {
-	t.Helper()
-	parsed, err := catalog.ParseSchedule([]byte(s))
-	if err != nil {
-		t.Fatal(err)
-	}
-	return parsed
-}
-
 // TestLost lists the prices the old schedule had and the new one lacks, per service tier, band and item.
 func TestLost(t *testing.T) {
 	t.Parallel()
@@ -81,7 +72,7 @@ func TestLost(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		got, err := schedule(t, c.new).Lost(schedule(t, c.old), c.r)
+		got, err := mustParse(t, c.new).Lost(mustParse(t, c.old), c.r)
 		if err != nil {
 			t.Errorf("%s: %v", c.name, err)
 		}
@@ -104,14 +95,14 @@ func TestLostBasis(t *testing.T) {
 	var r catalog.Reportable
 	r.Items.Add(catalog.ItemOutput)
 	r.ServiceTiers.Add(catalog.ServiceTierPriority)
-	oldS, newS := schedule(t, highOutputOnly(`"input","cache_read"`)), schedule(t, highOutputOnly(`"input"`))
+	oldS, newS := mustParse(t, highOutputOnly(`"input","cache_read"`)), mustParse(t, highOutputOnly(`"input"`))
 	if _, err := newS.Lost(oldS, r); !errors.Is(err, catalog.ErrTierBasisChanged) {
 		t.Errorf("different bases: %v", err)
 	}
 	if _, err := oldS.Lost(oldS, r); err != nil {
 		t.Errorf("the same basis: %v", err)
 	}
-	plain := schedule(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
+	plain := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"1","output":"2"}}`)
 	for name, pair := range map[string][2]catalog.Schedule{"new without tiers": {plain, oldS}, "old without tiers": {newS, plain}} {
 		if _, err := pair[0].Lost(pair[1], r); err != nil {
 			t.Errorf("%s: %v", name, err)

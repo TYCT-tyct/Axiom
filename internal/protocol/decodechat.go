@@ -10,29 +10,11 @@ func (d *decoder) top(c *canon) error {
 	return d.object(func() error {
 		switch string(d.name) {
 		case "messages":
-			return d.array(func() error {
-				var err error
-				if c.Messages, err = growWithin(c.Messages, d.b); err != nil {
-					return err
-				}
-				return d.message(&c.Messages[len(c.Messages)-1])
-			})
+			return elements(d, &c.Messages, d.message)
 		case "tools":
-			return d.array(func() error {
-				var err error
-				if c.Tools, err = growWithin(c.Tools, d.b); err != nil {
-					return err
-				}
-				return d.tool(&c.Tools[len(c.Tools)-1])
-			})
+			return elements(d, &c.Tools, d.tool)
 		case "functions":
-			return d.array(func() error {
-				var err error
-				if c.Functions, err = growWithin(c.Functions, d.b); err != nil {
-					return err
-				}
-				return d.function(&c.Functions[len(c.Functions)-1])
-			})
+			return elements(d, &c.Functions, d.function)
 		case "tool_choice":
 			return d.field(&c.ToolChoice)
 		case "function_call":
@@ -97,6 +79,16 @@ func (d *decoder) top(c *canon) error {
 	})
 }
 
+func elements[T any](d *decoder, dst *[]T, read func(*T) error) error {
+	return d.array(func() error {
+		var err error
+		if *dst, err = growWithin(*dst, d.b); err != nil {
+			return err
+		}
+		return read(&(*dst)[len(*dst)-1])
+	})
+}
+
 // field reads a member kept as written.
 func (d *decoder) field(dst *jsontext.Value) error {
 	v, err := d.value()
@@ -140,25 +132,13 @@ func (d *decoder) message(m *canonMessage) error {
 			m.Parts, err = d.parts(v)
 			return err
 		case "tool_calls":
-			return d.array(func() error {
-				var err error
-				if m.ToolCalls, err = growWithin(m.ToolCalls, d.b); err != nil {
-					return err
-				}
-				return d.toolCall(&m.ToolCalls[len(m.ToolCalls)-1])
-			})
+			return elements(d, &m.ToolCalls, d.toolCall)
 		case "tool_call_id":
 			return d.pointer(&m.ToolCallID, (*decoder).strp)
 		case "function_call":
 			return d.field(&m.FunctionCall)
 		case "reasoning_details":
-			return d.array(func() error {
-				var err error
-				if m.ReasoningDetails, err = growWithin(m.ReasoningDetails, d.b); err != nil {
-					return err
-				}
-				return d.reasoningDetail(&m.ReasoningDetails[len(m.ReasoningDetails)-1])
-			})
+			return elements(d, &m.ReasoningDetails, d.reasoningDetail)
 		case "name":
 			return d.field(&m.Name)
 		case "refusal":
@@ -193,13 +173,7 @@ func (d *decoder) parts(v jsontext.Value) ([]canonPart, error) {
 	}
 	pd := &decoder{dec: newDecoder(v), b: d.b, parent: d}
 	var parts []canonPart
-	if err := pd.array(func() error {
-		var err error
-		if parts, err = growWithin(parts, d.b); err != nil {
-			return err
-		}
-		return pd.part(&parts[len(parts)-1])
-	}); err != nil {
+	if err := elements(pd, &parts, pd.part); err != nil {
 		return nil, err
 	}
 	return parts, nil
