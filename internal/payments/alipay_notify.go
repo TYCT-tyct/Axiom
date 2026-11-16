@@ -3,7 +3,6 @@ package payments
 import (
 	"context"
 	"errors"
-	"mime"
 	"net/http"
 	"net/url"
 )
@@ -47,7 +46,7 @@ func (c *alipayChannel) notice(v url.Values) (Notice, error) {
 	}
 	status := v.Get("trade_status")
 	success := status == "TRADE_SUCCESS" || status == "TRADE_FINISHED"
-	amount := parseMinorText(v.Get("total_amount"), digits(c.currency))
+	amount := parseMinorText(v.Get("total_amount"), c.currency.MinorDigits())
 	return Notice{
 		Relevant: true, Success: success,
 		Order: v.Get("out_trade_no"), TradeNo: v.Get("trade_no"),
@@ -63,9 +62,5 @@ func alipayCallbackForm(cb Callback) (string, error) {
 	if cb.Method != http.MethodPost {
 		return "", errors.New("alipay: callback must be a POST form")
 	}
-	media, _, err := mime.ParseMediaType(cb.Header.Get("Content-Type"))
-	if err != nil || media != "application/x-www-form-urlencoded" || cb.RawQuery != "" {
-		return "", errors.New("alipay: invalid callback form")
-	}
-	return string(cb.Body), nil
+	return callbackForm(cb, "alipay")
 }
