@@ -258,6 +258,8 @@ type consoleParts struct {
 	frontend           *webui.Frontend // the pages of the three apps
 	alerts             alert.Sink
 	paymentSignals     *payments.SignalState
+
+	sessionCursorKey [32]byte // derived from the master snapshot under its own cursor label
 }
 
 func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) {
@@ -269,6 +271,10 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 		return consoleParts{}, err
 	}
 	loginKey, err := master.LoginKey()
+	if err != nil {
+		return consoleParts{}, err
+	}
+	sessionCursorKey, err := master.DeriveKey("axiom console call sessions cursor v1")
 	if err != nil {
 		return consoleParts{}, err
 	}
@@ -297,7 +303,7 @@ func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) 
 		return consoleParts{}, err
 	}
 	return consoleParts{
-		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, operationsContract: operations, frontend: frontend,
+		cfg: cfg, gate: limits, masterKeys: master, master: master.Keyring(), loginKey: loginKey, sessionCursorKey: sessionCursorKey, hashes: hashes, identity: identity, contract: console, adminContract: admin, operationsContract: operations, frontend: frontend,
 	}, nil
 }
 
