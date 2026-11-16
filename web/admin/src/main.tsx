@@ -3,8 +3,8 @@ import { adminAuth } from "@axiom/api/auth";
 import { AppProviders } from "@axiom/app";
 import { startApp } from "@axiom/ui";
 import { RouterProvider } from "@tanstack/react-router";
-import en from "./locales/en";
-import zh from "./locales/zh";
+import en from "./locales/en/initial";
+import zh from "./locales/zh/initial";
 import { router } from "./router";
 
 startApp(

@@ -325,3 +325,5 @@ function EditDialog({
     />
   );
 }
+
+export { default as messages } from "../locales/settings";
