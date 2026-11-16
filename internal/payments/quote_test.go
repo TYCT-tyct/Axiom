@@ -94,7 +94,7 @@ func TestQuoteProperty(t *testing.T) {
 		}
 		// need = (credits × num × 10^d ÷ (den × 10⁹) + fixed) × 10⁶, compared with total × (10⁶ − ppm), all over
 		// den × 10⁹ so everything is an integer.
-		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits(c))), nil)
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(c.MinorDigits())), nil)
 		under := new(big.Int).Mul(big.NewInt(den), big.NewInt(creditScale))
 		need := new(big.Int).Mul(new(big.Int).Mul(big.NewInt(credits), big.NewInt(num)), scale)
 		need.Add(need, new(big.Int).Mul(big.NewInt(fee.Fixed), under))
