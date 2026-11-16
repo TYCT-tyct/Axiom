@@ -51,3 +51,13 @@ regexes = ['''^owner-signing-2\.pub$''']
 [[allowlists]]
 description = "alert key in the operations alert tests"
 regexes = ['''^supplier/acme/balance$''']
+
+# The Login artboard displays this fixed demo key in its animation and clipboard examples; it never authenticates a
+# request. Preserve the authored input and generated engine, including their already-pushed history. Both the exact
+# value and one of these two paths must match; other values in either file and this value elsewhere still fail.
+[[allowlists]]
+description = "fixed display key in the Login artboard and its generated engine"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^web/packages/boards/(inputs/login-ui\.js\.txt|src/engines/login-ui\.js)$''']
+regexes = ['''^sk-ax-3f9a8c2e71b04d6e9a5f0c3b$''']

@@ -1,0 +1,172 @@
+// AxiomClawdEgg: Clawd as an easter egg on the Axiom site — a tiny sub-pixel sprite walking across the
+// sea floor in a diving helmet, bubbles rising. Triggered by hovering/tapping a Claude model row, or by
+// typing "claude" on the page. One visit per page load.
+//
+// The visit: Clawd walks in from the edge at the bottom of the viewport, pauses in view (waves, looks
+// around, maybe hops), then walks off the other side. Much smaller and quicker than the whale — a cute
+// surprise rather than a grand entrance.
+(() => {
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  class AxiomClawdEgg {
+    constructor(root, eng, opts = {}) {
+      this.root = root; this.eng = eng;
+      this.o = Object.assign({
+        dark: () => false, phone: false, scope: root,
+        rows: '.mr', once: true, delay: 10, enabled: () => true,
+        onSummon: null, onLight: null,
+        sizeFrac: 0.065, floor: 0.94, speed: 1.1
+      }, opts);
+      this.cv = opts.canvas || root.querySelector(':scope > canvas.cw');
+      this.t0 = performance.now(); this.seen = false; this.buf = '';
+      this.on = []; this.phase = 'idle'; this.phaseT = 0; this.exitX = 0;
+      const dark = this.o.dark();
+      this.cw = new window.ClawdScene(this.cv, {
+        palette: dark ? 'night' : 'orange',
+        sizeFrac: this.o.sizeFrac,
+        floor: this.o.floor,
+        speed: this.o.speed,
+        friends: false, friendCount: 0,
+        spinner: false, floorLine: false,
+        texture: true, entrance: false,
+        sleepAfter: 999,
+        transparent: true, helmet: true, bubbles: true
+      });
+      // start off-screen and hidden
+      this.cw.x = -100;
+      this.cw.go('idle');
+      // a small ghost body so the nearest fish scatter — Clawd is tiny, so the effect is subtle
+      this.ghost = { id: 98, kind: 'clawd', ghost: true, scripted: true, hidden: true,
+        length: 1, nodes: new Float32Array(8), heading: 0, speed: 10, phase: 0, turn: 0, depth: 1 };
+      this.wire();
+      const sync = () => {
+        if (this.dead) return; this.raf = requestAnimationFrame(sync);
+        const W = this.eng.world; if (!W || !W.sharks) return;
+        if (W.sharks.indexOf(this.ghost) < 0) W.sharks.push(this.ghost);
+        const P = this.cw.pos(); if (!P) { this.ghost.hidden = true; return; }
+        const vs = this.eng.vs || 1, g = this.ghost;
+        g.hidden = !this.cw.active() || this.phase === 'idle';
+        g.length = P.w * vs * 0.6;
+        // simple 4-node spine along the body
+        const cx = P.x * vs, cy = P.y * vs, hw = P.w * vs * 0.3;
+        g.nodes[0] = cx - hw; g.nodes[1] = cy;
+        g.nodes[2] = cx; g.nodes[3] = cy;
+        g.nodes[4] = cx + hw; g.nodes[5] = cy;
+        g.nodes[6] = cx + hw * 1.5; g.nodes[7] = cy;
+        g.heading = P.dir > 0 ? 0 : Math.PI; g.speed = P.w * 0.08 * vs;
+        // choreography: monitor phase transitions
+        this.choreograph();
+      };
+      sync();
+    }
+    setTheme(dark) {
+      this.cw.setOptions({ palette: dark ? 'night' : 'orange' });
+    }
+    active() { return this.phase !== 'idle'; }
+    // the choreography drives Clawd through: enter → perform → exit → done
+    choreograph() {
+      if (this.phase === 'idle') return;
+      const P = this.cw.pos(), W = this.cw.W;
+      if (this.phase === 'enter') {
+        // wait for Clawd to arrive at the target (state changes from walk)
+        if (this.cw.state !== 'walk') {
+          this.phase = 'perform'; this.phaseT = 0;
+          this.cw.react(); // hop + wave on arrival
+          this.lightRows(true);
+        }
+      } else if (this.phase === 'perform') {
+        this.phaseT++;
+        // after ~3 seconds of performing (wave takes 1.8s, then an idle), start exit
+        if (this.phaseT > 180) { // ~3s at 60fps
+          this.phase = 'exit';
+          this.lightRows(false);
+          this.cw.go('walk', { to: this.exitX });
+        }
+      } else if (this.phase === 'exit') {
+        // wait for Clawd to walk off screen
+        if ((this.exitX > W && P.x > W + 14 * P.CW) || (this.exitX < 0 && P.x < -14 * P.CW)) {
+          this.done();
+        }
+      }
+    }
+    wire() {
+      const L = (el, ev, fn, o) => { if (!el) return; el.addEventListener(ev, fn, o); this.on.push([el, ev, fn, o]); };
+      const scope = this.o.scope;
+      // models screen: a claude row pointed at or tapped
+      const row = (e) => {
+        const li = e.target && e.target.closest && e.target.closest(this.o.rows);
+        if (!li || !scope.contains(li)) return;
+        const nm = li.querySelector('.mn');
+        if (nm && /^claude/i.test(nm.textContent.trim())) this.summon(li);
+      };
+      L(scope, this.o.phone ? 'click' : 'pointerover', row);
+      if (!this.o.phone) L(scope, 'click', row);
+      // password: type "claude" on the page
+      L(this.root, 'keydown', (e) => {
+        if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+        const t = e.target;
+        if (t && t.closest && t.closest('input, textarea, select, [contenteditable]')) return;
+        this.buf = (this.buf + e.key.toLowerCase()).slice(-6);
+        if (this.buf.endsWith('claude')) { this.buf = ''; this.summon(null, true); }
+      });
+    }
+    summon(anchor, force) {
+      if (this.dead || this.active()) return false;
+      if (!force) {
+        if (!this.o.enabled()) return false;
+        if (this.o.once && this.seen) return false;
+        if (performance.now() - this.t0 < this.o.delay * 1000) return false;
+        if (this.root.dataset.state && this.root.dataset.state !== 'home') return false;
+      }
+      // don't overlap with whale
+      if (window.AxiomWhaleEgg) {
+        const we = this.root._whaleEgg;
+        if (we && we.active()) return false;
+      }
+      this.seen = true;
+      const W = this.cw.W;
+      // pick direction: enter from left, exit right (or vice versa)
+      const fromLeft = Math.random() < 0.5;
+      const startX = fromLeft ? -14 * this.cw.CW : W + 14 * this.cw.CW;
+      const targetX = W * (fromLeft ? 0.35 : 0.65);
+      this.exitX = fromLeft ? W + 14 * this.cw.CW : -14 * this.cw.CW;
+      this.cw.x = startX;
+      this.cw.go('walk', { to: targetX });
+      this.phase = 'enter'; this.phaseT = 0;
+      if (this.o.onSummon) this.o.onSummon(anchor);
+      return true;
+    }
+    // highlight claude rows in the model list
+    lightRows(on) {
+      const rows = [...this.o.scope.querySelectorAll(this.o.rows)].filter((li) => {
+        const nm = li.querySelector('.mn');
+        return nm && /^claude/i.test(nm.textContent.trim());
+      });
+      if (this.o.onLight) return this.o.onLight(rows, on);
+      rows.forEach((li) => {
+        li.classList.toggle('cw-lit', on);
+        const nm = li.querySelector('.mn');
+        if (nm) { nm.classList.toggle('cw-lit', on); nm.setAttribute('data-cw', '1'); }
+      });
+      const box = rows[0] && rows[0].closest('.lens');
+      if (box) box.classList.toggle('cw-lit', on);
+    }
+    done() {
+      this.phase = 'idle';
+      this.ghost.hidden = true;
+      this.cw.x = -100;
+      this.cw.go('idle');
+    }
+    destroy() {
+      this.dead = true;
+      cancelAnimationFrame(this.raf);
+      for (const [el, ev, fn, o] of this.on) el.removeEventListener(ev, fn, o);
+      this.cw.destroy();
+      const W = this.eng.world;
+      if (W && W.sharks) {
+        const i = W.sharks.indexOf(this.ghost);
+        if (i >= 0) W.sharks.splice(i, 1);
+      }
+    }
+  }
+  window.AxiomClawdEgg = AxiomClawdEgg;
+})();

@@ -1,20 +1,26 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "@playwright/test";
+import { readBoard } from "../../packages/boards/source.ts";
 import { boardFonts, type FontFace, fontRoute, usedFaces } from "./fonts.ts";
 import { type Stage, stage } from "./stage.ts";
 
 // The reference half of a comparison (docs/frontend.md「截图对比」): the board's own Component class, run in a browser context
 // of its own that is offline, keeps no cookies or storage and is thrown away after the shot. Every request outside
-// board.local is aborted, so a board script that reaches for the network cannot change the reference. support.js and the
-// engines the board loads with <script src> are not run: the harness below stands in for support.js the way the design
-// tool's own harnesses (handoff/src/site_harness.py, console_harness.py) do.
+// board.local is aborted, so a board script that reaches for the network cannot change the reference. support.js is
+// replaced by the harness below, as in the design tool's harnesses. Engines stay off for product comparisons; the
+// mechanical conversion proofs explicitly name their pinned engines and mount under a paused clock.
 
 const origin = "https://board.local";
 
 // A board and how to show it: its file in AXIOM_DESIGN_DIR, the props the design tool's editor would set (theme, view,
 // role...), and the Component's own methods to call after it mounts, each as [name, ...arguments] (["go", "keys"]).
-export type BoardScene = { file: string; props?: Record<string, string>; actions?: [string, ...unknown[]][] };
+export type BoardScene = {
+  file: string;
+  props?: Record<string, string>;
+  actions?: [string, ...unknown[]][];
+  engines?: string[];
+};
 
 export type OpenBoard = {
   page: Page;
@@ -169,16 +175,18 @@ function mount(template: string, actions: [string, ...unknown[]][]) {
 // boardDocument builds the page served at board.local: the board's helmet with its fonts replaced by the frozen source fonts,
 // then the support.js stand-in, the board's script and the mount call.
 function boardDocument(board: BoardScene, directory: string) {
-  const { helmet, template, script, defaults } = parts(readFileSync(join(directory, board.file), "utf8"));
+  const { helmet, template, script, defaults } = parts(readBoard(join(directory, board.file)));
   const fonts = boardFonts(helmet, `${origin}/fonts/`);
   return {
     fonts: fonts.faces,
     html: `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">${fonts.helmet}<style>body{margin:0}</style>
+${(board.engines ?? []).map((name) => `<script src="/engines/${name}.js"></script>`).join("\n")}
 <script>window.__props = ${inline({ ...defaults, ...board.props })};
 ${dcLogic}</script></head><body><div id="root"></div>
 <script>${script}</script>
-<script>(() => {
+<script>(async () => {
 ${[look, fill, render, patch, bind, mount].join("\n")}
+${board.engines ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
 mount(${inline(mark(template))}, ${inline(board.actions ?? [])});
 })();</script></body></html>`,
   };
@@ -207,6 +215,16 @@ export async function openBoard(
     if (url === `${origin}/`) {
       return route.fulfill({ contentType: "text/html; charset=utf-8", body: html });
     }
+    const engine = url.match(/\/engines\/([\w-]+)\.js$/)?.[1];
+    if (engine && board.engines?.includes(engine)) {
+      return route.fulfill({
+        contentType: "text/javascript",
+        body: readFileSync(
+          join(directory, existsSync(join(directory, `${engine}.js.txt`)) ? `${engine}.js.txt` : `${engine}.js`),
+          "utf8",
+        ),
+      });
+    }
     if (url.startsWith(`${origin}/fonts/`)) {
       return fontRoute(route, url.slice(`${origin}/fonts/`.length));
     }
@@ -217,7 +235,9 @@ export async function openBoard(
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
   await stage(page, view);
+  if (board.engines) await page.clock.pauseAt(view.time);
   await page.goto(`${origin}/`);
+  if (board.engines) await page.locator("#root > *").first().waitFor({ state: "attached" });
   if (errors.length) {
     await context.close();
     throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);

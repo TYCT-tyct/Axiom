@@ -1,0 +1,4 @@
+/* Match the artboard host's origin; the board itself owns its layout. */
+.root {
+  margin: 0;
+}

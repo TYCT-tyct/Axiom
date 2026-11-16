@@ -105,3 +105,9 @@
 概览的最近报错通过 `status=error&limit=5` 向服务器查询；只有返回可选的 `status_filter=error` 才展示结果，旧节点未回显时显示不可用，不在浏览器筛选一页普通调用。筛选、聚合与导出 API 的边界见[记录与告警](../docs/domains/observability.md#用户调用记录查询与导出)，本轮不增加视觉界面。
 
 控制台概览的 `announcements.tsx` 用原生 details 按需请求本站公告；加载、空、失败（可重试）、旧节点 404 或缺少 data 均有文本状态。公告标题和正文按文本换行并允许任意长词折行，不解析 HTML，也不要求已读。此入口按 #316 只做未加样式的数据阅读，不扩展后台视觉界面。
+
+画板机械转换：`AXIOM_DESIGN_DIR=/path/to/design pnpm --dir web boards`，仅导入 Login、ClawdEgg、AxApp。
+不指定目录时，从 `packages/boards/inputs/` 的固定输入重新生成；`pnpm --dir web boards --check` 校验产物，单元测试在 CI 执行同一校验。
+生成目录带 `@generated` 标记，禁止手改；页面包装写在 `packages/boards/demo/`，演示用 `pnpm --dir web --filter @axiom/boards dev` 打开 `/Login`、`/ClawdEgg`、`/AxApp`。
+画板及引擎随路由加载；演示字体复用 F1a 固定源，仅写本包忽略的缓存，生产页面的构建入口不变。
+`pnpm --dir web e2e boards.spec` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。

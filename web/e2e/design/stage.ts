@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { installFrameGate } from "./frames.ts";
 
 // What makes two runs of a side draw the same pixels, applied the same way to the board and the page.
 export type Stage = {
@@ -21,15 +22,66 @@ const loading = 30_000;
 // clock (Date, timers, requestAnimationFrame, performance.now) installed, running towards the scene's moment.
 export async function stage(page: Page, view: Stage) {
   await page.addInitScript((start) => {
-    let state = start;
-    Math.random = () => {
-      state = (state + 0x6d2b79f5) | 0;
-      let t = Math.imul(state ^ (state >>> 15), 1 | state);
-      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    const reset = () => {
+      let state = start;
+      Math.random = () => {
+        state = (state + 0x6d2b79f5) | 0;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
     };
+    reset();
+    // React consumes randomness for internal DOM keys before mounting. Start the ocean's stream at its own boundary
+    // so the reference and React draw the same world regardless of framework initialization.
+    Object.defineProperty(window, "AxiomOceanOrig", {
+      configurable: true,
+      set(ocean: { Engine: new (...args: never[]) => object }) {
+        ocean.Engine = new Proxy(ocean.Engine, {
+          construct(target, args) {
+            reset();
+            return Reflect.construct(target, args);
+          },
+        });
+        Object.defineProperty(window, "AxiomOceanOrig", { configurable: true, writable: true, value: ocean });
+      },
+    });
   }, seed);
   await page.clock.install({ time: view.time.getTime() - loading });
+  await page.addInitScript(installFrameGate);
+}
+
+// Canvas engines resize and reschedule their first frame in native observers, outside Playwright's clock. Let those
+// initial deliveries finish while the clock is paused, so they cannot interrupt one side's simulated animation time.
+export async function canvasesReady(page: Page) {
+  await page.evaluate(async () => {
+    await Promise.all(
+      [...document.querySelectorAll("canvas")].map(
+        (canvas) =>
+          new Promise<void>((resolve) => {
+            let sized = false;
+            let intersected = false;
+            const ready = () => {
+              if (sized && intersected) {
+                resize.disconnect();
+                intersection.disconnect();
+                resolve();
+              }
+            };
+            const resize = new ResizeObserver(() => {
+              sized = true;
+              ready();
+            });
+            const intersection = new IntersectionObserver(() => {
+              intersected = true;
+              ready();
+            });
+            resize.observe(canvas);
+            intersection.observe(canvas);
+          }),
+      ),
+    );
+  });
 }
 
 // How long the clock runs before the shot: entrances and transitions driven by timers or animation frames reach their

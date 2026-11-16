@@ -1,0 +1,28 @@
+
+<div class="eg d {{ modeCls }}" lang="zh-CN" tabindex="0" ref="{{ setRoot }}" style="width: 1440px; height: 900px;" aria-label="模型列表，指到 Claude 行会有 Clawd 走过海底">
+<canvas class="sea" ref="{{ setSea }}" aria-hidden="true"></canvas>
+<div class="depth" aria-hidden="true"></div>
+<canvas class="cw" ref="{{ setClawd }}" aria-hidden="true"></canvas>
+<section class="sec">
+<div class="hd">
+<div class="hl">
+<h2 class="lens">Clawd 海底散步测试</h2>
+<p class="lede lens">指到任意 Claude 行（或键入 claude），Clawd 会戴着潜水头盔从海底走过。</p>
+</div>
+</div>
+<div class="row">
+<div class="lst lens" ref="{{ setList }}">
+<div class="lh"><span>模型</span><span>起价</span></div>
+<ol class="mrows">
+<li class="mr {{ r0c }}" data-i="0"><span class="mn mono">claude-sonnet-5.5</span><span class="mp mono">¥15.8</span><span class="md">Anthropic<span class="mrt">4 条线路</span></span><span class="mt">+9%</span></li>
+<li class="mr {{ r1c }}" data-i="1"><span class="mn mono">claude-opus-5.5</span><span class="mp mono">¥26.4</span><span class="md">Anthropic<span class="mrt">3 条线路</span></span><span class="mt">+14%</span></li>
+<li class="mr {{ r2c }}" data-i="2"><span class="mn mono">gpt-6.1-sol</span><span class="mp mono">¥27.2</span><span class="md">OpenAI<span class="mrt">3 条线路</span></span><span class="mt">-6%</span></li>
+<li class="mr {{ r3c }}" data-i="3"><span class="mn mono">deepseek-v4-pro</span><span class="mp mono">¥1.9</span><span class="md">DeepSeek<span class="mrt">4 条线路</span></span><span class="mt">+4%</span></li>
+<li class="mr {{ r4c }}" data-i="4"><span class="mn mono">gemini-4-argon</span><span class="mp mono">¥12.6</span><span class="md">Google<span class="mrt">2 条线路</span></span><span class="mt">+21%</span></li>
+<li class="mr {{ r5c }}" data-i="5"><span class="mn mono">claude-haiku-5.5</span><span class="mp mono">¥5.1</span><span class="md">Anthropic<span class="mrt">2 条线路</span></span><span class="mt">-3%</span></li>
+<li class="mr {{ r6c }}" data-i="6"><span class="mn mono">kimi-k3</span><span class="mp mono">¥3.8</span><span class="md">Moonshot<span class="mrt">3 条线路</span></span><span class="mt">+32%</span></li>
+</ol>
+</div>
+</div>
+</section>
+</div>

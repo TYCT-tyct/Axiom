@@ -1,0 +1,7 @@
+{
+  "root": false,
+  "extends": ["../../biome.json"],
+  "files": {
+    "includes": ["!src/Login", "!src/ClawdEgg", "!src/AxApp", "!src/engines", "!inputs", "!src/demo-fonts.css"]
+  }
+}
