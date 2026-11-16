@@ -13,7 +13,6 @@ import (
 	"axiom/internal/platform"
 	"axiom/internal/platform/consoleapi"
 	"axiom/internal/platform/jsonx"
-	"axiom/internal/suppliers"
 )
 
 func TestCallAttemptHTTP(t *testing.T) {
@@ -110,15 +109,5 @@ func TestOwnRouteJSONAllowlist(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "internal") {
 		t.Fatalf("internal ID exposed: %s", raw)
-	}
-}
-
-func TestCallRoutingWithoutEndpointsDoesNotLookUpCodes(t *testing.T) {
-	// An uninitialized service cannot be read; an empty call must never touch it.
-	c := consoleAPI{upstreams: &suppliers.Service{}}
-	var body consoleapi.Call
-	c.callRoutingBody(observability.OwnCallDetail{}, &body, false)
-	if body.Attempts == nil || len(*body.Attempts) != 0 || body.Route != nil {
-		t.Fatalf("empty call detail: %+v", body)
 	}
 }

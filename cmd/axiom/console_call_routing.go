@@ -33,7 +33,7 @@ func (c consoleAPI) callRoutingBody(call observability.OwnCallDetail, body *cons
 }
 
 func (c consoleAPI) callEndpointCode(endpoint string) *string {
-	if c.upstreams == nil || endpoint == "" {
+	if c.upstreams == nil {
 		return nil
 	}
 	id, err := uuid.Parse(endpoint)

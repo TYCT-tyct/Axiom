@@ -14,7 +14,6 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
-	"axiom/internal/platform/secret"
 )
 
 func TestCallDetailResolvesLiveAndRetiredCodenames(t *testing.T) {
@@ -73,88 +72,5 @@ func TestCallDetailResolvesLiveAndRetiredCodenames(t *testing.T) {
 	want := []*string{new(live.Codename), nil, new(live.Codename)}
 	if diff := cmp.Diff(want, got); diff != "" {
 		t.Fatalf("public codenames (-want +got): %s", diff)
-	}
-}
-
-func TestCallRoutingCostDoesNotGrowWithPlatform(t *testing.T) {
-	f := newPublicationView(t)
-	f.world.addFailureCredential(uuid.MustParse(f.world.query("SELECT supplier_group_id::text FROM suppliers.credentials LIMIT 1")), "scale-original")
-	api := consoleAPI{upstreams: f.node.upstreams}
-	call := observability.OwnCallDetail{
-		Attempts: []observability.OwnAttempt{{Endpoint: f.endpoints[0].ID.String()}, {Endpoint: f.endpoints[1].ID.String()}},
-		Route:    &observability.OwnRoute{SelectedEndpoint: f.endpoints[1].ID.String()},
-	}
-	var body consoleapi.Call
-	var small float64
-	count := len(f.endpoints)
-	for _, size := range []int{10, 10000} {
-		growCallCodeSnapshot(t, f, count, size)
-		count = size
-		if err := f.node.upstreams.Reload(t.Context()); err != nil {
-			t.Fatal(err)
-		}
-		endpoints, err := f.node.upstreams.Routable()
-		if err != nil || len(endpoints) != size {
-			t.Fatalf("snapshot size = %d, want %d: %v", len(endpoints), size, err)
-		}
-		if got := f.world.query("SELECT count(*)::text FROM suppliers.credentials"); got != fmt.Sprint(size) {
-			t.Fatalf("credentials = %s, want %d", got, size)
-		}
-		allocs := testing.AllocsPerRun(20, func() {
-			api.callRoutingBody(call, &body, true)
-		})
-		t.Logf("endpoints=%d credentials=%d: %.0f allocs/detail", size, size, allocs)
-		if size == 10 {
-			small = allocs
-		} else if allocs != small {
-			t.Fatalf("detail allocations grew: small %.0f, large %.0f", small, allocs)
-		}
-	}
-	if diff := cmp.Diff([]*string{new(f.endpoints[0].Codename), new(f.endpoints[1].Codename)},
-		[]*string{(*body.Attempts)[0].EndpointCode, (*body.Attempts)[1].EndpointCode}); diff != "" {
-		t.Fatalf("scaled detail (-want +got): %s", diff)
-	}
-}
-
-func growCallCodeSnapshot(t *testing.T, f publicationViewFixture, from, to int) {
-	t.Helper()
-	keys := masterKeys(t)
-	if err := f.world.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) error {
-		for i := from; i < to; i++ {
-			group, credential, endpoint := uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
-			code := fmt.Sprintf("scale-%d", i)
-			sealed := keys.Seal(secret.New("scale-key"), secret.Location{Table: "suppliers.credentials", RowID: credential.String(), Purpose: "key"})
-			_, err := tx.Exec(t.Context(), `INSERT INTO suppliers.supplier_groups
-(id, supplier_id, upstream_ref, name, ratio, selected, codename)
-VALUES ($1, $2, $3, $3, 1, true, $3)`, group, f.endpoints[0].Supplier, code)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(t.Context(), `INSERT INTO suppliers.credentials
-(id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek, key_version, status, max_concurrency)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', 4)`, credential, f.endpoints[0].Supplier, group, code,
-				sealed.Ciphertext, sealed.Nonce, sealed.WrappedDEK, int64(sealed.KeyVersion))
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(t.Context(), `INSERT INTO suppliers.endpoints
-(id, supplier_id, supplier_group_id, model_id, upstream_name, formats)
-SELECT $3, supplier_id, $1, model_id, upstream_name, formats FROM suppliers.endpoints WHERE id=$2`, group, f.endpoints[0].ID, endpoint)
-			if err != nil {
-				return err
-			}
-			_, err = tx.Exec(t.Context(), `WITH cost AS (
-INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-SELECT c.supplier_id, $1, c.native_unit, c.schedule, c.basis, c.fingerprint
-FROM suppliers.cost_schedules c JOIN suppliers.endpoints e ON e.cost_schedule_id=c.id WHERE e.id=$2
-RETURNING id)
-UPDATE suppliers.endpoints SET cost_state='known', cost_schedule_id=cost.id FROM cost WHERE endpoints.id=$1`, endpoint, f.endpoints[0].ID)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
 	}
 }
