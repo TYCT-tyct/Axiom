@@ -138,12 +138,12 @@ func TestEasyPayExactAmounts(t *testing.T) {
 	} {
 		t.Run(tc.code+"/"+tc.text, func(t *testing.T) {
 			cur := currency(t, tc.code)
-			got := parseMinorText(tc.text, digits(cur))
+			got := parseMinorText(tc.text, cur.MinorDigits())
 			if got != tc.want {
 				t.Fatalf("amount %q = %d, want %d", tc.text, got, tc.want)
 			}
 			if got > 0 {
-				if round := parseMinorText(formatMinorText(Money{cur, got}), digits(cur)); round != got {
+				if round := parseMinorText(formatMinorText(Money{cur, got}), cur.MinorDigits()); round != got {
 					t.Fatal("round-trip", round)
 				}
 			}

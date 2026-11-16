@@ -14,7 +14,7 @@ func TestExchangeCurrentReadIsBoundedByPairs(t *testing.T) {
 	t.Parallel()
 
 	f := newRules(t)
-	codes := slices.Sorted(maps.Keys(minorDigits))
+	codes := slices.Sorted(maps.Keys(exchangeCurrencies))
 	pairs := len(codes) * (len(codes) - 1) / 2
 	const versions = 200
 	seedExchangeReadHistory(t, f, codes, versions)
