@@ -87,7 +87,7 @@
 | 运营接口 | Bearer 凭证；`x-axiom-permission`、`x-axiom-money`、`x-axiom-scope`、唯一的 `x-mcp-name`；读带 `Reason`，写带 `IdempotencyKey` 和 `reason`；`agentGuard` 先写 `operations.operation_log` 再答，写不进 503；读 15 秒、写 30 秒 |
 | 共有部分 | 控制台与管理各抄一份，同名须相同；运营契约 `$ref` 到 `admin.yaml` |
 | 无固定形状的 JSON（测试） | 形状固定的给命名模式、以 `jsonx.Raw` 照存；成员归别人的只在描述里列；请求里的模式不让守卫多拒 |
-| 没有处理器（`just generated`） | `tools/pendingapi` 的桩答 501 `not_implemented`；现在每个操作都有处理器 |
+| 没有处理器 | 答 501 `not_implemented`；现在控制台和管理接口的操作都有处理器 |
 
 `cmd/axiom` 的守卫在生成的路由之前，按嵌入的契约强制：读不通或有程序强制不了的声明就不启动。顺序：站点（Host 不对 404）→ Origin 与 JSON → 会话、级别、CSRF → 权限 → `jsonx` 策略 → 参数与请求体 schema（400 `invalid_request`，`fields` 写位置和规则、不写值）。期限：控制台 15 秒、管理一分钟，到期 503 `unavailable`。生成的处理器用 `jsonx.Decode` 读请求体（改过的模板 `consoleapi/templates/strict-http.tmpl`）。权限名和是否敏感在 `internal/accounts/authorize.go` 声明。
 

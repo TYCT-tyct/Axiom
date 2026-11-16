@@ -80,7 +80,7 @@
 - **错误体**：OpenRouter 的 `error.code` 是与状态相同的数字，细节放在 `metadata`；外壳相同，客户端不用改，但数字分不清同一状态下的不同原因，所以用封闭枚举。不选 RFC 9457。
 - **分文件**：控制台与管理契约各自成一体、抄写共用部分（检查保证相同），因为跨文件引用要 `import-mapping` 和一个共享包；运营契约例外，经 `import-mapping` 引用 `admin.yaml` 的模式、复用 `adminapi` 的类型。
 - **没有固定形状的 JSON**：价格依据 `Evidence` 保持 Go 类型 `map[string]interface{}`，因为幂等指纹按解码后的值算，换成 `jsonx.Raw` 会让超过 2⁵³ 的整数不再舍入，重试落到另一版本的节点就成了 409（`TestEvidenceFingerprintsAsReleased`）。请求里的模式不收紧服务端的判断，否则商户设置、预设的 422 会变成守卫的 400。按 `kind` 用 `oneOf` 被否：空对象同时匹配几个分支。
-- **桩**：契约一加操作，`StrictServerInterface` 就多一个方法；`tools/pendingapi` 生成嵌入的占位类型让程序照常编译，处理器声明同名方法即接管，全部接管后连同 `//go:generate` 删掉。
+- **桩**：契约一加操作，`StrictServerInterface` 就多一个方法；处理器分几个 PR 写时，曾用生成的占位类型让程序照常编译。所有操作都有处理器后，生成器已删掉，下一个契约需要时再加。
 - **gitleaks**：生成代码里内嵌的契约是 gzip 后的 base64，会被 `generic-api-key` 误报，所以 `.gitleaks.toml` 对三个接口包的 `.gen.go` 放行。`adminapi` 的类型和内嵌契约分别生成到 `types.gen.go`、`spec.gen.go`，因为合在一个文件里超过 `scripts/check_artifacts.py` 的 1 MB 上限。
 - **控制台版本**：前端靠 `GET /api/console/v1/version` 发现新版本，不轮询入口页。
 

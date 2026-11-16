@@ -47,33 +47,24 @@ func collectExpected(sums map[Metric]*big.Int, rates map[Metric]int64, row store
 
 // expectedTargets turns the accumulated sums and rates into the dashboard's expected values.
 func expectedTargets(sums map[Metric]*big.Int, rates map[Metric]int64, currency platform.Currency) (Expected, error) {
-	expected := Expected{}
-	var err error
-	if expected.Calls, err = countTarget(sums[Calls]); err != nil {
-		return Expected{}, err
+	targets := Targets{}
+	for _, field := range targets.metrics() {
+		var err error
+		switch {
+		case field.rate:
+			if rate, ok := rates[field.metric]; ok {
+				*field.count = &rate
+			}
+		case field.money != nil:
+			*field.money, err = moneyTarget(sums[field.metric], currency)
+		default:
+			*field.count, err = countTarget(sums[field.metric])
+		}
+		if err != nil {
+			return Expected{}, err
+		}
 	}
-	if expected.Errors, err = countTarget(sums[Errors]); err != nil {
-		return Expected{}, err
-	}
-	if expected.Revenue, err = moneyTarget(sums[Revenue], currency); err != nil {
-		return Expected{}, err
-	}
-	if expected.Cost, err = moneyTarget(sums[Cost], currency); err != nil {
-		return Expected{}, err
-	}
-	if expected.PaidUsers, err = countTarget(sums[PaidUsers]); err != nil {
-		return Expected{}, err
-	}
-	if expected.MonthlyRevenue, err = moneyTarget(sums[MonthlyRevenue], currency); err != nil {
-		return Expected{}, err
-	}
-	if rate, ok := rates[GrossMargin]; ok {
-		expected.GrossMargin = &rate
-	}
-	if rate, ok := rates[Retention]; ok {
-		expected.Retention = &rate
-	}
-	return expected, nil
+	return targets.expected(), nil
 }
 
 // addExpected adds one row's share to the window's sums. A money row in another currency is skipped, not compared; a
