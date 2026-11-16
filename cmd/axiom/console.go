@@ -33,6 +33,8 @@ type consoleAPI struct {
 	payments  *payments.Payments
 	catalog   *catalog.Catalog
 	db        *pg.DB
+
+	sessionCursorKey []byte
 	// models is the public projection built with the last routing snapshot, so the page and a call charge one price.
 	models modelProjection
 	// search is the node's enabled engines: the model pages show what one search through each costs.
