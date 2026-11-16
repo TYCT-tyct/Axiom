@@ -17,11 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 )
-
-const wechatpayMaxResponse = 1 << 20
 
 // errWechatOrderMissing is a signed ORDER_NOT_EXIST, not a failed query. Public Query turns it into PayPending; the
 // admin probe uses it to prove the credentials.
@@ -82,25 +79,20 @@ func (c *wechatChannel) do(ctx context.Context, method, path, query string, body
 	if err != nil {
 		return 0, nil, err
 	}
-	resp, err := c.client.Do(req)
+	resp, err := sendGateway(c.client, req, "wechatpay", "cannot read gateway response")
 	if err != nil {
-		return 0, nil, errors.New("wechatpay: gateway request failed")
-	}
-	defer resp.Body.Close() //nolint:errcheck // the body is read below or discarded; closing cannot change the outcome
-	response, err := egress.ReadBody(resp.Body, wechatpayMaxResponse)
-	if err != nil {
-		return 0, nil, errors.New("wechatpay: cannot read gateway response")
-	}
-	if len(response) == 0 {
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return resp.StatusCode, nil, nil
-		}
-		return 0, nil, &wechatFailure{Status: resp.StatusCode, Code: "empty_error"}
-	}
-	if err := c.verify(resp.Header, response); err != nil {
 		return 0, nil, err
 	}
-	return resp.StatusCode, response, nil
+	if len(resp.body) == 0 {
+		if resp.status >= 200 && resp.status < 300 {
+			return resp.status, nil, nil
+		}
+		return 0, nil, &wechatFailure{Status: resp.status, Code: "empty_error"}
+	}
+	if err := c.verify(resp.header, resp.body); err != nil {
+		return 0, nil, err
+	}
+	return resp.status, resp.body, nil
 }
 
 func (c *wechatChannel) request(ctx context.Context, method, path, query string, body []byte) (*http.Request, error) {

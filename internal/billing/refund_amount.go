@@ -3,7 +3,6 @@ package billing
 import (
 	"context"
 	"fmt"
-	"math/big"
 
 	"axiom/internal/platform/pg"
 )
@@ -45,7 +44,7 @@ func (r Refund) amounts(credit CreditBatch, refunded int64, history RefundHistor
 		return RefundAmounts{}, err
 	}
 	returned, fee := prior.Returned, prior.Fee
-	amount := refundShare(r.Amount, net, credit.Amount)
+	amount := mulDivFloor(r.Amount, net, credit.Amount)
 	if r.Amount == credit.Amount-refunded {
 		amount = net - returned
 	}
@@ -55,7 +54,7 @@ func (r Refund) amounts(credit CreditBatch, refunded int64, history RefundHistor
 	part := int64(0)
 	if r.WithFee {
 		// Allocate fees by cumulative cash, so each part is <= its cash even with many one-minor-unit refunds.
-		part = refundShare(returned+amount, credit.Payment.Fee, credit.Payment.Paid) - fee
+		part = mulDivFloor(returned+amount, credit.Payment.Fee, credit.Payment.Paid) - fee
 	}
 	if part < 0 || part > amount || !r.WithFee && fee != 0 {
 		return RefundAmounts{}, fmt.Errorf("billing: refunded fees do not fit payment of %s", r.Batch)
@@ -79,12 +78,4 @@ func (r Refund) history(credit CreditBatch, net int64, history RefundHistoryRow)
 		return RefundAmounts{}, fmt.Errorf("billing: refund history exceeds payment of %s", r.Batch)
 	}
 	return RefundAmounts{Returned: returned, Fee: fee}, nil
-}
-
-// refundShare floors exactly once; the product can exceed int64 even though its quotient fits.
-func refundShare(amount, paid, credited int64) int64 {
-	var n big.Int
-	n.Mul(big.NewInt(amount), big.NewInt(paid))
-	n.Quo(&n, big.NewInt(credited))
-	return n.Int64()
 }

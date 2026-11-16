@@ -17,6 +17,10 @@ func TestMerchantAmountsRoundTripMinorUnits(t *testing.T) {
 		{"JPY", 1, "1000000000"},
 		{"KWD", 1234, "1234000000"},
 		{"USD", 0, "0"},
+		{"ISK", 1, "1000000000"},
+		{"UGX", 1, "1000000000"},
+		{"XAU", 1, "10000000"},
+		{"USD", 9223372036854775807, "92233720368547758070000000"},
 	}
 	for _, c := range cases {
 		currency, err := platform.ParseCurrency(c.currency)

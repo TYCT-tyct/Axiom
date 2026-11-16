@@ -3,6 +3,7 @@ package payments
 import (
 	"context"
 	"errors"
+	"net/http"
 	"strconv"
 	"uuid"
 
@@ -10,46 +11,52 @@ import (
 	"axiom/internal/platform/jsonx"
 )
 
+type easyPayPreset struct {
+	name, upstream, queryMethod string
+	zeroMissing                 bool
+}
+
+var easyPayPresets = map[string]easyPayPreset{
+	"epusdt": {"Epusdt", "usdt.tron", http.MethodPost, true},
+	"ezpay":  {"EzPay", "usdt_trc20", http.MethodGet, false},
+}
+
 func (c *easyPayChannel) validateMerchant(in MerchantInput) error {
-	switch c.settings.Preset {
-	case "epusdt":
-		for i, method := range in.Methods {
-			if method.Upstream != "usdt.tron" {
-				return &FieldError{Field: "/methods/" + strconv.Itoa(i) + "/upstream", Reason: "Epusdt requires usdt.tron"}
-			}
+	preset, ok := easyPayPresets[c.settings.Preset]
+	if !ok {
+		return nil
+	}
+	for i, method := range in.Methods {
+		if method.Upstream != preset.upstream {
+			return &FieldError{Field: "/methods/" + strconv.Itoa(i) + "/upstream", Reason: preset.name + " requires " + preset.upstream}
 		}
-	case "ezpay":
-		return c.validateEzPayMerchant(in)
 	}
 	return nil
 }
 
 // Only save probes the gateway: opening a stored channel must not add network I/O to callbacks.
 func (c *easyPayChannel) probe(ctx context.Context) error {
-	switch c.settings.Preset {
-	case "ezpay":
-		return c.ezPayProbe(ctx)
-	case "epusdt":
-	default:
+	preset, ok := easyPayPresets[c.settings.Preset]
+	if !ok {
 		return nil
 	}
 	v := c.credentials("order")
 	// Never create a payable order merely to validate configuration.
 	v.Set("out_trade_no", OrderID(uuid.NewV7()).TypeID())
-	body, err := c.post(ctx, "/api.php", v, true)
+	body, err := c.request(ctx, preset.queryMethod, "/api.php", v, true)
 	if err != nil {
-		return &FieldError{"/settings", "Epusdt requires an available authenticated order query endpoint"}
+		return &FieldError{"/settings", preset.name + " requires an available authenticated order query endpoint"}
 	}
 	var response struct {
 		Code jsonx.Raw `json:"code"`
 		Msg  string    `json:"msg"`
 	}
 	if err = jsonx.Unmarshal(body, &response); err != nil {
-		return &FieldError{"/settings", "Epusdt query did not return protocol JSON"}
+		return &FieldError{"/settings", preset.name + " query did not return protocol JSON"}
 	}
 	code, err := easyPayScalar(response.Code)
-	if err != nil || (code != "0" && code != "-1") || !easyPayOrderMissing(response.Msg) {
-		return &FieldError{"/settings", "Epusdt query must explicitly report the probe order missing"}
+	if err != nil || (code != "-1" && (!preset.zeroMissing || code != "0")) || !easyPayOrderMissing(response.Msg) {
+		return &FieldError{"/settings", preset.name + " query must explicitly report the probe order missing"}
 	}
 	return nil
 }

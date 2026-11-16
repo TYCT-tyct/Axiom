@@ -75,6 +75,8 @@ func TestMinorUnits(t *testing.T) {
 		{"JPY", 5_000_000_000, 5},
 		{"JPY", 500_000_000, -1},
 		{"XAU", 1_000_000_000, -1},
+		{"KWD", 1_000_000_000, -1},
+		{"ISK", 1_000_000_000, -1},
 	} {
 		got, err := MinorUnits(currency(t, tc.code), tc.billionths)
 		if tc.want < 0 && err == nil || tc.want >= 0 && (err != nil || got != tc.want) {
