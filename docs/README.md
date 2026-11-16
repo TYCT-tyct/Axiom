@@ -37,8 +37,8 @@
 | 联网搜索：一次查询、SearXNG 适配器、配置与覆盖、结果上限、失败与测试 | [internal/websearch/README.md](../internal/websearch/README.md) | 改 `web` 插件、换搜索后端或部署 SearXNG 之前 |
 | 文件解析：一次转换、Docling serve 适配器、配置与覆盖、大小上限、失败与测试 | [internal/fileparse/README.md](../internal/fileparse/README.md) | 改 `file-parser` 插件、换解析后端或部署 Docling 之前 |
 | 一次调用在代码里怎么走：不变量、步骤、所有权、期限、并发与背压、故障矩阵、性能估算、PR 拆分 | [internal/gateway/README.md](../internal/gateway/README.md) | 实现或改动调用路径上任何模块之前 |
-| 运营：分工、agent 的组成与模型来源、运营接口与运营凭证、MCP、风险分级与审批、累计资金上限、审计与回滚、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
-| 运营在代码里怎么存业务目标、操作记录、运营操作与审批、资金上限与售价包络：表与索引、月度与折算、幂等与到期、锁的顺序、读写与审计 | [internal/operations/README.md](../internal/operations/README.md) | 实现或调用 `operations` 的业务目标、操作记录或审批之前 |
+| 运营：分工、agent 的组成与模型来源、运营接口与运营凭证、MCP、资金上限与售价包络、风险分级与审批、审计与回滚、运营看板与业务目标、部署与节点、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
+| 运营的代码接口与不变量：业务目标、操作记录、运营操作与审批、资金上限、售价包络、审计链、锁的顺序 | [internal/operations/README.md](../internal/operations/README.md) | 实现或调用 `operations` 的业务目标、操作记录或审批之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
 | 支付：收款渠道与商户账户、订单状态、金额与汇率、手续费、回调与到账、补单、加密货币、退款与拒付、防欺诈、对账、后台配置、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
@@ -52,6 +52,14 @@
 | 错题：失效机制、现有回归与尚缺的检查 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：五条硬约束、记录、对外文字、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 | 本项目的补充：角色、谁拍板、产品设计基线、任务与一个 PR、评审、编排（模型清单、任务大小、循环上限）、合并队列与迁移、CI 与检查、验收与关账、代码质量标准、检查清单、审计与发布、重新讨论的条件 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
+
+## 存档
+
+调研、被否决的方案和较长的推导；不是现行规则，任务卡不引用。
+
+| 内容 | 文件 |
+|---|---|
+| 运营：批准与委托的出处、运营接口的三个方案、几条较长的推导和否决的做法 | [archive/operations.md](archive/operations.md) |
 
 ## 文档怎么组织
 
