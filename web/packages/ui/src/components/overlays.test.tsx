@@ -13,7 +13,7 @@ import { DesignProvider } from "./design-provider";
 import { EditPanel } from "./edit-panel";
 import { moduleCss, reduced } from "./module-css";
 import { DataState } from "./states";
-import { ToastProvider, useToast, useUndo } from "./toast";
+import { ToastProvider, useUndo } from "./toast";
 
 const i18n = createInstance();
 const shown = new Set<HTMLDialogElement>();
@@ -28,10 +28,11 @@ beforeAll(async () => {
     this.setAttribute("open", "");
     shown.add(this);
   };
+  // A browser queues the close event as a task (HTML「close the dialog」), so it arrives after the code that closed it.
   HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
     if (this.open) {
       this.removeAttribute("open");
-      this.dispatchEvent(new Event("close"));
+      setTimeout(() => this.dispatchEvent(new Event("close")));
     }
   };
   Element.prototype.getAnimations = () => [];
@@ -60,7 +61,8 @@ const dialog = () => document.querySelector("dialog");
 const button = (name: string) =>
   [...document.querySelectorAll("button")].find((b) => b.textContent === name) as HTMLButtonElement;
 const field = () => document.querySelector("dialog input") as HTMLInputElement;
-const settle = () => act(async () => {});
+// Let the promises a call's answer settles and the tasks a closing dialog queued run.
+const settle = () => act(() => new Promise((resolve) => setTimeout(resolve)));
 // what a browser does on Esc: a cancelable cancel event on the dialog
 const pressEscape = async () => {
   act(() => {
@@ -146,6 +148,14 @@ it("takes a keyboard user into a named modal dialog and back to the trigger when
   expect(dialog()).toBeNull();
   expect(closed).toHaveBeenCalledWith(undefined);
   expect(document.activeElement).toBe(trigger);
+});
+
+// StrictMode closes and reopens the dialog on mount; the close event that closing queued arrives after.
+it("stays open once the events of opening have run", async () => {
+  newKey(fakeApi<{ name: string }, string>().send);
+  await settle();
+  expect(dialog()?.open).toBe(true);
+  expect(closed).not.toHaveBeenCalled();
 });
 
 it("keeps a dialog with something typed open on Esc and the backdrop; Cancel still closes it", async () => {
@@ -376,27 +386,32 @@ it("creates once when the dialog closes on success", async () => {
   expect(api.calls).toHaveLength(1);
 });
 
-it("lets a toast go after its time, and holds it while pointed at", async () => {
+// A toast with an action, held by the pointer and the focus in turn: it goes 1.6 seconds after the last of them leaves.
+it.each([
+  { holds: "the pointer", steps: ["point", "unpoint"] },
+  { holds: "the focus after the pointer left", steps: ["focus", "point", "unpoint", "blur"] },
+  { holds: "the pointer after the focus left", steps: ["point", "focus", "blur", "unpoint"] },
+])("lets a toast go after its time, and holds it while $holds stays", async ({ steps }) => {
   vi.useFakeTimers();
-  function Say() {
-    const say = useToast();
-    return (
-      <button type="button" onClick={() => say("已保存")}>
-        {"say"}
-      </button>
-    );
-  }
   render(
     <ToastProvider>
-      <Say />
+      <Disable reverse={() => Promise.resolve()} />
     </ToastProvider>,
   );
-  act(() => button("say").click());
+  act(() => button("disable").click());
   const toast = () => document.querySelector('[role="status"]');
-  act(() => toast()?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })));
-  await act(async () => vi.advanceTimersByTime(5000));
+  const does = {
+    point: () => toast()?.dispatchEvent(new MouseEvent("mouseover", { bubbles: true })),
+    unpoint: () => toast()?.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })),
+    focus: () => button("撤销").focus(),
+    blur: () => button("撤销").blur(),
+  };
+  for (const step of steps.slice(0, -1)) {
+    act(() => does[step as keyof typeof does]());
+  }
+  await act(async () => vi.advanceTimersByTime(10_000));
   expect(toast()).not.toBeNull();
-  act(() => toast()?.dispatchEvent(new MouseEvent("mouseout", { bubbles: true })));
+  act(() => does[steps.at(-1) as keyof typeof does]());
   await act(async () => vi.advanceTimersByTime(1600));
   expect(toast()).toBeNull();
 });

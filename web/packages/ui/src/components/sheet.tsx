@@ -83,9 +83,10 @@ export function Sheet({
       }}
       onClose={() => {
         // A browser may close it without a cancelable cancel (a second Esc with no activation between): one that may
-        // not close yet opens again.
+        // not close yet opens again. The event is queued, so it can arrive after the dialog opened again (StrictMode
+        // closes and reopens it on mount): a close event of a dialog that is open is from before, and means nothing.
         const now = latest.current;
-        if (!now.leaving) {
+        if (!now.leaving && !ref.current?.open) {
           now.dismissible ? now.onClose() : ref.current?.showModal();
         }
       }}

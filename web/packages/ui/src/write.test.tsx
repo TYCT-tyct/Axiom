@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { ApiError } from "@axiom/api";
-import { act } from "react";
+import { act, StrictMode } from "react";
 import { expect, it, vi } from "vitest";
 import { testRoot } from "./test-root";
 import { type ExplicitSave, type LiveSave, useExplicitSave, useLiveSave } from "./write";
@@ -27,7 +27,14 @@ function mount<R>(hook: () => R) {
     result.current = hook();
     return null;
   }
-  act(() => dom.root.render(<Probe />));
+  // StrictMode as the apps start: effects run, are cleaned up and run again on mount.
+  act(() =>
+    dom.root.render(
+      <StrictMode>
+        <Probe />
+      </StrictMode>,
+    ),
+  );
   return result;
 }
 
@@ -88,12 +95,16 @@ function live(server: () => Promise<Prefs> = () => Promise.resolve(initial)) {
   return { api, reread, save };
 }
 
-it("sends two quick changes one after another, the second on what the first returned", async () => {
-  const { api, save } = live();
+// changeTwo makes two quick changes, the second before the first has an answer.
+const changeTwo = (save: { current: LiveSave<Prefs> }) =>
   act(() => {
     save.current.change((p) => ({ ...p, balance: true }));
     save.current.change((p) => ({ ...p, digest: true }));
   });
+
+it("sends two quick changes one after another, the second on what the first returned", async () => {
+  const { api, save } = live();
+  changeTwo(save);
   expect(api.calls).toHaveLength(1);
   expect(api.calls[0]?.body).toEqual({ revision: 1, balance: true, digest: false });
   expect(save.current).toMatchObject({ saving: true, value: { balance: true, digest: true } });
@@ -121,6 +132,15 @@ it("reads the object again on 409 stale_revision and sends nothing made on the o
   await settle();
   expect(api.calls).toHaveLength(1);
   expect(save.current).toMatchObject({ saving: false, locked: false, value: fresh, failed: { after: "reloaded" } });
+});
+
+// The page that made the edits is gone (another page, or another person signed in): nothing it queued is sent.
+it("sends nothing queued once the page has gone", async () => {
+  const { api, save } = live();
+  changeTwo(save);
+  act(() => dom.root.render(null));
+  await act(async () => api.calls[0]?.resolve({ revision: 2, balance: true, digest: false }));
+  expect(api.calls).toHaveLength(1);
 });
 
 it("shows the server's object again when the server refused the change", async () => {

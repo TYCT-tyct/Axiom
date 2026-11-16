@@ -1,5 +1,5 @@
 import { ApiError, refused } from "@axiom/api";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // The two ways a console form writes (docs/frontend.md「写入策略」). The contract has no PATCH and a PUT replaces the
 // whole object, so a form holds a draft of the whole object and sends it once on save (useExplicitSave). Only a body
@@ -94,61 +94,66 @@ export type Failed = { error: unknown; after: "reverted" | "reloaded" | "unconfi
 
 type View<T> = Omit<LiveSave<T>, "mode" | "change">;
 
-export function useLiveSave<T>({
-  initial,
-  write,
-  reread,
-}: {
+type LiveSaveOptions<T> = {
   initial: T;
   // write sends the object with the edit applied (the whole body, or the one value an endpoint takes) and returns
   // the object as the server now has it.
   write: (next: T) => Promise<T>;
   // reread fetches the object as the server has it now, after a 409 stale_revision.
   reread: () => Promise<T>;
-}): LiveSave<T> {
+};
+
+export function useLiveSave<T>({ initial, write, reread }: LiveSaveOptions<T>): LiveSave<T> {
   const confirmed = useRef(initial);
   const queue = useRef<((current: T) => T)[]>([]);
-  const running = useRef(false);
   const locked = useRef(false);
-  const [view, setView] = useState<View<T>>({
-    value: initial,
-    saving: false,
+  const viewOf = (outcome: Partial<View<T>>): View<T> => ({
+    value: queue.current.reduce((value, edit) => edit(value), confirmed.current),
+    saving: queue.current.length > 0,
     saved: false,
     failed: null,
-    locked: false,
+    locked: locked.current,
+    ...outcome,
+  });
+  const [view, setView] = useState(() => viewOf({}));
+  const publish = (outcome: Partial<View<T>>) => setView(viewOf(outcome));
+
+  // Once the page that made the edits is gone (another page, another session), what is still queued is dropped.
+  const gone = useGone(() => {
+    queue.current = [];
   });
 
-  const publish = (outcome: Partial<View<T>>) =>
-    setView({
-      value: queue.current.reduce((value, edit) => edit(value), confirmed.current),
-      saving: queue.current.length > 0,
-      saved: false,
-      failed: null,
-      locked: locked.current,
-      ...outcome,
-    });
-
-  const drain = async () => {
-    running.current = true;
-    for (let edit = queue.current[0]; edit; edit = queue.current[0]) {
-      try {
-        confirmed.current = await write(edit(confirmed.current));
+  // send sends one edit and settles what its answer means, unless the page went while it was out.
+  const send = async (edit: (current: T) => T) => {
+    try {
+      confirmed.current = await write(edit(confirmed.current));
+      if (!gone.current) {
         queue.current.shift();
         publish({ saved: queue.current.length === 0 });
-      } catch (error) {
-        queue.current = [];
-        const result = await afterFailure(error, reread, () => {
-          locked.current = true;
-          publish({ saving: true });
-        });
-        if ("current" in result) {
-          confirmed.current = result.current;
-          locked.current = false;
-        }
-        publish({ failed: result.failed });
       }
+    } catch (error) {
+      queue.current = [];
+      if (gone.current) {
+        return;
+      }
+      const result = await afterFailure(error, reread, () => {
+        locked.current = true;
+        publish({ saving: true });
+      });
+      if ("current" in result) {
+        confirmed.current = result.current;
+        locked.current = false;
+      }
+      publish({ failed: result.failed });
     }
-    running.current = false;
+  };
+
+  // One drain runs while the queue holds anything: an edit pushed onto an empty queue starts it, and it ends when the
+  // queue is empty (an edit is not taken while the object is read again, since that locks it).
+  const drain = async () => {
+    for (let edit = queue.current[0]; edit && !gone.current; edit = queue.current[0]) {
+      await send(edit);
+    }
   };
 
   return {
@@ -160,11 +165,25 @@ export function useLiveSave<T>({
       }
       queue.current.push(edit);
       publish({});
-      if (!running.current) {
+      if (queue.current.length === 1) {
         void drain();
       }
     },
   };
+}
+
+// useGone is set once the component has unmounted, when drop runs, and cleared when it mounts, which StrictMode's
+// remount would otherwise leave set.
+function useGone(drop: () => void) {
+  const gone = useRef(false);
+  useEffect(() => {
+    gone.current = false;
+    return () => {
+      gone.current = true;
+      drop();
+    };
+  }, []);
+  return gone;
 }
 
 // afterFailure says where a failed write left the object. A refusal proves nothing was done, and so does a stale

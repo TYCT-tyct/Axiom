@@ -43,24 +43,42 @@ export function useToast(): Say {
 }
 
 // A toast stays 2.6 seconds, or 5.2 with an action to take; pointing at it or focusing it holds it, and it goes 1.6
-// seconds after the pointer or the focus leaves (the board's timing).
+// seconds after both the pointer and the focus have left (the board's timing).
 const stay = { plain: 2600, action: 5200, after: 1600 };
+
+// useStay calls leave when the toast's time is up: ms after it appears, or stay.after once the last of the pointer
+// over it and the focus in it has left. Either one holds it while it is there.
+function useStay(ms: number, leave: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const holding = useRef({ pointer: false, focus: false });
+  const stop = () => clearTimeout(timer.current);
+  const arm = (delay: number) => {
+    stop();
+    timer.current = setTimeout(leave, delay);
+  };
+  useEffect(() => {
+    arm(ms);
+    return stop;
+  }, []);
+  const hold = (by: "pointer" | "focus") => {
+    holding.current[by] = true;
+    stop();
+  };
+  const release = (by: "pointer" | "focus") => {
+    holding.current[by] = false;
+    if (!holding.current.pointer && !holding.current.focus) {
+      arm(stay.after);
+    }
+  };
+  return { hold, release, stop };
+}
 
 function Toast({ text, bad, action, onGone }: Omit<Shown, "id"> & { onGone: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const [leaving, setLeaving] = useState(false);
   const ran = useRef(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const ms = action ? stay.action : stay.plain;
-  const hold = () => clearTimeout(timer.current);
-  const arm = (delay: number) => {
-    hold();
-    timer.current = setTimeout(() => setLeaving(true), delay);
-  };
-  useEffect(() => {
-    arm(ms);
-    return hold;
-  }, []);
+  const { hold, release, stop } = useStay(ms, () => setLeaving(true));
   useEffect(() => {
     if (leaving && ref.current) {
       settled(ref.current).then(onGone);
@@ -73,10 +91,10 @@ function Toast({ text, bad, action, onGone }: Omit<Shown, "id"> & { onGone: () =
       role={bad ? "alert" : "status"}
       className={classes(s.root, bad && s.bad, leaving && s.leaving)}
       style={{ "--ms": `${ms}ms` } as CSSProperties}
-      onMouseEnter={hold}
-      onMouseLeave={() => arm(stay.after)}
-      onFocus={hold}
-      onBlur={() => arm(stay.after)}
+      onMouseEnter={() => hold("pointer")}
+      onMouseLeave={() => release("pointer")}
+      onFocus={() => hold("focus")}
+      onBlur={() => release("focus")}
     >
       <span className={s.icon}>
         <Glyph name={bad ? "warn" : "check"} />
@@ -94,7 +112,7 @@ function Toast({ text, bad, action, onGone }: Omit<Shown, "id"> & { onGone: () =
                 return;
               }
               ran.current = true;
-              hold();
+              stop();
               setLeaving(true);
               action.run();
             }}
