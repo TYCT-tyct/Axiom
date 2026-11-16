@@ -165,13 +165,13 @@ func (v visibility) allows(m catalog.ModelID) bool {
 // none of that. It takes a connection of the admission class and no account gate, as it moves no money. fn reads in
 // the same transaction, whose scope is the key's account, under the admission's budget.
 func (h *Handler) authorise(r *http.Request, caller accounts.Caller, fn func(context.Context, pg.Tx, accounts.Admission) error) error {
-	return h.authoriseWith(h.admitDB, r, caller, fn)
+	return h.authoriseWith(h.admitTx, r, caller, fn)
 }
 
 // authoriseRead is authorise for the read-only endpoints OpenRouter opens to management keys as well as call keys
 // (docs/domains/gateway.md「给其他中转站对接的接口」).
 func (h *Handler) authoriseRead(r *http.Request, caller accounts.Caller, fn func(context.Context, pg.Tx, accounts.Admission) error) error {
-	return h.authoriseWith(h.admitReadDB, r, caller, fn)
+	return h.authoriseWith(h.admitReadTx, r, caller, fn)
 }
 
 func (h *Handler) authoriseWith(admit func(context.Context, accounts.Caller, accounts.AdmitRequest, func(pg.Tx, accounts.Admission) error) error,
@@ -184,7 +184,11 @@ func (h *Handler) authoriseWith(admit func(context.Context, accounts.Caller, acc
 		return err
 	}
 	defer release()
-	return admit(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: h.clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
+	err = admit(ctx, caller, accounts.AdmitRequest{Domain: r.Host, ClientIP: h.clientIP(r)}, func(tx pg.Tx, a accounts.Admission) error { return fn(ctx, tx, a) })
+	if err == nil {
+		h.outage.recovered(depDatabase)
+	}
+	return err
 }
 
 // model resolves the public base name and checks model visibility. Discovery does not apply a call's request-level

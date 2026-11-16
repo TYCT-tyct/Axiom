@@ -55,16 +55,7 @@ var (
 )
 
 func (r *Registration) work(ctx context.Context, job *river.Job[registrationArgs]) error {
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	if err := r.process(ctx, job.Args); err != nil {
-		r.logFailure(ctx, job.ID, job.Attempt, err)
-		if errors.Is(err, errNoRegistrationDomain) || errors.Is(err, ErrBadEmail) {
-			return river.JobCancel(errRegistrationJob)
-		}
-		return errRegistrationJob
-	}
-	return nil
+	return runMailJob(ctx, job, r.process, r.logFailure, errNoRegistrationDomain, errRegistrationJob)
 }
 
 // process mails the link once. A redelivered job that finds the token already written sends nothing, and one that

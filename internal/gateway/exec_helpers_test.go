@@ -3,6 +3,7 @@ package gateway
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"log/slog"
@@ -370,7 +371,7 @@ type options struct {
 
 // optionSegments is the harness's segment settings: the test's, or a small segment that makes calls segment.
 func optionSegments(o options) billing.Segments {
-	return cmpOr(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
+	return cmp.Or(o.segments, billing.Segments{Output: 200, Overshoot: time.Second})
 }
 
 type harness struct {
@@ -405,7 +406,7 @@ const memorySize = 1 << 30
 // call and another's for a converted one.
 func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	t.Helper()
-	client := cmpOr(o.client, protocol.Messages)
+	client := cmp.Or(o.client, protocol.Messages)
 	upstream := client
 	if o.upstream != nil {
 		upstream = *o.upstream
@@ -440,7 +441,7 @@ func newHarness(t *testing.T, ctx context.Context, o options) *harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.budget = cmpOr(o.memory, memorySize)
+	h.budget = cmp.Or(o.memory, memorySize)
 	h.memory = protocol.NewMemory(h.budget)
 	alive := o.alive
 	if alive == nil {
@@ -484,20 +485,13 @@ func (h *harness) admitServerTool(o options, request []byte, client protocol.For
 	}
 	req.ServerSearch, req.Needs = o.server, req.Needs|protocol.Tools|protocol.WebSearch
 	o.server.Loop = true
-	cap := int(o.server.MaxUses)
-	if cap == 0 {
-		cap = protocol.DefaultServerToolCalls
-	}
-	if req.HasMaxToolCalls {
-		cap = min(cap, int(req.MaxToolCalls))
-	}
-	req.WebSearches = int64(cap)
+	req.WebSearches = serverToolCap(&req)
 	return request, req
 }
 
 // fillPlan builds the route's entries and their quotes for one scenario.
 func (h *harness) fillPlan(o options, schedule catalog.Schedule, upstream protocol.Format, n int) (routing.Plan, []billing.Quotable) {
-	plan := routing.Plan{MaxAttempts: cmpOr(o.maxAttempts, 3), StartBy: h.started.Add(cmpOr(o.startBy, 2*time.Minute))}
+	plan := routing.Plan{MaxAttempts: cmp.Or(o.maxAttempts, 3), StartBy: h.started.Add(cmp.Or(o.startBy, 2*time.Minute))}
 	var quotes []billing.Quotable
 	for i := 1; i <= n; i++ {
 		limits := billing.Model{ContextLength: 100000, OutputSpeed: 100}
@@ -556,7 +550,7 @@ func (h *harness) attachSearch(c *Call, o options, req *protocol.Request, reques
 func (h *harness) newCall(o options, request []byte, client, upstream protocol.Format) *Call {
 	h.t.Helper()
 	n := max(o.entries, 1)
-	schedule, err := catalog.ParseSchedule([]byte(cmpOr(o.price, cheap)))
+	schedule, err := catalog.ParseSchedule([]byte(cmp.Or(o.price, cheap)))
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -605,14 +599,6 @@ func setStream(req *protocol.Request, body []byte, stream *bool) []byte {
 		return body
 	}
 	return bytes.Replace(body, []byte(`"stream": true`), []byte(`"stream": false`), 1)
-}
-
-func cmpOr[T comparable](v, fallback T) T {
-	var zero T
-	if v == zero {
-		return fallback
-	}
-	return v
 }
 
 // fakeLedger records the settlements, with what the client had seen when each was asked for, which is what shows the
