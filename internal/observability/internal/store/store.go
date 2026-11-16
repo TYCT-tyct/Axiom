@@ -8,3 +8,6 @@ const ListQuery = listOwnCalls
 
 // UsageQuery is the production rollup read for EXPLAIN regression tests.
 const UsageQuery = readUsageStatistics
+
+// SessionsQuery is the production session read for EXPLAIN regression tests.
+const SessionsQuery = listOwnSessions

@@ -13,8 +13,8 @@ const (
 	ownCallReportWindow = 30 * 24 * time.Hour
 )
 
-// ownCallQuery decodes the shared filters after the guard has validated the operation's query schema.
-func ownCallQuery(cl call) (observability.OwnQuery, error) {
+// ownCallFilters decodes the shared filters after the guard has validated the operation's query schema.
+func ownCallFilters(cl call) (observability.OwnQuery, error) {
 	p := cl.r.URL.Query()
 	q := observability.OwnQuery{
 		Account: uuid.UUID(cl.principal.AccountID()), Until: endOfTime,
@@ -53,7 +53,15 @@ func ownCallQuery(cl call) (observability.OwnQuery, error) {
 		}
 		*field.dst = &id
 	}
-	if raw := p.Get("cursor"); raw != "" {
+	return q, nil
+}
+
+func ownCallQuery(cl call) (observability.OwnQuery, error) {
+	q, err := ownCallFilters(cl)
+	if err != nil {
+		return q, err
+	}
+	if raw := cl.r.URL.Query().Get("cursor"); raw != "" {
 		after, err := observability.ParseCursor(raw)
 		if err != nil {
 			return q, err

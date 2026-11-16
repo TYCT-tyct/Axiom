@@ -1,25 +1,17 @@
 package main
 
 import (
+	"uuid"
+
 	"axiom/internal/observability"
 	"axiom/internal/platform/consoleapi"
 )
 
 func (c consoleAPI) callRoutingBody(call observability.OwnCallDetail, body *consoleapi.Call, charged bool) {
-	codes := map[string]string{}
-	if c.upstreams != nil {
-		// A retired endpoint or stale snapshot has no current public identity. Keep the
-		// rest of the historical record readable without substituting an internal ID.
-		if endpoints, err := c.upstreams.Routable(); err == nil {
-			for _, e := range endpoints {
-				codes[e.ID.String()] = e.Codename
-			}
-		}
-	}
 	attempts := make([]consoleapi.CallAttempt, len(call.Attempts))
 	for i, a := range call.Attempts {
 		attempts[i] = consoleapi.CallAttempt{
-			Sequence: new(a.Sequence), EndpointCode: optionalText(codes[a.Endpoint]), SourceClass: new(a.SourceClass),
+			Sequence: new(a.Sequence), EndpointCode: c.callEndpointCode(a.Endpoint), SourceClass: new(a.SourceClass),
 			StartedAt: &a.StartedAt, FinishedAt: &a.FinishedAt, FirstTokenMs: new(a.FirstTokenMs),
 			Result: new(consoleapi.CallAttemptResult(a.Result)), ErrorKind: new(a.ErrorKind),
 		}
@@ -30,7 +22,7 @@ func (c consoleAPI) callRoutingBody(call observability.OwnCallDetail, body *cons
 		r := call.Route
 		route := &consoleapi.OwnCallRoute{
 			ExcludedReasons: &r.ExcludedReasons, ExcludedMore: &r.ExcludedMore,
-			SelectedEndpoint: optionalText(codes[r.SelectedEndpoint]), FastestUnmeasured: &r.FastestUnmeasured,
+			SelectedEndpoint: c.callEndpointCode(r.SelectedEndpoint), FastestUnmeasured: &r.FastestUnmeasured,
 			PresetUnavailable: &r.PresetUnavailable,
 		}
 		if r.Preset != nil {
@@ -38,6 +30,17 @@ func (c consoleAPI) callRoutingBody(call observability.OwnCallDetail, body *cons
 		}
 		body.Route = route
 	}
+}
+
+func (c consoleAPI) callEndpointCode(endpoint string) *string {
+	if c.upstreams == nil {
+		return nil
+	}
+	id, err := uuid.Parse(endpoint)
+	if err != nil {
+		return nil
+	}
+	return optionalText(c.upstreams.EndpointCode(id))
 }
 
 // The log lacks billing's loop membership. Distinct-endpoint fallback attempts
