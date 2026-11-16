@@ -1,20 +1,28 @@
 # routing
 
-路由在调用路径上的接口：会话标识、回退路线、换不换端点的判定。路由的规则见[路由](../../docs/domains/routing.md)，一次调用的编排见 [gateway](../gateway/README.md)。
-
-> 已实现（[Issue #26](https://github.com/TYCT-tyct/Axiom/issues/26)，PR R1–R3 合为一个）：路由快照、`SessionKey`、`Plan`、`Decide`、按供应商的重试预算、进程内的端点负载与 429 降权、会话粘性存储、路由记录。快照由 `NewSnapshot` 从端点和预设的数据组装，这些数据由 suppliers、quality、billing、accounts 提供；它们的类型还没有公开，所以 routing 先用最窄的自有类型（见「现在的输入类型」），对方公开后在调用处换掉。代码与本文不一致时，在同一个 PR 里改本文。
+路由在调用路径上的接口和不变量：快照、会话标识、回退路线、换不换端点的判定、路由预设的存取。行为和规则见[路由](../../docs/domains/routing.md)，一次调用的编排见 [gateway](../gateway/README.md)。代码与本文不一致时，在同一个 PR 里改本文。
 
 ## 接口
 
 ```go
 func New(cfg Config) (*Router, error)
-func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset) (*Snapshot, error)
-func (p *Preset) ReadRules(rules []byte) error // 校验并编译一个版本的规则；写入和快照共用，见「路由预设」
+func (r *Router) NewSnapshot(built time.Time, endpoints []Endpoint, presets []Preset, rules ...ByokRule) (*Snapshot, error)
+func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
+func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey // 只扫有界前缀
+func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale；ErrPresetUnavailable
+func (r *Router) KeyView(a Admission) (KeyView, error) // 模型列表看一把 key 能走到什么
+func (v KeyView) Serves(m catalog.ModelID) bool
+func (v KeyView) Allows(m catalog.ModelID, e EndpointID) bool
+func (r *Router) Block(e Entry, scope Scope, after time.Duration) // 暂停端点或供应商，最多两小时；没给用 Config.Pause
+func (r *Router) Blocked(e Entry) bool // 已定的条目在发出前再查一次
+func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
+
+func (p *Preset) ReadRules(rules []byte) error // 校验并编译一个版本的规则；写入和快照共用
 func (s *Presets) Load(ctx context.Context, tx pg.Tx) ([]Preset, error) // 快照的预设来源，平台范围
 func DefaultPreset(ctx context.Context, tx pg.Tx, site SiteID, account AccountID, workspace WorkspaceID, currency platform.Currency) (id PresetID, layer PresetScope, err error)
-func Module() pg.Module // routing 的迁移：预设三张表、全局预算行、后台改的上限和暂停开关
+func Module() pg.Module // 迁移：预设三张表、全局预算行、上限和暂停开关
 func ListPresets(ctx context.Context, tx pg.Tx, a Admission) ([]StoredPreset, error) // 一把 key 能选的活预设
-func LayerPresets(ctx context.Context, tx pg.Tx, layer Layer) ([]StoredPreset, error) // 一层自己的全部预设，管理这一层的人看
+func LayerPresets(ctx context.Context, tx pg.Tx, layer Layer) ([]StoredPreset, error) // 一层自己的全部预设
 func GetPreset(ctx context.Context, tx pg.Tx, id PresetID) (StoredPreset, error)
 func CreatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, slug string, c PresetContent, reason string) (StoredPreset, error)
 func UpdatePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID, revision int64, c PresetContent, reason string) (StoredPreset, error)
@@ -22,105 +30,67 @@ func DisablePreset(ctx context.Context, tx pg.Tx, actor audit.Actor, id PresetID
 func ReadDefault(ctx context.Context, tx pg.Tx, layer Layer) (Default, error)
 func SetDefault(ctx context.Context, tx pg.Tx, actor audit.Actor, layer Layer, currency platform.Currency, preset *PresetID, version int64, reason string) (Default, error)
 func SelectablePreset(ctx context.Context, tx pg.Tx, a Admission, id PresetID) error // key 显式选的预设能不能用
-func ReadLimits(ctx context.Context, tx pg.Tx) (Limits, int64, error) // 后台存的各层上限、版本保留数和全局预算与 rev，零值是代码默认
-func SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, l Limits, rev int64, reason string) (int64, error) // 平台范围；越界是 *LimitError，rev 已变是 ErrPresetStale
-func ReadSuspension(ctx context.Context, tx pg.Tx) (time.Time, error) // 平台暂停预设的时刻，没暂停是零值
-func SetSuspension(ctx context.Context, tx pg.Tx, actor audit.Actor, suspend bool, reason string) (time.Time, error) // 平台的 kill switch，平台范围；已是所求状态时什么都不写
-// Endpoint.Class is a stable source-class slug (official, cloud, relay, or one added in the admin), not an enum;
-// Entry.Class freezes it into the plan for the call record. See docs/domains/quality.md「来源类别与指纹」.
-func (r *Router) Replace(s *Snapshot) // 只接受更新的快照
-func (r *Router) SessionKey(acct AccountID, req *protocol.Request, body []byte, header string) SessionKey // 只扫有界前缀
-func (r *Router) Plan(in Input) (Plan, *Wait, error) // 纯内存；*NoEndpoint{Reasons, Permanent}；ErrStale
-func (r *Router) KeyView(a Admission) (KeyView, error) // 模型列表看一把 key 能走到什么；预设用不了是 ErrPresetUnavailable，没有快照什么都没有
-func (v KeyView) Serves(m catalog.ModelID) bool // 这把 key 看得见、它的受众可收费、它的预设留下的端点有没有一个；不看熔断、负载、暂停、预算、请求的过滤，也不看快照新不新
-func (v KeyView) Allows(m catalog.ModelID, e EndpointID) bool // 这个端点是否被受众可收费、被预设留下；OpenRouter 形状的列表按它收窄每个模型的端点和价格
-func (r *Router) Block(e Entry, scope Scope, after time.Duration) // 暂停端点或供应商到上游给的时间，最多两小时；没给用 Config.Pause
-func (r *Router) Blocked(e Entry) bool // 已定的条目在发出前再查一次
-func Decide(f Failure) Action // NextEntry | OtherCredential | ReturnToClient
+func ReadLimits(ctx context.Context, tx pg.Tx) (Limits, int64, error) // 零值是代码默认（DefaultLimits）
+func SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, l Limits, rev int64, reason string) (int64, error) // 越界 *LimitError，rev 已变 ErrPresetStale
+func ReadSuspension(ctx context.Context, tx pg.Tx) (time.Time, error) // 没暂停是零值
+func SetSuspension(ctx context.Context, tx pg.Tx, actor audit.Actor, suspend bool, reason string) (time.Time, error) // 已是所求状态时什么都不写
 ```
 
-- **`SessionKey`** 在准入之前算出，最多读 `Config.SessionPrefix`（默认 16 KiB）字节：已由 Inspect 读取的请求体 `session_id` 优先，其次 gateway 传入的 `x-session-id`，再取前缀里的 `prompt_cache_key`，或 Anthropic `metadata.user_id`（Claude Code 的会话）；都没有时，用账户、模型和对话（`messages`、`input`、`contents`）的第一条消息（最多 1 KiB）的哈希：只取第一条，所以对话变长、或后面的参数变化，键都不变。键里总含账户，所以不同账户都发 `default` 也不会串。透传给上游的不透明标识不在这里：gateway 的 `Executor.identity` 按账户和客户端的值派生。gateway 用 `Stuck` 读粘住的端点，作为 `Input.Sticky` 传入；gateway 在调用交付了内容、且服务它的端点与粘住的不同时调 `Stick`，收到“上下文已压缩”标记时调 `Forget`（写回规则见 [gateway 的「粘性」](../gateway/README.md)）。
-- **`Plan`** 在准入事务的 `fn` 里调用，只读内存快照和请求，不查库、不访问缓存。预设内容取快照，预设 ID、可用模型、账户、站点、工作区、站点币种及其当前等级取 `Admission`；快照没有这个预设，或预设不属于这把 key 的层（`Preset.visibleTo`：平台的人人可用但带价时只给同币种站点，站点、账户、工作区的只给自己）时返回 `ErrPresetUnavailable`（gateway 回 503 `preset_unavailable`），不改用别的预设；快照陈旧超过 `MaxStale`（30s）返回 `ErrStale`（gateway 回 503）。`Fresh` 报告同一个条件（有快照且不超过 `MaxStale`），节点用它决定是否撤销就绪。步骤：对每个模型（主模型在前，备选在后）取候选，逐个过滤并记下原因，按“指定顺序 → 没达到性能期望的靠后 → 粘住的端点 → 策略”排序，取前 `MaxEntries`（3）个不同的端点。`Input.Auto` 为真时（请求名是 `openrouter/auto`）不用 `Models`：按快照里全部模型取候选，仍然逐个过滤并按同一套规则排序，第一条就是选中的模型，后面的条目是它的跨模型回退；此时排序总是跨模型全局排序，因为请求本来就没有指定模型，`Models` 里的内容被忽略；同一模型去重、同一端点只进一次、第二个起的条目所在供应商的重试预算三条规则照旧。`Input.Free` 为真时（请求名是 `openrouter/free`）同样不用 `Models`，但只在快照的 `free` 列表里取候选：它是带 `Free` 的端点（目录的 `:free` 条目）按模型去重后的列表，过滤、排序、去重和回退与 auto 相同，第一条就是选中的免费模型；列表为空时返回永久的 `NoEndpoint`（原因 `NoCandidates`）。每个条目还携带同次快照构建的 `platform.ExchangeRate` 值副本，预留保留的条目冻结它，刷新不改在途路线；同币种为空，缺汇率保留货币对但 ID 为零。每个条目带端点、供应商（尝试花它的重试预算）、`Target`（怎么调这个端点：它对模型的名字和模型规格里的写法，`Endpoint.Target` 带来；调用格式由 `Plan` 按请求选（`callFormat`）：端点说请求的格式就用它；否则 Chat 请求先看端点说不说 Messages、Responses（先 Messages），Messages、Responses 请求先看端点说不说 Chat，不说就是另一个原生格式（三种格式两两可转）；`MaxOutput` 也由 `Plan` 填，等于下面的条目输出上限，端点的上限未知时为 0，见下）、模型、价格版本、输出上限（请求的上限与端点上限取小，请求没写取端点的默认）、`Segmentable` 和 `Limits`（报价用的 `billing.Model`，上下文、图片和页的 token 数、工具次数、输出速度、可上报的计费项，与过滤用的是同一份；`Limits.ID` 必须是条目的 `Model`，否则缺项会记到零 UUID，实际模型仍被选中）。gateway 用 `DemandOf` 把请求摘要转成报价的 `Demand`（`openrouter:web_search` 是一个 `web_search` 的 `ServerTool`，`MaxUses` 为循环的步数上限，网关跑模型侧循环时带 `Repeats`，每次继续采样都按自己的输出上限预留，映射成厂商原生搜索时不带；web 插件另加一次固定价的搜索，结果占的字节计入文本；`file-parser` 在目录开关打开时按 `FilePages` 每页另加一次固定价的 `file_parse`，`cloudflare-ai` 免费、`native` 按输入 token，不增加采样；开关关闭时按 `FileParses` 每个文件一次旧的 `web_search`，让升级后的站点保持原价；`code_execution` 与 `file_search` 各是一个同名 `ServerTool`，`MaxUses` 是请求允许的最多调用次数（代码执行取 Messages 的 `max_uses` 与 Responses 的 `max_tool_calls`，文件搜索只取 Responses 的 `max_tool_calls`），请求没写时由模型规格的 `max_uses` 补上，两者都不是 `Flat`、不带 `Repeats`，每次调用只收一次按次价，结算取上游报告的次数、没报时按回复里的调用项计数，见 [billing 的「预留与结算」](../../docs/domains/billing.md#预留与结算)），路由比较价格上限用的也是它。`StartBy` 是准入后不再发起新尝试的时刻（窗口取预设的、没有则取 `Config.AttemptWindow`；节点里 `cmd/axiom` 把它设成 gateway 配置的 `StartBy`，两处不会不同），`MaxAttempts` 是最多尝试几次（含同一条目换凭证），是硬上限，取预设的、没有则取路由器的默认，从不因路线更长而提高；`Input.FileRef` 为真时取 1（请求里的 `file_id` 是供应商账户的资源，见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）；路线里到不了的条目（超过它的）被去掉。
-- **结果**：候选都满载（过了全部过滤，但已达 `MaxConcurrent`，或凭证容量视图说没有并发位）返回 `*Wait`，gateway 回滚准入、在事务外排队，归还一个并发位时唤醒一个排队者（见 [gateway 的「入口与准入」](../gateway/README.md#入口与准入)）；没有可用端点返回 `*NoEndpoint`，`Permanent` 为真（所有被排除的原因都是永久的：能力、上下文、格式、预设或覆盖过滤、没有售价、未知计费项、原生成本无法报价、已停用、模型不可用于这把 key）时 gateway 回 404，否则（有离线端点、供应商余额、没有出口、重试预算、暂停中的 `cooling_down`）回 503，见[接入的「错误」](../../docs/domains/gateway.md#错误)。账户看不到的端点（别人的自带端点）不进原因，不泄露存在。
-- **受众售价**：`Endpoint.AudiencePrices` 是后台编译的稀疏受众索引。同一模型各端点共享一份价目表、混合价格和缓存优惠派生值；`priceFor` 使用计费模块的同一选择器，在账户、准入等级与全部之间先比目标具体程度再比受众。过滤、最高价、均衡与最便宜排序、粘性判断和路线冻结均使用选中的版本；没有版本的匹配层拒绝售卖，不能向宽泛规则回落。`KeyView` 也按这份价判定模型可见性，不读取数据库。
+`Config` 的默认值在 `New`：`MaxStale` 30s、`StickyTTL` 1h、`SessionPrefix` 16 KiB、`MaxAttempts` 4、`AttemptWindow` 2m、`Recovery` 1m、`ThrottleFloor` 0.1、`Pause` 5s、`RetryRatio` 0.2、`RetryFloor` 3、`RetryWindow` 1m。给了 `Config.Alerts` 却没给 `Node` 时 `New` 报错。
 
-- **过滤**，按顺序，先便宜的：可见性 → 已启用 → 熔断 → 供应商余额（组装时 `BalanceOK` 表示已提供同步余额；请求相关的付得起检查在永久条件与暂停之后、满载之前执行，使用 `Endpoint.Cost`、`Funds` 和 `billing.ReservedCost`，按完整生成上界比较原生单位余额，相等可用；原生成本缺价按全部已知等级与上下文档位的最高 token 单价估算，并保留更高的已知价格；数量越界等不能报价的情况按永久的 `UnquotableCost` 排除；工具未给次数上限的请求仍交准入报价返回明确的 400，不伪装成供应商余额不足；供应商的实时自动暂停由 `Funds.CanPay` 同时检查）→ 出口 → 能力（`protocol.Request.Needs` 必须是端点 `Caps` 的子集）→ 格式（`NativeOnly` 时要原生支持；否则可以经转换提供：Chat 请求交给说 Chat 的端点（同格式），或转换给 Messages、Responses 端点，Messages、Responses 请求可转换给声明提供这些格式的 Chat 端点，同格式优先，见 `callFormat` 与[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)；网关以流读上游，所以生成请求只保留能流式的端点，`NoSegments` 的压缩调用是唯一的例外，见 `streamsFor`）→ 服务等级（请求可能的等级 `ServiceTiers` 与端点提供的 `ServiceTiers` 要有交集）→ 上下文（输入按 (`TextBytes` + `SearchBytes`) / `billing.InputBytesPerToken`（4，不是路由器的设置：计费暂估用同一个常量）估计：`SearchBytes` 是 web 插件为搜索结果预留的字节，报价也把它算进文本，与下面的输出上限是同一条规则）→ 预设的过滤（按模型取规则：模型自己的、它作者的、默认的，取第一个有的；规则的来源类别、数据政策、产品成绩与置信度、只走已验证的、最高价，加平台预设的运营质量与置信度下限）→ 请求覆盖的过滤（只走、排除、类别、数据政策、最高价、按公开代号选组、有指定顺序且关闭回退时只留命名的组、`require_parameters` 的端点参数集合要包含请求所设的全部参数）→ 有售价 → 没有未知计费项（`Endpoint.UnknownItem`，billing 遇到该模型报告了没有价格的字段，见 [billing 的「兜底价」](../billing/README.md#兜底价)）→ 没在暂停（`Block` 暂停的端点或供应商，见下；放在能力、格式、上下文和各项过滤之后，所以一个本来就不合适的端点记的是永久原因，而不是暂时的 `cooling_down`）→ 未满载（端点的在途上限 `MaxConcurrent`，或 `Endpoint.Capacity.Full()`：供应商的实时容量视图，凭证没有并发位、账号的滚动分钟用完、都在休息或已过期；读在过滤的最后，前面已经排除了的端点不再读它）。预设和覆盖各检查一遍，端点必须都通过，所以覆盖只能收紧；最高价各自比较，等于取较低者，比较的是请求可能被收的最高价：请求可能的服务等级加标准档（计费也这样取），长度取 `billing.InputBound`（文本、图片、文件按最大值，会再次采样的工具调用则取整个上下文，与计费报价用同一个函数），在 `Schedule.Highest` 的各档里取最高。某个等级缺价不会让其他已知价格被忽略；缺价的 token 项按计费实际的兜底价，即该价目表最高的 token 单价，参与比较；缺价的按请求项按价目表最高请求价，与预留、结算用同一条规则；其他缺价的按次项目是站点默认价，路由不知道，不比较。预设关闭回退（`NoFallbacks`）时只留预设 `OrderNames` 里的分组代号，请求写什么顺序都不放宽。
-- **排序策略**：均衡是价格加权随机，权重 = 质量分 × 429 降权系数 ÷ 价格（输入加输出的标准档单价；质量分已含健康度，不再另乘），低余额或号池余量低减半，带工具调用时再乘 (1 − 工具错误率)²；用 Efraimidis–Spirakis 的随机键取样，所以第一个按权重比例选出，后面在剩下的里同样处理（不放回）。最便宜按价格升序；最快把测过的（`Throughput` 大于 0）按吞吐降序再按首字延迟升序，没测过的排在其后、彼此按均衡的随机键排，每次排序抽一次 `Rand`，低于 5%（`exploreShare`）时把随机键最大的那个没测过的端点放到策略这一层的最前（`explore`），所以指定顺序、性能期望和粘性仍在它之前；没测过的端点不算没达到性能期望（与首字延迟为 0 时一样），它只是不知道；最低延迟按首字延迟升序，未测量的排在后面并按价格加权随机；质量优先把有计入结局的（`Confidence` 大于 0）按质量分 × 置信度（带工具调用时再乘 (1 − 工具错误率)）降序，没测过的排在其后、彼此按均衡的随机键排；平局按端点 ID，同样的输入得到同样的顺序。
-- **粘性**只在这些同时成立时生效：请求带了 `Sticky`，端点缓存读取单价低于输入单价，健康度不低于 0.5，没在 429 降权中，没满载。生效时它排在同一指定顺序组的最前。
-- **条目的输出上限**只有一条规则，过滤和条目共用：请求写了上限就取它与端点上限中的较小者，没写取端点的默认；上下文要装得下输入加这个上限，请求写明的上限装不下就排除该端点，默认值则裁到上下文剩下的部分。报价用的就是发出去的：请求没写上限时，`Target.MaxOutput` 是这个（可能被裁短的）值，`Prepare` 把它写进发给上游的请求（`TestOutputCapQuotedIsTheCapSent`），否则上游按模型的默认值生成，比预留依据的多；端点的上限未知（0）时，报价取上下文剩下的部分，这个值上游不一定收，所以不发（`Target.MaxOutput` 为 0）。直接格式（embeddings、rerank）不生成输出：上限恒为 0，输入只要不超过上下文长度就装得下，恰好等于也算（`TestDirectContextBoundary`）。
-- **`Segmentable`**（按条目和这个请求算）= 网关能跟着计量（`Input.NoSegments` 为假）∧ 端点能流式 ∧ 实测传递取消 ∧ 调用格式下推理进度可见（只有规格列了 `reasoning` 能力的模型才要求这一位：不会推理的模型没有要看见的推理；判断用的是端点实际被调用的格式，客户端格式经转换后不代表网关读的那路流）∧ 请求没有隐藏推理 ∧ 端点的输出速度已知（`Endpoint.OutputSpeed` 大于 0，取自模型规格的 `output_speed`；超额额度是速度乘等待时间，速度未知会少预留）∧ 配置的一段大于 0 ∧ 条目输出上限大于 `Segments.Output + Segments.Allowance(速度)`（`routing.Config.Segments` 与 billing 的分段大小是 gateway 配置的同一个值，超额额度只由 `Segments.Allowance` 算）：上限不高于两者之和时一次预留足，不分段。现有模型规格都没有写速度，所以没有条目可分段，全部全额预留。`NoSegments` 是 gateway 对整份答复的调用（`/responses/compact`）设的：那种尝试没有可观测的进度，只能在准入时按上限预留，端点也不必能流式，因为网关读的是整份答复。
-- **`Decide`** 是纯函数，只看失败的作用范围：请求自身（`ScopeRequest`，如其他的 400）→ 返回客户端；凭证 → 同端点换凭证；出口、端点、分组、供应商 → 下一个条目（每个端点只有一个出口 `direct`，出口不通，换同端点的凭证没用）。余额不足、限流、过载、超时由 suppliers 的适配器分到端点、分组或供应商范围，所以换条目；上下文超长和内容审核由适配器按上游的答复分到请求或端点范围（OpenAI 直连的上下文超长是端点的，中转站的和以 400 报出的内容审核是请求的，以 403 回的拒绝按权限失败分到端点或凭证），流里报出的由 gateway 的 `scopeOf` 判为请求范围，规则即[路由的「失败怎么办」](../../docs/domains/routing.md#失败怎么办)。提交后 gateway 不再调用它。
-- **共享状态在进程内**（M1，D10；[Issue #26](https://github.com/TYCT-tyct/Axiom/issues/26) 的验收项）：端点在途数（`Begin`/`End`）、429 降权（`Throttled`，每个限流失败都调，`ThrottleFloor` 起在 `Recovery` 内线性恢复）、端点和供应商的定时暂停（余额不足的自动暂停归 suppliers，不调用 `Block`；`Block` 暂停到上游给的时间，最多两小时，没给用 `Config.Pause`（默认 5 秒）；`Blocked` 让 gateway 在发出前再查一次已定的条目；凭证范围的 `Block` 什么也不做，凭证的歇息归 suppliers；快照替换不清空暂停，后到的失败只延长、不缩短暂停）、按供应商的重试预算（`Sent` 记首次请求，`TakeRetry` 取用一次重试；窗口内重试数不得超过请求数 × `RetryRatio` 加 `RetryFloor`，十个桶的环让旧流量过期）和会话粘性（分片的有界 map，到期或超限时丢弃，丢失只让下一次重新选择）。它们不在快照里，快照只持有指向它们的指针，所以快照整体替换后状态还在。凭证容量也不在 routing：它是供应商的凭证状态，快照持有供应商给出的 `Capacity` 视图，`Plan` 在过滤的最后读一次，取位仍由 `Acquire` 原子完成（见 [suppliers 的「并发与速率」](../suppliers/README.md#并发与速率)）。M2 多节点时，会话粘性移到 Valkey：routing 定键（站点加 `SessionKey`）和值（端点 ID），gateway 在预检那一批里读、调用结束后经后台队列写，Valkey 不可用就不粘；进程内的表只留给没配 Valkey 的单核心模式（[platform/kv 的设计](../platform/kv/README.md)）。其余几样仍在进程内、在后台同步，硬上限不依赖共享的数字，`Plan` 不访问缓存；限流计数不在 routing。
-- **路由记录** `Record`：被排除的候选和原因（`Plan` 填；存储时逐个列出最多 16 个，每个原因的个数全记，大小因此有界）、选定的路线（`Plan` 填）、每次尝试的端点和结果（gateway 追加）、要求最快而候选都没测过（`Unmeasured`，`Plan` 填，存为 `fastest_unmeasured`）、路由所按的预设和版本（`Preset`、`PresetVersion`，存为 `preset`）与请求覆盖了哪些成员（`Overrides`，位集合，`Plan` 填、不分配，存为成员名的列表 `overrides`）；`JSON()` 给出存储形式，observability 随调用保存；管理和运营接口把它原样作为调用的 `route` 给出，契约里的模式是 `CallRoute`，`TestRecordKeepsItsContract` 让每个成员、原因和覆盖名都过这个模式，存储形式加了成员而契约没写就失败。
+## 不变量
 
-## 请求级供应商选择
+- **`Plan` 只读内存**：在准入事务里调用，不查库、不访问缓存、不改共享状态；重试预算只「看」，gateway 发出重试时才 `TakeRetry`。预设内容取快照，预设 ID、可用模型、账户、站点、工作区、币种和等级取 `Admission`。快照没有这个预设或 `Preset.visibleTo` 不放行时返回 `ErrPresetUnavailable`，从不改用别的预设；快照超过 `MaxStale` 返回 `ErrStale`，`Fresh` 报告同一条件。
+- **路线**：最多 `MaxEntries`（3）个不同的端点，在预留前定死，之后只会缩短。`MaxAttempts` 是硬上限（含同条目换凭证），取预设的、否则路由器的，从不因路线更长而提高；`Input.FileRef` 时为 1。`StartBy` 取预设的窗口、否则 `Config.AttemptWindow`。`Input.Auto`、`Input.Free` 不用 `Models`，在全部模型或快照的 `free` 列表里取候选并跨模型整体排序；`free` 为空时是永久的 `NoEndpoint`（`NoCandidates`）。
+- **条目**带端点、供应商、`Target`（上游名字、规格写法、`Plan` 按 `callFormat` 选的调用格式、`MaxOutput`）、模型、价格版本、输出上限、`Segmentable`、`Limits`（报价用的 `billing.Model`，与过滤用的同一份；`Limits.ID` 必须是条目的 `Model`）和同次构建的 `platform.ExchangeRate` 副本。gateway 用 `DemandOf` 把请求摘要转成报价的 `Demand`，路由比较价格上限用的也是它。
+- **过滤**，按顺序，先便宜的：可见性 → BYOK 不回落 → 已启用、静态熔断、供应商余额已同步、出口 → 格式 → 能力、可流式（`NoSegments` 与直接格式例外，见 `streamsFor`）、服务等级、上下文 → 预设 → `VerifiedOnly`（`NotVerified`，暂时）→ 请求覆盖 → 有售价 → 无未知计费项 → 没在暂停 → 付得起（`Funds`、`Endpoint.Cost`、`billing.ReservedCost`）→ 未满载（`MaxConcurrent` 或 `Endpoint.Capacity.Full()`）。暂停排在永久条件之后，所以不合适的端点记永久原因。账户看不到的端点不进原因。
+- **永久与暂时**：能力、上下文、格式、服务等级、预设或覆盖过滤、没有售价、未知计费项、原生成本无法报价、已停用、模型不对 key 开放是永久的（gateway 404）；离线、供应商余额、没有出口、重试预算、`cooling_down`、`NotVerified` 是暂时的（503）；混合时按暂时。候选都满载返回 `*Wait`，gateway 在事务外排队。
+- **上下文**：输入按 (`TextBytes` + `SearchBytes`) / `billing.InputBytesPerToken` 估计，只在肯定装不下时排除。条目输出上限只有一条规则：请求写了取它与端点上限的较小者，没写取端点默认并裁到上下文剩下的部分；请求写明的装不下就排除。没写时 `Target.MaxOutput` 就是报价所用的值，`Prepare` 把它发给上游；端点上限未知（0）时不发。直接格式的上限恒为 0，输入恰好等于上下文也装得下。
+- **价格**：`Endpoint.AudiencePrices` 是快照预编译的稀疏受众索引，`priceFor` 用计费的同一选择器在账户、等级与全部之间选版本；匹配层没有版本就拒绝售卖，不回落到宽泛规则。过滤、最高价、排序、粘性和冻结都用选中的版本。最高价按请求可能的服务等级加标准档、`billing.InputBound` 的长度，在 `Schedule.Highest` 里取最高；缺价的 token 项按最高 token 单价，缺价的请求项按最高请求价。
+- **预设与覆盖各检查一遍**，端点必须都通过，所以覆盖只能收紧；最高价各自比较即取较低者。预设 `NoFallbacks` 时只留 `OrderNames` 里的分组。
+- **排序**：`compare` 按 `order` → BYOK → 没达到性能期望 → 不粘 → 策略分数，平局按端点 ID。均衡用随机键 ln(u)/w 不放回取样；最快对没测过的端点抽 `Rand`，低于 `exploreShare`（5%）时把随机键最大的那个放到策略层最前。粘性要求带了 `Sticky`、缓存读单价低于输入单价、健康度不低于 0.5、没在 429 降权、没满载。
+- **熔断**在请求自己的过滤与排序之后处理，不改变已排好的先后：熔断的端点只作最后备选，`Offline` 一律排除；`Blocked` 在发出前复查离线和暂停。没有其他健康候选时忽略慢启动上限。`PausedUntil` 向 quality 暴露两种暂停的较晚时刻。
+- **`Segmentable`** = ¬`NoSegments` ∧ 能流式 ∧ 实测传递取消 ∧（模型会推理时）实际调用格式下推理可见 ∧ 请求没有隐藏推理 ∧ `OutputSpeed` > 0 ∧ 段大于 0 ∧ 条目上限大于 `Segments.Output + Segments.Allowance(速度)`。
+- **`Decide`** 是纯函数，只看作用范围：请求 → 返回客户端；凭证 → 同端点换凭证；出口、端点、分组、供应商 → 下一个条目。提交后 gateway 不再调用它。
+- **共享状态在进程内**：在途数（`Begin`/`End`）、429 降权（`Throttled`）、暂停（凭证范围的 `Block` 什么也不做）、重试预算（`Sent`/`TakeRetry`，十个桶的环，重试数 ≤ 请求数 × `RetryRatio` + `RetryFloor`）、进程内粘性表（分片有界 map）。快照只持有指针，整体替换后状态还在；暂停只延长、不缩短。凭证容量是供应商的 `Capacity` 视图。共享粘性的 `StickyKey`、`StickyEndpoint`、`StickyWrite` 只定义键、值和 TTL，gateway 负责同批预检和后台投递；配了 Valkey 就不读写进程表。
+- **`SessionKey`** 最多读 `Config.SessionPrefix` 字节，顺序见[会话粘性](../../docs/domains/routing.md#会话粘性)；兜底的哈希只取第一条消息（最多 1 KiB），对话变长键不变；键总含账户。透传给上游的标识由 gateway 的 `Executor.identity` 派生。
+- **`Record`**：被排除的候选（存储时逐个列出最多 16 个，每个原因的个数全记）、路线、每次尝试（gateway 追加）、`Unmeasured`、`Preset`/`PresetVersion`、`Overrides`（位集合，不分配）；`JSON()` 是存储形式，契约模式是 `CallRoute`（`TestRecordKeepsItsContract`）。
+- **请求的名称选择**：`Override.OrderNames`、`OnlyNames`、`ExcludeNames` 和 `Preset.OrderNames` 在 `Endpoint.Codename` 上精确匹配，从不转成供应商 ID。`Override.RequiredParameters` 来自 `protocol.RequestParameters`，按选中格式的 `Endpoint.Specs[f].Parameters` 判定（`HasAll`），不过记 `OverrideFilter`。
+- **BYOK**：账户的不回落选择（`ByokRule`，经 `NewSnapshot` 的 `rules` 传入，与凭证状态无关）或一个可见的 `Byok && !ByokFallback` 候选，让同模型的非 BYOK 候选以 `ByokNoFallback` 出局；其他 BYOK 候选不受影响。
+- **`KeyView`** 只问快照里有没有这把 key 看得见、可收费、预设留下的端点，不走 `Plan`，不看熔断、负载、暂停、预算和快照新旧；预设判定与 `Plan` 共用 `presetAllows`（经 `viewAllows`）。
 
-`Endpoint.Codename` 由供应商分组不可变的公开代号传入，`Override.OrderNames`、`OnlyNames`、`ExcludeNames` 直接在该快照上精确匹配；请求只有这一套名称选择器。平台预设的顺序 `Preset.OrderNames` 同样是分组代号、精确匹配，请求有顺序时替换它。不能先把代号转成供应商 ID：同一家多个组的货源与倍率不同，按 ID 会扩大请求的允许集合。私有端点先做归属过滤，不进入排除原因。
+## 输入类型
 
-`Override.SortGlobal` 对应 `sort.partition: none`，跨模型整体排序后再处理实时健康；`Input.Auto`、`Input.Free` 也强制跨模型整体排序。`NoFallbacks` 有非空请求顺序时限制命名集合；没有顺序时每个模型仅保留健康排序后的首条，跨模型备选仍保留，整体排序也按模型去重。熔断只在请求自己的过滤与排序之后处理，不改变模型、供应商顺序和性能偏好已经排好的先后。预设的关闭回退与请求限制各自检查，不可互相放宽。`Override.Quantizations` 按端点 `Quantization` 精确匹配，空列表不限制，未记录不匹配非空列表；`Override.MinThroughputPercentiles`/`MaxLatencyPercentiles` 用 quality 的滚动五分钟 p50/p75/p90/p99，写出的截断全满足才进偏好组，未测过的端点不判为不满足。`Override.RequireParameters`/`RequiredParameters` 来自网关的 `protocol.RequestParameters`，现在也含请求实际写出的能力参数（`tools`/`tool_choice`/`parallel_tool_calls`、`response_format`、`reasoning`/`reasoning_effort`；空 `tools` 不算），所以实测不支持其中一位时会真正过滤。候选按 `Plan` 选中的调用格式取 `Endpoint.Specs[f]`：`Parameters` 是该格式由模型规格和实测得到的有效集合，`Caps` 和 `Context` 也取该格式；`HasAll` 不过就记 `OverrideFilter`。端点的 `Caps`、`Parameters`、`Context`、`MaxOutput` 是所有原生格式的交集与下限，只用于没有格式参数的展示或回退，不替代 `Specs`，见[端点评估的「实测的能力与上限」](../../docs/domains/quality.md#实测的能力与上限)。清单外的参数网关在预留前 400，不进入这里。`Override.VerifiedOnly`（`:exacto` 设它）只保留 `Endpoint.Verified` 的候选：它在预设过滤之后、请求覆盖过滤之前判定，落选的记 `NotVerified`，是暂时原因，下一次真伪检测通过就会重新进入路线。`TestProviderGroupFilters`、`TestProviderSortPartition`、`TestProviderLowestLatency`、`TestProviderRequireParameters`、`TestProviderQuantization`、`TestPerformancePercentiles` 覆盖分组、权限、预设、跨模型、独立延迟排序、参数要求、量化匹配和百分位偏好。
-
-## 现在的输入类型
-
-suppliers、accounts、quality、billing 还没有公开 routing 要的类型，下面是 routing 自己的最窄定义，对方公开后各换一行：
-
-| routing 的类型 | 将来来自 | 说明 |
-|---|---|---|
-| `EndpointID`、`SupplierID`、`PresetID`、`AccountID`、`SiteID`、`WorkspaceID` | suppliers、accounts | 都是 `uuid.UUID` 之上的定义类型 |
-| `Admission` | accounts 的 `Admission` | 只取账户、站点、工作区、站点币种、预设 ID、key 可用的模型 |
-| `Endpoint` | suppliers（分组 × 模型、凭证余额、凭证容量、出口数、量化级别 `Quantization`）、quality（熔断、健康度、质量、置信度、吞吐、延迟、工具错误率、实测取消、`Verified`、实测的能力、参数、上下文与输出上限）、catalog（最快输出速度 `OutputSpeed`、可上报的计费项 `Reports`、参数清单 `Parameters`、能力与上下文基线）、billing（价格版本；`UnknownItem` 来自 `billing.UnknownItems`） | 快照重建时从各处合并成一份 |
-| `Capacity` | suppliers 的 `Capacity` | 只有 `Full()` 一个方法的窄接口：快照持有供应商的实时视图，`Plan` 用它判断端点有没有并发位 |
-| `Failure`、`Scope` | suppliers 的 `Failure`、`Scope`（在 `suppliers/internal/adapter`，顺序相同） | 调用处转换 |
-| `Endpoint.Funds`、`Endpoint.Cost` | suppliers 的 `Routable.Funds` 与 `Schedule` | 原生余额与成本随同一次供应商快照传入；自动暂停状态由供应商共享、跨快照保留 |
-| `Endpoint.Target` | suppliers 的 `Routable`（`Upstream` 是发给上游的模型名，`Formats` 是这个端点能用的调用格式，`Schedule` 是成本计划）、catalog 的 `Model.Serving()`（`Context`、`MaxOutput`、`Streams`、`Abilities`）加 `Model.Dialect()`（推理的写法、系统消息的位置等，规格里每个键可缺） | 已全部组装：`Service.Routable()` 给出上游名字、模型、格式、成本计划和这家供应商的 `Streams`/`Cancels`（suppliers README 的「调用面」），`Model.Serving()` 给出上下文、输出上限、流式和能力名（catalog README 的 `spec` 一条；能力名换成 `protocol.Capabilities` 的位在这一侧做），`Model.Dialect()` 给出其余 `Target` 字段（`Thinking`、`EncryptedReasoning`、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`、`CacheBreakpoints`），规格没写的键原样留作未设置，不补默认（protocol README 的「`Target` 里的模型数据」）；空的 `Target.Model` 会让尝试发出 `"model":""`，所以组装时必须填 |
-| `PriceRef` | billing 的价格版本 | 版本号加锁定的 `catalog.Schedule`，正是 `billing.Quotable.Price` 要的 |
-
-共享粘性的 `StickyKey`、`StickyEndpoint`、`StickyWrite` 只定义键、值和 TTL；gateway 负责同批预检与后台投递。配了 Valkey 就不读写进程表，故障时不粘；未配置的单核心行为不变。详见[会话粘性](../../docs/domains/routing.md#会话粘性)。
+suppliers、accounts、quality、billing 还没公开 routing 要的类型，routing 先用最窄的自有类型，对方公开后在调用处换掉：`EndpointID`、`SupplierID`、`PresetID`、`AccountID`、`SiteID`、`WorkspaceID`（`uuid.UUID` 之上的定义类型）；`Admission`（账户、站点、工作区、币种、预设 ID、可用模型、等级）；`Endpoint`（快照重建时从 suppliers、quality、catalog、billing 合并）；`Capacity`（只有 `Full()` 的窄接口）；`Failure`、`Scope`（与 suppliers 的顺序相同，调用处转换）；`PriceRef`（版本号加锁定的 `catalog.Schedule`）。`Endpoint.Target` 由 `suppliers.Service.Routable()`、`catalog.Model.Serving()` 和 `Model.Dialect()` 组装，规格没写的键留作未设置；空的 `Target.Model` 会发出 `"model":""`，组装时必须填。`Endpoint.Class` 是来源类别 slug，`Entry.Class` 把它冻结进计划。
 
 ## 路由预设
 
-预设是 routing 自己的数据（`migrations/00049_baseline.sql`），规则与理由见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
+[`00049_baseline.sql`](migrations/00049_baseline.sql) 创建本模块的结构并写入系统预设与平台默认；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。表和规则见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
 
-- **表**：`routing.presets`（身份、层与归属、`current_version`、`revision`、`deleted_at` 停用）、`routing.preset_versions`（不可变的规则 JSON，≤16 KiB；平台带价预设的币种）、`routing.preset_defaults`（每层最多一行的默认指针）。`presets.(id, current_version)` 引用自己的版本（延迟到事务结束检查），所以预设总有它指向的版本。迁移写入零 ID 的系统 `allow-all`（规则 `{"default":{"classes":["*"],"policies":["*"]},"advanced":{"max_attempts":4}}`，与代码里的 `gateway.presets()` 相同）和指向它的平台默认。
-- **行级安全**：读沿默认链向下：平台行任何范围可读，站点行本站（站点范围或账户范围的所属站点）可读，账户与工作区行本账户和所属站点可读；写只写本层。`preset_versions` 的读写经子查询继承 `presets` 的策略。`pg.Scope` 没有工作区这一维，租户边界是账户，账户内谁能改哪个工作区由接口授权决定。系统预设只有迁移能写，`UPDATE` 策略排除它。
-- **`ReadRules`**：严格解码（不认识的成员拒绝，所以更新版本写的新字段在旧节点上让这一个预设不可用，而不是半套生效），校验后编译成 `Preset.Rule`、`Authors`、`Models` 和平台的运行时设置。覆盖规则在编译时就补全：缺的筛选取上一层（模型的上一层是它作者的规则，没有才是默认），写了的筛选必须不宽于上一层；排序写了就替换。返回的错误都包着 `ErrRules`。
-- **`Presets.Load`**：每次快照构建读一次全部预设的头（含停用的，绑定它的 key 仍按它走），只为没编译过的 `(id, version)` 读规则；编译过的版本留在进程里，不再指向的就丢掉。读不懂的版本记一行 `routing.preset_isolated` 警告（每个版本只记一次）并不进快照，其余照常；系统预设缺失或读不懂时返回错误，快照不换。每次加载先读平台的暂停开关（`routing.preset_suspension` 有行即暂停），当场告诉 `Presets.Router`，再读预设；路由器暂停时 `Plan` 和 `KeyView`（共用 `presetOf`）把系统预设以外的预设都当作不可用（`ErrPresetUnavailable`），与快照装着什么无关，所以同一轮构建后面的来源失败、快照没换时暂停照样生效。路由器的状态变化每个节点记一次 `routing.presets_suspended`（警告）或 `routing.presets_resumed`。
-- **摘要与检查（`check.go`）**：`StoredPreset.Summary` 用 `ReadRules` 编译后的规则给出列表显示的摘要（默认规则的排序、来源类别、只走已验证、是否有规则限价、覆盖条数），读不懂的规则返回 false。`Router.CheckRules` 先按层 `ReadRules`（与写入同一套拒绝），再对当前快照里这把 key 能看到、有售价的端点，用 `KeyView` 的同一个判定（`viewAllows`）逐条判断：默认规则对全部端点，覆盖规则对它那个作者或模型的端点，没有端点的不判断；一条都留不下时，再把它自己写的每个条件单独套在全放行的规则上，单独就留不下端点的条件列进 `Unmatched.Fields`。没有快照时只给摘要。测试：`TestStoredPresetSummary`、`TestCheckRules`（单个条件、只在合起来时排除、平台的关闭回退、覆盖规则、继承、没有端点的作者）、`TestCheckRulesRefusesAndWaits`。
-- **`NewSnapshot`**：把每个预设的按作者、按模型规则建成指针表，`Plan` 每个模型查一到两次表，不复制规则、不分配（`BenchmarkPlanPreset`）。
-- **预设的拒绝与告警（`watch.go`）**：一次调用怎样收场由 `Router.Planned` 记下：网关在准入里对每次调用调一次，带上它最终被准入所按的计划和错误（后端搜索会规划两次，第一次只用来选搜索的路，不算数）；因 key 的预设被拒就给一个原子计数加一，`axiom.routing.preset_refusals`（可观测计数，采集时读这两个数；`Plan` 没有上下文可以记测量）按原因报出：标签 `reason` 是 `preset_unavailable`（节点不能按这条预设路由）或 `preset_filter`（计划为空、永久的 404，且预设排除过端点；等待和暂时的不可用不算）；模型列表的拒绝不是调用，不计。给了 `Config.Alerts` 的节点还按预设看平台和站点的预设（系统预设除外）：`NewSnapshot` 给它们挂上同一个计数（`presetTally`，按预设 ID 留在路由器里，跨快照不变），`Plan` 把它放进返回的计划，`Planned` 在路由成功时置一个先读后写的标志、因预设 404 时加一；`Replace` 每次重建时检查，满一分钟就结一个窗口：这一窗口路由过调用的解除 `routing.preset_refuses_all`，一次也没路由、被预设拒绝过的发出它（警告，`value` 是拒绝数），没有调用的不变。合并键是 `<Config.Node>/<预设 UUID>`，只解除本节点发的；节点启动后的第一个路由过的窗口也解除一次，清掉重启前可能留下的事件。告警缓冲拒收的信号记为欠着的，下一个窗口重发，即使那个窗口没有调用；之后有调用的窗口用它的结果替换欠着的（例如被拒的 raise 之后路由成功了，告警端本来没有事件，就什么都不欠）。账户和工作区的预设不看：所有者自己看得见 404。给了 `Alerts` 却没给 `Node` 时 `New` 报错。
-- **写（`manage.go`，默认与选预设的核对在 `defaults.go`）**：`CreatePreset`、`UpdatePreset`、`DisablePreset` 在调用方的范围里写，表的策略把它限在本层；规则先经 PostgreSQL 打印回文本，再由 `ReadRules` 按层校验，所以写入检查的就是快照读到的文本。`UpdatePreset` 带 `revision`（不符 `ErrPresetStale`），平台预设的改版不能让它服务的站点变少（不限价的加币种、限价的换币种都是 `ErrPresetCurrency`）：规则或币种变了才追加版本，只改名不加版本，什么都没变就什么都不写。停用的预设不再能改（`ErrPresetNotFound`）；看得到但改不了的是 `ErrPresetReadOnly`；仍是某层默认时停用返回 `ErrPresetInUse`。`ListPresets` 列一把 key 能选的活预设（不含系统预设），`LayerPresets` 列一层自己的全部预设（活的在前，平台的含系统预设，给管理端），`GetPreset` 读一条（含停用的）。`ReadDefault`、`SetDefault` 读写一层自己的默认，带 `version` 乐观并发（版本取自全局序列，清空后重设也不会拿到用过的版本）；`UpdatePreset` 加新版本时删掉保留数以外的旧版本（`Limits.KeptVersions`，默认 50，存的值不低于 50，表的删除策略只放过当前版本往前第 50 版及更早的），只改名不删；默认只能指向这一层看得见的活预设，系统预设只有平台层能指（`ErrPresetNotSelectable`）。`SelectablePreset` 是 key 显式选预设时的同一检查。`SetSuspension` 是平台的 kill switch：先锁预算行再插入或删除那一行；新建、改、停用预设和改默认都经 `lockWrites` 先锁预算行、再读开关，暂停时是 `ErrPresetsSuspended`，所以一次写要么在暂停前提交、要么被拒；`SelectablePreset` 只读开关不锁；`DefaultPreset` 和 `SetLimits` 不看开关，暂停期间新 key 仍按默认链落章。每次写都记审计 `routing.preset.create|update|disable`、`routing.default.update`，带层、版本和当前规则的 SHA-256，不带规则全文；`reason` 是操作者的理由，管理端的平台和站点改动必填（契约要求），控制台不填。
-- **配额与写的顺序**：`routing.preset_budget` 是一行全局总数（预设条数和当前规则的字节数），租户的范围数不到别人的行，所以全局预算靠它；新建、改规则、停用和改默认都先锁这一行，它同时让这些写排成一队：新建时租户的数在锁后才数，两个请求抢不到同一个空位；停用和改默认谁先谁后都看得见对方（默认先写时，外键对预设行的锁也让停用等它）。各层的上限由 `limitsOf` 按 `Limits` 取：默认（`DefaultLimits`）平台和站点各 50 条活预设、500 条（含停用，平台的含系统预设）；账户 20 条、200 条；工作区 10 条、100 条，同时计入所属账户。全局默认 10 万条、256 MiB。平台可以在 `routing.preset_limits` 一行里改它们、版本保留数和全局预算（`SetLimits`，留空的取默认，越界或某层活上限高于累计上限是 `*LimitError`；带读到的 `rev`，已变是 `ErrPresetStale`，清空也留着这一行，`rev` 不重复）。`takeBudget` 先锁预算行再读它，`SetLimits` 也先锁预算行，所以一次写按改前或改后的一套上限检查；任何范围都能读这一行，只有平台范围能写。租户不另设字节上限：每版最多 16 KiB，200 条也只有 3.2 MiB。只缩小的写（规则变小）超过预算也放行。
-- **`DefaultPreset`**：在建 key 的事务里（key 自己的范围）取最深的、设了默认的层；没有任何层就是系统预设。默认指向的预设已停用、这把 key 看不到或币种不符时返回 `ErrDefaultInvalid`，不退到更宽的层。同时返回作出决定的那一层（拒绝时也给，没有任何层设默认时是平台），控制台据此在默认的响应里写 `new_keys_layer`。cmd 把它作为 `accounts.Config.KeyPreset` 接上。
-- **测试**：`TestReadRulesRefuses`、`TestReadRulesInherits` 覆盖规则的校验和继承，`TestReadRulesBoundsTheDurations` 覆盖平台时长按整秒比较上限、不因换算成 `time.Duration` 溢出而放过；`TestPresetRulesRoute` 覆盖每种规则在默认、作者、模型三层的效果与平台的顺序、关闭回退、质量下限，并核对 `KeyView` 留下的端点就是路线能走的端点；`TestKeyView` 覆盖没有快照、快照过旧、端点暂时不可用、别的账户的端点和未知预设；`TestRequestOnlyTightensThePreset` 覆盖请求覆盖只能收紧；`TestPresetVisibility` 覆盖层与币种（`Plan` 和 `KeyView` 一样拒绝）；`TestPresetsLoad`、`TestDefaultPresetLayers`、`TestPresetTablesKeepTenantsApart` 走真实数据库，覆盖系统预设、隔离、新版本、停用、默认链和租户隔离；`TestPresetVersions`、`TestPresetDefaultAndDisable`、`TestPresetWritesRefused`、`TestPresetQuota`、`TestPresetGlobalBudget`、`TestDefaultVersionsAreNeverReused`、`TestPresetKeepsItsLastVersions`、`TestDefaultWaitsForTheDisable` 走真实数据库，覆盖写入、版本、默认、停用、审计、拒绝的写、租户配额（同一账户反复建停 201 次时第 201 次被拒，另一账户照常）、全局预算、默认版本不复用、只留最近 50 版和停用与改默认的交错；`TestLimitsCheck` 覆盖上限的取值范围和活上限不高于累计上限，`TestPresetLimitsApply` 走真实数据库，覆盖存下的上限约束下一次建预设（含全局条数）、账户范围不能改、存空值回到默认和审计，`TestLimitsRevision` 覆盖基于旧 `rev` 的改动被拒、清空后旧 `rev` 不再匹配，`TestKeptVersionsPruneOnNewRules` 覆盖调低保留数后只改名不删、改规则才删；`TestRecordNamesThePresetAndTheOverrides` 覆盖路由记录里的预设、版本和覆盖成员；`TestPresetRefusalsAreCounted` 覆盖两种拒绝按原因计数、路由成功不计；`TestAPresetThatRefusesEveryCallIsSignalled` 覆盖四层预设的窗口：启动后第一次路由解除、再路由不发、全部拒绝发出拒绝数、没有调用不变、路由过就解除，账户和工作区的不发；`TestPresetSuspension` 走真实数据库，覆盖暂停时五种写都被拒、新 key 仍落章、账户范围不能暂停、重复暂停不变、恢复后能写和审计；`TestSuspensionNeedsNoNewSnapshot` 覆盖读到暂停后不发布新快照（这一轮构建失败）时，绑定预设的 key 的调用和模型列表也被拒、系统预设照常、恢复后同一份快照又按预设路由；`TestLayerPresets`、`TestLayerQuota` 覆盖平台和站点层的列表、审计里的理由和两层各自的配额，`TestPlatformPresetKeepsItsCurrency` 覆盖平台预设改版时的币种；`cmd/axiom` 的 `TestNewKeysTakeTheDefaultPreset` 覆盖控制台和管理 key 建 key 时落章，`TestConsoleRoutingPresets` 覆盖控制台接口，`TestConsoleWorkspaceRoutingPresets` 覆盖控制台的工作区层，`TestAdminRoutingPresets` 覆盖管理端的平台和站点层，`TestAdminRoutingPresetLimits` 覆盖管理端读写上限，`TestAdminRoutingPresetSuspension` 覆盖管理端的暂停与恢复（理由、幂等重放、暂停中建预设 503 `presets_suspended`），`TestConsoleKeyPresets`、`TestManagementKeyPresets` 覆盖控制台和 `/api/v1/keys` 的 `preset_id`。
-
-## 健康闭环
-
-`Owner.Platform` 从站点与账户所有者均为空推导平台归属，不另存可矛盾的布尔字段。`Endpoint.LiveHealth` 指向 quality 的实时状态，独立于 `BreakerOpen` 静态排除字段；`Plan` 先做权限、能力、价格、资金、暂停与硬并发过滤，再在所有主模型和备选模型之间处理实时熔断。熔断的端点从正常路线降权，记 `breaker_open`；有别的候选时不接，候选全部熔断时保留原有排序作为最后备选。第一次试探仍失败的端点离线（`Offline`），一律排除；候选全部离线时返回暂时性的 `NoEndpoint`，gateway 回 503，等试探通过。`Blocked` 在发出前复查离线状态和暂停，离线的端点不会收到熔断前排进路线的条目，降权中的最后备选仍可发出。路由记录把排除的原因记在 `excluded` 里。
-
-恢复后的临时并发上限通过已有在途数检查。没有其他健康且有容量的候选时忽略慢启动上限，单端点不因慢启动等待。`PausedUntil` 只向 quality 暴露端点与供应商暂停的较晚时刻；两种暂停和熔断各自维护，互不清除。行为由 `TestTrippedEndpointsAreLastResort`、`TestOfflineEndpointsTakeNoTraffic`、`TestProbeRestoresAndSlowStart` 与 `TestFastestUnmeasuredAfterTheBreakers` 覆盖。
-
-## 账户自带的 key
-
-`Endpoint.Byok` 的候选排在站点端点之前，价格不参与这个先后。一个可见的 `Byok && !ByokFallback` 候选让同一模型的其他候选以 `ByokNoFallback` 出局：账户明确不许回落时，站点端点不能用；这个判断只针对该 key 覆盖的模型，别的模型照常走站点。被拒绝或停用的 key 不在快照里，所以不会挡住回落；没有可用候选时按 `NoEndpoint` 的永久/临时规则回答。
+- **`ReadRules`** 严格解码（不认识的成员拒绝，新字段在旧节点上只让这一个预设不可用），编译成 `Preset.Rule`、`Authors`、`Models` 和平台的运行时设置；覆盖规则在编译时补全继承并校验只能收紧，所以运行时不可能放宽；错误都包着 `ErrRules`。平台时长按整秒比较上限，不经 `time.Duration` 换算。
+- **`Presets.Load`** 先读暂停开关并当场告诉 `Presets.Router`，再读全部预设的头（含停用的），只为没编译过的 `(id, version)` 读规则；读不懂的版本记 `routing.preset_isolated` 并不进快照；系统预设缺失或读不懂时返回错误。暂停由 `Plan` 和 `KeyView` 共用的 `presetOf` 读，与快照内容无关。
+- **`NewSnapshot`** 把按作者、按模型的规则建成指针表，`Plan` 每个模型查一到两次，不复制、不分配（`BenchmarkPlanPreset`）。
+- **写**（`manage.go`、`defaults.go`）在调用方的范围里进行，表的策略限在本层；规则先经 PostgreSQL 打印回文本再 `ReadRules`，所以写入检查的就是快照读到的文本。错误：`ErrPresetStale`（`revision`/`rev` 不符）、`ErrPresetCurrency`、`ErrPresetNotFound`（含已停用）、`ErrPresetReadOnly`、`ErrPresetInUse`、`ErrPresetNotSelectable`、`ErrDefaultInvalid`、`ErrPresetsSuspended`。什么都没变的 `UpdatePreset` 什么都不写。
+- **锁的顺序**：建、改、停用和改默认都经 `lockWrites` 先锁 `routing.preset_budget` 行、再读开关，`takeBudget` 在锁后数本租户的行，`SetLimits` 也先锁它；所以配额不被并发抢穿，停用与改默认互相看得见，一次写要么在暂停前提交要么被拒。`SelectablePreset` 只读开关不锁；`DefaultPreset` 和 `SetLimits` 不看开关。各层上限由 `limitsOf` 按 `Limits` 取。
+- **`StoredPreset.Summary`** 从编译后的规则算摘要，读不懂的返回 false。**`Router.CheckRules`** 先按层 `ReadRules`，再用 `viewAllows` 对当前快照里这一层能看到（`Owner.visibleTo`）、有售价的端点判断；没有快照时只给摘要。
+- **告警**（`watch.go`）：`Router.Planned` 每次调用记一次结局，原子计数报为 `axiom.routing.preset_refusals`；平台和站点预设挂一个跨快照的 `presetTally`，`Replace` 每满一分钟结一个窗口，合并键 `<Config.Node>/<预设 UUID>`，只解除本节点发的。
 
 ## 决策与理由
 
 | 决策 | 理由 | 不选 |
 |---|---|---|
-| 回退判定是纯函数 `Decide`，只看失败的作用范围 | 适配器已经把每种上游错误分到作用范围；规则与路由文档的「失败怎么办」在一处，可以表驱动地测 | 由 gateway 按状态码判断；`Decide` 再按原因细分：两处都要认识每种原因 |
-| `Segmentable` 在 `Plan` 里按条目和请求算 | 端点能否截断、请求是否隐藏推理都会改变它；预留按条目报价时就要知道 | 按端点固定 |
-| 受众索引和价格派生值在快照预计算，账户与当前等级在准入选择 | 50 候选基准中快照排名约 12–15 µs、3752 B、5 次分配；准入按模型仅计算一次派生价格并复用预分配视图约 14–15 µs、4280 B、27 次分配。每次最多三次索引查询，不随账户规则数量线性增长；账户等级变更不依赖重新发布账户×等级组合 | 准入解析规则并算价；每账户×每等级复制完整路由 |
-| 预设内容来自快照，预设 ID 来自 `Admission` | 不新增查库；改预设内容滞后至多一个快照陈旧上限 | 准入时读预设内容 |
-| 覆盖规则在编译时补全继承，`Plan` 按模型 → 作者 → 默认取第一条 | 调用路径不逐字段合并、不分配；补全时就校验了“只能收紧”，运行时不可能放宽 | 运行时逐字段合并三层规则 |
-| 快照来源按 `(预设, 版本)` 缓存编译结果 | 每 5 秒重建只读预设头，规则文本只在版本变化时读和解析；规模由预设条数决定，不由规则字节决定 | 每次重建读并解析全部规则 |
-| 过滤的每一步给一个原因，永久与否看原因 | gateway 的 404 与 503 之分、运营的排查都靠它；混合时按暂时处理，因为等待可能治好 | 只返回“没有端点” |
-| 已停用算永久，熔断、余额、出口、重试预算算暂时 | 停用是配置，不会自己好；后几个会自己恢复。文档的列表没写停用，按它不会自己恢复归入永久 | 停用算暂时：模型只剩停用的端点时回 503 并叫客户端重试 |
-| 上下文用 `TextBytes / 4` 估计，只在“肯定装不下”时排除 | `TextBytes` 是 token 数的上界（字节），拿它排除会把约 4 倍上下文的合法请求永久拒掉；估计偏小时上游返回上下文超长：适配器判为端点范围（OpenAI 直连）时 `Decide` 换下一个条目，判为请求范围（中转站）时返回 400 | 直接用 `TextBytes`；把图片和 PDF 页按最大值算：同样会误拒 |
-| 价格上限、质量等预设条件和请求覆盖各检查一遍 | 两者都必须通过，等价于“只能收紧”，不需要合并规则，也能分别记原因 | 合并成一个有效条件再检查：要为每个字段写合并规则 |
-| 加权用不放回取样（随机键 ln(u)/w） | 第一个按权重比例，后面在剩下的里同样处理，一次排序得到整条路线；性质测试用频率验证 | 每个位置各抽一次：要重复归一化，且容易抽到重复 |
-| 均衡只乘质量分，质量优先把没测过的排在测过的之后 | 质量分由 quality 从可靠性、首字延迟和输出速度的 EWMA 合成，已经包含健康度，再乘一次会把失败计两次。没测过的端点置信度为 0，是未知而不是 0 分：和“最快”一样排在测过的之后并按价格加权随机，既不会永远垫底，也不会越过有证据的端点 | 另乘健康度：失败计两次；给未知记 0 分：永久垫底；给未知记 1 分：越过测出来好的端点 |
-| 重试预算在 `Plan` 里只“看”，在 gateway 发出重试时“取” | `Plan` 在准入事务里，不该改共享状态；几个并发的重试要靠 `TakeRetry` 原子地各占一次 | `Plan` 里直接扣：Plan 可能因排队重做，会重复扣 |
-| 模型列表只在请求自己的 `Models` 上去重，快照的 `models`、`free` 直接用 | `modelsOf` 从映射构建这两个列表，构造时已按模型唯一，无需再逐项比对；准入事务里对每个模型扫一遍已见列表，耗时随模型数平方增长（[#537](https://github.com/TYCT-tyct/Axiom/issues/537)）。请求自己的列表由 `uniqueModels` 按首次出现去重一次，没有重复时返回原列表，只有存在重复时才分配输出切片。`TestPlanScalesAcrossModels` 比较 100 与 6,400 个模型的最快耗时之比，超过 300 倍即失败 | 对每一份列表都逐项去重：快照列表本来唯一，这一遍只把准入事务里的模型扫描变成平方 |
-| 状态在进程内，快照只持有指针 | M1 只有一个核心节点（D10）；快照整体替换不丢负载和降权 | 状态放进快照：每次重建清零 |
-| 会话键含账户，透传标识用密钥派生 | 不同租户常发相同的会话值；原样透传会在上游串到一起并泄露客户端的标识 | 只用客户端的值 |
-| `KeyView` 只问这把 key 在快照里有没有它看得见、可收费、预设留下的端点，是只读的单项查询，不走 `Plan`；预设的判定调 `Plan` 的同一个 `presetAllows` | 模型列表要的是「有路可走」而不是「现在走得通」：没有端点（组装时没有售价或规格的模型已整个排除）的模型调用必然 404，列出来就是让客户端选到必败的名字；满载、熔断、暂停、预算只是暂时的，列表据此增减会让模型随负载闪进闪出。`Plan` 需要一个假请求，且这些暂时状态正是它的过滤 | 用 `Plan` 探测：造假请求，满载时模型消失；把「已启用」等永久原因也算进去：要在 `KeyView` 里重复 `Plan` 的一部分过滤，两处会漂移；所以预设这一部分不重写，直接共用 `presetAllows` |
-| `BaseRate` 加在 catalog 的 `Schedule` 上 | 路由要比较价格和算权重，需要读标准档的单价；价目表的字段不导出 | routing 自己解析 JSON |
+| 回退判定是纯函数 `Decide`，只看作用范围 | 适配器已把每种错误分到范围，规则在一处，可以表驱动地测 | gateway 按状态码判断：两处都要认识每种原因 |
+| `Segmentable` 按条目和请求算 | 端点能否截断、请求是否隐藏推理都会改变它 | 按端点固定 |
+| 受众索引和派生价在快照预计算，账户与等级在准入选择 | 每次最多三次索引查询，不随账户规则数增长；等级变更不必重新发布组合 | 准入时解析规则；每账户×等级复制路由 |
+| 预设内容来自快照，ID 来自 `Admission` | 不新增查库；内容滞后至多一个快照陈旧上限 | 准入时读预设内容 |
+| 覆盖规则在编译时补全，`Plan` 按模型 → 作者 → 默认取第一条 | 调用路径不逐字段合并、不分配 | 运行时合并三层 |
+| 编译结果按 `(预设, 版本)` 缓存 | 重建只读头，规模由条数决定，不由字节决定 | 每次解析全部规则 |
+| 每步过滤给一个原因，永久与否看原因 | gateway 的 404/503 之分和排查都靠它 | 只返回「没有端点」 |
+| 已停用算永久 | 停用是配置，不会自己好 | 算暂时：只剩停用端点时叫客户端重试 |
+| 上下文用 `TextBytes / 4` 估计，只在肯定装不下时排除 | `TextBytes` 是 token 数的上界，拿它排除会误拒约 4 倍上下文的合法请求 | 直接用 `TextBytes`；图片和页按最大值算 |
+| 预设和请求覆盖各检查一遍 | 等价于只能收紧，不用合并规则，也能分别记原因 | 合并成一个条件：每个字段都要合并规则 |
+| 加权用不放回的随机键 | 一次排序得到整条路线 | 每个位置各抽一次：要重复归一化，易抽到重复 |
+| 只对请求自己的 `Models` 去重 | 快照的 `models`、`free` 构造时已唯一，再去重会让准入里的扫描随模型数平方增长 | 每份列表都去重 |
+| 状态在进程内，快照只持有指针 | 快照整体替换不丢负载和降权 | 状态放进快照：每次重建清零 |
+| `KeyView` 不走 `Plan`，预设部分共用 `presetAllows` | 列表要的是「有路可走」，满载、熔断只是暂时的，不该让模型闪进闪出 | 用 `Plan` 探测：要造假请求；在 `KeyView` 里重写过滤：会漂移 |
+| `BaseRate` 加在 catalog 的 `Schedule` 上 | 路由要读标准档单价，价目表字段不导出 | routing 自己解析 JSON |
