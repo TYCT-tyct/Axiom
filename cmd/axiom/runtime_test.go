@@ -34,11 +34,11 @@ func TestServeClaimsListenersBeforeTheDatabase(t *testing.T) {
 	}
 	for _, c := range cases {
 		var claimed []*listening
-		err := serveWith(t.Context(), []string{
+		err := serveForTestBound(t.Context(), []string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + c.probes,
-			"AXIOM_DATABASE_URL=" + database.Superuser, "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
+			"AXIOM_DATABASE_URL=" + database.Superuser,
 			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
-		}, slog.New(slog.DiscardHandler), directEgress, startRecorder, nil, testGatewayConfig(), func(servers []*listening) {
+		}, slog.New(slog.DiscardHandler), func(servers []*listening) {
 			claimed = servers
 			t.Cleanup(func() { closeListeners(servers) })
 		})

@@ -95,8 +95,9 @@ func TestShutdownDrainsPublicFirst(t *testing.T) {
 	if err := <-stopped; err != nil {
 		t.Fatal(err)
 	}
-	assertListenersClosed(t, n.servers)
+	// Shutdown may finish before a Serve goroutine registers; its deferred listener close runs before it returns.
 	n.awaitClosed(t)
+	assertListenersClosed(t, n.servers)
 }
 
 // TestDrainRefusesNewRequests: while the node drains, a request that would start new work gets a retryable 503 from

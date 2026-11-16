@@ -29,14 +29,14 @@ func TestServe(t *testing.T) {
 	environ := []string{
 		"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 		"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
+		"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
 	}
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	var claimed []*listening
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), directEgress, startRecorder, nil, testGatewayConfig(),
+		done <- serveForTestBound(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)),
 			func(servers []*listening) { claimed = servers })
 	}()
 	addrs := servingAddrs(t, logs, done)

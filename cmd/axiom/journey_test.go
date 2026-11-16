@@ -81,7 +81,7 @@ func TestJourneyServer(t *testing.T) {
 		domainsErr = pgtest.Run(t.Context(), c.database.Superuser, `
 			UPDATE accounts.sites SET login_domain = NULL WHERE is_main;
 			UPDATE accounts.site_domains SET domain = '`+console+`', origin = 'http://`+console+`' WHERE domain = 'localhost:1';
-			UPDATE accounts.site_domains SET domain = '`+api+`', origin = 'http://`+api+`' WHERE domain = '127.0.0.1:1';
+			UPDATE accounts.site_domains SET domain = '`+api+`', origin = 'https://`+api+`' WHERE domain = '127.0.0.1:1';
 			UPDATE accounts.sites SET login_domain = '`+console+`' WHERE is_main`)
 	}
 	n := w.start()
