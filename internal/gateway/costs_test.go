@@ -1,9 +1,6 @@
 package gateway
 
 import (
-	"encoding/base64"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -175,7 +172,7 @@ func (r *rig) seedSupplierCost() (suppliers.AttemptReceipt, uuid.UUID) {
 func (r *rig) seedSupplierWith(prices string) (suppliers.AttemptReceipt, uuid.UUID) {
 	r.t.Helper()
 	ctx := r.t.Context()
-	keys := masterKey(r.t)
+	keys := testKeyring(r.t)
 	supplier, group, credential, endpoint, schedule := uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7(), uuid.NewV7()
 	sealed := keys.Seal(secret.New("sk-supplier"), secret.Location{Table: "suppliers.credentials", RowID: credential.String(), Purpose: "key"})
 	version := int64(sealed.KeyVersion)
@@ -230,22 +227,7 @@ func (r *rig) newSuppliers() (*suppliers.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	return suppliers.New(suppliers.Config{DB: r.db, Scope: platformScope, Keys: masterKey(r.t), Egress: exit})
-}
-
-// masterKey reads a keyring from a file, as the node does from AXIOM_MASTER_KEY_FILE.
-func masterKey(t *testing.T) *secret.Keyring {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "master-key")
-	line := "1:" + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32))) + "\n"
-	if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	keys, err := secret.Load(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return keys
+	return suppliers.New(suppliers.Config{DB: r.db, Scope: platformScope, Keys: testKeyring(r.t), Egress: exit})
 }
 
 // supplierStart is the message_start of the fake upstream's stream: the input tokens the attempt is costed from.
