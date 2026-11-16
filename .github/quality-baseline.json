@@ -30,7 +30,7 @@
   "gocognit_ceiling": [],
   "test_functions_over_gocognit_15": 67,
   "test_gocognit_ceiling": [],
-  "files_over_500_lines": 17,
+  "files_over_500_lines": 16,
   "file_ceiling": [],
   "coverage": {
     "tolerance_basis_points": 50,
