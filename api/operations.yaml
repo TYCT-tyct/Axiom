@@ -1,6 +1,6 @@
 # The operations API: what the operations agent calls through the MCP bridge on the ops node, on the core's operations
 # listener (docs/domains/operations.md「运营接口」). Code on both sides is generated from this file; change the contract
-# here first. The definitions it shares with api/admin.yaml are copies of them, kept identical by `just api`; the
+# here first. Shared schemas reference api/admin.yaml and reuse its generated Go types; the
 # conventions it follows are in internal/platform/README.md「接口约定」.
 openapi: 3.0.3
 info:
@@ -1467,27 +1467,9 @@ components:
         data: {type: array, items: {$ref: '#/components/schemas/AlertEvent'}}
         next_cursor: {type: string}
     AlertEvent:
-      type: object
-      properties:
-        id: {$ref: "#/components/schemas/Uuid"}
-        kind: {type: string}
-        key: {type: string}
-        severity: {type: string}
-        fields: {type: object, additionalProperties: {type: string}}
-        occurrences: {type: integer, format: int64}
-        state: {type: string, enum: [firing, delivered, resolved], x-enum-varnames: [AlertFiring, AlertDelivered, AlertResolved]}
-        fired_at: {type: string, format: date-time}
-        resolved_at: {type: string, format: date-time}
-        receipts: {type: array, items: {$ref: "#/components/schemas/AlertReceipt"}}
+      $ref: "admin.yaml#/components/schemas/AlertEvent"
     AlertReceipt:
-      type: object
-      properties:
-        id: {$ref: "#/components/schemas/Uuid"}
-        rule_id: {type: string}
-        sequence: {type: integer, description: "0 is the first notification; -1 is recovery; positive values are repeats."}
-        state: {type: string, enum: [pending, queued, delivered, failed], x-enum-varnames: [AlertPendingReceipt, AlertQueuedReceipt, AlertDeliveredReceipt, AlertFailedReceipt]}
-        at: {type: string, format: date-time}
-        delivered_at: {type: string, format: date-time}
+      $ref: "admin.yaml#/components/schemas/AlertReceipt"
     AgentReason:
       type: string
       minLength: 1
@@ -1569,94 +1551,21 @@ components:
         committed: {$ref: '#/components/schemas/OperationsCapAmount'}
         count: {type: integer, format: int32, minimum: 0, description: "Every proposal made in the window, however it ended."}
     OperationsCapCategory:
-      type: string
-      enum: [money.top_up, money.credit, money.refund]
-      description: A kind of money the agent moves, each with its own caps; top-ups of suppliers, credit grants to accounts and refunds of orders.
+      $ref: "admin.yaml#/components/schemas/OperationsCapCategory"
     OperationsCapAmount:
-      type: string
-      pattern: ^(0|[1-9][0-9]{0,17})$
-      description: An amount in billionths of one unit of the policy's currency, as integer text.
+      $ref: "admin.yaml#/components/schemas/OperationsCapAmount"
     OperationsCapLimits:
-      type: object
-      additionalProperties: false
-      required: [single_max, daily_max, weekly_max, object_daily_max, daily_count_max, hard_single_max, hard_daily_max, hard_weekly_max]
-      description: >-
-        The autonomous limits (a proposal within all of them needs nobody): one proposal, the UTC day, the ISO week, one
-        object's UTC day, and the day's number of proposals. The hard limits refuse a proposal outright, approved or
-        not: one proposal, the day and the week. Reserved and committed amounts both count.
-      properties:
-        single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        object_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        daily_count_max: {type: integer, format: int32, minimum: 0, maximum: 1000000}
-        hard_single_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        hard_daily_max: {$ref: "#/components/schemas/OperationsCapAmount"}
-        hard_weekly_max: {$ref: "#/components/schemas/OperationsCapAmount"}
+      $ref: "admin.yaml#/components/schemas/OperationsCapLimits"
     PricePublicationList:
-      type: object
-      properties:
-        policy: {$ref: "#/components/schemas/PricePolicy"}
-        data:
-          type: array
-          items: {$ref: "#/components/schemas/PricePublication"}
+      $ref: "admin.yaml#/components/schemas/PricePublicationList"
     PricePolicy:
-      type: object
-      properties:
-        rev: {type: integer, format: int64}
-        floor_multiplier: {type: string}
-        change_ratio: {type: string}
-        max_increase_ratio: {type: string}
-        byok_fee_bps:
-          type: integer
-          minimum: 0
-          maximum: 10000
-          description: >-
-            The share of a model's normal sale price charged when an account's own provider key serves the request,
-            in basis points (500 is 5%, docs/domains/billing.md「定价」).
+      $ref: "admin.yaml#/components/schemas/PricePolicy"
     PricePublication:
-      type: object
-      properties:
-        audience: {$ref: "#/components/schemas/PricingAudience"}
-        model_id: {$ref: "#/components/schemas/Uuid"}
-        candidate_id: {$ref: "#/components/schemas/Uuid"}
-        current_id: {$ref: "#/components/schemas/Uuid"}
-        status: {type: string, enum: [published, pending, blocked, unpriced]}
-        requested: {$ref: "#/components/schemas/PriceSchedule"}
-        schedule: {$ref: "#/components/schemas/PriceSchedule"}
-        floor: {$ref: "#/components/schemas/PriceSchedule"}
-        endpoints:
-          description: The proposed price of each endpoint for a cost-plus proposal.
-          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
-        requested_endpoints:
-          description: The rule price of each endpoint before the site floor, for a cost-plus proposal.
-          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
-        current_endpoints:
-          description: The price each endpoint currently serves, when the current version prices endpoints separately.
-          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
-        current_schedule:
-          description: The current model-level price schedule, including the envelope of a per-endpoint version.
-          allOf: [{$ref: "#/components/schemas/PriceSchedule"}]
-        costs:
-          description: The proposal's cost of each endpoint in the site currency, for a cost-plus proposal.
-          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
-        floors:
-          description: The proposal's break-even price of each endpoint in the site currency, for a cost-plus proposal.
-          allOf: [{$ref: "#/components/schemas/PriceEndpointMap"}]
-        problem: {type: string}
+      $ref: "admin.yaml#/components/schemas/PricePublication"
     PricingAudience:
-      type: object
-      required: [kind]
-      description: >-
-        Whom a rule prices for: one account, one tier, or everyone. `id` is the account's or tier's ID, absent for
-        `all`. Account and tier IDs must belong to this site.
-      properties:
-        kind: {type: string, enum: [account, tier, all]}
-        id: {type: string, maxLength: 64}
+      $ref: "admin.yaml#/components/schemas/PricingAudience"
     PriceEndpointMap:
-      type: object
-      description: Per-endpoint prices, keyed by endpoint UUID.
-      additionalProperties: {$ref: "#/components/schemas/PriceSchedule"}
+      $ref: "admin.yaml#/components/schemas/PriceEndpointMap"
     SalePricePublication:
       type: object
       additionalProperties: false
@@ -1686,87 +1595,19 @@ components:
         reason: {$ref: '#/components/schemas/AgentReason'}
         dry_run: {type: boolean, description: "Preview only: the same checks run, and nothing is written."}
     PricingTarget:
-      type: object
-      required: [kind]
-      description: >-
-        What a rule prices, from the most specific to the widest: an endpoint, a supplier group, a supplier, a model, a
-        model author, a source type, or everything. `id` is that thing's ID (a model author's slug), and absent for
-        `all`.
-      properties:
-        kind: {type: string, enum: [endpoint, group, supplier, model, author, source_type, all]}
-        id: {type: string, maxLength: 200}
+      $ref: "admin.yaml#/components/schemas/PricingTarget"
     PricingMethod:
-      type: object
-      required: [kind]
-      description: >-
-        How the price is set. `cost_plus`: cost × (1 + `markup_ratio`) + `fixed_markup`, or, with `margin_ratio`
-        instead of `markup_ratio`, cost ÷ (1 − `margin_ratio`) + `fixed_markup`; exactly one of the two ratios.
-        `reference_multiplier`: the model's reference price × `multiplier`. `face` only uses a reference already in
-        the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency
-        in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding.
-        A missing exchange rate stops publication for the matched model, without falling through to another rule
-        (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
-      properties:
-        kind: {type: string, enum: [cost_plus, reference_multiplier, fixed]}
-        markup_ratio: {$ref: "#/components/schemas/Decimal"}
-        margin_ratio: {$ref: "#/components/schemas/Decimal"}
-        fixed_markup: {$ref: "#/components/schemas/Rates"}
-        multiplier: {$ref: "#/components/schemas/Decimal"}
-        currency_conversion: {type: string, enum: [exchange, face]}
-        schedule: {$ref: "#/components/schemas/PriceSchedule"}
+      $ref: "admin.yaml#/components/schemas/PricingMethod"
     PricingConstraints:
-      type: object
-      description: >-
-        Limits on the price a rule sets, as ratios. This release does not apply them: a request that carries any
-        member (`min_margin_ratio`, `reference_min_ratio`, `reference_max_ratio`) is refused as 422 with the field
-        pointer `/rule/constraints/<member>`, so send `{}`. A stored rule that still has one is not priced, and
-        saving it without constraints clears them (#234).
-      properties:
-        min_margin_ratio: {$ref: "#/components/schemas/Decimal"}
-        reference_min_ratio: {$ref: "#/components/schemas/Decimal"}
-        reference_max_ratio: {$ref: "#/components/schemas/Decimal"}
+      $ref: "admin.yaml#/components/schemas/PricingConstraints"
     PricingRuleInput:
-      type: object
-      required: [enabled, target, audience, method, constraints]
-      properties:
-        enabled: {type: boolean}
-        target: {$ref: "#/components/schemas/PricingTarget"}
-        audience: {$ref: "#/components/schemas/PricingAudience"}
-        method: {$ref: "#/components/schemas/PricingMethod"}
-        constraints: {$ref: "#/components/schemas/PricingConstraints"}
+      $ref: "admin.yaml#/components/schemas/PricingRuleInput"
     PricingRule:
-      type: object
-      required: [id, rev, enabled, target, audience, method, constraints, updated_at]
-      properties:
-        id: {$ref: "#/components/schemas/Uuid"}
-        rev: {type: integer, format: int64, minimum: 0}
-        enabled: {type: boolean}
-        target: {$ref: "#/components/schemas/PricingTarget"}
-        audience: {$ref: "#/components/schemas/PricingAudience"}
-        method: {$ref: "#/components/schemas/PricingMethod"}
-        constraints: {$ref: "#/components/schemas/PricingConstraints"}
-        updated_at: {type: string, format: date-time}
+      $ref: "admin.yaml#/components/schemas/PricingRule"
     PricingRuleList:
-      type: object
-      required: [data]
-      properties:
-        data:
-          type: array
-          items: {$ref: "#/components/schemas/PricingRule"}
+      $ref: "admin.yaml#/components/schemas/PricingRuleList"
     OperationsPriceEnvelope:
-      type: object
-      additionalProperties: false
-      required: [min_margin_bps, model_daily_change_bps, daily_changes, daily_models]
-      description: >-
-        How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps
-        at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps`
-        in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most
-        `daily_models` models. Publications the owner approves count too.
-      properties:
-        min_margin_bps: {type: integer, format: int32, minimum: 0, maximum: 10000}
-        model_daily_change_bps: {type: integer, format: int64, minimum: 0, maximum: 100000000}
-        daily_changes: {type: integer, format: int32, minimum: 0, maximum: 1000000}
-        daily_models: {type: integer, format: int32, minimum: 0, maximum: 1000000}
+      $ref: "admin.yaml#/components/schemas/OperationsPriceEnvelope"
     OperationsPriceEnvelopeUsage:
       type: object
       additionalProperties: false
@@ -1806,277 +1647,39 @@ components:
             Why it waits for the owner, as the server decided it when the operation was proposed: which cap or envelope
             limit it goes over, a paused scope, or a class that always asks. Absent when an older node proposed it.
     OperationsApprovalReason:
-      type: object
-      additionalProperties: false
-      required: [code]
-      description: One reason an operation waited for the owner.
-      properties:
-        code:
-          type: string
-          enum:
-            - always
-            - cap_paused
-            - cap_single
-            - cap_daily
-            - cap_weekly
-            - cap_object_daily
-            - cap_daily_count
-            - envelope_unmeasured_change
-            - envelope_unknown_cost
-            - envelope_min_margin
-            - envelope_model_daily_change
-            - envelope_daily_changes
-            - envelope_daily_models
-          description: >-
-            `always`: its class always waits for the owner (a credit grant, retiring a model). `cap_paused`: the
-            owner paused its cap's scope. The other `cap_` codes are the autonomous limits of `summary.cap` a transfer
-            goes over: `cap_single` (`single_max`), `cap_daily` (`daily_used` + `amount` over `daily_max`),
-            `cap_weekly` (`weekly_max`), `cap_object_daily` (`object_daily_max`), `cap_daily_count` (`daily_count`
-            at `daily_count_max`). The `envelope_` codes are what `summary.envelope` does not cover:
-            `envelope_unmeasured_change` (`change_bps` is null), `envelope_unknown_cost` (`margin_bps` is null),
-            `envelope_min_margin` (`margin_bps` under `min_margin_bps`), `envelope_model_daily_change`
-            (`model_change_used` + `change_bps` over `model_daily_change_bps`), `envelope_daily_changes`
-            (`daily_changes_used` at `daily_changes`), `envelope_daily_models` (`daily_models_used` at
-            `daily_models` and the model not yet moved today). A later server may add codes; a page shows one it
-            does not know as a reason it cannot name.
+      $ref: "admin.yaml#/components/schemas/OperationsApprovalReason"
     OperationState:
-      type: string
-      enum: [pending_approval, approved, executing, succeeded, failed, unknown, canceled, expired, rejected, reverted]
-      description: >-
-        Where an operation is (docs/domains/operations.md「运营接口」): `pending_approval` and `approved` have not
-        started; `rejected`, `expired`, `canceled`, `failed` and `reverted` are final, and so is `succeeded` unless a
-        compensating operation reverts it.
+      $ref: "admin.yaml#/components/schemas/OperationState"
     OperationRisk:
-      type: string
-      enum: [routine, delisting, top_up, price, gift, refund]
-      description: The operation's class, which decides whether it waits for the owner.
+      $ref: "admin.yaml#/components/schemas/OperationRisk"
     OperationTarget:
-      type: object
-      additionalProperties: false
-      required: [kind, id]
-      properties:
-        kind: {type: string, description: "What the operation acts on, such as `model`."}
-        id: {type: string}
+      $ref: "admin.yaml#/components/schemas/OperationTarget"
     OperationsApprovalState:
-      type: string
-      enum: [pending, approved, rejected, expired, canceled]
-      description: >-
-        `pending` until the owner decides, it expires (30 minutes at most, never past the UTC day it was asked on) or
-        the agent withdraws it (`canceled`, as is every pending one at the emergency stop or the revocation of its
-        credential).
+      $ref: "admin.yaml#/components/schemas/OperationsApprovalState"
     OperationsApprovalTier:
-      type: string
-      enum: [human]
-      description: Who must decide; only the owner, in the admin, for now.
+      $ref: "admin.yaml#/components/schemas/OperationsApprovalTier"
     AccountId:
-      type: string
-      pattern: ^acct_[0-9a-hjkmnp-tv-z]{26}$
-      description: An account's ID (TypeID).
+      $ref: "admin.yaml#/components/schemas/AccountId"
     AdminAttempt:
-      type: object
-      additionalProperties: false
-      properties:
-        seq:
-          type: integer
-        endpoint_id: &id001
-          type: string
-        supplier_id: *id001
-        source_class: *id001
-        egress: *id001
-        outcome: *id001
-        error_kind: *id001
-        started_at:
-          type: string
-          format: date-time
-        finished_at:
-          type: string
-          format: date-time
-        first_token_ms:
-          type: integer
+      $ref: "admin.yaml#/components/schemas/AdminAttempt"
     AdminCallList:
-      type: object
-      additionalProperties: false
-      properties:
-        since:
-          type: string
-          format: date-time
-        until:
-          type: string
-          format: date-time
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/AdminCallSummary'
-        next_cursor: &id001
-          type: string
-        model_filter: *id001
-        status_filter:
-          $ref: '#/components/schemas/AdminCallStatus'
-        site_filter:
-          $ref: '#/components/schemas/SiteId'
-        incomplete:
-          type: boolean
-          description: 'True when the window crosses a month the call log no longer retains (archived and dropped): calls in
-            that month are missing, so an empty page does not mean the window had no calls. Calls before `available_since` were
-            archived. An old node leaves it out, which the page shows as unavailable rather than complete.'
-        available_since:
-          type: string
-          format: date-time
-          description: The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent
-            with `incomplete` true when no monthly partition remains, so no window can be answered from the log.
+      $ref: "admin.yaml#/components/schemas/AdminCallList"
     AdminCallStatus:
-      type: string
-      enum:
-      - ok
-      - error
-      description: 'The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter
-        echo out of a list.'
+      $ref: "admin.yaml#/components/schemas/AdminCallStatus"
     AdminCallSummary:
-      type: object
-      additionalProperties: false
-      properties:
-        id: &id001
-          type: string
-        site_id:
-          $ref: '#/components/schemas/SiteId'
-        account_id:
-          $ref: '#/components/schemas/AccountId'
-        at:
-          type: string
-          format: date-time
-        model: *id001
-        error_kind: *id001
-        latency_ms:
-          type: integer
-        price:
-          $ref: '#/components/schemas/Money'
+      $ref: "admin.yaml#/components/schemas/AdminCallSummary"
     AdminCallTrace:
-      type: object
-      additionalProperties: false
-      properties:
-        summary:
-          $ref: '#/components/schemas/AdminCallSummary'
-        cost:
-          $ref: '#/components/schemas/Money'
-        route:
-          x-go-type: jsonx.Raw
-          description: How routing chose the call's endpoints, passed on as it was stored with the call.
-          allOf: [{$ref: '#/components/schemas/CallRoute'}]
-        attempts:
-          type: array
-          items:
-            $ref: '#/components/schemas/AdminAttempt'
+      $ref: "admin.yaml#/components/schemas/AdminCallTrace"
     CallRoute:
-      type: object
-      additionalProperties: false
-      description: >-
-        How routing chose the endpoints of one call, as it was stored with the call (docs/domains/routing.md「路由记录」).
-        Every member is optional: a call recorded by an earlier release lacks the ones added since. Endpoints are named
-        by their internal ID, which the endpoint pages of this contract also use.
-      properties:
-        preset: {$ref: "#/components/schemas/CallRoutePreset"}
-        overrides:
-          type: array
-          description: >-
-            The members of the request's `provider` object that changed what the key's routing preset allows or how it
-            orders the route, by name; a member written with no effect is not listed. `data_collection` stands for
-            `zdr` too, and `verified_only` is what the `:exacto` variant asks.
-          items:
-            type: string
-            enum: [only, ignore, order, allow_fallbacks, sort, sort.partition, verified_only, classes, data_collection, max_price, preferred_min_throughput, preferred_max_latency, quantizations, require_parameters]
-            x-enum-varnames: [OverrideOnly, OverrideIgnore, OverrideOrder, OverrideAllowFallbacks, OverrideSort, OverrideSortPartition, OverrideVerifiedOnly, OverrideClasses, OverrideDataCollection, OverrideMaxPrice, OverridePreferredMinThroughput, OverridePreferredMaxLatency, OverrideQuantizations, OverrideRequireParameters]
-        fastest_unmeasured:
-          type: boolean
-          description: >-
-            True when the request asked for the fastest endpoint first and none of its candidates was measured, so the
-            route is in the balanced, price-weighted order and says nothing about speed. Absent means false.
-        excluded:
-          type: array
-          description: The candidates left out, at most 16 by name; `excluded_more` counts the rest.
-          items: {$ref: "#/components/schemas/CallRouteExclusion"}
-        excluded_more: {type: integer, minimum: 1, description: "How many more candidates were left out than `excluded` names."}
-        excluded_reasons:
-          type: object
-          description: How many candidates were left out for each reason, all of them, by the reason's name (`CallRouteExclusion.reason`).
-          additionalProperties: {type: integer, minimum: 1}
-        route:
-          type: array
-          description: The endpoints the call could try, in order.
-          items: {type: string, format: uuid}
-        attempts:
-          type: array
-          description: Each endpoint tried, in order.
-          items: {$ref: "#/components/schemas/CallRouteAttempt"}
-        breaker_open_fallback:
-          type: array
-          description: Written only by releases before endpoints were taken offline; the endpoints kept as a last resort because their breaker was open.
-          items: {type: string, format: uuid}
+      $ref: "admin.yaml#/components/schemas/CallRoute"
     CallRoutePreset:
-      type: object
-      additionalProperties: false
-      description: The routing preset the call was held to, at the version routing compiled.
-      properties:
-        id: {type: string, format: uuid}
-        version: {type: integer, format: int64, minimum: 1}
+      $ref: "admin.yaml#/components/schemas/CallRoutePreset"
     CallRouteExclusion:
-      type: object
-      additionalProperties: false
-      properties:
-        endpoint: {type: string, format: uuid, description: "Absent for `no_candidates` and `model_not_allowed`, which name no endpoint."}
-        reason:
-          type: string
-          description: Why the candidate was left out (docs/domains/routing.md「一个请求的路由步骤」).
-          enum: [no_candidates, model_not_allowed, disabled, breaker_open, supplier_balance, missing_capability, context_too_small, format_not_served, service_tier_not_served, preset_filter, override_filter, not_verified, no_price, no_egress, retry_budget, full, unknown_item, cooling_down, unquotable_cost, byok_no_fallback]
+      $ref: "admin.yaml#/components/schemas/CallRouteExclusion"
     CallRouteAttempt:
-      type: object
-      additionalProperties: false
-      properties:
-        endpoint: {type: string, format: uuid}
-        failed: {type: boolean, description: "True when the attempt failed. Absent means false."}
-        scope:
-          type: integer
-          minimum: 0
-          maximum: 5
-          description: >-
-            What a failure blamed: 0 the request itself, 1 the route to the supplier, 2 the endpoint, 3 the key, 4 the
-            supplier's group, 5 the supplier. Absent means 0.
-        action:
-          type: integer
-          minimum: 0
-          maximum: 2
-          description: "What routing did after a failure: 0 the next endpoint of the route, 1 the same endpoint with another key, 2 return the error to the client. Absent means 0."
-        egress: {type: string, description: "Written only by early releases; the egress now lies on the call's attempts (`AdminAttempt.egress`)."}
+      $ref: "admin.yaml#/components/schemas/CallRouteAttempt"
     AuditEntry:
-      type: object
-      additionalProperties: false
-      properties:
-        id: {type: string}
-        actor_kind: {type: string}
-        actor_id: {type: string}
-        request_id: {type: string}
-        action: {type: string}
-        module: {type: string}
-        target_kind: {type: string}
-        target_id: {type: string}
-        reason: {type: string}
-        at:
-          type: string
-          format: date-time
-        site_id:
-          $ref: '#/components/schemas/SiteId'
-        account_id:
-          $ref: '#/components/schemas/AccountId'
-        detail:
-          x-go-type: jsonx.Raw
-          type: object
-          additionalProperties: true
-          description: >-
-            What the module that made the change recorded about it, kept as written: small and structured, such as
-            the IDs and names involved and the values before and after; never a secret, a password, a key, call
-            content or personal data beyond IDs. Its members are the `action`'s own and change with the module that
-            writes it, so they are not typed here (one schema per action would be a second registry of every change
-            every module makes); show it as a tree of labelled values and decide nothing from it. Large integers are
-            written as they were, so read it with a parser that keeps them exact.
+      $ref: "admin.yaml#/components/schemas/AuditEntry"
     AuditDigestList:
       type: object
       additionalProperties: false
@@ -2152,802 +1755,82 @@ components:
             faults: {type: integer, format: int64, minimum: 0, description: Faults found; any stops the chaining until the owner acts.}
             checked_at: {type: string, format: date-time, description: 'When a check of the whole chain last finished; while a round runs, when the one before it finished.'}
     AuditEntryList:
-      type: object
-      additionalProperties: false
-      properties:
-        since: {type: string, format: date-time}
-        until: {type: string, format: date-time}
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/AuditEntry'
-        next_cursor: {type: string}
+      $ref: "admin.yaml#/components/schemas/AuditEntryList"
     AuthorSlug:
-      type: string
-      pattern: ^[a-z0-9][a-z0-9-]{0,39}$
+      $ref: "admin.yaml#/components/schemas/AuthorSlug"
     BillingItem:
-      type: string
-      enum:
-      - input
-      - cache_read
-      - cache_write
-      - cache_write_1h
-      - output
-      - reasoning
-      - audio_in
-      - audio_out
-      - image_in
-      - image_out
-      - web_search
-      - code_execution
-      - file_search
+      $ref: "admin.yaml#/components/schemas/BillingItem"
     ContextTier:
-      type: object
-      required:
-      - above
-      - rates
-      additionalProperties: false
-      properties:
-        above:
-          type: integer
-          format: int64
-          minimum: 0
-          description: The tier applies when the basis items sum to more than this.
-        rates:
-          $ref: '#/components/schemas/Rates'
+      $ref: "admin.yaml#/components/schemas/ContextTier"
     ContextTiers:
-      type: object
-      required:
-      - basis
-      - method
-      - tiers
-      additionalProperties: false
-      description: 'Whole-request tiers: when the basis items sum past a tier''s threshold, the tier''s rates replace the base
-        ones.'
-      properties:
-        basis:
-          type: array
-          items:
-            $ref: '#/components/schemas/BillingItem'
-        method:
-          type: string
-          enum:
-          - whole
-        tiers:
-          type: array
-          description: Strictly increasing by `above`.
-          items:
-            $ref: '#/components/schemas/ContextTier'
+      $ref: "admin.yaml#/components/schemas/ContextTiers"
     Decimal:
-      type: string
-      pattern: ^-?(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$
-      description: An exact decimal number in text, never a JSON number, so no digit is lost on the way.
+      $ref: "admin.yaml#/components/schemas/Decimal"
     Error:
-      type: object
-      required:
-      - error
-      description: The body of every failure. The request ID is in the `X-Request-ID` response header, as on every response.
-      properties:
-        error:
-          $ref: '#/components/schemas/ErrorDetail'
+      $ref: "admin.yaml#/components/schemas/Error"
     ErrorCode:
-      type: string
-      description: The closed list of failure codes. A code is added in a contract change, so a client that translates every
-        code fails to compile until it knows the new one.
-      enum:
-      - invalid_request
-      - unauthenticated
-      - invalid_credentials
-      - invalid_code
-      - forbidden
-      - mfa_required
-      - consent_required
-      - origin_rejected
-      - not_found
-      - conflict
-      - login_domain_locked
-      - login_domain_required
-      - identity_taken
-      - identity_already_linked
-      - account_not_linked
-      - email_taken
-      - name_taken
-      - too_many_keys
-      - stale_revision
-      - idempotency_key_reused
-      - invalid_invite
-      - registration_closed
-      - human_check_failed
-      - email_domain_not_allowed
-      - invalid_verification
-      - weak_password
-      - not_ready
-      - unprocessable
-      - cap_exceeded
-      - redeem_code_invalid
-      - redeem_code_expired
-      - redeem_code_disabled
-      - redeem_code_used
-      - rate_limited
-      - internal
-      - not_implemented
-      - unavailable
-      - preset_not_selectable
-      - preset_default_invalid
-      - preset_in_use
-      - preset_quota
-      - presets_suspended
+      $ref: "admin.yaml#/components/schemas/ErrorCode"
     ErrorDetail:
-      type: object
-      required:
-      - code
-      - message
-      description: '`code` is what a client branches on and translates; `message` is English text for logs and developers.'
-      properties:
-        code:
-          $ref: '#/components/schemas/ErrorCode'
-        message:
-          type: string
-        fields:
-          type: array
-          description: Which parts of the request broke a constraint, for `invalid_request`.
-          items:
-            $ref: '#/components/schemas/ErrorField'
+      $ref: "admin.yaml#/components/schemas/ErrorDetail"
     ErrorField:
-      type: object
-      required:
-      - pointer
-      - message
-      properties:
-        pointer:
-          type: string
-          description: JSON pointer into the request body, or the name of a query or path parameter.
-        message:
-          type: string
+      $ref: "admin.yaml#/components/schemas/ErrorField"
     Model:
-      type: object
-      required:
-      - id
-      - slug
-      - author
-      - status
-      - version_basis
-      - price_source
-      - rev
-      - spec
-      - names
-      - prices
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        slug:
-          $ref: '#/components/schemas/ModelSlug'
-        author:
-          $ref: '#/components/schemas/AuthorSlug'
-        status:
-          $ref: '#/components/schemas/ModelStatus'
-        version_basis:
-          $ref: '#/components/schemas/VersionBasis'
-        price_source:
-          $ref: '#/components/schemas/PriceSource'
-        rev:
-          type: integer
-          format: int64
-          minimum: 0
-        spec:
-          $ref: '#/components/schemas/ModelSpec'
-        names:
-          type: array
-          items:
-            $ref: '#/components/schemas/ModelName'
-        prices:
-          type: array
-          items:
-            $ref: '#/components/schemas/ReferencePrice'
+      $ref: "admin.yaml#/components/schemas/Model"
     ModelFormat:
-      type: string
-      enum:
-      - messages
-      - responses
-      - chat
-      - embeddings
-      - rerank
-      - completions
+      $ref: "admin.yaml#/components/schemas/ModelFormat"
     ModelList:
-      type: object
-      required:
-      - data
-      - next_cursor
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/ModelSummary'
-        next_cursor:
-          type: string
-          nullable: true
-          description: Null on the last page.
+      $ref: "admin.yaml#/components/schemas/ModelList"
     ModelName:
-      type: object
-      required:
-      - name
-      - visibility
-      properties:
-        name:
-          type: string
-          minLength: 1
-          maxLength: 200
-        visibility:
-          type: string
-          enum:
-          - public
-          - internal
-          description: Only public names can be called by users.
+      $ref: "admin.yaml#/components/schemas/ModelName"
     ModelSlug:
-      type: string
-      maxLength: 187
-      pattern: ^[a-z0-9][a-z0-9-]{0,39}/[a-z0-9][a-z0-9._-]{0,99}(:free)?(@[a-z0-9][a-z0-9._-]{0,39})?$
-      description: '`<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the
-        catalog stores it.'
+      $ref: "admin.yaml#/components/schemas/ModelSlug"
     ModelSpec:
-      type: object
-      description: The baseline facts about a model (context length, modalities, …), which are open for now, plus the two lists
-        the review needs. `items` and `tiers` say which billing items and service tiers the upstream may report; a model goes
-        on sale only if both are present, even if empty.
-      properties:
-        items:
-          type: array
-          items:
-            $ref: '#/components/schemas/BillingItem'
-        tiers:
-          type: array
-          items:
-            $ref: '#/components/schemas/ServiceTier'
-      additionalProperties: true
+      $ref: "admin.yaml#/components/schemas/ModelSpec"
     ModelStatus:
-      type: string
-      enum:
-      - draft
-      - listed
-      - retired
-      description: '`draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good.'
+      $ref: "admin.yaml#/components/schemas/ModelStatus"
     ModelSummary:
-      type: object
-      required:
-      - id
-      - slug
-      - author
-      - status
-      - version_basis
-      - price_source
-      - rev
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        slug:
-          $ref: '#/components/schemas/ModelSlug'
-        author:
-          $ref: '#/components/schemas/AuthorSlug'
-        status:
-          $ref: '#/components/schemas/ModelStatus'
-        version_basis:
-          $ref: '#/components/schemas/VersionBasis'
-        price_source:
-          $ref: '#/components/schemas/PriceSource'
-        rev:
-          type: integer
-          format: int64
-          minimum: 0
+      $ref: "admin.yaml#/components/schemas/ModelSummary"
     Money:
-      type: object
-      required:
-      - amount
-      - currency
-      description: An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths
-        of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53
-        (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount
-        that is written to the ledger must still fit 64 bits.
-      properties:
-        amount:
-          type: string
-          pattern: ^-?(0|[1-9][0-9]*)$
-          maxLength: 39
-          example: '1500000000'
-        currency:
-          type: string
-          pattern: ^[A-Z]{3}$
-          example: USD
+      $ref: "admin.yaml#/components/schemas/Money"
     PendingMapping:
-      type: object
-      required:
-      - supplier_id
-      - group_id
-      - upstream_name
-      - formats
-      properties:
-        supplier_id:
-          $ref: '#/components/schemas/Uuid'
-        group_id:
-          $ref: '#/components/schemas/Uuid'
-        group_codename:
-          type: string
-        upstream_name:
-          type: string
-        formats:
-          type: array
-          items:
-            $ref: '#/components/schemas/ModelFormat'
+      $ref: "admin.yaml#/components/schemas/PendingMapping"
     PendingMappingList:
-      type: object
-      required:
-      - data
-      - next_cursor
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/PendingMapping'
-        next_cursor:
-          type: string
-          nullable: true
-          description: Null on the last page.
+      $ref: "admin.yaml#/components/schemas/PendingMappingList"
     PriceSchedule:
-      type: object
-      required:
-      - v
-      - currency
-      - rates
-      additionalProperties: false
-      description: 'A price list in the canonical form the catalog stores (internal/catalog README「价目表」): prices per billing
-        item, optional whole-request tiers by size, and a complete set of prices for each service tier other than the standard
-        one. A tier that lists no price for an item has none, it does not inherit the standard one.'
-      properties:
-        v:
-          type: integer
-          enum:
-          - 1
-        currency:
-          type: string
-          pattern: ^[A-Z]{3}$
-          description: XXX in a supplier's cost plan, which is in the supplier's own unit.
-        rates:
-          $ref: '#/components/schemas/Rates'
-        context_tiers:
-          $ref: '#/components/schemas/ContextTiers'
-        service_tiers:
-          type: object
-          additionalProperties: false
-          properties:
-            flex:
-              $ref: '#/components/schemas/ServiceTierRates'
-            priority:
-              $ref: '#/components/schemas/ServiceTierRates'
-            fast:
-              $ref: '#/components/schemas/ServiceTierRates'
+      $ref: "admin.yaml#/components/schemas/PriceSchedule"
     PriceSource:
-      type: string
-      enum:
-      - litellm
-      - openrouter
-      - official
-      - manual
+      $ref: "admin.yaml#/components/schemas/PriceSource"
     Rates:
-      type: object
-      description: The price per unit of each billing item the schedule prices; an item left out has no price here.
-      additionalProperties: false
-      properties:
-        input:
-          $ref: '#/components/schemas/UnitPrice'
-        cache_read:
-          $ref: '#/components/schemas/UnitPrice'
-        cache_write:
-          $ref: '#/components/schemas/UnitPrice'
-        cache_write_1h:
-          $ref: '#/components/schemas/UnitPrice'
-        output:
-          $ref: '#/components/schemas/UnitPrice'
-        reasoning:
-          $ref: '#/components/schemas/UnitPrice'
-        audio_in:
-          $ref: '#/components/schemas/UnitPrice'
-        audio_out:
-          $ref: '#/components/schemas/UnitPrice'
-        image_in:
-          $ref: '#/components/schemas/UnitPrice'
-        image_out:
-          $ref: '#/components/schemas/UnitPrice'
-        web_search:
-          $ref: '#/components/schemas/UnitPrice'
-        code_execution:
-          $ref: '#/components/schemas/UnitPrice'
-        file_search:
-          $ref: '#/components/schemas/UnitPrice'
-        file_parse:
-          $ref: '#/components/schemas/UnitPrice'
+      $ref: "admin.yaml#/components/schemas/Rates"
     ReferencePrice:
-      type: object
-      required:
-      - id
-      - currency
-      - source
-      - published_at
-      description: The current version of a model's reference price in one currency.
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        currency:
-          type: string
-          pattern: ^[A-Z]{3}$
-        source:
-          $ref: '#/components/schemas/PriceSource'
-        schedule:
-          description: 'Absent when the price was withdrawn: the currency has no price now, but this row is still the current
-            one to build on.'
-          allOf:
-          - $ref: '#/components/schemas/PriceSchedule'
-        published_at:
-          type: string
-          format: date-time
+      $ref: "admin.yaml#/components/schemas/ReferencePrice"
     ServiceTier:
-      type: string
-      enum:
-      - standard
-      - flex
-      - priority
-      - fast
+      $ref: "admin.yaml#/components/schemas/ServiceTier"
     ServiceTierRates:
-      type: object
-      required:
-      - rates
-      additionalProperties: false
-      properties:
-        rates:
-          $ref: '#/components/schemas/Rates'
-        context_tiers:
-          type: array
-          description: The same thresholds as the schedule's, in order; a tier that changes no price has empty rates.
-          items:
-            $ref: '#/components/schemas/ContextTier'
+      $ref: "admin.yaml#/components/schemas/ServiceTierRates"
     SiteId:
-      type: string
-      pattern: ^site_[0-9a-hjkmnp-tv-z]{26}$
-      description: A site's ID (TypeID).
+      $ref: "admin.yaml#/components/schemas/SiteId"
     Supplier:
-      type: object
-      required:
-      - id
-      - name
-      - kind
-      - origin
-      - upstream_account
-      - native_unit
-      - settlement_currency
-      - status
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        name:
-          type: string
-          minLength: 1
-          maxLength: 200
-        kind:
-          type: string
-          pattern: ^[a-z][a-z0-9]*$
-          description: The adapter's name, such as newapi or sub2api.
-        origin:
-          type: string
-          example: https://api.example.com
-        upstream_account:
-          type: string
-          description: The email or username Axiom logs in as.
-        generation:
-          type: string
-          description: The system's generation the adapter detected, such as 1.0.
-        detected_version:
-          type: string
-        native_unit:
-          type: string
-          enum:
-          - quota
-          - usd
-          description: The unit the supplier counts its balance in.
-        settlement_currency:
-          type: string
-          pattern: ^[A-Z]{3}$
-        status:
-          $ref: '#/components/schemas/SupplierStatus'
-        status_reason:
-          type: string
-          minLength: 1
-          maxLength: 200
-        balance_native:
-          $ref: '#/components/schemas/Decimal'
-        balance_observed_at:
-          type: string
-          format: date-time
-        low_balance_threshold:
-          $ref: '#/components/schemas/Decimal'
-        unit_value:
-          $ref: '#/components/schemas/Decimal'
-        unit_value_hint:
-          $ref: '#/components/schemas/Decimal'
+      $ref: "admin.yaml#/components/schemas/Supplier"
     SupplierCredential:
-      type: object
-      required:
-      - id
-      - group_id
-      - upstream_key_ref
-      - status
-      - max_concurrency
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        group_id:
-          $ref: '#/components/schemas/Uuid'
-        upstream_key_ref:
-          type: string
-        status:
-          type: string
-          enum:
-          - binding
-          - active
-          - upstream_disabled
-          - quota_exhausted
-          - expired
-          - disabled
-          - erased
-        cooldown_until:
-          type: string
-          format: date-time
-        expires_at:
-          type: string
-          format: date-time
-        max_concurrency:
-          type: integer
-          minimum: 1
-        requests_per_minute:
-          type: integer
-          minimum: 1
-          maximum: 100000
-          description: The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds
-            no ceiling.
+      $ref: "admin.yaml#/components/schemas/SupplierCredential"
     SupplierDetail:
-      type: object
-      required:
-      - supplier
-      - groups
-      - credentials
-      - unbound_keys
-      - endpoints
-      properties:
-        supplier:
-          $ref: '#/components/schemas/Supplier'
-        groups:
-          type: array
-          items:
-            $ref: '#/components/schemas/SupplierGroup'
-        credentials:
-          type: array
-          items:
-            $ref: '#/components/schemas/SupplierCredential'
-        endpoints:
-          type: array
-          items:
-            $ref: '#/components/schemas/SupplierEndpoint'
-        unbound_keys:
-          type: array
-          items:
-            $ref: '#/components/schemas/UpstreamKey'
+      $ref: "admin.yaml#/components/schemas/SupplierDetail"
     SupplierEndpoint:
-      type: object
-      required:
-      - id
-      - group_id
-      - model_id
-      - upstream_name
-      - formats
-      - cost_state
-      - enabled
-      description: 'One model in one of the supplier''s groups, as the sync projected it: what testSupplierEndpoint is given.
-        Only an enabled endpoint whose cost is `known` can be called, and so tested.'
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        group_id:
-          $ref: '#/components/schemas/Uuid'
-        model_id:
-          $ref: '#/components/schemas/Uuid'
-        upstream_name:
-          type: string
-          description: The model's name at the supplier.
-        formats:
-          type: array
-          minItems: 1
-          items:
-            $ref: '#/components/schemas/ModelFormat'
-        cost_state:
-          type: string
-          enum:
-          - known
-          - unknown
-          - conflict
-        enabled:
-          type: boolean
-        quantization:
-          type: string
-          nullable: true
-          enum:
-          - int4
-          - int8
-          - fp4
-          - mxfp4
-          - nvfp4
-          - fp6
-          - fp8
-          - mxfp8
-          - fp16
-          - bf16
-          - fp32
-          - unknown
-          description: The precision a person recorded for this endpoint. Absent or null when none is recorded, which is not
-            the level `unknown`; a request that filters by quantization does not match an endpoint without one.
+      $ref: "admin.yaml#/components/schemas/SupplierEndpoint"
     SupplierGroup:
-      type: object
-      required:
-      - id
-      - upstream_ref
-      - name
-      - ratio
-      - selected
-      - present
-      properties:
-        id:
-          $ref: '#/components/schemas/Uuid'
-        upstream_ref:
-          type: string
-          description: The supplier's own ID of the group.
-        name:
-          type: string
-        ratio:
-          $ref: '#/components/schemas/Decimal'
-        selected:
-          type: boolean
-        codename:
-          type: string
-          description: What users see in place of the group's name. Set when first selected, never changed.
-        present:
-          type: boolean
-          description: False when the supplier no longer lists the group.
-        key_state:
-          type: string
-          enum:
-          - pending
-          - ready
-          - failed
-          - unavailable
-          description: 'How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will
-            make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`),
-            `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.'
-        key_reason:
-          type: string
-          enum:
-          - not_permitted
-          - group_unavailable
-          - refused
-          description: 'Why the last attempt to make a key failed: the login may not manage keys, the account may not use this
-            group, or the supplier refused. Present only with `key_state` `failed`.'
-        facts:
-          type: object
-          description: >-
-            What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for
-            example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a
-            declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not
-            typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in
-            the other fields: `ratio`, `key_state`, and the endpoints the group serves.
-          additionalProperties: true
-        pool:
-          $ref: '#/components/schemas/SupplierPool'
+      $ref: "admin.yaml#/components/schemas/SupplierGroup"
     SupplierList:
-      type: object
-      required:
-      - data
-      - next_cursor
-      properties:
-        data:
-          type: array
-          items:
-            $ref: '#/components/schemas/Supplier'
-        next_cursor:
-          type: string
-          nullable: true
-          description: Null on the last page.
+      $ref: "admin.yaml#/components/schemas/SupplierList"
     SupplierPool:
-      type: object
-      description: What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool,
-        or a read has not reported it yet.
-      required:
-      - accounts
-      - failed
-      - usable
-      - low
-      - observed_at
-      properties:
-        accounts:
-          type: integer
-          minimum: 1
-          description: The accounts assigned to the group.
-        failed:
-          type: integer
-          minimum: 0
-          description: 'How many of them the pool marks failed: they cannot serve.'
-        usable:
-          type: integer
-          minimum: 0
-          description: How many of them the pool may schedule now.
-        headroom:
-          type: integer
-          minimum: 0
-          maximum: 100
-          description: The mean room left in the tighter quota window of the accounts that can serve, in percent. Absent when
-            no account reported a window.
-        capacity:
-          type: integer
-          minimum: 0
-          maximum: 100
-          description: 'The effective capacity this leaves: headroom times the share of accounts that can serve, in percent.
-            Absent when no account reported a window.'
-        low:
-          type: boolean
-          description: Routing halves the group's weight while this is true.
-        observed_at:
-          type: string
-          format: date-time
-          description: When these numbers were recorded.
+      $ref: "admin.yaml#/components/schemas/SupplierPool"
     SupplierStatus:
-      type: string
-      enum:
-      - connecting
-      - active
-      - low_balance
-      - needs_attention
-      - paused
-      - removing
-      - removed
-      description: '`connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`:
-        syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person
-        acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what
-        a removal of an earlier version left behind, and removing again ends it.'
+      $ref: "admin.yaml#/components/schemas/SupplierStatus"
     UnitPrice:
-      type: string
-      pattern: ^(0|[1-9][0-9]{0,2})(\.[0-9]{1,15})?$|^1000$
-      description: A price per billing unit (one token, or one use) in the currency of its schedule, as exact decimal text with
-        at most 15 decimals and at most 1000 per unit.
+      $ref: "admin.yaml#/components/schemas/UnitPrice"
     UpstreamKey:
-      type: object
-      required:
-      - ref
-      - status
-      description: A key the supplier lists that Axiom has not bound to a group.
-      properties:
-        ref:
-          type: string
-        group_ref:
-          type: string
-          description: The supplier's ID of the group the key is for.
-        status:
-          type: string
-          enum:
-          - active
-          - disabled
-          - quota_exhausted
-          - expired
+      $ref: "admin.yaml#/components/schemas/UpstreamKey"
     Uuid:
-      type: string
-      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
-      description: An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+      $ref: "admin.yaml#/components/schemas/Uuid"
     VersionBasis:
-      type: string
-      enum:
-      - dated
-      - floating
-      description: '`dated`: the model is one fixed version; `floating`: the vendor moves the model under a name.'
+      $ref: "admin.yaml#/components/schemas/VersionBasis"
