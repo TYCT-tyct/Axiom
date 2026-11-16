@@ -20,6 +20,7 @@ import (
 	"encoding/json/v2" //nolint:depguard // tools is its own module, which cannot import axiom/internal
 	"fmt"
 	"io/fs"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -442,10 +443,5 @@ func sameNameSameDefinition(docs map[string]*openapi3.T) []string {
 }
 
 func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
+	return slices.Sorted(maps.Keys(m))
 }

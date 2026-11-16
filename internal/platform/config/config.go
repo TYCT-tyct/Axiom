@@ -134,16 +134,12 @@ func (e *Env) Addr(name, def string) string {
 		return def
 	}
 	host, port, err := net.SplitHostPort(value)
-	if _, portErr := strconv.ParseUint(port, 10, 16); err != nil || portErr != nil || host != "" && !isIP(host) {
+	_, addrErr := netip.ParseAddr(host)
+	if _, portErr := strconv.ParseUint(port, 10, 16); err != nil || portErr != nil || host != "" && addrErr != nil {
 		e.errs = append(e.errs, fmt.Errorf("%s: want an IP and a port such as 127.0.0.1:8081, or :8081 for every address", name))
 		return def
 	}
 	return value
-}
-
-func isIP(host string) bool {
-	_, err := netip.ParseAddr(host)
-	return err == nil
 }
 
 // Problems reports every invalid variable read so far, but not the variables nothing read. A command run in a node's

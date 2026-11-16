@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -193,7 +192,7 @@ func protectedDir(dir string) error {
 		if os.IsNotExist(err) {
 			return nil // read names the missing file, which is more useful than the directory
 		}
-		return fmt.Errorf("%s: %s", Variable, reason(err))
+		return fmt.Errorf("%s: %s", Variable, privfile.Reason(err))
 	}
 	if !info.IsDir() {
 		return fmt.Errorf("%s: not a directory", Variable)
@@ -213,12 +212,12 @@ func readPrivate(dir, name string, open privfile.Opener) ([]byte, error) {
 		if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
 			return nil, fmt.Errorf("%s: %s %w", Variable, name, err)
 		}
-		return nil, fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
+		return nil, fmt.Errorf("%s: %s: %s", Variable, name, privfile.Reason(err))
 	}
 	defer file.Close() //nolint:errcheck // A file opened only for reading has nothing to flush.
 	data, err := io.ReadAll(file)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
+		return nil, fmt.Errorf("%s: %s: %s", Variable, name, privfile.Reason(err))
 	}
 	return data, nil
 }
@@ -226,17 +225,7 @@ func readPrivate(dir, name string, open privfile.Opener) ([]byte, error) {
 func read(dir, name string) ([]byte, error) {
 	data, err := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- the trusted startup setting chooses the directory.
 	if err != nil {
-		return nil, fmt.Errorf("%s: %s: %s", Variable, name, reason(err))
+		return nil, fmt.Errorf("%s: %s: %s", Variable, name, privfile.Reason(err))
 	}
 	return data, nil
-}
-
-func reason(err error) string {
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return "file not found"
-	case errors.Is(err, fs.ErrPermission):
-		return "permission denied"
-	}
-	return "failed"
 }

@@ -26,28 +26,10 @@ func startServing(roles nodeRoles, servers []*listening, logger *slog.Logger) <-
 			}
 			served <- s.server.Serve(s.listener)
 		}()
-		attrs = append(attrs, listenerKey(s.variable), s.listener.Addr().String())
+		attrs = append(attrs, s.key, s.listener.Addr().String())
 	}
 	logger.Info("serving", attrs...)
 	return served
-}
-
-// listenerKey is the log field each listener has always had: the tests and the deployment's checks read them by name.
-func listenerKey(variable string) string {
-	switch variable {
-	case publicAddrVar:
-		return "public"
-	case adminAddrVar:
-		return "admin"
-	case nodeAddrVar:
-		return "node"
-	case operationsAddrVar:
-		return "operations"
-	case mcpAddrVar:
-		return "mcp"
-	default:
-		return "ops"
-	}
 }
 
 // listeners are the addresses the node's roles open, in the order shutdown stops them, before their handlers exist.
@@ -59,21 +41,21 @@ func listenerKey(variable string) string {
 func listeners(cfg nodeSettings) []*listening {
 	var servers []*listening
 	if cfg.roles.has(roleCore) || cfg.roles.has(roleIngress) {
-		servers = append(servers, &listening{variable: publicAddrVar, addr: cfg.publicAddr})
+		servers = append(servers, &listening{variable: publicAddrVar, key: "public", addr: cfg.publicAddr})
 	}
 	if cfg.roles.has(roleCore) {
-		servers = append(servers, &listening{variable: adminAddrVar, addr: cfg.adminAddr})
+		servers = append(servers, &listening{variable: adminAddrVar, key: "admin", addr: cfg.adminAddr})
 		if cfg.nodeTLS != nil {
-			servers = append(servers, &listening{variable: nodeAddrVar, addr: cfg.nodeAddr, tls: true})
+			servers = append(servers, &listening{variable: nodeAddrVar, key: "node", addr: cfg.nodeAddr, tls: true})
 		}
 		if cfg.operationsTLS != nil {
-			servers = append(servers, &listening{variable: operationsAddrVar, addr: cfg.operationsAddr, tls: true})
+			servers = append(servers, &listening{variable: operationsAddrVar, key: "operations", addr: cfg.operationsAddr, tls: true})
 		}
 	}
 	if cfg.mcp != nil {
-		servers = append(servers, &listening{variable: mcpAddrVar, addr: cfg.mcp.addr})
+		servers = append(servers, &listening{variable: mcpAddrVar, key: "mcp", addr: cfg.mcp.addr})
 	}
-	return append(servers, &listening{variable: probesAddrVar, addr: cfg.probesAddr})
+	return append(servers, &listening{variable: probesAddrVar, key: "ops", addr: cfg.probesAddr})
 }
 
 // node attaches a core node's handlers to the listeners startup claimed. The admin listener serves the admin app and
@@ -83,21 +65,20 @@ func listeners(cfg nodeSettings) []*listening {
 // restriction, which reads the connection's address and never a forwarding header: nothing proxies to it. Every
 // listener but the probes refuses a request that starts during the drain (httpserver.Health.Gate).
 func node(servers []*listening, cfg nodeSettings, routes nodeRoutes, health *httpserver.Health, logger *slog.Logger, requests httpserver.Telemetry) {
+	newServer := func(handler http.Handler) *http.Server {
+		return httpserver.New(httpserver.Public(handler, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
+	}
 	for _, s := range servers {
 		switch s.variable {
 		case publicAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(routes.public), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(health.Gate(routes.public))
 		case adminAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(routes.admin, cfg.adminSources, cfg.trustedProxies)), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(health.Gate(restrictSources(routes.admin, cfg.adminSources, cfg.trustedProxies)))
 		case nodeAddrVar:
-			s.server = httpserver.New(httpserver.Public(withHealth(routes.public, health), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(withHealth(routes.public, health))
 			s.server.TLSConfig = cfg.nodeTLS
 		case operationsAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(restrictSources(routes.operations, cfg.operationsSources, nil)), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(health.Gate(restrictSources(routes.operations, cfg.operationsSources, nil)))
 			s.server.TLSConfig = cfg.operationsTLS
 		case probesAddrVar:
 			s.server = health.Server(logger)
