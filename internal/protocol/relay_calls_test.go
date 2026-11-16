@@ -35,8 +35,10 @@ func TestRelayCountsServerToolCalls(t *testing.T) {
 	messages := messageStart(`{"input_tokens":5,"output_tokens":1}`) + serverTool +
 		"data: {\"type\":\"content_block_stop\",\"index\":0}\n\n" + clientTool +
 		"data: {\"type\":\"content_block_stop\",\"index\":1}\n\n" + messageDelta(`{"output_tokens":3}`) + messageStop
-	got = relay(t, protocol.Messages, strings.NewReader(messages), protocol.UsageContext{}, protocol.NewMemory(0), settled)
-	if p := got.r.Progress(); got.err != nil || p.CodeExecutions != 1 {
-		t.Errorf("Messages calls: code %d, %v; want the server tool's one", p.CodeExecutions, got.err)
+	for _, client := range []protocol.Format{protocol.Messages, protocol.Chat, protocol.Responses} {
+		got := relayTo(t, client, protocol.Messages, strings.NewReader(messages), protocol.UsageContext{}, protocol.NewMemory(0), settled)
+		if p := got.r.Progress(); got.err != nil || p.CodeExecutions != 1 {
+			t.Errorf("Messages to %d calls: code %d, %v; want the server tool's one", client, p.CodeExecutions, got.err)
+		}
 	}
 }

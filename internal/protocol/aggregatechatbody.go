@@ -18,10 +18,7 @@ func (a *chatAggregate) body() ([]byte, error) {
 	for i := range a.choices {
 		size += a.choices[i].size()
 	}
-	out := append(make([]byte, 0, size), `{"id":`...)
-	out = append(append(out, orNull(a.id)...), `,"object":"chat.completion","created":`...)
-	out = append(append(out, orZero(a.created)...), `,"model":`...)
-	out = append(append(out, orNull(a.model)...), `,"choices":[`...)
+	out := a.appendHead(make([]byte, 0, size), "chat.completion")
 	for i := range a.choices {
 		var err error
 		if out, err = a.choices[i].render(comma(out), a.hadError, a.legacy); err != nil {
@@ -29,15 +26,7 @@ func (a *chatAggregate) body() ([]byte, error) {
 		}
 	}
 	out = append(out, ']')
-	for _, m := range [...]struct {
-		name string
-		v    []byte
-	}{{"usage", a.usage}, {"error", a.errored}, {"axiom", a.axiom}} {
-		if len(m.v) > 0 {
-			out = append(append(append(append(out, `,"`...), m.name...), `":`...), m.v...)
-		}
-	}
-	return append(out, '}'), nil
+	return a.appendTail(out), nil
 }
 
 // size is about what the choice takes in a body, so that the body is allocated once: its pieces and a margin for the
@@ -53,16 +42,9 @@ func (c *chatChoice) size() int {
 	return n
 }
 
-func orNull(v []byte) []byte {
+func orElse(v []byte, def string) []byte {
 	if len(v) == 0 {
-		return []byte("null")
-	}
-	return v
-}
-
-func orZero(v []byte) []byte {
-	if len(v) == 0 {
-		return []byte("0")
+		return []byte(def)
 	}
 	return v
 }
@@ -91,9 +73,7 @@ func (c *chatChoice) render(out []byte, failed, legacy bool) ([]byte, error) {
 	if len(c.annotations) > 0 {
 		out = append(append(append(out, `,"annotations":[`...), c.annotations...), ']')
 	}
-	if out, err = c.appendCalls(out, legacy); err != nil {
-		return nil, err
-	}
+	out = c.appendCalls(out, legacy)
 
 	out = c.appendLogprobs(append(out, `},"logprobs":`...))
 	out = c.appendFinish(out, failed, legacy)
@@ -132,27 +112,13 @@ func appendTools(out []byte, tools []chatTool) []byte {
 	out = append(out, '[')
 	for _, t := range tools {
 		out = append(comma(out), `{"id":`...)
-		out = append(out, orEmptyString(t.id)...)
-		out = append(append(out, `,"type":`...), orFunction(t.kind)...)
+		out = append(out, orElse(t.id, `""`)...)
+		out = append(append(out, `,"type":`...), orElse(t.kind, `"function"`)...)
 		out = appendContents(append(out, `,"function":{"name":`...), t.name, true)
 		out = appendContents(append(out, `,"arguments":`...), t.arguments, true)
 		out = append(out, "}}"...)
 	}
 	return append(out, ']')
-}
-
-func orEmptyString(v []byte) []byte {
-	if len(v) == 0 {
-		return []byte(`""`)
-	}
-	return v
-}
-
-func orFunction(v []byte) []byte {
-	if len(v) == 0 {
-		return []byte(`"function"`)
-	}
-	return v
 }
 
 // appendDetails appends the entries merged, as a client hands them back (mergeDetails), as an array.
@@ -188,12 +154,9 @@ func appendDetails(out, entries []byte) ([]byte, error) {
 	return append(out, ']'), nil
 }
 
-func (c *chatChoice) appendCalls(out []byte, legacy bool) ([]byte, error) {
+func (c *chatChoice) appendCalls(out []byte, legacy bool) []byte {
 	if len(c.tools) > 0 {
 		if legacy {
-			if len(c.tools) != 1 {
-				return nil, fmt.Errorf("%w: parallel calls in a legacy reply", ErrUpstream)
-			}
 			t := c.tools[0]
 			out = appendContents(append(out, `,"function_call":{"name":`...), t.name, true)
 			out = appendContents(append(out, `,"arguments":`...), t.arguments, true)
@@ -202,7 +165,7 @@ func (c *chatChoice) appendCalls(out []byte, legacy bool) ([]byte, error) {
 			out = appendTools(append(out, `,"tool_calls":`...), c.tools)
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (c *chatChoice) appendFinish(out []byte, failed, legacy bool) []byte {

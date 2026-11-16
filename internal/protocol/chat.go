@@ -7,7 +7,6 @@ import (
 	"strconv"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -25,18 +24,16 @@ import (
 // client. [DONE] is the normal end once every choice that started has finished, and a chunk with a top-level error
 // the upstream's failure (OpenRouter《Errors》, read 2026-10-14).
 type chatStream struct {
-	eventReader
+	openAIStream
 	chatWriter // created is the upstream's first chunk's, or this call's when replaying a cached answer
 	// choices are the choices started so far, each set once it gave a finish_reason.
 	choices map[int64]bool
 	// The chunk being read: the choice being read and its finish_reason, in the chunk's data; the finish signals split
 	// from the chunk so far; whether anything but them is left; and what else it carries.
-	index                             int64
-	finish                            []byte
-	held                              []byte
-	more, failed, rewrites, noChoices bool
-	report                            *openAIUsage
-	reportErr                         error
+	index           int64
+	finish          []byte
+	held            []byte
+	more, noChoices bool
 	// The reasoning members of the delta being read, to be written under both names.
 	reasoning, reasoningContent reasoningMember
 	// pending are the tool calls of the choice being read, counted after its index is known: a chunk may put delta
@@ -293,8 +290,7 @@ func (s *chatStream) finishReason() error {
 	if v == nil || err != nil {
 		return err
 	}
-	to := int(s.dec.InputOffset())
-	s.finish = s.e.data[to-len(v) : to]
+	s.finish = valueIn(s.dec, s.e.data, v)
 	return s.edit(len(v), "null")
 }
 
@@ -362,33 +358,6 @@ type chatToolKey struct{ choice, tool int64 }
 // chatToolKeySize is what the overflow set is charged per counted call: a key and a value plus the table's growth,
 // rounded up. The inline pairs are part of the stream and need no charge.
 const chatToolKeySize = 64
-
-func (s *chatStream) upstreamError() error {
-	s.failed = s.dec.PeekKind() != 'n'
-	return errorObject(&s.reader, &s.eventReader, errorFields)
-}
-
-func (s *chatStream) rewritten() error {
-	s.rewrites = true
-	return s.skip()
-}
-
-// usage takes the usage out of the chunk for the meter, leaving null in its place.
-func (s *chatStream) usage() error {
-	if s.dec.PeekKind() == 'n' {
-		return s.skip()
-	}
-	v, err := s.dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	if err := s.edit(len(v), "null"); err != nil {
-		return err
-	}
-	s.report, s.e.usage = &openAIUsage{}, true
-	s.reportErr = jsonx.Unmarshal(v, s.report)
-	return nil
-}
 
 func (s *chatStream) dropBuffers() {
 	s.eventReader.dropBuffers()

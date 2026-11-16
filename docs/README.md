@@ -37,8 +37,8 @@
 | 联网搜索：一次查询、SearXNG 适配器、配置与覆盖、结果上限、失败与测试 | [internal/websearch/README.md](../internal/websearch/README.md) | 改 `web` 插件、换搜索后端或部署 SearXNG 之前 |
 | 文件解析：一次转换、Docling serve 适配器、配置与覆盖、大小上限、失败与测试 | [internal/fileparse/README.md](../internal/fileparse/README.md) | 改 `file-parser` 插件、换解析后端或部署 Docling 之前 |
 | 一次调用在代码里怎么走：不变量、步骤、所有权、期限、并发与背压、故障矩阵、性能估算、PR 拆分 | [internal/gateway/README.md](../internal/gateway/README.md) | 实现或改动调用路径上任何模块之前 |
-| 运营：分工、agent 的组成与模型来源、运营接口与运营凭证、MCP、风险分级与审批、累计资金上限、审计与回滚、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
-| 运营在代码里怎么存业务目标、操作记录、运营操作与审批、资金上限与售价包络：表与索引、月度与折算、幂等与到期、锁的顺序、读写与审计 | [internal/operations/README.md](../internal/operations/README.md) | 实现或调用 `operations` 的业务目标、操作记录或审批之前 |
+| 运营：分工、agent 的组成与模型来源、运营接口与运营凭证、MCP、资金上限与售价包络、风险分级与审批、审计与回滚、运营看板与业务目标、部署与节点、通知、提交 Issue | [domains/operations.md](domains/operations.md) | 改动 `operations` 模块、运营 agent 或审批策略之前 |
+| 运营的代码接口与不变量：业务目标、操作记录、运营操作与审批、资金上限、售价包络、审计链、锁的顺序 | [internal/operations/README.md](../internal/operations/README.md) | 实现或调用 `operations` 的业务目标、操作记录或审批之前 |
 | 记录与告警：记录范围、分类标签、分层存储、保留、受控导出、监控告警、通知渠道 | [domains/observability.md](domains/observability.md) | 改动 `observability` 模块、记录或告警之前 |
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
 | 支付：收款渠道与商户账户、订单状态、金额与汇率、手续费、回调与到账、补单、加密货币、退款与拒付、防欺诈、对账、后台配置、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
@@ -60,8 +60,10 @@
 | 内容 | 文档 |
 |---|---|
 | 账户与租户的外部对照、被否决的方案、准入与限频的推导和测量 | [archive/accounts.md](archive/accounts.md) |
+| 运营：批准与委托的出处、运营接口的三个方案、几条较长的推导和否决的做法 | [archive/operations.md](archive/operations.md) |
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
 | 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
+| 支付：参考实现对照、USDT 网关选择、Epusdt 兼容证据 | [archive/payments.md](archive/payments.md) |
 | 记录与告警：写入路径比较过的做法、深页游标条件的推导、列表计划与索引的实测、会话索引体积、告警消费的锁顺序 | [archive/observability.md](archive/observability.md) |
 
 ## 文档怎么组织

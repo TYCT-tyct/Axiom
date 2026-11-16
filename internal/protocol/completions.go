@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"axiom/internal/catalog"
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol/internal/sse"
 )
 
@@ -21,12 +20,10 @@ type EchoPrompts struct {
 // chunks whose choices carry text instead of a delta, a usage object in the last chunk when the request asked for one,
 // and [DONE]. The relay writes the client's usage chunk from the settlement, as it does for Chat.
 type completionsStream struct {
-	eventReader
+	openAIStream
 	completionsWriter
-	choices                                     map[int64]bool
-	report                                      *openAIUsage
-	reportErr                                   error
-	failed, rewrites, noChoices, choiceFinished bool
+	choices                   map[int64]bool
+	noChoices, choiceFinished bool
 	// delivered is whether the chunk carries an answer for the client: text, echo included, or, for a request that
 	// asked for no output, a finished choice. It alone decides the commit point, so an echo-only reply or an empty one
 	// to max_tokens 0 is an answer, not an empty response. The meter's content counts only the generated text after
@@ -241,32 +238,6 @@ func (s *completionsStream) createdAt() error {
 		s.created = string(v)
 	}
 	return err
-}
-
-func (s *completionsStream) usage() error {
-	if s.dec.PeekKind() == 'n' {
-		return s.skip()
-	}
-	v, err := s.dec.ReadValue()
-	if err != nil {
-		return err
-	}
-	if err := s.edit(len(v), "null"); err != nil {
-		return err
-	}
-	s.report, s.e.usage = &openAIUsage{}, true
-	s.reportErr = jsonx.Unmarshal(v, s.report)
-	return nil
-}
-
-func (s *completionsStream) upstreamError() error {
-	s.failed = s.dec.PeekKind() != 'n'
-	return errorObject(&s.reader, &s.eventReader, errorFields)
-}
-
-func (s *completionsStream) rewritten() error {
-	s.rewrites = true
-	return s.skip()
 }
 
 func (s *completionsStream) dropBuffers() {
