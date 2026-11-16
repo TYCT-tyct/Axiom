@@ -85,7 +85,7 @@
 | 值（不检查） | `Money.amount` 是十亿分之一单位的整数文本，倍率等是 `Decimal` 文本；账户实体用 TypeID；路径 ID 格式错同不存在 404；没有的值不出现；`PUT` 整体替换 |
 | 管理写操作 | 非 Session 的写带 `Idempotency-Key`、`reason`，`rev` 过期 409 `stale_revision`；只读的 POST 标 `x-axiom-safe: true` |
 | 运营接口 | Bearer 凭证；`x-axiom-permission`、`x-axiom-money`、`x-axiom-scope`、唯一的 `x-mcp-name`；读带 `Reason`，写带 `IdempotencyKey` 和 `reason`；`agentGuard` 先写 `operations.operation_log` 再答，写不进 503；读 15 秒、写 30 秒 |
-| 共有部分 | 控制台与管理契约各抄一份，同名须相同；运营契约 `$ref` 到 `admin.yaml` |
+| 共有部分 | 控制台与管理各抄一份，同名须相同；运营契约 `$ref` 到 `admin.yaml` |
 | 无固定形状的 JSON（测试） | 形状固定的给命名模式、以 `jsonx.Raw` 照存；成员归别人的只在描述里列；请求里的模式不让守卫多拒 |
 | 没有处理器（`just generated`） | `tools/pendingapi` 的桩答 501 `not_implemented`；现在每个操作都有处理器 |
 
@@ -128,7 +128,7 @@
 ### 任务队列
 
 - `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（`default` 没有 worker），测试检查。
-- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（没配 SMTP 就不登记邮件 worker）。
+- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（没配 SMTP 不登记邮件 worker）。
 - 任务最多 10 分钟，运行满 15 分钟算丢失；丢弃的任务每分钟扫描、在 `platform.discarded_jobs` 认领并告警，终态满 24 小时才删。
 - 租户数据不进任务参数和 worker 错误（River 的表没有策略）：数据放模块的表，参数只放 id，worker 用 `db.TenantTx` 换到该租户的范围。
 
@@ -166,7 +166,7 @@
 | 审计在平台、在改动事务里同步写，不接哈希链 | 模块不能引用 `operations`；同成同败；链头锁会让管理操作排队 |
 | 守卫按嵌入的契约强制，在生成路由之前 | 规则只有一处；包装不会抢先答 400 |
 | 金额是整数文本，错误码是封闭枚举 | 浏览器舍入超过 2⁵³ 的数；前端按原因翻译 |
-| 设置用 `PUT` 整体替换 | 生成类型分不清没写和 null |
+| 设置用 `PUT` 整体替换 | 生成类型分不清缺省和 null |
 | 前端嵌入程序、构建时预压缩 | 一个文件部署，请求不占 CPU |
 | 指标用 OpenTelemetry、Prometheus 抓取 | 换导出方式不改模块；不依赖境外服务 |
-| 根证书由 `x509roots/fallback` 内嵌 | scratch 镜像没证书库 |
+| 根证书由 `x509roots/fallback` 内嵌 | scratch 镜像无证书库 |
