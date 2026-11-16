@@ -33,7 +33,8 @@ func (o operationsAPI) PricingRulesList(ctx context.Context, _ operationsapi.Pri
 		return nil, err
 	}
 	answer, err := o.admin.ListPricingRules(ctx, adminapi.ListPricingRulesRequestObject{})
-	return relayed[operationsapi.PricingRulesList200JSONResponse, adminapi.ListPricingRules200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListPricingRules200JSONResponse](answer, err)
+	return operationsapi.PricingRulesList200JSONResponse(body), err
 }
 
 // PricingRuleCreate adds a rule to the main site within its price envelope, or asks the owner to.

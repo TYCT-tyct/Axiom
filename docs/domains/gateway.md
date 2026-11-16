@@ -25,7 +25,7 @@
 - **前缀**：所有路径同时以 `/v1` 和 `/api/v1` 提供，只挂在公开监听上，在控制台和网站之前截走（不经控制台的压缩和 404）；路由快照可用前节点不报就绪（[运维](operations.md#部署与节点管理)）。调用路径上的 WebSocket 升级回 400 `invalid_request`。
 - **直接格式**（embeddings、rerank）：上游回一份 JSON，`stream:true` 回 400；只路由到 `formats` 写了该格式的端点，不做转换。
 - **旧版补全**：只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转；上游一律流式并强制 `stream_options.include_usage:true`，非流式由网关按序聚合每个 choice 的 `text` 和四个 `logprobs` 数组。`prompt` 的数组是一次请求里的多份补全：输入按整批（含 `suffix`）预留、暂估、分档，上下文按最长一份（含 `suffix`）检查，输出按 `n × prompt 数 × 上限` 一次预留、不分段（[计费](billing.md#预留与结算)）。`best_of > 1` 准入前 400；超过报价上限的 `max_tokens` 按上限发；`max_tokens: 0` 是零输出，只带结束原因的空 choice 是正常回答。`echo` 回显算交付文字（决定提交点和空响应）而不算生成输出，无用量时只按回显之后的文字暂估输出，token 数组按每 token 4 字节估。
-- **格式闸**：同步写入 `embeddings`、`rerank`、`completions` 受 `AXIOM_DIRECT_FORMATS` 控制（默认 `off`，只写 messages、responses、chat），全部节点认识后才开，否则旧节点会摘掉整家供应商（[suppliers](../../internal/suppliers/README.md)）。适配器推不出的格式由管理接口模型映射的 `formats` 声明（省略不改、`[]` 清除、未知 422），与适配器格式取并集，同步不覆盖。
+- **格式声明**：适配器推不出的格式由管理接口模型映射的 `formats` 声明（省略不改、`[]` 清除、未知 422），与适配器格式取并集，同步不覆盖。
 - **`GET /v1/models`**：OpenAI 与 Anthropic 合一的形状，只列 key 能调用、有端点的模型（权限与调用同一判断）；不能用、没端点和不存在的都回 404 `model_not_found`。Anthropic 模型另列厂商原生名（Claude Code 只认含 `claude`/`anthropic` 的 ID，启动探测 3 秒超时、跳转算失败）。单模型按调用的方式解析别名，`id` 是请求里的名字。没端点（没接供应商、缺规格或售价）的不列，满载、熔断、暂停、预算用尽不让模型少列。`/v1` 下的 `models/count`、`models/user`、`models/{author}/{slug}/endpoints` 回 404 `not_found`。响应带 `Cache-Control: no-store`。`/embeddings/models` 不提供。
 - **`count_tokens`**：返回本地估算的 `{"input_tokens": n}`，不转发、不收费、不记录，只收调用 key，频率池与调用分开。
 - **鉴权**：`Authorization: Bearer` 或 `x-api-key`；key 只能在所属站点登记的 API 域名上用（[API key](accounts.md#api-key)）；只凭域名和请求头认 key，认出前不读请求体，认不出立即 401 并关连接。浏览器跨域默认不允许，站点可为指定来源开放。
@@ -303,7 +303,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | 旧版补全按整批预留、不分段，计入 `suffix` | 上游按整批计费，少留由平台承担。 |
 | `max_tokens: 0` 是零输出，`echo` 不算生成 | 只回显是合法回答；算进生成会多收。 |
 | `logprobs` 分数组追加，结束时编码一次 | 不复制历史，长流不退化成 O(n²)。 |
-| `completions` 编号追加在末尾，受格式闸控制 | 已存编号不变；旧节点不认识的格式会让它摘掉供应商。 |
+| `completions` 编号追加在末尾 | 已存的 `embeddings`、`rerank` 编号不变。 |
 | 推不出的格式由模型映射声明 | 按渠道类型猜会误标；直接改同步表会被覆盖。 |
 | compact 只换 `usage` | 每次调用都要返回用量和费用。批准：2026-10-28，#309。 |
 | `count_tokens` 本地估算 | 转发要占端点名额；文件按固定页数可能偏低，不承诺不超窗口。 |

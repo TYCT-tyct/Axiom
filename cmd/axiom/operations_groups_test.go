@@ -9,7 +9,7 @@ import (
 	"testing"
 	"uuid"
 
-	"axiom/internal/platform/operationsapi"
+	"axiom/internal/platform/adminapi"
 )
 
 // mapAs asks, as the agent, to map name in the group to model under key.
@@ -43,7 +43,7 @@ func TestOperationsSupplierGroupSelect(t *testing.T) {
 	rec := selectAs(true, key)
 	chosen := agentOperation(t, rec)
 	codename := strings.TrimSpace(f.text(`SELECT coalesce(codename, '') FROM suppliers.supplier_groups WHERE id = '` + group + `'`))
-	if rec.Code != http.StatusOK || chosen.State != operationsapi.OperationStateSucceeded || codename == "" ||
+	if rec.Code != http.StatusOK || chosen.State != adminapi.OperationStateSucceeded || codename == "" ||
 		!strings.Contains(rec.Body.String(), `"selected":true,`) || !strings.Contains(rec.Body.String(), `"codename":"`+codename+`"`) {
 		t.Fatalf("selecting the group: %d %s", rec.Code, rec.Body)
 	}
@@ -70,7 +70,7 @@ func TestOperationsSupplierModelMap(t *testing.T) {
 	model := catalogFixture(f).ready("acme/beta")
 	rec := f.mapAs(f.moneyAgent(false), supplier, group, "beta-latest", model.Id, newKey(), "")
 	mapped := agentOperation(t, rec)
-	if rec.Code != http.StatusOK || mapped.State != operationsapi.OperationStateSucceeded || mapped.Target.Kind != "supplier_group" ||
+	if rec.Code != http.StatusOK || mapped.State != adminapi.OperationStateSucceeded || mapped.Target.Kind != "supplier_group" ||
 		!strings.Contains(rec.Body.String(), `"model_id":"`+model.Id+`"`) || !strings.Contains(rec.Body.String(), `"revision":1`) {
 		t.Fatalf("mapping the name: %d %s", rec.Code, rec.Body)
 	}
@@ -108,7 +108,7 @@ func TestOperationsSupplierMappingRefusals(t *testing.T) {
 
 	token := f.moneyAgent(false)
 	rec := f.mapAs(token, supplier, group, "waiting", model.Id, newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateApproved {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStateApproved {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	_, reader := f.makeCredential(f.s, `{"name":"reader","permissions":["suppliers.view"],"platform":true,

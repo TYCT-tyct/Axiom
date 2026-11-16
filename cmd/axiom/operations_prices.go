@@ -30,7 +30,8 @@ func (o operationsAPI) PricesList(ctx context.Context, _ operationsapi.PricesLis
 		return nil, err
 	}
 	answer, err := o.admin.ListPricePublications(ctx, adminapi.ListPricePublicationsRequestObject{})
-	return relayed[operationsapi.PricesList200JSONResponse, adminapi.ListPricePublications200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListPricePublications200JSONResponse](answer, err)
+	return operationsapi.PricesList200JSONResponse(body), err
 }
 
 // PricePublish publishes a proposal of the main site within its price envelope, or asks the owner to.

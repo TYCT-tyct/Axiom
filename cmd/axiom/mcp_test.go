@@ -347,9 +347,7 @@ func TestMCPBridgeRefusesToStartWithoutTheCore(t *testing.T) {
 		http.Error(w, `{"error":{"code":"unauthenticated","message":"no live credential"}}`, http.StatusUnauthorized)
 	}))
 	t.Cleanup(refusing.Close)
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
-	for name, coreURL := range map[string]string{"a refused credential": refusing.URL, "a core that is not there": gone.URL} {
+	for name, coreURL := range map[string]string{"a refused credential": refusing.URL, "a core that is not there": "http://127.0.0.1:0"} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			core, err := url.Parse(coreURL)
@@ -499,9 +497,7 @@ func TestMCPBridgeNeverFollowsARedirect(t *testing.T) {
 // files, under any name, stops the start before anything is written, and the file keeps its bytes.
 func TestMCPBridgeKeepsItsIdentityFiles(t *testing.T) {
 	t.Parallel()
-	gone := httptest.NewServer(http.NotFoundHandler())
-	gone.Close()
-	core, err := url.Parse(gone.URL)
+	core, err := url.Parse("http://127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}

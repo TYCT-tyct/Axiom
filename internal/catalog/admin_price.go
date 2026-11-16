@@ -172,7 +172,7 @@ func (c *Catalog) PublishPrice(ctx context.Context, r PublishPriceRequest) (Resu
 	if err != nil {
 		return Result{}, err
 	}
-	if err := c.allowPrices(n.schedule); err != nil {
+	if err := c.AllowSchedule(n.schedule); err != nil {
 		return Result{}, err
 	}
 	if err := requireEvidence(r.Evidence); err != nil {
@@ -181,59 +181,12 @@ func (c *Catalog) PublishPrice(ctx context.Context, r PublishPriceRequest) (Resu
 	return c.apply(ctx, r.Op, "price.publish", func(tx pg.Tx) (outcome, error) { return publishIn(ctx, tx, r, n) })
 }
 
-// allowCounted refuses a schedule with a price on an item counted per piece, second or character while this release does
-// not publish those: a node running an older release rejects the unknown name and drops the whole snapshot, so they
-// wait until every node reads them (Config.CountedItems, README.md「新增计费项与滚动升级」).
-func (c *Catalog) allowCounted(s Schedule) error {
-	if !c.cfg.CountedItems && s.Priced(CountedItems) {
-		return ErrCountedItems
-	}
-	return nil
-}
-
-// allowRequest refuses a per-request price while this release does not publish it. The request item is not a counted
-// item: it is recorded by the gateway, not reported by the upstream, so it needs its own compatibility switch.
-func (c *Catalog) allowRequest(s Schedule) error {
-	if !c.cfg.RequestPrices && s.Priced(1<<ItemRequest) {
-		return ErrRequestPrices
-	}
-	return nil
-}
-
-// allowFileSearch refuses a price on the file_search item while this release does not publish it: the item's name and
-// ability are new entries in closed enumerations, so a node running an older release cannot read either.
-func (c *Catalog) allowFileSearch(s Schedule) error {
-	if !c.cfg.FileSearch && s.Priced(1<<ItemFileSearch) {
-		return ErrFileSearch
-	}
-	return nil
-}
-
-// allowFileParse refuses a price on the file_parse item while this release does not publish it. The item adds only a
-// price-schedule name: the gateway records it, so it has no spec item or ability to gate as well.
-func (c *Catalog) allowFileParse(s Schedule) error {
+// AllowSchedule checks whether per-page file billing is enabled before publishing its price.
+func (c *Catalog) AllowSchedule(s Schedule) error {
 	if !c.cfg.FileParse && s.Priced(1<<ItemFileParse) {
 		return ErrFileParse
 	}
 	return nil
-}
-
-// AllowSchedule applies the same new-item switches to a price list stored outside the catalog, such as a billing rule's
-// fixed price: that price reaches the same published versions, so the switch must be checked before the rule is saved.
-func (c *Catalog) AllowSchedule(s Schedule) error { return c.allowPrices(s) }
-
-// allowPrices applies every new-item compatibility switch before a price is written to the catalog.
-func (c *Catalog) allowPrices(s Schedule) error {
-	if err := c.allowCounted(s); err != nil {
-		return err
-	}
-	if err := c.allowRequest(s); err != nil {
-		return err
-	}
-	if err := c.allowFileSearch(s); err != nil {
-		return err
-	}
-	return c.allowFileParse(s)
 }
 
 func publishIn(ctx context.Context, tx pg.Tx, r PublishPriceRequest, n newPrice) (outcome, error) {
@@ -321,7 +274,7 @@ func (c *Catalog) selectSource(ctx context.Context, r SelectPriceSourceRequest) 
 		return Result{}, err
 	}
 	for _, n := range news {
-		if err := c.allowPrices(n.schedule); err != nil {
+		if err := c.AllowSchedule(n.schedule); err != nil {
 			return Result{}, err
 		}
 	}
