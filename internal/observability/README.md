@@ -2,7 +2,7 @@
 
 调用记录、对话内容、告警和花费异常检测的代码接口与不变量；行为见[记录与告警](../../docs/domains/observability.md)；指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)。比较过的做法和实测在[存档](../../docs/archive/observability.md)。
 
-本模块的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+基线 `00049`：[迁移规则](../platform/README.md#迁移)。
 
 ## 接口
 

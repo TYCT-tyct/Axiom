@@ -1,6 +1,6 @@
 # pg
 
-连接池、事务与角色的公开接口见 [platform](../README.md#范围)。本文件负责行级安全策略的表达式和查询计划；租户数据分类以[安全文档](../../../docs/security.md#租户隔离)为准。
+连接池、事务与角色的公开接口见 [platform](../README.md#范围)。本文件负责迁移执行与校验、行级安全策略的表达式和查询计划；租户数据分类以[安全文档](../../../docs/security.md#租户隔离)为准。
 
 ## 不变量
 
@@ -53,11 +53,18 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 
 基线迁移 `00049_baseline.sql` 直接创建 InitPlan 范围策略，包括 observability 父表和每个初始分区；基线在空库的一个事务内执行，不再重放历史范围改写。
 
+## 迁移执行与校验
+
+- `axiom_owner` 持 goose 会话锁、带平台范围迁移；每个锁最多等约 5 秒。`AXIOM_MIGRATE_CONNECT_TIMEOUT` 默认 10 秒，`AXIOM_MIGRATE_TIMEOUT` 默认 30 分钟，到期按本次 `application_name` 终止会话。
+- `platform.migration_checksums` 与版本行同事务记录 SHA-256，执行前核对全部历史，改过、改名、删掉即停止；CI 用 `just migrations <base>` 检查。
+
 ## 验证
 
 复现实验：`flock /tmp/axiom-remote-check.lock python3 internal/platform/pg/testdata/compare-scope.py --output scope-comparison.json`。JSON 保留完整计划，计时只作证据，不作 CI 门槛。
 
-`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的 `TestListPlansFollowTheIndexes` 复用同一份 12 万行数据，覆盖首页、紧随页及深 45,000 行的页，在平台与账户两种范围检查 50、200 行页的有序扫描和块预算；证据见[记录与告警存档](../../../docs/archive/observability.md#深页的游标条件)。基线结构与历史迁移的逐字节比较见 `scripts/compare_migrations.py`。
+`TestScopeSettingsAreStatementInitPlans` 检查被过滤与命中扫描的每个设置读取均在 InitPlan 内且执行至多一次；`TestScopePlansDoNotCacheAnEarlierScope` 强制两种计划并交替范围；`TestMalformedScopeArraysFailClosed` 检查非法数组报错。各模块既有隔离测试检查读、写与终态权限。账本计划测试检查平台和账户范围、首页与深页的索引顺序及块预算，EXPLAIN 在实际读取入口设置了有序扫描后进行。调用记录的 `TestListPlansFollowTheIndexes` 复用同一份 12 万行数据，覆盖首页、紧随页及深 45,000 行的页，在平台与账户两种范围检查 50、200 行页的有序扫描和块预算；证据见[记录与告警存档](../../../docs/archive/observability.md#深页的游标条件)。
+
+基线等价证明由 `scripts/compare_migrations.py` 在 CI static 执行：两个空库分别应用冻结历史和基线，先独立迁移 platform，再创建任务角色并迁移其余模块。完整对象排序后逐字节比较 `pg_dump --schema-only`，比较全部初始行、序列及角色授权；固定时间与 UUID 输入，导出前恢复内置函数，不忽略权限、策略、约束或数据字段。基线直接建最终定义，避免重放回填与反复改表。
 
 PostgreSQL 官方说明：无关联的单行子查询可以成为每次执行只运行一次的 [InitPlan](https://www.postgresql.org/docs/18/using-explain.html)；[函数易变性](https://www.postgresql.org/docs/18/xfunc-volatility.html)决定计划复用时能否把结果折叠为常量。查证日期：2026-10-28。
 

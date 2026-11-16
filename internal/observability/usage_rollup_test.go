@@ -127,6 +127,8 @@ func usageDBBeforeRollup(t *testing.T) (*pg.DB, pgtest.Database) {
 func beginUsageBackfill(t *testing.T, database pgtest.Database) {
 	t.Helper()
 	if err := pgtest.Run(t.Context(), database.Superuser,
+		// The old migration marked existing rows false before making new inserts default to true.
+		"UPDATE observability.call_log SET usage_rollup_live = false",
 		`UPDATE observability.usage_backfill SET (until_at, until_id) =
             (SELECT at, id FROM observability.call_log ORDER BY at DESC, id DESC LIMIT 1)`,
 		"ALTER TABLE observability.call_log ENABLE TRIGGER journal_usage"); err != nil {

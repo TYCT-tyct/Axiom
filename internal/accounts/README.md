@@ -14,7 +14,7 @@
 
 ## 数据
 
-本模块的结构与内置角色权限从 [`00049_baseline.sql`](migrations/00049_baseline.sql) 初始化；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+以基线 [`00049_baseline.sql`](migrations/00049_baseline.sql) 初始化；[迁移规则](../platform/README.md#迁移)。
 
 ### 表（schema `accounts`）
 

@@ -15,7 +15,7 @@ check: docs check-static test secrets web
 # `script-tests`) plus `secrets` on a train or main. The mode selects the quality ratchet's behaviour: `pr` (the default)
 # requires every improvement to be recorded in the baseline, `train` passes --allow-unrecorded-gains for a train or main
 # build and reports what to record (see the quality-ratchet recipe).
-check-static mode="pr": modules adapters-removable artifacts scope api doc-names tidy generated (quality-ratchet mode) lint deadcode vuln
+check-static mode="pr": modules adapters-removable artifacts scope api doc-names doc-size tidy generated (quality-ratchet mode) lint deadcode vuln
 
 # Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
 generate: web-install
@@ -175,8 +175,11 @@ check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
 # template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
-md-checks: docs doc-names modules artifacts
+md-checks: docs doc-names doc-size modules artifacts
     go test ./internal/platform/pg -run '^TestModuleOrderFollowsArchitecture$'
+
+doc-size:
+    {{ python }} scripts/check_doc_size.py
 
 # Record a protocol sample: send the request file (a path from the repository root) to a live upstream and save the
 # stream as internal/protocol/testdata/<format>/<scenario>/, scrubbed and checked. Base URLs and keys come from the

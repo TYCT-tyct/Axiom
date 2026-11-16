@@ -120,11 +120,10 @@
 
 ### 迁移
 
-- 每个模块从 `00049_baseline.sql` 起独立递增；基线直接创建最终结构，后续迁移只增不改（`just migrations <base>`）。首次生产部署前的这次压缩，以 `scripts/compare_migrations.py` 固定的历史提交为证：CI static 在两个空库分别执行历史和基线，按完整对象排序比较 `pg_dump --schema-only`，逐行比较全部初始数据和序列状态。比较先在任务角色尚未创建时分别执行两边的 platform 迁移，再创建模块任务角色并执行其余迁移，覆盖测试集群先独立迁移 platform 的初始化路径。临时库固定时间与 UUID 输入，导出前恢复内置函数，不忽略权限、策略、约束或数据字段。选择最终定义而非拼接历史 SQL，避免新库继续做回填和反复改表；不会升级已有开发数据库，开发库需重建。
-- 模块以 `pg.Module` 列进 `cmd/axiom` 的 `modules()`，同交 `pg.Migrate` 和 `DB.Check`；`platform` 先执行，其余按[依赖表](../../docs/architecture.md#模块之间的依赖)，名单外或重复的失败。
-- 迁移以 `axiom_owner` 持 goose 会话锁、带平台范围执行，各锁最多等约 5 秒；连接期限 `AXIOM_MIGRATE_CONNECT_TIMEOUT`（默认 10 秒），整次 `AXIOM_MIGRATE_TIMEOUT`（默认 30 分钟），到期按本次的 `application_name` 终止会话。
-- `platform.migration_checksums` 与版本行同事务记下每个迁移的 SHA-256，执行前核对全部历史，改过、改名、删掉的立即停下；CI 另以 `just migrations <base>` 拦。
-- River 的表在 schema `river`，由 `migrate` 迁移并授给 `axiom_app`；启动检查核对其版本。
+- 各模块从 `00049_baseline.sql` 独立递增，后续只增不改（`just migrations <base>`）。基线直接建最终结构，开发库需重建；CI static 对照冻结历史验证结构、初始数据和角色（[方法](pg/README.md#验证)）。
+- `pg.Module` 在 `cmd/axiom` 的 `modules()` 注册，交给 `pg.Migrate`、`DB.Check`；platform 先执行，其余按[依赖表](../../docs/architecture.md#模块之间的依赖)，名单外或重复即失败。
+- `axiom_owner` 在平台范围持会话锁迁移，SHA-256 与版本同事务记录；[期限与校验](pg/README.md#迁移执行与校验)。
+- River 表在 schema `river`，由 `migrate` 迁移并授权 `axiom_app`；启动检查核对版本。
 
 ### 任务队列
 
