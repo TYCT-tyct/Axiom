@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -150,14 +151,26 @@ func TestExpectedFromProratesEachMonthByDuration(t *testing.T) {
 	}
 }
 
+// The comparison refuses overflowing counts, negative amounts and unknown metrics instead of presenting them as real figures.
 func TestExpectedFromRefusesACountWiderThanItsType(t *testing.T) {
-	t.Parallel()
-	_, err := expectedFrom(
-		[]ReadTargetsRow{targetRow(t, "2026-01-01", Calls, "9223372036854775808", "")},
-		usd(t), at(t, "2026-01-01T00:00:00Z"), at(t, "2026-02-01T00:00:00Z"),
-	)
-	if err == nil {
-		t.Fatal("a count target wider than int64 was accepted")
+	month := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		row  ReadTargetsRow
+	}{
+		{"first count beyond int64", ReadTargetsRow{Month: month, Metric: string(Calls), Amount: "9223372036854775808"}},
+		{"count wider than 64 bits", ReadTargetsRow{Month: month, Metric: string(Calls), Amount: strings.Repeat("9", 100)}},
+		{"negative amount", ReadTargetsRow{Month: month, Metric: string(Calls), Amount: "-1"}},
+		{"unknown metric", ReadTargetsRow{Month: month, Metric: "visits", Amount: "1"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			for _, currency := range []platform.Currency{{}, usd(t)} {
+				if _, err := expectedFrom([]ReadTargetsRow{c.row}, currency, month, month.AddDate(0, 1, 0)); err == nil {
+					t.Errorf("%+v with currency %v was accepted", c.row, currency)
+				}
+			}
+		})
 	}
 }
 

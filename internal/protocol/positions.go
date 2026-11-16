@@ -118,8 +118,7 @@ func (p *rewriter) indexedMembers(positions *requestPositions) error {
 func (p *rewriter) indexedMember(member memberPosition, do rule) (bool, error) {
 	p.copyTo(max(p.at, member.from))
 	p.base, p.end, p.consumed = member.value, member.end, false
-	p.src = *bytes.NewBuffer(p.body[member.value:member.end])
-	p.dec.Reset(&p.src)
+	p.dec = p.src.reset(p.dec, p.body[member.value:member.end])
 	var err error
 	p.name, err = p.unquote(p.body[member.nameFrom:member.nameEnd])
 	if err != nil {

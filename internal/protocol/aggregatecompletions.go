@@ -1,13 +1,10 @@
 package protocol
 
 import (
-	"bytes"
 	"cmp"
 	"fmt"
 	"slices"
 	"strconv"
-
-	"axiom/internal/protocol/internal/sse"
 )
 
 // completionsAggregate builds a text completion from the chunks of a completions stream. Its logprobs are the one
@@ -16,21 +13,10 @@ import (
 // element is parsed once and copied into its array's buffer before it is charged, and the body is encoded once at the
 // end, so neither a chunk's history nor a temporary object is ever copied.
 type completionsAggregate struct {
-	aggBase
-	ev                 completionsAggEvent
-	pending            []completionsChoice
-	at                 map[int64]int
-	id, created, model []byte
-	usage, errored     []byte
-	axiom              []byte
-	choices            []completionsChoiceAgg
-	hadError, fixed    bool
-}
-
-type completionsAggEvent struct {
-	span                               completionsChoice
-	id, created, model, usage, errored []byte
-	axiom                              []byte
+	choiceAggregate[completionsChoice]
+	at      map[int64]int
+	choices []completionsChoiceAgg
+	fixed   bool
 }
 
 // completionsChoice is a choice as one chunk wrote it: its members are slices of the event's data, valid until the
@@ -67,21 +53,11 @@ var (
 		"text_offset": completionsTextOffset, "top_logprobs": completionsTopLogprobs,
 	}
 
-	//nolint:dupl // the completions aggregate mirrors chat's members but keeps its own types and rules
-	completionsAggFields = map[string]func(*completionsAggregate) error{
-		"id":      func(a *completionsAggregate) error { return a.capture(&a.ev.id) },
-		"created": func(a *completionsAggregate) error { return a.capture(&a.ev.created) },
-		"model":   func(a *completionsAggregate) error { return a.capture(&a.ev.model) },
-		"choices": func(a *completionsAggregate) error { return a.eachElement(a.readChoice) },
-		"usage":   func(a *completionsAggregate) error { return a.capture(&a.ev.usage) },
-		"error":   func(a *completionsAggregate) error { return a.capture(&a.ev.errored) },
-		"axiom":   func(a *completionsAggregate) error { return a.capture(&a.ev.axiom) },
-	}
 	completionsAggChoiceFields = map[string]func(*completionsAggregate) error{
-		"index":         func(a *completionsAggregate) error { return a.index(&a.ev.span.index) },
-		"text":          func(a *completionsAggregate) error { return a.capture(&a.ev.span.text) },
-		"finish_reason": func(a *completionsAggregate) error { return a.capture(&a.ev.span.finish) },
-		"logprobs":      func(a *completionsAggregate) error { return a.capture(&a.ev.span.logprobs) },
+		"index":         func(a *completionsAggregate) error { return a.index(&a.span.index) },
+		"text":          func(a *completionsAggregate) error { return a.capture(&a.span.text) },
+		"finish_reason": func(a *completionsAggregate) error { return a.capture(&a.span.finish) },
+		"logprobs":      func(a *completionsAggregate) error { return a.capture(&a.span.logprobs) },
 	}
 )
 
@@ -93,18 +69,6 @@ const (
 	completionsChoiceFixed = 128
 )
 
-func (a *completionsAggregate) read(data []byte) (bool, error) {
-	if t := bytes.TrimSpace(data); len(t) == 0 || string(t) == sse.Done {
-		return false, nil
-	}
-	a.begin(data)
-	a.ev, a.pending = completionsAggEvent{}, a.pending[:0]
-	if err := walk(&a.reader, a, completionsAggFields); err != nil {
-		return false, upstreamFailure(err)
-	}
-	return true, nil
-}
-
 func (a *completionsAggregate) event(data []byte) error {
 	if !a.fixed {
 		if err := a.take(completionsBodyFixed, 1); err != nil {
@@ -112,7 +76,7 @@ func (a *completionsAggregate) event(data []byte) error {
 		}
 		a.fixed = true
 	}
-	if ok, err := a.read(data); !ok || err != nil {
+	if ok, err := a.read(data, a.readChoice); !ok || err != nil {
 		return err
 	}
 	if err := a.keep(); err != nil {
@@ -126,36 +90,8 @@ func (a *completionsAggregate) event(data []byte) error {
 	return nil
 }
 
-// keep takes the members of the chunk that are not choices: the first chunk's identity, and the last usage, error and
-// axiom.
-//
-//nolint:dupl // the completions aggregate mirrors chat's members but keeps its own types and rules
-func (a *completionsAggregate) keep() error {
-	e := &a.ev
-	for _, m := range [...]struct {
-		dst   *[]byte
-		v     []byte
-		first bool
-	}{
-		{&a.id, e.id, true},
-		{&a.created, e.created, true},
-		{&a.model, e.model, true},
-		{&a.usage, e.usage, false},
-		{&a.errored, e.errored, false},
-		{&a.axiom, e.axiom, false},
-	} {
-		if m.v != nil && (!m.first || len(*m.dst) == 0) {
-			if err := a.set(m.dst, m.v, 1); err != nil {
-				return err
-			}
-		}
-	}
-	a.hadError = a.hadError || e.errored != nil
-	return nil
-}
-
 func (a *completionsAggregate) readChoice() error {
-	a.ev.span = completionsChoice{}
+	a.span = completionsChoice{}
 	if err := walk(&a.reader, a, completionsAggChoiceFields); err != nil {
 		return err
 	}
@@ -163,7 +99,7 @@ func (a *completionsAggregate) readChoice() error {
 	if err != nil {
 		return err
 	}
-	a.pending = append(pending, a.ev.span)
+	a.pending = append(pending, a.span)
 	return nil
 }
 
@@ -197,17 +133,17 @@ func (a *completionsAggregate) apply(c completionsChoice) error {
 	ch := &a.choices[i]
 	// null is the value OpenAI writes for a member that says nothing yet; the reader reads it as absent, and the reply
 	// writes its own default for a choice that never finished.
-	if len(c.text) > 0 && !bytes.Equal(c.text, []byte("null")) {
+	if len(c.text) > 0 {
 		if err := a.add(&ch.text, c.text, 2); err != nil {
 			return err
 		}
 	}
-	if len(c.finish) > 0 && !bytes.Equal(c.finish, []byte("null")) {
+	if len(c.finish) > 0 {
 		if err := a.set(&ch.finish, c.finish, 1); err != nil {
 			return err
 		}
 	}
-	if len(c.logprobs) > 0 && !bytes.Equal(c.logprobs, []byte("null")) {
+	if len(c.logprobs) > 0 {
 		// Finish feeds the events it withheld after the charging ended, and a chunk after the usage ending is not
 		// content: nothing it carries may be stored once grow can no longer ask for room.
 		if a.sealed {
@@ -246,22 +182,8 @@ func (a *completionsAggregate) logprobsArray(dst *[]byte) error {
 		if err != nil {
 			return err
 		}
-		return a.appendLog(dst, v)
+		return a.appendEntry(dst, v, 2)
 	})
-}
-
-// appendLog appends one element, separated from the ones before it. The room is charged before it is made, and the
-// element is copied into it: a piece that waits for the body is charged twice (docs/domains/gateway.md「决策与理由」).
-func (a *completionsAggregate) appendLog(dst *[]byte, v []byte) error {
-	b, err := grow(&a.aggBase, *dst, len(v)+1, 2)
-	if err != nil {
-		return err
-	}
-	if len(b) > 0 {
-		b = append(b, ',')
-	}
-	*dst = append(b, v...)
-	return nil
 }
 
 func (*completionsAggregate) failed() {}
@@ -276,19 +198,11 @@ func (a *completionsAggregate) body() ([]byte, error) {
 			size += len(l)
 		}
 	}
-	out := append(make([]byte, 0, size), `{"id":`...)
-	out = append(append(out, orNull(a.id)...), `,"object":"text_completion","created":`...)
-	out = append(append(out, orZero(a.created)...), `,"model":`...)
-	out = append(append(out, orNull(a.model)...), `,"choices":[`...)
+	out := a.appendHead(make([]byte, 0, size), "text_completion")
 	for i := range a.choices {
 		c := &a.choices[i]
-		out = append(strconv.AppendInt(append(out, `{"index":`...), c.index, 10), `,"text":`...)
-		if len(c.text) == 0 {
-			out = append(out, `""`...)
-		} else {
-			out = append(append(out, '"'), c.text...)
-			out = append(out, '"')
-		}
+		out = append(strconv.AppendInt(append(comma(out), `{"index":`...), c.index, 10), `,"text":`...)
+		out = appendContents(out, c.text, true)
 		out = append(out, `,"finish_reason":`...)
 		switch {
 		case len(c.finish) > 0:
@@ -300,20 +214,9 @@ func (a *completionsAggregate) body() ([]byte, error) {
 		}
 		out = c.appendLogprobs(out)
 		out = append(out, '}')
-		if i < len(a.choices)-1 {
-			out = append(out, ',')
-		}
 	}
 	out = append(out, ']')
-	for _, m := range [...]struct {
-		name string
-		v    []byte
-	}{{"usage", a.usage}, {"error", a.errored}, {"axiom", a.axiom}} {
-		if len(m.v) > 0 {
-			out = append(append(append(append(out, `,"`...), m.name...), `":`...), m.v...)
-		}
-	}
-	return append(out, '}'), nil
+	return a.appendTail(out), nil
 }
 
 // appendLogprobs writes a choice's logprobs: the four arrays, each from its buffer, or null when no chunk had one.
@@ -321,14 +224,10 @@ func (c *completionsChoiceAgg) appendLogprobs(out []byte) []byte {
 	if !c.logsSeen {
 		return append(out, `,"logprobs":null`...)
 	}
-	out = append(out, `,"logprobs":{"tokens":`...)
-	out = appendLogArray(out, c.logs[completionsTokens])
-	out = append(out, `,"token_logprobs":`...)
-	out = appendLogArray(out, c.logs[completionsTokenLogprobs])
-	out = append(out, `,"text_offset":`...)
-	out = appendLogArray(out, c.logs[completionsTextOffset])
-	out = append(out, `,"top_logprobs":`...)
-	out = appendLogArray(out, c.logs[completionsTopLogprobs])
+	out = append(out, `,"logprobs":{`...)
+	for i, name := range [...]string{"tokens", "token_logprobs", "text_offset", "top_logprobs"} {
+		out = appendLogArray(append(appendQuoted(comma(out), name), ':'), c.logs[i])
+	}
 	return append(out, '}')
 }
 

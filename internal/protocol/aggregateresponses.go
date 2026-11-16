@@ -224,16 +224,7 @@ func (a *responsesAggregate) addAnnotation(parts []responsePart) error {
 	if e.content < 0 || e.content >= int64(len(parts)) || e.annotation == nil {
 		return nil
 	}
-	p := &parts[e.content]
-	b, err := grow(&a.aggBase, p.annotations, len(e.annotation)+1, 2)
-	if err != nil {
-		return err
-	}
-	if len(b) > 0 {
-		b = append(b, ',')
-	}
-	p.annotations = append(b, e.annotation...)
-	return nil
+	return a.appendEntry(&parts[e.content].annotations, e.annotation, 2)
 }
 
 // body returns the response of the ending, or, for a reply that failed, the response we wrote for the failure with
