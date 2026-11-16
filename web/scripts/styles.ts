@@ -33,11 +33,16 @@ export type Baseline = { migrated: string[]; counts: Partial<Record<Rule, Record
 
 const isTest = (path: string) => /\.(test|spec)\.[jt]sx?$/.test(path);
 const isScript = (path: string) =>
-  /\.[cm]?[jt]sx?$/.test(path) && /^(site|console|admin|packages\/[^/]+)\/src\//.test(path);
+  (/\.[cm]?[jt]sx?$/.test(path) && /^(site|console|admin|packages\/[^/]+)\/src\//.test(path)) ||
+  path === "packages/boards/demo/main.tsx";
 const isApp = (path: string) =>
   /^(console|admin|site|packages\/app)\/src\//.test(path) && !path.startsWith("site/src/home/");
 const isModule = (path: string) => path.endsWith(".module.css");
-const moduleHomes = [/^packages\/ui\/src\/components\//, /^site\/src\/home\//];
+const moduleHomes = [
+  /^packages\/ui\/src\/components\//,
+  /^site\/src\/home\//,
+  /^packages\/boards\/demo\/main\.module\.css$/,
+];
 const globalCss = new Set([
   "packages/ui/src/css/tokens.css",
   "packages/ui/src/css/fonts.css",
@@ -456,7 +461,8 @@ function cssFindings(path: string, text: string, palette: ReturnType<typeof toke
       rule: "module-place",
       path,
       line: 1,
-      message: "a CSS Module outside packages/ui/src/components/ and site/src/home/",
+      message:
+        "a CSS Module outside packages/ui/src/components/, site/src/home/ and packages/boards/demo/main.module.css",
     });
   }
   return [...found, ...selectorFindings(path, text), ...edgeFindings(path, text, palette)];

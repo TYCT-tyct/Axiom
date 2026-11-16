@@ -1,6 +1,8 @@
 import { createRoot } from "react-dom/client";
 import "../src/demo-fonts.css";
-import "./demo.css";
+import styles from "./main.module.css";
+
+document.body.classList.add(styles.root as string);
 
 const theme = new URLSearchParams(location.search).get("theme") === "dark" ? "深色" : "浅色";
 const fonts = ["400 16px 'Axiom Sans'", "400 16px 'Axiom CJK'", "400 16px 'Axiom Mono'", "600 40px 'AX Serif'"];

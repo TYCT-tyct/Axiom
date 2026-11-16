@@ -55,6 +55,27 @@ describe("app code", () => {
 });
 
 describe("a component's module", () => {
+  it("checks the demo host module without allowing other demo CSS", () => {
+    const host = {
+      "packages/boards/demo/main.tsx":
+        'import styles from "./main.module.css"; document.body.classList.add(styles.root);',
+      "packages/boards/demo/main.module.css": ".root { margin: 0; }",
+    };
+    expect(run(host)).toEqual([]);
+    expect(run({ ...host, "packages/boards/demo/main.module.css": "body { margin: 0; }" }).join("\n")).toContain(
+      ": selector:",
+    );
+    expect(run({ ...host, "packages/boards/demo/demo.css": "body { margin: 0; }" }).join("\n")).toContain(
+      ": global-css:",
+    );
+    expect(run({ ...host, "packages/boards/demo/other.module.css": ".root {}" }).join("\n")).toContain(
+      ": module-place:",
+    );
+    expect(
+      run({ "packages/boards/demo/main.module.css": host["packages/boards/demo/main.module.css"] }).join("\n"),
+    ).toContain(": module-owner:");
+  });
+
   // A local alias is measured as the token it stands for, under every value the module gives it.
   it.each([
     { css: ".input {\n  border: 1px solid var(--line2);\n}", fails: true },
