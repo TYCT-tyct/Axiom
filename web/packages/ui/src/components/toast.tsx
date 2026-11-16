@@ -14,7 +14,8 @@ type Shown = { id: number; text: string; bad: boolean; action?: Action };
 // action is the one thing to do about it, such as undo.
 export type Say = (text: string, options?: { bad?: boolean; action?: Action }) => void;
 
-const SayContext = createContext<Say | null>(null);
+// Pure, so an app that never shows a toast (the admin) does not keep the call.
+const SayContext = /* @__PURE__ */ createContext<Say | null>(null);
 
 // ToastProvider holds the one toast an app shows at a time; a page says something with useToast.
 export function ToastProvider({ children }: { children: ReactNode }) {

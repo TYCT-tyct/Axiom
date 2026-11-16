@@ -119,7 +119,7 @@
       "packages/ui/src/components/panel.tsx": 8,
       "packages/ui/src/components/preferences.tsx": 1,
       "packages/ui/src/components/segmented.tsx": 5,
-      "packages/ui/src/components/states.tsx": 12,
+      "packages/ui/src/components/states.tsx": 13,
       "site/src/home.tsx": 2,
       "site/src/models.tsx": 6,
       "site/src/shell.tsx": 10
