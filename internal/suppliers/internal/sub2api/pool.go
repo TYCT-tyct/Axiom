@@ -93,7 +93,7 @@ func (m *manager) Pool(ctx context.Context) (adapter.PoolReading, error) {
 		}
 	}
 	out := make([]adapter.GroupCapacity, 0, len(groups))
-	for _, ref := range sortedKeys(groups) {
+	for _, ref := range slices.Sorted(maps.Keys(groups)) {
 		g := groups[ref]
 		if err = g.setHeadroom(usage, sample[ref], m.s.now()); err != nil {
 			return adapter.PoolReading{}, err
@@ -145,7 +145,7 @@ func poolSample(groups map[string]*poolAccountGroup) ([]number, map[string][]num
 	per, budget := max(1, poolUsageSample/len(groups)), poolUsageSample
 	sample := map[string][]number{}
 	var ids []number
-	for _, ref := range sortedKeys(groups) {
+	for _, ref := range slices.Sorted(maps.Keys(groups)) {
 		g := groups[ref]
 		n := min(per, len(g.ids), budget)
 		for i := range n {
@@ -359,13 +359,4 @@ func batchRequest(ids []number) (batchUsageRequest, error) {
 		r.AccountIDs[i] = n
 	}
 	return r, nil
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	slices.Sort(out)
-	return out
 }

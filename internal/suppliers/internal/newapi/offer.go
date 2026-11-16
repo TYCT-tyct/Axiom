@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math/big"
 	"net/url"
 	"slices"
@@ -77,12 +78,9 @@ func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page
 	if err != nil {
 		return adapter.Page[adapter.Group]{}, err
 	}
-	for {
-		page, more, err := m.offerPage(ctx, &p)
-		if err != nil || !more {
-			return page, err
-		}
-	}
+	return adapter.Drain(func() (adapter.Page[adapter.Group], bool, error) {
+		return m.offerPage(ctx, &p)
+	})
 }
 
 func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerProgress, error) {
@@ -94,7 +92,7 @@ func (m *manager) offerStart(ctx context.Context, from adapter.Listing) (offerPr
 	if err != nil {
 		return offerProgress{}, err
 	}
-	if !slices.Equal(sortedKeys(groups), p.Names) {
+	if !slices.Equal(slices.Sorted(maps.Keys(groups)), p.Names) {
 		return m.startOffer(ctx, groups)
 	}
 	return p, nil
@@ -118,7 +116,7 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	}
 	if err := m.api.get(ctx, "/api/user/models?group="+url.QueryEscape(name), global, &models); err != nil {
 		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
-			return adapter.Page[adapter.Group]{Next: listing(*p), Until: blocked.Until}, false, nil
+			return adapter.Page[adapter.Group]{Next: adapter.ListingOf(*p), Until: blocked.Until}, false, nil
 		}
 		return page, false, err
 	}
@@ -146,7 +144,7 @@ func (m *manager) startOffer(ctx context.Context, groups map[string]groupEntry) 
 	if pricing.Data == nil {
 		return offerProgress{}, errMissing("list of prices")
 	}
-	return offerProgress{V: 1, Groups: groups, Names: sortedKeys(groups), Prices: pricing.Data}, nil
+	return offerProgress{V: 1, Groups: groups, Names: slices.Sorted(maps.Keys(groups)), Prices: pricing.Data}, nil
 }
 
 func (p offerProgress) offer() ([]adapter.Group, error) {
@@ -182,15 +180,6 @@ func (m *manager) groupsNow(ctx context.Context) (map[string]groupEntry, error) 
 	return groups.Data, nil
 }
 
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	slices.Sort(keys)
-	return keys
-}
-
 func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []string, prices map[string]priceEntry) (adapter.Group, error) {
 	slices.Sort(models)
 	g := adapter.Group{Ref: name, Name: name, Ratio: adapter.Amount(ratioText)}
@@ -207,7 +196,7 @@ func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []st
 		}
 		g.Models = append(g.Models, model)
 	}
-	facts, err := jsonx.MarshalCanonical(map[string]any{"desc": desc, "endpoint_types": sortedKeys(endpoints)})
+	facts, err := jsonx.MarshalCanonical(map[string]any{"desc": desc, "endpoint_types": slices.Sorted(maps.Keys(endpoints))})
 	if err != nil {
 		return adapter.Group{}, fmt.Errorf("new-api: encode the facts of group %q: %w", name, err)
 	}

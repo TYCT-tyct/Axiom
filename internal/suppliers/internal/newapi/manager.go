@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -29,14 +28,6 @@ var _ adapter.Manager = (*manager)(nil)
 // the one known, not an answer that there is nothing.
 func errMissing(what string) error {
 	return fmt.Errorf("%w: the answer has no %s", adapter.ErrUnrecognised, what)
-}
-
-func listing(p any) adapter.Listing {
-	b, err := jsonx.MarshalCanonical(p)
-	if err != nil {
-		panic(err) // a position of names, numbers and statuses always encodes
-	}
-	return b
 }
 
 // Account implements adapter.Manager. The balance is the account's remaining quota, an integer in new-api's own unit;
@@ -113,84 +104,26 @@ func listed(k adapter.KeyState) listedKey {
 	return listedKey{Ref: k.Ref, GroupRef: k.GroupRef, Name: k.Name, Status: k.Status, Policy: k.Policy}
 }
 
-// keysProgress is the position in the keys listing: the page to read next, the keys read so far, and the total the
-// supplier stated. A key created during the listing shifts the pages, so one key may be read twice, which the position's
-// keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
-// again: the keys read so far are given up, none is skipped.
-type keysProgress struct {
-	Page  int         `json:"page"`
-	Total int         `json:"total"`
-	Keys  []listedKey `json:"keys"`
-}
-
-func decodeKeys(raw adapter.Listing) keysProgress {
-	if len(raw) == 0 {
-		return keysProgress{Page: 1}
-	}
-	var p keysProgress
-	if jsonx.UnmarshalKnown(raw, &p) != nil || p.Page < 1 {
-		return keysProgress{Page: 1}
-	}
-	return p
-}
+type keysProgress = adapter.KeyProgress[listedKey]
 
 // Keys implements adapter.Manager. new-api's key status is 1 enabled, 2 disabled, 3 expired, 4 exhausted. A key
 // with no group follows the account's group, which the empty GroupRef says. The listing is read from the position in
 // from, as far as the global bucket allows; what it read is in the position it answers with.
 func (m *manager) Keys(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.KeyState], error) {
-	p := decodeKeys(from)
-	for {
-		page, more, err := m.keysPage(ctx, &p)
-		if err != nil || !more {
-			return page, err
-		}
-	}
+	p := adapter.DecodeKeys[listedKey](from)
+	return adapter.Drain(func() (adapter.Page[adapter.KeyState], bool, error) {
+		return m.keysPage(ctx, &p)
+	})
 }
 
-func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.Page[adapter.KeyState], more bool, err error) {
-	if p.Page > maxPages {
-		return page, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
-	}
-	items, total, err := m.keyPage(ctx, p.Page)
-	if err != nil {
-		if blocked, ok := errors.AsType[adapter.Blocked](err); ok {
-			return adapter.Page[adapter.KeyState]{Next: listing(*p), Until: blocked.Until}, false, nil
+func (m *manager) keysPage(ctx context.Context, p *keysProgress) (adapter.Page[adapter.KeyState], bool, error) {
+	return adapter.KeyStep(p, func() ([]adapter.KeyState, int, bool, error) {
+		if p.Page > maxPages {
+			return nil, 0, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
 		}
-		return page, false, err
-	}
-	if p.Page > 1 && total < p.Total { // the list shrank under the position: it begins again
-		*p = keysProgress{Page: 1}
-		return page, true, nil
-	}
-	p.Total = total
-	seen := keyRefs(p.Keys)
-	for _, k := range items {
-		if !seen[k.Ref] {
-			seen[k.Ref] = true
-			p.Keys = append(p.Keys, listed(k))
-		}
-	}
-	if len(items) < keyPageSize {
-		return adapter.Page[adapter.KeyState]{Items: keyStates(p.Keys), Done: true}, false, nil
-	}
-	p.Page++
-	return page, true, nil
-}
-
-func keyRefs(keys []listedKey) map[adapter.KeyRef]bool {
-	seen := make(map[adapter.KeyRef]bool, len(keys))
-	for _, k := range keys {
-		seen[k.Ref] = true
-	}
-	return seen
-}
-
-func keyStates(keys []listedKey) []adapter.KeyState {
-	out := make([]adapter.KeyState, len(keys))
-	for i, k := range keys {
-		out[i] = k.state()
-	}
-	return out
+		items, total, err := m.keyPage(ctx, p.Page)
+		return items, total, len(items) < keyPageSize, err
+	}, listed, func(k listedKey) adapter.KeyRef { return k.Ref }, listedKey.state)
 }
 
 func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, int, error) {
