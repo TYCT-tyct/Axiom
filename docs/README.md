@@ -69,6 +69,7 @@
 | 平台层：测试设施、现有指标、出站地址策略、密钥与信封、连接池与迁移的推导、接口约定的取舍 | [archive/platform.md](archive/platform.md) |
 | 供应商的上游出处、CPA 的上游事实、被否决的方案、滚动发布的兼容推导、测量与样本 | [archive/suppliers.md](archive/suppliers.md) |
 | 记录与告警：写入路径比较过的做法、深页游标条件的推导、列表计划与索引的实测、会话索引体积、告警消费的锁顺序 | [archive/observability.md](archive/observability.md) |
+| 模型目录：请求写法的键的出处、计价事实、条款取证、官方价格页的 live 运行 | [archive/catalog.md](archive/catalog.md) |
 
 ## 文档怎么组织
 

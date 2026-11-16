@@ -142,7 +142,7 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm --no-deps 
 
 ## 目录的规格要补全
 
-**为什么**：规格里说请求怎么写给模型的键（`thinking`、`mid_system`、`untrusted_system_after_tools`、`default_sampling_only`、`forced_tool_choice`、`cache_breakpoints`、`encrypted_reasoning`）缺了不是 no。Chat 请求转给 Claude 模型时，用到缺的那个键的请求被拒（对客户端是 400「模型暂不支持该参数」），换完所有端点也一样，所以发布一个新的转换逻辑之前，库里每个已进目录的模型都要有这些键；规格解析不了的行（例如 `"thinking": true`）还会让 `axiom serve` 加载快照时直接退出。键的含义、每个型号的值和出处见[目录模块的「请求写法的键」](../../internal/catalog/README.md#请求写法的键值照厂商文档不手填)。
+**为什么**：规格里说请求怎么写给模型的键（`thinking`、`mid_system`、`untrusted_system_after_tools`、`default_sampling_only`、`forced_tool_choice`、`cache_breakpoints`、`encrypted_reasoning`）缺了不是 no。Chat 请求转给 Claude 模型时，用到缺的那个键的请求被拒（对客户端是 400「模型暂不支持该参数」），换完所有端点也一样，所以发布一个新的转换逻辑之前，库里每个已进目录的模型都要有这些键；规格解析不了的行（例如 `"thinking": true`）还会让 `axiom serve` 加载快照时直接退出。键的含义见[模型目录的「目录基线」](../domains/catalog.md#目录基线)，每个型号的值在 `deploy/catalog/dialects.json`，出处见[存档](../archive/catalog.md#请求写法的键的出处)。
 
 **步骤**：在要发布的提交的检出里，`AXIOM_DATABASE_URL` 指向目标库（连接串不进仓库）：
 
