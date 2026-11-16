@@ -15,7 +15,7 @@
 | `AXIOM_FILE_PARSER_URL` | — | Docling serve 的基地址，如 `http://docling:5001`；必须是 `http(s)`、有主机、不带账号、查询串和片段 |
 | `AXIOM_FILE_PARSER_KEY` | — | `DOCLING_SERVE_API_KEY` 打开时校验的 `X-Api-Key`。可以只设 URL（不认证），但不能只设 key |
 
-数据库没有覆盖时环境变量生效。管理员保存的覆盖存在 `platform.file_parser_config`（迁移 `00026_file_parser_config.sql`），与 SMTP、搜索配置同样整包信封加密：AAD 是表名、全零单例 ID 和 `purpose=config`，纳入主密钥轮换清单。显式清空 URL 也会存一行，等价于管理员关掉文件解析，不会回落到环境变量。保存后 API 返回 `restart_required`，节点重启时读取覆盖并重建后端；运行中的节点不换后端。
+数据库没有覆盖时环境变量生效。管理员保存的覆盖存在 `platform.file_parser_config`（迁移 `00049_baseline.sql`），与 SMTP、搜索配置同样整包信封加密：AAD 是表名、全零单例 ID 和 `purpose=config`，纳入主密钥轮换清单。显式清空 URL 也会存一行，等价于管理员关掉文件解析，不会回落到环境变量。保存后 API 返回 `restart_required`，节点重启时读取覆盖并重建后端；运行中的节点不换后端。
 
 保存时检查 URL 能否作为出网目标：全部 DNS 答案必须是公网地址，回环、私网、云元数据地址和混合答案拒绝。运行时的每次解析再由节点共享的 `egress.Client` 重新解析并校验。密钥只进加密行，不返回、不写审计、不进日志；省略密钥只在 URL 未变时保留，改 URL 必须重填。
 

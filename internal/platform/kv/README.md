@@ -76,7 +76,7 @@ K1–K3 共享设计中放进 Valkey 的三类状态，供应商硬额度另走�
 | 钱、预留、授权、控制台会话、幂等键、同步租约、任务认领 | PostgreSQL；不依赖进程内缓存决定资金或权限 |
 | 在途、账户闸、查库桶、argon2id、连接池、粘性写桶 | 每进程资源保护，按节点设限是本意 |
 | 端点负载、暂停、重试预算、凭证冷却 | 进程内的路由反馈；健康熔断与试探由 quality 经 PostgreSQL 后台共享；不是全局硬额度 |
-| **供应商凭证并发与账号 RPM** | 调用路径只读本地份额；每秒通过 `ShareView` 和 `ConfirmShares` 后台确认完整的成员列表，新节点等旧成员降低并排空占用后才放行。进程启动身份与确认列表存在 `platform.nodes.share_session`、`share_view`、`share_joining`；过期节点的列表和 `platform.credential_share_departures` 的离开视图继续预留 RPM 至最后可能准入的窗口结束，后台清理（迁移 `00013`）。注册表只分享额度和成员，不保存每次调用计数；详见 [suppliers 的并发与速率](../../suppliers/README.md#并发与速率) |
+| **供应商凭证并发与账号 RPM** | 调用路径只读本地份额；每秒通过 `ShareView` 和 `ConfirmShares` 后台确认完整的成员列表，新节点等旧成员降低并排空占用后才放行。进程启动身份与确认列表存在 `platform.nodes.share_session`、`share_view`、`share_joining`；过期节点的列表和 `platform.credential_share_departures` 的离开视图继续预留 RPM 至最后可能准入的窗口结束，后台清理（迁移 `00049`）。注册表只分享额度和成员，不保存每次调用计数；详见 [suppliers 的并发与速率](../../suppliers/README.md#并发与速率) |
 
 ## 时钟
 

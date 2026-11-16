@@ -364,7 +364,7 @@ func checkJobKeepsTheMessageOut(t *testing.T, w *queueWorld, reply string) {
 
 // TestOutboxKeepsMailFromOtherTenants: the queue carries the outbox row's id and nothing else, and the row is readable
 // only in the scope of the tenant it was queued for — neither another site's scope nor the empty one sees any of it
-// (internal/platform/pg/migrations/00008_mail_outbox.sql).
+// (internal/platform/pg/migrations/00049_baseline.sql).
 func TestOutboxKeepsMailFromOtherTenants(t *testing.T) {
 	t.Parallel()
 	w := newQueueWorld(t)

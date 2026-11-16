@@ -2,6 +2,8 @@
 
 调用记录、对话内容、告警和花费异常检测的代码接口与不变量；行为见[记录与告警](../../docs/domains/observability.md)；指标与链路的基座在 [platform 的「遥测」](../platform/README.md#遥测)。比较过的做法和实测在[存档](../../docs/archive/observability.md)。
 
+基线 `00049`：[迁移规则](../platform/README.md#迁移)。
+
 ## 接口
 
 ```go
@@ -126,7 +128,7 @@ schema `observability`，全部强制行级安全。
 
 ## 索引
 
-`call_log` 每个分区的索引：主键 `(id, at)`；`(account_id, at DESC, id DESC)`；模型、应用（`00002`）和 key、工作区、`(error_kind IS DISTINCT FROM '')`（`00009`）各一个 `(account_id, 筛选值, at DESC, id DESC)`；全局后台检索的 `call_log_admin_time`（`00011`，UTC 时间表达式与 id）；花费检测的 `(at, account_id)` 部分索引（`00014`，谓词 `price_nano >= 0`）；回退的部分索引（`00046`，`attempt_count > 1`）；会话的部分覆盖索引（`00047`，排除空会话和待定行）。`call_attempt` 只有主键。
+`call_log` 每个分区的索引：主键 `(id, at)`；`(account_id, at DESC, id DESC)`；模型、应用和 key、工作区、`(error_kind IS DISTINCT FROM '')` 各一个 `(account_id, 筛选值, at DESC, id DESC)`；全局后台检索的 `call_log_admin_time`（UTC 时间表达式与 id）；花费检测的 `(at, account_id)` 部分索引（谓词 `price_nano >= 0`）；回退的部分索引（`attempt_count > 1`）；会话的部分覆盖索引（排除空会话和待定行）。`call_attempt` 只有主键。
 
 - 列表共用一个查询，可选条件由 `force_custom_plan` 折叠；列表和 CSV 的事务设 `enable_sort=off`，聚合不设。状态条件必须写成 `IS DISTINCT FROM`：`<>` 的假值会被折叠成 `error_kind = ''`，失去表达式索引。
 - 游标行比较 `(at, id) < (after_at, after_id)` 必须写在标量时间窗条件之前，上界取 `page.UpperBound` 的较紧者，否则深页从窗口末端逐项扫描（推导见[存档](../../docs/archive/observability.md#深页的游标条件)）。保留显式时间窗供分区裁剪。

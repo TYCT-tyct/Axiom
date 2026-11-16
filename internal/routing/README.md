@@ -65,7 +65,7 @@ suppliers、accounts、quality、billing 还没公开 routing 要的类型，rou
 
 ## 路由预设
 
-迁移在 `migrations/`，表和规则见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
+[`00049_baseline.sql`](migrations/00049_baseline.sql) 创建本模块的结构并写入系统预设与平台默认；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。表和规则见[路由的「路由预设」](../../docs/domains/routing.md#路由预设)。
 
 - **`ReadRules`** 严格解码（不认识的成员拒绝，新字段在旧节点上只让这一个预设不可用），编译成 `Preset.Rule`、`Authors`、`Models` 和平台的运行时设置；覆盖规则在编译时补全继承并校验只能收紧，所以运行时不可能放宽；错误都包着 `ErrRules`。平台时长按整秒比较上限，不经 `time.Duration` 换算。
 - **`Presets.Load`** 先读暂停开关并当场告诉 `Presets.Router`，再读全部预设的头（含停用的），只为没编译过的 `(id, version)` 读规则；读不懂的版本记 `routing.preset_isolated` 并不进快照；系统预设缺失或读不懂时返回错误。暂停由 `Plan` 和 `KeyView` 共用的 `presetOf` 读，与快照内容无关。

@@ -114,7 +114,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 **一次换一个节点，换之前新节点已经就绪。** 同时停掉所有旧节点会让滚动期间没有节点接流量；核心和入口都要至少留一个就绪的节点。
 
-**被替换的版本必须在新 schema 上启动。** CI 的部署检查在列车和 `main` 上构建被替换的版本（列车的 `BASE`，`main` 落地提交的 `Train` 记录里的基础提交，普通提交的上一提交），用本树的 `axiom migrate` 迁移一个独立数据库，启动旧程序并等它的 `/readyz` 通过（`scripts/ci/old-binary-check.sh`，在 `scripts/ci/deploy-check.sh` 里先于旧迁移角色升级运行）。只回溯一个发布；更旧的版本可能被一次性的单向改动破坏，`00040_fallbacks_no_markup.sql` 就是一次（[billing 的决策与理由](../domains/billing.md#决策与理由)）。当前发布如果再做这种改动，这个检查会失败，是否接受必须作为发布决定显式记录；检查不把任意历史提交当作兼容目标。旧版本的程序在本树里没有前端构建，检查给它一个最小的嵌入前端；页面与 schema 兼容无关。
+**被替换的版本必须在新 schema 上启动。** CI 的部署检查在列车和 `main` 上构建被替换的版本（列车的 `BASE`，`main` 落地提交的 `Train` 记录里的基础提交，普通提交的上一提交），用本树的 `axiom migrate` 迁移一个独立数据库，启动旧程序并等它的 `/readyz` 通过（`scripts/ci/old-binary-check.sh`，在 `scripts/ci/deploy-check.sh` 里先于旧迁移角色升级运行）。只回溯一个发布；更旧的版本可能被一次性的单向改动破坏，兜底价移除旧加价字段就是一次（[billing 的决策与理由](../domains/billing.md#决策与理由)）。当前发布如果再做这种改动，这个检查会失败，是否接受必须作为发布决定显式记录；检查不把任意历史提交当作兼容目标。首次生产部署前的基线压缩是明确例外（[#774](https://github.com/TYCT-tyct/Axiom/pull/774)）：仅当旧版本迁移集合等于比较脚本固定的完整历史、当前集合恰为各模块基线时跳过旧二进制启动；static 必须通过结构与参考行等价比较。基线之后仍执行正常滚动发布检查。旧版本的程序在本树里没有前端构建，检查给它一个最小的嵌入前端；页面与 schema 兼容无关。
 
 **排空**（`axiom serve` 收到 SIGTERM 后自己完成，部署不需要发额外信号）：
 

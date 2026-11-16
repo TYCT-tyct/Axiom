@@ -2,6 +2,8 @@
 
 模型、名字、规格、参考价和共用的价目表结构。行为见[模型目录](../../docs/domains/catalog.md)，这里只写表、不变量和接口。数据集核对与其审核项、后台任务角色 `axiom_catalog_job` 和 `catalog.lock_models`、`CurrentPrices` 还没有实现。
 
+本模块的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 | 包 | 做什么 |
 |---|---|
 | `catalog` | 价目表与计价、名字、快照、管理操作、数据集同步、页面监测 |

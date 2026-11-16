@@ -14,6 +14,8 @@
 
 ## 数据
 
+以基线 [`00049_baseline.sql`](migrations/00049_baseline.sql) 初始化；[迁移规则](../platform/README.md#迁移)。
+
 ### 表（schema `accounts`）
 
 - 主键是 Go 生成的 UUIDv7；金额 `bigint`（[钱的表示](../../docs/domains/billing.md#钱的表示)）；名字 1 到 100 个字符。

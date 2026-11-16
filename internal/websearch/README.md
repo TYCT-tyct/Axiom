@@ -10,7 +10,7 @@
 
 ## 配置
 
-搜索引擎保存在 `platform.search_engines`（迁移 `00027_search_engines.sql`），一行一个：
+搜索引擎保存在 `platform.search_engines`（迁移 `00049_baseline.sql`），一行一个：
 
 | 列 | 说明 |
 |---|---|
@@ -22,7 +22,7 @@
 | `price_search`、`price_result`、`price_version` | 发布的对外价 = 成本 ×（1 + 加价），向上取整到最后一位；成本或比例变化时版本加一 |
 | 信封列 | `ciphertext`、`nonce`、`wrapped_dek`、`key_version`，AAD 是 `platform.search_engines`、该行 ID 和 `purpose=config`，与 SMTP 配置一起纳入主密钥轮换 |
 
-`Load` 依次读表、旧的单后端行 `platform.search_config`（迁移 `00025_search_config.sql`）、环境变量 `AXIOM_SEARCH_URL`/`AXIOM_SEARCH_KEY`。旧行和环境配置都显示成一个名为 `searxng` 的引擎，售价为 0，也就是按模型自己的 `web_search` 价卖，行为与引入多引擎之前一致。`Load` 的 `Source` 是 `database`、`saved`、`environment` 或 `none`。表为空且没有管理员的清空标记时，回到旧行或环境变量；管理员清空列表会写旧的单后端空行作为标记，所以保存空列表就是关掉搜索，环境变量不会把它带回来。
+`Load` 依次读表、旧的单后端行 `platform.search_config`（迁移 `00049_baseline.sql`）、环境变量 `AXIOM_SEARCH_URL`/`AXIOM_SEARCH_KEY`。旧行和环境配置都显示成一个名为 `searxng` 的引擎，售价为 0，也就是按模型自己的 `web_search` 价卖，行为与引入多引擎之前一致。`Load` 的 `Source` 是 `database`、`saved`、`environment` 或 `none`。表为空且没有管理员的清空标记时，回到旧行或环境变量；管理员清空列表会写旧的单后端空行作为标记，所以保存空列表就是关掉搜索，环境变量不会把它带回来。
 
 管理员保存时 `Save` 先锁一个事务级 advisory lock，再整表替换：没列出的引擎删除。每个输入可以带 `id` 编辑已有行，不带就新建。省略密钥时：同 `id` 且 URL、类型没变，沿用旧密钥；不带 `id` 时按同名行找，再按同 URL、同类型的旧单后端/环境配置找——后台把环境里的后端原样保存时不必重填密钥；换了 URL 或类型就丢掉旧密钥，绝不把旧凭证发给新主机，Firecrawl 没有密钥直接拒绝。`price_version` 只在该行成本或加价变化时加一，改 URL、名字或开关不动它。
 

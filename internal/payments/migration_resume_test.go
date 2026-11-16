@@ -1,18 +1,13 @@
 package payments
 
 import (
-	"fmt"
-	"io/fs"
-	"strconv"
-	"strings"
 	"testing"
-	"testing/fstest"
 
 	"axiom/internal/billing"
 	"axiom/internal/platform/pg"
 )
 
-func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
+func TestBaselineMigrationsPreservePaymentState(t *testing.T) {
 	w := newTestWorld(t, fakePlugin{create: goodCheckout})
 	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
 		t.Fatal("migrated schema rejected at startup", err)
@@ -24,16 +19,12 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Leave all schema steps present, as a failure in the last concurrent build would, without an applied marker.
-	payments, restorePayments := prepareMigrationReplay(w, Migrations(), 6)
-	ledger, restoreBilling := prepareMigrationReplay(w, billing.Migrations(), 24)
-	if err := pg.Migrate(t.Context(), w.super, ledger, payments); err != nil {
-		t.Fatal("resume concurrent builds", err)
+	// A subsequent migration run must preserve the booked credit and active query lease.
+	if err := pg.Migrate(t.Context(), w.super, billing.Migrations(), Migrations()); err != nil {
+		t.Fatal("repeat migrations", err)
 	}
-	restorePayments()
-	restoreBilling()
 	if err := w.db.Check(t.Context(), billing.Migrations(), Migrations()); err != nil {
-		t.Fatal("resumed schema rejected at startup", err)
+		t.Fatal("baseline schema rejected at startup", err)
 	}
 	if err := w.tx(w.p.platform, func(tx pg.Tx) error {
 		h, err := queries.LockQueryHealth(t.Context(), tx, m.ID)
@@ -50,44 +41,10 @@ func TestReconcileMigrationsResumeWithoutLosingState(t *testing.T) {
 	w.assertCredit(o, o.Credits)
 	if n := w.count(w.p.platform, `SELECT count(*) FROM pg_index i JOIN pg_class c ON c.oid=i.indexrelid
  WHERE i.indisvalid AND c.relname IN ('discrepancies_by_id','orders_changed_by_merchant','orders_merchant_cursor','credit_batches_by_merchant_day','transactions_refunds_by_day')`); n != 5 {
-		t.Fatal("resumed migration left invalid or missing daily indexes", n)
+		t.Fatal("baseline left invalid or missing daily indexes", n)
 	}
 	if err := w.p.finishQuery(t.Context(), MerchantID(m.ID), token, queryUnused); err != nil {
 		t.Fatal(err)
-	}
-}
-
-// Replaying an old interrupted migration cannot leave successor markers applied: Goose correctly rejects that
-// impossible deployment history. Keep the already migrated schema for the current application's seed helpers.
-func prepareMigrationReplay(w *world, module pg.Module, through int) (pg.Module, func()) {
-	w.t.Helper()
-	entries, err := fs.ReadDir(module.Migrations, ".")
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	older := fstest.MapFS{}
-	var later []int
-	for _, e := range entries {
-		prefix, _, _ := strings.Cut(e.Name(), "_")
-		version, err := strconv.Atoi(prefix)
-		if err != nil {
-			w.t.Fatal(err)
-		}
-		if version > through {
-			later = append(later, version)
-			continue
-		}
-		raw, err := fs.ReadFile(module.Migrations, e.Name())
-		if err != nil {
-			w.t.Fatal(err)
-		}
-		older[e.Name()] = &fstest.MapFile{Data: raw}
-	}
-	w.exec(fmt.Sprintf("DELETE FROM platform.goose_%s WHERE version_id >= %d", module.Name, through))
-	return pg.Module{Name: module.Name, Migrations: older}, func() {
-		for _, version := range later {
-			w.exec(fmt.Sprintf("INSERT INTO platform.goose_%s(version_id,is_applied) VALUES (%d,true)", module.Name, version))
-		}
 	}
 }
 

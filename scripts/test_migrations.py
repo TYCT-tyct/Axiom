@@ -44,5 +44,42 @@ class Migrations(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
 
 
+class BaselineMigrations(unittest.TestCase):
+    def test_baseline_clears_train_version_checks(self):
+        from pathlib import PurePosixPath
+        from compare_migrations import BASELINE, SOURCE, migration_paths
+        from migration_order import out_of_order, versions
+        history = migration_paths(SOURCE)
+        taken = versions(history)
+        added = versions(str(PurePosixPath(p).parent / BASELINE) for p in history)
+        self.assertFalse(taken & added)
+        self.assertFalse(out_of_order(taken, added))
+
+    def test_baseline_is_append_only_after_landing(self):
+        baseline = "a/migrations/00049_baseline.sql"
+        next_migration = "a/migrations/00050_new.sql"
+        for after, fails in [({next_migration: "SELECT 1;"}, False),
+                             ({baseline: "SELECT 2;"}, True),
+                             ({baseline: None}, True),
+                             ({next_migration: "SELECT 1;", "a/migrations/00050_duplicate.sql": "SELECT 2;"}, True)]:
+            with self.subTest(after=after), justrepo.repository() as repo:
+                justrepo.commit(repo, {baseline: "SELECT 1;"})
+                justrepo.commit(repo, after)
+                result = justrepo.just(repo, "migrations", "HEAD~1")
+                self.assertEqual(result.returncode != 0, fails, result.stdout)
+
+    def test_squash_requires_the_entire_frozen_history(self):
+        from migration_order import is_squash
+        history = {OLD: "old blob", "b/migrations/00009_later.sql": "later blob"}
+        baselines = {"a/migrations/00049_baseline.sql": "a blob", "b/migrations/00049_baseline.sql": "b blob"}
+        self.assertTrue(is_squash(history, history, baselines))
+        for before, after in [(history | {NEW: "newly merged"}, baselines),
+                              (history | {OLD: "changed"}, baselines),
+                              (history, {"a/migrations/00049_baseline.sql": "a blob"}),
+                              (baselines, baselines | {NEW: "new migration"})]:
+            with self.subTest(before=before, after=after):
+                self.assertFalse(is_squash(history, before, after))
+
+
 if __name__ == "__main__":
     unittest.main()

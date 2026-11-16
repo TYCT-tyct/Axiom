@@ -2,6 +2,8 @@
 
 订单、收款渠道、回调、补单、退款、拒付、兑换码与对账的公开接口和不变量。行为和理由见[支付](../../docs/domains/payments.md)，记账、额度批次和冻结见[计费](../../docs/domains/billing.md)。签名以 godoc 为准，这里只列入口和约定。
 
+本模块的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 接口
 
 - **组装**：`Open(Config)` 接收按 `Kind` 登记的插件、数据库、平台范围、Keyring、出站客户端、accounts（拒付暂停账户）、`Alerts`（突增信号的 Sink）、`Instance`（信号键里的节点身份，与 `Alerts` 一起给）和 `Signals`（同一节点的监听器、任务和管理入口共用一份，否则一分钟的计数会被拆开）。`RegisterPoll`、`RegisterReconcile` 登记 `payments.poll` 和 `payments.reconcile`；`Notify()` 是 `GET/POST /api/payments/v1/notify/{merchant}` 的处理器。

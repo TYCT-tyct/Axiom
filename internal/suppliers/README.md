@@ -2,6 +2,8 @@
 
 供应商模块的公开接口和不变量。行为、规则和理由见[供应商](../../docs/domains/suppliers.md)，供应商成本见[计费](../../docs/domains/billing.md#供应商成本)，一次调用的编排见 [gateway](../gateway/README.md)。代码与本文不一致时，在同一个 PR 里改本文。
 
+本模块的数据库结构由 [`00049_baseline.sql`](internal/store/migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 代码结构
 
 ```

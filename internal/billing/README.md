@@ -2,6 +2,8 @@
 
 计费模块的公开接口和它守住的不变量。行为和规则见[计费领域](../../docs/domains/billing.md)，一次调用的编排见 [gateway](../gateway/README.md)；实测数据和历史推导见[计费存档](../../docs/archive/billing.md)。依赖 catalog、suppliers、quality、accounts、platform；不依赖 protocol、routing。金额都是十亿分之一记账货币的 int64，精确计算用 `platform.Exact`。
 
+本模块的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 接口（草图）
 
 | 组 | 导出 | 说明 |

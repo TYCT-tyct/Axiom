@@ -2,6 +2,8 @@
 
 业务目标、运营接口的操作记录、运营操作与审批、资金上限、售价包络和审计链的公开接口与不变量。行为、规则和理由见[运营](../../docs/domains/operations.md)；本文只写调用方依赖的部分。本模块不引用被审批的模块（`suppliers`、`billing`、`payments`、`catalog`，见[模块边界规则](../../docs/architecture.md#模块边界规则)）：金额、变动和它们的依据由 `cmd/axiom` 算好传进来，目标模块的改动由 `cmd/axiom` 在同一个事务里调用。本模块不判权限，权限和两步验证在 `cmd/axiom` 的守卫里。所有函数都在调用方的事务里工作，不提交。
 
+本模块的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
+
 ## 业务目标
 
 ```go
