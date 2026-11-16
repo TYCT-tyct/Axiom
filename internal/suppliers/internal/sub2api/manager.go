@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"time"
 
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -26,14 +25,6 @@ type manager struct {
 }
 
 var _ adapter.Manager = (*manager)(nil)
-
-func listing(p any) adapter.Listing {
-	b, err := jsonx.MarshalCanonical(p)
-	if err != nil {
-		panic(err) // a position of names, numbers and statuses always encodes
-	}
-	return b
-}
 
 func (m *manager) get(ctx context.Context, path string, buckets ...string) (adapter.Response, error) {
 	return m.s.authed(ctx, adapter.Request{Method: http.MethodGet, Path: path, Buckets: buckets})

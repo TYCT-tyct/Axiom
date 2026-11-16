@@ -82,16 +82,6 @@ func (a benchmarkAnchor) scored(set *BenchmarkSet) (answered int, points float64
 	return answered, points, answered == len(a.scores)
 }
 
-// scoreBenchmark scores a candidate run against an official run of the same set; it is the recording path's view, and
-// anchorOf is what keeps the two runs comparable.
-func scoreBenchmark(set *BenchmarkSet, official, candidate BenchmarkRun) (BenchmarkResult, bool) {
-	anchor, ok := anchorOf(set, official)
-	if !ok {
-		return BenchmarkResult{}, false
-	}
-	return scoreAgainst(set, anchor, candidate)
-}
-
 // scoreAgainst scores a candidate run against the official anchor. The official run is the anchor: its points on the
 // questions it answered are 100, and a candidate that passes more is capped at 100 because a difference of a few
 // questions is noise, not a claim that it is better than official. A candidate that did not answer a question the

@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"cmp"
 	"errors"
 	"slices"
 	"time"
@@ -35,7 +36,7 @@ func (r *Router) attempts(n *need) int {
 	if n.in.FileRef {
 		return 1
 	}
-	return orDefault(n.preset.MaxAttempts, r.cfg.MaxAttempts)
+	return cmp.Or(n.preset.MaxAttempts, r.cfg.MaxAttempts)
 }
 
 // rankAll reports whether one ranking spans every model rather than each model's endpoints first: a global sort, or
@@ -138,7 +139,7 @@ func (r *Router) Plan(in Input) (Plan, *Wait, error) {
 	}
 	return Plan{
 		Entries: entries, Segments: n.segments, MaxAttempts: attempts,
-		StartBy: now.Add(orDefault(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
+		StartBy: now.Add(cmp.Or(preset.AttemptWindow, r.cfg.AttemptWindow)), StickyTTL: preset.StickyTTL, Record: rec,
 		tally: preset.tally,
 	}, nil, nil
 }

@@ -123,9 +123,3 @@ func authError(env envelope, parsed bool) error {
 	}
 	return fmt.Errorf("%w: %s", adapter.ErrAuthRejected, code)
 }
-
-// isHTML reports whether a body is a web page and not the JSON of an API: what a firewall or an anti-bot check shows.
-func isHTML(body []byte) bool {
-	head := strings.ToLower(strings.TrimSpace(string(body[:min(len(body), 64)])))
-	return strings.HasPrefix(head, "<!doctype html") || strings.HasPrefix(head, "<html")
-}

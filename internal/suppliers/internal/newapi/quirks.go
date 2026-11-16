@@ -56,7 +56,7 @@ type errorBody struct {
 // new_api_error; the same status without it is the channel's upstream passing through, which says nothing about our
 // key or balance, so it stays unknown.
 func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
-	if isHTML(body) {
+	if adapter.IsHTML(body) {
 		return adapter.Failure{Scope: adapter.ScopeEgress, Cause: adapter.Unknown{Status: status, SuspectedEgressBlock: true}}
 	}
 	if status == http.StatusTooManyRequests {

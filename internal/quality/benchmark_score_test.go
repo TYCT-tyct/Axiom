@@ -324,3 +324,13 @@ func recordedBenchmarkRuns(t *testing.T, set *BenchmarkSet) map[string]Benchmark
 	}
 	return runs
 }
+
+// scoreBenchmark scores a candidate run against an official run of the same set; it is the recording path's view, and
+// anchorOf is what keeps the two runs comparable.
+func scoreBenchmark(set *BenchmarkSet, official, candidate BenchmarkRun) (BenchmarkResult, bool) {
+	anchor, ok := anchorOf(set, official)
+	if !ok {
+		return BenchmarkResult{}, false
+	}
+	return scoreAgainst(set, anchor, candidate)
+}

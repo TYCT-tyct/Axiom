@@ -327,11 +327,7 @@ func formatUnitPrice(units *big.Int) string {
 
 func encodeOffer(st *offerState) adapter.Listing {
 	st.V = offerVersion
-	raw, err := jsonx.MarshalCanonical(st)
-	if err != nil {
-		return nil
-	}
-	return raw
+	return adapter.ListingOf(st)
 }
 
 func decodeOffer(from adapter.Listing, fingerprint string) *offerState {

@@ -40,7 +40,7 @@ func TestOfferPositionsKeepNumericValues(t *testing.T) {
 	}
 	p.Keys = map[string]number{"1": "7"}
 	p.Overrides = map[string]number{"1": "1.25"}
-	raw := listing(p)
+	raw := adapter.ListingOf(p)
 	var back offerProgress
 	if err := jsonx.UnmarshalKnown(raw, &back); err != nil {
 		t.Fatal(err)
