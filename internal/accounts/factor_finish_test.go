@@ -31,12 +31,12 @@ func enableTOTPForTest(t *testing.T, s *accounts.Service, x site, session accoun
 
 // usesReplacementCodes checks that a factor change made replacements the only working codes: one of the old codes is
 // refused and one of the replacements signs in.
-func (x site) usesReplacementCodes(t *testing.T, old, replacements []string) {
+func (x site) usesReplacementCodes(t *testing.T, currentPassword string, old, replacements []string) {
 	t.Helper()
 	if len(replacements) != 10 {
 		t.Fatalf("replacement recovery codes: %d, want 10", len(replacements))
 	}
-	challenge, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: x.email, Password: password})
+	challenge, err := x.s.SignIn(t.Context(), accounts.SignInRequest{Host: console, Email: x.email, Password: currentPassword})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestLinkAndUnlinkReplaceRecoveryCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.x.usesReplacementCodes(t, codes, taken)
+	f.x.usesReplacementCodes(t, password, codes, taken)
 	// Reading clears: the codes exist in the browser exactly once.
 	if again, err := f.s.TakePendingRecoveryCodes(t.Context(), request, linked); err != nil || len(again) != 0 {
 		t.Fatalf("a second take: %v, %d codes", err, len(again))
@@ -84,7 +84,7 @@ func TestLinkAndUnlinkReplaceRecoveryCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.x.usesReplacementCodes(t, taken, unlinked)
+	f.x.usesReplacementCodes(t, password, taken, unlinked)
 }
 
 // TestPasskeyChangesReplaceRecoveryCodes: adding and removing a passkey both raise the factor version; with TOTP on,
@@ -103,7 +103,7 @@ func TestPasskeyChangesReplaceRecoveryCodes(t *testing.T) {
 	if err != nil {
 		fatalPasskey(t, err)
 	}
-	x.usesReplacementCodes(t, codes, added)
+	x.usesReplacementCodes(t, password, codes, added)
 
 	after, err := s.Authenticate(t.Context(), cookieRequest(t, s, issued), client)
 	if err != nil {
@@ -113,7 +113,7 @@ func TestPasskeyChangesReplaceRecoveryCodes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	x.usesReplacementCodes(t, added, removed)
+	x.usesReplacementCodes(t, password, added, removed)
 }
 
 // TestRevokedSessionDropsPendingCodes: codes left unread must not outlive their session. The clearing lives in the

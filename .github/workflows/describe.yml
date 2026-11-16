@@ -24,6 +24,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # the PR's own head, not the merge with today's main: BASE...HEAD from the merge commit also counted every
+          # change main gained after the PR's base, so a PR touching no Go was asked about #785's accounts change (#784)
+          ref: ${{ github.event.pull_request.head.sha }}
       - run: |
           PR_BODY="$(gh api "repos/$REPO/pulls/$NUMBER" --jq .body)" # bash -e: a failed API call fails the step
           export PR_BODY

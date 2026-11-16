@@ -432,24 +432,19 @@ func TestSearchEngineSelectionReachesTheCall(t *testing.T) {
 			t.Fatalf("search price = %s, want 0.005 + 2*0.0125", call.searchPrice)
 		}
 	})
-	t.Run("native without the model's ability", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
-		a := r.newAccount(1e9)
-		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
-			strings.NewReader(`{"model":"acme/alpha","plugins":[{"id":"web","engine":"native"}],"messages":[{"role":"user","content":"what is axiom"}]}`))
-		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "no native web search") {
-			t.Fatalf("status = %d, body = %s, want a 400 naming native search", resp.StatusCode, out)
-		}
-	})
-	t.Run("an unknown engine", func(t *testing.T) {
-		t.Parallel()
-		r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
-		a := r.newAccount(1e9)
-		resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
-			strings.NewReader(`{"model":"acme/alpha","plugins":[{"id":"web","engine":"gone"}],"messages":[{"role":"user","content":"what is axiom"}]}`))
-		if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, "not an enabled search engine") {
-			t.Fatalf("status = %d, body = %s, want a 400 naming the engine", resp.StatusCode, out)
-		}
-	})
+	for _, tc := range []struct{ name, engine, message string }{
+		{"native without the model's ability", "native", "no native web search"},
+		{"an unknown engine", "gone", "not an enabled search engine"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			r := newRig(t, func(o *rigOptions) { o.backends = backends; o.price = price })
+			a := r.newAccount(1e9)
+			resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key,
+				strings.NewReader(`{"model":"acme/alpha","plugins":[{"id":"web","engine":"`+tc.engine+`"}],"messages":[{"role":"user","content":"what is axiom"}]}`))
+			if resp.StatusCode != http.StatusBadRequest || !strings.Contains(out, tc.message) {
+				t.Fatalf("status = %d, body = %s, want a 400 containing %q", resp.StatusCode, out, tc.message)
+			}
+		})
+	}
 }
