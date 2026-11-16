@@ -55,10 +55,9 @@
 
 ## 存档
 
-调研证据和长篇推导，不是现行规则，不进任务卡的阅读清单。
-
-| 内容 | 文件 |
+| 内容 | 文档 |
 |---|---|
+| 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
 | 支付：参考实现对照、USDT 网关选择、Epusdt 兼容证据 | [archive/payments.md](archive/payments.md) |
 
 ## 文档怎么组织

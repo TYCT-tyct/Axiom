@@ -48,46 +48,32 @@ func (s Schedule) PriceIncrease(next Schedule, ratio *big.Rat) (bool, error) {
 }
 
 func (s Schedule) priceChange(next Schedule, ratio *big.Rat, increaseOnly bool) (bool, error) {
-	bands, err := comparisonBands(s, next)
-	if err != nil {
-		return false, err
-	}
-	for st := range numServiceTiers {
-		for b, above := range bands {
-			length := above
-			if b > 0 {
-				length++
+	changed := false
+	err := s.eachRate(next, func(old, now platform.UnitPrice, had, has bool) bool {
+		if !increaseOnly && had != has {
+			changed = true
+		} else {
+			diff := new(big.Rat).Sub(now.Rat(), old.Rat())
+			allowed := new(big.Rat).Mul(old.Rat(), ratio)
+			if !increaseOnly {
+				diff.Abs(diff)
 			}
-			if s.changedRates(next, st, length, ratio, increaseOnly) {
-				return true, nil
-			}
+			changed = diff.Cmp(allowed) > 0
 		}
-	}
-	return false, nil
+		return !changed
+	})
+	return changed, err
 }
 
 // CoversCost checks each known cost, including fallback prices, across every interval. An unknown cost is never
 // inferred to be zero; callers decide whether an endpoint with incomplete cost evidence can be sold.
 func (s Schedule) CoversCost(cost Schedule) (bool, error) {
-	bands, err := comparisonBands(s, cost)
-	if err != nil {
-		return false, err
-	}
-	if s.currency != cost.currency {
-		return false, errors.New("price schedules have different currencies")
-	}
-	for st := range numServiceTiers {
-		for b, above := range bands {
-			length := above
-			if b > 0 {
-				length++
-			}
-			if !s.coversBand(cost, st, length) {
-				return false, nil
-			}
-		}
-	}
-	return true, nil
+	covered := true
+	err := s.eachRateInCurrency(cost, func(p, c platform.UnitPrice, has, known bool) bool {
+		covered = !known || has && p.Cmp(c) >= 0
+		return covered
+	})
+	return covered && err == nil, err
 }
 
 func comparisonBands(a, b Schedule) ([]int64, error) {
@@ -138,44 +124,10 @@ func (s Schedule) combinedRates(other Schedule, st ServiceTier, length int64, ad
 	return r, nil
 }
 
-func (s Schedule) changedRates(next Schedule, st ServiceTier, length int64, ratio *big.Rat, increaseOnly bool) bool {
-	for it := range NumItems {
-		old, had := s.price(st, s.bandOf(length), it)
-		now, has := next.price(st, next.bandOf(length), it)
-		if !increaseOnly && had != has {
-			return true
-		}
-		diff := new(big.Rat).Sub(now.Rat(), old.Rat())
-		allowed := new(big.Rat).Mul(old.Rat(), ratio)
-		if !increaseOnly {
-			diff.Abs(diff)
-		}
-		if diff.Cmp(allowed) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func (s Schedule) coversBand(cost Schedule, st ServiceTier, length int64) bool {
-	for it := range NumItems {
-		c, known := cost.price(st, cost.bandOf(length), it)
-		p, has := s.price(st, s.bandOf(length), it)
-		if known && (!has || p.Cmp(c) < 0) {
-			return false
-		}
-	}
-	return true
-}
-
 func (s Schedule) combinedLevel(other Schedule, st ServiceTier, bands []int64, add bool) (level, error) {
 	out := level{tiers: make([]rates, len(bands)-1)}
 	for b, above := range bands {
-		length := above
-		if b > 0 {
-			length++
-		}
-		r, err := s.combinedRates(other, st, length, add)
+		r, err := s.combinedRates(other, st, bandLength(b, above), add)
 		if err != nil {
 			return level{}, err
 		}
@@ -194,7 +146,7 @@ func (s Schedule) combinedLevel(other Schedule, st ServiceTier, bands []int64, a
 // 「售价的累计变动上限」).
 func (s Schedule) LargestChange(next Schedule) (change *big.Rat, measured bool, err error) {
 	change, measured = new(big.Rat), true
-	err = s.eachRate(next, func(old, now platform.UnitPrice, had, has bool) bool {
+	err = s.eachRateInCurrency(next, func(old, now platform.UnitPrice, had, has bool) bool {
 		switch {
 		case had != has, had && old.IsZero() && !now.IsZero():
 			measured = false
@@ -219,7 +171,7 @@ func (s Schedule) LargestChange(next Schedule) (change *big.Rat, measured bool, 
 // both sides is skipped: the same items CoversCost checks.
 func (s Schedule) SmallestMargin(cost Schedule) (margin *big.Rat, measured bool, err error) {
 	measured = true
-	err = s.eachRate(cost, func(p, c platform.UnitPrice, has, known bool) bool {
+	err = s.eachRateInCurrency(cost, func(p, c platform.UnitPrice, has, known bool) bool {
 		switch {
 		case !known || c.IsZero() && p.IsZero():
 			return true
@@ -239,15 +191,23 @@ func (s Schedule) SmallestMargin(cost Schedule) (margin *big.Rat, measured bool,
 	return margin, true, nil
 }
 
+// eachRateInCurrency keeps the basis error ahead of a currency mismatch.
+func (s Schedule) eachRateInCurrency(other Schedule, visit func(mine, theirs platform.UnitPrice, hasMine, hasTheirs bool) bool) error {
+	err := s.eachRate(other, func(mine, theirs platform.UnitPrice, hasMine, hasTheirs bool) bool {
+		return s.currency == other.currency && visit(mine, theirs, hasMine, hasTheirs)
+	})
+	if err == nil && s.currency != other.currency {
+		return errors.New("price schedules have different currencies")
+	}
+	return err
+}
+
 // eachRate calls visit with the effective price of every item in s and in other, and whether each has one, at every
-// service tier and every band of both, until visit returns false. Both must be in one currency.
+// service tier and every band of both, until visit returns false.
 func (s Schedule) eachRate(other Schedule, visit func(mine, theirs platform.UnitPrice, hasMine, hasTheirs bool) bool) error {
 	bands, err := comparisonBands(s, other)
 	if err != nil {
 		return err
-	}
-	if s.currency != other.currency {
-		return errors.New("price schedules have different currencies")
 	}
 	for st := range numServiceTiers {
 		for b, above := range bands {
