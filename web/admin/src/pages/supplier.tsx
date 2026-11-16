@@ -156,3 +156,5 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
       return null;
   }
 }
+
+export { default as messages } from "../locales/suppliers";

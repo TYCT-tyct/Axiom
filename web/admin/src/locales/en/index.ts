@@ -14,7 +14,7 @@ import sourceClasses from "./source-classes";
 import suppliers from "./suppliers";
 import users from "./users";
 
-export default {
+export const initial = {
   brandName: "Axiom Admin",
   forbiddenHint: "Ask the site owner to grant the permission.",
   nav: {
@@ -152,11 +152,12 @@ export default {
   },
   users,
   orders,
-  suppliers,
   mappings,
   models,
   pricing,
   redeem,
-  settings,
   approvals,
-} satisfies Messages<typeof zh>;
+} satisfies Messages<Omit<typeof zh, "settings" | "suppliers">>;
+
+// The complete catalog is for types and tooling; the app imports only initial.
+export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers }) satisfies Messages<typeof zh>;

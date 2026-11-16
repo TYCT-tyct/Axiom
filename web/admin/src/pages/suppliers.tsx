@@ -120,3 +120,5 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
     </Table>
   );
 }
+
+export { default as messages } from "../locales/suppliers";

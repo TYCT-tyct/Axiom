@@ -4,6 +4,7 @@ import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet 
 import type { ReactNode } from "react";
 import { approvalState } from "./approvals";
 import { Layout } from "./layout";
+import { loadTranslatedPage } from "./locales/load-page";
 import { modelStatus } from "./models/catalog";
 import { paymentOrderState } from "./orders/states";
 import { callStatus, cashView, overviewRange } from "./overview";
@@ -57,7 +58,7 @@ const routeTree = root.addChildren([
       () => import("./pages/users"),
       (search) => ({ q: text(search.q) }),
     ),
-    shellPage("/accounts/$accountId", () => import("./pages/account")),
+    shellPage("/accounts/$accountId", () => loadTranslatedPage(import("./pages/account"))),
     shellPage(
       "/orders",
       () => import("./pages/orders"),
@@ -111,10 +112,10 @@ const routeTree = root.addChildren([
     shellPage("/audit/$entryId", () => import("./pages/audit-entry")),
     shellPage(
       "/suppliers",
-      () => import("./pages/suppliers"),
+      () => loadTranslatedPage(import("./pages/suppliers")),
       (search) => ({ status: supplierStatus(search.status) }),
     ),
-    shellPage("/suppliers/$supplierId", () => import("./pages/supplier")),
+    shellPage("/suppliers/$supplierId", () => loadTranslatedPage(import("./pages/supplier"))),
     shellPage(
       "/mappings",
       () => import("./pages/mappings"),
@@ -131,9 +132,9 @@ const routeTree = root.addChildren([
     ),
     shellPage("/models/$modelId", () => import("./pages/model")),
     shellPage("/source-classes", () => import("./pages/source-classes")),
-    shellPage("/routing-presets", () => import("./pages/routing-presets")),
+    shellPage("/routing-presets", () => loadTranslatedPage(import("./pages/routing-presets"))),
     shellPage("/pricing", () => import("./pages/pricing")),
-    shellPage("/settings", () => import("./pages/settings")),
+    shellPage("/settings", () => loadTranslatedPage(import("./pages/settings"))),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),
 ]);
