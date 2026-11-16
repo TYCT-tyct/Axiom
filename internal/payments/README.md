@@ -5,7 +5,7 @@
 ## 接口
 
 - **组装**：`Open(Config)` 接收按 `Kind` 登记的插件、数据库、平台范围、Keyring、出站客户端、accounts（拒付暂停账户）、`Alerts`（突增信号的 Sink）、`Instance`（信号键里的节点身份，与 `Alerts` 一起给）和 `Signals`（同一节点的监听器、任务和管理入口共用一份，否则一分钟的计数会被拆开）。`RegisterPoll`、`RegisterReconcile` 登记 `payments.poll` 和 `payments.reconcile`；`Notify()` 是 `GET/POST /api/payments/v1/notify/{merchant}` 的处理器。
-- **充值**（账户范围）：`Options` 报价，与下单共用一条选择规则，页面显示的就是会选中的账户；`CreateOrder`、`Cancel`、`GetOrder`、`ListOrders`（`(created_at,id)` 倒序，一页 1–200）、`Verify`（"我已付款"）。可等待的拒绝是 `Wait{Err, After}`，处理器据此写 `Retry-After`。`ParseMerchantID`、`ParseOrderID` 格式不对与不存在同为 `ErrNotFound`。
+- **充值**（账户范围）：`Options` 报价，与下单共用一条选择规则（`ranked`），但不推进轮询、不预留：中间没有别的订单插进来时，订单才落在报价的账户上；`CreateOrder`、`Cancel`、`GetOrder`、`ListOrders`（`(created_at,id)` 倒序，一页 1–200）、`Verify`（"我已付款"）。可等待的拒绝是 `Wait{Err, After}`，处理器据此写 `Retry-After`。`ParseMerchantID`、`ParseOrderID` 格式不对与不存在同为 `ErrNotFound`。
 - **退款**：`Refund` 冻结并等待审批（`Key` 幂等）；`ApproveRefund`/`ApproveRefundTx` 记第一道或最终批准，提交后 `SendRefund`；`PrepareRejectRefund` 在决策事务前推进账本（单连接池不能在事务内再取连接），再 `RejectRefund`/`RejectRefundTx` 解冻；`GetRefund`、`ListRefunds`（一页订单的退款，一次查询）。运营 agent：`PrepareAgentRefund`（事务外推进分配）、`QuoteAgentRefundTx`（回滚的保存点里试一遍）、`RequestAgentRefundTx`（冻结并以负责人批准）、`AgentRefundOf`。`OrderOwnerTx` 读订单的站点和账户。
 - **人工结论**：`Resolve` 保存提案与凭证，`GetResolution` 供另一人检视，`ApproveResolution` 按存储的内容执行。
 - **管理**（站点范围）：`ListSiteOrders`、`ListSiteRefunds`；`ListDiscrepancies`、`GetDiscrepancy`、`InvestigateDiscrepancy`；`ReadSiteSettings`、`SetSiteSettings`。
