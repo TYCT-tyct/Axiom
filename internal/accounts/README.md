@@ -511,6 +511,6 @@ func (s *Service) ExpiredCookie(host string) (*http.Cookie, error) // 登出时�
 
 ## 邀请记录
 
-`Invitations` 只接受完整控制台会话。先按 Principal 的站点、个人账户和用户核对自己的码，再在站点范围显式按 `site_id` 和 `inviter_user_id` 读取邀请记录；不改变注册时写入且不可修改的关系。返回 `Invitee` 只含注册时间和 `Available`，不读取或输出邮箱、遮掩邮箱、姓名或独立用户 ID 字段；停用用户的 `Available` 为 false，占位文案由客户端本地化。注销流程尚未实现，保留停用用户行的占位可读，不新增注销规则。
+`Invitations` 只接受完整控制台会话。先按 Principal 的站点、个人账户和用户核对自己的码，再在站点范围显式按 `site_id` 和 `inviter_user_id` 读取邀请记录；不改变注册时写入且不可修改的关系。返回 `Invitee` 只含注册时间和 `Available`，查询只读取分页所需的内部 ID、状态和注册时间，不读取邮箱或姓名；响应不含遮掩邮箱或独立用户 ID 字段；停用用户的 `Available` 为 false，占位文案由客户端本地化。注销流程尚未实现，保留停用用户行的占位可读，不新增注销规则。
 
 注册时间复用管理用户列表的 `uuid_extract_timestamp(id)`；UUIDv7 倒序加独占上界游标，同毫秒注册仍按完整 ID 排序，读页大小加一判断是否还有下一页。迁移 `00048_invitations.sql` 并发创建的 `users_of_inviter` 索引限定站点、邀请人并按 ID 排序，避免扫描全站用户；不新增关系副本和回填。控制台组装层复用登记域名的 `Origin`，拼接 `/console/register?invite=`；响应字段可选，末页游标为 null，旧节点 404 时页面应视为不可用。当前只有邀请码注册会写入邀请关系，开放注册忽略邀请码、关闭注册拒绝注册，缺口见 [#763](https://github.com/TYCT-tyct/Axiom/issues/763)，本接口不改写入。覆盖空记录、排序、调用者隔离、停用状态及分页的测试为 `TestInvitations`。
