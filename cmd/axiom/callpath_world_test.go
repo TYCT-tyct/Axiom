@@ -179,6 +179,7 @@ func (f *fakeSupplier) sent() []supplied {
 // samples, and a supplier that serves them, all but the sale price, which a test adds when it wants the node to route.
 type callWorld struct {
 	commandLine
+	bound          func([]*listening)  // lets the journey set its domains before startup reads them
 	trusted        []*x509.Certificate // test servers the node's outbound client trusts besides the loopback supplier
 	supplier       *fakeSupplier
 	site           uuid.UUID
@@ -411,8 +412,12 @@ func (w *callWorld) start(extra ...string) runningNode {
 	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) { //nolint:unparam // the signature serveWith asks for; the production client can fail
 		return egress.NewForTesting(egresstest.Loopback(w.t, w.trusted...), egress.WithTracerProvider(tel.Traces)), nil
 	}
+	bound := w.bound
+	if bound == nil {
+		bound = func([]*listening) {}
+	}
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil, testGatewayConfig())
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil, testGatewayConfig(), bound)
 	}()
 	budget := awaitRecord(w.t, logs, done, "database connection budget")
 	if budget.Nodes != 2 {

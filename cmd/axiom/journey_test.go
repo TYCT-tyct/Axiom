@@ -51,11 +51,8 @@ func TestJourneyServer(t *testing.T) {
 	}
 	gateway := newJourneyGateway(t)
 	c := newCommandLine(t)
-	// The site's domains are the addresses the browser uses: localhost is the one host the cookie and Origin rules take
-	// over plain http (internal/accounts.origin), and the API host is the same port by IP, as the two must differ.
-	addr := freePort(t)
-	port := addr[strings.LastIndex(addr, ":")+1:]
-	console, api := "localhost:"+port, addr
+	// Startup replaces these placeholders with the public listener's actual address before reading the site snapshot.
+	console, api := "localhost:1", "127.0.0.1:1"
 	if _, err := c.site("init", "--name", "Main", "--currency", "USD", "--console", console, "--api", api); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +73,24 @@ func TestJourneyServer(t *testing.T) {
 	w.price()
 	gateway.open(w)
 
-	n := w.start("AXIOM_PUBLIC_ADDR=" + addr)
+	var domainsErr error
+	w.bound = func(servers []*listening) {
+		// localhost permits plain-http cookies and Origins; the API uses the same port by IP, as the hosts must differ.
+		api = servers[0].listener.Addr().String()
+		console = "localhost:" + api[strings.LastIndex(api, ":")+1:]
+		domainsErr = pgtest.Run(t.Context(), c.database.Superuser, `
+			UPDATE accounts.sites SET login_domain = NULL WHERE is_main;
+			UPDATE accounts.site_domains SET domain = '`+console+`', origin = 'http://`+console+`' WHERE domain = 'localhost:1';
+			UPDATE accounts.site_domains SET domain = '`+api+`', origin = 'http://`+api+`' WHERE domain = '127.0.0.1:1';
+			UPDATE accounts.sites SET login_domain = '`+console+`' WHERE is_main`)
+	}
+	n := w.start()
+	if domainsErr != nil {
+		t.Fatal(domainsErr)
+	}
+	if n.Public != api {
+		t.Fatalf("public listener = %s, want the site's API address %s", n.Public, api)
+	}
 	// Ready once something can be sold, and the startup reconciliations are done, as TestANodeServesModelCalls waits.
 	waitUntil(t, 30*time.Second, func() bool { return n.ready(t) })
 	waitUntil(t, 30*time.Second, func() bool {

@@ -11,29 +11,11 @@ import (
 	"axiom/internal/platform/pgtest"
 )
 
-// freeAddrs returns n loopback addresses that were free a moment ago.
-func freeAddrs(t *testing.T, n int) []string {
-	t.Helper()
-	var addrs []string
-	for range n {
-		l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		addrs = append(addrs, l.Addr().String())
-		if err := l.Close(); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return addrs
-}
-
 // TestServeClaimsListenersBeforeTheDatabase: startup claims its listeners before the database check, so a taken
 // address is refused with the variable's name; a check that fails with free addresses still reports the database's
-// error and leaves both addresses free.
+// error and closes every listener it claimed.
 func TestServeClaimsListenersBeforeTheDatabase(t *testing.T) {
 	database := pgtest.New(t, modules()...)
-	addrs := freeAddrs(t, 2)
 	taken, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -45,29 +27,28 @@ func TestServeClaimsListenersBeforeTheDatabase(t *testing.T) {
 	})
 	cases := []struct {
 		name, probes, want, notWant string
+		claimed                     int
 	}{
-		{"free addresses", addrs[1], "database:", "AXIOM_PROBES_ADDR"},
-		{"an address that is taken", taken.Addr().String(), "AXIOM_PROBES_ADDR: ", "database:"},
+		{"free addresses", "127.0.0.1:0", "database:", "AXIOM_PROBES_ADDR", 3},
+		{"an address that is taken", taken.Addr().String(), "AXIOM_PROBES_ADDR: ", "database:", 0},
 	}
 	for _, c := range cases {
-		err := serveForTest(t.Context(), []string{
-			"AXIOM_PUBLIC_ADDR=" + addrs[0], "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + c.probes,
-			"AXIOM_DATABASE_URL=" + database.Superuser,
+		var claimed []*listening
+		err := serveWith(t.Context(), []string{
+			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_ADMIN_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=" + c.probes,
+			"AXIOM_DATABASE_URL=" + database.Superuser, "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 			"AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'), "AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
-		}, slog.New(slog.DiscardHandler))
+		}, slog.New(slog.DiscardHandler), directEgress, startRecorder, nil, testGatewayConfig(), func(servers []*listening) {
+			claimed = servers
+			t.Cleanup(func() { closeListeners(servers) })
+		})
 		if err == nil || !strings.Contains(err.Error(), c.want) || strings.Contains(err.Error(), c.notWant) {
 			t.Errorf("%s: %v, want %q without %q", c.name, err, c.want, c.notWant)
 		}
-	}
-	for _, addr := range addrs {
-		l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", addr)
-		if err != nil {
-			t.Errorf("%s was left bound by a node that failed: %v", addr, err)
-			continue
+		if len(claimed) != c.claimed {
+			t.Fatalf("%s: claimed %d listeners, want %d", c.name, len(claimed), c.claimed)
 		}
-		if err := l.Close(); err != nil {
-			t.Error(err)
-		}
+		assertListenersClosed(t, claimed)
 	}
 }
 

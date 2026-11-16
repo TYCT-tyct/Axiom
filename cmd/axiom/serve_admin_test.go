@@ -18,14 +18,18 @@ func TestServeAdminListener(t *testing.T) {
 		return append([]string{
 			"AXIOM_PUBLIC_ADDR=127.0.0.1:0", "AXIOM_PROBES_ADDR=127.0.0.1:0", "AXIOM_SHUTDOWN_TIMEOUT=5s",
 			"AXIOM_DATABASE_URL=" + pgtest.New(t, modules()...).App, "AXIOM_MASTER_KEY_FILE=" + keyFile(t, 'm'), "AXIOM_KEY_HASH_FILE=" + keyFile(t, 'h'),
-			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'),
+			"AXIOM_IDENTITY_KEY_FILE=" + keyFile(t, 'i'), "AXIOM_CALL_LOG_DIR=" + t.TempDir(),
 		}, extra...)
 	}
 	start := func(extra ...string) (adminAddr, publicAddr string, stop func()) {
 		logs := make(records, 16)
 		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
-		go func() { done <- serveForTest(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil))) }()
+		var claimed []*listening
+		go func() {
+			done <- serveWith(ctx, environ(extra...), slog.New(slog.NewJSONHandler(logs, nil)), directEgress, startRecorder, nil, testGatewayConfig(),
+				func(servers []*listening) { claimed = servers })
+		}()
 		addrs := servingAddrs(t, logs, done)
 		return addrs.Admin, addrs.Public, func() {
 			cancel()
@@ -34,6 +38,7 @@ func TestServeAdminListener(t *testing.T) {
 				if err != nil {
 					t.Errorf("shutdown: %v", err)
 				}
+				assertListenersClosed(t, claimed)
 			case <-time.After(10 * time.Second):
 				t.Error("the node did not shut down")
 			}
@@ -57,7 +62,4 @@ func TestServeAdminListener(t *testing.T) {
 		}
 	}
 	stop()
-	if _, err := get(t, "http://"+admin+"/api/admin/v1/version"); err == nil {
-		t.Error("the admin listener still answers after shutdown")
-	}
 }

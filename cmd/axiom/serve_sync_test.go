@@ -56,7 +56,7 @@ func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) er
 	if !hasDir && core {
 		environ = append(environ, callLogDirVar+"="+dir)
 	}
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil, testGatewayConfig())
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil, testGatewayConfig(), func([]*listening) {})
 }
 
 func TestServeCancelsAPriceFetchOnShutdown(t *testing.T) {
@@ -111,7 +111,7 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices, testGatewayConfig())
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices, testGatewayConfig(), func([]*listening) {})
 	}()
 	servingAddrs(t, logs, done)
 	select {
