@@ -7,8 +7,8 @@
 // every failure has the one error body, a list takes the cursor and limit, and a contract that has idempotency keys
 // asks for one on every change. The operations API's operations take an operations credential instead of a session:
 // each names its permission, its scope and its MCP tool, which no other operation shares, and asks for a reason. The
-// surfaces share the session operations and a few schemas by being written twice, so what two contracts both define
-// under one name must be the same definition.
+// surfaces still repeat session operations and some components; definitions written in multiple contracts under
+// one name must agree. Schemas shared by reference are checked at their source.
 //
 // Given the base's contracts too, it also fails when a schema newly requires a property (compat.go).
 //
@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -92,12 +93,26 @@ func readContracts(dir string) (map[string][]byte, error) {
 	return files, nil
 }
 
+// loadContract resolves references from the same snapshot, including when checking a base revision.
+func loadContract(files map[string][]byte, name string) (*openapi3.T, error) {
+	loader := openapi3.NewLoader()
+	loader.IsExternalRefsAllowed = true
+	loader.ReadFromURIFunc = func(_ *openapi3.Loader, location *url.URL) ([]byte, error) {
+		data, ok := files[location.Path]
+		if !ok {
+			return nil, fmt.Errorf("contract %s not found", location)
+		}
+		return data, nil
+	}
+	return loader.LoadFromDataWithPath(files[name], &url.URL{Path: name})
+}
+
 // check returns the problems of the contracts, by file name, in a fixed order.
 func check(files map[string][]byte) []string {
 	var problems []string
 	docs := map[string]*openapi3.T{}
 	for _, name := range sortedKeys(files) {
-		doc, err := openapi3.NewLoader().LoadFromData(files[name])
+		doc, err := loadContract(files, name)
 		if err == nil {
 			err = doc.Validate(context.Background())
 		}
@@ -391,7 +406,9 @@ func definitions(doc *openapi3.T) map[string]any {
 	defs := map[string]any{}
 	if c := doc.Components; c != nil {
 		for name, v := range c.Schemas {
-			defs["schema "+name] = v
+			if v.Ref == "" {
+				defs["schema "+name] = v
+			}
 		}
 		for name, v := range c.Parameters {
 			defs["parameter "+name] = v

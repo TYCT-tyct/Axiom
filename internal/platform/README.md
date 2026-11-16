@@ -127,8 +127,8 @@
 
 ### 任务队列
 
-- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1，`default` 1；每个任务种类在 `InsertOpts` 写明队列，测试检查。
-- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类。
+- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（落进没有 worker 的 `default` 就不会被执行），测试检查。
+- `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（SMTP 未配置的节点不登记邮件 worker）。
 - 任务最多 10 分钟，运行满 15 分钟算丢失；丢弃的任务每分钟扫描、在 `platform.discarded_jobs` 认领并告警，终态满 24 小时才删。
 - 租户数据不进任务参数和 worker 错误（River 的表没有策略）：数据放模块的表，参数只放 id，worker 用 `db.TenantTx` 换到该租户的范围。
 

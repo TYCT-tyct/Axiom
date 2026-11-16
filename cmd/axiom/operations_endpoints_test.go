@@ -9,7 +9,6 @@ import (
 	"uuid"
 
 	"axiom/internal/platform/adminapi"
-	"axiom/internal/platform/operationsapi"
 )
 
 // switchEndpointAs asks, as the agent, to turn an endpoint of supplier on or off under key.
@@ -55,7 +54,7 @@ func TestOperationsEndpointSwitchRefusals(t *testing.T) {
 	t.Parallel()
 	f, supplier, endpoint, token := endpointFixture(t)
 	rec := f.switchEndpointAs(token, supplier, endpoint, false, newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateApproved {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStateApproved {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	expectAdmin(t, "an endpoint the supplier lacks", f.switchEndpointAs(token, supplier, uuid.NewV7().String(), false, newKey(), ""),
@@ -78,7 +77,7 @@ func TestOperationsEndpointSwitch(t *testing.T) {
 	key := newKey()
 	rec := f.switchEndpointAs(token, supplier, endpoint, false, key, "")
 	off := agentOperation(t, rec)
-	if rec.Code != http.StatusOK || off.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+	if rec.Code != http.StatusOK || off.State != adminapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"enabled":false`) {
 		t.Fatalf("turning it off: %d %s", rec.Code, rec.Body)
 	}
 	if f.routed(endpoint) {

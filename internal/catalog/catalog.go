@@ -21,24 +21,7 @@ type Config struct {
 	// sync holds it for a person; default 25. billing's reference-price safety valve (docs/domains/billing.md「定价」)
 	// is above the catalog and cannot be called from here, so the catalog keeps its own until that valve exists.
 	PriceChangeLimit int
-	// CountedItems allows publishing prices for the items counted per piece, second or character. An older release's
-	// parser rejects their names, and a node that cannot parse one price drops the whole snapshot and stops serving
-	// every model, so this stays off until every node runs a release that reads them: this release reads them; the
-	// release that opens the image, audio and speech endpoints, after the fleet runs this one, turns this on
-	// (README.md「新增计费项与滚动升级」).
-	CountedItems bool
-	// RequestPrices allows publishing the per-request item. It has its own switch because the release that first read
-	// request prices is not the release that opened counted items; the same rolling-upgrade rule applies: keep it off
-	// until every node runs a release that reads "request" (README.md「新增计费项与滚动升级」).
-	RequestPrices bool
-	// FileSearch allows the file_search item and ability, which add names to both closed enumerations a spec and a
-	// price schedule carry. It has its own switch because the release that first reads them is not the release that
-	// publishes them: keep it off until every node runs a release that reads them, like RequestPrices.
-	FileSearch bool
-	// FileParse allows publishing a price for the file_parse item and switches the gateway from the old web_search unit
-	// to per-page file_parse. The name is in a price schedule but not a spec: file parsing is the gateway's own work, not
-	// an upstream tool. It has its own switch for the same reason as FileSearch: keep it off until every node runs a
-	// release that reads the name and the existing models have a file_parse price.
+	// FileParse switches file parsing to per-page billing; settlement changes are tracked separately.
 	FileParse bool
 }
 
@@ -46,21 +29,7 @@ type Config struct {
 // MaxStale: a model taken down elsewhere must not be called here for long.
 var ErrStale = errors.New("the catalog snapshot is missing or stale")
 
-// ErrCountedItems is what a publish or a source switch returns for a price on an item counted per piece, second or
-// character while Config.CountedItems is off: a node running an older release cannot parse that name and would drop the
-// whole snapshot.
-var ErrCountedItems = errors.New("catalog: prices for counted items wait until every node reads them")
-
-// ErrRequestPrices is what a publish or a source switch returns for a per-request price while Config.RequestPrices is
-// off: an older release's parser rejects the name and would drop the whole snapshot.
-var ErrRequestPrices = errors.New("catalog: request prices wait until every node reads them")
-
-// ErrFileSearch is what a publish, a spec save or a source switch returns for the file_search item or ability while
-// Config.FileSearch is off: an older release's parser rejects the names and would drop the whole snapshot.
-var ErrFileSearch = errors.New("catalog: file search waits until every node reads it")
-
-// ErrFileParse is what a publish or a source switch returns for the file_parse item while Config.FileParse is off: an
-// older release's parser rejects the name and would drop the whole snapshot.
+// ErrFileParse refuses publication before per-page file billing is enabled.
 var ErrFileParse = errors.New("catalog: file parsing waits until every node reads it")
 
 // Catalog holds the node's snapshot and runs the admin operations. The platform scope is given by cmd/axiom.
