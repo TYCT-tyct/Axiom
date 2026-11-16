@@ -219,33 +219,6 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 	return snap, err
 }
 
-// admitDB runs an admission transaction; one that commits ends a database outage.
-func (h *Handler) admitDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
-	err := h.admitTx(ctx, caller, req, fn)
-	if err == nil {
-		h.outage.recovered(depDatabase)
-	}
-	return err
-}
-
-// admitReadDB is admitDB for the reads a management key may also make; one that commits ends a database outage.
-func (h *Handler) admitReadDB(ctx context.Context, caller accounts.Caller, req accounts.AdmitRequest, fn func(pg.Tx, accounts.Admission) error) error {
-	err := h.admitReadTx(ctx, caller, req, fn)
-	if err == nil {
-		h.outage.recovered(depDatabase)
-	}
-	return err
-}
-
-// admitDBBatch runs an admission batch; one that commits ends a database outage.
-func (h *Handler) admitDBBatch(ctx context.Context, calls []accounts.AdmitCall, fn func(pg.Tx, []accounts.Admission, []error) error) error {
-	err := h.admitBatchTx(ctx, calls, fn)
-	if err == nil {
-		h.outage.recovered(depDatabase)
-	}
-	return err
-}
-
 // authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
 // host that is not an API domain and a key that is not known are all the same 401.
 func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
@@ -347,7 +320,7 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	restoreWeb(&req, web)
+	req.Web = web
 	restoreFile(&req, file, parses, pages, billing)
 	restoreServer(&req, server)
 	return h.fillCall(c, r, sessionBody, body, req, snap, models, names, over)

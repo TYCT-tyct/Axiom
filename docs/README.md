@@ -43,12 +43,13 @@
 | 调用记录在代码里怎么写与读：表、有界队列与背压、批量写与重试、用户读自己的记录、分区 | [internal/observability/README.md](../internal/observability/README.md) | 实现或调用 `observability` 的调用记录之前 |
 | 支付：收款渠道与商户账户、订单状态、金额与汇率、手续费、回调与到账、补单、加密货币、退款与拒付、防欺诈、对账、后台配置、收据 | [domains/payments.md](domains/payments.md) | 改动 `payments` 模块或接入新的收款渠道之前 |
 | 支付在代码里的接口：渠道接口、billing 要提供的函数、不变量、表与行级安全、事务与任务、PR 拆分 | [internal/payments/README.md](../internal/payments/README.md) | 实现或调用 `payments`、写新的收款渠道插件之前 |
+| CI：作业与路径门禁、运行池、runner、缓存、测试与部署容器、诊断 | [ops/ci.md](ops/ci.md) | 改 CI、runner、缓存或排查构建之前 |
 | 合并队列：怎么排队、出队，标签的含义，列车怎么构建、找出元凶、落地和恢复，失败的列车怎么看，不稳定测试清单 | [ops/merge-train.md](ops/merge-train.md) | 给 PR 加 `queue` 之前；列车失败或卡住时 |
 | 上线前的安全审查：每次查了什么、怎么查、发现了什么、哪些没覆盖 | [ops/security-review.md](ops/security-review.md) | 做上线前审查、复核审查结论、接手遗留发现时 |
 | 备份与恢复：一次备份包含什么、停写与调用日志、加密与收件人、上传与保留、单实例、空白环境恢复、恢复演练、生产入口 | [ops/backup-restore.md](ops/backup-restore.md) | 配置或检查备份、恢复一台机器、改生产入口之前 |
 | 发布前：目录规格要补全（请求写法的键怎么写进库、怎么检查），发布前的其他确认 | [ops/release.md](ops/release.md) | 发布或部署之前 |
 | 示例法律文本（demo）：服务条款、隐私政策、OpenRouter 对照、在开发站点发布 | [legal/README.md](legal/README.md) | 准备演示条款/隐私政策、在开发站点发布 demo 版本、负责人审阅前 |
-| 错题：已经发生、还没转成检查或规则的问题，以及上次复盘的日期 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
+| 错题：失效机制、现有回归与尚缺的检查 | [lessons.md](lessons.md) | 复盘时；评审发现同类问题再次出现时 |
 | 通用开发规则：五条硬约束、记录、对外文字、安全；由 project-workflow 管理 | [AGENTS.md](../AGENTS.md) | 每个开发者（人或 AI）动手之前；AI 每次会话开始时（Claude Code 经 `CLAUDE.md` 自动加载） |
 | 本项目的补充：角色、谁拍板、产品设计基线、任务与一个 PR、评审、编排（模型清单、任务大小、循环上限）、合并队列与迁移、CI 与检查、验收与关账、代码质量标准、检查清单、审计与发布、重新讨论的条件 | [CONTRIBUTING.md](../CONTRIBUTING.md) | 同上 |
 

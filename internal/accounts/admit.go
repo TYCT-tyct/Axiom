@@ -136,16 +136,7 @@ func (s *Service) Admit(ctx context.Context, c Caller, r AdmitRequest, fn func(t
 		return ErrUnknownKey
 	}
 	return s.db.Tx(ctx, pg.AccountScope(uuid.UUID(c.account)), func(tx pg.Tx) error {
-		rows, err := s.queries.AdmitKey(ctx, tx, AdmitKeyParams{
-			KeyID: uuid.UUID(c.key), Domain: strings.ToLower(r.Domain), ClientIp: r.ClientIP,
-		})
-		if err != nil {
-			return err
-		}
-		if len(rows) == 0 {
-			return ErrUnknownKey
-		}
-		a, err := admitRow(c, rows[0], CallKey)
+		a, err := s.checkKey(ctx, tx, c, r)
 		if err != nil {
 			return err
 		}

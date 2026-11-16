@@ -31,6 +31,12 @@ import { words } from "./words.ts";
 // A metric with no ceiling is reported and never fails: CLS moved between 0.05 and 0.8 on the same page between two
 // runs, and the late frames of the scroll between 0.45 (a developer's host) and 0.68 (CI's); INP is a latency that follows the
 // load of the shared host (it went over its ceiling on a busy train). A limit on them would only trip by chance.
+// Baseline observations on the built pages: desktop LCP 0.50-0.83 s, phone 2.24-4.10 s; the phone regression
+// ceiling leaves 1.5x room above that first CI maximum. Local INP ranged 96-920 ms (CI maximum 280 ms).
+// With the scroll origin corrected, calls had 36-38% late frames and 47-49 long tasks locally (68% late on CI);
+// users had 4.1-4.5% late frames and 10 long tasks. These are observations, not alternate budgets.
+// The remaining gaps are not fully diagnosed: phone LCP includes throttled resource round trips, models/statement
+// CLS follows content layout, dialog INP follows rendering, and the long-list tasks still need attribution.
 type Limit = { target: number; ceiling?: number };
 const budget = {
   lcpDesktop: { target: 1500, ceiling: 1500 },
@@ -52,7 +58,7 @@ type Profile = typeof phone;
 // Every number here is a timing of this host, and the vitals job shares its host with the other jobs of its train and of
 // every pull request building beside it. Each page load except the overview is therefore measured between two loads of
 // the console overview, the lightest page with the same shell and a table of mocked data, each in a fresh context with
-// the same throttle. The page's LCP is scaled to the mean of the two reference loads around it on the 2026-10-30 run the
+// the same throttle. The page's LCP is scaled to the mean of the two reference loads around it on the baseline run the
 // ceilings came from, and the median of the three scaled loads drops the one a burst landed in (docs/frontend.md
 // 「实测」). A burst stretches a whole load, not one side of it, and contention can only delay a load, never hurry one.
 //
@@ -77,9 +83,20 @@ const overviewCpu = {
   phone: { target: 1200, ceiling: 1200 },
 } satisfies Record<"phone" | "desktop", Limit>;
 const overviewRatio: Limit = { target: 1.25, ceiling: 1.25 };
-// Nine pairs: on 62 CI runs to 2026-11-08 one pair's ratio scattered 0.62-1.65 around 1, independently of its
+// Nine pairs: on 62 CI runs one pair's ratio scattered 0.62-1.65 around 1, independently of its
 // neighbours, so the median of nine fails an unchanged tree about once in 8600 runs on the phone, where the ratio of
 // two five-load medians failed about once in 60 (docs/frontend.md「实测」).
+// Calibration evidence (phone / desktop, one million bootstrap samples of 310 pairs per profile):
+// five independent medians had false-positive rates 1/61 / 1/290; five paired ratios 1/348 / 1/2353;
+// nine paired ratios 1/8621 / 1/142857, detecting a 1.4x slowdown in 99.3% / 96.3% of samples.
+// Adjacent demeaned pairs had lag-one correlations -0.21 / -0.25 (independent five-sample expectation -0.25).
+// A 400 ms busy wait in the overview module produced ratios 1.326 / 1.458, and in the shared shell 1.533 / 1.733;
+// an unchanged tree measured 0.968 / 0.988 despite one pair in each exceeding 1.3. These support the paired median,
+// not retries or wider ceilings. A trimmed mean was slightly better but did not justify another statistic.
+// Hardware instruction counts were steadier (desktop 841-862 million while tdur varied 293-563 ms), but collecting
+// another process's counters needs CAP_PERFMON and CAP_SYS_PTRACE. A shared host running PR code must not grant those
+// capabilities just for this gate. A synthetic 1500-row reference was no better than raw CPU time: its uninterrupted
+// work does not pay the same cold-cache cost as the overview's many short tasks. The base page is the matched control.
 const overviewPairs = 9;
 // The base's overview, beside this tree's: its origin, where playwright.vitals.config.ts serves it, or none.
 const baseOrigin = process.env.AXIOM_VITALS_BASE_PORT

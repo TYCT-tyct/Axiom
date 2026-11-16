@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"strings"
 	"time"
 	"uuid"
@@ -28,7 +29,7 @@ func (r *rig) seedCatalog(fileParse bool) {
 	if r.catalog, err = catalog.Open(r.db, platformScope, catalog.Config{MaxStale: time.Hour, FileParse: fileParse}); err != nil {
 		r.t.Fatal(err)
 	}
-	r.alpha = r.listed("acme/alpha", cmpOr(r.alphaSpec, basicSpec), r.price)
+	r.alpha = r.listed("acme/alpha", cmp.Or(r.alphaSpec, basicSpec), r.price)
 	r.beta = r.model("acme/beta")
 	r.bare = r.model("anthropic/claude-test", "claude-test")
 	r.claude = r.model("anthropic/claude-live", "claude-live")
@@ -39,7 +40,7 @@ func (r *rig) seedCatalog(fileParse bool) {
 
 // model lists a model with its slug as a public name, and the other names given, at the basic spec and the cheap price.
 func (r *rig) model(slug string, names ...string) catalog.ModelID {
-	return r.listed(slug, cmpOr(r.spec, basicSpec), r.price, names...)
+	return r.listed(slug, cmp.Or(r.spec, basicSpec), r.price, names...)
 }
 
 // listed is model with its own spec and price schedule, which is also the sale price the OpenRouter list shows. The
