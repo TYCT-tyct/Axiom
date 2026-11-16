@@ -13,7 +13,7 @@ export interface paths {
         };
         /**
          * Read your invitation code and registrations
-         * @description Only the signed-in user's invitations, newest UUIDv7 registration first. Disabled users remain as Unavailable user placeholders. No rebates or amounts. Older nodes return 404; clients must treat that as unavailable.
+         * @description Only the signed-in user's invitations, newest UUIDv7 registration first. Disabled users remain with available=false; clients localize the placeholder. No rebates or amounts. Older nodes return 404; clients must treat that as unavailable.
          */
         get: operations["getInvitations"];
         put?: never;
@@ -2800,8 +2800,8 @@ export interface components {
         Invitee: {
             /** Format: date-time */
             registered_at?: string;
-            /** @description Masked email such as a***@g***.com, or Unavailable user; never a full email. */
-            display?: string;
+            /** @description False for a disabled user; localize the placeholder on the client. No personal identifier is returned. */
+            available?: boolean;
         };
         KeyList: {
             filters?: components["schemas"]["KeyFilterEcho"];
@@ -3171,7 +3171,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description Your code, registered console origin link and masked invitees. */
+            /** @description Your code, registered console origin link and registration records without personal identifiers. */
             200: {
                 headers: {
                     [name: string]: unknown;

@@ -25,11 +25,11 @@ func TestInvitations(t *testing.T) {
 		t.Fatalf("empty invitations: %q %+v %v %v", code, rows, next, err)
 	}
 	users := registerInvitees(t, x, code)
-	first, next := invitationPage(t, x, p, nil, 2, []string{"c***@e***.com", "b***@e***.com"})
-	if next == nil {
+	first, next := invitationPage(t, x, p, nil, 2, []bool{true, true})
+	if next == nil || *next != uuid.UUID(users[1]) {
 		t.Fatal("missing next page")
 	}
-	last, end := invitationPage(t, x, p, next, 2, []string{"a***@g***.com"})
+	last, end := invitationPage(t, x, p, next, 2, []bool{true})
 	if end != nil {
 		t.Fatal("unexpected next page")
 	}
@@ -76,17 +76,17 @@ func registerInvitees(t *testing.T, x site, code string) []accounts.UserID {
 	return users
 }
 
-func invitationPage(t *testing.T, x site, p accounts.Principal, after *uuid.UUID, limit int, want []string) ([]accounts.Invitee, *uuid.UUID) {
+func invitationPage(t *testing.T, x site, p accounts.Principal, after *uuid.UUID, limit int, want []bool) ([]accounts.Invitee, *uuid.UUID) {
 	t.Helper()
 	_, rows, next, err := x.s.Invitations(t.Context(), p, after, limit)
 	if err != nil {
 		t.Fatal(err)
 	}
-	displays := make([]string, len(rows))
+	available := make([]bool, len(rows))
 	for i, row := range rows {
-		displays[i] = row.Display
+		available[i] = row.Available
 	}
-	if diff := cmp.Diff(want, displays); diff != "" {
+	if diff := cmp.Diff(want, available); diff != "" {
 		t.Fatalf("invitees (-want +got): %s", diff)
 	}
 	return rows, next
@@ -98,7 +98,7 @@ func checkInvitationTombstone(t *testing.T, x site, p accounts.Principal, user a
 	if err := pgtest.Run(t.Context(), x.database.Superuser, "UPDATE accounts.users SET status='disabled', email='erased@invalid' WHERE id='"+uuid.UUID(user).String()+"'"); err != nil {
 		t.Fatal(err)
 	}
-	retained, _ := invitationPage(t, x, p, nil, 2, []string{"Unavailable user", "b***@e***.com"})
+	retained, _ := invitationPage(t, x, p, nil, 2, []bool{false, true})
 	if retained[0].RegisteredAt != first.RegisteredAt {
 		t.Fatal("registration time changed")
 	}

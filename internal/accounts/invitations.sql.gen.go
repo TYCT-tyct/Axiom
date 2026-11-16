@@ -31,7 +31,7 @@ func (q *Queries) InvitationCode(ctx context.Context, db DBTX, arg InvitationCod
 }
 
 const listInvitees = `-- name: ListInvitees :many
-SELECT id, email, status, uuid_extract_timestamp(id)::timestamptz AS registered_at
+SELECT id, status, uuid_extract_timestamp(id)::timestamptz AS registered_at
 FROM accounts.users
 WHERE site_id = $1 AND inviter_user_id = $2
     AND ($3::uuid IS NULL OR id < $3)
@@ -48,7 +48,6 @@ type ListInviteesParams struct {
 
 type ListInviteesRow struct {
 	ID           uuid.UUID
-	Email        string
 	Status       string
 	RegisteredAt pgtype.Timestamptz
 }
@@ -68,12 +67,7 @@ func (q *Queries) ListInvitees(ctx context.Context, db DBTX, arg ListInviteesPar
 	var items []ListInviteesRow
 	for rows.Next() {
 		var i ListInviteesRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.Email,
-			&i.Status,
-			&i.RegisteredAt,
-		); err != nil {
+		if err := rows.Scan(&i.ID, &i.Status, &i.RegisteredAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

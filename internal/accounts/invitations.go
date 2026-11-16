@@ -2,7 +2,6 @@ package accounts
 
 import (
 	"context"
-	"strings"
 	"time"
 	"uuid"
 
@@ -12,7 +11,7 @@ import (
 // Invitee is a registration attributed to the caller, without the invitee's identity.
 type Invitee struct {
 	RegisteredAt time.Time
-	Display      string
+	Available    bool
 }
 
 // Invitations reads only p's invitation relations. Disabled users remain as placeholders;
@@ -42,26 +41,9 @@ func (s *Service) Invitations(ctx context.Context, p Principal, after *uuid.UUID
 			rows = rows[:limit]
 		}
 		for _, row := range rows {
-			display := "Unavailable user"
-			if row.Status == "active" {
-				display = invitationDisplay(row.Email)
-			}
-			invitees = append(invitees, Invitee{RegisteredAt: row.RegisteredAt.Time, Display: display})
+			invitees = append(invitees, Invitee{RegisteredAt: row.RegisteredAt.Time, Available: row.Status == "active"})
 		}
 		return nil
 	})
 	return code, invitees, next, err
-}
-
-func invitationDisplay(email string) string {
-	local, domain, ok := strings.Cut(email, "@")
-	if !ok || local == "" || domain == "" {
-		return "Unavailable user"
-	}
-	suffix := ""
-	if dot := strings.LastIndex(domain, "."); dot > 0 && dot < len(domain)-1 {
-		suffix = domain[dot:]
-		domain = domain[:dot]
-	}
-	return string([]rune(local)[0]) + "***@" + string([]rune(domain)[0]) + "***" + suffix
 }

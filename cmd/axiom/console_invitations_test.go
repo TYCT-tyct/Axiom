@@ -35,13 +35,36 @@ func checkConsoleInvitationPages(t *testing.T, f consoleFixture, s session, code
 		expect(t, "registration", f.do(http.MethodPost, "/auth/register", registration), http.StatusCreated, "")
 	}
 	decode(t, f.do(http.MethodGet, "/invitations?limit=1", "", as(s)), &body)
-	if body.NextCursor == nil || body.Invitees == nil || len(*body.Invitees) != 1 || *(*body.Invitees)[0].Display != "b***@e***.com" {
+	if body.NextCursor == nil || body.Invitees == nil || len(*body.Invitees) != 1 || (*body.Invitees)[0].Available == nil || !*(*body.Invitees)[0].Available {
 		t.Fatalf("first page: %+v", body)
 	}
 	var last consoleapi.Invitations
 	response := f.do(http.MethodGet, "/invitations?limit=1&cursor="+*body.NextCursor, "", as(s))
 	decode(t, response, &last)
-	if last.NextCursor != nil || last.Invitees == nil || len(*last.Invitees) != 1 || *(*last.Invitees)[0].Display != "a***@g***.com" || strings.Contains(response.Body.String(), "alice@gmail.com") {
+	if last.NextCursor != nil || last.Invitees == nil || len(*last.Invitees) != 1 || (*last.Invitees)[0].Available == nil || !*(*last.Invitees)[0].Available {
 		t.Fatalf("last page: %s", response.Body)
 	}
+	checkInvitationPrivacy(t, response.Body.String())
+	checkConsoleInvitationTombstone(t, f, s, *body.NextCursor)
+}
+
+func checkInvitationPrivacy(t *testing.T, response string) {
+	t.Helper()
+	for _, personal := range []string{"alice@gmail.com", "bob@example.com", `"display"`, `"email"`, `"user_id"`, "***@", "Unavailable user"} {
+		if strings.Contains(response, personal) {
+			t.Fatalf("personal identifier %q in response: %s", personal, response)
+		}
+	}
+}
+
+func checkConsoleInvitationTombstone(t *testing.T, f consoleFixture, s session, cursor string) {
+	t.Helper()
+	f.run("UPDATE accounts.users SET status='disabled', email='erased@invalid' WHERE email='alice@gmail.com'")
+	response := f.do(http.MethodGet, "/invitations?limit=1&cursor="+cursor, "", as(s))
+	var body consoleapi.Invitations
+	decode(t, response, &body)
+	if body.Invitees == nil || len(*body.Invitees) != 1 || (*body.Invitees)[0].Available == nil || *(*body.Invitees)[0].Available {
+		t.Fatalf("unavailable registration: %s", response.Body)
+	}
+	checkInvitationPrivacy(t, response.Body.String())
 }

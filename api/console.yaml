@@ -30,7 +30,7 @@ paths:
       summary: Read your invitation code and registrations
       description: >-
         Only the signed-in user's invitations, newest UUIDv7 registration first.
-        Disabled users remain as Unavailable user placeholders. No rebates or amounts.
+        Disabled users remain with available=false; clients localize the placeholder. No rebates or amounts.
         Older nodes return 404; clients must treat that as unavailable.
       security:
         - session: []
@@ -41,7 +41,7 @@ paths:
         - {$ref: "#/components/parameters/Limit"}
       responses:
         "200":
-          description: Your code, registered console origin link and masked invitees.
+          description: Your code, registered console origin link and registration records without personal identifiers.
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Invitations"}
@@ -4745,7 +4745,7 @@ components:
       type: object
       properties:
         registered_at: {type: string, format: date-time}
-        display: {type: string, description: "Masked email such as a***@g***.com, or Unavailable user; never a full email."}
+        available: {type: boolean, description: "False for a disabled user; localize the placeholder on the client. No personal identifier is returned."}
     KeyList:
       type: object
       required: [data, next_cursor]

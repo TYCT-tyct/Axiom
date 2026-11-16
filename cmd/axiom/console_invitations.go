@@ -29,7 +29,7 @@ func (c consoleAPI) GetInvitations(ctx context.Context, r consoleapi.GetInvitati
 	link := origin + "/console/register?invite=" + url.QueryEscape(code)
 	invitees := make([]consoleapi.Invitee, len(rows))
 	for i, row := range rows {
-		invitees[i] = consoleapi.Invitee{RegisteredAt: &row.RegisteredAt, Display: &row.Display}
+		invitees[i] = consoleapi.Invitee{RegisteredAt: &row.RegisteredAt, Available: &row.Available}
 	}
 	response := consoleapi.Invitations{Code: &code, Link: &link, Invitees: &invitees}
 	if next != nil {
