@@ -1,4 +1,5 @@
-import { availableParallelism } from "node:os";
+import { availableParallelism, tmpdir } from "node:os";
+import { join } from "node:path";
 import { defineConfig, devices } from "@playwright/test";
 import { freeFirstPort } from "./scripts/free-port.ts";
 
@@ -42,6 +43,10 @@ const workers = shards > 1 ? Math.max(1, Math.floor((quota * 3) / 4 / shards)) :
 export default defineConfig({
   testDir: "e2e",
   testIgnore: "vitals.spec.ts", // timed, so it runs alone (playwright.vitals.config.ts)
+  // Only design.spec.ts compares snapshots: it writes each board's shot where Playwright looks for the snapshot, outside
+  // the repository and beside the page's shot (web/README.md「测试」).
+  snapshotDir: process.env.AXIOM_DESIGN_OUT || join(tmpdir(), "axiom-design"),
+  snapshotPathTemplate: "{snapshotDir}/{arg}{ext}",
   workers,
   forbidOnly: Boolean(process.env.CI),
   reporter: process.env.CI ? "github" : "list",
