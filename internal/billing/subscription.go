@@ -81,8 +81,8 @@ func (p PlanInput) check() error {
 	if p.Name == "" || len(p.Name) > 200 {
 		return &PlanError{"needs a name of 1 to 200 bytes"}
 	}
-	if _, err := minorScale(p.Currency); err != nil {
-		return err
+	if _, err := unitScale(p.Currency); err != nil {
+		return &PlanError{err.Error()}
 	}
 	if p.Price < 0 {
 		return &PlanError{"has a negative price"}
@@ -118,15 +118,6 @@ func faceValue(quota, term, window int64) (int64, error) {
 		return 0, &PlanError{"credits more than the ledger holds"}
 	}
 	return quota * int64(n), nil
-}
-
-// minorScale is billionths of one unit of c in its minor unit, and refuses a currency the ledger cannot take.
-func minorScale(c platform.Currency) (int64, error) {
-	scale, err := unitScale(c)
-	if err != nil {
-		return 0, &PlanError{err.Error()}
-	}
-	return scale, nil
 }
 
 // CreatePlan writes p to the catalog in tx, which must be in the platform scope, with its audit entry. A name already

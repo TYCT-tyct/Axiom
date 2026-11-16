@@ -71,14 +71,15 @@ func startAlerts(ctx context.Context, db *pg.DB, r *observability.Recorder, cons
 	stop := sampleAlerts(ctx, db, r, signals, console.cfg.valkey.NodeID, logger)
 	return func() {
 		stop()
-		drain, cancel := context.WithTimeout(context.WithoutCancel(ctx), console.cfg.shutdownTimeout)
-		defer cancel()
-		if depth, _ := r.AlertSample(); depth == 0 {
-			if err := signals.Resolve("observability.write_lag", console.cfg.valkey.NodeID); err != nil {
-				logger.Error("resolving drained writer alert", "err", err)
+		err := closeWithin(ctx, console.cfg.shutdownTimeout, func(drain context.Context) error {
+			if depth, _ := r.AlertSample(); depth == 0 {
+				if err := signals.Resolve("observability.write_lag", console.cfg.valkey.NodeID); err != nil {
+					logger.Error("resolving drained writer alert", "err", err)
+				}
 			}
-		}
-		if err := signals.Close(drain); err != nil {
+			return signals.Close(drain)
+		})
+		if err != nil {
 			logger.Error("closing alert signals", "err", err)
 		}
 	}

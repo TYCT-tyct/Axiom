@@ -55,11 +55,10 @@
 
 ## 存档
 
-调研、上游出处和被否决方案的推导，不是现行规则，只在追问某个决定的来由时读。
-
-| 主题 | 读 |
+| 内容 | 文档 |
 |---|---|
-| 供应商：上游出处、CPA 的上游事实、被否决的方案、滚动发布的兼容推导、测量与样本 | [archive/suppliers.md](archive/suppliers.md) |
+| 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
+| 供应商的上游出处、CPA 的上游事实、被否决的方案、滚动发布的兼容推导、测量与样本 | [archive/suppliers.md](archive/suppliers.md) |
 
 ## 文档怎么组织
 

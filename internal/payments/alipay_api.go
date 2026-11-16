@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 )
 
@@ -50,19 +49,14 @@ func (c *alipayChannel) post(ctx context.Context, method string, v url.Values) (
 		return nil, alipayFailure{}, errors.New("alipay: cannot construct request")
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=utf-8")
-	resp, err := c.client.Do(req)
+	resp, err := sendGateway(c.client, req, "alipay", "cannot read bounded gateway response")
 	if err != nil {
-		return nil, alipayFailure{}, errors.New("alipay: gateway request failed")
+		return nil, alipayFailure{}, err
 	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // reading the bounded response below determines the result
-	body, err := egress.ReadBody(resp.Body, 1<<20)
-	if err != nil {
-		return nil, alipayFailure{}, errors.New("alipay: cannot read bounded gateway response")
+	if resp.status < 200 || resp.status >= 300 {
+		return nil, alipayFailure{}, fmt.Errorf("alipay: gateway HTTP %d", resp.status)
 	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, alipayFailure{}, fmt.Errorf("alipay: gateway HTTP %d", resp.StatusCode)
-	}
-	return c.response(body, method)
+	return c.response(resp.body, method)
 }
 
 // response verifies the signature over the method node's exact bytes before trusting any field, as the official
@@ -185,7 +179,7 @@ func (c *alipayChannel) Query(ctx context.Context, outTradeNo, _ string) (Paymen
 	default:
 		return Payment{}, errors.New("alipay: unknown trade status")
 	}
-	paid := Money{Currency: c.currency, Minor: parseMinorText(r.TotalAmount, digits(c.currency))}
+	paid := Money{Currency: c.currency, Minor: parseMinorText(r.TotalAmount, c.currency.MinorDigits())}
 	return Payment{State: state, TradeNo: r.TradeNo, Paid: paid}, nil
 }
 
@@ -212,7 +206,7 @@ func (c *alipayChannel) Refund(ctx context.Context, r RefundCall) (RefundState, 
 		"refund_amount":  formatMinorText(r.Amount),
 		"out_request_no": outRequestNo,
 	}
-	if reason := alipayReason(r.Reason); reason != "" {
+	if reason := boundedText(r.Reason, 256); reason != "" {
 		biz["refund_reason"] = reason
 	}
 	node, failure, err := c.call(ctx, "alipay.trade.refund", biz)
@@ -241,7 +235,7 @@ func (c *alipayChannel) refundResponse(node jsonx.Raw, r RefundCall, outRequestN
 		return RefundState{}, errors.New("alipay: refund echoed another order")
 	}
 	if result.FundChange == "Y" &&
-		(result.RefundFee == "" || parseMinorText(result.RefundFee, digits(c.currency)) != r.Amount.Minor) {
+		(result.RefundFee == "" || parseMinorText(result.RefundFee, c.currency.MinorDigits()) != r.Amount.Minor) {
 		return RefundState{}, errors.New("alipay: refund echoed another amount")
 	}
 	state := RefundPending
@@ -285,7 +279,7 @@ func (c *alipayChannel) refundQueryResult(node jsonx.Raw, outRequestNo string, a
 		return RefundState{}, errors.New("alipay: refund query echoed another request")
 	}
 	if result.RefundStatus == "REFUND_SUCCESS" {
-		if result.RefundAmount == "" || parseMinorText(result.RefundAmount, digits(c.currency)) != amount.Minor {
+		if result.RefundAmount == "" || parseMinorText(result.RefundAmount, c.currency.MinorDigits()) != amount.Minor {
 			return RefundState{}, errors.New("alipay: refund query echoed another amount")
 		}
 		return RefundState{State: RefundSucceeded, ProviderRef: outRequestNo}, nil
@@ -337,14 +331,4 @@ func alipayRefundRefused(subCode string) bool {
 		return true
 	}
 	return false
-}
-
-// alipayReason keeps the short reason Alipay accepts and never lets a raw NUL or invalid UTF-8 into the request.
-func alipayReason(reason string) string {
-	reason = strings.ReplaceAll(strings.ToValidUTF8(reason, ""), "\x00", "")
-	runes := []rune(strings.TrimSpace(reason))
-	if len(runes) > 256 {
-		runes = runes[:256]
-	}
-	return string(runes)
 }

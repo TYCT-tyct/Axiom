@@ -60,28 +60,11 @@ type Money struct {
 	Minor    int64
 }
 
-// minorDigits are the ISO 4217 currencies whose minor unit is not two digits, after sub2api's table
-// (backend/internal/payment/currency.go:24-49 at 8f2cbb5) without its Stripe-only exceptions (ISK and UGX, which
-// ISO 4217 gives no minor unit).
-var minorDigits = map[string]int{
-	"BIF": 0, "CLP": 0, "DJF": 0, "GNF": 0, "ISK": 0, "JPY": 0, "KMF": 0, "KRW": 0, "MGA": 0, "PYG": 0, "RWF": 0,
-	"UGX": 0, "VND": 0, "VUV": 0, "XAF": 0, "XOF": 0, "XPF": 0,
-	"BHD": 3, "IQD": 3, "JOD": 3, "KWD": 3, "LYD": 3, "OMR": 3, "TND": 3,
-}
-
-// digits is how many decimal digits currency's minor unit has.
-func digits(currency platform.Currency) int {
-	if d, ok := minorDigits[currency.String()]; ok {
-		return d
-	}
-	return 2
-}
-
 // AmountFromMinor writes minor units as the admin API's exact decimal amount, in billionths of one unit
 // (api/admin.yaml Money). It is text because a JSON number would round an amount above 2^53 in the browser.
 // AmountFromMinor writes minor units as the contract's amount: an integer count of billionths of one unit.
 func AmountFromMinor(currency platform.Currency, minor int64) string {
-	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-digits(currency))), nil)
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-currency.MinorDigits())), nil)
 	return new(big.Int).Mul(big.NewInt(minor), scale).String()
 }
 
@@ -92,7 +75,7 @@ func MinorFromAmount(currency platform.Currency, amount string) (int64, bool) {
 	if !ok || n.Sign() < 0 {
 		return 0, false
 	}
-	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-digits(currency))), nil)
+	scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(9-currency.MinorDigits())), nil)
 	q, r := new(big.Int).QuoRem(n, scale, new(big.Int))
 	if r.Sign() != 0 || !q.IsInt64() {
 		return 0, false
@@ -156,7 +139,7 @@ func decimalParts(text string) (string, string, error) {
 // formatMinorText writes minor units as the decimal text channels take, without a float.
 func formatMinorText(m Money) string {
 	text := strconv.FormatInt(m.Minor, 10)
-	places := digits(m.Currency)
+	places := m.Currency.MinorDigits()
 	if places == 0 {
 		return text
 	}

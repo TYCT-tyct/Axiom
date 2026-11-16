@@ -6,7 +6,6 @@ import (
 	"crypto/md5" //nolint:gosec // EasyPay's wire protocol requires MD5
 	"encoding/hex"
 	"errors"
-	"mime"
 	"net/http"
 	"net/url"
 	"slices"
@@ -15,6 +14,10 @@ import (
 
 // Signature and whitelist adapted from sub2api backend/internal/payment/provider/easypay.go (a3298b46e).
 func easyPaySign(v url.Values, key string) string {
+	return md5Sign(v, key, nil)
+}
+
+func md5Sign(v url.Values, key string, encode func(string) string) string {
 	keys := make([]string, 0, len(v))
 	for k := range v {
 		if k != "sign" && k != "sign_type" && v.Get(k) != "" {
@@ -24,7 +27,11 @@ func easyPaySign(v url.Values, key string) string {
 	slices.Sort(keys)
 	var parts []string
 	for _, k := range keys {
-		parts = append(parts, k+"="+v.Get(k))
+		value := v.Get(k)
+		if encode != nil {
+			value = encode(value)
+		}
+		parts = append(parts, k+"="+value)
 	}
 	sum := md5.Sum([]byte(strings.Join(parts, "&") + key)) //nolint:gosec // required by the upstream protocol
 	return hex.EncodeToString(sum[:])
@@ -61,7 +68,7 @@ func (c *easyPayChannel) Verify(_ context.Context, cb Callback) (Notice, error) 
 	if c.settings.Preset == "ezpay" {
 		return c.ezPayNotice(v), nil
 	}
-	amount := parseMinorText(v.Get("money"), digits(c.currency))
+	amount := parseMinorText(v.Get("money"), c.currency.MinorDigits())
 	return Notice{Relevant: true, Success: v.Get("trade_status") == "TRADE_SUCCESS", Order: v.Get("out_trade_no"), TradeNo: v.Get("trade_no"), Paid: Money{Currency: c.currency, Minor: amount}, Raw: "easypay notification"}, nil
 }
 
@@ -93,11 +100,7 @@ func easyPayCallbackBody(cb Callback) (string, error) {
 		}
 		return cb.RawQuery, nil
 	case http.MethodPost:
-		media, _, err := mime.ParseMediaType(cb.Header.Get("Content-Type"))
-		if err != nil || media != "application/x-www-form-urlencoded" || cb.RawQuery != "" {
-			return "", errors.New("easypay: invalid callback form")
-		}
-		return string(cb.Body), nil
+		return callbackForm(cb, "easypay")
 	default:
 		return "", errors.New("easypay: unsupported callback method")
 	}

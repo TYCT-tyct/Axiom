@@ -201,48 +201,39 @@ END $$`); err != nil {
 	}
 }
 
-// TestRetentionWithoutABucketKeepsEverything: a deployment with no object store keeps every partition, even one far
-// past the window, because dropping without a confirmed archive would lose records.
-func TestRetentionWithoutABucketKeepsEverything(t *testing.T) {
+// TestRetentionKeepsEverythingWhenDisabled: no bucket must never lose records; a zero window must not archive them.
+func TestRetentionKeepsEverythingWhenDisabled(t *testing.T) {
 	t.Parallel()
-	db, database := openDBWithURL(t)
-	retention := openRetention(t, database)
-	account := uuid.NewV7()
-	keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return SetRetention(t.Context(), tx, Retention{HotDays: 30})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := newTestRetainer(t, retention, nil).run(t.Context(), time.Date(2026, 12, 15, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	if !partitionExists(t, db, "call_log_2026_10") {
-		t.Error("a partition was dropped with no object store to archive it to")
-	}
-}
-
-// TestRetentionWindowZeroKeepsEverything: zero is "never", not "everything is past the window".
-func TestRetentionWindowZeroKeepsEverything(t *testing.T) {
-	t.Parallel()
-	db, database := openDBWithURL(t)
-	retention := openRetention(t, database)
-	account := uuid.NewV7()
-	keep(t, db, record(account, time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
-	if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-		return SetRetention(t.Context(), tx, Retention{HotDays: 0})
-	}); err != nil {
-		t.Fatal(err)
-	}
-	store := newFakeStore()
-	if err := newTestRetainer(t, retention, store).run(t.Context(), time.Date(2027, 6, 15, 0, 0, 0, 0, time.UTC)); err != nil {
-		t.Fatal(err)
-	}
-	if !partitionExists(t, db, "call_log_2026_10") {
-		t.Error("a partition was dropped with the window off")
-	}
-	if len(store.objects) != 0 {
-		t.Errorf("the window off still uploaded %d objects", len(store.objects))
+	for _, tc := range []struct {
+		name       string
+		days, year int
+		month      time.Month
+	}{
+		{"no bucket", 30, 2026, time.December},
+		{"zero window", 0, 2027, time.June},
+	} {
+		db, database := openDBWithURL(t)
+		retention := openRetention(t, database)
+		keep(t, db, record(uuid.NewV7(), time.Date(2026, 10, 10, 12, 0, 0, 0, time.UTC)))
+		if err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+			return SetRetention(t.Context(), tx, Retention{HotDays: tc.days})
+		}); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		store := newFakeStore()
+		var bucket ArchiveStore
+		if tc.days == 0 {
+			bucket = store
+		}
+		if err := newTestRetainer(t, retention, bucket).run(t.Context(), time.Date(tc.year, tc.month, 15, 0, 0, 0, 0, time.UTC)); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if !partitionExists(t, db, "call_log_2026_10") {
+			t.Errorf("%s: a partition was dropped with retention disabled", tc.name)
+		}
+		if len(store.objects) != 0 {
+			t.Errorf("%s: disabled retention uploaded %d objects", tc.name, len(store.objects))
+		}
 	}
 }
 

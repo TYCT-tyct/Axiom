@@ -2,23 +2,9 @@ package billing
 
 import (
 	"context"
-	"uuid"
 
 	"axiom/internal/platform/pg"
 )
-
-// A reservation is read in a new statement after locking its balance, including on cleanup's path.
-func settlementRows(ctx context.Context, tx pg.Tx, id, account uuid.UUID) (balance LockBalanceRow, r LockReservationRow, err error) {
-	balance, err = queries.LockBalance(ctx, tx, account)
-	if err != nil {
-		return balance, r, balanceErr(err)
-	}
-	r, err = queries.LockReservation(ctx, tx, id)
-	if err != nil {
-		return balance, r, err
-	}
-	return balance, r, nil
-}
 
 // SettleIn settles h in tx, a transaction of the account's scope that may hold other settlements (internal/gateway's
 // completion batch). It returns the reports to run after that transaction commits; the caller must run them only then,

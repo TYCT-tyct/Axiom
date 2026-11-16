@@ -64,7 +64,7 @@ func (c *wechatChannel) Create(ctx context.Context, r CreateRequest) (Checkout, 
 	if !wechatNotifyURL(r.NotifyURL) {
 		return Checkout{}, &Rejected{Code: "invalid_notify_url", Message: "the notification address must be an HTTPS URL without a query"}
 	}
-	subject := wechatText(r.Subject, wechatpayMaxSubjectRunes)
+	subject := boundedText(r.Subject, wechatpayMaxSubjectRunes)
 	if subject == "" {
 		return Checkout{}, &Rejected{Code: "invalid_subject", Message: "the order needs a description"}
 	}
@@ -149,19 +149,9 @@ func wechatCodeURL(raw string) bool {
 	return err == nil && u.Scheme == "weixin" && u.Host != ""
 }
 
-// wechatText removes NUL and invalid UTF-8 and cuts by runes. WeChat counts description in characters, not bytes.
-func wechatText(s string, maxRunes int) string {
-	s = strings.ReplaceAll(strings.ToValidUTF8(s, ""), "\x00", "")
-	s = strings.TrimSpace(s)
-	if runes := []rune(s); len(runes) > maxRunes {
-		s = string(runes[:maxRunes])
-	}
-	return s
-}
-
 // wechatReason cuts to the protocol's 80 bytes without splitting a rune.
 func wechatReason(s string) string {
-	s = wechatText(s, 1000)
+	s = boundedText(s, 1000)
 	var b strings.Builder
 	for _, r := range s {
 		if b.Len()+utf8.RuneLen(r) > wechatpayMaxReasonBytes {
