@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Page, type TestInfo } from "@playwright/test";
+import { blankCanvases } from "./canvas.ts";
 import type { Region, Ruling } from "./rulings.ts";
 import { freeze } from "./stage.ts";
 
@@ -26,7 +27,7 @@ export type Comparison = {
 };
 
 async function rects(page: Page, region: Region | undefined, basis: string, side: string): Promise<Rect[]> {
-  if (!region) return [];
+  if (!region || "canvas" in region) return [];
   if (!("selector" in region)) return [region];
   const boxes = await page.locator(region.selector).evaluateAll((elements) =>
     elements.map((element) => {
@@ -40,9 +41,9 @@ async function rects(page: Page, region: Region | undefined, basis: string, side
   return boxes;
 }
 
-// shot blanks the given rectangles over everything, captures the viewport with CSS animations frozen, and takes
-// the blanks away again, so the next shot of the page starts from the page.
-export async function shot(page: Page, blanks: Rect[] = []) {
+// Rectangle rulings cover everything in their boxes; canvas rulings change only the backing pixels under other DOM.
+// Restore both after capture so subsequent interaction tests still exercise the original page.
+export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] = []) {
   await page.evaluate(
     ({ blanks, colour }) => {
       for (const rect of blanks) {
@@ -64,11 +65,16 @@ export async function shot(page: Page, blanks: Rect[] = []) {
     { blanks, colour: blank },
   );
   await freeze(page);
-  const image = await page.screenshot({ animations: "disabled", caret: "hide", scale: "css" });
-  await page.evaluate(() => {
-    for (const cover of document.querySelectorAll("[data-design-blank]")) cover.remove();
-  });
-  return image;
+  const saved = await blankCanvases(page, canvases);
+  try {
+    return await page.screenshot({ animations: "disabled", caret: "hide", scale: "css" });
+  } finally {
+    await saved.evaluate((restore) => restore());
+    await saved.dispose();
+    await page.evaluate(() => {
+      for (const cover of document.querySelectorAll("[data-design-blank]")) cover.remove();
+    });
+  }
 }
 
 // Keep the differing locations in the job log even when artifact storage is unavailable. Red is Playwright's
@@ -133,8 +139,13 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     rulings: scene.map((ruling) => ruling.basis),
   };
   mkdirSync(dirname(reference), { recursive: true });
-  writeFileSync(reference, await shot(board, blanks));
-  const actual = await shot(page, blanks);
+  const canvases = (side: "board" | "page") =>
+    scene.flatMap((ruling) => {
+      const region = ruling[side];
+      return region && "canvas" in region ? [region.canvas] : [];
+    });
+  writeFileSync(reference, await shot(board, blanks, canvases("board")));
+  const actual = await shot(page, blanks, canvases("page"));
   writeFileSync(result.page, actual);
   try {
     expect(actual).toMatchSnapshot([key, "board.png"], { maxDiffPixels });

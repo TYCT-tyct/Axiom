@@ -6,6 +6,7 @@ import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
 import { compare } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
+import { rulings } from "./design/rulings.ts";
 import { canvasesReady, type Stage, stage } from "./design/stage.ts";
 
 const root = join(import.meta.dirname, "../packages/boards");
@@ -90,7 +91,7 @@ for (const board of cases)
           const result = await compare(
             reference.page,
             page,
-            [],
+            rulings.filter((ruling) => ruling.scene === `converted-${board.name}`),
             `converted-${board.name}-${width}-${colorScheme}`,
             info,
           );
