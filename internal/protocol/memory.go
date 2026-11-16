@@ -1,6 +1,9 @@
 package protocol
 
-import "sync/atomic"
+import (
+	"sync"
+	"sync/atomic"
+)
 
 // baseMemory is what each stream may hold without drawing on the node's budget; the gateway counts it per stream
 // (internal/gateway/README.md「并发、背压与共享状态」).
@@ -11,7 +14,12 @@ const baseMemory = 64 << 10
 const meterMemory = 16 << 10
 
 // Memory is the node's memory budget for streams. It is safe for concurrent use.
-type Memory struct{ left atomic.Int64 }
+type Memory struct {
+	left atomic.Int64
+	// Preparations share the gate until one runs out of room. Its exclusive retry lets the other
+	// preparations return their partial charges before it starts drawing again. No I/O holds this gate.
+	preparing sync.RWMutex
+}
 
 // NewMemory returns a budget of size bytes.
 func NewMemory(size int64) *Memory {
