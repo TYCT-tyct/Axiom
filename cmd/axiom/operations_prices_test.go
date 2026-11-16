@@ -84,7 +84,7 @@ func (f priceFixture) publication(model string) operationsapi.PricePublication {
 func (f priceFixture) waiting(model string) operationsapi.PricePublication {
 	f.t.Helper()
 	p := f.publication(model)
-	if *p.Status != operationsapi.PricePublicationStatusPending {
+	if *p.Status != adminapi.PricePublicationStatusPending {
 		f.t.Fatalf("the publication of %s is %s", model, *p.Status)
 	}
 	return p
@@ -118,13 +118,13 @@ func TestOperationsPricePublish(t *testing.T) {
 	versions := func() string { return f.text(`SELECT count(*)::text FROM billing.price_versions`) }
 	before := versions()
 	rec := f.publish(model, p, newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateApproved || versions() != before {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStateApproved || versions() != before {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	key := newKey()
 	rec = f.publish(model, p, key, "")
 	done := agentOperation(t, rec)
-	if rec.Code != http.StatusOK || done.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"change_bps":2000`) || versions() == before {
+	if rec.Code != http.StatusOK || done.State != adminapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"change_bps":2000`) || versions() == before {
 		t.Errorf("the publication: %d %s", rec.Code, rec.Body)
 	}
 	f.expectReplayed(model, p, key, *done.OperationId)

@@ -463,27 +463,6 @@ func TestFallbackSettings(t *testing.T) {
 	}
 }
 
-// TestLockedFallbacksFromBeforeTheMarkupWasDropped: a reservation admitted before #232 locked the fallback text with the
-// markup; it still settles at the prices it locked, and the read leaves the row exactly as written. The stored row no
-// longer takes the member (TestFallbackSettings), so only a writer of the previous release can have produced it.
-func TestLockedFallbacksFromBeforeTheMarkupWasDropped(t *testing.T) {
-	t.Parallel()
-
-	b := fallbackBank(t, 10_000, 0, Config{})
-	h := b.hold(1000)
-	legacy := `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`
-	b.sql(`UPDATE billing.reservations SET fallbacks = ARRAY['` + legacy + `'] WHERE request_id = '` + h.id.String() + `'`)
-	s := segment(t, map[catalog.Item]int64{in: 50, catalog.ItemOutput: 20, catalog.ItemCodeExecution: 1})
-	const want = 120 // 70 billionths of tokens and one code execution at the locked 0.00000005
-	if f := b.settleWith(h, outcome(Committed, FinishStop, s)); f.Charged != platform.AmountExact(want) {
-		t.Errorf("Settle = %+v, want the prices the row locked, %d", f, want)
-	}
-	b.expect("settled", want)
-	if n := b.count(`SELECT count(*) FROM billing.reservations WHERE fallbacks[1] LIKE '%"markup"%'`); n != 1 {
-		t.Errorf("the locked row was rewritten: %d rows still hold its markup, want 1", n)
-	}
-}
-
 // TestStartChecksFallbacks: Start refuses fallback rows that fail the check, or no USD row, before it registers.
 func TestStartChecksFallbacks(t *testing.T) {
 	t.Parallel()

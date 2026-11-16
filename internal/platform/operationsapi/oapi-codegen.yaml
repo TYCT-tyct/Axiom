@@ -10,5 +10,10 @@ generate:
 additional-imports:
   - package: axiom/internal/platform/jsonx
 output-options:
+  # Shared schemas contain local references; retain their aliases in the embedded contract.
+  skip-prune: true
   user-templates:
     strict/strict-http.tmpl: ../consoleapi/templates/strict-http.tmpl
+
+import-mapping:
+  admin.yaml: axiom/internal/platform/adminapi
