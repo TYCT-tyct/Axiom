@@ -58,6 +58,7 @@
 | 内容 | 文档 |
 |---|---|
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
+| 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
 | 模型目录：请求写法的键的出处、计价事实、条款取证、官方价格页的 live 运行 | [archive/catalog.md](archive/catalog.md) |
 
 ## 文档怎么组织
