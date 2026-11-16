@@ -48,7 +48,7 @@ func checkExchangeSourcePairs(t *testing.T, inputs []ExchangeInput, date time.Ti
 	if err != nil || date.Format(time.DateOnly) != "2026-10-29" {
 		t.Fatalf("parse: %v %v", date, err)
 	}
-	if len(inputs) != len(minorDigits)*(len(minorDigits)-1)/2 {
+	if len(inputs) != len(exchangeCurrencies)*(len(exchangeCurrencies)-1)/2 {
 		t.Fatalf("pairs: %d", len(inputs))
 	}
 	for _, in := range inputs {
@@ -99,7 +99,7 @@ func TestExchangeSourceRecorded(t *testing.T) {
 		t.Fatal(err)
 	}
 	inputs, date, err := parseExchange(raw, exchangeAt)
-	if err != nil || date.Format(time.DateOnly) != "2026-10-28" || len(inputs) != len(minorDigits)*(len(minorDigits)-1)/2 {
+	if err != nil || date.Format(time.DateOnly) != "2026-10-28" || len(inputs) != len(exchangeCurrencies)*(len(exchangeCurrencies)-1)/2 {
 		t.Fatalf("recorded source: date %v pairs %d error %v", date, len(inputs), err)
 	}
 }
