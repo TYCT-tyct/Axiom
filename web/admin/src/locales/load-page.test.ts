@@ -1,12 +1,10 @@
 import i18next from "i18next";
 import { expect, it } from "vitest";
-import en from "./en";
-import initialEn from "./en/initial";
+import en, { initial as initialEn } from "./en";
 import { loadTranslatedPage } from "./load-page";
 import settings from "./settings";
 import suppliers from "./suppliers";
-import zh from "./zh";
-import initialZh from "./zh/initial";
+import zh, { initial as initialZh } from "./zh";
 
 it("loads complete deferred copy before returning a page and preserves both languages", async () => {
   await i18next.init({
