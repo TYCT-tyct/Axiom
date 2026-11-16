@@ -170,7 +170,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	r := &rig{
 		t: t, cfg: DefaultConfig(), endpoints: map[string]routing.Endpoint{}, sold: map[catalog.ModelID]billing.Sold{},
-		models: NewModelList(), price: cmpOr(o.price, cheap), alphaSpec: o.alphaSpec, spec: o.spec,
+		models: NewModelList(), price: cmp.Or(o.price, cheap), alphaSpec: o.alphaSpec, spec: o.spec,
 	}
 	// The tests run many rigs at once on a machine that is busy with other things, where a second is not enough for a
 	// transaction or a key lookup; the tests of the budgets set their own.
@@ -185,7 +185,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	}
 	// One live policy, as cmd/axiom wires it: the routing snapshot and billing reserve by the same segment settings,
 	// so a rig that segments in one of them segments in both.
-	segments := billing.NewSegmentPolicy(cmpOr(o.segments, billing.DefaultSegments()))
+	segments := billing.NewSegmentPolicy(cmp.Or(o.segments, billing.DefaultSegments()))
 	o.routing.Segments = segments
 	mods := []pg.Module{accounts.Module(), billing.Migrations(), catalog.Migrations, observability.Module(), Module()}
 	if o.suppliers {
@@ -227,7 +227,7 @@ func newRig(t *testing.T, opts ...func(*rigOptions)) *rig {
 	if r.handler, err = NewHandler(Deps{
 		Accounts: r.accounts, Catalog: r.catalog, Router: r.router, Billing: r.billing, Limits: r.limits, Memory: r.memory,
 		Run: r.run, Logger: slog.New(slog.NewTextHandler(logWriter{t}, nil)), Models: r.models, Proxies: o.proxies, KV: o.cache,
-		Outstanding: NewOutstanding(), Search: cmpOr(o.backends, SearchBackends(singleSearch{o.search})), Parser: o.parser,
+		Outstanding: NewOutstanding(), Search: cmp.Or(o.backends, SearchBackends(singleSearch{o.search})), Parser: o.parser,
 	}); err != nil {
 		t.Fatal(err)
 	}

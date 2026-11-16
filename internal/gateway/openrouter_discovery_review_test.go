@@ -8,6 +8,8 @@ import (
 	"testing"
 	"uuid"
 
+	"axiom/internal/billing"
+	"axiom/internal/catalog"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/routing"
 
@@ -125,7 +127,11 @@ func TestOpenRouterEndpointTagsAreStablePublicCodenames(t *testing.T) {
 
 func mustEncodeEndpoints(t *testing.T, model orEntry, endpoints []routing.Endpoint) []byte {
 	t.Helper()
-	body, err := encodeOREndpoints(model, endpoints)
+	price, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"USD","rates":{"request":"1.5"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := encodeOREndpointPrices(model, billing.Sold{Version: uuid.UUID{1}, Schedule: price}, 0, endpoints)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,15 +157,12 @@ func endpointTags(t *testing.T, body []byte) []string {
 // and omits it when none is, and the model's price list shows a per-request price when the schedule has one.
 func TestOpenRouterEndpointPublishesQuantizationAndRequestPrice(t *testing.T) {
 	t.Parallel()
-	model := orEntry{ID: "acme/model", Name: "model", Pricing: orPricing{Request: "1.5"}}
+	model := orEntry{ID: "acme/model", Name: "model"}
 	endpoints := []routing.Endpoint{
 		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-fp8", Context: 1, MaxOutput: 1, Quantization: "fp8"},
 		{ID: routing.EndpointID(uuid.NewV7()), Codename: "g-none", Context: 1, MaxOutput: 1},
 	}
-	body, err := encodeOREndpoints(model, endpoints)
-	if err != nil {
-		t.Fatal(err)
-	}
+	body := mustEncodeEndpoints(t, model, endpoints)
 	var reply struct {
 		Data orEndpointModel `json:"data"`
 	}

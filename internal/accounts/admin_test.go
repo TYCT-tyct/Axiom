@@ -84,10 +84,10 @@ func (o settingsOf) write(site uuid.UUID, v accounts.SiteSettings) error {
 	})
 }
 
-func (o settingsOf) entries() (n int) {
+func (o settingsOf) entries(action string) (n int) {
 	o.t.Helper()
 	if err := o.db.Tx(o.t.Context(), platform, func(tx pg.Tx) error {
-		return tx.QueryRow(o.t.Context(), `SELECT count(*) FROM platform.audit_log WHERE action = 'site_settings.update'`).Scan(&n)
+		return tx.QueryRow(o.t.Context(), `SELECT count(*) FROM platform.audit_log WHERE action = $1`, action).Scan(&n)
 	}); err != nil {
 		o.t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestSiteSettingsAreWrittenWhole(t *testing.T) {
 			t.Errorf("settings as set (-want +got):\n%s", diff)
 		}
 	}
-	if n := o.entries(); n != 2 {
+	if n := o.entries("site_settings.update"); n != 2 {
 		t.Errorf("%d audit entries, want 2", n)
 	}
 }
@@ -224,8 +224,8 @@ func TestSiteSettingsRefuseModelPricesWhileAnOldNodeIsLive(t *testing.T) {
 	o := newSettingsOf(t)
 	setModelPricesReady(t, o.db, false)
 	hidden := false
-	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); !refuses(err, "model_prices_public") || o.entries() != 0 {
-		t.Fatalf("hiding prices with an old node: %v, %d audit entries", err, o.entries())
+	if err := o.write(s1, accounts.SiteSettings{ModelPricesPublic: &hidden}); !refuses(err, "model_prices_public") || o.entries("site_settings.update") != 0 {
+		t.Fatalf("hiding prices with an old node: %v, %d audit entries", err, o.entries("site_settings.update"))
 	}
 	if got := o.mustRead(s1); got.ModelPricesPublic != nil {
 		t.Fatalf("a refused hide changed the setting: %v", got.ModelPricesPublic)
@@ -252,8 +252,8 @@ func TestSiteSettingsRefusals(t *testing.T) {
 	if err := o.write(s1, accounts.SiteSettings{AdminIdle: time.Hour}); err != nil {
 		t.Fatal(err)
 	}
-	if err := o.write(s1, accounts.SiteSettings{AdminIdle: time.Second}); !refuses(err, "admin_idle_timeout_seconds") || o.entries() != 1 {
-		t.Errorf("a value out of bounds: %v, %d entries", err, o.entries())
+	if err := o.write(s1, accounts.SiteSettings{AdminIdle: time.Second}); !refuses(err, "admin_idle_timeout_seconds") || o.entries("site_settings.update") != 1 {
+		t.Errorf("a value out of bounds: %v, %d entries", err, o.entries("site_settings.update"))
 	}
 	if got := o.mustRead(s1); got.AdminIdle != time.Hour {
 		t.Errorf("a refused write changed the settings: %+v", got)
