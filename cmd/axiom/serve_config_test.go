@@ -294,26 +294,21 @@ func TestByokRejectsUnknownValues(t *testing.T) {
 
 func TestResponseCacheContentIsOffUntilThePlatformAllowsIt(t *testing.T) {
 	t.Parallel()
-	off, err := readSettings(coreEnviron())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if off.responseCache {
-		t.Error("reply content is allowed without the platform saying so")
-	}
-	empty, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT="))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if empty.responseCache {
-		t.Error("an empty setting enabled reply content")
-	}
-	on, err := readSettings(coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT=on"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !on.responseCache {
-		t.Error("the platform's on was not read")
+	for _, c := range []struct {
+		name    string
+		environ []string
+		want    bool
+	}{
+		{"unset", coreEnviron(), false},
+		{"empty", coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT="), false},
+		{"on", coreEnviron("AXIOM_RESPONSE_CACHE_CONTENT=on"), true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := readSettings(c.environ)
+			if err != nil || s.responseCache != c.want {
+				t.Fatalf("response cache = %v, %v; want %v", s.responseCache, err, c.want)
+			}
+		})
 	}
 	if _, err := readSettings([]string{"AXIOM_RESPONSE_CACHE_CONTENT=maybe"}); err == nil ||
 		!strings.Contains(err.Error(), "AXIOM_RESPONSE_CACHE_CONTENT: want on or off") {

@@ -1,10 +1,6 @@
 package protocol
 
-import (
-	"bytes"
-
-	"axiom/internal/catalog"
-)
+import "axiom/internal/catalog"
 
 // UsageContextOf is the metering context a relay of r needs. The gateway also uses it when replaying a cached upstream
 // reply, so the replay sees the same request facts as the attempt that stored it.
@@ -142,7 +138,7 @@ const (
 type rewriter struct {
 	reader
 	body, out                             []byte
-	src                                   bytes.Buffer
+	src                                   decoderBuffer
 	at                                    int
 	base, end                             int // offsets of an indexed top-level value; zero on the streaming path
 	consumed                              bool
