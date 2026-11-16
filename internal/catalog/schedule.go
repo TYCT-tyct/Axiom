@@ -30,7 +30,7 @@ func (s Schedule) IsZero() bool {
 	for st := range numServiceTiers {
 		for it := range NumItems {
 			for band := range len(s.above) + 1 {
-				if p, ok := s.price(st, band, it); ok && p.String() != "0" {
+				if p, ok := s.price(st, band, it); ok && !p.IsZero() {
 					return false
 				}
 			}
