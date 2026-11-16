@@ -55,11 +55,13 @@
 
 ## 存档
 
-推导、调研和被否决方案的细节，不进任务卡和阅读清单；与现有文档冲突时以现有文档为准。
+不是现行规则：做决定时的外部对照、被否决的方案和推导，只在追问某个决定的来历时读，任务卡不引用。
 
 | 内容 | 文档 |
 |---|---|
+| 账户与租户的外部对照、被否决的方案、准入与限频的推导和测量 | [archive/accounts.md](archive/accounts.md) |
 | 端点评估的真伪信号比较与熔断概率推导 | [archive/quality.md](archive/quality.md) |
+| 接入与协议转换的参考基线、方案比较、微基准与推导 | [archive/gateway.md](archive/gateway.md) |
 | 平台层：测试设施、现有指标、出站地址策略、密钥与信封、连接池与迁移的推导、接口约定的取舍 | [archive/platform.md](archive/platform.md) |
 
 ## 文档怎么组织
