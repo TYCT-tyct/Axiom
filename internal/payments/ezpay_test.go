@@ -24,32 +24,15 @@ func ezPayWrite(w http.ResponseWriter, body string) {
 
 func ezPaySettingsJSON(t *testing.T, gateway, pid string) []byte {
 	t.Helper()
-	raw, err := jsonx.MarshalCanonical(easyPaySettings{Preset: "ezpay", Gateway: gateway, PID: pid})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return raw
+	return easyPayJSON(t, easyPaySettings{Preset: "ezpay", Gateway: gateway, PID: pid})
 }
 
 func ezPayConfig(t *testing.T, gateway string, certificates ...*x509.Certificate) MerchantConfig {
 	t.Helper()
-	client := egress.NewForTesting(egresstest.Loopback(t, certificates...))
-	t.Cleanup(client.CloseIdleConnections)
-	return MerchantConfig{
-		ID: MerchantID(uuid.NewV7()), Currency: currency(t, "USD"),
-		Settings: ezPaySettingsJSON(t, gateway, "1001"),
-		Secrets:  map[string]secret.Secret{"key": secret.New(theKey)},
-		Client:   client,
-	}
-}
-
-func ezPayOpen(t *testing.T, cfg MerchantConfig) Channel {
-	t.Helper()
-	c, err := (EasyPay{}).Open(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return c
+	cfg := easyPayConfig(t, gateway, certificates...)
+	cfg.Currency = currency(t, "USD")
+	cfg.Settings = ezPaySettingsJSON(t, gateway, "1001")
+	return cfg
 }
 
 func ezPayRequest(t *testing.T) CreateRequest {
@@ -89,7 +72,7 @@ func TestEzPayCreateSignatureVectors(t *testing.T) {
 //nolint:gocognit // one rejected configuration per row; the table is the test
 func TestEzPayConfiguration(t *testing.T) {
 	cfg := ezPayConfig(t, "https://pay.example.com/prefix/SUBMIT.php/?key=discard#fragment")
-	c := ezPayOpen(t, cfg)
+	c := easyPayOpen(t, cfg)
 	if c.Caps() != CapQuery {
 		t.Fatal("EzPay declares query only", c.Caps())
 	}
@@ -147,7 +130,7 @@ func TestEzPayCreateBuildsASignedRedirect(t *testing.T) {
 		t.Error("redirect checkout made a network call")
 	}))
 	t.Cleanup(server.Close)
-	c := ezPayOpen(t, ezPayConfig(t, server.URL, server.Certificate()))
+	c := easyPayOpen(t, ezPayConfig(t, server.URL, server.Certificate()))
 	r := ezPayRequest(t)
 	checkout, err := c.Create(t.Context(), r)
 	if err != nil {
@@ -241,7 +224,7 @@ func TestEzPayQueryShapes(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	c := ezPayOpen(t, ezPayConfig(t, server.URL, server.Certificate()))
+	c := easyPayOpen(t, ezPayConfig(t, server.URL, server.Certificate()))
 
 	for _, tc := range []struct {
 		order string
@@ -289,7 +272,7 @@ func ezPayCallback(v url.Values, key string) Callback {
 
 //nolint:cyclop // each callback variant and its amount is the test
 func TestEzPayVerify(t *testing.T) {
-	c := ezPayOpen(t, ezPayConfig(t, "https://pay.example.com"))
+	c := easyPayOpen(t, ezPayConfig(t, "https://pay.example.com"))
 	base := func() url.Values {
 		return url.Values{
 			"pid": {"1001"}, "trade_no": {"T1"}, "out_trade_no": {"ord_demo"}, "type": {"usdt_trc20"},
@@ -337,7 +320,7 @@ func TestEzPayVerify(t *testing.T) {
 
 	rotating := ezPayConfig(t, "https://pay.example.com")
 	rotating.Secrets["old_key"] = secret.New("old-key")
-	old := ezPayOpen(t, rotating)
+	old := easyPayOpen(t, rotating)
 	notice, err = old.Verify(t.Context(), ezPayCallback(base(), "old-key"))
 	if err != nil || !notice.Success {
 		t.Fatalf("old key: %+v, %v", notice, err)

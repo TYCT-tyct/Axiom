@@ -359,57 +359,37 @@ func TestASlowClientGetsItsWholeReply(t *testing.T) {
 	})
 }
 
-// TestAWholeReplyIsStoppedWhenItTakesTooLong: a reply has a total time of its own — its bytes at respondRate, or one
-// write's deadline, whichever is longer — and each chunk's deadline is what is left of it. A client that would take
-// longer than that is taken for one that has gone: the writes stop, the settlement stays what it was (the reply was
-// read, the report was charged) and the call's slot and memory are given back. The client here reads a 64 KiB chunk in
-// 8s, which one write's own deadline would allow; the reply's total of 10s is what stops it after the first chunk
-// (docs/domains/gateway.md「转发规则」, README.md「超时与限额」).
-func TestAWholeReplyIsStoppedWhenItTakesTooLong(t *testing.T) {
+func TestWholeReplyWriteFailuresKeepReportedUsage(t *testing.T) {
 	t.Parallel()
-	run(t, func(t *testing.T, ctx context.Context) {
-		reply := bigCompacted(256 << 10)
-		want := compactReply(t, reply)
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
-		h.w.rate = 8 << 10 // 8 KiB a second: a chunk in 8s, the 256 KiB reply in 32s against a total of 16s
-		h.run()
-		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != want[:respondChunk] {
-			t.Fatalf("status %d, %d writes, %d bytes:\n%s", h.w.status, h.w.wrote(), len(h.w.body()), h.w.body())
-		}
-		s := h.ended()
-		a := s.outcome.Attempts
-		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
-			t.Errorf("ending %+v", s.outcome)
-		}
-		if got := a[0].Segments[0].Usage.Count(catalog.ItemInput); got != 60 {
-			t.Errorf("the reply's usage is %d, want it charged with the report", got)
-		}
-	})
-}
-
-// TestAClientThatStopsReadingAWholeReply: a write that fails stops the reply where it is, and the settlement stands: the
-// reply was read and reported, so it is charged as delivered what was written of it (docs/domains/gateway.md
-// 「用量与费用」).
-func TestAClientThatStopsReadingAWholeReply(t *testing.T) {
-	t.Parallel()
-	run(t, func(t *testing.T, ctx context.Context) {
-		reply := bigCompacted(256 << 10)
-		want := compactReply(t, reply)
-		h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
-		h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
-		h.w.failFrom = 2 // the second chunk's write fails, as a client that stopped reading
-		h.run()
-		if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != want[:respondChunk] {
-			t.Fatalf("status %d, %d writes, %d bytes", h.w.status, h.w.wrote(), len(h.w.body()))
-		}
-		s := h.ended()
-		a := s.outcome.Attempts
-		if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
-			t.Errorf("ending %+v", s.outcome)
-		}
-		if got := a[0].Segments[0].Usage.Count(catalog.ItemOutput); got != 6 {
-			t.Errorf("the reply's output is %d, want the report charged", got)
-		}
-	})
+	for _, tc := range []struct {
+		name     string
+		rate     int64
+		failFrom int
+	}{
+		{"total deadline", 8 << 10, 0}, // a chunk in 8s, the reply in 32s against a total of 16s
+		{"client stops reading", 0, 2},
+	} {
+		run(t, func(t *testing.T, ctx context.Context) {
+			reply := bigCompacted(256 << 10)
+			want := compactReply(t, reply)
+			h := newHarness(t, ctx, options{mutate: func(c *Call) { compact(t, c) }, final: compactFinal(t, reply)})
+			h.up.eps[uuidOf(ep(1))].script = []scripted{wholeAnswer(reply)}
+			h.w.rate, h.w.failFrom = tc.rate, tc.failFrom
+			h.run()
+			if h.w.status != http.StatusOK || h.w.wrote() != 1 || h.w.body() != want[:respondChunk] {
+				t.Fatalf("%s: status %d, %d writes, %d bytes:\n%s", tc.name, h.w.status, h.w.wrote(), len(h.w.body()), h.w.body())
+			}
+			s := h.ended()
+			a := s.outcome.Attempts
+			if len(a) != 1 || a[0].Result != billing.Aggregated || a[0].Finish == billing.FinishCancelled {
+				t.Errorf("%s: ending %+v", tc.name, s.outcome)
+			}
+			if got := a[0].Segments[0].Usage.Count(catalog.ItemInput); got != 60 {
+				t.Errorf("%s: the reply's usage is %d, want it charged with the report", tc.name, got)
+			}
+			if got := a[0].Segments[0].Usage.Count(catalog.ItemOutput); got != 6 {
+				t.Errorf("%s: the reply's output is %d, want the report charged", tc.name, got)
+			}
+		})
+	}
 }
