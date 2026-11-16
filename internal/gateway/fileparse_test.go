@@ -58,23 +58,6 @@ func parseHarness(t *testing.T, parser fileparse.Parser) (*Handler, *Call) {
 	return &Handler{Deps: deps}, &Call{ID: uuid.NewV7()}
 }
 
-func TestParseFilesReplacesTheFile(t *testing.T) {
-	t.Parallel()
-	parser := &recordingParser{text: "The parsed page."}
-	h, c := parseHarness(t, parser)
-	body := fileBody("mistral-ocr")
-	req, err := protocol.Inspect(protocol.Chat, body)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, parsed, err := h.parseFiles(t.Context(), c, body, req, true)
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkParse(t, parser, parsed, out, c)
-	c.Done()
-}
-
 // checkParse holds the parse step to what one parsed file must leave behind: the backend's call, the count, the text in
 // the body's file's place, and the annotation a reuse sends back.
 func checkParse(t *testing.T, parser *recordingParser, req protocol.Request, out []byte, c *Call) {
@@ -293,92 +276,51 @@ const (
 		`"cache_write":"0.000001","image_in":"0.000001","web_search":"0.01","file_parse":"0.01"}}}}`
 )
 
-// TestFileParserThroughTheHandler: a request with an inline file goes through the handler, is parsed before admission,
-// reaches the upstream as the parsed text, reserves one call with the parse's per-use charge in it, settles once, and
-// comes back with the annotation the client can send to skip reparsing, its cost naming the parse's one per-use
-// charge. One call, one reservation, one settlement: the parse is billed inside the call it was made for.
 func TestFileParserThroughTheHandler(t *testing.T) {
 	t.Parallel()
-	parser := &recordingParser{text: "The parsed page."}
-	r := newRig(t, func(o *rigOptions) {
-		o.spec, o.parser = parseSpec, parser
-		o.price = parsePrice
-	})
-	up := withCosts(r, r.billing, fakeCosts{cost: 1000, known: true})
-	replies, _ := sample(t, protocol.Chat)
-	for _, e := range up.eps {
-		e.script = []scripted{wholeAnswer(strings.Join(replies, ""))}
-	}
-	a := r.newAccount(1e9)
-	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody("mistral-ocr")))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
-	}
-	checkParseReply(t, out)
-	if len(parser.docs) != 1 || string(parser.docs[0].Data) != "%PDF-1.7 a scanned page" {
-		t.Fatalf("the parser was given %d documents, want the request's one file", len(parser.docs))
-	}
-	checkParsedForward(t, up)
-	checkParseBilling(t, r, r.admits[0])
-	r.idle(1 << 30)
+	testFileParserThroughTheHandler(t, "mistral-ocr", true, 1e9, checkParseReply)
 }
 
-// TestCloudflareParsingIsFree: the cloudflare-ai engine is free in OpenRouter's File Parser. The file is still parsed
-// and annotated, but the call reserves and settles no file_parse unit and the reply has no server-tool cost.
 func TestCloudflareParsingIsFree(t *testing.T) {
 	t.Parallel()
-	parser := &recordingParser{text: "The parsed page."}
-	r := newRig(t, func(o *rigOptions) {
-		o.spec, o.parser = parseSpec, parser
-		o.price = parsePrice
-	})
-	up := withCosts(r, r.billing, fakeCosts{cost: 1000, known: true})
-	replies, _ := sample(t, protocol.Chat)
-	for _, e := range up.eps {
-		e.script = []scripted{wholeAnswer(strings.Join(replies, ""))}
-	}
-	a := r.newAccount(1e9)
-	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody("cloudflare-ai")))
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
-	}
-	checkParseReplyFree(t, out)
-	if len(parser.docs) != 1 {
-		t.Fatalf("the parser was given %d documents, want one", len(parser.docs))
-	}
-	if parser.countPages {
-		t.Fatal("the free engine asked for a page count")
-	}
-	checkParsedForward(t, up)
-	r.idle(1 << 30)
+	testFileParserThroughTheHandler(t, "cloudflare-ai", true, 1e9, checkParseReplyFree)
 }
 
-// TestFileParseKeepsSearchBillingUntilTheSwitchIsOn: a site that already parses keeps the old web_search unit after
-// upgrading this release, because the catalog switch is off. The parse succeeds without a file_parse price, so the
-// upgrade does not take an existing OCR site offline.
 func TestFileParseKeepsSearchBillingUntilTheSwitchIsOn(t *testing.T) {
 	t.Parallel()
+	testFileParserThroughTheHandler(t, "mistral-ocr", false, 1e12, checkParseReplyOld)
+}
+
+// Keep the documented test entry points while sharing their HTTP setup and forwarding assertions.
+func testFileParserThroughTheHandler(t *testing.T, engine string, fileBilling bool, balance int64, checkReply func(*testing.T, string)) {
+	t.Helper()
 	parser := &recordingParser{text: "The parsed page."}
 	r := newRig(t, func(o *rigOptions) {
-		o.spec, o.parser, o.price, o.fileParse = parseSpec, parser, `{"v":1,"currency":"USD","rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"},`+
-			`"service_tiers":{"priority":{"rates":{"input":"0.000001","output":"0.000002","cache_write":"0.000001","image_in":"0.000001","web_search":"0.01"}}}}`, false
+		o.spec, o.parser, o.price, o.fileParse = parseSpec, parser, parsePrice, fileBilling
+		if !fileBilling {
+			o.price = strings.ReplaceAll(parsePrice, `,"file_parse":"0.01"`, "")
+		}
 	})
 	up := withCosts(r, r.billing, fakeCosts{cost: 1000, known: true})
 	replies, _ := sample(t, protocol.Chat)
 	for _, e := range up.eps {
 		e.script = []scripted{wholeAnswer(strings.Join(replies, ""))}
 	}
-	a := r.newAccount(1e12)
-	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody("mistral-ocr")))
+	a := r.newAccount(balance)
+	resp, out := r.do(http.MethodPost, "/v1/chat/completions", a.key, bytes.NewReader(fileBody(engine)))
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", resp.StatusCode, out)
 	}
-	checkParseReplyOld(t, out)
+	checkReply(t, out)
 	if len(parser.docs) != 1 {
 		t.Fatalf("the parser was given %d documents, want one", len(parser.docs))
 	}
-	if parser.countPages {
-		t.Fatal("the old billing path asked for a page count")
+	c := r.admits[0]
+	if engine == "mistral-ocr" && fileBilling {
+		checkParse(t, parser, c.Request, c.Body, c)
+		checkParseBilling(t, r, c)
+	} else if parser.countPages {
+		t.Fatal("a path without page billing asked for a page count")
 	}
 	checkParsedForward(t, up)
 	r.idle(1 << 30)
