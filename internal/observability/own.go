@@ -37,7 +37,7 @@ type OwnCall struct {
 // OwnQuery selects the calls of one account, newest first, from those the transaction's scope can see. Account is
 // required: it is what the index is read by. Since is inclusive and Until exclusive; Model
 // and ClientApp, when not empty, must match exactly; After continues from a previous page.
-// FellBack applies only to ListOwn.
+// FellBack applies to ListOwn and ListOwnSessions.
 type OwnQuery struct {
 	FellBack                  bool
 	Account                   uuid.UUID
