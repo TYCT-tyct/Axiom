@@ -127,8 +127,8 @@ func TestPrepareBudgetedRefusesWithoutWaiting(t *testing.T) {
 	}
 }
 
-// TestPrepareBudgetedRefundsFailures: a failure after allocations returns the whole working set, including the
-// exclusive retry's charges, and the next request can use the same budget.
+// TestPrepareBudgetedRefundsFailures: a failure after allocations returns the whole working set and its preparation
+// share, and the next request can use the same budget.
 func TestPrepareBudgetedRefundsFailures(t *testing.T) {
 	t.Parallel()
 	body := []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"stop":["x"]}`)
@@ -144,8 +144,8 @@ func TestPrepareBudgetedRefundsFailures(t *testing.T) {
 	for _, size := range []int64{b.peak - 1, b.peak} {
 		m := NewMemory(size)
 		_, held, err := PrepareBudgeted(m, &r, body, target, Rewrites{})
-		if err == nil || held != 0 || m.left.Load() != size {
-			t.Fatalf("budget %d: held %d, left %d, error %v", size, held, m.left.Load(), err)
+		if err == nil || held != 0 || m.left.Load() != size || m.preparationHeld != 0 {
+			t.Fatalf("budget %d: held %d, left %d, preparing %d, error %v", size, held, m.left.Load(), m.preparationHeld, err)
 		}
 		if errors.Is(err, ErrMemory) != (size < b.peak) {
 			t.Fatalf("budget %d: unexpected memory refusal: %v", size, err)
@@ -178,8 +178,9 @@ func TestPrepareRetriesAfterCompetingPartialCharges(t *testing.T) {
 	need := prepareNeed(t, &r, body, target)
 	m := NewMemory(need)
 	partial := need - int64(len(body))
-	if !m.Charge(partial) {
-		t.Fatal("partial charge refused")
+	competitor := &budget{m: m}
+	if err := competitor.draw(partial); err != nil {
+		t.Fatal(err)
 	}
 	m.preparing.RLock() // another preparation has charged only part of its tree
 	type result struct {
@@ -194,7 +195,7 @@ func TestPrepareRetriesAfterCompetingPartialCharges(t *testing.T) {
 	}()
 	func() {
 		defer m.preparing.RUnlock()
-		defer m.Refund(partial)
+		defer competitor.give(partial)
 		// A pending writer blocks new readers. Wait for that state, or for an early refusal,
 		// without relying on a scheduler delay or the time conversion happens to take.
 		for m.preparing.TryRLock() {

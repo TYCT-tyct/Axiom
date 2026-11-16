@@ -19,6 +19,11 @@ type Memory struct {
 	// Preparations share the gate until one runs out of room. Its exclusive retry lets the other
 	// preparations return their partial charges before it starts drawing again. No I/O holds this gate.
 	preparing sync.RWMutex
+	// Keep the remaining budget and the preparations' share coherent when deciding whether a failed
+	// draw could succeed after competitors leave. Sent bodies and relay buffers are not in this share.
+	// Preparations acquire preparing before preparationMu; Charge and Refund acquire neither.
+	preparationMu   sync.Mutex
+	preparationHeld int64
 }
 
 // NewMemory returns a budget of size bytes.
