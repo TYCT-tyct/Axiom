@@ -40,10 +40,7 @@ func claimName(c catalog.Claim) string { return [...]string{"unset", "no", "yes"
 // checkOutcome prepares body for an endpoint that is claudeLike but for change, and holds the result to want.
 func checkOutcome(t *testing.T, want outcome, from, to protocol.Format, body string, change func(*protocol.Target)) {
 	t.Helper()
-	r, err := protocol.Inspect(from, []byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, from, []byte(body))
 	target := claudeLike(to)
 	target.MaxOutput = 4096
 	change(&target)
@@ -181,13 +178,10 @@ func TestSamplingAndForcedToolAreDecidedApart(t *testing.T) {
 // refusalOf is what an endpoint that says nothing of its model (but for change) answers to a Chat request.
 func refusalOf(t *testing.T, body string, change func(*protocol.Target)) *protocol.NotSupported {
 	t.Helper()
-	r, err := protocol.Inspect(protocol.Chat, []byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, protocol.Chat, []byte(body))
 	target := protocol.Target{Format: protocol.Messages, Model: "up", MaxOutput: 4096}
 	change(&target)
-	_, err = protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
+	_, err := protocol.Prepare(&r, []byte(body), target, protocol.Rewrites{Identity: derive})
 	ns, _ := errors.AsType[*protocol.NotSupported](err)
 	if ns == nil {
 		t.Fatalf("got %v, want a refusal", err)

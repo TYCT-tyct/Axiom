@@ -36,7 +36,7 @@ type aggregator interface {
 // aggBase is what the three aggregators share: a reader for the events' data, in place, and the accounting.
 type aggBase struct {
 	reader
-	src  bytes.Buffer
+	src  decoderBuffer
 	data []byte // the event being read
 	// draw asks the relay to charge n bytes. held is the capacity of the pieces and bounded by aggregateLimit; drawn
 	// is what was charged for them, which is more for a piece that is copied once more to make the body.
@@ -88,12 +88,8 @@ func grow[T any](a *aggBase, b []T, n, factor int) ([]T, error) {
 
 // begin starts reading v, a value of the event's data or the data itself.
 func (a *aggBase) begin(v []byte, opts ...jsontext.Options) {
-	a.data, a.src = v, *bytes.NewBuffer(v)
-	if a.dec == nil {
-		a.dec = jsontext.NewDecoder(&a.src, opts...)
-	} else {
-		a.dec.Reset(&a.src, opts...) // Reset forgets the options it was made with
-	}
+	a.data = v
+	a.dec = a.src.reset(a.dec, v, opts...)
 }
 
 // value reads a value as written: a slice of the data, which lasts as long as the data.
@@ -102,8 +98,7 @@ func (a *aggBase) value() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	to := int(a.dec.InputOffset())
-	return a.data[to-len(v) : to], nil
+	return valueIn(a.dec, a.data, v), nil
 }
 
 // capture reads a value into dst, which stays as it was for null.
@@ -149,6 +144,19 @@ func (a *aggBase) set(dst *[]byte, v []byte, factor int) error {
 	b, err := grow(a, (*dst)[:0], len(v), factor)
 	if err != nil {
 		return err
+	}
+	*dst = append(b, v...)
+	return nil
+}
+
+// appendEntry copies one comma-separated element, charging its room before growing.
+func (a *aggBase) appendEntry(dst *[]byte, v []byte, factor int) error {
+	b, err := grow(a, *dst, len(v)+1, factor)
+	if err != nil {
+		return err
+	}
+	if len(b) > 0 {
+		b = append(b, ',')
 	}
 	*dst = append(b, v...)
 	return nil

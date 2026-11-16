@@ -231,6 +231,12 @@ func checkFallbackIndexPlans(t *testing.T, db *pg.DB, database pgtest.Database) 
 	}{
 		{"sparse", heavyAccount, 400}, {"no match", lightAccount, 20},
 	}
+	var indexDDL string
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT replace(pg_get_indexdef('observability.call_log_account_fallback_at'::regclass), 'ON ONLY', 'ON')`).Scan(&indexDDL)
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := pgtest.Run(t.Context(), database.Superuser, "DROP INDEX observability.call_log_account_fallback_at"); err != nil {
 		t.Fatal(err)
 	}
@@ -241,11 +247,7 @@ func checkFallbackIndexPlans(t *testing.T, db *pg.DB, database pgtest.Database) 
 		before[i] = buffers(t, plan)
 		t.Logf("fallback %s before index: %d buffers\n%s", c.name, before[i], plan)
 	}
-	migration, err := migrations.ReadFile("migrations/00046_own_fallback.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := pgtest.Run(t.Context(), database.Superuser, string(migration)); err != nil {
+	if err := pgtest.Run(t.Context(), database.Superuser, indexDDL); err != nil {
 		t.Fatal(err)
 	}
 	for i, c := range cases {

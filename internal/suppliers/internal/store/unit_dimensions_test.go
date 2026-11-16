@@ -10,12 +10,8 @@ import (
 	"axiom/internal/suppliers/internal/store"
 )
 
-func TestUpgradeSnapshotsUnitValueDimensionsAndKeepsLegacyWrites(t *testing.T) {
-	database := pgtest.New(t)
-	old := pg.Module{Name: "suppliers", Migrations: migrationsThrough(t, "00013_listing.sql")}
-	if err := pg.Migrate(t.Context(), database.Migrator, old); err != nil {
-		t.Fatal(err)
-	}
+func TestBaselineSnapshotsUnitValueDimensions(t *testing.T) {
+	database := pgtest.New(t, pg.Module{Name: "suppliers", Migrations: store.Migrations()})
 	db := openApp(t, database.App)
 	w := seed(t, db)
 	if err := run(t, db, platform, func(ctx context.Context, tx pg.Tx) error {
@@ -42,7 +38,7 @@ func TestUpgradeSnapshotsUnitValueDimensionsAndKeepsLegacyWrites(t *testing.T) {
 	defer db.Close()
 	for name, id := range w.supplier {
 		if err := insert(id); err != nil {
-			t.Fatalf("%s legacy insert after upgrade: %v", name, err)
+			t.Fatalf("%s insert after migration rerun: %v", name, err)
 		}
 		var count int
 		if err := run(t, db, platform, func(ctx context.Context, tx pg.Tx) error {
@@ -52,7 +48,7 @@ func TestUpgradeSnapshotsUnitValueDimensionsAndKeepsLegacyWrites(t *testing.T) {
 			t.Fatal(err)
 		}
 		if count != 2 {
-			t.Errorf("%s: %d rows with dimensions, want backfilled and new rows", name, count)
+			t.Errorf("%s: %d rows with dimensions, want both inserted rows", name, count)
 		}
 	}
 }

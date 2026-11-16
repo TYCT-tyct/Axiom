@@ -2,25 +2,6 @@
 
 发布前逐项确认，本文记录固定交付物和模型目录检查；其余按 project-workflow 的发布方法。部署到服务器要先问负责人（[CONTRIBUTING](../../CONTRIBUTING.md)），本文的写库步骤改的是线上目录，同样先问。
 
-## 账户速率限额上线前核对
-
-首次上线 E4-2/P13 时，默认 6000 次/窗口从原有每 key 节点保护扩展到**按账户聚合**的业务额度（调用与 count_tokens 各一池，默认窗口一分钟）。已有账户若 4 把 key 各 2000 rpm，升级后会收到 account_rate 429。账户/等级覆盖值未设置时自动继承此默认值；迁移不会自动识别高流量账户。
-
-发布执行者须在获准访问生产后完成以下核对，并把时间范围、账户峰值及覆盖值清单写入发布记录；本地测试不替代生产核对，未取得完整数据不得标成通过：
-
-1. 从能识别已认证账户的入口请求记录，分别汇总推理与 count_tokens 在配置 RateWindow 内的峰值，覆盖代表性业务高峰并评估突发余量；计入业务 key 拒绝，排除超过节点保护的尝试。只有计费/完成调用记录不足以证明安全，它遗漏 count_tokens、未预留及失败的请求；没有完整入口数据时先补观测，暂缓默认限额上线。
-2. 对达到或超过默认值、或需要余量的现有账户，先通过后台 `PUT /api/admin/v1/rate-limits/account/{id}` 配置经确认的 rate_requests，并读取核对，保留 MFA、幂等键、理由与审计。需要保持不设账户业务上限时可明确设 0，仍受节点/key 限制；不要以 null 代替 0，null 会重新继承等级或 6000。旧节点不提供该接口时，须在放流量前通过隔离的新版本管理入口预设，核对完成后再切流量。
-3. 切换后核对 `axiom_gateway_rate_limited_total{reason="account_rate"}` 与 reason="business_key_rate" 的增量、受影响账户的入口记录和 429 头。按账户的识别靠访问记录，不把账户 ID 加入低基数指标；异常时调整已核对的后台覆盖值或按下节回滚镜像，保留兼容的数据库列。
-
-## 注册同意上线前核对
-
-注册同意（[账户与租户](../domains/accounts.md#登录与会话)）要求所有控制台操作先检查当前条款版本。旧节点没有这段查询和守卫，混合版本期间发布文档会让同一个用户随负载均衡结果被放行或拒绝。
-
-1. 先升级全部服务节点和页面，确认每个节点都返回 `GET /api/console/v1/legal` 和 `getSession.consent`；旧页面没有阅读和接受入口，先升级页面再发布。`00035_legal_locales.sql` 只展开 schema，旧节点仍可按 `(site, kind, version)` 发布和接受，但不会写 `locale`；触发器会把旧接受的 `locale` 解析成文档实际语言。
-2. 全部节点和页面就绪后才发布首份文档；发布前站点没有文档，机制不改变行为。兼容阶段版本号按 `kind` 跨语言共享，因此 `terms/en` 可能从 2 开始；这是预期行为，不要为了“从 1 开始”先删旧行。页面、接受接口和 `ValidSession` 都先取每种 `kind` 的最新版本，再在该版本内选语言；不能按语言选较低版本，否则新节点接受后请求落到旧节点会再次要求同意。旧节点响应没有 `locale` 时，页面提交也省略。
-3. 已有节点全部换成这个版本、并确认没有旧节点后，才做清理迁移：删除旧 `(site_id, kind, version)` 主键、旧接受唯一键和旧外键，把 `NextLegalVersion` 改成按 `(kind, locale)` 编号，并把历史游标改成 `kind:locale:version`；同时把页面、接受和会话检查切到按语言独立版本。清理不能和本次扩展同一次部署。
-4. 发布后不把流量切回不支持 locale 的版本；确需回退时停用站点或保持新版本，不能只换镜像。回退前先确认旧程序仍兼容已经写入的接受记录；本次 Down 只删新列、约束和触发器，旧约束未动，且版本号跨语言唯一，不会撞主键。
-
 ## 固定交付物与 digest
 
 `ci.yml` 的 `deploy` 作业在非轻量列车和 `main`（push 或不带 base 的 dispatch）上运行 `release-check.sh`，所以只在 `main` 上会跑的发布步骤会先在列车里失败、退回弄坏它的 PR；普通 `main` 运行不保留交付物，只有在 `main` 当前 tip 上显式调起的发布运行才上传；PR 不生成。runner 由 `runner-host.sh` 安装固定版本（当前 v0.38.0）、按发布页 `checksums.txt` 校验 SHA-256 的 buildx CLI 插件，`check` 运行 `docker buildx version`；缺少它时 `docker buildx create --name …` 会落到 `docker --name` 并以 125 退出（2026-10-29 `main` 的 `deploy`）。
@@ -133,7 +114,7 @@ PATH="$tools:$PATH" bash scripts/ci/verify-release.sh "$RELEASE_REPOSITORY@$dige
 
 **一次换一个节点，换之前新节点已经就绪。** 同时停掉所有旧节点会让滚动期间没有节点接流量；核心和入口都要至少留一个就绪的节点。
 
-**被替换的版本必须在新 schema 上启动。** CI 的部署检查在列车和 `main` 上构建被替换的版本（列车的 `BASE`，`main` 落地提交的 `Train` 记录里的基础提交，普通提交的上一提交），用本树的 `axiom migrate` 迁移一个独立数据库，启动旧程序并等它的 `/readyz` 通过（`scripts/ci/old-binary-check.sh`，在 `scripts/ci/deploy-check.sh` 里先于旧迁移角色升级运行）。只回溯一个发布；更旧的版本可能被一次性的单向改动破坏，`00040_fallbacks_no_markup.sql` 就是一次（[billing 的决策与理由](../domains/billing.md#决策与理由)）。当前发布如果再做这种改动，这个检查会失败，是否接受必须作为发布决定显式记录；检查不把任意历史提交当作兼容目标。旧版本的程序在本树里没有前端构建，检查给它一个最小的嵌入前端；页面与 schema 兼容无关。
+**被替换的版本必须在新 schema 上启动。** CI 的部署检查在列车和 `main` 上构建被替换的版本（列车的 `BASE`，`main` 落地提交的 `Train` 记录里的基础提交，普通提交的上一提交），用本树的 `axiom migrate` 迁移一个独立数据库，启动旧程序并等它的 `/readyz` 通过（`scripts/ci/old-binary-check.sh`，在 `scripts/ci/deploy-check.sh` 里先于旧迁移角色升级运行）。只回溯一个发布；更旧的版本可能被一次性的单向改动破坏，兜底价移除旧加价字段就是一次（[billing 的决策与理由](../domains/billing.md#决策与理由)）。当前发布如果再做这种改动，这个检查会失败，是否接受必须作为发布决定显式记录；检查不把任意历史提交当作兼容目标。首次生产部署前的基线压缩是明确例外（[#774](https://github.com/TYCT-tyct/Axiom/pull/774)）：仅当旧版本迁移集合等于比较脚本固定的完整历史、当前集合恰为各模块基线时跳过旧二进制启动；static 必须通过结构与参考行等价比较。基线之后仍执行正常滚动发布检查。旧版本的程序在本树里没有前端构建，检查给它一个最小的嵌入前端；页面与 schema 兼容无关。
 
 **排空**（`axiom serve` 收到 SIGTERM 后自己完成，部署不需要发额外信号）：
 
@@ -161,7 +142,7 @@ docker compose -f deploy/compose.yaml --env-file deploy/.env run --rm --no-deps 
 
 ## 目录的规格要补全
 
-**为什么**：规格里说请求怎么写给模型的键（`thinking`、`mid_system`、`untrusted_system_after_tools`、`default_sampling_only`、`forced_tool_choice`、`cache_breakpoints`、`encrypted_reasoning`）缺了不是 no。Chat 请求转给 Claude 模型时，用到缺的那个键的请求被拒（对客户端是 400「模型暂不支持该参数」），换完所有端点也一样，所以发布一个新的转换逻辑之前，库里每个已进目录的模型都要有这些键；规格解析不了的行（例如 `"thinking": true`）还会让 `axiom serve` 加载快照时直接退出。键的含义、每个型号的值和出处见[目录模块的「请求写法的键」](../../internal/catalog/README.md#请求写法的键值照厂商文档不手填)。
+**为什么**：规格里说请求怎么写给模型的键（`thinking`、`mid_system`、`untrusted_system_after_tools`、`default_sampling_only`、`forced_tool_choice`、`cache_breakpoints`、`encrypted_reasoning`）缺了不是 no。Chat 请求转给 Claude 模型时，用到缺的那个键的请求被拒（对客户端是 400「模型暂不支持该参数」），换完所有端点也一样，所以发布一个新的转换逻辑之前，库里每个已进目录的模型都要有这些键；规格解析不了的行（例如 `"thinking": true`）还会让 `axiom serve` 加载快照时直接退出。键的含义见[模型目录的「目录基线」](../domains/catalog.md#目录基线)，每个型号的值在 `deploy/catalog/dialects.json`，出处见[存档](../archive/catalog.md#请求写法的键的出处)。
 
 **步骤**：在要发布的提交的检出里，`AXIOM_DATABASE_URL` 指向目标库（连接串不进仓库）：
 

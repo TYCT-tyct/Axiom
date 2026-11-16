@@ -1,511 +1,167 @@
 # gateway
 
-编排一次模型调用：认 key、读请求、准入与路由、调上游、计量与追加、结算、记录。对外行为见[接入与对外接口](../../docs/domains/gateway.md)，调用经过哪些模块见[总体架构的「一次调用怎么走」](../../docs/architecture.md#一次调用怎么走)；这里写代码层面的顺序、所有权、期限、并发、故障和测试。
+编排一次模型调用。对外行为见[接入与对外接口](../../docs/domains/gateway.md)，格式转换见 [protocol](../protocol/README.md)，模块走向见[总体架构](../../docs/architecture.md#一次调用怎么走)；这里只写公开接口和一次调用内部的不变量。下层见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[accounts](../accounts/README.md#认出与准入)。
 
-> 本文先于代码写成，是 [Issue #36](https://github.com/TYCT-tyct/Axiom/issues/36) 的调用路径契约；各部分随下文「PR 拆分」落地，已落地的是 G1–G9（下文「入口与准入」「尝试与转发」「计量、追加与结算」写它们的代码结构），代码与本文不一致时，在同一个 PR 里改本文。下层的接口见 [billing](../billing/README.md)、[routing](../routing/README.md)、[suppliers](../suppliers/README.md)、[protocol](../protocol/README.md#转发草图)、[accounts](../accounts/README.md#认出与准入)。
+响应缓存的数据库结构由 [`00049_baseline.sql`](migrations/00049_baseline.sql) 创建；编号、等价验证与开发库重建规则见[平台迁移说明](../platform/README.md#迁移)。
 
-M1 是单个核心节点，共享状态都在进程内；多核心和 Valkey 在 M2：限流计数移到 Valkey（K1 已落地），会话粘性也已共享（K3），状态核对见 [platform/kv 的设计](../platform/kv/README.md)，供应商凭证并发与有限账号 RPM 按存活核心后台静态分份额，生产支持 N > 1。出口只有 `platform/egress` 直连。
+## 公开接口
+
+- `NewHandler(Deps)` → `Handler`（外面套 `httpserver.Public`）：入口、准入、模型列表、辅助接口。`NewExecutor(ExecDeps)` → `Executor.Run`（即 `Deps.Run`）：准入后把 `Call` 做到结算。依赖缺一个不启动，没有生产 stub，由 `cmd/axiom/callpath.go` 接线。
+- `New(Config)` → `Backpressure`（`InFlight`、`Funds`、`Pool`、`Queue`、`RateCounter`）：先 `Config.Validate`，一次报出全部问题；默认值只在 `DefaultConfig`。
+- `Call` 的所有权归 `Run`；`Call.Done` 归还名额和内存，可能晚于 `Run` 返回。`Outstanding` 是两者共用的排空计数。
+- `RouteDeps`（`Build`/`Publish`/`Rebuild`/`Run`）产出路由快照和模型列表；`ModelList.Public` 给价格页。`ResponseCache` 可为空；`StreamCacheSealed`/`OpenCachePayload` 供受控导出；`LedgerAmounts` 按账本补记录金额。
 
 ## 不变量
 
-账户暂停在 `accounts.Admit` 原查询读取账户状态，返回 `ErrAccountSuspended`；Chat/Responses 为数字 `error.code: 403`，Messages 为 `permission_error`，统一分类 `permission_denied`。已通过准入的调用正常结束，用户禁用登录不影响 key；恢复账户无需缓存失效。
-
 | 不变量 | 靠什么保证 |
 |---|---|
-| I1 先落库再花钱：上游请求发出前，已提交的预留覆盖本次尝试当前允许执行的费用上界，加上停止前的最大额外消耗（超额额度 = 端点规格的最快输出速度 × 后台分段设置的 `Overshoot`，后者不短于追加等待）；不可分段的尝试就是整次的最大花费 | 准入提交后才进入尝试；`Bind` 只接受准入时报过价的条目；追加没批准就停读（「计量与追加」）；保存时拒绝超额额度短于 `ExtendWait` 的设置；节点重读到不可用的记录时保留旧值并记日志 |
-| I2 恰好一次终结：每个准入的请求恰好落到一个终态，经 `billing.Settle`（只释放也走它），或由清理按截止时间、持有者回收接管 | 每条退出路径（含 `recover` 之后）都调 `Settle`；预留"比较后再写"；清理见 [billing 的「预留的状态」](../billing/README.md#预留的状态) |
-| I3 先入账再报费用：带费用的结尾只在结算提交后发出 | Relay 扣住成功结尾，所有者在 `Settle` 返回后才调 `Finish` |
-| I4 提交后不换尝试：向客户端写出正文、推理或工具调用之后，不再换端点 | Relay 返回 `Commit` 之后不再调用 `routing.Decide` |
-| I5 钱只在 PostgreSQL：每笔收费写入时守余额底线；缓存丢失不改变钱；已确认的提交不因主备切换丢失 | billing 的余额行锁；[运营的复制要求](../../docs/domains/operations.md#部署与节点管理) |
-| I6 调用路径上同步访问缓存至多一次，在准入之前 | 只有第 5 步访问缓存；排队醒来从第 6 步重做 |
-| I7 写入有栅栏：持有者被回收后，它名下不能再新增或追加预留；回收之后的清理看得到它全部已提交的预留 | [billing 的「持有者与截止时间」](../billing/README.md#持有者与截止时间) |
+| I1 先落库再花钱：发上游前，已提交的预留覆盖本次尝试的费用上界加超额额度（最快输出速度 × `Overshoot`） | 准入提交后才尝试；`Bind` 只收报过价的条目；追加没批准就停读；billing 拒绝 `Overshoot` < `ExtendWait` 的分段设置 |
+| I2 每个准入的请求恰好一次 `billing.Settle`（只释放也走它），或由清理接管 | 唯一出口 `session.conclude`，panic 时 `settleOnPanic` |
+| I3 先入账再报费用 | Relay 扣住成功结尾，`Settle` 返回后才 `Finish` |
+| I4 提交后不换尝试 | 写出正文、推理或工具调用之后不再调 `routing.Decide`；聚合时提交点在整份回复写出那一刻 |
+| I5 钱只在 PostgreSQL | billing 的余额行锁；缓存丢失不改变钱 |
+| I6 调用路径上同步访问缓存至多一次，在准入之前 | 只有预检访问；排队醒来只重做准入 |
+| I7 写入有栅栏：持有者被回收后不能再新增或追加预留 | [billing 的「持有者与截止时间」](../billing/README.md#持有者与截止时间) |
 
 ## 一次调用的步骤
 
-DB 指一次 PostgreSQL 往返（BEGIN、设范围、COMMIT 各算一次；同批发出的语句算一次），C 指一次缓存往返。
-
-| # | 做什么 | 模块 | 往返 | 期限 | 失败时 |
-|---|---|---|---|---|---|
-| 0 | 生成请求 ID（UUIDv7），即调用编号；在接收请求时记下到达时刻 `Call.At`，调用记录和预留都用这一个开始 | gateway | — | — | — |
-| 1 | 按 IP 的在途上限；只用 Host 和请求头：`SiteForHost`、`AuthenticateKey`（未命中查库、合并并发查找）。不读请求体 | gateway、accounts | 0；未命中 1 个事务 | 1s | 429；401 立即关闭；库不可用或站点快照过旧 503 |
-| 2 | 按账户在途上限，再取节点在途名额，每路记 64 KiB | gateway | — | — | 429 / 503 |
-| 3 | 有上限地读请求体，长度计入节点内存预算 | gateway | — | 2 分钟 | 413 / 408 / 503 |
-| 4 | `protocol.Inspect`；catalog 解析名字（含 `models`）；`routing.SessionKey` | protocol、catalog、routing | 0 | — | 400 / 404 |
-| 5 | 预检：限流计数加一（速率计数，不需释放），读会话粘性；只计数不判定 | gateway | M1 0；M2 1 C | 20ms | 按本节点计数、无粘性 |
-| 6 | 账户闸 → 准入名额 → `accounts.AdmitBatch`，`fn`：逐请求判定限流 → `routing.Plan` → `billing.ReserveMany`；提交 | accounts、routing、billing | 7 DB（批量摊薄） | 闸 5s，之后连接加事务合计 1s | 429 / 402 / 403 / 404 / 503；`Wait` 则回滚、事务外排队，醒来只重做本步 |
-| 7 | 尝试：本地持有者检查 → `Acquire` → `Prepare` → `Bind` → `Send`；从读到第一个字节起计量，暂存开头事件到提交点 | suppliers、protocol、billing | 上游 | 见「超时与限额」 | 提交前按 `routing.Decide` 换条目 |
-| 8 | 提交后边读边计量边转发，按段 `Extend` | gateway、protocol、billing | 每段 9 DB（已覆盖时 6） | 追加 1s | 截断 |
-| 9 | 上游正常结束：结算批提交 → `Relay.Finish` 写最后一个事件 | billing、suppliers、protocol | 单请求一次尝试 9 DB，每多一次尝试多 1；同批结算的锁、读、账本、结束和 `EndRequest` 每批一次，批内多一次尝试不再多一次往返 | 2s × 重试 | 「结束与结算」 |
-| 10 | 每条退出路径释放凭证、名额；异步写调用记录、quality 观测、粘性 | gateway、observability、quality | 0 | — | 「并发、背压与共享状态」 |
-
-响应缓存的命中在第 7 步的尝试之前判断，但仍在第 6 步准入之后：没有尝试，结算只释放预留（「响应缓存」）。`Call.At` 在 `accept` 里取一次，是请求到达的时刻，早于读体和准入；`reserveBatch` 把它交给 `billing.ReserveMany`（`created_at` 按微秒），`trail` 用它写调用记录的 `at`，所以一次调用和它的钱落在同一个窗口里，不会因为准入跨过窗口边界而分开。执行耗时仍从 `newSession` 的开始算，准入耗时不计入上游延迟。升级前写入的预留保留当时的 `created_at`，口径见[运营的「运营看板」](../../docs/domains/operations.md#运营看板)；`TestAdmissionReservesTheDearestKeptEntry` 读回预留的 `created_at` 与 `Call.At` 比较，`TestTrailUsesTheCallStart` 守住记录不退回执行开始。
-
-## 准入
-
-- **按账户成批**：`admitOnce` 把请求交给 `Funds.Admit`，账户队列由独立的领头 goroutine 服务，把同类等待者取成一批（准入最多 32，完成最多 16）；每个请求（包括第一个）只等自己的批，批一结束就返回，`admitBatch` 为整批调一次 `accounts.AdmitBatch`；回调里逐请求 `planAdmission`（限流、路由），可预留的请求交给 `billing.ReserveMany`，每个请求的错误留在自己的 `admissionItem` 上。一个请求的取消、限流、路由失败或余额不足不打断同批其他请求；数据库错误整批回滚；只有写完预留后提交失败或确认丢失的请求按"可能已提交"各走一次孤儿结算。
-- `fn` 由本模块组装，逐请求依次：用预检计数对照限额（M1 只有平台配置的防滥用限额；以后的 key、等级速率值从 `Admission` 读，判定位置不变）；`routing.Plan`；整批最后 `billing.ReserveMany`（单请求时就是只有一项的批）。`ReserveMany` 返回每个请求保留条目在原路线里的下标，本模块按它裁剪路线；首选条目被删就是 402（余额）或 403（工作区预算、key 上限）。
-- 往返：单请求 7 次，同一账户的并发请求合成一个事务，按批摊薄；分解与锁、快照语义见 [billing 的「同一账户的合并预留」](../billing/README.md#同一账户的合并预留)。
-- `Plan` 返回 `*Wait`：`AdmitBatch` 回滚（还没有预留），在事务外按 FIFO 等进程内名额，醒来只重做第 6 步，不访问缓存、不重复计限流。
-- **准入的 COMMIT 确认丢失**：批次的事务在写完预留后返回错误（提交失败、确认丢失、期限到），无法区分已提交还是已回滚，一律按"可能已提交"处理：每个已写预留的请求返回 503、不发上游，各自交 `billing.SettleOrphan` 收尾（见 [billing 的「追加与结算」](../billing/README.md#追加与结算)）。
+| # | 做什么 | 往返 | 失败 |
+|---|---|---|---|
+| 0 | 请求 ID 即调用编号；`Call.At` 在 `accept` 取一次，预留和记录共用 | — | — |
+| 1 | IP 在途；只凭 Host 和头认 key | 未命中 1 事务 | 429；401；503 |
+| 2 | 账户在途，再节点在途 | — | 429 / 503 |
+| 3 | 读体，计入节点内存预算 | — | 413 / 408 / 503 |
+| 4 | `Inspect`、预设/压缩/文件解析、解析模型名、`SessionKey` | — | 400 / 404 |
+| 5 | 预检：限流计数加一，读粘性；只计数不判定 | M2 1 C | 按本节点计数 |
+| 6 | 账户闸 → `accounts.AdmitBatch`：限流判定 → `routing.Plan` → `billing.ReserveMany` | 7 DB，按批摊薄 | 429 / 402 / 403 / 404 / 503 |
+| 7 | 缓存命中判断；尝试：`Acquire` → `Prepare` → `Bind` → `Send` | 上游 | 提交前换条目 |
+| 8 | 提交后边读边计量边转发，按段 `Extend` | 每段 9 DB（已覆盖时 6） | 截断 |
+| 9 | 结算提交 → `Relay.Finish` | 9 DB，按批摊薄 | 见下 |
+| 10 | 释放凭证和名额；记录、观测、粘性 | — | — |
 
 ## 入口与准入
 
-G1、G3 的代码结构。`Handler`（`NewHandler(Deps)`，依赖缺一个就不启动）是 `http.Handler`，外面要套 `httpserver.Public`，请求 ID 由它生成，`Call.ID` 就是它（UUIDv7），每个响应（含错误）带同值的 `X-Request-ID` 和 `X-Generation-Id`：后者由 `Handler.ServeHTTP` 统一设置，所以模型列表、拒绝升级、405 和 404 也有。`/v1` 和 `/api/v1` 两套前缀的路由相同：`POST /chat/completions`、`/responses`、`/responses/compact`、`/messages`、`/completions`、`/embeddings`、`/rerank`，`GET /models`、`GET /models/{model}`；每个调用路径上的 GET 只用来拒绝 WebSocket 握手（带 `Upgrade` 回 400，否则 405）。没有路由接的路径和方法也由错误出口按协议的外壳作答（404 `not_found`、405 `method_not_allowed`，保留 `Allow`）。`count_tokens` 和只读的账户接口见「辅助接口」。
-
-**一次请求的顺序**（任何一步失败都由错误出口作答，已取的名额和内存经 `Call.Done` 归还）：
-
-| 步 | 做什么 | 失败 |
-|---|---|---|
-| 1 | 按 IP 的在途上限（`Backpressure.IPCalls`）；不在 accept 时按 IP 限连接数：节点只绑本机、前面是反向代理，accept 时看到的是代理的地址，按它限连接会变成整个节点的连接上限，所以连接数由前置代理或 CDN 限制（[安全的「防攻击」](../../docs/security.md#防攻击)）。IP 取 `platform/clientip` 的 `Addr`：只认 `RemoteAddr`，`AXIOM_TRUSTED_PROXIES` 里的代理才读 `X-Forwarded-For`，与控制台守卫是同一份；计数的键是 `clientip.Group` 的来源分组，与登录尝试同一份（映射 IPv4 还原、去 IPv6 zone、IPv6 按 /64） | 429 |
-| 2 | 带 `Upgrade` 头的请求 | 400 |
-| 3 | `SiteForHost(r.Host)`，必须是 API 域名；`Authorization: Bearer`（不分大小写）或 `x-api-key` 认 key（有 Bearer 用 Bearer）；未登记的域名、控制台域名、认不出的 key 都是同一个 401，带 `Connection: close`，体从不被读。key 不在缓存里时查库，查库在共享的一次任务里取一个准入类连接名额（`accounts.Config.LookupSlot`，见「并发、背压与共享状态」）；认出只表示 key 存在，能否使用由第 7 步的 `Admit` 判定 | 401；站点快照过旧、库不答、名额等不到 503 |
-| 4 | 账户在途名额，再节点名额（`InFlight.Acquire`） | 429 / 503 |
-| 5 | 读体（`MaxBody`，默认 32 MiB）：宣告的长度先计入节点内存预算（`protocol.Memory.Charge`），按宣告的长度一次分配；未宣告的从 4 KiB 起翻倍增长，每次分配前先计入新缓冲、复制后退还旧的，峰值就是已计入的量，读完留下的是最终缓冲（至多正文的两倍） | 413；408（超时）；503（预算不够）；断开或读到一半 400 |
-| 6 | `Inspect`；`previous_response_id` 非空 400；`provider` 对象转成路由覆盖（下文「路由参数」）；`parseModelName` 读掉模型名的变体（`:nitro`、`:floor` 定排序，`:thinking` 只在请求已要求推理时接受，`:free` 留在名字上作为目录条目，`~` 别名原样交给目录，`:exacto` 置质量优先且只选已验证端点，`:online` 未配置搜索后端时 400、配置后等同 `web` 插件，`:batch`、`:extended` 400，`openrouter/auto`、`openrouter/free` 置路由器的标记），`catalog.ResolvePublic` 认目录名字（不存在或已下线 404），`models` 里的备选（同样读变体）认得出的跟在后面；`SessionKey`；预检同批取限流计数与粘性（本地模式用 `Stuck` 与 `RateCounter.Count`） | 400 / 404 / 503 |
-| 7 | 准入循环（下文） | 见「错误出口」 |
-| 8 | 交给 `Run` | — |
-
-**准入循环**（`admit`）：取 `Queue.Epoch()`，再 `admitOnce`；`*routing.Wait` 时事务已回滚，在事务外 `Queue.Wait`（按 key 计），醒来只重做 `admitOnce`，不重读体、不重复计速率。`routing.Wait` 现在也出现在候选的凭证都没容量时：路由快照持有供应商的容量视图（`suppliers.Capacity`），`Plan` 在过滤的最后读它，所以满载的判断不再只依赖生产上从不赋值的 `MaxConcurrent`（#313 E3-9）。每次尝试归还凭证并发位都会调 `Queue.Wake()`（`session.done`，`attempt.go`），排队等的是真实的容量释放；`Wait` 交回唤醒它的那次 `relay`，`admitOnce` 没准入（仍满载、空位被别人拿走或别的错误）就先 `Queue.Pass(relay)` 把唤醒交给下一个人，再按剩余时间重排。供应商的端点测试（`suppliers` 的 `acquire` 带 `probe`）归还的位不经 `session.done`，不唤醒。排队期限 `QueueWait` 从这次调用第一次排队起算一次（`Queue.Wait` 收到的是绝对期限），被无关的唤醒叫醒再排队也共用剩余时间，到期 429。期限在 `Wait` 里先于 `Epoch` 快路径检查，所以别处不断释放名额也不能让过期的调用继续重试；期限过后至多再做正在进行的那一次准入。`admitOnce` 的 1s 期限（`AdmissionBudget`）从取得账户闸起算，连接和事务共用，等闸不计入（`Funds.Admit` 把带期限的 context 交回来）：`Funds.Admit` 把请求排进账户队列；领导者取出一批后 `admitBatch` → `accounts.AdmitBatch`，每个请求的 `fn` 依次是速率判定（先判节点 `KeyRate`，再用 `Admission.RateLimits()` 判账户与 key 的业务计数，超额回带限流头的 429）→ `routing.Plan`，然后整批 `billing.ReserveMany`。`ReserveMany` 返回的每个下标裁剪各自的路线（`Call.Plan.Entries` 与 `Record.Route` 只留保留下来的条目），首选条目被删就是 402（余额）或 403（工作区预算、key 上限）。批次开始前已取消的请求不进事务；批次已经取走后客户端才取消的准入不再中断整个事务，随批次完成，随后按取消结束并释放预留。每次准入的路由定下后（后端搜索带上结果的上界再规划一次之后，`planAdmission`）调一次 `Router.Planned`，交给路由按它最终的计划和错误给 key 的预设计数和告警（见 [routing 的「路由预设」](../routing/README.md#路由预设)；`TestABackendSearchCountsItsLastPlan`）。`Input.Admission` 里 key 没有预设时用零 ID 的预设，路由快照必须有它；`Admission.Models()` 为 nil 是全部模型、空列表是一个都不行。`billing.Model` 由路由条目带来（`Entry.Limits`），与路由过滤用的是同一份。账户生效的扣费顺序也随同一次准入快照下来（`Admission.BillingPreference()`），填进 `billing.Admitted.Preference`，网关不为此多查一次；四个顺序和回退见[计费的「资金来源」](../../docs/domains/billing.md#资金来源)。
-
-**提交确认丢失**：`fn` 写完预留后批次的事务仍返回错误（提交失败、确认丢失、期限到），无法区分已提交还是已回滚，一律按"可能已提交"处理：每个已写预留的请求回 503、不发上游，名额不立即归还，后台为它调一次 `settleOrphan`（账户闸的完成类、2s 一次，库出错退避 50ms 到 2s 重试，到 `SettleBackground` 为止），成功或放弃后才 `Call.Done`。同批里没有写预留的请求按各自的错误返回，不会因为别人的提交未知被当成已写。节点排空（`Outstanding.Drain`）等它们，期限到则停止重试，剩下的归清理。
-
-**`Run` 与 `Call`**：`Run` 是准入之后的缝（`Executor.Run` 填），拿走 `Call` 的所有权：`Call` 带请求 ID、格式、compact 标记（`/responses/compact` 的调用整份读入，回复只换 `usage`）、摘要、体、白名单头、会话键、`accounts.Admission`、`billing.Admitted`、`*billing.Hold`、裁剪后的 `routing.Plan`；结算写进之后（或交给清理之后，见「计量、追加与结算」）调 `Done`，归还账户和节点名额与体的内存，可能晚于 `Run` 返回。`NewHandler` 要求 `Run` 非空，生产路径没有 stub；测试里的 `Run` 只用 `SettleOrphan` 释放预留。
-
-**错误出口**（`writeRefusal`）：状态码、`error_type` 和外壳按[接入的「错误」](../../docs/domains/gateway.md#错误)。Messages 有自己的外壳，Chat 和 Responses 用 Chat 的（`message`、`type`、`param`、`code`，`metadata.error_type` 是错误类型的名字，`code` 通常同它）；`type` 由状态码决定。`protocol.RenderError` 写同样的外壳（尝试之后的错误、流中途的错误），两个写入函数由 `TestARefusalIsAnErrorOfProtocol` 拴在一起：各类拒绝（包括 provider 参数校验）与 protocol 写的同一个错误逐字相同；账户暂停外壳另由 `TestAccountSuspensionErrorEnvelopes` 单独验证。`Retry-After` 取整数秒、最多 60。文字不用 new-api 自动停用渠道的措辞（`TestMessagesAvoidAutoDisablePhrases`）。判定：
-- 402（余额、套餐窗口）或 403（工作区预算、key 上限）：`limit_source` 取 `balance`、`subscription`、`openrouter_workspace_budget`、`openrouter_key_limit`，后两个是 OpenRouter 的取值，`subscription` 是本站的名字（OpenRouter 没有套餐）。`subscription` 只在套餐是最后被拒的来源时出现（`subscription_only`，没有套餐也算；或 `wallet_first` 先试过钱包再试套餐），和余额一样是 402、不带 `Retry-After`：`Insufficient.Transient` 只由工作区和 key 的上限置真。会重置的上限（`Insufficient.Transient`）带 `Retry-After: 60`，billing 不报重置时刻。在途预留占满余额时同样报 `balance`：`Insufficient` 还没有区分它的来源，也没有所需金额，待 billing 报告。
-- `NoEndpoint`：理由全是 `NotAllowed`（key 不能用这个模型）回 404 `model_not_found`，不是 403；其余永久的回 404 `no_endpoint` 附理由；暂时的回 503 `no_endpoint`，`Retry-After: 1`，附理由。
-- 没有路由接的路径和方法：`Handler.ServeHTTP` 先用 `mux.Handler` 看有没有路由，没有就让 mux 自己判 404 还是 405（连同 `Allow`），只丢掉它的纯文本响应体，再用 `writeRefusal` 按路径选外壳——`/v1/messages` 与 `/api/v1/messages` 下用 Messages 的，其余用 Chat 的；404 是 `not_found`，405 是 `method_not_allowed`。`refuseUpgrade` 的 405 同样走 `writeRefusal`，`Allow: POST` 保留。
-- 满载排队超时回 429，`Retry-After` 是 `Wait.RetryAfter` 取整。
-- 路由、目录、站点快照过旧，持有者失效（`billing.ErrTerminated`），准入期限到，提交确认丢失：503 `overloaded`。其余没预料到的错误同样回 503，并记 error 日志。
-- **依赖故障按状态变化记日志，不逐请求记**（#294）：数据库连不上（`pg.Unavailable`：连接失败、SQLSTATE 08 类、57P01 到 57P03、53300）和账户、目录、路由的快照过旧（各自的 `ErrStale`）都回 503 `overloaded`，但不走逐请求的日志。每个依赖（`database`、`accounts`、`catalog`、`routing`）各记各的：故障开始或原因（固定文本，不含主机和用户名）变了，记一条 error，原来的那条同时记一条 warn 结束；同一原因不重复记。成功用到该依赖的请求结束它的故障，记一条 warn（期间拒绝的请求数和时长）：通过准入事务的请求结束 `database`，认出站点的结束 `accounts`，取到目录快照的结束 `catalog`，路由出计划的结束 `routing`；不用路由的请求（如模型列表）不会结束路由故障。每个被拒的请求计入 `axiom_gateway_outage_refusals_total{dependency}`。实现和不变量见 `outage.go`；测试 `TestAnOutageIsLoggedOnceNotPerRequest`、`TestANewReasonIsTold`、`TestAHelperRequestEndsTheOutageItUsed`。
-- 客户端已断开的请求不写响应，读体超时除外：net/http 在读期限到时会取消请求的 context，但连接还能写，所以 408 照写，并带 `Connection: close`（`TestSlowBodyIsAnswered408OverARealConnection` 用真实连接守住这一点；用模拟读失败的测试看不出）。
-
-`TestRecordedSub2apiMetadataContract` 回放 `testdata/sub2api/metadata.json` 的两轮完整请求，对比 Axiom 发给内存上游的请求，并按 sub2api 的 JSON 解析与会话选择契约读取结果。样本固定测试账户的派生设备与会话，记录的是内存测试上游所见的 Axiom 请求，不是线上 sub2api 抓包；解析来源是 sub2api `a3298b46` 的 `backend/internal/service/metadata_userid.go:35` 与 `gateway_service.go:901`。现有 `TestSub2apiPinsTwoTurnsToOneAccount` 继续覆盖 Messages、Responses、Chat 的两轮会话。
-
-**派生标识的长度**：`protocol.Rewrites.Identity` 返回的会话和用户标识，以及它和 `Rewrites.Device` 一起写成的 `metadata.user_id`，都须不超过 128 字节（`metadata.user_id` 按内层 JSON 编码后的长度算），`Prepare` 对超出的返回错误（`IdentityLen` 为 0 时的默认上限，#121）；G1、G3 自己不调 `Identity`；调用 `Prepare` 的尝试（G4）把客户端的值经 HMAC-SHA256（密钥 `ExecDeps.IdentitySecret`，加账户 ID）派生成 32 个十六进制字符，`metadata.user_id` 里的结构因此是 114 字节（两个 32 字符的分量加 50 字节的结构），都在约束之内。
-
-**命名预设**（`presets.go`）：`expandPreset` 在摘要初读后从 accounts 的租户快照读出配置，按 `protocol.PresetCost` 先申请合并工作集，再调用 `protocol.MergePreset` 并重新 Inspect；保留的正文容量到 Call.Done 退款，拒绝时全额退款。会话指纹扫描客户端原始正文，以免默认展开移动缓存键或插入系统提示后改变身份；显式 body session_id 仍来自完整最终摘要。所有能力、路由、输入报价和执行均使用最终摘要；count_tokens 也使用同一展开路径。未引用时只做引用判断，不建立映射或编码请求。命名配置不改变 Admission 上的模型权限或强制路由预设。API 与覆盖规则见[命名预设](../../docs/domains/routing.md#命名预设)。
-
-**路由参数**（`provider`，`override`）：`Inspect` 把对象原样交出（至多 4 KiB），gateway 转成 `routing.Override`，每个成员要么生效要么按名字回 400。`order`、`only`、`ignore` 保存为 `OrderNames`、`OnlyNames`、`ExcludeNames`，routing 与同次快照的 `Endpoint.Codename` 比较，不能扩大到同供应商其他分组；代号由 suppliers 的 `Routable.Codename` 提供，不增加调用路径查询。`allow_fallbacks: false` 有顺序时限制命名组，无顺序时每个模型在健康排序后只取首个端点，保留 `models` 的跨模型回退；原有预设过滤仍独立检查。`sort` 字符串和 `{by, partition}` 对象共用策略，支持 price、throughput、latency；`partition: none` 在逐模型汇集候选后整体排序，默认 model 保持主模型优先。首字延迟独立升序，没测过的排后；吞吐仍降序再比首字延迟。数据政策继续按既有规则执行；数字性能偏好按 EWMA，`p50/p75/p90/p99` 对象按 quality 的滚动五分钟窗口，写出的每个截断都要满足，不满足的排后不排除；`quantizations` 按管理员记录的端点级别精确匹配，未记录不匹配非空列表；`max_price.prompt/completion` 按 token、`max_price.request` 按每个生成请求比较。`require_parameters: true` 时 `readRouting` 用 `protocol.RequestParameters` 二次扫描顶层成员，按请求实际调用格式生效的 `Endpoint.Specs[f].Parameters` 过滤：采样、输出上限、`stop`，以及请求实际写出的 `tools`/`tool_choice`/`parallel_tool_calls`、`response_format`、`reasoning`/`reasoning_effort`（Responses 的 `text.format` 和 Messages 的 `output_config` 也读成对应的参数位）。空 `tools`/`functions` 数组不算工具参数；`null` 不算写出。Responses 的 `text.verbosity` 与顶层 `verbosity` 一样按清单外参数拒绝；空成员名也算发现，不能当作扫描结束。清单外的参数回 400 并点名，清单内没有端点满足时按 `override_filter` 404。只有这项为真才扫描，默认调用路径不增加一次遍历。`max_price.prompt/completion` 以本站记账货币每百万 token 精确转成单 token 单价，`max_price.request` 按每个请求的记账货币精确转成请求单价，都不取整；指数与精度在构造大整数前检查。校验失败用统一错误外壳，Chat/Responses 的 `error.code` 是数字 400、分类在 `metadata.error_type`，Messages 用原生外壳；`TestARefusalIsAnErrorOfProtocol` 同样覆盖 provider 拒绝。无法兑现的完整清单及 OpenRouter 来源见[接入的「路由参数」](../../docs/domains/gateway.md#路由参数)：`enforce_distillable_text`、按张的价格上限（缺端点语义）、清单外的 `require_parameters` 参数与未知成员均在预留前 400；每项缺的数据和补上后能支持什么，见该节偏离表的第三列（蒸馏许可、按张上限的输入/生成语义）。
-
-**插件与变换**（`plugins.go`）：入口经 `protocol.Inspect` 校验，未知或未支持的插件/变换在准入、预留之前返回 400，Chat/Responses 的 `error.code` 为数字 400，统一错误契约。压缩仅对 Chat 按主模型目录规格执行：先在节点预算里计入 `protocol.CompressionCost`，再从中间裁剪，替换正文并重新生成摘要，随后才取会话键、路由和报价；原正文与替换正文的内存直到 `Call.Done` 归还。默认压缩只在正文超过整个上下文的字节上界或消息上限时尝试，不扣默认输出上限；不能压缩或临时内存不足时保留原正文与摘要，显式开启仍严格拒绝失败。重试使用相同正文。响应修复由 `Prepare` 带到非流式 Chat 聚合器，不新增上游调用，不改流式计量。`web` 插件在准入时选定路径，在第一次尝试之前跑一次：选定后端后取查询并设置 `Request.SearchBytes`，再用这个注入上界重新路由一次（检查上下文和输出上限，必要时换到大窗口回退），`Executor.Run` 经 `websearch.Searcher` 搜索，结果由 `protocol.InjectWebSearch` 注入，`RelayOptions.Citations` 供非流式 Chat 聚合后补 `url_citation`；搜索前向节点预算申请 `websearch.WorkingSet`，注入正文按原正文三倍加 `WebSearchMaxBytes` 再申请一次，引用注解的预留随聚合内容在封账前做，调用结束统一归还；申请不到回 503，不搜索、不调用上游。搜索失败在发起上游之前返回 502，没有尝试、没有模型用量。`file-parser` 的 OCR 引擎在 `read` 里、准入之前解析（`parseFiles`）：先做一次只读的 key 检查（`accounts.Check`，与准入同一条 `AdmitKey` 查询）并按 `judgeRate` 判速率，停用、过期、IP 不符或超速的 key 在这里就收到准入会给的拒绝，文件不会发给后端；再取出内联文件交给 `fileparse.Parser`，用 `protocol.RewriteFiles` 换掉正文，重新 `Inspect` 和 `FileReferences`，除了按 `file_id` 引用的文件，正文里不应再有文件；改写本身的工作集在改写之前按上限申请（`3×正文 + 12×MaxParsedBytes`：正文、拼接后的条目和新的正文各一份，文本按 JSON 转义的 6 倍在部件和新正文里各算一次），改写完成后只保留正文增长到调用结束，其余立即退回，所以预算不够时在分配之前就回 503；每个文件另按 `2×文件大小 + ResponseLimit` 申请解析用的字节。替换进正文的文本合计（同一文件出现几次算几次）不超过 2 MiB，`Call.files` 留给聚合器挂 `file` 注解；注记在编码之前按各字符串的转义长度和每个 choice 的实际容量申请聚合预算，装不下就不写。`Config.FileParse` 打开时按页计一次 `file_parse`：PDF 从 Docling 的 `json_content.pages` 条目数取得物理页（空页也计入），非 PDF 才用 `md_page_break_placeholder`，`Request.FilePages` 进 `routing.DemandOf` 和结算；解析的三个计费口径（`FileParses`、`FilePages`、`FileBilling`）在 `newSession` 时抄进会话，结算只读会话，`web` 搜索和服务端搜索循环重写正文后都用 `restoreFile` 补回 `Request`，所以重新 `Inspect` 看不到它们也不会改变账单；`mistral-ocr` 收 `file_parse`，`cloudflare-ai` 免费，`native` 按输入 token。开关关闭时保留旧规则：`Request.FileParses` 每个文件仍按 `web_search` 计，已有站点升级后不会因为新项未发布而失败。跳过解析的注解不计。后端失败、超时是 502 `upstream_error`，不调用上游；超过大小或文件数上限是 413。执行与偏离见[接入域的插件表](../../docs/domains/gateway.md#插件与提示词变换)。
-
-**模型名变体**（`variant.go`，[docs/domains/gateway.md 的「模型名变体」](../../docs/domains/gateway.md#模型名变体)）：`parseModelName` 在调用、`count_tokens`、模型详情和 endpoints 查目录之前读掉路由后缀，把目录名字交给 `ResolvePublic`，`Request.Model` 不改，所以调用记录里仍是客户端写的名字。行为在 `variants` 一张表里：`:nitro`、`:floor` 查 `strategies` 表，等于 `provider.sort` 的 `throughput`、`price`，最后一个排序变体生效；显式的 `provider.sort`（`override` 已读好的 `Sort`）优先，`resolve` 把最终排序交回，`read` 写进 `Override.Sort`。`:free` 不剥掉，留在基础名字后面作为一个目录名字（`acme/alpha:free`）；`:exacto` 在没有别的排序替换它时置 `BestQuality` 和 `VerifiedOnly`：只在真伪检测验证过的端点里按质量排，没有这样的端点时 503 `not_verified`（现有运营质量分只含可靠性、首字延迟和输出速度，没有 Exacto 的工具调用成功率与基准评分，所以不声称按相同信号排序）；`:online` 置 `WebPlugin.Online`，没有配置搜索后端时由 `Handler.checkWebSearch` 回 400（与 `web` 插件共用 `protocol.NoWebSearch`），配置后等同 `web` 插件；`:batch`、`:extended` 回 400，各说目录缺什么；`~` 开头原样交给目录的别名解析，不再由网关拒绝。`:thinking` 只置一个标记，由 `readRouting` 按请求判断：`req.Needs` 有 `Reasoning` 时接受（本目录没有独立思考条目，后缀没有别的含义），否则回 400 并提示用 `reasoning` 参数。不认识的后缀回 404，不看基础名字存不存在，从不落到基础模型。`openrouter/auto` 置 `Call.auto`，`read` 不查目录（没有具体模型），`routing.Input.Auto` 让路由对全部模型排序，取第一条，响应 `model` 由 `servedModel` 从命中端点的模型给具体标准 ID；请求的 `models` 不再追加备选，因为 auto 已经覆盖全部模型。`openrouter/free` 置 `Call.free`，同样不查目录；`routing.Input.Free` 让路由只对快照里的免费模型排序（`Endpoint.Free` 来自目录的 `Model.Free()`，快照按模型去重成 `free` 列表），同样取第一条、回显具体模型、略去请求的 `models`；没有免费条目时路由给出永久的 `NoEndpoint`（`no_candidates`），网关按「错误」表回 404 `no_endpoint`。备选名字读同一个函数：400 照回，404 的略去，排序变体与请求最终排序不同回 400，备选的 `:exacto` 只有请求本身已经是 `:exacto` 或有显式 `provider.sort` 时才成立，备选的 `:thinking` 同样要求请求已要求推理，auto 或 free 的备选略去。调用（`read`）和 `count_tokens` 共用 `readRouting`（它连 `provider` 一起读，`override` 在其中），所以两边拒绝的一致；`count_tokens` 对两个路由器都回 400，因为没有具体模型可数。整个名字超过 `maxModelName`（200 字节，调用记录的列上限）在 `parseModelName` 里 404，后缀叠加也绕不过。不变量：目录只收到目录认识的名字（基础名字、`:free` 条目、别名），路由后缀由 `parseModelName` 读掉；`parseModelName` 是读变体的唯一入口，`readRouting` 是定最终排序、`:thinking` 是否可兑现和两个路由器的唯一入口。发现接口只使用 `parseModelName` 解析目录名字，不执行 `readRouting` 的请求级校验，因此 `:exacto`、`:thinking` 可查询基础元数据；调用与 `count_tokens` 按上表行事（`:exacto` 可调用，没有已验证端点时仍 503）。
-
-
-**头白名单**（`headers.go`）：按**目标协议**各一份表，只转发表里的名字，其余一律不转发（含 `Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`、`Cookie`、`User-Agent`）。应用归因的三个头不转发，但由 `attributionOf`（`record.go`）在请求到达时读出、去控制字符、按列宽截断（`app_referer` 另去掉 userinfo、查询串和片段）后写进调用记录（`app_referer`、`app_title`、`app_categories`，见[记录与告警的「写入时记全」](../../docs/domains/observability.md#写入时记全)）。`accept` 时一次拷下所有协议可能用到的头（`forwardable`），每次尝试再按端点格式挑（`(*attempt).upstreamHeader`），所以同一份请求发给不同格式的端点时发的头也不同。Messages 端点：`Anthropic-Beta`、`Anthropic-Version`，值原样（`anthropic-beta` 不筛选值，见[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。Responses 端点：`session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID` 换成派生值——它们都是 sub2api 用来定账号的会话名（sub2api `internal/service/openai_gateway_scheduling.go` 的 `explicitOpenAIHeaderSessionNames`，2026-10-19），值与体内 `prompt_cache_key` 的派生同一个函数，客户端两处写同一个值时两条路读出来是同一个会话；`X-Codex-Turn-State` 原样转发，它是厂商铸的不透明状态，派生等于伪造。Chat 端点：那七个会话名同样换成派生值（它也是 OpenAI 的方言，中转站照样按这些名字定账号），没有状态头。空白的会话值整个头不发：派生空值会让所有客户端共用一个会话；体内 `metadata.user_id` 和 Chat `user` 转 Messages 遇到空串或纯空白也不派生，交给 protocol 的同一个编码函数写为空串，让中转站按内容回退。要加协议头只改 `requestHeaders` 这一处。
-
-**模型列表与单个模型**：`GET /v1/models`、`/api/v1/models` 和两套前缀下的 `GET .../models/{model}` 要认 key，并像准入一样判定它能否使用：取一个准入类连接名额（不过账户闸，不动钱），调 `accounts.Admit`，在同一个事务里读 `Admission.Models()`，所以停用、过期、删除、管理类 key 和 IP 白名单都生效，缓存里的认出不算数。不占账户名额，只受 IP 在途上限约束。key 的模型集合用 `allowedModels` 换算，和 `routingAdmission` 过滤路由是同一个函数（nil 是全部，空列表是一个都不行）：列表和单个模型只出现这个集合里、且这把 key 在路由快照里有端点的模型（`routing.KeyView`：它看得见、它的受众可收费、它的路由预设留下的端点；路由快照组装时没有售价或规格的端点已排除，所以没有端点的模型调用必然 404 `no_endpoint`，列出来只会让客户端选到必败的名字，`TestModelNothingServesIsNotListed`）。key 的准入换成路由的准入用调用路径的同一个 `routingAdmission`，所以列表和调用认的是同一个预设；预设这个节点用不了时列表回 503 `preset_unavailable`，和调用一样（`TestModelListsFollowTheKeysPreset`）；别的名字、没有端点的模型和不存在、已下线的名字一样回 404 `model_not_found`，不是 403。端点的实时状态不进列表：满载、熔断、暂停、预算用尽，模型仍在列表里（`TestModelListKeepsModelsWhoseEndpointsAreBusy`），容量由调用自己排队或报错；路由快照陈旧时列表照用最后一份，陈旧由调用回 503。`/v1` 下每个模型列出目录里的名字（`Slug`），以及去掉作者前缀的名字——只在它是公开名字、解析到同一个模型时才列，所以 `claude` 开头的厂商原生名字能被 Claude Code 发现。`GET /v1/models/{model}` 用 `catalog.ResolvePublic` 按调用路径的方式解析别名，投影与列表里的同一项相同（`modelEntry`），`id` 是请求里的名字。没有该受众可用发布价的模型不列出；满载与熔断等临时状态仍不影响列表。每项带 OpenAI 的 `id`、`object`、`created`、`owned_by` 和 Anthropic 的 `type`、`display_name`、`created_at`；目录没有上架时间，`created` 恒为 0。每个模型的条目按目录快照编码一次（`listing`；`created_at` 是常量，不逐项格式化），请求只按这把 key 的可见集合挑出条目、拼进一个缓冲区（`listing.encode`：一次分配，与目录大小无关，`BenchmarkModelList` 守住）；整份应答不缓存，因为它取决于 key 的可见集合和路由快照，两者都会变，而每次请求本来就要过一次准入事务。响应带 `Cache-Control: no-store`（`writeJSON`、`writeBody`），免得共享缓存把一把 key 的列表给另一把。IP 在途上限和 key 的 IP 白名单用的地址与调用路径是同一个（`h.clientIP`，第 1 步）。`/api/v1/models` 与 `/api/v1/models/{model}` 是 OpenRouter 的对象（`openrouter.go`）：`pricing` 取准入账户及当前等级下实际可服务端点中最便宜的一个主站发布售价（标准服务等级、第一档，`web_search` 每次），`context_length`、`top_provider`、`architecture`、`supported_parameters`、`reasoning` 取目录的规格（未知 mandatory 不声称），`id`/`canonical_slug` 是公开标准 ID（目录名去掉内部 `@版本` 后缀，且要 `catalog.ResolvePublic` 解析回这个模型；解析不到就整个不列，那个名字既取不到详情也调不通），`name` 取标准 ID 的尾段，`created` 恒 0，`default_parameters`、`per_request_limits`、`supported_voices` 输出 null，售价表没有的单位（`request`、`discount`、`overrides`，以及价目表没有按张价时的 `image`、`image_output`）省略而不是写 0（售价填不出 `prompt`/`completion` 的模型整个不列，OpenRouter 的对象里那两个成员没有 null 的位置），`description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks` 不输出；单模型按发布的那份列表回答（`catalog.ResolvePublic` 解析别名，返回 `{data: …}`，`id` 是标准 ID：形状里一个模型只有一个 `id`）。列表、`/user`、`/count`、单模型和 providers 都经 `openRouterListing.entry` 取一个模型对这把 key 的样子：预设一个端点都不留的模型不列；留下全部端点或各端点同价时用构建时编码的那份；只留下一部分且端点各自定价时，按留下的端点里最便宜的价当场编码一份（只有这种情况分配）。`visible` 在 `ModelList.mu` 读锁里同时取发布的列表和 `routing.KeyView`，所以列表据以构建的端点就是视图认识的端点。端点列表（`/{author}/{slug}/endpoints`）是公开投影，不按预设收窄（`find` 不调 `narrow`）。每种受众的模型与端点条目、价格筛选和价格排序所用的值在构建时预编码，读取按与路由相同的受众索引选择，不逐请求重算价格。这份列表由 `RouteDeps.Build` 和路由快照一起产出、由 `Publish` 在 `ModelList.mu` 写锁内一起换：同一次读目录、同一次读售价，所以列表上的价格就是快照里最便宜端点的售价版本的收费价格（`TestRouteBuildPricesTheListWithTheSnapshotsPrices`），构建失败或迟到则两者都不换（`Publish` 按 `built` 时间拒绝迟到的那份）；`ModelList.published` 和准入的 `ModelList.plan` 同持读锁，不能读到发布两次写入之间的状态（`TestModelPublicationExcludesReaders`）；锁只覆盖内存工作，不覆盖鉴权事务或编码。这里选择共享发布锁，不用两次独立的 atomic Store，因为两次 Store 无法排除中间状态。请求路径上没有读价（`TestOpenRouterRequestsDoNotReadPrices`），`ModelList` 只存最近发布的一份，所以一次响应里的 `total_count`、这一页和链接都属于同一次构建（`TestOpenRouterListIsOneBuild`）。查询参数按 `orQueryMembers` 生效、`orRefused` 里的名字（文档有而 Axiom 没有数据）回 400 说明缺什么、文档之外的参数忽略；查询串本身解不开（`%ZZ`、用 `;` 分隔）也回 400，因为 `url.Values` 会静默丢掉解不开的项。请求只做过滤、排序和一次缓冲区拷贝，缓冲区按这一页申请而不是整个目录（`BenchmarkOpenRouterList` 守分配次数，`TestOpenRouterPageBuffer` 通过 `alloctest.Measure` 在隔离子进程中守字节数：没有后续页链接的完整列表不排序一次分配，排序多一次给待排序的匹配项；生成翻页链接另有分配）。`/v1/models` 下的 `/count`、`/user`、`/{author}/{slug}/endpoints` 仍注册成 404，免得模型通配符吞掉；`/api/v1` 下三条路径和 `/api/v1/providers` 由 OpenRouter 模型发现实现（`openrouter_discovery.go`）。`newOpenRouterListing` 接受同次构建的路由端点，分组前排除所有非零 Owner 的私有端点，只向共享发现投影提供公共端点及模型；在副本上按分组代号排序，提前编码每个模型的 endpoints 响应；`tag` 就是持久分组代号（同一分组跨模型相同，也是 `provider.only`/`ignore` 和预设的路由身份），不暴露内部主键或创建时间，端点集合变化不重编号；当前接入都是中转分组，`provider_name` 为 Axiom，官方直连后同一字段用真实名称；供应商名、凭证、上游名和成本从不进入投影。计数和 providers 按 key 的模型可见集回答，count 只读取官方 output_modalities，复用列表的模态解析和匹配，非法或重复模态与损坏查询串回 400，没有可见模型时 providers 是空数组；user 复用列表过滤和翻页，链接保留 user 路径。未知数据、必填字段的有意偏离与逐字段来源见[领域文档](../../docs/domains/gateway.md#模型发现接口基线投影与偏离)。响应数据只读内存；实时准入仍查库，防止停用 key 和权限变更被缓存掩盖。`TestOpenRouterRecordedContracts` 回放每个端点的官方文档响应样本并比较本站完整投影，`TestOpenRouterDiscovery` 覆盖权限、空集及不存在模型，`TestOpenRouterUserPagination` 验证翻页路径；`TestOpenRouterCountOutputModalities` 对照列表总数核对模态过滤和非法查询；`TestOpenRouterDiscoveryExcludesPrivateOwners` 覆盖站点与账户私有端点及只有私有端点的模型不进入共享投影；`TestOpenRouterEndpointTagsAreStablePublicCodenames` 验证 tag 就是分组代号、替换内部 ID 不改变相同公共数据的响应、增加分组不重编号，且编码不修改路由输入。叫 count 或 user 的公开别名依旧不能从单模型路径取出。模型接口的错误外壳按 `Anthropic-Version` 选 Messages 或 Chat；没有路由接的路径只按路径选外壳，所以 Anthropic SDK 访问不存在的 `/v1/organizations` 得到的是 Chat 外壳，这不违反「错误」一节按路径选外壳的规定。
-
-**模型与价格页的公开投影**：`ModelList.Public(billing.Audience)` 从同一份 `published()` 列表取每个模型，用 `billing.Sold.For(audience)` 选账户、等级和默认层，再用 `ModelPrice(entry.served)` 取其中实际可服务端点最便宜的一个售价，跳过没有可用售价的模型，返回 `PublicModel`（目录 ID、名字、厂商、上下文、最大输出、是否流式、能力、`catalog.ScheduleView`，以及按代号排序的 `Endpoints`：每个端点的代号、上下文、最大输出、流式、能力、量化、验证状态和该受众的 `ScheduleView`）。端点价逐个用 `sold.PriceFor` 取，没有该受众定价的端点不列；模型级的价仍是最便宜端点，所以两处可以不同。`ListPublicModels` 用站点默认等级，`ListAccountModels` 先用 `accounts.AccountTier` 读本账户当前等级；两者都只读内存，不查目录或售价表。站点把 `model_prices_public` 设为 false 且所有存活节点都支持隐藏时，`cmd/axiom` 的 `ListPublicModels` 在投影后省略每个模型和端点的 `pricing`，`ListAccountModels` 仍带账户价；还有旧节点时匿名投影继续带价，避免同一个站点在不同节点上一个隐藏一个泄露；前者是匿名接口，不能按会话改变答案（见[领域文档](../../docs/domains/gateway.md#模型发现接口基线投影与偏离)）。`newOpenRouterListing` 把 `sold`、`served`、`serving` 和 `pageEndpoints` 留在每个条目上，所以按受众投影与路由、OpenRouter 发现用的是同一次构建；每个端点的 `pricing` 取它自己的版本价，模型级 `pricing` 取这些端点里最便宜的一个。端点的上下文、最大输出和能力取该端点所有原生格式的交集与下限（`routing.Endpoint.Surface`），与路由使用同一份 `Specs`；模型级能力仍是目录的模型能力。测试 `TestPublicModelsAreTheServedCatalogAtTheAudiencePrice`、`TestPublicModelsSelectTheAccountThenTierThenDefaultPrice` 守住可见集合、端点属性和账户、等级、默认三层售价的优先级；`TestOpenRouterPricesEachEndpoint` 守住模型级最便宜价与逐端点价。
-
-### 预检计数
-
-`precheck` 在原有 `count` 脚本里同时传 key 与账户的两对窗口键，调用再同批读取/删除粘性绑定；总共一次同步 Valkey 往返。账户计数不按等级汇总；等级只是准入查询读出的账户默认额度。key 进程计数每次推进；脚本按相同滑动估值先看节点 KeyRate/CountRate，超出时只读账户计数，不递增。本地账户池也只在当前采用的 key 计数未超节点保护时推进，防止其他节点已拒绝的流量污染故障兜底。缓存故障用本地全额计数，恢复后不回填。业务 key 拒绝仍消耗账户池，取舍见[账户领域](../../docs/domains/accounts.md#业务速率限制)。`count_tokens` 使用独立的 key/count 与 account_count 维度，不读取粘性。
-
-不变量：计数只在预检发生一次、拒绝不返还；排队醒来只用同一份计数重读策略；策略在 `accounts.Admit` 查询里读，不加数据库往返、不缓存可变权限。节点保护、账户额度、key 额度依次判断，0 只表示该业务维度不限。速率 429 的 `X-RateLimit-Limit` 为触发维度的额度、`Remaining` 为 0、`Reset` 为预检时间加两个窗口并向上取整的 Unix 秒上界；`Retry-After` 为两个窗口并沿用最多 60 秒的客户端兼容上限，`Reset` 可以更晚；给滑动近似彻底清空留时间。持续重试仍会计数，这不是承诺一定放行的时刻。并发/队列/凭证容量 429 没有可解释为请求窗口的额度，不伪造这些头。
+- **入口**：IP 取 `platform/clientip`，按 `clientip.Group` 计在途；不按 IP 限连接：节点前是反向代理，连接数归它。认出 key 前不读体，认不出一律 401 加 `Connection: close`；冷 key 查库在共享查找里取一个准入类名额（`accounts.Config.LookupSlot`）。读体先计入预算再分配：宣告长度一次分配，未宣告的从 4 KiB 翻倍。读体超时仍写 408 并关连接；其余已断开的请求不写响应。
+- **预检计数**：key 与账户的计数和粘性读删同批一次 Valkey 往返；超了节点 `KeyRate`/`CountRate` 不推进账户计数；Valkey 不可用时用进程内计数比全额限额。只计一次、拒绝不返还；`count_tokens` 单独计数、不读粘性。判定在 `fn` 里，策略随 `accounts.Admit` 读出。
+- **准入批**：`Funds.Admit` 把请求排进账户队列，领头 goroutine 取成一批，`admitBatch` 调一次 `accounts.AdmitBatch`；每项的错误只属于自己，数据库错误整批回滚。`ReserveMany` 返回的下标裁剪路线（`Call.Plan`、`Record.Route` 只留保留的条目）；首选被删是 402/403。key 没有预设用零 ID 的预设。
+- **排队**：`Plan` 返回 `*routing.Wait`（候选全满，含 `suppliers.Capacity` 无位）时事务已回滚，先取 `Queue.Epoch()`，在事务外 `Queue.Wait`；醒来只重做准入，不重计速率。`QueueWait` 从第一次排队起算一次，期限先于 `Epoch` 快路径检查。
+- **提交确认丢失**：`fn` 写完预留后事务报任何错误，都按"可能已提交"处理：已写预留的请求回 503、不发上游，后台各调一次 `settleOrphan`（完成类，每次 2s，退避 50ms–2s，到 `SettleBackground`），之后才 `Call.Done`；没写预留的按各自的错误返回。
+- **错误出口**：`writeRefusal` 与 `protocol.RenderError` 写同一个外壳（`TestARefusalIsAnErrorOfProtocol`）；`Retry-After` 至多 60。映射表见[错误](../../docs/domains/gateway.md#错误)。
+- **依赖故障按状态变化记日志**（`outage.go`）：数据库不可用（`pg.Unavailable`）和 accounts、catalog、routing 快照过旧回 503，每个依赖只在故障开始或原因变化时记一条 error，首个成功用它的请求记 warn 结束；每次拒绝计入 `axiom_gateway_outage_refusals_total{dependency}`。
+- **派生标识**：`Prepare` 拒绝超过 128 字节的标识和 `metadata.user_id`；派生值是 HMAC-SHA256（`ExecDeps.IdentitySecret` 加账户 ID）的 32 个十六进制字符。所有节点的 `AXIOM_IDENTITY_KEY_FILE` 必须相同，否则上游缓存换节点就断。转发的头只在 `headers.go` 一处。
+- **模型列表**：鉴权同准入（准入类名额、`accounts.Admit`，不过闸），模型集合与路由过滤同用 `allowedModels`。列表与快照同次构建，`Publish` 在 `ModelList.mu` 写锁内一起换，迟到的被拒；读锁只盖内存工作（`TestModelPublicationExcludesReaders`）；请求路径不读价。
 
 ## 辅助接口
 
-G9 的代码在 `readonly.go`（只读接口）、`count.go`（`count_tokens`）。两套前缀（`/v1`、`/api/v1`）下路由相同：`POST /messages/count_tokens`，`GET /key`、`/credits`、`/generation?id=`、`/generation/content?id=`、`/activity`、`/dashboard/billing/subscription`、`/dashboard/billing/usage`。`/key` 和 `/credits` 接受管理 key，其余只接受调用 key。行为基线是 OpenRouter 的 `GET /api/v1/key`、`/credits`（OpenRouter《API Reference》，2026-10-16 读取；生成字段于 2026-10-30 按生成查询文档复核）、Anthropic 的 `count_tokens` 和 OpenAI 旧版的两个余额接口（new-api 源码，2026-10）。
+鉴权同模型列表，数据在同一个事务里读，行级安全是全部的访问控制。只有 `/key`、`/credits` 经 `accounts.AdmitRead` 也收管理 key。
 
-**认 key 与读数据**：与模型列表同一条路——`IPCalls`、`authenticate`、一个准入类连接名额（不过账户闸，不动钱）、`accounts.Admit`——`fn` 在同一个事务里读（模型列表读 key 的模型集合，这些接口读调用记录、余额、花费）。事务的范围就是 key 的账户，行级安全是全部的访问控制：别的账户的调用记录、余额、花费读不到，`generation` 取不到别人的编号（与不存在的编号同为 404）。key/工作区停用、过期、删除、IP 白名单、控制台域名都是同一个 401；其余条件有效而账户暂停调用时为 403 `permission_denied`。`/key` 和 `/credits` 经 `accounts.AdmitRead` 也接受管理 key（OpenRouter 的这两个接口接受管理 key，《Get remaining credits》标 "Management key required"，2026-10-16），并保留调用 key，因为其他中转站常用调用 key 查余额和用量；管理 key 仍不能发起模型调用，其余辅助接口仍只收调用 key。偏离写在[接入的决策表](../../docs/domains/gateway.md#决策与理由)。错误用 Chat 的外壳；`count_tokens` 用 Messages 的外壳。成功响应带 `Cache-Control: no-store`。
-
-| 接口 | 内容 | 数据从哪来 |
-|---|---|---|
-| `GET /key` | `label`（前缀、`...`、末四位）、`name`、`usage`（累计）、`usage_daily`、`usage_weekly`、`usage_monthly`（当前 UTC 日、周、月）、`limit`、`limit_remaining`、`limit_reset`、`expires_at`、`is_free_tier`（恒 false）、`is_management_key`（按实际种类）、`rate_limit`、`budgets`、`effective_budget`；没有上限的 key，`limit`、`limit_remaining`、`limit_reset` 是 null，不重置的上限 `limit_reset` 也是 null | `Admission.SpendLimit()`；`billing.ReadKeyUsage`：`billing.spend` 里 subject 是这把 key 的行（工作区的行另算，不相加）；`accounts.GetKeyInfo`；key 预算复用同次 `billing.ReadKeyUsage` 的已收、预留与重置时刻；工作区预算用 `billing.ReadBudgetUsage` |
-| `GET /credits` | `total_credits`、`total_usage`，调用 key 和管理 key 都可读 | `billing.ReadFunds`；工作区列表来自 `accounts.AccountWorkspaces` |
-| `GET /generation/content?id=` | 本站不保存对话内容，始终 404 `content_not_available`（别人的编号仍是 `generation_not_found`），见 [OpenRouter 内容接口](https://openrouter.ai/docs/api/api-reference/generations/get-stored-prompt-completion-and-error-content-for-a-generation) |
-| `GET /activity` | 最近 30 个完整 UTC 日的按日/模型汇总（可按 `api_key_hash`、`workspace_id`、`group_by=workspace`），字段见 `activityItem`；`endpoint_id` 为零、`provider_name` 为 Axiom，`api_key_hash` 用 key UUID，`user_id` 拒绝；金额取 `billing.ChargedCalls` 的当前实收（校正后），输入优先用 `physical_input`，缺失时才回退到计费项之和 |
-| `GET /dashboard/billing/subscription` | `hard_limit_usd`、`soft_limit_usd`、`system_hard_limit_usd`，`has_payment_method` 恒 false，`access_until` 0 | 同上 |
-| `GET /dashboard/billing/usage` | `total_usage`（0.01 个单位）；`start_date`、`end_date` 不读 | 同上 |
-| `GET /generation?id=` | `id`、`model`、`created_at`、`total_cost`（有 `charge_details` 时取其中的 `charged`，校正后与账本一致）、`currency`、`is_free`、`service_tier`、`app`、`latency`（首字，毫秒）、`generation_time`（全程，毫秒）、`finish_reason`、`error`、`usage`（计费项名到数量）、`tokens_prompt`（输入侧各项之和）、`tokens_completion`（输出侧各项之和，含推理）、`tokens_reasoning`、`tokens_cached`（缓存读）、`native_tokens_prompt`（写入时的物理输入，未知则省略）、`native_tokens_completion/reasoning/cached/completion_images`、`streamed`、`cancelled`、可选 `session_id`、`cache_discount`、`price_version` 和 `charge_details` | `observability.GetOwn`；`billing.ChargeReader.ReadCharges` 从冻结预留读取可选明细，单行重建失败省略该行明细并记录日志/指标；`OwnCall` 没有成本、端点、路由，所以响应里也没有；也没有 `api_type`：调用记录不存调用格式，`request_class` 是请求类别，不是格式，借来填会误导客户端，待记录存格式后再加 |
-
-- **金额**：本站记账单位的额度，十亿分之一额度除以 10⁹ 显示（`float64` 对一个人持有的余额足够精确，只用于显示）；币种只在 `generation` 里带，OpenRouter 的 `key`、`credits` 没有币种字段。
-- **余额类字段**：`balance` 取余额行（账本的合计，在途预留不扣：预留是还没发生的收费，OpenRouter 的 `credits` 同样不扣），`usage` 取账户**所有工作区**的 `billing.spend.spent` 之和（含已删除的工作区；key 的计数器记的是同样的收费，不相加），`total_credits` = `balance` + `usage`，`total_usage` = `usage`，旧版接口的 `hard_limit_usd` = `total_credits`、`total_usage`（0.01 单位）= `usage` × 100，所以两种工具算出的余额都是 `balance`。不直接对账本求和：账户每次调用一行分录，轮询的接口要扫全部，而 `spend` 的行数只随天数和工作区数增长。今天动余额的只有进账（赠送）和收费，所以这个和就是累计进账；退款、额度过期加入时，它们也动余额但不是收费，`total_credits` 要改成另记的累计进账，那时再改这一处。`start_date`、`end_date` 不读，永远是累计。没有余额行的账户全是 0。
-- **`key` 的业务额度与预算**：`rate_limit.requests` 是节点保护、账户、key 三者中最小的正上限，`interval` 是 Go duration 文本（默认 `1m0s`）；另有 `account_requests`、`key_requests`（0 不限）。`budgets` 只列实际设置的工作区/key 预算，scope 分别为 workspace、key_limit，按工作区、key 顺序，`effective_budget` 是第一个已耗尽项，否则是剩余最少项；无预算时分别为 `[]`、null。每项含 scope、limit_usd、spend_usd、reserved_usd、remaining_usd、reset_interval、resets_at；余额不冒充预算，不重复累计账户额度。后缀 usd 沿用兼容字段名，数值仍为本站额度单位。
-- **`key` 的用量与上限**：`usage*` 只算已收的（`spent`）；`limit_remaining` = 上限 − 上限窗口里的（已收 + 在途预留），与准入拒绝的依据相同，不会为负。窗口按该 key 的 `limit_reset`、数据库时钟的 UTC 日、周、月；不重置的上限算全部日子。
-- **`generation` 的来源与缺口**：先读调用记录，再由 billing 的 `ChargeReader.ReadCharges` 按请求编号在同一账户事务中读取冻结的结算依据；可用时带 `price_version` 和 `charge_details`，字段及精度见[计费的用户明细](../../docs/domains/billing.md#用户看得到什么)。历史或旧节点缺依据、或单行格式/金额核对失败时省略该行明细；基础调用数据仍可读。记录由后台批量写，请求结束后至多约 200 ms 才可查，此前（和不存在、别的账户的）都是 404 `generation_not_found`，客户端稍后重试；没有账本兜底：账本（`billing.transactions`）只记金额，不记用量和价格版本，所以不提供精简版，它的内容要等调用记录的写入方（G10）和账本一起定。编号不是 UUID 或缺失是 400。`GetOwn` 按主键在各月分区里查，每个分区一次索引探查，不在调用路径上。
-- **`count_tokens`**（`POST /messages/count_tokens`）：Anthropic 的格式，返回 `{"input_tokens": n}`。**不调上游**，所以 n 是估算，口径固定为：`⌈TextBytes / 3⌉ + 图片数 × 1600 + 文件数 × 3000`（粗估，不查模型的页数上限；`billing.InputBound` 才按模型的页数界定上限）。`TextBytes` 是 `protocol.Inspect` 读出的请求体字节数减去图片、文件的数据（含 JSON 的键和引号，不去除）；每三字节一个 token 是经验比例：英文约四字节一个，所以文本通常偏高，但不是保证的上界（字节多、token 更密的文本会低估）；图片取一张最多约 1,600 个 token（上游会把大图缩到这个量级），是上界；文件的页数不解码就不知道，取固定的 3000，页数多的文件会被低估。因此不承诺“只偏早、不超窗口”：带大文件的请求，按这个数裁剪的客户端（Claude Code 用它定压缩时机）可能偏晚。以后经上游的 `count_tokens` 转发时才有精确值。不读 `max_tokens`，不要求它。它不预留、不收费、不写调用记录；前置检查同调用：IP 在途、认 key、账户在途名额、请求体按内存预算、key 的计数请求速率（单独计数，键 `count:`+key，先判节点 `CountRate`，再在准入里判账户/key 业务额度，超额回带限流头的 429，不占用也不受调用计数影响），然后 `Admit` 确认 key 可用并判速率。**模型**必须存在（404 `model_not_found`），且 key 可用（`Admission.Models()`，用 `allowedModels`，与路由同一逻辑）；不可用的同样回 404 `model_not_found`，不回 403。要精确计数，以后可经上游的 `count_tokens` 转发（G4 之后），这里的估算作为没有上游时的回答。
-- **测试**：`readonly_test.go`（rig，真实数据库：成功、无效 key、无权限类 key、跨账户读取、不存在、计数口径、额度窗口）；`billing/read_test.go`（窗口边缘、行级安全）。
-
-## 尝试
-
-- 逐条目：先查本地持有者（`billing.Alive`：上次心跳成功 + TTL − 5s 晚于现在），失效就不再发起尝试、按「结束与结算」收尾。`Acquire`（内存比较交换）→ `Prepare`；拿不到凭证或 `*NotSupported` 就跳过，不算尝试，写进路由记录。全部因 `*NotSupported` 跳过：`Settle` 只释放，400 附原因；全部因凭证名额跳过：`Settle` 只释放，429、`Retry-After: 1`。
-- 并发位在每个 `session.done` 交还：正常尝试结束，以及 `Prepare` 失败、格式不支持、重试预算用尽时的提前归还都走它；它先 `conn.Done()` 再 `Queue.Wake()`，顺序保证被唤醒的排队者看到的是已经空出来的位。走 `Acquire` 之前就被跳过的条目不占位，也就没有唤醒。
-- **尝试的身份在进入 `Send` 时确定**：本模块按已有的尝试数分配序号（从 1 起；路由的回退最多 `platform.MaxAttempts` = 3 次，模型侧循环的每次继续采样另占一个序号，合计最多 `platform.MaxAttemptSeq` = 33，`session.begin`），`Hold.Bind(entry)` 把 `Meter` 绑到准入时报过价的条目（绑被删的条目会 panic：路线已按保留的条目裁剪，所以不会发生），开始时间（`priced_at`）在 `Acquire` 时记下。此后不论结果都算一次尝试，计入次数和重试预算。失败的尝试是**确知未执行**（用量 0）还是**结果未知**，取 `Failure.Executed`，判定规则见 [suppliers 的「调用面」](../suppliers/README.md#调用面)。
-- 尝试结束时 `result` 把它的用量、成本、回执（供应商的请求 ID 所在的 `AttemptReceipt`）和结束时刻填进 `billing.AttemptResult`，结算一次写进 suppliers，与账本同一次提交；没有别的地方记「这次尝试到过供应商」（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)）。
-- 非 2xx 由适配器归为 `Failure`，`routing.Decide` 定换条目、换凭证还是返回。端点或供应商范围的限流、余额不足以外的供应商范围失败由 `Router.Block` 暂停到上游给的时间（没给用 `Config.Pause`，默认 5 秒；最多两小时）；供应商范围的失败还让本次调用跳过该供应商剩下的全部条目。余额不足的自动暂停归 suppliers：路由读同步原生余额与成本计划做付得起过滤，`Acquire` 再查整家暂停，新正余额同步或成功检测恢复；节点的一秒后台循环经 `RefreshBalances` 合并并限速请求余额同步。每个条目在 `Acquire` 前再查一次 `Router.Blocked`：规划之后别的请求可能已经暂停了它，这样跳过不算尝试、不花重试预算。2xx 后暂存开头事件，第一段正文、推理或工具调用到达即提交。提交前出错、空闲超时、200 无正文都换条目，换前取消当前上游。
-- 回退不追加预留：准入已按保留条目的最高报价预留。客户端断开后不再发起新尝试。
+- `/key`：`usage*` 只算已收，窗口是数据库时钟的 UTC 日、周、月；`limit_remaining` = 上限 −（窗口内已收 + 在途预留），不为负，与准入拒绝的依据相同。
+- 余额类字段读 `billing.spend` 的合计，不对随调用数增长的账本求和。
+- `count_tokens` 不调上游：`⌈TextBytes ÷ 3⌉ + 图片数 × 1600 + 文件数 × 3000`，`TextBytes` 是体字节减去图片、文件数据。不预留、不收费、不记录；模型必须存在且 key 可用，否则 404 `model_not_found`。
 
 ## 尝试与转发
 
-G4、G5 的代码结构。`Executor`（`NewExecutor(ExecDeps)`，依赖缺一个就不启动）的 `Run` 正是 `Deps.Run`，拿走准入后的 `Call`，把它做到最后一个字节并结算。文件：`exec.go`（`Executor`、`session`）、`conclude.go`（收尾）、`attempt.go`（尝试循环）、`forward.go`（提交点之后的转发）、`write.go`（对客户端的每次写，都在写锁下），G6、G7 的在下一节。`session` 是一次调用的运行，归运行它的 goroutine；与它共享状态的只有保活计时器和取消尝试的函数，都经写锁。
-
-**循环**（`session.attempts`），每个条目一次 `try`，直到有一个应答、没有条目、或调用被别的原因结束：
-
-| 步 | 做什么 | 结果 |
-|---|---|---|
-| 开始前 | 客户端已走、持有者可能已失效（`Alive`）、单次调用最长到了、尝试已满 `min(Plan.MaxAttempts, 3)`、过了 `Plan.StartBy` | 依次：什么都不写；503 `overloaded`；408；502（有过尝试）；有过尝试 502，没有 408 |
-| `Acquire` | `ErrNoSlot` / `ErrNoEndpoint` / `ErrSupplierResting` | 跳过，不算尝试；前两种记录 `Full`，余额暂停记录 `SupplierBalance`。无尝试且含不可用端点时回 503，只有凭证满载时回 429 |
-| `Prepare` | `*NotSupported`；`ErrInvalid`；其他 | 跳过，记 `FormatNotServed`；400 照客户端的错；503 并记 error |
-| 重试预算 | 第一次尝试 `Router.Sent`；之后 `Router.TakeRetry`，用完 | 跳过，记 `RetryBudget` |
-| 内存 | `protocol.PrepareBudgeted` 在分配之前向节点预算申请：同一格式改写先申请输出缓冲，Chat 转出按实际解码的树和写出的增长逐次申请，Messages、Responses 转出的读取段按 `nativeRequestCost` 整段预留；`Prepare` 之后只留结果缓冲的容量，`Send` 返回即退还 | 申请不到：`ErrMemory`，503 |
-| `bind` | 序号、`Hold.Bind(Kept[i])`、`Router.Begin` | 此后算一次尝试 |
-| `send` | `Send`（带白名单头，会话值已派生，见「头白名单」），`HeaderWait` 的计时器到点取消尝试 | 失败：`Executed` 定 `NotExecuted` 或 `Unknown`；`RateLimited` 通知 `Router.Throttled`；`routing.Decide`：换条目 / 同条目再来（再 `Acquire`，也算一次尝试）/ 400 `invalid_request` |
-| `stream` | `NewRelay`、读到结束 | 见下 |
-
-没有任何条目可试时（`exhausted`）：有过尝试是 502 `upstream_error`；否则有凭证名额被占的是 429（`Retry-After: 1`），有条目不在 suppliers 里的是 503，其余是 400 附 `NotSupported` 的原因。原因里「规格没说」的情形（`NotSupported.Detail` 非空）对客户端只说「模型暂不支持 X」，缺哪个键写进日志（warn，带供应商和端点），不出节点。
-
-**直接格式**（`Call.Format.Direct()`：embeddings、rerank）不走 `attempt.stream`，走 `attempt.pass`：上游不流式，`readWhole` 一次读完（上限与 compact 相同的 16 MiB），校验 `data`/`results` 存在后按 `protocol.DirectUsage` 读用量；通过则记 `Aggregated`，`conclude` 结算后经 `protocol.RewriteDirectReply` 写出上游的 `data`/`results` 加本站的 `id`、`model`、`usage`、`cost`。读取或校验失败时什么都没写，`failedReply` 仍可换条目。准入对直接格式设 `NativeOnly`（不转换）和 `NoSegments`（一次预留足），因为答复只有一份。
-
-**转发**（`attempt.stream`，所有者 goroutine 的读循环）：每次 `Relay.Next` 之后，按步的种类写：`StepCommit` 是提交点（写 200、`Content-Type: text/event-stream`、`Cache-Control: no-cache`、`X-Accel-Buffering: no`、上游这次响应带的 `X-Codex-Turn-State` 和暂存的开头，起保活计时器），`StepData`、`StepHeartbeat` 照写，`StepUpstreamDone` 结束。空闲计时从响应头到达起，遇到“新数据”就重置：提交点、`StepData`、正文字节或搜索数变化、一个事件的字节在到（`PartialBytes` 增长）；心跳、注释、没有内容的完整事件都不算（`TestAnUpstreamThatSaysNothingNewBeforeTheCommitPointIsTriedElsewhere`）。只有作答的那次尝试的上游能写这个状态头：它随尝试记下，换端点时跟着有内容的那一次走，客户端自己发的值从不回显（`TestTheTurnStateComesBackFromTheUpstream`）。
-
-**服务端搜索循环**（`openrouter:web_search`，`serverloop.go`）：`resolveServerTool` 决定走厂商原生搜索（`nativeSearch`，无循环）还是网关循环；循环的每一跳仍是一个 `attempt.stream`，但 `RelayOptions.ServerTool` 让 `Relay` 从客户端格式的事件里捕获 `openrouter_web_search` 的调用和整个 assistant 回合（文本、thinking、签名）。每一跳的客户端事件先经 `holdOut` 留在 `session.out`（按缓冲区容量、扩容前记入节点预算；`dropOut` 退款时连缓冲区一起丢掉），`StepUpstreamDone` 时读 `Relay.ServerTurn()`：有服务端调用且未到上限，`search` 跑后端、`AppendServerTurn` 原样回放这一回合并追加工具结果、`prepare` 带 `Rewrites.ServerFunction` 重发同一个条目，然后丢弃这一跳的输出并读下一跳；服务端和客户端函数同时出现时回 502，不丢客户端调用。没有调用或到上限，`flush` 一次写出，再由 `complete` 收尾；到上限后没有客户端工具时 `Prepare` 去掉强制的工具选择。每跳是一次独立的尝试：`sendNext` 先用 `endRequest` 结束上一跳（归还凭证槽，`result` 按它自己的回执计价、写进它自己的 `session.ends`），再 `Acquire`（各算一次 RPM）、`prepare`，然后 `session.begin` 记下 `Continues` 的新尝试并发出；`attempt` 这个 Go 对象（流、`Meter`、计时器）跨越整个循环，`a.first`、`a.i` 是它在 `ends` 里的第一次和当前那次。发送失败时先由 `failed` 判定执行与否，再 `endRequest` 计价（确知未执行为 0，未知按失败尝试估算）；搜索和下一跳都跟随客户端断开，不因端点不转发取消而继续。到上限后 `s.serverFunction=false`，最后一跳不再声明函数。客户端只看到一条流；断开取消当前跳；新搜索和下一跳跟随客户端，即使端点不转发取消。每次搜索走 `websearch.Searcher`，成功才 `s.searches++`，`conclude` 里 `closeLoop` 让循环的各次尝试取最后一次的交付结局，并把次数（`addToolUsage`）加到循环的第一次尝试上；`attempt.hopDone` 把这一跳的 `estimated`（按单次采样的输出上限）放进 `a.hops`，`result` 用它作为这次尝试的用量。billing 按 `Continues` 把循环的各次采样合起来向用户收一次（`charged`）。`StepUpstreamDone` 先停空闲计时器再搜索；搜索在尝试的上下文上跑（另用 `context.AfterFunc` 跟随客户端），每次搜索前与搜索失败后由 `stopped` 判断尝试或客户端是否已结束；`sendNext` 每跳清掉 `a.content`，只让作答那一跳决定是否交付。`checkServerTool` 拒绝与厂商代码执行同时声明。中途失败走 `abort`：`FailedBeforeCommit`、`FinishError`，模型用量免单、已执行搜索照收，`s.searched` 让 `failed`、`unanswered`、`complete` 不再换端点；`mayStart` 按全部尝试（含循环的采样）计回退次数，所以不接循环的尝试序号都在 `platform.MaxAttempts` 以内，各版本的修正任务都认得。
-
-读结束的各种情况（`broke`、`complete`）：
-
-| 情况 | 提交前 | 提交后 |
-|---|---|---|
-| 上游断流、格式出错、空闲超时 | 取消并换条目（空闲超时的原因是 `errIdle`）；结局 `FailedBeforeCommit` | 以 `Fail` 结束：`upstream_error` / `timeout`；结局 `Committed`，`FinishError` / `FinishTimeout` |
-| 上游在流里报错（出错事件、`response.failed`） | 按 `protocol.FaultOf` 分：请求本身的（上下文过长、内容被拒、请求不合法）400 `invalid_request`，带上游的 `param` 和原话、上游的 `code` 放 `metadata.provider_code`，不再换条目；其余换条目 | 请求本身的以 `invalid_request` 结束（上游的 `param` 和原话、`metadata.provider_code`），其余以 `upstream_error` 结束；结局 `Committed`，`FinishError` |
-| 200 无正文 | 换条目 | — |
-| 单次调用最长 | 408，不再换 | `timeout` 结束，`FinishTimeout` |
-| `ErrMemory` | 503，不再换 | `overloaded` 结束 |
-| 客户端已走 | 不写，不再换；传递取消的端点已被取消，其余读到结束 | 同左，结局 `FinishCancelled` |
-| 上游正常结束 | — | `Settle` 后 `Finish`；结算写不进则 `Final{Pending}` |
-| 追加没批准 | 截断：回 402/403 / 503，不再换 | 截断：以 `credits_insufficient` / `billing_unavailable` 结束 |
-
-`classify` 决定答复、结束原因和是否重试。请求本身的那几类不换条目，理由与 `send` 阶段的 `ScopeRequest` 相同；已生成内容的聚合回复直接作为失败回复交回，保留 Chat、Responses 的部分内容，Messages 仍只给 502 错误体。上游原话经过 `Conn.Sanitize`：协议取出有界的 `code`、`type`、`message`、`param`，去掉供应商身份仍是 suppliers 的事，网关不认识凭证和端点地址。失败事件立即返回；节点期限、内存和客户端取消仍优先按本地原因结束。`brokeAggregate` 以 `requestRefusals` 识别整个请求拒绝家族，不能只按旧的 invalid_request 判定，否则新增类型会丢掉已经生成的聚合内容。HTTP 和流内的拒绝都经 `requestError`：保留 context_length_exceeded、permission_denied、content_policy_violation、payload_too_large 的统一分类与状态，普通参数错误仍为 invalid_request。HTTP 优先供应商原因，流内优先 Fault；已知 code 再细分，凭证范围的失败不进入此路径。quality 照旧按 `protocol.FaultOf` 判断健康。`TestStreamFailureMeaningAndUsage` 覆盖七条转发路径的提交前后、聚合与流式、usage、错误范围和回退；`TestStreamRefusalMatchesHTTP400` 核对 HTTP 400 与 SSE 的脱敏原话及错误字段一致。
-
-**收尾**（`session.conclude`）只在这一处结算，所以每条出口恰好一次：运行 panic 时 `settleOnPanic` 以已有的尝试结算再让 panic 继续。尝试在 `attempt` 返回时已 `close`：取消它的 context、还凭证的名额和端点的在途数，按用量和回执（有上游的请求号）写好它的 `billing.AttemptResult`；`Settle` 之后才写结尾（I3）；提交前的错误用 `protocol.RenderError`，收了费的带上用量和费用（`axiom` 对象），没收费的不带。
-
-**不要流的客户端**（`!Request.Stream`）走同一条收尾路径，只是答案是一整份响应体：见下文「非流式聚合与 compact」。
-
-**接缝**（没有生产路径上的 stub；全部由 `cmd/axiom` 的 `callpath.go` 接上）：
-
-- `Costs`：尝试的成本，按这次尝试的价格币种计的十亿分之一额度，以及供应商单位下的估算（同一次定价）；生产实现是 `*suppliers.Service` 的 `Credits`（[suppliers 的「调用面」](../suppliers/README.md#调用面)），接线时把服务直接交给 `ExecDeps.Costs`，不加包装。`costs_test.go` 用真实的服务和账本跑通一次调用：账上是成本计划 × 单位价值，这次尝试的成本就是那个已知值（`TestTheAttemptCostIsTheSuppliersKnownCost`，同时核对 `billing.waivers` 里一行也没有），其余用例仍用固定值。
-- `Alive` 是 `billing.Alive`，`Upstreams` 是 `NewUpstreams(*suppliers.Service)`，`Ledger` 是 `*billing.Billing`；billing 的 `Suppliers` 是 suppliers 自己的 `CallWrites`，节点直接把它交给 `billing.Start`：结算事务里的写入因此落进 suppliers 的表，与账本同成同败。
-- `Endpoint.Target` 由 `endpoint.go` 的 `endpointOf` 填：`Model` 是端点的 `upstream_name`，`Streams` 是规格与供应商策略的交集；其余改写项（思考、加密推理、对话中途的系统消息、采样、缓存断点）原样取自规格的 `Model.Dialect()`（`targetOf`），规格没写的键留作未设置，不在这里补默认，由 `protocol` 按请求是否要用来决定（见 protocol README 的「`Target` 里的模型数据」）。生产装配的验收是 `route_target_test.go`：真实目录、`Build`、`Plan` 和 `Prepare` 走一遍，不手工构造 `Target`。`ExecDeps.IdentitySecret` 由节点从 `AXIOM_IDENTITY_KEY_FILE` 读出，所有节点必须相同，否则会话的上游缓存换节点就断。
-- `Deps.Records` / `ExecDeps.Records` 是调用记录（`*observability.Recorder`）：准入时 `Handler.take` 调 `Admit` 为这次调用预占一条记录的位置，结算写成或交给后台之后、响应结束之前 `Executor.log` 用这个位置 `Commit`，金额用账本实收的数，所以记录与账本一致；结算交给后台重试的，先记一条待定记录（`BillingPending`，没有金额，由 observability 停放），后台结算提交后用同一个位置、同一个结束时间记已结算记录，替换它；没有 handler 的调用（执行器的测试）没有位置可停放，只记已结算记录。记录先落本机 spill 并 fsync，写库由后台按批做，调用不等待数据库；spill 满或 recorder 已坏时 `Admit` 返回错误，handler 在准入前答 503 `overloaded`，不服务无记录的调用。节点在结尾之后任何时刻被杀，下一次启动都有这条调用的记录；被杀在后台结算提交之后、已结算记录 fsync 之前时，重放的待定记录入库前由 observability 的写库者按账本补全（`LedgerAmounts` 读 billing 的 `SettledFinals`，经与 `recordOf` 同一个 `amountsOf` 转换，cmd 接进 `observability.Config.Ledger`），记录带账本的金额；结算没提交的仍是待定记录，账户的读取（含 `generation`）不显示它，见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)，测试 `TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash`。是否免单取结算里已算好的 `Final.Waived`（只由三条免单规则决定），不是“实收为 0”；客户端应用在请求到达时从 `User-Agent` 认（Claude Code 记 `claude-code`，Codex 记 `codex`，其余为空）；来源类别取路由条目里冻结的 `Entry.Class`（`endpoint.go` 从 quality 按指纹认出的类别填，没有规则命中时是 `relay`），规则之后改了，这次尝试记的仍是它实际去的类别。尝试的响应头和配置（`attempt.go` 的 `a.obs.Headers`、`a.obs.Config`）交给 quality 作指纹证据，见[质量的「来源类别与指纹」](../../docs/domains/quality.md#来源类别与指纹)。终端用户取 `protocol.Request.EndUser`，以 `observability.HashEndUser` 按账户哈希，密钥是执行器由 `IdentitySecret` 按用途派生的 `endUserKey`；会话取请求体的 `session_id`，没有时依次取 `X-Session-Id`、`X-Claude-Code-Session-Id`、`session_id` 请求头（`namedSession`）；类别按端点（`classOf`：`chat`、`completions`、`embeddings`、`rerank`、`compact`）；协议版本取准入行的 `accounts.Admission.Consent`，写成 `terms:zh:3,privacy:zh:2` 的形式，所有者一种都没同意过时写 `none`，训练许可仍是不允许。调用的错误类型是客户端收到的统一错误类型（`callError`：正常结束、整份回复和客户端已离开为空，崩溃记 `internal_error`）；每次尝试的错误类型在它失败处由 `failAttempt` 记下：2xx 之前是供应商原因的名字，之后是网关判定的统一错误类型，客户端已离开时是 `cancelled`；没有失败、只以 `FinishCancelled` 结束的尝试（客户端离开后上游照常答完）由 `attemptsOf` 同样记 `cancelled`。尝试的首字时间在 `attempt.next` 读到提交点时记进 `try.firstToken`，调用的首字时间取回答它的那次尝试（`firstTokenOf`），与延迟一样从请求到达（`Call.At`）算起，整份透传的回复没有首字。子 agent 标识和语言没有可靠来源，留空表示未知。字段的定义见[记录与告警的「写入时记全」](../../docs/domains/observability.md#写入时记全)，测试 `TestCallRecordKeepsErrorKindsAndFirstTokens`、`TestCallRecordNamesTheRequester`。映射在 `record.go`。`Records` 为空时调用不记录，账本测试因此不需要记录器；生产由 `newCallNode` 同时接到 handler 和 executor。
-- 响应头等待和空闲超时“按端点、按模型可调”还没有：routing 的 `Endpoint` 没有这两项，现在全站一个值（`Config`）。
-- `ExecDeps.Quality` 是 `*quality.Monitor`，与 `RouteDeps.Quality` 是同一个：每次尝试在 `close` 里把它怎么结束的（`quality.Observation`：适配器的失败、流读失败的 `protocol.Fault`、`cutOf` 从 context 原因读出的超时或我们自己的原因、客户端是否已走、是否正常结束或 200 无正文、预估输入、结算用的输出 token、发出和首段内容的时刻，以及回答结尾检查过的客户端工具调用数和其中参数不是合法 JSON 的数）报一次；工具调用计数由 `toolCounts` 在 relay 结束时从 `Relay.Progress()` 读取，正常结束（`complete`）和读取失败（`broke`）都读，因为客户端格式接不住参数时读取在 relay 计数之后才失败（见[端点评估的「线上观测」](../../docs/domains/quality.md#线上观测)）；判定在 quality（[internal/quality/README.md](../quality/README.md)）。
-- 结尾的结束原因：`Relay` 不交出上游的 `stop_reason`，正常结束一律记 `FinishStop`；零输出免单要的“结束原因为空”因此只有出错的情形，protocol 补上后再接；零输出把普通输出、推理、音频输出、图片一起算，有音频输出就不免单。零输出这条规则本身没有上限，连续多少次都按它免。
-
-**路由快照**由 `RouteDeps`（`route.go`）从供应商的端点、目录的规格、站点的售价组装，规则见[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)。`Build` 是纯映射（一次读完所有来源，目录里没有的模型、已下线的模型、没有售价或规格的端点，以及已发布售价不全为零的 `:free` 模型，排除并记一条带原因的日志；一个端点被排除不再连带同模型的其他端点，模型没有任何端点可走时才从快照消失；模型状态以目录为准，供应商映射还没更新时按已下线处理），`Publish` 替换路由的快照并通知节点，`Rebuild` 是一次 `Build` 加 `Publish`、同一时刻只跑一个（`Build` 要写已报原因的记录），`Run` 启动后每 5 秒调一次，写入售价或目录的节点在提交后也调一次；等待正在进行的重建和读取来源都随 context 结束而放弃（周期重建每次限 `buildLimit` 30 秒）。健康度、质量分、置信度、工具调用错误率、吞吐、首字延迟和实测的结构事实取 `RouteDeps.Quality`（`quality.Monitor.MeasuredFor`，重建时的值；没测过的吞吐、延迟和工具调用错误率为 0，没计入结局的质量分为中性 1、置信度为 0，没有实测的能力与上限用目录值；实测可用的位加上、不可用的去掉，实测的上限替换目录值（更高或更低），见[端点评估的「实测的能力与上限」](../../docs/domains/quality.md#实测的能力与上限)），都只在 `endpointOf` 这一处赋。供应商快照的 `Routable.PoolLow`（号池分组的有效容量低）也在这里带进 `Endpoint.PoolLow`，路由据此把该分组的权重减半（见[供应商的「号池」](../../docs/domains/suppliers.md#号池)）；没有号池读数的分组是 `false`，权重不变。服务端工具的默认次数从 `Model.ToolUses()` 拷入 `Endpoint.ToolUses`，报价经 `Entry.Limits.MaxUses` 读取；未声明档位的缺项同样经 `UnknownItems` 标记端点并由下一次快照排除。每个端点的服务档是规格里的档加标准档，计费按端点实际提供的档报价（`billing.Model.ServiceTiers`），所以售价表只有标准档的模型也能接下没写档位的请求。
+- **开始前**依次查：客户端已走、`billing.Alive`（留 5s 余量）、单次最长、尝试数到 `min(Plan.MaxAttempts, platform.MaxAttempts)`、过了 `Plan.StartBy`（不读 `Config.StartBy`）。
+- `Acquire` 前再查 `Router.Blocked`；拿不到凭证、`*NotSupported`、重试预算用完都跳过，不算尝试。`Bind` 之后不论结果都算一次尝试；序号经 `session.begin` 分配，服务端循环的每次采样另占一个，合计至多 `platform.MaxAttemptSeq`。
+- 等响应头用计时器取消尝试的 context，而不是包住 `Send` 的短 context，那会在头到达后继续掐流。空闲计时只在有新内容时重置，完整但无内容的事件不算。
+- 上游一律以流调用；非流式客户端由 `RelayOptions.Aggregate` 聚合，计量、追加、截断、结算同一条路径。聚合的尝试有内容后失败仍可换条目，只留最后一次有内容的 `Relay`；截断、`ErrMemory`、单次最长、客户端已走不换。
+- `/responses/compact` 和直接格式（embeddings、rerank）走 `attempt.pass`：`readWhole` 至多 16 MiB，校验、结算再改写；改写缓冲在结算前申请；读失败时没写任何字节，可换条目。准入设 `NoSegments`（一次报足）；compact 与不可转换的格式设 `NativeOnly`。
+- 服务端搜索循环（`serverloop.go`）：每跳一次独立尝试，先结束上一跳再 `Acquire`；输出暂存在 `session.out`（扩容前记预算），只有最后一跳写出。
+- 供应商范围的失败由 `Router.Block` 暂停，本次跳过该供应商其余条目。上游原话只经 `Conn.Sanitize` 交出，只进响应。
+- **客户端断开**：三个 context。`clientCtx`；`attemptCtx`（`AttemptContext`）带单次最长，只对传递取消的端点跟随 `clientCtx`，空闲、等头、写失败各以自己的原因取消；`settleCtx`（`SettleContext`）不随取消、自带期限。不传递取消的端点读完不转发；写失败（`WriteTimeout`）按客户端已走处理。取消不直接动钱。
 
 ## 计量、追加与结算
 
-G6、G7 的代码结构。文件：`meter.go`（计量、追加、截断的错误）、`settle.go`（结算的重试与交接、尝试的结局与暂估）、`background.go`（`Outstanding`：节点排空等的计数，从过 gate 的请求到活得比请求长的后台结算、`SettleOrphan`）。依赖：`ExecDeps.Ledger`（`Extend`、`SettleIn`、`RunBatch`、`SettleBatch`，即 `*billing.Billing`）、`ExecDeps.Costs`；每次追加和结算先过账户闸的完成类（`withFunds`）。
-
-**计量**（`attempt.metered`，读循环里每次 `Next` 之后、写这一步之前，提交前后都一样）：把 `Relay.Progress()` 交给 `Meter.Observe`。
-
-| `Observe` 说 | 做什么 |
-|---|---|
-| `Extend` | `extend` 在自己的 goroutine 里以 `SettleContext`（不随客户端取消，`ExtendWait` 1s，含等闸）调 `Ledger.Extend`，结果进容量 1 的通道；所有者每读一次先不等待地取一次（`landed(false)`），取到就 `Meter.Extended` |
-| `Exhausted`，或 `Left` 为 0 | 停读：停空闲计时，等在途的那次（`Left` 为 0 只在有追加到期或在途时出现：`Observe` 在没有在途时总会再请求；输出免费的条目 `Left` 不设界，所以不会为一次不会来的追加空等），批准就以同一进度再计量一次（新段可能仍不够这次读），否则截断；这一步是上游正常结束时不等、也不因先前失败的追加截断，读已经完了 |
-| `Left` | 这一步之后写出内容的期限 = min(`WriteTimeout`, `Left` ÷ 条目的最快输出速度)；全额预留或已覆盖到输出上限时 `Left` 是 `math.MaxInt64`，即 `WriteTimeout`。不再读上游之后（结尾、截断的错误事件）的写用 `WriteTimeout`：上游已停，阻塞的写不再让它多生成 |
-
-- **任何一次追加失败都截断**，不等到当前段用完，也不等上游再发数据：追加的 goroutine 失败时，除了把结果放进通道，还以 `*extendFailed`（带着失败）为原因取消尝试，阻塞在 `Relay.Next` 里的所有者因此立刻醒来，`broke` 认出这个原因，按它的失败走 `truncate`，所以一个追加失败后上游完全静默的流，立即以 `billing_unavailable` 结束，不是等 180s 的空闲超时再报 `timeout`。`*Insufficient` 截断为 `credits_insufficient`（带 `limit_source`，会重置的上限在提交前的回答带 `Retry-After: 60`），其余（数据库错误、超时、`ErrTerminated`）为 `billing_unavailable`。截断（`attempt.truncate`）取消上游（原因 `errCut`），结束原因 `FinishTruncated`，花掉这一段的那一步不写；提交后以 `Relay.Fail` 结束，提交前没有内容交到客户端，以错误码回答（402/403 / 503），结局 `FailedBeforeCommit`，所以只收按次项目，不再换条目：别的条目花的是同一个账户。
-- **结算前没有追加在途**（billing 的前提）：`stream` 退出时（含出错、panic）`defer` 等在途的那次返回，至多 `ExtendWait`。
-
-**尝试的结局**（`attempt.result`，在 `close` 里）：回执、结束时刻、成本一并记进 `AttemptResult`，结算据此在 suppliers 写这次尝试的成本行；确知未执行的没有用量、成本 0（行里记完整、0）；其余按 `estimated` 补齐上游没报告的项再交 `Costs` 定价：`Credits` 一次给出十亿分之一额度和供应商单位下的估算（后者写进 `attempt_costs.estimated_native`），币种取这次尝试条目的价格币种。成本是平台自己的，定不出就记 0 并记 error 日志：不影响向用户收费，供应商记录到了也不改这次尝试的成本。供应商那一行的完整度标记（`attempt_costs.cost_flag`）由 `costFlag` 在这里一处定：上游一项用量都没报告的记 `no_usage`（行里的估算是我们猜的数，对账不拿它判价格），报告了一部分、其余是估的（或有项没价格）记 `unpriced`，定价出错同样记 `unpriced`（零不是"已知为零"），其余才是 `complete`；对账只对 `complete` 的估算判断价格对不对。`estimated` 只动回复那一段：输入侧一项都没报告时输入取首次采样的输入，其中文本按该条目模型族数出的 token（先 `Router.End` 释放端点在途计数，再以 `billing.NewTextCount` 数 `protocol.Text` 解码的字符串值，再加字符串看不出的输入：token 数组的 token 数和旧版补全重复读的 `suffix` 字节按 4 字节 1 个 token（`protocol.Request.TokenInputs`、`RepeatedTextBytes`），OpenAI 两族用词表、Claude 两族按形状估，因为 Claude 3 以后没有可内置的分词器（调查见计费文档的决策表）；同一会话每族只数一次并缓存成功或失败，计数不按首个条目的上下文截断，以便复用于更大窗口。最多解码/分词 256 KiB 普通字符串，余下字符串的原始字节按 4 字节 1 个 token；不透明媒体、签名和加密内容不入分词器。未知族或计数失败沿用字节估计），每张图片 1600、每个文件 4096 个 token，模型数据里的单张图片、单个文件上界更小时取上界（`billing.InputEstimate` 算，合计不超过准入的上界 `billing.InputBound`：预留仍按上界，两者分开，所以带图片的请求被取消时不会按整个上下文收费），输出没报告最终值时取 max(已报告的下界, min(读到的正文、推理和工具参数的估计 + 每个客户端工具调用的框架, 本次尝试的输出上限))，估计是转发时统计的文本形状（`protocol.Progress.Text`）按该族权重的每字节 token 数乘全部内容字节（`billing.TextTokens`，不超过字节数），没有权重的族或没有可统计的文本时按字节 ÷ 3 向上取整，工具调用的框架按 `billing.ToolCallTokens` 每调用 45 个 Claude token（OpenAI 族为 0；上限是计量器自己用的那个值，`Meter.OutputCap`：条目的输出上限乘选择数；推理算在上限里，已报告的下界高于上限时照报告），搜索没报告时取事件数；报告了的原样保留，billing 据"有数但没报告"标暂估。比例的口径和理由见[计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)：比例和上限都在 `estimated` 里，不会超过预留覆盖的部分（`TestAnEstimateIsNeverChargedBeyondTheReservation` 用真实账本核对）；标暂估只说明这次收费建立在估算上；供应商的完整记录到了以后由 billing 的 `RegisterCorrections` 冲正并重结（[计费的「用量来源与暂估」](../../docs/domains/billing.md#用量来源与暂估)）。
-
-**结算**（`Executor.settle`，前台与后台共用）：同一个 `billing.Outcome` 反复交给 `Ledger.Settle`，每次 2s，间隔 50ms 起翻倍到 2s（`Outstanding.retry`）；确认丢失后的重试拿回 billing 存的 `Final`，不补扣。前台试满 `SettleRetry`（10s）：写进，结尾带费用；没写进，内容完整的以 `Final{Pending}` 结束（`billing_pending`），其余结尾不带费用。之后（`Executor.settled`）：
-
-| 结算 | 名额 |
-|---|---|
-| 写进了 | `Run` 返回时归还 |
-| 暂时性错误 | 后台以同一结局重试到 `SettleBackground`，写进就在后台归还，放弃则同下一行 |
-| 永久性错误（`permanent`：`ErrNoAttempt`、找不到预留行、SQLSTATE 22/23/42 类），或后台放弃 | 记 error，交给清理：`Run` 返回时归还，清理按预留的截止时间接管并记丢失的请求（[suppliers 的「没有对账日志」](../suppliers/README.md#没有对账日志)） |
-
-**优雅退出**（`Outstanding.Drain(ctx, grace)`）：节点的 `Handler` 和 `Executor` 共用一个 `Outstanding`（`Deps.Outstanding`、`ExecDeps.Outstanding`），排空只看这一个计数，归零才算完。计数的范围：请求从过 gate（`ServeHTTP` 入口）到 handler 返回；执行中的调用；交给后台的结算（`Executor.settled`）和丢失准入的结算（`settleOrphan`）。不变量：交给后台的工作在 `Go` 里、在调用者的 goroutine 中先计数，而两种交接都发生在请求的 `ServeHTTP` 之内，所以交出方释放自己的计数之前接手方已经计上，计数不会在两者之间读到零。三个时钟各自独立：新的流在 gate 处立即拒绝（503，`httpserver.Health.Gate`）；到 `ctx` 期限前 `grace`（cmd 的 `abortGrace` 5 秒）取消全部尝试（每个尝试的 context 经 `context.AfterFunc` 挂在 `Outstanding` 的 `shutdown` 上，原因 `errShutdown`，不论端点是否传递取消），不再发起新尝试（408），提交后的流以 `timeout` 结束、按已有用量结算；计数归零或到期限时才停止后台重试、取消结算的 context。所以 abort 之后才读完请求体的请求，其预留仍在期限内结算；abort 后才交接的结算仍有期限内的重试时间。`grace` 从期限里扣，不在期限之后追加，剩下的交给清理；排空之后执行器不再发起尝试、不再写结算。不看执行器或 handler 单独为空：那只是交接前的瞬间。计数用锁而不是 `sync.WaitGroup`：排空等待期间可能有请求从零开始，`WaitGroup` 不允许。
-
-## 计量与追加
-
-- **计量覆盖每次尝试的全部阶段**：从读到上游第一个字节起，含提交前暂存、聚合、断开后读完。每次 `Relay.Next` 返回后、写客户端之前，把 `Relay.Progress()` 复制给纯内存的 `Meter.Observe`。每次尝试一个 `Meter`，彼此独立；预留由请求共享。输出上界怎么算见 [billing 的「接口」](../billing/README.md#接口草图)。
-- **所有权**：`Meter` 只归所有者 goroutine。`Observe` 返回 `ExtendNow(req)` 时，`req` 是这一刻的不可变快照，`Meter` 进入"追加中"，在途期间不再返回它。所有者在另一个 goroutine 里以新建的、1s 期限、不随 `clientCtx` 取消的 context 调 `Extend(ctx, h, req)`，结果经通道送回，所有者在两次 `Next` 之间取走、调 `Meter.Extended(seq, err)`。后台的 `Extend` 从不读 `Meter`。每个请求最多一个追加在途；停用 key 不中断在途请求。
-- **何时追加**：当前段用掉 40%–60% 时，比例每个请求随机取一次，避免同时开始的请求一起追加。
-- **写阻塞**：可分段的尝试，客户端单次写的期限 = min(10s, 当前段余量 ÷ 模型最快输出速度)，到期按断开处理，所以停读期间上游的生成也不越过当前段加超额额度。
-- **分段与超额额度**：一段的大小与超额额度来自后台记录（`billing.segment_settings`，默认值在 `billing.DefaultSegments()`），`cmd/axiom` 把同一个 `billing.SegmentPolicy` 交给路由和计费，节点每 30 秒重读；路由在计划时读一次并冻结进 `routing.Plan`，随预留请求交给计费，计划后的热更新不会改变这笔报价；超额额度的 token 数是 `Segments.Allowance(速度)`，速度取端点规格里的最快输出速度（[路由的「路由快照从哪来」](../../docs/domains/routing.md#路由快照从哪来)）。
-- **当前段先用完**（`Observe` 返回 `Exhausted`）：停止调 `Next`，空闲计时暂停，最多等追加 1s。`*Insufficient` 截断为 `credits_insufficient`；数据库失败、超时、`ErrTerminated` 截断为 `billing_unavailable`。截断 = 取消上游 → 等 `Next` 返回 → `Settle` → `Relay.Fail`。
-- 达到用户设的输出上限是正常结束（`length`、`max_tokens`、`response.incomplete`），不是截断。
-
-## 结束与结算
-
-- 收费规则见[计费的「免单规则」](../../docs/domains/billing.md#免单规则)；本模块把每次尝试的结局（`NotExecuted`、`Unknown`、`FailedBeforeCommit`、`Aggregated`、`Committed`）和是否客户端取消交给 `Settle`。
-- 上游正常结束时 Relay 扣住成功结尾。等追加在途的结束后，以 `settleCtx` 调 `Settle`，提交后 `Relay.Finish(final)`。截断、提交后出错、超时：先 `Settle` 再 `Relay.Fail`；提交前全部失败：先 `Settle` 再返回错误码。
-- **结算写不进**：暂时性错误以同一幂等键退避重试满 10s。仍失败：内容完整的照常结束、不带费用，结尾带 `axiom.billing_pending`；只有截断的流发 `billing_unavailable`。之后由原执行器带准确用量继续重试到预留截止时间前，期间占着名额，所以待结算数有界；永久性错误（违反约束、范围被拒）立即停止重试、告警，交给清理，预留由截止时间清理接管；交给清理时名额何时释放见「并发、背压与共享状态」。处理函数 `recover` 之后同样走 `Settle`。
-
-## 客户端断开
-
-三个 context：`clientCtx`（请求的 context）；`attemptCtx`（`AttemptContext`），带单次调用最长时间，只对传递取消的端点还跟随 `clientCtx`，再加一层 `WithCancelCause`，空闲计时、等响应头超时、写失败各以自己的原因取消它，`context.Cause` 据此认出读为什么结束；`settleCtx`（`SettleContext`，单次 2s），不跟随取消、自带期限，保留 `clientCtx` 里的值。取消的传递：`clientCtx` → `attemptCtx` → 关闭上游响应体 → `Next` 返回。用户看到的四种情况见[接入的「用量与费用」](../../docs/domains/gateway.md#用量与费用)；代码上：
-
-- 排队中：停止等待，什么都不写（`admit`）。已预留、未发上游：每次尝试之前看 `clientCtx`，客户端已走则不发，`Settle` 的结局没有尝试，整笔预留释放。收费的那次尝试若不是因客户端离开而结束（结局不是 `FinishCancelled`），之后客户端才走也不改变它：失败的尝试照免模型用量。
-- 端点传递取消：`attemptCtx` 随 `clientCtx` 取消，`Next` 返回，已累计用量（`Relay.Usage()`，缺项由 billing 估算标暂估）交 `Settle`，结局 `FinishCancelled`；之后不写。
-- 端点不传递取消（不论是否已提交）：`attemptCtx` 与 `clientCtx` 脱钩，读完上游不再转发（没提交的尝试不提交，结局 `FailedBeforeCommit`），仍受空闲计时和最长时间约束、仍占名额；读也超时就取消、按暂估结算。
-- 向客户端写失败（写期限到或连接已断，`WriteTimeout`，默认 10s）按客户端已走处理：之后不再写，传递取消的端点当即取消，其余照上一条。`clientCtx` 已结束的客户端同样不再写，哪怕连接还能写。
-- 取消不直接动钱，预留只经 `Settle` 或清理落到终态。
+- **计量**：每次 `Relay.Next` 之后、写这一步之前，把 `Relay.Progress()` 交给 `Meter.Observe`，覆盖提交前暂存、聚合和断开后读完。`Meter` 只归所有者 goroutine，每次尝试一个。
+- **追加**：`Observe` 要追加时，另一个 goroutine 以 `SettleContext`（`ExtendWait`，含等闸）调 `Ledger.Extend`，请求是不可变快照，结果进容量 1 的通道，所有者在两次 `Next` 之间取。每个请求至多一个追加在途；`stream` 退出前等它返回，结算前没有追加在途。
+- **停读**：段用完或 `Left` 为 0 时停读、暂停空闲计时，等在途的那次；输出免费的条目 `Left` 不设界，免得为不会来的追加空等。写期限 = min(`WriteTimeout`, `Left` ÷ 最快输出速度)；不再读上游后用 `WriteTimeout`。
+- **截断**：任何一次追加失败都以 `*extendFailed` 取消尝试，阻塞的 `Next` 立刻醒来，不等空闲超时；`*Insufficient` → `credits_insufficient`，其余 → `billing_unavailable`。上游正常结束的那一步不截断。提交前截断不换条目：别的条目花的是同一个账户。
+- **结局**：`attempt.result` 在 `close` 时写好 `billing.AttemptResult`，与账本同一次提交写进 suppliers。成本经 `Costs` 按条目冻结的汇率定价，定不出记 0 和 error、不挡结算。缺项按 `estimated` 暂估，不超过预留覆盖的部分，口径见[计费](../../docs/domains/billing.md#用量来源与暂估)。
+- **结算**：同一个 `billing.Outcome` 反复交 `Ledger.Settle`，每次 2s，退避 50ms–2s；前台试满 `SettleRetry`，没写进时内容完整的带 `billing_pending` 结束。之后：暂时性错误由后台以同一结局重试到 `SettleBackground`；永久性错误（`ErrNoAttempt`、找不到预留行、SQLSTATE 22/23/42）记 error 交给清理。名额在写进或交给清理时归还。
+- **调用记录**：准入时 `Records.Admit` 预占位置（spill 满则 503）；结算后 `Commit` 到本机 spill，再写响应；后台结算的先停放待定记录，提交后替换（`TestACallSettledInTheBackgroundKeepsItsRecordThroughACrash`）。
+- **排空**：`Outstanding.Go` 在调用者 goroutine 先计数、交接都在 `ServeHTTP` 内，计数不会在交接间读到零；用锁不用 `sync.WaitGroup`，因为排空中计数可能从零再增长。期限前 `grace`（`abortGrace` 5s）取消全部尝试，到期限才停后台重试。
 
 ## Relay 的所有权
 
-- 一个请求一个所有者 goroutine：只有它调 `Relay` 的方法，同一时刻至多一个 `Next` 在读；`Next`、`Finish`、`Fail` 返回的切片在下一次调用 `Relay` 前有效，所有者写完才再调 `Next`。
-- 写客户端经一把写锁（`session.wmu`），写锁还守着“已开始”“客户端已走”“已收尾”三个标志：提交后的保活由计时器在写锁下写 `protocol.KeepAlive(format)` 的预生成字节，不碰 `Relay`；每次写都在写期限内并推迟保活，收尾时先停保活再写结尾，之后不再写。空闲计时到期只取消 `attemptCtx`。
-- 收尾顺序固定：取消 `attemptCtx` → 等 `Next` 返回 → 所有者调 `Settle` → `Finish` 或 `Fail`。
-- 不变量：调用拿到的每个 `Relay` 在每条退出路径上都归还节点预算，恰好一次，panic 也不例外。所有权从 `NewRelay` 起就在会话：`stream` 创建时记入 `session.live`（读到一半 panic 也找得到它），`part` 里留着的永远就是 `live`（下一次尝试在创建 `Relay` 之前先放掉它），所以 `left` 转交时 `part` 清空也不会漏，`Run` 退出时 `release` 统一 `Release`。`Relay.Release` 第二次起什么都不做；先行结束的路径（`Finish`、`Fail`）不必管 `live`，而确定丢弃一个 `Relay` 的路径一律经 `session.drop`（`Fail`、`Release` 做完才清 `live`）：丢弃的 `Relay` 缓冲不能因会话还指着它而一直可达，否则退还的预算被下一次尝试再用时（比如等响应头），旧缓冲仍占着内存而没有计数。`drop` 中途 panic 时 `live` 还在，由 `Run` 退出的 `release` 兜底，兜底只有这一条。compact 回复的 `held` 同理：`readWhole` 边读边记入 `session.replyHeld`（读到一半 panic 也找得到），读失败或客户端已走时 `dropReply` 立即退还，否则 `release` 一并归还。
-- 非流式客户端：`RelayOptions.Aggregate`，`Next` 不返回 `Out`，`Finish`、`Fail` 返回整个响应体，`Status()` 给它的状态码，没有内容时的失败是 `RenderError` 的答案，可以换端点（[protocol 的「非流式聚合」](../protocol/README.md#非流式聚合)）；每路输出预算 16 MiB；聚合内存申请不到（`ErrMemory`）是本地容量故障，按对外错误结束，不再回退。网关怎么用它见下文「非流式聚合与 compact」。
-
-## 账户自带的 key
-
-服务这次请求的 `routing.Entry.Byok` 写进 `protocol.Final.IsBYOK`，三种 OpenAI 形状的用量和直接用量的格式据此写 `usage.is_byok`；Messages 的用量没有这个成员，不写。`Pending` 也写，因为它描述的是账户而不是结算结果。路由按 `Entry.Price.Schedule` 收费，BYOK 的价格已在构建快照时按站点费率缩放（[计费](../billing/README.md#定价规则)）。
-
-## 非流式聚合与 compact
-
-G8 的代码结构，`forward.go`（聚合的出口）、`conclude.go`（`answerAggregate`；compact 的回复由 `conclude` 交给 `answerReply` 直接 `respond`）、`pass.go`（compact）。不要流的客户端仍以流调用上游、由网关聚合，compact 则上游不流式（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)），区别在答案怎么得到。
-
-**不要流的客户端**（`stream` 不为 true）：`session.aggregate` 为真，`RelayOptions.Aggregate` 让 `Next` 不交出 `Out`，读、计量、追加、截断、结算都与流式相同（同一个 `Meter`/`Extend`/`Settle` 路径，客户端断开四种情况不变）。提交点仍由 `Relay` 在第一个内容事件上给出，但客户端什么都还没收到，所以 `commit` 只记下这次尝试有内容（`attempt.content`）和它上游的状态头，不写响应头。
-
-- **可以换端点**：读到内容之后断流、空闲超时，把这次尝试的 `Relay` 留下来（`session.part`），按 `routing.Decide` 的 `NextEntry` 换下一条，下一次尝试开始时把上一条放掉，所以各次尝试的内容从不混在一起。没有条目可试、或 `mayStart` 不再放行时，`left` 把留下的那一个交回，由它作答：Chat、Responses 以 200 带上已生成的内容和错误，Messages 以 502 只带错误（`Relay.Fail` 按格式决定），尝试的结局记 `Aggregated`（内容随回复交到客户端）或 `FailedBeforeCommit`（Messages 的 502）。保留的那次尝试在 `Run` 退出时也一定放掉（`defer s.release()`，经 `let` 调 `drop`，即 `Fail` 再 `Release`），容量与节点预算随之归还；`left` 交回作答的那一个由 `session.live` 接着管（见「Relay 的所有权」）。
-- **请求本身的失败**：上游在流里拒绝请求时，不再换条目。没有内容时按 400 作答；已有内容时由 `brokeAggregate` 交给 `left` 立即生成失败回复，内容与结局按上一条的格式规则保留。
-- **本地原因不换端点的失败**：截断（预留追加不到）、节点内存不够（`ErrMemory`）、单次调用最长、客户端已走：没有内容交给客户端，`conclude` 直接以错误作答（402/403 / 503 / 408 / 不写），这次尝试记 `FailedBeforeCommit`，不再换条目——分别因为钱、本地容量和期限。
-- **写出**：`answerAggregate` 在 `Settle` 之后调 `Finish` 或 `Fail`，拿到整个响应体和 `Status()`；答 200 时用 `respond` 按 64 KiB 一块写出，整个响应体就是 `Relay` 的缓冲，所以它占的节点预算在写完（或客户端已走、写不下去）之前不归还，`Run` 退出时经 `session.live` 的 `Relay.Release` 归还，`replyHeld` 归还 compact 回复的 `held` 与之一样（每块重设写期限，整份另有总期限，见「超时与限额」；`Content-Type: application/json`，状态码取自 `Status()`；上游那次响应的 `X-Codex-Turn-State` 也由 `respond` 写，compact 的回复走的正是它）。结算写不进时照 `Final{Pending: true}` 走，响应体带 `axiom.billing_pending`、不带费用，与流式相同；失败且费用为零时与 `answer` 一样不带 `axiom` 对象。
-- **16 MiB**：每个聚合的回复最多持有 `aggregateLimit`（protocol 的「非流式聚合」），超出或节点预算不够都以 `ErrMemory` 结束，不换端点。
-
-**直接格式的整份回复**（embeddings、rerank）：`attempt.pass` 读完整份回复后按 `protocol.DirectUsage` 读用量，`conclude` 用 `protocol.RewriteDirectReply` 把上游的 `data`/`results` 与本站的 `id`/`model`/`usage`/`cost` 合成答复。它不经过 `Relay` 的聚合器，也不需要 `stream` 的提交点：读失败时没向客户端写任何字节，所以仍能换端点；结算写不进时按 `Final{Pending}` 加 `axiom.billing_pending`，不带费用。上限是 `compactLimit`（16 MiB，与聚合相同），准入时 `NoSegments` 让预留一次报足，`NativeOnly` 让路由只保留原生条目。
-
-**`/responses/compact`**（`Call.Compact`）：上游不流式、回复整份读入、请求只做最小的同格式改写、一次预留足（[接入的「转发规则」](../../docs/domains/gateway.md#转发规则)）。
-
-- 准入：`routing.Input.NoSegments` 让条目不可分段，预留按输出上限一次报足；这类调用读的是整份答复，所以端点不必能流式（路由对此例外）。`NativeOnly` 只对压缩请求设置：只有原生支持 Responses 的端点能服务它，生成请求允许转换。
-- 请求：`protocol.Prepare` 按 `Target.Compact` 只改必须改的成员——模型名换成端点的名字，`user`、`safety_identifier`、`prompt_cache_key` 换成派生值，路由参数删除——`store`、`include`、输出上限、`input` 既不补也不改（[protocol 的「同格式改写」](../protocol/README.md#同格式改写)）；路径由 `suppliers.Call.Compact` 选（`/v1/responses/compact`，在 suppliers 的路径表里），等响应头的期限是 `CompactHeaderWait`（10 分钟，[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。请求带 `stream: true` 的在准入前就回 400：这个端点只给整份回复。
-- 回复：`readWhole` 一次读完，边读边向节点预算申请（上限 `compactLimit`，与聚合的 16 MiB 相同；扩容时新旧两块缓冲同时在，峰值见函数注释），每次读到字节就重置空闲计时；读完先用 `protocol.ValidateCompactReply` 确认它是恰好一个 JSON 对象（`usage` 可缺），不合格就与读失败一样在结算前换条目；再用 `protocol.UsageOf` 读出顶层 `usage` 作为这次尝试的用量，上游没报告的部分由结算暂估。改写要另分配一份回复（`len+64 KiB`），这笔内存在结算前向节点预算申请并在调用结束归还，申请不到也在结算前回 503，和直接格式一样。读成功、客户端还在，就是这次调用的答案：`Settle` 之后 `conclude` 把上游的状态码和字节按 64 KiB 一块写出（每块一个写期限，整份的总期限见「超时与限额」）；客户端已走则不写，记 `FailedBeforeCommit`。客户端在结算之后、写出之前离开，或写到一半停读：不再写，结算与金额不变，只是调用记录仍按已读到的报告记 `Aggregated`（内容没送到，这类回复没有可报告的输出，不会因此免单）。读失败（断流、空闲、断开、内存）时什么都没写，按失败的作用范围换条目或直接以错误作答（`failedReply`，与流式提交前相同）。
-- **费用**：结算之后把顶层 `usage` 换成 Axiom 的用量和费用（`protocol.RewriteCompactReply`），回复的其余成员和字节不动；`Settle` 写不进时只带用量和 `axiom.billing_pending: true`，不带费用。这是产品要求的「每次调用都返回用量和费用」。
+- 一个请求一个所有者 goroutine，只有它调 `Relay`；返回的切片在下一次调用前有效。
+- 写客户端经写锁 `session.wmu`，它也守收尾标志；保活在写锁下写预生成字节，不碰 `Relay`。收尾：取消 `attemptCtx` → 等 `Next` 返回 → `Settle` → `Finish` 或 `Fail`。
+- 每个 `Relay` 在每条退出路径上恰好归还一次节点预算，panic 也不例外：创建即记入 `session.live`，丢弃一律经 `session.drop`，`Run` 退出时 `release` 兜底；compact 回复的缓冲同理记入 `session.replyHeld`。
 
 ## 超时与限额
 
-用户遇到的期限（读请求体、排队、等响应头、数据空闲、`StartBy`、单次调用最长、尝试次数）见[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)。内部的期限：
+用户看得到的期限见[路径与格式](../../docs/domains/gateway.md#路径与格式)。默认值只在 `DefaultConfig`，尚无后台读写。
 
-| 跳 | 默认 | 到期 |
+| 项 | 默认 | 到期 |
 |---|---|---|
-| key 未命中查库 | 1s | 503 |
-| 预检缓存（M2） | 20ms | 按缓存不可用 |
-| 账户闸等待（`AccountGateWait`） | 5s，不计入下一行的 1s | 429 `rate_limited`，原因 `account_gate` |
-| 准入名额加事务 | 连接和事务合计 1s（一个 context 期限，从取得账户闸起算，不含等闸）；`lock_timeout` 500ms、`statement_timeout` 800ms 只校验、暂不下发（见「入口与准入」） | 503，回滚无副作用 |
-| 建连、TLS | 各 10s（egress） | 换条目 |
-| 等上游的响应头（`HeaderWait`） | 60s；`/responses/compact` 是 `CompactHeaderWait`，10 分钟 | 取消这次尝试，换条目 |
-| 上游没有新数据（`IdleTimeout`） | 180s | 提交前换条目，提交后以 `timeout` 结束 |
-| 保活（`KeepAlive`） | 提交后 15s 没有写过就写一次 | — |
-| 向客户端写一次（`WriteTimeout`） | 10s；可分段的取 min(10s, 当前段余量 ÷ 最快输出速度) | 按客户端已走处理 |
-| 向客户端写一整份回复（`respond`） | 每块 64 KiB，期限取 min(10s, 距总期限还剩)；总期限取 max(`WriteTimeout`, 回复字节数 ÷ 64 KiB/s)，16 MiB 约 4 分 16 秒 | 到期不再写，按客户端已走处理（结算已提交，金额不变） |
-| 追加（`ExtendWait`） | 1s，含等账户闸 | 截断 |
-| 一段与超额额度（后台分段设置） | 默认一段 1000 个输出 token、超额额度 2s（是追加等待的两倍，没有模型标出速度时用不到）；保存后 30 秒内生效 | 不是一个期限：额度盖住截断前上游最多再生成的量 |
-| 结算（`SettleRetry`、`SettleBackground`） | 单次 2s，退避重试 10s 后改为后台重试 20 分钟 | 「计量、追加与结算」 |
-| 持有者 | TTL 60s，心跳 10s，回收宽限 60s | billing 的「持有者与截止时间」 |
-| 预留截止时间 | 准入 + 单次调用最长 + 30 分钟结算宽限 | 清理接管 |
-| 优雅退出 | 监听、调用和结算共用 `AXIOM_SHUTDOWN_TIMEOUT`（默认 30s）；监听与调用同时等这个期限，到期限前 `abortGrace`（5s）取消全部上游，结算等到期限，不追加 grace | 交给清理 |
+| `NodeInFlight` / `IPInFlight` / 账户在途 | 5000 / 500 / 节点的 1/10 | 503 / 429 / 429 |
+| `MaxBody` | 32 MiB | 413 |
+| `KeyRate` / `CountRate`，`RateWindow` | 每 key 6000 / 6000，1 分钟 | 429 |
+| `KeyLookup` / 预检缓存 | 1s / 20ms | 503 / 按本节点计数 |
+| `AccountGateWait` | 5s，不计入下一行 | 429 `account_gate` |
+| `AdmissionBudget` | 1s，连接加事务，从取得闸起算 | 503，回滚 |
+| `LockTimeout` / `StatementTimeout` | 500ms / 800ms，只校验不下发 | — |
+| `QueueMax` / `QueuePerKey` | 256 / 16 | 429 |
+| `HeaderWait` / compact / `IdleTimeout` / `KeepAlive` | 60s / 10 分钟 / 180s / 15s | 换条目或 `timeout` |
+| `WriteTimeout` | 10s；整份回复每 64 KiB 一块，总期限 max(10s, 字节 ÷ 64 KiB/s) | 按客户端已走 |
+| `ExtendWait` | 1s，含等闸 | 截断 |
+| `SettleRetry` / `SettleBackground` | 10s / 20 分钟 | 交给清理 |
+| 持有者 TTL / 心跳 / 宽限 | 60s / 10s / 60s | 回收 |
+| `SettleGrace` | 30 分钟，截止 = 准入 + `MaxCall` + 它 | 清理 |
+| 优雅退出 | `AXIOM_SHUTDOWN_TIMEOUT` 30s，其中 `abortGrace` 5s | 交给清理 |
 
-- 这些是节点启动时的值，保存配置时校验下列关系，不满足拒绝保存，启动时不满足不启动（`gateway.New` 先 `Config.Validate`，一次报出全部问题；数值都须为正；入口的数值是 `IPInFlight`、`MaxBody`、`KeyRate`、`CountRate`、`RateWindow`、`KeyLookup`，默认 500、32 MiB、每 key 每分钟 6000 次（调用）、每 key 每分钟 6000 次（计数）、1 分钟、1s）：`lock_timeout`、`statement_timeout` < 准入合计；排队 ≤ `StartBy` < 单次调用最长；响应头等待、空闲 < 单次调用最长，保活 < 空闲；TTL ≥ 3 × 心跳，宽限 ≥ TTL；结算宽限 > 结算的前台加后台重试（`SettleRetry` + `SettleBackground`，默认 10s + 20 分钟，给清理接管留约 10 分钟）；0 < 保留数 < N；每 key 等待者 ≤ 全局等待者；`RateWindow` 是整毫秒、1 秒到 24 小时（共享计数的窗口按毫秒从纪元算，键活两个窗口）。
-- **分段设置的下限**：超额额度必须 ≥ `ExtendWait`（截断前上游最迟在这段时间里还在生成，额度要盖住它），由 billing 在保存和重读时校验，不在 `gateway.Config` 里。
-- **限额**：每个请求最多 3 次路由尝试（含结果未知的；模型侧循环的每次采样也计入：回退的尝试序号因此不超过 3），共享期限，换端点不重置时钟。重试预算按供应商、在进程内：1 分钟内重试不超过首次请求数的 10%，保底每分钟 5 次；用完跳过该供应商并写进路由记录。凭证范围的失败在同端点换凭证，也算一次尝试；疑似出口拦截在 M1 按端点处理并报告 quality。suppliers、egress 不暗中重试 POST。
+`Validate` 要求：全部为正；`PoolReserve` < `PoolSize`；`QueuePerKey` ≤ `QueueMax`；`LockTimeout`、`StatementTimeout` < `AdmissionBudget`；`QueueWait` ≤ `StartBy` < `MaxCall`；`HeaderWait`、`CompactHeaderWait`、`IdleTimeout` < `MaxCall`，`KeepAlive` < `IdleTimeout`；TTL ≥ 3 × 心跳，宽限 ≥ TTL；`SettleGrace` > `SettleRetry` + `SettleBackground`；`RateWindow` 是 1 秒到 24 小时的整毫秒。不满足不启动。重试预算属于 routing（默认首次请求数的 20%，每分钟保底 3 次）。
 
 ## 并发、背压与共享状态
 
-- **入口**：按 IP 的在途数上限（[安全的「防攻击」](../../docs/security.md#防攻击)）在一切之前；认 key 只看头，失败立即 401，未认证的连接从不读体、不占业务名额。
-- **节点在途上限** 5000（含已断开、仍在读完的），超出 503 不排队；**按账户在途上限**默认节点名额的 10%（`InFlight.Acquire` 的 `accountMax` 为 0 时），可按账户调，超出 429；先取账户的，再取节点的，节点拒绝时账户的名额随即归还。按 IP 的连接数与在途数用同一个 `Limiter`（按键计数、到限即拒、不排队），数值是 G1 的后台配置。名额在请求执行期间和结算后台重试期间一直占着，只在两种情况下释放：`Settle` 提交；或交给清理（结算永久性错误，或到截止时间放弃重试），这时执行器已经停了上游、不会再重试结算，预留由清理按截止时间接管。待结算数因此受节点名额约束。
-- **账户闸**（进程内，按账户）：同一账户一次一个批次，完成类先于准入；排队不占连接，详见「[账户闸](#账户闸)」。
-- **429 的原因**：节点回的每个 429 都按原因计入指标 `axiom.gateway.rate_limited`（标签 `reason`，Prometheus 里是 `axiom_gateway_rate_limited_total`），客户端看到的错误码都是 `rate_limited`，原因不发给客户端。`ip_in_flight`（按地址在途）、`account_in_flight`（按账户在途）、`key_rate`（每 key 调用频率）、`count_rate`（每 key 计数频率）、`account_rate`（账户聚合业务速率，调用和计数各一池）、`business_key_rate`（key 自身业务速率，调用和计数各一池）、`account_gate`（等账户闸超时）、`queue_full`（排队总数满）、`queue_key_full`（一个 key 的排队数满）、`queue_wait`（排队期限到）、`credentials_busy`（路线上的凭证并发都占满）。新增会回 429 的限制必须有自己的原因；原因为空的计数说明有限制没分开。
-- **内存**：每路 64 KiB（原生两格式之间的转发另加 16 KiB，两层转换同时持有缓冲，见 protocol README 的「内存」）加节点预算 2 GiB，由 protocol 记账，请求体、转换（分配之前按上界申请，见「尝试与转发」）、暂存、聚合都计入。
-- **连接池**：gateway 的准入类许可最多 N−R 个，完成类最多 R 个，分别计数；完成类占满或排队时，其他账户的准入仍能取满 N−R 个许可。完成类只在账户闸上优先，两个许可队列互不挤占。物理隔离由 [platform 的连接池](../platform/README.md#连接池)保证：普通池 N−R 条，完成池 R 条；N 由数据库预算和节点数在启动时算出（算出的上限最多 64，显式 `pool_max_conns` 可在份额内改），R 默认 16。追加、结算、孤儿结算在进入 billing 前用 `pg.CompletionContext` 选择完成池。recorder、River、控制台即使不经 gateway 许可也只能使用普通池。冷 key 查找和只读 key 端点仍领取准入许可；`NewHandler` 检查 `Service.GatesLookups`，没配就不启动。类内先到先得，等待者不占连接，期限来自调用者 context。持有者心跳与回收不占任何一个池，走它自己的专用连接（[platform 的连接池](../platform/README.md#连接池)）。
-- **排队**：只在候选端点都满载时，在事务之外；全局最多 256、每 key 最多 16 个等待者，满了 429；FIFO，每释放一个名额调一次 `Queue.Wake`，唤醒一个；醒来的人用不上（它等的是别的端点）就 `Pass`，唤醒只交给这次释放时已在排的人，重排的人排在它们后面、不再被同一次唤醒叫醒，所以一次释放至多引起当时排队人数那么多次准入。调用者在看负载之前先取 `Queue.Epoch()` 并传给 `Wait`：看负载和入队之间释放的名额没有等待者可唤醒，`Epoch` 会记下这种释放，`Wait` 见到就直接返回让调用者重做，不会睡到 20 秒期限；有人在排队时的释放归队首，不计入，新来的不会插队。醒来时 context 已结束的等待者把唤醒转给下一个。排队期限是 `QueueWait`，从调用第一次排队起算一次，之后再排队共用剩余时间，到期 429；调用者的 context 结束则返回它的错误，什么都不写。
-- **调用记录与观测**：准入时预占一条记录的位置，结算后的 `Commit` 把调用和每次尝试追加到本机 spill；响应在 `Commit` 之后才写出，进程崩溃后由下一次启动重放；结算留给后台重试的，结尾之前先停放一条待定记录，后台结算提交后由已结算记录替换。spill 满或 recorder 坏时准入直接拒绝新调用，不丢已接受的记录，规则见[记录与告警的「写入路径」](../../docs/domains/observability.md#写入路径)；`quality.Monitor.Observe` 同步更新固定大小的端点窗口，不分配、不访问数据库；观察带准入里的账户所有者与关闭回执里的凭证 ID。只有健康状态变化异步交接，缓冲满时推迟该变化、计数，已有变化不丢。试探、持久化与运行模式见 [quality](../quality/README.md)。`CallRecord` 只用 observability、catalog、protocol、accounts 的类型和跨层 ID，由本模块转换。
-- **预检计数**：`RateCounter` 按键做滑动窗口计数（当前窗口加上一窗口按重叠比例折算的部分），只计数不判定，不需要释放；两张轮换的表使内存只与最近两个窗口出现过的键成正比。配了 Valkey 时（M2），预检把各维度的计数交给 `count` 脚本，一次往返，粘性的 `GET`/`DEL` 在同一批，本地 key 始终计数、账户只在未超节点保护时计数作为兜底（见「预检计数」）：Valkey 不可用（出错、超过 20ms、熔断打开）时，用进程内的计数与全额限额比较，不乘 N：故障期间一个 key 合计至多放大到 N 倍，但不会因 Valkey 抖动而误拒流量集中在一个核心的 key（[platform/kv 的设计](../platform/kv/README.md)）。`count_tokens` 的预检只有计数。
-- **粘性**：排序第 2 位用预检取到的端点；成功端点不同时，结束后写回。收费那次尝试交付了内容（`Committed` 或 `Aggregated`），且它的端点不是预检取到的那个，就 `Stick(会话, 端点, 路线的粘性时间)`，时间取预设的 `StickyTTL`（`Plan.StickyTTL`），预设没设就用路由的默认值；一次尝试都没交付内容的调用什么都不写，也不忘记。在结算和结尾之前更新本地表或投递后台队列；异步写入可能晚于紧跟结尾的下一个请求，只损失粘性命中。M1 的粘性表在进程内，写一次是一次 map 写入，不另起协程；M2 配了 Valkey 后经 `kv` 的后台队列写，队列满就丢弃并计数，不等待。请求带 `x-claude-code-context-compacted` 时，读粘性前先 `Forget`，旧缓存已经作废；配了 Valkey 时这一步就是预检那一批里的 `DEL`，代替读取。Valkey 不可用时不粘、写入丢弃，不退回进程内的表。
+- **在途**：IP、账户、节点各一个 `Limiter`（到限即拒、不排队），先账户后节点。名额占到结算写进或交给清理，待结算数因此有界。
+- **429 的原因**：每个 429 按 `Refusal.Reason` 计入 `axiom.gateway.rate_limited`；新增会回 429 的限制必须有自己的原因，原因为空的计数说明有限制没分开。原因清单见[错误](../../docs/domains/gateway.md#错误)。
+- **内存**：每路 64 KiB 加节点预算 2 GiB，由 `protocol.Memory` 记账；请求体全额计入、不扣基数。准备阶段由 `protocol.PrepareBudgeted` 在分配之前申请，申请不到 `ErrMemory`（503）。
+- **连接池**：准入类许可至多 N−R、完成类至多 R，分别计数，物理隔离见 [platform 的连接池](../platform/README.md#连接池)。追加、结算、孤儿结算用 `pg.CompletionContext` 走完成池。`NewHandler` 要求 accounts 配了 `LookupSlot`。
+- **排队**：FIFO；`session.done` 先 `conn.Done()` 再 `Queue.Wake()`，被唤醒者看到已空出的位，用不上就 `Pass`；`Epoch` 记下"看负载与入队之间"无人可唤醒的释放，`Wait` 见到即返回；有人排队时的释放归队首。一次释放至多引起当时排队人数那么多次准入。
+- **粘性**：收费的那次尝试交付了内容、且端点不是预检取到的，才 `Stick`（`Plan.StickyTTL`）；在结尾之前写，异步写入晚到只损失命中。带 `x-claude-code-context-compacted` 时先 `Forget`。
 
-| 共享状态 | 放在哪 | 理由 |
-|---|---|---|
-| 余额、预留、计数、账本、持有者 | PostgreSQL | 钱只在这里 |
-| 限流计数、会话粘性 | M1 进程内；M2 Valkey，计数脚本与粘性读取同批、一次往返，期限 20ms；最近 10 秒内至少 20 次且过半不可用、至少 10 次且超过 20% 超时、或连续 5 次不可用即熔断 5s（调用方自己的取消不计入），之后放一次试探（半开）；不可用期间按本节点计数与全额限额比较、不粘；粘性在结束后经后台队列写回 | 丢了不影响钱；放库每个请求多一次写。细节见 [platform/kv 的设计](../platform/kv/README.md) |
-| 端点负载、429 降权、凭证在途数与冷却、重试预算、账户闸 | 进程内；M2 后台每秒同步，凭证并发与有限账号 RPM 按存活核心静态分份额，完整成员确认及排空见 [suppliers](../suppliers/README.md#并发与速率) | 请求里不访问缓存；硬上限不依赖共享提示 |
-
-缓存只在准入之前同步访问一次，规则见[路由的「容量感知」](../../docs/domains/routing.md#容量感知)。
+| 共享状态 | 放在哪 |
+|---|---|
+| 余额、预留、账本、持有者 | PostgreSQL |
+| 限流计数、会话粘性 | M2 Valkey，熔断与故障语义见 [platform/kv](../platform/kv/README.md)；不可用时不粘 |
+| 端点负载、凭证在途、重试预算、账户闸、排队 | 进程内；凭证份额见 [suppliers](../suppliers/README.md#并发与速率) |
 
 ## 账户闸
 
-进程内，按账户。同一账户的资金事务（准入、追加、结算、`SettleOrphan`）一次只有一个批次在数据库里执行：余额行锁在数据库里也串行，但等锁的每个事务占一条连接；在闸上排队不占连接，所以一个热点账户填不满池，冷 key 和其他租户照常准入（`gate.go` 的 `batchGate`、`accountQueue`）。
+进程内，按账户（`gate.go`）：同一账户的资金事务一次一个批次，在闸上排队不占连接，所以热点账户填不满池。
 
-- **两类**：完成（追加、结算、孤儿结算）先于准入，同类按到达顺序。完成带着已经提交的钱，晚一刻就多占一刻在途名额和余额；准入等久了会在 `AccountGateWait` 后 429，而不是无限占着请求。
-- **批大小**：准入最多 `admissionBatchMax`（32）个，完成最多 `completionBatchMax`（16）个；一个批次只含一类、一个账户，共用一个连接和一个事务。完成批全是结算时走 `SettleBatch`：锁、读预留、三条账本语句（余额按精确终值写入）、批量尝试、结束预留和 `EndRequest` 每批各一次，规划仍按项。
-- **收集**：准入批已经有同伴时才最多等 `admissionCollect`（1ms）再开始；单个请求立即开始，冷账户不为一个可能不来的同伴付延迟。突发里第一批之后，后面的请求互相收集。完成批不等待。
-- **期限**：准入在闸上最多等 `AccountGateWait`（5s），等不到回 429 `account_gate`；被取进批次后按 `AdmissionBudget` 计连接和事务，等闸不计入（#295）。完成类不设闸内期限，只受调用方 context 的期限约束。
-- **取消**：客户端在排队时取消，未被取走的准入立即退出并返回 `ctx.Err()`，不写库；被取进批次后批次用 `context.WithoutCancel` 和一个批次期限，单个客户端的取消不回滚同批别人的预留。完成类即使调用方走了也照常执行，它带的是已经提交的钱。
-- **失败隔离**：完成批里一个 work 的错误让整批回滚，但错误只还给这个请求，并在回滚后立即返回；其余请求在只含它们的新事务里、按各自期限重试，必要时继续拆批，报告仍只在提交后执行。结算批同一条规则：`SettleBatch` 的规划错误，或集合语句的 SQL 错误回滚后逐项定位出的成员错误，带项号就只失败该项；只有没有 SQL state 的事务或连接错误才整批按各请求的单结算重试。事务开始、提交或连接错误没有失败的 work，才整批交给各请求按幂等重试。
-- **公平性**：严格完成优先、同类 FIFO；持续结算可以让准入在闸上等到 429。这是有意的：结算晚一分钟就多一分钟的在途资金和名额，而准入可以重试。批内按队列顺序取，不做请求间重排。
-- **表项生命周期**：一个账户的表项只在有等待者或批次时存在；领头 goroutine 在锁内确认队列为空并删除，刚到的请求看到空账户就自己开一个，所以删除不会丢唤醒。领头 goroutine 独立于发起请求，即使发起者的请求取消也继续服务队列，直到队列为空；每个请求在自己的批结束时返回，不会被后续批次拖住。批次开始前发现客户端已走的准入被剔除，不写库。
-- **期限的容量含义**：闸每秒放行约 batch ÷ 持锁时间个准入；批越大，同样 5s 能容纳的排队越长。压测 #295 里持锁 50–100ms（共享 CI 机器，比 `docs/performance.md` 估的 5ms 慢一个量级），批大小为 1 时 200ms 只容 2–4 个，1 秒内每账户 20 个新请求就有六成回 429；5s 容 50–100 个。合成批次后每个请求的固定成本按 1/批摊薄，闸的放行速率随之上升；实际能排多长仍由整批持闸时间和数据库执行决定，压测必须按批大小报告。等闸的请求不占连接，只占在途名额和请求体内存；再多的由按账户在途上限（默认 500）截住。sub2api 对账号和用户并发名额也是有界等待加长期限（`maxConcurrencyWait` 30s），队列满或超时才回 429（`backend/internal/handler/gateway_helper.go`，2026-10-18）。
+- 完成（追加、结算、孤儿结算）先于准入，同类 FIFO：完成带着已提交的钱，准入可以重试。
+- 一批一类、一个账户、一个事务；准入至多 32 个、完成至多 16 个。准入批已有同伴时才等 1ms，单个请求不等。全是结算的批走 `SettleBatch`。
+- 准入等闸至多 `AccountGateWait`；完成类只受调用方 context 约束，调用方走了也照常执行。被取进批次后用 `context.WithoutCancel` 加批次期限，单个客户端取消不回滚别人。
+- 一个 work 的错误整批回滚、只还给它，其余在新事务里重试；只有事务或连接错误才整批按请求重试。
+- 表项只在有等待者或批次时存在，领头 goroutine 在锁内确认队列空才删除，所以不丢唤醒；领头者不随发起请求取消。
 
 ## 响应缓存
 
-P15 的代码结构：`cacheplan.go` 在准入前决定开不开、TTL、清除和键，`cache.go` 负责加密、存储、查询、淘汰和清理，`cachehit.go` 负责把命中的上游字节重新走 `protocol.Relay`。对外语义见[接入的「响应缓存」](../../docs/domains/gateway.md#响应缓存)。
-`cache_export.go` 只给受控导出用：`StreamCacheSealed` 在调用方的平台范围只读事务里，用同一个查询按批准时间窗和租户列出缓存行及其密封正文；导出在快照内用平台密钥环打开正文，再用本次导出的临时密钥加密到 0600 暂存，快照结束后用临时密钥在内存打开并校验 NUL、回复长度和大小，再组装成 `cache.jsonl` 和 `cache/<cache_id>`。`OpenCachePayload` 是快照内打开行的入口。这样快照后的正常淘汰、同键替换或数据库密钥退役不会拆开清单和正文，暂存也不含缓存明文。导出不冒充带请求 ID 的调用内容。
-
-**顺序与钱**：`fillCall` 在预设、压缩、文件解析都完成之后调用 `cachePlanFor`，键因此是最终发给上游的正文；`Run` 在 `webSearch`、`readEcho` 之后、第一次尝试之前调用 `cached`。命中仍走完整的准入和预留，只是没有尝试：`conclude` 用 `billing.Outcome{Attempts: nil}` 结算，`billing.Settle` 把预留全额释放，不写账本；调用记录写 `cache_hit=true`、价格和成本为 0。未命中照常尝试，结算成功后才异步写入。
-
-**键与范围**：SHA-256 的内容是 `axiom/response-cache/v1`、账户 UUID、客户端格式、是否流式、`writeNormalized` 后的正文。规范化逐段只删除字符串外的空白，不先复制整份正文；它保留属性顺序、重复键、数字写法和字符串内空白。账户进哈希，查询又在 `Call.Admitted.Scope` 里完成，所以不同账户永不共用一个条目；条目还记下写入时的服务模型与端点，命中前按当前 key 的准入路由复核，权限收窄后旧条目不会被重放。只缓存 Chat、Responses、Messages 的普通生成；直连格式、compact、`previous_response_id`、`web`/`file-parser`、服务端搜索、服务端原生工具、压缩和文件引用都不缓存（`cacheable`），它们的缓存头被忽略。平台开关 `AXIOM_RESPONSE_CACHE_CONTENT` 默认 `off`，关闭时 `cmd/axiom` 不构造缓存，请求级开关不起作用。
-
-**命中**：`cachehit.go` 从 `cache.go` 拿到已开封的正文和实际模型，先用当前 key 的路由复核模型与端点，再用当前客户端格式、当前流式/聚合选项 `protocol.NewRelay`；`RelayOptions.Cached` 让 relay 把每个 usage 计数改写成 0（`protocol` 的 `zeroJSONNumbers`），并把 Chat 的 `created`、Responses 的 `created_at` 换成这次调用的时间。`Finish` 用站点的币种写零费用，命中不再出现空的 `cost_currency`。每个命中用新的调用 ID，保留条目里的 `X-Codex-Turn-State`（它和正文一起放在同一份加密载荷里，表里没有明文状态列）；`beginReply`/`respond` 写 `Cache-Control: no-store`，共享代理不会缓存一个账户的回复。重放在提交点之前失败时删掉条目并退回正常 MISS，之后失败按普通断流结束，仍免费。`Lookup` 在读取密文和明文之前按密文、两份明文和固定开销计入节点内存预算，读不到就释放并当 MISS，不会为一条命中透支内存。
-
-**未命中、写入与边界**：只写上游 `200`、回复完整、结算成功的尝试；`newCacheCapture` 在读到上游字节时复制并计入节点内存预算，超过 `maxCacheEntry`（1 MiB）就放弃，流照常转发。`Offer` 复制正文后立即返回，队列满就丢弃并计数；写库在独立 goroutine 上用 5 秒期限，失败只记日志。每个账户最多 64 MiB 或 1024 条，超出按 `created_at` 从旧到新淘汰，最后写入的一条不会被删；`Lookup` 把过期、损坏、打不开或格式不认识的行当 MISS 并删掉，2 秒期限。`cleanup` 每分钟用平台范围分批删除过期行（每次至多 1000 行、10 批）。平台开关关闭时整张表和写入路径都不被使用。
-
-**加密与运维**：每条正文用 `secret.Keyring` 信封加密，AAD 绑定 `gateway.response_cache` 的行 ID 和 `body`；迁移开 RLS，四个策略都走语句级 InitPlan（`platform.in_platform_scope`、`allowed_sites`、`allowed_accounts`），不按候选行调用 `in_scope`。`cmd/axiom/keyring.go` 的轮换清单登记这张表，迁移带 `platform.fence_envelope_key_version` 触发器，旧密钥版本的行会在轮换时被栅栏挡住。新增的 `observability.call_log.cache_hit` 是 `NOT NULL DEFAULT false`，旧节点写调用记录时 JSON 里没有这个成员，插入用 `coalesce(..., false)` 兜底；缓存表只被新节点使用。滚动升级期间旧节点不认识这张表，密钥轮换可能让只被缓存引用的版本先退役，新节点读到不可解的行时按 MISS 删除——缓存可丢，不影响调用和账本。
-
-**并发**：相同的并发请求不合并，两个都 MISS、都调用上游、各自计费，后写覆盖先写；这是[接入的决策](../../docs/domains/gateway.md#决策与理由)里写明的偏离。命中不占供应商凭证和速率槽，但仍占节点和账户的在途名额，所以不会绕过入口保护。
-
-测试：`cacheplan_test.go` 覆盖优先级、TTL 读法、键规范化和不可缓存路径；`cache_test.go` 覆盖命中免费与记录、按账户隔离、当前 key 的模型/端点权限、流式区分、清除、过期、失败不写、加密、损坏、断流、捕获上限、内存准入和两种存储上限；`protocol/cached_test.go` 覆盖三种格式重放的 usage 清零、时间戳和币种。
+对外语义见[响应缓存](../../docs/domains/gateway.md#响应缓存)。`cachePlanFor` 在预设、压缩、文件解析之后算键，命中判断在 `webSearch` 之后、第一次尝试之前；命中仍走准入和预留，结算没有尝试。`Lookup` 先按密文和两份明文计入节点预算，2s 期限，坏行当 MISS 并删除。`newCacheCapture` 超过 `maxCacheEntry` 即放弃，流照常转发。写入队列 64，满即丢弃并计数，写库 5s 期限；`cleanup` 每分钟至多 10 批 × 1000 行。
 
 ## 故障矩阵
 
-"钱守恒"：账本平衡、余额等于分录之和、不重复扣、收费不越底线；平台承担只出现在[计费](../../docs/domains/billing.md#预留与结算)列出的情况里，且有记录。
+| 故障 | 结果与钱 |
+|---|---|
+| 准入时库慢、持有者失效、COMMIT 确认丢失 | 503、无预留；确认丢失由 `SettleOrphan` 释放或写墓碑 |
+| 已发上游、结算前崩溃 | 清理释放预留，不收用户费；成本平台承担 |
+| 追加时库慢 | 1s 后截断，消耗不超过超额额度 |
+| 结算失败 | 内容完整的照常结束不带费用，执行器继续重试；比较后再写只有一方生效 |
+| 数据库不可用达到 TTL + 宽限 | 只有本节点断开时它的持有者被回收，在途追加得 `ErrTerminated` 截断 |
 
-| 步 | 故障 | 结果与钱 |
-|---|---|---|
-| 1–5 | 节点崩溃；缓存不可用（M2） | 什么都没写；限流按本节点计数、无粘性 |
-| 1 | 慢速请求体攻击 | 未认证的不读体；有 key 的受按 IP、按账户上限约束 |
-| 6 | 数据库慢、锁等待 / 持有者失效 | 1s 内回滚 503 / 写入 0 行 503；都没有预留 |
-| 6 | COMMIT 确认丢失 | 503 不发上游；`SettleOrphan` 锁余额行后释放或写墓碑；进程死了由清理释放 |
-| 7 | 缓存查询慢、打不开或损坏 | 当 MISS，调用照常走上游；损坏行删掉，2 秒期限不拖慢调用 |
-| 7 | 缓存正文重放在提交点前失败 | 删条目、当 MISS 重走上游；提交点后失败按断流结束，免费 |
-| 7 | 缓存写入慢、队列满或数据库出错 | 只丢缓存条目并计数，调用已答完，钱不受影响 |
-| 7–8 | 节点崩溃（已发出、结算前） | 回收后按[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)收尾：清理释放并记丢失的请求，带预留冻结的路线，不向用户收费；崩溃前那次尝试没有成本行，也没有保存对账键，成本由平台承担，由供应商的逐笔记录补齐 |
-| 7 | 上游连不上、出错 | 换条目；失败尝试的成本在最后结算里记 |
-| 8 | 追加时数据库慢 | 等满 1s 截断为 `billing_unavailable`；消耗不超过超额额度 |
-| 9 | 结算失败或超时 | 内容完整的照常结束、不带费用；执行器继续重试，比较后再写只有一方生效，迟到方按 billing 的终态分支 |
-| 9 | 结算已提交、结尾未写出就崩溃 | 收费有效；客户端重试是新请求 |
-| 9 | 结算永久性错误 | 停止重试、告警，交给清理：名额随即释放，截止时间到由清理接管并记丢失的请求 |
-| — | 数据库不可用短于 TTL + 宽限（120s） | 新准入 503；恢复后心跳续上，在途照常结算 |
-| — | 数据库不可用达到 TTL + 宽限 | 全部节点一起连不上时，恢复后谁也不回收谁：回收者自己的持有者要连续 TTL + 宽限没有失效才回收别人，活着的节点在那之前已续上，在途结算照常写入。只有这个节点单独连不上、别的节点一直连得上时，它的持有者被回收，在途的追加得 `ErrTerminated` 截断；迟到的 `Settle` 按终态分支，钱不重复 |
-| — | 主备切换 | 已确认的提交不丢，靠[运营的复制要求](../../docs/domains/operations.md#部署与节点管理)；切换演练在 G11 |
-| 10 | 调用记录写不进 | 准入时预占失败就拒绝新调用；已接受但尚未入库的记录留在本机 spill，崩溃后重放，不丢。数据库不可用时记录积压到容量上限后拒绝新调用；已服务的记录在写入数据库前，`generation` 仍返回 404 `generation_not_found`，写入后即可查。 |
-| 暂估 | 上游没报告的用量、价目表缺的项、价目表定价不了的等级 | 按锁定价格和兜底价收，标暂估；预留里没用掉的部分随结算一起释放，没有后续校正 |
-| 对账 | 某供应商持续缺逐笔记录 | 停止向它路由并告警 |
-| 退出 | 优雅退出到期 | 取消全部上游（不传递取消的因此暂估），结算到期限，之后的交给回收 |
-
-每个 HTTP 请求一个请求 ID，客户端重试是新请求。不承诺外部调用恰好一次：上游已执行而响应丢失的窗口消除不了，由对账兜底。
+不承诺外部调用恰好一次：上游已执行而响应丢失由对账兜底。
 
 ## 性能估算
 
-预算见[性能的「延迟预算」](../../docs/performance.md#延迟预算)。下表全是估算（同机房 RTT 0.2–0.5ms、提交 fsync 约 1ms），G1 实测了组合扫描（表后），准入和结算的往返留给 G11。
-
-| 环节 | 预算 | 本设计 | 估算 |
-|---|---|---|---|
-| 入口转核心 | 1ms | M1 同进程 | 达标 |
-| 认 key、读请求、路由 | 2ms | 缓存命中 + `Inspect`（严格全扫并记录固定大小的位置表）+ `SessionKey`（有界前缀）+ 名字解析 + `Plan`；事务外的同格式 `Prepare` 复用位置，只解析要改的值、分段复制其余字节 | 普通请求沿用 2ms；大请求的读取与改写按[分级预算](../../docs/performance.md#延迟预算)，实测见下 |
-| 限流和粘性 | 2ms | M1 为 0；M2 1 C | 达标 |
-| 准入 | 5ms | 7 DB（含提交） | 约 3–5ms，待实测；RTT 1ms 即超标，核心与库必须同机房 |
-| 出口发请求、首字节 | 2ms + 1ms | `Prepare` 在事务外，复用长连接 | 达标；转换单独基准 |
-| 追加、结算 | 不在首字路径 | 追加 9 DB（已覆盖时 6）；结算 9 DB（单请求一次尝试），同批结算的固定语句按批摊薄 | 单笔结算的服务时间目标 p95 10ms；热点账户的排队尾延迟单独报告 |
-
-**读取与改写实测**（2026-10-28，Linux、共享 8 核 AMD EPYC；`BenchmarkInspect` + `BenchmarkPrepare`，1 MiB、4 MiB 各五轮的中位数相加，基线为优化前 merge base `06ee5f8e`；绝对耗时随共享负载变化）：
-
-| 请求体 | 格式 | 优化前 | 复用位置后 | `Inspect` 分配 | `Prepare` 分配（前 → 后） |
-|---|---|---|---|---|---|
-| 1 MiB | Messages | 8.61ms | 5.06ms | 36 | 37 → 4 |
-| 1 MiB | Responses | 6.20ms | 3.90ms | 29 | 30 → 4 |
-| 4 MiB | Messages | 31.26ms | 18.76ms | 36 | 37 → 4 |
-| 4 MiB | Responses | 25.23ms | 14.92ms | 29 | 30 → 4 |
-
-`Inspect` 仍执行重复键、UTF-8 与深度检查；位置表只保存有限的顶层改写成员，不按消息存位置，所以不增加分配次数。`Prepare` 对未改写的内容只拷贝，响应历史也直接按已校验的值拼接；回放候选清理会改变位置，保留 tokenizer 回退。1 MiB 已由单次严格检查占去约 3–4ms，单靠去掉第二遍无法达到 2ms，因此采用性能文档的分级预算，而不取消重名检查。`BenchmarkRequestRead` 五轮中位数在 256 KiB 为 0.99–1.32ms，1 MiB 为 3.96–5.32ms，4 MiB 为 16.79–31.22ms，均在分级预算内；同一次 4 MiB Responses 有一轮达 35.81ms（112%），当时共享机器负载约 36，超过 8 核，按性能文档保留超标证据，不据此放宽预算。该基准按体积报告预算占比；`BenchmarkScan` 继续同时测有界的会话前缀，`TestScanAllocationsDoNotGrow` 保证组合分配不随对话长度增长。全调用的 30ms p95 目标仍由压测验证，不能用这张微基准表代替。
-
-## PR 拆分
-
-G1–G9 与节点接线（`cmd/axiom` 起齐循环、组装快照、挂 `/v1`）已落地。剩下两块，各约 400 行非生成代码，测试先行：
-
-| # | 内容 | 依赖 |
-|---|---|---|
-| G10 | quality 观测、粘性写回（`Router.Stick`）、网关的指标和链路 | O1、O2 |
-| G11 | 端到端：Claude Code、Codex、Chat SDK 经 new-api、sub2api；故障注入；主备切换；压测 | 全部 |
-
-测试先行，至少包括：B 的读语句在 A 提交前开始（B2）；孤儿处理先于迟到的 COMMIT、回收与在途准入和追加交错、结算确认丢失后重试不补扣（B4、B5）；聚合与写阻塞时消耗不超超额额度（G6）；大事件越过当前段、事件持续到达却迟迟不结束都在读的过程中触发追加或停读（P5、G6）；冷 key 洪峰叠加热点账户结算（G2）；数据库中断 30s 与 150s（G11）。压测场景见[性能的「怎么验证」](../../docs/performance.md#怎么验证)。
-
-## 实现时验证的前提
-
-- Codex 固定版本经 HTTP 每轮发完整历史（G11；不成立就把续接提前到 M1）。
-- `thinking.display: omitted` 时提交前几分钟无字节，Claude Code 能容忍（G11；不能就在提交前透传 `ping`）。
-- 两家中转站的逐条记录 1 小时内可查（S9）。
-- 联网搜索在流式 `message_delta` 里的累计输入（G11，决定输入上界能否收紧）。
-- sub2api 是否回显客户端发来的 `X-Client-Request-Id`（S8；是则发请求前就知道对账键）。
-- 锁、持有者栅栏与读计数按独立语句同批发送，语义见 billing 的「同一账户的合并预留」；单请求 7 次往返，并发请求合成批次后摊薄。读计数的快照仍在余额锁取得之后。
+预算见[性能](../../docs/performance.md#延迟预算)。约束代码的：准入 7 次往返，核心与库同机房；`Prepare` 在事务外、复用 `Inspect` 的位置表；扫描分配不随对话长度增长（`TestScanAllocationsDoNotGrow`）；模型列表一次请求一次分配（`BenchmarkModelList`）。
 
 ## 决策与理由
 
-| 决策 | 理由 | 不选 |
-|---|---|---|
-| 请求 ID 即调用编号 | 一个身份贯穿日志、账本、记录 | 另生成调用编号 |
-| 每个准入的请求恰好一次 `Settle`，只释放也走它 | 终结只有一个入口 | 单独的 `Release`：多一条漏记尝试成本的路径 |
-| 预检只计数，判定在 `fn` | 以后速率值从库里读，判定位置不变 | 在预检里判定 |
-| M1 共享状态在进程内，Valkey 到 M2；多核心没有 Valkey 不启动（`AXIOM_CORE_NODES` 大于 1 而没有 `AXIOM_VALKEY_URL`） | 进程内实现本就是缓存不可用时的兜底 | M1 就接 Valkey |
-| M1 直接用 `platform/egress` | 一种实现不加抽象 | 先定义出口接口 |
-| 准入后凭证竞争失败即释放并 429 | 竞争罕见 | 持钱等待：多一条排队路径 |
-| 归还并发位时唤醒排队者，而不是让排队者轮询或睡满期限 | 排队等的是容量，容量释放的唯一事件是归还；每归还一个位唤醒一个，FIFO 不让新来的插队，`Epoch` 补上"释放时无人排队"的窗口 | 只靠期限：位空出来也要等满 `QueueWait` 才重试；轮询：按排队人数乘频率打准入事务 |
-| 用不上唤醒的排队者把它交给释放时已在排的下一个人（`Pass`） | 队列跨端点共用，队首可能等的是另一个端点（例如账号分钟已用完的），它醒来重排后唤醒就丢了，后面等着这个空位的人要睡到期限再拿 429；限定只交给释放时已在排的人，一次释放至多引起当时排队人数那么多次准入 | 广播：每次释放让所有排队者各做一次带数据库往返的准入；按端点分队：一个请求的候选跨多个端点和模型，入哪一队、何时出队都要另设规则，等真有测量到的需要再做 |
-| 满载判断读供应商的实时容量视图，而不是在路由里复制计数或只比较份额之和 | 视图和 `Acquire` 用同一套判断，快照只持有指针，份额、休息和账号分钟都在调用时现读；`Plan` 能说出"全满"，排队才可达 | 把 `MaxConcurrent` 设成份额之和：五秒一份快照，份额和休息在期间变化，路由会看错 |
-| 重试预算按比例并保底，按供应商、按进程 | 低流量时一次故障不至于封死回退 | 纯比例 |
-| pg 的普通池和完成池共用可配置预算，gateway 保留账户闸和准入许可 | 控制台、recorder 和直接使用 pgxpool 的 River 都无法侵占完成类容量；预算按部署缩小 | 只在 gateway 发许可或只给 `Tx` 加信号量：其他事务入口或 River 可绕过 |
-| 进程内账户闸，按账户成批，完成类优先；结算批再用集合语句摊薄每项的固定往返 | 等锁不占连接、提交与锁等待按批摊薄；完成先走，结算不会排在准入后面；结算批把每项一次的锁、读、账本、结束和 `EndRequest` 变成每批一次，规划仍按项，收费上限与逐个相同；完成批一个 work 的错误整批回滚后只还给该请求、其余在新事务重试；结算批的余额按精确终值写入，集合 SQL 错误回滚后逐项定位、成功项照常收费；数据库或提交错误才整批按请求 ID 重试 | 只靠行锁：等锁的事务占满准入名额，且每请求一次提交；逐请求保存点：多一次往返和一套回滚状态；只调大完成批：固定语句仍按项 |
-| 账户闸等 5s 而不是 200ms，期限不并入准入的 1s | 一次突发在一个账户上排队的时间要由持锁时间乘队长决定；批大小为 1 时 200ms 在持锁 50–100ms 就拒掉六成突发，5s 容得下，等闸又只多占在途名额、不占连接。合成批次后同样 5s 容得更多 | 保持 200ms：热点账户的突发被拒；把闸并入 1s 并只调长闸：等闸超 1s 的变成 503 而不是 429 |
-| 准入批只在已有同伴时等 1ms，单个请求不等待 | 单个请求不为一个可能不来的同伴付延迟；突发里的后续请求互相收集，批越大，BEGIN、COMMIT、连接和锁等待摊得越薄 | 固定等待：冷账户多 1ms；完全不等：热点账户的突发仍然逐请求提交 |
-| 准入和完成许可按各自的 N−R、R 上限计数 | 物理池已隔离，完成类持有或等待许可都不减少普通池的准入容量；账户闸上的完成优先级不变 | 两类共用总在用数：完成积压会挡住准入，即使普通池空闲 |
-| 排队用 `Epoch` 补上"看负载与入队之间的释放" | 没有它，那次释放无人可唤醒，请求睡满 20 秒还拿 429，而容量是空的 | 无等待者时的释放攒成许可：空闲时攒下的许可会让以后每个新来的白跑一遍 7 次往返的准入（批量摊薄） |
-| 先认 key 再读请求体 | 认 key 只要头；未认证的慢速请求体不占业务名额 | 先读体 |
-| 准入的 1s 是一个 context 期限，不下发 `lock_timeout`、`statement_timeout` | 目前仍用统一 context 期限；独立 `SET LOCAL` 会多一次往返（准入 7 次变 8 次）；期限到时 pgx 取消语句、事务回滚，对客户端效果相同 | 事务里 `SET LOCAL`：区分等锁和慢语句，但每次准入多一次往返；需要单独分解服务器超时时，再评估并入已有批量 |
-| `fn` 写完预留之后 `Admit` 的任何错误都按"可能已提交"处理 | 提交失败和确认丢失无法区分；`SettleOrphan` 对已提交的释放、对已回滚的写墓碑，重复执行无害 | 只认特定错误：漏掉的那一种会留下永不释放的预留 |
-| key 没有预设时用零 ID 的预设 | 预设内容在路由快照里，网关不另带一份默认 | 网关内置默认预设：两份会不一致 |
-| 未宣告长度的请求体从 4 KiB 起翻倍增长，每次分配前先计入、复制后退还旧的 | 分配之前计入，所以并发的慢上传和大请求受预算约束，小的分块请求也不预占整个上限；峰值是新旧两个缓冲，不是 `io.ReadAll` 的全部分块加整体复制（约两倍正文，其中的一半没人计）。代价：留下的缓冲至多正文的两倍，预算中途不够会在读到一半时回 503 | 按上限预占：每个分块请求占 32 MiB；`io.ReadAll` 配 2 倍上限预占：仍然是预占；读完再复制成恰好的大小：多一份峰值 |
-| 请求体全额计入内存预算，不扣每路 64 KiB 的基数 | 基数是给流缓冲的；全额简单且偏保守 | 扣基数 |
-| 输出速度未知的条目不分段（routing） | 分段预留的超额额度是速度乘等待时间，速度为 0 就少预留 | 编一个默认速度 |
-| 升级请求回 400 `invalid_request` | 文档只说拒绝；Codex 握手收到任何非 101 就回退到 HTTP | 426：那是邀请升级 |
-| 模型列表像准入一样查库判定 key | 缓存只说 key 存在；停用、过期、IP 白名单只有 `Admit` 知道，否则被停用的 key 仍能列模型 | 缓存里附带状态：多节点下不一致 |
-| 冷 key 查找的名额由共享的那次查库持有，在 accounts 里取 | 查库在 singleflight 的函数里、脱离发起请求运行；按等待者取名额会重复计，或在发起者走后提前还掉仍在用的连接 | 在 gateway 里包住 `AuthenticateKey`：每个等待者各取一个，与连接数对不上 |
-| 路由参数里无法兑现的成员回 400，分组名称只取公开代号 | 静默忽略会让客户端以为约束被执行；用代号精确选组，不泄露真实名称、不扩大到同家其他组 | 把未公布的参数、供应商自报的量化或伪造的百分位当作支持；按整家供应商映射分组代号 |
-| `/v1/models` 要认 key、只列这把 key 能用的模型，M1 不带价格 | key 决定站点、域名和可见的模型；列出别的模型会让客户端选到必然 404 的名字，key 的模型限制也就无从发现；价格要等售价接口 | 列出全部模型：客户端选到不能用的模型；匿名可读 |
-| 模型列表和单个模型只给这把 key 在路由快照里有端点的模型（`routing.KeyView`，含它的路由预设），不看熔断、满载、暂停、预算 | 没有端点（没接供应商，或组装时缺售价、规格被整个排除）的模型调用必然 404 `no_endpoint`，列出来就是让客户端选到必败的名字，正是 #311 的 E2-9 要消除的；new-api、sub2api 也只列能调用的模型。满载、熔断等是暂时的，列表据此增减会让模型随负载闪进闪出，调用自己会排队或回 503 | 只看目录的上架状态：有名无路的模型照列；用 `routing.Plan` 探测：要造一个假请求，且满载时模型从列表消失 |
-| 按目录快照把每个模型的条目编码一次，请求只挑选和拼接；整份应答不缓存 | 条目只取决于目录快照，编码一次后一次请求是对模型数的一遍挑选加一次拷贝：300 个模型（600 项）约 25 µs、1 次分配（`BenchmarkModelList`），原先逐项建 map 再编码约 2.3 ms、10911 次分配。整份应答取决于 key 的可见集合和路由快照，缓存要带上这两个维度，路由快照每 5 秒重建，命中率低，不值得 | 每次请求现建：CPU 与分配随目录线性增长，每次 Claude Code 启动都要付；按目录快照缓存整份：一把 key 的列表会给另一把 |
-| 402/403 只报来源，暂时性的带 `Retry-After: 60` | billing 的 `Insufficient` 只有来源和是否会重置 | 在 gateway 里重算窗口：重复 billing 的规则 |
-| 尝试的新数据按“内容或事件在进展”算，完整但没有内容的事件不算 | 文档只说心跳、注释、重复快照不算；Messages 的 `message_start`、`content_block_start` 之后的几分钟静默若算新数据，空闲计时就永远不到；代价：提交前只发这类事件的上游 180s 后被换掉 | 任何事件都算：重复快照能把计时无限推后 |
-| 响应头等待用计时器取消尝试的 context，不是包住 `Send` 的短 context | 请求的 context 管着整个响应体的读取，短 context 会在响应头到了之后继续掐流 | 给 `Send` 一个带期限的 context |
-| 重试预算在尝试之前取（`TakeRetry`），第一次尝试记 `Sent` | `Plan` 只看不取；并发的重试靠 `TakeRetry` 各占一次 | 在 `Plan` 里扣 |
-| 过了 `Plan.StartBy` 不再发起尝试，且以它为准，不读 `Config.StartBy` | 它由路由器按预设的窗口算好，`Config.StartBy` 只是种子；默认值下（StartBy 120s、空闲 180s）提交前空闲超时那次已过了窗口，所以只有空闲超时调短（按模型可调）才会换端点，返回最后一次尝试的错误（502）是文档的规则 | 两处都读：同一个值两个来源 |
-| 上游因请求自身拒绝（`ScopeRequest`）回 400 `invalid_request`，带上游的 `message`、`type`、`param`，上游的 `code` 放 `metadata.provider_code`（`Failure.Rejection`，已去掉网址、凭证、请求编号），没有原话时用统一的说法 | 负责人 2026-10-18：影响兼容的行为照 new-api；Claude Code 靠原话自动恢复。`Rejection` 只进给客户端的响应，不进日志和表（`failed` 只把它交给 `protocol.Error`） | 让每个适配器的 `Classify` 带原文：各清洗一遍，漏一个就泄露；原样透传：会暴露供应商的网址 |
-| 上游在流里报的错走同一套：`protocol.FaultOf` 分类，请求本身的按 `ScopeRequest` 答 400（提交后以错误事件）、不换端点，原话经 `Conn.Sanitize`（suppliers 的同一份清洗）；其余换端点或用统一的说法 | #311 的 E2-4：同一个参数错误无论从 HTTP 400 还是从流里来，读到的都是同一句话、同样的 `code` 和 `param`，客户端才不必按来路分两种处理；只有 suppliers 知道该遮蔽哪个凭证和地址，所以协议只交出有界的原文，清洗仍在一处（`cleanRejection`）。不换端点的理由与上一行相同：换个端点还是这个请求。代价：`Conn` 多一个方法 | 让适配器在流里各清洗一遍：漏一个就泄露，且 `Classify` 至今不留文字；把 5xx、限流的原话也交给客户端：与 HTTP 路径不一致，会漏出供应商内部报错 |
-| 提交点之前按上游的类别决定换不换端点，与 `send` 阶段的 `routing.Decide` 同口径：请求本身的失败不再交给下一个端点 | 一条流在提交前失败和一次 4xx 失败是同一件事：请求本身的失败换端点必败，还多花一次尝试 | 提交前一律换端点：同一个 400 被重试两次 |
-| 非流式的答案也由同一个读循环聚合，而不是另开一条路 | 上游一律以流调用，计量、追加、截断、结算、断开四种情况都只有一份；聚合只是出口不同（`RelayOptions.Aggregate`） | 上游按客户端的 `stream` 调用：计量看不到进度，非分段预留，转换后的请求体还得再转换回复 |
-| 聚合时提交点不写响应头，失败的尝试可以换端点 | 客户端在整份回复写好之前什么都没收到，所以"I4 提交后不换尝试"对它是写出那一刻；代价是聚合的回复在最后一次尝试之前不占状态码 | 见到第一个内容就定 200：中途失败只能返回半截内容，或丢掉已生成的内容报错 |
-| 聚合保留"最后一次有内容的尝试"，下一次尝试开始时放掉 | 文档只让"最后一次尝试生成了部分内容"随错误返回，各次尝试的内容不混；保留一个 `Relay` 最多 16 MiB | 把每次尝试的内容都留着：容量随尝试数翻倍，且违反不混的要求 |
-| 聚合回复在结算之后一次写出，不按提交点写 | 一次调用只写一份整个响应体，它的"内容交到客户端"就是那一次写；结算在写之前提交，所以写不出去时钱也不重复 | 边聚合边写：客户端拿到的不是一份完整的回复，失败时也收不回已写的字节 |
-| `/responses/compact` 的回复只把 `usage` 换成 Axiom 的用量和费用，请求只经最小的同格式改写（`Target.Compact`：模型名、标识、路由参数） | 产品要求每次调用都返回用量和费用，所以 `usage` 必须是本站结算的数字；除它以外不加上游没给的字段，其余字节不动。请求则不能原样：模型名对不上上游、终端用户标识会泄露、官方端点拒绝未知的路由参数。生成请求的改写（`store`、`include`、输出上限、`stream`、`input` 与历史）对压缩请求没有依据，所以只留必须改的三样 | 回复整份原样透传：客户端读不到本站的用量和费用，违背产品要求。请求也原样发：模型名不同时调用失败，或按别的模型计费；标识泄露 |
-| compact 的请求体读进节点预算、上限 16 MiB，读完分块写出 | 节点内存有界；读失败时客户端什么都没收到，还能换条目；`usage` 只能从整份回复里读。写出按 64 KiB 一块、每块一个写期限，慢但一直在读的手机不会被当成已走 | 边读边透传：`usage` 读不到就没法计费，失败时也收不回已写的字节；整份一个写期限：16 MiB 在限速网络下超过 10 秒，结算已提交而客户端只拿到半截 |
-| compact 的答复只换 `usage`，结算写不进时加 `axiom.billing_pending` 且不带费用 | `usage` 是产品要求每次调用都返回的用量和费用，其余成员保持上游的字节；结算写不进时如实说不带费用，与各格式的流一致 | 整份原样透传：客户端读不到费用；在别处插本站字段：改了上游回复的其余部分 |
-| 生成请求优先客户端的原格式；三种格式两两可转（Messages 与 Responses 之间也经 Chat 的映射），`NativeOnly` 只限制压缩请求。路由快照把每个端点列为三种格式可服务，`callFormat` 仍用 Native 选实际调用格式；带 `file_id` 的请求只安排一次尝试 | 同格式不经过规范模型；转换时表达不了的成员由 protocol 拒绝，预留按实际调用格式的用量口径计算。`file_id` 是供应商账户的资源，只可能在一个端点，换端点必错还多花一次尝试 | 先转换：多一次有损转换；把 Served 当成 Native：给 Chat 端点发送错误格式；`file_id` 按普通请求重试：把别家的文件 id 发给不持有它的端点 |
-| `Target.Streams` 告诉 `Prepare` 端点能流式，请求里一律要流；路由对生成请求只保留能流式的端点（`FormatNotServed`） | 网关总是以流读上游，非流式客户端拿聚合结果，不能流式的端点必然让这次尝试失败：花了上游的钱、用户免单、还占一次尝试。压缩调用读的是整份答复，是唯一的例外 | 让不能流式的端点接生成请求：`Relay` 只按事件流读，整份 JSON 读不出内容，只能失败；启动时断言所有端点都能流式：适配器注册表不在路由手里 |
-| `PrepareBudgeted` 保证准备分配的每个字节都先向节点内存预算申请过：同格式先为输出缓冲按 `rewriteSize` 申请；Chat 转出时解码逐项申请、写出只经 `protocol` 的 `writer`（每次增长前申请）；Messages、Responses 读成 Chat 的一段整段预留 `nativeRequestCost`；申请不到返回 `ErrMemory`（503），只留结果缓冲的容量到 `Send` 返回 | 之后再记，预算满了分配已经发生，503 撤销不了峰值（评审 #157）。逐处补申请收不拢：#549 三轮评审每轮都找到新的漏记点，所以改成两条机制——转换的输出只有一种会增长的缓冲，增长前必申请；`TestPrepareAllocatesOnlyWhatItDrew` 对每对格式和最坏形状在子进程里测分配总量不超过申请总量、随机压低预算时拒绝前不超申请，漏一处就失败。Chat 转出于是按实际申请：1 MiB 长文本约 1.01 倍请求体，此前按形状常数约 6 倍。Messages、Responses 的读取经 `encoding/json` 构造映射，分配不经我们的缓冲，不能逐次申请，仍整段预留；它的常数由同一测试核对，测出旧值对不认识的成员和嵌套的 base64 偏小，已修正（每成员 512 → 768，读取不再逐层复制值）。代价：反向仍约 12 倍请求体；改成流式读入 `writer` 后才能按实际申请（待定） | 继续逐处补申请：评审三轮未收敛；全部改回形状上界：Chat 转出 32 MiB 请求预占约 1 GiB（#166）；用 `runtime` 计数按实际分配记账：只有全进程计数，并发请求分不开 |
-| 没写输出上限或写成 `null`、0（含 `-0`）的生成请求，发给上游的是报价用的上限（条目的输出上限），不是模型默认值 | 路由把默认值裁到上下文剩下的部分来报价，上游不知道就按默认值生成，多出来的不在预留里（I1）；条目的上限只有一个来源，`Entry.MaxOutput`，`Target.MaxOutput` 与它相同 | 只改跨格式：同格式的 Responses 仍会超出；靠计量器的输出上限封顶：上游照常生成，封顶只少记，花费并没有少 |
-| 尝试关闭时就写好它的 `billing.AttemptResult`，结算直接交 `billing.Outcome`；回执（对账键在里面）原样交给 billing，成本经 `Costs` | 回执只在关闭时拿到，用量此时已定；中间再有一层 `Ending` 要多一次逐项转换 | G4 的 `Ending` 加 `SettleFunc`：结算之外的路径都得经它，测试也只能测到它为止 |
-| 任何一次追加失败都截断，不等当前段用完再看 | 计费文档：超时或追加失败就中断上游；计量器失败后每读一次就重发，数据库出故障时每个流每次读都打一次库 | 失败后照读到段用完：省不了钱，只多打库 |
-| 上游正常结束的那一步不因段用完或追加失败而截断；追加失败在读完之前发生则照常截断 | 已经读完，不再有要停的读；结算按实际用量收、守底线。失败发生在读的过程中，上游还在生成，要立刻停 | 照样截断：完整的回答被当作出错 |
-| 追加失败即取消尝试，所有者从被取消的读里认出原因 | 所有者只在 `Next` 返回时才处理通道里的失败；上游静默时它到空闲超时才返回，把计费故障报成 `timeout`，期间继续生成 | 所有者另起 goroutine 监听通道：多一个等读的 goroutine，取消还是要经 context；通道旁加计时器：又一个期限 |
-| 输出免费的条目 `Left` 不设界 | 费用不随输出增长，段永远用不完；`Left` 为 0 被当作「有追加要等」，没有追加时所有者空转，取消不了，`Drain` 也结束不了 | 所有者见没有在途就不等：把计量器的契约漏洞留在调用方里补 |
-| 提交前截断不换条目，回 402/403 / 503 | 别的条目花的是同一账户的钱；没有内容交到客户端，只收按次项目 | 换条目：同一个余额再被拒一次 |
-| 暂估：输入的文本按该条目模型族的计数（OpenAI 用分词器，Claude 按文本形状，因为 Claude 3 以后没有可内置的分词器，调查见计费的「决策与理由」；未知族 4 字节 1 个 token）、每张图片 1600、每个文件 4096 个 token，输出按转发文本的形状估（没有权重的族 3 字节 1 个 token）再加每个客户端工具调用的 45 个 Claude token（OpenAI 0），向上取整，都不超过预留覆盖的上界（输出的上界是计量器自己用的 `Meter.OutputCap`） | 分词器只在这一刻、上游没报输入时跑；输出的形状在转发时顺带统计（不分配），只在没报输出时用；口径、误差和理由在计费的「用量来源与暂估」「决策与理由」；比例和上限都在 `estimated` 里，算出的数不超过预留覆盖的部分，所以不会落到底线以下 | 按 0 记缺项：免费；按上界：约多收四倍 |
-| 结算的永久性错误只认 `ErrNoAttempt`、找不到预留行和 SQLSTATE 22、23、42 类，其余都重试 | 文档的"违反约束、范围被拒"；认错成暂时的只是多重试到 `SettleBackground`，认错成永久的会把能结算的调用推给清理 | 只重试连接类错误：认不出的错误一律放弃 |
-| 成本定不出时记 0、记 error，照常结算 | 成本是平台的，对账按供应商记录改正；为它扣住结算会把能向用户定价的调用推给清理 | 当作结算失败 |
-| 收了费的提交前错误才带 `axiom` 对象 | 文档：流开始前出错也可能收费，带上用量和费用；没收费时多一个 0 只是噪声 | 一律带 |
-| 只读接口在认 key 的同一个事务里读数据 | 范围就是 key 的账户，行级安全是全部的访问控制；不另开事务，也不在 gateway 里组装范围 | 先认 key、再用账户范围另开事务：多一次往返，且 gateway 要自己取范围 |
-| `/credits`、`/key` 同时接受管理 key 和调用 key | OpenRouter 的 `/credits` 只收管理 key；其他中转站常用调用 key 查余额和用量，禁用它会断掉已接入的对接方。读的只是本账户的余额，作用域不变 | 照 OpenRouter 只收管理 key：会拒绝现有的调用 key 对接方 |
-| 余额类字段：`total_usage` 取账户各工作区的 `spend.spent` 之和，`total_credits` 为余额加它 | 账本每次调用一行，每次轮询都扫全部不可接受；`spend` 随天数增长，且保持"额度 − 用量 = 余额" | 对 `entries` 求和：随调用数增长；把工作区和 key 的计数器一起加：每笔收费记两份，会重复；只给可用余额、用量 0：用量是假的 |
-| `count_tokens` 本地估算，三字节一 token，图片 1600、文件 3000 | 没有上游就没有精确值；文本通常偏高，客户端多半偏早压缩，但不保证不超出窗口（大文件、token 密的文本会低估）。路由、报价的输入上界（字节数）偏高太多，会让 Claude Code 压缩得太早 | 用报价的输入上界：高出约三到四倍；转发上游：G4 之后再做，且要为一个免费接口占用端点名额 |
-
-## 成本汇率的传递
-
-`RouteDeps.ExchangeRates` 每次构建只读一次，不成功就不发布新快照，最长陈旧时间继续由 routing 的 `MaxStale` 判断。条目携带的值经 `quotables` 进入预留，保留条目的汇率集合持久化；`attempt.result` 把同一条目的冻结汇率附到回执后交给 `Credits`，不读取新的汇率。`AttemptResult.CostKnown` 要求换算已知且最终的 `CostFlag` 为 `complete`：没有用量、用量靠暂估或有项目没有价格的成本是估计值，利润记未知（`NULL`）；缺汇率不会改写原生对账所用的 `CostFlag`。`exchange_test.go` 在 Plan 层证明条目的值副本在多次刷新后不变，及失败刷新不延长有效期；`exchange_costs_test.go` 端到端覆盖首次发送前改汇率，和第一次尝试失败、改汇率、回退到第二条目仍用预留时的汇率。这组测试的 `payInCNY` 在模拟切换供应商币种的同一事务里追加对应币种的单位价值确认，沿用原数值并保留 USD 历史；单位价值的币种或原生单位不匹配时，供应商端点本就不应进快照。
-
-路由构建的 `RouteDeps.Prices` 接收本次已读取的目录快照、端点与汇率，由 billing 发布或保留安全的价格版本；不会分别再取一次成本。准入把条目的 `Price.Version` 送到 `Quotable.Version`，结算后的调用记录使用冻结预留行返回的版本。
-
-路由构建的价格回调只读 `billing.PublishedPrices`，并检查本节点成本；没有可用的发布版本时，日志指向价格发布列表、发布确认是否超时和本地成本，不再归因为没有规则。
+| 决策 | 理由 |
+|---|---|
+| 请求 ID 即调用编号 | 一个身份贯穿日志、账本、记录 |
+| 预检只计数，判定在 `fn` | 速率值从库里读，判定位置不变 |
+| 多核心没有 Valkey 不启动（`AXIOM_CORE_NODES` > 1 而无 `AXIOM_VALKEY_URL`） | 进程内计数只是单核心和故障时的兜底 |
+| 准入的 1s 是 context 期限，不下发 `SET LOCAL` | 多一次往返；期限到时 pgx 取消语句，效果相同 |
+| 结算永久错误只认三类，其余重试 | 错认成暂时只是多重试，错认成永久会把能结算的调用推给清理 |

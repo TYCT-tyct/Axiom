@@ -34,7 +34,11 @@ func TestServe(t *testing.T) {
 	logs := make(records, 16)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- serveForTest(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil))) }()
+	var claimed []*listening
+	go func() {
+		done <- serveForTestBound(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)),
+			func(servers []*listening) { claimed = servers })
+	}()
 	addrs := servingAddrs(t, logs, done)
 	awaitRecord(t, logs, done, "ready") // /readyz turns 200 on a goroutine of its own, after "serving"
 
@@ -56,11 +60,7 @@ func TestServe(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the node did not shut down")
 	}
-	for _, addr := range []string{addrs.Public, addrs.Admin, addrs.Ops} {
-		if _, err := get(t, "http://"+addr+"/"); err == nil {
-			t.Errorf("%s still answers after shutdown", addr)
-		}
-	}
+	assertListenersClosed(t, claimed)
 }
 
 // checkPages: the public listener serves the website and the console under the policy, and none of the admin's files;
@@ -453,7 +453,7 @@ func TestFailedStartLeavesNoRecorderWriter(t *testing.T) {
 		}
 		return recorder, errors.New("injected failure after the call-record writer started")
 	}
-	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil, testGatewayConfig()); err == nil || !strings.Contains(err.Error(), "injected failure") {
+	if err := serveWith(t.Context(), environ, slog.New(slog.DiscardHandler), directEgress, record, nil, testGatewayConfig(), func([]*listening) {}); err == nil || !strings.Contains(err.Error(), "injected failure") {
 		t.Fatalf("serveWith: %v, want the injected failure", err)
 	}
 	if recorder == nil {

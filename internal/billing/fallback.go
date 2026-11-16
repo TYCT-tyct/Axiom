@@ -21,11 +21,6 @@ import (
 
 // fallbacks are a credit currency's prices for what a schedule cannot price (docs/domains/billing.md「价目表缺项」):
 // each known per-use item's default unit price. Admission locks them on the reservation, as it locks the schedules.
-//
-// Rows also carried a markup on a supplier's actual cost, which priced a correction of the charge. M1 has no
-// corrections (docs/domains/billing.md「用量来源与暂估」), so nothing applied it; migration 00040_fallbacks_no_markup.sql
-// drops it from billing.fallbacks, and a reservation admitted before then still holds it, which parseLockedFallbacks
-// ignores.
 type fallbacks struct {
 	currency platform.Currency
 	perUse   map[catalog.Item]platform.UnitPrice
@@ -36,15 +31,6 @@ type fallbacks struct {
 type fallbacksJSON struct {
 	Currency string            `json:"currency"`
 	PerUse   map[string]string `json:"per_use"`
-}
-
-// lockedFallbacksJSON is a reservation's locked fallbacks: the same, plus the markup rows admitted before #232 locked.
-// It is read and ignored so those calls settle at the prices they were admitted at; billing.fallbacks and every save
-// stay closed and refuse it.
-type lockedFallbacksJSON struct {
-	Currency string            `json:"currency"`
-	PerUse   map[string]string `json:"per_use"`
-	Markup   jsonx.Raw         `json:"markup"`
 }
 
 // maxPerUse is the bound a valid row keeps: a per-use price above one currency unit (catalog's sanity bound for
@@ -68,27 +54,10 @@ func parseFallbacks(body string) (fallbacks, error) {
 	if err := jsonx.UnmarshalKnown([]byte(body), &w); err != nil {
 		return fallbacks{}, fmt.Errorf("%w: %w", errFallbacks, err)
 	}
-	return w.parse()
-}
-
-// parseLockedFallbacks reads the fallback text a reservation locked. A row admitted before #232 also locked a markup,
-// which priced a correction billing no longer has; that one member is ignored so the call settles at the prices it
-// locked. Any other member is still refused, as on the stored row.
-func parseLockedFallbacks(body string) (fallbacks, error) {
-	var w lockedFallbacksJSON
-	if err := jsonx.UnmarshalKnown([]byte(body), &w); err != nil {
-		return fallbacks{}, fmt.Errorf("%w: %w", errFallbacks, err)
-	}
-	return w.parse()
-}
-
-func (w fallbacksJSON) parse() (fallbacks, error) { return parseFallbacksBody(w.Currency, w.PerUse) }
-
-func (w lockedFallbacksJSON) parse() (fallbacks, error) {
 	return parseFallbacksBody(w.Currency, w.PerUse)
 }
 
-// parseFallbacksBody checks the members both stored forms share.
+// parseFallbacksBody checks the stored prices.
 func parseFallbacksBody(currency string, perUse map[string]string) (f fallbacks, err error) {
 	if f.currency, err = platform.ParseCurrency(currency); err != nil {
 		return fallbacks{}, fmt.Errorf("%w: %w", errFallbacks, err)
@@ -320,7 +289,7 @@ func (r *SaveFallbacksRequest) SetActor(a audit.Actor) { r.actor = a }
 // platform scope. A request that fails the check changes nothing. Reservations already admitted keep the fallbacks
 // they locked.
 func SaveFallbacks(ctx context.Context, tx pg.Tx, r SaveFallbacksRequest) error {
-	f, err := fallbacksJSON{Currency: r.Currency, PerUse: r.PerUse}.parse()
+	f, err := parseFallbacksBody(r.Currency, r.PerUse)
 	if err != nil {
 		return err
 	}

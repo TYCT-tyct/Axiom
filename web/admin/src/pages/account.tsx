@@ -161,3 +161,5 @@ function AccountKeyLimits({ account }: { account: Account }) {
     />
   );
 }
+
+export { default as messages } from "../locales/settings";

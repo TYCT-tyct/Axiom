@@ -184,7 +184,7 @@ func TestFundsReadsShareRefusals(t *testing.T) {
 			return err
 		}, errNoBalance},
 		{"settlement balance", func(tx pg.Tx) error {
-			_, _, err := settlementRows(t.Context(), tx, uuid.NewV7(), missing.Account)
+			_, err := b.billing.lock(t.Context(), tx, uuid.NewV7(), missing.Account)
 			return err
 		}, errNoBalance},
 		{"holder", func(tx pg.Tx) error {
@@ -245,17 +245,20 @@ func TestBatchRowsMatchGeneratedQueries(t *testing.T) {
 		if usage, err = readBatchUsage(t.Context(), tx, reqs, src.day); err != nil {
 			return err
 		}
-		settleBalance, row, err = settlementRows(t.Context(), tx, h.id, a.Account)
-		return err
+		c, err := b.billing.lock(t.Context(), tx, h.id, a.Account)
+		if err != nil {
+			return err
+		}
+		settleBalance, row = c.balance, c.row
+		return nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(reserveBalance, wantBalance) || !reflect.DeepEqual(usage, []ReadUsageRow{wantUsage}) {
-		t.Errorf("reservation batch differs: balance %+v / %+v; usage %+v / %+v", reserveBalance, wantBalance, usage, wantUsage)
-	}
-	if !reflect.DeepEqual(settleBalance, wantBalance) || !reflect.DeepEqual(row, wantRow) {
-		t.Errorf("settlement batch differs: balance %+v / %+v; row %+v / %+v", settleBalance, wantBalance, row, wantRow)
+	got := []any{reserveBalance, usage, settleBalance, row}
+	want := []any{wantBalance, []ReadUsageRow{wantUsage}, wantBalance, wantRow}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("reservation and settlement reads = %+v, want %+v", got, want)
 	}
 }
 

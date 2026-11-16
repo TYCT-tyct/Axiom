@@ -27,7 +27,7 @@ import (
 
 // The operations API (api/operations.yaml, docs/domains/operations.md「运营接口」): what the operations agent calls through
 // the MCP bridge, on the core's operations listener. Its reads go through the admin's handlers, so the two APIs read
-// alike and the bodies, which the contracts define identically (just api), cannot drift; the guard has authenticated
+// alike and the bodies share one schema and Go type; the guard has authenticated
 // the credential and put the scope it may read in the call before a handler runs.
 
 // operationsContract is the operations contract as the generated code embeds it, with the rules read out of it.
@@ -322,18 +322,17 @@ func (o operationsAPI) OperationLogList(ctx context.Context, r operationsapi.Ope
 	return operationsapi.OperationLogList200JSONResponse(list), nil
 }
 
-// relayed is the admin handler's answer of type A as the operations contract's T: the contracts define the bodies
-// alike, so the JSON one writes is the JSON the other reads. Any other answer is a bug.
-func relayed[T, A any](answer any, err error) (T, error) {
+// relayed checks the admin handler's response variant before the operations handler wraps the shared body.
+func relayed[T any](answer any, err error) (T, error) {
 	var out T
 	if err != nil {
 		return out, err
 	}
-	body, ok := answer.(A)
+	body, ok := answer.(T)
 	if !ok {
 		return out, fmt.Errorf("the admin handler answered %T", answer)
 	}
-	return adminJSON[T](body)
+	return body, nil
 }
 
 // The supplier reads are of the platform's own suppliers only (suppliers.PlatformOwned): the guard's platform scope lets
@@ -343,15 +342,17 @@ func relayed[T, A any](answer any, err error) (T, error) {
 // SuppliersList lists the platform's suppliers as the admin does.
 func (o operationsAPI) SuppliersList(ctx context.Context, r operationsapi.SuppliersListRequestObject) (operationsapi.SuppliersListResponseObject, error) {
 	answer, err := o.admin.listSuppliers(ctx, adminapi.ListSuppliersRequestObject{Params: adminapi.ListSuppliersParams{
-		Status: (*adminapi.SupplierStatus)(r.Params.Status), Cursor: r.Params.Cursor, Limit: r.Params.Limit,
+		Status: r.Params.Status, Cursor: r.Params.Cursor, Limit: r.Params.Limit,
 	}}, suppliers.PlatformOwned)
-	return relayed[operationsapi.SuppliersList200JSONResponse, adminapi.ListSuppliers200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListSuppliers200JSONResponse](answer, err)
+	return operationsapi.SuppliersList200JSONResponse(body), err
 }
 
 // SuppliersGet reads one of the platform's suppliers as the admin does; another owner's is not found.
 func (o operationsAPI) SuppliersGet(ctx context.Context, r operationsapi.SuppliersGetRequestObject) (operationsapi.SuppliersGetResponseObject, error) {
 	answer, err := o.admin.getSupplier(ctx, adminapi.GetSupplierRequestObject{SupplierId: r.SupplierId}, suppliers.PlatformOwned)
-	return relayed[operationsapi.SuppliersGet200JSONResponse, adminapi.GetSupplier200JSONResponse](answer, err)
+	body, err := relayed[adminapi.GetSupplier200JSONResponse](answer, err)
+	return operationsapi.SuppliersGet200JSONResponse(body), err
 }
 
 // PendingMappingsList lists the upstream names of the platform's suppliers waiting to be mapped as the admin does.
@@ -359,22 +360,25 @@ func (o operationsAPI) PendingMappingsList(ctx context.Context, r operationsapi.
 	answer, err := o.admin.listPendingMappings(ctx, adminapi.ListPendingMappingsRequestObject{Params: adminapi.ListPendingMappingsParams{
 		SupplierId: r.Params.SupplierId, Cursor: r.Params.Cursor, Limit: r.Params.Limit,
 	}}, suppliers.PlatformOwned)
-	return relayed[operationsapi.PendingMappingsList200JSONResponse, adminapi.ListPendingMappings200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListPendingMappings200JSONResponse](answer, err)
+	return operationsapi.PendingMappingsList200JSONResponse(body), err
 }
 
 // ModelsList lists the catalog's models as the admin does.
 func (o operationsAPI) ModelsList(ctx context.Context, r operationsapi.ModelsListRequestObject) (operationsapi.ModelsListResponseObject, error) {
 	answer, err := o.admin.ListModels(ctx, adminapi.ListModelsRequestObject{Params: adminapi.ListModelsParams{
-		Status: (*adminapi.ModelStatus)(r.Params.Status), Author: r.Params.Author, SlugPrefix: r.Params.SlugPrefix,
+		Status: r.Params.Status, Author: r.Params.Author, SlugPrefix: r.Params.SlugPrefix,
 		Cursor: r.Params.Cursor, Limit: r.Params.Limit,
 	}})
-	return relayed[operationsapi.ModelsList200JSONResponse, adminapi.ListModels200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListModels200JSONResponse](answer, err)
+	return operationsapi.ModelsList200JSONResponse(body), err
 }
 
 // ModelGet reads one model as the admin does.
 func (o operationsAPI) ModelGet(ctx context.Context, r operationsapi.ModelGetRequestObject) (operationsapi.ModelGetResponseObject, error) {
 	answer, err := o.admin.GetModel(ctx, adminapi.GetModelRequestObject{ModelId: r.ModelId})
-	return relayed[operationsapi.ModelGet200JSONResponse, adminapi.GetModel200JSONResponse](answer, err)
+	body, err := relayed[adminapi.GetModel200JSONResponse](answer, err)
+	return operationsapi.ModelGet200JSONResponse(body), err
 }
 
 // CallsList lists the calls of the credential's sites as the admin's search does; the scope keeps it to them.
@@ -382,15 +386,17 @@ func (o operationsAPI) CallsList(ctx context.Context, r operationsapi.CallsListR
 	p := r.Params
 	answer, err := o.admin.ListAdminCalls(ctx, adminapi.ListAdminCallsRequestObject{Params: adminapi.ListAdminCallsParams{
 		Since: p.Since, Until: p.Until, Cursor: p.Cursor, Limit: p.Limit, AccountId: p.AccountId, RequestId: p.RequestId,
-		Model: p.Model, Status: (*adminapi.AdminCallStatus)(p.Status), SiteId: p.SiteId,
+		Model: p.Model, Status: p.Status, SiteId: p.SiteId,
 	}})
-	return relayed[operationsapi.CallsList200JSONResponse, adminapi.ListAdminCalls200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListAdminCalls200JSONResponse](answer, err)
+	return operationsapi.CallsList200JSONResponse(body), err
 }
 
 // CallGet reads one call's trace as the admin does; a call outside the credential's sites is not found.
 func (o operationsAPI) CallGet(ctx context.Context, r operationsapi.CallGetRequestObject) (operationsapi.CallGetResponseObject, error) {
 	answer, err := o.admin.GetAdminCallTrace(ctx, adminapi.GetAdminCallTraceRequestObject{CallId: r.CallId})
-	return relayed[operationsapi.CallGet200JSONResponse, adminapi.GetAdminCallTrace200JSONResponse](answer, err)
+	body, err := relayed[adminapi.GetAdminCallTrace200JSONResponse](answer, err)
+	return operationsapi.CallGet200JSONResponse(body), err
 }
 
 // AuditList lists the platform's audit entries as the admin's search does; the guard has required the platform grant.
@@ -401,11 +407,13 @@ func (o operationsAPI) AuditList(ctx context.Context, r operationsapi.AuditListR
 		RequestId: p.RequestId, ActorKind: p.ActorKind, ActorId: p.ActorId, Action: p.Action, Module: p.Module,
 		TargetKind: p.TargetKind, TargetId: p.TargetId,
 	}})
-	return relayed[operationsapi.AuditList200JSONResponse, adminapi.ListAuditEntries200JSONResponse](answer, err)
+	body, err := relayed[adminapi.ListAuditEntries200JSONResponse](answer, err)
+	return operationsapi.AuditList200JSONResponse(body), err
 }
 
 // AuditGet reads one audit entry as the admin does.
 func (o operationsAPI) AuditGet(ctx context.Context, r operationsapi.AuditGetRequestObject) (operationsapi.AuditGetResponseObject, error) {
 	answer, err := o.admin.GetAuditEntry(ctx, adminapi.GetAuditEntryRequestObject{EntryId: r.EntryId})
-	return relayed[operationsapi.AuditGet200JSONResponse, adminapi.GetAuditEntry200JSONResponse](answer, err)
+	body, err := relayed[adminapi.GetAuditEntry200JSONResponse](answer, err)
+	return operationsapi.AuditGet200JSONResponse(body), err
 }

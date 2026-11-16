@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -53,13 +54,13 @@ const (
 func (l *Limits) Effective() Limits {
 	d := DefaultLimits()
 	layer := func(v, d LayerLimits) LayerLimits {
-		return LayerLimits{orDefault(v.Active, d.Active), orDefault(v.Total, d.Total)}
+		return LayerLimits{cmp.Or(v.Active, d.Active), cmp.Or(v.Total, d.Total)}
 	}
 	return Limits{
 		Platform: layer(l.Platform, d.Platform), Site: layer(l.Site, d.Site),
 		Account: layer(l.Account, d.Account), Workspace: layer(l.Workspace, d.Workspace),
-		KeptVersions: orDefault(l.KeptVersions, d.KeptVersions),
-		Presets:      orDefault(l.Presets, d.Presets), Bytes: orDefault(l.Bytes, d.Bytes),
+		KeptVersions: cmp.Or(l.KeptVersions, d.KeptVersions),
+		Presets:      cmp.Or(l.Presets, d.Presets), Bytes: cmp.Or(l.Bytes, d.Bytes),
 	}
 }
 

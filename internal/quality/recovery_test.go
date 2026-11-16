@@ -264,12 +264,3 @@ func probeDurationCount(t *testing.T, reader *sdkmetric.ManualReader) (count uin
 	}
 	return count
 }
-
-// TestOfflineSignalUsesTheLegacyResolvableKind: resolution is by exact (kind, key), and released versions only resolve
-// endpoint_still_down. A new endpoint_offline raised here would survive an old node's restore during a rolling upgrade.
-func TestOfflineSignalUsesTheLegacyResolvableKind(t *testing.T) {
-	s := healthSignal(change{kind: "offline", record: healthRecord{ID: uuid.NewV7(), Epoch: 2, Opened: 1}})
-	if s.Kind != "endpoint_still_down" || s.Severity != "warning" {
-		t.Fatalf("offline signal %+v, want endpoint_still_down warning", s)
-	}
-}

@@ -1,6 +1,7 @@
 package routing
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -79,19 +80,19 @@ func New(cfg Config) (*Router, error) {
 }
 
 func (c *Config) setDefaults() {
-	c.MaxStale = orDefault(c.MaxStale, 30*time.Second)
-	c.RetryAfter = orDefault(c.RetryAfter, time.Second)
-	c.StickyTTL = orDefault(c.StickyTTL, time.Hour)
-	c.AttemptWindow = orDefault(c.AttemptWindow, 2*time.Minute)
-	c.Recovery = orDefault(c.Recovery, time.Minute)
-	c.Pause = orDefault(c.Pause, 5*time.Second)
-	c.RetryWindow = orDefault(c.RetryWindow, time.Minute)
-	c.StickyMax = orDefault(c.StickyMax, 100000)
-	c.SessionPrefix = orDefault(c.SessionPrefix, 16<<10)
-	c.MaxAttempts = orDefault(c.MaxAttempts, 4)
-	c.RetryFloor = orDefault(c.RetryFloor, 3)
-	c.ThrottleFloor = orDefault(c.ThrottleFloor, 0.1)
-	c.RetryRatio = orDefault(c.RetryRatio, 0.2)
+	c.MaxStale = cmp.Or(c.MaxStale, 30*time.Second)
+	c.RetryAfter = cmp.Or(c.RetryAfter, time.Second)
+	c.StickyTTL = cmp.Or(c.StickyTTL, time.Hour)
+	c.AttemptWindow = cmp.Or(c.AttemptWindow, 2*time.Minute)
+	c.Recovery = cmp.Or(c.Recovery, time.Minute)
+	c.Pause = cmp.Or(c.Pause, 5*time.Second)
+	c.RetryWindow = cmp.Or(c.RetryWindow, time.Minute)
+	c.StickyMax = cmp.Or(c.StickyMax, 100000)
+	c.SessionPrefix = cmp.Or(c.SessionPrefix, 16<<10)
+	c.MaxAttempts = cmp.Or(c.MaxAttempts, 4)
+	c.RetryFloor = cmp.Or(c.RetryFloor, 3)
+	c.ThrottleFloor = cmp.Or(c.ThrottleFloor, 0.1)
+	c.RetryRatio = cmp.Or(c.RetryRatio, 0.2)
 	if c.Now == nil {
 		c.Now = time.Now
 	}
@@ -119,13 +120,6 @@ func (c *Config) validate() error {
 		return fmt.Errorf("routing: the throttle floor %v must be in (0, 1] and the retry ratio %v not negative", c.ThrottleFloor, c.RetryRatio)
 	}
 	return nil
-}
-
-func orDefault[T int | int64 | float64 | time.Duration](v, fallback T) T {
-	if v == 0 {
-		return fallback
-	}
-	return v
 }
 
 // Fresh reports whether Plan would use the current snapshot: there is one and it is not older than MaxStale. It is the

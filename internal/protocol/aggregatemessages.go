@@ -327,15 +327,7 @@ func (a *messagesAggregate) cite(citation []byte) error {
 	if citation == nil {
 		return nil
 	}
-	b, err := grow(&a.aggBase, a.cur.citations, len(citation)+1, 2)
-	if err != nil {
-		return err
-	}
-	if len(b) > 0 {
-		b = append(b, ',')
-	}
-	a.cur.citations = append(b, citation...)
-	return nil
+	return a.appendEntry(&a.cur.citations, citation, 2)
 }
 
 // input adds a piece of a tool's input, a JSON string whose contents are the next piece of the input's text. The
@@ -446,18 +438,11 @@ func (a *messagesAggregate) body() ([]byte, error) {
 	if len(a.tail) > 2 {
 		out = append(append(out, ','), a.tail[1:len(a.tail)-1]...)
 	}
-	out = append(append(out, `,"usage":`...), orEmptyObject(a.usage)...)
+	out = append(append(out, `,"usage":`...), orElse(a.usage, "{}")...)
 	if a.axiom != nil {
 		out = append(append(out, `,"axiom":`...), a.axiom...)
 	}
 	return append(out, '}'), nil
-}
-
-func orEmptyObject(v []byte) []byte {
-	if len(v) == 0 {
-		return []byte("{}")
-	}
-	return v
 }
 
 // failed lets go of everything: a Messages reply that failed is an error without content.

@@ -13,7 +13,7 @@ import suppliers from "./suppliers";
 import users from "./users";
 
 // The admin's messages in Chinese, the source every other language follows.
-export default {
+export const initial = {
   brandName: "Axiom 管理后台",
   forbiddenHint: "请联系站长授予权限。",
   nav: {
@@ -146,11 +146,12 @@ export default {
   },
   users,
   orders,
-  suppliers,
   mappings,
   models,
   pricing,
   redeem,
-  settings,
   approvals,
 };
+
+// The complete catalog is for types and tooling; the app imports only initial.
+export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers });

@@ -313,22 +313,6 @@ func (q *Queries) PageRequestWait(ctx context.Context, db DBTX, origin string) (
 	return column_1, err
 }
 
-const pageSnapshotContent = `-- name: PageSnapshotContent :one
-SELECT extractor_version, text FROM catalog.page_snapshot WHERE id = $1
-`
-
-type PageSnapshotContentRow struct {
-	ExtractorVersion int32
-	Text             string
-}
-
-func (q *Queries) PageSnapshotContent(ctx context.Context, db DBTX, id uuid.UUID) (PageSnapshotContentRow, error) {
-	row := db.QueryRow(ctx, pageSnapshotContent, id)
-	var i PageSnapshotContentRow
-	err := row.Scan(&i.ExtractorVersion, &i.Text)
-	return i, err
-}
-
 const pageSnapshotText = `-- name: PageSnapshotText :one
 SELECT text FROM catalog.page_snapshot WHERE id = $1
 `

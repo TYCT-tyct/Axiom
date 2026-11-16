@@ -39,6 +39,7 @@ from urllib.parse import quote
 
 from migration_order import out_of_order, versions as migration_versions
 
+SOLO = "train:solo"  # rides in a train of its own: a risky PR (a first e2e run, say) cannot send a batch into bisection
 QUEUE, HOTFIX, CONFLICT, FAILED = "queue", "hotfix", "train:conflict", "train:failed"
 STATUS = "merge-train"  # required on main; posted on a PR head only to mark the PR that broke a train. Nothing posts it
 # as a success any more: the train lands by pushing, so keeping it required is what stops a hand merge of a PR into main.
@@ -46,7 +47,7 @@ STATUS = "merge-train"  # required on main; posted on a PR head only to mark the
 # a required context of that name made a PR block its own landing while the run was in progress, and keep blocking once
 # it failed
 BUILD_JOB = "build"  # ci.yml's aggregator job, the required check; a failing part fails it too
-TEST_JOB = "go-test"  # ci.yml's job for `just test`, the only one whose log names a flaky Go test
+TEST_JOB = "go-test"  # ci.yml's matrix job for `just test` ("go-test (1/2)"...), the only one whose log names a flaky Go test
 VERIFIED = "train/verified"  # on train/<base>/land: the prefix passed and may be landed
 FLAKY = ".github/flaky.toml"
 TRAILER = re.compile(r"#(\d+) ([0-9a-f]{40}) on ([0-9a-f]{40})$")  # the Train trailer of each car of a train
@@ -65,6 +66,7 @@ class Entry:
     sha: str
     title: str = ""
     body: str = ""
+    solo: bool = False
 
 
 @dataclass(frozen=True)
@@ -83,6 +85,15 @@ class Abort(Exception):
 def queue_order(prs):
     """Hotfixes first, then by the time the queue label was added."""
     return sorted(prs, key=lambda pr: (HOTFIX not in pr["labels"], pr["queued_at"], pr["number"]))
+
+
+def next_batch(entries):
+    """The entries the next train builds, in queue order: a solo entry alone; otherwise every entry up to the first solo
+    one, which then rides by itself in the train after. #784's first e2e runs failed four trains and sent the PRs built
+    with it into bisection each time (2026-11-16)."""
+    if entries[0].solo:
+        return entries[:1]
+    return next((entries[:i] for i, entry in enumerate(entries) if entry.solo), entries)
 
 
 def unmet_checks(required, check_runs, statuses):
@@ -137,15 +148,15 @@ def covered(tests, unexplained, flaky):
         any(test == known or test.endswith("/" + known) for known in flaky) for test in tests)
 
 
-def test_job_failing(jobs):
-    """The job whose log names the failures when a build failed only because of the Go tests, or None. `go-test` runs
-    `just test`; the `build` aggregator reports its failure. A failure of any other job is a real problem no flaky entry
-    covers."""
+def test_jobs_failing(jobs):
+    """The shards whose logs name the failures when a build failed only because of the Go tests, or []. `go-test`
+    shards run `just test`; the `build` aggregator reports their failure. A failure of any other job is a real problem
+    no flaky entry covers."""
     failed = [job for job in jobs if job["conclusion"] == "failure"]
-    names = {job["name"] for job in failed}
-    if TEST_JOB not in names or names - {BUILD_JOB, TEST_JOB}:
-        return None
-    return next(job for job in failed if job["name"] == TEST_JOB)
+    tests = [job for job in failed if job["name"].split(" (")[0] == TEST_JOB]
+    if not tests or any(job["name"] != BUILD_JOB and job not in tests for job in failed):
+        return []
+    return tests
 
 
 def parse_flaky(text):
@@ -285,7 +296,7 @@ class Train:
                 continue
             if waiting:
                 log(f"#{pr['number']} would wait ({', '.join(waiting)}); a dry run takes it anyway")
-            entries.append(Entry(pr["number"], sha, pr["title"], pr["body"]))
+            entries.append(Entry(pr["number"], sha, pr["title"], pr["body"], SOLO in pr["labels"]))
         return entries
 
     def eject(self, entry, label, reason):
@@ -423,10 +434,11 @@ class Train:
     def only_flaky(self, run, flaky):
         if not flaky:
             return False
-        job = test_job_failing(self.api(f"actions/runs/{run}/jobs?per_page=100")["jobs"])
-        if job is None:
+        jobs = test_jobs_failing(self.api(f"actions/runs/{run}/jobs?per_page=100")["jobs"])
+        if not jobs:
             return False
-        tests, unexplained = go_failures(sh("gh", "api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs").stdout)
+        tests, unexplained = go_failures("\n".join(sh("gh", "api", f"repos/{self.repo}/actions/jobs/{job['id']}/logs").stdout
+                                                 for job in jobs))
         log(f"failed tests in {self.run_link(run)}: {tests or 'none parsed'}{'; unexplained: ' + str(unexplained) if unexplained else ''}")
         return covered(tests, unexplained, flaky)
 
@@ -554,7 +566,7 @@ class Train:
             while entries := self.eligible():
                 before = self.changed
                 try:
-                    self.train(entries)
+                    self.train(next_batch(entries))
                 finally:
                     self.sweep()
                 if self.dry_run or self.changed == before:

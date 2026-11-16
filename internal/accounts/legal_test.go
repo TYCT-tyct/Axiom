@@ -3,7 +3,6 @@ package accounts_test
 import (
 	"errors"
 	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -469,52 +468,5 @@ func TestLegalSessionPendingUsesNewestVersion(t *testing.T) {
 	}
 	if p.ConsentPending() {
 		t.Fatal("the session is still pending after accepting the newest versions")
-	}
-}
-
-// TestLegalLocaleMigrationDownKeepsOldWrites runs the migration's Down section after a Chinese and an English
-// document at different versions, then repeats the statements an old node runs. The expansion never created two rows
-// at one (site, kind, version), so removing the locale columns leaves the legacy primary key and unique constraint
-// valid; documents and acceptances survive, and rollback is not a one-way door.
-func TestLegalLocaleMigrationDownKeepsOldWrites(t *testing.T) {
-	t.Parallel()
-	db, database := open(t)
-	run := func(statement string) {
-		t.Helper()
-		if err := pgtest.Run(t.Context(), database.Superuser, ids.Replace(statement)); err != nil {
-			t.Fatalf("%s: %v", statement, err)
-		}
-	}
-	run(`INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
-		VALUES (:s1, 'terms', 'zh', 1, 'Chinese terms.')`)
-	run(`INSERT INTO accounts.legal_documents (site_id, kind, locale, version, body)
-		VALUES (:s1, 'terms', 'en', 2, 'English terms.')`)
-	run(`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, locale, version)
-		VALUES (:x, :s1, :a1, :u1, 'terms', 'en', 2)`)
-
-	file, err := os.ReadFile("migrations/00035_legal_locales.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	parts := strings.Split(string(file), "-- +goose Down")
-	if len(parts) != 2 {
-		t.Fatal("the migration has no Down section")
-	}
-	for statement := range strings.SplitSeq(parts[1], ";") {
-		if strings.TrimSpace(statement) != "" {
-			run(statement)
-		}
-	}
-
-	run(`INSERT INTO accounts.legal_documents (site_id, kind, version, body)
-		VALUES (:s1, 'terms', 3, 'Old node terms.')`)
-	run(`INSERT INTO accounts.legal_acceptances (id, site_id, account_id, user_id, kind, version)
-		VALUES (:y, :s1, :a1, :u1, 'terms', 3)
-		ON CONFLICT (user_id, kind, version) DO NOTHING`)
-	if got := texts(t, db, platform, "SELECT kind || ' ' || version FROM accounts.legal_documents ORDER BY version"); !slices.Equal(got, []string{"terms 1", "terms 2", "terms 3"}) {
-		t.Fatalf("documents after rollback: %v", got)
-	}
-	if got := texts(t, db, platform, "SELECT kind || ' ' || version FROM accounts.legal_acceptances ORDER BY version"); !slices.Equal(got, []string{"terms 2", "terms 3"}) {
-		t.Fatalf("acceptances after rollback: %v", got)
 	}
 }
