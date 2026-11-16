@@ -40,7 +40,7 @@ func TestOperationsAlertRaise(t *testing.T) {
 	body := raise("supplier/acme/balance", "warning", "Acme 余额只够 2 小时")
 	rec := f.alertAs(token, "/alerts", body, key)
 	raised := agentOperation(t, rec)
-	if rec.Code != http.StatusOK || raised.State != operationsapi.OperationStateSucceeded || raised.Target.Kind != "alert" ||
+	if rec.Code != http.StatusOK || raised.State != adminapi.OperationStateSucceeded || raised.Target.Kind != "alert" ||
 		!strings.Contains(rec.Body.String(), `"kind":"operations.agent_alert"`) {
 		t.Fatalf("raising: %d %s", rec.Code, rec.Body)
 	}
@@ -93,7 +93,7 @@ func TestOperationsAlertsAreTheCredentials(t *testing.T) {
 func (f adminFixture) expectResolved(token, key string) {
 	f.t.Helper()
 	rec := f.alertAs(token, "/alerts/resolve", `{"key":"`+key+`","reason":"the owner topped it up"}`, newKey())
-	if resolved := agentOperation(f.t, rec); rec.Code != http.StatusOK || resolved.State != operationsapi.OperationStateSucceeded {
+	if resolved := agentOperation(f.t, rec); rec.Code != http.StatusOK || resolved.State != adminapi.OperationStateSucceeded {
 		f.t.Fatalf("resolving: %d %s", rec.Code, rec.Body)
 	}
 	resolution := `SELECT body->>'key' FROM platform.alert_signals WHERE body->>'kind' = 'operations.agent_alert' AND (body->>'resolved')::bool`
@@ -114,7 +114,7 @@ func TestOperationsAlertRefusals(t *testing.T) {
 	owner := f.owner()
 	token := f.alerter(owner)
 	rec := f.alertAs(token, "/alerts", strings.TrimSuffix(raise("k", "info", "x"), "}")+`,"dry_run":true}`, newKey())
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateApproved {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStateApproved {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	expectAdmin(t, "171 Chinese characters", f.alertAs(token, "/alerts", raise("k", "info", strings.Repeat("钱", 171)), newKey()),

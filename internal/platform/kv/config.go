@@ -168,12 +168,5 @@ func passwordError(operation string, err error) error {
 	if errors.Is(err, privfile.ErrNotRegular) || errors.Is(err, privfile.ErrPermissions) {
 		return fmt.Errorf("%s: %w", PasswordFileVar, err)
 	}
-	reason := "failed"
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		reason = "file not found"
-	case errors.Is(err, os.ErrPermission):
-		reason = "permission denied"
-	}
-	return fmt.Errorf("%s: %s: %s", PasswordFileVar, operation, reason)
+	return fmt.Errorf("%s: %s: %s", PasswordFileVar, operation, privfile.Reason(err))
 }

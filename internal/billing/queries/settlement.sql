@@ -120,7 +120,7 @@ updated AS (
 )
 SELECT request_id, ended_at FROM updated;
 
--- name: SettleWindows :exec
+-- name: SettleWindows :execrows
 -- The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
 -- balance row lock the batch already holds. The rows are summed by window first: several requests of one batch may
 -- freeze the same window, and UPDATE ... FROM applies only one matching input row to a target row.

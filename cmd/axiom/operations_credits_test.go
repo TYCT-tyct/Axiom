@@ -95,7 +95,7 @@ func TestOperationsCreditGrant(t *testing.T) {
 	rec := f.propose(f.token, "5000000000", key, "")
 	expectAdmin(t, "within every limit", rec, http.StatusAccepted, "")
 	op := agentOperation(t, rec)
-	if op.Risk != operationsapi.Gift || op.Approval == nil {
+	if op.Risk != adminapi.OperationRiskGift || op.Approval == nil {
 		t.Fatalf("the proposal: %s", rec.Body)
 	}
 	if rec := f.propose(f.token, "5000000000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *op.OperationId {
@@ -139,7 +139,7 @@ func (f creditFixture) expectGiven(operation string) {
 	f.expectAudit("reservation.commit", map[string]string{"actor_kind": "operations_agent"})
 	var caps operationsapi.OperationsCapUsageList
 	decode(t, f.agent(f.token, because("/caps", "check")), &caps)
-	if len(caps.Data) != 1 || caps.Data[0].Category != operationsapi.MoneyCredit || caps.Data[0].Day.Committed != "5000000000" {
+	if len(caps.Data) != 1 || caps.Data[0].Category != adminapi.MoneyCredit || caps.Data[0].Day.Committed != "5000000000" {
 		t.Errorf("caps_get: %+v", caps.Data)
 	}
 }
@@ -176,7 +176,7 @@ func TestOperationsCreditGrantRefusals(t *testing.T) {
 		`{"amount":{"amount":"1000000000","currency":"USD"},"reason":"r"}`, idempotent(newKey()))
 	expectAdmin(t, "no such account", rec, http.StatusNotFound, codeNotFound)
 	rec = f.propose(f.token, "1000000000", newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStatePendingApproval {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStatePendingApproval {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	if got := f.money(); got != " - -" {

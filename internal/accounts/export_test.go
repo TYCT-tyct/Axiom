@@ -83,9 +83,15 @@ var ProofWorked = proofWorked
 
 // ProofNonce finds a nonce for the test's work.
 func ProofNonce(site SiteID, email string, bitsWanted int) string {
+	return ProofNonceNotFor(site, email, "", bitsWanted)
+}
+
+// ProofNonceNotFor is a nonce that proves email's work but not other's: the site id is random per run, so the first
+// nonce for one address also proves another's one run in 2^bits (TestOpenRegistrationHumanCheck failed on it once).
+func ProofNonceNotFor(site SiteID, email, other string, bitsWanted int) string {
 	for i := uint64(0); ; i++ {
 		nonce := fmt.Sprintf("%d", i)
-		if proofWorked(site, email, nonce, bitsWanted) {
+		if proofWorked(site, email, nonce, bitsWanted) && (other == "" || !proofWorked(site, other, nonce, bitsWanted)) {
 			return nonce
 		}
 	}

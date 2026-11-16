@@ -94,6 +94,44 @@ type Expected struct {
 	Retention      *int64
 }
 
+// targetMetric ties each stored name and validation label to its target field.
+type targetMetric struct {
+	metric Metric
+	name   string
+	count  **int64
+	money  **Money
+	rate   bool
+}
+
+func (t *Targets) metrics() []targetMetric {
+	return []targetMetric{
+		{Calls, "calls", &t.Calls, nil, false},
+		{Errors, "errors", &t.Errors, nil, false},
+		{Revenue, "revenue", nil, &t.Revenue, false},
+		{Cost, "cost", nil, &t.Cost, false},
+		{PaidUsers, "paid users", &t.PaidUsers, nil, false},
+		{MonthlyRevenue, "monthly revenue", nil, &t.MonthlyRevenue, false},
+		{GrossMargin, "gross margin", &t.GrossMargin, nil, true},
+		{Retention, "retention", &t.Retention, nil, true},
+	}
+}
+
+func (t *Targets) metric(metric Metric) targetMetric {
+	for _, field := range t.metrics() {
+		if field.metric == metric {
+			return field
+		}
+	}
+	return targetMetric{}
+}
+
+func (m targetMetric) amount() (*string, *string) {
+	if m.money != nil {
+		return moneyAmount(*m.money)
+	}
+	return countAmount(*m.count), nil
+}
+
 // SetOptions carries the one difference between the full set an editor of this release writes and the first-release
 // four an older editor knows.
 type SetOptions struct {
@@ -197,13 +235,13 @@ func Set(ctx context.Context, tx pg.Tx, actor audit.Actor, site uuid.UUID, set T
 		after.GrossMargin, after.Retention = set.GrossMargin, set.Retention
 	}
 	for _, metric := range dashboardMetrics {
-		if err := writeTarget(ctx, tx, q, site, month, metric, after); err != nil {
+		if err := writeTarget(ctx, tx, q, site, month, metric, after, false); err != nil {
 			return err
 		}
 	}
 	if !opts.KeepCommercial {
 		for _, metric := range commercialMetrics {
-			if err := writeCommercialTarget(ctx, tx, q, site, month, metric, after); err != nil {
+			if err := writeTarget(ctx, tx, q, site, month, metric, after, true); err != nil {
 				return err
 			}
 		}
@@ -225,20 +263,38 @@ func (t *Targets) Check() error {
 	if t.Month.IsZero() || !t.Month.Equal(monthStart(t.Month)) {
 		return fmt.Errorf("operations: a target's month must be the first day of a month, got %s", t.Month)
 	}
-	for name, count := range map[string]*int64{"calls": t.Calls, "errors": t.Errors, "paid users": t.PaidUsers} {
-		if count != nil && *count < 0 {
-			return fmt.Errorf("operations: a %s target cannot be negative", name)
+	// Retain the category precedence and map iteration within each category.
+	fields := t.metrics()
+	for _, matches := range []func(Metric) bool{isCountMetric, isMoneyMetric, isRateMetric} {
+		group := map[string]targetMetric{}
+		for _, field := range fields {
+			if matches(field.metric) {
+				group[field.name] = field
+			}
+		}
+		for _, field := range group {
+			if err := field.check(); err != nil {
+				return err
+			}
 		}
 	}
-	for name, money := range map[string]*Money{"revenue": t.Revenue, "cost": t.Cost, "monthly revenue": t.MonthlyRevenue} {
-		if err := checkMoney(name, money); err != nil {
-			return err
-		}
+	return nil
+}
+
+func (m targetMetric) check() error {
+	if m.money != nil {
+		return checkMoney(m.name, *m.money)
 	}
-	for name, rate := range map[string]*int64{"gross margin": t.GrossMargin, "retention": t.Retention} {
-		if rate != nil && (*rate < 0 || *rate > 10000) {
-			return fmt.Errorf("operations: a %s target must be between 0 and 10000 basis points", name)
+	value := *m.count
+	if value == nil {
+		return nil
+	}
+	if m.rate {
+		if *value < 0 || *value > 10000 {
+			return fmt.Errorf("operations: a %s target must be between 0 and 10000 basis points", m.name)
 		}
+	} else if *value < 0 {
+		return fmt.Errorf("operations: a %s target cannot be negative", m.name)
 	}
 	return nil
 }
@@ -261,61 +317,31 @@ func checkMoney(name string, money *Money) error {
 	return nil
 }
 
-// writeTarget writes one first-release metric of set, or deletes it when it has no value.
-func writeTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID, month time.Time, metric Metric, set Targets) error {
-	var amount, currency *string
-	//nolint:exhaustive // this table stores the first-release metrics; the rest live in commercial_targets.
-	switch metric {
-	case Calls:
-		amount = countAmount(set.Calls)
-	case Errors:
-		amount = countAmount(set.Errors)
-	case Revenue:
-		amount, currency = moneyAmount(set.Revenue)
-	case Cost:
-		amount, currency = moneyAmount(set.Cost)
-	default:
-		return fmt.Errorf("operations: unknown metric %q", metric)
-	}
+// writeTarget writes or clears a metric in its original storage table.
+func writeTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID, month time.Time, metric Metric, set Targets, commercial bool) error {
+	amount, currency := set.metric(metric).amount()
+	var err error
 	if amount == nil {
-		if err := queries.DeleteTarget(ctx, tx, DeleteTargetParams{SiteID: site, Metric: string(metric), Month: month}); err != nil {
+		if commercial {
+			err = queries.DeleteCommercialTarget(ctx, tx, DeleteCommercialTargetParams{SiteID: site, Metric: string(metric), Month: month})
+		} else {
+			err = queries.DeleteTarget(ctx, tx, DeleteTargetParams{SiteID: site, Metric: string(metric), Month: month})
+		}
+		if err != nil {
 			return fmt.Errorf("operations: clear the %s target: %w", metric, err)
 		}
 		return nil
 	}
-	if err := queries.UpsertTarget(ctx, tx, UpsertTargetParams{
-		SiteID: site, Metric: string(metric), Month: month, Amount: *amount, Currency: currency,
-	}); err != nil {
-		return fmt.Errorf("operations: write the %s target: %w", metric, err)
+	if commercial {
+		err = queries.UpsertCommercialTarget(ctx, tx, UpsertCommercialTargetParams{
+			SiteID: site, Metric: string(metric), Month: month, Amount: *amount, Currency: currency,
+		})
+	} else {
+		err = queries.UpsertTarget(ctx, tx, UpsertTargetParams{
+			SiteID: site, Metric: string(metric), Month: month, Amount: *amount, Currency: currency,
+		})
 	}
-	return nil
-}
-
-// writeCommercialTarget writes one commercial metric of set, or deletes it when it has no value.
-func writeCommercialTarget(ctx context.Context, tx pg.Tx, queries *Queries, site uuid.UUID, month time.Time, metric Metric, set Targets) error {
-	var amount, currency *string
-	//nolint:exhaustive // this table stores the commercial metrics; the rest live in targets.
-	switch metric {
-	case PaidUsers:
-		amount = countAmount(set.PaidUsers)
-	case MonthlyRevenue:
-		amount, currency = moneyAmount(set.MonthlyRevenue)
-	case GrossMargin:
-		amount = countAmount(set.GrossMargin)
-	case Retention:
-		amount = countAmount(set.Retention)
-	default:
-		return fmt.Errorf("operations: unknown commercial metric %q", metric)
-	}
-	if amount == nil {
-		if err := queries.DeleteCommercialTarget(ctx, tx, DeleteCommercialTargetParams{SiteID: site, Metric: string(metric), Month: month}); err != nil {
-			return fmt.Errorf("operations: clear the %s target: %w", metric, err)
-		}
-		return nil
-	}
-	if err := queries.UpsertCommercialTarget(ctx, tx, UpsertCommercialTargetParams{
-		SiteID: site, Metric: string(metric), Month: month, Amount: *amount, Currency: currency,
-	}); err != nil {
+	if err != nil {
 		return fmt.Errorf("operations: write the %s target: %w", metric, err)
 	}
 	return nil
@@ -381,56 +407,23 @@ func (t *Targets) add(row storedTarget) error {
 		if err != nil {
 			return err
 		}
-		t.setCount(row.Metric, count)
+		*t.metric(row.Metric).count = &count
 	case isMoneyMetric(row.Metric):
 		money, err := storedMoney(row)
 		if err != nil {
 			return err
 		}
-		t.setMoney(row.Metric, money)
+		*t.metric(row.Metric).money = money
 	case isRateMetric(row.Metric):
 		rate, err := storedRate(row)
 		if err != nil {
 			return err
 		}
-		t.setRate(row.Metric, rate)
+		*t.metric(row.Metric).count = &rate
 	default:
 		return fmt.Errorf("operations: stored target has unknown metric %q", row.Metric)
 	}
 	return nil
-}
-
-func (t *Targets) setCount(metric Metric, count int64) {
-	if metric == Calls {
-		t.Calls = &count
-	}
-	if metric == Errors {
-		t.Errors = &count
-	}
-	if metric == PaidUsers {
-		t.PaidUsers = &count
-	}
-}
-
-func (t *Targets) setMoney(metric Metric, money *Money) {
-	if metric == Revenue {
-		t.Revenue = money
-	}
-	if metric == Cost {
-		t.Cost = money
-	}
-	if metric == MonthlyRevenue {
-		t.MonthlyRevenue = money
-	}
-}
-
-func (t *Targets) setRate(metric Metric, rate int64) {
-	if metric == GrossMargin {
-		t.GrossMargin = &rate
-	}
-	if metric == Retention {
-		t.Retention = &rate
-	}
 }
 
 func storedCount(row storedTarget) (int64, error) {
@@ -467,31 +460,22 @@ func storedMoney(row storedTarget) (*Money, error) {
 // metric disappearing from the map.
 func (t *Targets) detail() map[string]any {
 	detail := map[string]any{}
-	if t.Calls != nil {
-		detail["calls"] = *t.Calls
-	}
-	if t.Errors != nil {
-		detail["errors"] = *t.Errors
-	}
-	if t.Revenue != nil {
-		detail["revenue"] = map[string]any{"amount": t.Revenue.Amount, "currency": t.Revenue.Currency.String()}
-	}
-	if t.Cost != nil {
-		detail["cost"] = map[string]any{"amount": t.Cost.Amount, "currency": t.Cost.Currency.String()}
-	}
-	if t.PaidUsers != nil {
-		detail["paid_users"] = *t.PaidUsers
-	}
-	if t.MonthlyRevenue != nil {
-		detail["monthly_revenue"] = map[string]any{
-			"amount": t.MonthlyRevenue.Amount, "currency": t.MonthlyRevenue.Currency.String(),
+	for _, field := range t.metrics() {
+		if field.money != nil {
+			if money := *field.money; money != nil {
+				detail[string(field.metric)] = map[string]any{"amount": money.Amount, "currency": money.Currency.String()}
+			}
+		} else if count := *field.count; count != nil {
+			detail[string(field.metric)] = *count
 		}
 	}
-	if t.GrossMargin != nil {
-		detail["gross_margin"] = *t.GrossMargin
-	}
-	if t.Retention != nil {
-		detail["retention"] = *t.Retention
-	}
 	return detail
+}
+
+func (t *Targets) expected() Expected {
+	return Expected{
+		Calls: t.Calls, Errors: t.Errors, Revenue: t.Revenue, Cost: t.Cost,
+		PaidUsers: t.PaidUsers, MonthlyRevenue: t.MonthlyRevenue,
+		GrossMargin: t.GrossMargin, Retention: t.Retention,
+	}
 }

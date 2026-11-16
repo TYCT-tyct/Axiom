@@ -84,7 +84,7 @@ func TestMainExitCodes(t *testing.T) {
 		{"version", []string{"version"}, nil, 0, "axiom "},
 		{"migrate without its database", []string{"migrate"}, nil, 1, "AXIOM_MIGRATE_DATABASE_URL: required"},
 		{"serve without its database", []string{"serve"}, nil, 1, "AXIOM_DATABASE_URL: required"},
-		{"healthcheck with nothing listening", []string{"healthcheck"}, []string{"AXIOM_PROBES_ADDR=" + freePort(t)}, 1, ""},
+		{"healthcheck with nothing listening", []string{"healthcheck"}, []string{"AXIOM_PROBES_ADDR=127.0.0.1:0"}, 1, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

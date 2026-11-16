@@ -91,13 +91,15 @@ func serveWithoutCore(ctx context.Context, cfg nodeSettings, logger *slog.Logger
 // comes first, then the MCP bridge, then the probes, which keep answering while the others drain. The public proxy and
 // the bridge refuse a request that starts during the drain.
 func nonCoreServers(servers []*listening, cfg nodeSettings, transport http.RoundTripper, bridge http.Handler, health *httpserver.Health, requests httpserver.Telemetry, logger *slog.Logger) {
+	newServer := func(handler http.Handler) *http.Server {
+		return httpserver.New(httpserver.Public(handler, logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
+	}
 	for _, s := range servers {
 		switch s.variable {
 		case publicAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(ingressHandler(cfg.coreURL, transport, logger)), logger, bodyTimeout,
-				httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(health.Gate(ingressHandler(cfg.coreURL, transport, logger)))
 		case mcpAddrVar:
-			s.server = httpserver.New(httpserver.Public(health.Gate(bridge), logger, bodyTimeout, httpserver.WithTelemetry(requests)), logger)
+			s.server = newServer(health.Gate(bridge))
 		case probesAddrVar:
 			s.server = health.Server(logger)
 		}

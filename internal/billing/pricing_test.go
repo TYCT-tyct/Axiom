@@ -45,21 +45,20 @@ func rule(target Selector, m Method) RuleInput {
 
 // TestRuleChecks: a rule breaks a rule of rules by one member, which the refusal names; the rules that pass are the
 // ones the contract describes.
-// TestRuleItemsWaitForEveryNode: a rule's fixed price and fixed markup pass the catalog's new-item switches, so a name
-// an older node cannot read is never stored in a rule.
-func TestRuleItemsWaitForEveryNode(t *testing.T) {
+// TestRuleItemsRespectFileBilling: fixed prices and markups respect the catalog's file billing switch.
+func TestRuleItemsRespectFileBilling(t *testing.T) {
 	t.Parallel()
 	allow := func(s catalog.Schedule) error {
-		if s.Priced(1 << catalog.ItemFileSearch) {
-			return catalog.ErrFileSearch
+		if s.Priced(1 << catalog.ItemFileParse) {
+			return catalog.ErrFileParse
 		}
 		return nil
 	}
 	for _, tc := range []struct {
 		name, method, field string
 	}{
-		{"a fixed price", `{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"1","file_search":"0.0025"}}}`, "method/schedule"},
-		{"a fixed markup", `{"kind":"cost_plus","markup_ratio":"0.1","fixed_markup":{"file_search":"0.0025"}}`, "method/fixed_markup"},
+		{"a fixed price", `{"kind":"fixed","schedule":{"v":1,"currency":"USD","rates":{"input":"1","file_parse":"0.0025"}}}`, "method/schedule"},
+		{"a fixed markup", `{"kind":"cost_plus","markup_ratio":"0.1","fixed_markup":{"file_parse":"0.0025"}}`, "method/fixed_markup"},
 	} {
 		in := RuleInput{Enabled: true, Target: Selector{Kind: "all"}, Audience: Selector{Kind: "all"}}
 		if err := jsonx.Unmarshal([]byte(tc.method), &in.Method); err != nil {

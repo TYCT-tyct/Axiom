@@ -113,8 +113,8 @@ func (o operationsAPI) CapsGet(ctx context.Context, _ operationsapi.CapsGetReque
 			}
 			p := capPolicyBody(u.Policy)
 			list.Data = append(list.Data, operationsapi.OperationsCapUsage{
-				Scope: p.Scope, Category: operationsapi.OperationsCapCategory(p.Category), Currency: p.Currency,
-				Limits: operationsapi.OperationsCapLimits(p.Limits), Rev: p.Rev, Paused: p.PausedAt != nil,
+				Scope: p.Scope, Category: p.Category, Currency: p.Currency,
+				Limits: p.Limits, Rev: p.Rev, Paused: p.PausedAt != nil,
 				Day: capWindow(u.DayStart, u.Day), Week: capWindow(u.WeekStart, u.Week),
 			})
 		}

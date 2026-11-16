@@ -49,7 +49,7 @@ func TestLoadNodeProcess(t *testing.T) {
 		return egress.NewForTesting(egresstest.Loopback(t), egress.WithTracerProvider(tel.Traces)), nil
 	}
 	// The load node is the production configuration: the 503s its budgets turn away are part of what a load run measures.
-	if err := serveWith(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback, startRecorder, nil, gateway.DefaultConfig()); err != nil {
+	if err := serveWith(ctx, strings.Split(environ, "\n"), slog.New(slog.NewJSONHandler(os.Stdout, nil)), loopback, startRecorder, nil, gateway.DefaultConfig(), func([]*listening) {}); err != nil {
 		t.Fatal(err)
 	}
 }

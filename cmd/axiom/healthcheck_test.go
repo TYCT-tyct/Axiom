@@ -29,7 +29,8 @@ func TestHealthcheck(t *testing.T) {
 		{"not ready", "127.0.0.1:" + port, false, false},
 		{"a listener on every address is probed on loopback", ":" + port, true, true},
 		{"0.0.0.0 likewise", "0.0.0.0:" + port, true, true},
-		{"nothing listening", freePort(t), true, false},
+		// Listen assigns port zero a different port, so nothing can answer a connection to zero itself.
+		{"nothing listening", "127.0.0.1:0", true, false},
 	}
 	for _, c := range cases {
 		health.SetReady(c.ready)
