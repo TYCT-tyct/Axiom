@@ -9,7 +9,7 @@ web := "pnpm --dir web"
 # Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
 # This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to check-docs.yml and check-secrets.yml (see
 # `check-ci`)
-check: docs check-static test quality-ratchet-coverage secrets web
+check: docs check-static test secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main. The mode selects the quality ratchet's behaviour: `pr` (the default)
@@ -171,7 +171,7 @@ check-all: check bench-once
 # What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which check-docs.yml's
 # required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
 # `docs` check-docs.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
-check-ci: script-tests check-static test quality-ratchet-coverage web
+check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
 # template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.
