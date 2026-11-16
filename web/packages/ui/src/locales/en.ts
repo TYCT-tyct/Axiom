@@ -44,6 +44,8 @@ export default {
     undoUnknown:
       "It’s unclear whether the undo took effect. Reload the page to see the current state before changing it back.",
   },
+  filters: { clear: "Clear filters" },
+  chart: { time: "Time" },
   month: { month: "Month", year: "Year" },
   cancel: "Cancel",
   loadMore: "Load more",

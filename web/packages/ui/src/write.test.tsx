@@ -1,11 +1,9 @@
 // @vitest-environment jsdom
 import { ApiError } from "@axiom/api";
 import { act } from "react";
-import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { testRoot } from "./test-root";
 import { type ExplicitSave, type LiveSave, useExplicitSave, useLiveSave } from "./write";
-
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // A fake API: every call is recorded with its body and stays out until the test answers it.
 type Call<T> = { body: T; resolve: (value: T) => void; reject: (error: unknown) => void };
@@ -20,17 +18,7 @@ function fakeApi<T>() {
 
 const failed = (status: number, code?: string) =>
   new ApiError(status, "req_1", { body: code ? { error: { code, message: code } } : undefined });
-
-let root: Root;
-let host: HTMLElement;
-beforeEach(() => {
-  host = document.body.appendChild(document.createElement("div"));
-  root = createRoot(host);
-});
-afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
-});
+const dom = testRoot();
 
 // mount runs a hook in a component and hands back its latest result.
 function mount<R>(hook: () => R) {
@@ -39,7 +27,7 @@ function mount<R>(hook: () => R) {
     result.current = hook();
     return null;
   }
-  act(() => root.render(<Probe />));
+  act(() => dom.root.render(<Probe />));
   return result;
 }
 

@@ -2,11 +2,11 @@
 import { ApiError } from "@axiom/api";
 import { createInstance } from "i18next";
 import { act, type ReactNode, StrictMode, useState } from "react";
-import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import zh from "../locales/zh";
+import { testRoot } from "../test-root";
 import { useExplicitSave, useLiveSave } from "../write";
 import { CreateDialog } from "./create-dialog";
 import { EditPanel } from "./edit-panel";
@@ -14,10 +14,9 @@ import { moduleCss, reduced } from "./module-css";
 import { DataState } from "./states";
 import { ToastProvider, useToast, useUndo } from "./toast";
 
-(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-
 const i18n = createInstance();
 const shown = new Set<HTMLDialogElement>();
+const dom = testRoot();
 
 // jsdom has no modal dialogs, animations or media queries. The stubs do what a browser does with them: showModal
 // opens the dialog (the browser also makes the page behind it inert, which jsdom cannot show, so the tests check that
@@ -39,16 +38,8 @@ beforeAll(async () => {
   window.matchMedia = (query: string) => ({ matches: false, media: query }) as MediaQueryList;
 });
 
-let root: Root;
-let host: HTMLElement;
-beforeEach(() => {
-  host = document.body.appendChild(document.createElement("div"));
-  root = createRoot(host);
-  shown.clear();
-});
+beforeEach(() => shown.clear());
 afterEach(() => {
-  act(() => root.unmount());
-  host.remove();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -56,7 +47,7 @@ afterEach(() => {
 // StrictMode as the apps start (start.tsx): effects run, are cleaned up and run again on mount.
 const render = (node: ReactNode) =>
   act(() =>
-    root.render(
+    dom.root.render(
       <StrictMode>
         <I18nextProvider i18n={i18n}>{node}</I18nextProvider>
       </StrictMode>,

@@ -87,6 +87,8 @@ export default {
     undoFailed: "撤销没有完成，现在仍是撤销之前的样子。需要的话再改回来。",
     undoUnknown: "不确定撤销有没有生效。刷新页面看看现在的状态，再决定要不要改回来。",
   },
+  filters: { clear: "清除筛选" },
+  chart: { time: "时间" },
   month: { month: "月份", year: "年份" },
   cancel: "取消",
   loadMore: "加载更多",
