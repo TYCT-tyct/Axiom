@@ -17,11 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 )
-
-const wechatpayMaxResponse = 1 << 20
 
 // errWechatOrderMissing is a signed ORDER_NOT_EXIST, not a failed query. Public Query turns it into PayPending; the
 // admin probe uses it to prove the credentials.
@@ -82,14 +79,9 @@ func (c *wechatChannel) do(ctx context.Context, method, path, query string, body
 	if err != nil {
 		return 0, nil, err
 	}
-	resp, err := c.client.Do(req)
+	resp, response, err := sendGateway(c.client, req, "wechatpay", "cannot read gateway response")
 	if err != nil {
-		return 0, nil, errors.New("wechatpay: gateway request failed")
-	}
-	defer resp.Body.Close() //nolint:errcheck // the body is read below or discarded; closing cannot change the outcome
-	response, err := egress.ReadBody(resp.Body, wechatpayMaxResponse)
-	if err != nil {
-		return 0, nil, errors.New("wechatpay: cannot read gateway response")
+		return 0, nil, err
 	}
 	if len(response) == 0 {
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {

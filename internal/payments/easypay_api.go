@@ -11,19 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"axiom/internal/platform/egress"
 	"axiom/internal/platform/jsonx"
 )
-
-// post never wraps network or decoder errors: both may quote the secret-bearing URL or echoed response body.
-func (c *easyPayChannel) post(ctx context.Context, path string, v url.Values, query bool) ([]byte, error) {
-	return c.request(ctx, http.MethodPost, path, v, query)
-}
-
-// get keeps the merchant key in the query string, as EzPay's order query expects.
-func (c *easyPayChannel) get(ctx context.Context, path string, v url.Values) ([]byte, error) {
-	return c.request(ctx, http.MethodGet, path, v, true)
-}
 
 func (c *easyPayChannel) request(ctx context.Context, method, path string, v url.Values, query bool) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -43,14 +32,9 @@ func (c *easyPayChannel) request(ctx context.Context, method, path string, v url
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
-	resp, err := c.client.Do(req)
+	resp, data, err := sendGateway(c.client, req, "easypay", "cannot read bounded gateway response")
 	if err != nil {
-		return nil, errors.New("easypay: gateway request failed")
-	}
-	defer func() { _ = resp.Body.Close() }() //nolint:errcheck // reading the bounded response below determines the result
-	data, err := egress.ReadBody(resp.Body, 1<<20)
-	if err != nil {
-		return nil, errors.New("easypay: cannot read bounded gateway response")
+		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("easypay: gateway HTTP %d", resp.StatusCode)
@@ -127,7 +111,7 @@ func (c *easyPayChannel) Query(ctx context.Context, order, _ string) (Payment, e
 	}
 	v := c.credentials("order")
 	v.Set("out_trade_no", order)
-	body, err := c.post(ctx, "/api.php", v, true)
+	body, err := c.request(ctx, http.MethodPost, "/api.php", v, true)
 	if err != nil {
 		return Payment{}, err
 	}
@@ -161,7 +145,7 @@ func (c *easyPayChannel) payment(r easyPayOrderResponse, order string) (Payment,
 	if err != nil {
 		return Payment{}, err
 	}
-	amount := parseMinorText(text, digits(c.currency))
+	amount := parseMinorText(text, c.currency.MinorDigits())
 	state := PayPending
 	if paid {
 		state = PayPaid
@@ -187,7 +171,7 @@ func (c *easyPayChannel) Close(ctx context.Context, order OrderID, _ string) err
 	}
 	v := c.credentials("close")
 	v.Set("out_trade_no", order.TypeID())
-	body, err := c.post(ctx, "/api.php", v, true)
+	body, err := c.request(ctx, http.MethodPost, "/api.php", v, true)
 	if err != nil {
 		return err
 	}
@@ -220,7 +204,7 @@ func (c *easyPayChannel) Refund(ctx context.Context, r RefundCall) (RefundState,
 }
 
 func (c *easyPayChannel) refund(ctx context.Context, v url.Values) (RefundState, bool, error) {
-	body, err := c.post(ctx, "/api.php?act=refund", v, false)
+	body, err := c.request(ctx, http.MethodPost, "/api.php?act=refund", v, false)
 	if err != nil {
 		return RefundState{}, false, err
 	}
@@ -259,10 +243,10 @@ func (*easyPayChannel) QueryRefund(context.Context, RefundCall) (RefundState, er
 
 // testConfig queries merchant metadata without creating a payment or returning gateway data.
 func (c *easyPayChannel) testConfig(ctx context.Context) error {
-	if c.settings.Preset == "epusdt" || c.settings.Preset == "ezpay" {
+	if _, ok := easyPayPresets[c.settings.Preset]; ok {
 		return c.probe(ctx)
 	}
-	body, err := c.post(ctx, "/api.php", c.credentials("query"), true)
+	body, err := c.request(ctx, http.MethodPost, "/api.php", c.credentials("query"), true)
 	if err != nil {
 		return err
 	}
