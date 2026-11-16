@@ -154,7 +154,7 @@ func saleReference(snap *catalog.Snapshot, model catalog.ModelID, currency platf
 	if ref, ok := snap.ReferencePrice(model, "USD"); ok {
 		return ref
 	}
-	for _, code := range slices.Sorted(maps.Keys(minorDigits)) {
+	for _, code := range slices.Sorted(maps.Keys(exchangeCurrencies)) {
 		if ref, ok := snap.ReferencePrice(model, code); ok {
 			return ref
 		}

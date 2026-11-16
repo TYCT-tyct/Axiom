@@ -6,10 +6,10 @@
 
 | 包 | 公开接口 |
 |---|---|
-| `platform` | 值类型 `UnitPrice`、`Exact`、`Currency`、`ExchangeRate`、`RequestID`、`AttemptSeq`；规则由 [billing](../../docs/domains/billing.md#钱的表示) 定 |
+| `platform` | 值类型 `UnitPrice`、`Exact`、`Currency`（`MinorDigits`：ISO 4217 小数位，未列出为 2，不代表受支持）、`ExchangeRate`、`RequestID`、`AttemptSeq`；规则见 [billing](../../docs/domains/billing.md#钱的表示) |
 | `config` | 把 `AXIOM_*` 读成带类型的值，问题一次报告；默认值以 `cmd/axiom` 为准 |
 | `privfile`、`secret`、`nodetls` | 私密文件的唯一打开入口；密钥加载、信封加密与脱敏；节点间双向 TLS（[nodetls](nodetls/README.md)） |
-| `httpserver` | 监听的中间件、`Compress`、健康检查、`/metrics` |
+| `httpserver` | 监听中间件、`Compress`、健康检查 |
 | `clientip` | 客户端地址的唯一读法与来源分组 `Group`（IPv6 按 /64） |
 | `webui`、`egress`、`egresstest`、`*api` | 嵌入的前端、出站 HTTP、测试用回环放行、由 `api/*.yaml` 生成的接口，见下文 |
 | `textshape` | 不分配地数十类字符特征，乘 [billing](../billing/README.md) 的权重估 token，不超过字节数 |
@@ -43,7 +43,7 @@
 - `egress.New(egress.Direct)` 是并发安全的客户端，只支持直连；`DialContext` 给 SMTP 复用同一套校验；`ReadBody(body, max)` 超限报错、不返回截断内容。
 - DNS 结果全部合格才拨号（任一不合格整组拒绝），按 IP 拨，Host 和 SNI 保留原主机；拒绝私网、回环、链路本地、特殊用途段、非 `2000::/3` 的 IPv6、NAT64 知名与本地前缀、Azure 的 `168.63.129.16`，以及 URL 里的映射 IPv6、非常规 IPv4 写法和 zone。
 - 连接合计 10 秒（候选 IP 平分），TLS 握手 10 秒，空闲 90 秒，响应头至多 1 MiB；其余只受调用方期限约束。
-- 部署前提：出站网络没有转到内网的自选 NAT64 前缀（本包认不出）。
+- 部署前提：出站网络没有转向内网的自选 NAT64 前缀。
 
 ## 监听
 
@@ -127,7 +127,7 @@
 
 ### 任务队列
 
-- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（`default` 没有 worker），测试检查。
+- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（`default` 无 worker），有测试。
 - `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（没配 SMTP 不登记邮件 worker）。
 - 任务最多 10 分钟，运行满 15 分钟算丢失；丢弃的任务每分钟扫描、在 `platform.discarded_jobs` 认领并告警，终态满 24 小时才删。
 - 租户数据不进任务参数和 worker 错误（River 的表没有策略）：数据放模块的表，参数只放 id，worker 用 `db.TenantTx` 换到该租户的范围。
@@ -159,14 +159,14 @@
 
 | 决策 | 理由 |
 |---|---|
-| 校验全部 DNS 结果后按 IP 拨号 | 没有重绑定窗口，仍保留证书校验 |
-| 配置只来自环境变量，未知变量算错 | 一个来源；拼错的名字不会落回默认值 |
-| 连接预算启动时按服务器与节点数算，两个物理池 | 扩节点不会当天连接满；River 直用 pgxpool，信号量拦不住 |
-| River 在 `pg` 里、同一事务入队 | 任务不丢不早发，模块拿不到连接 |
-| 审计在平台、在改动事务里同步写，不接哈希链 | 模块不能引用 `operations`；同成同败；链头锁会让管理操作排队 |
-| 守卫按嵌入的契约强制，在生成路由之前 | 规则只有一处；包装不会抢先答 400 |
-| 金额是整数文本，错误码是封闭枚举 | 浏览器舍入超过 2⁵³ 的数；前端按原因翻译 |
-| 设置用 `PUT` 整体替换 | 生成类型分不清缺省和 null |
-| 前端嵌入程序、构建时预压缩 | 一个文件部署，请求不占 CPU |
-| 指标用 OpenTelemetry、Prometheus 抓取 | 换导出方式不改模块；不依赖境外服务 |
-| 根证书由 `x509roots/fallback` 内嵌 | scratch 镜像无证书库 |
+| 校验全部 DNS 结果后按 IP 拨号 | 无重绑定窗口，仍保留证书校验 |
+| 配置只来自环境变量，未知变量算错 | 一个来源；拼错不会落回默认值 |
+| 连接预算启动时按服务器与节点数算，两个物理池 | 扩节点不会当天满；River 直用 pgxpool，信号量拦不住 |
+| River 在 `pg` 里、同事务入队 | 任务不丢不早发，模块拿不到连接 |
+| 审计在平台、在改动事务里同步写，不接哈希链 | 模块不能引用 `operations`；同成同败；链头锁让管理操作排队 |
+| 守卫按嵌入契约强制，在生成路由之前 | 规则只有一处；包装不抢先答 400 |
+| 金额是整数文本，错误码是封闭枚举 | 浏览器舍入超 2⁵³ 的数；前端按码翻译 |
+| 设置用 `PUT` 整体替换 | 生成类型分不清缺省与 null |
+| 前端嵌入程序、构建时预压缩 | 单文件部署，不占 CPU |
+| 指标用 OpenTelemetry、Prometheus 抓取 | 换导出不改模块；不依赖境外服务 |
+| 根证书由 `x509roots/fallback` 内嵌 | scratch 无证书库 |
