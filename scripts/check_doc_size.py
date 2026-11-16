@@ -47,11 +47,21 @@ def git(*args):
     return subprocess.check_output(["git", *args]).decode("utf-8")
 
 
+def merged_onto(base):
+    """Whether HEAD merges something onto a first parent that already contains base."""
+    parents = git("rev-list", "--parents", "-n", "1", "HEAD").split()[1:]
+    return len(parents) == 2 and subprocess.run(["git", "merge-base", "--is-ancestor", base, parents[0]]).returncode == 0
+
+
 def main():
     head = git("rev-parse", "HEAD").strip()
     base = git("merge-base", os.environ.get("BASE") or "origin/main", head).strip()
     if base == head:
         base = git("rev-parse", "HEAD^").strip()
+    elif merged_onto(base):
+        # A pull request's build checks out its merge into the current base, while BASE is the base as of the PR's last
+        # push: the base's own changes since then would count as the PR's new history (#784, run 43924805578).
+        base = git("rev-parse", "HEAD^1").strip()
     previous_paths = set(git("ls-tree", "-r", "--name-only", "-z", base).split("\0"))
     paths = git("ls-files", "--cached", "--others", "--exclude-standard", "-z").split("\0")
     found = []

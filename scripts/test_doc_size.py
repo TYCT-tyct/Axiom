@@ -74,6 +74,44 @@ class DocSize(unittest.TestCase):
             env["BASE"] = git("rev-parse", "HEAD")
             self.assertEqual(check().returncode, 1)  # main's first-parent diff
 
+    def test_a_pull_request_merge_is_checked_against_the_current_base_not_a_stale_one(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            env = dict(os.environ, GIT_AUTHOR_NAME="Test", GIT_AUTHOR_EMAIL="test@example.com",
+                       GIT_COMMITTER_NAME="Test", GIT_COMMITTER_EMAIL="test@example.com")
+
+            def git(*args):
+                return subprocess.check_output(["git", *args], cwd=root, env=env, stderr=subprocess.DEVNULL).decode().strip()
+
+            def write(path, text):
+                (root / path).parent.mkdir(parents=True, exist_ok=True)
+                (root / path).write_text(text, encoding="utf-8")
+
+            git("init", "-b", "main")
+            write("docs/domains/test.md", "规则\n")
+            git("add", ".")
+            git("commit", "-m", "base")
+            env["BASE"] = git("rev-parse", "HEAD")  # the base as of the PR's last push
+            git("checkout", "-q", "-b", "pr")
+            write("web/a.txt", "x\n")
+            git("add", ".")
+            git("commit", "-m", "pr")
+            git("checkout", "-q", "main")
+            write("docs/domains/test.md", "规则\n日期 2026-11-16\n")  # main moved on, history and all
+            git("add", ".")
+            git("commit", "-m", "main moves on")
+            git("merge", "-q", "--no-ff", "pr", "-m", "merge pr into the current main")  # what CI checks out
+            result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stdout)
+            git("checkout", "-q", "pr")
+            write("docs/domains/test.md", "规则\n参考 new-api/a.go:1\n")  # the PR's own history still fails
+            git("commit", "-qam", "pr adds history")
+            git("checkout", "-q", "main")
+            git("merge", "-q", "--no-ff", "-X", "theirs", "pr", "-m", "merge again")
+            result = subprocess.run([sys.executable, str(SCRIPT)], cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            self.assertIn("new-api/a.go:1", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
