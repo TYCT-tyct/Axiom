@@ -31,8 +31,8 @@ type confirmed struct {
 func (p *Payments) receive(ctx context.Context, c confirmed) error {
 	if invalidPaymentText(c.order) || invalidPaymentText(c.payment.TradeNo) {
 		c.reason = "invalid_payment"
-		c.order = strings.ReplaceAll(strings.ToValidUTF8(c.order, ""), "\x00", "")
-		c.payment.TradeNo = strings.ReplaceAll(strings.ToValidUTF8(c.payment.TradeNo, ""), "\x00", "")
+		c.order = cleanText(c.order)
+		c.payment.TradeNo = cleanText(c.payment.TradeNo)
 	}
 	err := p.db.Tx(ctx, p.platform, func(tx pg.Tx) error {
 		return p.receiveTx(ctx, tx, c)

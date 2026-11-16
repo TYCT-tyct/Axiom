@@ -56,12 +56,11 @@ func (e *PaidError) Error() string { return "billing: paid credit " + e.Reason }
 
 // unitScale is how many billionths of a unit of c make one of its minor units.
 func unitScale(c platform.Currency) (int64, error) {
-	d, ok := minorDigits[c.String()]
-	if !ok {
+	if !exchangeCurrencies[c.String()] {
 		return 0, &PaidError{"in " + c.String() + ", which is not a supported currency"}
 	}
 	scale := int64(1)
-	for range 9 - d {
+	for range 9 - c.MinorDigits() {
 		scale *= 10
 	}
 	return scale, nil

@@ -33,7 +33,6 @@ const (
 	CapRefund                       // Refund
 	CapQueryRefund                  // QueryRefund
 	CapRefundKey                    // the channel takes RefundCall.Refund as an idempotency key, so a refund can be resent
-	CapStatements                   // daily statements
 )
 
 // Has reports whether every capability of want is in c.

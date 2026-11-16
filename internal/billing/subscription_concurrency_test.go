@@ -1,6 +1,8 @@
 package billing
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 	"uuid"
@@ -95,4 +97,52 @@ func waitForLock(t *testing.T, b *bank, pid int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("admission %d never blocked on the balance lock", pid)
+}
+
+// The missing window is fault injection by a separate privileged transaction, not an application deletion path.
+// It commits after planning and before writing, so a successful batch must account for every distinct window.
+func TestSettlementBatchChecksDistinctWindows(t *testing.T) {
+	b := newBank(t, 1000, 0, Config{})
+	sub := b.subscribe(b.makePlan(400, 3600), uuid.NewV7())
+	batch := func() []Settlement {
+		return []Settlement{
+			{Hold: b.holdOn(b.exact, 100), Outcome: outcome(Committed, FinishStop, used(t, 60, 0, 0))},
+			{Hold: b.holdOn(b.exact, 100), Outcome: outcome(Committed, FinishStop, used(t, 70, 0, 0))},
+		}
+	}
+	items := batch()
+	for range 2 {
+		// The replay neither charges again nor expects an update for an already settled window.
+		if _, _, err := b.billing.SettleBatch(t.Context(), b.admitted.Scope, items); err != nil {
+			t.Fatal(err)
+		}
+		if w := b.window(1); w.Used != 130 || w.Reserved != 0 {
+			t.Fatalf("window = %+v, want 130 used and no reservation", w)
+		}
+	}
+	items = batch()
+	snapshot := func() [4]int64 {
+		return [4]int64{
+			b.count("SELECT count(*) FROM billing.reservations WHERE state = 'pending'"),
+			b.count("SELECT count(*) FROM billing.transactions"),
+			b.count("SELECT sum(reserved) FROM billing.spend"),
+			b.count("SELECT balance FROM billing.balances"),
+		}
+	}
+	before := snapshot()
+	err := b.app.Tx(t.Context(), b.admitted.Scope, func(tx pg.Tx) error {
+		plans, err := b.billing.planSettlements(t.Context(), tx, items)
+		if err != nil {
+			return err
+		}
+		b.sql(fmt.Sprintf("DELETE FROM billing.subscription_windows WHERE subscription_id = '%s' AND seq = 1", sub.ID))
+		return writeSettlements(t.Context(), tx, b.supplies, plans)
+	})
+	if err == nil || !strings.Contains(err.Error(), "settle the subscription windows wrote 0 of 1 rows") {
+		t.Fatalf("settlement error = %v, want the missing window", err)
+	}
+	if after := snapshot(); after != before {
+		t.Errorf("pending/transactions/reserved/balance = %v, want %v after rollback", after, before)
+	}
+	b.balanced()
 }

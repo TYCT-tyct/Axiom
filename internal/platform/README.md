@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`（`ParseExact` 读取有符号十进制、最多 15 位小数，拒绝 128 位越界；只用于后台快照解析原生余额）、币种 `Currency`（三个大写字母，由 `ParseCurrency` 检查）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
+| `platform`（本目录） | 各模块共用的值类型：单价 `UnitPrice`、精确金额 `Exact`（`ParseExact` 读取有符号十进制、最多 15 位小数，拒绝 128 位越界；只用于后台快照解析原生余额）、币种 `Currency`（`ParseCurrency` 检查三个大写字母；`Currency.MinorDigits` 提供最小单位位数，未列出的币种默认 2 位，不能用它判断币种是否受支持）、可复制的汇率依据 `ExchangeRate`（行 ID、版本、规范化币种对与整数分子/分母，`Between` 只取精确分数或倒数）。只有类型和运算；支持币种、数值范围、冻结与取整规则由 [billing](../../docs/domains/billing.md#汇率) 校验和决定 |
 | `config` | 把 `AXIOM_*` 环境变量读成带类型的值，收集全部问题后一次报告 |
 | `privfile` | 打开节点自己保留的私密文件（主密钥、Valkey 密码、节点 mTLS 私钥）的唯一入口：类型和权限从被打开的那个描述符读，调用方读的也是它；格式、大小上限和是否拒绝符号链接仍由调用方决定 |
 | `nodetls` | 节点间双向 TLS：从 `AXIOM_NODE_TLS_DIR` 读 `node.crt`、`node.key`、`ca.crt`，检查配对、有效期、扩展密钥用途和私钥权限，最低 TLS 1.3，见 [nodetls/README.md](nodetls/README.md) |

@@ -729,7 +729,7 @@ func (q *Queries) SetBalance(ctx context.Context, db DBTX, arg SetBalanceParams)
 	return result.RowsAffected(), nil
 }
 
-const settleWindows = `-- name: SettleWindows :exec
+const settleWindows = `-- name: SettleWindows :execrows
 WITH input AS (
     SELECT i AS ord, ($1::uuid[])[i] AS subscription_id, ($2::integer[])[i] AS seq,
         ($3::bigint[])[i] AS held, ($4::bigint[])[i] AS charged
@@ -752,14 +752,17 @@ type SettleWindowsParams struct {
 // The plan windows of a batch's settlements: each hold goes back and its charge is used, in one statement under the
 // balance row lock the batch already holds. The rows are summed by window first: several requests of one batch may
 // freeze the same window, and UPDATE ... FROM applies only one matching input row to a target row.
-func (q *Queries) SettleWindows(ctx context.Context, db DBTX, arg SettleWindowsParams) error {
-	_, err := db.Exec(ctx, settleWindows,
+func (q *Queries) SettleWindows(ctx context.Context, db DBTX, arg SettleWindowsParams) (int64, error) {
+	result, err := db.Exec(ctx, settleWindows,
 		arg.Subscriptions,
 		arg.Seqs,
 		arg.Helds,
 		arg.Chargeds,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unbalanced = `-- name: Unbalanced :many
