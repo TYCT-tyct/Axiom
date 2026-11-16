@@ -9,7 +9,7 @@ web := "pnpm --dir web"
 # Run every check CI runs, except one run of each benchmark and the deployment check: `check-all` adds the benchmarks.
 # This is the local pre-push gate, so it keeps `secrets` and `docs`, which a PR build leaves to check-docs.yml and check-secrets.yml (see
 # `check-ci`)
-check: docs check-static test quality-ratchet-coverage secrets web
+check: docs check-static test secrets web
 
 # The checks that need no run of a test suite: CI's static job adds `script-tests` on a PR, and `docs` (which includes
 # `script-tests`) plus `secrets` on a train or main. The mode selects the quality ratchet's behaviour: `pr` (the default)
@@ -66,9 +66,15 @@ lint:
 # coverage, whose suite does not run on a PR. The workflow chooses the mode explicitly; the script does not guess it.
 # With BASE set (PRs and trains), it also reads the baseline committed at the base, so code and baseline cannot grow
 # together; a base without the baseline is its first introduction. A static-only write keeps the recorded coverage.
-# The static half of the quality ratchet: nolint, complexity and file length may only fall.
+# The static half of the quality ratchet: nolint, complexity and file length may only fall. A gain is never required in
+# the PR that made it: every refactor PR rewrote the one baseline file, so the train ejected them on conflicts with each
+# other (#779-#786). Gains are recorded together by `just quality-ratchet-record` on main.
 quality-ratchet mode="pr":
-    {{ python }} scripts/ci/quality_ratchet.py {{ if mode == "train" { "--allow-unrecorded-gains" } else { "" } }}
+    {{ python }} scripts/ci/quality_ratchet.py --allow-unrecorded-gains
+
+# Lower the baseline to what main now measures; run on an up-to-date main and commit the result as its own PR.
+quality-ratchet-record:
+    {{ python }} scripts/ci/quality_ratchet.py --write-baseline
 
 # After `just test` wrote coverage.out: a package may not fall below its baseline by more than the tolerance, a new
 # package must start at or above the floor, and an improvement past the tolerance is recorded by the PR that made it, or
@@ -165,7 +171,7 @@ check-all: check bench-once
 # What a pull request's build runs: `check` without `secrets` and the workflow half of `docs`, which check-docs.yml's
 # required `secrets` and `docs` jobs already run on it, so they would run twice per build. `script-tests` is the half of
 # `docs` check-docs.yml does not run. A train or main runs `docs` and `secrets` too (CI's static job).
-check-ci: script-tests check-static test quality-ratchet-coverage web
+check-ci: script-tests check-static test web
 
 # The checks a Markdown-only pull request runs instead of the full build: the docs tests (including the pull request
 # template), module boundaries, the pg module table, and the size and binary rule, which a document must pass too.

@@ -69,12 +69,6 @@ func onlineWebPlugin(req *protocol.Request, online bool) {
 	}
 }
 
-// restoreWeb puts back what compression removed: the plugin is a routing setting, not a body one. The input a backend
-// search may add was reserved at admission and is not restored here.
-func restoreWeb(req *protocol.Request, web *protocol.WebPlugin) {
-	req.Web = web
-}
-
 // restoreServer puts back the fields a re-Inspection of a rewritten body cannot see: the server tool was removed from
 // the body before parsing or compression, so the new Request knows nothing of it, and the loop or native mapping would
 // be lost (docs/domains/gateway.md「服务端工具」).
@@ -111,7 +105,7 @@ func (s *session) webSearch(ctx context.Context) *ended {
 		if errors.Is(err, websearch.ErrQueryTooLong) {
 			return &ended{err: protocol.Error{Type: protocol.InvalidRequest, Message: "The web plugin's search query is longer than this search engine accepts."}}
 		}
-		s.logger.WarnContext(ctx, "the web search backend failed", "request_id", s.c.ID.String(), "err", err)
+		s.logger.WarnContext(ctx, "the web search backend failed", "err", err)
 		return &ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
 	}
 	if !s.reserveSearch(3*int64(len(s.c.Body)) + protocol.WebSearchMaxBytes) {
@@ -119,12 +113,12 @@ func (s *session) webSearch(ctx context.Context) *ended {
 	}
 	body, err := protocol.InjectWebSearch(s.c.Body, webSearchMessage(web, results, s.start))
 	if err != nil {
-		s.logger.Error("the web search results could not be injected", "request_id", s.c.ID.String(), "err", err)
+		s.logger.Error("the web search results could not be injected", "err", err)
 		return &ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
 	}
 	req, err := protocol.Inspect(s.c.Format, body)
 	if err != nil {
-		s.logger.Error("the injected web search body is invalid", "request_id", s.c.ID.String(), "err", err)
+		s.logger.Error("the injected web search body is invalid", "err", err)
 		return &ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
 	}
 	// :online is a routing setting, not a body member, so Inspect cannot see it; the plugin's own members remain in

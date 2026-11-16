@@ -26,16 +26,21 @@ type budget struct {
 	drawn int64 // what it has drawn over its life, refunds included, for the tests that hold it to what a run allocated
 	peak  int64 // the most it held at once
 	err   error // the first charge that failed, for the callers that build values without an error to return
+	retry bool  // the failed draw could fit if competing preparations returned their charges
 }
 
 func (b *budget) draw(n int64) error {
 	if b == nil || b.m == nil || n <= 0 {
 		return nil
 	}
+	b.m.preparationMu.Lock()
+	defer b.m.preparationMu.Unlock()
 	if !b.m.Charge(n) {
+		b.retry = b.m.preparationHeld > b.held && max(b.peak, b.held+n) <= b.m.left.Load()+b.m.preparationHeld
 		b.err = ErrMemory
 		return ErrMemory
 	}
+	b.m.preparationHeld += n
 	b.held += n
 	b.drawn += n
 	b.peak = max(b.peak, b.held)
@@ -46,6 +51,9 @@ func (b *budget) give(n int64) {
 	if b == nil || b.m == nil || n <= 0 {
 		return
 	}
+	b.m.preparationMu.Lock()
+	defer b.m.preparationMu.Unlock()
+	b.m.preparationHeld -= n
 	b.m.Refund(n)
 	b.held -= n
 }

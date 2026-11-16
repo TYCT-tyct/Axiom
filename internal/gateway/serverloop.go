@@ -30,15 +30,18 @@ type serverLoop struct {
 }
 
 func newServerLoop(c *Call) *serverLoop {
-	t := c.Request.ServerSearch
-	cap := int(t.MaxUses)
+	return &serverLoop{backend: c.searchBackend, tool: c.Request.ServerSearch, cap: int(serverToolCap(&c.Request))}
+}
+
+func serverToolCap(req *protocol.Request) int64 {
+	cap := req.ServerSearch.MaxUses
 	if cap == 0 {
 		cap = protocol.DefaultServerToolCalls
 	}
-	if c.Request.HasMaxToolCalls {
-		cap = min(cap, int(c.Request.MaxToolCalls))
+	if req.HasMaxToolCalls {
+		cap = min(cap, req.MaxToolCalls)
 	}
-	return &serverLoop{backend: c.searchBackend, tool: t, cap: cap}
+	return cap
 }
 
 // The tool results that tell the model why a call ran no search, so it can answer or call again.
@@ -143,7 +146,7 @@ func (a *attempt) runSearch(ctx context.Context, query string, limit int64, room
 		if errors.Is(err, websearch.ErrQueryTooLong) {
 			return longQueryResult, nil
 		}
-		s.logger.WarnContext(ctx, "the web search backend failed in the model-side loop", "request_id", s.c.ID.String(), "err", err)
+		s.logger.WarnContext(ctx, "the web search backend failed in the model-side loop", "err", err)
 		return "", a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
 	s.searches++
@@ -189,12 +192,12 @@ func (a *attempt) appendTurn(turn protocol.ServerTurn, results []string) *ended 
 	}
 	body, err := protocol.AppendServerTurn(s.c.Format, s.c.Body, turn, results)
 	if err != nil {
-		s.logger.Error("the web search turn could not be appended", "request_id", s.c.ID.String(), "err", err)
+		s.logger.Error("the web search turn could not be appended", "err", err)
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
 	req, err := protocol.Inspect(s.c.Format, body)
 	if err != nil {
-		s.logger.Error("the appended web search body is invalid", "request_id", s.c.ID.String(), "err", err)
+		s.logger.Error("the appended web search body is invalid", "err", err)
 		return a.abort(protocol.Error{Type: protocol.UpstreamFailed}, 0)
 	}
 	// The tool's declaration left the body before admission; what the gateway read of it is restored, so the quote

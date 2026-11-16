@@ -66,14 +66,20 @@ var (
 )
 
 func (r *PasswordRecovery) work(ctx context.Context, job *river.Job[passwordResetArgs]) error {
+	return runMailJob(ctx, job, r.process, r.logFailure, errNoResetDomain, errPasswordResetJob)
+}
+
+func runMailJob[A river.JobArgs](ctx context.Context, job *river.Job[A], process func(context.Context, A) error,
+	logFailure func(context.Context, int64, int, error), noDomain, failure error,
+) error {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := r.process(ctx, job.Args); err != nil {
-		r.logFailure(ctx, job.ID, job.Attempt, err)
-		if errors.Is(err, errNoResetDomain) || errors.Is(err, ErrBadEmail) {
-			return river.JobCancel(errPasswordResetJob)
+	if err := process(ctx, job.Args); err != nil {
+		logFailure(ctx, job.ID, job.Attempt, err)
+		if errors.Is(err, noDomain) || errors.Is(err, ErrBadEmail) {
+			return river.JobCancel(failure)
 		}
-		return errPasswordResetJob
+		return failure
 	}
 	return nil
 }
