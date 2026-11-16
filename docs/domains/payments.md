@@ -1,509 +1,343 @@
 # 支付
 
-用户怎么给账户充值：收款渠道与商户账户、订单、金额与汇率、手续费、回调与到账、补单与过期、加密货币、退款与拒付、防欺诈、对账、后台配置、收据。对应代码模块 `payments`，表、接口、不变量和 PR 拆分见[模块 README](../../internal/payments/README.md)。充值到账后怎么记账、额度批次和退款金额怎么算，见[计费](billing.md)。
+用户怎么给账户充值：收款渠道与商户账户、订单、金额与汇率、手续费、回调与到账、补单与过期、加密货币、退款与拒付、兑换码、防欺诈、对账、后台配置、收据。代码接口、不变量和表见[模块 README](../../internal/payments/README.md)；到账后怎么记账、额度批次和退款金额怎么算见[计费](billing.md)。
 
 ## 要求
 
-- 支持人民币和美元充值（见[产品需求的「范围」](../product.md#范围)）。
-- 收款渠道做成插件，配置预留好，开通哪些由负责人在后台自行配置。
-- 支持加密货币（USDT）充值。
+- 支持人民币和美元充值（[产品需求的「范围」](../product.md#范围)）和加密货币（USDT）充值。
+- 收款渠道做成插件，配置预留好，开通哪些由负责人在后台配置；易支付是可配置的通用协议插件，不绑定某一家。
 - 渠道手续费由用户支付。
-- 二级站点用站长自己的收款账户（见[术语与核心概念的「关键关系」](../glossary.md#关键关系)）。
-- 行为照搬 sub2api 的支付包（负责人 2026-10-18/19：「照搬、避免报错、确保高兼容性」）：读懂它已经过实战的逻辑，按 Axiom 的结构重写，不复制代码（sub2api 是 LGPL，new-api 是 AGPL，见[总体架构的「工程原则」](../architecture.md#工程原则)）。只有三处坚持 Axiom 自己的规则：欠款硬上限、精确的十进制金额（整数最小单位、先求和再只取整一次）、多租户行级安全。
-- 易支付是可配置的通用协议插件，不绑定某一家。
-- 商户凭证由负责人在接入时提供，永不入库。订阅套餐作为资金来源由 billing 实现（见[计费](billing.md#订阅套餐)），不经过支付渠道；把套餐做成订单商品和自动续费仍未定（见[计费的待定问题](billing.md#待定问题)）。套餐退款也不走支付渠道：管理员在 billing 里提出申请、另一个管理员批准后按剩余付费额度退，用户不能自退，见[计费的「订阅套餐」](billing.md#订阅套餐)。兑换码见下文「兑换码」。
+- 二级站点用站长自己的收款账户（[术语的「关键关系」](../glossary.md#关键关系)）。
+- 行为照 sub2api 的支付包，按 Axiom 的结构重写、不复制代码（[总体架构的「工程原则」](../architecture.md#工程原则)）；只有三处坚持 Axiom 的规则：欠款硬上限、精确的十进制金额（整数最小单位、先求和再只取整一次）、多租户行级安全。
+- 商户凭证由负责人在接入时提供，永不入库明文。订阅套餐不经过支付渠道，由 billing 实现，套餐退款也在 billing 里审批（[计费的「订阅套餐」](billing.md#订阅套餐)）；做成订单商品和自动续费仍未定（[计费的待定问题](billing.md#待定问题)）。
 
 ## 设计
-
-本节引用的 sub2api 源码都是 `backend/internal/` 下的路径，提交 `8f2cbb5`；new-api 是提交 `32e5874`；均为 2026-10-19 查。每条行为写明照的是哪一处，偏离的写一句理由。
 
 ### 收款渠道
 
 | 渠道 | 适合 | 开通条件与风险 |
 |---|---|---|
-| 支付宝（官方） | 国内用户 | 网站需要 ICP 备案；个人账号也能开通电脑网站支付，资质不全时额度受限（支付宝文档《电脑网站支付申请条件》，2026-10） |
-| 微信支付（官方） | 国内用户 | 网站扫码支付只对个体工商户、企业等有执照的主体开放，网站需要 ICP 备案（微信支付文档《Native 支付》，2026-10）。官方 API v3 插件见下文「微信支付官方插件」 |
-| Stripe | 海外用户，信用卡 | 需要在 Stripe 支持的国家或地区有主体和银行账户（Stripe 帮助中心，2026-10） |
-| 易支付协议（聚合支付） | 没有官方渠道时收国内款；也用来接 USDT 网关 | new-api、sub2api 都支持（源码，2026-10）。资金先进入聚合平台，有平台跑路和合规的风险；协议没有统一标准，签名一般只有 MD5 |
-| 加密货币（USDT） | 海外用户，或没有其他渠道时 | 经自托管的易支付兼容网关接入，见下文「加密货币」 |
+| 支付宝（官方） | 国内用户 | 网站需 ICP 备案；资质不全时额度受限 |
+| 微信支付（官方 API v3） | 国内用户 | 网站扫码支付只对有执照的主体开放，需 ICP 备案 |
+| Stripe | 海外用户，信用卡 | 需在 Stripe 支持的地区有主体和银行账户 |
+| 易支付协议（聚合支付） | 没有官方渠道时收国内款；也接 USDT 网关 | 资金先进聚合平台，有跑路与合规风险；签名一般只有 MD5 |
+| USDT | 海外用户或没有其他渠道时 | 经自托管的易支付兼容网关，见「加密货币」 |
 
-- **三个概念**：**收款渠道**是一种收款协议的插件（易支付、Stripe、支付宝官方……），代码里叫 `Kind`；**商户账户**是站点在某个渠道上配置的一个收款账号（商户号、密钥、网关地址），一个渠道可以配多个，对应 sub2api 的 provider instance（`ent/schema/payment_provider_instance.go:31`）；**付款方式**是用户在充值页选的那一项（支付宝、微信、`usdt.tron`），一个商户账户可以支持多种，对应 sub2api 的 payment type（`payment/types.go:14-24`）。
-- **插件是编译进程序的 Go 代码**，在 `cmd/axiom` 里按种类登记；不做动态加载。sub2api 同样按种类在工厂里构造（`payment/provider/factory.go:10-25`）。新增一种渠道是加一个插件包，不改核心（[产品需求的「质量要求」](../product.md#质量要求)的可扩展）。
-- **每个插件实现同一个渠道接口**：下单、验证回调、查单、关单、退款、查退款，后四项和"渠道认我们的退款单号"按商户账户的配置声明是否支持；接口、能力和"结果未知"的约定见[模块 README 的「渠道接口」](../../internal/payments/README.md#渠道接口)。照 sub2api 的 `Provider` 及其扩展接口（`payment/types.go:217-263`）。
-- **配置预留好，启用与否由各站点决定**：主站由负责人配置；二级站点由站长配置，钱直接进站长的账户。下文的配置项都按站点设置，清单见「后台配置」。
-- **主站的收款配置属于控制面**：商户号、密钥、网关地址、收款地址只有负责人能改，需要两步验证（见[运营的「控制面」](operations.md#控制面只有负责人能改的设置)）。网关地址与密钥同等对待：改成攻击者的地址，查单和退款就会把密钥发过去。
-- **二级站点的收款配置只有站长本人能改**，同样需要两步验证；每次修改都记入审计，并在同一个事务里给站长的账户排一条用户提醒（`site_payment_changed`，经既有 outbox 发邮件，见[账户的用户提醒](accounts.md#用户提醒与站内公告)）。
-- **站点之间隔离**：每个商户账户的密钥按[安全基线](../security.md#安全基线)分别信封加密存储，密文绑定"商户配置表、行、用途"，换行或换表都解不开。网关地址等非密配置明文存放以便后台展示，但它的哈希与密钥封在同一份密文里，取用时不一致就拒绝，所以绕过保存流程改掉网关地址，这个商户账户就用不了。密文和非密配置只有站点和平台范围能读，用户的充值页只读得到付款方式、手续费和限额。回调地址带商户账户的 ID，只用该账户自己的密钥验签。偏离 sub2api：它的商户配置现在以明文 JSON 存储（`payment/load_balancer.go:317-347` 的注释），我们的安全基线要求加密。
-- **卡号不经过我们**：信用卡只在 Stripe 托管的页面或组件里输入，我们的服务器不接触卡号。
-- **出站请求**：插件调用网关一律经平台的出站客户端（校验目标地址、不跟随重定向、必须有期限，见[平台的「出站 HTTP」](../../internal/platform/README.md#出站-http)），每次调用最多 10 秒，响应体最多 1 MiB（sub2api `payment/provider/easypay.go:29-30`、`:674`）。易支付的密钥会出现在请求的查询串里，所以支付的出站调用在日志、链路和错误信息里只记主机和路径，不记查询串和表单。
+- **三个概念**：**收款渠道**是一种收款协议的插件（代码里叫 `Kind`）；**商户账户**是站点在某个渠道上配置的一个收款账号，一个渠道可以配多个；**付款方式**是用户在充值页选的那一项（支付宝、微信、`usdt.tron`），一个商户账户可以支持多种。
+- **插件编译进程序**，在 `cmd/axiom` 按种类登记，不动态加载；新增渠道是加一个插件包，不改核心。每个插件实现同一个渠道接口，查单、关单、退款、查退款和"认我们的退款单号"按商户账户声明能力，见[模块 README 的「渠道接口」](../../internal/payments/README.md#渠道接口)。
+- **配置按站点**：主站由负责人配置，属于控制面，商户号、密钥、网关地址只有负责人能改且要两步验证（[运营的「控制面」](operations.md#控制面只有负责人能改的设置)）；网关地址与密钥同等对待，因为改成攻击者的地址，查单和退款就会把密钥发过去。二级站点只有站长本人能改，同样要两步验证，每次修改记审计并在同一事务里给站长排一条 `site_payment_changed` 提醒（[账户的用户提醒](accounts.md#用户提醒与站内公告)）。
+- **站点之间隔离**：每个商户账户的密钥按[安全基线](../security.md#安全基线)分别信封加密，密文绑定"表、行、用途"；非密配置明文存放供后台展示，但它的哈希封在同一份密文里，绕过保存流程改掉网关地址，这个商户账户就用不了。密文只有站点和平台范围能读，充值页只读得到付款方式、手续费和限额。回调地址带商户账户 ID，只用该账户的密钥验签。
+- **卡号不经过我们**：信用卡只在 Stripe 托管页面输入。
+- **出站请求**一律经平台出站客户端（[平台的「出站 HTTP」](../../internal/platform/README.md#出站-http)），每次最多 10 秒、响应体最多 1 MiB；日志、链路和错误里只记主机和路径，不记查询串和表单（易支付的密钥在查询串里），也不回显网关正文。
+- **错误分类**：只有渠道明确拒绝或确定未发送才是失败；超时、断连、5xx、HTML、验签失败和解析不了的应答都是"结果未知"，不得据此把订单或退款改成失败。
+- **后台"测试"**：对已保存的商户做一次认证的只读查询（查一个随机不存在的订单号，或易支付的 `act=query`），返回 accepted/failed/unsupported，不建单、不转钱、不返回渠道正文。
 
 #### 支付宝官方插件
 
-支付宝官方（电脑网站支付、手机网站支付、当面付）走开放平台网关，请求与应答都用 RSA2（SHA256withRSA）签名和验签。协议按支付宝开放平台的《签名专区》《异步通知验签》《电脑网站支付》《手机网站支付》《当面付》《统一收单交易查询/关闭/退款/退款查询》实现（2026-11-01 核对）；sub2api 用 smartwalle/alipay SDK 做同一件事（`backend/internal/payment/provider/alipay.go:81-96`、`:116-240`、`:389-436`、`:508-574`）。
+开放平台网关，RSA2（SHA256withRSA）签名与验签，只用标准库。付款币种固定 CNY。配置项与密钥名见[模块 README 的「支付宝配置与边界」](../../internal/payments/README.md#支付宝配置与边界)。
 
-| 配置项 | 含义 |
-|---|---|
-| `app_id` | 开放平台的应用 ID，必须是数字；回调里的 `app_id` 必须等于它 |
-| `seller_id` | 可省略；填了要求回调的 `seller_id` 与之一致 |
-| `gateway` | 可省略，默认 `https://openapi.alipay.com/gateway.do`；只接受无用户信息、查询串和片段的 HTTPS 地址；沙箱填 `https://openapi-sandbox.dl.alipaydev.com/gateway.do` |
-| 付款方式映射 `upstream` | 产品代码：`FAST_INSTANT_TRADE_PAY`（电脑网站支付）、`QUICK_WAP_WAY`（手机网站支付）、`FACE_TO_FACE_PAYMENT`（当面付，返回二维码） |
-| 密钥 `private_key` | 应用私钥，PKCS#8 或 PKCS#1 PEM，RSA 至少 2048 位，只给请求签名 |
-| 密钥 `public_key` | 支付宝公钥，PEM 或裸 base64，验回调与应答的签名 |
-| 密钥 `old_public_key` | 可省略；轮换支付宝公钥期间新旧两把都验签 |
-
-- **下单**：按付款方式映射选三个产品之一。电脑网站支付（`alipay.trade.page.pay`）和手机网站支付（`alipay.trade.wap.pay`）在本地拼参数、按参数名排序签名，返回网关 URL 让浏览器跳转；当面付（`alipay.trade.precreate`）向网关 POST，校验应答签名后把 `qr_code` 交给页面。公共参数是 `app_id`、`method`、`format=JSON`、`charset=utf-8`、`sign_type=RSA2`、`timestamp`（固定 UTC+8）、`version=1.0`、`notify_url`、需要时的 `return_url` 和 `biz_content`；`out_trade_no` 用订单 ID，`total_amount` 用付款币种的精确小数文本（不经过浮点），`subject` 是核心给的商品名。不按设备猜产品，也不在当面付失败后改试电脑网站支付：产品是商户账户的配置事实，猜错会多一次网络调用，还可能把一个已经建好的交易留在网关。
-- **验签（官方协议）**：回调是 `application/x-www-form-urlencoded` 的 POST。排除 `sign`、`sign_type` 和空值，其余参数按键名 ASCII 升序、以 `k=v` 用 `&` 连接成待验原文，用支付宝公钥做 SHA256withRSA 验签；`sign_type` 必须是 `RSA2`。请求签名同样排除 `sign`，但保留 `sign_type`。应答是 JSON，`sign` 是对 `alipay_<method>_response` 节点**原文字节**的签名：先取出节点原文验签，再解析，不能重新序列化。实现只用标准库 `crypto/rsa`，不引入第三方 SDK。
-- **回调绑定商户**：验签后 `app_id` 必须等于配置；配置了 `seller_id` 时 `seller_id` 也必须一致。`notify_type` 为空或 `trade_status_sync` 才算支付事件，其他类型回成功但不入账。金额取 `total_amount` 的十进制文本：缺失为 0（留给查单），非法或精度超限为 -1（待处理）；到账金额始终以随后查单的 `total_amount` 为准，回调金额只用于比较。
-- **查单**：`alipay.trade.query` 按我们的订单号查。`TRADE_SUCCESS`、`TRADE_FINISHED` 为已支付，`TRADE_CLOSED` 为已关闭，`WAIT_BUYER_PAY` 为待支付；应答签过名的 `ACQ.TRADE_NOT_EXIST` 当作还没建单（待支付），其他业务错误和网络错误都是结果未知。回显的 `out_trade_no` 必须与我们查的一致。补单、用户"我已付款"和每日对账都走这条查询。
-- **关单**：`alipay.trade.close`；`ACQ.TRADE_NOT_EXIST` 当作已经关掉，其他错误只记日志，由过期后的补查继续兜住。
-- **退款**：`alipay.trade.refund`，`out_request_no` 就是退款 ID（`rfd_…`），同一笔退款重发只退一次，所以声明 `RefundKey`；`refund_amount` 是精确小数，`refund_reason` 截到 256 字。`fund_change=Y` 为成功，`N` 为结果待查；成功应答必须提供 `refund_fee` 且与本次金额一致，缺失或不同都是结果未知。`ACQ.TRADE_NOT_EXIST`、`ACQ.TRADE_STATUS_ERROR`、`ACQ.REFUND_AMT_NOT_EQUAL_TOTAL`、`ACQ.TRADE_HAS_FINISHED` 是确定没退，其他业务错误（如 `ACQ.SYSTEM_ERROR`）是结果未知，不能解冻。查询用 `alipay.trade.fastpay.refund.query`：`refund_status=REFUND_SUCCESS` 为成功，成功时必须提供 `refund_amount` 且与本次金额一致，缺失或不同都是结果未知；`ACQ.TRADE_NOT_EXIST` 直接判失败；没有记录且距发送满 10 分钟为失败（sub2api 的宽限，`alipay.go:30-31`、`:548-573`）；其余待确认。发送时间由核心的 `RefundCall.SentAt` 给出。
-- **对账**：支付宝有账单下载，但核心还没有 `Statements` 接口和 `statement_lines` 表，本插件不声明 `CapStatements`。当前对账走核心的每日逐单复查（前一日的非终态、有变化及补查窗口内的订单再查一次）加现金、批次和用量的对平；"网关有、订单无"仍只能靠回调发现。账单逐笔比对和渠道手续费的实数随第一个声明 `Statements` 的插件交付，记在 [#310](https://github.com/TYCT-tyct/Axiom/issues/310) 的支付宝子项。
-- **后台配置与密钥**：`app_id`、`seller_id`、`gateway` 是商户身份，订单在途时不能改；私钥和公钥按现有商户配置信封加密（密文绑定表、行、用途，配置哈希封在同一份密文里），密钥只写不读，不进审计、幂等指纹、日志和错误信息。保存时 `Open` 做本地校验（密钥格式与位数、网关地址、币种），插件的 `validateMerchant` 校验产品代码；停用照常接受回调、查单和退款。后台"测试"按钮用 `alipay.trade.query` 查一个随机不存在的订单号，只验证应用凭证和签名，不建单、不转钱，也不返回网关原文；只有签过名的 `ACQ.TRADE_NOT_EXIST` 才算通过，无签名或错误签名的应答都失败。
-- **滚动发布**：没有迁移，也没有契约字段变化。新的 `kind = "alipay"` 对旧节点是不认识的插件：旧节点把这个商户账户当作不可用（充值页不选它并告警），它的回调在旧节点上回 503，支付宝按 4 分钟、10 分钟、10 分钟、1 小时、2 小时、6 小时、15 小时的节奏重试（共 8 次，约 25 小时），直到新节点处理；所以商户账户要等所有节点都升到含本插件的版本后再创建。旧页面的商户表单只认识 EasyPay：已有 EasyPay 商户照常读写，但它不能创建或轮换支付宝密钥，也不要在旧页面编辑支付宝商户；支付宝商户用新页面（或 API）创建，并等所有节点都升级后再建。
-- **失败、重试与晚到**：签名错、`app_id`/`seller_id` 不符一律拒绝且不写库；回调确认依赖同一次查单，查单失败回 502 让支付宝重试，已入账的精确重放不再查；回调丢失由每分钟的补单查询补上，过期后仍在补查窗口（默认 7 天）内继续查；超过"过期后自动入账期限"的到账进待处理。出站请求都经平台出站客户端，每次最多 10 秒、响应体最多 1 MiB；错误只带固定上下文和支付宝的错误码，不回显订单、金额或签名。
+- **下单**：付款方式的 `upstream` 选产品：`FAST_INSTANT_TRADE_PAY`（电脑网站，`alipay.trade.page.pay`）、`QUICK_WAP_WAY`（手机网站，`alipay.trade.wap.pay`）在本地签名拼出网关 URL 让浏览器跳转；`FACE_TO_FACE_PAYMENT`（当面付，`alipay.trade.precreate`）POST 后验应答签名、把 `qr_code` 交给页面。`out_trade_no` 是订单 ID，`total_amount` 是精确小数文本，`timestamp` 固定 UTC+8。不按设备猜产品，失败后也不改试另一种。
+- **签名**：排除 `sign`（回调另排除 `sign_type`）和空值，按键名 ASCII 升序以 `k=v&` 拼接；回调 `sign_type` 必须是 `RSA2`。JSON 应答的签名针对 `alipay_<method>_response` 节点的原文字节，先取原文验签再解析；无签名的 `error_response` 是结果未知。轮换期间新旧支付宝公钥都验，请求只用当前私钥。
+- **回调**：POST 表单；`app_id` 必须等于配置，配了 `seller_id` 也必须一致；`notify_type` 为空或 `trade_status_sync` 才是支付事件，其他回成功不入账。
+- **查单** `alipay.trade.query`：`TRADE_SUCCESS`、`TRADE_FINISHED` 已支付，`TRADE_CLOSED` 已关闭，`WAIT_BUYER_PAY` 和签名的 `ACQ.TRADE_NOT_EXIST` 待支付，回显的 `out_trade_no` 必须一致。**关单** `alipay.trade.close`：`ACQ.TRADE_NOT_EXIST` 当作已关。
+- **退款** `alipay.trade.refund`：`out_request_no` 是退款 ID，所以声明认退款单号；`fund_change=Y` 成功、`N` 待查，成功必须带与本次金额相同的 `refund_fee`，`refund_reason` 截到 256 字。`ACQ.TRADE_NOT_EXIST`、`ACQ.TRADE_STATUS_ERROR`、`ACQ.REFUND_AMT_NOT_EQUAL_TOTAL`、`ACQ.TRADE_HAS_FINISHED` 是确定没退，其他业务错误是结果未知。**查退款** `alipay.trade.fastpay.refund.query`：`REFUND_SUCCESS` 且 `refund_amount` 一致为成功；`ACQ.TRADE_NOT_EXIST` 失败；没有记录且距发送（`RefundCall.SentAt`）满 10 分钟为失败，否则待确认。
+- **商户测试**：只有签名的 `ACQ.TRADE_NOT_EXIST` 算通过。保存只做本地校验，不做网络探测。
 
 #### 易支付协议插件
 
-易支付没有统一标准，彩虹易支付及其分支、Epusdt、EzPay 等在细节上各不相同。插件只实现协议，差异做成商户账户的预设和配置项，不新增渠道种类：
+易支付没有统一标准，插件只实现协议，各分支的差异做成商户账户的配置和预设（通用、`epusdt`、`ezpay`），不新增渠道种类。配置字段见[模块 README 的「易支付配置与边界」](../../internal/payments/README.md#易支付配置与边界)。
 
-| 配置项 | 含义 | 来源 |
-|---|---|---|
-| 预设 | 空为通用易支付；`epusdt` 固定跳转、CNY/USD、`usdt.tron`；`ezpay` 固定跳转、USD、`usdt.tron` 到 `usdt_trc20`、GET 查单和额外回调字段 | [模块 README 的「Epusdt 预设」](../../internal/payments/README.md#epusdt-预设与兼容门槛)与[「EzPay 预设」](../../internal/payments/README.md#ezpay-预设) |
-| 网关地址 | 只接受 HTTPS，去掉 `submit.php`、`mapi.php`、`api.php` 后缀后保存 | sub2api `easypay.go:72-96` |
-| 商户号 `pid`、密钥 `key` | 密钥加密保存 | `easypay.go:54-59` |
-| 付款币种 | 通用易支付的查单不带币种，币种只来自这项配置；Epusdt 显式传 CNY/USD，EzPay 只收 USD，回调必须带 `currency`；缺失时进入待处理，币种不是 USD 时按回调币种和金额交给核心转待处理，无法解析的金额也转待处理 | 偏离 sub2api（它按全站币种处理）：配错币种会让每笔入账差一个汇率 |
-| 下单方式 | 跳转（`submit.php`，本地签名拼 URL）或接口（`mapi.php`，返回支付链接或二维码） | `easypay.go:128-214` |
-| 付款方式映射 | 本站付款方式 → 网关的 `type`（如 `alipay`、`wxpay`、`usdt.tron`），可增删 | `easypay.go:271-304` |
-| 通道号 `cid` | 可按付款方式分别设置 | `easypay.go:637-648` |
-| 签名方式 | 目前只有 MD5。通用与 Epusdt 用参数到达时的值、不再重新编码：非空参数按键名排序、`k=v` 用 `&` 连接、末尾接密钥、取 MD5 小写十六进制；EzPay 创建按它的 RFC 3986 路径（先解码、再编码、排序），回调仍用原始值；比较用常量时间 | `easypay.go:681-704`、EzPay `internal/util/sign.go:42` 与 `:269` |
-| 关单 | 支持与否；仅给实测支持 `api.php?act=close` 的网关开启，商户凭证及我们的订单号同时放在 URL 和表单里 | 插件能力按商户声明，不假定所有易支付分支都支持 |
-| 查单 | 支持与否；通用与 Epusdt 把 `act=order` 的参数同时放在 URL 和表单里（彩虹易支付只读 URL），EzPay 必须用 GET；错误信息里去掉带密钥的 URL | `easypay.go:332-352`、EzPay `internal/handler/epay.go:475` |
-| 退款 | 支持与否；先按我们的订单号退，网关明确回"订单不存在"再按网关订单号退。易支付没有退款单号，不声明"认我们的退款单号"，退款结果未知时不再发（见「退款」） | `easypay.go:508-574` |
-
-配置 JSON 的字段、默认值、密钥名称和能力限制见[模块 README 的「易支付配置与边界」](../../internal/payments/README.md#易支付配置与边界)。
-
-- **回调参数白名单**：只接受 `pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，出现别的参数一律拒绝；除商品名外，参数值含 `&` 或 `=` 也拒绝。EzPay 预设额外允许 `currency`、`pay_currency`、`pay_amount`，三者同样参与签名；其他额外字段仍拒绝。签名串把值直接拼接、不转义，下单参数里嵌着的 `trade_status=TRADE_SUCCESS` 能被重放成一条伪造的到账通知，白名单把这一类整体堵住（`easypay.go:464-506`、`:706-727`，sub2api issue #7881）。
-- **回调绑定商户**：验签通过后 `pid` 必须等于这个商户账户的商户号（`easypay.go:491-495`）。
-- **返回的支付链接**：以单个 `/` 开头时按网关地址补全（`easypay.go:216-255`）；补全后和带协议的链接一样，只放行 `https` 和明确列出的 `alipays://`、`weixin://`、`wxp://`，以 `//` 开头的和其他协议（`javascript:`、`data:`、`http:`）一律当作下单失败。二维码内容同样检查。偏离 sub2api 的原样保留：它把 `//evil.com/x` 当作相对链接补全成别的主机，`javascript:` 原样交给浏览器。
-- **返回地址**由服务端生成，不接受浏览器传入的地址：取请求的控制台域名登记的 origin（不是请求头里的 `Host` 或 `Origin`）加 `/console/balance`（控制台挂载在 `/console`，余额页）。订单号下单时才有，地址里放不下它，页面回来后用订单接口取订单；控制台域名登记的不是 https（本机开发）时不能下单。
-- **宽松读数**：查单结果里 PHP 常把整数写成字符串，`code`、`status`、`money` 都按"字符串或数字"读；明确的失败码优先于看起来已支付的状态；回显的订单号与我们的不同就报错（`easypay.go:354-407`）。
-- **金额**：`money` 按十进制文本精确解析成付款币种的最小单位，末尾的零不算（Epusdt 回 `100.0000`），超出精度的非零小数和整数溢出保留为无效付款，进入待处理；仅缺失或空金额留给补查，非空的零金额和格式非法（如千分位、指数）同样进入待处理；不用 sub2api 的浮点容差 0.005（`easypay.go:32`）。
+- **网关地址**只接受 HTTPS，保存时去掉 `submit.php`、`mapi.php`、`api.php` 后缀。**付款币种**只来自商户配置（通用易支付的查单不带币种），配错会让每笔入账差一个汇率。
+- **下单方式**：跳转（`submit.php`，本地签名拼 URL）或接口（`mapi.php`，返回支付链接或二维码）；付款方式映射到网关的 `type`，通道号 `cid` 可按付款方式设置。
+- **签名**：只有 MD5。用参数到达时的值、不重新编码：非空参数按键名排序、`k=v&` 拼接、末尾接密钥、取小写十六进制，常量时间比较。
+- **回调参数白名单**：只接受 `pid`、`trade_no`、`out_trade_no`、`type`、`name`、`money`、`trade_status`、`param`、`sign`、`sign_type`，多出的参数、重复字段一律拒绝，除商品名外值含 `&` 或 `=` 也拒绝：签名串不转义，下单参数里嵌着的 `trade_status=TRADE_SUCCESS` 能被重放成伪造的到账通知。验签后 `pid` 必须等于商户号。GET 只读查询串，POST 只读表单并拒绝非空查询串。
+- **返回的支付链接**：以单个 `/` 开头的按网关地址补全；补全后只放行 `https` 和 `alipays://`、`weixin://`、`wxp://`，`//` 开头和其他协议（`javascript:`、`data:`、`http:`）一律当作下单失败。二维码内容同样检查。这条由核心对所有渠道执行。
+- **查单** `act=order`：参数同时放在 URL 和表单里（彩虹易支付只读 URL）；`code`、`status`、`money` 按"字符串或数字"读，明确的失败码优先于看起来已支付的状态，回显的订单号不同就报错。**关单** `act=close` 只给实测支持的网关开启。
+- **退款** `act=refund`：先按我们的订单号退，有效的 2xx JSON 明确回"订单不存在"再按网关订单号退；网络错误、非 2xx 或解析不了的应答不触发第二次。易支付没有退款单号，不声明认退款单号，也不声明查退款。
+- **金额**：`money` 精确解析成最小单位，末尾的零不算（`100.0000` 等于 10000 分）；缺失或空金额留给补查；非空的零、格式非法（千分位、指数、分数、符号）、超出精度和溢出都是无效付款，进待处理；没有容差。
+- **商户测试**用带认证的 `act=query`，只取状态码，不记录应答（它可能带回密钥和结算信息）。
+- **Epusdt 预设**：固定跳转、强制查单、`usdt.tron` 映射、CNY/USD、PID 是无前导零的正 int64，签名带小写法币 `currency`。已发布版本都没有带商户身份的查单接口，所以只能保存为停用（见「加密货币」）。
+- **EzPay 预设**：固定跳转、强制查单、只收 USD，`usdt.tron` 映射到 `usdt_trc20`；创建签名按它的 RFC 3986 路径（先解码、再编码、排序），回调仍用原始值；查单必须 GET；回调白名单另加 `currency`、`pay_currency`、`pay_amount`，三者参与签名。回调缺 `currency` 或 `type` 不是 `usdt_trc20` 时金额记为无效、进待处理；币种不是 USD 时按回调的币种交给核心，核心按币种不符转待处理。查单 `code=-1` 且明确"订单不存在"按待支付，其他 `code=-1` 是确定拒绝。只有查单能力，退款只能线下。
+- **保存为启用时探测**（两个预设，包括更新和重新启用）：在数据库事务之外用随机不存在的订单号查单，只有明确"订单不存在"才通过；404、HTML、超时、密钥错误和不明确的 JSON 都拒绝，不写商户。写事务再取商户身份排他锁、复核修订号和在途身份约束，并发修改返回过期修订。保存为停用只做本地校验，网关故障挡不住止损。
 
 #### 微信支付官方插件
 
-微信支付官方走 API v3：请求用商户 API 证书私钥做 SHA256withRSA 签名，应答和回调都用微信支付平台证书或微信支付公钥验签，回调正文再用 APIv3 密钥做 AES-256-GCM 解密。协议按微信支付商户文档的《签名认证》《Native 下单》《H5 下单》《微信支付商户订单号查询订单》《关闭订单》《申请退款》《查询单笔退款》《支付成功回调通知》《如何解密回调报文》（2026-11-01 核对）：签名串是 `方法\nURL\n时间戳\n随机串\n报文主体\n`，应答和回调的验签串是 `时间戳\n随机串\n报文主体\n`，`Wechatpay-Serial` 选中平台证书序列号或 `PUB_KEY_ID_` 开头的微信支付公钥 ID。sub2api 用官方 `wechatpay-go` SDK 做同一件事（`backend/internal/payment/provider/wxpay.go:88-168`、`:239-280`、`:392-423`、`:425-456`、`:458-521`、`:550-563`）；本插件只用标准库，不引入 SDK。
+API v3，`Kind` 是 `wechatpay`（付款方式仍可叫 `wxpay`）。请求用商户 API 证书私钥做 SHA256withRSA，应答和回调用平台证书或微信支付公钥验签，回调正文用 APIv3 密钥做 AES-256-GCM 解密；只用标准库。付款币种必须是 CNY。配置见[模块 README 的「微信支付配置与边界」](../../internal/payments/README.md#微信支付配置与边界)。
 
-| 配置项 | 含义 |
-|---|---|
-| `app_id` | 公众号或应用 ID；回调里的 `appid` 必须等于它 |
-| `mch_id` | 直连商户号；应答和回调里的 `mchid` 必须等于它 |
-| `serial_no` | 商户 API 证书序列号，放请求的 `serial_no`；16–64 位十六进制 |
-| `platform_public_key_id` | 用微信支付公钥验签时必填，值就是 `Wechatpay-Serial`，以 `PUB_KEY_ID_` 开头；用平台证书时留空 |
-| `old_platform_public_key_id` | 轮换期间的旧微信支付公钥 ID，可省略 |
-| `gateway` | 可省略，默认 `https://api.mch.weixin.qq.com`；只接受无用户信息、查询串和片段的 HTTPS 地址 |
-| 密钥 `private_key` | 商户 API 证书私钥，PKCS#8 或 PKCS#1 PEM，RSA 至少 2048 位，只给请求签名 |
-| 密钥 `api_v3_key` | APIv3 密钥，恰好 32 字节，解密回调 |
-| 密钥 `platform_certificate` | 微信支付平台证书 PEM 或裸 base64 DER，验签；序列号从证书本身取 |
-| 密钥 `platform_public_key` | 微信支付公钥 PEM 或裸 base64，验签；ID 来自 `platform_public_key_id` |
-| 密钥 `old_platform_certificate`、`old_platform_public_key` | 轮换期间的旧平台证书或公钥，可省略 |
-
-- **下单**：付款方式的 `upstream` 选 `native` 或 `h5`，对应 Native 扫码和 H5 跳转；不按设备猜产品，也不在一种失败后改试另一种。Native 向 `/v3/pay/transactions/native` POST，返回 `code_url`（`weixin://wxpay/bizpayurl?…`），页面把它画成二维码；H5 向 `/v3/pay/transactions/h5` POST，`scene_info.payer_client_ip` 取服务端解析的客户端 IP，`h5_info.type` 固定 `Wap`，返回的 `h5_url` 末尾追加 URL 编码的 `redirect_url`（服务端生成的返回地址），页面直接打开。公共参数是 `appid`、`mchid`、`description`（截到 127 字）、`out_trade_no`（订单 ID）、`notify_url`，金额是 `{total: 最小单位整数, currency: "CNY"}`。签过名的 4xx（429 除外）是明确拒绝，返回 `*Rejected`，核心把订单置为失败并退掉日用量；429、5xx、超时、断连和验签失败仍是结果未知。console 没有 openid，所以不做 JSAPI（sub2api 的 JSAPI 分支见 `wxpay.go:202-236`）。
-- **请求签名与应答验签**：每个请求带 `Authorization: WECHATPAY2-SHA256-RSA2048 mchid="…",nonce_str="…",signature="…",timestamp="…",serial_no="…"`，`signature` 是商户私钥对五行签名串的 SHA256withRSA。应答（包括 4xx、5xx 的错误体）在信任任何字段前，用 `Wechatpay-Serial` 对应的平台证书或公钥验 `时间戳\n随机串\n正文\n`；204 无正文不验。没配置的序列号、缺头、坏签名一律当作结果未知，不解析正文（微信支付会发 `WECHATPAY/SIGNTEST/` 开头的探测签名，按同样的规则验不过即拒绝）。
-- **回调验签与解密**：回调是 `application/json` 的 POST，不能带查询串。先按上一条验签，并检查 `Wechatpay-Timestamp` 距现在不超过 5 分钟；再要求 `event_type = TRANSACTION.SUCCESS`、`resource_type = encrypt-resource`、`algorithm = AEAD_AES_256_GCM`、`original_type = transaction`，用 APIv3 密钥、`resource.nonce`、`resource.associated_data` 对 base64 的 `ciphertext` 做 AES-256-GCM 解密。明文里的 `mchid`、`appid` 必须与配置一致；`trade_state = SUCCESS` 才是有款待入账；金额取 `amount.total` 的整数分，缺失为 0（留给查单），非法或币种不是 CNY 为 -1（待处理）。其他签名正确的事件类型回成功但不碰订单。与支付无关的通知不查单。
-- **查单**：`GET /v3/pay/transactions/out-trade-no/{out_trade_no}?mchid=…`。`SUCCESS` 和 `REFUND` 为已支付（部分退款后微信把交易状态改成 `REFUND`，钱已经收过），`NOTPAY`、`USERPAYING` 为待支付，`CLOSED`、`REVOKED`、`PAYERROR` 为已关闭；其他状态是结果未知。回显的 `out_trade_no` 必须与我们查的一致，`mchid`、`appid` 也必须与配置一致；平台签名只证明应答来自微信，不能证明它属于这个商户，缺失或不同都按结果未知，绝不能据此入账。`amount.total` 是整数分，币种不是 CNY 时保留为无效付款。签名正确的 404 `ORDER_NOT_EXIST` 当作还没建单（待支付），其他错误是结果未知。补单、用户"我已付款"和每日复查都走这条查询。
-- **关单**：`POST /v3/pay/transactions/out-trade-no/{out_trade_no}/close`，正文 `{"mchid":"…"}`，成功是 204 无正文。其他错误只返回给核心记日志，不改本地状态；订单已经不能在本站付款，渠道那边仍能付的由过期后的补查兜住。
-- **退款**：微信要求 `amount.total` 是原支付交易的总金额，而 `RefundCall` 只有本次退款额，所以先按订单号查一次交易取 `amount.total`（sub2api 同样先查，`wxpay.go:458-470`、`:535-548`），再 `POST /v3/refund/domestic/refunds`，正文是 `out_trade_no`、`out_refund_no`（我们的退款 ID `rfd_…`）、`reason`（截到 80 字节）、`amount: {refund, total, currency: "CNY"}`。`out_refund_no` 是幂等键，同一笔退款重发只退一次，所以声明 `RefundKey`；两次调用共用核心给的 5 秒退款期限，退款 POST 发出后的超时是结果未知。查单请求本身失败（超时、5xx、验签失败）、查单显示未支付、已关闭或拿不到原单金额时都还没发退款请求，按明确拒绝处理，让核心解冻并由用户重试，不能留成待确认——之后按 `rfd_…` 查退款只会得到 404。只有退款 POST 已经发出后的超时、5xx、429 和无法解析的应答才是结果未知。200 应答里 `out_refund_no`、`out_trade_no`、`amount.refund`、`amount.total` 必须与本次请求和查到的原单金额一致；`status = SUCCESS` 为成功，`PROCESSING` 为待确认，`CLOSED` 按微信文档是退款失败，`ABNORMAL`（退款到银行卡失败，需商户平台或异常退款接口人工处理）保持待确认，不自动解冻。签过名的 4xx 一般是明确拒绝（未受理），但 429 `FREQUENCY_LIMITED` 的文档说退款单可能已受理、要求查单确认，所以这一种和退款 POST 的 5xx、超时、断连、解析失败一样是结果未知。
-- **查退款**：`GET /v3/refund/domestic/refunds/{out_refund_no}`，接口只收商户退款单号，所以始终查 `rfd_…`；`ProviderRef` 存微信退款单号，只用于展示和人工核对。状态映射同上；签名正确的 404 `RESOURCE_NOT_EXISTS` 保持待确认：它可能是申请请求没到微信，也可能是刚到还没可查，把它当失败会解冻一笔仍可能被退出去的钱。超过 24 小时仍未知的退款由核心记待处理并转人工（见「退款」）。
-- **对账**：微信支付有交易账单和资金账单，但核心还没有 `Statements` 接口和 `statement_lines` 表，本插件不声明 `CapStatements`。当前走核心的每日逐单复查（前一日的非终态、有变化及补查窗口内的订单再查一次）加现金、批次和用量的对平；"网关有、订单无"仍只能靠回调发现，账单逐笔比对和渠道手续费的实数随第一个声明 `Statements` 的插件交付，记在 [#310](https://github.com/TYCT-tyct/Axiom/issues/310) 的微信子项。
-- **后台配置与密钥**：配置 JSON 存 `app_id`、`mch_id`、`serial_no`、`platform_public_key_id`、`old_platform_public_key_id`、`gateway`；密钥存 `private_key`、`api_v3_key`、平台证书或公钥及旧的那一份，未知名称拒绝保存。`Open` 只做本地校验：证书序列号从证书算、公钥 ID 必须配公钥、APIv3 密钥恰好 32 字节、私钥和公钥能解析且 RSA 至少 2048 位、付款币种必须是 CNY。保存不做网络探测；后台的"测试"用配置做一次 `GET` 查随机不存在的订单号，只有签名正确的 `ORDER_NOT_EXIST` 算 accepted，其他是 failed 或 unsupported，不建单、不转钱、不返回渠道正文。保存和测试都不把私钥、APIv3 密钥、证书或公钥写进响应、审计、日志或错误信息。
-- **滚动发布**：没有迁移和契约变化。旧节点不认识 `kind = "wechatpay"`，会把这个商户账户当作不可用：不选中它下单，回调返回 503；微信支付按 15s/15s/30s/3m/10m/20m/30m/30m/30m/60m/3h/3h/3h/6h/6h 重试，总计约 24 小时 4 分钟（[支付结果通知](https://pay.weixin.qq.com/doc/global/v3/zh/4012354798)），所以要在所有节点都运行新版本之后再创建微信商户账户。新页面读旧节点时，`kind` 只是不认识的字符串，商户列表照常显示，测试按钮回 unsupported；没有新增响应字段。
-- **失败、重试与晚到**：下单超时是结果未知，订单留在待支付，核心的轮询按订单号查单并关单；丢回调由同一条查询补上；订单过期后才到账的，核心按既有的晚付和宽限期规则入账；重复或乱序回调由核心的订单行锁和 `order_payments` 唯一性挡住；退款未知时冻结保留，查询收敛前不动账本，超过 24 小时转人工。钱怎么走：用户付给微信，现金进商户账户；核心只在查单确认后写付费批次和账本；退款成功时微信把现金原路退回用户，核心才结算冻结并写退款分录；微信自己的渠道手续费从商户结算款里扣，和本设计里用户付的渠道手续费是两笔账，前者的实数等账单接入后再对。
+- **下单**：`upstream` 选 `native`（返回 `weixin://` 的 `code_url`，页面画二维码）或 `h5`（带服务端解析的客户端 IP 和 `h5_info.type = Wap`，返回的 `h5_url` 追加 URL 编码的返回地址）。`description` 截到 127 字，金额是整数分。不做 JSAPI（控制台没有 openid），不按设备猜产品。签名的 4xx（429 除外）是明确拒绝；429、5xx、超时和验签失败是结果未知。
+- **验签**：请求签名串是 `方法\nURL\n时间戳\n随机串\n正文\n`；应答（含错误体）和回调先按 `Wechatpay-Serial` 选公钥验 `时间戳\n随机串\n正文\n`，再解析；204 无正文不验；未配置的序列号、缺头、坏签名都是结果未知。证书模式和公钥模式都支持，轮换期间新旧各留一份。
+- **回调**：`application/json` 的 POST、无查询串，时间戳距现在不超过 5 分钟；要求 `TRANSACTION.SUCCESS`、`encrypt-resource`、`AEAD_AES_256_GCM`、`transaction`；明文的 `mchid`、`appid` 必须与配置一致，`trade_state = SUCCESS` 才待入账。金额缺失为 0（留给查单），非法或币种不是 CNY 为无效。其他签名正确的事件回成功不碰订单。
+- **查单**：`SUCCESS`、`REFUND` 已支付，`NOTPAY`、`USERPAYING` 和签名的 404 `ORDER_NOT_EXIST` 待支付，`CLOSED`、`REVOKED`、`PAYERROR` 已关闭，其他未知；回显的 `out_trade_no`、`mchid`、`appid` 缺失或不同都是结果未知（平台签名不能证明应答属于这个商户）。**关单**成功是 204，失败只记日志。
+- **退款**：微信要求原交易总额，先查单取 `amount.total`，再以退款 ID 为 `out_refund_no` 退款（`reason` 截到 80 字节，查单与退款共用核心的 5 秒期限）。查单失败、未支付、已关闭或拿不到原额时退款还没发出，按明确拒绝让核心解冻。退款 POST 发出后的超时、5xx、429（`FREQUENCY_LIMITED` 可能已受理）和坏应答是结果未知。应答回显的单号和金额必须一致。`SUCCESS` 成功，`CLOSED` 失败，`PROCESSING`、`ABNORMAL` 待确认。**查退款**只按退款 ID 查，签名的 404 `RESOURCE_NOT_EXISTS` 待确认；`ProviderRef` 存微信退款单号供展示。
+- **商户测试**只认签名的 `ORDER_NOT_EXIST`；保存不做网络探测。
 
 #### Stripe 插件
 
-`Stripe{}` 只接 Stripe Checkout 的托管页面（`mode=payment`）：下单返回 Stripe 的 `https://checkout.stripe.com/...`，用户在 Stripe 的页面里输入卡号，我们的服务器、日志、订单事件和数据库都不接触卡号、CVC 或支付凭证。不用 Payment Element、自定义表单或 `client_secret`，也不保存客户的姓名、邮箱和地址；Stripe 的客户对象不由我们创建。卡号和 3D 验证都在 Stripe 那边，3D 验证与 Radar 在 Stripe 后台开启。
+只接 Checkout 托管页面（`mode=payment`）：不用 Payment Element 或 `client_secret`，不保存客户的姓名、邮箱和地址，不创建 Stripe 客户对象；3D 验证和 Radar 在 Stripe 后台开启。配置见[模块 README 的「Stripe 配置与边界」](../../internal/payments/README.md#stripe-配置与边界)。保存时调余额接口做一次只读探测（受限密钥要授予 checkout session、refund 的读写和 `balance_read`）；webhook 密钥对不对要到第一条回调才知道，验签失败会记日志并告警。
 
-**商户配置**：`kind` 是 `stripe`，`settings` 是空对象 `{}`（Stripe 没有需要明文展示的非密配置；以后新增字段仍由插件严格校验），付款币种来自商户账户的 `currency`。`secrets` 只接受三个名字：
-
-| 密钥 | 含义 |
-|---|---|
-| `secret_key` | Stripe 的 API 密钥，`sk_` 或 `rk_` 开头；下单、查单、关单、退款和商户测试都用它 |
-| `webhook_secret` | Stripe 给的签名密钥，`whsec_` 开头；回调验签用 |
-| `old_webhook_secret` | 轮换期间旧的签名密钥；当前密钥验不过时再用它试一次，为空表示没有轮换 |
-
-不接收 `old_secret_key`：API 密钥轮换后旧密钥不再用于任何请求，留着只会扩大凭证的使用面。`secret_key` 和 `webhook_secret` 在保存时必须能打开配置：前者非空且前缀正确，后者非空且前缀正确；其他密钥名一律拒绝保存。保存商户时用 Stripe 的余额接口做一次只读探测（需要 `balance_read`；标准密钥默认有），不创建订单、不动钱；受限密钥要把 checkout session 的读写、refund 的读写和 `balance_read` 一并授予。探测只能证明 API 密钥可用，不能证明 webhook 密钥正确——后者要到第一条真实回调才会暴露，验签失败会记日志并告警。
-
-**回调地址由管理员在 Stripe 后台登记**：每个商户账户的回调地址是 `https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，和易支付同一个 `NotifyPath`。Stripe 的 webhook 是按端点配置的，不能按 Checkout Session 单独指定，所以 `CreateRequest.NotifyURL` 在 Stripe 这里不参与下单，也不由程序自动登记；管理员按固定格式在 Stripe 后台填写，这是与易支付“下单时由我们生成回调地址”的唯一一处不同。Stripe 端点要订阅这些事件（订阅 `*` 也可以，插件会忽略不认识的事件）：
-
-- `checkout.session.completed`
-- `checkout.session.async_payment_succeeded`
-- `checkout.session.async_payment_failed`
-- `checkout.session.expired`
-- `charge.dispute.created`
-- `charge.dispute.closed`
-- `charge.dispute.funds_withdrawn`
-- `charge.dispute.funds_reinstated`
-
-**下单**：一个订单行，价格数据内联（`price_data`），金额就是订单的总额（付款币种的最小单位），币种转小写；`quantity=1`；`client_reference_id` 和 Session 的 `metadata.order` 都写订单 ID，`metadata.merchant` 写商户账户 ID；`payment_intent_data.metadata` 同样写这两个，拒付事件才能从 PaymentIntent 找回订单。`success_url` 与 `cancel_url` 都取核心交来的、服务端生成的 `ReturnURL`（控制台余额页），不接受浏览器传来的地址；`mode=payment`，付款方式由站点的付款方式行的 `upstream` 决定（`card`、`alipay`、`wechat_pay`、`link`，`wechat_pay` 在 Checkout 里同时设 `payment_method_options.wechat_pay.client=web`），保存商户时校验 `upstream` 在这四个之内。默认只用 `card`；其他方式要等真实网关实测后再开放。下单的幂等键是 `cs_<订单 ID>`，第一次调用超时但 Stripe 已建单时，重试拿到同一个 Session，不会建两个。`expires_at` 取订单有效期，但 Stripe 要求至少 30 分钟、至多 24 小时：比 30 分钟短的按 30 分钟、比 24 小时长的按 24 小时减一分钟，订单自己的有效期仍然按本地时间执行；Session 比订单晚关时，用户在过期后仍可能付款，走「过期后到账」。返回的 `Checkout.TradeNo` 是 Session ID，`PayURL` 是 Session 的托管页地址；`ClientSecret` 留空。
-
-**回调**：只接受 POST，读取 `Stripe-Signature` 头，用官方 Go SDK 的 `webhook.ConstructEventWithOptions` 验签，`IgnoreAPIVersionMismatch=true`（SDK 固定的 API 版本与端点的版本可以不同），时间戳容差用 SDK 默认的 300 秒；当前 `webhook_secret` 验不过且配置了 `old_webhook_secret` 时再用旧密钥试一次。签名头缺失、格式错、时间戳过期或两个密钥都不匹配一律返回 400，不写库。验签通过后按事件类型解析 `event.Data.Raw`；事件类型不认识、或付款事件与当前订单无关（例如已完成的 Session 又收到 `expired`）返回 `Relevant=false`，照常回 200，避免 Stripe 对无关事件无限重试。
+- **回调地址由管理员在 Stripe 后台登记**：`https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，Stripe 的端点不能按 Session 指定，下单时的 `NotifyURL` 不用。订阅 `checkout.session.completed`、`async_payment_succeeded`、`async_payment_failed`、`expired` 和 `charge.dispute.created`、`closed`、`funds_withdrawn`、`funds_reinstated`（订阅 `*` 也可以）。
+- **下单**：一个订单行，内联 `price_data`，金额是订单总额（最小单位），币种小写，`quantity=1`；`client_reference_id` 和 `metadata.order` 写订单 ID，`metadata.merchant` 写商户账户 ID，`payment_intent_data.metadata` 也写这两项。`success_url`、`cancel_url` 都是服务端生成的返回地址。付款方式取 `upstream`（`card`、`alipay`、`wechat_pay`、`link`，保存时校验，空为 `card`；`wechat_pay` 另设 `client=web`）。幂等键 `cs_<订单 ID>`。`expires_at` 夹在 Stripe 的 30 分钟到 24 小时减一分钟之间，订单自己的有效期仍按本地执行，Session 比订单晚关时过期后付的款走「过期后才到账」。4xx 是确定拒绝，其余错误是结果未知；SDK 不重试。
+- **回调验签**用官方 SDK（`IgnoreAPIVersionMismatch`，容差 300 秒），当前 `webhook_secret` 不过再试 `old_webhook_secret`；失败回 400、不写库。不认识的事件和与订单无关的事件回 200。
 
 | 事件 | 处理 |
 |---|---|
-| `checkout.session.completed` 且 `payment_status=paid`、`status=complete` | 付款成功：`Order` 取 `client_reference_id`（缺失时取 `metadata.order`），`TradeNo` 取 Session 的 PaymentIntent ID，`Paid` 取 `amount_total`/`currency`，`Raw` 只写事件 ID、类型和 Session ID |
-| `checkout.session.completed` 但 `payment_status` 不是 `paid` | 不相关：异步付款方式还没落定，等 `async_payment_succeeded` 或 `async_payment_failed` |
-| `checkout.session.async_payment_succeeded` | 与上一行相同，按付款成功处理 |
-| `checkout.session.async_payment_failed` | 相关但失败：只记订单事件，不改订单状态；订单仍可由补单/过期处理，晚到的成功回调仍能入账 |
-| `checkout.session.expired` | 相关但失败：只记事件，不改状态；本地过期任务负责过期 |
-| `charge.dispute.created` / `charge.dispute.funds_withdrawn` | 拒付开始，见下文 |
-| `charge.dispute.closed` / `charge.dispute.funds_reinstated` | 拒付结论，见下文 |
-| 其他 | 不相关，回 200 |
+| `completed` 且 `status=complete`、`payment_status=paid`；`async_payment_succeeded` | 付款成功：订单取 `client_reference_id`（缺失取 `metadata.order`），交易号是 PaymentIntent ID，金额取 `amount_total`/`currency` |
+| `completed` 但未付 | 不相关，等异步结果 |
+| `async_payment_failed`、`expired` | 只记订单事件，不改状态；晚到的成功仍能入账 |
+| `charge.dispute.*` | 拒付，见下 |
 
-付款事件的 `TradeNo` 用 PaymentIntent ID 而不是 Session ID：退款和拒付都以 PaymentIntent 为入口，`order_payments.trade_no` 因此记的是 PaymentIntent，`checkout.session.completed` 与 `async_payment_succeeded` 对同一笔付款给出同一个号，重复回调可以精确去重。Stripe 的 Session 查询结果也返回 PaymentIntent ID；查单确认后核心用查单金额入账，和通知金额不一致时转待处理，规则与易支付相同。`checkout.session.expired` 和 `async_payment_failed` 不带金额，`Paid` 留零；核心只记事件。
-
-**拒付**：`charge.dispute.*` 事件里的 Dispute 有 `id`、`payment_intent`、`amount`、`currency`、`reason`、`status`，`charge.metadata.order` 可能带订单 ID。插件把状态归成四种动作：`needs_response`、`under_review` 和 `funds_withdrawn` 是“已扣款”，`won` 和 `funds_reinstated` 是“胜诉冲正”，`lost` 是“败诉确认”，`warning_*`、`prevented`、`warning_closed` 是“只记录、不动钱”。核心按 `order_payments` 的 `(merchant_id, trade_no=PaymentIntent)` 找订单；找不到就记 `dispute_unmatched` 待处理并告警，回 200。找到订单后在一张新表 `payments.order_disputes` 里按 `(商户账户, 渠道, Dispute ID)` 幂等记一行，状态是 `recorded`（只记录）、`applied`（已扣钱）、`reversed`（已冲正）。
-
-只有同时满足下面全部条件才自动扣钱：
-
-1. 订单已支付、存在付费额度批次，且没有第二笔拒付已经扣过；
-2. 没有在途退款（冻结、发送中、待确认），否则拒付和退款可能对同一笔额度各扣一次；记 `dispute_refund_in_flight` 待处理，等人工先落定退款；
-3. Dispute 的金额与币种等于“实付减去已成功退回的现金”，即 Stripe 这次实际拉回的净额；不等（部分拒付、Stripe 按全额拉回、币种不符）记 `dispute_amount` 待处理，不自动扣；
-4. 扣回的额度等于付费批次的入账额度减去已成功退款和已扣回的额度；现金等于实付减去已退现金；手续费收入等于原手续费减去已退手续费。已经用掉或已过期的部分照扣，余额可以为负（[计费的「账本」](billing.md#账本)），不设下限；整批已作废时计费按拒付指名的批次单独补载，不要求它还留有余额。
-
-扣钱复用退款的分录形状：站点记账货币的账借用户余额、借手续费收入、贷现金、差额记汇兑损益；跨币种时付款币种的账同样配平，站点货币的账把额度从用户余额转到汇兑损益。订单在同一事务里从已支付、部分退款或已退款变成被拒付，写一条订单事件。`warning_*`、`prevented` 只记 `recorded` 行和事件，不动钱；`won` 只对 `applied` 的行做反向分录（`chargeback_reverse`），订单**保持被拒付**——拒付确实发生过，钱已经冲正，额度回到用户余额，订单不再允许新退款；`won` 是终态，后到的任何状态都不能把行改回“已扣款”，也不会再动钱。`lost` 对还没扣钱的行补扣，对已经扣过的行只更新状态。`applied_at` 和 `reversed_at` 直接取对应 `chargeback`/`chargeback_reverse` 账本交易的 `created_at`，不取进程时钟：跨 UTC 零点时，拒付现金和订单/批次必须在同一个记账日，否则两天的对账各看到一半。重复、乱序、晚到的拒付事件按行状态幂等，后到的“已扣款”不能覆盖已经胜诉的行。
-
-不在自动路径里的拒付（金额不符、在途退款、订单没入账、同一订单第二笔拒付）全部记待处理并告警，由人工核对凭证后处理；约束始终是“一笔订单扣回的额度加成功退款的额度不超过入账额度”。**账户在拒付时暂停**：`dispute_open` 和 `dispute_lost` 在记拒付的同一事务里把订单所属账户置为暂停（[计费的「风控状态」](billing.md#风控状态)），该账户的新调用被拒绝；登录、创建 key 等非消费行为仍可用。暂停只由操作员在后台解除，`dispute_won` 不会自动解除；暂停和解除都写 `account.status_change` 审计，并持久化 `accounts.account_suspended` 信号（解除时恢复），待处理记录和告警仍用于人工核对金额与凭证。拒付行记下 `suspended_at`，同一笔拒付的重复、后到事件不会在操作员解除后再次暂停；滚动升级期间旧节点只扣钱不记这一位，新节点在之后的事件里补暂停，没有后续事件的由轮询按 `state='applied' AND suspended_at IS NULL` 补齐（迁移前的历史行视为已处理，不追溯暂停）。扣钱、暂停和差额信号按这个顺序取锁：余额行 → 账户行 → 平台告警锁，与计费修正和操作员手动暂停同序。
-
-**退款**：声明 `CapRefund|CapQueryRefund|CapRefundKey`。`RefundCall.TradeNo` 在下单后是 Session ID，入账后订单的交易号会换成 PaymentIntent ID；插件对两者都接受，是 Session 时先取回它得到 PaymentIntent，再调 `Refunds.Create`：金额是退款额度（付款币种最小单位），`metadata.refund` 写退款 ID、`metadata.order` 写订单 ID，`metadata.reason` 写截到 500 字的理由；不传 Stripe 的 `reason` 枚举，因为我们的理由可能是欺诈、重复或客户请求，硬塞 `requested_by_customer` 会误导渠道。幂等键是 `re_<退款 ID>`：同一笔退款重发只会退一次，不同退款不会像 sub2api 的 `re-<订单>-<金额>` 那样在金额相同的两笔部分退款上撞键。返回 `succeeded` 记成功，`pending`/`requires_action` 记待确认，`failed`/`canceled` 记失败；4xx 是确定拒绝（金额超过可退、已全额退过等），网络错误、5xx、无法解析的响应是未知。
-
-**查退款**：有 `ProviderRef` 时直接取回那笔退款；没有时先取 Session 的 PaymentIntent，再分页列出它的退款，按 `metadata.refund` 精确找我们这一笔，找不到就回 `ErrRefundNotFound`；核心只在渠道幂等键仍有效（Stripe 为 24 小时，留 1 分钟余量）且声明了 `CapRefundKey` 时用同一个键重发，窗口外、不能保证键或查询本身失败时仍回待确认并记 `refund_unknown`，不把“查不到”当成“没发过”。找到但金额不符就报未知。状态映射同上。sub2api 在缺退款号时取“最新一笔退款”（`stripe.go:271-279`），两笔退款并发时会认错；我们按元数据找。
-
-**查单与关单**：`Query` 对 Session ID 取回 Session（`complete` 且 `payment_status=paid` 记已支付，`expired` 记已关闭，其余待支付），对入账后的 PaymentIntent ID 直接取回 PaymentIntent（`succeeded` 已支付、`canceled` 已关闭、其余待支付），两种都返回 PaymentIntent ID 作为交易号；金额为 0 或币种缺失用无效哨兵，交给核心转待处理。`Close` 先读 Session：已过期视为成功（Stripe 的 `expire` 对已过期 Session 返回 4xx，不能靠重试变幂等），已完成返回确定拒绝，只有未完成才调 `expire`；失败由核心记日志，订单本地状态不受影响。Stripe 的 Session 最长 24 小时，订单有效期可以更长或更短；查单和过期后补查仍按核心的排期执行。
-
-**对账**：Stripe 声明 `CapQuery`，所以每个 Stripe 商户自动进入现有的每日对账：逐单核对订单、付费批次、退款和现金，并核对当天的用量计数；拒付的扣款和冲正也计入现金侧（见「对账」）。**账单下载（`Statements`）本次不实现**：`Caps` 里虽然预留了 `Statements`，但渠道接口还没有这个方法、库里也没有 `statement_lines` 表；第一个声明它的插件再一起交付。Stripe 的 Balance Transactions 和实际手续费因此还没有逐笔核对，渠道实际扣的手续费也没有入账口径，渠道账单与实际手续费对账待定（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）：不在 `product.md` 第一版，手续费入账政策要负责人定；现在只有逐单日对账，不假装已经对平。
-
-**失败、重试与晚回调**：
-
-- 下单 4xx 是确定拒绝（`*Rejected`），订单失败；超时、断连、5xx、限流是未知，订单留在待支付，由补单和过期处理。SDK 自身不重试（`MaxNetworkRetries=0`），重试由核心按同一幂等键发起。
-- 回调只在入账事务提交后回 2xx；事务回滚、提交失败回 5xx，Stripe 会重试。重复回调按订单、PaymentIntent 和金额幂等。
-- 晚回调：Stripe 在事件投递失败时按自己的节奏重试；即使事件丢了，补单和每日对账也会用 Session 的当前状态补上。`checkout.session.expired` 和 `async_payment_failed` 不改状态，之后真的付成功仍能入账。
-- 拒付事件同样可能重复、乱序、晚到；行状态和 `(商户账户, 渠道, Dispute ID)` 唯一键保证只扣一次，胜诉后不会被后到的“已扣款”再扣一次。
-
-**滚动发布**：只新增 `payments.order_disputes` 表、`credit_batches.charged_back` 列和两个交易种类；管理 API 的现金流水和额度流水枚举各加两个值，没有改已有列或既有字段的含义。上线顺序必须是：先让所有节点和页面都跑上新版本，再创建第一个 Stripe 商户账户。旧节点没有 `stripe` 插件，Stripe 回调打到旧节点会 503，Stripe 会重试到新节点；旧节点读不懂 `chargeback`/`chargeback_reverse` 交易，余额流水页会整页失败，所以不能在还有旧节点时产生拒付。旧页面看到新节点的 `chargeback` 流水没有对应文案，只影响显示；新页面配旧节点保存 Stripe 商户会被“未知渠道”拒绝。迁移只加表和列，旧节点不读它们；新节点写的 `Notice` 字段是进程内结构，旧插件不受影响。发布期间若旧节点先做了当天对账，它不知道拒付现金，会记一条 `ledger` 差额；这是可见的告警，不动钱，下一轮新节点对账会按新规则对平。
+- **交易号用 PaymentIntent ID**：退款和拒付都以它为入口，两种成功事件给出同一个号，重复回调能精确去重。**查单**对 Session 取回 Session（`complete`+`paid` 已支付、`expired` 已关闭），对 PaymentIntent 取回 PaymentIntent（`succeeded` 已支付、`canceled` 已关闭），其余待支付；金额为 0 或缺币种记为无效。**关单**先读 Session：已过期视为成功，已完成是确定拒绝，未完成才 `expire`。
+- **退款**：交易号是 Session 时先取回 PaymentIntent；`metadata.refund`、`metadata.order` 写退款和订单 ID，理由截到 500 字写 `metadata.reason`，不传 Stripe 的 `reason` 枚举；幂等键 `re_<退款 ID>`。`succeeded` 成功，`pending`/`requires_action` 待确认，`failed`/`canceled` 失败，4xx 确定拒绝。**查退款**有 `ProviderRef` 就取回并核对金额币种，否则列出 PaymentIntent 的退款按 `metadata.refund` 找；找不到时只在幂等键有效期内（24 小时留 1 分钟余量）用同一键重发，否则待确认。
+- **拒付归类**：`needs_response`、`under_review`、`funds_withdrawn` 是扣款；`won`、`funds_reinstated` 是胜诉冲正；`lost` 是败诉；`warning_*`、`prevented` 只记录。处理规则见「拒付」。
 
 ### 订单
 
-1. 用户输入要充的额度、选付款方式，系统显示要付的总额（含手续费）和付款币种。
-2. 创建订单：选出商户账户，按「金额与汇率」算出总额并锁定汇率，在一个事务里检查限额并写入"待支付"的订单。
-3. 事务提交后调用渠道下单，把支付链接或二维码存回订单，返回给浏览器（sub2api `service/payment_order.go:108-119`、`:411-499`）。订单先落库再调渠道，渠道那边的订单一定能在我们这里找到。
-4. 渠道通知到账：验签 → 向渠道查询确认 → 在一个事务里核对金额、记下这笔付款、改订单状态、生成付费额度批次并记账（见「回调与到账」）。
+1. 用户输入要充的额度、选付款方式，页面显示总额（含手续费）和付款币种。
+2. 下单：选商户账户，按「金额与汇率」算总额并锁定汇率，在一个事务里检查限额并写入待支付订单。
+3. 事务提交后调用渠道下单，把支付链接或二维码存回订单：订单先落库再调渠道，渠道那边的订单在我们这里一定找得到。
+4. 渠道通知到账：验签 → 查单确认 → 一个事务里记付款、改状态、生成付费额度批次并记账（见「回调与到账」）。
 
-- **订单号**：发给渠道的商户订单号就是订单 ID 的对外写法（`ord_` 加 26 个字符，30 个字符），只含字母、数字和下划线，满足易支付分支常见的 32 字符上限。偏离 sub2api 的"前缀 + 日期 + 8 位随机数、查重最多 5 次"（`service/payment_service.go:58-62`、`service/payment_order.go:238-251`）：ID 本身唯一，不需要查重。
-- **只认渠道**：到账以渠道的回调或我们主动向渠道查询的结果为准。用户付款后跳回的页面只用来展示，不作为到账依据。回调验签失败或密钥缺失时一律拒绝。
-- **有效期**：订单和锁定的汇率在有效期内有效，默认 30 分钟，按商户账户配置（sub2api `service/payment_config_service.go:47`）。
-- **每个账户的待支付订单最多 3 笔**，超过就拒绝新建（sub2api `service/payment_order.go:253-266`，默认值 `payment_config_service.go:48`）；取消次数也限流（`service/payment_order_lifecycle.go:37-97`），统计取消次数的查询出错时拒绝新建，不像 sub2api 那样放行（`payment_order_lifecycle.go:50-52`）。
-- **限额检查是串行的**：账户级的检查（待支付笔数、取消次数、每天充值上限、新账户首笔上限）在下单事务里先取这个账户的事务级锁，再读计数、插入订单；商户账户的当天额度由一行"商户账户 × 日"的用量计数守着，见「选商户账户」。偏离 sub2api 的先读后写（`payment_order.go:253-266`、`payment/load_balancer.go:167-246`）：两个请求同时读到"还差一笔"，就会一起越过上限。
-- **控制台怎么回应下单**（`api/console.yaml` 的 Top-ups）：同一个 `Idempotency-Key` 的首次请求和重放按订单现在的样子回答，不按有没有错误回答：渠道拒绝过的订单（失败）回 422，要用户重新下单；待支付且存了 checkout 的回 201，带支付链接（渠道给的 `client_secret` 只在首次的应答里，重放没有）；待支付而没有 checkout 的回 202、不带支付链接，用户不要付，可以取消或等它过期（首次的结果未知，或同键的另一个请求还在调用渠道）；已支付、已取消、已过期等回 200，同样不带支付链接。订单对外只有订单号、状态、额度、总额和手续费（付款币种）、时间、支付链接，没有商户账户和渠道的订单号；渠道的拒绝原因只记在订单事件里，不进应答。查询、取消和"我已付款"只认账户自己的订单，别人的订单和不存在的一样回 404。`GET /api/console/v1/orders` 按游标列出自己的订单，新在前，一页默认 50、最多 200，需要 `balance.view`；订单的 `refund_allowed` 表示这个商户账户是否允许用户申请退款（`user_refund` 和退款能力都开着），`refunds` 是这笔订单的退款及状态。滚动升级期间这两个字段可能不出现，页面显示"不可用"而不是把没有当成拒绝。已支付的订单还带 `paid_at`、`paid_total`（付款币种）和 `credited`（站点币种），收据页就是这些事实的渲染；旧节点同样不返回，页面说收据暂不可用。每个限额各有自己的回答和下一步：待支付笔数 409「先付款或取消」；取消次数、每 IP 次数、每单每分钟一次的核验 429，`Retry-After` 写还要等多久；当天上限、首笔上限、金额范围、没有商户账户能接这笔 422。
+- **订单号**就是订单 ID 的对外写法（`ord_` 加 26 个字符），只含字母、数字和下划线，满足易支付常见的 32 字符上限。
+- **只认渠道**：到账以回调或主动查单为准，用户跳回的页面只用来展示。
+- **有效期**按商户账户配置，默认 30 分钟；创建和到期取数据库事务时钟。
+- **返回地址**由服务端生成：请求的控制台域名登记的 origin（不是请求头的 `Host` 或 `Origin`）加 `/console/balance`；不是 https 时不能下单。订单号下单后才有，页面回来后用订单接口取。
+- **限额在锁内检查**：待支付笔数（默认 3）、取消次数、每天上限、新账户首笔上限在账户的事务级锁内读计数并插入订单；统计出错时拒绝下单，不放行。商户当天额度见「选商户账户」，每 IP 次数见「防欺诈」。
+- **幂等**：下单带 `Idempotency-Key`，账户内唯一；同键同内容（付款方式、额度）返回原订单，之后关闭充值或改限额仍可重放；内容不同回 409。同键并发只调一次渠道。
+- **控制台怎么回应**（`api/console.yaml` 的 Top-ups）：首次和重放都按订单现在的状态回答：失败（渠道拒绝）回 422；待支付且有支付链接回 201（渠道的 `client_secret` 只在首次应答里，从不入库）；待支付没有链接回 202、不带链接（首次结果未知或同键请求还在调用渠道），用户不要付，可以取消或等过期；其余状态回 200、不带链接。各限额：待支付笔数 409；取消次数、每 IP 次数、每单每分钟一次的核验 429 带 `Retry-After`；当天上限、首笔上限、金额范围、没有商户账户能接 422。
+- **对外字段**：订单号、状态、额度、总额和手续费（付款币种）、时间、支付链接；已支付的另有 `paid_at`、`paid_total`、`credited`；`refund_allowed` 表示商户账户此刻是否允许用户申请退款，`refunds` 是退款及状态。不返回商户账户和渠道订单号，渠道的拒绝原因只记在订单事件里。查询、取消、"我已付款"只认自己的订单，别人的和不存在的一样回 404。`GET /api/console/v1/orders` 按游标列出，新在前，一页默认 50、最多 200，要 `balance.view`；下单、取消、核验和报价要 `balance.top_up`。
 
-| 订单状态 | 代码 | 什么时候进入 |
+| 状态 | 代码 | 什么时候进入 |
 |---|---|---|
-| 待支付 | `pending` | 创建订单 |
-| 已支付 | `paid` | 确认到账，与付费额度批次、记账在同一个事务里 |
+| 待支付 | `pending` | 下单 |
+| 已支付 | `paid` | 确认到账，与付费批次、记账同一事务 |
 | 已过期 | `expired` | 有效期内没有到账 |
-| 已取消 | `cancelled` | 用户或管理员在付款前取消 |
-| 失败 | `failed` | 调用渠道前配置打不开（确定未发送），或渠道明确拒绝下单、支付链接不合格 |
-| 待处理 | `review` | 实付金额或币种与订单不符、同一订单收到多笔付款、折算出的额度为 0、过期太久才到账，等人工处理 |
-| 部分退款、已退款 | `partially_refunded`、`refunded` | 有退款成功，按成功退款的合计 |
-| 被拒付 | `charged_back` | 持卡人向银行申诉（随 Stripe 插件实现） |
+| 已取消 | `cancelled` | 付款前取消 |
+| 失败 | `failed` | 调渠道前配置打不开（确定未发送）、渠道明确拒绝、支付链接不合格 |
+| 待处理 | `review` | 金额或币种不符、多笔付款、折算出 0 额度、过期太久才到账 |
+| 部分退款、已退款 | `partially_refunded`、`refunded` | 按成功退款的合计 |
+| 被拒付 | `charged_back` | 持卡人向银行申诉 |
 
-| 从 | 到 | 谁触发 | 条件与幂等 |
+| 从 | 到 | 谁触发 | 条件 |
 |---|---|---|---|
-| — | 待支付 | 用户 | 请求带 `Idempotency-Key`，同一账户内唯一；同键同内容返回原订单（之后关闭充值或改限额仍可重放），内容不同返回 409 |
-| 待支付 | 失败 | 下单调用 | 调用渠道前配置打不开（确定未发送），或渠道明确拒绝、支付链接不合格；链接不合格时提交后关单。已调用渠道后的超时、断连这类结果未知的错误不改状态，订单留在待支付，交给补单和过期处理。偏离 sub2api 的"出错就标失败"（`payment_order.go:112-118`）：请求可能已到网关，用户可能已经付了 |
-| 待支付 | 已取消 | 用户、管理员 | 原子取消、减回用量、提交后关单（渠道支持时）；取消前不查单，避免渠道故障阻止本地取消。偏离 sub2api `payment_order_lifecycle.go:99-142`：取消与到账由订单行锁串行，取消后收到的付款仍走统一到账路径 |
-| 待支付 | 已过期 | 过期任务 | 过了有效期；处理顺序和 E1-2b/E1-2c 的范围见[补单与过期](#补单与过期) |
-| 待支付、已过期、已取消、失败 | 已支付 | 回调、补单、用户点"我已付款" | 验签并查询确认；这是订单收到的唯一一笔付款，金额与币种完全一致；过期的还要在"过期后自动入账期限"之内；条件更新（只有这几种状态能变成已支付），额度批次以订单 ID 为幂等键 |
-| 同上 | 待处理 | 同上 | 金额或币种不符（当前一律人工，策略配置随 E1-6b）；或这笔订单已记下另一笔付款；或按实付折算出 0 额度；或过期超过"过期后自动入账期限"才到账 |
-| 待处理 | 已支付 | 管理员、站长 | 人工结论（见「退款」的"人工结论"）：按已确认付款的合计折算入账，附网关订单号，写理由，记审计 |
-| 待处理 | 已退款 | 管理员、站长 | 线下退回，记一条线下退款 |
+| — | 待支付 | 用户 | 见上文幂等 |
+| 待支付 | 失败 | 下单 | 链接不合格的提交后关单；调渠道后的结果未知不改状态，交给补单和过期 |
+| 待支付 | 已取消 | 用户、管理员 | 原子取消、减回用量，提交后关单（渠道支持时）；取消前不查单，渠道故障挡不住本地取消；与到账由订单行锁串行，取消后收到的付款仍走统一到账路径；重复取消返回原订单 |
+| 待支付 | 已过期 | 过期任务 | 见「补单与过期」 |
+| 待支付、已过期、已取消、失败 | 已支付 | 回调、补单、"我已付款" | 验签并查单确认；订单唯一的一笔付款，金额币种完全一致；过期的要在自动入账期限内 |
+| 同上 | 待处理 | 同上 | 金额或币种不符、已记过另一笔付款、折算出 0、过期超过自动入账期限 |
+| 待处理 | 已支付、已退款 | 管理员、站长 | 人工结论（见「退款」） |
 | 已支付、部分退款 | 部分退款、已退款 | 退款成功 | 见「退款」 |
-| 已支付、部分退款、已退款 | 被拒付 | 渠道的拒付通知 | 见「拒付」 |
+| 已支付、部分退款、已退款 | 被拒付 | 拒付通知 | 见「拒付」 |
 
-- **已支付之前没有中间态**。sub2api 把到账拆成"已支付 → 充值中 → 已完成"三步，中间靠一个 5 分钟的租约防止两个进程同时履约（`service/payment_fulfillment.go:178-215`、`:314-363`），因为它的加余额走兑换码服务，不在同一个事务里。我们的入账就在改状态的那个事务里，没有第二步，也就不需要租约和"履约失败、人工重试"（`:907-952`）。
-- **过期后才到账**：过期 5 分钟（后台可调）内到账，按锁定的汇率入账（sub2api 的宽限期，`payment_fulfillment.go:181-190`，`service/payment_service.go:42`）；超过宽限期，付款币种与站点记账货币相同的照常入账，不同的按到账时的汇率重新折算后入账，到账汇率另记在订单上，锁定的汇率不改。过期超过"过期后自动入账期限"（默认 7 天）才到账的，不自动入账，转待处理。偏离 sub2api：它超过宽限期只记一条审计、不入账（`payment_fulfillment.go:227-238`），用户的钱被吞掉；按到账时的汇率折算，用户既不丢钱，也不能拿过期前锁定的汇率套利；退款按批次实际的付款与入账额度之比折算（见「退款」），换汇率入账也套不出钱。
-- **一笔订单的每笔付款单独记**：每笔确认过的付款（网关订单号、金额）记一行，网关订单号在商户账户内唯一；订单按确认过的付款判断。已支付或已退款的订单又收到一笔网关订单号不同的付款，订单状态不变，这笔付款进待处理记录并告警，由人工退回或另行入账。sub2api 对此直接返回成功、不留记录（`payment_fulfillment.go:217-242`）。
-- **订单事件**：每次状态变化、每条验签通过的通知和每次查单结果都追加一条订单事件（来源、新旧状态、网关订单号、金额、截短的原文），对应 sub2api 的支付审计日志（`ent/schema/payment_audit_log.go:31`）。人做的操作另记平台的审计日志。
+- **已支付之前没有中间态**：入账就在改状态的事务里，不需要"充值中"和履约租约。
+- **过期后才到账**：宽限期（默认 5 分钟）内按锁定汇率入账；之后同币种照常入账，跨币种按到账时的汇率重新折算，到账汇率另记在订单上，锁定的不改；过期超过自动入账期限（默认 7 天）的转待处理。这样不吞用户的钱，也不能拿过期前锁定的汇率套利。
+- **每笔付款单独记**：网关订单号在商户账户内唯一。已支付或已退款的订单又收到一笔网关订单号不同的付款，订单状态不变，这笔进待处理并告警。
+- **订单事件**：每次状态变化、每条验签通过的通知和每次查单结果都追加一条（来源、新旧状态、网关订单号、金额、截到 8 KiB 的原文）；人做的操作另记平台审计。
 
 ### 金额与汇率
 
-- **三种单位，各在各的列**：额度用十亿分之一（同[计费的「钱的表示」](billing.md#钱的表示)）；付款金额（总额、手续费、实付、退款）用付款币种的最小单位，整数；汇率用精确分数。币种的小数位数来自代码里的 ISO 4217 表（人民币、美元 2 位，日元 0 位，第纳尔 3 位），与 sub2api 的币种表一致（`payment/currency.go:24-49`）；金额文本精确解析，位数超出就拒绝（`currency.go:92-113`）。sub2api 在库里用 `decimal(20,2)`、在 Go 里用 `float64`（`ent/schema/payment_order.go:46-56`），我们一律用整数，比较用相等，不用容差（偏离 `service/payment_service.go:47` 的 0.01 元容差，因为它只是在掩盖浮点误差）。
-- **用户输入的是额度**（站点记账货币），付款币种由商户账户决定。对齐 OpenRouter 按美元额度充值的做法；同币种时与 sub2api"充多少到多少"一致（`service/payment_amounts.go:28-33`，倍率为 1）。
-- **汇率锁定**：付款币种与站点记账货币不同时，下单那一刻锁定计费的参考汇率版本（[计费的「汇率」](billing.md#汇率)，[#167](https://github.com/TYCT-tyct/Axiom/issues/167) 的带版本的人工汇率），并加上对平台有利方向的充值缓冲，得到"成交汇率"。订单记下汇率版本 ID、参考汇率和成交汇率三样，此后不再改；过期超过宽限期才到账时另记一组到账汇率（见上），不覆盖锁定的这组。站点没有这对货币的汇率时，这个付款方式不显示。
-- **先求和、只取整一次**：总额 = ⌈(额度 × 成交汇率 + 固定手续费) ÷ (1 − 手续费比例)⌉，整个式子按精确分数算，最后向上取到最小单位，只这一次（见「渠道手续费」）。订单另存充值部分 = ⌈额度 × 成交汇率⌉ 和手续费 = 总额 − 充值部分，只用于展示和拆分分录，不影响总额。
-- **范围先查**：额度、单笔上下限和手续费都有上限（手续费比例最多 50%，见「渠道手续费」），算总额之前检查额度与汇率的乘积不超出最小单位的 int64 范围，超出就拒绝下单，不让中间结果溢出。
-- **按实付折算额度**：实付等于总额、按锁定汇率入账时入订单的额度；其他情况（金额不符时按实付入账、过期后按到账汇率入账、人工入账）入 ⌊max(0, 实付 × (1 − 比例) − 固定手续费) ÷ 所用的成交汇率⌋，三处用同一个函数。折算出 0 时不入账，订单转待处理。入账时批次记下实付、其中的手续费（实付 − ⌈入账额度 × 所用的成交汇率⌉，与订单报价的拆法相同）和入账额度，退款按它们折算（[计费的「额度批次」](billing.md#额度批次)）。
+- **三种单位各在各的列**：额度用十亿分之一（[计费的「钱的表示」](billing.md#钱的表示)）；付款金额用付款币种的最小单位整数，位数来自 ISO 4217 表；汇率用精确分数。金额文本精确解析，位数超出就拒绝；比较用相等，没有容差。
+- **用户输入额度**（站点记账货币），付款币种由商户账户决定。
+- **汇率锁定**：跨币种时下单锁定计费的参考汇率版本（[计费的「汇率」](billing.md#汇率)），加上对平台有利的充值缓冲（站点设置，默认 2%，0 到 10%），得到成交汇率；订单记下版本 ID、参考汇率和成交汇率，此后不改。站点没有这对货币的汇率时，这个付款方式不显示。
+- **只取整一次**：总额 = ⌈(额度 × 成交汇率 + 固定手续费) ÷ (1 − 手续费比例)⌉，按精确分数算；充值部分 = ⌈额度 × 成交汇率⌉，手续费 = 总额 − 充值部分，只用于展示和拆分分录。算之前检查额度乘汇率不超出最小单位的 int64 范围，超出就拒绝。
+- **按实付折算额度**：实付等于总额且按锁定汇率入账时入订单的额度；其他情况（按实付入账、到账汇率、人工入账）入 ⌊max(0, 实付 × (1 − 比例) − 固定手续费) ÷ 所用成交汇率⌋，同一个函数。折算出 0 不入账、转待处理。批次记下实付、其中的手续费（实付 − ⌈入账额度 × 所用成交汇率⌉）和入账额度，退款按它们折算（[计费的「额度批次」](billing.md#额度批次)）。
 
 ### 渠道手续费
 
-- 每个商户账户、每种付款方式按"比例 + 固定金额"配置手续费，付款前明确显示。偏离 sub2api：它只有一个全站的手续费率（`service/payment_config_service.go` 的 `RECHARGE_FEE_RATE`）；不同商户账户的费率本来就不同。
-- 渠道按用户付的总额扣手续费，所以总额要反推：总额 = (充值金额 + 固定金额) ÷ (1 − 比例)，向上取整到最小单位。例如充值 100 元、比例 3%、固定金额 0 时，总额为 103.10 元；渠道按总额乘比例四舍五入取手续费时扣 3.09 元，实收 100.01 元，不少于 100 元；直接按 100 × 3% 收 3 元，实收只有 99.91 元。网关的舍入方式各家不同（向上取整时可能少 1 分），E1-3 在真实网关上实测并记录，渠道实际扣的手续费按对账记（见下）。偏离 sub2api 的"充值金额 + 充值金额 × 比例"（`payment/fee.go:12-22`），理由同此例。
-- 比例以百万分之一存储，取值 0 到 500000（50%），超出在保存时拒绝：再高的费率不是真实渠道的费率，而且会让反推的总额成倍放大。
-- 记账见[计费的「账本」](billing.md#账本)：用户付的手续费记手续费收入，渠道实际扣的记渠道手续费。
+- 每个商户账户、每种付款方式按"比例 + 固定金额"配置，付款前明确显示。
+- 渠道按总额扣费，所以总额要反推：充值 100 元、比例 3% 时总额 103.10 元，渠道扣 3.09 元，实收 100.01 元；按 100 × 3% 收只实收 99.91 元。
+- 比例以百万分之一存储，0 到 500000（50%），超出拒绝保存。
+- 用户付的手续费记手续费收入，渠道实际扣的记渠道手续费（[计费的「账本」](billing.md#账本)）。
 
 ### 选商户账户
 
-照 sub2api 的负载均衡（`payment/load_balancer.go:79-115`）：
+1. 候选：本站点启用的、支持这种付款方式、配置打得开的商户账户。
+2. 过滤：单笔上下限；当天（UTC 日）额度，已用量含待支付订单。都按付款币种的总额计。
+3. 在剩下的里面按站点策略挑：轮询（默认，按站点和付款方式各自计数）或当天已用最少（按参考汇率把各账户用量换成站点货币精确比较）。报价和下单用同一条规则，页面显示的就是订单落下的账户和总额。
+4. 下单事务里锁住选中账户当天的用量计数行，锁内确认放得下再加上这笔，否则换下一个。订单过期、取消、失败时减回，之后又到账的按创建日加回。
 
-1. 候选：本站点启用的、支持这种付款方式的商户账户。
-2. 过滤：单笔下限、上限（按付款方式设置）；当天额度（UTC 自然日），已用量包括待支付的订单，避免同时下的单一起超额（`load_balancer.go:167-246`）。单笔上下限和当天额度都以付款币种的总额（最小单位）计。
-3. 在剩下的里面按站点选的策略挑一个：轮询（默认）或当天已用最少（`load_balancer.go:273-293`）。
-4. 在下单事务里锁住选中账户当天的用量计数行，锁内重读、确认加上这笔仍不超额后加上这笔的总额，再插入订单；超了就换下一个候选。订单离开待支付却没付（过期、取消、失败）时减回，之后又到账的再加回；计数按订单创建的 UTC 日。用量计数是一行，账户范围的下单事务也能锁它，不必读别的账户的订单。
-
-- **都被过滤掉时拒绝下单**，告诉用户换个金额或付款方式，并告警。偏离 sub2api：它此时退回全部候选、让网关自己拒绝（`load_balancer.go:105-110`），等于无视商户的限额。
-- **查当天用量出错时拒绝下单**，不当作 0。偏离 sub2api 的放行（`load_balancer.go:199-201`）。
-- **商户配置解不开或不合法**：保存时校验，存进库的都合法；启动或刷新时仍有解不开的，这个商户账户不参与挑选并告警，不影响其他账户和整个节点。偏离 sub2api 的"当作空配置继续运行"（`load_balancer.go:344-346`）。
-- 订单记下选中的商户账户，之后的查单、关单、退款、回调验签都只用这一个账户（sub2api `service/payment_refund.go:53-82`、`service/payment_webhook_provider.go:32-83`）。
+- **都被过滤掉或查用量出错时拒绝下单**，并告警；不放行，否则等于无视商户限额，收款账户超额可能被风控冻结。
+- 解不开或不合法的商户配置不参与挑选并告警，不影响别的账户和整个节点。
+- 订单记下选中的商户账户，之后的查单、关单、退款、验签只用它。
 
 ### 回调与到账
 
-回调地址是 `https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，域名取站点配置，不用请求头里的 Host（[安全基线](../security.md#安全基线)）。下单时由我们生成，不用商户配置里写死的地址（偏离 sub2api `easypay.go:257-269`）。
+回调地址 `https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，域名取站点配置，不用请求头的 Host；下单时由核心生成（Stripe 除外）。
 
-1. 读请求：GET 读查询串，POST 只读表单，两者合计最多 1 MiB（sub2api `handler/payment_webhook_handler.go:26-27`、`:71-84`）。协议没有定义 JSON 的签名串，按 JSON 投递的网关会被当作格式错误拒绝，所以要接的网关必须按表单投递。可信代理解析后的来源 IP 先在本节点限每分钟 600 次，再读库；IPv4 归一化映射地址，IPv6 去 zone 后按 /64 归并。超限回 429，网关稍后重试。
-2. 按路径里的 ID 取商户账户、解密配置；取不到返回失败并告警（不存在记 Warn，配置或插件故障记 Error）。只有存在且配置可打开的商户才按（商户账户，来源 IP 分组）再限每分钟 120 次。两级限流共用最多 4096 个桶，满时淘汰最近最久未访问的桶，不因表满拒绝新来源；随机商户 ID 只消耗来源 IP 的一个桶。解开的配置在内存里缓存一分钟（按修订号失效），命中缓存时仍核对修订，但不重新解密。
-3. 验签和商户身份由插件完成（`handler/payment_webhook_handler.go:106-116`）。失败返回 400，**不写任何数据**；与通知内容无关的事件（插件说"不相关"）直接回成功。
-4. 按（商户账户，订单号）找订单，先不加锁读一次状态：订单已支付且这个网关订单号已记下，直接回成功，不查单（重放的通知不会放大成出站查单）。找不到订单时，向网关按通知里的订单号查一次：网关说已支付，就记一条待处理记录（"有付款没订单"，按网关订单号去重）并告警，再回成功；查询失败返回 502 让网关重试；网关说没付只记警告、回成功。预发布与生产共用商户号、回调地址配错、订单行丢失时，钱都有记录。偏离 sub2api 找不到就回成功、只记警告（`handler/payment_webhook_handler.go:132-146`）。
-5. **查询确认**：渠道支持查单时，以同一个商户账户的配置查一次，查单单独限时 5 秒，要求网关也说已支付、完整通知的网关订单号与通知一致；**入账金额一律用查单的金额**，与完整通知的金额不一致时订单转待处理。金额或网关单号暂空的通知由查单结果补全；查询结果暂空的重试规则见「补单与过期」。查询失败返回 502，让网关稍后重试（`handler/payment_webhook_handler.go:126-130`，`service/payment_fulfillment.go:60-85`，`easypay.go:409-435`）。sub2api 只对易支付这样做，我们对所有支持查单的渠道都这样做：多一次往返，换来回调伪造时多一道关。这一关挡的是拿到回调地址、没有密钥的第三方：通知和查单都只认这个商户账户的密钥。配了网关和密钥的站长本人两样都能签，对他就是自己查自己，所以平台能依靠的边界是商户账户归谁配置（主站的只有负责人能改，见「收款渠道」），这一关不能当成对站长本人的防护。不支持查单的渠道用通知的金额。
-6. **一个事务**：锁订单行；记下这笔付款（网关订单号已记在另一笔订单上时，进待处理记录并告警，不报错）；按上文的状态表做条件转移；金额、币种与订单比较（完全相等）；调用 billing 生成付费额度批次并记账（[计费的「账本」](billing.md#账本)"用户充值"一行）；追加订单事件；提交。
-7. **事务提交之后**才按渠道要求回成功（易支付回 `success`，见 `handler/payment_webhook_handler.go:215-226`）；事务回滚、提交失败一律回非 2xx，让网关重试。
+1. **读请求**：GET 读查询串，POST 只读表单，合计最多 1 MiB；按 JSON 投递的网关会被拒（协议没有 JSON 的签名串）。来源 IP（可信代理解析；IPv4 归一化映射地址，IPv6 按 /64）先在本节点限每分钟 600 次，超限回 429。
+2. **取商户账户**：按路径 ID 取并打开配置，取不到回失败并告警（不存在记 Warn，配置或插件故障记 Error）。存在且配置打得开的再按（商户账户，来源分组）限每分钟 120 次；两级共用最多 4096 个桶，满时淘汰最久未访问的。打开的配置缓存一分钟，修订号变了立即失效。
+3. **验签和商户身份**由插件完成；失败回 400，**不写任何数据**。插件说"不相关"的事件直接回成功。
+4. **预读**：不加锁读订单，已支付且这笔网关订单号已记下、金额币种相同，直接回成功、不查单。找不到订单时按通知里的订单号查一次：已支付就记"有付款没订单"待处理（按网关订单号去重）并告警再回成功；查询失败回 502；没付只记警告。
+5. **查单确认**：支持查单的渠道用同一商户账户查一次（限时 5 秒，占商户查询名额），要求也是已支付、网关订单号一致；**入账金额一律用查单的金额**，与通知金额不同转待处理。查询失败、名额满或暂停时回 502 让网关重试。这一关挡的是拿到回调地址却没有密钥的人；对配置了密钥的站长本人无效，平台的边界是商户账户归谁配置。不支持查单的渠道用通知的金额。
+6. **一个事务**：锁订单行 → 记付款（网关订单号已在别的订单上就进待处理，不报错）→ 条件转移 → 金额币种完全相等比较 → billing 写付费批次和账本 → 订单事件 → 提交。事务里不做网络调用。
+7. **提交之后**才按渠道要求回成功；回滚或提交失败回非 2xx，让网关重试。
 
-- **重复回调**：状态已是已支付，条件转移不改任何行，直接回成功；额度批次以订单 ID 为键，即使走到 billing 也不会入第二次。
-- **乱序**：失败或关闭的通知只记事件，不改状态（sub2api 只处理成功的通知，`payment_fulfillment.go:40-43`），所以"先成功后失败"不会把已支付改回去。
-- **丢失**：见「补单与过期」。
-- **金额不符**：记事件、告警，当前一律转待处理；站点的「人工处理、按实付入账」配置随 E1-6b 的人工结论交付，届时默认人工，选按实付时按「金额与汇率」折算。sub2api 只记审计并让网关重试（`payment_fulfillment.go:140-143`），钱留在网关、订单一直待支付。
-- **多笔付款**：一笔订单收到第二笔网关订单号不同的付款（例如先付 60、再付 40），两笔都记下，订单转待处理，不自动入账；人工按已确认付款的合计处理。
-- **币种不符、商户身份不符、实付不是正数**：一律不入账，记事件并告警（`payment_fulfillment.go:116-139`）；暂空金额或单号保留原状态，允许后续完整回执恢复。非法 UTF-8 或 NUL 的订单号、网关单号先清理成可记录文本，已付通知进待处理，绝不用改过的身份自动入账。
-- **同一回调只能动同一个商户账户的订单**：路径里的商户账户 ID 是查询条件的一部分，验签用的是这个账户的密钥。回调和后台任务在平台范围的事务里执行，靠这一条和验签守住租户边界（理由见「决策与理由」）。
+- **重复**：已支付时条件转移不改行；批次以订单 ID 为键，不会入第二次。**乱序**：失败或关闭的通知只记事件，"先成功后失败"改不回去。
+- **金额不符**：默认转待处理并告警；站点选"按实付入账"时，只对单笔、同币种、身份无冲突的付款按「金额与汇率」折算入账，币种不符始终人工。已进待处理的订单不因重放或后来改政策自动入账。
+- **多笔付款**：一笔订单收到第二笔网关订单号不同的付款，两笔都记，订单转待处理。
+- **商户身份不符、实付不是正数**：不入账，记事件并告警。金额或网关订单号暂空的保留原状态，等完整回执。非法 UTF-8 或 NUL 的订单号、网关订单号清理成可记录文本后，已付通知进待处理，不用改过的身份入账。
+- **租户边界**：回调和后台任务在平台范围的事务里执行（没有操作者，又要写 billing 的表），靠"路径里的商户账户 ID 是查询条件"和验签守住；一个商户账户的回调只能动它自己的订单。
 
 ### 补单与过期
 
-- **补单**：队列上的周期任务每分钟一次（多节点时只有队列的领导节点插入，sub2api 用的是领导锁，`service/payment_order_expiry_service.go:15-22`、`:89-119`），对创建超过 30 秒、还没过期的待支付订单向渠道查询，查到已支付就按「回调与到账」第 6 步入账。sub2api 只查支付宝和微信、每轮 20 笔（`payment_order_lifecycle.go:306-339`）；我们查所有支持查单的渠道。每笔订单记下次查询的时间，按退避排期（30 秒起翻倍，有效期内最长 10 分钟一次），一笔订单在有效期内只查十来次；每轮有时间预算，先查未过期的待支付，其次刚到期的待支付，晚付窗口只用余下预算；同组按下次查询时间排序，排在后面的下一轮接着查。
-- **按商户账户隔离**：轮询、日对账、用户核验和回调确认共用数据库中的名额，同一商户账户跨节点同时最多 2 个查询（每个名额 10 秒租约，调用从取名额前开始限时 5 秒；旧持有者完成时凭令牌更新，不能释放接替者的名额）；连续 5 次网关结果未知就暂停查询这个账户 5 分钟并告警；请求取消或轮次期限截断不计失败，核心自己的五秒网关期限超时仍计未知。日对账仅能占第一个名额，跨节点也至少保留一个给回调、轮询和用户核验。慢的网关拖不垮整轮，也不会因查得太勤被网关限频封号。
-- **用户点"我已付款"**：对自己的待支付或已过期订单立即查一次（`payment_order_lifecycle.go:275-304`），每个订单每分钟最多一次。
-- **过期**：同一个周期任务，对过了有效期的待支付订单先查一次，已付就按到账处理，否则原子过期并减回用量，本批过期事务全部提交后才关单（渠道支持时）。事务里不做网络调用；每次关单最多 5 秒，同轮已超时的商户不再关单，关单失败由过期后继续查单兜住（sub2api `payment_order_lifecycle.go:144-210`、`:379-399`；Axiom 把本地过期与网络关单分开，避免慢网关挡住其他订单）。查询阶段最多占一轮 30 秒预算中的 10 秒，单次最多 5 秒；到期的待支付订单优先补查，不受下次查询时间限制。商户查询名额和熔断状态保存在 PostgreSQL，轮询、日对账和用户核验共用，每商户最多 2 个在途查询；暂停期间仍执行本地过期。
-- **过期之后继续查**：渠道不支持关单或关单失败时，网关那边仍能付款，已过期、已取消及有网关单号的失败订单按退避（最长 1 小时一次）继续查，直到"过期后补查窗口"（默认 7 天）结束；实际查询与商户身份保护共同覆盖宽限期、自动入账期限、补查窗口中最长者，避免仍可自动入账时密钥已被更换。之后只由日对账覆盖。偏离 sub2api：它的过期任务不再查已过期的订单，过期后付款又丢了回调，钱就留在网关。
-- 查询结果已付但金额不是正数或网关单号暂空时，在同一个 5 秒期限内再查一次；仍不完整则只记事件和警告、保留订单状态，不写付款或待处理记录，后续完整回执仍可入账（`payment_order_lifecycle.go:168-182`、`:212-227`）。
+- **`payments.poll`** 每分钟一轮（队列周期任务，只有领导节点插入），一轮预算 30 秒，其中查询阶段最多 10 秒、单次 5 秒，余下用于本地过期、关单和退款。查询顺序：未过期的待支付、刚到期的待支付（不受下次查询时间限制）、晚付窗口；组内按下次查询时间，同组按商户交错，每轮最多发现 100 笔，同一商户最多两个工作者。
+- **补单**：创建超过 30 秒、未过期的待支付订单查单，已付就按「回调与到账」第 6 步入账。每单按退避排期：30 秒起翻倍，有效期内最长 10 分钟一次，过期后最长 1 小时一次。
+- **过期**：过了有效期的待支付订单先查一次，已付就入账；否则原子过期、减回用量；本批过期事务全部提交后才关单（渠道支持时），每次关单最多 5 秒，本轮超时过的商户不再关单，关单失败由过期后补查兜住。商户查询暂停期间仍执行本地过期。
+- **过期之后继续查**：已过期、已取消及有网关订单号的失败订单在补查窗口（默认 7 天）内继续查；之后只由日对账覆盖。补查和商户身份保护覆盖宽限期、自动入账期限、补查窗口中最长的那个，避免还能自动入账时密钥已被换掉。
+- **查到已付但金额不是正数或网关订单号为空**：同一个 5 秒期限内再查一次；仍不完整只记事件和警告，不改状态、不写付款或待处理。
+- **商户查询名额**：回调确认、补单、日对账和"我已付款"共用数据库里的名额：同一商户账户跨节点最多 2 个在途查询（每个名额租约 10 秒，过期持有者完成时不能释放接替者的名额），日对账只能用第一个名额；连续 5 次网关结果未知就暂停查询这个账户 5 分钟并告警。请求取消或轮次截断不计失败，核心自己的 5 秒期限超时计未知；明确拒绝算已知。
+- **"我已付款"**：对自己的待支付或已过期订单立即查一次，每单每分钟最多一次；名额繁忙不扣次数。
 
 ### 加密货币
 
-- **接入方式：自托管的易支付兼容网关 EzPay v1.1.9**（[发布](https://github.com/opinework/ezpay/releases/tag/v1.1.9)，2026-10-18；GPL-3.0）：它提供易支付兼容的 `submit.php` 下单，`type` 写 `usdt_trc20`，到账时 GET 回调，`money` 是法币金额；另有带商户 PID、密钥和 `out_trade_no` 的 `GET /api.php?act=order` 查单，返回 `money` 和 `trade_status`。所以 USDT 仍是「易支付协议插件」的一个商户账户，配置 `preset=ezpay`，不另写插件。候选比较和选择理由见「决策与理由」的「USDT 网关选择」。
-- **链上的事归网关**：每笔订单的收款地址或唯一金额、只认登记的代币合约、区块确认数、少付和充错网络，都由网关按它自己的配置处理；Axiom 只看到一笔法币订单（EzPay 预设只收美元），照常验签、查询确认、入账。服务器上不保存任何私钥，归集也在网关和钱包那边。
-- **前提**：网关必须支持带商户身份的查单，否则不能满足「查询确认」。EzPay 预设固定跳转下单、`usdt.tron` 映射到上游 `usdt_trc20`、只收 USD，`Caps` 只有查单，退款只能线下；保存为启用（包括更新与重新启用）前，在数据库事务之外用随机不存在的订单号 GET `api.php?act=order`，只有 `code=-1` 且明确「订单不存在」才通过；404、HTML、超时、密钥错误、商户不存在及不明确的 JSON 一律拒绝启用，不写商户；停用只做本地校验，不依赖网关健康。Epusdt 预设保持原样：固定跳转、`usdt.tron` 映射、CNY/USD、数字 PID 必须是无前导零的正 int64，避免网关回调转成数字后改变商户身份；它同样在保存为启用前探测查单，但已发布版本没有该接口，所以只能保存为停用。
-- **当前兼容性**：Epusdt 的已发布版本（v0.0.1 至 v2.0.0）都没有易支付商户查单，唯一的公开查询接口是 `/pay/check-status/{trade_id}`，只有网关交易号和状态，没有商户身份、我们的订单号和法币金额；逐版源码、官方文档、镜像摘要和测试见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)。EzPay v1.1.9 的查单已按官方镜像实测：下单 → GET 回调 → 查单确认 → 入账，保存探测、丢回调补单和真实回调验签都有测试（见[模块 README](../../internal/payments/README.md#ezpay-预设)）。USDT 可以在负责人提供服务器、收款钱包和商户号后开放；真实链上小额实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户。
-- **换算与币价风险**：订单是法币，按「金额与汇率」锁定；下单时网关按它的价格把法币金额换成 USDT 数量。USDT 收进钱包之后、换成法币之前，币价波动和稳定币脱锚的风险由平台承担；什么时候、按什么节奏换成法币由负责人定（见「待定问题」）。
+- **接入方式**：自托管的易支付兼容网关 EzPay v1.1.9，作为易支付商户账户的 `preset=ezpay`（见「易支付协议插件」），不另写插件。理由见「决策与理由」。
+- **链上的事归网关**：收款地址或唯一金额、代币合约、确认数、少付和充错网络都由网关处理；Axiom 只看到一笔美元订单，照常验签、查单确认、入账。服务器不保存任何私钥。
+- **前提**：网关必须支持带商户身份的查单。Epusdt 的已发布版本没有，只能保存为停用。EzPay 已在官方镜像上跑通下单、GET 回调、查单确认和丢回调补单；真实链上小额实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户。
+- **币价风险**：订单是法币，网关按它的价格换成 USDT 数量；收进钱包后、换成法币前的币价波动和脱锚风险由平台承担。
 
 ### 退款
 
-- **退多少、谁审核**：按[计费的「额度批次」](billing.md#额度批次)，只退这笔订单的付费批次里没用掉、没过期、没被冻结的部分。必须由管理员、站长或运营 agent 发起，受[运营的风险分级与审批](operations.md#风险分级与审批)约束。二级站点的退款由站长审核，从站长的商户账户退回。商户账户可以设置"允许用户申请退款"（sub2api `ent/schema/payment_provider_instance.go:54-57`，默认关），用户的申请只是一条待审核的退款。
-- **用户在控制台申请**：`POST /api/console/v1/orders/{order_id}/refunds` 需要 `balance.top_up` 和 `Idempotency-Key`，请求体是退款额度（十亿分之一，十进制文本）和原因（1–1000 字）。只认账户自己的订单；订单必须是已支付或部分退款，商户账户必须允许用户申请；同一订单已有待审核、处理中或结果未知的退款时回 409；可退额度由账本算，申请多了回 422。成功回 201，这笔额度立即按上文冻结，退款等待审核；审核通过后才发送，拒绝时解冻，额度回到余额。同一幂等键的重复请求返回同一笔退款，键被另一笔内容用过回 409。控制台把第一次发出的请求体和键固定在一起：应答未知时只允许原样重试（关掉再打开对话框也一样），不能改额度或理由；键冲突不是原请求没执行的证据，页面不再换键发送，先让用户看已有的退款。充值同样把金额、方式和键固定，未知时只按原样重试（刷新页面也保留），改金额或方式才会换键。退款对用户只有四个状态：待审核（`pending_review`）、处理中（`processing`，已冻结并在发送或等待渠道）、成功（`succeeded`）、拒绝（`declined`）；内部"已冻结""发送中""待确认"对用户都显示为处理中，渠道不明的结果不当作失败，也不让用户重复申请（见下一条）。
-- **退款是独立的记录**，一笔订单可以有多笔退款；订单只按成功退款的合计变成部分退款或已退款。偏离 sub2api：它把退款状态挂在订单上（`payment/types.go:35-40`），一笔订单同时只能有一个退款在途。渠道不认我们的退款单号时（易支付），当前不论渠道能力，一笔订单同时最多一笔退款在已冻结、发送中或待确认：两笔金额相同的部分退款在网关那边分不清。
-- **先冻结、标记发送、再调渠道**（照 sub2api 的"准备、执行、待确认"三段，`service/payment_refund.go:208-256`、`:307-358`、`:804-857`，把"先扣余额"换成"冻结"）：
-  1. 一个事务：锁订单行，再锁账户的余额行，把额度批次的分配补算到当下，算出可退额度，冻结这次要退的额度，按下一条算出退回金额，写退款记录（已冻结）。冻结的额度不能再被花、不会被到期作废、准入时不算可用余额；冻结和解冻是账本里带序号的事件，额度批次的分配重放到它们时与现场一致（[计费的「额度批次」](billing.md#额度批次)）。
-  2. 冻结时按站点的退款审批额度记下 `second_required`：不超过额度时一名站点/平台管理员批准即可发送；额度为 0（当前默认，后台尚未开放该设置）时每笔退款都走这一条。两人审批和冻结快照的代码已经就位，但开放启用路径需要负责人先明确批准审批人数、快照时点和在途处理；开放后超过额度时第一道批准只记 `first_approved_by`，必须另一名管理员再做第二道批准。请求人永远不能批准自己的退款，同一人也不能在同一笔超额度退款上担任两名批准人；未释放的请求（包括只记了第一道批准的超额度退款）可以拒绝并原子解冻，驳回不会发出任何钱。运营 agent 发起的退款还要按[运营的「资金操作上限」](operations.md#资金操作上限)叠加；两者同时生效，取更严的一档：agent 只能经原渠道退款，退款记录的申请人是运营凭证（`requested_by_agent`），负责人批准这个运营操作时在同一个事务里冻结并以自己的名义做这笔退款的批准（超过额度时是第一道），之后照常发送；额度、在途和商户能力的检查和管理员的退款完全一样（见[运营的「转账的累计金额上限」](operations.md#转账的累计金额上限)）。批准提交后，另一个事务把退款记录改为发送中、记下发送时间。之后才调用渠道，退款单号是退款记录的 ID。剩余发现预算不足五秒时不认领下一笔；已认领的调用使用独立五秒期限，结果在独立的最多三十秒完成窗口内保存，调用方取消或轮次到期不能丢弃渠道已给出的结论。崩溃停在已批准的"已冻结"一定没发过，周期任务接着发；停在"发送中"的说不清发没发。
-  3. 渠道说成功：先无锁预放等待期间的账本历史，再在一个事务里把冻结转成退款分录（[计费的「账本」](billing.md#账本)"退款"一行），退款记录成功，订单按合计更新。渠道明确失败：一个事务里解冻、退款记录失败（sub2api `payment_refund.go:583-657` 把归还与改状态放在一个事务里，理由相同）。超时、断连、渠道说处理中：结果未知，冻结不动，退款记录待确认。
-  4. 发送中、待确认的退款由周期任务收尾，**从不自动重发**，除非渠道认我们的退款单号（`RefundKey`：同一单号重发只退一次，如 Stripe、支付宝、微信的退款单号）：认的，用同一单号重发或查退款；不认的（易支付），只能查退款（`payment_refund.go:431-489`）；渠道不支持查退款，或超过 24 小时仍未知，就记待处理记录并告警；确定没有自动恢复能力的设为仅人工处理、退出自动队列并保留冻结，等人工结论（`payment_refund.go:444-447`）。偏离 sub2api：它没有"发送中"，调用前崩溃与调用后超时分不清；对不认单号的渠道重发，第一次若已退成就会退两次。
-- **为什么冻结而不是先扣**：sub2api 先扣余额再调渠道，失败再加回，加回失败时记一条"回滚失败"并靠审计日志避免重扣（`payment_refund.go:315-330`、`:866-883`）。冻结不动余额和账本，渠道失败只是解冻，不存在"扣了钱、渠道却没退"的无主状态；成功时只记一次真实的退款分录。
-- **退回的金额**按额度批次记下的实付和入账额度的比例折算，与今天的汇率无关，也与订单的报价无关（过期后按到账汇率入账的批次，按它实际的付款和额度算）：净付款额 = 实付 − 其中的手续费，站点政策为退手续费时就是实付（由订单的第一笔成功退款按其冻结报价的政策定下并记在订单上，之后沿用；第一笔失败则解冻，不设，下次重新定）；一笔退款退 ⌊退款额度 × 净付款额 ÷ 入账额度⌋，让累计退款额度达到入账额度的那一笔退 净付款额 − 此前已退的金额，所以全额退款恰好退回净付款额，任何拆法下累计退款都不超过净付款额（[计费的「额度批次」](billing.md#额度批次)）。偏离 sub2api 按订单金额的比例退（`service/payment_amounts.go:35-48`）：它的入账额度总是按订单金额算，我们的入账可能按实付或到账汇率重新折算，按订单报价退会多退。
-- **怎么退回**：渠道有退款接口的原路退回；没有退款接口（多数易支付、所有加密货币网关）、超过渠道退款期限的，管理员线下退回后登记为线下退款，同样经冻结、照常记账。
-- **加密货币**：链上转账无法原路撤回，只能线下退到用户提供并核实过的地址，链上手续费从退款中扣除。
-- **人工结论**：待处理订单的入账、未知退款的落定、线下退款的登记，都要附渠道凭证（网关订单号或退款记录、对账单行），先保存不可变的提案、再由另一个管理员检视并批准，写理由，记审计，并按[运营的风险分级与审批](operations.md#风险分级与审批)审批。它和普通退款审批不是同一条路径：这里落定的是未知或线下已经发生的资金，不论金额都保留第二人复核，凭证必须显示渠道那边到底退没退成。
-- **退款政策由站点配置**（见「后台配置」），其中两项的初始值由开发者先定，与 OpenRouter 一致，负责人可以随时修改：
-  - 加密货币充值不退款（OpenRouter《FAQ》，2026-10）；
-  - 退款时不退手续费：Stripe 退款时不退还原交易的手续费（Stripe 文档《Refund and cancel payments》，2026-10），OpenRouter 也不退平台手续费（OpenRouter《FAQ》，2026-10）。
+- **退多少、谁审核**：只退这笔订单付费批次里没用掉、没过期、没被冻结的部分（[计费的「额度批次」](billing.md#额度批次)）。由管理员、站长或运营 agent 发起，受[运营的风险分级与审批](operations.md#风险分级与审批)约束；二级站点由站长审核，从站长的商户账户退回。商户账户可以"允许用户申请退款"（默认关），用户的申请只是一条待审核的退款。
+- **用户申请**：`POST /api/console/v1/orders/{order_id}/refunds`，要 `balance.top_up` 和 `Idempotency-Key`，请求体是额度（十亿分之一的十进制文本）和原因（1–1000 字）。订单必须是自己的、已支付或部分退款，商户账户允许用户申请；已有在途退款回 409，超出可退额度回 422；成功回 201，额度立即冻结等待审核。同键重复返回同一笔，键被另一笔内容用过回 409。用户只看到四个状态：待审核（`pending_review`）、处理中（`processing`，含内部的已冻结已批准、发送中、待确认）、成功（`succeeded`）、拒绝（`declined`）；渠道结果不明不当作失败，也不让用户重复申请。
+- **退款是独立记录**：一笔订单可以有多笔，订单按成功退款的合计变成部分退款或已退款；同一订单同时最多一笔在途（已冻结、发送中、待确认）。
+- **先冻结、标记发送、再调渠道**：
+  1. **冻结**：锁订单行和余额行，补算批次分配到当下，冻结这次的额度，按下文算退回金额，写退款记录（已冻结）。冻结的额度不能再花、不会到期作废、准入时不算可用。退回金额为零时拒绝并回滚冻结。
+  2. **审批**：请求人永远不能批准自己的退款。冻结时按站点的退款审批额度快照 `second_required`；额度当前固定为 0（设置不开放，见「待定问题」），所以每笔退款由一名非申请人的站点或平台管理员批准即可发送。额度开放后，超过它的退款第一道批准只记 `first_approved_by`，必须另一人再批准；冻结后改额度不影响在途申请。未发出的退款（含只有第一道批准的）可以驳回，原子解冻。运营 agent 只能经原渠道退款，申请人记为运营凭证，负责人批准这个运营操作时在同一事务里冻结并以自己的名义批准，叠加[运营的「资金操作上限」](operations.md#资金操作上限)，取更严的一档。
+  3. **发送**：批准提交后，另一个事务把退款改为发送中、记发送时间和一分钟租约，然后才调渠道，退款单号是退款 ID。渠道调用期限 5 秒，独立于调用方并在这个事务之前开始，过期的发送者醒来也不能再发；结果在独立的最多 30 秒窗口内保存，调用方断开不丢渠道给出的结论。剩余预算不足 5 秒时不认领。崩溃停在已批准的已冻结一定没发过，周期任务接着发；停在发送中的说不清发没发。配置打不开或退款能力被停用时不认领，保留冻结。
+  4. **落定**：成功时冻结转成退款分录（[计费的「账本」](billing.md#账本)），订单按合计更新；明确失败时一个事务里解冻并记失败；超时、断连、处理中是结果未知，冻结不动、记待确认。落定前先在订单锁之外预放等待期间的账本历史。成功时间取账本退款分录的时间，跨 UTC 午夜也归同一现金日。
+  5. **收尾**：发送中、待确认的由周期任务处理，**从不自动重发**，除非渠道认我们的退款单号且冻结时和现在都声明这项能力（Stripe、支付宝、微信）：认的用同一单号重发或查退款；不认的（易支付）只查退款。既不能查也不能安全重发的立即记待处理、设为仅人工处理并保留冻结；能自动处理但超过 24 小时仍未知的也记待处理并告警。每笔退款每分钟最多尝试一次，每轮最多发现 100 笔、预算 10 秒，排在本地过期之后、关单之前，慢关单饿不死退款；未批准、线下和仅人工处理的不在自动队列里。
+- **为什么冻结而不是先扣**：冻结不动余额，渠道失败只是解冻，没有"扣了钱渠道却没退"的状态。
+- **退回的金额**按批次的实付和入账额度之比折算，与今天的汇率、订单报价都无关：净付款额 = 实付 − 其中的手续费（站点政策为退手续费时就是实付；政策由订单第一笔成功退款定下并记在订单上，之后沿用）；一笔退 ⌊退款额度 × 净付款额 ÷ 入账额度⌋，让累计额度达到入账额度的那一笔退余数，所以全额退款恰好退回净付款额，任何拆法都不超过。按订单报价折算会多退：锁 7.40、过期后到账汇率 7.00，付 74.00 元入 10.571 美元，全退按 7.40 会退 78.22 元。
+- **怎么退回**：有退款接口的原路退回；没有接口（多数易支付、所有加密货币网关）或超过渠道退款期限的，线下退回后登记为线下退款，同样经冻结和记账，批准后保持冻结，等转账凭证经第二人批准才结算。加密货币只能线下退到用户提供并核实过的地址，链上手续费从退款中扣除。
+- **人工结论**：待处理订单的入账、未知退款的落定、线下退款的登记，都要附渠道凭证，先保存不可变的提案，再由另一个管理员检视并批准，写理由、记审计。不论金额都要第二人，因为落定的是未知或已经在线下发生的资金。未知退款只在待确认时接受结论；人工入账只对同币种、无冲突的单笔付款，不受自动入账时间窗限制，但仍用锁定或到账汇率、手续费和账本校验。
+- **退款政策**由站点配置，初始值与 OpenRouter 一致：加密货币充值不退款；退款不退手续费（Stripe 退款也不退原交易手续费）。
 
 ### 拒付
 
-拒付指信用卡持卡人事后向银行申诉，银行把钱从商户账户拉回。Stripe 插件接收 `charge.dispute.*` 事件，处理规则和金额见「Stripe 插件」的「拒付」。
+持卡人向银行申诉、银行把钱拉回。Stripe 插件把 `charge.dispute.*` 归成扣款、败诉、胜诉、只记录四种动作（见「Stripe 插件」），核心按（商户账户，PaymentIntent）从付款记录找订单，在 `order_disputes` 按（商户账户，渠道，Dispute ID）幂等记一行：`recorded`（只记录）、`applied`（已扣）、`reversed`（已冲正）。找不到订单记 `dispute_unmatched` 待处理并告警，回 200。
 
-- 扣回这笔充值的入账额度减去已成功退款的额度（已退的不重复扣），已经用掉或过期的部分也照扣，余额可以变成负数；准入因此拒绝新的消费（见[计费的「风控状态」](billing.md#风控状态)）。记账见[计费的「账本」](billing.md#账本)。在途退款未落定时不自动扣，记待处理等人工先落定；一笔订单扣回的额度加成功退款的额度不超过入账额度。`dispute_open`/`dispute_lost` 在同一事务里暂停账户，操作员在后台解除；胜诉只冲正钱，不自动解除暂停。待处理记录和告警仍用于人工核对金额与凭证。拒付行以 `suspended_at` 记住暂停是否已发生，重复或后到事件、以及滚动升级中旧节点漏掉的暂停，由新节点的事件或轮询补齐，解除后不会再次暂停。
-- 系统整理该账户的充值和调用记录（不含对话内容）作为申诉材料，由人工在渠道规定的期限内提交；申诉胜诉后冲正分录，订单保持被拒付状态。胜诉后额度回到余额，但订单不再允许新退款，需要人工另行处理。
-- 二级站点的拒付发生在站长的商户账户上，记在该站点的账上，并通知站长处理。
-- 金额不符、在途退款、订单没入账、同一订单第二笔拒付都记待处理（`dispute_*`）并告警，由人工核对凭证；自动路径只处理“单笔、净额相符、无在途退款”的全额拒付。
+- **只在全部满足时自动扣**：订单已支付且有付费批次、没有被扣过；没有在途退款（否则记 `dispute_refund_in_flight`，等人工先落定退款）；拒付的金额币种等于实付减已退现金（否则记 `dispute_amount`）。不满足的都记待处理并告警，由人工核对凭证。约束始终是：扣回额度加成功退款额度不超过入账额度。
+- **扣多少**：额度 = 入账额度 − 已成功退款 − 已扣回；现金 = 实付 − 已退现金；手续费收入 = 原手续费 − 已退手续费。已用掉或过期的也照扣，余额可以为负，准入因此拒绝新的消费（[计费的「风控状态」](billing.md#风控状态)）。分录形状同退款（`chargeback`），跨币种用汇兑损益配平。订单在同一事务里变成被拒付，写订单事件。
+- **胜诉**只对 `applied` 的行做反向分录（`chargeback_reverse`），额度回到余额；订单**保持被拒付**，不再允许新退款。`won` 是终态，后到的任何事件都不能把行改回已扣或再动钱；`lost` 对没扣的补扣，扣过的只更新状态。重复、乱序、晚到的事件按行状态幂等。`applied_at`、`reversed_at` 取对应账本交易的时间，拒付现金和订单、批次归同一个记账日。
+- **账户暂停**：扣款和败诉在记拒付的同一事务里把订单所属账户置为暂停（[计费的「风控状态」](billing.md#风控状态)），新调用被拒，登录和创建 key 仍可用；暂停只由操作员在后台解除，胜诉不自动解除。暂停和解除记 `account.status_change` 审计并持久化 `accounts.account_suspended` 信号。拒付行记 `suspended_at`，同一笔拒付的后续事件不会在解除后再次暂停；已扣钱但还没暂停的行由轮询补齐。取锁顺序：余额行 → 账户行 → 平台告警锁，与计费修正和手动暂停同序。
+- 系统整理该账户的充值和调用记录（不含对话内容）作为申诉材料，由人工在渠道期限内提交。二级站点的拒付记在该站点的账上并通知站长。
 
 ### 兑换码
 
-- **形态**：管理员按批次生成兑换码，给定每个码的面额（站点记账货币）、数量（1–100）、可选备注和可选有效期；同一批的码面额、备注、有效期相同。码是 20 位 Crockford Base32（去掉易混的 I、L、O、U），按 5 位一组显示，输入时可以带连字符、空格、任意大小写。数据库只存码的 SHA-256 和末四位提示（`hint`），明文只在生成接口的应答里出现一次；列表、详情、日志和错误信息都不回显码，幂等声明里保存的应答也不含码（同键重放回同一批的 ID、面额和提示，但不再有明文，页面提示没保存就停用重发）。码的 ID 用 `rdm_` 前缀，兑换记录用 `rdn_`。
-- **管理接口**（`/api/admin/v1/payments/redeem-codes`）：按站点列出、生成一批、停用一个。列出可按状态（`enabled`、`used`、`disabled`、`expired`）和备注前缀筛选（按字面比较，`_`、`%`、`\` 不当作通配符），按 `(created_at, id)` 倒序翻页；`expired` 不落库，是「仍是启用、已过有效期」的推导值。生成回 201，只在这个应答里带 `code`；停用回 200，已兑换的码停用回 409，不存在的码 404。三项都要 `sites.manage`、MFA、CSRF、`Idempotency-Key` 和理由；生成与停用各记一条审计（`redeem_code.issue`、`redeem_code.disable`），与数据同事务。停用只改 `state`、`disabled_at`、`disabled_by`，已兑换的码不受影响。
-- **控制台**（`/api/console/v1/redeem-codes`）：`POST` 用 `balance.top_up` 和 `Idempotency-Key` 兑换，首次回 201，同一个键重放回 200 和同一笔兑换；键被同一个账户的另一个请求用过回 409。`GET` 用 `balance.view` 读自己的兑换记录，按 `(created_at, id)` 倒序翻页，只带面额、提示、有效期和兑换时间。兑换成功时额度作为新的 `redeem` 来源批次入账，批次 ID 就是兑换记录 ID，有效期沿用码上的；兑换记录、码的状态和这笔入账在同一个事务里。余额、额度流水和 CSV 导出都认识这个来源：流水把它显示为「兑换码」，不会因为遇到未知来源而拒绝整页。被拒时回可区分的稳定错误码：`redeem_code_invalid`、`redeem_code_expired`、`redeem_code_disabled`（422）和 `redeem_code_used`（409），页面据此说明是换码还是联系发放方，不用笼统的「内容有误」；到限流仍是 429。
-- **一次且只一次**：事务里先取账户的事务级咨询锁（命名空间 `0x52`，键由整个账户 ID 的散列派生），再按 `(account_id, idem_key)` 重读一次兑换记录（重放直接返回它），然后 `SELECT … FOR UPDATE` 锁住码行，读 `clock_timestamp()` 作为兑换决策时间并检查状态和有效期（不能用事务开始时间：等锁期间码可能已经过期），用 `UPDATE … SET state = 'used' WHERE state = 'enabled' AND (expires_at IS NULL OR expires_at > clock_timestamp())` 的条件更新把码从可用改为已用，插入兑换记录（`code_id` 唯一），最后调 `billing.CreditRedeem`。码行锁和 `code_id` 唯一各是一道闸：即使两个账户同时拿到同一个码的明文，也只有一个事务能把状态改掉并插入记录。账户锁让同一个账户的并发兑换和同键重放按顺序看到彼此。
-- **限流**：每次尝试先在独立的、已提交的事务里占用名额：按账户每窗口 30 次、按来源 IP 分组每站点每窗口 100 次，窗口一小时，从窗口后的第一次尝试起算。到上限回 429 并带 `Retry-After`。计数在检查码之前完成，所以猜码的请求也会占名额；数不了（计数写入出错）时拒绝兑换，不放行。计数存在数据库里，跨节点、重启后仍然有效。sub2api 只数失败次数、按用户计数，Redis 出错时放行（`backend/internal/service/redeem_service.go:28`、`:336-352`、`:446-452`）；new-api 没有兑换限流。
-- **与 new-api 的差异**：new-api 把码本身明文存进 `key` 列（`model/redemption.go:16`），兑换时在事务里锁行、检查状态与 `ExpiredTime`，再用状态的条件更新挡住并发（`model/redemption.go:136-180`），入账走 `creditTopUpQuota`；生成按名称和数量逐条插入并直接返回明文列表（`controller/redemption.go:75-124`），管理路由见 `router/api-router.go:308-318`。我们保留它的「条件更新 + 锁」思路，按 Axiom 的规则改成只存哈希、批次带备注和有效期、入账记成独立的 `redeem` 批次、管理操作带审计和幂等；账户与 IP 限流是新加的（本设计「防欺诈」一节的限额都要求在事务里或独立计数里原子占用，数不了就拒绝）。
+- **形态**：管理员按批次生成，给定面额（站点记账货币）、数量（1–100）、可选备注（至多 200 字）和有效期；同一批面额、备注、有效期相同，全部成功或全部回滚。码是 20 位 Crockford Base32（去掉 I、L、O、U），5 位一组显示，输入可带连字符、空格、任意大小写。库里只存 SHA-256 和末四位提示；明文只在生成应答里出现一次，列表、详情、日志、错误和幂等声明保存的应答都没有，同键重放回同一批但不带明文。ID 前缀：码 `rdm_`，兑换记录 `rdn_`。
+- **管理接口** `/api/admin/v1/payments/redeem-codes`：列出（按状态 `enabled`、`used`、`disabled`、`expired` 和备注前缀筛选，前缀按字面比较，按 `(created_at, id)` 倒序翻页）、生成（201，只有这里带 `code`）、停用（200；已兑换的 409，不存在 404）。都要 `sites.manage`；生成和停用另要 MFA、CSRF、`Idempotency-Key` 和理由，各记一条审计（`redeem_code.issue`、`redeem_code.disable`），与数据同事务。`expired` 不落库，是读时对"启用且已过有效期"的推导；停用只改状态和停用人、时间。
+- **控制台** `/api/console/v1/redeem-codes`：`POST` 要 `balance.top_up` 和 `Idempotency-Key`，首次 201，同键重放 200 和同一笔，键被同账户另一请求用过 409；`GET` 要 `balance.view`，列自己的兑换记录（面额、提示、有效期、时间）。兑换成功时额度作为 `redeem` 来源批次入账，批次 ID 就是兑换记录 ID，有效期沿用码上的；兑换记录、码的状态和入账同一事务。余额、额度流水和 CSV 导出都认识这个来源。被拒时回稳定错误码：`redeem_code_invalid`、`redeem_code_expired`、`redeem_code_disabled`（422），`redeem_code_used`（409）；错误不回显码，也不确认某个码是否存在。
+- **一次且只一次**：事务里先取账户的事务级锁，按（账户，幂等键）重读兑换记录（重放直接返回），再锁码行，读数据库当前时钟（不是事务开始时间：等锁期间码可能过期）检查状态和有效期，用带同样条件的更新把码改为已用，插入兑换记录（码 ID 唯一），最后入账。
+- **限流**：每次尝试先在独立的、已提交的事务里占名额：每账户每小时 30 次，每 IP 分组每站点每小时 100 次，窗口从窗口过后的第一次尝试起算；超限回 429 带 `Retry-After`。计数先于查码，猜码也占名额；数不了就拒绝兑换。
 
 ### 防欺诈
 
-以下都是配置项，默认值保守而不是关闭（[安全](../security.md)：影响体验的措施是配置项，负责人未表态的由开发者先定）：
+以下都是站点配置，默认保守而不是关闭（[安全](../security.md)）：
 
-- 每个账户每天的充值上限、单笔上下限；新账户首笔充值的上限（每天上限照 sub2api `service/payment_order.go:336-358`，单笔照 `:122-142`）。
-- 每个账户的待支付订单数和取消次数上限（见「订单」）；每个 IP 的下单次数和支付失败次数上限，防止有人用盗来的卡反复试卡、刷单。IP 按站点分别数，IPv4 一个地址一组、IPv6 按 /64 一组；窗口是一小时，从窗口过后的第一次下单或失败起算，到期后重新数。下单次数在下单事务里占名额，同一个 IP 下不同账户同时下单也不会超过上限；失败次数是被渠道拒绝（失败）的订单数，不含用户自己取消和过期的；任何一项到了上限，下一单回 429 并告诉还要等多久。数不了（计数的写入出错）时拒绝下单，不放行。
-- Stripe 启用 3D 验证和它自带的风控（Radar）。
+- 每账户每天充值上限、单笔上下限、新账户首笔上限；待支付笔数和取消次数上限（见「订单」）。
+- **每 IP 的下单次数和支付失败次数上限**（默认每小时 20、10 次），防试卡和刷单。按站点分别数，IPv4 一个地址一组、IPv6 按 /64；窗口一小时，从窗口过后的第一次下单或失败起算。下单次数在下单事务里占名额，同 IP 不同账户并发也不超过；被账户自己的限额或选不出商户账户拒绝的请求不占，重放不占。失败次数只数渠道拒绝的订单，不含取消和过期。到上限回 429 并告诉要等多久；数不了就拒绝下单。
+- Stripe 启用 3D 验证和 Radar。
 
 ### 对账
 
-- **每天自己对平**：每个商户账户，按付费批次的创建时间划分 UTC 入账日，将订单的实付之和与同一批次的现金分录对平；即使事务跨过午夜，订单与现金也归同一天。退款现金按退款交易的时间划日，支付退款的完成时间取账本同一时间，从订单侧同时扣除对应成功退款额；拒付的扣款按 `applied_at`、胜诉的冲正按 `reversed_at` 从同一币种的预期现金里扣除或加回；跨 UTC 午夜不产生假差额，现有账本中没有支付退款记录可对应的现金冲出仍是差异。各商户账户的用量计数等于按订单复算的值；不平就记一条待处理记录并告警。
-- **与渠道对账**：渠道提供账单下载的（如 Stripe、支付宝官方、微信支付），逐笔比对金额、手续费、状态（包括退款和拒付），再比对汇总；"网关有、订单无"的付款单列一类差额；对不上就记待处理记录并告警。易支付没有账单接口；微信支付有交易账单和资金账单，但核心还没有 `Statements` 接口，当前未接入（见「微信支付官方插件」）。每日任务将前一个 UTC 日固定在作业参数中，按商户分开核对，再每个查单作业只查一单，成功后持久派生下一单的游标作业；名额忙时通过有次数上限的正常重试退避，熔断时延后尚未开始的这一单，失败不会重查已经完成的前缀；查询失败或付款信息仍不完整时只重试这一单。核对与查单运行在独立对账队列，不占入账和过期的 money 工作名额。它把前一天所有非终态和有变化的订单、以及还在"过期后补查窗口"内的已过期和已取消订单再查一次；"网关有、订单无"只能靠回调发现（见「回调与到账」第 4 步）。渠道结算的币种与付款币种不同时，差额记入汇兑损益。sub2api 没有账单对账，只有上文的补单。Stripe 的 Balance Transactions 账单下载和渠道实际手续费还没有接（`Statements` 接口和 `statement_lines` 表随第一个声明它的插件交付），所以 Stripe 目前只做订单、批次、退款、拒付和账本现金的日对账，见「Stripe 插件」。
-- **待处理记录**（`api/admin.yaml` 的 Payments）：金额不符、多笔或重复付款、有付款没订单、网关订单号冲突、拒付金额或身份不符、拒付时有在途退款、对账差额、长期未知的退款都进同一张表，管理后台可见，后台可按状态分页、读取详情并附理由标记已调查（金额按精确十进制文本返回，包含旧记录中的大整数）；这一步只关闭调查记录，不改变订单、余额或退款，资金的人工结论仍见「退款」。同一差额按商户、类别、日期/订单及差异内容去重，已调查的同一事实重复报告也不另建行；数值后来改变会形成新记录，避免新的差额被旧调查结论掩盖。
+- **每日任务 `payments.reconcile`** 固定前一个 UTC 日（启动时也运行），按商户账户（含已停用的）分开、在一致快照里核对：订单实付之和与同一批次的现金分录、当日变更的订单与当日入账批次（缺批次、孤立批次、实付、手续费、入账额度、账户、币种、商户不符），以及各商户账户的用量计数等于按订单复算的值。按付费批次的创建时间划 UTC 入账日，订单和现金归同一天；退款现金按账本退款时间划日并从订单侧扣除；拒付扣款按 `applied_at`、胜诉冲正按 `reversed_at` 计入同币种现金；没有对应成功退款记录的现金冲出仍是差异。不平就记待处理并告警，与平台信号同一事务。任务在独立队列上运行（单节点一个工作者），不占入账和过期的工作名额；商户核对与差异落库合计最多 5 分钟。
+- **逐单复查**：前一天所有非终态和有变化的订单，以及补查窗口内的已过期、已取消订单再查一次；每个作业只查一单，成功后持久派生下一单，失败只重试这一单；名额忙按次数有限的重试退避，暂停时延后一分钟。"网关有、订单无"只能靠回调发现。
+- **渠道账单**：渠道账单下载和逐笔比对（含渠道实际手续费）还没有实现，任何插件都不声明 `Statements`；见「待定问题」。在那之前只有上面的逐单日对账。
+- **待处理记录**（`api/admin.yaml` 的 Payments）：金额不符、多笔或重复付款、有付款没订单、网关订单号冲突、拒付不符或有在途退款、对账差额、长期未知的退款都进同一张表。后台可按状态分页、读详情，并附理由标记已调查；这只关闭调查记录，不改订单、余额或退款，资金结论走「退款」的人工结论。同一事实按商户、类别和内容指纹去重，已调查的重复报告不另建行；数值变了形成新记录。
 
 ### 后台配置
 
-全部是站点数据，默认值写在代码里，库里只存与默认不同的取值（负责人偏好：选项是后台数据，不写死）：
+全部是站点数据，默认值写在代码里，库里只存与默认不同的取值：
 
 | 范围 | 配置项 | 默认 |
 |---|---|---|
-| 站点 | 是否开放充值；单笔额度上下限；快捷金额；选商户账户的策略 | 关闭；无；无；轮询 |
-| 站点 | 每账户待支付订单上限；取消限流（次数、窗口）；每账户每天充值上限；新账户首笔上限；每 IP 下单次数与失败次数上限 | 3；每小时 5 次；不限；100 额度；每小时 20 次、10 次 |
-| 站点 | 金额不符的处理（人工、按实付入账）；过期后的宽限期；过期后自动入账期限；过期后补查窗口 | 人工；5 分钟；7 天；7 天 |
-| 站点 | 退款政策：是否退手续费、加密货币是否可退；退款审批额度暂不开放（机制已实现，等待负责人批准；值固定为 0，仍由一名非申请人的管理员批准） | 不退；不可退；不设 |
-| 商户账户 | 渠道种类、名称、启用、排序；付款币种；订单有效期；下单方式；插件配置（含加密的密钥） | —；—；启用；—；—；30 分钟 |
-| 商户账户 × 付款方式 | 网关的付款方式代码（支付宝是产品代码，见「支付宝官方插件」）；手续费比例（0–50%）与固定金额；单笔上下限、每天额度（付款币种的总额） | —；0；不限；不限 |
-| 商户账户 | 支持退款、允许用户申请退款 | 关；关 |
+| 站点 | 是否开放充值；单笔额度上下限；快捷金额；选商户账户的策略；充值缓冲 | 关闭；不限；无；轮询；2% |
+| 站点 | 每账户待支付上限；取消限流；每账户每天上限；新账户首笔上限；每 IP 下单与失败次数 | 3；每小时 5 次；不限；100 额度；每小时 20、10 次 |
+| 站点 | 金额不符的处理（人工、按实付入账）；过期后宽限期；自动入账期限；补查窗口 | 人工；5 分钟；7 天；7 天 |
+| 站点 | 退款政策：是否退手续费、加密货币是否可退；退款审批额度（不开放，固定 0） | 不退；不可退；0 |
+| 商户账户 | 渠道种类、名称、启用、排序；付款币种；订单有效期（60 秒到 24 小时）；插件配置和加密的密钥；支持退款、允许用户申请退款 | —；—；启用；—；—；30 分钟；—；关、关 |
+| 商户账户 × 付款方式 | 网关的付款方式代码；手续费比例（0–50%）与固定金额；单笔上下限、每天额度（付款币种总额） | —；0；不限；不限 |
 
-- Stripe 商户账户的密钥在上表的“插件配置（含加密的密钥）”里：`secret_key`、`webhook_secret`，轮换期间可加 `old_webhook_secret`；非密的 `settings` 是空对象。Stripe 的 webhook 端点不在本程序里创建：管理员按部署的站点域名拼出 `https://<站点域名>/api/payments/v1/notify/<商户账户 ID>`，在 Stripe 后台登记，并选择「Stripe 插件」列出的事件；`CreateRequest.NotifyURL` 虽然由核心生成，Stripe 下单用不到它。后台页面的渠道种类下拉和密钥字段按种类切换：EasyPay 是 `key`/`old_key`，Stripe 是 `secret_key`/`webhook_secret`/`old_webhook_secret`，微信支付是 `private_key`、`api_v3_key` 和平台证书或公钥及轮换用的旧那份，非密配置仍是严格 JSON。
-- 保存时整体校验，不合法就拒绝保存；改动与审计、二级站点站长的通知在同一个事务里，失败就一起回滚，不会留下没有通知的改动或没有改动的通知。微信支付的配置项和密钥名称见「微信支付官方插件」；保存只做本地校验，后台的"测试"另做一次只读查单。
-- **有未完成的订单时不能改身份**：商户账户还有待支付、待处理的订单或未落定的退款时，不能改商户号、密钥、网关地址、签名方式和付款币种；付款方式映射、cid、下单模式及能力开关可以修改（sub2api `service/payment_config_providers.go:121-165`、`:297-329`）。身份保护覆盖补查窗口内的已过期、已取消和有网关单号的失败订单（含窗口截止瞬间）；即使关单失败或渠道不支持关单，也必须保留原来的身份，直到补查窗口结束（[#390](https://github.com/TYCT-tyct/Axiom/issues/390)）。网关那边换密钥时，新旧密钥并存验签，直到用旧密钥签的订单都落定。商户账户不删除，只停用：停用的不再被选中，但照常接受回调、查单和退款，历史订单永远找得到它。
+- **保存时整体校验**，不合法就拒绝；改动、审计和站长通知在同一事务里。
+- **有未完成订单时不能改商户身份**：还有待支付、待处理的订单、未落定的退款，或补查窗口内的已过期、已取消、有网关订单号的失败订单时，不能改商户号、密钥、网关地址、签名方式、预设和付款币种（各插件的身份字段见[模块 README](../../internal/payments/README.md#渠道接口)）；付款方式映射、cid、下单方式和能力开关可以改。网关那边换密钥时，新旧密钥并存验签，直到旧密钥签的订单都落定。
+- **商户账户不删除，只停用**：停用的不再被选中，但照常接受回调、查单和退款，配置和密文都保留。
+- **站点支付设置** `/api/admin/v1/sites/{site_id}/system-settings/payments`：读改收款开关、充值额度范围和充值缓冲（`top_up_buffer_ppm`），金额是精确整数文本，省略上下限表示不限；审计记改前改后的值。退款审批额度不在接口里。
+- **商户账户** `/api/admin/v1/payments/merchants`：按 `site_id` 列出、读取、创建、按修订号修改、单独停用（`/disable`），以及 `/{merchant_id}/tests`。响应只有非密配置和付款方式；密钥只写不读，不进审计、幂等指纹、日志和错误，修改时省略就保留原来的。非密配置是严格 JSON，各渠道的成员在契约里各有模式，未知成员 422。付款方式的费率用百万分之一，限额是带币种的精确金额，不是整最小单位就拒绝。过期修订号 409，字段错误 422 带 JSON 指针。重复停用幂等，不再写审计。
+- **订单与退款** `/api/admin/v1/payments/orders`、`/payments/refunds`、`/payments/refunds/{refund_id}/approve|reject`：订单按站点、用户、用户账户、商户账户、状态和创建时间（`since` 含、`until` 不含）筛选，按 `(created_at, id)` 倒序翻页，每笔带退款，不返回 `checkout`（可能带客户端密钥）；退款队列只列冻结的退款。要显式的 `site_id`，作用域外的站点和不存在的一样 404。`credits`、`credited` 是十亿分之一，`total`、`fee`、`paid_total`、`paid_fee` 和退款的 `amount` 是付款币种最小单位，都是十进制文本。
+- **批准和驳回**要 MFA、`sites.manage`、CSRF、`Idempotency-Key` 和理由；本地决策、审计和幂等答案同一事务提交，渠道退款在提交后才调，失败由退款轮询接续。同键重放返回第一次的结果并带 `Idempotency-Replayed: true`；同键用于另一笔退款在决策前回 409。自批 403；已有最终批准或已终结 409；理由不合法 422 带 `/reason`。批准线下退款只记批准，退款保持冻结等凭证；驳回解冻并记 `refund.reject`。
+- 后台设置页把站点信息、邮件和支付分成独立卡片各自保存，密钥字段只写、编辑时留空表示保留；旧节点拒绝 `top_up_buffer_ppm` 时，用同一幂等键去掉该字段重试并说明缓冲未改。
+- 所有管理操作要 MFA、`sites.manage`、CSRF、幂等键和理由，配置与审计同事务。新增的可选字段缺失时，页面显示"暂不可用"，不当作空值或零。
 
 ### 审计与告警
 
-- **审计**（平台审计日志，与改动同事务）：商户账户的增删改与启停（不记密钥）、管理员对订单的取消与待处理结论、退款的发起、两道审批（已终结请求不再批准）、手工结论、站点支付配置的修改。拒付触发的账户暂停和解除由账户模块记 `account.status_change`，系统自动的到账不另记支付审计：订单事件和 billing 入账时写的审计已覆盖。
-- **告警**（经平台的告警信号，由记录与告警模块发送；支付的通知需要管理员按[规则配置](observability.md#告警信号事件与规则e5-3)新增 `payments.discrepancy`、`payments.query_paused`、`payments.verify_failed`、`payments.query_failed`、`payments.rate_limited` 与 `payments.merchant_unreadable` 规则并绑定渠道，默认五条规则不覆盖它们）：金额不符、多笔或重复付款、有付款没订单、所有商户账户都被限额过滤、退款超过 24 小时未知、补单积压、对账差额（`payments.discrepancy`，随差异同事务落平台信号，调查记录提交时清除）、商户账户的查询被暂停（`payments.query_paused`，恢复后的首个成功查询清除）。
-- **另外四类支付信号**：验签失败（`payments.verify_failed`）、查询确认失败（`payments.query_failed`，订单查询与退款查询共用商户健康判定）、回调或下单被限流拒绝（`payments.rate_limited`）都在每个服务节点内按 UTC 分钟窗口计数；每个完整分钟结束时经非阻塞的 Sink 发出该分钟的完整计数（`Fields["value"]`，1 次也发），是否通知由管理员规则的阈值决定（[观测的「告警信号」](observability.md#告警信号事件与规则e5-3)）。合并键带节点身份（`<节点>/callbacks`、`<节点>/queries`、`<节点>/orders`），一个节点的恢复不会清掉另一个节点仍在上报的事件；商户配置解不开（`payments.merchant_unreadable`，合并键 `<节点>/<商户 TypeID>`）在每个商户第一次失败时立即发一条，重新打开时清除。计数只有每种信号每个键的一个计数器，内存有界；每请求只加一个整数，不写数据库；窗口结束时最多发一条，不随请求增长。同一个节点的监听器、后台轮询和管理入口共用一个 `SignalState`，不会把一分钟的失败拆成几份计数。消费端对每个完整窗口先按当前值评估，再允许后续样本；事件保留当前窗口值供规则判断，通知回执冻结创建时的展示字段，后续低值会重置持续条件且不会改写已排队的突发，恢复仍由空窗口决定。上报后的下一个完整分钟没有同类事件时清除；中间一个空分钟、随后又有事件时保持未恢复。完全不再有同类事件时事件保持未恢复，由管理员关闭。
-- **账户暂停信号**：拒付暂停账户和操作员解除由账户模块持久化 `accounts.account_suspended`（暂停 critical，解除时恢复，合并键是账户 TypeID）。它同样没有预置规则，管理员要按[规则配置](observability.md#告警信号事件与规则e5-3)新增规则并绑定渠道；默认五条规则不覆盖它。
+- **审计**（平台审计日志，与改动同事务）：商户账户的创建、修改、启停（不记密钥）；管理员取消订单和待处理结论；退款的发起、每道审批、驳回、人工结论；站点支付配置的修改。拒付引起的暂停和解除由账户模块记。系统自动的到账不另记，订单事件和 billing 的入账审计已覆盖。
+- **持久告警**（随事实同事务落平台信号）：`payments.discrepancy`（待处理记录，调查记录提交时清除）、`payments.query_paused`（商户查询暂停，恢复后首个成功查询清除）。
+- **突增信号**：`payments.verify_failed`（验签失败）、`payments.query_failed`（查询确认失败，订单与退款查询共用）、`payments.rate_limited`（回调或下单被限流）在每个节点内按 UTC 分钟计数，每个完整分钟结束时发一条完整计数（1 次也发），是否通知由管理员规则的阈值决定；上报后下一个完整分钟没有同类事件时清除。合并键带节点身份（`<节点>/callbacks`、`<节点>/queries`、`<节点>/orders`），一个节点恢复不清另一个节点的事件。`payments.merchant_unreadable`（合并键 `<节点>/<商户 ID>`）在商户第一次解不开时立即发，重新打开时清除。计数只有每种信号每个键一个整数，不写数据库。
+- 这些信号和 `accounts.account_suspended` 都没有预置规则，要管理员按[观测的「告警信号」](observability.md#告警信号事件与规则e5-3)新增规则并绑定渠道。
 
 ### 收据与发票
 
-- **收据是订单的渲染，不是另存的副本**：付款落定后，控制台为每笔充值出一张收据（`/console/orders/<订单号>/receipt`），写着站点名称、订单号、支付时间、支付金额与币种、付款方式、入账额度，以及之后成功退回的退款。它只读订单上的已付事实（`paid_at`、`paid_total`、`credited`）和订单自己的退款，没有收据表，也没有可编辑的字段，所以不会与订单不一致。为此控制台的订单读取多了三个可选字段（`api/console.yaml` 的 `Order`）；旧节点不返回时，订单页说收据暂不可用，不画一张缺数字的收据。收据页每次打开都重新读一遍订单：核验和取消的响应不带退款，也不覆盖已读到的订单；读到的记录没有退款列表时同样不出收据，「没有退款」和「没读到退款」不能混为一谈。
-- **收据是一张可打印的网页，PDF 交给浏览器的打印对话框**：页面上的「打印或存为 PDF」调用 `window.print()`。不引入 PDF 库和中日韩字体，不在服务端存放不可变的文件，渲染只有一条路径；打印时控制台的导航和按钮隐藏、配色固定为浅色（`web/packages/ui/src/styles.css` 的 `@media print`），纸面上只有收据本身。
-- **哪些订单有**：有已付事实的订单都有——已支付、部分退款、已全额退款，以及之后发生过拒付的。拒付不撤销付款事实（争议胜诉只把钱冲正，订单仍是 `charged_back`），收据只写当时的付款和之后成功退回的退款，不写争议本身；未支付和未完成的（待支付、已过期、已取消、失败、待处理）没有，页面说「还没有收据」，支付完成后再来。
-- **只写成功退回的退款**：审核中、处理中和被拒绝的退款没有动过钱，写进收据会把「申请过」当成「已退回」。每笔退款写退回的现金和扣回的额度，时间是它成功的时间。
-- **支付时间与金额**：支付时间按读者浏览器的时区显示并带时区名（`useFormat` 的 `format.dateTime`），同一笔付款在不同人眼里是同一天的不同时刻，收据要写出是哪一刻。支付金额用付款币种的最小单位（`PayAmount`），入账额度用站点记账币种（`Money`），后者可以因为到账时的汇率和实际金额与报价不同（见「过期后到账」）。
-- 正式发票以后再做，不在本次范围；界面和文档都不把收据叫发票。
-
-系统设置 API 在 `/api/admin/v1/sites/{site_id}/system-settings/payments` 读改收款开关、充值额度范围和充值缓冲（`top_up_buffer_ppm`，0 到 10%，站点没设时返回默认的 2%）。金额保持精确整数文本，省略充值上下限表示不限。退款审批额度（`refund_second_approval_credits`）的列和判定代码已经就位，但接口和页面不读写它：开放启用路径要先有负责人对审批人数、快照时点和在途处理的明确批准。开放前该值保持 0，每笔退款仍由一名非申请人的管理员批准。缓冲与支付设置在同一个事务里保存，审计里记下改前和改后的值。
-
-商户账户的管理 API 在 `/api/admin/v1/payments/merchants`：按 `site_id` 列出、按 ID 读取、创建、按修订号修改，以及单独停用（`/disable`）。响应只有非密配置和付款方式，密钥只写不读，也不进审计、幂等指纹或错误信息；创建必填，修改省略就保留已封装的那份。付款方式的费率用百万分之一，限额在接口里是带币种的精确金额，服务端按该商户的付款币种换算成最小单位，不是整最小单位就拒绝。修改撞上过期修订号返回 409，字段错误返回 422 并带 JSON 指针。停用只把启用位关掉并加修订号，配置、付款方式和密文都保留，已有关单、查单、回调和退款照常可用；已停用时重复停用是幂等的，不再写审计。
-
-`/api/admin/v1/payments/merchants/{merchant_id}/tests` 以已保存的商户做认证只读查询（易支付 [V1 商户查询](https://docs.xarr.cn/merchant/api/epay.html)，2026-10-29 核对 POST、act=query 和 code=1），返回 accepted/failed/unsupported，不建单、不转钱、不泄漏渠道响应或密钥。管理操作需 MFA、sites.manage、CSRF、幂等与理由，配置和审计同事务；创建、修改和停用的理由都写进审计。
-
-管理订单与退款的接口在 `/api/admin/v1/payments/orders`、`/payments/refunds` 和 `/payments/refunds/{refund_id}/approve|reject`：订单按站点、用户、用户账户、商户账户、状态和创建时间（`since` 含、`until` 不含）筛选，游标按 `(created_at, id)` 倒序；退款按状态筛选，同一游标规则。每笔订单带它的退款，`refund_allowed` 是商户账户此刻是否允许用户申请退款。站点取后台账户所在的站点（M1 没有站点列表），接口仍要求显式的 `site_id`；作用域之外的站点和不存在的站点一样是 404。金额分两种单位：`credits`、`credited` 是站点记账货币的十亿分之一，`total`、`fee`、`paid_total`、`paid_fee` 和退款的 `amount` 是付款币种的最小单位，都用十进制文本，不用浮点。订单的 `checkout` 不返回：它可能带客户端密钥。新字段在滚动发布期间都可能不出现，页面显示「暂不可用」而不是当成空值。
-
-批准和驳回都要求 MFA、`sites.manage`、CSRF、`Idempotency-Key` 和理由。服务端把本地决策、审计和该请求的幂等答案放在同一事务提交，渠道退款在提交后才调用；发送失败或进程中断由退款轮询接续，所以不会把没做成的决策存成成功。同一个键重放返回第一次的结果并带 `Idempotency-Replayed: true`；同一个键用于另一笔退款或另一个请求，在决策前返回 409，不会产生第二个资金操作。两种决策都按退款状态幂等。退款人不能批准自己的退款（`ErrSecondPerson`，403）；已有最终批准或已终结的退款返回 409，但超过额度的第一道批准不阻止另一人继续批准，也不阻止驳回。空理由或不合法理由返回 422 并带 `/reason` 指针。批准线下退款只记批准人与审计，退款仍是已冻结，等人工凭证；驳回把未释放的冻结额度解冻并记 `refund.reject`。
-
-后台设置页把站点信息、邮件和支付放在同一页，各自读改：站点信息用 `/sites/{site_id}/system-settings` 只改名称，注册方式留在注册策略卡片里改（三种模式都在那里）；邮件用 `/settings/mail` 和 `/settings/mail/tests`；支付用上面的站点支付设置、商户管理接口和商户测试。密钥字段一律只写，编辑时留空表示保留。旧节点没有的操作或字段显示「暂不可用」，不把缺失当成空值或零。站点名称保存只提交名称，由服务端在站点行锁内保留当时的注册方式；旧节点不返回 `name_editable`，页面把名称保持只读并说明等升级。支付保存遇到旧节点拒绝 `top_up_buffer_ppm` 时，用同一个幂等键去掉该字段重试，并把降级后的请求体按该键保存，关闭再打开对话框后的重发仍用它；结果里说明缓冲未改，旧节点没有缓冲字段时不显示输入框。
+- **收据是订单的渲染**：控制台为每笔有已付事实的充值出一张收据（`/console/orders/<订单号>/receipt`）：站点名称、订单号、支付时间、支付金额与币种、付款方式、入账额度，以及之后成功退回的退款（退回的现金、扣回的额度、成功时间）。只读订单的 `paid_at`、`paid_total`、`credited` 和订单自己的退款，没有收据表，不会与订单不一致。每次打开都重新读订单；读到的记录缺这些字段或没有退款列表时不出收据（"没有退款"和"没读到退款"不能混同）。
+- **哪些订单有**：已支付、部分退款、已退款，以及之后被拒付的（拒付不撤销付款事实，收据不写争议）；待支付、已过期、已取消、失败、待处理的没有，页面说"还没有收据"。审核中、处理中和被拒绝的退款不写。
+- 支付时间按读者浏览器的时区显示并带时区名；支付金额用付款币种，入账额度用站点记账货币，二者可以因到账汇率和实付与报价不同。
+- **PDF 交给浏览器**："打印或存为 PDF"调用 `window.print()`，打印时隐藏导航和按钮、固定浅色。
+- 正式发票以后再做；界面和文档都不把收据叫发票。
 
 ## 决策与理由
 
-E1-5 的表和管理操作按负责人记录的授权落地：「遇到问题自己解决问题和判断最优而不是问我。」（[2026-10-28 原文](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)）；涉及钱，仍需流水线安排独立深评审。
-
-### USDT 网关选择
-
-2026-10-29 按源码、README 和发布页比较了以下自托管网关。「商户查单」指网关提供带商户身份（PID/密钥）、我们的订单号和法币金额的查询接口，能在下单应答丢失后按我们的订单号补单。
-
-| 网关 | 版本与日期 | 协议 | 商户查单 | 结论 |
-|---|---|---|---|---|
-| [Epusdt](https://github.com/GMWalletApp/epusdt/releases/tag/v2.0.0) | v2.0.0，2026-07-23 | 易支付 `submit.php` | 无；只有公开的 `GET /pay/check-status/{trade_id}`，不验商户、不认我们的订单号、不带法币金额 | 不满足 |
-| [BEpusdt](https://github.com/v03413/BEpusdt/releases/tag/v1.24.3) | v1.24.3，2026-10-21 发布（源码 2026-10-19） | 易支付 `submit.php` 与自有 `/api/v1/order/*` | 无；`POST /api/v1/pay/info` 只按 `trade_id` 读单，且不验商户 | 不满足 |
-| [UPAY_PRO](https://github.com/wangegou/UPAY_PRO/releases/tag/v1.1.27) | v1.1.27，2026-02-09 | 自有 `/create_order` | 无；只有公开的 `GET /pay/check-status/:trade_id` | 不满足 |
-| [UPay](https://github.com/UPay-USDT/USDT-Payment-Gateway/releases/tag/v1.1.2) | v1.1.2，2024-01-15（唯一提交 2024-10-25） | 自有 | 有 `search`，但项目停更 | 不选 |
-| [EzPay](https://github.com/opinework/ezpay/releases/tag/v1.1.9) | v1.1.9，2026-10-18 | 易支付 `submit.php` | `GET /api.php?act=order`，`pid`+`key`+`out_trade_no`，返回 `money`、`trade_status`、`trade_no` | 选用 |
-
-选择 EzPay v1.1.9：它是唯一同时满足自托管、持续维护、易支付兼容和商户查单的候选；GPL-3.0，仓库自带 Dockerfile 与 docker-compose，SQLite/MySQL 均可，USD 统一结算，支持 TRC20。查单返回法币 `money` 和 `trade_status`，能覆盖「下单应答丢失后按我们的订单号补单」和「回调金额再确认」。代价是只支持 USD 法币、没有退款和关单接口、回调多三个签名字段、查单必须是 GET；这些都在 `preset=ezpay` 里固化，退款走线下。
-
-源码核对（2026-10-29）：EzPay v1.1.9 的 `submit.php` 在 [`main.go:165`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/main.go#L165)，`GET /api.php` 在 [`main.go:173`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/main.go#L173)，查单处理在 [`internal/handler/epay.go:475`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L475)，响应里的 `money`/`trade_status` 在 [`internal/handler/epay.go:545`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L545)；`api.php?act=refund` 明确拒绝退款（[`internal/handler/epay.go:297`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/handler/epay.go#L297)）。创建签名按 RFC 3986（[`internal/util/sign.go:42`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L42)），回调签名用原始值（[`internal/util/sign.go:269`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/util/sign.go#L269)），回调参数在 [`internal/service/notify.go:82`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/service/notify.go#L82)，回调地址的 SSRF 限制在 [`internal/service/notify.go:132`](https://github.com/opinework/ezpay/blob/0912d988146ea83a1946b5fd963d104ab111b088/internal/service/notify.go#L132)。BEpusdt 的 EPay 路由只有 `submit.php`（[`app/router/epay.go:8`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/router/epay.go#L8)），自有 API 在 [`app/router/epusdt.go:15`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/router/epusdt.go#L15)，`Info` 只按 `trade_id` 读单（[`app/handler/epusdt/epusdt.go:388`](https://github.com/v03413/bepusdt/blob/07164853c38ed43700d3abcaab78e832782d36fa/app/handler/epusdt/epusdt.go#L388)）。UPAY_PRO 只有下单和公开状态（[`web/web.go:731`](https://github.com/wangegou/UPAY_PRO/blob/a232783682f9617bcc772e1e2c404ae809475c84/web/web.go#L731)、[`:739`](https://github.com/wangegou/UPAY_PRO/blob/a232783682f9617bcc772e1e2c404ae809475c84/web/web.go#L739)）。Epusdt 的逐版证据见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)。
-
-EzPay 仍走 `EasyPay{}` 的 `kind=easypay`，只新增 `preset=ezpay`，不新增插件种类、表或凭证格式；理由见下表的「易支付是一个通用协议插件」和「E1-4 选 EzPay v1.1.9…」两行。
-
 | 决策 | 理由 |
 |---|---|
-| 突增告警用进程内分钟窗口上报完整计数，阈值留给管理员规则 | 阈值等取值是后台数据（[产品需求的「质量要求」](../product.md#质量要求)）。生产端硬编码 10/5/20 会让规则既不能更严（计数到下限后不再上报更大的窗口）也不能更松（低于下限的窗口根本不发），所以每个完整窗口只在结束时发一次完整计数（1 次也发），管理员规则按计数判断是否通知；消费端逐条评估，事件保留当前窗口值，回执冻结创建时的展示字段；后续低值重置持续条件，也不改写已排队的突发；上报后的下一个完整空分钟恢复。按节点分键，避免一个节点的恢复清掉另一个节点仍在发生的故障。内存只有每种信号每个键一个计数器，每请求只加一个整数，不写数据库 |
-| 站长通知新增必发的 `site_payment_changed` 种类 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地已有的通知承诺。通知复用 `accounts.user_notices` 和既有派发器：审计与通知同事务，保存失败两边都不留；新种类加入 `noticeKinds`，派发器只领取自己认识的种类，不会把不认识的提醒标成已派发；没有另建支付专用通知表或直接发邮件，那会绕过 outbox、重试和收件人偏好。`user_notices.site_id` 仍是 owner 主站（租户和 RLS 的归属），另加 `detail` 列保存被改的二级站点名称，同一站长的多个站点不会都写成主站品牌 |
-| 管理接口新增显式的订单与退款路径，不把筛选加进已有的订单读取 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地：这是新增的对外接口，路径与字段一旦发布就要兼容。管理端要跨账户读一页订单并带上退款；控制台的订单读取是账户作用域，混进管理筛选会让两边的授权和字段互相牵制。显式路径也让新旧节点在滚动发布时各自忽略不认识的参数，不改变已有调用的含义 |
-| 订单按用户或用户账户筛选，不按邮箱；退款队列固定只列冻结的退款 | 支付模块不读账户模块的表（跨模块查询在生成期就被拒绝），用户和账户都是订单上的稳定引用；每行仍带用户 ID。后台没有站点列表，站点与设置页一样取后台账户的站点，接口仍显式要求 `site_id`。队列只列冻结的退款：未批准的等决定，已批准的线下退款等凭证；终态在订单行下看，避免页面再维护一份状态筛选 |
-| 退款决策、审计与幂等答案同事务提交，渠道发送在提交后继续；解冻前的账本推进在决策事务之前 | 决策有本地部分和可失败的渠道调用。先提交幂等声明再执行会把没做成存成成功；先执行再保存答案又会在渠道成功后写答案失败时留下一个无法用同一键重放的请求。本地决策与答案原子提交，渠道发送失败由退款轮询接续，同键异退款在决策前被拒。驳回的解冻准备要另取连接，放在决策事务内会让只有一个普通连接的池等待自身，所以先在事务外推进账本，再在锁内复核状态 |
-| 商户查单用 PostgreSQL 的两个有期限名额与连续未知计数；五次未知暂停五分钟 | 跨节点、轮询与日对账不能叠加突破上限；崩溃后的名额可回收，暂停不阻碍本地过期；不选进程内信号量（随节点数放大）或持有事务等待网关（占连接和锁） |
-| 对账按 UTC 前一日、在只读一致快照中核对当日变更订单、当日入账批次和现金；差异与平台告警同事务 | 避免同时到账造成假差额；先落事实，重跑不重复行或通知；不选只打印日志（丢待办）或提交前异步发告警（可能报告回滚的数据） |
-| 对账每单一个可续作业，只用一个共享商户名额，独立队列单节点一个工作者 | 避免长查询页占满商户和 money 队列；成功前缀通过续作业持久化，重试只重查未完成单；不把调用方取消当作渠道故障 |
-| 对账迁移为 payments `00006`、billing `00024`，新表使用策略级 InitPlan | 高于 main 已部署的范围与价格迁移，避免版本冲突或在持久库上漏跑；不改已合并迁移、不放宽租户范围，也不启用乱序迁移 |
-| 日核对按 (商户,时间,id) 索引翻页，批次与归属按页批量读；billing 索引并发构建 | 读量跟当天变更与入账量走，不对每个商户重扫全部历史，不逐单往返；不在大表上阻塞资金写入建索引 |
-| 管理接口仅标记调查完毕并保存操作者、时间、理由 | E1-6b 的资金处理需要独立审批，本步骤不能隐式入账或退款；不复用资金人工结论接口，以免把调查与移动资金混在一起 |
-| 支付宝的 RSA2 用标准库实现，不引入 smartwalle/alipay SDK | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地新增渠道的依赖选择。需要的能力只有 PKCS#1 v1.5 签名、PEM 解析和 JSON，标准库 `crypto/rsa`、`crypto/x509` 都覆盖，审计面小、没有版本升级风险；sub2api 用 SDK（`alipay.go:14`、`:81-96`），但它同时带来自己的参数顺序、应答结构和错误分类，关键的钱路径仍要逐段核对。没选 SDK：多一个依赖和一层我们不控制的签名实现 |
-| 支付宝的产品由付款方式映射的 `upstream` 决定，不在失败后改试另一种产品 | 电脑网站支付、手机网站支付、当面付是三个需要在开放平台分别签约的产品；商户开了哪一个由管理员知道，是配置事实，不是能从设备猜出来的。sub2api 在桌面默认先试当面付、失败再跳电脑网站支付（`alipay.go:173-211`），两次调用会把一个可能已建好的交易留在网关，也让"下单失败"的含义变得含糊。我们的做法是一个付款方式一个产品，失败就是失败，订单留在待支付等补查或过期 |
-| 支付宝的退款单号就是退款 ID，退款查询按发送时间判定"没有记录"满 10 分钟为失败 | 同一笔退款重发必须只退一次，`rfd_` 是核心已经持久化的退款 ID，天然幂等，所以可以声明 `RefundKey`；sub2api 用订单号加时间戳（`alipay.go:508-523`），重发会生成新单号，可能退两次。没有记录时不能立刻判失败：支付宝可能还没受理（`alipay.go:30-31`、`:548-573`），用 10 分钟宽限收敛，发送时间由核心的 `RefundCall.SentAt` 提供；没选"永远待确认"，那会让冻结拖到 24 小时人工处理 |
-| 支付宝只收 CNY，账单逐笔比对等 `Statements` 接口再交付 | 官方国内接口的 `total_amount` 单位是元；美元站点可以用人民币商户账户收款，由核心的汇率锁定换算，不需要让支付宝收美元。跨境支付宝+是另一套产品，等有主体和需求时另开设计。账单下载要新增核心接口、`statement_lines` 表和逐笔比对作业，属于独立的资金对账设计；当前每日对账仍对非终态和有变化的订单逐单复查并核对现金、批次和用量，"网关有、订单无"只能靠回调发现，渠道手续费的实数暂按商户账户配置的费率记，这些差距写进 #310 的子项 |
-| 支付宝网关地址可配置但只接受 HTTPS，且和 `app_id`、`seller_id` 一起属于商户身份 | 沙箱和受控测试需要一个不同的地址；正式环境默认官方网关。私钥不出现在请求里（只做签名），应答又必须由支付宝公钥验签，所以改地址不能直接偷密钥；但它能决定请求发到哪里，仍按身份保护，订单在途时不能改。没选"写死正式网关"：沙箱无法联调，记录下来的协议样本也只能对着生产跑 |
-| 渠道全部做成插件，配置预留，开通由各站点自行配置 | 负责人决定。能开哪些渠道取决于主体情况，插件化后不改代码 |
-| 支付行为照搬 sub2api，只在欠款上限、精确金额、行级安全三处坚持 Axiom 的规则；逐条注明来源和偏离 | 负责人决定（2026-10-18/19）。sub2api 的支付包处理过大量真实网关的怪癖（易支付参数走私、PHP 字符串整数、相对支付链接），重写它的逻辑最不容易出错；按[工程原则](../architecture.md#工程原则)允许复用自包含的协议代码并注明来源，金额、商户边界和出站路径按 Axiom 的规则实现 |
-| 易支付是一个通用协议插件，分支间的差异是商户账户的配置项 | 负责人要求不绑定某一家。sub2api 的差异处理已经覆盖彩虹易支付、ZPay 等分支，做成配置后接新网关不改代码 |
-| 支持加密货币充值，经自托管的易支付兼容网关（EzPay v1.1.9）接入，不自建链上监听 | 负责人决定支持加密货币；OpenRouter 也接受（OpenRouter《Terms of Service》，2026-10）。接入方式由开发者决定：EzPay 已处理地址分配、确认数、合约校验，钱直接进自己的钱包，Axiom 不保存私钥，也不用写第二个插件（`preset=ezpay`）。代价：只收 USD，依赖网关的正确性，且必须实测它支持查单；收到的 USDT 换成法币之前的币价风险由平台承担。Epusdt 没有商户查单，不能作为收款网关；比较见上节「USDT 网关选择」。没选自建监听：要自己处理重组、确认数、多网络和私钥，工作量与风险都大，sub2api、new-api 都没有做 |
-| Epusdt 预设保持启用时在事务外探测查单，停用与运行时绑定仍不发网络请求；不为兼容网关放宽确认入账 | 按 [#309 授权记录](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)「遇到问题自己解决问题和判断最优而不是问我。」落地已有查询确认设计。只相信 `query=true` 会把不兼容配置留到用户付款后才发现；每次绑定都探测会拖慢回调与后台任务。保存接口接收范围并管理自己的短事务，避免调用者已开事务而让探测占着连接；写入前再查修订号与身份，避免网络等待中的配置变更被覆盖。未选只在身份配置变化时探测：保持启用的保存仍要确认可用；停用跳过网络，以保留故障时的止损入口。预设参与商户身份保护，防止在途订单被切回可关闭查单的普通易支付配置。初始只收 CNY/USD，签名请求显式传币种，避免依赖网关的默认人民币设置；其他法币待实测后扩展。未选另写 Epusdt 插件或使用无金额的公开状态接口：前者重复协议，后者不能核对实付。也不把网关管理员 JWT 当成商户查单凭证，它会扩大凭证权限与保管范围，超出本次易支付商户接入。上游已发布版本都没有这个商户查单接口（逐版证据见[模块 README](../../internal/payments/README.md#epusdt-预设与兼容门槛)），公开状态只有交易号和状态，所以 Epusdt 预设只能停用。EzPay 作为同一个 `EasyPay{}` 插件的 `preset=ezpay` 接入，查单走 GET，多币种回调字段和 USD 限制在预设里固化；它满足查单后，USDT 才有可开放的网关。 |
-| E1-4 选 EzPay v1.1.9 作为 USDT 网关，作为 `EasyPay{}` 的 `preset=ezpay`，不新增插件种类 | 2026-10-29 比较 Epusdt v2.0.0、BEpusdt v1.24.3、UPAY_PRO v1.1.27 和 UPay v1.1.2：只有 EzPay 同时自托管、维护中、易支付兼容、有带商户身份的订单查询。它的 `GET /api.php?act=order` 用 `pid`+`key`+`out_trade_no`，返回 `money` 和 `trade_status`，能在下单应答丢失后按我们的订单号补单；Epusdt、BEpusdt、UPAY_PRO 的公开接口只认网关交易号，UPay 停更。预设而不是新插件，是因为协议仍是易支付，差异只有 GET 查单、三个回调字段、USD 和签名编码；复用已验证的验签、回调、补单和白名单路径。代价是退款只能线下、不能关单、只收 USD，这些写进预设校验和文档。 |
-| 手续费由用户支付，按总额反推，按商户账户和付款方式分别设置 | 负责人决定由用户支付，OpenRouter 也在充值时收取手续费（OpenRouter《FAQ》，2026-10）。渠道按总额扣费，直接用充值金额乘比例会少收；不同商户的费率不同 |
-| 金额一律是整数最小单位，总额先按精确分数求和、只取整一次，比较用相等 | 负责人要求的精确金额。sub2api 的浮点和 0.01 元容差只是在掩盖浮点误差，容差内的少付会被当作付清 |
-| 只认渠道回调和主动查询；回调验签后，支持查单的渠道一律再查一次，入账用查单的金额 | 跳转页面可以被伪造；new-api 曾出现 Stripe 回调验签可被绕过的漏洞（见[安全基线](../security.md#安全基线)）；sub2api 因易支付参数走私补上了"查询确认"。对所有渠道都查，代价只是一次往返 |
-| 订单状态变化、付费额度批次和记账在同一个事务里，没有"充值中"；事务提交后才回网关成功 | 入账与改状态同成同败，就不需要 sub2api 的履约租约和人工重试；new-api 的易支付到账也是行锁加一个事务（new-api `model/topup.go:189-219`）。先回成功再提交，提交失败时网关不再重试，钱就没有记录 |
-| 验签通过、却找不到订单的付款记待处理并告警 | 验签通过说明钱是真的付了；只回成功、记警告，网关不再重试，钱就没有记录（sub2api 的做法） |
-| 每笔付款单独记，一笔订单收到多笔付款就转人工 | 订单上一个"实付"字段容不下第二笔，后来的会覆盖或漏记前一笔；多笔付款少见，人工处理最稳 |
-| 过期后到账：宽限期内按锁定汇率，之后按到账时的汇率入账，过期超过 7 天的转人工；锁定的汇率不覆盖 | 不吞用户的钱（sub2api 超过宽限期不入账）；如果一直按过期前锁定的汇率，用户可以等汇率变得有利时再付款。到账汇率另存，订单的总额仍能从锁定的列复算 |
-| 选商户账户时被限额全部过滤或查用量出错就拒绝下单；限额在锁内检查 | sub2api 在这两种情况下放行，读后写也挡不住并发，等于无视商户限额；收款账户超额可能被风控冻结 |
-| 回调和后台任务在 `cmd/axiom` 交来的平台范围里执行，靠"路径里的商户账户 ID 是查询条件"和验签守住租户边界 | 回调在知道租户之前到来，没有操作者；billing 的入账要求平台范围（[billing 模块的「结算与账本」](../../internal/billing/README.md#结算与账本)），与 billing 的到期、自平任务一致。没选按站点建任务角色：同一个事务里要写 billing 的表，跨模块授权会打破"每个模块只写自己的表" |
-| 退款是独立的记录，先冻结、标记发送中、再调渠道；未知结果只查询，渠道认我们的退款单号时才重发；失败在一个事务里解冻；落定前同样在锁订单前预放账本历史 | 一笔订单可以多次部分退款；冻结不动余额，渠道失败没有要回滚的扣减，避免 sub2api"扣了却没退、回滚又失败"的状态。"发送中"把"没发过"和"发了不知道结果"分开；对不认单号的渠道重发，或凭一个人的判断把未知标为失败，都可能退两次 |
-| 用户侧退款只有待审核、处理中、成功、拒绝四个状态；内部"已冻结未批准、已批准未发送、发送中、待确认"合并为前两个 | 用户只需要知道钱在谁手里、还要不要自己做什么；把"待确认"单列会让人以为可以再申请或放弃。合并把结果未知留在"处理中"，客户端不把未知当失败，内部新增状态也不会让旧页面误读 |
-| E1-6b 将退款能力和手续费报价随冻结保存；两人审批和冻结快照的机制已实现，但后台暂不开放启用路径，人工结论仍由另一人确认 | 退款审批额度是退款政策，按 [CONTRIBUTING](../../CONTRIBUTING.md) 需要负责人对这次改动的明确同意；「遇到问题自己解决问题」的授权不覆盖审批人数、快照时点和在途处理。没有这段原话前，接口和页面不提供额度字段，列保持默认 0，每笔退款仍按现有规则由一名非申请人的管理员批准，不改变已经生效的资金规则。机制本身已按「额度内直接执行，超出则人工审批」写好：开放正数额度后，超过它的退款才需要两名不同的人批准；冻结时快照 `second_required`，之后改额度不影响在途申请。当前没有运营的跨类别累计资金限额服务，因此按站点退款额度判定，而不是假装已有累计限额；请求人永远不能批准自己的退款。持久提案加独立确认把批准绑定到实际金额、凭证、理由和目标；以后接入运营策略时不必改资金状态机。旧节点插入时由触发器按当前额度补 `second_required`，其一步批准随后被 CHECK 拒绝；在额度未开放时这条路径不会产生 true。仍需独立深审。 |
-| 同一订单始终只留一笔在途退款，报价为零时拒绝并回滚冻结 | billing 的最终余数和第一次成功退款的手续费政策必须串行决定；即使支持退款单号也不并发报价，避免两笔都领取余数。不新增零现金退款或猜测网关的最小退款额 |
-| 发送前持久化一分钟租约，五秒渠道期限在提交发送中之前开始且独立于调用方；结果用独立的三十秒窗口完成，剩余发现预算不足五秒则不认领；重发还要求冻结时和当前都声明退款单号 | 两个节点不能同时消费已冻结记录；网络调用不占数据库锁。能力开关后来开启不能让已经未知的易支付退款突然可重发；尚未发送而能力停用或配置打不开时不认领，保留冻结等待配置恢复。调用方期限不能丢掉渠道的确定结果；三十秒完成窗口加五秒调用仍短于一分钟租约。无查询也无安全重发能力的未知立即记差异并设 `manual_only`，避免周期任务反复抢占人工结论；选择显式布尔列而非无穷时间，保持生成模型的时间类型一致。支持查询但超过 24 小时的也记差异 |
-| 金额不符默认人工，站点可选按实付折算；人工入账和自动折算共用到账计算 | 固定容差或按订单额度入账会给少付者超额额度。只对单笔、同币种、身份清楚的付款开放自动折算，其他差异继续人工；实付、手续费和实际额度必须原子写入批次和订单。基线于 2026-10-29 核对 [OpenRouter 条款 §4.1](https://openrouter.ai/terms)：未用额度原路退回、不退平台费、加密货币不可退；本次不扩展加密货币渠道 |
-| 退款按批次的实付与入账额度之比折算，累计不超过净付款额 | 按订单报价折算，过期后按到账汇率入账的订单可以多退：下单锁 7.40、过期后人民币升到 7.00，付 74.00 元入 10.571 美元，全退时按 7.40 折算退 78.22 元 |
-| Stripe 只接 Checkout 托管页面，金额用内联 `price_data`，`TradeNo` 用 PaymentIntent ID；下单和退款的幂等键分别是订单 ID 和退款 ID | 卡号只在 Stripe 页面输入，我们既不存卡也不碰 3D 验证；new-api 用固定的 Price ID 乘数量（`controller/topup_stripe.go:358-395`），金额表达不了我们按最小单位算出的总额。sub2api 的 `pi-<订单>` 下单幂等键沿用了订单维度（`provider/stripe.go:129`），退款键却是 `re-<订单>-<金额>`（`:233`），同订单同金额的两笔部分退款会撞键，所以退款改用退款 ID。PaymentIntent 是退款和拒付的共同入口，Session ID 只用于取回 Session |
-| Stripe 的拒付只自动处理“净额相符、无在途退款”的全额扣款；其余记待处理，`dispute_open`/`dispute_lost` 暂停账户，胜诉不自动解除 | 拒付和退款可能同时盯上同一笔额度，自动处理部分拒付或按全额拉回会把已退的钱再扣一次；约束是扣回额度加成功退款不超过入账额度。暂停在记拒付的同一事务里完成，避免“钱已扣、账户还能继续调用”的窗口；解除必须由操作员确认，胜诉只冲正钱，不替操作员判断是否继续信任该账户。暂停记在拒付行的 `suspended_at` 上，解除后同一笔拒付的重复事件不会再次暂停；旧节点只扣钱不记这一位，新节点的事件或轮询补上。扣钱、暂停、差额告警按“余额行 → 账户行 → 告警锁”取锁，与计费修正和手动暂停一致。按[#309 授权](https://github.com/TYCT-tyct/Axiom/issues/309#issuecomment-6478816797)落地已有拒付设计，仍需独立深审 |
-| Stripe webhook 端点由管理员在 Stripe 后台按商户账户登记，签名用官方 SDK 验证，保留旧签名密钥一轮 | Stripe 的端点不能按 Session 动态指定，所以 `NotifyURL` 不能像易支付那样随下单生效，只能由管理员按固定格式登记；让插件用 API 自动建端点要额外的 webhook 管理权限和签名密钥回写，超出收款密钥的最小权限。官方 SDK 的 `ConstructEventWithOptions` 处理时间戳、签名和 API 版本（new-api 也是这样用，`controller/topup_stripe.go:181-184`）；旧密钥让轮换期间在途事件还能验过 |
-| Stripe 的账单下载和渠道实际手续费本次不接，只用现有日对账核对订单、批次、退款、拒付和现金 | `Statements` 接口和 `statement_lines` 表还没有第一个插件来定义，单为 Stripe 造一套会让接口和表在第二个渠道到来时重做；现有日对账已经能发现订单与账本现金的差异。缺口写进待定，不把“没有逐笔账单”说成已对平 |
-| 商户账户的管理接口提供列出、读取、创建、修改和单独的停用；密钥只写不读，幂等指纹不含密钥，停用保留配置与密文 | 负责人要自己配置收款账户，而此前只有保存函数、没有创建和修改的入口。停用是新订单不再选中它，不是删除：在途订单的回调、查单和退款还要用它的密钥与网关地址，所以配置必须留着；单独的操作也避免为了停用而重发整份配置、误改别的东西。修订号挡住两个页面互相覆盖；密钥不进幂等指纹，是因为那张表存的是不带密钥的哈希，弱网关密钥可以被离线猜出来，与 SMTP 密码同一个理由。已停用时重复停用不写审计，页面上旧修订号的按钮仍能用 |
-| 充值缓冲并入站点支付设置的读改，默认 2%，0 是「不加缓冲」的明确选择 | 缓冲本来就是站点级的。它与收款开关、充值额度范围在同一个页面、同一笔保存里，管理员不会只改了一半；分成两个接口会多一次幂等键、理由和审计，还会出现只改缓冲却把开关覆盖回旧值的情况。默认值只写在代码里，表里没有行就是 2%，0 必须能存下来 |
-| 后台设置页把站点信息、邮件和支付分成独立卡片，各自保存；渠道设置是 JSON 输入，旧节点缺的字段或操作显示不可用 | 三组配置的接口、权限和审计各自独立，一张卡片保存只提交自己那组，不会把没打开的组覆盖。渠道插件的非密配置由插件自己严格定义，通用表单会在页面和插件两处维护同一份字段表，插件加字段就要改页面；JSON 输入加指针错误让插件做唯一的校验者。滚动发布时旧节点没有缓冲字段、商户接口或名称单改能力，页面显示「暂不可用」而不是当成 0、没有账户或覆盖注册方式；支付保存被旧节点拒绝缓冲时以同一幂等键省略重试，并保留降级后的请求体供重发 |
-| 主站收款配置属于控制面，站点收款配置只有站长能改；密钥信封加密，网关地址的哈希一起封进密文；有未完成订单时不能改商户身份 | 收款账户或网关地址被改掉，钱或密钥就到了别人手里；sub2api 明文存配置不符合安全基线。平台的 `secret` 包只接受表、行、用途作为绑定的位置，不收调用方的附加数据，所以把哈希放进密文而不是放进绑定 |
-| 防欺诈的限流默认开启，取保守值 | 全部默认关闭，上线当天就是试卡和刷单的入口；sub2api 的待支付上限默认也是 3。由开发者先定，负责人可以随时修改（[安全](../security.md)） |
-| 每 IP 的限额数不了时拒绝下单，不放行 | 这是防试卡、刷单的限额，放开它正是攻击者想要的；与账户的取消次数查询出错时拒绝新建（见「订单」）同一个做法。登录前的次数在缓存不可用时退回进程内、不拒绝登录（[账户模块的决策表](../../internal/accounts/README.md)），那里放开的代价是猜密码的速度仍受哈希并发限制，这里没有这样的第二道闸 | sub2api 查询失败时放行（`payment_order_lifecycle.go:50-52`） |
-| 兑换码只存 SHA-256 和末四位提示，明文只在生成应答里出现一次，幂等声明保存的应答也不含码 | 码就是钱：库被读走或备份泄露时，明文码可以直接换成余额；哈希让读库的人拿不到能用的码；幂等声明同样在库里，存了明文就抵消了哈希。末四位让客服能对着用户手里的码定位批次，又不至于拼出完整的码。代价是应答丢失后重放看不到明文，只能停用重发；这比把明文留在库里好。new-api 把码明文存在 `key` 列（`model/redemption.go:16`），不采用 |
-| 批量生成按面额、数量、备注、有效期，码用 20 位 Crockford Base32，按 5 位分组 | 一批码共用面额和有效期，备注给运营看；Base32 去掉 I/L/O/U，人工抄写和电话报码时不容易错，20 位约 100 位熵。new-api 生成的是 32 位 UUID 字符串并另要一个 1–20 字的名称（`controller/redemption.go:75-124`），名称对不上批次的用途，改成备注；有效期同时约束码和兑到的额度，见[计费](billing.md#额度批次) |
-| 兑换入账记成新的 `redeem` 来源批次，不写付费批次 | `gift` 和 `paid` 的区别决定能不能退：付费批次有实付、手续费和退款折算，兑换码没有收到钱，记成付费会在退款时凭空退出现金。单独一个来源让报表能区分赠送和兑换，账本仍走同一套批次与分录。new-api 直接给用户加额度（`creditTopUpQuota`），没有批次和来源，无法按批次到期或对账 |
-| 账户每小时 30 次、IP 分组每站点每小时 100 次，先计数再查码，数不了就拒绝 | 码有约 100 位熵，盲猜不可行，限流挡的是自动化试错和用盗来的码刷接口；账户限额保护单个账户，IP 限额保护同一出口下的多个账户。计数先于查码提交，失败尝试也占名额，才挡得住猜；数据库计数跨节点有效。不选 sub2api 的「只数失败、Redis 出错放行」（`redeem_service.go:28`、`:336-352`）：那正好在存储故障时放开猜码 |
-| 同一账户的兑换在账户咨询锁内串行，码行 `FOR UPDATE` 加 `code_id` 唯一再挡一次 | 账户锁让同键重放和同一账户的并发兑换看到确定的前后顺序，避免两笔都通过余额检查；码行锁和唯一键让不同账户同时兑同一个码时只有一个成功。两个账户之间没有共享锁，不同码的兑换互不阻塞 |
-| 到期在取得码行锁之后按数据库当前时钟判断，条件更新里再查一次 | `transaction_timestamp()` 是事务开始时间，等同一账户的咨询锁时码可能已经过期；用事务时间会让一笔过期码入账，批次却已过期。锁后读 `clock_timestamp()`，更新条件再守一次，只有两次都未过期才入账；跨过有效期的等待兑换失败，码、兑换记录和余额都不变 |
-| 余额、流水和导出都认识 `redeem` 来源；滚动发布先让所有节点跑上新读取，再生成码 | 新增来源后旧节点读流水会拒绝整页、导出也失败，所以读取方必须先兼容；生成码是管理员在新版本上的手动动作，按「先全量发版、再生成」执行，旧节点就不会遇到 `redeem` 批次。契约的来源与流水种类枚举、生成的类型和页面文案一起补齐，读余额、流水和 CSV 的回归测试守住这条链路 |
-| 兑换拒绝用四个稳定错误码区分无效、过期、停用和已兑换 | 这四种情况对用户的下一步不同（换码、联系发放方、不要再试），共用 `unprocessable`/`conflict` 只能显示笼统提示，反复重试还会继续消耗限流名额。错误码加进两份契约的封闭列表和页面翻译，客户端漏翻会在类型检查时失败 |
-| 停用按单个码、已兑换的不能停用、过期是推导状态 | 兑换是用户已经得到的钱，停用只应拦住还没兑换的码；已兑换的记录和额度保留。把 `expired` 写成数据库状态要求定时任务扫全表改状态，而读的时候按 `expires_at` 推导结果一样且没有延迟。new-api 的删除和状态更新混在一个管理页（`controller/redemption.go:206-231`），我们不删除码，保留审计和历史 |
-| 加密货币充值不退款、退款不退手续费，作为初始值 | 开发者先定，负责人可以随时修改。与 OpenRouter 一致；链上转账无法原路撤回，退款要人工核实地址；Stripe 退款时不退还手续费，退给用户等于平台承担 |
-| 微信支付只做 Native 和 H5，不做 JSAPI，也不按设备猜产品 | console 没有 openid，JSAPI 无法下单；把 Native/H5 写进付款方式的 `upstream` 是商户账户的配置事实。按设备猜产品会在一种方式失败后到网关留下第二笔预支付交易，客户可能为同一订单付两次；sub2api 用请求参数选模式（`wxpay.go:171-199`），配置化的做法更窄也更容易测 |
-| 微信支付同时接受平台证书和微信支付公钥两种验签配置，不去下载平台证书 | 微信已把新商户迁到公钥模式，新商户下载不到平台证书（sub2api `wxpay.go:85-87` 的注释）；已经用平台证书的老商户还要能用。实现只维护一张"序列号或公钥 ID → RSA 公钥"的表，回调按 `Wechatpay-Serial` 选，轮换时新旧各留一份。不选只支持公钥：会挡住存量商户；不选自动下载证书：要新增一个会花 APIv3 密钥的后台任务，且证书轮换期仍然要处理多把公钥 |
-| 退款先查原单的 `amount.total`，不把订单总额加进渠道接口 | 微信要求退款请求带原支付交易的总金额，`RefundCall` 只有本次退款额；按实际支付金额记账的订单，订单总额也不等于微信那边收到的钱，只有查单能给出两处都对得上的数（sub2api 同样先查，`wxpay.go:458-470`、`:535-548`）。代价是退款发送多一次网关往返，和退款共用核心的 5 秒期限；查单阶段超时按明确拒绝（见下一行），退款 POST 发出后的超时按结果未知处理，用同一个 `rfd_` 重试。不选扩展 `RefundCall`：为一个渠道把核心接口加宽，且金额还可能选错 |
-| 退款查单失败、发现未支付、已关闭或拿不到原单金额时按明确拒绝，不进入待确认 | 这几种情况退款请求还没发出，留成待确认后核心只会按 `rfd_…` 查退款，得到 404 也不能解冻，24 小时内既退不了也重试不了。明确拒绝让核心立即解冻，用户可以重新申请；等订单状态在微信侧更新后再退也更安全。退款 POST 发出后的未知结果仍保持冻结 |
-| 微信退款 `PROCESSING` 和 `ABNORMAL`、查退款 `RESOURCE_NOT_EXISTS` 都保持待确认，只有 `CLOSED` 判失败 | `CLOSED` 按微信文档就是退款失败（[退款常见问题](https://pay.weixin.qq.com/doc/v3/merchant/4013071200)）。`ABNORMAL` 是退款到银行卡失败、等商户平台或异常退款接口人工处理，若在这里解冻，用户可能既拿回额度又被人工作弊退一次；`RESOURCE_NOT_EXISTS` 可能是申请请求没到微信，也可能是刚到还查不到，同样不能据此解冻。三者都留给 24 小时后的待处理记录和两人结论。sub2api 把 `ABNORMAL` 当失败（`wxpay.go:500-515`），这里偏离：钱的代价比少一次自动重试大 |
-| 回调时间戳只接受 5 分钟以内的，应答验签不查时间 | 回调带签名，时间窗把捕获后重放的旧通知拦在外面；重复通知本来就会被核心的订单行锁和回调幂等挡住，时间窗是第二道闸。应答是我们刚发起请求后收到的，服务端的时钟偏差不该让一笔已完成的支付变成未知，签名和序列号已经足够 |
-| 微信支付不声明 `Statements`，账单逐笔对账留到核心有对账单接口之后 | 核心没有 `Statements` 接口和 `statement_lines` 表，插件声明了也走不到；当前每日逐单复查、现金与批次对平已经覆盖丢回调和入账差异。先做一个只有插件用的账单下载会多一套没有读方的存储。账单接入后同时补上微信渠道手续费的实数 |
-| 官方微信渠道的 `Kind` 用 `wechatpay`，付款方式仍可叫 `wxpay` | `Kind` 是协议插件名，`Method` 是站点自己的付款方式；易支付也把 `wxpay` 当 `type` 用过，两者分开后后台和日志里不会把官方渠道和聚合网关的微信付款混为一谈。改动只在插件名，外键和接口都是字符串 |
-| 收据是已付订单的渲染：控制台的订单读取加三个可选字段，不加接口、不建表 | 收据要的事实（支付时间、实付、入账、退款）都已经在订单上，只是控制台读取没有返回；另建收据表就复制了一份钱的状态，两边迟早不一致，还要为它重新设计权限、分页和滚动发布。走已有的订单读取，这些都不必重做，别人的订单仍然是 404。字段可选：旧节点不返回，新页面说「暂不可用」，旧页面忽略 |
-| 收据是可打印的 HTML 页，PDF 由浏览器的打印对话框生成 | 不引入 PDF 库和中日韩字体（体积、字形缺失、版本升级都是成本），不在服务端存不可变的文件，也没有"生成后不可改"的迁移；打印样式藏掉导航、固定浅色配色。代价是版式取决于浏览器，只求打印出来是对的；以后要邮件附件或批量归档，再按那时的需求生成 PDF（记在待定） |
-| 收据在订单记录之上渲染，不另建收据表 | 参考实现只暴露充值与订单记录，没有收据或发票（new-api `model/topup.go:15`、`controller/topup.go:528`、`router/api-router.go:123`；sub2api `service/payment_order.go:856`、`handler/payment_handler.go:342`、`:365`），在订单记录之上渲染是 Axiom 自己的设计。渲染就不会有第二份钱的状态，不必为收据另做权限、分页和滚动发布 |
-| 拒付过的订单仍有收据，收据不写争议结果 | 设计本来就写「每笔充值自动生成收据」，这次不加例外。拒付没有撤销付款事实，胜诉后订单仍是 `charged_back`（`internal/payments/dispute.go` 的 `reverseDispute` 明说不能改回去，否则重新可退款），按状态拒绝会把已付款的订单挡在收据外，还会把胜诉说成「款项已被追回」。争议结果在余额、流水和争议记录里，收据只写付款与成功退回的退款 |
+| 渠道全部做成编译进程序的插件，一个 `Channel` 接口加 `Caps` 能力集合 | 能开哪些渠道取决于主体情况，插件化后不改代码；易支付的能力取决于具体网关，是配置而不是插件种类 |
+| 易支付是一个通用协议插件，分支差异（含 Epusdt、EzPay）是配置和预设 | 不绑定某一家，接新网关不改代码，复用已验证的验签、白名单和补单路径 |
+| 金额一律是整数最小单位，总额按精确分数只取整一次，比较用相等 | 浮点加容差只是在掩盖误差，容差内的少付会被当作付清 |
+| 手续费由用户付，按总额反推，按商户账户和付款方式分别设置 | 渠道按总额扣费，直接用充值金额乘比例会少收；不同商户费率不同 |
+| 只认回调和主动查询；支持查单的渠道回调后一律再查一次，入账用查单金额 | 跳转页面可伪造，易支付参数走私这类漏洞要靠查询确认挡住；代价只是一次往返 |
+| 订单状态、付费批次和记账同一事务，提交后才回网关成功 | 入账与改状态同成同败，不需要履约租约；先回成功再提交失败，网关不再重试，钱就没有记录 |
+| 验签通过却找不到订单、网关订单号冲突、多笔付款都记待处理 | 验签通过说明钱真付了；只回成功不留记录，钱就丢了 |
+| 过期后到账：宽限期内锁定汇率，之后到账汇率，超过 7 天转人工 | 不吞用户的钱，也不让用户等汇率有利时再付 |
+| 选商户账户时全被过滤或查用量出错就拒绝下单；商户当天额度和每 IP 次数各用一行计数守 | 放行等于无视限额；账户范围读不到别人的订单，一行计数既是读数又是串行点，计数出错不放行 |
+| 商户密钥信封加密，网关地址等非密配置的哈希封进同一份密文；商户账户不删只停用 | 收款账户或网关地址被改掉，钱或密钥就到了别人手里；平台 `secret` 包只按表、行、用途绑定；在途订单还要用原配置 |
+| 有未完成订单（含补查窗口内的）时不能改商户身份 | 关单失败或不支持关单时网关那边仍能付，换了密钥就验不了晚到的付款 |
+| 回调和后台任务在平台范围执行，靠路径里的商户账户 ID 和验签守住租户边界 | 回调没有操作者，又要写 billing 的表；按站点建任务角色会打破"每个模块只写自己的表" |
+| 退款独立成表，先冻结、单独提交"发送中"、再调渠道；只对认退款单号的渠道重发 | 支持多次部分退款；渠道失败只解冻；"发送中"让崩溃后分得清没发过和发了不知结果；对不认单号的渠道重发会退两次 |
+| 同一订单只留一笔在途退款 | billing 的最终余数和第一笔成功退款的手续费政策必须串行决定；易支付分不清两笔金额相同的部分退款 |
+| 退款按批次的实付与入账额度之比折算，最后一笔取余数 | 入账可能按实付或到账汇率折算，按订单报价会多退；取余数让全额退款没有舍入误差 |
+| 用户侧退款只有四个状态 | 用户只需知道钱在谁手里；把"待确认"单列会让人以为可以再申请 |
+| 退款审批额度的机制已实现但不开放，固定 0 | 审批人数、快照时点和在途处理是退款政策，要负责人明确同意；在那之前不改变已生效的资金规则 |
+| 人工结论一律保存不可变提案并由第二人批准 | 落定的是不确定或线下已发生的资金，一个人的判断可能退两次 |
+| 拒付只自动处理净额相符、无在途退款的单笔全额扣款；扣款与暂停账户同事务，胜诉只冲正、不解除暂停、订单保持被拒付 | 部分拒付或与退款并发会把同一笔额度扣两次；同事务避免"钱已扣、还能调用"的窗口；是否继续信任账户由操作员判断 |
+| USDT 经自托管的 EzPay，不自建链上监听 | 网关已处理地址分配、确认数和合约校验，Axiom 不保管私钥；自建要处理重组、多网络和私钥，风险大 |
+| Epusdt 预设保留但只能停用；预设保存为启用前在事务外探测查单 | 不能查单就满足不了查询确认；探测不占数据库连接和商户锁，停用不依赖网关，保留止损入口 |
+| 支付宝、微信支付用标准库实现签名和验签，不引入 SDK | 需要的只有 RSA、PEM、AES-GCM 和 JSON；签名原文的取舍由我们控制，少一个依赖 |
+| 支付宝、微信支付的产品由付款方式的 `upstream` 决定，不按设备猜、失败不改试 | 产品要分别签约，是配置事实；改试会在网关留下第二笔交易 |
+| 支付宝退款查询无记录满 10 分钟判失败 | 支付宝可能还没受理，立刻判失败会解冻一笔仍可能退出去的钱；永远待确认又会拖到 24 小时人工 |
+| 微信退款先查原单金额，查单阶段失败按明确拒绝 | 微信要求原交易总额而 `RefundCall` 没有；那时退款还没发出，留成待确认只会查到 404、24 小时内退不了也重试不了 |
+| 微信 `ABNORMAL`、`PROCESSING` 和查退款 404 都待确认，只有 `CLOSED` 判失败 | 解冻一笔可能仍会退出去的钱，代价比少一次自动重试大 |
+| 微信回调时间戳只接受 5 分钟内，应答验签不查时间 | 时间窗挡住捕获后重放的旧通知；应答是我们刚发起的请求，时钟偏差不该让已完成的支付变成未知 |
+| 同时支持微信平台证书和微信支付公钥，不自动下载证书 | 新商户只有公钥模式，老商户还在用证书；自动下载要新增一个花 APIv3 密钥的后台任务 |
+| Stripe 只接 Checkout 托管页，内联 `price_data`，交易号用 PaymentIntent ID；退款幂等键按退款 ID | 卡号不经过我们；内联价格才能表达按最小单位算出的总额；按订单加金额做键会让两笔同额部分退款撞键 |
+| Stripe 端点由管理员登记，验签用官方 SDK，保留旧 webhook 密钥一轮，不保留旧 API 密钥 | Stripe 不能按 Session 指定回调地址，自动建端点要超出最小权限；旧 API 密钥不再用于请求，留着只扩大使用面 |
+| 渠道账单下载（`Statements`）暂不实现 | 接口和 `statement_lines` 表要由第一个声明它的插件定义，单为一个渠道造一套会在第二个渠道到来时重做 |
+| 商户查单用数据库里的两个有期限名额和连续未知计数 | 跨节点、补单和日对账不能叠加突破上限；崩溃后名额可回收；进程内信号量会随节点数放大 |
+| 日对账每单一个可续作业、独立队列、只用第一个名额 | 长查询不占满商户名额和资金队列；成功前缀持久，重试只重查未完成单 |
+| 突增信号每个完整分钟发完整计数，阈值留给管理员规则；按节点分键 | 阈值是后台数据，硬编码的下限会让规则既不能更严也不能更松；一个节点恢复不该清掉另一个节点的故障 |
+| 防欺诈限流默认开启、取保守值；每 IP 计数出错时拒绝下单 | 默认关闭上线当天就是试卡入口；登录前的限额在缓存不可用时放行是为了不把用户锁在门外，这里没有第二道闸 |
+| 兑换码只存 SHA-256 和末四位，幂等应答也不存明文 | 码就是钱，库或备份泄露时明文可以直接兑成余额；末四位够客服定位，又拼不出码 |
+| 兑换入账记成 `redeem` 来源批次，不写付费批次 | 兑换码没收到钱，记成付费会在退款时凭空退出现金 |
+| 兑换先在独立事务计数再查码，数不了就拒绝；锁后按数据库当前时钟判到期 | 失败尝试也计数才挡得住猜码；事务开始时间早于等锁，可能让过期码入账 |
+| 兑换码停用按单个码、已兑换的不能停用、过期是读时推导、码不删除 | 已兑换是用户已拿到的钱；写成状态要定时扫表；保留历史和审计 |
+| 管理端订单与退款用显式的新路径，按用户或账户筛选、不按邮箱 | 控制台的订单读取是账户作用域，混进管理筛选会让两边的授权互相牵制；支付模块不读账户模块的表 |
+| 退款决策、审计和幂等答案同事务，渠道发送在提交后 | 先存答案再执行会把没做成存成成功，先执行再存答案会在写答案失败时留下无法重放的请求 |
+| 收据是订单的渲染，PDF 由浏览器打印生成；拒付过的订单仍有收据 | 另建收据表就复制了一份钱的状态；不引入 PDF 库和字体；拒付没有撤销付款事实 |
+| 主站收款配置属于控制面，二级站点只有站长能改，修改通知站长 | 改收款账户等于改钱的去向 |
+| 加密货币充值不退款、退款不退手续费，作为初始值 | 与 OpenRouter 一致；链上转账无法原路撤回；渠道不退手续费，退给用户等于平台承担 |
 
 ## 待定问题
 
-- 主站先接哪一家易支付网关、用哪个商户号，由负责人在接入时决定并提供凭证（E1-3）
-- EzPay 的服务器、收款钱包、商户号和可公网访问的回调地址由负责人在接入时提供；真实链上小额实测（下单、GET 回调、查单确认、入账、手续费与汇率、退款走线下）记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录前不创建生产商户账户（E1-4）
-- Stripe 的商户凭证（`sk_`/`rk_`、`whsec_`）和真实沙箱小额实测由负责人在接入时提供并执行；代码层只对官方协议和本地假 Stripe 服务验证，真实商户号、webhook 端点和结算币种确认记在[#497](https://github.com/TYCT-tyct/Axiom/issues/497)
-- Stripe 的 Balance Transactions 账单下载、渠道实际手续费与逐笔对账，等第一个 `Statements` 插件一起定义接口和 `statement_lines` 表；在那之前 Stripe 只走现有日对账
-- 收据要不要写出拒付及其结果：这需要控制台的订单读取返回争议状态，并由负责人决定收据是否承载这类信息；在那之前收据只写付款和成功退回的退款
-- 收到的 USDT 什么时候、按什么节奏换成法币：在那之前币价和脱锚风险由平台承担，由负责人决定（E1-4 上线前）
-- 支付宝的商户号、应用私钥、支付宝公钥和 ICP 备案由负责人在接入时提供；没有真实商户前按官方沙箱协议和录制的协议样本验收，接入后的下单、回调、查单、关单、退款和手续费实测记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)
-- 支付宝账单下载与渠道手续费的实数：等核心的 `Statements` 接口和 `statement_lines` 表，见 #310 的支付宝子项；在那之前对账只做逐单复查与现金/批次/用量对平
-- 微信支付的商户号、APIv3 密钥、商户 API 证书和平台证书或公钥由负责人在接入时提供；真实沙箱或商户的小额实测（Native 扫码、H5、回调、查单、关单、退款、退款查询）记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有这份记录不打开微信支付
-- 微信支付的交易账单和资金账单逐笔对账、渠道手续费实数，等核心的 `Statements` 接口和 `statement_lines` 表落地后接入（#310 的微信子项）
-- 发票与税（国内增值税发票、海外增值税和税号），待有公司主体后确定
-- 收据的邮件发送和 PDF 归档（例如按月打包下载）如果要做，再决定文件怎么生成和保存；当前只有控制台里的可打印页面
+- 各渠道的真实商户凭证由负责人在接入时提供：主站接哪一家易支付网关；EzPay 的服务器、收款钱包、商户号和公网回调地址；支付宝的商户、密钥和 ICP 备案；微信支付的商户号、APIv3 密钥、商户证书和平台证书或公钥；Stripe 的 `sk_`/`rk_`、`whsec_`。代码只对官方协议、录制样本和本地假网关验证过，真实小额实测（下单、回调、查单、关单、退款、手续费舍入、币种）记在 [#497](https://github.com/TYCT-tyct/Axiom/issues/497)，没有记录不创建生产商户账户、不打开充值。
+- 先让所有节点升级到认识新渠道或新预设的版本，再创建第一个该种类的商户账户。
+- 渠道账单下载与逐笔对账、渠道实际手续费的入账口径（支付宝、微信、Stripe），等第一个 `Statements` 插件一起定义（支付宝、微信子项见 [#310](https://github.com/TYCT-tyct/Axiom/issues/310)，手续费政策见 [#731](https://github.com/TYCT-tyct/Axiom/issues/731)）。
+- 退款审批额度的开放：审批人数、快照时点和在途处理要负责人批准。
+- 收到的 USDT 什么时候、按什么节奏换成法币，由负责人决定；在那之前风险由平台承担。
+- 收据是否写出拒付及其结果；收据的邮件发送和 PDF 归档。
+- 发票与税（国内增值税发票、海外增值税和税号），待有公司主体后确定。
