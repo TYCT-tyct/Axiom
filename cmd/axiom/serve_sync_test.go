@@ -30,10 +30,15 @@ func testGatewayConfig() gateway.Config {
 }
 
 // serveForTest keeps the entry's admission checks, with periodic downloads disabled unless a test supplies local data.
+func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) error {
+	return serveForTestBound(ctx, environ, logger, func([]*listening) {})
+}
+
+// serveForTestBound also reports the claimed listeners before the database check.
 // A core node's recorder gets a temporary spill directory: the production default is relative to the working
 // directory, and a test must not leave call-log/ in the package tree. A node without the core role reads no call log
 // and refuses the variable, so it gets none.
-func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) error {
+func serveForTestBound(ctx context.Context, environ []string, logger *slog.Logger, bound func([]*listening)) error {
 	dir, err := os.MkdirTemp("", "axiom-call-log-")
 	if err != nil {
 		return err
@@ -56,7 +61,7 @@ func serveForTest(ctx context.Context, environ []string, logger *slog.Logger) er
 	if !hasDir && core {
 		environ = append(environ, callLogDirVar+"="+dir)
 	}
-	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil, testGatewayConfig())
+	return serveWith(ctx, environ, logger, directEgress, startRecorder, nil, testGatewayConfig(), bound)
 }
 
 func TestServeCancelsAPriceFetchOnShutdown(t *testing.T) {
@@ -111,7 +116,7 @@ func checkPriceFetchShutdown(t *testing.T, body bool) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices, testGatewayConfig())
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(logs, nil)), loopback, startRecorder, prices, testGatewayConfig(), func([]*listening) {})
 	}()
 	servingAddrs(t, logs, done)
 	select {

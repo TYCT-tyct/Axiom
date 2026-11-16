@@ -9,11 +9,8 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// TestStateKeepsFormatsByTheGate: the persisted state is what every node loads and projects, a pre-P18 one included,
-// for any task. With the gate closed it holds no format such a node cannot name, whether the listing was read or its
-// models were kept from an earlier state written with the gate open; a model left with no format is not listed. Open,
-// it keeps every format the adapter reported.
-func TestStateKeepsFormatsByTheGate(t *testing.T) {
+// TestStateKeepsReportedFormats also checks a listing that leaves models unread.
+func TestStateKeepsReportedFormats(t *testing.T) {
 	t.Parallel()
 	listed := func(unread bool) func(adapter.Listing) (adapter.Page[adapter.Group], error) {
 		return func(adapter.Listing) (adapter.Page[adapter.Group], error) {
@@ -39,20 +36,18 @@ func TestStateKeepsFormatsByTheGate(t *testing.T) {
 	m := healthy()
 	m.offer = listed(false)
 	st, clk := newStore(), &clock{t: t0}
-	open := Defaults()
-	open.DirectFormats = true
-	round(t, New(st, m, open, clk.now))
+	round(t, New(st, m, Defaults(), clk.now))
 	if got, want := formats(st.state.Groups[0]), map[string][]int{
 		"embed": {embeddings}, "mixed": {chat, embeddings, rerank}, "legacy": {completions},
 	}; !equalFormats(got, want) {
-		t.Fatalf("open gate keeps %v, want %v", got, want)
+		t.Fatalf("state keeps %v, want %v", got, want)
 	}
 	for _, unread := range []bool{true, false} {
 		m.offer = listed(unread)
 		clk.advance(10 * time.Minute)
 		round(t, New(st, m, Defaults(), clk.now))
-		if got, want := formats(st.state.Groups[0]), map[string][]int{"mixed": {chat}}; !equalFormats(got, want) {
-			t.Errorf("closed gate, models unread %t: state keeps %v, want %v", unread, got, want)
+		if got, want := formats(st.state.Groups[0]), map[string][]int{"embed": {embeddings}, "mixed": {chat, embeddings, rerank}, "legacy": {completions}}; !equalFormats(got, want) {
+			t.Errorf("models unread %t: state keeps %v, want %v", unread, got, want)
 		}
 	}
 }
