@@ -16,7 +16,12 @@ func TestPrepareAsksForAStream(t *testing.T) {
 	bodies := []string{`{"model":"m"}`, `{"model":"m","stream":false}`, `{"model":"m","stream":null}`, `{"model":"m","stream":true}`}
 	for _, f := range []protocol.Format{protocol.Messages, protocol.Responses, protocol.Chat} {
 		for i, body := range bodies {
-			checkStreamAsked(t, f, names[i], body)
+			if !preparedReply(t, f, f, body, true).Stream {
+				t.Errorf("format %d, %s: the request does not ask for a stream", f, names[i])
+			}
+		}
+		if preparedReply(t, f, f, `{"model":"m","stream":false}`, false).Stream {
+			t.Errorf("format %d: an endpoint that cannot stream was asked for one", f)
 		}
 	}
 	// A Chat request is converted, and gets the member the same way.
@@ -25,25 +30,10 @@ func TestPrepareAsksForAStream(t *testing.T) {
 	}
 }
 
-// checkStreamAsked: the request sent to a streaming endpoint asks for a stream, and the one sent to an endpoint that
-// cannot stream keeps what the client wrote.
-func checkStreamAsked(t *testing.T, f protocol.Format, name, body string) {
-	t.Helper()
-	if !preparedReply(t, f, f, body, true).Stream {
-		t.Errorf("format %d, %s: the request does not ask for a stream", f, name)
-	}
-	if preparedReply(t, f, f, `{"model":"m","stream":false}`, false).Stream {
-		t.Errorf("format %d: an endpoint that cannot stream was asked for one", f)
-	}
-}
-
 // preparedReply is the summary of the request Prepare writes from body for an endpoint of format to.
 func preparedReply(t *testing.T, from, to protocol.Format, body string, streams bool) protocol.Request {
 	t.Helper()
-	r, err := protocol.Inspect(from, []byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, from, []byte(body))
 	w := protocol.Rewrites{Identity: derive}
 	u, err := protocol.Prepare(&r, []byte(body), protocol.Target{Format: to, Model: "up", MaxOutput: 100, Streams: streams}, w)
 	if err != nil {
@@ -69,10 +59,7 @@ func TestPrepareCompactionRewritesOnlyWhatMustNotGoUpstream(t *testing.T) {
 		`"include":["reasoning.encrypted_content"],"user":"h(u)","prompt_cache_key":"h(k)","safety_identifier":"h(s)"}`
 	target := protocol.Target{Format: protocol.Responses, Model: "endpoint-model", MaxOutput: 100, Streams: true, Compact: true}
 	w := protocol.Rewrites{Identity: derive}
-	r, err := protocol.Inspect(protocol.Responses, []byte(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	r := inspected(t, protocol.Responses, []byte(body))
 	u, err := protocol.Prepare(&r, []byte(body), target, w)
 	if err != nil {
 		t.Fatal(err)

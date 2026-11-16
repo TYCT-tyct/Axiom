@@ -232,3 +232,5 @@ function Keys({ preset, labelled = false }: { preset: Preset; labelled?: boolean
     ? t("routingPresets.keys.count", { count: preset.keys, keys: format.number(preset.keys) })
     : format.number(preset.keys);
 }
+
+export { default as messages } from "../locales/settings";
