@@ -112,13 +112,6 @@ func TestMulRejectsNegativeCount(t *testing.T) {
 // TestUnitPriceScale checks the two ways an engine price is derived from a cost: an exact product stays exact, one
 // with more than 15 decimals rounds up once, and one past the price ceiling is an error rather than a price.
 func TestUnitPriceScale(t *testing.T) {
-	price := func(s string) UnitPrice {
-		p, err := ParseUnitPrice(s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
 	for _, tc := range []struct {
 		name    string
 		price   UnitPrice
@@ -126,12 +119,12 @@ func TestUnitPriceScale(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"exact", price("0.005"), big.NewRat(6, 5), "0.006", false},
-		{"halves a unit", price("0.000000000000001"), big.NewRat(1, 2), "0.000000000000001", false},
-		{"rounds up once", price("0.1"), big.NewRat(1, 3), "0.033333333333334", false},
+		{"exact", mustPrice(t, "0.005"), big.NewRat(6, 5), "0.006", false},
+		{"halves a unit", mustPrice(t, "0.000000000000001"), big.NewRat(1, 2), "0.000000000000001", false},
+		{"rounds up once", mustPrice(t, "0.1"), big.NewRat(1, 3), "0.033333333333334", false},
 		{"zero cost", UnitPrice{}, big.NewRat(2, 1), "0", false},
-		{"zero ratio", price("1"), big.NewRat(0, 1), "0", false},
-		{"above the ceiling", price("1000"), big.NewRat(2, 1), "", true},
+		{"zero ratio", mustPrice(t, "1"), big.NewRat(0, 1), "0", false},
+		{"above the ceiling", mustPrice(t, "1000"), big.NewRat(2, 1), "", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := tc.price.Scale(tc.ratio)
@@ -160,17 +153,10 @@ func TestUnitPriceScaleRejectsNegativeRatio(t *testing.T) {
 // TestUnitPriceAdd checks the sum of a search price and its extra-result prices, including the ceiling the database
 // cannot hold.
 func TestUnitPriceAdd(t *testing.T) {
-	price := func(s string) UnitPrice {
-		p, err := ParseUnitPrice(s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	if got, err := price("0.005").Add(price("0.0125")); err != nil || got.String() != "0.0175" {
+	if got, err := mustPrice(t, "0.005").Add(mustPrice(t, "0.0125")); err != nil || got.String() != "0.0175" {
 		t.Fatalf("0.005 + 0.0125 = %s, %v; want 0.0175", got, err)
 	}
-	if _, err := price("1000").Add(price("0.000000000000001")); err == nil {
+	if _, err := mustPrice(t, "1000").Add(mustPrice(t, "0.000000000000001")); err == nil {
 		t.Fatal("a sum past the price ceiling was accepted")
 	}
 }
@@ -259,14 +245,7 @@ func FuzzAmount(f *testing.F) {
 // exchange rate such as 10/71 and rounds up once to its smallest amount, 10⁻⁹; a value exactly on an amount stays
 // there and one unit more rounds up, which only holds when the fraction is exact.
 func TestExactRat(t *testing.T) {
-	price := func(s string) UnitPrice {
-		p, err := ParseUnitPrice(s)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return p
-	}
-	most := price("1000").Mul(1e10)
+	most := mustPrice(t, "1000").Mul(1e10)
 	seven := Exact{}
 	for range 7 {
 		var err error
@@ -280,9 +259,9 @@ func TestExactRat(t *testing.T) {
 		amount string // units × 10/71, rounded up to 10⁻⁹; empty to skip
 	}{
 		{Exact{}, "0", "0"},
-		{price("0.000000000000001").Mul(1), "1", "1"},
-		{price("0.000000071").Mul(1), "71000000", "10"},
-		{price("0.000000071000001").Mul(1), "71000001", "11"},
+		{mustPrice(t, "0.000000000000001").Mul(1), "1", "1"},
+		{mustPrice(t, "0.000000071").Mul(1), "71000000", "10"},
+		{mustPrice(t, "0.000000071000001").Mul(1), "71000001", "11"},
 		{most, "10000000000000000000000000000", "1408450704225352112677"},
 		{seven, "70000000000000000000000000000", "9859154929577464788733"},
 		{maxExact, "170141183460469231731687303715884105727", ""},
@@ -306,4 +285,13 @@ func TestExactRat(t *testing.T) {
 			t.Errorf("%s units × 10/71 rounds up to %s, want %s", c.units, amount, c.amount)
 		}
 	}
+}
+
+func mustPrice(t testing.TB, s string) UnitPrice {
+	t.Helper()
+	p, err := ParseUnitPrice(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

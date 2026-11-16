@@ -1,9 +1,6 @@
 package protocol
 
-import (
-	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // values are walked token by token, so a skipped one allocates nothing
-)
+import "encoding/json/jsontext" //nolint:depguard // values are walked token by token, so a skipped one allocates nothing
 
 // walkDepth is the deepest object or array a walk opens; the capture goes deepest: a Chat event, its choices, a choice, its delta, the
 // delta's tool calls, a call and its function.
@@ -21,7 +18,7 @@ type walker struct {
 // walkLevel is one depth of the walk: a decoder, the value it walks, and the member name it last read. A level can
 // walk a value twice, for an object whose members came in an order it could not act on in one pass.
 type walkLevel struct {
-	buf  bytes.Buffer
+	buf  decoderBuffer
 	dec  *jsontext.Decoder
 	name []byte
 }
@@ -39,12 +36,7 @@ func (errNotRead) Error() string { return "protocol: a captured event that is no
 // returns before the one above it moves on. A bytes.Buffer is what the decoder parses in place.
 func (c *walker) open(depth int, v []byte) *jsontext.Decoder {
 	l := &c.levels[depth]
-	l.buf = *bytes.NewBuffer(v)
-	if l.dec == nil {
-		l.dec = jsontext.NewDecoder(&l.buf, walkOptions[0], walkOptions[1])
-	} else {
-		l.dec.Reset(&l.buf, walkOptions[0], walkOptions[1])
-	}
+	l.dec = l.buf.reset(l.dec, v, walkOptions[0], walkOptions[1])
 	return l.dec
 }
 
