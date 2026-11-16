@@ -26,17 +26,23 @@ func benchmarkEndpoints() (official, candidate suppliers.Routable) {
 	return official, candidate
 }
 
+func prepareBenchmarkEndpoints(t *testing.T, l *Loop, f *probeFixture) (suppliers.Routable, suppliers.Routable) {
+	t.Helper()
+	official, candidate := benchmarkEndpoints()
+	f.mu.Lock()
+	f.endpoints = []suppliers.Routable{official, candidate}
+	f.mu.Unlock()
+	tick(t, l)
+	return official, candidate
+}
+
 // TestBenchmarkPersistsAcrossRestartAndNodes: a recorded score is in the store before it is published, a node that
 // started before the run adopts it on its next refresh without a restart, and a restarted node loads it at start.
 //
 //nolint:cyclop // one test walks the record, the second node and the restart in order
 func TestBenchmarkPersistsAcrossRestartAndNodes(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	// A second node is already running and has published the same endpoints before the run.
 	otherNow := *now
@@ -96,11 +102,7 @@ func TestBenchmarkPersistsAcrossRestartAndNodes(t *testing.T) {
 // write leaves neither in memory, and a later valid run is accepted.
 func TestOfficialBenchmarkStoreFailureLeavesNoAnchor(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -127,11 +129,7 @@ func TestOfficialBenchmarkStoreFailureLeavesNoAnchor(t *testing.T) {
 // write returns false and the endpoint keeps no score; the same run succeeds once the write can proceed.
 func TestBenchmarkStoreFailureLeavesMemoryUnchanged(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -157,11 +155,7 @@ func TestBenchmarkStoreFailureLeavesMemoryUnchanged(t *testing.T) {
 // chose by time alone would prefer it.
 func TestNewerBenchmarkVersionSupersedesTheOlder(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	oldAt := now.Add(2 * time.Hour)
 	oldHash := strings.Repeat("0", 64)
@@ -229,11 +223,7 @@ func TestNewerBenchmarkVersionSupersedesTheOlder(t *testing.T) {
 // endpoint's own 100 must not be blocked by a candidate run recorded after it against the previous baseline.
 func TestNewerBaselineReplacesScoresAgainstTheOlder(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	first := *now
@@ -275,11 +265,7 @@ func TestNewerBaselineReplacesScoresAgainstTheOlder(t *testing.T) {
 // for that configuration is still adopted.
 func TestBenchmarkConfigurationChangeDoesNotResurrect(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -328,11 +314,7 @@ func TestBenchmarkConfigurationChangeDoesNotResurrect(t *testing.T) {
 // on; a node whose endpoint publishes another configuration must not inherit it.
 func TestStoredBenchmarkBindsToTheEndpointConfiguration(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now

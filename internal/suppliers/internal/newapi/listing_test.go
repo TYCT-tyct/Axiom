@@ -28,22 +28,30 @@ func keyList(total *int) func(adapter.Request) (adapter.Response, error) {
 
 func TestAKeyListingResumesAcrossManagers(t *testing.T) {
 	t.Parallel()
-	for _, shrink := range []bool{false, true} {
-		t.Run(fmt.Sprint(shrink), func(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		total, blockedPage int
+		shrink             bool
+	}{
+		{"resume", 250, 2, false},
+		{"shrink", 250, 2, true},
+		{"past a window", 9050, 90, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			resumeKeys(t, shrink)
+			resumeKeys(t, c.total, c.blockedPage, c.shrink)
 		})
 	}
 }
 
-func resumeKeys(t *testing.T, shrink bool) {
+func resumeKeys(t *testing.T, total, blockedPage int, shrink bool) {
 	t.Helper()
-	total, asked, limited := 250, []int{}, true
+	asked, limited := []int{}, true
 	serve := keyList(&total)
 	client := funcClient(func(r adapter.Request) (adapter.Response, error) {
 		page := pageOf(t, r)
 		asked = append(asked, page)
-		if limited && page == 2 {
+		if limited && page == blockedPage {
 			return adapter.Response{}, adapter.Blocked{Until: t0.Add(time.Minute)}
 		}
 		return serve(r)
@@ -58,7 +66,13 @@ func resumeKeys(t *testing.T, shrink bool) {
 		t.Fatalf("no resumable position: %+v", first)
 	}
 	limited = false
-	want := []int{1, 2, 2, 3}
+	var want []int
+	for page := 1; page <= blockedPage; page++ {
+		want = append(want, page)
+	}
+	for page := blockedPage; page <= (total+99)/100; page++ {
+		want = append(want, page)
+	}
 	if shrink {
 		total = 50
 		want = []int{1, 2, 2, 1}
@@ -119,29 +133,4 @@ func TestLegacyKeyListingRestartsBeforeProjectingPolicies(t *testing.T) {
 			t.Fatalf("key %s kept an unread legacy policy", key.Ref)
 		}
 	}
-}
-
-// TestAKeyListingResumesPastAWindow: 9,050 keys need 91 pages, more than one 90-request window. The first run stops at
-// page 90 with the names of the pages it read; the second finishes and returns every key, so the sync can onboard.
-func TestAKeyListingResumesPastAWindow(t *testing.T) {
-	t.Parallel()
-	total := 9050
-	limited := true
-	serve := keyList(&total)
-	client := funcClient(func(r adapter.Request) (adapter.Response, error) {
-		if limited && pageOf(t, r) == 90 {
-			return adapter.Response{}, adapter.Blocked{Until: t0.Add(time.Minute)}
-		}
-		return serve(r)
-	})
-	first, err := open(t, client, t0).Keys(t.Context(), nil)
-	if err != nil || first.Done || len(first.Next) == 0 {
-		t.Fatalf("first run: done %v, position %d, %v; want a resumable position", first.Done, len(first.Next), err)
-	}
-	limited = false
-	page, err := open(t, client, t0).Keys(t.Context(), first.Next)
-	if err != nil {
-		t.Fatal(err)
-	}
-	assertKeyListing(t, page, total)
 }

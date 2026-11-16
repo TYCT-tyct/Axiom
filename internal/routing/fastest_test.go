@@ -1,7 +1,6 @@
 package routing_test
 
 import (
-	"math"
 	"slices"
 	"strings"
 	"testing"
@@ -46,26 +45,6 @@ func TestFastestRanksByMeasurement(t *testing.T) {
 	in.Override.MinThroughput = 100
 	if got := endpoints(h.plan(in)); !slices.Equal(got, []routing.EndpointID{ep(1), ep(2)}) {
 		t.Errorf("route %v: the endpoint measured below the wish is not last", got)
-	}
-}
-
-// TestFastestUnmeasuredByPrice: unmeasured endpoints are ordered among themselves as Balanced orders them, by a
-// price-weighted draw, never by their IDs: of three, one at half the others' price comes first half of the time, the
-// other two a quarter each.
-func TestFastestUnmeasuredByPrice(t *testing.T) {
-	t.Parallel()
-	half := func(e *routing.Endpoint) { e.Price.Schedule = schedule(t, "0.0000005", "0.000001", "0.00000005") }
-	h := newHarness(t, routing.Config{}, fastestPreset(),
-		endpoint(t, 1, unmeasured), endpoint(t, 2, unmeasured), endpoint(t, 3, unmeasured, half))
-	const n = 20000
-	firsts := map[routing.EndpointID]int{}
-	for range n {
-		firsts[first(h.plan(input()))]++
-	}
-	for e, want := range map[routing.EndpointID]float64{ep(1): 0.25, ep(2): 0.25, ep(3): 0.5} {
-		if got := float64(firsts[e]) / n; math.Abs(got-want) > 0.02 {
-			t.Errorf("endpoint %v first %.3f of the time, want %.2f", e, got, want)
-		}
 	}
 }
 

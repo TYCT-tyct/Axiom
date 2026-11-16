@@ -3,6 +3,7 @@
 -- Final pre-production schema; history and equivalence proof: scripts/compare_migrations.py.
 SET LOCAL check_function_bodies = false;
 GRANT USAGE, CREATE ON SCHEMA observability TO axiom_retention_job;
+GRANT USAGE ON SCHEMA platform TO axiom_retention_job;
 
 -- +goose StatementBegin
 CREATE FUNCTION observability.journal_usage() RETURNS trigger

@@ -550,7 +550,6 @@ CREATE POLICY writes ON platform.model_prices_public_readiness USING (platform.i
 
 GRANT USAGE ON SCHEMA platform TO axiom_app;
 GRANT USAGE ON SCHEMA platform TO axiom_lookup;
-GRANT USAGE ON SCHEMA platform TO axiom_retention_job;
 
 REVOKE ALL ON FUNCTION platform.mail_tenant(id uuid) FROM PUBLIC;
 GRANT ALL ON FUNCTION platform.mail_tenant(id uuid) TO axiom_app;

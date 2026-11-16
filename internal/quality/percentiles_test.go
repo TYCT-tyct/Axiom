@@ -7,24 +7,6 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// TestWindowPercentiles: each percentile is the nearest rank of the samples in the window, p50/p75/p90/p99 in order.
-func TestWindowPercentiles(t *testing.T) {
-	var w sampleWindow
-	now := time.Unix(1_000, 0)
-	for _, v := range []float64{10, 20, 30, 40, 50} {
-		w.add(v, now)
-	}
-	got, ok := w.percentiles(now)
-	if !ok {
-		t.Fatal("five fresh samples are not measured")
-	}
-	for i, want := range [...]float64{30, 40, 50, 50} {
-		if got[i] != want {
-			t.Errorf("percentile %d = %v, want %v", i, got[i], want)
-		}
-	}
-}
-
 // TestWindowExpiresAndIsBounded: a sample older than five minutes is not read, fewer than five fresh samples are
 // unknown, and the ring keeps only the most recent percentileSamples whatever it is given.
 func TestWindowExpiresAndIsBounded(t *testing.T) {

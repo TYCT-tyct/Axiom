@@ -1,7 +1,7 @@
 """Prove the pre-production squash against its immutable Git source (PostgreSQL 18).
 
 Run with PostgreSQL client tools on PATH and PGHOST/PGPORT/PGUSER pointing at a
-throwaway superuser cluster, or --container NAME for a disposable postgres container.
+fresh throwaway superuser cluster, or --container NAME for a disposable postgres container.
 Only the two databases this script creates are removed. Future migrations run on
 both sides, so the proof continues to exercise the baseline after the squash lands.
 """
@@ -128,18 +128,28 @@ def compare(prefix):
 DO $$ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='axiom_owner') THEN
         CREATE ROLE axiom_owner; CREATE ROLE axiom_app; CREATE ROLE axiom_lookup;
-        CREATE ROLE axiom_retention_job; CREATE ROLE axiom_retention;
+        CREATE ROLE axiom_retention;
     END IF;
 END $$;
 GRANT axiom_lookup TO axiom_owner WITH INHERIT FALSE, SET TRUE;
-GRANT axiom_retention_job TO axiom_owner WITH ADMIN TRUE, INHERIT TRUE, SET TRUE;
 """)
     results = []
     try:
         for db, files in zip(databases, (old, current)):
             sql(prefix, "postgres", f"CREATE DATABASE {db};")
+            # pgtest first migrates platform alone, before any module job role exists.
+            apply(prefix, db, {p: body for p, body in files.items() if module(p) == "platform"})
+        sql(prefix, "postgres", """
+DO $$ BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname='axiom_retention_job') THEN
+        CREATE ROLE axiom_retention_job;
+    END IF;
+END $$;
+GRANT axiom_retention_job TO axiom_owner WITH ADMIN TRUE, INHERIT TRUE, SET TRUE;
+""")
+        for db, files in zip(databases, (old, current)):
             sql(prefix, "postgres", "REVOKE axiom_retention_job FROM axiom_retention;")
-            apply(prefix, db, files)
+            apply(prefix, db, {p: body for p, body in files.items() if module(p) != "platform"})
             results.append(snapshots(prefix, db))
         for kind in results[0]:
             before, after = results[0][kind], results[1][kind]
