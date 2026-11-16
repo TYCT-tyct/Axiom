@@ -90,7 +90,7 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 - **结尾**：带 `stop_reason` 的 `message_delta`、`response.completed`/`incomplete`、Chat 用量块（本站按结算写，带一个空内容的选项）；`Finish` 带上费用。
 - **出错帧**先校验并吸收本帧 `usage`，再立即 `ErrUpstream`；`RejectionOf` 留下解码后的四项，每项超过 2 KiB 整项省略。Responses 正常事件只用 `response.usage`，失败事件缺它才用顶层的。
 - **改写**：`id` 换调用编号，`model` 换 `ActualModel`；`usage` 只留官方成员再追加费用，删中转站的 `cost` 和上游的 `axiom`；`Cached` 时用量数字清零。
-- **用量**按 [catalog 的「计费项与用量」](../catalog/README.md#计费项与用量)折算：计数须在 0 到 10¹⁰；Messages 按项取最新，0 不覆盖正数，变小判无效；OpenAI 每侧带明细或总量变大才整体替换，总量不下降；DeepSeek 命中数只在 `cached_tokens` 缺或为 0 时算缓存读；映射外的非零计数进 `Unknown()`。无效不中断流，写进 `Usage().Invalid`，按估算。
+- **用量**按 [catalog 的「计费项与用量」](../../docs/domains/catalog.md#计费项与用量)折算：计数须在 0 到 10¹⁰；Messages 按项取最新，0 不覆盖正数，变小判无效；OpenAI 每侧带明细或总量变大才整体替换，总量不下降；DeepSeek 命中数只在 `cached_tokens` 缺或为 0 时算缓存读；映射外的非零计数进 `Unknown()`。无效不中断流，写进 `Usage().Invalid`，按估算。
 - **字节上界**：正文、推理、工具参数、思考签名和加密推理按解码后的字节，`reasoning_details` 和工具 `input` 按原文字节；`output_item.done` 只加比增量多出的；`web_search_call` 计一次搜索，`file_search_call`、`code_interpreter_call` 各一次调用。
 - **错误**：断流、不合规、出错事件包装 `ErrUpstream`，`FaultOf` 给类别；之后 `Next` 一直返回同一错误，正常结束后为 `ErrTerminated`。出错结尾带用量，结算提交了才带费用。外壳见[接入的「错误」](../../docs/domains/gateway.md#错误)。
 - **内存**：跨事件的缓冲按容量在增长前记账，前 64 KiB（原生两格式之间加 `nativeConversionMemory`）是基础额度，超出向 `RelayOptions.Memory` 申请。计量器先记 16 KiB，未知用量字段每段至多 16 个、名和值各 128 字节，压缩段至多 8 个，超出判无效。单事件上限 Responses 32 MiB，其余 1 MiB。

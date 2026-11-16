@@ -184,7 +184,7 @@
 - 账户：`accounts.authentication_failures` 以站点为键，每站点每分钟至多上报一次数据库共享的完整分钟猜凭证失败峰值，下一个完整低值或零窗口恢复（[账户模块](../../internal/accounts/README.md#注册登录与会话)）；`accounts.account_suspended` 由 `accounts.SetAccountSuspended` 同事务持久化，暂停为 critical，解除时恢复。
 - 供应商持久事件（E5-2）：每分钟转入同一信号入口，每个供应商按 `(version, seq)` 记持久消费位置，与信号同事务提交，每页最多 1000 条；首次接入只报告当前未恢复的状态。登录失效与其他同步需处理分别保留恢复基线；登录和任务以失败事件的 LastOK 基线与更高同步版本验证新的成功观测后恢复，换凭证本身不算恢复；低余额由明确的恢复事件恢复；号池容量比较 `pool_low` 行恢复（分组离开回答也算）。某供应商没有可用来源时发 `suppliers.sources_unavailable`（每分钟最多 100 家，持久游标轮转），全平台没有可用来源时发 `suppliers.exhausted`，都检查凭证到期；退役来源的旧故障需人工关闭。信号不带上游的文字。
 - 路由：`routing.preset_refuses_all`（warning，`value` 是一分钟里被预设拒绝的调用数）报告一个节点上一个窗口里预设拒绝了全部调用（[路由的「可观测」](routing.md#滚动发布失败与性能)），管理员按要容忍多久设持续秒数。
-- 目录：官方页面监测把审核项、健康状态与三类 `catalog.*` 信号同事务保存（[目录模块](../../internal/catalog/README.md#参考价的录入)）。
+- 目录：官方页面监测把审核项、健康状态与三类 `catalog.*` 信号同事务保存（[模型目录的「官方价格页」](catalog.md#官方价格页)）。
 - 用户通知（E5-4）走租户的邮件 outbox，不进平台运维事件。
 
 | 种类 | 合并键 | 恢复方式 |
