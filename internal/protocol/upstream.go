@@ -49,19 +49,24 @@ type event struct {
 	// data is what the client gets in place of the event, but for edits, replacements in place ordered by position;
 	// for an ending, usageAt is where its usage object closes, or -1 without one. withheld, when set, is an event to
 	// withhold besides, such as the finish signals Chat splits from a chunk that also carries content.
-	data                                                       []byte
-	edits                                                      []edit
-	withheld                                                   []byte
-	usageAt                                                    int
+	data     []byte
+	edits    []edit
+	withheld []byte
+	usageAt  int
+	eventCounts
+	usage bool // it reported usage, which the meter has taken
+	final bool // it is the format's last usage event
+	ends  bool // an ending that is also the normal end, as Responses' response.completed is
+}
+
+// eventCounts travels as a whole through every stream conversion.
+type eventCounts struct {
 	content, searches, codeExecutions, fileSearches, toolCalls int64
 	// toolChecks are the client tool calls whose arguments the answer that ended with this event had checked, and
 	// toolErrors those of them that were not one JSON text. An answer cut at its output cap reports none: its calls
 	// did not end, they were cut.
 	toolChecks, toolErrors int64
 	shape                  textshape.Shape // the shape of the content's decoded strings
-	usage                  bool            // it reported usage, which the meter has taken
-	final                  bool            // it is the format's last usage event
-	ends                   bool            // an ending that is also the normal end, as Responses' response.completed is
 }
 
 // edit replaces data[from:to] with with, then echo: a value of the event itself, copied again.
@@ -76,7 +81,7 @@ type edit struct {
 // writes into buf, charged as the relay's own buffers are and reused.
 type eventReader struct {
 	reader
-	src bytes.Buffer
+	src decoderBuffer
 	ctx UsageContext
 	// capture, when set, keeps the answer's text as it is read; a gateway call sets none.
 	capture *Capture
@@ -110,19 +115,14 @@ func (s *eventReader) init(u UsageContext, o RelayOptions, usageMembers map[stri
 
 // start begins reading an event.
 func (s *eventReader) start(data []byte) {
-	s.src = *bytes.NewBuffer(data)
-	if s.dec == nil {
-		s.dec = jsontext.NewDecoder(&s.src)
-	} else {
-		s.dec.Reset(&s.src)
-	}
+	s.dec = s.src.reset(s.dec, data)
 	s.e = event{role: passive, data: data, usageAt: -1, edits: s.e.edits[:0]}
 	s.errClass, s.code = FaultNone, FaultNone
 	s.rejection = Rejection{}
 }
 
 func (s *eventReader) dropBuffers() {
-	s.reader, s.src, s.rw, s.buf, s.pre, s.e, s.tier = reader{}, bytes.Buffer{}, rewriter{}, nil, nil, event{}, nil
+	s.reader, s.src, s.rw, s.buf, s.pre, s.e, s.tier = reader{}, decoderBuffer{}, rewriter{}, nil, nil, event{}, nil
 	s.rejection = Rejection{}
 }
 
@@ -159,8 +159,7 @@ func (s *eventReader) textValue() (jsontext.Value, error) {
 	if v == nil || err != nil {
 		return nil, err
 	}
-	to := int(s.dec.InputOffset())
-	return s.e.data[to-len(v) : to], nil
+	return valueIn(s.dec, s.e.data, v), nil
 }
 
 // addText counts v, a JSON string or nil, as content, and tallies its text's shape.

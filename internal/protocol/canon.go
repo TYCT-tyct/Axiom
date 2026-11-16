@@ -154,50 +154,16 @@ func decodeCanon(body []byte) (*canon, error) {
 		return nil, err
 	}
 	for i := range c.Messages {
-		if err := c.Messages[i].settle(); err != nil {
+		m := &c.Messages[i]
+		var err error
+		if m.Parts, err = m.readParts(); err != nil {
+			return nil, err
+		}
+		if err := settleMessage(m, nil); err != nil {
 			return nil, err
 		}
 	}
 	return c, nil
-}
-
-// settle finishes a message read by decodeCanon: the unbudgeted twin of settleMessage, written to allocate exactly
-// what the old path did.
-func (m *canonMessage) settle() error {
-	var err error
-	if m.Parts, err = m.readParts(); err != nil {
-		return err
-	}
-	for i, p := range m.Parts {
-		if p.Type == "refusal" {
-			m.Parts[i].Text = p.Refusal
-		}
-	}
-	if m.ReasoningDetails, err = mergeDetails(m.ReasoningDetails); err != nil {
-		return err
-	}
-	switch {
-	case !isNull(m.Name) && m.Name.Kind() != '"', !isNull(m.Refusal) && m.Refusal.Kind() != '"':
-		return shapeError("a name or refusal that is not a string")
-	case !isNull(m.Refusal):
-		m.Parts = append(m.Parts, canonPart{Type: "refusal", Text: m.Refusal})
-	}
-	if !isNull(m.Name) && m.Role != "tool" {
-		m.prependNameFast()
-	}
-	return nil
-}
-
-// prependNameFast is the unbudgeted twin of prependName.
-func (m *canonMessage) prependNameFast() {
-	prefix := slices.Concat(m.Name[:len(m.Name)-1], []byte(`: "`))
-	for i, p := range m.Parts {
-		if (p.Type == "text" || p.Type == "refusal") && p.Text.Kind() == '"' {
-			m.Parts[i].Text = slices.Concat(prefix[:len(prefix)-1], p.Text[1:])
-			return
-		}
-	}
-	m.Parts = slices.Insert(m.Parts, 0, canonPart{Type: "text", Text: prefix})
 }
 
 // readParts reads a message's content: a string is one text part, null none.

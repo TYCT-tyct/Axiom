@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"bytes"
-	"encoding/json/jsontext" //nolint:depguard // stream replies are rewritten in place without decoding payloads
 	"fmt"
 
 	"axiom/internal/protocol/internal/sse"
@@ -21,12 +20,7 @@ func (r *Relay) legacyReply(data []byte) ([]byte, error) {
 		return nil, err
 	}
 	p.body, p.at = data, 0
-	p.src = *bytes.NewBuffer(data)
-	if p.dec == nil {
-		p.dec = jsontext.NewDecoder(&p.src)
-	} else {
-		p.dec.Reset(&p.src)
-	}
+	p.dec = p.src.reset(p.dec, data)
 	if err := p.top(legacyReplyRules); err != nil {
 		return nil, fmt.Errorf("%w: legacy reply: %w", ErrUpstream, err)
 	}
