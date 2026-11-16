@@ -19,11 +19,11 @@ import (
 
 var now = time.Now().UTC().Truncate(time.Millisecond)
 
-// keep writes records through a real Recorder and waits for them to be stored.
+// keep admits a whole fixture batch without depending on writer throughput, then waits for persistence.
 func keep(t *testing.T, db *pg.DB, records ...CallRecord) {
 	t.Helper()
 	r, err := NewRecorder(t.Context(), db, platformScope, Config{
-		Dir: t.TempDir(), Capacity: 64, BatchSize: 8, FlushInterval: 10 * time.Millisecond,
+		Dir: t.TempDir(), Capacity: max(64, len(records)), BatchSize: 8, FlushInterval: 10 * time.Millisecond,
 		RetryBase: time.Millisecond, RetryMax: 10 * time.Millisecond, WriteTimeout: 5 * time.Second,
 	}, quiet)
 	if err != nil {
