@@ -204,6 +204,7 @@ func TestPermissionsAreCheckedEveryRequest(t *testing.T) {
 		{endpoint{http.MethodGet, "/statement.csv", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/calls", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/calls/aggregate", ""}, http.StatusForbidden},
+		{endpoint{http.MethodGet, "/calls/sessions", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, "/calls/export", ""}, http.StatusForbidden},
 		{endpoint{http.MethodGet, someCall, ""}, http.StatusForbidden},
 	} {
