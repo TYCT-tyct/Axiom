@@ -26,13 +26,16 @@ func moveSettledWindow(ctx context.Context, tx pg.Tx, subscription uuid.UUID, se
 // settlePlanWindows settles every plan window a batch's reservation ends moved, in one statement.
 func settlePlanWindows(ctx context.Context, tx pg.Tx, ends []*reservationEnd) error {
 	var params SettleWindowsParams
+	type windowKey struct {
+		subscription uuid.UUID
+		seq          int32
+	}
+	windows := make(map[windowKey]struct{})
 	for _, e := range ends {
 		if e.window == nil {
 			continue
 		}
-		if e.c.row.SubscriptionID == (uuid.UUID{}) || e.c.row.WindowSeq == 0 {
-			return fmt.Errorf("billing: the plan hold %s names no window", e.c.id)
-		}
+		windows[windowKey{e.c.row.SubscriptionID, e.c.row.WindowSeq}] = struct{}{}
 		params.Subscriptions = append(params.Subscriptions, e.c.row.SubscriptionID)
 		params.Seqs = append(params.Seqs, e.c.row.WindowSeq)
 		params.Helds = append(params.Helds, e.window.held)
@@ -41,8 +44,12 @@ func settlePlanWindows(ctx context.Context, tx pg.Tx, ends []*reservationEnd) er
 	if len(params.Subscriptions) == 0 {
 		return nil
 	}
-	if err := queries.SettleWindows(ctx, tx, params); err != nil {
+	n, err := queries.SettleWindows(ctx, tx, params)
+	if err != nil {
 		return fmt.Errorf("billing: settle the subscription windows: %w", err)
+	}
+	if n != int64(len(windows)) {
+		return fmt.Errorf("billing: settle the subscription windows wrote %d of %d rows", n, len(windows))
 	}
 	return nil
 }
