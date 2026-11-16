@@ -16,7 +16,7 @@ import (
 
 // TestEveryJobKindNamesOneOfTheQueues is the table of every job kind of the program and the queue it runs on. The kinds
 // are read out of the source, so a kind added without a queue fails here: River would put it on its default queue, whose
-// single worker only drains old jobs, so the kind would lose the isolation the split exists for
+// jobs have no worker
 // (internal/platform/README.md「任务队列」).
 func TestEveryJobKindNamesOneOfTheQueues(t *testing.T) {
 	t.Parallel()

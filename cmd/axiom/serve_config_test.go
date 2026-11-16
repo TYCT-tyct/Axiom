@@ -278,13 +278,6 @@ func TestModelVerificationRejectsUnknownValues(t *testing.T) {
 	}
 }
 
-func TestDirectFormatsRejectsUnknownValues(t *testing.T) {
-	_, err := readSettings([]string{"AXIOM_DIRECT_FORMATS=maybe"})
-	if err == nil || !strings.Contains(err.Error(), "AXIOM_DIRECT_FORMATS: want on or off") {
-		t.Fatalf("direct-format gate validation: %v", err)
-	}
-}
-
 func TestByokRejectsUnknownValues(t *testing.T) {
 	_, err := readSettings([]string{"AXIOM_BYOK=maybe"})
 	if err == nil || !strings.Contains(err.Error(), "AXIOM_BYOK: want on or off") {

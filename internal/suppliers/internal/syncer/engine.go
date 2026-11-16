@@ -63,11 +63,6 @@ type Settings struct {
 	// KeyRetry is how long a group waits after its key could not be made or read for a reason the login or the group
 	// has to fix.
 	KeyRetry time.Duration
-	// DirectFormats lets the state keep embeddings, rerank and legacy completions. While it is false the state holds
-	// only the formats a
-	// pre-P18 node can name: such a node may load this state for any task and project it, and a name it does not know
-	// fails its whole step.
-	DirectFormats bool
 }
 
 // Defaults are the design's values.

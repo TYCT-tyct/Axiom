@@ -130,14 +130,10 @@ func bucketOf(second int64) int {
 }
 
 // ceiling is a per-minute limit as the snapshot holds it: a column with no value is no ceiling of Axiom's, which is
-// zero here. A value above MaxRequestsPerMinute is an old node's write during a rolling release; the new code reads it
-// as the cap rather than letting the account exceed the bounded window.
+// zero here.
 func ceiling(n *int32) int32 {
 	if n == nil {
 		return 0
-	}
-	if *n > MaxRequestsPerMinute {
-		return MaxRequestsPerMinute
 	}
 	return *n
 }
