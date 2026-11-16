@@ -295,16 +295,18 @@ class TestContainerPolicy(unittest.TestCase):
             r"- name: Configure test container policy\n        run: \|\n(.*?)(?=^      -)",
             job("go-test"), re.M | re.S,
         ).group(1)
-        for parent in (None, "", "axiom-ci.slice"):
-            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as tmp:
+        # shards of one job share GITHUB_JOB, so each needs its own label; an unsharded job has none
+        for parent, shard in ((None, None), ("", None), ("axiom-ci.slice", None), (None, "2")):
+            with self.subTest(parent=parent, shard=shard), tempfile.TemporaryDirectory() as tmp:
                 output = Path(tmp) / "env"
                 env = {**os.environ, "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2",
                        "GITHUB_JOB": "go-test", "GITHUB_ENV": output.as_posix()}
-                env.pop("AXIOM_TEST_CGROUP_PARENT", None)
-                if parent is not None:
-                    env["AXIOM_TEST_CGROUP_PARENT"] = parent
+                for name, value in (("AXIOM_TEST_CGROUP_PARENT", parent), ("AXIOM_TEST_SHARD", shard)):
+                    env.pop(name, None)
+                    if value is not None:
+                        env[name] = value
                 subprocess.run([BASH, "-euo", "pipefail", "-c", textwrap.dedent(policy)], env=env, check=True)
-                expected = "AXIOM_TEST_JOB=123-2-go-test\n"
+                expected = "AXIOM_TEST_JOB=123-2-go-test" + (f"-{shard}" if shard else "") + "\n"
                 if parent:
                     expected += "TESTCONTAINERS_RYUK_DISABLED=true\n"
                 self.assertEqual(output.read_text(), expected)
