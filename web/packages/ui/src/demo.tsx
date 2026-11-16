@@ -10,6 +10,7 @@ import {
   CreateDialog,
   DataState,
   DataTable,
+  DesignProvider,
   EditPanel,
   Field,
   type Filter,
@@ -499,12 +500,14 @@ export const demos: Record<string, () => ReactNode> = {
 
 export function ComponentDemo() {
   return (
-    <Stack gap={32}>
-      {Object.entries(demos).map(([name, demo]) => (
-        <section key={name} data-demo={name}>
-          {demo()}
-        </section>
-      ))}
-    </Stack>
+    <DesignProvider>
+      <Stack gap={32}>
+        {Object.entries(demos).map(([name, demo]) => (
+          <section key={name} data-demo={name}>
+            {demo()}
+          </section>
+        ))}
+      </Stack>
+    </DesignProvider>
   );
 }

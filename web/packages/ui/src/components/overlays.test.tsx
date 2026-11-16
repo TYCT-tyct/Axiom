@@ -9,6 +9,7 @@ import zh from "../locales/zh";
 import { testRoot } from "../test-root";
 import { useExplicitSave, useLiveSave } from "../write";
 import { CreateDialog } from "./create-dialog";
+import { DesignProvider } from "./design-provider";
 import { EditPanel } from "./edit-panel";
 import { moduleCss, reduced } from "./module-css";
 import { DataState } from "./states";
@@ -49,7 +50,9 @@ const render = (node: ReactNode) =>
   act(() =>
     dom.root.render(
       <StrictMode>
-        <I18nextProvider i18n={i18n}>{node}</I18nextProvider>
+        <I18nextProvider i18n={i18n}>
+          <DesignProvider>{node}</DesignProvider>
+        </I18nextProvider>
       </StrictMode>,
     ),
   );
@@ -410,20 +413,24 @@ const query = (status: "pending" | "error" | "success", data?: string[], error: 
   refetch: () => {},
 });
 
+// The console draws the design's state block (DesignProvider); the admin keeps its frames until A1.
 it.each([
   { state: "loading", query: query("pending"), says: "正在加载" },
   { state: "empty", query: query("success", []), says: "这里还没有内容" },
   { state: "failed", query: query("error", undefined, new ApiError(500, "req_9")), says: "没能加载" },
   { state: "not allowed", query: query("error", undefined, new ApiError(403, null)), says: "没有权限" },
-])("shows the design's state block when $state", ({ query, says }) => {
-  const html = renderToStaticMarkup(
-    <I18nextProvider i18n={i18n}>
-      <DataState query={query} isEmpty={(rows) => rows.length === 0}>
-        {(rows) => rows.join()}
-      </DataState>
-    </I18nextProvider>,
+])("shows the design's state block in the console, and the admin's frame elsewhere, when $state", ({ query, says }) => {
+  const state = (
+    <DataState query={query} isEmpty={(rows) => rows.length === 0}>
+      {(rows) => rows.join()}
+    </DataState>
   );
-  expect(html).toContain(says);
-  expect(html).toMatch(/class="_(root|placeholder)_/);
-  expect(html).not.toMatch(/class="[^"]*\b(flex|text-|py-)/);
+  const html = (node: ReactNode) => renderToStaticMarkup(<I18nextProvider i18n={i18n}>{node}</I18nextProvider>);
+  const design = html(<DesignProvider>{state}</DesignProvider>);
+  expect(design).toContain(says);
+  expect(design).toMatch(/class="_(root|placeholder)_/);
+  expect(design).not.toMatch(/class="[^"]*\b(flex|text-|py-|p-6)/);
+  const legacy = html(state);
+  expect(legacy).toContain(says);
+  expect(legacy).not.toMatch(/class="_(root|placeholder)_/);
 });

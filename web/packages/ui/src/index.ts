@@ -10,6 +10,7 @@ export { BarChart, LineChart } from "./components/chart";
 export { CopyButton } from "./components/copy-button";
 export { CreateDialog } from "./components/create-dialog";
 export { DataTable } from "./components/data-table";
+export { DesignProvider } from "./components/design-provider";
 export { Dialog } from "./components/dialog";
 export { EditPanel } from "./components/edit-panel";
 export { Field, Select, TextArea } from "./components/field";

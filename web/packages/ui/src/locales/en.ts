@@ -16,34 +16,6 @@ export default {
     skipToContent: "Skip to content",
   },
   dialog: { close: "Close" },
-  overlay: {
-    create: "Create",
-    sending: "Submitting",
-    retry: "Try again",
-    done: "Done",
-    save: "Save",
-    saving: "Saving",
-    saved: "Saved",
-    live: "Changes apply right away",
-    staleTitle: "This was just changed elsewhere",
-    staleBody:
-      "It now shows the latest version, and your last change wasn’t saved. Make it again if you still want it.",
-  },
-  failed: {
-    title: "That didn’t go through",
-    kept: "Everything you entered is still here, so you can try again.",
-    reverted: "The setting is back to what it was, so you can change it again.",
-    unconfirmed:
-      "It’s unclear whether your change took effect. Reload the page to see the current setting before changing it again.",
-    requestId: "Request ID",
-  },
-  toast: {
-    undo: "Undo",
-    undone: "Undone",
-    undoFailed: "The undo didn’t go through, so it is still as it was before. Change it back by hand if you need to.",
-    undoUnknown:
-      "It’s unclear whether the undo took effect. Reload the page to see the current state before changing it back.",
-  },
   filters: { clear: "Clear filters" },
   chart: { time: "Time" },
   month: { month: "Month", year: "Year" },
@@ -246,6 +218,7 @@ export default {
     errorTitle: "Couldn’t load this",
     errorBody: "Try again in a moment. If it keeps failing, include the request ID below when you contact support.",
     networkError: "Can’t reach Axiom. Check your connection and try again.",
+    requestId: "Request ID {{id}}",
     failedAt: "Failed at {{time}}",
     retry: "Try again",
     forbiddenTitle: "No access",

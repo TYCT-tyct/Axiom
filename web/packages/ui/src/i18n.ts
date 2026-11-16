@@ -1,5 +1,6 @@
 import i18next from "i18next";
 import { initReactI18next } from "react-i18next";
+import type { zh as design } from "./locales/design";
 import en from "./locales/en";
 import zh from "./locales/zh";
 import { readStored, writeStored } from "./storage";
@@ -32,8 +33,9 @@ export function initialLanguage(stored: string | null, preferred: readonly strin
   return "zh";
 }
 
-// The shared messages' type, which each app declares as its namespace "common" (i18next.d.ts).
-export type CommonMessages = typeof zh;
+// The shared messages' type, which each app declares as its namespace "common" (i18next.d.ts). It includes the
+// redesign's component messages, which join the namespace at run time only where DesignProvider is.
+export type CommonMessages = typeof zh & typeof design;
 
 // A namespace's messages: the Chinese ones are the source, and the English ones must have exactly the same keys.
 export type Messages<T> = { [K in keyof T]: T[K] extends string ? string : Messages<T[K]> };
