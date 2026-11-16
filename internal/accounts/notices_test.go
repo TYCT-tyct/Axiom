@@ -207,37 +207,31 @@ func TestAnnouncementBoundaryValidation(t *testing.T) {
 
 func TestPasswordSecurityMailCannotBeDisabled(t *testing.T) {
 	t.Parallel()
-	x := recoverySite(t)
-	p, err := x.principal(t, console, x.signIn(t, console))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword}); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != "1" {
-		t.Fatalf("mandatory password mail missing: %v", got)
-	}
-}
-
-func TestPasswordResetSecurityMailCannotBeDisabled(t *testing.T) {
-	t.Parallel()
-	x := recoverySite(t)
-	p, err := x.principal(t, console, x.signIn(t, console))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
-		t.Fatal(err)
-	}
-	if err = x.reset(t, console, x.token(t), changedPassword); err != nil {
-		t.Fatal(err)
-	}
-	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != "2" {
-		t.Fatalf("mandatory password mail missing: %v", got)
+	for _, tc := range []struct {
+		name, mails string
+	}{
+		{"change", "1"},
+		{"reset", "2"},
+	} {
+		x := recoverySite(t)
+		p, err := x.principal(t, console, x.signIn(t, console))
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if _, err = x.s.UpdateNotificationPreferences(t.Context(), p, accounts.NotificationPreferences{Language: "en"}, nil); err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if tc.name == "reset" {
+			err = x.reset(t, console, x.token(t), changedPassword)
+		} else {
+			_, _, err = x.s.ChangePassword(t.Context(), p, accounts.PasswordChange{CurrentPassword: password, NewPassword: changedPassword})
+		}
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.mail_outbox"); got[0] != tc.mails {
+			t.Fatalf("%s: mandatory password mail missing: %v", tc.name, got)
+		}
 	}
 }
 
