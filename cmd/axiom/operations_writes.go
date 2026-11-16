@@ -45,7 +45,7 @@ func (o operationsAPI) ModelSetStatus(ctx context.Context, r operationsapi.Model
 	if r.Params.XAxiomRunID != nil {
 		p.Run = *r.Params.XAxiomRunID
 	}
-	if b.Status == operationsapi.ModelStatusChangeStatusRetired {
+	if b.Status == operationsapi.Retired {
 		p.Risk = operations.RiskDelisting
 	}
 	var op operations.Operation
@@ -275,7 +275,7 @@ func operationBody(op operations.Operation) operationsapi.Operation {
 		if a.Reasons != nil { // nil: an older node proposed it without them
 			reasons := make([]operationsapi.OperationsApprovalReason, len(a.Reasons))
 			for i, r := range a.Reasons {
-				reasons[i].Code = operationsapi.OperationsApprovalReasonCode(r)
+				reasons[i].Code = adminapi.OperationsApprovalReasonCode(r)
 			}
 			body.Approval.Reasons = &reasons
 		}
