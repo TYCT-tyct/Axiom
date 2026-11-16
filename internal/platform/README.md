@@ -73,7 +73,7 @@
 
 ## 接口约定
 
-契约每个监听一份、自成一体：`api/console.yaml`、`api/admin.yaml`、`api/operations.yaml`。`just api` 校验契约和下表的约定（括号注明的除外）；`just api-compat` 禁止已有结构新增必填字段（`x-axiom-newly-required` 写理由豁免）。客户端视角见[前端接口指南](../../docs/frontend-api.md)。
+契约每个监听一份：`api/console.yaml`、`api/admin.yaml`、`api/operations.yaml`。`just api` 校验契约和下表的约定（括号注明的除外）；`just api-compat` 禁止已有结构新增必填字段（`x-axiom-newly-required` 写理由豁免）。客户端视角见[前端接口指南](../../docs/frontend-api.md)。
 
 | 约定 | 内容 |
 |---|---|
@@ -85,7 +85,7 @@
 | 值（不检查） | `Money.amount` 是十亿分之一单位的整数文本，倍率等是 `Decimal` 文本；账户实体用 TypeID；路径 ID 格式错同不存在 404；没有的值不出现；`PUT` 整体替换 |
 | 管理写操作 | 非 Session 的写带 `Idempotency-Key`、`reason`，`rev` 过期 409 `stale_revision`；只读的 POST 标 `x-axiom-safe: true` |
 | 运营接口 | Bearer 凭证；`x-axiom-permission`、`x-axiom-money`、`x-axiom-scope`、唯一的 `x-mcp-name`；读带 `Reason`，写带 `IdempotencyKey` 和 `reason`；`agentGuard` 先写 `operations.operation_log` 再答，写不进 503；读 15 秒、写 30 秒 |
-| 共有部分 | 各契约抄写共用部分，同名必须完全相同 |
+| 共有部分 | 控制台与管理契约各抄一份，同名必须完全相同；运营契约 `$ref` 到 `admin.yaml`，复用 `adminapi` 的类型 |
 | 无固定形状的 JSON（测试） | 形状固定的给命名模式、以 `jsonx.Raw` 照存；成员归别人的只在描述里列；请求里的模式不让守卫多拒 |
 | 没有处理器（`just generated`） | `tools/pendingapi` 的桩答 501 `not_implemented`；现在每个操作都有处理器 |
 
@@ -127,7 +127,7 @@
 
 ### 任务队列
 
-- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（落进没有 worker 的 `default` 就不会被执行），测试检查。
+- `pg.Queue`（`db.NewQueue`）封装 River（v0.51.0）。具名队列的 worker 数：`money` 3、`reconcile` 1、`notifications` 2、`syncs` 4、`archive` 1；每个任务种类在 `InsertOpts` 写明队列（`default` 没有 worker），测试检查。
 - `Start` 前用 `q.Workers()`、`q.Every` 登记 worker 和周期任务（领导节点插入，须容忍晚到和重复），之后登记 panic。`q.InsertManyTx` 在引起它的写入事务里入队；至少执行一次，worker 要容忍重复。节点只取有 worker 的种类（SMTP 未配置的节点不登记邮件 worker）。
 - 任务最多 10 分钟，运行满 15 分钟算丢失；丢弃的任务每分钟扫描、在 `platform.discarded_jobs` 认领并告警，终态满 24 小时才删。
 - 租户数据不进任务参数和 worker 错误（River 的表没有策略）：数据放模块的表，参数只放 id，worker 用 `db.TenantTx` 换到该租户的范围。
