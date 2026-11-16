@@ -317,6 +317,14 @@ class Decisions(unittest.TestCase):
             with self.subTest(results=results):
                 self.assertEqual(train.verdict(results, n), expected)
 
+    def test_a_solo_entry_rides_alone(self):
+        e = lambda n, solo=False: train.Entry(n, f"sha{n}", solo=solo)
+        cases = [([e(1), e(2)], [1, 2]), ([e(1, True), e(2)], [1]), ([e(1), e(2, True), e(3)], [1]),
+                 ([e(1, True)], [1])]
+        for entries, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual([entry.number for entry in train.next_batch(entries)], expected)
+
     def test_queue_order_puts_hotfixes_first_then_label_time(self):
         prs = [{"number": 1, "labels": ["queue"], "queued_at": "2026-10-18T02:00:00Z"},
                {"number": 2, "labels": ["queue", "hotfix"], "queued_at": "2026-10-18T03:00:00Z"},
@@ -415,19 +423,18 @@ class Flaky(unittest.TestCase):
             with self.subTest(tests=tests, unexplained=unexplained, flaky=flaky):
                 self.assertEqual(train.covered(tests, unexplained, flaky), expected)
 
-    def test_a_failed_build_offers_a_log_to_read_only_when_the_go_tests_failed(self):
+    def test_a_failed_build_offers_logs_to_read_only_when_the_go_tests_failed(self):
         job = lambda name, conclusion, id=1: {"id": id, "name": name, "conclusion": conclusion}
-        cases = [([job("go-test", "failure", 7), job("build", "failure")], 7),
-                 ([job("go-test", "failure", 7)], 7),
-                 ([job("build", "failure")], None),  # no test failed: nothing a flaky entry could excuse
-                 ([job("go-test", "failure"), job("web", "failure")], None),
-                 ([job("go-test", "failure"), job("e2e (1/2)", "failure")], None),
-                 ([job("go-test", "failure"), job("e2e (2/2)", "failure")], None),
-                 ([job("go-test", "success"), job("build", "success")], None)]
+        cases = [([job("go-test (1/2)", "failure", 7), job("build", "failure")], [7]),
+                 ([job("go-test (1/2)", "failure", 7), job("go-test (2/2)", "failure", 8)], [7, 8]),
+                 ([job("go-test (2/2)", "failure", 8), job("go-test (1/2)", "success", 7)], [8]),
+                 ([job("build", "failure")], []),  # no test failed: nothing a flaky entry could excuse
+                 ([job("go-test (1/2)", "failure"), job("web", "failure")], []),
+                 ([job("go-test (1/2)", "failure"), job("e2e (2/2)", "failure")], []),
+                 ([job("go-test (1/2)", "success"), job("build", "success")], [])]
         for jobs, expected in cases:
             with self.subTest(jobs=[(j["name"], j["conclusion"]) for j in jobs]):
-                found = train.test_job_failing(jobs)
-                self.assertEqual(found and found["id"], expected)
+                self.assertEqual([found["id"] for found in train.test_jobs_failing(jobs)], expected)
 
     def test_the_repository_flaky_list_parses(self):
         train.parse_flaky((Path(__file__).parents[1] / train.FLAKY).read_text(encoding="utf-8"))

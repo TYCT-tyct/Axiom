@@ -14,7 +14,7 @@
 非轻量作业：
 
 - `static`：`check-ci` 中的静态部分、迁移版本与 `api-compat`；列车和 main 加 docs/secrets。
-- `go-test`：`just test`，仅可缓存的 `go test -race` 参数。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
+- `go-test`：两个分片各跑 `just test i/2`（按 `go list` 顺序隔一取一，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 和列车仅在 `web/` 或 `api/*.yaml` 变化时跑，main 总跑。目标与实际门禁见[前端](../frontend.md#实测)。
 - `e2e`：两个 `playwright test --shard=i/2` 分片，准备嵌入前端与 Go 静态服务。
