@@ -85,7 +85,7 @@
 | 值（不检查） | `Money.amount` 是十亿分之一单位的整数文本，倍率等是 `Decimal` 文本；账户实体用 TypeID；路径 ID 格式错同不存在 404；没有的值不出现；`PUT` 整体替换 |
 | 管理写操作 | 非 Session 的写带 `Idempotency-Key`、`reason`，`rev` 过期 409 `stale_revision`；只读的 POST 标 `x-axiom-safe: true` |
 | 运营接口 | Bearer 凭证；`x-axiom-permission`、`x-axiom-money`、`x-axiom-scope`、唯一的 `x-mcp-name`；读带 `Reason`，写带 `IdempotencyKey` 和 `reason`；`agentGuard` 先写 `operations.operation_log` 再答，写不进 503；读 15 秒、写 30 秒 |
-| 共有部分 | 控制台与管理契约各抄一份，同名必须完全相同；运营契约 `$ref` 到 `admin.yaml`，复用 `adminapi` 的类型 |
+| 共有部分 | 控制台与管理契约各抄一份，同名须相同；运营契约 `$ref` 到 `admin.yaml` |
 | 无固定形状的 JSON（测试） | 形状固定的给命名模式、以 `jsonx.Raw` 照存；成员归别人的只在描述里列；请求里的模式不让守卫多拒 |
 | 没有处理器（`just generated`） | `tools/pendingapi` 的桩答 501 `not_implemented`；现在每个操作都有处理器 |
 
