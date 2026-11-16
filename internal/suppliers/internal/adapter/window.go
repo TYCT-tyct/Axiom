@@ -60,6 +60,7 @@ func (s WindowScan) lateEnd() int64 {
 	return s.LateEnd
 }
 
+// Encode returns the canonical JSON position to persist between calls.
 func (s WindowScan) Encode() (ScanState, error) { return jsonx.MarshalCanonical(s) }
 
 // Next picks what to read next: the last day again when that is due, otherwise the stretch after the watermark,

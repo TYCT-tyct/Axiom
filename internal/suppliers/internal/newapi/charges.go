@@ -14,8 +14,10 @@ import (
 
 const logPageSize = 100
 
-type scanState = adapter.WindowScan
-type pass = adapter.WindowPass
+type (
+	scanState = adapter.WindowScan
+	pass      = adapter.WindowPass
+)
 
 func decodeScan(raw adapter.ScanState, now time.Time) (scanState, error) {
 	if len(raw) == 0 { // the first scan: nothing before the connection is ours

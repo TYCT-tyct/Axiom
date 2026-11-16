@@ -276,10 +276,8 @@ func checkKeyRows(t *testing.T, items []adapter.KeyState) {
 func checkCharges(t *testing.T, m adapter.Manager, now time.Time) {
 	t.Helper()
 	scan, err := (&scanState{
-		WindowScan: adapter.WindowScan{
-			V: 1, Watermark: now.Add(-time.Hour).Unix(), Span: 3600,
-			LastLate: now.Unix(), LateEnd: now.Unix(), Connected: now.Add(-2 * time.Hour).Unix(),
-		},
+		V: 1, Watermark: now.Add(-time.Hour).Unix(), Span: 3600,
+		LastLate: now.Unix(), LateEnd: now.Unix(), Connected: now.Add(-2 * time.Hour).Unix(),
 	}).encode()
 	if err != nil {
 		t.Fatal(err)
