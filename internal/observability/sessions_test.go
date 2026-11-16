@@ -162,7 +162,38 @@ func TestOwnSessionsPlanBoundsCallRecords(t *testing.T) {
 			t.Fatalf("narrow window exceeds 1500-block budget:\n%s", plan)
 		}
 	}
+	checkSessionFilterPlans(t, db, until)
 	checkSessionReadBudget(t, db, database, until)
+}
+
+func checkSessionFilterPlans(t *testing.T, db *pg.DB, until time.Time) {
+	t.Helper()
+	account := uuid.MustParse(heavyAccount)
+	var requestText string
+	if err := db.ReadTx(t.Context(), accountScope(account), func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), "SELECT id::text FROM observability.call_log WHERE account_id=$1 LIMIT 1", account.String()).Scan(&requestText)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	request := uuid.MustParse(requestText)
+	for _, test := range []struct {
+		name string
+		q    OwnQuery
+		max  int
+	}{
+		{"model", OwnQuery{Model: "rare"}, 400},
+		{"status", OwnQuery{Status: "error"}, 400},
+		{"fallback", OwnQuery{FellBack: true}, 400},
+		{"request", OwnQuery{RequestID: &request}, 40},
+	} {
+		q := test.q
+		q.Account, q.Since, q.Until = account, until.Add(-31*24*time.Hour), until
+		plan := explainSessions(t, db, q)
+		t.Logf("%s filter: %d buffers\n%s", test.name, buffers(t, plan), plan)
+		if buffers(t, plan) > test.max || regexp.MustCompile(`Seq Scan on call_log_[^\n]*actual[^\n]*rows=[1-9]`).MatchString(plan) {
+			t.Errorf("%s exceeds %d-block index budget:\n%s", test.name, test.max, plan)
+		}
+	}
 }
 
 func explainSessions(t *testing.T, db *pg.DB, q OwnQuery) string {
@@ -176,7 +207,7 @@ func explainSessions(t *testing.T, db *pg.DB, q OwnQuery) string {
 		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Account.String(), q.Since, q.Until, "", "", "", "", "", "", false, maxOwnSessionCalls, q.Until, uuid.Nil().String(), int64(size)+1)
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Account.String(), q.Since, q.Until, q.Model, q.ClientApp, uuidFilter(q.Key), uuidFilter(q.Workspace), q.Status, uuidFilter(q.RequestID), q.FellBack, maxOwnSessionCalls, q.Until, uuid.Nil().String(), int64(size)+1)
 		if err != nil {
 			return err
 		}
