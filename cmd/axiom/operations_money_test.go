@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"axiom/internal/platform/adminapi"
-	"axiom/internal/platform/operationsapi"
 )
 
 // moneyLimits is the platform's top-up caps in the tests, in billionths: autonomous single 10, day 25, week 40,
@@ -87,7 +86,7 @@ func TestOperationsTopUpRefusals(t *testing.T) {
 	expectAdmin(t, "the policy", f.setCaps("USD", 0, moneyLimits), http.StatusOK, "")
 	expectAdmin(t, "over the hard single cap", f.proposeTopUp(token, supplier, "10500000", newKey(), ""), http.StatusUnprocessableEntity, codeCapExceeded)
 	rec := f.proposeTopUp(token, supplier, "6000000", newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStatePendingApproval {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStatePendingApproval {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	if got := f.text(`SELECT count(*)::text FROM operations.money_actions`); got != "0" {
@@ -103,7 +102,7 @@ func TestOperationsTopUp(t *testing.T) {
 	key := newKey()
 	rec := f.proposeTopUp(token, supplier, "2500000", key, "")
 	five := agentOperation(t, rec)
-	if rec.Code != http.StatusOK || five.State != operationsapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"amount":"5000000000"`) || !strings.Contains(rec.Body.String(), `"reservation":"reserved"`) {
+	if rec.Code != http.StatusOK || five.State != adminapi.OperationStateSucceeded || !strings.Contains(rec.Body.String(), `"amount":"5000000000"`) || !strings.Contains(rec.Body.String(), `"reservation":"reserved"`) {
 		t.Errorf("five dollars: %d %s", rec.Code, rec.Body)
 	}
 	if rec := f.proposeTopUp(token, supplier, "2500000", key, ""); rec.Header().Get("Idempotency-Replayed") != "true" || *agentOperation(t, rec).OperationId != *five.OperationId {

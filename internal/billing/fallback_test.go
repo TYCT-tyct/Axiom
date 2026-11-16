@@ -23,8 +23,7 @@ func mustFallbacks(tb testing.TB, body string) fallbacks {
 }
 
 // TestParseFallbacks: a row is valid only with a currency, a price above 0 and at most 1 for each known per-use item
-// and nothing else (docs/domains/billing.md「价目表缺项」: 币种、单位正确，不为 0). The markup rows written before #232
-// carried is an unknown member now and is refused here; parseLockedFallbacks alone reads it.
+// and nothing else (docs/domains/billing.md「价目表缺项」: 币种、单位正确，不为 0).
 func TestParseFallbacks(t *testing.T) {
 	t.Parallel()
 
@@ -57,36 +56,6 @@ func TestParseFallbacks(t *testing.T) {
 			}
 			if body, err := f.body(); err != nil || body != tc.body { // every valid fixture is written canonically
 				t.Errorf("body = %s, %v; want %s", body, err, tc.body)
-			}
-		})
-	}
-}
-
-// TestParseLockedFallbacks: a reservation's locked text reads with or without the markup rows admitted before #232
-// carried, and yields the prices alone; any other unknown member is still refused.
-func TestParseLockedFallbacks(t *testing.T) {
-	t.Parallel()
-
-	for _, tc := range []struct {
-		name, body string
-		ok         bool
-	}{
-		{"locked after #232", testFallbacks, true},
-		{"locked before #232", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"}}`, true},
-		{"a markup after the prices", `{"currency":"USD","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"},"markup":"1.5"}`, true},
-		{"an unknown member", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0.00000005","web_search":"0.00000002"},"v":1}`, false},
-		{"an invalid price", `{"currency":"USD","markup":"1.5","per_use":{"code_execution":"0","web_search":"0.00000002"}}`, false},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			f, err := parseLockedFallbacks(tc.body)
-			if (err == nil) != tc.ok || err != nil && !errors.Is(err, errFallbacks) {
-				t.Fatalf("parseLockedFallbacks = %v, want ok %v", err, tc.ok)
-			}
-			if err != nil {
-				return
-			}
-			if body, err := f.body(); err != nil || body != testFallbacks {
-				t.Errorf("body = %s, %v; want the prices alone, %s", body, err, testFallbacks)
 			}
 		})
 	}

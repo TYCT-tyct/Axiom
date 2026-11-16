@@ -65,7 +65,7 @@ func TestOperationsAPIWrites(t *testing.T) {
 	rec := f.setStatusAs(token, draft.Id, "listed", draft.Rev, key, "")
 	expectAdmin(t, "listing", rec, http.StatusOK, "")
 	listed := agentOperation(t, rec)
-	if listed.State != operationsapi.OperationStateSucceeded || listed.Approval != nil || !strings.Contains(rec.Body.String(), `"status":"listed"`) {
+	if listed.State != adminapi.OperationStateSucceeded || listed.Approval != nil || !strings.Contains(rec.Body.String(), `"status":"listed"`) {
 		t.Errorf("the listing: %s", rec.Body)
 	}
 	rec = f.setStatusAs(token, draft.Id, "listed", draft.Rev, key, "")
@@ -76,7 +76,7 @@ func TestOperationsAPIWrites(t *testing.T) {
 
 	model := f.send(http.MethodGet, "/models/"+draft.Id, "", http.StatusOK)
 	rec = f.setStatusAs(token, model.Id, "retired", model.Rev, newKey(), `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.OperationId != nil || preview.State != operationsapi.OperationStatePendingApproval {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.OperationId != nil || preview.State != adminapi.OperationStatePendingApproval {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	expectAdmin(t, "a stale revision", f.setStatusAs(token, model.Id, "retired", model.Rev-1, newKey(), ""), http.StatusConflict, codeStaleRevision)
@@ -93,7 +93,7 @@ func TestOperationsAPIApproval(t *testing.T) {
 	f := newCatalogFixture(t)
 	_, token := f.writer()
 	model, asked := f.listedAndAsked(token, "acme/m1")
-	if asked.State != operationsapi.OperationStatePendingApproval || asked.Approval == nil || asked.NextCheckAfterSeconds == nil {
+	if asked.State != adminapi.OperationStatePendingApproval || asked.Approval == nil || asked.NextCheckAfterSeconds == nil {
 		t.Fatalf("the proposal: %+v", asked)
 	}
 	expectReasons(t, "the agent's proposal", asked.Approval.Reasons, `[{"code":"always"}]`)
@@ -273,7 +273,7 @@ func TestOperationsWithdrawalPreview(t *testing.T) {
 	}
 	key := newKey()
 	rec := withdraw(key, `,"dry_run":true`)
-	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != operationsapi.OperationStateCanceled || preview.OperationId != nil {
+	if preview := agentOperation(t, rec); rec.Code != http.StatusOK || !preview.DryRun || preview.State != adminapi.OperationStateCanceled || preview.OperationId != nil {
 		t.Errorf("the preview: %d %s", rec.Code, rec.Body)
 	}
 	if got := f.text(`SELECT a.state || ':' || o.state || ':' || (SELECT count(*) FROM platform.audit_log WHERE action = 'operation.cancel') || ':' ||
@@ -285,7 +285,7 @@ func TestOperationsWithdrawalPreview(t *testing.T) {
 	replayed := agentOperation(t, withdraw(key, ""))
 	read := agentOperation(t, f.agent(token, because("/operations/"+*asked.OperationId, "x")))
 	for what, op := range map[string]operationsapi.Operation{"the withdrawal": withdrawn, "its retry": replayed} {
-		if op.State != operationsapi.OperationStateCanceled || !op.UpdatedAt.Equal(*read.UpdatedAt) || !op.UpdatedAt.After(*asked.UpdatedAt) ||
+		if op.State != adminapi.OperationStateCanceled || !op.UpdatedAt.Equal(*read.UpdatedAt) || !op.UpdatedAt.After(*asked.UpdatedAt) ||
 			op.Approval.DecidedAt == nil || !op.Approval.DecidedAt.Equal(*read.Approval.DecidedAt) {
 			t.Errorf("%s answers %+v, the operation reads %+v", what, op, read)
 		}
