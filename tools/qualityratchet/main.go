@@ -38,6 +38,7 @@ import (
 	"strings"
 
 	"github.com/uudashr/gocognit"
+	"golang.org/x/mod/modfile"
 )
 
 const (
@@ -465,11 +466,8 @@ func modulePath(root string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("read go.mod: %w", err)
 	}
-	for line := range strings.SplitSeq(string(source), "\n") {
-		line = strings.TrimSpace(line)
-		if module, ok := strings.CutPrefix(line, "module "); ok {
-			return strings.TrimSpace(module), nil
-		}
+	if module := modfile.ModulePath(source); module != "" {
+		return module, nil
 	}
 	return "", fmt.Errorf("%s/go.mod has no module line", root)
 }

@@ -59,7 +59,7 @@ func quote(credits int64, applied *big.Rat, currency platform.Currency, fee Fee)
 
 // minorScale is how many minor units one unit of currency has.
 func minorScale(currency platform.Currency) *big.Int {
-	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(digits(currency))), nil)
+	return new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(currency.MinorDigits())), nil)
 }
 
 // ceil rounds a non-negative fraction up to an integer.

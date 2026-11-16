@@ -146,13 +146,9 @@ var errFrom = fmt.Errorf("%s: want one address such as Axiom <no-reply@example.c
 
 // checkHost refuses what net.JoinHostPort would turn into a different address, such as a URL or a port.
 func checkHost(host string) error {
-	if strings.ContainsAny(host, " \t\r\n/") || strings.Contains(host, ":") && !isIP(host) {
+	_, addrErr := netip.ParseAddr(host)
+	if strings.ContainsAny(host, " \t\r\n/") || strings.Contains(host, ":") && addrErr != nil {
 		return fmt.Errorf("%s: want a host name such as smtp.example.com, without a scheme or port", hostVar)
 	}
 	return nil
-}
-
-func isIP(host string) bool {
-	_, err := netip.ParseAddr(host)
-	return err == nil
 }
