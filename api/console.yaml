@@ -2351,10 +2351,7 @@ paths:
       x-axiom-level: signed_in
       x-axiom-permission: calls.view
       parameters:
-        - name: fell_back
-          in: query
-          schema: {type: boolean}
-          description: When true, only calls with attempt_count greater than one.
+        - $ref: "#/components/parameters/CallFellBack"
         - $ref: "#/components/parameters/CallSince"
         - $ref: "#/components/parameters/CallUntil"
         - $ref: "#/components/parameters/CallModel"
@@ -2457,9 +2454,7 @@ paths:
         - $ref: "#/components/parameters/CallWorkspace"
         - $ref: "#/components/parameters/CallStatus"
         - $ref: "#/components/parameters/CallRequestId"
-        - name: fell_back
-          in: query
-          schema: {type: boolean}
+        - $ref: "#/components/parameters/CallFellBack"
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -3060,6 +3055,11 @@ components:
       name: workspace_id
       in: query
       schema: {$ref: "#/components/schemas/WorkspaceId"}
+    CallFellBack:
+      name: fell_back
+      in: query
+      schema: {type: boolean}
+      description: When true, only calls with attempt_count greater than one.
     CallStatus:
       name: status
       in: query

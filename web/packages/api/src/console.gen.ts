@@ -3134,6 +3134,8 @@ export interface components {
         ModelAbility: components["schemas"]["ModelAbility"];
         CallKey: components["schemas"]["KeyId"];
         CallWorkspace: components["schemas"]["WorkspaceId"];
+        /** @description When true, only calls with attempt_count greater than one. */
+        CallFellBack: boolean;
         /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
         CallStatus: components["schemas"]["CallStatus"];
         CallRequestId: components["schemas"]["CallId"];
@@ -5449,7 +5451,7 @@ export interface operations {
         parameters: {
             query?: {
                 /** @description When true, only calls with attempt_count greater than one. */
-                fell_back?: boolean;
+                fell_back?: components["parameters"]["CallFellBack"];
                 since?: components["parameters"]["CallSince"];
                 until?: components["parameters"]["CallUntil"];
                 /** @description Exactly the model name the client asked for. */
@@ -5533,7 +5535,8 @@ export interface operations {
                 /** @description success means empty error_kind; error means nonempty error_kind. Omit for both. */
                 status?: components["parameters"]["CallStatus"];
                 request_id?: components["parameters"]["CallRequestId"];
-                fell_back?: boolean;
+                /** @description When true, only calls with attempt_count greater than one. */
+                fell_back?: components["parameters"]["CallFellBack"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
