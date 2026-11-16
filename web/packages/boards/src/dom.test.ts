@@ -2,13 +2,15 @@
 import { expect, it, vi } from "vitest";
 import { boardCSS, boardHTML, boardStyle } from "./dom.ts";
 
-it("keeps style attributes out of the parsed document's active tree", () => {
+it("keeps style attributes out of the parser, including inert templates", () => {
   const parse = DOMParser.prototype.parseFromString;
   const activeStyles: string[] = [];
   const spy = vi.spyOn(DOMParser.prototype, "parseFromString").mockImplementation(function (this: DOMParser, ...args) {
     const doc = parse.apply(this, args);
     // Capture at parse time: removing an attribute later cannot undo a CSP violation already reported by the parser.
-    for (const node of doc.querySelectorAll("[style]")) activeStyles.push(node.getAttribute("style") ?? "");
+    const template = doc.querySelector("template");
+    for (const node of (template?.content ?? doc).querySelectorAll("[style]"))
+      activeStyles.push(node.getAttribute("style") ?? "");
     return doc;
   });
   try {
@@ -19,6 +21,48 @@ it("keeps style attributes out of the parsed document's active tree", () => {
     expect(target.querySelector("b")?.style.fontWeight).toBe("400");
   } finally {
     spy.mockRestore();
+  }
+});
+
+it("preserves quoted content and style declarations through inert HTML parsing", () => {
+  const el = document.createElement("div");
+  boardHTML(el, `<span title='a > style="unchanged"' STYLE = 'color:red; --text:"a;b"'>&lt;style=hello&gt;</span>`);
+  const span = el.firstElementChild as HTMLElement;
+  expect(span.title).toBe('a > style="unchanged"');
+  expect(span.style.color).toBe("red");
+  expect(span.style.getPropertyValue("--text")).toBe('"a;b"');
+  expect(span.textContent).toBe("<style=hello>");
+  expect(span.hasAttribute("data-board-style")).toBe(false);
+});
+
+it("keeps variable shorthands rather than copying their empty pending-substitution longhands", () => {
+  const sheet = {
+    cssRules: [
+      {
+        style: {
+          length: 1,
+          0: "background-color",
+          getPropertyValue: (name: string) => (name === "background" ? "var(--c0)" : ""),
+          getPropertyPriority: () => "",
+        },
+      },
+    ],
+    insertRule: () => 0,
+  };
+  vi.stubGlobal(
+    "CSSStyleSheet",
+    class {
+      cssRules = sheet.cssRules;
+      insertRule = sheet.insertRule;
+    },
+  );
+  try {
+    expect(boardStyle("background:var(--c0)")).toEqual({ background: "var(--c0)" });
+    const style = document.createElement("i").style;
+    boardCSS(style, "background:var(--c0)");
+    expect(style.background).toBe("var(--c0)");
+  } finally {
+    vi.unstubAllGlobals();
   }
 });
 

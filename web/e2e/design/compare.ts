@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { expect, type Page, type TestInfo } from "@playwright/test";
 import { blankCanvases } from "./canvas.ts";
+import { pauseFrames, resumeFrames } from "./frames.ts";
 import type { Region, Ruling } from "./rulings.ts";
 import { freeze } from "./stage.ts";
 
@@ -64,6 +65,7 @@ export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] =
     },
     { blanks, colour: blank },
   );
+  await pauseFrames(page);
   await freeze(page);
   const saved = await blankCanvases(page, canvases);
   try {
@@ -71,6 +73,7 @@ export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] =
   } finally {
     await saved.evaluate((restore) => restore());
     await saved.dispose();
+    await resumeFrames(page);
     await page.evaluate(() => {
       for (const cover of document.querySelectorAll("[data-design-blank]")) cover.remove();
     });
@@ -157,7 +160,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     const pixels = Number(result.error.match(/(\d+) pixels \(ratio/)?.[1] ?? -1);
     result.differentPixels = pixels;
     result.differentRatio = pixels < 0 ? -1 : pixels / (actual.readUInt32BE(16) * actual.readUInt32BE(20));
-    const diff = info.attachments.find((attachment) => attachment.name.endsWith("diff.png"))?.path;
+    const diff = info.attachments.findLast((attachment) => attachment.name.endsWith("diff.png"))?.path;
     if (diff) {
       result.diff = join(dirname(reference), "diff.png");
       writeFileSync(result.diff, readFileSync(diff));

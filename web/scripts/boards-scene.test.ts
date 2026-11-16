@@ -73,7 +73,9 @@ it("checks text input fonts without treating checkbox chrome as text", async () 
 it("starts identical ocean worlds despite framework randomness before mounting", async () => {
   const random = Math.random;
   const page = {
-    addInitScript: async (fn: (seed: number) => void, seed: number) => fn(seed),
+    addInitScript: async (fn: (seed: number) => void, seed?: number) => {
+      if (seed !== undefined) fn(seed);
+    },
     clock: { install: async () => {} },
   } as unknown as Page;
   const worlds: number[][] = [];

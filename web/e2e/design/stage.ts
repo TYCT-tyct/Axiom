@@ -1,4 +1,5 @@
 import type { Page } from "@playwright/test";
+import { installFrameGate } from "./frames.ts";
 
 // What makes two runs of a side draw the same pixels, applied the same way to the board and the page.
 export type Stage = {
@@ -47,6 +48,7 @@ export async function stage(page: Page, view: Stage) {
     });
   }, seed);
   await page.clock.install({ time: view.time.getTime() - loading });
+  await page.addInitScript(installFrameGate);
 }
 
 // Canvas engines resize and reschedule their first frame in native observers, outside Playwright's clock. Let those
