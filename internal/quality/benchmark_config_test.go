@@ -13,11 +13,7 @@ import (
 // configuration must not mark it as handled.
 func TestBenchmarkScoreWaitsForItsConfiguration(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	second := &probeFixture{
 		endpoints: []suppliers.Routable{official, candidate},
@@ -75,11 +71,7 @@ func TestBenchmarkScoreWaitsForItsConfiguration(t *testing.T) {
 //nolint:cyclop // one test walks the local node, the second node and the restart in order
 func TestBenchmarkConfigurationRoundTripSurvivesRestart(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -156,11 +148,7 @@ func TestBenchmarkConfigurationRoundTripSurvivesRestart(t *testing.T) {
 // later return to the old configuration could adopt the row.
 func TestBenchmarkScoreCannotOutliveItsConfigurationWrite(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -226,11 +214,7 @@ func TestBenchmarkScoreCannotOutliveItsConfigurationWrite(t *testing.T) {
 //nolint:cyclop,gocognit // the test holds a transaction open while it checks that the write waits
 func TestBenchmarkScoreWaitsForAnUncommittedConfigurationChange(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 	configEpoch, configOK := m.configForScore(t.Context(), candidate)
 	if !configOK {
 		t.Fatal("the candidate configuration was not recorded")
@@ -320,11 +304,7 @@ func TestBenchmarkScoreWaitsForAnUncommittedConfigurationChange(t *testing.T) {
 // it checked, not only the fields it sees at write time.
 func TestBenchmarkStaleRunCannotCrossConfigurationRoundTrip(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -373,11 +353,7 @@ func TestBenchmarkStaleRunCannotCrossConfigurationRoundTrip(t *testing.T) {
 // shared row to B; otherwise every score for B is rejected forever.
 func TestBenchmarkRestartSyncsChangedConfiguration(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
@@ -459,11 +435,7 @@ func TestBenchmarkOfficialStaleRunKeepsNewerConfiguration(t *testing.T) {
 //nolint:cyclop // the test orchestrates the paused older call and the newer publish in order
 func TestPrepareStartupSyncSerializesOlderSnapshot(t *testing.T) {
 	m, l, f, now := fixtureLoop(t, Observe)
-	official, candidate := benchmarkEndpoints()
-	f.mu.Lock()
-	f.endpoints = []suppliers.Routable{official, candidate}
-	f.mu.Unlock()
-	tick(t, l)
+	official, candidate := prepareBenchmarkEndpoints(t, l, f)
 
 	set := fixedBenchmark()
 	at := *now
