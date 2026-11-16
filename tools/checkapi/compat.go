@@ -22,12 +22,12 @@ func newlyRequired(base, files map[string][]byte) []string {
 		if base[name] == nil {
 			continue
 		}
-		before, err := openapi3.NewLoader().LoadFromData(base[name])
+		before, err := loadContract(base, name)
 		if err != nil {
 			problems = append(problems, fmt.Sprintf("%s: the base contract does not load: %v", name, err))
 			continue
 		}
-		if after, err := openapi3.NewLoader().LoadFromData(files[name]); err == nil { // check reports one that does not load
+		if after, err := loadContract(files, name); err == nil { // check reports one that does not load
 			problems = append(problems, compare(name, objects(before), objects(after))...)
 		}
 	}

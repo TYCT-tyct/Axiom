@@ -312,17 +312,6 @@ SET pool_accounts = NULL, pool_failed = NULL, pool_usable = NULL, pool_headroom 
 	})
 }
 
-// dropPoolPosition erases the set of groups the bridge last reported, as a node of the previous version rewriting the
-// position would.
-func dropPoolPosition(w *world) {
-	w.t.Helper()
-	w.tx(func(ctx context.Context, tx pg.Tx) error {
-		_, err := tx.Exec(ctx, `UPDATE platform.alert_positions SET position = position - 'PoolLow' WHERE source = $1`,
-			"suppliers.sync/"+w.supplier.String())
-		return err
-	})
-}
-
 // TestPoolCapacityAlertCarriesItsNumbers: a group the pool reports low raises one signal, keyed by the group and
 // carrying the counts an operator needs; the first bridge run reports a low group that already exists.
 func TestPoolCapacityAlertCarriesItsNumbers(t *testing.T) {
@@ -344,9 +333,7 @@ func TestPoolCapacityAlertCarriesItsNumbers(t *testing.T) {
 	}
 }
 
-// TestPoolCapacityAlertResolvesWhenTheGroupRecovers: the bridge compares the rows each run, so a recovery needs no event,
-// and a lost set of reported groups (a position written by the previous version) re-raises a low that is still there and
-// resolves one that is not.
+// TestPoolCapacityAlertResolvesWhenTheGroupRecovers: the bridge compares rows each run, so a recovery needs no event.
 func TestPoolCapacityAlertResolvesWhenTheGroupRecovers(t *testing.T) {
 	w := newWorld(t, 2)
 	lowPoolGroup(w)
@@ -354,38 +341,14 @@ func TestPoolCapacityAlertResolvesWhenTheGroupRecovers(t *testing.T) {
 	forwardPoolAlerts(w)
 	consumeSupplierSignals(w)
 
-	dropPoolPosition(w)
-	forwardPoolAlerts(w)
-	signals := consumeSupplierSignals(w)
-	if len(signals) != 1 || signals[0].Resolved {
-		t.Fatalf("a low group after the position lost its set: %+v, want one firing signal", signals)
-	}
-
 	clearPoolGroup(w)
 	forwardPoolAlerts(w)
-	signals = consumeSupplierSignals(w)
+	signals := consumeSupplierSignals(w)
 	if len(signals) != 1 || !signals[0].Resolved || signals[0].Key != w.supplier.String()+"/g" {
 		t.Fatalf("recovery: %+v, want one resolved pool capacity", signals)
 	}
 	forwardPoolAlerts(w)
 	if got := consumeSupplierSignals(w); len(got) != 0 {
 		t.Fatalf("a steady reading raised %+v, want nothing", got)
-	}
-}
-
-// TestPoolCapacityAlertRecoversWhenThePositionPredatesTheSet: an older node consuming events skipped the pool ones and
-// rewrote the position without the set; the run that sees the row already cleared resolves the alert all the same.
-func TestPoolCapacityAlertRecoversWhenThePositionPredatesTheSet(t *testing.T) {
-	w := newWorld(t, 2)
-	lowPoolGroup(w)
-	setSyncAlertState(w, 0, syncer.State{})
-	forwardPoolAlerts(w)
-	consumeSupplierSignals(w)
-	dropPoolPosition(w)
-	clearPoolGroup(w)
-	forwardPoolAlerts(w)
-	signals := consumeSupplierSignals(w)
-	if len(signals) != 1 || !signals[0].Resolved || signals[0].Key != w.supplier.String()+"/g" {
-		t.Fatalf("recovery with no remembered set: %+v, want one resolved pool capacity", signals)
 	}
 }

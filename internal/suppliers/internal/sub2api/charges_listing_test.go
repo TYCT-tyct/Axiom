@@ -13,11 +13,10 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// Resuming on a fresh manager must not skip keys after a page shifts, or read
-// the same key's usage twice after a legacy node appends a complete listing.
+// Resuming on a fresh manager must not skip keys after a page shifts.
 func TestChargeScanResumesAChangingKeyList(t *testing.T) {
 	t.Parallel()
-	for _, change := range []string{"unchanged", "insert", "delete", "legacy append", "legacy mid-key", "limited"} {
+	for _, change := range []string{"unchanged", "insert", "delete", "limited"} {
 		t.Run(change, func(t *testing.T) {
 			t.Parallel()
 			resumeChargeKeys(t, change)
@@ -39,23 +38,12 @@ func resumeChargeKeys(t *testing.T, change string) {
 	m := managerAt(t, srv, loginStore, clk)
 	initial := begin(t, m)
 	clk.advance(time.Hour)
-	state, decoded := listKeysStep(t, m, clk, initial)
+	state, _ := listKeysStep(t, m, clk, initial)
 	switch change {
 	case "insert":
 		ids = append([]string{"151"}, ids...)
 	case "delete":
 		ids = ids[1:]
-	case "legacy append", "legacy mid-key":
-		decoded.Pass.Keys = append(decoded.Pass.Keys, ids...)
-		decoded.Pass.Listed, decoded.Pass.Page = true, 1
-		if change == "legacy mid-key" {
-			decoded.Pass.Key, decoded.Pass.Page = 100, 2
-		}
-		var err error
-		state, err = decoded.encode()
-		if err != nil {
-			t.Fatal(err)
-		}
 	case "limited":
 		limited = true
 		_, next, err := m.Charges(t.Context(), state)
@@ -67,9 +55,6 @@ func resumeChargeKeys(t *testing.T, change string) {
 	}
 	finishChargeKeys(t, managerAt(t, srv, loginStore, clk), state)
 	want := ids
-	if change == "legacy mid-key" {
-		want = ids[100:]
-	}
 	if !slices.Equal(used, want) {
 		t.Fatalf("usage read for %v, want each key once: %v", used, want)
 	}

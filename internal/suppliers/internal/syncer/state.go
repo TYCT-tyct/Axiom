@@ -35,13 +35,10 @@ func (t Task) String() string { return taskNames[t] }
 // Status is where a supplier stands.
 type Status uint8
 
-// The statuses. Only Normal is polled. Removing and Removed are not set by the engine now (see RemovalStep); they keep
-// their numbers because a stored state may hold one.
+// The statuses. Only Normal is polled.
 const (
 	Normal         Status = iota
 	NeedsAttention        // polling stopped until a person fixes the cause
-	Removing
-	Removed
 )
 
 // TaskState is the schedule of one task.
@@ -52,11 +49,6 @@ type TaskState struct {
 	LastOK       time.Time
 	Halted       bool // the supplier's answer was not understood: only this task stops, until a person resets it
 }
-
-// RemovalStep is the step a removal had reached, in the engine's days of doing the removal itself. A removal is one
-// transaction of the admin now (suppliers.Admin.Remove), so no step is taken; the type and the members below it stay
-// because they are in the stored state, which is read with jsonx.UnmarshalKnown and refuses a member it does not know.
-type RemovalStep uint8
 
 // ModelSnap is a model of a group as last read. Without are the capabilities its cost plan does not cover, which
 // routing keeps requests that need them away from. Plan is the fingerprint of its cost plan, empty while the cost is
@@ -84,8 +76,7 @@ type GroupSnap struct {
 func PlanKey(ref, model string) string { return ref + "/" + model }
 
 // State is everything the engine knows about one supplier. It is stored as it is (internal/suppliers/README.md「同步」
-// 「持久化」), so the constants of Task, Status and RemovalStep only gain members at the end, and any other change to
-// its fields that an old stored state would read differently needs a new format number in package persist.
+// 「持久化」).
 type State struct {
 	Version   int64 // the Store's fence: a Commit must name the version it read
 	ConfigGen int64 // raised when the configuration changes; results of rounds that began before are void
@@ -120,11 +111,8 @@ type State struct {
 	Scan     adapter.ScanState
 	ScanOpen bool
 
-	// Removal, GraceUntil, RescanFrom and RemovalAt are never set now (RemovalStep says why they stay). Through is how far
-	// the adapter says the charge records are read, from the last Done page that said.
-	Removal                           RemovalStep
-	GraceUntil, RescanFrom, RemovalAt time.Time
-	Through                           time.Time
+	// Through is how far the adapter has read charge records, from the last Done page.
+	Through time.Time
 }
 
 // Kind names an event.
