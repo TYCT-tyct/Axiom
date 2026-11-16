@@ -37,6 +37,15 @@ func TestCallDetailResolvesLiveAndRetiredCodenames(t *testing.T) {
 		{Seq: 2, Endpoint: retired.ID, Supplier: retired.Supplier, SourceClass: "relay", StartedAt: rec.At.Add(time.Second), FinishedAt: rec.At.Add(2 * time.Second), Outcome: observability.AttemptCommitted},
 	}
 	console.record(rec)
+	var liveBody consoleapi.Call
+	api := consoleAPI{upstreams: f.node.upstreams}
+	api.callRoutingBody(observability.OwnCallDetail{Attempts: []observability.OwnAttempt{
+		{Endpoint: live.ID.String()}, {Endpoint: retired.ID.String()},
+	}, Route: &observability.OwnRoute{SelectedEndpoint: retired.ID.String()}}, &liveBody, true)
+	if diff := cmp.Diff([]*string{new(live.Codename), new(retired.Codename), new(retired.Codename)},
+		[]*string{(*liveBody.Attempts)[0].EndpointCode, (*liveBody.Attempts)[1].EndpointCode, liveBody.Route.SelectedEndpoint}); diff != "" {
+		t.Fatalf("two live endpoints (-want +got): %s", diff)
+	}
 	if err := pgtest.Run(t.Context(), f.world.database.Superuser, fmt.Sprintf("UPDATE suppliers.endpoints SET enabled=false WHERE id='%s'", retired.ID.String())); err != nil {
 		t.Fatal(err)
 	}
