@@ -104,12 +104,9 @@ func uuidFilter(id *uuid.UUID) string {
 // this was the last. The scope is the whole of the access control: row-level security shows the account's own rows
 // and no others, so a caller that builds the scope from the user's authorization cannot ask for someone else's.
 func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, error) {
-	size := q.PageSize
-	switch {
-	case size == 0:
-		size = DefaultPageSize
-	case size < 0 || size > MaxPageSize:
-		return nil, nil, fmt.Errorf("list calls: page size %d, want 1 to %d", size, MaxPageSize)
+	size, err := ownPageSize(q.PageSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list calls: %w", err)
 	}
 	rows, err := listRows(ctx, tx, q, size)
 	if err != nil {
@@ -132,6 +129,17 @@ func ListOwn(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnCall, *Cursor, err
 		}
 	}
 	return calls, next, nil
+}
+
+func ownPageSize(size int) (int, error) {
+	switch {
+	case size == 0:
+		return DefaultPageSize, nil
+	case size < 0 || size > MaxPageSize:
+		return 0, fmt.Errorf("page size %d, want 1 to %d", size, MaxPageSize)
+	default:
+		return size, nil
+	}
 }
 
 // GetOwn returns one call of the scope by its request ID; a call of another account is not found, as if it did not

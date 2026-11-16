@@ -76,7 +76,7 @@ func TestCallSessionsHTTP(t *testing.T) {
 
 func TestSessionCursorIntegrity(t *testing.T) {
 	t.Parallel()
-	api := consoleAPI{sessionCursorKey: []byte("shared-identity-key")}
+	api := consoleAPI{sessionCursorKey: []byte("shared-session-cursor-key")}
 	q := observability.OwnQuery{Account: uuid.NewV7(), Since: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC), Until: time.Date(2026, 11, 2, 0, 0, 0, 0, time.UTC)}
 	pos := observability.Cursor{At: q.Since, ID: uuid.NewV7()}
 	raw, err := api.sessionCursor(pos, q)
@@ -110,5 +110,28 @@ func TestSessionCursorIntegrity(t *testing.T) {
 	q.Account = uuid.NewV7()
 	if _, err := api.parseSessionCursor(raw, q); err == nil {
 		t.Fatal("accepted other account")
+	}
+}
+
+func TestCallSessionsRejectOversize(t *testing.T) {
+	t.Parallel()
+	c := newCallsFixture(t)
+	first := uuid.NewV7()
+	c.f.run(`INSERT INTO observability.call_log
+ SELECT r.* FROM observability.call_log c CROSS JOIN generate_series(1,100001) n
+ CROSS JOIN LATERAL jsonb_populate_record(NULL::observability.call_log, to_jsonb(c) || jsonb_build_object(
+ 'id',CASE WHEN n=1 THEN '` + first.String() + `'::uuid ELSE uuidv7() END,'session_id','budget')) r
+ WHERE c.id='` + c.old.ID.String() + `'`)
+	rec := c.f.do(http.MethodGet, "/calls/sessions", "", as(c.s))
+	expect(t, "oversized session window", rec, http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	if !strings.Contains(rec.Body.String(), "100000") {
+		t.Fatalf("missing read budget: %s", rec.Body)
+	}
+	rec = c.f.do(http.MethodGet, "/calls/sessions?request_id="+first.String(), "", as(c.s))
+	expect(t, "narrowed session window", rec, http.StatusOK, "")
+	var body consoleapi.CallSessionList
+	decode(t, rec, &body)
+	if body.Data == nil || len(*body.Data) != 1 || *(*body.Data)[0].Calls != "1" {
+		t.Fatalf("narrowed window: %+v", body)
 	}
 }

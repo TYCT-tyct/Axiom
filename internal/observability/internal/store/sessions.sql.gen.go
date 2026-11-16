@@ -14,40 +14,51 @@ const listOwnSessions = `-- name: ListOwnSessions :many
 WITH filtered AS MATERIALIZED (
     SELECT id, at, session_id, client_app, model, currency, price_nano
     FROM observability.call_log
-    WHERE account_id = ($4::text)::uuid
-        AND at >= $5 AND at < $6
+    WHERE account_id = ($1::text)::uuid
+        AND at >= $2 AND at < $3
         AND session_id <> '' AND NOT billing_pending
-        AND ($7::text = '' OR model = $7)
-        AND ($8::text = '' OR client_app = $8)
-        AND ($9::text = '' OR key_id = nullif($9, '')::uuid)
-        AND ($10::text = '' OR workspace_id = nullif($10, '')::uuid)
-        AND ($11::text = '' OR (error_kind IS DISTINCT FROM '') = ($11 = 'error'))
-        AND ($12::text = '' OR id = nullif($12, '')::uuid)
-        AND (NOT $13::boolean OR attempt_count > 1)
+        AND ($4::text = '' OR model = $4)
+        AND ($5::text = '' OR client_app = $5)
+        AND ($6::text = '' OR key_id = nullif($6, '')::uuid)
+        AND ($7::text = '' OR workspace_id = nullif($7, '')::uuid)
+        AND ($8::text = '' OR (error_kind IS DISTINCT FROM '') = ($8 = 'error'))
+        AND ($9::text = '' OR id = nullif($9, '')::uuid)
+        AND (NOT $10::boolean OR attempt_count > 1)
+    ORDER BY call_log.at DESC, call_log.id DESC
+    LIMIT $11::bigint + 1
+), budget AS MATERIALIZED (
+    SELECT count(*) > $11::bigint AS exceeded FROM filtered
 ), models AS (
     SELECT session_id, currency, model, count(*) AS calls, sum(price_nano) AS price,
         min(at) AS first_at
-    FROM filtered GROUP BY session_id, currency, model
+    FROM filtered WHERE NOT (SELECT exceeded FROM budget)
+    GROUP BY session_id, currency, model
 ), totals AS (
     SELECT session_id, currency, sum(calls)::text AS calls, sum(price)::text AS price,
         min(first_at) AS first_at, (array_agg(model ORDER BY calls DESC, model COLLATE "C"))[1]::text AS main_model
     FROM models GROUP BY session_id, currency
 ), latest AS (
     SELECT DISTINCT ON (session_id, currency) session_id, currency, at AS last_at, id, client_app
-    FROM filtered ORDER BY session_id, currency, at DESC, id DESC
-)
+    FROM filtered WHERE NOT (SELECT exceeded FROM budget)
+    ORDER BY session_id, currency, at DESC, id DESC
+), page AS (
 SELECT totals.session_id, latest.client_app, totals.currency, totals.calls, totals.price, totals.main_model,
     totals.first_at::timestamptz AS first_at, latest.last_at, latest.id::text AS last_id
 FROM totals JOIN latest USING (session_id, currency)
-WHERE (latest.last_at, latest.id) < ($1::timestamptz, ($2::text)::uuid)
+WHERE (latest.last_at, latest.id) < ($12::timestamptz, ($13::text)::uuid)
 ORDER BY latest.last_at DESC, latest.id DESC
-LIMIT $3::bigint
+LIMIT $14::bigint
+)
+SELECT page.session_id, page.client_app, page.currency, page.calls, page.price, page.main_model,
+    page.first_at, page.last_at, page.last_id, false AS over_limit FROM page
+UNION ALL
+SELECT ''::text, ''::text, ''::text, ''::text, ''::text, ''::text,
+    $2::timestamptz, $2::timestamptz, ''::text, true
+FROM budget WHERE exceeded
+ORDER BY last_at DESC, last_id DESC
 `
 
 type ListOwnSessionsParams struct {
-	AfterAt     time.Time
-	AfterID     string
-	PageSize    int64
 	AccountID   string
 	Since       time.Time
 	Until       time.Time
@@ -58,6 +69,10 @@ type ListOwnSessionsParams struct {
 	Status      string
 	RequestID   string
 	FellBack    bool
+	CallLimit   int64
+	AfterAt     time.Time
+	AfterID     string
+	PageSize    int64
 }
 
 type ListOwnSessionsRow struct {
@@ -70,14 +85,13 @@ type ListOwnSessionsRow struct {
 	FirstAt   time.Time
 	LastAt    time.Time
 	LastID    string
+	OverLimit bool
 }
 
 // Filter before grouping: RLS and the account/time indexes bound every input, including default partitions.
+// Return an explicit refusal, never totals for a truncated prefix or an empty success page.
 func (q *Queries) ListOwnSessions(ctx context.Context, db DBTX, arg ListOwnSessionsParams) ([]ListOwnSessionsRow, error) {
 	rows, err := db.Query(ctx, listOwnSessions,
-		arg.AfterAt,
-		arg.AfterID,
-		arg.PageSize,
 		arg.AccountID,
 		arg.Since,
 		arg.Until,
@@ -88,6 +102,10 @@ func (q *Queries) ListOwnSessions(ctx context.Context, db DBTX, arg ListOwnSessi
 		arg.Status,
 		arg.RequestID,
 		arg.FellBack,
+		arg.CallLimit,
+		arg.AfterAt,
+		arg.AfterID,
+		arg.PageSize,
 	)
 	if err != nil {
 		return nil, err
@@ -106,6 +124,7 @@ func (q *Queries) ListOwnSessions(ctx context.Context, db DBTX, arg ListOwnSessi
 			&i.FirstAt,
 			&i.LastAt,
 			&i.LastID,
+			&i.OverLimit,
 		); err != nil {
 			return nil, err
 		}

@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
+	"errors"
 
 	"axiom/internal/observability"
 	"axiom/internal/platform/consoleapi"
@@ -38,6 +39,9 @@ func (c consoleAPI) ListCallSessions(ctx context.Context, request consoleapi.Lis
 		rows, next, err = observability.ListOwnSessions(ctx, tx, q)
 		return err
 	})
+	if errors.Is(err, observability.ErrSessionSize) {
+		return nil, invalidField("since", err.Error())
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -59,8 +63,8 @@ func (c consoleAPI) ListCallSessions(ctx context.Context, request consoleapi.Lis
 	return consoleapi.ListCallSessions200JSONResponse(body), nil
 }
 
-// Bind the cursor to the complete filter set, including account and fixed time bounds. The identity key is shared
-// across nodes; domain separation keeps these signatures independent of upstream identifier replacement.
+// Signing enforces the tampered-cursor refusal; RLS remains the authorization boundary.
+// The key is derived under a separate master-key label at startup, independently of upstream identity replacement.
 func (c consoleAPI) sessionCursorMAC(position string, q observability.OwnQuery) ([]byte, error) {
 	filters, err := jsonx.MarshalCanonical([]any{
 		q.Account, q.Since.UTC(), q.Until.UTC(), q.Model, q.ClientApp,

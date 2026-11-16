@@ -1,7 +1,9 @@
 package observability
 
 import (
+	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -140,6 +142,15 @@ func TestOwnSessionsPlanBoundsCallRecords(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	var heapBytes, indexBytes int64
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT
+ (SELECT sum(pg_relation_size(relid)) FROM pg_partition_tree('observability.call_log') WHERE isleaf),
+ (SELECT sum(pg_relation_size(relid)) FROM pg_partition_tree('observability.call_log_account_sessions_at') WHERE isleaf)`).Scan(&heapBytes, &indexBytes)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("120000 nonempty-session calls: heap=%d bytes, session index=%d bytes (%.1f bytes/call)", heapBytes, indexBytes, float64(indexBytes)/120000)
 	for _, span := range []time.Duration{10 * time.Minute, 31 * 24 * time.Hour} {
 		q := OwnQuery{Account: account, Since: until.Add(-span), Until: until}
 		plan := explainSessions(t, db, q)
@@ -151,16 +162,17 @@ func TestOwnSessionsPlanBoundsCallRecords(t *testing.T) {
 			t.Fatalf("narrow window exceeds 1500-block budget:\n%s", plan)
 		}
 	}
+	checkSessionReadBudget(t, db, database, until)
 }
 
 func explainSessions(t *testing.T, db *pg.DB, q OwnQuery) string {
 	t.Helper()
 	var lines []string
 	if err := db.ReadTx(t.Context(), accountScope(q.Account), func(tx pg.Tx) error {
-		if err := planOwnQuery(t.Context(), tx); err != nil {
+		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Until, uuid.Nil().String(), 51, q.Account.String(), q.Since, q.Until, "", "", "", "", "", "", false)
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+store.SessionsQuery, q.Account.String(), q.Since, q.Until, "", "", "", "", "", "", false, maxOwnSessionCalls, q.Until, uuid.Nil().String(), 51)
 		if err != nil {
 			return err
 		}
@@ -177,4 +189,62 @@ func explainSessions(t *testing.T, db *pg.DB, q OwnQuery) string {
 		t.Fatal(err)
 	}
 	return strings.Join(lines, "\n")
+}
+
+func checkSessionReadBudget(t *testing.T, db *pg.DB, database pgtest.Database, until time.Time) {
+	t.Helper()
+	if err := pgtest.Run(t.Context(), database.Superuser, `WITH chosen AS (
+ SELECT id,at FROM observability.call_log WHERE account_id<>'`+heavyAccount+`' ORDER BY at,id LIMIT 40000
+ ) UPDATE observability.call_log c SET account_id='`+heavyAccount+`' FROM chosen WHERE (c.id,c.at)=(chosen.id,chosen.at)`,
+		`VACUUM ANALYZE observability.call_log`); err != nil {
+		t.Fatal(err)
+	}
+	q := OwnQuery{Account: uuid.MustParse(heavyAccount), Since: until.Add(-31 * 24 * time.Hour), Until: until, PageSize: 200}
+	rows, next := sessionPage(t, db, accountScope(q.Account), q)
+	var calls int64
+	for _, r := range rows {
+		n, err := strconv.ParseInt(r.Calls, 10, 64)
+		if err != nil {
+			t.Fatal(err)
+		}
+		calls += n
+	}
+	if calls != 100000 || next != nil {
+		t.Fatalf("at budget: calls=%d next=%v", calls, next)
+	}
+	plan := explainSessions(t, db, q)
+	t.Log("100000 matching calls, at budget:\n" + plan)
+	if buffers(t, plan) > 6000 || regexp.MustCompile(`Seq Scan on call_log_[^\n]*actual[^\n]*rows=[1-9]`).MatchString(plan) {
+		t.Fatalf("maximum window exceeds 6000-block budget:\n%s", plan)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, `UPDATE observability.call_log SET account_id='`+heavyAccount+`' WHERE id=(SELECT id FROM observability.call_log WHERE account_id<>'`+heavyAccount+`' LIMIT 1)`); err != nil {
+		t.Fatal(err)
+	}
+	checkSessionSizeRefusal(t, db, q)
+	if err := pgtest.Run(t.Context(), database.Superuser, `UPDATE observability.call_log SET account_id='`+heavyAccount+`'`, `VACUUM ANALYZE observability.call_log`); err != nil {
+		t.Fatal(err)
+	}
+	checkSessionSizeRefusal(t, db, q)
+	plan = explainSessions(t, db, q)
+	t.Log("120000 matching calls, refuse after at most 100001 inputs:\n" + plan)
+	if !strings.Contains(plan, "rows=100001.00") && !strings.Contains(plan, "rows=100001 ") {
+		t.Fatalf("no bounded input in plan:\n%s", plan)
+	}
+}
+
+func checkSessionSizeRefusal(t *testing.T, db *pg.DB, q OwnQuery) {
+	t.Helper()
+	for _, after := range []*Cursor{nil, {At: q.Until.Add(-time.Hour), ID: uuid.NewV7()}} {
+		q.After = after
+		err := db.ReadTx(t.Context(), accountScope(q.Account), func(tx pg.Tx) error {
+			rows, next, err := ListOwnSessions(t.Context(), tx, q)
+			if len(rows) != 0 || next != nil {
+				t.Errorf("oversized window returned a partial page: %+v %v", rows, next)
+			}
+			return err
+		})
+		if !errors.Is(err, ErrSessionSize) {
+			t.Fatalf("oversized window: %v", err)
+		}
+	}
 }

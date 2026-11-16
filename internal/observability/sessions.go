@@ -10,6 +10,11 @@ import (
 	"axiom/internal/platform/pg"
 )
 
+const maxOwnSessionCalls = 100000
+
+// ErrSessionSize refuses a window before grouping more calls than its fixed read budget.
+var ErrSessionSize = fmt.Errorf("session window exceeds %d matching calls; narrow the window or filters", maxOwnSessionCalls)
+
 // OwnSession contains only visible call metadata, grouped within the requested window and currency.
 type OwnSession struct {
 	SessionID, ClientApp, Currency, Calls, PriceNano, MainModel string
@@ -19,27 +24,28 @@ type OwnSession struct {
 // ListOwnSessions groups after applying the same scope and filters as ListOwn. The newest call identifies a group
 // uniquely, so the shared time/UUID cursor also orders sessions whose last timestamps are equal.
 func ListOwnSessions(ctx context.Context, tx pg.Tx, q OwnQuery) ([]OwnSession, *Cursor, error) {
+	// This exported read also guards callers outside HTTP: the index budget assumes a bounded window.
 	if !q.Since.Before(q.Until) || q.Until.Sub(q.Since) > 31*24*time.Hour {
 		return nil, nil, fmt.Errorf("list sessions: require a nonempty window of at most 31 days")
 	}
-	size := q.PageSize
-	if size == 0 {
-		size = DefaultPageSize
+	size, err := ownPageSize(q.PageSize)
+	if err != nil {
+		return nil, nil, fmt.Errorf("list sessions: %w", err)
 	}
-	if size < 1 || size > MaxPageSize {
-		return nil, nil, fmt.Errorf("list sessions: invalid page size")
-	}
-	if err := planOwnQuery(ctx, tx); err != nil {
+	if err := planOwnPage(ctx, tx); err != nil {
 		return nil, nil, err
 	}
 	at, id := cursorOf(q)
 	rows, err := store.New().ListOwnSessions(ctx, tx, store.ListOwnSessionsParams{
 		AccountID: q.Account.String(), Since: q.Since, Until: q.Until, Model: q.Model, ClientApp: q.ClientApp,
 		KeyID: uuidFilter(q.Key), WorkspaceID: uuidFilter(q.Workspace), Status: q.Status, RequestID: uuidFilter(q.RequestID),
-		FellBack: q.FellBack, AfterAt: at, AfterID: id, PageSize: int64(size) + 1,
+		FellBack: q.FellBack, AfterAt: at, AfterID: id, PageSize: int64(size) + 1, CallLimit: maxOwnSessionCalls,
 	})
 	if err != nil {
 		return nil, nil, fmt.Errorf("list sessions: %w", err)
+	}
+	if len(rows) > 0 && rows[0].OverLimit {
+		return nil, nil, ErrSessionSize
 	}
 	var next *Cursor
 	if len(rows) > size {
