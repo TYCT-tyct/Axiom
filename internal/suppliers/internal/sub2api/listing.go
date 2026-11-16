@@ -9,11 +9,7 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-const keyListingVersion = 3 // Version 2 stored adapter.KeyState, whose Name was not persisted.
-
-// listedKey is one key read in a resumable listing. It is deliberately not adapter.KeyState: that hides Name from the
-// stored state, which older nodes decode strictly, but a resumed listing needs the names of the pages already read so
-// the sync can adopt a key it made before the read was interrupted.
+// listedKey keeps names across interrupted reads so the sync can adopt a key it made before the read stopped.
 type listedKey struct {
 	Ref       adapter.KeyRef    `json:"ref"`
 	GroupRef  string            `json:"group_ref"`
@@ -43,7 +39,6 @@ func listed(k adapter.KeyState) listedKey {
 // keys take out. A listing that shrank (a key removed) moved its pages forward, which would skip a key, so it begins
 // again: the keys read so far are given up, none is skipped.
 type keysProgress struct {
-	V     int         `json:"v"`
 	Page  int         `json:"page"`
 	Total int         `json:"total"`
 	Keys  []listedKey `json:"keys"`
@@ -51,11 +46,11 @@ type keysProgress struct {
 
 func decodeKeys(raw adapter.Listing) keysProgress {
 	if len(raw) == 0 {
-		return keysProgress{V: keyListingVersion, Page: 1}
+		return keysProgress{Page: 1}
 	}
 	var p keysProgress
-	if jsonx.UnmarshalKnown(raw, &p) != nil || p.V != keyListingVersion || p.Page < 1 {
-		return keysProgress{V: keyListingVersion, Page: 1}
+	if jsonx.UnmarshalKnown(raw, &p) != nil || p.Page < 1 {
+		return keysProgress{Page: 1}
 	}
 	return p
 }
@@ -82,7 +77,7 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (page adapter.P
 		return page, false, err
 	}
 	if p.Page > 1 && total < p.Total { // the list shrank under the position: it begins again
-		*p = keysProgress{V: keyListingVersion, Page: 1}
+		*p = keysProgress{Page: 1}
 		return page, true, nil
 	}
 	p.Total = total
@@ -123,7 +118,7 @@ func (m *manager) resumeKeyPage(ctx context.Context, p *keysProgress) ([]keyDTO,
 	if same {
 		p.Total = total
 	} else {
-		*p = keysProgress{V: keyListingVersion, Page: 1}
+		*p = keysProgress{Page: 1}
 	}
 	return m.keyPage(ctx, p.Page)
 }
