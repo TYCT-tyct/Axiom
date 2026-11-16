@@ -372,13 +372,6 @@ func projectStatus(current string, st syncer.State) (status string, reason *stri
 			return "needs_attention", nil
 		}
 		return "needs_attention", &st.Reason
-	case syncer.Removing:
-		if current == "removed" {
-			return current, nil
-		}
-		return "removing", nil
-	case syncer.Removed:
-		return "removed", nil
 	}
 	panic("persist: a status the engine does not have")
 }

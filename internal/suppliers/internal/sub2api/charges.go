@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"slices"
 	"strconv"
 	"time"
 
@@ -43,8 +42,7 @@ type scanState struct {
 }
 
 // pass is the pass under way: the time it covers, the keys it reads and where in them it is. Page is the key page while
-// the keys are being listed, and the page of a key's usage records once they are: a member of its own for the key page
-// would be one a node of the version before refuses, and the two run side by side during a rollout.
+// the keys are being listed, and the page of a key's usage records once they are.
 type pass struct {
 	Late   bool     `json:"late"`
 	Start  int64    `json:"start"`
@@ -136,8 +134,6 @@ func (m *manager) passPage(ctx context.Context, p *pass) ([]adapter.Charge, bool
 			return nil, false, nil
 		}
 	}
-	p.skipDuplicateKeys()
-
 	if p.Key >= len(p.Keys) {
 		return nil, true, nil
 	}
@@ -175,15 +171,6 @@ func (m *manager) listScanKeys(ctx context.Context, p *pass) error {
 	}
 	p.Listed, p.Page = true, 1
 	return nil
-}
-
-// A legacy node may append a full listing after IDs saved by a newer node.
-// A repeated key must not carry its page number over to the next unread key.
-func (p *pass) skipDuplicateKeys() {
-	for p.Key < len(p.Keys) && slices.Contains(p.Keys[:p.Key], p.Keys[p.Key]) {
-		p.Key++
-		p.Page = 1
-	}
 }
 
 // usageItem is a charge record. Count fields are numbers that may be absent: one that is absent is not reported, which
