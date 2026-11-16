@@ -137,7 +137,7 @@ func TestRefundAmountLimits(t *testing.T) {
 			}
 		})
 	}
-	if got := refundShare(math.MaxInt64, math.MaxInt64, math.MaxInt64); got != math.MaxInt64 {
+	if got := mulDivFloor(math.MaxInt64, math.MaxInt64, math.MaxInt64); got != math.MaxInt64 {
 		t.Fatalf("overflowed product: %d", got)
 	}
 }
