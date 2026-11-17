@@ -1,6 +1,6 @@
 """Reuse frontend work by content on the CI host, which keeps its disk between jobs.
 
-The build of the three apps and a passing end-to-end run are stored under a host cache directory, keyed by a hash of
+The build of the three apps and passing browser checks are stored under a host cache directory, keyed by a hash of
 everything that goes into them. Paths are not part of a key, so a checkout in another directory with the same content
 still hits; outputs are excluded, so changing only an output does not invalidate. The version string is an input of the
 build because the console is stamped with it; the end-to-end key is the inputs its assertions run against (web, api,
@@ -9,6 +9,7 @@ all Go code, go.mod/go.sum), not the label, which the tests compare with the sam
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -46,8 +47,11 @@ def add_file(h, root: Path, path: Path) -> None:
 
 
 def walk_files(root: Path, skip: set[str] = frozenset()) -> list[Path]:
+    def failed(error):
+        raise error
+
     files = []
-    for base, dirs, names in os.walk(root):
+    for base, dirs, names in os.walk(root, onerror=failed):
         dirs[:] = sorted(d for d in dirs if d not in skip and d != ".git")
         for name in sorted(names):
             files.append(Path(base) / name)
@@ -92,7 +96,7 @@ def script_hash() -> str:
 
 
 ENV_PREFIXES = ("VITE_", "NODE_", "AXIOM_")
-ENV_EXCLUDED = {"AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"}
+ENV_EXCLUDED = {"AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION", "AXIOM_TEST_RESULTS", "AXIOM_PLAYWRIGHT_REPORTS"}
 
 
 def env_inputs():
@@ -131,6 +135,10 @@ def e2e_key(root: Path, tools: str, command: list[str]) -> str:
     extra(h, "command", "\0".join(command))
     extra(h, "script", script_hash())
     extra(h, "inputs", e2e_inputs_hash(root))
+    for name in ("justfile", "scripts/ci/playwright.py", "scripts/ci/web-container.sh", ".github/workflows/ci.yml"):
+        path = root / name
+        if path.is_file():
+            add_file(h, root, path)
     extra(h, "toolchain", tools)
     extra(h, "platform", platform.platform())
     for name, value in env_inputs():
@@ -203,27 +211,93 @@ def build(root: Path, cache: Path, version: str, command: list[str], tools: str)
 
 def e2e(root: Path, cache: Path, version: str, command: list[str], tools: str) -> int:
     key = e2e_key(root, tools, command)
-    marker = cache / "e2e" / key
+    return passing(root, cache / "e2e" / key, version, command, "e2e")
+
+
+def passing(root: Path, marker: Path, version: str, command: list[str], label: str) -> int:
     if marker.is_file():
-        print(f"e2e cache hit {key[:12]}: skipped {command}, passed before at {marker}")
+        print(f"{label} cache hit: passed before at {marker}")
         return 0
     start = time.monotonic()
     status = run(command, root, version)
     if status:
         return status
     elapsed = time.monotonic() - start
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    temp = marker.with_name(marker.name + f".{os.getpid()}.tmp")
-    temp.write_text(CACHE_FORMAT + "\n", encoding="utf-8")
-    os.replace(temp, marker)
-    print(f"e2e cache miss {key[:12]}: passed in {elapsed:.1f}s, saved {marker}")
+    record_pass(marker)
+    print(f"{label} cache miss: passed in {elapsed:.1f}s, saved {marker}")
     return 0
+
+
+def record_pass(marker: Path) -> None:
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    # Container PIDs repeat across concurrent jobs sharing this host cache.
+    with tempfile.NamedTemporaryFile(mode="w", dir=marker.parent, delete=False) as file:
+        file.write(CACHE_FORMAT + "\n")
+        temp = Path(file.name)
+    try:
+        os.replace(temp, marker)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+def vitals(root: Path, cache: Path, version: str, command: list[str], tools: str) -> int:
+    h = hashlib.sha256()
+    extra(h, "build", build_key(root, version, tools))
+    # The overview gate compares with BASE; main (no comparison) cannot certify a train's relative gate.
+    extra(h, "base", os.environ.get("BASE", ""))
+    extra(h, "server", e2e_inputs_hash(root))
+    extra(h, "command", "\0".join(command))
+    for name in ("justfile", "scripts/ci/vitals-base.sh", "scripts/ci/web-container.sh", ".github/workflows/ci.yml"):
+        add_file(h, root, root / name)
+    if output := os.environ.get("AXIOM_TEST_RESULTS"):
+        command = [*command, f"--output={output}"]
+    return passing(root, cache / "vitals" / h.hexdigest(), version, command, "vitals")
+
+
+def boards_key(root: Path, board: str, boards: list[str], semantic: dict, selected: list[str], tools: str) -> str:
+    h = hashlib.sha256()
+    extra(h, "script", script_hash())
+    extra(h, "toolchain", tools)
+    extra(h, "platform", platform.platform())
+    extra(h, "board", board)
+    extra(h, "selection", json.dumps(sorted(selected)))
+    extra(h, "semantic", json.dumps(semantic, sort_keys=True))
+    for name, value in env_inputs():
+        extra(h, "env " + name, value)
+    package = root / "web/packages/boards"
+    paths = []
+    for path in walk_files(package, SKIP_DIRS):
+        relative = path.relative_to(package).parts
+        # Region modules and the generated demo index are evaluated once and partitioned by board by the caller.
+        if relative[0] == "manifest" or relative == ("regions.ts",) or relative == ("src", "demo.ts"):
+            continue
+        if board != "_all" and len(relative) > 2 and relative[0] == "src" and relative[1] in boards and relative[1] != board:
+            continue
+        if board != "_all" and relative[0] == "inputs" and path.name.split(".")[0] in boards and path.name.split(".")[0] != board:
+            continue
+        paths.append(path)
+    paths += list((root / "web/scripts").glob("boards*"))
+    paths += list((root / "web/e2e").glob("boards*.spec.ts"))
+    paths += walk_files(root / "web/e2e/design")
+    paths += [path for path in (root / "web").iterdir() if path.is_file()]
+    paths += [root / name for name in (
+        "web/e2e/collect-errors.ts", "web/e2e/apps.ts", "web/scripts/free-port.ts",
+        "web/scripts/fonts/sources.json", "web/packages/ui/src/css/fonts/fonts.json",
+        "scripts/ci/playwright.py", "scripts/ci/boards-inputs.mjs", "scripts/ci/web-container.sh",
+        ".github/workflows/ci.yml",
+    )]
+    # An explicit design override is also an input, including split boards and pinned engines.
+    if design := os.environ.get("AXIOM_DESIGN_DIR"):
+        paths += walk_files(Path(design))
+    for path in sorted(set(paths)):
+        add_file(h, root, path)
+    return h.hexdigest()
 
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
-    for action in ("build", "e2e"):
+    for action in ("build", "e2e", "vitals"):
         p = sub.add_parser(action)
         p.add_argument("--version", default="")
         p.add_argument("--repo", default=".")
@@ -238,6 +312,8 @@ def main(argv: list[str]) -> int:
     tools = toolchain()
     if args.action == "build":
         return build(root, cache, args.version, command, tools)
+    if args.action == "vitals":
+        return vitals(root, cache, args.version, command, tools)
     return e2e(root, cache, args.version, command, tools)
 
 

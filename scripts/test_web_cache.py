@@ -66,12 +66,14 @@ class EnvInputs(unittest.TestCase):
             "AXIOM_CACHE_DIR": "cache",
             "AXIOM_WEB_PORT": "1",
             "AXIOM_VERSION": "v",
+            "AXIOM_TEST_RESULTS": "/ci/axiom/reports/1/e2e/test-results",
+            "AXIOM_PLAYWRIGHT_REPORTS": "/ci/axiom/reports/1/e2e/playwright-report",
         }, clear=False):
             inputs = dict(web_cache.env_inputs())
         self.assertEqual(inputs["VITE_PROOF"], "vite")
         self.assertEqual(inputs["NODE_OPTIONS"], "--proof")
         self.assertEqual(inputs["AXIOM_SHOTS_DIR"], "shots")
-        for name in ("AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION"):
+        for name in ("AXIOM_CACHE_DIR", "AXIOM_WEB_PORT", "AXIOM_VERSION", "AXIOM_TEST_RESULTS", "AXIOM_PLAYWRIGHT_REPORTS"):
             self.assertNotIn(name, inputs)
 
 
@@ -228,6 +230,95 @@ class E2ECache(unittest.TestCase):
         self.assertEqual(status, 1)
         status, out = self.e2e()
         self.assertEqual((status, "cache miss" in out), (0, True))
+
+
+class BoardAndVitalsCache(unittest.TestCase):
+    def setUp(self):
+        self.repo = Repository()
+        self.addCleanup(self.repo.close)
+        self.cache = self.repo.root / "cache"
+        for name in ("justfile", "scripts/ci/vitals-base.sh", "scripts/ci/web-container.sh",
+                     ".github/workflows/ci.yml", "scripts/ci/playwright.py", "scripts/ci/boards-inputs.mjs",
+                     "web/e2e/collect-errors.ts", "web/e2e/apps.ts", "web/scripts/free-port.ts",
+                     "web/scripts/fonts/sources.json", "web/packages/ui/src/css/fonts/fonts.json",
+                     "web/scripts/boards.ts", "web/e2e/boards.spec.ts", "web/e2e/design/compare.ts",
+                     "web/packages/boards/regions.ts", "web/packages/boards/src/demo.ts",
+                     "web/packages/boards/src/AxApp/Board.tsx", "web/packages/boards/src/Site/Board.tsx",
+                     "web/packages/boards/inputs/AxApp.head.html", "web/packages/boards/inputs/Site.dc.html"):
+            self.repo.write(name, "input\n")
+
+    def key(self, board="AxApp", semantic=None, selected=None):
+        return web_cache.boards_key(self.repo.root, board, ["AxApp", "Site"], semantic or {},
+                                    selected or [board + " light", board + " dark"], "tools")
+
+    def test_console_and_other_boards_do_not_invalidate_a_board(self):
+        before = self.key()
+        for name in ("web/console/src/app.ts", "web/packages/boards/src/Site/Board.tsx",
+                     "web/packages/boards/inputs/Site.dc.html", "web/packages/boards/regions.ts",
+                     "web/packages/boards/src/demo.ts"):
+            self.repo.write(name, "changed\n")
+            self.assertEqual(self.key(), before, name)
+        self.assertNotEqual(before, self.key(semantic={"regions": [{"board": "AxApp", "name": "Shell"}]}))
+        self.assertNotEqual(before, self.key(selected=["AxApp light"]))
+
+    def test_board_shared_inputs_and_pins_invalidate(self):
+        for name in ("web/packages/boards/src/AxApp/Board.tsx", "web/packages/boards/inputs/AxApp.head.html",
+                     "web/packages/boards/src/runtime.tsx", "web/packages/boards/src/engines/clawd.js",
+                     "web/scripts/boards.ts", "web/e2e/boards.spec.ts", "web/e2e/design/compare.ts",
+                     "web/playwright.boards.config.ts", "web/playwright.config.ts", "web/pnpm-lock.yaml",
+                     "web/packages/ui/src/css/fonts/fonts.json", "scripts/ci/playwright.py"):
+            with self.subTest(path=name):
+                before = self.key()
+                self.repo.write(name, "changed\n")
+                self.assertNotEqual(before, self.key())
+
+    def test_input_read_failure_is_not_an_empty_hash(self):
+        with mock.patch.object(web_cache, "add_file", side_effect=OSError("unreadable")):
+            with self.assertRaises(OSError):
+                self.key()
+
+    def test_concurrent_writers_can_publish_the_same_pass(self):
+        marker = self.cache / "boards/AxApp/pass"
+        barrier = threading.Barrier(2)
+        replace = os.replace
+        errors = []
+        def publish():
+            try:
+                web_cache.record_pass(marker)
+            except OSError as error:
+                errors.append(error)
+        def together(source, target):
+            barrier.wait()
+            replace(source, target)
+        with mock.patch.object(web_cache.os, "replace", side_effect=together):
+            threads = [threading.Thread(target=publish) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(marker.read_text(), web_cache.CACHE_FORMAT + "\n")
+        self.assertEqual(list(marker.parent.iterdir()), [marker])
+
+    def test_vitals_reuses_only_same_build_baseline_and_success(self):
+        def measure(base="base", version="v1"):
+            with mock.patch.dict(os.environ, {"BASE": base}), contextlib.redirect_stdout(io.StringIO()):
+                return web_cache.vitals(self.repo.root, self.cache, version, ["measure"], "tools")
+        with mock.patch.object(web_cache, "run", return_value=1) as run:
+            self.assertEqual(measure(), 1)
+            run.return_value = 0
+            self.assertEqual(measure(), 0)
+            self.assertEqual(measure(), 0)
+            self.assertEqual(run.call_count, 2)
+            with mock.patch.dict(os.environ, {"AXIOM_TEST_RESULTS": "/another-run/test-results"}):
+                self.assertEqual(measure(), 0)
+                self.assertEqual(run.call_count, 2)
+            measure(base="other")
+            measure(base="")
+            measure(version="v2")
+            self.repo.write("web/console/src/app.ts", "changed\n")
+            measure()
+            self.assertEqual(run.call_count, 6)
 
 
 if __name__ == "__main__":

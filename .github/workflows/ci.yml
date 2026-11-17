@@ -51,6 +51,7 @@ jobs:
   # run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    timeout-minutes: 1
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     outputs:
       light: ${{ steps.decide.outputs.light }}
@@ -70,7 +71,7 @@ jobs:
           light=false; deploy=true; bench=true; web=true; vitals=true; boards=true
           if [ -n "$BASE" ]; then
             status=0
-            git diff --quiet "$BASE...HEAD" -- 'web/scripts/boards*' 'web/packages/boards/**' 'web/e2e/boards*.spec.ts' 'web/e2e/design/**' 'web/playwright.config.ts' 'web/playwright.boards.config.ts' '.github/workflows/ci.yml' || status=$?
+            git diff --quiet "$BASE...HEAD" -- 'web/scripts/boards*' 'web/packages/boards/**' 'web/e2e/boards*.spec.ts' 'web/e2e/design/**' ':(glob)web/*' 'web/playwright*.config.ts' 'web/e2e/collect-errors.ts' 'web/e2e/apps.ts' 'web/scripts/free-port.ts' 'web/scripts/fonts/sources.json' 'web/packages/ui/src/css/fonts/fonts.json' 'scripts/web_cache.py' 'scripts/ci/**' '.github/actions/setup/**' '.github/workflows/ci.yml' || status=$?
             if [ "$status" -eq 0 ]; then
               boards=false
             elif [ "$status" -ne 1 ]; then
@@ -98,6 +99,11 @@ jobs:
               status=0
               python3 scripts/ci_skips.py vitals-needed "$BASE" || status=$?
               if [ "$status" -eq 10 ]; then
+                status=0
+                git diff --quiet "$BASE...HEAD" -- 'justfile' 'scripts/web_cache.py' 'scripts/ci/**' '.github/actions/setup/**' '.github/workflows/ci.yml' 'go.mod' 'go.sum' '*.go' || status=$?
+                if [ "$status" -eq 0 ]; then status=10; fi
+              fi
+              if [ "$status" -eq 10 ]; then
                 echo "vitals skipped: nothing the pages are built from changed between $BASE and HEAD"
                 vitals=false
               else
@@ -109,10 +115,16 @@ jobs:
             status=0
             python3 scripts/ci_skips.py web-needed "$BASE" || status=$?
             if [ "$status" -eq 10 ]; then
+              status=0
+              git diff --quiet "$BASE...HEAD" -- 'scripts/ci/**' || status=$?
+              if [ "$status" -eq 0 ]; then status=10; fi
+            fi
+            if [ "$status" -eq 10 ]; then
               echo "web skipped: no frontend, API or build inputs changed"
               web=false
             fi
           fi
+          if [ "${{ github.event_name }}" = pull_request ]; then vitals=false; fi
           printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\nboards=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" "$boards" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
@@ -121,6 +133,7 @@ jobs:
   static:
     needs: changes
     if: needs.changes.result == 'success' && !inputs.gate_stress
+    timeout-minutes: 25
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
@@ -172,7 +185,7 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 40
+    timeout-minutes: 30
     strategy:
       fail-fast: false # the other shard's log still names its own failures for the train's flaky check
       matrix:
@@ -204,6 +217,7 @@ jobs:
   web:
     needs: changes
     if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true')
+    timeout-minutes: 12
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -217,21 +231,24 @@ jobs:
 
   # The web vitals are timings, so they run in a job of their own: one test at a time, with no other test on the
   # container's cores. A build whose diff touches nothing the pages are built from ships the same pages, so its timing
-  # can only follow the runner (#503): PRs and trains run them only for those inputs, main runs them on every push, and
+  # can only follow the runner (#503): trains select by inputs, main always selects, PRs leave them to the train, and
   # a failure there is main-red.
   vitals:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress
+    if: needs.changes.result == 'success' && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+      - name: Prepare runner evidence
+        if: vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py prepare
       - name: Run the web vitals in their network namespace
         run: bash scripts/ci/web-container.sh just web-vitals
-      - if: failure()
+      - if: failure() && vars.RUNS_ON == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: vitals-test-results
@@ -240,6 +257,11 @@ jobs:
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
+      - name: Keep runner evidence
+        if: always() && vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py collect
+        env:
+          JOB_STATUS: ${{ job.status }}
 
   # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request unless its frontend inputs changed, so a broken page fails before its train.
   e2e:
@@ -262,6 +284,9 @@ jobs:
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+      - name: Prepare runner evidence
+        if: vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py prepare
       - name: Run e2e shard in its network namespace
         run: |
           bash scripts/ci/web-container.sh bash -e -c '
@@ -274,11 +299,11 @@ jobs:
               AXIOM_VERSION=$(just axiom-version)
               export AXIOM_VERSION
               pnpm --dir web exec playwright test "${gate[@]}" \
-                --repeat-each=50 --max-failures=1 --reporter=line
+                --repeat-each=50 --max-failures=1 --reporter=line --output="${AXIOM_TEST_RESULTS:-test-results}"
             fi
           '
       # A later checkout removes test-results on self-hosted runners; keep each shard's evidence separately.
-      - if: failure()
+      - if: failure() && vars.RUNS_ON == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: e2e-test-results-${{ matrix.shard }}
@@ -288,27 +313,48 @@ jobs:
       # Cancellation can stop the Docker client before the test process; remove only this attempt's container.
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
+      - name: Keep runner evidence
+        if: always() && vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py collect
+        env:
+          JOB_STATUS: ${{ job.status }}
 
   # Mechanical design proofs are independent of product e2e. Run on relevant PRs and trains, and always on main.
   boards:
+    name: boards (${{ matrix.shard }}/4)
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    env:
+      E2E_SHARD_INDEX: ${{ matrix.shard }}
+      E2E_SHARD_COUNT: 4
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+      - name: Prepare runner evidence
+        if: vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py prepare
       - name: Compare converted boards in their network namespace
-        run: bash scripts/ci/web-container.sh pnpm --dir web e2e --config=playwright.boards.config.ts
-      - if: failure()
+        run: bash scripts/ci/web-container.sh python3 scripts/ci/playwright.py boards "$E2E_SHARD_INDEX/$E2E_SHARD_COUNT"
+      - if: failure() && vars.RUNS_ON == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
-          name: boards-test-results
+          name: boards-test-results-${{ matrix.shard }}
           path: web/test-results/
           if-no-files-found: ignore
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
+      - name: Keep runner evidence
+        if: always() && vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py collect
+        env:
+          JOB_STATUS: ${{ job.status }}
 
   # One browser against a real node with PostgreSQL and Valkey (#321). The databases are started on the host (withcluster,
   # which needs Docker); the node and the browser run in the web container, so Chromium keeps its own network namespace
@@ -318,7 +364,7 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -332,10 +378,13 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
+      - name: Prepare runner evidence
+        if: vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py prepare
       - run: just web-embed
       - name: Run the journey in the web container
-        run: go run ./internal/platform/pgtest/cmd/withcluster bash scripts/ci/web-container.sh pnpm --dir web journey
-      - if: failure()
+        run: go run ./internal/platform/pgtest/cmd/withcluster bash scripts/ci/web-container.sh pnpm --dir web journey --output="${AXIOM_TEST_RESULTS:-test-results}"
+      - if: failure() && vars.RUNS_ON == ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: journey-test-results
@@ -344,6 +393,11 @@ jobs:
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
+      - name: Keep runner evidence
+        if: always() && vars.RUNS_ON != ''
+        run: python3 scripts/ci/reports.py collect
+        env:
+          JOB_STATUS: ${{ job.status }}
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh
@@ -358,6 +412,7 @@ jobs:
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.bench == 'true'
+    timeout-minutes: 30
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -393,6 +448,7 @@ jobs:
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
+    timeout-minutes: 22
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     # cosign obtains a short-lived Fulcio certificate for this workflow and ref from GitHub's OIDC token, so no signing
     # key is stored. Only the release job needs the token; every other job keeps the workflow's read-only default.
@@ -409,11 +465,11 @@ jobs:
       - name: Rehearse train deployment
         if: github.ref != 'refs/heads/main' && inputs.base == ''
         run: bash scripts/ci/deploy-check.sh
-        timeout-minutes: 40
+        timeout-minutes: 20
       - name: Build and rehearse release by digest
         if: github.ref == 'refs/heads/main' || inputs.base != ''
         run: bash scripts/ci/release-check.sh
-        timeout-minutes: 40
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
           RELEASE_DIR: ${{ runner.temp }}/release-${{ github.run_id }}-${{ github.run_attempt }}
@@ -441,7 +497,7 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.light != 'true'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 15
+    timeout-minutes: 2
     permissions:
       contents: read
       id-token: write
@@ -453,13 +509,14 @@ jobs:
           GH_TOKEN: ${{ github.token }} # release-asset.sh's API fallback
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
-  # check counts as passed on GitHub. Light builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
-  # select web, boards and the vitals by path. Intentional skips still produce this required check.
+  # check counts as passed on GitHub. Light builds may skip parts; PRs skip go-test/journey/bench/deploy/signing/vitals and
+  # select web and boards by path; vitals belong to the train. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
     needs: [changes, static, go-test, web, e2e, boards, vitals, journey, bench, deploy, signing]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
+    timeout-minutes: 1
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       # GitHub accepts a skipped required check, so diagnostics must fail this check rather than skip it.
@@ -471,10 +528,19 @@ jobs:
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
-      # `needs.e2e.result` aggregates the whole matrix. Only light builds and pull requests may skip its shards.
-      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
+      - run: test '${{ needs.changes.result }}' = success && test '${{ needs.static.result }}' = success
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true'
+        run: test '${{ needs.web.result }}' = success
+      # The result aggregates the entire matrix; a selected PR suite cannot pass by being skipped either.
+      - if: needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true')
         run: test '${{ needs.e2e.result }}' = success
-      - if: needs.changes.outputs.vitals == 'true'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.go-test.result }}' = success
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.bench == 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.bench.result }}' = success
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.deploy == 'true' && github.event_name != 'pull_request'
+        run: test '${{ needs.deploy.result }}' = success
+      - if: needs.changes.outputs.vitals == 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.vitals.result }}' = success
       - if: needs.changes.outputs.boards == 'true' && !inputs.gate_stress
         run: test '${{ needs.boards.result }}' = success
@@ -490,6 +556,7 @@ jobs:
     name: gate-stress
     needs: [changes, web, e2e]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.gate_stress
+    timeout-minutes: 1
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - run: test '${{ needs.changes.result }}' = success && test '${{ needs.web.result }}' = success && test '${{ needs.e2e.result }}' = success

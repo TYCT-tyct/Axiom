@@ -18,7 +18,8 @@ trap 'exit 143' TERM
 go_cache=$(go env GOCACHE)
 module_cache=$(go env GOMODCACHE)
 pnpm_store=$(pnpm --dir web store path)
-web_cache="${AXIOM_CACHE_DIR:-$(dirname "$go_cache")/_webcache}"
+# Use web_cache.py's host-wide default too: a matrix shard can land on a different runner in the next round.
+web_cache=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from web_cache import cache_root; print(cache_root())')
 mkdir -p "$go_cache" "$module_cache" "$web_cache"
 id
 stat -c '%u:%g %n' "$go_cache" "$web_cache"
@@ -53,6 +54,7 @@ docker create --name "$name" \
   --volume "$pnpm_store:$pnpm_store" \
   --volume "$web_cache:/ci/axiom" \
   --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env BASE --env HOME=/tmp/axiom-web-home \
+  --env AXIOM_TEST_RESULTS --env AXIOM_PLAYWRIGHT_REPORTS \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env XDG_CACHE_HOME=/ci/axiom/xdg \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
