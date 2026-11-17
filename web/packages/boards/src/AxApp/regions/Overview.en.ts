@@ -2,12 +2,11 @@
 /* jscpd:ignore-start */
 import type zh from "./Overview.zh.ts";
 export default {
-  "mba00f96381": "Retried on another route",
   "m053461ce86": "Success",
+  "mba00f96381": "Retried on another route",
   "mfea405f9b0": "Overview",
   "m569c43d6cc": "Copy Base URL",
   "mc7b62164df": "New key",
-  "m3b09c4395d": "Adjust limit",
   "m02e9734a51": "Spent this month",
   "m393e124155": "Requests",
   "mfd198d22ce": "Median first token",
@@ -21,11 +20,9 @@ export default {
   "mc98e118e0a": "Model",
   "m6320b4a872": "Status",
   "m7fe8603c08": "Cost",
-  "ma5ed23e046": "production has used 86% of its quota",
-  "m56c750f710": "¥431.60 / ¥500. At this rate it runs out around October 28; after that this key's requests are refused.",
-  "mf7beee2958": "+34% vs the same days of September",
-  "m41d168728e": "¥0.075 per request on average",
-  "mc7bac034f2": "99.82% succeeded",
-  "m70521d196a": "¥842 of ¥1,500, ¥1,138 expected by month end"
+  "mfa10f1a884": "+23% vs the same days of September",
+  "m3680acf4d7": "¥0.062 per request on average",
+  "m7b1ed4bf77": "99.76% succeeded",
+  "m1ab89346ec": "¥186 of ¥300, ¥248 expected by month end"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

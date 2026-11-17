@@ -20,7 +20,6 @@ const overviewEnglish = {
   mfea405f9b0: "Overview",
   m569c43d6cc: "Copy Base URL",
   mc7b62164df: "New key",
-  m3b09c4395d: "Adjust limit",
   m02e9734a51: "Spent this month",
   m393e124155: "Requests",
   mfd198d22ce: "Median first token",
@@ -34,13 +33,10 @@ const overviewEnglish = {
   mc98e118e0a: "Model",
   m6320b4a872: "Status",
   m7fe8603c08: "Cost",
-  ma5ed23e046: "production has used 86% of its quota",
-  m56c750f710:
-    "¥431.60 / ¥500. At this rate it runs out around October 28; after that this key's requests are refused.",
-  mf7beee2958: "+34% vs the same days of September",
-  m41d168728e: "¥0.075 per request on average",
-  mc7bac034f2: "99.82% succeeded",
-  m70521d196a: "¥842 of ¥1,500, ¥1,138 expected by month end",
+  mfa10f1a884: "+23% vs the same days of September",
+  m3680acf4d7: "¥0.062 per request on average",
+  m7b1ed4bf77: "99.76% succeeded",
+  m1ab89346ec: "¥186 of ¥300, ¥248 expected by month end",
 };
 
 function shellRegion(board: string): Region {
@@ -72,7 +68,7 @@ function shellRegion(board: string): Region {
 }
 
 // The console has only the calls the API can answer: the live state bar, the year heatmap, the month-end forecasts and
-// the other demo accounts' views stay out (#816, O23). The chart's currency axis goes because the board writes ¥ in its
+// the team workspaces' views stay out (#816, O23). The chart's currency axis goes because the board writes ¥ in its
 // CSS; the page's money comes from the account's currency.
 function overviewRegion(board: string): Region {
   return {
@@ -93,8 +89,8 @@ function overviewRegion(board: string): Region {
       ".qkpi:nth-child(1) .cy",
       ".qkpi:nth-child(3) .cy",
       ".qkpi:nth-child(4) .cy",
+      ".wv.w0",
       ".wv.w1",
-      ".wv.w2",
     ],
     repeats: {
       models: ".ovmr",
@@ -102,8 +98,6 @@ function overviewRegion(board: string): Region {
       bars: ".qch2 > svg > rect",
     },
     text: {
-      noticeTitle: ".qnote > div > b",
-      noticeBody: ".qnote > div > span",
       spendWhole: ".qkpi:nth-child(1) > b",
       spendFraction: ".qkpi:nth-child(1) > b > .ct",
       spendNote: ".qkpi:nth-child(1) > em",

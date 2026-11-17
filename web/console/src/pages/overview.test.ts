@@ -8,7 +8,6 @@ import {
   dailyTotals,
   modelRowsOf,
   monthWindow,
-  pickQuota,
   requestRowsOf,
   splitMoney,
   sumTotals,
@@ -113,42 +112,5 @@ describe("the figures", () => {
     expect(chartLabels(31, 10, "")[0]).toEqual({ text: "10/1", left: "left: 1.61%;" });
     expect(chartLabels(31, 10, "No calls this month")[0]?.text).toBe("No calls this month");
     expect(chartLabels(31, 10, "")).toHaveLength(5);
-  });
-});
-
-describe("the key the notice warns about", () => {
-  const key = (over: Partial<Schemas["Key"]>) =>
-    ({
-      id: "key",
-      name: "production",
-      disabled: false,
-      limit_remaining: money("25000000000"),
-      ...over,
-    }) as Schemas["Key"];
-
-  it("is the enabled one nearest its limit", () => {
-    const quota = pickQuota([
-      key({ id: "a", name: "a", spend_limit: money("50000000000"), limit_remaining: money("40000000000") }),
-      key({ id: "b", name: "b", spend_limit: money("50000000000"), limit_remaining: money("5000000000") }),
-      key({ id: "c", name: "c", disabled: true, spend_limit: money("50000000000"), limit_remaining: money("1") }),
-      key({
-        id: "d",
-        name: "d",
-        expires_at: "2020-01-01T00:00:00Z",
-        spend_limit: money("50000000000"),
-        limit_remaining: money("1"),
-      }),
-    ]);
-    expect(quota).toMatchObject({ percent: 90 });
-    expect(quota?.key.id).toBe("b");
-  });
-
-  it("is none when no key has a spend limit to run out of", () => {
-    expect(pickQuota([key({})])).toBeUndefined();
-  });
-
-  it("treats a limit of zero as used up, not as no limit", () => {
-    const quota = pickQuota([key({ spend_limit: money("0"), limit_remaining: money("0") })]);
-    expect(quota).toMatchObject({ percent: 100 });
   });
 });

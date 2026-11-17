@@ -30,7 +30,6 @@ export default function Overview() {
   const values = {
     copyBase,
     nkx: () => void navigate({ to: "/keys" }),
-    ko0_0: () => void navigate({ to: "/keys" }),
     go_usage: () => void navigate({ to: "/calls" }),
     go_logs: () => void navigate({ to: "/calls", search: { status: "error" } }),
   };
@@ -176,8 +175,6 @@ function boardLabels(t: TFunction, copy: CopyState, apiBase: string | undefined,
         return t("nav.keys");
       case "m5de8778457":
         return t("overview.recentErrors");
-      case "m3b09c4395d":
-        return t("overview.manageKeys");
       case "m569c43d6cc":
         if (copy === "copied") {
           return t("overview.copied");

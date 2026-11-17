@@ -54,7 +54,6 @@ type RequestRow = DesktopProps["rows"]["requests0"][number];
 type Aggregate = Schemas["CallAggregate"];
 type ApiKey = Schemas["Key"];
 type Call = Schemas["Call"];
-type Money = Schemas["Money"];
 type Format = Pick<ReturnType<typeof useFormat>, "money" | "number" | "hour" | "monthLabel" | "dateTime">;
 type Totals = { calls: bigint; amount: bigint };
 type KeysState = "pending" | "error" | "ok";
@@ -145,63 +144,6 @@ export function chartLabels(days: number, month: number, note: string): { text: 
     return [{ text: note, left: "left: 1.61%;" }, ...marks.slice(1).map(() => ({ text: "", left: "" }))];
   }
   return marks.map((day) => ({ text: `${month}/${day}`, left: `left: ${(((day - 0.5) / days) * 100).toFixed(2)}%;` }));
-}
-
-export type Quota = { key: ApiKey; percent: number; limit: Money; remaining: Money };
-
-// pickQuota finds the enabled key nearest its spend limit, the one a warning is about. A limit of zero is a limit that
-// allows nothing, so it is fully used, not an unlimited key; a key that is disabled or expired cannot warn about
-// anything, and one without a limit has nothing to run out of.
-export function pickQuota(keys: ApiKey[]): Quota | undefined {
-  let best: Quota | undefined;
-  for (const key of keys) {
-    const limit = key.spend_limit;
-    const expired = key.expires_at !== undefined && Date.parse(key.expires_at) <= Date.now();
-    if (!limit || key.disabled || expired) {
-      continue;
-    }
-    const remaining = key.limit_remaining ?? { amount: limit.amount, currency: limit.currency };
-    const allowed = BigInt(limit.amount);
-    const used = allowed - BigInt(remaining.amount);
-    const percent = allowed <= 0n ? 100 : used <= 0n ? 0 : Math.min(100, Number((used * 100n) / allowed));
-    if (!best || percent > best.percent) {
-      best = { key, percent, limit, remaining };
-    }
-  }
-  return best;
-}
-
-function noticeOf(keys: ApiKey[], state: KeysState, more: boolean, format: Format, t: TFunction) {
-  if (state === "pending") {
-    return { noticeTitle: t("overview.loadingKeys"), noticeBody: "" };
-  }
-  if (state === "error") {
-    return { noticeTitle: t("overview.keysFailed"), noticeBody: "" };
-  }
-  const quota = pickQuota(keys);
-  if (quota) {
-    return {
-      noticeTitle: t("overview.quotaTitle", { name: quota.key.name, percent: quota.percent }),
-      noticeBody: t("overview.quotaBody", {
-        remaining: format.money(quota.remaining),
-        limit: format.money(quota.limit),
-      }),
-    };
-  }
-  if (keys.length === 0) {
-    return { noticeTitle: t("overview.noKeys"), noticeBody: t("overview.createFirstBody") };
-  }
-  // More keys may be unread: the sentence may only speak for the ones loaded, and says so past the first page.
-  const moreNote = more ? ` ${t("overview.moreKeys")}` : "";
-  return keys.some((key) => key.spend_limit !== undefined)
-    ? {
-        noticeTitle: t("overview.noActiveQuotaTitle"),
-        noticeBody: `${t("overview.noActiveQuotaBody")}${moreNote}`,
-      }
-    : {
-        noticeTitle: t("overview.noLimitTitle", { count: keys.length }),
-        noticeBody: `${t("overview.noLimitBody")}${moreNote}`,
-      };
 }
 
 function spendOf(balance: Schemas["Balance"] | undefined, format: Format, month: string) {
@@ -503,7 +445,6 @@ export function useBoardData(t: TFunction) {
     errors,
     aggregate: aggregateFailure(days, models, advance),
     text: {
-      ...noticeOf(keyList, keyState, keys.hasNextPage, format, t),
       ...spendOf(balance.data, format, period.month),
       ...requestsOf(totals, currency, format, t),
       ...balanceOf(balance.data, format, t),

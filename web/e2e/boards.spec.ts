@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
 import { build, preview } from "vite";
 import { boardEngines, boardNames } from "../packages/boards/catalog.ts";
+import { regions } from "../packages/boards/regions.ts";
 import { readBoard } from "../packages/boards/source.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
@@ -107,6 +108,17 @@ async function regionMenus(page: Page, reference: Page, name: string, suffix: st
   }
 }
 
+function omitted(board: string) {
+  return regions
+    .filter((region) => region.board === board)
+    .flatMap((region) =>
+      region.roots.flatMap((root) =>
+        (region.omit ?? []).map((selector) => `${root} ${selector}{display:none!important}`),
+      ),
+    )
+    .join("\n");
+}
+
 async function loginInteractions(page: Page) {
   await page.locator("#lg-id").fill("reader@example.com");
   await page.locator('[data-act="consent"]').check();
@@ -181,6 +193,9 @@ for (const board of cases)
           await Promise.all([canvasesReady(page), canvasesReady(reference.page)]);
           await page.clock.runFor(5000);
           await reference.page.clock.runFor(5000);
+          // A region leaves out what its manifest omits, so its reference is the board without those parts, as in
+          // regions.test.ts. A style rather than removal, since the board re-renders on every interaction.
+          if (board.region) await reference.page.addStyleTag({ content: omitted(board.name) });
           const scene = rulings.filter((ruling) => ruling.scene === `converted-${board.name}`);
           if (board.canvas) {
             expect(await page.locator("canvas").count()).toBe(await reference.page.locator("canvas").count());
