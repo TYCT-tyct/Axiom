@@ -1,4 +1,7 @@
 import json
+import contextlib
+import importlib.util
+import io
 import os
 import re
 import shutil
@@ -7,6 +10,7 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from test_runner_host import BASH
 
@@ -14,6 +18,17 @@ from test_runner_host import BASH
 ROOT = Path(__file__).parents[1]
 WORKFLOW = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
 JUSTFILE = (ROOT / "justfile").read_text(encoding="utf-8")
+
+
+def ci_module(name):
+    spec = importlib.util.spec_from_file_location(name, ROOT / "scripts/ci" / f"{name}.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+browser = ci_module("playwright")
+reports = ci_module("reports")
 
 
 def job(name):
@@ -60,6 +75,21 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
 
 
 class BuildChecks(unittest.TestCase):
+    def test_every_job_has_a_wall_clock_limit(self):
+        for name in re.findall(r"^  ([\w-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M):
+            self.assertRegex(job(name), r"(?m)^    timeout-minutes: [1-9]\d*$", name)
+
+    def test_self_hosted_evidence_stays_on_disk_and_fallback_uploads(self):
+        for name in ("boards", "e2e", "vitals", "journey"):
+            steps = job(name)
+            self.assertIn("if: failure() && vars.RUNS_ON == ''", steps)
+            self.assertIn("if: always() && vars.RUNS_ON != ''", steps)
+            self.assertIn("python3 scripts/ci/reports.py prepare", steps)
+            self.assertIn("python3 scripts/ci/reports.py collect", steps)
+            self.assertLess(steps.index("web-container.sh cleanup"), steps.index("reports.py collect"))
+        self.assertIn("scripts/web_cache.py vitals", JUSTFILE)
+        self.assertIn("shard: [1, 2, 3, 4]", job("boards"))
+        self.assertIn('"$E2E_SHARD_INDEX/$E2E_SHARD_COUNT"', job("boards"))
     def test_normal_events_publish_the_literal_build_check(self):
         self.assertRegex(job("build"), r"(?m)^    name: build$")
         for event in ("pull_request", "push", "workflow_dispatch"):
@@ -95,7 +125,7 @@ class BuildChecks(unittest.TestCase):
         self.assertFalse(enabled("e2e", "pull_request", web=False))
         self.assertTrue(enabled("e2e", "push", web=False))
 
-    def test_vitals_run_on_main_and_by_page_inputs_on_prs_and_trains(self):
+    def test_vitals_run_on_main_and_by_page_inputs_on_trains(self):
         self.assertRegex(job("vitals"), r"(?m)^    needs: changes$")
         self.assertIn("bash scripts/ci/web-container.sh", job("vitals"))
         self.assertRegex(job("vitals"), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
@@ -103,14 +133,15 @@ class BuildChecks(unittest.TestCase):
             for vitals in (False, True):
                 with self.subTest(event=event, vitals=vitals):
                     # changes decides by path on PRs and trains and always says true on main; Markdown-only says false
-                    self.assertEqual(enabled("vitals", event, vitals=vitals), vitals)
+                    self.assertEqual(enabled("vitals", event, vitals=vitals), vitals and event != "pull_request")
 
     def test_build_requires_vitals_exactly_when_they_are_scheduled(self):
         # A skipped job counts as passed on GitHub, so the aggregator must require the timing job whenever changes said
         # it was due, and only then.
-        check = re.search(r"- if: (needs.changes.outputs.vitals == 'true')\n        run: (.+)", job("build"))
+        check = re.search(r"- if: (needs.changes.outputs.vitals .+)\n        run: (.+)", job("build"))
         self.assertIsNotNone(check)
-        self.assertTrue(expression(check[1], vitals=True))
+        self.assertTrue(expression(check[1], event="workflow_dispatch", vitals=True))
+        self.assertFalse(expression(check[1], event="pull_request", vitals=True))
         self.assertFalse(expression(check[1], vitals=False))
         for result in ("success", "failure", "cancelled", "skipped"):
             with self.subTest(result=result):
@@ -122,7 +153,7 @@ class BuildChecks(unittest.TestCase):
             for selected in (False, True):
                 self.assertEqual(enabled("boards", event, boards=selected), selected)
                 self.assertFalse(enabled("boards", event, boards=selected, stress=True))
-        self.assertIn("--config=playwright.boards.config.ts", job("boards"))
+        self.assertIn("scripts/ci/playwright.py boards", job("boards"))
         self.assertNotIn("just web-e2e", job("boards"))
         self.assertIn("name: boards-test-results", job("boards"))
         self.assertRegex(job("boards"), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
@@ -144,7 +175,8 @@ class BuildChecks(unittest.TestCase):
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
         stub = ("python3() { return 0; }\n"
                 "git() { printf '%s\\n' \"$*\" > \"$DIFF_ARGS\"; return \"$DIFF_STATUS\"; }\n")
-        for path in ("web/scripts/boards*", "web/packages/boards/**", "web/e2e/boards*.spec.ts"):
+        for path in ("web/scripts/boards*", "web/packages/boards/**", "web/e2e/boards*.spec.ts",
+                     ":(glob)web/*", "web/scripts/fonts/sources.json", "scripts/web_cache.py", "scripts/ci/**"):
             self.assertIn("'" + path + "'", decide)
         for event in ("pull_request", "workflow_dispatch", "push"):
             for status in (0, 1, 128):
@@ -177,16 +209,17 @@ class BuildChecks(unittest.TestCase):
         decide = textwrap.dedent(re.search(
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
         stub = "python3() { case \"$2\" in md-only|light-only) return 1;; web-needed) return \"$WEB_STATUS\";; *) return 0;; esac; }\n"
+        stub += 'git() { return "$CI_DIFF_STATUS"; }\n'
         for event in ("pull_request", "push", "workflow_dispatch"):
-            for status in (0, 10, 37):
-                with self.subTest(event=event, status=status), tempfile.TemporaryDirectory() as tmp:
+            for status, diff in ((0, 0), (10, 0), (37, 0), (10, 1), (10, 128)):
+                with self.subTest(event=event, status=status, diff=diff), tempfile.TemporaryDirectory() as tmp:
                     output = Path(tmp) / "output"
-                    env = {**os.environ, "BASE": "" if event == "push" else "base", "WEB_STATUS": str(status),
+                    env = {**os.environ, "BASE": "" if event == "push" else "base", "WEB_STATUS": str(status), "CI_DIFF_STATUS": str(diff),
                            "GITHUB_OUTPUT": output.as_posix()}
                     script = stub + decide.replace("${{ github.event_name }}", event)
                     subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
                     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                    self.assertEqual(values["web"], "false" if event == "pull_request" and status == 10 else "true")
+                    self.assertEqual(values["web"], "false" if event == "pull_request" and status == 10 and diff == 0 else "true")
 
     @unittest.skipUnless(BASH, "Bash is unavailable")
     def test_vitals_selection_covers_prs_and_trains_and_never_skips_main(self):
@@ -197,9 +230,10 @@ class BuildChecks(unittest.TestCase):
                 "  vitals-needed) return \"$VITALS_STATUS\";;\n"
                 "  *) return 0;;\n"
                 "esac; }\n")
+        stub += 'git() { [ "$VITALS_STATUS" = 10 ]; }\n'
         cases = {
             "main on a push": ("push", "", "1", "10", "true"),
-            "a PR touching the pages": ("pull_request", "base", "1", "0", "true"),
+            "a PR touching the pages": ("pull_request", "base", "1", "0", "false"),
             "a PR touching other files": ("pull_request", "base", "1", "10", "false"),
             "a train touching the pages": ("workflow_dispatch", "base", "1", "0", "true"),
             "a train touching other files": ("workflow_dispatch", "base", "1", "10", "false"),
@@ -254,16 +288,17 @@ class BuildChecks(unittest.TestCase):
         self.assertIn("E2E_SHARD_INDEX: ${{ matrix.shard }}", job("e2e"))
         self.assertIn('just web-e2e "$E2E_SHARD_INDEX/$E2E_SHARD_COUNT"', job("e2e"))
         recipe = re.search(r"^web-e2e .*?\n(.*?)(?=^\S|\Z)", JUSTFILE, re.M | re.S).group(1)
-        self.assertRegex(recipe, r"scripts/web_cache.py e2e .* -- .* e2e --shard=\{\{ quote\(shard\) \}\}")
+        self.assertIn('scripts/ci/playwright.py e2e {{ quote(shard) }}', recipe)
         self.assertIn("fail-fast: false", job("e2e"))
         self.assertIn("name: e2e-test-results-${{ matrix.shard }}", job("e2e"))
 
     def test_build_rejects_non_successful_shards_except_light_and_pull_requests(self):
-        check = re.search(r"- if: (needs.changes.outputs.light .+)\n        run: (.+)", job("build"))
+        check = re.search(r"- if: (needs.changes.outputs.light .+)\n        run: (test '\$\{\{ needs.e2e.result \}\}' = success)", job("build"))
         self.assertIsNotNone(check)
         for docs in (False, True):
             self.assertEqual(expression(check[1], event="workflow_dispatch", docs=docs), not docs)
-            self.assertFalse(expression(check[1], event="pull_request", docs=docs))
+            self.assertEqual(expression(check[1], event="pull_request", docs=docs), not docs)
+            self.assertFalse(expression(check[1], event="pull_request", docs=docs, web=False))
             for result in ("success", "failure", "cancelled", "skipped"):
                 with self.subTest(docs=docs, result=result):
                     command = check[2].replace("${{ needs.e2e.result }}", result)
@@ -313,10 +348,154 @@ class BuildChecks(unittest.TestCase):
         self.assertEqual(commands, ["typecheck", "lint", "limits", "unused", "duplicates", "test", "budget"])
 
 
+def browser_report(names, status="passed"):
+    return {"suites": [{"title": "boards.spec.ts", "line": 0, "specs": [
+        {"title": name, "file": "boards.spec.ts", "tests": [{
+            "projectName": "chromium", "status": "expected" if status == "passed" else "unexpected",
+            "results": [{"status": status, "duration": 10}],
+        }]} for name in names
+    ]}], "errors": []}
+
+
+class BrowserSelection(unittest.TestCase):
+    def test_longest_first_balances_measured_work_and_keeps_serial_files_whole(self):
+        found = {name: {"file": file} for name, file in (("a", "one"), ("b", "two"), ("c", "three"),
+                                                        ("d", "four"), ("serial-1", "one"))}
+        with contextlib.redirect_stdout(io.StringIO()):
+            shards = browser.partition(found, {"a": 90, "b": 80, "c": 20, "d": 10, "serial-1": 1}, 2, "boards")
+            self.assertEqual([sum({"a": 90, "b": 80, "c": 20, "d": 10, "serial-1": 1}[n] for n in s)
+                              for s in shards], [101, 100])
+            shards = browser.partition(found, {"a": 90, "b": 80, "c": 20, "d": 10, "serial-1": 1}, 2, "e2e")
+        self.assertEqual(sorted(n for s in shards for n in s), sorted(found))
+        self.assertTrue(any("a" in s and "serial-1" in s for s in shards))
+
+    def test_new_tests_are_selected_and_title_paths_match_playwright_lists(self):
+        report = browser_report(["AxApp light", "Site light", "new board"])
+        report["suites"][0]["suites"] = [{"title": "nested suite", "line": 12,
+                                           "specs": report["suites"][0]["specs"][:1]}]
+        found = browser.tests(report)
+        self.assertIn("[chromium] › boards.spec.ts › nested suite › AxApp light", found)
+        with contextlib.redirect_stdout(io.StringIO()):
+            shards = browser.partition(found, {}, 4, "boards")
+        self.assertEqual(sorted(n for s in shards for n in s), sorted(found))
+        self.assertEqual(len(shards), 4)
+
+    def test_parallel_file_can_balance_across_shards(self):
+        found = {name: {"file": "gate.spec.ts"} for name in ("slow-a", "slow-b", "fast-a", "fast-b")}
+        weights = {"slow-a": 90, "slow-b": 80, "fast-a": 20, "fast-b": 10}
+        with contextlib.redirect_stdout(io.StringIO()):
+            shards = browser.partition(found, weights, 2, "e2e", {"gate.spec.ts"})
+        self.assertEqual([sum(weights[n] for n in shard) for shard in shards], [100, 100])
+
+    @unittest.skipUnless(shutil.which("node"), "Node is unavailable")
+    def test_real_manifest_evaluation_changes_only_its_board(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "web/packages/boards"
+            (package / "src").mkdir(parents=True)
+            (package / "catalog.ts").write_text('export const boardNames = ["AxApp", "AxAppPhone", "Site"];')
+            (package / "src/demo.ts").write_text('export const boards = {}; export const slices = {};')
+            regions = package / "regions.ts"
+            regions.write_text('export const regions = ["AxApp", "AxAppPhone"].map(board => ({board, name:"Shell"}));')
+            def read():
+                result = subprocess.run(["node", str(ROOT / "scripts/ci/boards-inputs.mjs")], cwd=root,
+                                        text=True, capture_output=True, check=True)
+                return json.loads(result.stdout)["inputs"]
+            before = read()
+            regions.write_text(regions.read_text().replace('name:"Shell"', 'name:"Overview"'))
+            after = read()
+            self.assertEqual(before["Site"], after["Site"])
+            for board in ("AxApp", "AxAppPhone"):
+                self.assertNotEqual(before[board], after[board])
+
+    def test_a_partial_or_skipped_board_report_cannot_certify_the_selection(self):
+        full = browser_report(["AxApp light", "AxApp dark"])
+        selected = list(browser.tests(full))
+        self.assertTrue(browser.green(full, selected))
+        for report in (browser_report(["AxApp light"]), browser_report(["AxApp light", "AxApp dark"], "skipped")):
+            self.assertFalse(browser.green(report, selected))
+
+    def test_cache_hits_skip_browsers_and_input_read_failures_run_every_selected_test(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root, cache = Path(tmp), Path(tmp) / "cache"
+            (root / "scripts/ci").mkdir(parents=True)
+            (root / "scripts/ci/playwright-durations.json").write_text('{"boards":{}}')
+            names = ["AxApp light", "Site light"]
+            report = browser_report(names)
+            played = []
+            def run(command, **kwargs):
+                if "--list" in command:
+                    return subprocess.CompletedProcess(command, 0, stdout=json.dumps(report))
+                if command[0] == "node":
+                    return subprocess.CompletedProcess(command, 0, stdout='{"boards":["AxApp","Site"],"inputs":{}}')
+                listing = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--test-list="))
+                played.append(Path(listing).read_text().splitlines())
+                chosen = [item.rsplit(" › ", 1)[1] for item in played[-1]]
+                measured = {**report, "suites": [{**report["suites"][0], "specs": [
+                    spec for spec in report["suites"][0]["specs"] if spec["title"] in chosen]}]}
+                Path(kwargs["env"]["PLAYWRIGHT_JSON_OUTPUT_FILE"]).write_text(json.dumps(measured))
+                return subprocess.CompletedProcess(command, 0)
+            with mock.patch.object(browser.subprocess, "run", side_effect=run), \
+                    mock.patch.object(browser.web_cache, "toolchain", return_value="tools"), \
+                    mock.patch.object(browser.web_cache, "boards_key", side_effect=lambda root, board, *args: board), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 0)
+                self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 0)
+                self.assertEqual(len(played), 1)
+                (cache / "boards/AxApp/AxApp").unlink()
+                self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 0)
+                self.assertEqual(played[-1], ["[chromium] › boards.spec.ts › AxApp light"])
+                with mock.patch.object(browser.web_cache, "boards_key", side_effect=OSError("unreadable")):
+                    self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 0)
+                self.assertEqual(played[0], played[-1])
+                # A failed batch must not certify even the board that passed before another one failed.
+                shutil.rmtree(cache)
+                report["suites"][0]["specs"][1]["tests"][0]["results"][0]["status"] = "failed"
+                self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 1)
+                self.assertFalse(cache.exists())
+
+
+class RunnerEvidence(unittest.TestCase):
+    def test_retention_is_two_days_and_shards_attempts_and_runs_are_isolated(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            cache = root / "cache"
+            old, recent = cache / "reports/old", cache / "reports/recent"
+            old.mkdir(parents=True)
+            recent.mkdir()
+            now = 1_000_000
+            os.utime(old, (now - 172800, now - 172800))
+            os.utime(recent, (now - 172799, now - 172799))
+            env = {"GITHUB_RUN_ID": "123", "GITHUB_JOB": "boards", "GITHUB_RUN_ATTEMPT": "1",
+                   "E2E_SHARD_INDEX": "1", "RUNNER_NAME": "test-host", "GITHUB_STEP_SUMMARY": str(root / "summary"),
+                   "GITHUB_ENV": str(root / "env")}
+            with mock.patch.object(reports.time, "time", return_value=now), contextlib.redirect_stdout(io.StringIO()):
+                first = reports.prepare(cache, env)
+                second = reports.prepare(cache, {**env, "E2E_SHARD_INDEX": "2"})
+                retry = reports.prepare(cache, {**env, "GITHUB_RUN_ATTEMPT": "2"})
+            self.assertFalse(old.exists())
+            self.assertTrue(recent.exists())
+            self.assertEqual(len({first, second, retry}), 3)
+            for name in ("test-results/trace.zip", "test-results/diff.png", "playwright-report/report.json"):
+                path = root / "web" / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(name)
+            reports.collect(first, root, failed=True)
+            reports.collect(second, root, failed=False)
+            self.assertTrue((first / "test-results/trace.zip").is_file())
+            self.assertTrue((first / "test-results/diff.png").is_file())
+            self.assertFalse((second / "test-results").exists())
+            self.assertTrue((second / "playwright-report/report.json").is_file())
+            self.assertIn(str(first), (root / "summary").read_text())
+            self.assertIn("test-host", (root / "summary").read_text())
+            self.assertIn("AXIOM_TEST_RESULTS=/ci/axiom/reports/123/boards/1-1/test-results", (root / "env").read_text())
+            self.assertIn("AXIOM_PLAYWRIGHT_REPORTS=/ci/axiom/reports/123/boards/1-1/playwright-report", (root / "env").read_text())
+
+
 class TestContainerPolicy(unittest.TestCase):
     def test_cleanup_brackets_tests_and_matches_job_timeout(self):
         steps = job("go-test")
-        self.assertRegex(steps, r"(?m)^    timeout-minutes: 40$")
+        self.assertRegex(steps, r"(?m)^    timeout-minutes: 30$")
         before = steps.index("- name: Clean test containers before tests")
         tests = steps.index("- run: just test")
         after = steps.index("- name: Clean test containers after tests")
