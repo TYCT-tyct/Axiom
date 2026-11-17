@@ -1,5 +1,6 @@
 import { ApiError } from "@axiom/api";
-import { describe, expect, it } from "vitest";
+import { QueryObserver } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 import { createQueryClient } from "./providers";
 import { accountKey, type Session } from "./session";
 
@@ -117,5 +118,36 @@ describe("a late unauthenticated answer", () => {
     await settled;
 
     expect(client.getQueryData(["session"])).toBeNull();
+  });
+});
+
+describe("a refused read is asked for once", () => {
+  const cases = [
+    ["a refusal", new ApiError(403, "request"), 1],
+    ["a network failure", new ApiError(0, null), 2],
+  ] as const;
+
+  it.each(cases)("%s: calls made when a second subscriber mounts after it", async (_, error, want) => {
+    const client = createQueryClient();
+    let calls = 0;
+    const options = {
+      queryKey: [accountKey, "balance"],
+      queryFn: () => {
+        calls += 1;
+        return Promise.reject(error);
+      },
+      retry: false,
+    };
+    const first = new QueryObserver(client, options);
+    const stopFirst = first.subscribe(() => undefined);
+    await vi.waitFor(() => expect(first.getCurrentResult().isError).toBe(true));
+
+    const second = new QueryObserver(client, options);
+    const stopSecond = second.subscribe(() => undefined);
+    await vi.waitFor(() => expect(second.getCurrentResult().fetchStatus).toBe("idle"));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls).toBe(want);
+    stopFirst();
+    stopSecond();
   });
 });
