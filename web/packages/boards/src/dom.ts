@@ -74,9 +74,9 @@ export function boardHTML(
   html: string,
   mode: "inner" | "outer" | InsertPosition = "inner",
 ) {
-  // Connect's drawing facade fans writes out through a setter; its element writes are converted too.
+  // Connect's drawing facade owns a setter, not a DOM sink; its element writes are converted too.
   if (!(target instanceof Element)) {
-    target.innerHTML = html;
+    Object.getOwnPropertyDescriptor(target, "innerHTML")?.set?.call(target, html);
     return;
   }
   const context = ["outer", "beforebegin", "afterend"].includes(mode) ? (target.parentElement as Element) : target;
