@@ -38,8 +38,8 @@
 | 变量 | 标签与分配 |
 |---|---|
 | `RUNS_ON` | `axiom-light`，便宜检查和列车驱动 |
-| `RUNS_ON_TRAIN` | `self-hosted, axiom-train`，前 `TRAIN_RUNNERS` 个，默认 4 |
-| `RUNS_ON_HEAVY` | `self-hosted, axiom-pr`，排除前 `TRAIN_ONLY` 个（默认 2），八个 runner 中六个可跑 PR |
+| `RUNS_ON_TRAIN` | `self-hosted, axiom-train`，前 `TRAIN_RUNNERS` 个，默认 10（全部） |
+| `RUNS_ON_HEAVY` | `self-hosted, axiom-pr`，排除前 `TRAIN_ONLY` 个（默认 2），十个 runner 中八个可跑 PR |
 
 列车构建的所有作业（含 changes/build）都用列车池，避免占便宜池等待的列车驱动与构建互相等待；前两个专用，第 3、4 个共享。PR 成功的 `workflow_run` 发车；落地用部署密钥一次快进 main，触发 push 工作流，拒绝推送则整班失败、PR 留队。
 

@@ -9,8 +9,8 @@
 #   scripts/ci/runner-host.sh check     # what install sets up is present and works; exits 1 naming what is not
 #   scripts/ci/runner-host.sh remove    # then delete the runner registrations it prints on GitHub
 #
-# Settings, from the environment: RUNNERS (8), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
-# TRAIN_RUNNERS (4: the first runners also get axiom-train), TRAIN_ONLY (2: of those, the first get no axiom-pr; every
+# Settings, from the environment: RUNNERS (10), PREFIX (axiom-t: runners axiom-t1...), LABELS (axiom,axiom-temp),
+# TRAIN_RUNNERS (10: the first runners also get axiom-train), TRAIN_ONLY (2: of those, the first get no axiom-pr; every
 # other runner gets axiom-pr). Both labels are managed separately from LABELS.
 # install also needs GH_TOKEN with repository Administration write permission to reconcile existing runners' labels.
 # PROCS (6: GOMAXPROCS of each job), CPU_QUOTA (8000%: of the whole host), CPU_WEIGHT (20: against 100 for the host's
@@ -29,8 +29,8 @@ toolcache=/opt/hostedtoolcache
 # host's own slices
 slice=axiom-ci.slice
 parent_dropin=/etc/systemd/system/axiom.slice.d/axiom-ci.conf
-runners=${RUNNERS:-8} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
-train_runners=${TRAIN_RUNNERS:-4} train_only=${TRAIN_ONLY:-2}
+runners=${RUNNERS:-10} prefix=${PREFIX:-axiom-t} labels=${LABELS:-axiom,axiom-temp} procs=${PROCS:-6}
+train_runners=${TRAIN_RUNNERS:-10} train_only=${TRAIN_ONLY:-2}
 [ "$train_runners" -ge 0 ] 2>/dev/null || { echo 'TRAIN_RUNNERS must be a nonnegative integer' >&2; exit 2; }
 [ "$train_only" -ge 0 ] 2>/dev/null && [ "$train_only" -le "$train_runners" ] || { echo 'TRAIN_ONLY must be an integer from 0 to TRAIN_RUNNERS' >&2; exit 2; }
 cpu_weight=${CPU_WEIGHT:-20}
