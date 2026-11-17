@@ -141,6 +141,7 @@
 
 | 决策 | 理由 |
 |---|---|
+| 日汇总只聚合用户余额及退款冻结事件 | 分类见[额度流水](../../docs/domains/billing.md#用户看得到什么)。不另建日表，现有账户序号索引限定一本账；每页需聚合该账户历史。游标绑定时区，读取实时历史，新流水可更新日合计；合计可超过 int64，花费与净充值可为负。三份参考均无完整日流水映射：OpenRouter [Activity Export](https://openrouter.ai/docs/cookbook/administration/activity-export)（2026-11-17）只说明调用用量与花费；new-api `model/log.go:689–727` 只合计消费日志；sub2api `backend/internal/repository/usage_log_repo_trend.go:229–247` 只按日合计调用成本，不覆盖退款、冻结、到期与拒付。 |
 | 报价是纯函数，准入在锁下调用 | 规则最多、最易错，脱开数据库才能逐条证明。 |
 | 单价取 `Ceiling`：所有可能项、等级和档中的最高价 | 提示词拆分可落到任一档，只有这样是可证明的上界。 |
 | 计量器自己算累计目标，`Extend` 只比较后写 | 重发和前一次尝试的追加都不会多扣。 |
