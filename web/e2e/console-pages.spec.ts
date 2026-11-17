@@ -368,7 +368,7 @@ test.describe("balance", () => {
     await page.goto("/console/");
     await expect(page.getByText("US$11.75")).toBeVisible();
     await expect(page.getByText("US$3.141592653")).toBeVisible();
-    await page.getByRole("link", { name: "查看明细" }).click();
+    await page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "余额" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "余额" })).toBeVisible();
     await expect(page.getByText("US$12.00", { exact: true })).toBeVisible();
     await expect(page.getByText("US$0.25", { exact: true })).toBeVisible();

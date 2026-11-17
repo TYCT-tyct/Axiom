@@ -83,7 +83,7 @@ describe("board conversion", () => {
         input,
         readFileSync(input, "utf8").replace("</helmet>", "<style>.source-change{color:red}</style></helmet>"),
       );
-      writeFileSync(english, readFileSync(english, "utf8").replace(/ {2}"m[\da-f]+": "",?\n/, ""));
+      writeFileSync(english, readFileSync(english, "utf8").replace(/^ {2}"m[\da-f]+": .*\n/m, ""));
       writeFileSync(join(root, "src/wrapper.tsx"), "export const wrapper = 1;");
       expect(checkGenerated(root)).toEqual(["Login/board.css", "AxApp/regions/Overview.en.ts"]);
       generate(root);

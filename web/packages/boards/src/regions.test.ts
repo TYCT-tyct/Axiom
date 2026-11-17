@@ -98,6 +98,13 @@ async function buildRegions(board: string) {
   }
 }
 
+// The expected DOM is the board minus what each region declares it leaves out, as the generated component is.
+function withoutOmitted(scope: Element, board: string) {
+  for (const region of regions.filter((candidate) => candidate.board === board))
+    for (const root of scope.querySelectorAll(region.roots.join(",")))
+      for (const selector of region.omit ?? []) for (const el of root.querySelectorAll(selector)) el.remove();
+}
+
 describe("region generation", () => {
   it("passes noJsxLiterals for every generated region", () => {
     const web = join(packageRoot, "../..");
@@ -154,9 +161,9 @@ describe("region generation", () => {
       const overview = original.querySelector(".p-ov") as Element;
       const slot = original.querySelector(".qpages") as Element;
       slot.replaceChildren(overview);
-      for (const el of original.querySelectorAll(".pscr,.qdrs,.qdr,.kov,.tst")) el.remove();
-      const files: Record<string, string> = {};
+      withoutOmitted(original, board);
       const manifest = regions.filter((region) => region.board === board);
+      const files: Record<string, string> = {};
       // CSS selection is tested separately; this checks the entire pinned markup without executing its scripts.
       for (const region of manifest) Object.assign(files, convertRegion(markup, "", region, marker));
       const shell = renderer(files, board, "Shell");

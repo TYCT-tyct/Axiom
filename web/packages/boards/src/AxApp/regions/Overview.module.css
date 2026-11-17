@@ -32,7 +32,6 @@
 :global(.ax .rlx path):where(.scope){fill:none;stroke:var(--bad);stroke-width:1.75;stroke-linecap:round}
 :global(.ax.mred *):where(.scope),:global(.ax.mred *):where(.scope)::before,:global(.ax.mred *):where(.scope)::after{animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}
 :global(.ov i):where(.scope){font-style:normal}
-:global(.ov .spk polyline):where(.scope){fill:none;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
 @container ov (max-width: 1100px){
 
 }
@@ -85,17 +84,11 @@
 :global(.ov .mut):where(.scope){color:var(--t2)}
 :global(.ov .qlnk):where(.scope){all:unset;font-size:14px;color:var(--accentT);cursor:pointer}
 :global(.ov .qlnk:hover):where(.scope){text-decoration:underline;text-underline-offset:3px}
-:global(.ov .qseg):where(.scope){position:relative;display:inline-grid;grid-auto-flow:column;grid-auto-columns:1fr;padding:3px;border-radius:8px;background:var(--hover)}
-:global(.ov .qseg > i):where(.scope){position:absolute;top:3px;bottom:3px;left:3px;width:calc((100% - 6px) / var(--n));border-radius:8px;background:var(--cardBg);box-shadow:var(--sh1);transform:translateX(calc(var(--i) * 100%));transition:transform 250ms var(--easeB)}
-:global(.ov .qseg button):where(.scope){all:unset;position:relative;height:28px;padding:0 12px;text-align:center;font-size:12px;color:var(--t2);cursor:pointer;white-space:nowrap;transition:color var(--dur) var(--ease)}
-:global(.ov .qseg button.on):where(.scope){color:var(--t1)}
 :global(.ov .qkpis):where(.scope){display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:16px}
 :global(.ov .qkpi):where(.scope){position:relative;display:flex;flex-direction:column;gap:4px;padding:16px 20px;border-radius:12px;background:var(--cardBg);box-shadow:var(--cardSh);overflow:hidden}
 :global(.ov .qkpi span):where(.scope){font-size:12px;color:var(--t2)}
 :global(.ov .qkpi b):where(.scope){font-size:24px;line-height:32px;font-weight:500;text-align:left}
 :global(.ov .qkpi em):where(.scope){font-style:normal;font-size:12px;color:var(--t3)}
-:global(.ov .qsp):where(.scope){position:absolute;right:16px;top:18px;width:96px;height:30px;overflow:visible}
-:global(.ov .qsp polyline):where(.scope){fill:none;stroke:var(--t3);stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 :global(.ov .qbl):where(.scope){position:relative;height:18px;margin-top:8px;font-size:12px;color:var(--t3)}
 :global(.ov .qbl span):where(.scope){position:absolute;transform:translateX(-50%)}
 :global(.ov .qrq):where(.scope){display:grid;grid-template-columns:96px minmax(0,1.2fr) minmax(0,1fr) 96px 80px;align-items:center;gap:16px;height:44px;font-size:14px}
@@ -106,7 +99,7 @@
 :global(.ov .qph h1):where(.scope){font-size:24px;line-height:28px}
 :global(.ov .qpa):where(.scope){flex-wrap:wrap}
 :global(.ov .qkpis):where(.scope){grid-template-columns:repeat(2,minmax(0,1fr))}
-:global(.ov .qsp):where(.scope){display:none}
+
 
 :global(.ov .qcard):where(.scope){padding:16px}
 
@@ -132,13 +125,8 @@
 
 
 }
-:global(.ov .qkpi b .cy):where(.scope){font-size:14px;font-weight:400;color:var(--t2);margin-right:0.1em}
 :global(.ov .qkpi b .ct):where(.scope){font-size:14px;font-weight:400;color:var(--t2)}
 :global(.ov .qnote):where(.scope){display:flex;align-items:center;gap:10px;font-size:14px;color:var(--t2)}
-@keyframes qlv{0%,100%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 55%,transparent)}60%{box-shadow:0 0 0 5px transparent}}
-:global(.ov .qleg):where(.scope){display:flex;gap:18px;margin-top:10px;font-size:12px;color:var(--t2)}
-:global(.ov .qleg span):where(.scope){display:inline-flex;align-items:center;gap:7px}
-:global(.ov .qleg i):where(.scope){width:8px;height:8px;border-radius:3px}
 :global(.ov .qg2b):where(.scope){display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);gap:16px}
 :global(.ov .v8 .qrq):where(.scope){grid-template-columns:64px minmax(0,1.25fr) minmax(0,1fr) 76px 64px;gap:12px}
 :global(.ov .v8 .qrq .mono):where(.scope){white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -169,55 +157,19 @@
 
 
 
-:global(.ov .qleg):where(.scope){flex-wrap:wrap;gap:10px 16px}}
-:global(.ov .qlivec):where(.scope){display:grid;grid-template-columns:minmax(0,1.35fr) minmax(0,1fr) auto;align-items:center;gap:28px;margin-bottom:16px;padding:18px 22px;border-radius:12px;
-  background:radial-gradient(70% 160% at 0% 50%,color-mix(in srgb,var(--wc) 9%,transparent),transparent 70%),var(--cardBg);box-shadow:var(--cardSh)}
-:global(.ov .qlvl):where(.scope){display:flex;align-items:center;gap:14px;min-width:0}
-:global(.ov .qlvl b):where(.scope){display:block;font-size:16px;line-height:24px;font-weight:500}
-:global(.ov .qlvl div > span):where(.scope){display:block;font-size:12px;line-height:18px;color:var(--t2)}
-:global(.ov .qlvd):where(.scope){position:relative;display:flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;border-radius:50%;background:color-mix(in srgb,var(--ok) 14%,transparent)}
-:global(.ov .qlvd i):where(.scope){width:10px;height:10px;border-radius:50%;background:var(--ok);animation:qlv 2.2s var(--ease) infinite}
-:global(.ov .qlvd.idle):where(.scope){background:var(--hover)}
-:global(.ov .qlvd.idle i):where(.scope){background:var(--t3);animation:none}
-:global(.ov .qlvb):where(.scope){min-width:0}
-:global(.ov .qlvbars):where(.scope){display:flex;align-items:flex-end;gap:3px;height:44px}
-:global(.ov .qlvbars i):where(.scope){flex:1;min-width:0;border-radius:2px;background:color-mix(in srgb,var(--wc) 55%,transparent);transition:height 250ms var(--ease)}
-:global(.ov .qlvbars i.z):where(.scope){background:var(--line)}
-:global(.ov .qlvbars i.now):where(.scope){background:var(--wc);animation:qnow 2.4s var(--ease) infinite}
-@keyframes qnow{0%,100%{opacity:1}50%{opacity:0.55}}
-:global(.ov.mred .qlvbars i.now):where(.scope),:global(.ov.mred .qlvd i):where(.scope){animation:none}
-:global(.ov .qlvx):where(.scope){display:flex;justify-content:space-between;margin-top:6px;font-size:12px;color:var(--t3)}
-:global(.ov .qlvx span:nth-child(2)):where(.scope){margin-left:22%}
-:global(.ov .qlvs):where(.scope){display:flex;gap:26px}
-:global(.ov .qlvs span):where(.scope){display:flex;flex-direction:column;gap:2px;white-space:nowrap}
-:global(.ov .qlvs em):where(.scope){font-style:normal;font-size:12px;color:var(--t2)}
-:global(.ov .qlvs b):where(.scope){font-size:16px;line-height:24px;font-weight:500}
+}
 :global(.ov .qg2w):where(.scope){display:grid;grid-template-columns:minmax(0,1.7fr) minmax(0,1fr);gap:16px;margin-bottom:16px}
 :global(.ov .qg2w > .qcard):where(.scope),:global(.ov .qg2b > .qcard):where(.scope){margin-bottom:0}
 :global(.ov .qg2b):where(.scope){margin-bottom:16px}
 :global(.ov .qch2):where(.scope){position:relative;padding-left:30px}
 :global(.ov .qch2 svg):where(.scope){display:block;width:100%;height:190px;overflow:visible}
-:global(.ov .qch2 .qgl line):where(.scope){stroke:var(--line);stroke-width:1;vector-effect:non-scaling-stroke;stroke-dasharray:2 3}
-:global(.ov .qch2 .fut):where(.scope){fill:none;stroke:var(--line2);stroke-dasharray:3 3;vector-effect:non-scaling-stroke}
-:global(.ov .qch2 .hit):where(.scope){fill:transparent;cursor:crosshair}
-:global(.ov .qch2 .hit.on):where(.scope){fill:color-mix(in srgb,var(--t1) 6%,transparent)}
-:global(.ov .qyax):where(.scope){position:absolute;left:0;top:0;width:24px;height:190px;font-size:12px;color:var(--t3)}
-:global(.ov .qyax span):where(.scope){position:absolute;right:0;transform:translateY(50%);line-height:1}
 :global(.ov .qch2 .qbl):where(.scope){margin-top:8px}
-:global(.ov .qtip):where(.scope){position:absolute;top:-6px;z-index:5;display:flex;flex-direction:column;gap:4px;min-width:178px;padding:10px 12px;border-radius:12px;background:var(--pop);box-shadow:var(--shPop);
-  font-size:12px;pointer-events:none;opacity:0;transform:translate(-50%,6px);transition:opacity 250ms var(--ease),transform 250ms var(--ease),left 250ms var(--ease)}
-:global(.ov .qtip.on):where(.scope){opacity:1;transform:translate(-50%,0)}
-:global(.ov .qtip > b):where(.scope){font-weight:500;font-size:12px;color:var(--t2)}
-:global(.ov .qtip > em):where(.scope){font-style:normal;font-size:16px;line-height:22px;font-weight:500;margin-bottom:2px}
-:global(.ov .qtip > span):where(.scope){display:flex;align-items:center;gap:8px;white-space:nowrap}
-:global(.ov .qtip > span i):where(.scope){width:8px;height:8px;border-radius:3px;flex:none}
-:global(.ov .qtip > span b):where(.scope){margin-left:auto;padding-left:14px;font-weight:400}
 :global(.ov .qatd):where(.scope){width:8px;height:8px;margin-top:7px;border-radius:50%;background:var(--t3)}
 :global(.ov .qsd):where(.scope){display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--t2);white-space:nowrap}
 :global(.ov .qsd i):where(.scope){width:7px;height:7px;border-radius:50%;background:var(--ok)}
 :global(.ov .qsd.retry i):where(.scope){background:var(--warn)}
-@container ov (max-width: 600px){:global(.ov .qlivec):where(.scope){grid-template-columns:minmax(0,1fr);gap:16px;padding:16px}
-:global(.ov .qlvs):where(.scope){gap:18px;flex-wrap:wrap}
+@container ov (max-width: 600px){
+
 :global(.ov .qg2w):where(.scope){grid-template-columns:minmax(0,1fr)}
 :global(.ov .qch2):where(.scope){padding-left:24px}
 
@@ -229,7 +181,7 @@
 
 
 
-:global(.ov .qtip):where(.scope){min-width:150px}}
+}
 @container ov (max-width: 600px){:global(.ov .qch):where(.scope){flex-wrap:wrap;row-gap:10px}}
 @container ov (max-width: 600px){
 
@@ -252,38 +204,12 @@
 @container ov (max-width: 1100px){
 }
 :global(.ov .qcard):where(.scope){border-radius:12px}
-:global(.ov .qseg):where(.scope){padding:2px;border-radius:8px}
-:global(.ov .qseg > i):where(.scope){top:2px;bottom:2px;left:2px;width:calc((100% - 4px) / var(--n));border-radius:6px}
-:global(.ov .qlivec):where(.scope){background:var(--cardBg)}
-:global(.ov .qlvbars i.now):where(.scope){animation:none}
 :global(.ov .p-ov .qkpi b):where(.scope){display:block;height:32px;white-space:nowrap}
-:global(.ov .p-ov .qkpi .qsp):where(.scope){display:none}
 :global(.ov .p-ov .qchc):where(.scope){display:flex;flex-direction:column}
 :global(.ov .p-ov .qch2):where(.scope){flex:1;display:flex;flex-direction:column}
 :global(.ov .p-ov .qch2 > svg):where(.scope){flex:1 1 190px;height:auto;min-height:190px}
-:global(.ov .p-ov .qyax):where(.scope){height:auto;bottom:26px}
 :global(.ov .p-ov .qrq):where(.scope){height:40px;font-size:12px}
 :global(.ov .p-ov .qrq.qrqh):where(.scope){height:32px;color:var(--t2)}
-:global(.ov .qyr):where(.scope){position:relative;margin-bottom:16px;padding:20px 24px}
-:global(.ov .qyrt):where(.scope){display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:16px}
-:global(.ov .qyrt h2):where(.scope){font-size:16px;line-height:24px;font-weight:500}
-:global(.ov .qyrlg .gap):where(.scope){flex:1}
-:global(.ov .qyrlg .yrTot):where(.scope){color:var(--t1)}
-:global(.ov .qyrsg):where(.scope){display:flex;gap:8px}
-:global(.ov .qyr .yrL):where(.scope){position:relative}
-:global(.ov .qyr .yrsv):where(.scope){display:block;width:100%;height:auto;overflow:visible;cursor:pointer}
-:global(.ov .qyr .yrsv text):where(.scope){fill:var(--t2);font-size:12px}
-:global(.ov .qyr .yrsv g.pre):where(.scope){opacity:.5}
-:global(.ov .qyr .yrsv g:hover rect):where(.scope),:global(.ov .qyr .yrsv g:hover .t):where(.scope){stroke:var(--t1);stroke-width:1px;vector-effect:non-scaling-stroke}
-:global(.ov .qyrlg):where(.scope){display:flex;align-items:center;justify-content:flex-end;gap:4px;margin-top:12px;font-size:12px;line-height:18px;color:var(--t2)}
-:global(.ov .qyrlg i):where(.scope){width:10px;height:10px;border-radius:2px}
-:global(.ov .qyrlg i.bad):where(.scope){margin-left:12px;background:var(--bad)}
-:global(.ov .qyrlg span + i):where(.scope){margin-left:4px}
-:global(.ov .qyrlg i + span):where(.scope){margin-left:4px}
-:global(.ov .qyr .yrC):where(.scope),:global(.ov .yrc1 .qyr .yrR):where(.scope){display:none}
-:global(.ov .yrc1 .qyr .yrC):where(.scope){display:inline}
-:global(.ov .qyr .yrtip):where(.scope){position:absolute;z-index:2;min-width:0;padding:6px 10px;border-radius:8px;background:var(--pop);box-shadow:var(--shPop);font-size:12px;line-height:18px;color:var(--t1);white-space:nowrap;pointer-events:none;opacity:0;transition:opacity 250ms ease-out;font-variant-numeric:tabular-nums}
-@container ov (max-width: 1100px){:global(.ov .qyr):where(.scope){padding:16px 20px}}
 :global(.ov .qnote):where(.scope){display:flex;align-items:center;gap:12px;margin-bottom:16px;padding:12px 16px;border-radius:12px;background:color-mix(in srgb, var(--warn) 10%, var(--cardBg));box-shadow:inset 0 0 0 var(--bw) color-mix(in srgb, var(--warn) 50%, var(--cardBg))}
 :global(.ov .qnote .qatd):where(.scope){flex:none;width:8px;height:8px;margin:0;border-radius:50%;background:var(--warn)}
 :global(.ov .qnote > div):where(.scope){display:flex;align-items:baseline;flex-wrap:wrap;gap:4px 12px;min-width:0;flex:1}
@@ -304,9 +230,6 @@
 :global(.ov .qg2b):where(.scope){grid-template-columns:minmax(0,1fr)}
 :global(.ov .qrq .mono):where(.scope){font-family:inherit;font-size:12px}
 :global(.ov .qrq):where(.scope){font-variant-numeric:tabular-nums}
-:global(.ov .qchc .qyax span):where(.scope)::before{content:"¥"}
-:global(.ov .qleg span):where(.scope){white-space:nowrap}
-:global(.ov .qleg i.dash):where(.scope){width:10px;height:8px;border-radius:2px;background:none;border:var(--bw) dashed var(--t3)}
 @container ov (max-width: 600px){
 
 
@@ -396,7 +319,7 @@
 }
 :global(.ov .tmk span):where(.scope){font-size:12px;color:var(--t2)}
 :global(.ov .tmk b):where(.scope){font-size:24px;line-height:32px;font-weight:500;font-variant-numeric:tabular-nums}
-:global(.ov .tmk b .cy):where(.scope),:global(.ov .tmk b .ct):where(.scope){font-size:14px;font-weight:400;color:var(--t2)}
+:global(.ov .tmk b .ct):where(.scope){font-size:14px;font-weight:400;color:var(--t2)}
 :global(.ov .tmk em):where(.scope){font-style:normal;font-size:12px;color:var(--t3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :global(.ov .tmshare i):where(.scope){display:block;height:100%;border-radius:2px;transform-origin:0 50%;animation:tmGrow 600ms ease-out both}
 @keyframes tmGrow{from{transform:scaleX(0)}}
@@ -456,16 +379,11 @@
 :global(.ov .qpg):where(.scope){animation:none}
 :global(.ov .qpg > *):where(.scope){animation:fxIn 250ms ease-out backwards}
 :global(.ov .qpg > :nth-child(2)):where(.scope){animation-delay:40ms}
-:global(.ov .qpg > :nth-child(3)):where(.scope){animation-delay:80ms}
-:global(.ov .qpg > :nth-child(4)):where(.scope){animation-delay:120ms}
 @keyframes fxIn{from{opacity:0;transform:translateY(8px)}}
-:global(.ov :is(.nkchips button,.pyq button,.pym,.tmrr,.nkx,.ppeye,.pplink,.sw2,.qseg button,.nkmh):focus-visible):where(.scope){outline:2px solid var(--focus);outline-offset:2px}
 @container ov (max-width: 600px){
 }
 :global(.ov .qph):where(.scope){align-items:flex-start;min-height:32px}
 :global(.ov .qph > .qpa):where(.scope){min-height:36px;margin:-2px 0}
-:global(.ov .qyr .qyrt):where(.scope){align-items:flex-start}
-:global(.ov .qyr .qyrt h2):where(.scope){line-height:24px}
 @container ov (min-width: 601px) and (max-width: 900px){
 }
 @container ov (max-width: 900px){
