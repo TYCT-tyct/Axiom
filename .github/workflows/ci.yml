@@ -229,7 +229,7 @@ jobs:
           name: vitals-test-results
           path: web/test-results/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
@@ -274,7 +274,7 @@ jobs:
           name: e2e-test-results-${{ matrix.shard }}
           path: web/test-results/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 2
       # Cancellation can stop the Docker client before the test process; remove only this attempt's container.
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
@@ -310,7 +310,7 @@ jobs:
           name: journey-test-results
           path: web/test-results/
           if-no-files-found: ignore
-          retention-days: 7
+          retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
       - name: Clean test containers after tests
