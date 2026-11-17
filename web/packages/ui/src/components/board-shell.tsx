@@ -39,32 +39,27 @@ export function BoardShell({
 // whichever board is shown takes that element in. Rendered inside the boards' slots instead, the page would be
 // mounted again with the board, losing what it holds, such as a new key's secret shown only once.
 export function useKeptPage(page: ReactNode) {
-  const [host] = useState(() => {
+  const [{ host, take }] = useState(() => {
     const element = document.createElement("div");
     element.className = styles.page as string;
-    return element;
+    // One callback for the hook's life: a new one each render would make React detach and attach the slot's ref, and
+    // moving the page blurs whatever has focus in it, such as the heading a navigation focused.
+    const attach = (slot: HTMLDivElement | null) => {
+      if (!slot || element.parentNode === slot) return;
+      slot.append(element);
+      // Moving the page took its open modal dialogs out of the top layer, leaving them open but not modal. Showing
+      // them again restores that; dropping the open attribute first fires no close event, which the page would take
+      // for the person dismissing it.
+      for (const dialog of element.querySelectorAll<HTMLDialogElement>("dialog[open]")) {
+        if (!dialog.matches(":modal")) {
+          dialog.removeAttribute("open");
+          dialog.showModal();
+        }
+      }
+    };
+    return { host: element, take: attach };
   });
-  return {
-    page: createPortal(page, host),
-    slot: (
-      <div
-        className={styles.page}
-        ref={(slot) => {
-          if (!slot) return;
-          slot.append(host);
-          // Moving the page took its open modal dialogs out of the top layer, leaving them open but not modal. Showing
-          // them again restores that; dropping the open attribute first fires no close event, which the page would take
-          // for the person dismissing it.
-          for (const dialog of host.querySelectorAll<HTMLDialogElement>("dialog[open]")) {
-            if (!dialog.matches(":modal")) {
-              dialog.removeAttribute("open");
-              dialog.showModal();
-            }
-          }
-        }}
-      />
-    ),
-  };
+  return { page: createPortal(page, host), slot: <div className={styles.page} ref={take} /> };
 }
 
 // BoardMark is the site's logo in a board's mark, in a 20px box whatever its size (docs/frontend.md「主题与自由度」);

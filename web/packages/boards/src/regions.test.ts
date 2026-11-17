@@ -103,7 +103,6 @@ async function buildRegions(board: string) {
 function edit(root: Element, region: Region) {
   const within = (selector: string) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
   for (const el of (region.omit ?? []).flatMap(within)) el.remove();
-  for (const el of Object.values(region.slots ?? {}).flatMap(within)) el.replaceChildren();
   const changes = Object.entries(region.elements ?? {}).flatMap(([selector, change]) =>
     within(selector).map((found) => ({ found, ...change })),
   );

@@ -6,5 +6,7 @@ export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values
 balance: "¥215.40",
 balanceCurrency: "¥",
 balanceWhole: "215",
-balanceFraction: ".40"},  });
+balanceFraction: ".40",
+lang: "zh-CN",
+frameStyle: "height: 900px;"}, mark: "A", });
 /* jscpd:ignore-end */

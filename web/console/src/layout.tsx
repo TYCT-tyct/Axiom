@@ -59,6 +59,37 @@ const phoneWidth = media("(max-width: 819px)");
 const wideWidth = media("(min-width: 1024px)");
 const useMedia = (query: ReturnType<typeof media>) => useSyncExternalStore(query.subscribe, query.matches);
 
+// The shell's departures from the drawing, which the regions leave to the page (packages/boards/regions.ts). The document
+// scrolls, not the board's fixed frame (port design §3.3): the bar sticks to the top, the sidebar below it (56px is the
+// bar), the phone's tabs to the bottom, and the phone's popovers are sheets at the bottom of the window. The board's
+// width gives way to the window's, and the console's font stacks, whose Chinese faces are cut for its pages, replace
+// the drawing's; tokens.css carries the colours. The pages not ported yet bring their own padding. What is not built
+// (#816) is not shown, and the bar keeps the places of its unbuilt buttons. Set inline, these outrank the board's rules.
+const frame = {
+  vars: "width: auto; font-family: var(--family-ui)",
+  appStyle: "position: relative; inset: auto; min-height: 100dvh",
+  barStyle: "position: sticky; top: 0; background: var(--page)",
+  mainStyle: "overflow: visible; flex: 1 0 auto",
+  pagesStyle: "padding: 0; max-width: none",
+  bodyStyle: "flex: 1 0 auto",
+  sidebarStyle: "position: sticky; top: 56px; height: calc(100dvh - 56px)",
+  panelStyle: "overflow: clip",
+  monoStyle: "font-family: var(--family-mono)",
+  sheetStyle: "position: fixed",
+  // The board's fifth tab is not built.
+  tabsStyle: "position: sticky; bottom: 0; grid-template-columns: repeat(4, 1fr)",
+  unbuilt: "display: none",
+  placeholder: "visibility: hidden",
+  // An entry the board draws as a <div> or <a> without an address, given a button's role: Enter and Space press it.
+  press: (event: KeyEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      (event.currentTarget as HTMLElement).click();
+    }
+  },
+};
+const frameStyle = "overflow: clip; min-height: 100dvh";
+
 // The router's link where the board draws an <a>: it marks the current page with aria-current and loads the page's
 // chunk when pointed at.
 function RouterLink({ href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
@@ -116,13 +147,6 @@ function usePopover() {
     oHelp: toggle("help"),
     oMe: toggle("me"),
     oMore: toggle("more"),
-    // The phone's "more" tab is an <a> the board styles as one: Enter and Space open it as they would a button.
-    moreKey: (event: KeyEvent) => {
-      if (event.key === "Enter" || event.key === " ") {
-        event.preventDefault();
-        toggle("more")(event);
-      }
-    },
   };
 }
 
@@ -193,7 +217,7 @@ function usePreferenceValues() {
   const preferences = usePreferences();
   const theme = preferences.themes.indexOf(preferences.theme);
   return {
-    lang: preferences.locale,
+    locale: preferences.locale,
     dark: preferences.dark ? " thD" : "",
     tsi: theme,
     ...Object.fromEntries(preferences.themes.map((_, i) => [`tsg${i}`, i === theme ? "on" : ""])),
@@ -255,9 +279,10 @@ function ConsoleShell({
   const { page, slot } = useKeptPage(children);
   const phone = useMedia(phoneWidth);
   const { level, ...pageValues } = usePageValues();
-  const { dark, language, ...preferenceValues } = usePreferenceValues();
+  const { dark, language, locale, ...preferenceValues } = usePreferenceValues();
   const balance = useBalanceText();
   const values = {
+    ...frame,
     ...pageValues,
     ...preferenceValues,
     ...usePopover(),
@@ -277,7 +302,7 @@ function ConsoleShell({
         <Phone
           t={(key) => (english ? phoneEn : phoneZh)[key]}
           values={values}
-          text={{ language }}
+          text={{ language, lang: locale, frameStyle }}
           link={RouterLink}
           mark={mark}
         >
@@ -287,7 +312,7 @@ function ConsoleShell({
         <Wide
           t={(key) => (english ? wideEn : wideZh)[key]}
           values={values}
-          text={{ language, ...balance }}
+          text={{ language, lang: locale, frameStyle, ...balance }}
           link={RouterLink}
           mark={mark}
         >

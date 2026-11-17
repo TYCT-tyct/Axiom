@@ -9,13 +9,18 @@ import { useKeptPage } from "./board-shell";
 // A page with something only it holds, as the key page holds a new key's secret.
 function Page() {
   const [secret] = useState(() => Math.random().toString(36));
-  return <p>{secret}</p>;
+  return (
+    <>
+      <p>{secret}</p>
+      <input aria-label="field" />
+    </>
+  );
 }
 
 const Wide = ({ children }: { children: ReactNode }) => <main className="wide">{children}</main>;
 const Phone = ({ children }: { children: ReactNode }) => <section className="phone">{children}</section>;
 
-function Shell({ phone }: { phone: boolean }) {
+function Shell({ phone }: { phone: boolean; render?: number }) {
   const { page, slot } = useKeptPage(<Page />);
   return (
     <>
@@ -35,4 +40,17 @@ it("keeps the page and what it holds while the shell changes boards", () => {
   expect(container.querySelector(".phone")).toBeNull();
   expect(container.querySelector(".wide p")?.textContent).toBe(secret);
   act(() => root.unmount());
+});
+
+it("leaves focus in the page while the shell renders again on the same board", () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  act(() => root.render(<Shell phone={false} render={1} />));
+  const field = container.querySelector("input") as HTMLInputElement;
+  field.focus();
+  act(() => root.render(<Shell phone={false} render={2} />));
+  expect(document.activeElement).toBe(field);
+  act(() => root.unmount());
+  container.remove();
 });

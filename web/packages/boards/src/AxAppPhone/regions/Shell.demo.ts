@@ -2,5 +2,7 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Shell.tsx";
 import type en from "./Shell.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {language: t("m81e531c3b1")},  });
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {language: t("m81e531c3b1"),
+lang: "zh-CN",
+frameStyle: "height: 844px;"}, mark: "A", });
 /* jscpd:ignore-end */

@@ -77,10 +77,7 @@ const slots = (region: Region): Record<string, string> => ({
   ...(region.children ? { children: region.children } : {}),
   ...region.slots,
 });
-const slotProps = (region: Region) => {
-  const names = Object.keys(slots(region));
-  return names.length ? ` & { ${names.map((name) => `${name}?: import("react").ReactNode`).join("; ")} }` : "";
-};
+const slotProps = (names: string[]) => names.map((name) => `${name}?: import("react").ReactNode;`).join(" ");
 
 function source(
   region: Region,
@@ -108,8 +105,8 @@ function source(
   const link = state.links.size
     ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
     : "";
-  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}`;
-  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${slotProps(region)}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
+  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}${region.slots ? ` ${slotProps(Object.keys(region.slots))}` : ""}`;
+  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
 function locales(region: Region, state: ReturnType<typeof emitter>, marker: string) {
@@ -155,8 +152,11 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     const roots = cut(document, region);
     const state = emitter(region);
     edit(roots, state);
+    // A named slot's demo shows the drawing's own content, its text, so the demo still draws the board.
+    const slotDemo = new Map<string, string>();
     for (const [name, selector] of Object.entries(slots(region)))
       for (const el of document.querySelectorAll(selector)) {
+        if (name !== "children") slotDemo.set(name, state.literal(el.textContent ?? ""));
         el.replaceChildren();
         // Keep the slot's own element in JSX and CSS, replacing only its content.
         el.append(document.createComment(`region ${name}`));
@@ -166,7 +166,8 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     const repeated = rows(roots, state);
     const body = roots.map((root) => jsx(root, state)).join("\n");
     const textDemo = [...state.texts].map(([name, text]) => `${name}: ${state.literal(text)}`).join(",\n");
-    const demo = `({ t, values: {}, ${state.texts.size ? `text: {${textDemo}},` : ""} ${repeated.length ? `rows: {${repeated.map((g) => `${g.name}: ${g.demo}`).join(",\n")}}` : ""} })`;
+    const slotsDemo = [...slotDemo].map(([name, value]) => `${name}: ${value},`).join(" ");
+    const demo = `({ t, values: {}, ${state.texts.size ? `text: {${textDemo}},` : ""} ${slotsDemo}${repeated.length ? `rows: {${repeated.map((g) => `${g.name}: ${g.demo}`).join(",\n")}}` : ""} })`;
     const elements = new Set(roots.flatMap((root) => [root, ...root.querySelectorAll("*")]));
     classStates(document, region, css);
     const files = {
