@@ -25,8 +25,6 @@ export default {
   "m42723e8b49": "Usage",
   "m7dbac1c20f": "Logs",
   "m38844b135c": "More",
-  "m3797982942": "Workspaces",
-  "m4bf3c13e58": "Billing",
   "mb9670c85a4": "Routing",
   "mf1de1e2621": "Presets",
   "me806fbbe8e": "Plugins",
@@ -35,14 +33,6 @@ export default {
   "mba1902c7c9": "Observability",
   "mc15323851b": "Billing",
   "m650eb042f0": "Management keys",
-  "mdf3d58c7d8": "Settings",
-  "m6e6d6ddbb7": "Members",
-  "ma5c97a7a7e": "Security and compliance",
-  "md44e0d633b": "Team settings",
-  "me68cd1fada": "New team",
-  "m8714d7f5e9": "Axiom Labs workspaces",
-  "m5fa0b0f66f": "¥842.17 this month",
-  "maafe08594f": "¥118.40 this month",
   "m81e531c3b1": "Appearance and language"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

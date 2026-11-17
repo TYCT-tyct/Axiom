@@ -162,11 +162,12 @@ describe("region generation", () => {
 
   it("changes the declared elements' tags and attributes, and draws links with the page's component", () => {
     const markup =
-      '<div class="m"><a class="ni" onclick="{{go}}">日志</a><div class="pmi" onclick="{{out}}">退出</div><main class="scr"></main></div>';
+      '<div class="m"><a class="ni" onclick="{{go}}">日志</a><div class="pmi" onclick="{{out}}">退出</div><b>soon</b><main class="scr"></main></div>';
     const elements = {
       ".ni": { tag: "link", set: { href: "{{to}}", hidden: "{{gone}}" } },
       ".pmi": { tag: "button", set: { type: "button" } },
       main: { set: { id: "main", tabindex: "-1" } },
+      b: { unless: "unbuilt" },
     };
     const region = { board: "Test", name: "Edits", roots: [".m"], elements, slots: { mark: "main" } };
     const files = convertRegion(markup, "", region, marker);
@@ -184,6 +185,10 @@ describe("region generation", () => {
     expect(shown.querySelector(".pmi")?.outerHTML).toMatch(/^<button [^>]*type="button"/);
     expect(shown.querySelector("main")?.getAttribute("tabindex")).toBe("-1");
     expect(render(true).querySelector("a.ni")?.hasAttribute("hidden")).toBe(true);
+    // Left out while its hole is true, drawn as the drawing has it otherwise.
+    expect(shown.querySelector("b")).not.toBeNull();
+    const without = renderToStaticMarkup(createElement(component, { ...props, link, values: { unbuilt: true } }));
+    expect(fragment(without).querySelector("b")).toBeNull();
     expect(() =>
       convertRegion(markup, "", { board: "Test", name: "Edits", roots: [".m"], elements: { ".none": {} } }, marker),
     ).toThrow(".none matches nothing");

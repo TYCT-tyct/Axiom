@@ -25,9 +25,10 @@ export function retag(original: Element, tag: string) {
 }
 
 type Change = NonNullable<Region["elements"]>[string];
-function change(original: Element, { tag, set = {} }: Change, links: Set<Element>) {
-  if (tag === "link") links.add(original);
+function change(original: Element, { tag, set = {}, unless }: Change, state: ReturnType<typeof emitter>) {
+  if (tag === "link") state.links.add(original);
   const element = tag && tag !== "link" ? retag(original, tag) : original;
+  if (unless) state.unless.set(element, unless);
   for (const [name, value] of Object.entries(set)) element.setAttribute(name, value);
 }
 
@@ -35,7 +36,7 @@ function edit(roots: Element[], state: ReturnType<typeof emitter>) {
   for (const [selector, declared] of Object.entries(state.region.elements ?? {})) {
     const found = within(roots, selector);
     if (!found.length) throw new Error(`${state.region.board}/${state.region.name}: ${selector} matches nothing`);
-    for (const element of found) change(element, declared, state.links);
+    for (const element of found) change(element, declared, state);
   }
 }
 
@@ -106,7 +107,10 @@ function source(
     ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
     : "";
   const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}${region.slots ? ` ${slotProps(Object.keys(region.slots))}` : ""}`;
-  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
+  const inline = [...state.inline]
+    .map(([text, name]) => `const ${name} = boardStyle(${JSON.stringify(text)});`)
+    .join("\n");
+  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body + inline, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${inline}\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
 function locales(region: Region, state: ReturnType<typeof emitter>, marker: string) {

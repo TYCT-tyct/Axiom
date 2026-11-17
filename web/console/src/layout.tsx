@@ -63,8 +63,9 @@ const useMedia = (query: ReturnType<typeof media>) => useSyncExternalStore(query
 // scrolls, not the board's fixed frame (port design §3.3): the bar sticks to the top, the sidebar below it (56px is the
 // bar), the phone's tabs to the bottom, and the phone's popovers are sheets at the bottom of the window. The board's
 // width gives way to the window's, and the console's font stacks, whose Chinese faces are cut for its pages, replace
-// the drawing's; tokens.css carries the colours. The pages not ported yet bring their own padding. What is not built
-// (#816) is not shown, and the bar keeps the places of its unbuilt buttons. Set inline, these outrank the board's rules.
+// the drawing's; tokens.css carries the colours. The pages not ported yet bring their own padding. Set inline, these
+// outrank the board's rules. What is not built (#816) is hidden (board-shell.module.css), and the bar keeps the places
+// of its unbuilt buttons.
 const frame = {
   vars: "width: auto; font-family: var(--family-ui)",
   appStyle: "position: relative; inset: auto; min-height: 100dvh",
@@ -78,7 +79,7 @@ const frame = {
   sheetStyle: "position: fixed",
   // The board's fifth tab is not built.
   tabsStyle: "position: sticky; bottom: 0; grid-template-columns: repeat(4, 1fr)",
-  unbuilt: "display: none",
+  unbuilt: true,
   placeholder: "visibility: hidden",
   // An entry the board draws as a <div> or <a> without an address, given a button's role: Enter and Space press it.
   press: (event: KeyEvent) => {

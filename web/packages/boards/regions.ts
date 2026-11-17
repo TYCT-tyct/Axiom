@@ -11,15 +11,16 @@ export type Region = {
   text?: Record<string, string>;
   attributes?: Record<string, { selector: string; attribute: string }>;
   // What the product needs on an element that the drawing leaves out, by selector (a root included): another tag, where
-  // "link" renders the router link the page passes as `link`, and attributes set, whose values may hold {{holes}}.
-  elements?: Record<string, { tag?: string; set?: Record<string, string> }>;
+  // "link" renders the router link the page passes as `link`; attributes set, whose values may hold {{holes}}; and
+  // unless, a boolean hole that leaves the element out while true.
+  elements?: Record<string, { tag?: string; set?: Record<string, string>; unless?: string }>;
   classes?: Record<string, string[]>;
   english?: Record<string, string>;
 };
 
 // The console's pages that the shell links to, by the board's page key. The shell's departures from the drawing are
 // holes the page fills: a region rendered with the drawing's own values is the drawing (boards.spec), and the console
-// supplies the document scroll, its fonts, and "display: none" for what is not built (#816) as values.
+// supplies the document scroll, its fonts, and leaves out what is not built (#816), as values.
 const account = ["profile", "security", "notify"];
 const pages = ["ov", "logs", "keys", "presets", "byok", "bill", ...account];
 const unbuiltPages = ["usage", "route", "plugins", "budget", "observe", "mkeys", "prefs"];
@@ -31,7 +32,7 @@ const links = (scope: string, keys: string[]) =>
 // A menu entry the board draws as a clickable <div> takes focus and the keys a button does, and keeps its look.
 const button = { role: "button", tabindex: "0", onkeydown: "{{press}}" };
 const expanded = (hole: string) => ({ "aria-expanded": `{{${hole}}}` });
-const unbuilt = { set: { style: "{{unbuilt}}" } };
+const unbuilt = { unless: "unbuilt" };
 const placeholder = { set: { style: "{{placeholder}}" } };
 const styled = (hole: string, more: Record<string, string> = {}) => ({ set: { style: `{{${hole}}}`, ...more } });
 const shellEnglish = {
@@ -60,13 +61,6 @@ const shellEnglish = {
   m1bf1ab1035: "Collapse or expand the sidebar",
   m81e531c3b1: "Appearance and language",
   // What the drawing shows that the console hides or has not built (#816), translated so the region stays complete.
-  m0d8f3231cc: "Lin Zhiyuan",
-  m364ca15da1: "Team, 6 members",
-  me68cd1fada: "New team",
-  m8714d7f5e9: "Axiom Labs workspaces",
-  m5fa0b0f66f: "¥842.17 this month",
-  maafe08594f: "¥118.40 this month",
-  m946897d107: "New workspace",
   md1f3e891d3: "At the 7-day daily average of ¥8.88, it runs out on ",
   m3bb8a15d6e: "November 17",
   m9e576b565a: ".",
@@ -75,9 +69,6 @@ const shellEnglish = {
   m57844391cf: "Dec",
   m0370bac54b: "Automatic top-up",
   m1a03b814c2: "Top up ¥200 when the balance falls below ¥50",
-  md711568daf: "At the 7-day daily average of ¥47.04, it runs out on ",
-  mf0b3ec59c3: "November 20",
-  ma0975bc7b9: "Top up ¥1,000 when the balance falls below ¥300",
   me0b97e179f: "Report a problem",
   mc044f887b3: "Contact us",
   m2687ccdbb1: "Docs",
@@ -88,12 +79,6 @@ const shellEnglish = {
   mbf13911816: "Guardrails and budgets",
   mba1902c7c9: "Observability",
   m650eb042f0: "Management keys",
-  m3797982942: "Workspaces",
-  m6e6d6ddbb7: "Members",
-  ma5c97a7a7e: "Security and compliance",
-  md44e0d633b: "Team settings",
-  mdf3d58c7d8: "Settings",
-  m4bf3c13e58: "Billing",
   m15dec50795: "Personal",
   m1eaba8087e: "Production",
   m7ea2dbe244: "Evaluation",
@@ -158,7 +143,24 @@ const shell = (board: string): Region => ({
   board,
   name: "Shell",
   roots: [".board"],
-  omit: [".qdrs", ".qdr", ".kov", ".tst"],
+  // Besides the drawing's own omissions, what it hides in the personal space it shows: the team and workspace levels
+  // and the space switch's menus (O1, #816). Left out, they cost the console nothing; the drawing is unchanged.
+  omit: [
+    ".qdrs",
+    ".qdr",
+    ".kov",
+    ".tst",
+    ".pnS",
+    ".pnW",
+    ".qspm",
+    ".gbar .qbc > .onW",
+    ".gbal .sxT",
+    ".bp > .sxT",
+    ".qswp",
+    ".qmore > .onW",
+    ".qmore > .onS2",
+    ".otabs.onS2",
+  ],
   children: ".qpages",
   // The site's logo, or its initial where the board draws an A.
   slots: { mark: ".glogo .bm" },

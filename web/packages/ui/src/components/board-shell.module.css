@@ -4,8 +4,9 @@
   min-height: 100dvh;
 }
 
-/* An entry the session may not open is hidden even where the board's rules give it a display. */
-.root [data-shell] :is(a, div)[hidden] {
+/* An entry the session may not open is hidden even where the board's rules give it a display: theirs reach (0,2,1) on
+   these elements. */
+.root [data-shell] [hidden] {
   display: none;
 }
 
