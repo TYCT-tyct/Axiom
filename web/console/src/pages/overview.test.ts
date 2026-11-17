@@ -1,8 +1,29 @@
 import type { Schemas } from "@axiom/api";
+import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
-import { barRows, chartLabels, dailyTotals, monthWindow, pickQuota, splitMoney, sumTotals } from "./overview";
+import {
+  barRows,
+  chartLabels,
+  dailyRows,
+  dailyTotals,
+  modelRowsOf,
+  monthWindow,
+  pickQuota,
+  requestRowsOf,
+  splitMoney,
+  sumTotals,
+} from "./overview-data";
 
 type Money = Schemas["Money"];
+type Call = Schemas["Call"];
+const t = ((key: string) => key) as unknown as TFunction;
+const format = {
+  money: ({ amount }: Money) => `$${amount}`,
+  number: (value: number | bigint) => String(value),
+  hour: () => "08:23",
+  monthLabel: (month: string) => month,
+  dateTime: () => "full time",
+};
 const money = (amount: string): Money => ({ amount, currency: "USD" });
 const aggregate = (bucket: string, calls: string, amount: string, currency = "USD"): Schemas["CallAggregate"] => ({
   bucket,
@@ -40,6 +61,34 @@ describe("the figures", () => {
       [1, 15n],
       [2, 25n],
     ]);
+  });
+
+  it("keeps a day and a model whose calls cost nothing", () => {
+    const rows = [aggregate("2026-10-01", "5", "0")];
+    expect(dailyRows(rows, "USD")).toEqual([{ day: 1, calls: 5n, amount: 0n }]);
+    const models = modelRowsOf(rows, "USD", "", format, t);
+    expect(models).toHaveLength(1);
+    expect(models[0]).toMatchObject({ f3: "2026-10-01", f5: "0%", f7: "$0" });
+  });
+
+  it("writes an error's date, reason and full time where a narrow row can still read them", () => {
+    const at = new Date(2026, 9, 24, 8, 23);
+    const call = {
+      id: "call-1",
+      at: at.toISOString(),
+      model: "deepseek/x",
+      key_id: "key-1",
+      error_kind: "upstream_timeout",
+      price: money("0"),
+    } as Call;
+    const [row] = requestRowsOf([call], "", new Map(), format, t);
+    expect(row).toMatchObject({
+      f2: "10/24 08:23",
+      f7: "upstream_timeout · deepseek/x",
+      f9: "—",
+      f10: "",
+      f11: "upstream_timeout",
+    });
   });
 
   it("splits the currency and integer digits from the fraction the board sets smaller", () => {
@@ -96,5 +145,10 @@ describe("the key the notice warns about", () => {
 
   it("is none when no key has a spend limit to run out of", () => {
     expect(pickQuota([key({})])).toBeUndefined();
+  });
+
+  it("treats a limit of zero as used up, not as no limit", () => {
+    const quota = pickQuota([key({ spend_limit: money("0"), limit_remaining: money("0") })]);
+    expect(quota).toMatchObject({ percent: 100 });
   });
 });
