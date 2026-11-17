@@ -192,7 +192,7 @@ compose exec -T axiom /axiom site init --name "Statement smoke" --currency USD -
 statement_password="$(openssl rand -hex 24)"
 printf '%s\n' "$statement_password" | compose exec -T axiom /axiom user create --email statement@example.com
 compose restart axiom
-compose up --detach --wait --wait-timeout 60 axiom
+start # Restarting can change ephemeral host ports; rediscover them before making requests.
 statement_cookie="$(jq -cn --arg password "$statement_password" '{email:"statement@example.com", password:$password}' |
   curl -fsS -D - -H 'Host: localhost' -H 'Origin: http://localhost' -H 'Content-Type: application/json' \
     --data-binary @- "http://localhost:$public/api/console/v1/auth/sign-in" |
