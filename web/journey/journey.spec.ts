@@ -21,7 +21,8 @@ test("register, sign in, key, top-up, call, and see the call and its charge", as
   await page.getByRole("button", { name: "注册", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
 
-  // Registering signs in; signing out and in again is the sign-in itself.
+  // Registering signs in; signing out, in the account menu, and in again is the sign-in itself.
+  await page.getByRole("button", { name: "账号设置" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   await page.getByLabel("邮箱").fill(email);
   await page.getByLabel("密码").fill(password);
