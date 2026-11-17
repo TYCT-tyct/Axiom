@@ -1,4 +1,5 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
 import { build, preview } from "vite";
@@ -9,7 +10,7 @@ import { openBoard } from "./design/board.ts";
 import { compare } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
 import { rulings } from "./design/rulings.ts";
-import { canvasesReady, type Stage, stage } from "./design/stage.ts";
+import { canvasesReady, type Stage, stagePaused } from "./design/stage.ts";
 
 const root = join(import.meta.dirname, "../packages/boards");
 const design = process.env.AXIOM_DESIGN_DIR;
@@ -23,8 +24,9 @@ const test = base.extend<object, { boardsURL: string }>({
     // biome-ignore lint/correctness/noEmptyPattern: Playwright requires a destructured fixture argument.
     async ({}, use) => {
       // The production build cache restores only site, console and admin. Build this isolated demo from this tree.
-      await build({ root, logLevel: "error" });
-      const server = await preview({ root, preview: { port: 0, strictPort: true } });
+      const outDir = mkdtempSync(join(tmpdir(), "axiom-boards-demo-"));
+      await build({ root, logLevel: "error", build: { outDir } });
+      const server = await preview({ root, build: { outDir }, preview: { port: 0, strictPort: true } });
       const address = server.httpServer.address();
       if (!address || typeof address === "string") throw new Error("no demo server port");
       try {
@@ -33,6 +35,7 @@ const test = base.extend<object, { boardsURL: string }>({
         await new Promise<void>((resolve, reject) =>
           server.httpServer.close((error) => (error ? reject(error) : resolve())),
         );
+        rmSync(outDir, { recursive: true, force: true });
       }
     },
     { scope: "worker" },
@@ -96,6 +99,8 @@ async function regionMenus(page: Page, reference: Page, name: string, suffix: st
     await reference.locator(selector).first().dispatchEvent("click");
     await page.clock.runFor(500);
     await reference.clock.runFor(500);
+    await expect(page.locator(".pm.open").first()).toBeVisible();
+    await expect(reference.locator(".pm.open").first()).toBeVisible();
     const menu = await compare(reference, page, [], `${name}-regions-${selector.slice(1)}-${suffix}`, info);
     expect.soft(menu.error, `see ${menu.diff ?? menu.page}`).toBeUndefined();
   }
@@ -130,7 +135,6 @@ async function boardInteractions(page: Page, name: string) {
   } else await extraInteractions(page, name);
 }
 
-test.describe.configure({ timeout: 120_000 });
 test.use({ timezoneId: "Asia/Shanghai" });
 
 for (const board of cases)
@@ -154,9 +158,8 @@ for (const board of cases)
           );
         });
         await page.setViewportSize(view.viewport);
-        await page.emulateMedia({ colorScheme, reducedMotion: "reduce" });
-        await stage(page, view);
-        await page.clock.pauseAt(view.time);
+        await page.emulateMedia({ colorScheme, reducedMotion: "no-preference" });
+        await stagePaused(page, view);
         await page.goto(`${boardsURL}/${board.name}${board.region ? "/regions" : ""}?theme=${colorScheme}`);
         await expect(page.locator(board.selector).first()).toBeAttached();
         await page.evaluate(() => document.fonts.ready.then(() => {}));

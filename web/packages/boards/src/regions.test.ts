@@ -154,7 +154,7 @@ describe("region generation", () => {
       const overview = original.querySelector(".p-ov") as Element;
       const slot = original.querySelector(".qpages") as Element;
       slot.replaceChildren(overview);
-      for (const el of original.querySelectorAll(".pscr,.qdrs,.qdr,.kov,.tst")) el.remove();
+      for (const el of original.querySelectorAll(".qdrs,.qdr,.kov,.tst")) el.remove();
       const files: Record<string, string> = {};
       const manifest = regions.filter((region) => region.board === board);
       // CSS selection is tested separately; this checks the entire pinned markup without executing its scripts.
