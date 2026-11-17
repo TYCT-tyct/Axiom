@@ -29,22 +29,23 @@ def ci_module(name):
 
 browser = ci_module("playwright")
 reports = ci_module("reports")
+train_result = ci_module("train_result")
 
 
 def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, boards=False, web=True):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, boards=False, web=True, reuse=()):
     folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
     if folded:
         condition = " ".join(line.strip() for line in folded.group(1).splitlines())
     else:
         condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, boards=boards, web=web)
+    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, boards=boards, web=web, reuse=reuse)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, boards=False, web=True):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, boards=False, web=True, reuse=()):
     results = results or {}
     values = {
         "always()": True,
@@ -54,6 +55,7 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "inputs.base": base,
         "inputs.release": release,
         "needs.changes.result": results.get("changes", "success"),
+        "needs.changes.outputs.reuse": json.dumps(list(reuse)),
         "needs.changes.outputs.light": "true" if docs or light else "false",
         "needs.changes.outputs.web": "false" if light or not web else "true",
         "needs.changes.outputs.deploy": "false" if light else "true",
@@ -355,6 +357,86 @@ def browser_report(names, status="passed"):
             "results": [{"status": status, "duration": 10}],
         }]} for name in names
     ]}], "errors": []}
+
+
+class TrainReuse(unittest.TestCase):
+    def test_only_completed_train_jobs_on_the_exact_verified_commit_are_reused(self):
+        run = dict(id=12, head_sha="head", head_branch="train/main/12", event="workflow_dispatch",
+                   status="completed", conclusion="success", html_url="https://example/train/12")
+        jobs = [dict(name=name, conclusion="success", status="completed")
+                for names in train_result.JOBS.values() for name in names]
+        jobs += [dict(name=name, conclusion="success", status="completed") for name in ("changes", "build")]
+        def find(statuses=None, runs=None, tree="tree", job_list=None):
+            selected = jobs if job_list is None else job_list
+            with mock.patch.object(train_result, "api", side_effect=[
+                [{"context": "train/verified", "state": "success"}] if statuses is None else statuses,
+                {"workflow_runs": [run] if runs is None else runs}, {"tree": {"sha": tree}},
+                {"total_count": len(selected), "jobs": selected},
+            ]):
+                return train_result.find("head", "tree")[0]
+        self.assertEqual(set(find()), set(train_result.JOBS))
+        self.assertEqual(find(statuses=[]), [])
+        self.assertEqual(find(statuses=[{"context": "train/verified", "state": "failure"}]), [])
+        self.assertEqual(find(runs=[]), [])
+        for field, value in (("head_sha", "other"), ("head_branch", "topic"), ("head_branch", "train/main/land"),
+                             ("conclusion", "failure"), ("event", "push"), ("status", "in_progress")):
+            with self.subTest(field=field, value=value):
+                self.assertEqual(find(runs=[{**run, field: value}]), [])
+        self.assertEqual(find(tree="other-tree"), [])
+        self.assertEqual(find(job_list=[j for j in jobs if j["name"] != "build"]), [])
+        partial = [dict(j, conclusion="skipped") if j["name"] in ("vitals", "e2e (2/2)") else j for j in jobs]
+        self.assertEqual(set(find(job_list=partial)), set(train_result.JOBS) - {"vitals", "e2e"})
+
+    def test_lookup_errors_fall_back_to_the_full_build(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {
+            "GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/main", "GITHUB_SHA": "head",
+            "GITHUB_OUTPUT": tmp + "/out",
+        }), mock.patch.object(train_result, "find", side_effect=ValueError("bad API response")):
+            train_result.main()
+            self.assertEqual(Path(tmp + "/out").read_text(), 'reuse=[]\n')
+
+    def test_only_main_push_exports_reuse_and_vitals_source(self):
+        for event, ref in (("push", "refs/heads/main"), ("workflow_dispatch", "refs/heads/main"),
+                           ("pull_request", "refs/pull/1/merge"), ("push", "refs/heads/topic")):
+            with self.subTest(event=event, ref=ref), tempfile.TemporaryDirectory() as tmp, \
+                    mock.patch.dict(os.environ, {"GITHUB_EVENT_NAME": event, "GITHUB_REF": ref,
+                        "GITHUB_SHA": "head", "GITHUB_OUTPUT": tmp + "/out", "GITHUB_STEP_SUMMARY": tmp + "/summary"}), \
+                    mock.patch.object(train_result, "find", return_value=(["static", "vitals"], "https://example/run")) as find:
+                train_result.main()
+                reuse = json.loads(Path(tmp + "/out").read_text().split("=", 1)[1])
+                if event == "push" and ref == "refs/heads/main":
+                    find.assert_called_once()
+                    self.assertEqual(reuse, ["static", "vitals"])
+                    self.assertIn("vitals | success (train)", Path(tmp + "/summary").read_text())
+                    self.assertIn("https://example/run", Path(tmp + "/summary").read_text())
+                else:
+                    find.assert_not_called()
+                    self.assertEqual(reuse, [])
+
+    def test_workflow_skips_only_reused_jobs_and_build_still_requires_every_other_success(self):
+        reused = tuple(train_result.JOBS)
+        for name in reused:
+            self.assertTrue(enabled(name, "push", boards=True), name)
+            self.assertFalse(enabled(name, "push", boards=True, reuse=reused), name)
+        self.assertTrue(enabled("changes", "push", reuse=reused))
+        self.assertTrue(enabled("build", "push", reuse=reused))
+        self.assertTrue(enabled("vitals", "push", reuse=tuple(n for n in reused if n != "vitals")))
+        # Execute the actual aggregator assertions, with all reused jobs skipped.
+        for failed in (None, "vitals"):
+            results = {name: "skipped" for name in reused}
+            active = reused if failed is None else tuple(n for n in reused if n != failed)
+            commands = re.findall(r"(?:- if: ([^\n]+)\n        run: |      - run: )(test [^\n]+)", job("build"))
+            statuses = []
+            for condition, command in commands:
+                if condition and not expression(condition.replace("github.ref", repr("refs/heads/main")),
+                                                event="push", results=results, boards=True, reuse=active):
+                    continue
+                command = re.sub(r"\$\{\{ needs\.([\w-]+)\.result \}\}",
+                                 lambda m: "success" if m[1] == "changes" else results[m[1]], command)
+                statuses.append(subprocess.run(["bash", "-c", command]).returncode)
+            self.assertEqual(all(code == 0 for code in statuses), failed is None)
+        self.assertIn("actions: read", job("changes"))
+        self.assertIn("inputs.release", job("deploy"))
 
 
 class BrowserSelection(unittest.TestCase):

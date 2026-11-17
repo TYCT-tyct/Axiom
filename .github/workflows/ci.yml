@@ -39,21 +39,27 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
-  # What a pull request or a train is checked against; empty on main, which runs everything
+  # What a pull request or a train is checked against; empty on main, which selects everything before train reuse
   BASE: ${{ github.event.pull_request.base.sha || inputs.base }}
   # Chromium and serveweb share a private network namespace; keep the browser image pinned.
   WEB_IMAGE: mcr.microsoft.com/playwright:v1.64.0-noble@sha256:06a9939e57531807f8d5fd76ce44b53165ffb7d7501d87ab10e285c20b1e971f
 
 jobs:
   # Light PRs and trains run md-checks and scope, including script tests; trains also scan secrets.
-  # Without a base (main pushes and release dispatches), all checks run. PRs select web and boards by inputs, and trains
-  # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
+  # Without a base all checks are selected, with verified train successes reused on main pushes. PRs select web and
+  # boards by inputs; trains run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
   # run on trains or main alone.
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     timeout-minutes: 1
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    permissions:
+      contents: read
+      issues: read # keep the quarantine reminder on reused main builds
+      statuses: read # train/verified on the landed commit
+      actions: read # verify the successful train build
     outputs:
+      reuse: ${{ steps.train.outputs.reuse }}
       light: ${{ steps.decide.outputs.light }}
       deploy: ${{ steps.decide.outputs.deploy }}
       bench: ${{ steps.decide.outputs.bench }}
@@ -64,8 +70,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
           fetch-depth: 0 # the diff needs the merge base
+      - id: train
+        run: python3 scripts/ci/train_result.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - if: steps.train.outputs.reuse != '[]'
+        run: python3 scripts/check_flaky.py
+        env:
+          GH_TOKEN: ${{ github.token }}
       # Exit 10 is the only "not needed" (scripts/ci_skips.py); every other outcome runs the check, so a failed diff
-      # never hides a regression. Without a base (main) everything runs.
+      # never hides a regression. Without a base (main) everything is selected before train reuse.
       - id: decide
         run: |
           light=false; deploy=true; bench=true; web=true; vitals=true; boards=true
@@ -132,7 +146,7 @@ jobs:
   # two PRs whose docs pass alone can break a link together.
   static:
     needs: changes
-    if: needs.changes.result == 'success' && !inputs.gate_stress
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'static') && !inputs.gate_stress
     timeout-minutes: 25
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
@@ -146,7 +160,7 @@ jobs:
         with:
           node: ${{ needs.changes.outputs.light != 'true' }}
       # Each known-flaky test names an open issue; once the issue closes the entry must go (CONTRIBUTING.md「合并队列」)
-      - run: python3 scripts/train.py flaky-check
+      - run: python3 scripts/check_flaky.py
         env:
           GH_TOKEN: ${{ github.token }}
       # A train adds `secrets`, which check-secrets.yml runs for a PR but nothing dispatches for a train.
@@ -183,7 +197,7 @@ jobs:
   go-test:
     name: go-test (${{ matrix.shard }}/2)
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
@@ -216,7 +230,7 @@ jobs:
   # Keep frontend checks parallel to the browser suite; neither waits for the other's build.
   web:
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true')
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'web') && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true')
     timeout-minutes: 12
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -232,10 +246,10 @@ jobs:
   # The web vitals are timings, so they run in a job of their own: one test at a time, with no other test on the
   # container's cores. A build whose diff touches nothing the pages are built from ships the same pages, so its timing
   # can only follow the runner (#503): trains select by inputs, main always selects, PRs leave them to the train, and
-  # a failure there is main-red.
+  # a failure there is main-red. A verified train timing remains reported in main's reuse summary.
   vitals:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'vitals') && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 45
     steps:
@@ -269,7 +283,10 @@ jobs:
     needs: changes
     # a shard takes about 11 minutes; without a limit a hung one held the merge train for an hour (GitHub's default is 6 h)
     timeout-minutes: 30
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'))
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e') && (inputs.gate_stress || needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'))
+    permissions:
+      contents: read
+      issues: read
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
       matrix:
@@ -277,6 +294,7 @@ jobs:
     env:
       E2E_SHARD_INDEX: ${{ matrix.shard }}
       E2E_SHARD_COUNT: ${{ inputs.gate_stress && 1 || 2 }}
+      E2E_FLAKY_RETRY: ${{ inputs.base != '' && startsWith(github.ref, 'refs/heads/train/') && !inputs.gate_stress }}
       GATE_STRESS: ${{ inputs.gate_stress || false }}
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -287,6 +305,12 @@ jobs:
       - name: Prepare runner evidence
         if: vars.RUNS_ON != ''
         run: python3 scripts/ci/reports.py prepare
+      - name: Read open e2e quarantine issues
+        run: |
+          entries=$(python3 scripts/check_flaky.py e2e)
+          echo "E2E_FLAKY=$entries" >> "$GITHUB_ENV"
+        env:
+          GH_TOKEN: ${{ github.token }}
       - name: Run e2e shard in its network namespace
         run: |
           bash scripts/ci/web-container.sh bash -e -c '
@@ -325,7 +349,7 @@ jobs:
   boards:
     name: boards (${{ matrix.shard }}/4)
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'boards') && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
@@ -364,7 +388,7 @@ jobs:
   # keeps the browser's trace and the node's log.
   journey:
     needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
@@ -410,6 +434,7 @@ jobs:
   bench:
     needs: changes
     if: >-
+      !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'bench') &&
       github.event_name != 'pull_request' &&
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
@@ -446,6 +471,7 @@ jobs:
   deploy:
     needs: changes
     if: >-
+      !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'deploy') &&
       github.event_name != 'pull_request' &&
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
@@ -494,6 +520,7 @@ jobs:
   signing:
     needs: changes
     if: >-
+      !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'signing') &&
       github.event_name != 'pull_request' &&
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
@@ -530,29 +557,31 @@ jobs:
         run: |
           echo "a job this build needs failed or was cancelled"
           exit 1
-      - run: test '${{ needs.changes.result }}' = success && test '${{ needs.static.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true'
+      - run: test '${{ needs.changes.result }}' = success
+      - if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'static')
+        run: test '${{ needs.static.result }}' = success
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'web')
         run: test '${{ needs.web.result }}' = success
       # The result aggregates the entire matrix; a selected PR suite cannot pass by being skipped either.
-      - if: needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true')
+      - if: needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true') && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e')
         run: test '${{ needs.e2e.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test')
         run: test '${{ needs.go-test.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.bench == 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.bench == 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'bench')
         run: test '${{ needs.bench.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.deploy == 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.deploy == 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'deploy')
         run: test '${{ needs.deploy.result }}' = success
-      - if: needs.changes.outputs.vitals == 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.vitals == 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'vitals')
         run: test '${{ needs.vitals.result }}' = success
-      - if: needs.changes.outputs.boards == 'true' && !inputs.gate_stress
+      - if: needs.changes.outputs.boards == 'true' && !inputs.gate_stress && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'boards')
         run: test '${{ needs.boards.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey')
         run: test '${{ needs.journey.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
+      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'signing')
         run: test '${{ needs.signing.result }}' = success
-      - if: github.ref == 'refs/heads/main' && !inputs.base && !inputs.gate_stress
+      - if: github.ref == 'refs/heads/main' && !inputs.base && !inputs.gate_stress && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'deploy')
         run: test '${{ needs.deploy.result }}' = success
-      - run: echo "every required job passed; only optional jobs were skipped"
+      - run: echo "every required job passed here or on the verified train; only optional or reused jobs were skipped"
 
   gate-stress:
     name: gate-stress

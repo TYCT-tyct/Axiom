@@ -1,8 +1,15 @@
-# Known-flaky Go tests. When every failure of a merge train's build is listed here, the train reruns the failed job once
-# before bisecting (CONTRIBUTING.md「合并队列」). Each entry names an open issue that tracks the fix; CI's build fails
-# once that issue is closed, so the entry goes when the flake does. id is the package path from the module root, a dot
+# Known-flaky Go and Playwright tests. When every Go failure of a merge train's build is listed here, the train reruns
+# the failed jobs once before bisecting (CONTRIBUTING.md「合并队列」). Each entry names an open issue tracking the fix;
+# CI's build fails once that issue is closed, so the entry goes when the flake does. id is the package path from the module root, a dot
 # and the top-level test name:
 #
 # [[test]]
 # id = "internal/gateway.TestStreamTimeout"
 # issue = 245
+#
+# Playwright entries use a spec path relative to web/e2e and the full title path (describe titles joined with " › ").
+# Trains retry only these failed tests once, inside their shard; PR/main report failures without retrying.
+# [[e2e]]
+# spec = "gate.spec.ts"
+# title = "admin › example"
+# issue = 830
