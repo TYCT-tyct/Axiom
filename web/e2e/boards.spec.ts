@@ -33,7 +33,8 @@ const test = base.extend<object, { boardsURL: string }>({
         );
       }
     },
-    { scope: "worker" },
+    // the demo build of the whole boards takes more than the default 30 s fixture time on a loaded runner (#819's run)
+    { scope: "worker", timeout: 240_000 },
   ],
 });
 const cases = [
