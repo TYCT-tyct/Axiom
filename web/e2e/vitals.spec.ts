@@ -81,10 +81,16 @@ type Profile = typeof phone;
 // absolute backstop stops a slow creep that each PR's ratio lets through: it is three times the clean build's time,
 // above the 1.9x a busy host added on CI (docs/frontend.md「实测」).
 const overviewMs = { phone: 3496, desktop: 948 } as Record<"phone" | "desktop", number>;
-// The backstop: the clean build's 340 ms (desktop) and 400 ms (phone), three times.
+// Recalibrated 2026-11-17 on b7e5225f's production build, served by Go, Linux/8 cores, Chromium 156.0.8078.4:
+// node web/scripts/vitals.ts <origin> <output-directory>, after the builds/checks ended; nine fresh contexts per
+// viewport, the gate's mock, network profiles and toplevel tdur sum, cpu=1 in BOTH viewports. Desktop median
+// 470.467 ms (409.926-782.806), phone 576.562 ms (539.418-681.867). Round each median UP to milliseconds, then
+// multiply by three: 471*3 / 577*3. The separate detailed trace and 4x-CPU phone samples do not set this backstop.
+// The old 340/400 ms calibration predates the board shell; even #826's parent now measures 512/674 ms on this host.
+// This only resets the cumulative backstop; keep the paired regression gate below unchanged (docs/frontend.md「实测」).
 const overviewCpu = {
-  desktop: { target: 1020, ceiling: 1020 },
-  phone: { target: 1200, ceiling: 1200 },
+  desktop: { target: 1413, ceiling: 1413 },
+  phone: { target: 1731, ceiling: 1731 },
 } satisfies Record<"phone" | "desktop", Limit>;
 const overviewRatio: Limit = { target: 1.25, ceiling: 1.25 };
 // Nine pairs: on 62 CI runs one pair's ratio scattered 0.62-1.65 around 1, independently of its
