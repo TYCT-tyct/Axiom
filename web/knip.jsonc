@@ -15,6 +15,5 @@
       "ignoreDependencies": ["web-vitals"]
     }
   },
-  // These requested standalone design engines are generated assets outside the current boards' import graphs.
-  "ignore": ["**/*.gen.ts", "packages/boards/src/engines/eggs.js", "packages/boards/src/engines/routes.js"]
+  "ignore": ["**/*.gen.ts"]
 }

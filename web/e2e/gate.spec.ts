@@ -1,9 +1,10 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import { applyBrand, brands } from "./brand.ts";
+import { siteSuite } from "./site-scenes.ts";
 import { suites } from "./suites.ts";
 
-// The acceptance gate of docs/frontend.md「验收门槛」 as checks, for the console and the admin: WCAG 2.2 AA in both
+// The acceptance gate of docs/frontend.md「验收门槛」 as checks, for the console, the admin and the website: WCAG 2.2 AA in both
 // colour schemes and both languages, and no page wider than the window from 360px to 2560px, with the worst realistic
 // data on screen. A table may scroll sideways inside its own box, which the page's width does not show: the buttons
 // and links of its rows must still be in view without scrolling it.
@@ -93,7 +94,8 @@ for (const suite of suites) {
             .map((th) => th.textContent),
         );
         expect(wrapped).toEqual([]);
-        if (width === 1280) {
+        // The website has no sidebar: its first nav is the header's.
+        if (width === 1280 && suite !== siteSuite) {
           // The sidebar's column reaches the end of the document, not only the end of the window.
           const sidebar = await page.evaluate(() => {
             const nav = document.querySelector("nav");

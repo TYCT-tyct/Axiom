@@ -12,6 +12,7 @@ import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 import type { Scene, Suite } from "./scene.ts";
+import { siteSuite } from "./site-scenes.ts";
 import { traced } from "./vitals-cpu.ts";
 import { words } from "./words.ts";
 
@@ -213,6 +214,7 @@ const overview = sceneOf(consoleSuite, "overview");
 const pages: [Suite, string][] = [
   ...["sign-in", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
+  [siteSuite, "home"],
 ];
 
 const profiles: {

@@ -47,7 +47,9 @@ test("the website reaches models and prices on a phone", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 800 });
   await mockConsole(page);
   await page.goto(apps[0].url);
-  await page.getByRole("navigation").getByRole("link", { name: "模型与价格" }).click();
+  // a phone's header has no room for the pages: they are in the menu sheet
+  await page.getByRole("banner").getByRole("link", { name: "菜单" }).click();
+  await page.locator(".sheet").getByRole("link", { name: "模型", exact: true }).click();
   await expect(page).toHaveURL(/\/models$/);
   await expect(page.getByRole("heading", { level: 1, name: "模型与价格" })).toBeVisible();
 });
@@ -70,9 +72,12 @@ test("the website lists models and prices and filters them in the address", asyn
   await expect(page.getByRole("table", { name: /模型价格/ })).toBeVisible();
 });
 
-test("the website's buttons open the console", async ({ page }) => {
-  signedInAs(await mockConsole(page));
+test("the website's sign-in and sign-up open the console's pages", async ({ page }) => {
+  await mockConsole(page);
   await page.goto(apps[0].url);
-  await page.getByRole("link", { name: "获取 API key" }).click();
-  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  await page.getByRole("banner").getByRole("link", { name: "登录", exact: true }).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await page.goto(apps[0].url);
+  await page.getByRole("link", { name: "注册，获取API key" }).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
 });
