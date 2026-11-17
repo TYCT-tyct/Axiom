@@ -1,6 +1,7 @@
 import { consoleSuite } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import type { Suite } from "./scene.ts";
+import { siteSuite } from "./site-scenes.ts";
 
 // Which design board each end-to-end scene is compared with (design.spec.ts). A design scene names a suite's scene
 // (console-scenes.ts, admin-scenes.ts) and, per viewport width, the board in AXIOM_DESIGN_DIR and the props and actions
@@ -25,6 +26,13 @@ const consoleBoards = (page: string) => ({
   1440: { file: "AxApp.dc.html", height: 900, actions: [["go", page]] as [string, string][] },
   390: { file: "AxAppPhone.dc.html", height: 844, actions: [["go", page]] as [string, string][] },
 });
+
+// The website's home boards come one per width; the scheme is the system's, a prop.
+const siteBoards = {
+  1440: { file: "Site.dc.html", height: 900 },
+  820: { file: "SiteTablet.dc.html", height: 1180 },
+  390: { file: "SitePhone.dc.html", height: 844 },
+};
 
 export const designScenes: DesignScene[] = [
   // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet
@@ -55,5 +63,13 @@ export const designScenes: DesignScene[] = [
     fonts: "console",
     boards: consoleBoards("keys"),
     schemes: consoleSchemes,
+  },
+  {
+    name: "site home",
+    suite: siteSuite,
+    scene: "home",
+    fonts: "site/home",
+    boards: siteBoards,
+    schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
   },
 ];

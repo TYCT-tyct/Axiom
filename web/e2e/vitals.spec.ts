@@ -12,6 +12,7 @@ import { consoleSuite } from "./console-scenes.ts";
 import { signedInAs } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 import type { Scene, Suite } from "./scene.ts";
+import { siteSuite } from "./site-scenes.ts";
 import { traced } from "./vitals-cpu.ts";
 import { words } from "./words.ts";
 
@@ -41,6 +42,9 @@ type Limit = { target: number; ceiling?: number };
 const budget = {
   lcpDesktop: { target: 1500, ceiling: 1500 },
   lcpPhone: { target: 2500, ceiling: 6000 },
+  // The website's own phone target (docs/frontend.md「前端性能指标」); the ceiling is its first measurement, 2.05 s
+  // scaled, with the same 1.5x room for a slower host as the console's.
+  lcpSitePhone: { target: 2000, ceiling: 3100 },
   inp: { target: 100 },
   cls: { target: 0.05 },
   lateFrames: { target: 0.05 },
@@ -213,6 +217,7 @@ const overview = sceneOf(consoleSuite, "overview");
 const pages: [Suite, string][] = [
   ...["sign-in", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
   ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
+  [siteSuite, "home"],
 ];
 
 const profiles: {
@@ -339,7 +344,8 @@ test.describe("loading", () => {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
         const reference = { suite: consoleSuite, scene: overview, lcp: overviewMs[name] };
-        await measurePage(browser, profile, device, suite, scene, reference, name, lcp);
+        const limit = suite === siteSuite && name === "phone" ? budget.lcpSitePhone : lcp;
+        await measurePage(browser, profile, device, suite, scene, reference, name, limit);
       });
     }
   }

@@ -1,20 +1,19 @@
-import { Button } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
-import { SiteShell } from "./shell";
+import { FirstScreen } from "./home/first-screen";
+import { SiteFrame } from "./home/frame";
+import { useWide } from "./home/wide";
 
+// The website's home page (the owner's Site boards, #747): the sea, the header and the first screen; the screens
+// below it come with S2. A change of layout starts the frame afresh, its effects with it: they hold the old markup.
+// The footer names the Chinese font, as MiSans's licence asks (docs/frontend.md「字体」), until the seabed screen's own
+// footer replaces it.
 export function Home() {
   const { t } = useTranslation();
+  const wide = useWide();
   return (
-    <SiteShell mainClassName="justify-center gap-6 py-24">
-      <h1 className="max-w-[16em] text-[clamp(36px,7vw,68px)] leading-[1.08] tracking-[-0.035em] text-t1">
-        {t("hero.title")}
-      </h1>
-      <p className="max-w-[34em] text-[17px] leading-relaxed text-t2">{t("hero.body")}</p>
-      <div>
-        <Button asChild variant="primary" size="lg">
-          <a href="/console/">{t("hero.start")}</a>
-        </Button>
-      </div>
-    </SiteShell>
+    <SiteFrame key={wide ? "wide" : "narrow"} wide={wide}>
+      <FirstScreen />
+      <footer>{t("footer")}</footer>
+    </SiteFrame>
   );
 }

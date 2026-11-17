@@ -12,7 +12,14 @@
     "./AxApp/regions/*.en": "./src/AxApp/regions/*.en.ts",
     "./AxAppPhone/regions/*": "./src/AxAppPhone/regions/*.tsx",
     "./AxAppPhone/regions/*.zh": "./src/AxAppPhone/regions/*.zh.ts",
-    "./AxAppPhone/regions/*.en": "./src/AxAppPhone/regions/*.en.ts"
+    "./AxAppPhone/regions/*.en": "./src/AxAppPhone/regions/*.en.ts",
+    "./Site/regions/*": "./src/Site/regions/*.tsx",
+    "./Site/regions/*.zh": "./src/Site/regions/*.zh.ts",
+    "./Site/regions/*.en": "./src/Site/regions/*.en.ts",
+    "./SitePhone/regions/*": "./src/SitePhone/regions/*.tsx",
+    "./SitePhone/regions/*.zh": "./src/SitePhone/regions/*.zh.ts",
+    "./SitePhone/regions/*.en": "./src/SitePhone/regions/*.en.ts",
+    "./engines/*": "./src/engines/*"
   },
   "scripts": {
     "typecheck": "tsc",
