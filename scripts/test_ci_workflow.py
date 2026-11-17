@@ -20,16 +20,16 @@ def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, web=True):
     folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
     if folded:
         condition = " ".join(line.strip() for line in folded.group(1).splitlines())
     else:
         condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light)
+    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, web=web)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, web=True):
     results = results or {}
     values = {
         "always()": True,
@@ -40,7 +40,7 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "inputs.release": release,
         "needs.changes.result": results.get("changes", "success"),
         "needs.changes.outputs.light": "true" if docs or light else "false",
-        "needs.changes.outputs.web": "false" if light else "true",
+        "needs.changes.outputs.web": "false" if light or not web else "true",
         "needs.changes.outputs.deploy": "false" if light else "true",
         "needs.changes.outputs.bench": "false" if light else "true",
         "needs.changes.outputs.vitals": "true" if vitals else "false",
@@ -87,9 +87,12 @@ class BuildChecks(unittest.TestCase):
             for event in ("pull_request", "push", "workflow_dispatch"):
                 for docs in (False, True):
                     with self.subTest(job=name, event=event, docs=docs):
-                        # the tests run once, in the train and on main; a pull request runs only the cheap checks
-                        want = not docs and (name == "web" or event != "pull_request")
-                        self.assertEqual(enabled(name, event, docs=docs), want)
+                        # a pull request whose frontend inputs changed runs the e2e too, so a broken page is caught
+                        # before its train; the train and main run them again
+                        self.assertEqual(enabled(name, event, docs=docs), not docs)
+        # a pull request without frontend changes leaves the e2e to its train
+        self.assertFalse(enabled("e2e", "pull_request", web=False))
+        self.assertTrue(enabled("e2e", "push", web=False))
 
     def test_vitals_run_on_main_and_by_page_inputs_on_prs_and_trains(self):
         self.assertRegex(job("vitals"), r"(?m)^    needs: changes$")
