@@ -3,7 +3,7 @@ import type DesktopOverview from "@axiom/boards/AxApp/regions/Overview";
 import { useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { balanceQuery, callAggregateQuery, keysQuery, recentErrorsQuery, siteQuery } from "../queries";
 
 // Everything the overview shows that is not a piece of markup: the month the figures cover, the board's rows and texts
@@ -25,29 +25,26 @@ export function monthWindow(now = new Date()): MonthWindow {
   };
 }
 
-// useMonthWindow keeps the window current: a refetch on focus or on the tab becoming visible moves it to that moment,
-// and across a UTC month boundary it moves the month, its days and its start too. A minute that changed no window leaves
-// the state alone, so the query keys change only when the window does.
+// useMonthWindow keeps the window current: every focus or return to the tab moves it to that moment, and across a UTC
+// month boundary it moves the month, its days and its start too. It always moves, not once a minute: a refetch at 10:00:45
+// must cover a call at 10:00:20, and the query's own freshness window is 30 seconds.
 function useMonthWindow() {
   const [period, setPeriod] = useState(monthWindow);
+  const advance = useCallback(() => setPeriod(monthWindow()), []);
   useEffect(() => {
-    const advance = () => {
-      if (document.visibilityState === "hidden") {
-        return;
+    const onVisible = () => {
+      if (document.visibilityState !== "hidden") {
+        advance();
       }
-      setPeriod((current) => {
-        const next = monthWindow();
-        return next.until.slice(0, 16) === current.until.slice(0, 16) ? current : next;
-      });
     };
-    window.addEventListener("focus", advance);
-    document.addEventListener("visibilitychange", advance);
+    window.addEventListener("focus", onVisible);
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
-      window.removeEventListener("focus", advance);
-      document.removeEventListener("visibilitychange", advance);
+      window.removeEventListener("focus", onVisible);
+      document.removeEventListener("visibilitychange", onVisible);
     };
-  }, []);
-  return period;
+  }, [advance]);
+  return { period, advance };
 }
 
 type DesktopProps = Parameters<typeof DesktopOverview>[0];
@@ -463,8 +460,9 @@ function errorListOf(calls: Call[], format: Format, t: TFunction) {
 // aggregateFailure answers one retry for both aggregates: they come from the same endpoint, and a reader who retries
 // wants the chart and the model card back together.
 function aggregateFailure(
-  days: { isError: boolean; error: unknown; errorUpdatedAt: number; refetch: () => unknown },
-  models: { isError: boolean; error: unknown; errorUpdatedAt: number; refetch: () => unknown },
+  days: { isError: boolean; error: unknown; errorUpdatedAt: number },
+  models: { isError: boolean; error: unknown; errorUpdatedAt: number },
+  advance: () => void,
 ) {
   if (!days.isError && !models.isError) {
     return undefined;
@@ -474,13 +472,14 @@ function aggregateFailure(
     data: undefined,
     error: days.error ?? models.error,
     errorUpdatedAt: Math.max(days.errorUpdatedAt, models.errorUpdatedAt),
-    refetch: () => void Promise.all([days.refetch(), models.refetch()]),
+    // The retry moves the window first: the new query keys fetch both aggregates from that moment.
+    refetch: advance,
   };
 }
 
 export function useBoardData(t: TFunction) {
   const format = useFormat();
-  const period = useMonthWindow();
+  const { period, advance } = useMonthWindow();
   const keys = useInfiniteQuery(keysQuery());
   const errors = useQuery(recentErrorsQuery);
   const days = useQuery(callAggregateQuery({ since: period.since, until: period.until }, "day"));
@@ -502,7 +501,7 @@ export function useBoardData(t: TFunction) {
     period,
     keys,
     errors,
-    aggregate: aggregateFailure(days, models),
+    aggregate: aggregateFailure(days, models, advance),
     text: {
       ...noticeOf(keyList, keyState, keys.hasNextPage, format, t),
       ...spendOf(balance.data, format, period.month),
