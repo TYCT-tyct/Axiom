@@ -50,7 +50,7 @@ const cases = [
     .map((name) => ({
       name,
       engines: boardEngines(name, readBoard(join(root, "inputs", `${name}.dc.html`))),
-      selector: ".board",
+      selector: originalCases.find((board) => name.startsWith(board.name))?.selector ?? ".board",
       prop: name.startsWith("Site") ? "system" : name.startsWith("Login") ? "mode" : "theme",
       region: false,
       canvas: /<canvas[\s>]/.test(readBoard(join(root, "inputs", `${name}.dc.html`))),

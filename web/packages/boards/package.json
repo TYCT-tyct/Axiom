@@ -12,8 +12,7 @@
     "./AxApp/regions/*.en": "./src/AxApp/regions/*.en.ts",
     "./AxAppPhone/regions/*": "./src/AxAppPhone/regions/*.tsx",
     "./AxAppPhone/regions/*.zh": "./src/AxAppPhone/regions/*.zh.ts",
-    "./AxAppPhone/regions/*.en": "./src/AxAppPhone/regions/*.en.ts",
-    "./engines/*": "./src/engines/*.js"
+    "./AxAppPhone/regions/*.en": "./src/AxAppPhone/regions/*.en.ts"
   },
   "scripts": {
     "typecheck": "tsc",
