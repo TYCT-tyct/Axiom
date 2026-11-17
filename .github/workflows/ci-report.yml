@@ -1,0 +1,25 @@
+# The weekly CI health report (#830): the numbers nobody watched. A throttled runner that slowed every job and a 32%
+# train failure rate went unnoticed for days. scripts/ci_report.py reads the last seven days of ci and train runs and
+# rewrites the report section of issue #830, adding the same tables as one comment so the issue keeps the history.
+name: ci-report
+
+on:
+  schedule:
+    - cron: "17 1 * * 1" # Monday 01:17 UTC: the week that ended, before Monday's work
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read # the runs, jobs and job logs the report is built from
+  issues: write # the report section of the issue and one comment per week
+
+jobs:
+  report:
+    # The cheap pool: the report is a few hundred API calls and no build, so it must not hold a heavy runner
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/ci_report.py --repo "$GITHUB_REPOSITORY"
+        env:
+          GH_TOKEN: ${{ github.token }}

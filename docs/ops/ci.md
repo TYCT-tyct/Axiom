@@ -25,6 +25,8 @@
 
 路径判断由 `scripts/ci_skips.py` 和 `ci.yml` 的画板输入比较负责，读取失败不跳过；`*-needed` 仅退出 10 表示无需运行。`build` 是 ci.yml 唯一进入规则集的聚合检查，任一作业失败或取消即失败；非轻量列车/main 的 e2e、journey、signing 不可跳过，选中的 vitals 和 boards 必须成功；普通 main 构建还要求 deploy 成功。其他必需的 workflow 检查独立保留。`just check` 本地全跑；`check-ci` 避免重复 workflow 已跑的 secrets/docs 部分，仓库脚本测试仍跑。
 
+每周一 01:17（UTC）`ci-report` 把上一周的 ci 与 train 运行汇成周报（通过率、作业耗时与排队、机器分钟、列车失败与退车、失败最多的测试），覆盖 #830 的正文并另发一条评论留档；表格由 `scripts/ci_report.py` 从 GitHub API 的 JSON 算出，跑在便宜池。
+
 ## 运行池
 
 `runs-on` 从 Actions 变量读，未设回退 GitHub 托管 `ubuntu-latest`。
