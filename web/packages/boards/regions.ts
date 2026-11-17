@@ -60,7 +60,6 @@ const shellEnglish = {
 };
 
 const shellOmit = [
-  ".pscr",
   ".qdrs",
   ".qdr",
   ".kov",

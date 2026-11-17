@@ -20,16 +20,16 @@ def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, web=True):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, boards=False, web=True):
     folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
     if folded:
         condition = " ".join(line.strip() for line in folded.group(1).splitlines())
     else:
         condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, web=web)
+    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, boards=boards, web=web)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, web=True):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, boards=False, web=True):
     results = results or {}
     values = {
         "always()": True,
@@ -44,6 +44,7 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "needs.changes.outputs.deploy": "false" if light else "true",
         "needs.changes.outputs.bench": "false" if light else "true",
         "needs.changes.outputs.vitals": "true" if vitals else "false",
+        "needs.changes.outputs.boards": "true" if boards else "false",
     }
     for name, result in results.items():
         values["needs." + name + ".result"] = result
@@ -79,7 +80,7 @@ class BuildChecks(unittest.TestCase):
 
     def test_web_and_shards_run_independently_on_all_build_events(self):
         needs = re.search(r"^    needs: \[(.+)\]$", job("build"), re.M).group(1).split(", ")
-        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "vitals", "journey", "bench", "deploy", "signing"})
+        self.assertEqual(set(needs), {"changes", "static", "go-test", "web", "e2e", "boards", "vitals", "journey", "bench", "deploy", "signing"})
         for name in ("web", "e2e"):
             self.assertRegex(job(name), r"(?m)^    needs: changes$")
             self.assertIn("bash scripts/ci/web-container.sh", job(name))
@@ -115,6 +116,50 @@ class BuildChecks(unittest.TestCase):
             with self.subTest(result=result):
                 command = check[2].replace("${{ needs.vitals.result }}", result)
                 self.assertEqual(subprocess.run(["bash", "-c", command]).returncode == 0, result == "success")
+
+    def test_boards_run_separately_when_selected_and_build_requires_success(self):
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            for selected in (False, True):
+                self.assertEqual(enabled("boards", event, boards=selected), selected)
+                self.assertFalse(enabled("boards", event, boards=selected, stress=True))
+        self.assertIn("--config=playwright.boards.config.ts", job("boards"))
+        self.assertNotIn("just web-e2e", job("boards"))
+        self.assertIn("name: boards-test-results", job("boards"))
+        self.assertRegex(job("boards"), r"- if: always\(\)\n        run: bash scripts/ci/web-container.sh cleanup")
+        check = re.search(r"- if: (needs.changes.outputs.boards .+)\n        run: (.+)", job("build"))
+        self.assertTrue(expression(check[1], boards=True))
+        self.assertFalse(expression(check[1], boards=False))
+        for result in ("success", "failure", "cancelled", "skipped"):
+            command = check[2].replace("${{ needs.boards.result }}", result)
+            self.assertEqual(subprocess.run(["bash", "-c", command]).returncode == 0, result == "success")
+        regular = (ROOT / "web/playwright.config.ts").read_text()
+        dedicated = (ROOT / "web/playwright.boards.config.ts").read_text()
+        self.assertIn('testIgnore: ["vitals.spec.ts", "boards*.spec.ts"]', regular)
+        self.assertIn('testMatch: "boards*.spec.ts"', dedicated)
+        self.assertIn('webServer: undefined', dedicated)
+
+    @unittest.skipUnless(BASH, "Bash is unavailable")
+    def test_board_path_selection_runs_on_main_and_fails_open(self):
+        decide = textwrap.dedent(re.search(
+            r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
+        stub = ("python3() { return 0; }\n"
+                "git() { printf '%s\\n' \"$*\" > \"$DIFF_ARGS\"; return \"$DIFF_STATUS\"; }\n")
+        for path in ("web/scripts/boards*", "web/packages/boards/**", "web/e2e/boards*.spec.ts"):
+            self.assertIn("'" + path + "'", decide)
+        for event in ("pull_request", "workflow_dispatch", "push"):
+            for status in (0, 1, 128):
+                with self.subTest(event=event, status=status), tempfile.TemporaryDirectory() as tmp:
+                    output, args = Path(tmp) / "output", Path(tmp) / "args"
+                    env = {**os.environ, "BASE": "" if event == "push" else "base", "DIFF_STATUS": str(status),
+                           "GITHUB_OUTPUT": output.as_posix(), "DIFF_ARGS": args.as_posix()}
+                    script = stub + decide.replace("${{ github.event_name }}", event)
+                    subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
+                    values = dict(line.split("=", 1) for line in output.read_text().splitlines())
+                    self.assertEqual(values["boards"], "false" if event != "push" and status == 0 else "true")
+                    if event == "push":
+                        self.assertFalse(args.exists())
+                    else:
+                        self.assertTrue(args.read_text().startswith("diff --quiet base...HEAD -- "))
 
     def test_unrelated_pr_skips_web_and_build_passes(self):
         condition = re.search(r"^    if: (.+)$", job("web"), re.M).group(1)

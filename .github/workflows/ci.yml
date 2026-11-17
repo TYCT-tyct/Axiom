@@ -46,7 +46,7 @@ env:
 
 jobs:
   # Light PRs and trains run md-checks and scope, including script tests; trains also scan secrets.
-  # Without a base (main pushes and release dispatches), all checks run. Other PRs select web by build inputs, and trains
+  # Without a base (main pushes and release dispatches), all checks run. PRs select web and boards by inputs, and trains
   # run the vitals only when the pages' own inputs changed. Go tests, e2e, benchmark comparison and deployment checks
   # run on trains or main alone.
   changes:
@@ -58,6 +58,7 @@ jobs:
       bench: ${{ steps.decide.outputs.bench }}
       web: ${{ steps.decide.outputs.web }}
       vitals: ${{ steps.decide.outputs.vitals }}
+      boards: ${{ steps.decide.outputs.boards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
@@ -66,8 +67,15 @@ jobs:
       # never hides a regression. Without a base (main) everything runs.
       - id: decide
         run: |
-          light=false; deploy=true; bench=true; web=true; vitals=true
+          light=false; deploy=true; bench=true; web=true; vitals=true; boards=true
           if [ -n "$BASE" ]; then
+            status=0
+            git diff --quiet "$BASE...HEAD" -- 'web/scripts/boards*' 'web/packages/boards/**' 'web/e2e/boards*.spec.ts' 'web/e2e/design/**' 'web/playwright.config.ts' 'web/playwright.boards.config.ts' '.github/workflows/ci.yml' || status=$?
+            if [ "$status" -eq 0 ]; then
+              boards=false
+            elif [ "$status" -ne 1 ]; then
+              echo "board input diff exited $status; running boards"
+            fi
             if python3 scripts/ci_skips.py light-only "$BASE"; then
               light=true; deploy=false; bench=false; web=false; vitals=false
             else
@@ -105,7 +113,7 @@ jobs:
               web=false
             fi
           fi
-          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" >> "$GITHUB_OUTPUT"
+          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\nboards=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" "$boards" >> "$GITHUB_OUTPUT"
 
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
@@ -281,6 +289,27 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
+  # Mechanical design proofs are independent of product e2e. Run on relevant PRs and trains, and always on main.
+  boards:
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup
+      - name: Compare converted boards in their network namespace
+        run: bash scripts/ci/web-container.sh pnpm --dir web e2e --config=playwright.boards.config.ts
+      - if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
+        with:
+          name: boards-test-results
+          path: web/test-results/
+          if-no-files-found: ignore
+          retention-days: 2
+      - if: always()
+        run: bash scripts/ci/web-container.sh cleanup
+
   # One browser against a real node with PostgreSQL and Valkey (#321). The databases are started on the host (withcluster,
   # which needs Docker); the node and the browser run in the web container, so Chromium keeps its own network namespace
   # (#363) and reaches the databases through the host gateway. Like go-test and e2e, not on a pull request; a failure
@@ -425,11 +454,11 @@ jobs:
 
   # The required check, and the only name the ruleset knows. It runs even when a part failed, because a skipped required
   # check counts as passed on GitHub. Light builds may skip parts; PRs skip go-test/e2e/bench/deploy/signing and
-  # select web and the vitals by path. Intentional skips still produce this required check.
+  # select web, boards and the vitals by path. Intentional skips still produce this required check.
   build:
     # Diagnostics publish a failed build: dispatch on main or a throwaway commit, never a PR head intended to merge.
     name: build
-    needs: [changes, static, go-test, web, e2e, vitals, journey, bench, deploy, signing]
+    needs: [changes, static, go-test, web, e2e, boards, vitals, journey, bench, deploy, signing]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
@@ -447,6 +476,8 @@ jobs:
         run: test '${{ needs.e2e.result }}' = success
       - if: needs.changes.outputs.vitals == 'true'
         run: test '${{ needs.vitals.result }}' = success
+      - if: needs.changes.outputs.boards == 'true' && !inputs.gate_stress
+        run: test '${{ needs.boards.result }}' = success
       - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: test '${{ needs.journey.result }}' = success
       - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
