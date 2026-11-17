@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "@playwright/test";
-import { readBoard } from "../../packages/boards/source.ts";
+import { boardProps, readBoard } from "../../packages/boards/source.ts";
 import { boardFonts, type FontFace, fontRoute, usedFaces } from "./fonts.ts";
 import { type Stage, stage } from "./stage.ts";
 
@@ -37,12 +37,11 @@ function parts(html: string) {
   const helmet = html.match(/<helmet>([\s\S]*?)<\/helmet>/)?.[1];
   const template = html.match(/<\/helmet>([\s\S]*)<\/x-dc>/)?.[1];
   const script = html.match(/data-dc-script[^>]*>([\s\S]*?)<\/script>/)?.[1];
-  const declared = html.match(/data-props='([^']*)'/)?.[1];
   if (helmet === undefined || template === undefined || script === undefined) {
     throw new Error("not a board: no <helmet>, template or data-dc-script");
   }
   const defaults: Record<string, unknown> = {};
-  for (const [key, prop] of Object.entries(JSON.parse(declared ?? "{}") as Record<string, { default?: unknown }>)) {
+  for (const [key, prop] of Object.entries(boardProps(html))) {
     if (prop && typeof prop === "object" && "default" in prop) {
       defaults[key] = prop.default;
     }

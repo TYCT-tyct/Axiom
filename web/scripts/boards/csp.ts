@@ -1,5 +1,13 @@
 import ts from "typescript";
 
+export function exportComponent(source: string): string {
+  const tree = ts.createSourceFile("board.js", source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const component = tree.statements.find((node) => ts.isClassDeclaration(node) && node.name?.text === "Component");
+  if (!component) throw new Error("board has no top-level Component");
+  const at = component.getStart(tree);
+  return `${source.slice(0, at)}export ${source.slice(at)}`;
+}
+
 function assignment(node: ts.BinaryExpression, tree: ts.SourceFile): string | undefined {
   if (!ts.isPropertyAccessExpression(node.left)) return;
   const { left, right, operatorToken } = node;

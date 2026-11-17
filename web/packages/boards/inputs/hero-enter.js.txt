@@ -1,0 +1,231 @@
+(() => {
+  // Entrance for the Axiom hero. Each visit plays one of two, picked at random:
+  //  tide    the sea rises from the bottom behind a crest of ~, the text floats up in reading order,
+  //          and the sharks swim in from both sides one after another.
+  //  decode  the sea connects cell by cell; the title decodes cell by cell (faint dot while waiting, cycling
+  //          glyph when close, cyan glyph when next, then the real character, never two in one cell) and a
+  //          cursor blinks once at the end; the rest types in reading order and the mono line really decodes.
+  // Everything is in place in about a second. Clicking the logo plays it again.
+  const EXPO = 'cubic-bezier(.16,1,.3,1)';
+  const GLYPHS = ':;t%SX8#@/\\<>=+*', KEEP = ' ，。';
+  const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+  const BAND = 0.09, TITLE_AT = (i) => 140 + i * 55, END = { decode: 1560, tide: 1140 };
+  const FONTS = [['600 80px "AX Serif"', '一个接入所有模型，'], ['italic 400 80px "AX Serif Latin"', 'key'], ['500 16px "Axiom Mono"', 'claude:;t%SX8#@'],
+    ['600 16px "Geist Mono"', '~-:;t%SX8#@'], ['500 16px "Axiom Sans"', 'APIkey'], ['400 16px "Axiom CJK"', '每条线路实测']];
+  const hash = (a, b) => { let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const glyph = (i, tick) => GLYPHS[Math.floor(hash(i, tick) * GLYPHS.length)];
+  const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  class Enter {
+    constructor(root, eng, opts = {}) {
+      this.root = root; this.eng = eng; this.manual = !!opts.manual;
+      this.pick = opts.pick || (() => (Math.random() < 0.5 ? 'tide' : 'decode'));
+      // scope: the part of the root that is the hero (a page that holds more than the hero passes it)
+      const sc = this.sc = opts.scope || root;
+      this.cover = root.querySelector('canvas.cover'); this.scr = root.querySelector('canvas.scramble');
+      this.h1 = sc.querySelector('h1'); this.chars = [...sc.querySelectorAll('h1 .ch')];
+      this.slots = [...sc.querySelectorAll('[data-dx]')].map((el, n) => ({ el, n, text: el.textContent, chars: [...el.textContent], at: +el.dataset.at, per: +el.dataset.per, mode: el.dataset.dx, out: '' }));
+      this.anims = []; this.raf = 0; this.v = null; this.ms = 0; this.dead = false; this.started = false; this.key = ''; this.done = -1;
+      root.dataset.enter = 'wait';
+      this.brand = sc.querySelector('.brand');
+      this.onBrand = (e) => { e.preventDefault(); if (this.started) this.play(); };
+      if (this.brand) this.brand.addEventListener('click', this.onBrand);
+      if (this.manual) return;
+      // start when the hero is first seen, so the entrance is never spent off screen
+      let answered = false;
+      this.io = new IntersectionObserver((es) => { answered = true; if (es.some((e) => e.isIntersecting)) { this.io.disconnect(); this.ready(); } }, { threshold: 0.3 });
+      this.io.observe(root);
+      this.fallback = setTimeout(() => { if (!answered) { this.io.disconnect(); this.ready(); } }, 2000);
+    }
+    ready() {
+      if (this.dead || this.started) return;
+      this.started = true;
+      const fl = document.fonts, loads = fl ? FONTS.map(([f, t]) => fl.load(f, t).catch(() => null)) : [];
+      Promise.race([Promise.all(loads), new Promise((r) => setTimeout(r, 1500))]).then(() => requestAnimationFrame(() => this.play()));
+    }
+    play(v) {
+      if (this.dead) return;
+      this.stop(); this.started = true;
+      v = this.v = v || this.pick();
+      const eng = this.eng, life = eng.world.life;
+      this.root.dataset.enter = v;
+      this.measure();
+      // the whale keeps its first visit for about six seconds after the entrance, never during it
+      if (life && life.st === 'hidden') life.t = Math.min(life.t, 0);
+      if (v === 'tide') { eng.hold(true); this.offstage(); eng.still(); this.rise(); }
+      else { eng.hold(false); }
+      this.frame(0);
+      if (this.manual) return;
+      const t0 = performance.now();
+      const loop = (now) => { const ms = now - t0; if (ms >= END[v]) { this.finish(); return; } this.frame(ms); this.raf = requestAnimationFrame(loop); };
+      this.raf = requestAnimationFrame(loop);
+    }
+    seek(ms) { // for tests: show the entrance at a given time
+      for (const a of this.anims) { a.pause(); a.currentTime = ms; }
+      if (ms >= END[this.v]) this.finish(); else this.frame(ms);
+    }
+    frame(ms) {
+      this.ms = ms;
+      const r = this.root;
+      if (r.offsetWidth !== this.rw || r.offsetHeight !== this.rh) this.measure();
+      if (this.v === 'tide') {
+        const p = ms < 120 ? 0 : 1 - Math.pow(1 - Math.min(1, (ms - 120) / 900), 3);
+        this.paintCover('rows', p, ms);
+        if (ms >= 300 && this.eng.held) this.eng.hold(false);
+        return;
+      }
+      this.paintCover('random', 1 - Math.pow(1 - Math.min(1, ms / 760), 2), ms);
+      for (const s of this.slots) this.slot(s, ms);
+      this.title(ms);
+    }
+    finish() {
+      cancelAnimationFrame(this.raf); this.raf = 0;
+      this.restore();
+      this.root.dataset.enter = 'done';
+      if (this.eng.held) this.eng.hold(false);
+    }
+    stop() { cancelAnimationFrame(this.raf); this.raf = 0; this.restore(); }
+    restore() {
+      for (const s of this.slots) if (s.out) { s.el.textContent = s.text; s.out = ''; }
+      for (const c of this.chars) c.style.color = '';
+      for (const a of this.anims) a.cancel();
+      this.anims = []; this.key = ''; this.done = -1;
+      if (this.cover) this.canvas(this.cover, 2);
+      if (this.scr) this.canvas(this.scr, 2);
+    }
+    destroy() {
+      this.dead = true; this.stop(); clearTimeout(this.fallback);
+      if (this.io) this.io.disconnect();
+      if (this.brand) this.brand.removeEventListener('click', this.onBrand);
+    }
+    canvas(el, cap) {
+      const w = el.clientWidth, h = el.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, cap), W = Math.round(w * dpr), H = Math.round(h * dpr);
+      if (el.width !== W || el.height !== H) { el.width = W; el.height = H; }
+      const x = el.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, w, h);
+      return x;
+    }
+    measure() {
+      const r = this.root, box = r.getBoundingClientRect(), k = r.offsetWidth ? box.width / r.offsetWidth : 1;
+      this.rw = r.offsetWidth; this.rh = r.offsetHeight; this.key = '';
+      this.fs = parseFloat(getComputedStyle(this.h1).fontSize) || 80;
+      this.cells = this.chars.map((n) => { const b = n.getBoundingClientRect(); return { x: (b.left - box.left + b.width / 2) / k, y: (b.top - box.top + b.height / 2) / k, r: (b.right - box.left) / k }; });
+    }
+    offstage() {
+      // The sharks are caught swimming in from both sides, alternating, the biggest furthest in and the rest a
+      // little further out each, so they arrive one after another. They hold their line for a few seconds, then
+      // go back to the usual steering.
+      const w = this.eng.world, R = this.eng.renderer, W = w.width, H = w.height;
+      const list = w.sharks.filter((s) => !s.scripted && !s.whaleLike && !s.hidden).sort((a, b) => b.length - a.length);
+      const lanes = [0.25, 0.74, 0.36, 0.86];
+      list.forEach((sh, i) => {
+        const side = i % 2 ? 1 : -1, L = sh.length, seg = L / 19, inside = L * (0.34 - 0.12 * i);
+        const hx = side < 0 ? inside : W - inside, hy = H * lanes[i % 4];
+        const h = (side < 0 ? 0 : Math.PI) + (side < 0 ? 1 : -1) * (hy < H / 2 ? -0.04 : 0.04); // a touch away from the text
+        for (let k = 0; k < 20; k++) { sh.nodes[k * 2] = hx - Math.cos(h) * seg * k; sh.nodes[k * 2 + 1] = hy - Math.sin(h) * seg * k; }
+        sh.heading = h; sh.turn = 0; sh.speed = 1.9 * (30 + L * 0.04); sh.target = null; sh.retargetAt = w.time + 3.2;
+        sh.enter = 2.8; sh.enterH = h;
+      });
+      // forget the wake the sharks left where they were
+      R.energy.fill(0); R.energyTmp.fill(0); R.heat.fill(0);
+    }
+    rise() {
+      const r = this.sc;
+      const add = (els, big, delay) => els.forEach((el) => {
+        if (!el) return;
+        this.anims.push(el.animate([{ color: 'transparent', transform: `translateY(${big ? 14 : 8}px)` }, { transform: 'none' }], { duration: big ? 900 : 700, delay, easing: EXPO, fill: 'backwards' }));
+      });
+      add([...r.querySelectorAll('.bar .nav > a')], false, 0);
+      add([this.h1], true, 120);
+      add([r.querySelector('.lede')], false, 240);
+      add([...r.querySelectorAll('.cta > a')], false, 320);
+      add([r.querySelector('.fam')], false, 400);
+    }
+    paintCover(pattern, p, ms) {
+      // Cells clear across a narrow band behind the front (4 alpha steps). Inside the band a cell briefly carries
+      // a character: a ~ crest on the rising tide, a cycling glyph when the sea connects.
+      const el = this.cover; if (!el) return;
+      const x = this.canvas(el, 2); if (p >= 1) return;
+      const R = this.eng.renderer, vs = this.eng.vs, cw = R.cw / vs, ch = R.ch / vs, cols = R.cols, rows = R.rows, key = pattern + cols + 'x' + rows;
+      const k = el.width / (el.clientWidth || 1), gx = (c) => Math.round(c * cw * k), gy = (q) => Math.round(q * ch * k);
+      if (this.thrKey !== key) {
+        this.thrKey = key; this.thr = new Float32Array(cols * rows);
+        for (let q = 0; q < rows; q++) for (let c = 0; c < cols; c++) {
+          const b = BAYER[(q % 4) * 4 + (c % 4)] / 16;
+          this.thr[q * cols + c] = pattern === 'rows' ? (1 - q / rows) * (1 - BAND - 0.2) + b * 0.2 : hash(c, q) * (1 - BAND);
+        }
+      }
+      const levels = [[], [], [], []], crest = [];
+      for (let q = 0, i = 0; q < rows; q++) for (let c = 0; c < cols; c++, i++) {
+        const a = (this.thr[i] + BAND - p) / BAND;
+        if (a <= 0) continue;
+        levels[a >= 1 ? 3 : Math.min(2, Math.floor(a * 3))].push(c, q);
+        if (a < 1 && hash(c + 7, q) < (pattern === 'rows' ? 0.5 : 0.22)) crest.push(c, q, a);
+      }
+      // whole device pixels, so neighbouring cells neither overlap nor leave hairlines
+      x.setTransform(1, 0, 0, 1, 0, 0); x.fillStyle = R.bg;
+      levels.forEach((cells, l) => {
+        x.globalAlpha = (l + 1) / 4;
+        for (let j = 0; j < cells.length; j += 2) { const c = cells[j], q = cells[j + 1], x0 = gx(c), y0 = gy(q); x.fillRect(x0, y0, gx(c + 1) - x0, gy(q + 1) - y0); }
+      });
+      x.setTransform(k, 0, 0, k, 0, 0);
+      // drawn before the light-mode inversion, like the sea itself
+      x.fillStyle = 'rgb(230,238,255)'; x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.font = `600 ${Math.round(ch * 0.74)}px ${R.font}`;
+      const tick = Math.floor(ms / 60);
+      for (let j = 0; j < crest.length; j += 3) {
+        const c = crest[j], q = crest[j + 1], a = crest[j + 2];
+        x.globalAlpha = (pattern === 'rows' ? 0.55 : 0.36) * Math.sin(Math.PI * a);
+        const g = pattern === 'rows' ? (hash(c, q + tick) < 0.75 ? '~' : '-') : glyph(c * 31 + q, tick);
+        x.fillText(g, c * cw + cw / 2, q * ch + ch / 2);
+      }
+      x.globalAlpha = 1;
+    }
+    slot(s, ms) {
+      // r: each character arrives with a cyan pen tip that hands over to the next one
+      // s: mono text, a short run of cycling glyphs travels ahead of the resolved text (same width, nothing shifts)
+      const { text, chars, at, per, mode } = s, len = chars.length;
+      let A = text, H = '', B = '', C = '';
+      if (ms < at) { A = ''; C = text; }
+      else {
+        const k = Math.floor((ms - at) / per);
+        if (mode === 'r') {
+          if (k === 0) { A = ''; C = text; }
+          else if (k <= len) { A = chars.slice(0, k - 1).join(''); H = chars[k - 1]; C = chars.slice(k).join(''); }
+        } else if (k < len) {
+          const tick = Math.floor(ms / 50), g = (c, i) => (KEEP.includes(c) ? c : glyph(i + 97 * s.n, tick));
+          A = chars.slice(0, k).join(''); H = g(chars[k], k); B = chars.slice(k + 1, k + 4).map((c, j) => g(c, k + 1 + j)).join(''); C = chars.slice(k + 4).join('');
+        }
+      }
+      const out = A === text ? '' : A + '|' + H + '|' + B + '|' + C;
+      if (out === s.out) return;
+      s.out = out;
+      if (!out) { s.el.textContent = text; return; }
+      s.el.innerHTML = `${esc(A)}<span style="color:var(--ring)">${esc(H)}</span><span style="color:var(--text2)">${esc(B)}</span><span style="color:transparent">${esc(C)}</span>`;
+    }
+    title(ms) {
+      const cells = this.cells; if (!cells || !cells.length || !this.scr) return;
+      let done = 0; for (let i = 0; i < cells.length; i++) if (ms >= TITLE_AT(i)) done++;
+      if (done !== this.done) { this.done = done; this.chars.forEach((c, i) => (c.style.color = i < done ? '' : 'transparent')); }
+      const after = ms - TITLE_AT(cells.length - 1), cursor = after >= 0 && (after < 300 || (after >= 450 && after < 750));
+      const tick = Math.floor(ms / 50), key = tick + ':' + done + ':' + cursor + ':' + this.rw;
+      if (key === this.key) return;
+      this.key = key;
+      const x = this.canvas(this.scr, 2), fs = this.fs, cs = getComputedStyle(this.root), ring = cs.getPropertyValue('--ring').trim(), dim = cs.getPropertyValue('--text2').trim();
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      x.font = `500 ${Math.round(fs * 0.72)}px "Axiom Mono", ui-monospace, monospace`;
+      cells.forEach((c, i) => {
+        const d = TITLE_AT(i) - ms; if (d <= 0) return;
+        if (d <= 55) { x.globalAlpha = 1; x.fillStyle = ring; x.fillText(glyph(i, tick), c.x, c.y); }
+        else if (d <= 220) { x.globalAlpha = 0.85; x.fillStyle = dim; x.fillText(glyph(i, tick), c.x, c.y); }
+        else { x.globalAlpha = 0.5; x.fillStyle = dim; x.beginPath(); x.arc(c.x, c.y, Math.max(1.5, fs * 0.035), 0, Math.PI * 2); x.fill(); }
+      });
+      if (cursor) {
+        const last = cells[cells.length - 1];
+        x.globalAlpha = 1; x.fillStyle = ring;
+        x.fillRect(Math.round(last.r + fs * 0.06), Math.round(last.y - fs * 0.42), Math.max(2, Math.round(fs * 0.05)), Math.round(fs * 0.84));
+      }
+      x.globalAlpha = 1;
+    }
+  }
+  window.AxiomEnter = Enter;
+})();

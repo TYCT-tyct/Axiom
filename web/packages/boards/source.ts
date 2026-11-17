@@ -3,6 +3,11 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 const sections = ["head", "template", "logic"];
 const sectionFile = (file: string, section: string) => file.replace(/\.dc\.html$/, `.${section}.html`);
 
+export function boardProps(html: string): Record<string, { default?: unknown; options?: unknown[] }> {
+  const value = html.match(/data-props=(["'])([\s\S]*?)\1/)?.[2] ?? "{}";
+  return JSON.parse(value.replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&amp;", "&"));
+}
+
 // The original AxApp exceeds the repository's 1 MB artifact limit. Text sections retain every byte and stay diffable.
 export function readBoard(file: string): string {
   if (existsSync(file)) return readFileSync(file, "utf8");

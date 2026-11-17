@@ -1,0 +1,316 @@
+(() => {
+  // Axiom header preferences: language and appearance.
+  //  Language: a globe button showing the current language in its own name. It opens a panel with a search
+  //  field; typing an endonym, the name in the current language, the English name or a code (ja, zh-tw) filters
+  //  the list. Choosing one rewrites the page in place with the decode pen.
+  //  Appearance: one icon button that shows the appearance a click will give. The page follows the system until
+  //  it is clicked; clicking back to the system's appearance follows the system again. The change is drawn in
+  //  characters: each cell of the sea climbs the ASCII ramp into the new ground behind a noisy waterline.
+  const LANGS = ['zh-CN', 'zh-TW', 'en', 'ja', 'ko', 'es', 'de', 'fr', 'pt', 'ru'];
+  const ENDO = { 'zh-CN': '简体中文', 'zh-TW': '繁體中文', en: 'English', ja: '日本語', ko: '한국어', es: 'Español', de: 'Deutsch', fr: 'Français', pt: 'Português', ru: 'Русский' };
+  const ALIAS = {
+    'zh-CN': '中文 汉语 简体 普通话 chinese simplified zh zh-cn zh-hans cn', 'zh-TW': '繁体 繁體 台湾 台灣 香港 chinese traditional zh-tw zh-hant tw hk',
+    en: '英语 英文 english en', ja: '日语 日文 japanese ja jp', ko: '韩语 韩文 朝鲜语 korean ko kr', es: '西班牙语 spanish espanol es',
+    de: '德语 german de', fr: '法语 french francais fr', pt: '葡萄牙语 巴西 portuguese portugues pt br', ru: '俄语 russian ru',
+  };
+  const COPY = {
+    'zh-CN': { models: '模型', pricing: '价格', docs: '文档', login: '登录', signup: '注册', h1: '一个key，接入所有模型', lede: '每条线路实测，按实际服务的线路计费。', cta1: '注册，获取API key', cta2: '查看文档' },
+    'zh-TW': { models: '模型', pricing: '價格', docs: '文件', login: '登入', signup: '註冊', h1: '一個key，接入所有模型', lede: '每條線路實測，按實際服務的線路計費。', cta1: '註冊，取得API key', cta2: '查看文件' },
+    en: { models: 'Models', pricing: 'Pricing', docs: 'Docs', login: 'Log in', signup: 'Sign up', h1: 'One key for every model', lede: 'Every route is tested. You pay for the route that served you.', cta1: 'Sign up and get an API key', cta2: 'Read the docs' },
+    ja: { models: 'モデル', pricing: '料金', docs: 'ドキュメント', login: 'ログイン', signup: '登録', h1: '1つのキーで、すべてのモデルへ', lede: 'すべての経路を実測し、実際に使われた経路で課金します。', cta1: '登録してAPIキーを取得', cta2: 'ドキュメントを見る' },
+    ko: { models: '모델', pricing: '요금', docs: '문서', login: '로그인', signup: '가입', h1: '키 하나로 모든 모델에', lede: '모든 경로를 실측하고, 실제로 처리한 경로 기준으로 과금합니다.', cta1: '가입하고 API 키 받기', cta2: '문서 보기' },
+    es: { models: 'Modelos', pricing: 'Precios', docs: 'Docs', login: 'Iniciar sesión', signup: 'Registrarse', h1: 'Una clave para todos los modelos', lede: 'Probamos cada ruta. Pagas por la ruta que atendió tu solicitud.', cta1: 'Regístrate y obtén una API key', cta2: 'Ver la documentación' },
+    de: { models: 'Modelle', pricing: 'Preise', docs: 'Doku', login: 'Anmelden', signup: 'Registrieren', h1: 'Ein Schlüssel für alle Modelle', lede: 'Jede Route wird gemessen. Du zahlst für die Route, die deine Anfrage bedient hat.', cta1: 'Registrieren und API-Key erhalten', cta2: 'Doku ansehen' },
+    fr: { models: 'Modèles', pricing: 'Tarifs', docs: 'Docs', login: 'Connexion', signup: 'S’inscrire', h1: 'Une clé pour tous les modèles', lede: 'Chaque route est testée. Vous payez la route qui a servi votre requête.', cta1: 'S’inscrire et obtenir une clé API', cta2: 'Voir la documentation' },
+    pt: { models: 'Modelos', pricing: 'Preços', docs: 'Docs', login: 'Entrar', signup: 'Cadastrar', h1: 'Uma chave para todos os modelos', lede: 'Cada rota é testada. Você paga pela rota que atendeu sua requisição.', cta1: 'Cadastre-se e receba uma chave de API', cta2: 'Ver a documentação' },
+    ru: { models: 'Модели', pricing: 'Цены', docs: 'Документация', login: 'Войти', signup: 'Регистрация', h1: 'Один ключ для всех моделей', lede: 'Каждый маршрут проверен. Вы платите за маршрут, который обработал запрос.', cta1: 'Зарегистрироваться и получить API-ключ', cta2: 'Документация' },
+  };
+  const UI = {
+    'zh-CN': { search: '搜索语言', none: '没有找到「%s」', toDark: '切换到深色', toLight: '切换到浅色', sys: '跟随系统', title: '选择语言', close: '关闭' },
+    'zh-TW': { search: '搜尋語言', none: '找不到「%s」', toDark: '切換到深色', toLight: '切換到淺色', sys: '跟隨系統', title: '選擇語言', close: '關閉' },
+    en: { search: 'Search languages', none: 'No language matches “%s”', toDark: 'Switch to dark', toLight: 'Switch to light', sys: 'Following system', title: 'Choose a language', close: 'Close' },
+    ja: { search: '言語を検索', none: '「%s」に一致する言語はありません', toDark: 'ダークに切り替え', toLight: 'ライトに切り替え', sys: 'システムに合わせる', title: '言語を選択', close: '閉じる' },
+    ko: { search: '언어 검색', none: '“%s”와 일치하는 언어가 없습니다', toDark: '다크 모드로 전환', toLight: '라이트 모드로 전환', sys: '시스템 설정 따름', title: '언어 선택', close: '닫기' },
+    es: { search: 'Buscar idioma', none: 'Ningún idioma coincide con “%s”', toDark: 'Cambiar a oscuro', toLight: 'Cambiar a claro', sys: 'Según el sistema', title: 'Elige un idioma', close: 'Cerrar' },
+    de: { search: 'Sprache suchen', none: 'Keine Sprache passt zu „%s“', toDark: 'Dunkel', toLight: 'Hell', sys: 'Wie System', title: 'Sprache wählen', close: 'Schließen' },
+    fr: { search: 'Rechercher une langue', none: 'Aucune langue ne correspond à « %s »', toDark: 'Passer en sombre', toLight: 'Passer en clair', sys: 'Selon le système', title: 'Choisir une langue', close: 'Fermer' },
+    pt: { search: 'Buscar idioma', none: 'Nenhum idioma corresponde a “%s”', toDark: 'Mudar para escuro', toLight: 'Mudar para claro', sys: 'Igual ao sistema', title: 'Escolha um idioma', close: 'Fechar' },
+    ru: { search: 'Найти язык', none: 'Нет языка «%s»', toDark: 'Тёмная тема', toLight: 'Светлая тема', sys: 'Как в системе', title: 'Выберите язык', close: 'Закрыть' },
+  };
+  const GLYPHS = ':;t%SX8#@/\\<>=+*', RAMP = ' .:-=+*#%@';
+  const hash = (a, b) => { let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const norm = (s) => String(s).toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '');
+  const io = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+  const store = { get(k) { try { return localStorage.getItem(k); } catch (_) { return null; } }, set(k, v) { try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (_) {} } };
+  const dn = (inLang, code) => { try { return new Intl.DisplayNames([inLang], { type: 'language' }).of(code) || ''; } catch (_) { return ''; } };
+  // no reduced-motion variant: the switches always play in full, whatever the system setting (see the 减少动态 note)
+
+  class Prefs {
+    constructor(root, eng, opts = {}) {
+      this.root = root; this.eng = eng; this.system = opts.system || 'light'; this.dead = false; this.manual = !!opts.manual; this.opts = opts;
+      // each text's own markup in the page's first language, so switching back restores it exactly (italics, phrases)
+      this.orig = new Map([...root.querySelectorAll('[data-i18n]')].map((el) => [el, { html: el.innerHTML, text: el.textContent }]));
+      this.lang = LANGS.includes(store.get('ax-lang')) ? store.get('ax-lang') : 'zh-CN';
+      this.override = store.get('ax-theme'); if (this.override !== 'light' && this.override !== 'dark') this.override = null;
+      this.btn = root.querySelector('.lang'); this.tbtn = root.querySelector('.theme'); this.panel = root.querySelector('.lp'); this.bd = root.querySelector('.lp-bd');
+      this.input = root.querySelector('.lp input'); this.rows = [...root.querySelectorAll('.lp li')]; this.empty = root.querySelector('.lp-e'); this.toast = root.querySelector('.tt');
+      this.thx = root.querySelector('canvas.thx'); this.pens = []; this.raf = 0;
+      this.rows.forEach((li) => { const c = li.dataset.code; li.dataset.keys = norm([ENDO[c], dn('en', c), dn('zh-CN', c), c, ALIAS[c]].join(' ')).replace(/[()（）]/g, ' ').replace(/\s+/g, ' '); });
+      this.on = [];
+      const listen = (el, ev, fn, o) => { el.addEventListener(ev, fn, o); this.on.push([el, ev, fn, o]); };
+      listen(this.btn, 'click', (e) => { e.preventDefault(); this.panel.dataset.open !== undefined ? this.close() : this.open(); });
+      listen(this.tbtn, 'click', (e) => { e.preventDefault(); this.toggleTheme(); });
+      listen(this.input, 'input', () => this.filter());
+      listen(this.input, 'keydown', (e) => this.key(e));
+      listen(this.panel, 'click', (e) => { const li = e.target.closest('li'); if (li && !li.hidden) this.choose(li.dataset.code); if (e.target.closest('.lp-x')) this.close(true); });
+      listen(this.panel, 'pointermove', (e) => { const li = e.target.closest('li'); if (li && !li.hidden) this.activate(li); });
+      listen(root, 'pointerdown', (e) => { if (this.panel.dataset.open !== undefined && !this.panel.contains(e.target) && !this.btn.contains(e.target)) this.close(); });
+      listen(this.bd, 'click', () => this.close(true));
+      this.applyLang(this.lang, false); this.applyTheme(this.effective(), false);
+    }
+    destroy() { this.dead = true; this.ltok = null; cancelAnimationFrame(this.raf); cancelAnimationFrame(this.traf); for (const [el, ev, fn, o] of this.on) el.removeEventListener(ev, fn, o); }
+    effective() { return this.override || this.system; }
+    // ---------- language ----------
+    open() {
+      const p = this.panel, r = this.root, rb = r.getBoundingClientRect(), bb = this.btn.getBoundingClientRect(), k = r.offsetWidth ? rb.width / r.offsetWidth : 1;
+      // on a wide screen the panel hangs under the button, its right edge on the button's; on a phone it is a sheet
+      p.style.right = r.offsetWidth >= 768 ? Math.max(12, (rb.right - bb.right) / k) + 'px' : '';
+      p.dataset.open = ''; this.bd.dataset.open = ''; this.btn.setAttribute('aria-expanded', 'true');
+      this.input.value = ''; this.filter(); this.activate(this.rows.find((r) => r.dataset.code === this.lang));
+      try { this.input.focus({ preventScroll: true }); } catch (_) {}
+    }
+    close(refocus) { delete this.panel.dataset.open; delete this.bd.dataset.open; this.btn.setAttribute('aria-expanded', 'false'); if (refocus) try { this.btn.focus({ preventScroll: true }); } catch (_) {} }
+    filter() {
+      // Latin letters match the start of a word (es: Español, not Chinese); Chinese, Japanese and the like match anywhere
+      const q = norm(this.input.value.trim()), latin = /^[a-z0-9 -]+$/.test(q); let shown = [];
+      this.rows.forEach((li, i) => {
+        const words = li.dataset.keys.split(' '), hit = !q || (latin ? words.some((w) => w.startsWith(q)) || li.dataset.keys.startsWith(q) : li.dataset.keys.includes(q));
+        li.hidden = !hit; if (hit) shown.push([li, !q ? 0 : words[0].startsWith(q) ? 0 : 1, i]);
+      });
+      // the language's own name matching comes first, then the list's own order
+      shown.sort((a, b) => a[1] - b[1] || a[2] - b[2]).forEach(([li]) => li.parentNode.appendChild(li));
+      this.rows.filter((r) => r.hidden).forEach((li) => li.parentNode.appendChild(li));
+      this.empty.textContent = shown.length ? '' : UI[this.lang].none.replace('%s', this.input.value.trim());
+      this.activate(shown.length ? (shown.find(([li]) => li.dataset.code === this.lang) && !q ? shown.find(([li]) => li.dataset.code === this.lang)[0] : shown[0][0]) : null);
+    }
+    activate(li) { for (const r of this.rows) r.classList.toggle('act', r === li); this.act = li || null; if (li) { this.warm(li.dataset.code); this.input.setAttribute('aria-activedescendant', li.id); li.scrollIntoView({ block: 'nearest' }); } else this.input.removeAttribute('aria-activedescendant'); }
+    key(e) {
+      const vis = [...this.panel.querySelectorAll('li:not([hidden])')], i = vis.indexOf(this.act);
+      if (e.key === 'ArrowDown') { e.preventDefault(); this.activate(vis[Math.min(vis.length - 1, i + 1)] || vis[0]); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this.activate(vis[Math.max(0, i - 1)] || vis[0]); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (this.act) this.choose(this.act.dataset.code); }
+      else if (e.key === 'Escape') { e.preventDefault(); this.close(true); }
+    }
+    // origin: where the ring starts (another control on the page that chose it); the globe button by default
+    choose(code, origin) { this.close(!origin); if (code === this.lang) return; this.lang = code; store.set('ax-lang', code); this.origin = origin || null; this.applyLang(code, true); }
+    // a language's faces start loading as soon as its row is pointed at, so the decode never lands on a fallback face
+    warm(code) {
+      this.warmed = this.warmed || {}; if (this.warmed[code]) return this.warmed[code];
+      if (!document.fonts || !COPY[code]) return (this.warmed[code] = Promise.resolve());
+      const text = Object.values(COPY[code]).join('') + ENDO[code], fams = ["'AX Serif','Axiom CJK',serif", "'Axiom Sans','Axiom CJK',sans-serif"];
+      return (this.warmed[code] = Promise.all(fams.flatMap((f) => ['400', '600'].map((w) => document.fonts.load(`${w} 32px ${f}`, text).catch(() => null)))));
+    }
+    applyLang(code, animate) {
+      const r = this.root, ui = UI[code], copy = COPY[code], from = this.shown || code; this.shown = code;
+      r.setAttribute('lang', code); if (this.opts.onLang) this.opts.onLang(code); this.input.placeholder = ui.search; this.input.setAttribute('aria-label', ui.search);
+      this.panel.setAttribute('aria-label', ui.title); const h = this.panel.querySelector('.lp-h span'); if (h) h.textContent = ui.title;
+      const x = this.panel.querySelector('.lp-x'); if (x) x.setAttribute('aria-label', ui.close);
+      for (const li of this.rows) { const c = li.dataset.code, sub = li.querySelector('.sub'); sub.textContent = c === code ? '' : dn(code, c); li.setAttribute('aria-selected', String(c === code)); }
+      this.btn.setAttribute('aria-label', ui.title);
+      this.themeLabel();
+      this.settle();
+      let items = [...r.querySelectorAll('[data-i18n]')].map((el) => ({ el, to: el.dataset.i18n === 'lang' ? ENDO[code] : copy[el.dataset.i18n] }));
+      if (!animate) { for (const it of items) this.put(it.el, it.to); return; }
+      // texts out of sight (another page of the same root) change at once; the rest change with the wave
+      const still = this.opts.still; if (still) { for (const it of items) if (still(it.el)) this.put(it.el, it.to); items = items.filter((it) => !still(it.el)); }
+      // the old headline keeps its own face until the wave reaches it
+      for (const h1 of r.querySelectorAll('h1')) h1.setAttribute('lang', from);
+      const tok = (this.ltok = {}), go = () => { if (!this.dead && this.ltok === tok) this.sonar(items); };
+      Promise.race([this.warm(code), new Promise((res) => setTimeout(res, 400))]).then(go);
+    }
+    geo() { const box = this.root.getBoundingClientRect(); return { box, k: this.root.offsetWidth ? box.width / this.root.offsetWidth : 1 }; }
+    // text is set one span a character while it changes, so each character has a cell the decode can stand in
+    chars(el, text) { el.innerHTML = [...text].map((c) => `<span class="ch">${esc(c)}</span>`).join(''); }
+    // a text at rest: its original markup when it is back in the first language, headlines one span a character
+    put(el, text) {
+      const o = this.orig.get(el); if (o && o.text === text) { if (el.innerHTML !== o.html) el.innerHTML = o.html; return; }
+      if (el.closest('h1, .lg-pitch .h')) this.chars(el, text); else el.textContent = text;
+    }
+    cells(el) {
+      const { box, k } = this.geo();
+      if (!el.querySelector('.ch')) this.chars(el, el.textContent);
+      return [...el.querySelectorAll('.ch')].map((n) => { const b = n.getBoundingClientRect(); return { n, x: (b.left - box.left + b.width / 2) / k, y: (b.top - box.top + b.height / 2) / k, blank: !n.textContent.trim() }; });
+    }
+    scr() { const c = this.root.querySelector('canvas.scramble'), W = this.root.clientWidth, H = this.root.clientHeight, d = Math.min(window.devicePixelRatio || 1, 2); if (c.width !== Math.round(W * d) || c.height !== Math.round(H * d)) { c.width = Math.round(W * d); c.height = Math.round(H * d); } const x = c.getContext('2d'); x.setTransform(d, 0, 0, d, 0, 0); x.clearRect(0, 0, W, H); return x; }
+    clearScr() { this.scr(); }
+    // 声呐: a ring leaves the globe button and every character changes as the ring passes it, nearest first. The old
+    // characters break into glyphs and clear just behind the ring; the new ones wait as faint dots, cycle, flash
+    // cyan and settle. Buttons ease to their new width and blocks to their new height, so nothing below jumps.
+    sonar(items) {
+      const r = this.root, g = this.geo(), bb = (this.origin || this.btn).getBoundingClientRect(); this.origin = null;
+      const O = { x: (bb.left - g.box.left + bb.width / 2) / g.k, y: (bb.top - g.box.top + bb.height / 2) / g.k };
+      const W = r.clientWidth, H = r.clientHeight, far = Math.max(...[[0, 0], [W, 0], [0, H], [W, H]].map(([x, y]) => Math.hypot(x - O.x, y - O.y)));
+      const v = Math.max(1.1, far / 1000), main = r.querySelector('main');
+      if (main) main.setAttribute('aria-busy', 'true');
+      const sc = r.querySelector('canvas.scramble'); if (sc) sc.dataset.on = ''; // a page may keep it out of the way while it is idle
+      this.wave = { O, v, far, main, items: items.map((it) => {
+        const old = this.cells(it.el), b = it.el.getBoundingClientRect();
+        const l = (b.left - g.box.left) / g.k, rt = (b.right - g.box.left) / g.k, t = (b.top - g.box.top) / g.k, bt = (b.bottom - g.box.top) / g.k;
+        const dmin = Math.hypot(Math.max(l - O.x, 0, O.x - rt), Math.max(t - O.y, 0, O.y - bt)), ds = old.map((c) => Math.hypot(c.x - O.x, c.y - O.y)), tc = dmin / v;
+        old.forEach((c, i) => (c.out = tc + (ds[i] - dmin) / (3 * v)));
+        return { ...it, old, swap: tc + (Math.max(dmin, ...ds) - dmin) / (3 * v) + 90, at: null, ctl: it.el.closest('a,button'), blk: it.el.closest('h1,p'), done: false };
+      }) };
+      const t0 = performance.now(), step = (now) => { if (this.dead || !this.wave) return; if (this.wtick(Math.max(0, now - t0))) this.raf = requestAnimationFrame(step); else this.settle(); };
+      cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(step);
+    }
+    swapIn(it) {
+      const g = this.geo(), w = this.wave, h1 = it.blk && it.blk.tagName === 'H1';
+      const w0 = it.ctl ? it.ctl.getBoundingClientRect().width / g.k : 0, h0 = it.blk ? it.blk.getBoundingClientRect().height / g.k : 0;
+      if (h1) { it.blk.removeAttribute('lang'); it.blk.setAttribute('aria-label', it.to); }
+      this.chars(it.el, it.to); for (const n of it.el.children) n.style.color = 'transparent';
+      const ease = '300ms cubic-bezier(.16,1,.3,1)';
+      if (it.ctl) { const w1 = it.ctl.offsetWidth; if (Math.abs(w1 - w0) > 0.5) { Object.assign(it.ctl.style, { boxSizing: 'border-box', whiteSpace: 'nowrap', width: w0 + 'px', transition: 'none' }); void it.ctl.offsetWidth; it.ctl.style.transition = `width ${ease}`; it.ctl.style.width = w1 + 'px'; } }
+      if (it.blk) { const h1n = it.blk.offsetHeight; if (Math.abs(h1n - h0) > 0.5) { Object.assign(it.blk.style, { height: h0 + 'px', transition: 'none' }); void it.blk.offsetHeight; it.blk.style.transition = `height ${ease}`; it.blk.style.height = h1n + 'px'; } }
+      it.at = this.cells(it.el).map((c) => Math.max(it.swap + 60, Math.hypot(c.x - w.O.x, c.y - w.O.y) / w.v + 120) + 260);
+    }
+    wtick(ms) {
+      const w = this.wave, x = this.scr(), cs = getComputedStyle(this.root), ring = cs.getPropertyValue('--ring').trim(), dim = cs.getPropertyValue('--text2').trim(), tick = Math.floor(ms / 50);
+      const glyph = (i) => GLYPHS[Math.floor(hash(i, tick) * GLYPHS.length)];
+      x.textAlign = 'center'; x.textBaseline = 'middle';
+      let busy = false;
+      w.items.forEach((it, n) => {
+        if (it.done) return;
+        busy = true;
+        const fs = parseFloat(getComputedStyle(it.el).fontSize) || 16;
+        x.font = `500 ${Math.round(fs * 0.72)}px "Axiom Mono", ui-monospace, monospace`;
+        if (ms < it.swap) {
+          it.old.forEach((c, i) => { if (ms < c.out) return; c.n.style.color = 'transparent'; if (c.blank || ms > c.out + 90) return; x.globalAlpha = 0.85; x.fillStyle = dim; x.fillText(glyph(i + n * 31 + 7), c.x, c.y); });
+          x.globalAlpha = 1; return;
+        }
+        if (!it.at) this.swapIn(it);
+        let last = 0;
+        this.cells(it.el).forEach((c, i) => {
+          const A = it.at[i]; last = Math.max(last, A); const d = A - ms;
+          c.n.style.color = d > 0 ? 'transparent' : '';
+          if (d <= 0 || c.blank) return;
+          if (d <= 50) { x.globalAlpha = 1; x.fillStyle = ring; x.fillText(glyph(i + n * 31), c.x, c.y); }
+          else if (d <= 220) { x.globalAlpha = 0.85; x.fillStyle = dim; x.fillText(glyph(i + n * 31), c.x, c.y); }
+          else { x.globalAlpha = 0.5; x.fillStyle = dim; x.beginPath(); x.arc(c.x, c.y, Math.max(1.2, fs * 0.035), 0, Math.PI * 2); x.fill(); }
+        });
+        x.globalAlpha = 1;
+        if (ms > last + 20) it.done = true;
+      });
+      const R = ms * w.v;
+      if (R < w.far) { x.strokeStyle = ring; x.globalAlpha = 0.7 * (1 - R / w.far); x.lineWidth = 1; x.beginPath(); x.arc(w.O.x, w.O.y, R, 0, Math.PI * 2); x.stroke(); x.globalAlpha = 1; busy = true; }
+      return busy;
+    }
+    // ends whatever is running at once: every text at its target, no inline sizes left behind
+    settle() {
+      cancelAnimationFrame(this.raf); this.ltok = null;
+      const w = this.wave; this.wave = null;
+      for (const h1 of this.root.querySelectorAll('h1')) { h1.removeAttribute('lang'); if (h1.querySelector('[aria-hidden]') && COPY[this.shown]) h1.setAttribute('aria-label', COPY[this.shown].h1); else h1.removeAttribute('aria-label'); }
+      if (w) {
+        for (const it of w.items) { this.put(it.el, it.to); for (const el of [it.ctl, it.blk]) if (el) Object.assign(el.style, { width: '', height: '', transition: '', boxSizing: '', whiteSpace: '' }); }
+        if (w.main) w.main.removeAttribute('aria-busy');
+      }
+      this.clearScr(); const sc = this.root.querySelector('canvas.scramble'); if (sc) delete sc.dataset.on;
+    }
+    // ---------- appearance ----------
+    themeLabel() { const ui = UI[this.lang], eff = this.effective(); this.tbtn.setAttribute('aria-label', eff === 'dark' ? ui.toLight : ui.toDark); this.toast.textContent = ui.sys; }
+    setSystem(s) { if (s === this.system) return; const before = this.effective(); this.system = s; if (this.effective() !== before) this.applyTheme(this.effective(), true); }
+    toggleTheme() {
+      const to = this.effective() === 'dark' ? 'light' : 'dark';
+      // landing back on the system's own appearance means: follow the system again
+      this.override = to === this.system ? null : to; store.set('ax-theme', this.override);
+      this.applyTheme(to, true);
+      if (this.override === null) { this.toast.dataset.on = ''; clearTimeout(this.tt); this.tt = setTimeout(() => delete this.toast.dataset.on, 1600); }
+    }
+    applyTheme(to, animate) {
+      const r = this.root; r.dataset.eff = to; this.themeLabel();
+      // the page's own colours (classes, and the screens below through onTheme), and the sea's
+      const page = () => { for (const el of [r, ...(this.opts.themed ? r.querySelectorAll(this.opts.themed) : [])]) { el.classList.toggle('dark', to === 'dark'); el.classList.toggle('light', to === 'light'); } };
+      const sea = () => { this.eng.setLight(to === 'light'); for (const el of r.querySelectorAll('[data-t]')) el.removeAttribute('data-t'); };
+      const finish = () => { page(); sea(); if (this.opts.onTheme) this.opts.onTheme(to); };
+      if (!animate) { cancelAnimationFrame(this.traf); this.dv = null; this.clearThx(); finish(); this.eng.canvas.style.filter = ''; return; }
+      this.dive(to, finish);
+    }
+    clearThx() { const c = this.thx, x = c.getContext('2d'); x.setTransform(1, 0, 0, 1, 0, 0); x.clearRect(0, 0, c.width, c.height); c.style.opacity = ''; c.style.display = ''; }
+    // 下潜: dark is the deep. Going dark the water rises from the bottom and the page sinks under it; going light
+    // it drains away downwards. Under the surface is the same live sea shown as it is (the light page shows that
+    // picture inverted), so fish swim across the line, and the brighter ones glow cyan as they do in the dark.
+    // A thin cyan surface and a few bubbles; words change colour as the surface passes them. Toggling again
+    // midway turns the same water around.
+    // the dark page's veil as a canvas gradient: same ellipse and stops as the CSS one
+    veil(glow) {
+      const W = this.root.clientWidth, H = this.root.clientHeight, m = /(\d+(?:\.\d+)?)% (\d+(?:\.\d+)?)% at (\d+(?:\.\d+)?)% (\d+(?:\.\d+)?)%/.exec(getComputedStyle(glow).backgroundImage);
+      if (!m) return null;
+      const probe = document.createElement('span'); probe.setAttribute('data-t', 'dark'); probe.hidden = true; this.root.appendChild(probe);
+      const cs = getComputedStyle(probe), g0 = cs.getPropertyValue('--g0').trim(), g1 = cs.getPropertyValue('--g1').trim(); probe.remove();
+      if (!g0 || !g1) return null;
+      const mid = /var|rgba?\([^)]*\)\s+(\d+(?:\.\d+)?)%/g; let k = 0.52, q; while ((q = mid.exec(getComputedStyle(glow).backgroundImage))) if (q[1] && +q[1] > 0 && +q[1] < 100) k = +q[1] / 100;
+      return { cx: W * m[3] / 100, cy: H * m[4] / 100, rx: W * m[1] / 100, ry: H * m[2] / 100, grad: (x) => { const g = x.createRadialGradient(0, 0, 0, 0, 0, 1); g.addColorStop(0, g0); g.addColorStop(k, g1); g.addColorStop(1, 'rgba(0,0,0,0)'); return g; } };
+    }
+    // Read down the page (the hero out of view) there is no dive: the screens there are coloured whole, not word by word
+    // as the surface passes, so a rising surface would leave each card in the wrong colours over the other water for
+    // most of the way. Instead the page and the sea change together: the words and cards ease over 200ms, and the old
+    // sea, held on the layer behind the page, fades out over the new one.
+    below() { const hs = this.root.querySelector('.hs'), main = hs && hs.querySelector(':scope > .main'); return !!(hs && main && hs.scrollTop > main.offsetHeight * 0.5); }
+    fade(finish) {
+      cancelAnimationFrame(this.traf); clearTimeout(this.ft); this.dv = null;
+      const r = this.root, c = this.thx, sea = this.eng.canvas, W = r.clientWidth, H = r.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+      c.style.transition = ''; c.style.display = 'block'; c.style.opacity = '1'; c.width = Math.round(W * dpr); c.height = Math.round(H * dpr);
+      const x = c.getContext('2d'); x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, W, H); sea.style.filter = '';
+      try { x.drawImage(sea, 0, 0, W, H); } catch (e) { /* nothing to hold */ }
+      finish();
+      this.traf = requestAnimationFrame(() => { c.style.transition = 'opacity 320ms ease-out'; c.style.opacity = '0'; this.ft = setTimeout(() => { c.style.transition = ''; this.clearThx(); }, 360); });
+    }
+    dive(to, finish) {
+      if (this.below() && !this.dv) return this.fade(finish);
+      cancelAnimationFrame(this.traf); clearTimeout(this.ft);
+      const r = this.root, c = this.thx, eng = this.eng, R = eng.renderer, sea = eng.canvas, W = r.clientWidth, H = r.clientHeight, dpr = Math.min(window.devicePixelRatio || 1, 2);
+      c.style.display = 'block'; c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.transition = ''; c.style.opacity = '1';
+      const x = c.getContext('2d'), dk = to === 'dark', D = 1400, a = Math.max(5, H * 0.012), span = H + 6 * a, s = this.dv ? this.dv.s : Math.random() * 6.28;
+      const p0 = this.dv && this.dv.to !== to ? 1 - this.dv.p : 0; let l0 = 0;
+      if (p0 > 0) { let lo = 0, hi = 1; for (let k = 0; k < 24; k++) { const m = (lo + hi) / 2; if (io(m) < p0) lo = m; else hi = m; } l0 = lo; }
+      // for the whole dive the sea is drawn for the light page; the deep shows those pixels as they are
+      eng.setLight(true); sea.style.filter = 'invert(1)';
+      const wave = (px, S, t) => S + a * Math.sin(px / 170 + s + t * 0.0021) + 0.45 * a * Math.sin(px / 61 - s * 1.7 - t * 0.0037) + 0.2 * a * Math.sin(px / 23 + s + t * 0.006);
+      const g = this.geo(), units = [...r.querySelectorAll('.bar .brand, .bar .nav > *, .main > *')].map((el) => { const b = el.getBoundingClientRect(); return { el, cx: (b.left - g.box.left + b.width / 2) / g.k, cy: (b.top - g.box.top + b.height / 2) / g.k, done: false }; });
+      // the veil behind the words: what shows of the DOM one is always the light water, so it takes the light look;
+      // the deep paints the dark page's veil itself
+      const glow = r.querySelector('.glow'), vg = glow && this.veil(glow);
+      if (glow) glow.setAttribute('data-t', 'light');
+      const bub = Array.from({ length: Math.max(8, Math.round(W / 36)) }, (_, i) => ({ x: hash(i, 3) * W, o: hash(i, 9), r: 1 + hash(i, 5) * 1.6 }));
+      const t0 = performance.now() - l0 * D, frame = (now) => {
+        if (this.dead) return;
+        const ms = Math.max(0, now - t0), lin = Math.min(1, ms / D), p = io(lin), S = dk ? H + 3 * a - p * span : -3 * a + p * span;
+        this.dv = { to, p, s };
+        x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, W, H);
+        x.save(); x.beginPath(); x.moveTo(0, H + 1);
+        for (let px = 0; px <= W + 8; px += 8) x.lineTo(px, wave(px, S, ms));
+        x.lineTo(W + 8, H + 1); x.closePath(); x.clip();
+        x.fillStyle = '#111113'; x.fillRect(0, 0, W, H);
+        x.globalCompositeOperation = 'lighten'; x.drawImage(sea, 0, 0, W, H); x.globalCompositeOperation = 'source-over';
+        if (R.cols) {
+          const cw = R.cw / (eng.vs || 1), ch = R.ch / (eng.vs || 1), hh = Math.max(1, Math.round(ch * 0.08));
+          for (let b = 3; b < 5; b++) { x.fillStyle = b === 4 ? 'rgba(76,204,230,.9)' : 'rgba(130,218,238,.74)'; for (const i of R.fishBuckets[b]) x.fillRect((i % R.cols) * cw + cw * 0.22, ((i / R.cols) | 0) * ch + ch * 0.5, cw * 0.56, hh); }
+        }
+        if (vg) { x.save(); x.translate(vg.cx, vg.cy); x.scale(vg.rx, vg.ry); x.fillStyle = vg.grad(x); x.fillRect(-1, -1, 2, 2); x.restore(); }
+        x.strokeStyle = 'rgba(76,204,230,.45)'; x.lineWidth = 1;
+        for (const b of bub) { const by = wave(b.x, S, ms) + 10 + ((b.o * 70 + ms * 0.06) % 70); if (by < H) { x.beginPath(); x.arc(b.x + Math.sin(ms / 320 + b.o * 9) * 2, by, b.r, 0, Math.PI * 2); x.stroke(); } }
+        x.restore();
+        x.strokeStyle = 'rgba(76,204,230,.75)'; x.lineWidth = 1; x.beginPath();
+        for (let px = 0; px <= W + 8; px += 8) { const y = wave(px, S, ms); if (px) x.lineTo(px, y); else x.moveTo(px, y); }
+        x.stroke();
+        for (const u of units) if (!u.done && (dk ? wave(u.cx, S, ms) <= u.cy : wave(u.cx, S, ms) >= u.cy)) { u.done = true; u.el.setAttribute('data-t', to); }
+        if (lin < 1) { this.traf = requestAnimationFrame(frame); return; }
+        // the sea redraws for the new page on its own next frame; the finished water covers it until then
+        this.dv = null; finish(); sea.style.filter = ''; this.traf = requestAnimationFrame(() => (this.traf = requestAnimationFrame(() => this.clearThx())));
+      };
+      frame(performance.now());
+    }
+  }
+  Prefs.LANGS = LANGS; Prefs.ENDO = ENDO;
+  window.AxiomPrefs = Prefs;
+})();
