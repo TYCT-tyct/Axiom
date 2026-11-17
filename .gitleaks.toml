@@ -61,3 +61,13 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^web/packages/boards/(inputs/login-ui\.js\.txt|src/engines/login-ui\.js)$''']
 regexes = ['''^sk-ax-3f9a8c2e71b04d6e9a5f0c3b$''']
+
+# Steps decodes this fixed display value into its simulated key row; Site embeds the same Steps animation. The
+# request animation only updates state and never sends a request. Keep the authored bytes and pushed history,
+# allowing only this exact value in these five boards' pinned logic and generated controllers.
+[[allowlists]]
+description = "fixed display key in the Steps animation and the Site boards embedding it"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^web/packages/boards/(inputs/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)\.logic\.html|src/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)/logic\.ts)$''']
+regexes = ['''^sk-ax-7f3c9a1e5b02$''']
