@@ -3,6 +3,10 @@
   // The packages are the apps' own, not published: an export no app imports is unused, entry files included.
   "includeEntryExports": true,
   "workspaces": {
+    // regions.ts imports every file in manifest/ by listing the directory, which knip cannot follow.
+    "packages/boards": {
+      "entry": ["manifest/*.ts"]
+    },
     // vite.shared.ts reads theme.js as text and serves it, which knip cannot follow.
     ".": {
       "entry": ["theme.js"],

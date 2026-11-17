@@ -21,7 +21,7 @@ function Brand({ logoUrl, name }: { logoUrl?: string; name?: string }) {
 }
 
 // BrandPlaces fills the brand's places in the frame root points at: the header's, the menu sheet's and the island's.
-// The frame's region leaves them empty (packages/boards/regions.ts), since a region has one slot and the frame's is
+// The frame's region leaves them empty (packages/boards/manifest/site.ts), since a region has one slot and the frame's is
 // the scroller; they are found once mounted, before the first paint.
 export function BrandPlaces({
   root,

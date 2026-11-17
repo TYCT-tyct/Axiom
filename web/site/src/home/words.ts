@@ -2,7 +2,7 @@ import type zh from "../locales/zh";
 
 export type BoardKey = keyof typeof zh.board;
 
-// The board's locale keys (packages/boards/regions.ts names them by their text) of the words the page hands its
+// The board's locale keys (packages/boards/manifest/site.ts names them by their text) of the words the page hands its
 // regions itself: those the preference engine rewrites in place.
 export const words = {
   headline: "m2e2a3b1e5d",

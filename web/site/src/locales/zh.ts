@@ -9,7 +9,7 @@ export default {
   navigation: "主导航",
   models: "模型与价格",
   signIn: "登录",
-  // the home page's words, by the keys the board's regions give them (packages/boards/regions.ts)
+  // the home page's words, by the keys the board's regions give them (packages/boards/manifest/site.ts)
   board: { ...wide, ...narrow, ...first, ...headline },
   // the language as its own switch names it
   language: "简体中文",

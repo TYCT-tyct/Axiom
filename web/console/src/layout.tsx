@@ -59,7 +59,7 @@ const phoneWidth = media("(max-width: 819px)");
 const wideWidth = media("(min-width: 1024px)");
 const useMedia = (query: ReturnType<typeof media>) => useSyncExternalStore(query.subscribe, query.matches);
 
-// The shell's departures from the drawing, which the regions leave to the page (packages/boards/regions.ts). The document
+// The shell's departures from the drawing, which the regions leave to the page (packages/boards/manifest/shell.ts). The document
 // scrolls, not the board's fixed frame (port design §3.3): the bar sticks to the top, the sidebar below it (56px is the
 // bar), the phone's tabs to the bottom, and the phone's popovers are sheets at the bottom of the window. The board's
 // width gives way to the window's, and the console's font stacks, whose Chinese faces are cut for its pages, replace
