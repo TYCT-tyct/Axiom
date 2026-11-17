@@ -35,6 +35,19 @@ const siteBoards = {
 };
 
 export const designScenes: DesignScene[] = [
+  // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet
+  // board, the wide board's markup with its sidebar folded.
+  {
+    name: "console shell",
+    suite: consoleSuite,
+    scene: "overview",
+    fonts: "console",
+    boards: {
+      ...consoleBoards("ov"),
+      820: { file: "AxAppTablet.dc.html", height: 1180, actions: [["go", "ov"]] },
+    },
+    schemes: consoleSchemes,
+  },
   {
     name: "console overview",
     suite: consoleSuite,

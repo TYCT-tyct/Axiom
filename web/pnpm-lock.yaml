@@ -99,6 +99,9 @@ importers:
       '@axiom/app':
         specifier: workspace:*
         version: link:../packages/app
+      '@axiom/boards':
+        specifier: workspace:*
+        version: link:../packages/boards
       '@axiom/ui':
         specifier: workspace:*
         version: link:../packages/ui

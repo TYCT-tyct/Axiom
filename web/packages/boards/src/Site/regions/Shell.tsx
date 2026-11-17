@@ -5,6 +5,7 @@ import { boardStyle } from "../../dom.ts";
 import type zh from "./Shell.zh.ts";
 import styles from "./Shell.module.css";
 
+
 export type Props = { t: (key: keyof typeof zh) => string; values?: { modeCls?: string | number;
 vars?: string | number;
 setCanvas?: RefCallback<Element>;

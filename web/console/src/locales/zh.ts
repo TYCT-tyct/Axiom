@@ -4,6 +4,7 @@ import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
 import { zh as routingPresets } from "./routing-presets";
 import { zh as settings } from "./settings";
+import { zh as shell } from "./shell";
 import { zh as statement } from "./statement";
 import { zh as workspaces } from "./workspaces";
 
@@ -12,6 +13,7 @@ export default {
 
   forbiddenHint: "请联系工作区的管理员。",
 
+  shell,
   nav: {
     models: "模型与价格",
     overview: "概览",

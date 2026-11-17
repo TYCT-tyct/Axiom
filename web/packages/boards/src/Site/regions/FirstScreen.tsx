@@ -5,6 +5,7 @@
 import type zh from "./FirstScreen.zh.ts";
 import styles from "./FirstScreen.module.css";
 
+
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };  text: { lede: string;
 signUp: string;
 signUpHref: string; }; };

@@ -90,7 +90,7 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     secTxt: t(`sections.${sections[scroll.sec]?.name ?? "surface"}`),
     depthTxt: depthText(scroll.depth),
     sheetCls: menu ? "on" : "",
-    sheetHide: menu ? "false" : "true",
+    sheetHide: !menu,
   };
   const text = frameText((key) => opened(`board.${key}`), opened("language"), name);
   const Shell = wide ? Wide : Narrow;

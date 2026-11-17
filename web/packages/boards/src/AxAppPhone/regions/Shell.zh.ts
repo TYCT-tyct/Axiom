@@ -15,7 +15,6 @@ export default {
   "mb94d13a45e": "个人资料",
   "mdfe0487d70": "登录与安全",
   "m4b6ded8a7f": "通知",
-  "m81e531c3b1": "外观和语言",
   "m86a63f23a0": "外观",
   "m217cfe7db1": "跟随系统",
   "maa0819dfc4": "浅色",
@@ -25,8 +24,6 @@ export default {
   "m42723e8b49": "用量",
   "m7dbac1c20f": "日志",
   "m38844b135c": "更多",
-  "m3797982942": "工作区",
-  "m4bf3c13e58": "账单",
   "mb9670c85a4": "路由",
   "mf1de1e2621": "预设",
   "me806fbbe8e": "插件",
@@ -35,13 +32,6 @@ export default {
   "mba1902c7c9": "可观测",
   "mc15323851b": "账单与充值",
   "m650eb042f0": "管理 Key",
-  "mdf3d58c7d8": "设置",
-  "m6e6d6ddbb7": "成员",
-  "ma5c97a7a7e": "安全与合规",
-  "md44e0d633b": "团队设置",
-  "me68cd1fada": "新建团队",
-  "m8714d7f5e9": "Axiom Labs 的工作区",
-  "m5fa0b0f66f": "本月 ¥842.17",
-  "maafe08594f": "本月 ¥118.40"
+  "m81e531c3b1": "外观和语言"
 } as const;
 /* jscpd:ignore-end */

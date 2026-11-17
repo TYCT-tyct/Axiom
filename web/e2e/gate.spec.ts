@@ -96,20 +96,34 @@ for (const suite of suites) {
         expect(wrapped).toEqual([]);
         // The website has no sidebar: its first nav is the header's.
         if (width === 1280 && suite !== siteSuite) {
-          // The sidebar's column reaches the end of the document, not only the end of the window.
+          // The sidebar's column reaches the end of the document, not only the end of the window. The console's sidebar
+          // sticks below the bar, as tall as the window, while the document scrolls past it; the admin's column holds a
+          // window-tall box of links.
           const sidebar = await page.evaluate(() => {
-            const nav = document.querySelector("nav");
+            const nav = [...document.querySelectorAll('nav[aria-label="主导航"]')].find((n) =>
+              n.checkVisibility({ visibilityProperty: true }),
+            );
             // A modal dialog scrolls its own body over a locked page; the column behind it is only viewport-tall.
-            if (!nav || nav.getBoundingClientRect().width === 0 || document.querySelector("dialog[open]")) {
+            if (!nav || document.querySelector("dialog[open]")) {
               return null;
             }
+            const aside = nav.closest("aside");
+            const column = aside?.parentElement ?? nav;
             return {
-              bottom: nav.getBoundingClientRect().bottom + window.scrollY,
+              bottom: column.getBoundingClientRect().bottom + window.scrollY,
               page: document.documentElement.scrollHeight,
+              sticky: aside && {
+                position: getComputedStyle(aside).position,
+                gap: Math.abs(aside.getBoundingClientRect().bottom - window.innerHeight),
+              },
             };
           });
           if (sidebar) {
             expect(sidebar.bottom).toBeGreaterThanOrEqual(sidebar.page - 1);
+          }
+          if (sidebar?.sticky) {
+            expect(sidebar.sticky.position).toBe("sticky");
+            expect(sidebar.sticky.gap).toBeLessThanOrEqual(1);
           }
         }
       });

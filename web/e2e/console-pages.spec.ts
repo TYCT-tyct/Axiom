@@ -334,9 +334,7 @@ test.describe("API keys", () => {
     await expect(page.getByRole("button", { name: "创建 key" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /^修改/ })).toHaveCount(0);
     // The sidebar leaves out what the account cannot open.
-    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "调用记录" })).toHaveCount(
-      0,
-    );
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "日志" })).toHaveCount(0);
   });
 
   test("an empty list invites creating the first key, in English too", async ({ page }) => {
@@ -366,7 +364,7 @@ test.describe("balance", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/");
-    await expect(page.getByText("US$11.75")).toBeVisible();
+    await expect(page.locator("#main").getByText("US$11.75")).toBeVisible();
     await expect(page.getByText("US$3.141592653")).toBeVisible();
     await page.getByRole("link", { name: "查看明细" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "余额" })).toBeVisible();

@@ -5,7 +5,7 @@ export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
 export { useErrors } from "./errors";
 export { readForm, toInstant, toLocalInput } from "./forms";
-export { LoadMore, Stat } from "./parts";
+export { LoadMore, SignOutError, Stat } from "./parts";
 export { useRulesCheck } from "./presets/check";
 export { RulesEditor, useClassOptions } from "./presets/editor";
 export { draftOf, type Invalid, priced, rulesOf, systemPreset } from "./presets/rules";
@@ -25,7 +25,9 @@ export {
   useSession,
   useSessionBound,
   useSignIn,
+  useSignOut,
   useStartSession,
 } from "./session";
-export { type NavItem, Shell } from "./shell";
+export { Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
+export { NewVersionNotice } from "./version";
