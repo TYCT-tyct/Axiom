@@ -69,7 +69,16 @@ function markup(context: Element, html: string) {
 
 // The parser only sees inert data attributes. Adopt nodes before applying their declarations through CSSOM.
 // Callers still own escaping interpolated text: this adapter preserves the board's behavior, not a sanitizer API.
-export function boardHTML(target: Element, html: string, mode: "inner" | "outer" | InsertPosition = "inner") {
+export function boardHTML(
+  target: Element | Pick<Element, "innerHTML">,
+  html: string,
+  mode: "inner" | "outer" | InsertPosition = "inner",
+) {
+  // Connect's drawing facade owns a setter, not a DOM sink; its element writes are converted too.
+  if (!(target instanceof Element)) {
+    Object.getOwnPropertyDescriptor(target, "innerHTML")?.set?.call(target, html);
+    return;
+  }
   const context = ["outer", "beforebegin", "afterend"].includes(mode) ? (target.parentElement as Element) : target;
   const { nodes, styles } = markup(context, html);
   switch (mode) {

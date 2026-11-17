@@ -1,9 +1,9 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Browser, Page } from "@playwright/test";
-import { readBoard } from "../../packages/boards/source.ts";
+import { boardProps, readBoard } from "../../packages/boards/source.ts";
 import { boardFonts, type FontFace, fontRoute, usedFaces } from "./fonts.ts";
-import { type Stage, stage } from "./stage.ts";
+import { type Stage, stage, stagePaused } from "./stage.ts";
 
 // The reference half of a comparison (docs/frontend.md「截图对比」): the board's own Component class, run in a browser context
 // of its own that is offline, keeps no cookies or storage and is thrown away after the shot. Every request outside
@@ -37,12 +37,11 @@ function parts(html: string) {
   const helmet = html.match(/<helmet>([\s\S]*?)<\/helmet>/)?.[1];
   const template = html.match(/<\/helmet>([\s\S]*)<\/x-dc>/)?.[1];
   const script = html.match(/data-dc-script[^>]*>([\s\S]*?)<\/script>/)?.[1];
-  const declared = html.match(/data-props='([^']*)'/)?.[1];
   if (helmet === undefined || template === undefined || script === undefined) {
     throw new Error("not a board: no <helmet>, template or data-dc-script");
   }
   const defaults: Record<string, unknown> = {};
-  for (const [key, prop] of Object.entries(JSON.parse(declared ?? "{}") as Record<string, { default?: unknown }>)) {
+  for (const [key, prop] of Object.entries(boardProps(html))) {
     if (prop && typeof prop === "object" && "default" in prop) {
       defaults[key] = prop.default;
     }
@@ -86,9 +85,10 @@ function look(key: string, scope: unknown) {
 
 function fill(text: string, scope: unknown, refs: unknown[]) {
   return text
-    .replace(/ref="\{\{\s*([\w.]+)\s*\}\}"/g, (_, key) => {
+    .replace(/(ref|on[A-Z]\w*)="\{\{\s*([\w.]+)\s*\}\}"/g, (_, attribute: string, key) => {
       refs.push(look(key, scope));
-      return `data-ref="${refs.length - 1}"`;
+      const name = attribute === "ref" ? "ref" : `event-${attribute.slice(2).toLowerCase()}`;
+      return `data-${name}="${refs.length - 1}"`;
     })
     .replace(/\{\{\s*([\w.$]+)\s*\}\}/g, (_, key) => {
       const value = look(key, scope);
@@ -96,7 +96,7 @@ function fill(text: string, scope: unknown, refs: unknown[]) {
     });
 }
 
-function render(text: string, scope: Record<string, unknown>, refs: unknown[]): string {
+export function render(text: string, scope: Record<string, unknown>, refs: unknown[]): string {
   const start = text.indexOf("<sc-for");
   if (start < 0) return fill(text, scope, refs);
   const tagEnd = text.indexOf(">", start);
@@ -141,10 +141,14 @@ function patch(root: HTMLElement, next: HTMLElement) {
   return true;
 }
 
-// bind hands each ref hole its element.
-function bind(root: HTMLElement, refs: unknown[]) {
-  for (const element of root.querySelectorAll<HTMLElement>("[data-ref]")) {
-    (refs[Number(element.dataset.ref)] as ((el: Element) => void) | undefined)?.(element);
+// Bind authored event and ref holes after the complete tree exists.
+export function bind(root: HTMLElement, refs: unknown[]) {
+  for (const element of root.querySelectorAll<HTMLElement>("*")) {
+    if (element.hasAttribute("data-ref"))
+      (refs[Number(element.dataset.ref)] as ((el: Element) => void) | undefined)?.(element);
+    for (const attribute of element.attributes)
+      if (attribute.name.startsWith("data-event-"))
+        element.addEventListener(attribute.name.slice(11), refs[Number(attribute.value)] as EventListener);
   }
 }
 
@@ -234,8 +238,8 @@ export async function openBoard(
   const page = await context.newPage();
   const errors: Error[] = [];
   page.on("pageerror", (error) => errors.push(error));
-  await stage(page, view);
-  if (board.engines) await page.clock.pauseAt(view.time);
+  if (board.engines) await stagePaused(page, view);
+  else await stage(page, view);
   await page.goto(`${origin}/`);
   if (board.engines) await page.locator("#root > *").first().waitFor({ state: "attached" });
   if (errors.length) {

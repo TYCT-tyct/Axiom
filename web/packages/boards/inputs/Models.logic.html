@@ -1,0 +1,206 @@
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme": {"editor": "enum", "options": ["深色", "浅色"], "default": "浅色"}, "$preview": {"width": 1440, "height": 900}}'>
+
+const RX = {"light": {"slate1": "#fcfcfd", "slate2": "#f9f9fb", "slate3": "#f0f0f3", "slate4": "#e8e8ec", "slate5": "#e0e1e6", "slate6": "#d9d9e0", "slate7": "#cdced6", "slate8": "#b9bbc6", "slate9": "#8b8d98", "slate10": "#80838d", "slate11": "#60646c", "slate12": "#1c2024", "cyan1": "#fafdfe", "cyan2": "#f2fafb", "cyan3": "#def7f9", "cyan4": "#caf1f6", "cyan5": "#b5e9f0", "cyan6": "#9ddde7", "cyan7": "#7dcedc", "cyan8": "#3db9cf", "cyan9": "#00a2c7", "cyan10": "#0797b9", "cyan11": "#107d98", "cyan12": "#0d3c48", "grass1": "#fbfefb", "grass2": "#f5fbf5", "grass3": "#e9f6e9", "grass4": "#daf1db", "grass5": "#c9e8ca", "grass6": "#b2ddb5", "grass7": "#94ce9a", "grass8": "#65ba74", "grass9": "#46a758", "grass10": "#3e9b4f", "grass11": "#2a7e3b", "grass12": "#203c25", "amber1": "#fefdfb", "amber2": "#fefbe9", "amber3": "#fff7c2", "amber4": "#ffee9c", "amber5": "#fbe577", "amber6": "#f3d673", "amber7": "#e9c162", "amber8": "#e2a336", "amber9": "#ffc53d", "amber10": "#ffba18", "amber11": "#ab6400", "amber12": "#4f3422", "tomato1": "#fffcfc", "tomato2": "#fff8f7", "tomato3": "#feebe7", "tomato4": "#ffdcd3", "tomato5": "#ffcdc2", "tomato6": "#fdbdaf", "tomato7": "#f5a898", "tomato8": "#ec8e7b", "tomato9": "#e54d2e", "tomato10": "#dd4425", "tomato11": "#d13415", "tomato12": "#5c271f", "focusTok": "#0797b9", "focusName": "cyan10"}, "dark": {"slate1": "#111113", "slate2": "#18191b", "slate3": "#212225", "slate4": "#272a2d", "slate5": "#2e3135", "slate6": "#363a3f", "slate7": "#43484e", "slate8": "#5a6169", "slate9": "#696e77", "slate10": "#777b84", "slate11": "#b0b4ba", "slate12": "#edeef0", "cyan1": "#0b161a", "cyan2": "#101b20", "cyan3": "#082c36", "cyan4": "#003848", "cyan5": "#004558", "cyan6": "#045468", "cyan7": "#12677e", "cyan8": "#11809c", "cyan9": "#00a2c7", "cyan10": "#23afd0", "cyan11": "#4ccce6", "cyan12": "#b6ecf7", "grass1": "#0e1511", "grass2": "#141a15", "grass3": "#1b2a1e", "grass4": "#1d3a24", "grass5": "#25482d", "grass6": "#2d5736", "grass7": "#366740", "grass8": "#3e7949", "grass9": "#46a758", "grass10": "#53b365", "grass11": "#71d083", "grass12": "#c2f0c2", "amber1": "#16120c", "amber2": "#1d180f", "amber3": "#302008", "amber4": "#3f2700", "amber5": "#4d3000", "amber6": "#5c3d05", "amber7": "#714f19", "amber8": "#8f6424", "amber9": "#ffc53d", "amber10": "#ffd60a", "amber11": "#ffca16", "amber12": "#ffe7b3", "tomato1": "#181111", "tomato2": "#1f1513", "tomato3": "#391714", "tomato4": "#4e1511", "tomato5": "#5e1c16", "tomato6": "#6e2920", "tomato7": "#853a2d", "tomato8": "#ac4d39", "tomato9": "#e54d2e", "tomato10": "#ec6142", "tomato11": "#ff977d", "tomato12": "#fbd3cb", "focusTok": "#11809c", "focusName": "cyan8"}};
+const rgba = (h, a) => { const n = parseInt(h.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+const themeOf = (dark) => {
+  const s = RX[dark ? 'dark' : 'light'];
+  return {
+    s, dark,
+    vars: [
+      `--bg: ${s.slate1}`, `--panel: ${s.slate2}`, `--hover: ${s.slate3}`, `--press: ${s.slate4}`,
+      `--hair2x: ${s.slate6}`, `--line2x: ${s.slate7}`, `--lineStrong2x: ${s.slate8}`,
+      `--hair1x: ${s.slate5}`, `--line1x: ${s.slate6}`, `--lineStrong1x: ${s.slate7}`,
+      `--edge: ${rgba(dark ? '#ffffff' : '#000000', dark ? 0.06 : 0.05)}`,
+      `--focus: ${s.focusTok}`, `--selection: ${s.cyan5}`, `--text1: ${s.slate12}`, `--text2: ${s.slate11}`, `--cyanSolid: ${s.cyan9}`, `--accent: ${s.cyan11}`,
+      `--veil: ${rgba(s.slate1, dark ? 0.42 : 0.5)}`, `--veilStrong: ${rgba(s.slate1, dark ? 0.72 : 0.78)}`,
+      `--popShadow: ${dark ? '0 12px 32px rgba(0,0,0,0.5)' : '0 12px 32px rgba(0,0,0,0.08)'}`,
+      `--hw: ${dark ? 460 : 480}`, `--sunO: ${dark ? 0 : 1}`, `--moonO: ${dark ? 1 : 0}`
+    ].join('; '),
+    glyph: s.cyan12, ground: s.slate1,
+    seaFilter: dark ? 'grayscale(1)' : 'invert(1) grayscale(1) brightness(1.07)',
+    tintMul: dark ? 'multiply' : 'screen', tintBlend: dark ? 'lighten' : 'darken'
+  };
+};
+const GLYPHS = ':;t%SX8#@/<>=+*';
+const hash = (a, b) => { let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263); h = Math.imul(h ^ (h >>> 13), 1274126177); return ((h ^ (h >>> 16)) >>> 0) / 4294967296; };
+const easeIO = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const easeO = (p) => 1 - Math.pow(1 - p, 3);
+
+const MODELS = [{"id": "claude-sonnet-5.5", "dev": "Anthropic", "ctx": "200K", "max": "64K", "week": 2.41, "trend": 9, "routes": [{"n": "A", "in": 17.6, "out": 88.0, "ttft": 0.82, "up": 99.91, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 15.8, "out": 79.0, "ttft": 0.95, "up": 99.96, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "C", "in": 19.2, "out": 96.0, "ttft": 0.71, "up": 99.99, "ticks": [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "D", "in": 14.9, "out": 74.5, "ttft": 1.42, "up": 98.7, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "claude-opus-5.5", "dev": "Anthropic", "ctx": "200K", "max": "64K", "week": 1.87, "trend": 14, "routes": [{"n": "A", "in": 29.5, "out": 147.5, "ttft": 1.08, "up": 99.93, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 26.4, "out": 132.0, "ttft": 1.21, "up": 99.97, "ticks": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "C", "in": 31.0, "out": 155.0, "ttft": 0.88, "up": 99.99, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "gpt-6.1-sol", "dev": "OpenAI", "ctx": "400K", "max": "128K", "week": 1.52, "trend": -6, "routes": [{"n": "A", "in": 29.0, "out": 174.0, "ttft": 0.64, "up": 99.95, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 27.2, "out": 163.0, "ttft": 0.77, "up": 99.9, "ticks": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "C", "in": 25.9, "out": 155.4, "ttft": 1.3, "up": 99.42, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0]}]}, {"id": "gemini-4-argon", "dev": "Google", "ctx": "1M", "max": "64K", "week": 1.18, "trend": 21, "routes": [{"n": "A", "in": 13.4, "out": 80.4, "ttft": 0.58, "up": 99.97, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]}, {"n": "B", "in": 12.6, "out": 75.6, "ttft": 0.69, "up": 99.94, "ticks": [0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]}]}, {"id": "deepseek-v4-pro", "dev": "DeepSeek", "ctx": "128K", "max": "32K", "week": 0.96, "trend": 4, "routes": [{"n": "A", "in": 2.2, "out": 4.4, "ttft": 0.92, "up": 99.88, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 1.9, "out": 3.8, "ttft": 1.1, "up": 99.95, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "C", "in": 2.0, "out": 4.0, "ttft": 0.81, "up": 99.97, "ticks": [0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "D", "in": 1.7, "out": 3.4, "ttft": 1.66, "up": 99.12, "ticks": [0, 0, 0, 0, 2, 2, 2, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "claude-haiku-5.5", "dev": "Anthropic", "ctx": "200K", "max": "64K", "week": 0.74, "trend": -3, "routes": [{"n": "A", "in": 5.6, "out": 28.0, "ttft": 0.41, "up": 99.96, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 5.1, "out": 25.5, "ttft": 0.47, "up": 99.98, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "kimi-k3", "dev": "Moonshot", "ctx": "256K", "max": "32K", "week": 0.58, "trend": 32, "routes": [{"n": "A", "in": 4.1, "out": 16.4, "ttft": 0.88, "up": 99.9, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 3.8, "out": 15.2, "ttft": 1.02, "up": 99.93, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "C", "in": 3.6, "out": 14.4, "ttft": 1.35, "up": 99.61, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0]}]}, {"id": "qwen-max", "dev": "Qwen", "ctx": "128K", "max": "16K", "week": 0.46, "trend": 7, "routes": [{"n": "A", "in": 2.4, "out": 9.6, "ttft": 0.62, "up": 99.97, "ticks": [0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 2.2, "out": 8.8, "ttft": 0.74, "up": 99.95, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "gpt-6-astra", "dev": "OpenAI", "ctx": "400K", "max": "128K", "week": 0.41, "trend": -11, "routes": [{"n": "A", "in": 54.0, "out": 270.0, "ttft": 1.31, "up": 99.92, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 51.5, "out": 257.5, "ttft": 1.48, "up": 99.89, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}]}, {"id": "glm-5.2", "dev": "Zhipu", "ctx": "128K", "max": "32K", "week": 0.33, "trend": 5, "routes": [{"n": "A", "in": 3.3, "out": 12.0, "ttft": 0.71, "up": 99.94, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}, {"n": "B", "in": 3.0, "out": 11.2, "ttft": 0.83, "up": 99.9, "ticks": [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]}]}];
+const STATS = {"models": 312, "routes": 1046, "tokens": 4213800000};
+const FILTERS = ["全部", "Anthropic", "OpenAI", "Google", "国产"];
+const DOMESTIC = ["DeepSeek", "Moonshot", "Qwen", "Zhipu"];
+const NR = 6, NROUTE = 4, NT = 24, MODE = 'd';
+const ease = (p) => (p < 0.5 ? 4 * p * p * p : 1 - Math.pow(-2 * p + 2, 3) / 2);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const yuan = (v) => '¥' + v.toFixed(2);
+const fmtTokens = (n) => (n >= 1e8 ? (n / 1e8).toFixed(1) + ' 亿' : Math.round(n / 1e4) + ' 万');
+class Component extends DCLogic {
+  state = { filter: 0, sel: 0, down: -1, st: null, mt: null, tokens: STATS.tokens, fail: null };
+  setStage = (el) => { if (el && !this.st) { this.st = el; this.boot(); } };
+  setCanvas = (el) => { if (el && !this.cv) { this.cv = el; this.boot(); } };
+  setList = (el) => { if (el) this.list = el; };
+  setPanel = (el) => { if (el) this.panel = el; };
+  setRoutes = (el) => { if (el) this.routes = el; };
+  setLeads = (el) => { if (el) this.leads = el; };
+  setPick = (el) => { if (el) this.pickEl = el; };
+  dark() { return (this.props.theme ?? '浅色') !== '浅色'; }
+  boot() {
+    if (!this.st || !this.cv || this.r) return;
+    const go = () => {
+      if (this.r || !window.AxiomRespond || !window.AxiomOceanReact) return;
+      if (MODE === 'm') window.AxiomPersonas['触屏'] = { hover: null, wake: 0, tap: 'splash', flow: 1, linger: false };
+      this.ocean = new window.AxiomOceanScene(this.cv);
+      if (MODE === 'm') { const w = this.ocean.e.world; w.sharkSpecs = [{ kind: 'classic', size: 1 }, { kind: 'classic', size: 0.77 }]; w.seed(); this.ocean.setObstacles = () => { w.obstacles = []; }; }
+      this.r = new window.AxiomRespond({ stage: this.st, page: null, surface: this.cv, scene: this.ocean, persona: MODE === 'm' ? '触屏' : '回声', flowMul: 1, reduce: false });
+      requestAnimationFrame(() => this.r.sync());
+      this.io = new IntersectionObserver((es) => { this.visible = es[es.length - 1].isIntersecting; if (this.visible && !this.seen) { this.seen = true; this.intro(); } }, { threshold: 0.3 });
+      this.io.observe(this.st);
+      window.addEventListener('resize', () => this.place());
+    };
+    const ready = () => (document.fonts ? document.fonts.ready.then(go) : go());
+    if (window.AxiomRespond) ready(); else window.addEventListener('load', ready, { once: true });
+  }
+  // ---------------------------------------------------------------- data views
+  shown() {
+    const f = FILTERS[this.state.filter];
+    return MODELS.map((m, i) => ({ m, i })).filter(({ m }) => f === '全部' || (f === '国产' ? DOMESTIC.includes(m.dev) : m.dev === f)).slice(0, NR);
+  }
+  // the route Axiom would pick: the cheapest one that is up
+  pickOf(m, down) {
+    let best = -1;
+    const ok = (r, j) => j !== down && r.up >= 99.5;
+    m.routes.forEach((r, j) => { if (!ok(r, j)) return; if (best < 0 || r.in < m.routes[best].in) best = j; });
+    if (best < 0) m.routes.forEach((r, j) => { if (j !== down && (best < 0 || r.up > m.routes[best].up)) best = j; });
+    return best;
+  }
+  // ---------------------------------------------------------------- motion
+  tween(ms, fn) { return new Promise((res) => { const t0 = performance.now(); const step = (now) => { const p = Math.min(1, (now - t0) / ms); fn(p); if (p < 1 && !this.dead) requestAnimationFrame(step); else res(); }; requestAnimationFrame(step); }); }
+  decodeStats() { const t0 = performance.now(); const run = (now) => { const t = now - t0; if (t < 700) { this.setState({ st: t }); requestAnimationFrame(run); } else this.setState({ st: null }); }; requestAnimationFrame(run); }
+  decodeModel() { const t0 = performance.now(); const run = (now) => { const t = now - t0; if (t < 420) { this.setState({ mt: t }); requestAnimationFrame(run); } else { this.setState({ mt: null }); } }; requestAnimationFrame(run); }
+  async intro() {
+    this.decodeStats(); this.decodeModel();
+    requestAnimationFrame(() => this.place(true));
+    // tokens keep counting while the section is on screen
+    this.tick = setInterval(() => { if (this.visible && !document.hidden) this.setState({ tokens: this.state.tokens + 1800 + Math.floor(Math.random() * 2600) }); }, 1000);
+    this.loop();
+  }
+  async loop() {
+    let n = 0;
+    while (!this.dead) {
+      await sleep(5200);
+      if (!this.visible || document.hidden || this.hold) continue;
+      n++;
+      // every third turn, the chosen route drops out and Axiom moves to the next one
+      if (n % 3 === 0) { await this.failover(); continue; }
+      const list = this.shown(), at = list.findIndex((x) => x.i === this.state.sel);
+      this.select(list[(at + 1) % list.length].i);
+    }
+  }
+  select(i) {
+    if (i === this.state.sel) return;
+    this.setState({ sel: i, down: -1, fail: null }); this.decodeModel();
+    requestAnimationFrame(() => this.place(true));
+  }
+  async failover() {
+    const m = MODELS[this.state.sel], was = this.pickOf(m, -1);
+    this.setState({ down: was, fail: was });
+    requestAnimationFrame(() => this.place(true));
+    await sleep(2600);
+    this.setState({ down: -1, fail: null });
+    requestAnimationFrame(() => this.place(true));
+  }
+  // the lead from the card to the chosen route, and a hairline bridge from the selected model to the panel
+  place(glide) {
+    if (!this.leads || !this.panel || !this.routes || !this.pickEl || !this.list) return;
+    const S = this.st.getBoundingClientRect(), k = this.st.offsetWidth ? S.width / this.st.offsetWidth : 1;
+    const R = (el) => { const r = el.getBoundingClientRect(); return { x: (r.left - S.left) / k, y: (r.top - S.top) / k, w: r.width / k, h: r.height / k }; };
+    const m = MODELS[this.state.sel], pick = this.pickOf(m, this.state.down);
+    const rows = this.routes.children, row = rows[pick]; if (!row) return;
+    const rr = R(row), dot = R(row.querySelector('.dot')), pnl = R(this.panel);
+    // the card sits under the panel, its lead rises to the chosen route's status dot
+    const cardY = pnl.y + pnl.h + (MODE === 'd' ? 28 : 24);
+    this.pickEl.style.top = cardY + 'px';
+    const card = R(this.pickEl);
+    const a = [card.x + card.w - 24, cardY], b = [dot.x + dot.w / 2, dot.y + dot.h / 2];
+    const [ld, ldt, ldc, br, bd] = ['.ld', '.ldt', '.ldc', '.br', '.bd'].map((s) => this.leads.querySelector(s));
+    const draw = (bx, by) => {
+      const mid = MODE === 'd' ? pnl.x + pnl.w + 20 : pnl.x + pnl.w - 4;
+      ld.setAttribute('d', `M${a[0].toFixed(1)} ${a[1].toFixed(1)}V${(cardY - 12).toFixed(1)}H${mid.toFixed(1)}V${by.toFixed(1)}H${(bx + 6).toFixed(1)}`);
+      ldt.setAttribute('cx', bx.toFixed(1)); ldt.setAttribute('cy', by.toFixed(1)); ldc.setAttribute('cx', a[0].toFixed(1)); ldc.setAttribute('cy', a[1].toFixed(1));
+    };
+    const from = this.leadY ?? b[1];
+    this.leadY = b[1];
+    [ld, ldt].forEach((e) => e.classList.add('on')); clearTimeout(this.ldT); this.ldT = setTimeout(() => [ld, ldt].forEach((e) => e.classList.remove('on')), 900);
+    if (glide && Math.abs(from - b[1]) > 1) this.tween(250, (p) => draw(b[0], from + (b[1] - from) * (1 - Math.pow(1 - p, 3)))); else draw(b[0], b[1]);
+    // the bridge: from the selected model's row to the panel's edge
+    const li = [...this.list.children].find((el) => el.classList.contains('on'));
+    if (li && MODE === 'd') {
+      const l = R(li), y = l.y + l.h / 2;
+      br.setAttribute('d', `M${(l.x + l.w + 4).toFixed(1)} ${y.toFixed(1)}H${(pnl.x - 4).toFixed(1)}`); bd.setAttribute('cx', (pnl.x - 4).toFixed(1)); bd.setAttribute('cy', y.toFixed(1));
+      br.style.opacity = '1'; bd.style.opacity = '1';
+    } else { br.style.opacity = '0'; bd.style.opacity = '0'; }
+  }
+  pickFilter(i) {
+    const f = FILTERS[i];
+    this.hold = false; this.setState({ filter: i });
+    const first = MODELS.findIndex((m) => f === '全部' || (f === '国产' ? DOMESTIC.includes(m.dev) : m.dev === f));
+    if (first >= 0) { this.setState({ sel: -1 }); this.select(first); }
+  }
+  pf0 = () => this.pickFilter(0); pf1 = () => this.pickFilter(1); pf2 = () => this.pickFilter(2); pf3 = () => this.pickFilter(3); pf4 = () => this.pickFilter(4);
+  rowHover(k) { const x = this.shown()[k]; if (!x) return; this.hold = true; this.select(x.i); }
+  rl = () => { this.hold = false; };
+  componentWillUnmount() { this.dead = true; clearInterval(this.tick); clearTimeout(this.ldT); if (this.io) this.io.disconnect(); if (this.r) this.r.destroy(); }
+  renderVals() {
+    const dark = this.dark(), T = themeOf(dark), s = T.s;
+    const v = { ...s, vars: T.vars + `; --ok: ${s.grass9}; --warn: ${s.amber9}; --bad: ${s.tomato9}; --up: ${s.grass11}; --dn: ${s.tomato11}; --failText: ${s.tomato11}; --pickRing: ${dark ? 'rgba(0,162,199,0.32)' : 'rgba(0,162,199,0.22)'}`,
+      glyph: T.glyph, ground: T.ground, seaFilter: T.seaFilter, tintMul: T.tintMul, tintBlend: T.tintBlend,
+      setStage: this.setStage, setCanvas: this.setCanvas, setList: this.setList, setPanel: this.setPanel, setRoutes: this.setRoutes, setLeads: this.setLeads, setPick: this.setPick, rl: this.rl };
+    // live numbers, written in like the entrance
+    const st = this.state.st, tk = Math.floor((st || 0) / 50);
+    const dec = (txt, t) => { if (t == null) return txt; const n = Math.floor((t / 620) * (txt.length + 3)); return [...txt].map((c, i) => (i < n ? c : (i < n + 3 && c !== ' ' ? GLYPHS[Math.floor(hash(i, tk) * GLYPHS.length)] : (c === ' ' ? ' ' : ' ')))).join(''); };
+    v.s0 = dec(String(STATS.models), st); v.s1 = dec(STATS.routes.toLocaleString('en-US'), st); v.s2 = dec(fmtTokens(this.state.tokens), st);
+    for (let i = 0; i < FILTERS.length; i++) { v['f' + i] = i === this.state.filter ? 'on' : ''; v['fs' + i] = i === this.state.filter ? 'true' : 'false'; v['pf' + i] = this['pf' + i]; }
+    // the list
+    const list = this.shown();
+    for (let k = 0; k < NR; k++) {
+      const x = list[k], p = 'r' + k;
+      v['rh' + k] = this['rh' + k] || (this['rh' + k] = () => this.rowHover(k));
+      if (!x) { Object.assign(v, { [p + 'c']: 'off', [p + 'n']: '', [p + 'p']: '', [p + 'd']: '', [p + 'r']: '', [p + 't']: '', [p + 'tc']: '' }); continue; }
+      const m = x.m, low = Math.min(...m.routes.map((r) => r.in));
+      v[p + 'c'] = x.i === this.state.sel ? 'on' : ''; v[p + 'n'] = m.id; v[p + 'p'] = yuan(low); v[p + 'd'] = m.dev; v[p + 'r'] = m.routes.length + ' 条线路';
+      v[p + 't'] = (m.trend > 0 ? '+' : '') + m.trend + '%'; v[p + 'tc'] = m.trend > 0 ? 'upc' : 'dnc';
+    }
+    // the panel for the selected model
+    const m = MODELS[Math.max(0, this.state.sel)], pick = this.pickOf(m, this.state.down), mx = Math.max(...m.routes.map((r) => r.in));
+    const mt = this.state.mt, mtk = Math.floor((mt || 0) / 50), nm = m.id;
+    const kk = mt == null ? Infinity : Math.floor((mt / 380) * (nm.length + 3)), a = Math.min(nm.length, kk), g = Math.max(0, Math.min(nm.length - a, kk + 3 - a));
+    v.pmA = nm.slice(0, a); v.pmG = [...nm.slice(a, a + g)].map((c, i) => GLYPHS[Math.floor(hash(a + i, mtk) * GLYPHS.length)]).join(''); v.pmC = nm.slice(a + g);
+    v.pDev = m.dev; v.pCtx = m.ctx; v.pMax = m.max;
+    for (let j = 0; j < NROUTE; j++) {
+      const r = m.routes[j], p = 'u' + j;
+      if (!r) { Object.assign(v, { [p + 'c']: 'off', [p + 'n']: '', [p + 'a']: '', [p + 'b']: '', [p + 'w']: '0%', [p + 't']: '', [p + 'u']: '' }); for (let q = 0; q < NT; q++) v[`q${j}_${q}`] = ''; continue; }
+      const down = j === this.state.down;
+      v[p + 'c'] = (j === pick ? 'chosen' : '') + (down ? ' down' : '');
+      v[p + 'n'] = r.n; v[p + 'a'] = yuan(r.in); v[p + 'b'] = yuan(r.out); v[p + 'w'] = Math.round((r.in / mx) * 100) + '%';
+      v[p + 't'] = down ? '超时' : r.ttft.toFixed(2) + 's'; v[p + 'u'] = r.up.toFixed(2) + '%';
+      for (let q = 0; q < NT; q++) v[`q${j}_${q}`] = q === NT - 1 && down ? 'x' : (['', 'w', 'x'][r.ticks[q]]);
+    }
+    const pr = m.routes[pick];
+    if (this.state.fail != null) {
+      v.pickCls = 'fail'; v.pkA = '已切换到'; v.pkR = pr.n; v.pkB = `线路 ${m.routes[this.state.fail].n} 超时，请求已自动重试`;
+    } else {
+      v.pickCls = ''; v.pkA = '当前选择'; v.pkR = pr.n;
+      const cheapest = m.routes.every((r) => r.in >= pr.in);
+      v.pkB = (cheapest ? '价格最低' : '达标线路里价格最低') + `，7 天可用率 ${pr.up.toFixed(2)}%`;
+    }
+    v.say = `${m.id}，当前选择线路 ${pr.n}`;
+    const now = new Date(); v.upd = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+    return v;
+  }
+}
+
+</script>
+</body>
+</html>

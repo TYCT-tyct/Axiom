@@ -1,10 +1,10 @@
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { JSDOM } = require("jsdom") as {
+export const { JSDOM } = require("jsdom") as {
   JSDOM: new (html: string) => { window: { document: Document; close(): void } };
 };
-const events: Record<string, string> = {
+export const events: Record<string, string> = {
   onclick: "onClick",
   oninput: "onInput",
   onkeydown: "onKeyDown",
@@ -41,7 +41,7 @@ function expression(text: string): string {
   return parts.join(" + ") || '""';
 }
 
-function property(name: string) {
+export function property(name: string) {
   if (name.startsWith("aria-") || name.startsWith("data-")) return name;
   return names[name] ?? name.replace(/[-:]([a-z])/g, (_, c: string) => c.toUpperCase());
 }

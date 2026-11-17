@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>登录页，手机</title>
+<script src="./support.js"></script>
+<script src="./ocean-orig.js"></script>
+<script src="./login-ui.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@600&display=swap" rel="stylesheet">
+<style>
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/071e79011960dba00b305ae09e6b4237) format('woff2');unicode-range:U+3001,U+3002,U+4E00,U+4E2A,U+4E2D,U+4E3B,U+4F53,U+4F60,U+4F7F,U+5173,U+5408,U+540C,U+5730,U+5B9E,U+5C31,U+5F00,U+6210,U+6216,U+6240,U+628A,U+6587,U+65B9,U+6709,U+7528,U+7684,U+770B,U+7ECF,U+80FD,U+8FC7,U+90A3,U+90FD,U+FF0C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/f7dc53f5629f464759e531aa5d710e14) format('woff2');unicode-range:U+5165,U+52A1,U+53E3,U+5B8C,U+63A5,U+63D0,U+6539,U+670D,U+6761,U+683C,U+6BCF,U+76F4,U+8272,U+8BA1,U+8DEF}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/e463e73ebbc19e7fb829bc4af2bf97a3) format('woff2');unicode-range:U+4EF7,U+4F9B,U+5355,U+578B,U+5B57,U+67E5,U+6848,U+6CE8,U+6D41,U+6DF1,U+7B97,U+7EBF,U+8C03,U+8D39,U+9645}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/5266481a9e20919250d1167503184d2b) format('woff2');unicode-range:U+8D26}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/69bc7767df16eb8f1ce04ec4fee2b809) format('woff2');unicode-range:U+6309,U+6A21,U+7EC6}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/0a631576826c68deee8bd21960b6df01) format('woff2');unicode-range:U+5F55,U+6362,U+6D4B,U+767B}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8a00f1012efd3793a3ae82b3fcfa506c) format('woff2');unicode-range:U+518C,U+7C97}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/4d659e36a489f4ef4885fbe6d1154c88) format('woff2');unicode-range:U+3002,U+4E0D,U+4E2A,U+4F1A,U+4F7F,U+53BB,U+540E,U+5B83,U+6587,U+672C,U+6B63,U+7528,U+7684,U+770B,U+8FD9,U+FF0C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/9000a9bcadb544f7ca1879316d5163fd) format('woff2');unicode-range:U+5373,U+53D6,U+5E38,U+6B21,U+6C42,U+7ACB}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/7882dcd5ff73629e635b004b5f01189e) format('woff2');unicode-range:U+5931,U+672A,U+67E5,U+6CE8,U+6D88,U+8BF7,U+8D39,U+8DB3,U+9664}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8281f2139f01b0021fe4852b5fb74094) format('woff2');unicode-range:U+4F59,U+503C,U+5145,U+6545}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/09e5622a68807c4c69df90a4bfb9ddb6) format('woff2');unicode-range:U+8D25,U+989D}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/571a765663d7abf629937798392cde31) format('woff2');unicode-range:U+518C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/9457f88c120d9a1b5a4cdab3fd49d428) format('woff2');unicode-range:U+4E0B,U+4E0E,U+4E1A,U+4E24,U+4E48,U+4E8B,U+4E9B,U+4EE5,U+51FA,U+5206,U+5230,U+5236,U+529B,U+52A8,U+53EA,U+53EF,U+5728,U+591A,U+5BF9,U+5DE5,U+5DF2,U+624B,U+65F6,U+6700,U+6708,U+70B9,U+73B0,U+8D77,U+8FDB,U+90E8,U+957F,U+9762,U+9AD8,U+FF08,U+FF09}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/fc49098a22b6b0099a4691795329420d) format('woff2');unicode-range:U+4EF6,U+4F4D,U+4FDD,U+505A,U+539F,U+56DE,U+573A,U+5C11,U+5C55,U+5EA6,U+5F20,U+5F80,U+5FEB,U+6301,U+6536,U+653E,U+6C34,U+6D77,U+754C,U+7EC4,U+8868,U+8BB0,U+8BBE,U+8FB9,U+91CF}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/5e41242435fc301be6335634d67a11eb) format('woff2');unicode-range:U+4F01,U+4F9D,U+5177,U+5217,U+5305,U+590D,U+5B58,U+6001,U+600E,U+652F,U+6574,U+65AD,U+663E,U+6807,U+6BB5,U+793A,U+79BB,U+7EA7,U+843D,U+89C6,U+9009}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/558cac2d07ede1ced947afaf0745ab37) format('woff2');unicode-range:U+505C,U+51B2,U+54EA,U+5C42,U+5F39,U+72B6,U+7F6E,U+9000,U+901F,U+9519,U+964D}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/2e8925e7b3cf9b281e6a08028162a1d0) format('woff2');unicode-range:U+51CF,U+5438,U+547C,U+5757,U+677E,U+6BEB,U+6E10,U+753B,U+79FB,U+91CE,U+949F}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/bd7a2cf2d8bcd7185ecd8fd7b11d4130) format('woff2');unicode-range:U+52FE,U+77AC,U+79D2}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8660dd6a2431e3108e8171ac3bdea120) format('woff2');unicode-range:U+552F,U+66F2,U+7A97,U+7F13,U+9690}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/3562fa8001b5e21cc8bc935f830871ae) format('woff2');unicode-range:U+4E0A,U+4E3A,U+4EA7,U+52A0,U+53D1,U+548C,U+597D,U+5B9A,U+5DF1,U+5E94,U+6027,U+662F,U+6765,U+6CA1,U+7269,U+751F,U+7740,U+79CD,U+81EA,U+88AB,U+89C1,U+FF1A,U+FF1B}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/756e93c3d1d95f2985d60e04e6b83eb6) format('woff2');unicode-range:U+4E34,U+63A2,U+63A7,U+6563,U+666F,U+6D0B,U+7B14,U+8F93,U+9760,U+9C7C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/32ddc3b0427a07e14a1e8871250a583b) format('woff2');unicode-range:U+4EFB,U+4F55,U+4FE1,U+5019,U+5171,U+5185,U+5207,U+53D8,U+58F0,U+5904,U+5E26,U+5E73,U+5F3A,U+6307,U+636E,U+6570,U+767D,U+7A7A,U+7CFB,U+7ED9,U+7EDF,U+89C2,U+89E3,U+8BA4,U+8BA9,U+8BAE,U+8D70}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/1d1d7fcd32eb542cab7ec102c36680f2) format('woff2');unicode-range:U+534F,U+56F4,U+60CA,U+6B62,U+6CE2,U+6E38,U+6F14,U+73AF,U+7F51,U+83B7,U+8BFB,U+8D85,U+9650,U+9759,U+98DF}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/d1744829afc0d14f614bab8377495105) format('woff2');unicode-range:U+53F7,U+54CD,U+56FE,U+591F,U+5947,U+5BB9,U+606F,U+6784,U+7559,U+7A81,U+7FA4,U+8282,U+8DDF,U+8F7B,U+8FDC,U+968F,U+9700}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/0c397ddc13e3eed248e21173178f68bb) format('woff2');unicode-range:U+5F53,U+65B0}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/4899128dec44def590d3007cdb121c1e) format('woff2');unicode-range:U+4E86,U+4ECE,U+5411,U+5C0F,U+660E,U+673A,U+884C,U+9053,U+91CC,U+95EE,U+95F4}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/45b6291b8b7d885a22f690259faa26c3) format('woff2');unicode-range:U+4EE4,U+5E95,U+63A8,U+67D0,U+7247,U+7EA6,U+8F6C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/a0366a623d58dd1885429af853b118b1) format('woff2');unicode-range:U+513F,U+5149,U+51E0,U+547D,U+624D,U+6C14,U+6E05,U+76EE,U+771F,U+7A0B}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/f39a5f97704cefbed1f3610f5d8d7749) format('woff2');unicode-range:U+626B,U+6668,U+788E,U+8584,U+86CB,U+98D8}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/b12dc74e87b41770febc564773cb2fc9) format('woff2');unicode-range:U+51B7,U+5FAE,U+6392,U+8BD5,U+8C01}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8eee7e27551d1e67ba876ecac92f1e4c) format('woff2');unicode-range:U+53EB,U+62A4,U+7EC8}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/353a3eee03b5c4b0950c964b53053ac5) format('woff2');unicode-range:U+7AEF,U+85CF}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/5eb654ce2f0d7c97feffc17bb348789e) format('woff2');unicode-range:U+7EEA}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/54bbe9979dae0f80c9ba296e24724320) format('woff2');unicode-range:U+8DF3}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/d14eb00bd268e08f50b67d3cd545b3cc) format('woff2');unicode-range:U+5F71,U+6548,U+9752}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/62fcfec820d94888e14c9e222354f38d) format('woff2');unicode-range:U+724C,U+7801}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8f1ecbb33ad00b172fb0162b3a9b94d2) format('woff2');unicode-range:U+4E4B,U+5176,U+5916,U+5FC3,U+610F,U+65E0,U+8BF4,U+91CD}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/a88aa297482af0c79313bd8983da2c2b) format('woff2');unicode-range:U+4EA4,U+5143,U+533A,U+53CA,U+5BFC,U+9898}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/15338eabd3933768c4b5f6935c32748e) format('woff2');unicode-range:U+51FB,U+5212,U+52BF,U+7167,U+7EED,U+82B1,U+8BED,U+8FD1,U+8FDE}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/3083931a3ccac4f8ae6f1a7bb0900ade) format('woff2');unicode-range:U+77ED,U+9047}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/3da54535dd3d81de9434c187ef0fb4c8) format('woff2');unicode-range:U+5F97,U+7B49}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/c95f2973192050e71d40307dcfdc26f1) format('woff2');unicode-range:U+4FEE,U+6C49,U+6E90,U+914D}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/bbdbf43435e382291d4fd77d8921c2bb) format('woff2');unicode-range:U+4EEC,U+6211,U+6CD5}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/ea7b91fb847653cf7cec3c1320ccce27) format('woff2');unicode-range:U+4E07,U+8054}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/1fe759de1cc3725e5ef1c04745c83985) format('woff2');unicode-range:U+517C,U+9891}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/4ffc1f1aad505e84ec331ed52654fb87) format('woff2');unicode-range:U+5EFA,U+6B65,U+901A}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/fbe748c6d0e028a32250e25a1913f5bf) format('woff2');unicode-range:U+5199,U+53F0}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/4f3c9036804b979cc57ca0c6b86875c5) format('woff2');unicode-range:U+521B,U+5DEE,U+6267,U+666E}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/1e1098fbe1dddd1eeba252028c92272d) format('woff2');unicode-range:U+4E5F,U+4ED6}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/06db6d6c3f671df7272a85873c0e4765) format('woff2');unicode-range:U+5168}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/4dba6a90e8fba82f89aab7d461357bde) format('woff2');unicode-range:U+4EFD,U+6B3E,U+8BCD,U+9010}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/dc80102e417fc4ada0eaab56d99d31d4) format('woff2');unicode-range:U+4E09,U+5E76,U+7B2C,U+8FD8}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/e0239a63b3d43a692164b37c0e4a712a) format('woff2');unicode-range:U+521A,U+5F85,U+9001}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/5606297e37aeb8a109636488726b0ee9) format('woff2');unicode-range:U+5148,U+522B,U+529E,U+53F8}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/b0eccb279ee50cc92eb5f499877bad95) format('woff2');unicode-range:U+518D,U+5404,U+6BD4}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/102787e3186507acb3478744e4db0e2b) format('woff2');unicode-range:U+FF1F}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/3392ba722565f09f131d26946f670d20) format('woff2');unicode-range:U+5F0F}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/e4a5a49ff7fb3ddab47a91de684496b2) format('woff2');unicode-range:U+6237,U+65E7}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/a9ebe745de256391ad81ae5ea41e4fc6) format('woff2');unicode-range:U+653F}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/1d7034a7e819c82ab78bb96f8f2a091a) format('woff2');unicode-range:U+7B56}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/f9c402308d8755e3532a9755ff8bf19f) format('woff2');unicode-range:U+79C1}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/bb073aa83d81bb9df0e086a9c6995215) format('woff2');unicode-range:U+6EE1,U+9A8C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/845b2c2dabf5732e1865efb6ba8ef7e5) format('woff2');unicode-range:U+5934}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/932da39e8b21a09a4283181a9eb9e638) format('woff2');unicode-range:U+4E1C,U+514B,U+544A,U+56DB,U+5F62,U+7535,U+773C,U+786E,U+8BBA}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/e5b28b71cb42cd6bcbeec4c8e9c07c46) format('woff2');unicode-range:U+5F15,U+5F8B,U+6613,U+8BC1,U+8D28}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/4ad24cdccd239f62f8e47f999e18756a) format('woff2');unicode-range:U+9605}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/65bad28a2be83a5746fffca87cbd07d7) format('woff2');unicode-range:U+4E8C,U+8EAB}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/1b9b5d03e28e49c722bd0f8a94772837) format('woff2');unicode-range:U+50A8,U+5141,U+7BB1,U+7F72}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/493410234af662228e573a8f9caa9e8e) format('woff2');unicode-range:U+90AE}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-style:normal;font-display:swap;src:url(/_blob/b0bf8cf45c88ea681e71c4608e1445de) format('woff2');unicode-range:U+5426,U+68C0}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/dbaacd50bb06080e3506d232b10870c0) format('woff2');unicode-range:U+4E0D,U+53BB,U+6587,U+6709,U+6B63,U+6CA1,U+770B,U+8FD9,U+FF0C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/821885af12c879c886ae402c069e8e8e) format('woff2');unicode-range:U+53D6,U+5E38,U+6B21,U+6C42}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/fb95b4cd26adb7f6c95acd6de21f31bc) format('woff2');unicode-range:U+67E5,U+6CE8,U+6D88,U+8BF7,U+8D39,U+8DB3}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/8c6fae6fb32b23da5ab8c9e8ccf8d3d5) format('woff2');unicode-range:U+4F59,U+503C,U+5145,U+6545}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/a8e2713f99c289719fb10a61fd8bbef1) format('woff2');unicode-range:U+989D}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/000b3a599258e3e2b78bf8ad95109335) format('woff2');unicode-range:U+518C}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/bc7ca6ecc37d5dc072bc15aaae5f73bb) format('woff2');unicode-range:U+8001}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/cb51dbbc0cfb8c3915ec4b86c906fdb4) format('woff2');unicode-range:U+904D}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/1f53f6ca5fcf6eb51e107c7bc5b87718) format('woff2');unicode-range:U+7840,U+7E41}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/f03ccdeb50c71ea9463b35feba76ca1f) format('woff2');unicode-range:U+2026,U+7EE7}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/07bb8a40634c35424da78745de4d9903) format('woff2');unicode-range:U+300A,U+300B,U+57FA,U+592A,U+7EF4,U+8FCE}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/c553ce0aefc6965f33c82f86c4aa6649) format('woff2');unicode-range:U+6B22}
+@font-face{font-family:'Axiom CJK';font-weight:150 700;font-display:swap;src:url(/_blob/d5d2299f0dccf8b95ab4dd3e615f903d) format('woff2');unicode-range:U+203A}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/37b19e37cd85717b8bf41105f0584d50) format('woff2');unicode-range:U+6A21}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/382ee04b3905849c6561bbafb465f907) format('woff2');unicode-range:U+578B,U+63A5,U+6539}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/e96de78f7ed343a7e24fe08b98122417) format('woff2');unicode-range:U+5165,U+90FD}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/416b11e689c0b4d12082a1ba7cf8f2f9) format('woff2');unicode-range:U+6240}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/4c90d06ee48743157dfacf2028343b90) format('woff2');unicode-range:U+4E00,U+4E2A,U+6709,U+7528,U+80FD}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/ce287cdd976a2b52de6e9820f4e1817d) format('woff2');unicode-range:U+FF0C}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/56adb0abc8a59c259a402ecbd3884b6f) format('woff2');unicode-range:U+518C}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/10d3fcc86c71894b7c8b54ce32f218ba) format('woff2');unicode-range:U+6B65,U+6CE8}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/605a290548d7e8b7fcecc03bdd540ae6) format('woff2');unicode-range:U+4E09,U+4ECE,U+7B2C}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/952afe7e66257738fb0a547cf2ba2d58) format('woff2');unicode-range:U+FF0C}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/2a0e1f526c678a35eb0460c2dbeebd56) format('woff2');unicode-range:U+628A}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-style:normal;font-display:swap;src:url(/_blob/81799272dcc8f6f9b15577ab8abf79d1) format('woff2');unicode-range:U+7684}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/81799272dcc8f6f9b15577ab8abf79d1) format('woff2');unicode-range:U+7684}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/d0b86586b6fd5047388cb564be8b7d29) format('woff2');unicode-range:U+626B}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/1a345b639ca7ecc82bf2c889c5e0d237) format('woff2');unicode-range:U+8FCE}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/9b1c03da462f9c3d2e586230b0edd4e3) format('woff2');unicode-range:U+8D26}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/74648e79a6be38737ba9b800e40403be) format('woff2');unicode-range:U+6B22}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/adf4d633bdf96894e01e05e42293e54b) format('woff2');unicode-range:U+767B,U+7801}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/683187d18a034bb4d11747bc4855a263) format('woff2');unicode-range:U+5F55,U+5FAE,U+8F93}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/dad4767408f72d23ceed8d011ac40f8f) format('woff2');unicode-range:U+53F7}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/a64beb19459e85d4d35e3bb4c3f826b6) format('woff2');unicode-range:U+56DE}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/37ac01f5248fc5190211f3b9d4ca4c72) format('woff2');unicode-range:U+4F60,U+9A8C}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/d9501cee5afad5e1827152ab1a93d32e) format('woff2');unicode-range:U+5DF2}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/20f78c2c4fe1475aab2780f7b7289808) format('woff2');unicode-range:U+521B,U+8BC1}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/4400c256ab8cae3eb4fefa207214fdb4) format('woff2');unicode-range:U+4FE1,U+6216}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/fec3d4eb074c76d2a6d1d6d3d263f22d) format('woff2');unicode-range:U+5EFA}
+@font-face{font-family:'AX Serif';font-weight:250 900;font-display:swap;src:url(/_blob/ef05d0599d8754569b11e60bd9bbbe8f) format('woff2');unicode-range:U+6765}
+@font-face{font-family:'Axiom Sans';font-weight:400 700;font-display:swap;size-adjust:105%;src:url(/_blob/e769d1504875b7ff839b7b2904c6a841) format('woff2')}
+@font-face{font-family:'Axiom Mono';font-weight:100 800;font-display:swap;src:url(/_blob/443c89f8ceeef8bb311b0be6c979ff1e) format('woff2')}
+body{margin:0}
+.lg{position:relative;display:grid;grid-template-columns:minmax(0,56fr) minmax(440px,44fr);width:100%;height:100vh;min-height:640px;background:var(--bg);color:var(--text1);font-family:'Axiom Sans','Axiom CJK','PingFang SC',sans-serif;text-autospace:normal;line-break:strict;-webkit-font-smoothing:antialiased;--bw:1px;--line:var(--line1x);--lineStrong:var(--lineStrong1x)}
+@media (min-resolution:2dppx){.lg{--bw:.5px;--line:var(--line2x);--lineStrong:var(--lineStrong2x)}}
+.lg.light{--bg:#fcfcfd;--field:#ffffff;--hover:#f0f0f3;--press:#e8e8ec;--line1x:#d9d9e0;--line2x:#cdced6;--lineStrong1x:#cdced6;--lineStrong2x:#b9bbc6;--text1:#1c2024;--text2:#60646c;--focus:#0797b9;--ring:#107d98;--err:#d13415;--ok:#2a7e3b;--veil:rgba(252,252,253,.55)}
+.lg.dark{--bg:#111113;--field:#18191b;--hover:#212225;--press:#272a2d;--line1x:#363a3f;--line2x:#43484e;--lineStrong1x:#43484e;--lineStrong2x:#5a6169;--text1:#edeef0;--text2:#b0b4ba;--focus:#11809c;--ring:#4ccce6;--err:#ff977d;--ok:#71d083;--veil:rgba(17,17,19,.45)}
+.lg *{box-sizing:border-box}
+.lg a{color:inherit}
+.lg a:focus-visible,.lg button:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+.lg-sea{position:relative;overflow:hidden;box-shadow:inset calc(-1 * var(--bw)) 0 0 var(--line)}
+.lg .sea{position:absolute;inset:0;width:100%;height:100%;display:block;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
+.lg.light .sea{filter:invert(1)}
+.lg .brand{position:absolute;left:48px;top:23px;z-index:2;display:flex;align-items:center;gap:10px;font-weight:600;font-size:16px;line-height:26px;letter-spacing:-.01em;text-decoration:none}
+.lg-pitch{position:absolute;left:48px;bottom:48px;z-index:2;max-width:560px}
+.lg-pitch .h{margin:0;font-family:'AX Serif','Axiom CJK',serif;font-weight:600;font-size:40px;line-height:48px;letter-spacing:-.01em}
+.lg-pitch .k{font-family:'AX Serif Latin',serif;font-style:italic;font-weight:400;font-size:1.12em;letter-spacing:0;padding-right:.04em}
+.lg-pitch .kern{margin-right:-.42em}
+.lg-pitch .s{margin:12px 0 0;font-size:16px;line-height:26px;color:var(--text2)}
+.lg .lens{position:relative;z-index:0}
+.lg .lens::before{content:'';position:absolute;inset:-12px -24px;z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--veil);
+  -webkit-mask-image:linear-gradient(to right,transparent,#000 20px,#000 calc(100% - 20px),transparent),linear-gradient(to bottom,transparent,#000 16px,#000 calc(100% - 16px),transparent);-webkit-mask-composite:source-in;
+  mask-image:linear-gradient(to right,transparent,#000 20px,#000 calc(100% - 20px),transparent),linear-gradient(to bottom,transparent,#000 16px,#000 calc(100% - 16px),transparent);mask-composite:intersect}
+.lg-top{position:absolute;top:18px;right:24px;z-index:3;display:flex;align-items:center;font-size:16px;line-height:26px}
+.lg-top a{height:36px;padding:0 12px;border-radius:8px;display:inline-flex;align-items:center;color:var(--text2);text-decoration:none;transition:background-color 250ms ease-out,color 250ms ease-out}
+.lg-top a:hover{background:var(--hover);color:var(--text1)}
+.lg-top a[aria-current]{color:var(--text1)}
+.lg-side{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 40px}
+.lg-form{position:relative;width:400px;max-width:100%}
+.lg-foot{position:absolute;left:0;right:0;bottom:24px;margin:0;text-align:center;font-size:12px;line-height:18px;color:var(--text2)}
+.lg-foot a,.lg-note a,.lg-consent a{color:var(--text1);text-decoration:underline;text-decoration-thickness:1px;text-underline-offset:3px}
+.lg-dc{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.lg-step{display:flex;flex-direction:column}
+.lg-step.in{animation:lgIn 250ms cubic-bezier(.16,1,.3,1) both}
+@keyframes lgIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.lg-title{margin:0;font-family:'AX Serif','Axiom CJK',serif;font-weight:600;font-size:40px;line-height:48px;letter-spacing:-.01em}
+.lg-sub{margin:8px 0 32px;font-size:16px;line-height:26px;color:var(--text2)}
+.lg-stack{display:flex;flex-direction:column;gap:12px}
+.lg-btn{all:unset;box-sizing:border-box;height:44px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;line-height:26px;font-weight:500;cursor:pointer;color:var(--text1);background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong);transition:background-color 250ms ease-out,box-shadow 250ms ease-out,opacity 250ms ease-out}
+.lg-btn:hover{background:var(--hover)}
+.lg-btn:active{transform:scale(.975)}
+.lg-btn[disabled]{cursor:default;color:var(--text2);background:var(--field)}
+.lg-btn.primary{margin-top:12px;background:var(--text1);color:var(--bg);box-shadow:none}
+.lg-btn.primary:hover{opacity:.88}
+.lg-or{display:flex;align-items:center;gap:12px;margin:24px 0;font-size:12px;line-height:18px;color:var(--text2)}
+.lg-or::before,.lg-or::after{content:'';flex:1;height:var(--bw);background:var(--line)}
+.lg-label{display:block;margin:0 0 8px;font-size:12px;line-height:18px;color:var(--text2)}
+.lg-field{display:flex;align-items:center;height:44px;border-radius:8px;background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong)}
+.lg-field:focus-within{outline:2px solid var(--focus);outline-offset:2px}
+.lg-field.bad{box-shadow:inset 0 0 0 1px var(--err)}
+.lg-field input{all:unset;flex:1;min-width:0;height:100%;padding:0 14px;font-size:16px;line-height:26px;color:var(--text1)}
+.lg-field input::placeholder{color:var(--text2)}
+.lg-phone .cc{padding:0 2px 0 14px;font-family:'Axiom Mono',ui-monospace,monospace;font-size:16px;color:var(--text2)}
+.lg-err{margin:8px 0 0;font-size:12px;line-height:18px;color:var(--err)}
+.lg-consent{position:relative;display:flex;align-items:flex-start;gap:8px;margin-top:16px;font-size:12px;line-height:18px;color:var(--text2);cursor:pointer}
+.lg-consent input{position:absolute;left:0;top:1px;width:16px;height:16px;margin:0;opacity:0}
+.lg-consent .box{flex:none;display:flex;align-items:center;justify-content:center;width:16px;height:16px;margin-top:1px;border-radius:4px;background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong);color:transparent;transition:background-color 120ms ease-out,color 120ms ease-out}
+.lg-consent input:checked+.box{background:var(--text1);color:var(--bg);box-shadow:none}
+.lg-consent input:focus-visible+.box{outline:2px solid var(--focus);outline-offset:2px}
+.lg-consent.bad .box{box-shadow:inset 0 0 0 1px var(--err)}
+.lg-seg{display:flex;gap:2px;margin:0 0 16px;padding:2px;border-radius:8px;background:var(--hover)}
+.lg-seg button{all:unset;flex:1;height:32px;border-radius:6px;text-align:center;font-size:12px;line-height:32px;color:var(--text2);cursor:pointer;transition:background-color 250ms ease-out,color 250ms ease-out}
+.lg-seg button[aria-selected=true]{background:var(--field);color:var(--text1);box-shadow:inset 0 0 0 var(--bw) var(--line)}
+.lg-digits{display:flex;gap:8px}
+.lg-digit{all:unset;box-sizing:border-box;width:56px;height:64px;border-radius:8px;background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong);text-align:center;font-family:'Axiom Mono',ui-monospace,monospace;font-size:24px;line-height:64px;color:var(--text1);caret-color:var(--ring)}
+.lg-digit:focus{outline:2px solid var(--focus);outline-offset:2px}
+.lg-digit.bad{box-shadow:inset 0 0 0 1px var(--err)}
+.lg-note{margin:16px 0 0;font-size:12px;line-height:18px;color:var(--text2)}
+.lg .mono{font-family:'Axiom Mono',ui-monospace,monospace}
+.lg-qr{all:unset;position:relative;align-self:flex-start;padding:12px;border-radius:12px;background:#ffffff;box-shadow:inset 0 0 0 var(--bw) var(--line);cursor:pointer}
+.lg-qr svg{display:block;fill:#1c2024}
+.lg-qr .tag{position:absolute;right:-56px;top:12px;font-size:12px;line-height:18px;color:var(--text2)}
+.lg-key{display:flex;align-items:center;gap:8px;height:52px;padding:0 8px 0 14px;border-radius:8px;background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong)}
+.lg-key .mono{flex:1;min-width:0;font-size:16px;line-height:26px;white-space:nowrap;overflow:hidden}
+.lg-key .hd{color:var(--ring)}
+.lg-key .nr{color:var(--text2)}
+.lg-key .far{color:transparent}
+.lg-mini{all:unset;flex:none;height:32px;padding:0 12px;border-radius:6px;font-size:12px;line-height:32px;color:var(--text1);background:var(--field);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong);cursor:pointer}
+.lg-mini:hover{background:var(--hover)}
+.lg-mini .ok{color:var(--ok)}
+.lg-h{display:flex;align-items:center;justify-content:space-between;margin:24px 0 8px;font-size:12px;line-height:18px;color:var(--text2)}
+.lg-seg.tools{margin:0 0 8px}
+.lg-code{position:relative;padding:12px 14px;border-radius:8px;background:var(--hover)}
+.lg-code pre{margin:0;min-height:72px;font-family:'Axiom Mono','Axiom CJK',ui-monospace,monospace;font-size:12px;line-height:18px;white-space:pre;overflow:hidden}
+.lg-code .ln{display:block}
+.lg-code .c,.lg-code .n{color:var(--text2)}
+.lg-code .k{color:var(--ring)}
+.lg-bar{height:2px;margin-top:8px;border-radius:1px;background:var(--line);overflow:hidden}
+.lg-bar span{display:block;width:0;height:100%;background:var(--ring);animation:lgBar 1400ms cubic-bezier(.65,0,.35,1) forwards}
+.lg-bar.done span{width:100%;animation:none}
+@keyframes lgBar{to{width:100%}}
+@media (max-width:767px){
+  .lg{display:flex;flex-direction:column;height:auto;min-height:100vh}
+  .lg-sea{flex:none;height:208px;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--line)}
+  .lg .brand{left:20px;top:15px}
+  .lg-top{top:10px;right:8px}
+  .lg-pitch{left:20px;right:20px;bottom:20px}
+  .lg-pitch .h{font-size:28px;line-height:36px}
+  .lg-pitch .s{display:none}
+  .lg-side{flex:1;justify-content:flex-start;padding:32px 20px 72px}
+  .lg-form{width:100%}
+  .lg-title{font-size:28px;line-height:36px}
+  .lg-sub{margin-bottom:24px}
+  .lg-digits{gap:6px}
+  .lg-digit{width:calc((100% - 30px) / 6);height:56px;line-height:56px}
+  .lg-qr .tag{right:8px;top:auto;bottom:-26px}
+  .lg-key{height:auto;flex-wrap:wrap;row-gap:8px;padding:12px 12px 10px}
+  .lg-key .mono{flex-basis:100%}
+  .lg-code pre{overflow-x:auto}
+}
+</style>
+</helmet>

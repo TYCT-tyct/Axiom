@@ -42,7 +42,7 @@ const workers = shards > 1 ? Math.max(1, Math.floor((quota * 3) / 4 / shards)) :
 
 export default defineConfig({
   testDir: "e2e",
-  testIgnore: "vitals.spec.ts", // timed, so it runs alone (playwright.vitals.config.ts)
+  testIgnore: ["vitals.spec.ts", "boards*.spec.ts"], // Separate timing and converter jobs own these suites.
   // Only design.spec.ts compares snapshots: it writes each board's shot where Playwright looks for the snapshot, outside
   // the repository and beside the page's shot (web/README.md「测试」).
   snapshotDir: process.env.AXIOM_DESIGN_OUT || join(tmpdir(), "axiom-design"),

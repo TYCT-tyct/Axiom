@@ -1,0 +1,204 @@
+// AxiomWhaleEgg: the humpback as an easter egg on the final site. Draws the whale (whale.js, visit mode) on its own
+// canvas above the sea, hands its body to the sea's engine as a ghost so the fish and sharks steer around it, and
+// wires the triggers: "deepseek" in the hero's family strip, clicked or tapped (on the final site the models table
+// only answers; rowSummon brings back the old trigger, a deepseek row pointed at), the connect screen's info card
+// decoding a deepseek model (a chance meeting: one per page load, not within the first seconds, not on the way to the
+// sign-in page), and the password (typing deepseek). Called on purpose it always comes, unless it is already out or
+// the water is taken (blocked): then it comes as soon as the water is free.
+//
+// The visit, shadow first: a silhouette slides in from the edge and passes behind the glass of the list, a big blurred
+// shadow the fish keep away from; it surfaces out from under the glass into the open water as the whole whale, the
+// text on its flank lights once and the deepseek rows answer; then it sinks back into a shadow as it leaves the other
+// edge. Where there is no open water (the phone) it stays behind the glass and the glass thins for the reveal.
+(() => {
+  // A tap (the same as in clawd-cast.js): a press and a release close together in space and time, caught on the way down (capture), so neither a
+  // host that handles touches itself (the design canvas pans and zooms, and the browser then makes no click) nor an
+  // element that stops the click on its way up can swallow it. A plain click still counts once (a keyboard, or a
+  // browser without pointer events). A long press on a spot that answers does not select the text next to it.
+  function onTap(L, el, hit, fn) {
+    let d = null, last = 0, held = 0;
+    L(el, 'pointerdown', (e) => { if (e.button > 0) { d = null; return; } d = { x: e.clientX, y: e.clientY, t: performance.now(), id: e.pointerId }; held = hit(e) ? performance.now() : 0; }, { capture: true, passive: true });
+    L(el, 'pointerup', (e) => { const s = d; d = null; if (!s || s.id !== e.pointerId || Math.hypot(e.clientX - s.x, e.clientY - s.y) > 12 || performance.now() - s.t > 650) return; last = performance.now(); fn(e); }, { capture: true });
+    L(el, 'pointercancel', () => { d = null; }, { capture: true });
+    L(el, 'click', (e) => { if (performance.now() - last < 900) return; fn(e); }, { capture: true });
+    const quiet = (e) => { if (held && performance.now() - held < 2000) e.preventDefault(); };
+    L(el, 'selectstart', quiet, { capture: true }); L(el, 'contextmenu', quiet, { capture: true });
+  }
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  class AxiomWhaleEgg {
+    constructor(root, eng, opts = {}) {
+      this.root = root; this.eng = eng;
+      this.o = Object.assign({ dark: () => false, phone: false, scope: root, rows: '.mr', rowSummon: true, fam: null, blocked: null, card: '.rcard .rc-m', once: true, delay: 10, enabled: () => true, onSummon: null, onLight: null, onThin: null, pace: 0.26,
+        content: '[data-avoid], .lens, .rcard, .pnl, .pick, .bar:not(.away), .isl.on' }, opts);
+      this.cv = opts.canvas || root.querySelector(':scope > canvas.wh');
+      this.t0 = performance.now(); this.seen = false; this.buf = ''; this.on = []; this.thin = false; this.thinOn = false; this.cover = null;
+      const dark = this.o.dark();
+      this.wh = new window.WhaleScene(this.cv, Object.assign({ mode: 'visit', rigid: true, transparent: true, fish: false, text: true, textReveal: true, blow: true, beatAsym: true, pectSway: true, flipFade: true, pointer: false, minCell: 4, onDone: () => this.done() }, this.theme(dark)));
+      // a body the sea's fish and sharks avoid; the sea never draws it
+      this.ghost = { id: 99, kind: 'whale', ghost: true, scripted: true, whaleLike: true, hidden: true, length: 1, nodes: new Float32Array(40), heading: Math.PI, speed: 30, phase: 0, turn: 0, depth: 1 };
+      this.wire();
+      const sync = () => {
+        if (this.dead) return; this.raf = requestAnimationFrame(sync);
+        if (this.pend && !(this.o.blocked && this.o.blocked())) { const p = this.pend; this.pend = null; if (performance.now() - p.at < 15000) this.summon(p.anchor, true); }
+        const W = this.eng.world; if (!W || !W.sharks) return;
+        if (W.sharks.indexOf(this.ghost) < 0) W.sharks.push(this.ghost);
+        const S = this.wh.spine(); if (!S) { this.ghost.hidden = true; return; }
+        // while it is only a shadow the fish keep further away: something big is passing underneath
+        const vs = this.eng.vs || 1, g = this.ghost, wide = S.rev < 0.5 ? 1.5 : 1; g.hidden = S.alp < 0.05; g.length = S.L * vs * wide;
+        for (let k = 0; k < 20; k++) { const j = Math.round(k * (S.n - 1) / 19); g.nodes[k * 2] = S.rs[j * 2] * vs; g.nodes[k * 2 + 1] = S.rs[j * 2 + 1] * vs; }
+        g.heading = S.dirx > 0 ? S.pitch : Math.PI - S.pitch; g.speed = S.L * 0.12 * vs * wide;
+        const t = this.thin && S.rev > 0.5; if (t !== this.thinOn) { this.thinOn = t; this.setThin(t); }
+      };
+      sync();
+    }
+    theme(dark) { return { palette: dark ? 'bright' : 'deep', fadeTo: dark ? [17, 17, 19] : [252, 252, 253], spoutColor: dark ? '76,204,230' : '7,151,185', shadowMix: dark ? 0.3 : 0.34 }; }
+    setTheme(dark) { this.wh.setOptions(this.theme(dark)); }
+    set(o) { this.wh.setOptions(o); }
+    active() { return this.wh.active() || !!this.pend; }
+    // the glass itself carries the class (the root's class is re-rendered by the page)
+    setThin(on) { if (this.o.onThin) this.o.onThin(on); else if (this.cover) this.cover.classList.toggle('wh-under', on); else this.root.classList.toggle('wh-visiting', on); }
+    wire() {
+      const L = (el, ev, fn, o) => { if (!el) return; el.addEventListener(ev, fn, o); this.on.push([el, ev, fn, o]); };
+      const scope = this.o.scope;
+      // the models screen: a deepseek row pointed at, or tapped
+      const row = (e) => { const li = e.target && e.target.closest && e.target.closest(this.o.rows); if (!li || !scope.contains(li)) return; const nm = li.querySelector('.mn'); if (nm && /^deepseek/i.test(nm.textContent.trim())) this.summon(li); };
+      if (this.o.rowSummon) { L(scope, this.o.phone ? 'click' : 'pointerover', row); if (!this.o.phone) L(scope, 'click', row); }
+      // the hero's family strip: its "deepseek" calls the whale. The word is marked in the markup (data-egg) and the
+      // click is caught on the root: the entrance rewrites the word's letters and the page may render the strip again
+      // the word in the hero's strip: a tap caught on the way down (see onTap)
+      if (this.o.fam) { const eg = (e) => e.target && e.target.closest && e.target.closest(this.o.fam + ' [data-egg=deepseek]'); onTap(L, this.root, (e) => !!eg(e), (e) => { const w = eg(e); if (w) this.summon(w, true); }); }
+      // the connect screen: its info card finishes decoding a deepseek model
+      const card = scope.querySelector(this.o.card);
+      if (card && window.MutationObserver) {
+        this.mo = new MutationObserver(() => { const g = card.querySelector('.g'); if (g && g.textContent) return; if (/^deepseek/i.test(card.textContent.trim())) this.summon(card.closest('.rcard') || card); });
+        this.mo.observe(card, { childList: true, characterData: true, subtree: true });
+      }
+      // the password: type deepseek on the page (the root takes focus on the first press so the keys reach it)
+      L(this.root, 'pointerdown', (e) => { const a = document.activeElement; if (!a || a === document.body || a === this.root) { try { this.root.focus({ preventScroll: true }); } catch (_) {} } if (e.target && e.target.closest && e.target.closest('[data-go]')) this.wh.scare(); }, { passive: true });
+      L(this.root, 'keydown', (e) => { if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return; const t = e.target; if (t && t.closest && t.closest('input, textarea, select, [contenteditable]')) return; this.buf = (this.buf + e.key.toLowerCase()).slice(-8); if (this.buf === 'deepseek') { this.buf = ''; this.summon(null, true); } });
+    }
+    // the content in the viewport, in root coordinates
+    rects() {
+      // the board may be shown scaled (the design canvas zooms it): root coordinates are the page's own pixels
+      const R = this.root.getBoundingClientRect(), k = this.root.offsetWidth && R.width ? R.width / this.root.offsetWidth : 1, H = R.height / k, out = [];
+      for (const el of this.o.scope.querySelectorAll(this.o.content)) {
+        const r = el.getBoundingClientRect(); if (r.width < 2 || r.height < 2 || r.bottom < R.top || r.top > R.bottom) continue;
+        out.push({ t: Math.max(0, (r.top - R.top) / k - 16), b: Math.min(H, (r.bottom - R.top) / k + 16), l: (r.left - R.left) / k, r: (r.right - R.left) / k, el, lens: el.classList.contains('lens') });
+      }
+      // the seabed is not water: the wordmark and the sand
+      const art = this.root.querySelector('canvas.art'), a = art && art.getBoundingClientRect();
+      if (a && a.height > 2 && a.bottom > R.top && a.top < R.bottom) out.push({ t: Math.max(0, (a.top - R.top) / k), b: H, l: 0, r: R.width / k, el: art, lens: false });
+      return out;
+    }
+    // open water: the tallest band with no content in it, over the whole width first, then over one side
+    lane(rects, ay, W, H, L) {
+      const need = L * 0.3;
+      for (const [x0, x1] of [[0, W], [W * 0.5, W], [0, W * 0.5]]) {
+        const rs = rects.filter((r) => r.r > x0 && r.l < x1).sort((a, b) => a.t - b.t), bands = []; let y = 0;
+        for (const { t, b } of rs) { if (t > y) bands.push([y, t]); y = Math.max(y, b); }
+        if (y < H) bands.push([y, H]);
+        const fit = bands.filter((b) => b[1] - b[0] >= need).sort((p, q) => Math.abs((p[0] + p[1]) / 2 - ay) - Math.abs((q[0] + q[1]) / 2 - ay));
+        if (fit.length) { const [a, b] = fit[0]; return { y: Math.min(Math.max(a + 0.14 * L + 4, L * 0.16), b - L * 0.2), x0, x1, open: true }; }
+      }
+      return { y: ay, x0: 0, x1: W, open: false };
+    }
+    // the route: the glass it passes behind (the biggest lens in view, the anchor's own if it is big enough), the open
+    // water it surfaces in, and the points of the path from one edge of the page to the other
+    plan(anchor) {
+      const R = this.root.getBoundingClientRect(), k = this.root.offsetWidth && R.width ? R.width / this.root.offsetWidth : 1, W = R.width / k, H = R.height / k, L = this.wh.metrics().L, rects = this.rects();
+      const ar = anchor ? anchor.getBoundingClientRect() : null, ay = ar ? clamp(((ar.top + ar.bottom) / 2 - R.top) / k, 0, H) : H * 0.5;
+      // a strip of text is no hiding place: the glass has to be wide and tall enough to hold the shadow
+      const lenses = rects.filter((a) => a.lens && a.r - a.l >= L * 0.6 && a.b - a.t >= L * 0.34), area = (a) => (a.r - a.l) * (a.b - a.t);
+      const own = anchor && anchor.closest ? anchor.closest('.lens') : null;
+      let cover = (own && lenses.find((a) => a.el === own)) || null;
+      if (!cover && lenses.length) cover = lenses.slice().sort((p, q) => area(q) - area(p))[0];
+      const ln = this.lane(rects, ay, W, H, L);
+      // it swims from the side of the glass toward the open water; with nothing to decide, from left to right
+      let dir = 1; if (cover && ln.open) { const cx = (cover.l + cover.r) / 2, lx = (ln.x0 + ln.x1) / 2; if (Math.abs(lx - cx) > W * 0.1) dir = lx >= cx ? 1 : -1; }
+      const X = (x) => (dir > 0 ? x : W - x), fx = (x) => (dir > 0 ? x : W - x);
+      const pts = []; let sweepAt = 0, blowAt = null;
+      if (cover) {
+        const cl = Math.min(fx(cover.l), fx(cover.r)), cr = Math.max(fx(cover.l), fx(cover.r));
+        const sy = clamp(ln.open ? ln.y - 0.25 * L : ay, cover.t + 0.16 * L, cover.b - 0.16 * L);
+        if (ln.open && cover.r - cover.l > W * 0.7) {
+          // the glass spans the screen (the phone): pass under it as a shadow, then come out below or above it, on screen
+          this.thin = false;
+          pts.push({ x: -0.3 * L, y: sy + 0.03 * L, r: 0, z: 0.85, a: 0.3, v: 1.1 });
+          pts.push({ x: 0.25 * L, y: sy, r: 0, z: 0.9, a: 1, v: 1 });
+          pts.push({ x: W * 0.36, y: (sy + ln.y) / 2, r: 0.5, z: 0.95, a: 1, v: 0.9 });
+          pts.push({ x: W * 0.5 + 0.1 * L, y: ln.y, r: 1, z: 1, a: 1, v: 0.8 });
+          pts.push({ x: W * 0.5 + 0.45 * L, y: ln.y - 0.02 * L, r: 1, z: 1, a: 1, v: 0.8 });
+          pts.push({ x: W + 0.45 * L, y: ln.y + 0.1 * L, r: 0.2, z: 0.85, a: 0.7, v: 1.2 });
+          pts.push({ x: W + 1.1 * L, y: ln.y + 0.2 * L, r: 0, z: 0.7, a: 0, v: 1.5 });
+          sweepAt = 2.9;
+        } else if (ln.open) {
+          const lx0 = Math.min(fx(ln.x0), fx(ln.x1)), lx1 = Math.max(fx(ln.x0), fx(ln.x1));
+          const x3 = Math.max(cr + 0.55 * L, lx0 + 0.3 * L), x4 = Math.max(x3 + 0.4 * L, Math.min(W - 0.25 * L, lx1 - 0.25 * L));
+          pts.push({ x: cl - 0.2 * L, y: sy - 0.04 * L, r: 0, z: 0.85, a: 0.25, v: 1.05 });
+          pts.push({ x: cl + 0.3 * L, y: sy, r: 0, z: 0.85, a: 1, v: 1 });
+          pts.push({ x: cr - 0.12 * L, y: sy + 0.02 * L, r: 0, z: 0.9, a: 1, v: 0.95 });
+          pts.push({ x: x3, y: ln.y, r: 1, z: 1, a: 1, v: 0.85 });
+          pts.push({ x: x4, y: ln.y - 0.03 * L, r: 1, z: 1, a: 1, v: 0.8 });
+          pts.push({ x: W + 0.45 * L, y: ln.y + 0.1 * L, r: 0.2, z: 0.85, a: 0.7, v: 1.25 });
+          pts.push({ x: W + 1.1 * L, y: ln.y + 0.2 * L, r: 0, z: 0.7, a: 0, v: 1.5 });
+          sweepAt = 3.35; if (!this.o.phone && ln.y < H * 0.4) blowAt = 3.1;
+        } else {
+          // no open water: the reveal happens under the glass, which thins for it
+          this.thin = true;
+          pts.push({ x: -0.3 * L, y: sy + 0.03 * L, r: 0, z: 0.85, a: 0.3, v: 1.1 });
+          pts.push({ x: Math.max(cl, 0) + 0.25 * L, y: sy, r: 0, z: 0.9, a: 1, v: 1 });
+          pts.push({ x: W * 0.5 - 0.1 * L, y: sy, r: 1, z: 1, a: 1, v: 0.8 });
+          pts.push({ x: W * 0.5 + 0.35 * L, y: sy - 0.02 * L, r: 1, z: 1, a: 1, v: 0.8 });
+          pts.push({ x: W + 0.5 * L, y: sy + 0.05 * L, r: 0.2, z: 0.85, a: 0.7, v: 1.1 });
+          pts.push({ x: W + 1.15 * L, y: sy + 0.1 * L, r: 0, z: 0.7, a: 0, v: 1.2 });
+          sweepAt = 2.3;
+        }
+      } else {
+        // nothing to hide behind: it comes up out of the deep on its way into the open water
+        this.thin = !ln.open;
+        const lx0 = Math.min(fx(ln.x0), fx(ln.x1)), lx1 = Math.max(fx(ln.x0), fx(ln.x1)), mid = (lx0 + lx1) / 2;
+        pts.push({ x: -0.3 * L, y: ln.y + 0.06 * L, r: 0, z: 0.8, a: 0.3, v: 1.1 });
+        pts.push({ x: Math.max(lx0, 0) + 0.25 * L, y: ln.y + 0.02 * L, r: 0.5, z: 0.9, a: 0.9, v: 0.95 });
+        pts.push({ x: mid - 0.2 * L, y: ln.y, r: 1, z: 1, a: 1, v: 0.8 });
+        pts.push({ x: mid + 0.35 * L, y: ln.y - 0.02 * L, r: 1, z: 1, a: 1, v: 0.8 });
+        // it sinks back into a shadow as it leaves the open water, and is gone by the far edge
+        const xe = Math.min(W + 0.45 * L, Math.max(lx1 + 0.5 * L, mid + 0.95 * L));
+        pts.push({ x: xe, y: ln.y + 0.08 * L, r: 0.2, z: 0.85, a: 0.7, v: 1.15 });
+        pts.push({ x: Math.max(xe + 0.6 * L, W + 1.1 * L), y: ln.y + 0.15 * L, r: 0, z: 0.7, a: 0, v: 1.4 });
+        sweepAt = 2.4; if (!this.o.phone && ln.open && ln.y < H * 0.4) blowAt = 2.2;
+      }
+      for (const p of pts) p.x = X(p.x);
+      return { pts, sweepAt, blowAt, cover: cover ? cover.el : null, open: ln.open };
+    }
+    summon(anchor, force) {
+      if (this.dead || this.wh.active()) return false;
+      // the water is taken: come as soon as it is free (only when called on purpose)
+      if (this.o.blocked && this.o.blocked()) { if (force) this.pend = { anchor, at: performance.now() }; return false; }
+      if (!force) {
+        if (!this.o.enabled()) return false;
+        if (this.o.once && this.seen) return false;
+        if (performance.now() - this.t0 < this.o.delay * 1000) return false;
+        if (this.root.dataset.state && this.root.dataset.state !== 'home') return false;
+      }
+      this.seen = true; this.thin = false;
+      const P = this.plan(anchor); this.cover = P.cover;
+      const ok = this.wh.visit({ pts: P.pts, pace: this.o.pace, sweepAt: P.sweepAt, blowAt: P.blowAt, blow: P.blowAt != null, onSweep: () => this.light() });
+      if (ok && this.o.onSummon) this.o.onSummon(anchor, P);
+      return ok;
+    }
+    // the sweep: the deepseek rows answer in cyan
+    light() {
+      const rows = [...this.o.scope.querySelectorAll(this.o.rows)].filter((li) => { const nm = li.querySelector('.mn'); return nm && /^deepseek/i.test(nm.textContent.trim()); });
+      // the page re-renders the rows' classes while the whale is out (the counters tick), so the light also rides on what it
+      // never touches: a mark on the names and a class on the list's glass
+      const fe = this.o.fam && this.root.querySelector(this.o.fam + ' [data-egg=deepseek]');
+      const set = (on) => { if (fe) fe.classList.toggle('wh-lit', on); if (this.o.onLight) return this.o.onLight(rows, on);
+        rows.forEach((li) => { li.classList.toggle('lit', on); const nm = li.querySelector('.mn'); if (nm) { nm.classList.toggle('lit', on); nm.setAttribute('data-ds', '1'); } });
+        const box = rows[0] && rows[0].closest('.lens'); if (box) box.classList.toggle('lit', on); };
+      set(true); clearTimeout(this.lt); this.lt = setTimeout(() => set(false), 1800);
+    }
+    done() { this.ghost.hidden = true; if (this.thinOn) { this.thinOn = false; this.setThin(false); } this.thin = false; this.cover = null; }
+    destroy() { this.dead = true; cancelAnimationFrame(this.raf); clearTimeout(this.lt); if (this.mo) this.mo.disconnect(); for (const [el, ev, fn, o] of this.on) el.removeEventListener(ev, fn, o); this.wh.destroy(); const W = this.eng.world; if (W && W.sharks) { const i = W.sharks.indexOf(this.ghost); if (i >= 0) W.sharks.splice(i, 1); } }
+  }
+  window.AxiomWhaleEgg = AxiomWhaleEgg;
+})();

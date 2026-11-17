@@ -1,0 +1,191 @@
+/* Axiom response layer.
+ * Turns raw input into a few scene-agnostic signals, then lets a personality decide what each one means:
+ *   pointer  {x, y, active, k}  k = 0 over content .. 1 on open water (the "quiet field")
+ *   tap      {x, y}             a deliberate tap/click on open water (never a press on a control, a drag or a selection)
+ *   flow     vy (px/s)          a current that follows scroll speed, capped, decays in ~1s
+ *   linger   {x, y} | null      the pointer has rested on open water for a while
+ *   pause / still               off-screen, hidden tab, or reduced motion
+ * Any scene that implements setPointer / tap / setFlow / lure / unlure / setObstacles / play / pause / still can be driven.
+ */
+(function () {
+  const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  const QUIET = 'a,button,input,textarea,select,label,pre,code,[role=button],[data-avoid]';
+
+  const PERSONAS = {
+    // Calm: the scene keeps its own time. Only a tap leaves a ring on the surface; scrolling makes a light current.
+    '静观': { hover: null, wake: 0, tap: 'ripple', flow: 0.5, linger: false },
+    // Echo: open water answers the pointer (school parts, a wake follows), a tap scatters, scrolling is a current.
+    '回声': { hover: 'flee', wake: 1, tap: 'splash', flow: 1, linger: false },
+    // Companion: creatures are curious. The school circles a still pointer, a tap feeds, a resting pointer brings a shark over.
+    '共游': { hover: 'orbit', wake: 0.45, tap: 'feed', flow: 1, linger: true }
+  };
+
+  class Respond {
+    constructor(o) {
+      this.stage = o.stage; this.page = o.page; this.surface = o.surface; this.scene = o.scene;
+      this.persona = PERSONAS[o.persona] || PERSONAS['回声'];
+      this.flowMul = o.flowMul ?? 1;
+      this.reduce = !!o.reduce;
+      this.p = { x: 0, y: 0, active: false, k: 0, kt: 0, mode: null };
+      this.flowV = 0; this.flowT = 0; this.lastScroll = null;
+      this.rest = { x: 0, y: 0, t: 0, on: false };
+      this.down = null;
+      this.run = false;
+      this.bind();
+      this.sync();
+      this.io = new IntersectionObserver(([e]) => { this.visible = e.isIntersecting; this.visible ? this.resume() : this.halt(); });
+      this.io.observe(this.stage);
+      this.onVis = () => (document.hidden ? this.halt() : this.visible && this.resume());
+      document.addEventListener('visibilitychange', this.onVis);
+    }
+    setScene(scene) { if (this.scene === scene) return; this.scene.pause(); this.scene.unlure(); this.scene = scene; this.sync(); this.resume(); }
+    setPersona(name, flowMul) { this.persona = PERSONAS[name] || this.persona; this.flowMul = flowMul ?? this.flowMul; this.scene.unlure(); this.rest.on = false; }
+    setReduce(r) { this.reduce = r; if (r) { this.halt(); if (!this.noStill) this.scene.still(); } else this.resume(); }
+
+    // canvas-local coordinates; the design canvas may be zoomed, so divide by its scale
+    local(e) {
+      const b = this.surface.getBoundingClientRect();
+      const k = this.surface.offsetWidth ? b.width / this.surface.offsetWidth : 1;
+      return { x: (e.clientX - b.left) / k, y: (e.clientY - b.top) / k, inside: e.clientX >= b.left && e.clientX <= b.right && e.clientY >= b.top && e.clientY <= b.bottom };
+    }
+    sync() {
+      const b = this.surface.getBoundingClientRect();
+      const k = this.surface.offsetWidth ? b.width / this.surface.offsetWidth : 1;
+      const rects = [];
+      this.stage.querySelectorAll('[data-avoid]').forEach((n) => {
+        const r = n.getBoundingClientRect(); if (!r.width) return;
+        const small = n.dataset.avoid === 's', pad = (small ? 14 : 10);
+        rects.push({ x0: (r.left - b.left) / k - pad, y0: (r.top - b.top) / k - pad, x1: (r.right - b.left) / k + pad, y1: (r.bottom - b.top) / k + pad, m: 56 * (small ? 1.5 : 1), k: small ? 1.8 : 1 });
+      });
+      this.rects = rects;
+      this.scene.setObstacles(rects);
+    }
+    quiet(x, y) {
+      // distance to the nearest content block: 0 inside/at the edge, full response 80px out
+      let d = Infinity;
+      for (const r of this.rects) {
+        const dx = Math.max(r.x0 - x, 0, x - r.x1), dy = Math.max(r.y0 - y, 0, y - r.y1);
+        d = Math.min(d, Math.hypot(dx, dy));
+      }
+      return clamp((d - 8) / 72, 0, 1);
+    }
+    bind() {
+      const st = this.stage;
+      this.h = {
+        move: (e) => {
+          if (e.pointerType === 'touch') return;
+          const { x, y, inside } = this.local(e);
+          this.p.x = x; this.p.y = y; this.p.active = inside;
+          this.p.kt = e.target.closest && e.target.closest(QUIET) ? 0 : this.quiet(x, y);
+          if (Math.hypot(x - this.rest.x, y - this.rest.y) > 24) {
+            this.rest = { x, y, t: performance.now(), on: false };
+            this.scene.unlure();
+          }
+        },
+        leave: () => { this.p.active = false; this.scene.unlure(); this.rest.on = false; },
+        down: (e) => { const l = this.local(e); this.down = { x: l.x, y: l.y, t: performance.now(), quiet: !!(e.target.closest && e.target.closest(QUIET)), moved: false }; },
+        dmove: (e) => { if (!this.down) return; const l = this.local(e); if (Math.hypot(l.x - this.down.x, l.y - this.down.y) > 8) this.down.moved = true; },
+        up: (e) => {
+          const d = this.down; this.down = null;
+          if (!d || d.quiet || d.moved || this.reduce) return;
+          if (performance.now() - d.t > 350) return;                 // a long press is not a tap
+          const sel = window.getSelection && String(window.getSelection()); if (sel) return;
+          if (this.quiet(d.x, d.y) < 0.5) return;                      // too close to content
+          this.scene.tap(this.persona.tap, d.x, d.y);
+        },
+        scroll: () => {
+          const now = performance.now(), top = this.page.scrollTop;
+          if (this.lastScroll) {
+            const dt = Math.max(8, now - this.lastScroll.t);
+            const v = (top - this.lastScroll.top) / dt * 1000;   // px/s, positive = reading down
+            this.flowT = -clamp(v * 0.12, -70, 70) * this.persona.flow * this.flowMul;
+          }
+          this.lastScroll = { t: now, top };
+          this.dirty = true;
+        }
+      };
+      st.addEventListener('pointermove', this.h.move, { passive: true });
+      st.addEventListener('pointerleave', this.h.leave);
+      st.addEventListener('pointerdown', this.h.down, { passive: true });
+      st.addEventListener('pointermove', this.h.dmove, { passive: true });
+      st.addEventListener('pointerup', this.h.up);
+      if (this.page) this.page.addEventListener('scroll', this.h.scroll, { passive: true });
+    }
+    resume() {
+      if (this.reduce || document.hidden || this.visible === false) return;
+      this.scene.play();
+      if (this.run) return; this.run = true; this.last = performance.now();
+      const tick = (now) => {
+        if (!this.run) return;
+        const dt = Math.min(0.05, (now - this.last) / 1000); this.last = now;
+        const P = this.persona;
+        // pointer strength eases toward the quiet field: reading = still water
+        this.p.k += (this.p.kt - this.p.k) * (1 - Math.exp(-dt * 10));
+        // a moment may borrow the pointer channel for a while (e.g. a whirlpool at a fixed point)
+        const o = this.override && now < this.override.until ? this.override : null;
+        if (o) this.scene.setPointer({ x: o.x, y: o.y, active: true, k: o.k ?? 1, mode: o.mode, wake: o.wake ?? 0.3 });
+        else this.scene.setPointer({ x: this.p.x, y: this.p.y, active: this.p.active && !!P.hover, k: this.p.k, mode: P.hover, wake: P.wake });
+        // current follows scroll speed and settles within about a second
+        this.flowT *= Math.exp(-dt * 3);
+        this.flowV += (this.flowT - this.flowV) * (1 - Math.exp(-dt * 6));
+        if (Math.abs(this.flowV) < 0.3) this.flowV = 0;
+        this.scene.setFlow(this.flowV);
+        if (this.dirty) { this.dirty = false; this.sync(); }
+        // linger: pointer resting on open water
+        if (P.linger && this.p.active && !this.rest.on && this.p.k > 0.85 && now - this.rest.t > 1600) {
+          this.rest.on = true; this.scene.lure(this.p.x, this.p.y);
+        }
+        this.raf = requestAnimationFrame(tick);
+      };
+      this.raf = requestAnimationFrame(tick);
+    }
+    halt() { this.run = false; cancelAnimationFrame(this.raf); this.scene.pause(); }
+    destroy() {
+      this.halt(); this.io.disconnect(); document.removeEventListener('visibilitychange', this.onVis);
+      const st = this.stage;
+      st.removeEventListener('pointermove', this.h.move); st.removeEventListener('pointerleave', this.h.leave);
+      st.removeEventListener('pointerdown', this.h.down); st.removeEventListener('pointermove', this.h.dmove); st.removeEventListener('pointerup', this.h.up);
+      if (this.page) this.page.removeEventListener('scroll', this.h.scroll);
+    }
+  }
+
+  // The ocean, adapted to the protocol. The engine's own listeners are removed: the response layer owns input.
+  window.AxiomNoAutoStill = true;
+  class OceanScene {
+    constructor(canvas) {
+      const e = new window.AxiomOceanReact(canvas);
+      window.removeEventListener('pointermove', e.onPointerMove); window.removeEventListener('pointerdown', e.onPointerDown);
+      document.documentElement.removeEventListener('pointerleave', e.onPointerLeave); window.removeEventListener('blur', e.onPointerLeave);
+      e.schedule = () => {}; cancelAnimationFrame(e.raf);
+      this.e = e; this.flow = 0;
+      const w = e.world, step = w.step.bind(w);
+      w.step = (dt) => {
+        step(dt);
+        const dy = this.flow * dt, dx = (this.flowX || 0) * dt; if (!dy && !dx) return;
+        for (const f of w.fish) { f.y += dy; f.x += dx; }
+        for (const s of w.sharks) for (let k = 0; k < s.nodes.length; k += 2) { s.nodes[k] += dx; s.nodes[k + 1] += dy; }
+      };
+    }
+    setPointer(p) { const q = this.e.world.pointer; q.x = p.x; q.y = p.y; q.active = p.active; q.k = p.k; q.mode = p.mode; q.wake = p.wake; }
+    tap(kind, x, y) { const w = this.e.world; if (kind === 'splash') w.splash(x, y); else if (kind === 'feed') w.feed(x, y); else w.ripple(x, y); }
+    setFlow(v) { this.flow = v; }
+    lure(x, y) {
+      const w = this.e.world; let best = null, bd = Infinity;
+      for (const s of w.sharks) { const d = Math.hypot(s.nodes[0] - x, s.nodes[1] - y); if (d < bd) { bd = d; best = s; } }
+      if (best) w.lure = { id: best.id, x, y };
+    }
+    unlure() { this.e.world.lure = null; }
+    setObstacles(r) { this.e.world.obstacles = r; }
+    play() { const e = this.e; cancelAnimationFrame(e.raf); e.last = performance.now(); e.raf = requestAnimationFrame(e.frame); }
+    pause() { cancelAnimationFrame(this.e.raf); }
+    still() {
+      const e = this.e, w = e.world, R = e.renderer; this.pause();
+      for (let i = 0; i < 240; i++) w.step(1 / 60);
+      const d = R.diffuse; R.diffuse = () => {}; R.rasterTick = 0; R.render(w, 1); R.diffuse = d;
+    }
+  }
+
+  window.AxiomRespond = Respond;
+  window.AxiomOceanScene = OceanScene;
+  window.AxiomPersonas = PERSONAS;
+})();

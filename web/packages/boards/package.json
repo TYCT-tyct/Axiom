@@ -5,7 +5,14 @@
   "exports": {
     "./Login": "./src/Login/Board.tsx",
     "./ClawdEgg": "./src/ClawdEgg/Board.tsx",
-    "./AxApp": "./src/AxApp/Board.tsx"
+    "./AxApp": "./src/AxApp/Board.tsx",
+    "./*": "./src/*/Board.tsx",
+    "./AxApp/regions/*": "./src/AxApp/regions/*.tsx",
+    "./AxApp/regions/*.zh": "./src/AxApp/regions/*.zh.ts",
+    "./AxApp/regions/*.en": "./src/AxApp/regions/*.en.ts",
+    "./AxAppPhone/regions/*": "./src/AxAppPhone/regions/*.tsx",
+    "./AxAppPhone/regions/*.zh": "./src/AxAppPhone/regions/*.zh.ts",
+    "./AxAppPhone/regions/*.en": "./src/AxAppPhone/regions/*.en.ts"
   },
   "scripts": {
     "typecheck": "tsc",

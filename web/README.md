@@ -106,8 +106,22 @@
 
 控制台概览的 `announcements.tsx` 用原生 details 按需请求本站公告；加载、空、失败（可重试）、旧节点 404 或缺少 data 均有文本状态。公告标题和正文按文本换行并允许任意长词折行，不解析 HTML，也不要求已读。此入口按 #316 只做未加样式的数据阅读，不扩展后台视觉界面。
 
-画板机械转换：`AXIOM_DESIGN_DIR=/path/to/design pnpm --dir web boards`，仅导入 Login、ClawdEgg、AxApp。
+画板机械转换：`AXIOM_DESIGN_DIR=/path/to/design pnpm --dir web boards`，导入清单见 `packages/boards/catalog.ts`。
 不指定目录时，从 `packages/boards/inputs/` 的固定输入重新生成；`pnpm --dir web boards --check` 校验产物，单元测试在 CI 执行同一校验。
-生成目录带 `@generated` 标记，禁止手改；页面包装写在 `packages/boards/demo/`，演示用 `pnpm --dir web --filter @axiom/boards dev` 打开 `/Login`、`/ClawdEgg`、`/AxApp`。
-画板及引擎随路由加载；演示字体复用 F1a 固定源，仅写本包忽略的缓存，生产页面的构建入口不变。
-`pnpm --dir web e2e boards.spec` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。
+生成目录带 `@generated` 标记，禁止手改；演示用 `pnpm --dir web --filter @axiom/boards dev` 打开 `/<Board>`，整板保留原始演示逻辑，随路由加载。
+画板及引擎随路由加载；演示字体复用 F1a 固定源，按摘要校验后原子写入共享下载缓存，归档从已校验内存解包，生产页面的构建入口不变。
+`pnpm --dir web e2e --config=playwright.boards.config.ts` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。
+参考演示不压缩 CSS，保留透明颜色的小数精度；画板检查独立运行，不进入产品端到端分片。
+
+产品页面使用区域入口，例如 `@axiom/boards/AxApp/regions/Shell` 和 `@axiom/boards/AxApp/regions/Overview`；手机对应 AxAppPhone。
+区域由手写 `packages/boards/regions.ts` 描述：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽。
+`text` 只替换所选元素的直接文本节点，不破坏货币、小数等子元素；`attributes` 替换指定属性。多处匹配按文档顺序生成编号字段。
+`repeats` 把连续的同级节点提取为类型化数组，原有不同节点结构成为联合类型，渲染模板仍由工具复制；数据字段 `fN` 对应模板中按顺序遍历的属性和文本，具体值见旁边的 `.demo.ts`。
+`values` 提供原有模板孔洞的类型化数据、事件及 ref；区域不导入整板控制器。页面只传数据和行为，不复制 JSX。
+
+CSS 只保留可匹配本区域节点的规则、分组及所用关键帧，声明原文不改。每个节点保留原类名，并附上 CSS Module 的局部标记；选择器加零优先级的 `:where` 标记，跨区域祖先作用域和级联顺序因此不变。
+动态状态参与筛选，`page` 限制页面状态类，`classes` 可明确孔洞的其他候选类；清单变动后重跑转换器。
+中文文本及属性生成稳定内容键和 `.zh.ts`，组件通过调用方的 `t` 取文案；`.en.ts` 生成相同键的空值，页面卡在清单的 `english` 中填翻译后再生成，不直接编辑产物。缺英文键会使类型检查和 `boards --check` 失败。
+文案入口为 `@axiom/boards/AxApp/regions/Overview.zh`、`Overview.en`（手机同理）。
+`.demo.ts` 仅为截图数据，产品入口不要导入；`/<Board>/regions` 是桌面、手机外壳加概览的参考路由，仅该路由接回原画板控制器。
+转换器单测比较完整区域 DOM、核对 CSS 规则数量，并用独立 Vite 构建检查模块隔离、报告逐文件及合计 brotli 体积（React 外置）。新增引擎保留原始固定输入，仅适配 CSP 的 DOM 写入；原始画板和引擎从不在 Node 中执行。
