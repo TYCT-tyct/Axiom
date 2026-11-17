@@ -6,8 +6,8 @@
 
 | 场景 | 执行 |
 |---|---|
-| PR | `static`、按路径选择的 `web` 和 `vitals`；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
-| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；Go 测试和 e2e 每个 PR 只在列车跑一次，失败由列车二分定位 |
+| PR | `static`、按路径选择的 `web` 和 `vitals`，选中 `web` 时还跑两个 e2e 分片（页面坏了在进列车前发现）；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
+| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；Go 测试每个 PR 只在列车跑一次，失败由列车二分定位；e2e 在列车里再跑一次 |
 | `main` | 每次推送全跑，不用路径豁免 |
 | 轻量 PR / 列车 | 按受管的 `[lanes] light` 排除 `[lanes] code`，包括纯 Markdown；`static` 跑 `just md-checks scope`（含脚本测试），列车再跑 `secrets` |
 

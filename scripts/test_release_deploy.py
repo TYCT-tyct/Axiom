@@ -64,6 +64,7 @@ docker() {
   case "$*" in
     'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
     'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
+    'compose -f deploy/compose.yaml exec -T axiom /axiom user create --email statement@example.com') cat > /dev/null ;;
     'compose -f deploy/compose.yaml ps --quiet postgres') cat db ;;
     'compose -f deploy/compose.yaml ps --quiet axiom') cat node ;;
     'ps -aq --filter label=com.docker.compose.project=axiom-ci-fixture') echo axiom ;;
@@ -72,7 +73,8 @@ docker() {
     'run --rm --network none --volumes-from axiom'*) echo '65532:65532:700' ;;
     'run --rm --user 65532:65532 --network none --volumes-from axiom'*) : ;;
     'compose -f deploy/compose.yaml ps --all --quiet migrate') echo migrate ;;
-    'compose -f deploy/compose.yaml port axiom 8080') echo 127.0.0.1:12345 ;;
+    'compose -f deploy/compose.yaml restart axiom') echo 12347 > public.port ;;
+    'compose -f deploy/compose.yaml port axiom 8080') printf '127.0.0.1:%s\n' "$(cat public.port 2> /dev/null || echo 12345)" ;;
     'compose -f deploy/compose.yaml port axiom 8082') echo 127.0.0.1:12346 ;;
     # The key ring's refusals: the keys service exits 1, so the node's start fails, and its last line is the reason.
     'compose -f deploy/compose.yaml up --detach --no-build axiom') return 1 ;;
@@ -85,6 +87,13 @@ docker() {
 curl() {
   case "$*" in
     *'/api/console/v1/version'|*'/api/admin/v1/version') echo '{"version":"axiom fixture"}' ;;
+    *'/api/console/v1/auth/sign-in')
+      cat > /dev/null
+      [ "${!#}" = "http://localhost:$(cat public.port)/api/console/v1/auth/sign-in" ] || return 7
+      printf 'Set-Cookie: axiom_session=fixture; Path=/\r\n\r\n{}\n' ;;
+    *'/api/console/v1/statement/daily?time_zone=Asia%2FShanghai')
+      [ "${!#}" = "http://localhost:$(cat public.port)/api/console/v1/statement/daily?time_zone=Asia%2FShanghai" ] || return 7
+      echo '{"data":[],"next_cursor":null}' ;;
     *'/api/console/v1/site'|*'/api/admin/v1/users') echo '{"error":{"code":"not_found"}}' ;;
     *'-w '*'/assets/'*) echo 404 ;;
     *'-H Accept-Encoding: br'*) printf 'cache-control: public, max-age=31536000, immutable\ncontent-encoding: br\n' ;;
@@ -132,14 +141,14 @@ curl() {
                 self.assertEqual(calls.count("build --tag axiom-ci:fixture deploy"), 1 if image is None else 0)
                 # The database image is up.sh's to build, only when no node runs (#605).
                 self.assertFalse([call for call in calls if call.startswith("build ") and "postgres" in call], calls)
-                # Outside up.sh only the key ring's three starts, each refused by the keys service before the node runs.
+                # Every start uses up.sh; only the key ring's deliberate refusals bypass it.
                 self.assertEqual([call for call in calls if call.startswith("compose ") and " up " in call],
                                  ["compose -f deploy/compose.yaml up --detach --no-build axiom"] * 3)
                 starts = [call.removeprefix("bash scripts/ops/up.sh --env-file deploy/.env").strip()
                           for call in calls if call.startswith("bash scripts/ops/up.sh")]
-                # The first start, an application release, a misspelled setting, the legacy upgrade refused under the
-                # running node and then applied with --database, and the start that repeats the grants.
-                self.assertEqual(starts, ["", "", "", "", "--database", ""])
+                # Initial start, statement fixture restart, application release, misspelled setting, refused and applied
+                # legacy upgrade, then repeating the grants. The fixture restart changes the published port.
+                self.assertEqual(starts, ["", "", "", "", "", "--database", ""])
                 self.assertEqual(calls[-1], "image rm --force axiom-ci-postgres:fixture")
 
     def test_a_failed_check_prints_the_containers_output_before_removing_them(self):
