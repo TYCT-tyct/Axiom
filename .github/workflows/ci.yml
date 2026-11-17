@@ -320,19 +320,21 @@ jobs:
           JOB_STATUS: ${{ job.status }}
 
   # Mechanical design proofs are independent of product e2e. Run on relevant PRs and trains, and always on main.
+  # 108 comparisons took 24 minutes on one runner, the longest job of every frontend PR (2026-11-17); four shards on
+  # separate runners bring it near the e2e's length.
   boards:
     name: boards (${{ matrix.shard }}/4)
+    needs: changes
+    if: needs.changes.result == 'success' && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
+    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 30
     strategy:
-      fail-fast: false
+      fail-fast: false # finish the other shards and keep their evidence when one fails
       matrix:
         shard: [1, 2, 3, 4]
     env:
       E2E_SHARD_INDEX: ${{ matrix.shard }}
       E2E_SHARD_COUNT: 4
-    needs: changes
-    if: needs.changes.result == 'success' && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
-    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
