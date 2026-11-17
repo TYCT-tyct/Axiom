@@ -204,6 +204,7 @@ describe("region generation", () => {
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();
       edit(drawn.firstElementChild as Element, manifest.find((region) => region.name === "Shell") as Region);
+      edit(overview, manifest.find((region) => region.name === "Overview") as Region);
       const original = fragment(drawn.innerHTML.replace(/\{\{[^}]*\}\}/g, ""));
       (original.querySelector(".qpages") as Element).replaceChildren(
         fragment(overview.outerHTML.replace(/\{\{[^}]*\}\}/g, "")).firstChild as Node,
