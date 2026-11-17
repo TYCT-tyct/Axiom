@@ -65,6 +65,8 @@ PR 描述写明属于哪几类，跨类取并集，拿不准按更严的。负�
 
 流水线 `~/axiom-ops/srv/pipeline.py` 在开发机上（不在仓库里），systemd 定时器每 3 分钟跑一次：派写手、开 PR、派评审、交回意见、排队。事件写进同目录的 `events.log`，要编排者处理的（`ESCALATE`）汇成一条评论发到 #309。本节写它现在的做法，改流水线时同步改这里。做法版本 1（2026-11-14）；待试的改动和基线在 #740。
 
+每次写手和评审的运行都显示在负责人的 Agent Board 上（项目 `axiom`，单元是分支名）：流水线经同目录的 `board.py` 用 HTTP 报给开发机本机的看板服务，dsh 的日志交给看板的 dsh 翻译器算出步数和 token；在本仓库里开的 Claude Code 会话由 `.claude/settings.local.json` 的钩子（`agb hook`）上报，这个文件只在本机、不入库。同一次运行只由一种方式上报，写手和评审在各自的 worktree 里跑，不会触发这个钩子。看板挂了不影响流水线和会话：请求 1.2 秒超时，出错只记一行日志。关掉：删掉 `settings.local.json` 里的钩子；流水线一侧在 `pipeline.py` 的 `main()` 里去掉 `on_board`，直接调用 `do_write`、`do_review`。
+
 | 用途 | 模型（推理档） | 什么时候用 |
 |---|---|---|
 | 写手 | pi `workbuddy/cn:deepseek-v4.1-flash`（high） | 默认，额度宽 |
@@ -96,7 +98,7 @@ PR 描述写明属于哪几类，跨类取并集，拿不准按更严的。负�
 
 ## CI 与检查
 
-- **分层**：PR 跑 `static`、按路径选择的 `web`、页面构建输入变动时的 `vitals`，以及 `docs`、`secrets`、`pr`、`review`、`docs-impact`；Go 测试、两个 e2e 分片、`journey`、`bench`、`deploy` 只在列车和 `main` 上跑；`main` 每次落地都跑全部，`vitals` 在 `main` 上总跑。`ci.yml` 里只有 `build` 进规则集，`check-*` 和 `docs-impact` 各自的任务也是必需检查。每个 PR 的 Go 测试和 e2e 只在它的列车里跑一次，失败由列车二分找出元凶。
+- **分层**：PR 跑 `static`、按路径选择的 `web`、页面构建输入变动时的 `vitals`，以及 `docs`、`secrets`、`pr`、`review`、`docs-impact`；Go 测试、`journey`、`bench`、`deploy` 只在列车和 `main` 上跑；两个 e2e 分片也在列车和 `main` 上跑，选中 `web` 的 PR 另在 PR 上先跑一次，页面坏了不进列车；`main` 每次落地都跑全部，`vitals` 在 `main` 上总跑。`ci.yml` 里只有 `build` 进规则集，`check-*` 和 `docs-impact` 各自的任务也是必需检查。每个 PR 的 Go 测试只在它的列车里跑一次，失败由列车二分找出元凶。
 - **路径门禁**：`vitals` 只在 `web/` 或生成页面客户端所用的 `api/*.yaml` 变动时跑；`bench`、`deploy`、`web` 按各自路径跳过；轻量 PR 和列车（文档、受管文件及 `[lanes] light`，排除 `[lanes] code`）只跑 `static` 的 `just md-checks scope`（含 `script-tests`），列车另加 `secrets`；纯 Markdown 和混合轻量改动保持同一套检查。拿不准时让检查跑；PR 上跳过的作业不挡 `build`，列车按路径规则跑，`main` 上全跑。
 - **偶发失败**：只有失败全是 `.github/flaky.toml` 登记、且每条有开着的 Issue 的 Go 测试时，列车重跑失败的作业一次；编译、lint、前端、端到端和部署失败都不算。写手不重跑、不取消；未知失败先分类、留证据，不叫「偶发」，重复出现就修机制并把条目移出清单，Issue 关闭后 CI 会失败提醒删条目。
 
