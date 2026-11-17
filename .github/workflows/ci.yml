@@ -237,6 +237,8 @@ jobs:
   e2e:
     name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
     needs: changes
+    # a shard takes about 11 minutes; without a limit a hung one held the merge train for an hour (GitHub's default is 6 h)
+    timeout-minutes: 30
     if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'))
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
