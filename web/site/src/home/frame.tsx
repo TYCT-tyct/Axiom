@@ -3,7 +3,9 @@ import Narrow from "@axiom/boards/SitePhone/regions/Shell";
 import { useEffectModule } from "@axiom/fx";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useSiteBrand } from "../shell";
 import { useFrameBehaviour } from "./behaviour";
+import { BrandPlaces } from "./brand";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { useSwitches } from "./switches";
@@ -22,14 +24,16 @@ const frameVars = [
 
 const depthText = (depth: number) => (depth === 0 ? "0 m" : `−${depth.toLocaleString("en-US")} m`);
 
-// The frame's words the switches' engine rewrites, in the language the page opened in, and where its links go.
-const frameText = (word: (key: BoardKey) => string, language: string) => ({
+// The frame's words the switches' engine rewrites, in the language the page opened in, where its links go, and the
+// site's name for the island's mark.
+const frameText = (word: (key: BoardKey) => string, language: string, name: string) => ({
   models: word(words.models),
   pricing: word(words.pricing),
   language,
   signIn: word(words.signIn),
   signUp: word(words.signUp),
   home: links.home,
+  islandLabel: name,
   modelsHref: links.models,
   pricingHref: links.pricing,
   signInHref: links.signIn,
@@ -61,6 +65,8 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   );
   useSwitches(root, sea);
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
+  const brand = useSiteBrand();
+  const name = brand?.name ?? t("brand", { ns: "common" });
 
   // What the switches' engine sets, until it is loaded: it starts from them, and keeps them the same itself.
   const language = i18n.language === "en" ? "en" : "zh-CN";
@@ -86,14 +92,14 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     sheetCls: menu ? "on" : "",
     sheetHide: menu ? "false" : "true",
   };
-  const text = frameText((key) => opened(`board.${key}`), opened("language"));
-  return wide ? (
-    <Wide t={board} values={values} text={text}>
-      {children}
-    </Wide>
-  ) : (
-    <Narrow t={board} values={values} text={text}>
-      {children}
-    </Narrow>
+  const text = frameText((key) => opened(`board.${key}`), opened("language"), name);
+  const Shell = wide ? Wide : Narrow;
+  return (
+    <>
+      <Shell t={board} values={values} text={text}>
+        {children}
+      </Shell>
+      <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
+    </>
   );
 }

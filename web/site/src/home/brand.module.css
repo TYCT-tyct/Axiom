@@ -1,0 +1,7 @@
+/* A site's logo in the mark's 20×20 place: any shape fits inside it, so loading it never moves the header. */
+.logo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}

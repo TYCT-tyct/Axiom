@@ -81,3 +81,23 @@ test("the website's sign-in and sign-up open the console's pages", async ({ page
   await page.getByRole("link", { name: "注册，获取API key" }).click();
   await expect(page).toHaveURL(/\/console\/register$/);
 });
+
+// The site's own name and logo in the home page's header, as on its other pages (docs/frontend.md「主题与自由度」);
+// a logo that fails to load leaves the board's mark.
+const logoSVG =
+  "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIyNCIgaGVpZ2h0PSIyNCI+PHBhdGggZmlsbD0iIzEyMyIgZD0iTTAgMGgyNHYyNEgweiIvPjwvc3ZnPg==";
+for (const width of [1440, 390]) {
+  test(`the website's home page shows the site's brand at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await mockConsole(page);
+    state.site = { ...state.site, name: "WebDemo", logo_url: logoSVG };
+    await page.goto(apps[0].url);
+    const header = page.getByRole("banner").getByRole("link", { name: "WebDemo" });
+    await expect(header.locator(`img[src='${logoSVG}']`)).toBeVisible();
+    await expect(page.locator(".isl .im")).toHaveAttribute("aria-label", "WebDemo");
+
+    state.site = { ...state.site, logo_url: "/missing-logo.svg" };
+    await page.reload();
+    await expect(page.getByRole("banner").getByRole("link", { name: "WebDemo" }).locator("svg")).toBeVisible();
+  });
+}

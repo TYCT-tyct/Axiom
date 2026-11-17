@@ -110,6 +110,9 @@ const notYet = [
   ".sheet .shs",
   ".tr .tour",
 ];
+// The site's own logo and name go in the brand's places (docs/frontend.md「主题与自由度」): the page fills them, with the
+// board's mark (the Mark region) when the site has no logo or it fails to load.
+const brand = [".bar .brand > *", ".sheet .brand > *", ".isl .im > *"];
 const otherLanguages = ["zh-TW", "ja", "ko", "es", "de", "fr", "pt", "ru"].map((code) => `#lp-${code}`);
 const siteRegions: Region[] = [
   ...["Site", "SitePhone"].map(
@@ -118,7 +121,16 @@ const siteRegions: Region[] = [
       name: "Shell",
       roots: [".tr.site"],
       // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
-      omit: [".tr > .cw", ".tr > .wh", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...otherLanguages],
+      omit: [
+        ".tr > .cw",
+        ".tr > .wh",
+        ".tr > .lg",
+        ".tr > .fly",
+        ".tr > canvas.ui",
+        ...notYet,
+        ...brand,
+        ...otherLanguages,
+      ],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
@@ -129,6 +141,7 @@ const siteRegions: Region[] = [
       },
       attributes: {
         home: { selector: ".bar .brand", attribute: "href" },
+        islandLabel: { selector: ".isl .im", attribute: "aria-label" },
         modelsHref: { selector: ".bar .nav.mid a:nth-child(1)", attribute: "href" },
         pricingHref: { selector: ".bar .nav.mid a:nth-child(2)", attribute: "href" },
         signInHref: { selector: ".bar .login", attribute: "href" },
@@ -162,6 +175,7 @@ const siteRegions: Region[] = [
     },
     english: siteEnglish,
   },
+  { board: "Site", name: "Mark", roots: [".bar .brand > svg"] },
   {
     board: "Site",
     name: "Headline",
