@@ -105,6 +105,9 @@ func (q StatementDailyQuery) check(ctx context.Context, tx pg.Tx) error {
 	if !valid {
 		return ErrStatementTimeZone
 	}
+	if err := planLedgerPage(ctx, tx); err != nil {
+		return err
+	}
 	count, err := queries.StatementDailyBudget(ctx, tx, StatementDailyBudgetParams{AccountID: q.Account, Max: MaxStatementTransactions + 1})
 	if err != nil {
 		return fmt.Errorf("billing: probe daily statement size: %w", err)

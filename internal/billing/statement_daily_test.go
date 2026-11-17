@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -282,7 +283,7 @@ func TestStatementDailyBudget(t *testing.T) {
 	b.checkDailyBudgetRefusal()
 	b.sql(fmt.Sprintf(seed, 50000), "ANALYZE billing.transactions")
 	b.checkDailyBudgetRefusal()
-	blocks, plan := b.plan(b.admitted.Scope, nil, statementDailyBudget, b.admitted.Account, int32(MaxStatementTransactions+1))
+	blocks, plan := b.plan(b.admitted.Scope, func(tx pg.Tx) error { return planLedgerPage(t.Context(), tx) }, statementDailyBudget, b.admitted.Account, int32(MaxStatementTransactions+1))
 	checkTransactionIndexPlan(t, plan, 1, "Forward")
 	if !strings.Contains(plan, "transactions_by_account_seq") || blocks > 2*MaxStatementTransactions+100 {
 		t.Fatalf("daily budget touched %d blocks without a bounded index scan: %s", blocks, plan)
@@ -332,8 +333,7 @@ func TestStatementDayRejectsUnknownCategory(t *testing.T) {
 func checkStatementDailyChanges(t *testing.T, days []StatementDay) {
 	t.Helper()
 	var opening int64
-	for i := len(days) - 1; i >= 0; i-- {
-		day := days[i]
+	for _, day := range slices.Backward(days) {
 		if day.ClosingBalance == nil {
 			t.Fatal("numbered history lost its closing balance")
 		}
