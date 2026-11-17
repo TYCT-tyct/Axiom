@@ -2345,7 +2345,11 @@ paths:
         of those totals. Closing balance follows the last ledger movement of the day with a known balance,
         or is null when every movement predates ledger sequencing. Totals are exact integer billionths, never floats.
         Cursors require the same time_zone. Pages read live history; new movements can update a day's totals.
-        At most 31 days are returned even when limit is greater. This additive read may be unavailable on older nodes.
+        At most 31 days are returned even when limit is greater. Before aggregating, the account's history is checked
+        against a 5000-transaction budget (including zero-effect events); exceeding it returns 400 invalid_request
+        without partial totals. Use listStatement for larger histories. The entire read has a 10-second deadline.
+        The database's named IANA zones are authoritative; no node-local zoneinfo is required.
+        This additive read may be unavailable on older nodes.
       security:
         - session: []
       x-axiom-level: signed_in

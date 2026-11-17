@@ -11,7 +11,26 @@ import (
 	"uuid"
 )
 
-const statementDailyPage = `-- name: StatementDailyPage :many
+const statementDailyBudget = `-- name: StatementDailyBudget :one
+SELECT count(*)::bigint FROM (
+    SELECT seq FROM billing.transactions WHERE account_id = $1 ORDER BY seq LIMIT $2
+) candidates
+`
+
+type StatementDailyBudgetParams struct {
+	AccountID uuid.UUID
+	Max       int32
+}
+
+// Bound the probe using the existing account/sequence index before reading entries or sorting movements.
+func (q *Queries) StatementDailyBudget(ctx context.Context, db DBTX, arg StatementDailyBudgetParams) (int64, error) {
+	row := db.QueryRow(ctx, statementDailyBudget, arg.AccountID, arg.Max)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const statementDailyKinds = `-- name: StatementDailyKinds :many
 WITH movements AS (
     SELECT t.id, t.seq, t.created_at, t.kind, coalesce(b.source, '')::text AS source,
         -coalesce(e.debit, 0) AS amount,
@@ -39,46 +58,41 @@ WITH movements AS (
     FROM positioned
     WHERE amount <> 0 OR frozen_change <> 0
 ), daily AS (
-    SELECT day,
-        (-coalesce(sum(amount) FILTER (WHERE kind IN ('settle', 'reverse')), 0))::text AS spent,
-        coalesce(sum(amount) FILTER (WHERE (kind = 'credit' AND source = 'paid')
-            OR kind IN ('refund', 'chargeback', 'chargeback_reverse')), 0)::text AS topped_up,
-        coalesce(sum(amount) FILTER (WHERE kind = 'credit' AND source IN ('gift', 'redeem')), 0)::text AS gifted,
-        (-coalesce(sum(amount) FILTER (WHERE kind = 'expire'), 0))::text AS expired
-    FROM visible
+    SELECT day FROM visible
     WHERE $3::text = '' OR day < nullif($3::text, '')::date
-    GROUP BY day
-    ORDER BY day DESC
-    LIMIT $4
+    GROUP BY day ORDER BY day DESC LIMIT $4
 ), closing AS (
     SELECT day, balance_after::bigint AS balance
     FROM visible WHERE day_position = 1 AND seq IS NOT NULL
+), grouped AS (
+    SELECT v.day, v.kind, v.source, sum(v.amount)::text AS amount
+    FROM visible v JOIN daily d ON d.day = v.day
+    GROUP BY v.day, v.kind, v.source
 )
-SELECT d.day::text AS day, d.spent, d.topped_up, d.gifted, d.expired, c.balance AS closing_balance
-FROM daily d LEFT JOIN closing c ON c.day = d.day
-ORDER BY d.day DESC
+SELECT g.day::text AS day, g.kind, g.source, g.amount, c.balance AS closing_balance
+FROM grouped g LEFT JOIN closing c ON c.day = g.day
+ORDER BY g.day DESC, g.kind, g.source
 `
 
-type StatementDailyPageParams struct {
+type StatementDailyKindsParams struct {
 	AccountID uuid.UUID
 	TimeZone  string
 	BeforeDay string
 	Max       int32
 }
 
-type StatementDailyPageRow struct {
+type StatementDailyKindsRow struct {
 	Day            string
-	Spent          string
-	ToppedUp       string
-	Gifted         string
-	Expired        string
+	Kind           string
+	Source         string
+	Amount         string
 	ClosingBalance *int64
 }
 
-// Use StatementPage's balance entries and refund-hold deltas. Keep all dates through the balance window: a later
+// Called only after StatementDailyBudget accepts the same read snapshot. Use StatementPage's balance entries and refund-hold deltas. Keep all dates through the balance window: a later
 // sequence can have an earlier timestamp, and filtering at the cursor first would corrupt historical balances.
-func (q *Queries) StatementDailyPage(ctx context.Context, db DBTX, arg StatementDailyPageParams) ([]StatementDailyPageRow, error) {
-	rows, err := db.Query(ctx, statementDailyPage,
+func (q *Queries) StatementDailyKinds(ctx context.Context, db DBTX, arg StatementDailyKindsParams) ([]StatementDailyKindsRow, error) {
+	rows, err := db.Query(ctx, statementDailyKinds,
 		arg.AccountID,
 		arg.TimeZone,
 		arg.BeforeDay,
@@ -88,15 +102,14 @@ func (q *Queries) StatementDailyPage(ctx context.Context, db DBTX, arg Statement
 		return nil, err
 	}
 	defer rows.Close()
-	var items []StatementDailyPageRow
+	var items []StatementDailyKindsRow
 	for rows.Next() {
-		var i StatementDailyPageRow
+		var i StatementDailyKindsRow
 		if err := rows.Scan(
 			&i.Day,
-			&i.Spent,
-			&i.ToppedUp,
-			&i.Gifted,
-			&i.Expired,
+			&i.Kind,
+			&i.Source,
+			&i.Amount,
 			&i.ClosingBalance,
 		); err != nil {
 			return nil, err

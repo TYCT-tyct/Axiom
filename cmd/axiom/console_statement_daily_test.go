@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"testing"
 
+	"axiom/internal/billing"
 	"axiom/internal/platform/consoleapi"
 )
 
@@ -25,4 +27,15 @@ func TestStatementDaily(t *testing.T) {
 	for _, query := range []string{"?time_zone=not-a-zone", "?time_zone=Local", "?time_zone=", "?cursor=nonsense", "?limit=201", "?limit=0"} {
 		expect(t, query, f.do(http.MethodGet, "/statement/daily"+query, "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
 	}
+}
+
+func TestStatementDailyBudget(t *testing.T) {
+	t.Parallel()
+	f := newConsoleFixture(t)
+	s := f.owner()
+	account, site := f.account(s)
+	f.run(fmt.Sprintf("INSERT INTO billing.transactions (id, site_id, account_id, kind, request_id) SELECT uuidv7(), '%s', '%s', 'settle', uuidv7() FROM generate_series(1, %d)", site, account, billing.MaxStatementTransactions+1))
+	expect(t, "daily history budget", f.do(http.MethodGet, "/statement/daily", "", as(s)), http.StatusBadRequest, consoleapi.ErrorCodeInvalidRequest)
+	var statement consoleapi.Statement
+	decode(t, f.do(http.MethodGet, "/statement?limit=1", "", as(s)), &statement)
 }

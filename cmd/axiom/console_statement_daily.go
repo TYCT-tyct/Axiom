@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"time"
+	"errors"
 	"uuid"
 
 	"axiom/internal/billing"
@@ -11,13 +11,12 @@ import (
 )
 
 func (c consoleAPI) ListStatementDaily(ctx context.Context, request consoleapi.ListStatementDailyRequestObject) (consoleapi.ListStatementDailyResponseObject, error) {
+	ctx, cancel := context.WithTimeout(ctx, callReportTimeout)
+	defer cancel()
 	cl := callOf(ctx)
 	zone := "UTC"
 	if request.Params.TimeZone != nil {
 		zone = *request.Params.TimeZone
-	}
-	if _, err := time.LoadLocation(zone); err != nil || zone == "Local" {
-		return nil, invalidField("time_zone", "must name an IANA time zone")
 	}
 	q := billing.StatementDailyQuery{
 		Account: uuid.UUID(cl.principal.AccountID()), TimeZone: zone,
@@ -36,7 +35,14 @@ func (c consoleAPI) ListStatementDaily(ctx context.Context, request consoleapi.L
 		rows, next, err = billing.ListStatementDaily(ctx, tx, q)
 		return err
 	}); err != nil {
-		return nil, err
+		switch {
+		case errors.Is(err, billing.ErrStatementTimeZone):
+			return nil, invalidField("time_zone", "must name an IANA time zone")
+		case errors.Is(err, billing.ErrStatementDailySize):
+			return nil, invalidField("", "daily totals exceed the ledger history budget; use the statement")
+		default:
+			return nil, err
+		}
 	}
 	page := consoleapi.StatementDaily{Data: make([]consoleapi.StatementDay, len(rows)), NextCursor: next}
 	for i, row := range rows {

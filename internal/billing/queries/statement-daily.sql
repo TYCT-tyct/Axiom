@@ -1,5 +1,5 @@
--- name: StatementDailyPage :many
--- Use StatementPage's balance entries and refund-hold deltas. Keep all dates through the balance window: a later
+-- name: StatementDailyKinds :many
+-- Called only after StatementDailyBudget accepts the same read snapshot. Use StatementPage's balance entries and refund-hold deltas. Keep all dates through the balance window: a later
 -- sequence can have an earlier timestamp, and filtering at the cursor first would corrupt historical balances.
 WITH movements AS (
     SELECT t.id, t.seq, t.created_at, t.kind, coalesce(b.source, '')::text AS source,
@@ -28,21 +28,23 @@ WITH movements AS (
     FROM positioned
     WHERE amount <> 0 OR frozen_change <> 0
 ), daily AS (
-    SELECT day,
-        (-coalesce(sum(amount) FILTER (WHERE kind IN ('settle', 'reverse')), 0))::text AS spent,
-        coalesce(sum(amount) FILTER (WHERE (kind = 'credit' AND source = 'paid')
-            OR kind IN ('refund', 'chargeback', 'chargeback_reverse')), 0)::text AS topped_up,
-        coalesce(sum(amount) FILTER (WHERE kind = 'credit' AND source IN ('gift', 'redeem')), 0)::text AS gifted,
-        (-coalesce(sum(amount) FILTER (WHERE kind = 'expire'), 0))::text AS expired
-    FROM visible
+    SELECT day FROM visible
     WHERE @before_day::text = '' OR day < nullif(@before_day::text, '')::date
-    GROUP BY day
-    ORDER BY day DESC
-    LIMIT @max
+    GROUP BY day ORDER BY day DESC LIMIT @max
 ), closing AS (
     SELECT day, balance_after::bigint AS balance
     FROM visible WHERE day_position = 1 AND seq IS NOT NULL
+), grouped AS (
+    SELECT v.day, v.kind, v.source, sum(v.amount)::text AS amount
+    FROM visible v JOIN daily d ON d.day = v.day
+    GROUP BY v.day, v.kind, v.source
 )
-SELECT d.day::text AS day, d.spent, d.topped_up, d.gifted, d.expired, c.balance AS closing_balance
-FROM daily d LEFT JOIN closing c ON c.day = d.day
-ORDER BY d.day DESC;
+SELECT g.day::text AS day, g.kind, g.source, g.amount, c.balance AS closing_balance
+FROM grouped g LEFT JOIN closing c ON c.day = g.day
+ORDER BY g.day DESC, g.kind, g.source;
+
+-- name: StatementDailyBudget :one
+-- Bound the probe using the existing account/sequence index before reading entries or sorting movements.
+SELECT count(*)::bigint FROM (
+    SELECT seq FROM billing.transactions WHERE account_id = @account_id ORDER BY seq LIMIT @max
+) candidates;

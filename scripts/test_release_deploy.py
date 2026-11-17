@@ -64,6 +64,7 @@ docker() {
   case "$*" in
     'inspect --format {{.Config.Image}} axiom'|'inspect --format {{.Config.Image}} migrate') echo "${ACTUAL_IMAGE:-$CI_DEPLOY_IMAGE}" ;;
     'compose -f deploy/compose.yaml ps --all --quiet axiom') echo axiom ;;
+    'compose -f deploy/compose.yaml exec -T axiom /axiom user create --email statement@example.com') cat > /dev/null ;;
     'compose -f deploy/compose.yaml ps --quiet postgres') cat db ;;
     'compose -f deploy/compose.yaml ps --quiet axiom') cat node ;;
     'ps -aq --filter label=com.docker.compose.project=axiom-ci-fixture') echo axiom ;;
@@ -85,6 +86,8 @@ docker() {
 curl() {
   case "$*" in
     *'/api/console/v1/version'|*'/api/admin/v1/version') echo '{"version":"axiom fixture"}' ;;
+    *'/api/console/v1/auth/sign-in') cat > /dev/null; printf 'Set-Cookie: axiom_session=fixture; Path=/\r\n\r\n{}\n' ;;
+    *'/api/console/v1/statement/daily?time_zone=Asia%2FShanghai') echo '{"data":[],"next_cursor":null}' ;;
     *'/api/console/v1/site'|*'/api/admin/v1/users') echo '{"error":{"code":"not_found"}}' ;;
     *'-w '*'/assets/'*) echo 404 ;;
     *'-H Accept-Encoding: br'*) printf 'cache-control: public, max-age=31536000, immutable\ncontent-encoding: br\n' ;;
@@ -132,8 +135,9 @@ curl() {
                 self.assertEqual(calls.count("build --tag axiom-ci:fixture deploy"), 1 if image is None else 0)
                 # The database image is up.sh's to build, only when no node runs (#605).
                 self.assertFalse([call for call in calls if call.startswith("build ") and "postgres" in call], calls)
-                # Outside up.sh only the key ring's three starts, each refused by the keys service before the node runs.
+                # After provisioning the statement fixture, wait for the restarted node; deployment changes still use up.sh.
                 self.assertEqual([call for call in calls if call.startswith("compose ") and " up " in call],
+                                 ["compose -f deploy/compose.yaml up --detach --wait --wait-timeout 60 axiom"] +
                                  ["compose -f deploy/compose.yaml up --detach --no-build axiom"] * 3)
                 starts = [call.removeprefix("bash scripts/ops/up.sh --env-file deploy/.env").strip()
                           for call in calls if call.startswith("bash scripts/ops/up.sh")]
