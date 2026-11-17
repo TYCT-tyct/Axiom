@@ -4,6 +4,8 @@ import { contentSecurityPolicy } from "../../vite.shared.ts";
 import { sourceFont, sources } from "./fonts.ts";
 
 export default defineConfig({
+  // Alpha colors must retain authored precision: .5 and #80 differ at the text's translucent backdrop edges.
+  build: { cssMinify: false },
   plugins: [
     react(),
     {

@@ -2,6 +2,7 @@
 import { setImmediate } from "node:timers/promises";
 import type { Page } from "@playwright/test";
 import { afterEach, expect, it, vi } from "vitest";
+import { bind, render } from "../e2e/design/board.ts";
 import { usedFaces } from "../e2e/design/fonts.ts";
 import { canvasesReady, stage } from "../e2e/design/stage.ts";
 
@@ -12,6 +13,32 @@ afterEach(() => {
   vi.unstubAllGlobals();
   document.body.replaceChildren();
   Reflect.deleteProperty(window, "AxiomOceanOrig");
+});
+
+it("binds reference-board event holes alongside refs, including each repeated item", () => {
+  const root = document.createElement("div");
+  const receive = vi.fn();
+  const click = vi.fn();
+  const input = vi.fn();
+  const refs: unknown[] = [];
+  root.innerHTML = render(
+    '<div ref="{{ root }}"><sc-for list="{{ items }}" as="item"><button onClick="{{ item.click }}">{{ item.label }}</button></sc-for><input onInput="{{ input }}"></div>',
+    {
+      root: receive,
+      items: [
+        { label: "one", click },
+        { label: "two", click },
+      ],
+      input,
+    },
+    refs,
+  );
+  bind(root, refs);
+  expect(receive).toHaveBeenCalledWith(root.firstElementChild);
+  for (const button of root.querySelectorAll("button")) button.click();
+  root.querySelector("input")?.dispatchEvent(new Event("input"));
+  expect(click).toHaveBeenCalledTimes(2);
+  expect(input).toHaveBeenCalledOnce();
 });
 
 it("waits for both native canvas observers before advancing scene time", async () => {

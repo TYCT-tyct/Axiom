@@ -139,6 +139,8 @@
 :global(.ov .gbal:hover):where(.scope){box-shadow:var(--shPop)}
 :global(.ov .gav):where(.scope){all:unset;display:inline-flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;margin-left:10px;border-radius:50%;background:var(--accentWash);color:var(--accentT);font-size:12px;font-weight:500;cursor:pointer;transition:box-shadow var(--dur) var(--ease)}
 :global(.ov .gav:hover):where(.scope){box-shadow:0 0 0 3px var(--hover)}
+:global(.ov .pscr):where(.scope){position:absolute;inset:0;z-index:55;display:none}
+:global(.ov .pscr.open):where(.scope){display:block}
 :global(.ov .pm):where(.scope){position:absolute;top:calc(100% + 8px);left:0;z-index:60;min-width:260px;box-sizing:border-box;padding:6px;border-radius:12px;background:var(--pop);box-shadow:var(--shPop);color:var(--t1);
   opacity:0;visibility:hidden;transform:translateY(-4px) scale(0.97);transform-origin:top left;pointer-events:none;
   transition:opacity 250ms var(--ease),transform 250ms var(--easeB),visibility 0s linear 250ms}

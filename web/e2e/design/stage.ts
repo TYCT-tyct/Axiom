@@ -20,7 +20,7 @@ const loading = 30_000;
 
 // stage prepares a page before it loads anything: Math.random replaced by a seeded generator (mulberry32) and the
 // clock (Date, timers, requestAnimationFrame, performance.now) installed, running towards the scene's moment.
-export async function stage(page: Page, view: Stage) {
+export async function stage(page: Page, view: Stage, frameOrigin?: number) {
   await page.addInitScript((start) => {
     const reset = () => {
       let state = start;
@@ -48,7 +48,13 @@ export async function stage(page: Page, view: Stage) {
     });
   }, seed);
   await page.clock.install({ time: view.time.getTime() - loading });
-  await page.addInitScript(installFrameGate);
+  await page.addInitScript(installFrameGate, frameOrigin);
+}
+
+// Paired mechanical proofs need identical frame phases after navigation, as well as the same wall clock.
+export async function stagePaused(page: Page, view: Stage) {
+  await stage(page, view, view.time.getTime());
+  await page.clock.pauseAt(view.time);
 }
 
 // Canvas engines resize and reschedule their first frame in native observers, outside Playwright's clock. Let those
