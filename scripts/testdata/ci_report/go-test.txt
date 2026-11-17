@@ -1,0 +1,8 @@
+2026-11-16T17:21:15.8755352Z 2026/11/16 17:19:25 🚫 Container terminated: b73cea354076
+2026-11-16T17:21:15.8756524Z --- FAIL: TestUsageBackfillDrainsLiveJournal (1.26s)
+2026-11-16T17:21:15.8770523Z     usage_rollup_test.go:105: live calls delayed: {Buckets:[{At:2026-11-01 00:00:00 +0000 UTC Group: UsageMetrics:{Currency:USD Requests:6 Successes:0 Spend:30000000 Input:720 Output:180 CacheRead: CacheWrite: CacheRateRequests:0 CacheHitRate:<nil> SuccessRate:0xc000984ef8}}] Totals:[{Currency:USD Requests:6 Successes:0 Spend:30000000 Input:720 Output:180 CacheRead: CacheWrite: CacheRateRequests:0 CacheHitRate:<nil> SuccessRate:0xc000984e88}] Previous:[] BackfillComplete:true}
+2026-11-16T17:21:15.8777724Z --- FAIL: TestUsageBackfillResumesAcrossPartitions (1.04s)
+2026-11-16T17:21:15.8779839Z     usage_test.go:203: backfill ended before second row
+2026-11-16T17:21:15.8781695Z FAIL
+2026-11-16T17:21:15.8782466Z coverage: 80.5% of statements
+2026-11-16T17:21:15.8783616Z FAIL	axiom/internal/observability	212.644s
