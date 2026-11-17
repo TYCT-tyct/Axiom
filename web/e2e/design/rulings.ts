@@ -35,6 +35,40 @@ export const rulings: Ruling[] = [
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
+  // is not what the page shows, so the board's rendering of them is excused.
+  {
+    scene: "console overview",
+    basis: "#816 O23: the live state bar needs hourly counts and attempts the API does not aggregate",
+    board: { selector: ".qlivec" },
+  },
+  {
+    scene: "console overview",
+    basis: "#816 O23: the year heatmap needs more than 31 days, which the API does not aggregate",
+    board: { selector: ".qyr" },
+  },
+  {
+    scene: "console overview",
+    basis: "#816 O23: month-end and run-out forecasts have no basis",
+    board: { selector: ".qleg, .qch2 .fut" },
+  },
+  {
+    scene: "console overview",
+    basis: "#816 G1: the median first token needs an aggregation the API does not offer; the page shows the balance",
+    board: { selector: ".qkpis .qkpi:nth-child(3)" },
+    page: { selector: ".qkpis .qkpi:nth-child(3)" },
+  },
+  {
+    scene: "console overview",
+    basis: "#816 G1: the budget card and its forecast have no endpoint here; the page shows the account's keys",
+    board: { selector: ".qkpis .qkpi:nth-child(4)" },
+    page: { selector: ".qkpis .qkpi:nth-child(4)" },
+  },
+  {
+    scene: "console overview",
+    basis: "G1: the board writes ¥ in its spend axis; the page's money is in the account's currency",
+    board: { selector: ".qyax, .qgl" },
+  },
   {
     scene: "converted-Login",
     basis: "animated engine; covered by its fixed-seed engine test",

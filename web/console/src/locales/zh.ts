@@ -1,5 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as announcements } from "./announcements";
+import { zh as overviewBoard } from "./overview";
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
 import { zh as routingPresets } from "./routing-presets";
@@ -79,6 +80,7 @@ export default {
     accept: "我已阅读并同意上述服务条款和隐私政策。",
   },
   overview: {
+    ...overviewBoard,
     description: "余额、本月花费、key 和最近的报错。",
     balanceDetails: "查看明细",
     monthNote: "按 UTC 自然月统计",

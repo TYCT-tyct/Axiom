@@ -1,5 +1,6 @@
 import type { Messages } from "@axiom/ui";
 import { en as announcements } from "./announcements";
+import { en as overviewBoard } from "./overview";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
 import { en as routingPresets } from "./routing-presets";
@@ -81,6 +82,7 @@ export default {
     accept: "I have read and agree to the terms of service and privacy policy above.",
   },
   overview: {
+    ...overviewBoard,
     description: "Your balance, this month’s spending, keys and recent errors.",
     balanceDetails: "See details",
     monthNote: "Counted by UTC calendar month",
