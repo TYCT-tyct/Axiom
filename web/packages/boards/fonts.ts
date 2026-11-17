@@ -1,8 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 type Source = { url: string; sha256: string; member?: string };
 export const sources: Record<string, Source> = JSON.parse(
@@ -10,7 +10,7 @@ export const sources: Record<string, Source> = JSON.parse(
 ).sources;
 const cache = join(import.meta.dirname, "node_modules", ".cache", "boards-fonts");
 
-// Reuse F1a's pinned sources and existing download cache. Only this package's ignored cache is written.
+// Reuse F1a's pinned sources and its shared download cache.
 const loaded = new Map<string, Promise<Buffer>>();
 export function sourceFont(name: string): Promise<Buffer> {
   let result = loaded.get(name);
@@ -39,6 +39,14 @@ async function loadFont(name: string): Promise<Buffer> {
     throw new Error(`font digest mismatch: ${name}`);
   mkdirSync(cache, { recursive: true });
   if (!existsSync(local)) writeFileSync(local, data);
+  // The shared cache outlives the checkout (CI keeps it on its web cache volume): a font is downloaded once, not on
+  // every run. Written under a temporary name and renamed, so a concurrent reader never sees half a file.
+  if (!existsSync(shared)) {
+    mkdirSync(dirname(shared), { recursive: true });
+    const partial = `${shared}.${process.pid}.part`;
+    writeFileSync(partial, data);
+    renameSync(partial, shared);
+  }
   if (!source.member) return data;
   return execFileSync(
     "python3",
