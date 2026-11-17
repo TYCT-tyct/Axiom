@@ -39,10 +39,17 @@ function selectors(source: string): string[] {
 }
 
 function potential(selector: string) {
-  return selector
-    .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
-    .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
-    .replace(/:not\([^()]*\)/g, ":is(*)");
+  return (
+    selector
+      .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
+      .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
+      // The board is cut as its markup first stands: the page's language and the states engines and components set at
+      // run time (data-open, data-enter, aria-expanded="true") are not in it yet, so their rules are kept regardless.
+      .replace(/:lang\([^()]*\)/g, "")
+      .replace(/\[data-[\w-]+(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g, ":is(*)")
+      .replace(/\[([\w-]+)[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*)\]/g, "[$1]")
+      .replace(/:not\([^()]*\)/g, ":is(*)")
+  );
 }
 
 function scoped(selector: string) {

@@ -50,7 +50,14 @@ function attribute(name: string, raw: string, state: Emitter, replacement?: stri
   const prop = property(name);
   const booleans = ["disabled", "checked", "selected", "multiple", "readOnly", "required", "autoFocus", "hidden"];
   if (booleans.includes(prop)) return `${prop}={${hole ? state.value(hole, "boolean") : "true"}}`;
-  return `${prop === "value" ? "defaultValue" : prop}={${expr}}`;
+  return `${prop === "value" ? "defaultValue" : prop}={${typed(prop, raw, expr)}}`;
+}
+
+// React types tabIndex as a number and a state aria-* attribute as "true" | "false"; the board writes strings.
+function typed(prop: string, raw: string, expr: string) {
+  if (prop === "tabIndex") return `Number(${expr})`;
+  if (prop.startsWith("aria-") && raw.includes("{{")) return `(${expr}) as "true" | "false"`;
+  return expr;
 }
 
 export function jsx(node: Node, state: Emitter, fields?: Map<Node | Attr, string>): string {
