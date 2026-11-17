@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
 import { compare } from "./design/compare.ts";
 import { type Ruling, rulings } from "./design/rulings.ts";
-import { stage } from "./design/stage.ts";
+import { stage, stagePaused } from "./design/stage.ts";
 
 const view = {
   viewport: { width: 400, height: 300 },
@@ -19,6 +19,29 @@ async function prepare(page: Page) {
   await page.setViewportSize(view.viewport);
   await page.setContent('<canvas class="sea" width="400" height="300"></canvas>');
 }
+
+test("board clocks replay the same zero epoch and animation frames after navigation", async ({ browser }) => {
+  const timelines: number[][] = [];
+  for (let i = 0; i < 2; i++) {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    await stagePaused(page, view);
+    await page.goto("about:blank");
+    const samples = await page.evaluateHandle(() => {
+      const samples = [performance.now()];
+      requestAnimationFrame((time) => samples.push(time, performance.now()));
+      return samples;
+    });
+    await page.clock.runFor(16);
+    timelines.push(await samples.jsonValue());
+    await samples.dispose();
+    await context.close();
+  }
+  expect(timelines).toEqual([
+    [0, 16, 16],
+    [0, 16, 16],
+  ]);
+});
 
 test("canvas rulings preserve overlaid text, glass, geometry and the original bitmap", async ({ context }, info) => {
   const board = await context.newPage();

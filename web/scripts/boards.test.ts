@@ -33,8 +33,16 @@ describe("board conversion", () => {
   });
 
   it("mechanically adapts CSP writes while leaving other script bytes alone", () => {
+    expect(csp("el.setAttribute('style', saved); el.setAttribute('class', 'on');")).toBe(
+      "boardCSS(el.style, saved); el.setAttribute('class', 'on');",
+    );
     expect(csp("const x = 1; el.innerHTML = '<i style=\"color:red\">hi</i>'; el.style.cssText += 'width:1px';")).toBe(
       `const x = 1; boardHTML(el, '<i style="color:red">hi</i>', "inner"); boardCSS(el.style, 'width:1px', true);`,
+    );
+    expect(
+      csp("const drawing = { set innerHTML(s) { els.forEach(e => { e.innerHTML = s; }); } }; drawing.innerHTML = svg;"),
+    ).toBe(
+      'const drawing = { set innerHTML(s) { els.forEach(e => { boardHTML(e, s, "inner"); }); } }; boardHTML(drawing, svg, "inner");',
     );
   });
 

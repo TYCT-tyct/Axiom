@@ -18,7 +18,7 @@ const consoleRegions: Region[] = ["AxApp", "AxAppPhone"].flatMap((board): Region
     board,
     name: "Shell",
     roots: [".board"],
-    omit: [".pscr", ".qdrs", ".qdr", ".kov", ".tst"],
+    omit: [".qdrs", ".qdr", ".kov", ".tst"],
     children: ".qpages",
     text: {
       workspaceSpent: ".qwsr .pmt > span",

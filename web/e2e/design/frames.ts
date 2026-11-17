@@ -8,9 +8,16 @@ declare global {
 
 // Installed after Playwright's clock, before the boards. Native observers may schedule frames even while time is
 // paused. Keep their callbacks queued during capture, then resume them for the interaction assertions.
-export function installFrameGate() {
-  const request = window.requestAnimationFrame.bind(window);
-  const cancel = window.cancelAnimationFrame.bind(window);
+export function installFrameGate(origin?: number) {
+  // Clock installation replays RPC/loading time into performance.now after navigation. Anchor paired proofs to their
+  // fixed Date instead, including the clock's 16 ms frame grid, so SVG tweens reach exactly the same point.
+  const now = () => Date.now() - (origin ?? 0);
+  if (origin !== undefined) Object.defineProperty(performance, "now", { configurable: true, value: now });
+  const request =
+    origin === undefined
+      ? window.requestAnimationFrame.bind(window)
+      : (callback: FrameRequestCallback) => window.setTimeout(() => callback(now()), 16 - (now() % 16));
+  const cancel = origin === undefined ? window.cancelAnimationFrame.bind(window) : window.clearTimeout.bind(window);
   type Frame = { callback: FrameRequestCallback; native?: number };
   const pending = new Map<number, Frame>();
   let next = 0;

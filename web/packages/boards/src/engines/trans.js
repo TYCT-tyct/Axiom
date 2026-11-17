@@ -244,7 +244,7 @@ import { boardHTML, boardCSS } from "../dom.ts";
       if (dir < 0 && this.trigger && this.trigger.focus) { const fa = document.activeElement; if (!fa || fa === document.body || this.lg.contains(fa)) try { this.trigger.focus({ preventScroll: true }); } catch (_) {} }
     }
     cleanup() {
-      for (const [el, st] of this.touched) { if (st === null) el.removeAttribute('style'); else el.setAttribute('style', st); }
+      for (const [el, st] of this.touched) { if (st === null) el.removeAttribute('style'); else boardCSS(el.style, st); }
       this.touched.clear();
       for (const s of this.slots) if (s.out) { s.el.textContent = s.text; s.out = ''; }
       for (const c of this.root.querySelectorAll('.lg-title .ch')) c.style.color = '';

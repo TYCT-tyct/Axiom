@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -8,7 +8,6 @@ type Source = { url: string; sha256: string; member?: string };
 export const sources: Record<string, Source> = JSON.parse(
   readFileSync(new URL("../../scripts/fonts/sources.json", import.meta.url), "utf8"),
 ).sources;
-const cache = join(import.meta.dirname, "node_modules", ".cache", "boards-fonts");
 
 // Reuse F1a's pinned sources and its shared download cache.
 const loaded = new Map<string, Promise<Buffer>>();
@@ -26,10 +25,8 @@ async function loadFont(name: string): Promise<Buffer> {
   if (!source) throw new Error(`unknown font ${name}`);
   const file = `${source.sha256}-${name}`;
   const shared = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "axiom-fonts", file);
-  const local = join(cache, file);
   let data: Buffer;
   if (existsSync(shared)) data = readFileSync(shared);
-  else if (existsSync(local)) data = readFileSync(local);
   else {
     const response = await fetch(source.url);
     if (!response.ok) throw new Error(`font download failed: ${name} ${response.status}`);
@@ -37,25 +34,26 @@ async function loadFont(name: string): Promise<Buffer> {
   }
   if (createHash("sha256").update(data).digest("hex") !== source.sha256)
     throw new Error(`font digest mismatch: ${name}`);
-  mkdirSync(cache, { recursive: true });
-  if (!existsSync(local)) writeFileSync(local, data);
   // The shared cache outlives the checkout (CI keeps it on its web cache volume): a font is downloaded once, not on
   // every run. Written under a temporary name and renamed, so a concurrent reader never sees half a file.
   if (!existsSync(shared)) {
     mkdirSync(dirname(shared), { recursive: true });
-    const partial = `${shared}.${process.pid}.part`;
-    writeFileSync(partial, data);
-    renameSync(partial, shared);
+    const partial = `${shared}.${randomUUID()}.part`;
+    try {
+      writeFileSync(partial, data);
+      renameSync(partial, shared);
+    } finally {
+      rmSync(partial, { force: true });
+    }
   }
   if (!source.member) return data;
   return execFileSync(
     "python3",
     [
       "-c",
-      "import sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(sys.argv[1], metadata_encoding='utf-8').read(sys.argv[2]))",
-      local,
+      "import io,sys,zipfile; sys.stdout.buffer.write(zipfile.ZipFile(io.BytesIO(sys.stdin.buffer.read()), metadata_encoding='utf-8').read(sys.argv[1]))",
       source.member,
     ],
-    { maxBuffer: 64 * 1024 * 1024 },
+    { input: data, maxBuffer: 64 * 1024 * 1024 },
   );
 }

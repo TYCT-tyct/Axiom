@@ -35,6 +35,20 @@ it("preserves quoted content and style declarations through inert HTML parsing",
   expect(span.hasAttribute("data-board-style")).toBe(false);
 });
 
+it("passes drawing-facade writes through their converted setter to every SVG copy", () => {
+  const copies = [0, 1].map(() => document.createElementNS("http://www.w3.org/2000/svg", "g"));
+  const drawing = {
+    set innerHTML(html: string) {
+      for (const copy of copies) boardHTML(copy, html);
+    },
+  };
+  boardHTML(drawing, '<path d="M0 0L1 1" style="stroke:red"/>');
+  for (const copy of copies) {
+    expect(copy.firstElementChild?.namespaceURI).toBe(copy.namespaceURI);
+    expect((copy.firstElementChild as SVGElement).style.stroke).toBe("red");
+  }
+});
+
 it("keeps variable shorthands rather than copying their empty pending-substitution longhands", () => {
   const sheet = {
     cssRules: [

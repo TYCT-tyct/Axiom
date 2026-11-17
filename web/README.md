@@ -110,8 +110,9 @@
 画板机械转换：`AXIOM_DESIGN_DIR=/path/to/design pnpm --dir web boards`，导入清单见 `packages/boards/catalog.ts`。
 不指定目录时，从 `packages/boards/inputs/` 的固定输入重新生成；`pnpm --dir web boards --check` 校验产物，单元测试在 CI 执行同一校验。
 生成目录带 `@generated` 标记，禁止手改；演示用 `pnpm --dir web --filter @axiom/boards dev` 打开 `/<Board>`，整板保留原始演示逻辑，随路由加载。
-画板及引擎随路由加载；演示字体复用 F1a 固定源，仅写本包忽略的缓存，生产页面的构建入口不变。
-`pnpm --dir web e2e boards.spec` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。
+画板及引擎随路由加载；演示字体复用 F1a 固定源，按摘要校验后原子写入共享下载缓存，归档从已校验内存解包，生产页面的构建入口不变。
+`pnpm --dir web e2e --config=playwright.boards.config.ts` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。
+参考演示不压缩 CSS，保留透明颜色的小数精度；画板检查独立运行，不进入产品端到端分片。
 
 产品页面使用区域入口，例如 `@axiom/boards/AxApp/regions/Shell` 和 `@axiom/boards/AxApp/regions/Overview`；手机对应 AxAppPhone。
 区域由手写 `packages/boards/regions.ts` 描述：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽。
