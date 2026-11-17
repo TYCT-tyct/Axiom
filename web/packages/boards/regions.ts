@@ -5,6 +5,8 @@ export type Region = {
   page?: string;
   omit?: string[];
   children?: string;
+  // Elements whose content the page supplies, by prop name, as children does for its own.
+  slots?: Record<string, string>;
   repeats?: Record<string, string>;
   text?: Record<string, string>;
   attributes?: Record<string, { selector: string; attribute: string }>;
@@ -90,11 +92,14 @@ const shellOmit = [
 // it, the phone's tabs to the bottom, and the phone's popovers are sheets at the bottom of the window. Set inline, the
 // frame's geometry outranks the board's rules, four classes deep. tokens.css carries the colours.
 const frame = (app: string) => ({
-  ".board": { set: { style: "", lang: "{{lang}}" } },
+  // The app's own font stacks, whose Chinese faces are cut for its pages, in place of the drawing's.
+  ".board": { set: { style: "font-family: var(--family-ui)", lang: "{{lang}}" } },
   ".frame": { set: { style: "overflow: clip; min-height: 100dvh" } },
   ".app2": { set: { style: "position: relative; inset: auto; min-height: 100dvh", "data-shell": app } },
   ".gbar": { set: { style: "position: sticky; top: 0; background: var(--page)" } },
   "main.scr": { set: { id: "main", tabindex: "-1", style: "overflow: visible; flex: 1 0 auto" } },
+  // The pages not ported yet carry their own padding and width; a ported page's card gives the board's back.
+  ".qpages": { set: { style: "padding: 0; max-width: none" } },
 });
 
 // The bar's menus, the same on both boards.
@@ -105,9 +110,9 @@ const menus = {
   ".qgav": { set: expanded("meOpen") },
   ".qme [data-pg=prefs]": { ...button, set: { ...button.set, lang: "{{languageTag}}" } },
   ".qme .pmi.mut2": button,
-  ".tseg > :nth-child(1)": { set: { "aria-pressed": "{{themeSystem}}" } },
-  ".tseg > :nth-child(2)": { set: { "aria-pressed": "{{themeLight}}" } },
-  ".tseg > :nth-child(3)": { set: { "aria-pressed": "{{themeDark}}" } },
+  ".tseg > button:nth-of-type(1)": { set: { "aria-pressed": "{{themeSystem}}" } },
+  ".tseg > button:nth-of-type(2)": { set: { "aria-pressed": "{{themeLight}}" } },
+  ".tseg > button:nth-of-type(3)": { set: { "aria-pressed": "{{themeDark}}" } },
   ...links(".qme .pmi", account),
 };
 
@@ -118,6 +123,7 @@ const wide = {
   ".qnv": { set: { "aria-label": "{{navigation}}" } },
   // The command palette is not built (#816); its place in the bar's grid stays.
   ".gsr": { set: { style: "visibility: hidden" } },
+  ".gsr .mono": { set: { style: "font-family: var(--family-mono)" } },
   ".abody": { set: { "data-shell": "body", style: "flex: 1 0 auto" } },
   // 56px is the board's bar.
   ".sbar": { set: { style: "position: sticky; top: 56px; height: calc(100dvh - 56px)" } },
@@ -155,6 +161,8 @@ const shell = (board: string): Region => ({
   roots: [".board"],
   omit: shellOmit,
   children: ".qpages",
+  // The site's logo, or its initial where the board draws an A.
+  slots: { mark: ".glogo .bm" },
   english: shellEnglish,
   text: {
     // The language entry names the language it switches to.

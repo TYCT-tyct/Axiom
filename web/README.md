@@ -114,7 +114,7 @@
 参考演示不压缩 CSS，保留透明颜色的小数精度；画板检查独立运行，不进入产品端到端分片。
 
 产品页面使用区域入口，例如 `@axiom/boards/AxApp/regions/Shell` 和 `@axiom/boards/AxApp/regions/Overview`；手机对应 AxAppPhone。
-区域由手写 `packages/boards/regions.ts` 描述：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽。
+区域由手写 `packages/boards/regions.ts` 描述：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽，`slots` 按属性名再给出其他插槽（如标志），由页面传入内容。
 `text` 只替换所选元素的直接文本节点，不破坏货币、小数等子元素；`attributes` 替换指定属性。多处匹配按文档顺序生成编号字段。
 `elements` 补画板没画的产品需要：按选择器（含根节点）换标签（如可点击的 `<div>` 换成 `<button>`）、设置属性（值可含孔洞），`tag: "link"` 渲染页面通过 `link` 传入的路由链接。布尔 ARIA 状态的孔洞类型为 `boolean`。选择器不匹配即生成失败。
 `repeats` 把连续的同级节点提取为类型化数组，原有不同节点结构成为联合类型，渲染模板仍由工具复制；数据字段 `fN` 对应模板中按顺序遍历的属性和文本，具体值见旁边的 `.demo.ts`。

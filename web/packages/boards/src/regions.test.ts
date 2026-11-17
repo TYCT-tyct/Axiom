@@ -103,6 +103,7 @@ async function buildRegions(board: string) {
 function edit(root: Element, region: Region) {
   const within = (selector: string) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
   for (const el of (region.omit ?? []).flatMap(within)) el.remove();
+  for (const el of Object.values(region.slots ?? {}).flatMap(within)) el.replaceChildren();
   const changes = Object.entries(region.elements ?? {}).flatMap(([selector, change]) =>
     within(selector).map((found) => ({ found, ...change })),
   );
@@ -168,12 +169,17 @@ describe("region generation", () => {
       ".pmi": { tag: "button", set: { type: "button" } },
       main: { set: { id: "main", tabindex: "-1" } },
     };
-    const files = convertRegion(markup, "", { board: "Test", name: "Edits", roots: [".m"], elements }, marker);
+    const region = { board: "Test", name: "Edits", roots: [".m"], elements, slots: { mark: "main" } };
+    const files = convertRegion(markup, "", region, marker);
     const { component, props } = renderer(files, "Test", "Edits");
     const link = (attributes: object) => createElement("a", { ...attributes, "data-router": "" });
+    const mark = createElement("img", { alt: "" });
     const render = (gone: boolean) =>
-      fragment(renderToStaticMarkup(createElement(component, { ...props, link, values: { to: "/calls", gone } })));
+      fragment(
+        renderToStaticMarkup(createElement(component, { ...props, link, mark, values: { to: "/calls", gone } })),
+      );
     const shown = render(false);
+    expect(shown.querySelector("main > img")).not.toBeNull();
     expect(shown.querySelector("a.ni[data-router]")?.getAttribute("href")).toBe("/calls");
     expect(shown.querySelector("a.ni")?.hasAttribute("hidden")).toBe(false);
     expect(shown.querySelector(".pmi")?.outerHTML).toMatch(/^<button [^>]*type="button"/);

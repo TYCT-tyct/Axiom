@@ -364,7 +364,7 @@ test.describe("balance", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/");
-    await expect(page.getByText("US$11.75")).toBeVisible();
+    await expect(page.locator("#main").getByText("US$11.75")).toBeVisible();
     await expect(page.getByText("US$3.141592653")).toBeVisible();
     await page.getByRole("link", { name: "查看明细" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "余额" })).toBeVisible();

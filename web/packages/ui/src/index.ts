@@ -4,7 +4,7 @@ export { useBrandStyle } from "./brand";
 export { ActionButton } from "./components/action-button";
 export { AppShell, focusPage, PageHeader, routerDefaults, SideNavItem } from "./components/app-shell";
 export { Avatar } from "./components/avatar";
-export { BoardShell, usePreferences } from "./components/board-shell";
+export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
 export { Button, SubmitButton } from "./components/button";
 export { Card } from "./components/card";
 export { BarChart, LineChart } from "./components/chart";

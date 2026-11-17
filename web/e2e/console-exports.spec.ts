@@ -43,7 +43,7 @@ for (const exported of exports) {
     state.user.email = "other@example.com";
     await returnToWindow(page);
     await page.getByRole("button", { name: "账号设置" }).click();
-    await expect(page.getByText("other@example.com")).toBeVisible();
+    await expect(page.getByRole("banner").getByText("other@example.com")).toBeVisible();
     await abandoned;
     answer();
     expect(downloads).toBe(0);

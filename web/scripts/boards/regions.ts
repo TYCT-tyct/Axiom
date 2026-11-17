@@ -72,6 +72,16 @@ function imports(fields: string, body: string, hasRows: boolean) {
   ].join("\n");
 }
 
+// The region's slots by prop name: children, and the named ones whose content the page supplies.
+const slots = (region: Region): Record<string, string> => ({
+  ...(region.children ? { children: region.children } : {}),
+  ...region.slots,
+});
+const slotProps = (region: Region) => {
+  const names = Object.keys(slots(region));
+  return names.length ? ` & { ${names.map((name) => `${name}?: import("react").ReactNode`).join("; ")} }` : "";
+};
+
 function source(
   region: Region,
   body: string,
@@ -90,7 +100,7 @@ function source(
     fields ? "values: v = {}" : "",
     hasRows ? "rows" : "",
     hasText ? "text" : "",
-    region.children ? "children" : "",
+    ...Object.keys(slots(region)),
     state.links.size ? 'link: Link = "a"' : "",
   ]
     .filter(Boolean)
@@ -99,7 +109,7 @@ function source(
     ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
     : "";
   const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}`;
-  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
+  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${slotProps(region)}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
 function locales(region: Region, state: ReturnType<typeof emitter>, marker: string) {
@@ -145,12 +155,12 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     const roots = cut(document, region);
     const state = emitter(region);
     edit(roots, state);
-    if (region.children)
-      for (const el of document.querySelectorAll(region.children)) {
+    for (const [name, selector] of Object.entries(slots(region)))
+      for (const el of document.querySelectorAll(selector)) {
         el.replaceChildren();
         // Keep the slot's own element in JSX and CSS, replacing only its content.
-        el.append(document.createComment("region children"));
-        state.replacements.set(el.firstChild as Node, "{children}");
+        el.append(document.createComment(`region ${name}`));
+        state.replacements.set(el.firstChild as Node, `{${name}}`);
       }
     expose(roots, state);
     const repeated = rows(roots, state);

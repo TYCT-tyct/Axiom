@@ -42,9 +42,12 @@ export default function Balance() {
                 )}
                 <p className="border-t border-b1 px-4 py-3 text-ui text-t3">{t("balance.batchesNote")}</p>
               </Panel>
-              <Link to="/statement" className="text-ui text-accent underline-offset-4 hover:underline">
-                {t("nav.statement")}
-              </Link>
+              {/* The shell has one billing entry; the statement and redeeming a code are reached from here. */}
+              {(["/statement", "/redeem"] as const).map((to) => (
+                <Link key={to} to={to} className="mr-4 text-ui text-accent underline-offset-4 hover:underline">
+                  {t(to === "/statement" ? "nav.statement" : "nav.redeem")}
+                </Link>
+              ))}
             </>
           )}
         </DataState>

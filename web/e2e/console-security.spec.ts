@@ -205,7 +205,7 @@ test.describe("passkey changes and the session that asked", () => {
     state.user.email = "other@example.com";
     await returnToWindow(page);
     await page.getByRole("button", { name: "账号设置" }).click();
-    await expect(page.getByText("other@example.com")).toBeVisible();
+    await expect(page.getByRole("banner").getByText("other@example.com")).toBeVisible();
     await abandoned;
     answer();
     await expect(page.getByRole("dialog", { name: "保存你的恢复码" })).toHaveCount(0);

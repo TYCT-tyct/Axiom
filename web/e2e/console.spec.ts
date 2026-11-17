@@ -125,7 +125,7 @@ test("a server failure is retried, then shows its request ID, and retrying asks 
   expect(calls).toBe(3);
 
   await page.getByRole("button", { name: "重试" }).click();
-  await advanceUntil(page, () => expect(page.getByText("US$11.75")).toBeVisible({ timeout: 100 }));
+  await advanceUntil(page, () => expect(page.locator("#main").getByText("US$11.75")).toBeVisible({ timeout: 100 }));
   expect(calls).toBe(4);
 });
 
@@ -210,6 +210,25 @@ test("the theme chosen on a phone is the one the wide shell shows once the windo
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "账号设置" })).toBeFocused();
   await expect(page.getByRole("button", { name: "跟随系统" })).toBeHidden();
+});
+
+test("a key's secret, shown once, stays while the window crosses from the phone board to the wide one", async ({
+  page,
+}) => {
+  await openConsole(page, built);
+  await page.setViewportSize({ width: 390, height: 800 });
+  await page.goto("/console/keys");
+  await page.getByRole("button", { name: "创建 key" }).click();
+  await page.getByRole("dialog", { name: "创建 key" }).getByLabel("名称").fill("Deploy bot");
+  await page.getByRole("button", { name: "创建", exact: true }).click();
+  const secret = page.getByRole("dialog", { name: "复制你的 key" });
+  await expect(secret).toBeVisible();
+  const text = await secret.textContent();
+  for (const width of [820, 390]) {
+    await page.setViewportSize({ width, height: 800 });
+    await expect(secret).toBeVisible();
+    expect(await secret.textContent()).toBe(text);
+  }
 });
 
 test("a followed link opens the new page at its top with focus on its heading", async ({ page }) => {

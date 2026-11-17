@@ -176,7 +176,7 @@ test.describe("signing in", () => {
     state.keys = [];
     await returnToWindow(page);
     await page.getByRole("button", { name: "账号设置" }).click();
-    await expect(page.getByText("other@example.com")).toBeVisible();
+    await expect(page.getByRole("banner").getByText("other@example.com")).toBeVisible();
     await expect(secret).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "还没有 key" })).toBeVisible();
     await expect(page.getByText("Laptop")).toHaveCount(0);

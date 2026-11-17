@@ -1,4 +1,5 @@
-import { type ReactNode, useSyncExternalStore } from "react";
+import { type ReactNode, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useBrandStyle } from "../brand";
 import { chooseLanguage, type Language, languageNames, languages, locales } from "../i18n";
@@ -31,6 +32,65 @@ export function BoardShell({
       <ForbiddenHint value={forbiddenHint}>{children}</ForbiddenHint>
     </div>
   );
+}
+
+// useKeptPage keeps a page mounted while the shell around it changes from one board's to another's, as the window
+// crosses a board's width: the page renders into an element of its own at one place in the tree, and the slot of
+// whichever board is shown takes that element in. Rendered inside the boards' slots instead, the page would be
+// mounted again with the board, losing what it holds, such as a new key's secret shown only once.
+export function useKeptPage(page: ReactNode) {
+  const [host] = useState(() => {
+    const element = document.createElement("div");
+    element.className = styles.page as string;
+    return element;
+  });
+  return {
+    page: createPortal(page, host),
+    slot: (
+      <div
+        className={styles.page}
+        ref={(slot) => {
+          if (!slot) return;
+          slot.append(host);
+          // Moving the page took its open modal dialogs out of the top layer, leaving them open but not modal. Showing
+          // them again restores that; dropping the open attribute first fires no close event, which the page would take
+          // for the person dismissing it.
+          for (const dialog of host.querySelectorAll<HTMLDialogElement>("dialog[open]")) {
+            if (!dialog.matches(":modal")) {
+              dialog.removeAttribute("open");
+              dialog.showModal();
+            }
+          }
+        }}
+      />
+    ),
+  };
+}
+
+// BoardMark is the site's logo in a board's mark, in a 20px box whatever its size (docs/frontend.md「主题与自由度」);
+// without one, or when it does not load, the initial of the site's name, as the boards draw Axiom's A.
+export function BoardMark({ name, logoUrl }: { name?: string; logoUrl?: string }) {
+  const { t } = useTranslation("common");
+  // The URL that failed, not a boolean: a new logo at a new URL is tried, not hidden behind the old failure.
+  const [failed, setFailed] = useState<string | null>(null);
+  return logoUrl && failed !== logoUrl ? (
+    <img src={logoUrl} alt="" width="20" height="20" onError={() => setFailed(logoUrl)} className={styles.logo} />
+  ) : (
+    (name ?? t("brand")).slice(0, 1).toUpperCase()
+  );
+}
+
+// focusHeading moves focus to the new page's heading after a navigation, so a screen reader announces the page instead of
+// staying on the link or the menu, and the next Tab starts from the page; the first load leaves focus where the browser
+// puts it. Pass it to the router's onResolved event. The heading is made focusable here, for every page has one
+// (docs/frontend.md「工程要求」); a page without one hands focus to #main. Focus does not scroll: the router has put the
+// new page at its top.
+export function focusHeading({ fromLocation, pathChanged }: { fromLocation?: unknown; pathChanged: boolean }) {
+  if (fromLocation && pathChanged) {
+    const heading = document.querySelector<HTMLElement>("#main h1");
+    heading?.setAttribute("tabindex", "-1");
+    (heading ?? document.getElementById("main"))?.focus({ preventScroll: true });
+  }
 }
 
 const darkScheme = () => matchMedia("(prefers-color-scheme: dark)");

@@ -4,15 +4,22 @@
   min-height: 100dvh;
 }
 
-/* A link the board drew without an address now has one: keep the board's colour, not the browser's. */
-.root :where(a[href]) {
-  color: inherit;
-  text-decoration: none;
-}
-
 /* An entry the session may not open is hidden even where the board's rules give it a display. */
 .root [data-shell] :is(a, div)[hidden] {
   display: none;
+}
+
+/* The page's own box, which the shown board's slot holds; it adds nothing to the layout. */
+.page {
+  display: contents;
+}
+
+.logo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5.5px;
+  object-fit: contain;
 }
 
 .skip {

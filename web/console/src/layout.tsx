@@ -5,7 +5,7 @@ import wideZh from "@axiom/boards/AxApp/regions/Shell.zh";
 import Phone from "@axiom/boards/AxAppPhone/regions/Shell";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/Shell.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/Shell.zh";
-import { BoardShell, useFormat, usePreferences } from "@axiom/ui";
+import { BoardMark, BoardShell, useFormat, useKeptPage, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import {
@@ -44,9 +44,9 @@ const account: Page[] = ["profile", "security", "notify"];
 // The board's own state classes for the personal space, as it draws it; only the level and the page vary here.
 const drawn = "spP woP wa2 rw tx0 tm1 ap0 lf0 wsk0 nks0 cz0 ck0 ct1 den0 kp0 yrc0 pico0";
 
-// The widths the boards are drawn for: the phone board below 600px, where its own container queries switch; the wide
-// one above, whose sidebar starts collapsed below 1024px, as the tablet board (AxAppTablet, the same markup at 820px)
-// draws it. Only one of the two is in the DOM.
+// The widths the boards are drawn for: the wide board from the tablet board's 820px (AxAppTablet, the same markup with
+// its sidebar folded, as it stays below 1024px), the phone board below, where the page keeps the whole width. Only one
+// of the two is in the DOM.
 const media = (query: string) => ({
   subscribe: (listener: () => void) => {
     const list = matchMedia(query);
@@ -55,7 +55,7 @@ const media = (query: string) => ({
   },
   matches: () => matchMedia(query).matches,
 });
-const phoneWidth = media("(max-width: 599px)");
+const phoneWidth = media("(max-width: 819px)");
 const wideWidth = media("(min-width: 1024px)");
 const useMedia = (query: ReturnType<typeof media>) => useSyncExternalStore(query.subscribe, query.matches);
 
@@ -146,7 +146,11 @@ export function Layout() {
   return (
     <Gate stage="member">
       <BoardShell banner={notices} forbiddenHint={t("forbiddenHint")} brandColor={site.data?.brand_color}>
-        <ConsoleShell name={site.data?.name} signOut={() => signOut.isPending || signOut.mutate()}>
+        <ConsoleShell
+          name={site.data?.name}
+          logoUrl={site.data?.logo_url}
+          signOut={() => signOut.isPending || signOut.mutate()}
+        >
           <Outlet />
         </ConsoleShell>
       </BoardShell>
@@ -236,8 +240,19 @@ function useBalanceText() {
 // ConsoleShell is the AxApp board's shell with the session's data: the bar with the path, the balance, help and the
 // account menu, the sidebar on wide windows and the tabs on phones. What fails to load is said in its place; the rest
 // of the shell works without it.
-function ConsoleShell({ name, signOut, children }: { name?: string; signOut: () => void; children: ReactNode }) {
+function ConsoleShell({
+  name,
+  logoUrl,
+  signOut,
+  children,
+}: {
+  name?: string;
+  logoUrl?: string;
+  signOut: () => void;
+  children: ReactNode;
+}) {
   const { t, i18n } = useTranslation();
+  const { page, slot } = useKeptPage(children);
   const phone = useMedia(phoneWidth);
   const { level, ...pageValues } = usePageValues();
   const { dark, language, ...preferenceValues } = usePreferenceValues();
@@ -248,24 +263,38 @@ function ConsoleShell({ name, signOut, children }: { name?: string; signOut: () 
     ...usePopover(),
     ...useSidebarValues(),
     rootC: `${level} ${drawn}${dark}`,
-    home: name,
+    home: name ?? t("brand", { ns: "common" }),
     path: t("shell.path"),
     navigation: t("shell.navigation", { ns: "common" }),
     fnOut: signOut,
   };
   const english = i18n.language === "en";
-  return phone ? (
-    <Phone t={(key) => (english ? phoneEn : phoneZh)[key]} values={values} text={{ language }} link={RouterLink}>
-      {children}
-    </Phone>
-  ) : (
-    <Wide
-      t={(key) => (english ? wideEn : wideZh)[key]}
-      values={values}
-      text={{ language, ...balance }}
-      link={RouterLink}
-    >
-      {children}
-    </Wide>
+  const mark = <BoardMark name={name} logoUrl={logoUrl} />;
+  // The page comes after the board, so the slot holds the page's element before the page's own effects run.
+  return (
+    <>
+      {phone ? (
+        <Phone
+          t={(key) => (english ? phoneEn : phoneZh)[key]}
+          values={values}
+          text={{ language }}
+          link={RouterLink}
+          mark={mark}
+        >
+          {slot}
+        </Phone>
+      ) : (
+        <Wide
+          t={(key) => (english ? wideEn : wideZh)[key]}
+          values={values}
+          text={{ language, ...balance }}
+          link={RouterLink}
+          mark={mark}
+        >
+          {slot}
+        </Wide>
+      )}
+      {page}
+    </>
   );
 }

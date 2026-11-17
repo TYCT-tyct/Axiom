@@ -1,5 +1,5 @@
 import { safeNext } from "@axiom/app";
-import { focusPage, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
+import { focusHeading, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
 import { Layout } from "./layout";
 
@@ -182,7 +182,7 @@ function keyStatus(value: unknown) {
 
 export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
 
-router.subscribe("onResolved", focusPage);
+router.subscribe("onResolved", focusHeading);
 
 declare module "@tanstack/react-router" {
   interface Register {
