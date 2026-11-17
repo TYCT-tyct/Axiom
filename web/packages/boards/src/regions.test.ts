@@ -9,9 +9,9 @@ import ts from "typescript";
 import { build } from "vite";
 import { describe, expect, it, vi } from "vitest";
 import { cssBlocks } from "../../../scripts/boards/region-css.ts";
-import { convertRegion } from "../../../scripts/boards/regions.ts";
+import { convertRegion, retag } from "../../../scripts/boards/regions.ts";
 import { marker, packageRoot } from "../../../scripts/boards.ts";
-import { regions } from "../regions.ts";
+import { type Region, regions } from "../regions.ts";
 import { readBoard } from "../source.ts";
 import { boardStyle } from "./dom.ts";
 
@@ -98,6 +98,21 @@ async function buildRegions(board: string) {
   }
 }
 
+// The manifest's declared omissions and element changes, made on the drawing by hand, so that the generated region must
+// match it in everything else.
+function edit(root: Element, region: Region) {
+  const within = (selector: string) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)];
+  for (const el of (region.omit ?? []).flatMap(within)) el.remove();
+  const changes = Object.entries(region.elements ?? {}).flatMap(([selector, change]) =>
+    within(selector).map((found) => ({ found, ...change })),
+  );
+  for (const { found, tag, set = {} } of changes) {
+    // The page's link component stands in for an <a> where the region uses no other.
+    const el = tag ? retag(found, tag === "link" ? "a" : tag) : found;
+    for (const [name, value] of Object.entries(set)) el.setAttribute(name, value);
+  }
+}
+
 describe("region generation", () => {
   it("passes noJsxLiterals for every generated region", () => {
     const web = join(packageRoot, "../..");
@@ -145,18 +160,45 @@ describe("region generation", () => {
     expect(files["Test/regions/Rows.tsx"]).toContain("readonly Items0Item[]");
   });
 
+  it("changes the declared elements' tags and attributes, and draws links with the page's component", () => {
+    const markup =
+      '<div class="m"><a class="ni" onclick="{{go}}">日志</a><div class="pmi" onclick="{{out}}">退出</div><main class="scr"></main></div>';
+    const elements = {
+      ".ni": { tag: "link", set: { href: "{{to}}", hidden: "{{gone}}" } },
+      ".pmi": { tag: "button", set: { type: "button" } },
+      main: { set: { id: "main", tabindex: "-1" } },
+    };
+    const files = convertRegion(markup, "", { board: "Test", name: "Edits", roots: [".m"], elements }, marker);
+    const { component, props } = renderer(files, "Test", "Edits");
+    const link = (attributes: object) => createElement("a", { ...attributes, "data-router": "" });
+    const render = (gone: boolean) =>
+      fragment(renderToStaticMarkup(createElement(component, { ...props, link, values: { to: "/calls", gone } })));
+    const shown = render(false);
+    expect(shown.querySelector("a.ni[data-router]")?.getAttribute("href")).toBe("/calls");
+    expect(shown.querySelector("a.ni")?.hasAttribute("hidden")).toBe(false);
+    expect(shown.querySelector(".pmi")?.outerHTML).toMatch(/^<button [^>]*type="button"/);
+    expect(shown.querySelector("main")?.getAttribute("tabindex")).toBe("-1");
+    expect(render(true).querySelector("a.ni")?.hasAttribute("hidden")).toBe(true);
+    expect(() =>
+      convertRegion(markup, "", { board: "Test", name: "Edits", roots: [".m"], elements: { ".none": {} } }, marker),
+    ).toThrow(".none matches nothing");
+  });
+
   it.each(["AxApp", "AxAppPhone"])(
     "renders %s shell plus overview with the original DOM, SVG, styles and text",
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const original = fragment(markup.replace(/\{\{[^}]*\}\}/g, ""));
-      const overview = original.querySelector(".p-ov") as Element;
-      const slot = original.querySelector(".qpages") as Element;
-      slot.replaceChildren(overview);
-      for (const el of original.querySelectorAll(".pscr,.qdrs,.qdr,.kov,.tst")) el.remove();
-      const files: Record<string, string> = {};
       const manifest = regions.filter((region) => region.board === board);
+      const drawn = fragment(markup);
+      const overview = drawn.querySelector(".p-ov") as Element;
+      (drawn.querySelector(".qpages") as Element).replaceChildren();
+      edit(drawn.firstElementChild as Element, manifest.find((region) => region.name === "Shell") as Region);
+      const original = fragment(drawn.innerHTML.replace(/\{\{[^}]*\}\}/g, ""));
+      (original.querySelector(".qpages") as Element).replaceChildren(
+        fragment(overview.outerHTML.replace(/\{\{[^}]*\}\}/g, "")).firstChild as Node,
+      );
+      const files: Record<string, string> = {};
       // CSS selection is tested separately; this checks the entire pinned markup without executing its scripts.
       for (const region of manifest) Object.assign(files, convertRegion(markup, "", region, marker));
       const shell = renderer(files, board, "Shell");

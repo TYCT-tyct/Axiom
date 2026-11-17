@@ -42,7 +42,8 @@ for (const exported of exports) {
     state.account = 2;
     state.user.email = "other@example.com";
     await returnToWindow(page);
-    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await page.getByRole("button", { name: "账号设置" }).click();
+    await expect(page.getByText("other@example.com")).toBeVisible();
     await abandoned;
     answer();
     expect(downloads).toBe(0);

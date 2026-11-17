@@ -134,7 +134,7 @@ test.describe("signing in", () => {
     await expect(page.getByText("Laptop")).toBeVisible();
 
     state.level = "none";
-    await page.getByRole("link", { name: "调用记录" }).click();
+    await page.getByRole("link", { name: "日志" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     await signIn(page);
     await expect(page.getByRole("heading", { level: 1, name: "调用记录" })).toBeVisible();
@@ -146,11 +146,13 @@ test.describe("signing in", () => {
     signedInAs(state);
     await page.goto("/console/keys");
     await expect(page.getByText("Laptop")).toBeVisible();
+    // Signing out is in the account menu.
+    await page.getByRole("button", { name: "账号设置" }).click();
     await page.getByRole("button", { name: "退出登录" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     state.keys = [];
     await signIn(page);
-    await page.getByRole("link", { name: "API key" }).click();
+    await page.getByRole("link", { name: "API Keys" }).click();
     await expect(page.getByText("Laptop")).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "还没有 key" })).toBeVisible();
   });
@@ -173,7 +175,8 @@ test.describe("signing in", () => {
     state.user.email = "other@example.com";
     state.keys = [];
     await returnToWindow(page);
-    await expect(page.getByRole("navigation", { name: "主导航" }).getByText("other@example.com")).toBeVisible();
+    await page.getByRole("button", { name: "账号设置" }).click();
+    await expect(page.getByText("other@example.com")).toBeVisible();
     await expect(secret).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "还没有 key" })).toBeVisible();
     await expect(page.getByText("Laptop")).toHaveCount(0);
@@ -193,7 +196,10 @@ test.describe("signing in", () => {
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
     await expect(page.getByText("请联系工作区的管理员。")).toBeVisible();
     await expect(page.getByText("US$12.00", { exact: true })).toHaveCount(0);
-    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "余额" })).toHaveCount(0);
+    await expect(
+      page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "账单与充值" }),
+    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^余额/ })).toHaveCount(0);
   });
 
   test("a sign-out that fails says the user is still signed in, and trying again signs out", async ({ page }) => {
@@ -202,6 +208,7 @@ test.describe("signing in", () => {
     await failOnce(page, "**/api/console/v1/auth/sign-out");
     await page.goto("/console/keys");
     await expect(page.getByText("Laptop")).toBeVisible();
+    await page.getByRole("button", { name: "账号设置" }).click();
     await page.getByRole("button", { name: "退出登录" }).click();
     await expect(page.getByRole("alert").filter({ hasText: "没能退出登录" })).toContainText("你仍在登录状态");
     await expect(page.getByText("Laptop")).toBeVisible();

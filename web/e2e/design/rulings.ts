@@ -14,7 +14,23 @@ export type Ruling = { scene: string; basis: string; board?: Region; page?: Regi
 
 const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 
+// The shell's rulings, at every width, so each selector names the wide board's part and the phone's: what the page
+// inside the frame shows, the board's demo account and balance, and what is not built (#816).
+const both = (selector: string) => ({ board: { selector }, page: { selector } });
+const shell: Ruling[] = [
+  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+  { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
+  { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
+  {
+    basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+    ...both(".pnP .qnv, .otabs"),
+  },
+  { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
+].map((ruling) => ({ scene: "console shell", ...ruling }));
+
 export const rulings: Ruling[] = [
+  ...shell,
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },

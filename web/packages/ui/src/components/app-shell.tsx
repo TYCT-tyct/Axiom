@@ -130,16 +130,20 @@ function NavDrawer({ ref, children }: { ref: RefObject<HTMLDialogElement | null>
 // The width from which the sidebar shows beside the page: Tailwind's lg breakpoint, which the classes above use.
 const desktopWidth = 1024;
 
-// focusPage moves focus to the page after a navigation, so a screen reader announces the new page instead of staying
-// on the link or the menu button; the first load leaves focus where the browser puts it. Pass it to the router's
-// onResolved event. A drawer still open makes the page inert, where focus() does nothing, and closing it later hands
-// focus back to the menu button: so it is closed first, whichever of the two events came first.
+// focusPage moves focus to the new page's heading after a navigation, so a screen reader announces the page instead of
+// staying on the link or the menu button, and the next Tab starts from the page; the first load leaves focus where the
+// browser puts it. Pass it to the router's onResolved event. The heading is made focusable here, for every page has
+// one (docs/frontend.md「工程要求」); a page without one hands focus to #main. Focus does not scroll: the router has
+// put the new page at its top. A drawer still open makes the page inert, where focus() does nothing, and closing it
+// later hands focus back to the menu button: so it is closed first, whichever of the two events came first.
 export function focusPage({ fromLocation, pathChanged }: { fromLocation?: unknown; pathChanged: boolean }) {
   if (fromLocation && pathChanged) {
     for (const dialog of document.querySelectorAll("dialog[open]")) {
       (dialog as HTMLDialogElement).close();
     }
-    document.getElementById("main")?.focus();
+    const heading = document.querySelector<HTMLElement>("#main h1");
+    heading?.setAttribute("tabindex", "-1");
+    (heading ?? document.getElementById("main"))?.focus({ preventScroll: true });
   }
 }
 

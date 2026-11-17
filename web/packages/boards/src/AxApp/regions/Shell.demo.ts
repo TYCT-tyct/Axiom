@@ -2,26 +2,9 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Shell.tsx";
 import type en from "./Shell.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {workspaceSpent0: t("m5fa0b0f66f"),
-workspaceSpent1: t("maafe08594f"),
-workspaceName0: t("m1eaba8087e"),
-workspaceName1: t("m7ea2dbe244"),
-accountName: t("m0d8f3231cc"),
-personalBalance: "¥215.40",
-teamBalance: "¥1,284.60",
-spaceBalance0: "¥215.40",
-spaceBalance1: "¥1,284.60",
-balanceWhole0: "215",
-balanceWhole1: "1,284",
-balanceFraction0: ".40",
-balanceFraction1: ".60",
-balanceRunway0: t("md1f3e891d3"),
-balanceRunway1: t("m9e576b565a"),
-balanceRunway2: t("md711568daf"),
-balanceRunway3: t("m9e576b565a"),
-balanceDate0: t("m3bb8a15d6e"),
-balanceDate1: t("mf0b3ec59c3"),
-autoRecharge0: t("m1a03b814c2"),
-autoRecharge1: t("ma0975bc7b9"),
-teamMembers: t("m364ca15da1")},  });
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {language: t("m81e531c3b1"),
+balance: "¥215.40",
+balanceCurrency: "¥",
+balanceWhole: "215",
+balanceFraction: ".40"},  });
 /* jscpd:ignore-end */

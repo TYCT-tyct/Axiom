@@ -334,9 +334,7 @@ test.describe("API keys", () => {
     await expect(page.getByRole("button", { name: "创建 key" })).toHaveCount(0);
     await expect(page.getByRole("button", { name: /^修改/ })).toHaveCount(0);
     // The sidebar leaves out what the account cannot open.
-    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "调用记录" })).toHaveCount(
-      0,
-    );
+    await expect(page.getByRole("navigation", { name: "主导航" }).getByRole("link", { name: "日志" })).toHaveCount(0);
   });
 
   test("an empty list invites creating the first key, in English too", async ({ page }) => {

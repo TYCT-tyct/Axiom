@@ -4,12 +4,39 @@ import { emitter, jsx } from "./region-jsx.ts";
 import { rows } from "./region-rows.ts";
 import { JSDOM } from "./template.ts";
 
+const within = (roots: Element[], selector: string) =>
+  roots.flatMap((root) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)]);
+
 function cut(document: Document, region: Region) {
   const roots = region.roots.flatMap((selector) => [...document.querySelectorAll(selector)]);
   if (!roots.length) throw new Error(`${region.board}/${region.name}: roots match nothing`);
   for (const selector of region.omit ?? [])
     for (const root of roots) for (const el of root.querySelectorAll(selector)) el.remove();
   return roots;
+}
+
+// A changed tag keeps the board's classes and children, so the board's CSS still selects the element.
+export function retag(original: Element, tag: string) {
+  const element = original.ownerDocument.createElement(tag);
+  for (const { name, value } of original.attributes) element.setAttribute(name, value);
+  element.append(...original.childNodes);
+  original.replaceWith(element);
+  return element;
+}
+
+type Change = NonNullable<Region["elements"]>[string];
+function change(original: Element, { tag, set = {} }: Change, links: Set<Element>) {
+  if (tag === "link") links.add(original);
+  const element = tag && tag !== "link" ? retag(original, tag) : original;
+  for (const [name, value] of Object.entries(set)) element.setAttribute(name, value);
+}
+
+function edit(roots: Element[], state: ReturnType<typeof emitter>) {
+  for (const [selector, declared] of Object.entries(state.region.elements ?? {})) {
+    const found = within(roots, selector);
+    if (!found.length) throw new Error(`${state.region.board}/${state.region.name}: ${selector} matches nothing`);
+    for (const element of found) change(element, declared, state.links);
+  }
 }
 
 const states = ["on", "off", "open", "active", "sel", "bad", "warn", "ok", "hot", "in", "out"];
@@ -64,10 +91,14 @@ function source(
     hasRows ? "rows" : "",
     hasText ? "text" : "",
     region.children ? "children" : "",
+    state.links.size ? 'link: Link = "a"' : "",
   ]
     .filter(Boolean)
     .join(", ");
-  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}`;
+  const link = state.links.size
+    ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
+    : "";
+  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}`;
   return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
@@ -85,7 +116,7 @@ function locales(region: Region, state: ReturnType<typeof emitter>, marker: stri
 }
 
 function expose(roots: Element[], state: ReturnType<typeof emitter>) {
-  const matches = (selector: string) => roots.flatMap((root) => [...root.querySelectorAll(selector)]);
+  const matches = (selector: string) => within(roots, selector);
   const bind = (name: string, nodes: (Node | Attr)[]) => {
     if (!nodes.length) throw new Error(`${state.region.name}: ${name} matches nothing`);
     for (const [index, node] of nodes.entries()) {
@@ -113,6 +144,7 @@ export function convertRegion(markup: string, css: string, region: Region, marke
   try {
     const roots = cut(document, region);
     const state = emitter(region);
+    edit(roots, state);
     if (region.children)
       for (const el of document.querySelectorAll(region.children)) {
         el.replaceChildren();
