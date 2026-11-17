@@ -41,6 +41,8 @@ if [ -n "${PGTEST_CLUSTER_URL:-}" ]; then
     --env KVTEST_PASSWORD_FILE --env KVTEST_ADMIN_PASSWORD_FILE)
 fi
 # The shared 80-core budget / eight runners allows ten cores each; eight leaves room for host-side setup.
+# XDG_CACHE_HOME sits on the kept web cache: the boards demo and the font pipeline download pinned source fonts there
+# once, instead of on every run (a cold download failed the boards e2e twice on 2026-11-17).
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
 # BASE (the commit a PR or train is measured against) lets the vitals serve that commit's frontend beside this one.
 docker create --name "$name" \
@@ -52,6 +54,7 @@ docker create --name "$name" \
   --volume "$web_cache:/ci/axiom" \
   --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env BASE --env HOME=/tmp/axiom-web-home \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
+  --env XDG_CACHE_HOME=/ci/axiom/xdg \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
   "${shared[@]}" \
   "$WEB_IMAGE" bash -e -c '

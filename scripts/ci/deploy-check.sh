@@ -186,6 +186,23 @@ headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "http://127.0.0.
 grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::the admin script is not served cached and compressed"; exit 1; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$public$admin_script")" = 404 ] || { echo "::error::the public listener serves the admin's files"; exit 1; }
 
+# A named zone must work in the scratch image, which has no host zoneinfo. Provision an empty account through the
+# production CLI, restart to load its site, then use an authenticated console request through the public listener.
+compose exec -T axiom /axiom site init --name "Statement smoke" --currency USD --console localhost --api api.statement.example
+statement_password="$(openssl rand -hex 24)"
+printf '%s\n' "$statement_password" | compose exec -T axiom /axiom user create --email statement@example.com
+compose restart axiom
+start # Restarting can change ephemeral host ports; rediscover them before making requests.
+statement_cookie="$(jq -cn --arg password "$statement_password" '{email:"statement@example.com", password:$password}' |
+  curl -fsS -D - -H 'Host: localhost' -H 'Origin: http://localhost' -H 'Content-Type: application/json' \
+    --data-binary @- "http://localhost:$public/api/console/v1/auth/sign-in" |
+  sed -n -E 's/^[Ss]et-[Cc]ookie: ([^;]*axiom_session=[^;]+);.*/\1/p' | tr -d '\r')"
+[ -n "$statement_cookie" ] || { echo "::error::statement smoke sign-in set no session"; exit 1; }
+curl -fsS -H 'Host: localhost' -H "Cookie: $statement_cookie" \
+  "http://localhost:$public/api/console/v1/statement/daily?time_zone=Asia%2FShanghai" |
+  jq -e '.data == [] and .next_cursor == null' > /dev/null
+unset statement_password statement_cookie
+
 # The rolling release's other half: the release this deployment replaces must still start against the schema this tree
 # migrates. The program is the train's base (BASE) or the base a main landing's Train trailer names; the check builds
 # it, migrates a database with this deployment's image and waits for its /readyz. It runs before the legacy-role
