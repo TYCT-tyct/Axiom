@@ -43,9 +43,6 @@
 :global(.ax .ic-route .a1):where(.scope){stroke-dasharray:3 2.2;stroke-dashoffset:0;transition:stroke-dashoffset 250ms linear}
 :global(.ax .ic-route .f .a1):where(.scope){stroke-dasharray:none}
 :global(.ax :is(.icc,.ni):hover .ic-route .o .a1):where(.scope){stroke-dashoffset:-10.4}
-:global(.ax :is(.icc,.ni):hover .ic-team .a2):where(.scope){transform:translateX(-1.5px)}
-:global(.ax :is(.icc,.ni):hover .ic-settings .a1):where(.scope){transform:translateX(5px)}
-:global(.ax :is(.icc,.ni):hover .ic-settings .a2):where(.scope){transform:translateX(-5px)}
 :global(.ax :is(.icc,.inp):hover .ic-search .a1):where(.scope){transform:rotate(-12deg)}
 :global(.ax .ic-search .a1):where(.scope){transform-box:view-box;transform-origin:8.75px 8.75px}
 :global(.ax .ni):where(.scope){display:flex;align-items:center;gap:12px;height:36px;padding:0 10px;border-radius:8px;color:var(--t2);cursor:pointer;transition:background-color var(--dur) var(--ease),color var(--dur) var(--ease)}
@@ -85,7 +82,6 @@
 :global(.ov .pin):where(.scope){max-width:1120px;margin:0 auto;padding:32px 40px 72px;display:flex;flex-direction:column;gap:16px}
 :global(.ov i):where(.scope){font-style:normal}
 :global(.ov .spk):where(.scope){width:72px;height:20px;overflow:visible}
-:global(.ov .spk polyline):where(.scope){fill:none;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round}
 @container ov (max-width: 1100px){
 
 }
@@ -150,7 +146,6 @@
 :global(.ov .pmi):where(.scope){display:flex;align-items:center;gap:10px;min-height:36px;padding:6px 10px;box-sizing:border-box;border-radius:8px;font-size:14px;cursor:pointer;transition:background-color var(--dur) var(--ease)}
 :global(.ov .pmi:hover):where(.scope){background:var(--hover)}
 :global(.ov .pmi .ic):where(.scope){width:16px;height:16px;color:var(--t2)}
-:global(.ov .pmi .ck):where(.scope){margin-left:auto;color:var(--t1)}
 :global(.ov .pmi.mut2):where(.scope){color:var(--t2)}
 :global(.ov .pmt):where(.scope){display:flex;flex-direction:column;gap:2px;min-width:0}
 :global(.ov .pmt b):where(.scope){font-weight:500;font-size:14px;line-height:20px}
@@ -220,9 +215,6 @@
 @keyframes axReveal{from{clip-path:circle(0 at var(--vtx,50%) var(--vty,50%))}to{clip-path:circle(160vmax at var(--vtx,50%) var(--vty,50%))}}
 :global(.ov .pin.wide):where(.scope){max-width:1440px;padding:28px 40px 96px}
 :global(.ov .pin.qpages):where(.scope){max-width:1240px;padding:28px 40px 96px}
-:global(.ov .qws):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:8px;background:var(--w);color:#fff;font-size:12px;font-weight:500}
-:global(.ov .qws.sm):where(.scope){width:18px;height:18px;border-radius:4px;font-size:12px;transform:scale(0.9)}
-:global(.ov .pmi .ck):where(.scope){opacity:0}
 :global(.ov .pmi.on):where(.scope){background:var(--hover)}
 :global(.ov .qav):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:50%;background:var(--accentWash);color:var(--accentT);font-size:12px;font-weight:500}
 :global(.ov .qav.lg):where(.scope){width:48px;height:48px;font-size:16px}
@@ -251,7 +243,6 @@
 }
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-tools .a1):where(.scope){transform:rotate(-14deg)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-observe .a2):where(.scope){transform:scale(1.25)}
-:global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-spaces .a2):where(.scope){transform:translate(1px,1px)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-mkey .a1):where(.scope){transform:translateX(1px)}
 :global(.ov .ic-bell .a1):where(.scope){transform-origin:50% 0%}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-bell .a1):where(.scope){transform:rotate(10deg)}
@@ -271,31 +262,22 @@
 }
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-tools .a1):where(.scope){transform:rotate(-14deg)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-observe .a2):where(.scope){transform:scale(1.25)}
-:global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-spaces .a2):where(.scope){transform:translate(1px,1px)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-mkey .a1):where(.scope){transform:translateX(1px)}
 :global(.ov .ic-bell .a1):where(.scope){transform-origin:50% 0%}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-bell .a1):where(.scope){transform:rotate(10deg)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-user .a1):where(.scope){transform:translateY(-1px)}
 :global(.ov :is(.ni,.ib,.gsw,.qbtn,.btn,.kit,.pmi,.qnav):hover .ic-prefs .a2):where(.scope){transform:translateX(-5.5px)}
-:global(.ov .lvS :is(.onW,.onM)):where(.scope),:global(.ov .lvW :is(.onSM,.onM)):where(.scope),:global(.ov .lvM .onW):where(.scope){display:none!important}
+:global(.ov .lvS :is(.onW,.onM)):where(.scope),:global(.ov .lvW :is(.onSM,.onM)):where(.scope){display:none!important}
 :global(.ov .spP .sxT):where(.scope),:global(.ov .spT .sxP):where(.scope){display:none!important}
-:global(.ov .tm0 .tmon):where(.scope){display:none!important}
-:global(.ov .v8 .qws):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:8px;transform:none;
-  background:color-mix(in srgb,var(--w) 14%,var(--cardBg));color:color-mix(in srgb,var(--w) 82%,var(--t1));
-  box-shadow:inset 0 0 0 var(--bw) color-mix(in srgb,var(--w) 22%,transparent),inset 0 1px 0 color-mix(in srgb,#fff 40%,transparent)}
-:global(.ov .v8 .qws svg):where(.scope),:global(.ov .qpsp svg):where(.scope){width:60%;height:60%;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
-:global(.ov .v8 .qws.sm):where(.scope){width:22px;height:22px;border-radius:6px}
-:global(.ov .v8 .qws.sm svg):where(.scope){stroke-width:1.7}
+:global(.ov .qpsp svg):where(.scope){width:60%;height:60%;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
 :global(.ov .qpsp):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:8px;background:var(--hover);color:var(--t1);box-shadow:inset 0 0 0 var(--bw) var(--line)}
 :global(.ov .qpsp.sm):where(.scope){width:22px;height:22px;border-radius:6px}
 :global(.ov .qpsp.sm svg):where(.scope){stroke-width:1.7}
-:global(.ov .qpsp.md):where(.scope){width:34px;height:34px;border-radius:8px}
 :global(.ov .qteam):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:8px;
   background:linear-gradient(145deg,color-mix(in srgb,var(--team) 62%,#fff) 0%,var(--team) 55%,color-mix(in srgb,var(--team) 80%,#000) 100%);
   box-shadow:inset 0 1px 0 rgba(255,255,255,0.28),0 1px 2px color-mix(in srgb,var(--team) 35%,transparent)}
 :global(.ov .qteam svg):where(.scope){width:70%;height:70%}
 :global(.ov .qteam.sm):where(.scope){width:22px;height:22px;border-radius:6px}
-:global(.ov .qteam.md):where(.scope){width:34px;height:34px;border-radius:8px}
 :global(.ov .v8 .qav):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:50%;
   background:color-mix(in srgb,var(--p,var(--accentSolid)) 20%,var(--cardBg));color:color-mix(in srgb,var(--p,var(--accentSolid)) 50%,var(--t1));font-size:12px;font-weight:500;line-height:1}
 :global(.ov .v8 .qav.lg):where(.scope){width:48px;height:48px;font-size:16px}
@@ -309,48 +291,27 @@
 @keyframes qline{from{transform:scaleX(0)}to{transform:none}}
 :global(.ov .qbc):where(.scope){display:flex;align-items:center;gap:2px;min-width:0}
 :global(.ov .qbcb):where(.scope){all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:8px;height:34px;padding:0 6px;border-radius:8px;font-size:14px;color:var(--t1);cursor:pointer;white-space:nowrap;transition:background-color var(--dur) var(--ease)}
-:global(.ov .qbcb:hover):where(.scope),:global(.ov .pw:has(> .pm.open) > .qbcb):where(.scope){background:var(--hover)}
+:global(.ov .qbcb:hover):where(.scope){background:var(--hover)}
 :global(.ov .qbci):where(.scope){display:inline-flex;align-items:center;gap:8px;min-width:0}
 :global(.ov .qbci b):where(.scope){font-weight:500;overflow:hidden;text-overflow:ellipsis}
 :global(.ov .qbcs):where(.scope){margin:0 2px;font-size:16px;font-weight:400;color:var(--t3);opacity:0.55}
 :global(.ov .qbct):where(.scope){padding:0 6px;font-size:14px;font-weight:500}
-:global(.ov .qbcw):where(.scope){animation:qbcIn 250ms var(--ease) 250ms both}
-:global(.ov .wsk0 .qbcw .qbci):where(.scope){animation:qbcA 250ms var(--ease) both}
-:global(.ov .wsk1 .qbcw .qbci):where(.scope){animation:qbcB 250ms var(--ease) both}
-@keyframes qbcIn{from{opacity:0;transform:translateX(-8px)}to{opacity:1;transform:none}}
-@keyframes qbcA{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes qbcB{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
-:global(.ov.mred .qbcw):where(.scope),:global(.ov.mred .qbcw .qbci):where(.scope),:global(.ov.mred .spT .g8):where(.scope)::after{animation:none}
+:global(.ov.mred .spT .g8):where(.scope)::after{animation:none}
 :global(.ov .g8 .gsr):where(.scope){margin-left:20px}
 :global(.ov .g8 .gbal b):where(.scope){display:inline-flex}
 :global(.ov .qgav):where(.scope){background:none;width:auto;height:auto;margin-left:10px;border-radius:50%}
 :global(.ov .qgav .qav):where(.scope){width:30px;height:30px}
 :global(.ov .qgav.on):where(.scope){box-shadow:0 0 0 2px var(--page),0 0 0 3.5px var(--t1)}
-:global(.ov .qspm):where(.scope){width:330px}
-:global(.ov .qspi):where(.scope){min-height:54px}
-:global(.ov .qspi .ck):where(.scope),:global(.ov .qwsr .ck):where(.scope){opacity:0;flex:none}
-:global(.ov .qspi.on .ck):where(.scope),:global(.ov .qwsr.on .ck):where(.scope){opacity:1}
-:global(.ov .qspi.on):where(.scope),:global(.ov .qwsr.on):where(.scope){background:var(--hover)}
-:global(.ov .qspb):where(.scope){margin-left:auto;font-size:12px;color:var(--t2);white-space:nowrap}
-:global(.ov .qwsm8):where(.scope){width:350px;max-height:520px;overflow-y:auto}
-:global(.ov .qwsr):where(.scope){min-height:50px}
-:global(.ov .qwsr .qspk):where(.scope){width:64px;height:24px;margin-left:auto;flex:none}
 :global(.ov .sbar.q8):where(.scope){padding:6px 12px 12px}
 :global(.ov .qsl):where(.scope){position:relative;flex:1;min-height:0}
 :global(.ov .qpn):where(.scope){position:absolute;inset:0;display:flex;flex-direction:column;overflow-y:auto;overflow-x:hidden;scrollbar-width:none;opacity:0;visibility:hidden;pointer-events:none;
   transition:transform 250ms var(--ease),opacity 250ms var(--ease),visibility 0s linear 250ms}
 :global(.ov .qpn):where(.scope)::-webkit-scrollbar{display:none}
-:global(.ov .lvS .pnS):where(.scope),:global(.ov .lvW .pnW):where(.scope),:global(.ov .lvM .pnM):where(.scope){opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:transform 250ms var(--ease),opacity 250ms var(--ease) 90ms,visibility 0s}
-:global(.ov .lvW .pnS):where(.scope),:global(.ov .lvM .pnS):where(.scope),:global(.ov .lvM .pnW):where(.scope){transform:translateX(-40px)}
-:global(.ov .lvS .pnW):where(.scope),:global(.ov .lvS .pnM):where(.scope),:global(.ov .lvW .pnM):where(.scope){transform:translateX(40px)}
+:global(.ov .lvM .pnM):where(.scope){opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:transform 250ms var(--ease),opacity 250ms var(--ease) 90ms,visibility 0s}
+:global(.ov .lvS .pnM):where(.scope),:global(.ov .lvW .pnM):where(.scope){transform:translateX(40px)}
 :global(.ov.mred .qpn):where(.scope){transition:none}
 :global(.ov .qnv):where(.scope){display:flex;flex-direction:column;gap:14px}
 :global(.ov .qnvg):where(.scope){display:flex;flex-direction:column}
-:global(.ov .wsk0 .pnW .qnv):where(.scope){animation:qwA 250ms var(--ease)}
-:global(.ov .wsk1 .pnW .qnv):where(.scope){animation:qwB 250ms var(--ease)}
-@keyframes qwA{from{opacity:0.3;transform:translateY(4px)}to{opacity:1;transform:none}}
-@keyframes qwB{from{opacity:0.3;transform:translateY(4px)}to{opacity:1;transform:none}}
-:global(.ov.mred .pnW .qnv):where(.scope){animation:none}
 :global(.ov .qback):where(.scope){all:unset;box-sizing:border-box;display:inline-flex;align-items:center;gap:4px;align-self:flex-start;flex:none;height:28px;padding:0 10px 0 4px;margin:0 0 8px;border-radius:8px;font-size:12px;color:var(--t2);cursor:pointer;
   transition:background-color var(--dur) var(--ease),color var(--dur) var(--ease)}
 :global(.ov .qback:hover):where(.scope){background:var(--hover);color:var(--t1)}
@@ -360,8 +321,6 @@
 :global(.ov .cold .qback span):where(.scope){display:none}
 :global(.ov .cold .qback):where(.scope){padding:0 6px;margin-left:4px}
 :global(.ov .v8 .pin.qpages):where(.scope){max-width:1180px;padding:30px 40px 96px}
-:global(.ov .qspk):where(.scope){display:block;width:100%;height:40px;overflow:visible}
-:global(.ov .qspk polyline):where(.scope){fill:none;stroke-width:1.6;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
 @container ov (max-width: 600px){:global(.ov .v8 .pin.qpages):where(.scope){padding:14px 16px 120px}
 
 
@@ -393,9 +352,6 @@
 :global(.ov .wa1):where(.scope){--wc:var(--w1)}
 :global(.ov .wa2):where(.scope){--wc:var(--w2)}
 :global(.ov .wa3):where(.scope){--wc:var(--w3)}
-:global(.ov .lvW .pnW .ni.on):where(.scope){background:color-mix(in srgb,var(--wc) 11%,transparent);color:var(--t1)}
-:global(.ov .lvW .pnW .ni.on .ic):where(.scope){color:color-mix(in srgb,var(--wc) 85%,var(--t1))}
-:global(.ov .lvW .pnW .ni.on .ic .f):where(.scope){opacity:1}
 :global(.ov .qsd):where(.scope){display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--t2);white-space:nowrap}
 :global(.ov .qsd i):where(.scope){width:7px;height:7px;border-radius:50%;background:var(--ok)}
 :global(.ov .qsd.warn i):where(.scope){background:var(--warn)}
@@ -417,10 +373,8 @@
 :global(.ov .lvP .pnP):where(.scope){opacity:1;visibility:visible;pointer-events:auto;transform:none;transition:transform 250ms var(--ease),opacity 250ms var(--ease) 90ms,visibility 0s}
 :global(.ov .lvM .pnP):where(.scope){transform:translateX(-40px)}
 :global(.ov .lvS .pnP):where(.scope),:global(.ov .lvW .pnP):where(.scope){transform:translateY(-10px)}
-:global(.ov .lvP .pnS):where(.scope),:global(.ov .lvP .pnW):where(.scope){transform:translateY(10px)}
 :global(.ov .lvP .pnM):where(.scope){transform:translateX(40px)}
 :global(.ov .spP):where(.scope){--wc:var(--accentSolid)}
-:global(.ov .qspi .ck):where(.scope){margin-left:12px}
 @container ov (max-width: 600px){
 
 
@@ -435,9 +389,6 @@
 
 
 }
-:global(.ov .wa0 .wv:not(.w0)):where(.scope){display:none!important}
-:global(.ov .wa1 .wv:not(.w1)):where(.scope){display:none!important}
-:global(.ov .wa2 .wv:not(.w2)):where(.scope){display:none!important}
 :global(.ov .gbar.g11):where(.scope){display:grid;grid-template-columns:minmax(0,1fr) minmax(200px,400px) minmax(0,1fr);gap:16px}
 :global(.ov .g11l):where(.scope),:global(.ov .g11r):where(.scope){display:flex;align-items:center;gap:4px;min-width:0}
 :global(.ov .g11r):where(.scope){justify-content:flex-end}
@@ -463,9 +414,7 @@
 :global(.ov .pmi):where(.scope){border-radius:6px}
 :global(.ov .gsr kbd):where(.scope){border-radius:2px}
 :global(.ov .qteam):where(.scope){background:var(--team);box-shadow:none}
-:global(.ov .spT .g8):where(.scope)::after,:global(.ov .qspk path):where(.scope){display:none}
-:global(.ov .lvW .pnW .ni.on):where(.scope){background:var(--selected)}
-:global(.ov .lvW .pnW .ni.on .ic):where(.scope){color:var(--t1)}
+:global(.ov .spT .g8):where(.scope)::after{display:none}
 :global(.ax .sw2):where(.scope){border-radius:999px}
 :global(.ov .pico0 .gbar .qbcb .qbci > :is(.qpsp,.qteam,.qws)):where(.scope){display:none}
 :global(.ov .pico0 .gbar .qbcb):where(.scope){padding:0 8px}
@@ -482,8 +431,6 @@
 :global(.ov .v8 .sfl):where(.scope){padding-left:5px}
 :global(.ov .cold .sfl):where(.scope){padding-left:0}
 :global(.ov .sbar .nm):where(.scope){display:none}
-:global(.ov .qwsr .qspk):where(.scope){display:none}
-:global(.ov .qwsm8):where(.scope){width:280px}
 @container ov (max-width: 600px){
 
 

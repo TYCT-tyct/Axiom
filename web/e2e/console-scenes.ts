@@ -110,7 +110,7 @@ const scenes: Scene[] = [
         .getByRole("button", { name: /^(详情|Details)$/ })
         .first()
         .click();
-      await page.locator("[aria-expanded=true]").waitFor();
+      await page.locator("#main [aria-expanded=true]").waitFor();
     },
   },
   dialogScene("refund", "orders", (page) =>

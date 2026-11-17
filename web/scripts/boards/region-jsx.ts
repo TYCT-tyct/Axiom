@@ -10,6 +10,14 @@ export function emitter(region: Region) {
   const texts = new Map<string, string>();
   const replacements = new Map<Node, string>();
   const attributes = new Map<Attr, string>();
+  const links = new Set<Element>();
+  const unless = new Map<Element, string>();
+  // A style with no hole is parsed once, when the module loads, not on every render: a constant per distinct text.
+  const inline = new Map<string, string>();
+  const constant = (text: string) => {
+    if (!inline.has(text)) inline.set(text, `inline${inline.size}`);
+    return inline.get(text) as string;
+  };
   const literal = (text: string) => {
     if (!/\p{Script=Han}/u.test(text)) return JSON.stringify(text);
     const key = `m${createHash("sha256").update(text).digest("hex").slice(0, 10)}`;
@@ -33,8 +41,38 @@ export function emitter(region: Region) {
     if (start < text.length) pieces.push(literal(text.slice(start)));
     return pieces.join(" + ") || '""';
   };
-  return { region, locale, values, texts, replacements, attributes, literal, value, expression };
+  return {
+    region,
+    locale,
+    values,
+    texts,
+    replacements,
+    attributes,
+    links,
+    unless,
+    inline,
+    constant,
+    literal,
+    value,
+    expression,
+  };
 }
+
+const booleans = ["disabled", "checked", "selected", "multiple", "readOnly", "required", "autoFocus", "hidden"];
+// ARIA states a page sets from its own state, which React types as booleans.
+const ariaStates = ["aria-expanded", "aria-pressed", "aria-checked", "aria-selected", "aria-disabled", "aria-hidden"];
+// The props whose value React wants other than as the attribute's text.
+const typed: Record<string, (expr: string) => string> = {
+  className: (expr) => `className={(${expr}) + " " + styles.scope}`,
+  tabIndex: (expr) => `tabIndex={Number(${expr})}`,
+  value: (expr) => `defaultValue={${expr}}`,
+};
+
+// A style with no hole is a module constant; one with holes is parsed on each render.
+const style = (raw: string, state: Emitter, replacement?: string) =>
+  replacement === undefined && !raw.includes("{{")
+    ? state.constant(raw)
+    : `boardStyle(${replacement ?? state.expression(raw)})`;
 
 function attribute(name: string, raw: string, state: Emitter, replacement?: string): string {
   const hole = raw.match(/^\{\{\s*([\w.$]+)\s*\}\}$/)?.[1];
@@ -44,13 +82,12 @@ function attribute(name: string, raw: string, state: Emitter, replacement?: stri
     if (!event || !hole) throw new Error(`unsupported region event ${name}`);
     return `${event}={${state.value(hole, `DOMAttributes<Element>[${JSON.stringify(event)}]`)}}`;
   }
-  const expr = replacement ?? state.expression(raw);
-  if (name === "style") return `style={boardStyle(${expr})}`;
-  if (name === "class") return `className={(${expr}) + " " + styles.scope}`;
   const prop = property(name);
-  const booleans = ["disabled", "checked", "selected", "multiple", "readOnly", "required", "autoFocus", "hidden"];
-  if (booleans.includes(prop)) return `${prop}={${hole ? state.value(hole, "boolean") : "true"}}`;
-  return `${prop === "value" ? "defaultValue" : prop}={${expr}}`;
+  if (booleans.includes(prop) || (hole && ariaStates.includes(prop)))
+    return `${prop}={${hole ? state.value(hole, "boolean") : "true"}}`;
+  if (name === "style") return `style={${style(raw, state, replacement)}}`;
+  const expr = replacement ?? state.expression(raw);
+  return typed[prop]?.(expr) ?? `${prop}={${expr}}`;
 }
 
 export function jsx(node: Node, state: Emitter, fields?: Map<Node | Attr, string>): string {
@@ -66,7 +103,8 @@ export function jsx(node: Node, state: Emitter, fields?: Map<Node | Attr, string
   );
   if (!el.hasAttribute("class")) attrs.push("className={styles.scope}");
   const children = [...el.childNodes].map((child) => jsx(child, state, fields)).join("");
-  return children
-    ? `<${el.localName} ${attrs.join(" ")}>${children}</${el.localName}>`
-    : `<${el.localName} ${attrs.join(" ")} />`;
+  const tag = state.links.has(el) ? "Link" : el.localName;
+  const out = children ? `<${tag} ${attrs.join(" ")}>${children}</${tag}>` : `<${tag} ${attrs.join(" ")} />`;
+  const hole = state.unless.get(el);
+  return hole ? `{!${state.value(hole, "boolean")} && (${out})}` : out;
 }

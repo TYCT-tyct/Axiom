@@ -2,10 +2,7 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Shell.tsx";
 import type en from "./Shell.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {workspaceSpent0: t("m5fa0b0f66f"),
-workspaceSpent1: t("maafe08594f"),
-workspaceName0: t("m1eaba8087e"),
-workspaceName1: t("m7ea2dbe244"),
-spaceBalance0: "¥215.40",
-spaceBalance1: "¥1,284.60"},  });
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {language: t("m81e531c3b1"),
+lang: "zh-CN",
+frameStyle: "height: 844px;"}, mark: "A", });
 /* jscpd:ignore-end */

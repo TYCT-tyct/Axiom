@@ -31,7 +31,7 @@ describe("routeLiterals", () => {
 
   it("gives every page the shell's keys", () => {
     for (const literals of pages.values()) {
-      expect(literals.has("nav.overview")).toBe(true);
+      expect(literals.has("shell.path")).toBe(true);
     }
   });
 });
