@@ -45,9 +45,11 @@ export function convert(html: string, name: string): Record<string, string> {
   };
 }
 
-function outputs(input = inputRoot): Record<string, string> {
+// `names` narrows a run to some boards for the tests; the shared files (engines, fonts, demo routes) come out the same
+// for any subset, so a narrowed run never writes a truncated demo.ts.
+function outputs(input = inputRoot, names: readonly string[] = boardNames): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const name of boardNames) {
+  for (const name of names) {
     const html = readBoard(join(input, `${name}.dc.html`));
     Object.assign(result, convert(html, name));
     const { markup, css } = parts(html);
@@ -94,20 +96,22 @@ export function generatedBoard(path: string, text: string): boolean {
   return path.startsWith("packages/boards/src/") && text.startsWith(`${marker}\n`);
 }
 
-export function checkGenerated(root = packageRoot): string[] {
-  const expected = outputs(join(root, "inputs"));
+export function checkGenerated(root = packageRoot, names?: readonly string[]): string[] {
+  const expected = outputs(join(root, "inputs"), names);
   const files = readdirSync(join(root, "src"), { recursive: true }).filter((p) => typeof p === "string") as string[];
   const marked = files.filter(
     (p) => /\.(tsx?|js|css)$/.test(p) && readFileSync(join(root, "src", p), "utf8").startsWith(marker),
   );
-  return [...new Set([...Object.keys(expected), ...marked])].filter(
+  // A narrowed run judges only what it converted: it cannot tell whether a file of an unconverted board is stale.
+  const candidates = names ? Object.keys(expected) : [...Object.keys(expected), ...marked];
+  return [...new Set(candidates)].filter(
     (p) =>
       !expected[p] || !existsSync(join(root, "src", p)) || readFileSync(join(root, "src", p), "utf8") !== expected[p],
   );
 }
 
-export function generate(root = packageRoot) {
-  for (const [path, text] of Object.entries(outputs(join(root, "inputs")))) {
+export function generate(root = packageRoot, names?: readonly string[]) {
+  for (const [path, text] of Object.entries(outputs(join(root, "inputs"), names))) {
     const file = join(root, "src", path);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, text);

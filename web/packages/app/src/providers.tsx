@@ -1,4 +1,4 @@
-import { isTransient } from "@axiom/api";
+import { ApiError, isTransient } from "@axiom/api";
 import type { AuthApi } from "@axiom/api/auth";
 import {
   type DefaultError,
@@ -84,6 +84,10 @@ export function createQueryClient() {
       queries: {
         staleTime: 30_000,
         retry: (failures, error) => failures < 2 && isTransient(error),
+        // A refusal (403, or 401 for want of a permission) answers the same until the grant changes, so a page that
+        // mounts after it reads the refusal instead of asking again; any other failure is tried again on mount.
+        retryOnMount: (query) =>
+          !(query.state.error instanceof ApiError && query.state.error.status < 500 && query.state.error.status > 0),
       },
     },
   });

@@ -1,0 +1,2 @@
+2026-11-17T13:57:03.5837530Z ##[error]  1) [chromium] › e2e/console.spec.ts:40:1 › the console offers a reload after a deployment, in either language 
+2026-11-17T14:01:11.8089916Z   1) [chromium] › e2e/console.spec.ts:40:1 › the console offers a reload after a deployment, in either language 

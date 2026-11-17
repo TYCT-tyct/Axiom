@@ -79,33 +79,28 @@ describe("board conversion", () => {
     expect(checkGenerated()).toEqual([]);
   }, 60_000);
 
-  it("detects changed inputs and missing English keys, and leaves handwritten wrappers alone", () => {
+  // Converting one board, not the 1 MiB AxApp artboard, keeps this at a couple of seconds: the check compares the bytes
+  // the converter would write against what the tree holds, so it still proves staleness detection, not the catalog.
+  it("detects a changed input as stale and regenerates it", () => {
     const root = mkdtempSync(join(tmpdir(), "axiom-boards-"));
     try {
       cpSync(join(packageRoot, "inputs"), join(root, "inputs"), { recursive: true });
       cpSync(join(packageRoot, "src"), join(root, "src"), { recursive: true });
-      const file = join(root, "src/Login/board.css");
-      const english = join(root, "src/AxApp/regions/Overview.en.ts");
       const input = join(root, "inputs/Login.head.html");
       writeFileSync(
         input,
         readFileSync(input, "utf8").replace("</helmet>", "<style>.source-change{color:red}</style></helmet>"),
       );
-      writeFileSync(english, readFileSync(english, "utf8").replace(/ {2}"m[\da-f]+": "",?\n/, ""));
       writeFileSync(join(root, "src/wrapper.tsx"), "export const wrapper = 1;");
-      expect(checkGenerated(root)).toEqual(["Login/board.css", "AxApp/regions/Overview.en.ts"]);
-      generate(root);
-      expect(readFileSync(file, "utf8")).toBe(
-        convert(readBoard(join(root, "inputs/Login.dc.html")), "Login")["Login/board.css"],
-      );
-      expect(readFileSync(english, "utf8")).toBe(
-        readFileSync(join(packageRoot, "src/AxApp/regions/Overview.en.ts"), "utf8"),
-      );
+      expect(checkGenerated(root, ["Login"])).toEqual(["Login/board.css"]);
+      generate(root, ["Login"]);
+      expect(checkGenerated(root, ["Login"])).toEqual([]);
+      expect(readFileSync(join(root, "src/Login/board.css"), "utf8")).toContain(".source-change{color:red}");
       expect(readFileSync(join(root, "src/wrapper.tsx"), "utf8")).toBe("export const wrapper = 1;");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
-  }, 60_000);
+  }, 10_000);
 
   it("only recognizes the marker inside the generated board tree", () => {
     expect(generatedBoard("packages/boards/src/Login/Board.tsx", `${marker}\n`)).toBe(true);

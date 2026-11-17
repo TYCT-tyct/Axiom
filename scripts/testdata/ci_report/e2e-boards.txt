@@ -1,0 +1,3 @@
+2026-11-17T14:19:34.7507751Z ##[error]  1) [chromium] › e2e/boards.spec.ts:144:7 › AxApp regions 1440 light: artboard diff and CSP interactions 
+2026-11-17T14:19:34.7570413Z ##[error]  1) [chromium] › e2e/boards.spec.ts:144:7 › AxApp regions 1440 light: artboard diff and CSP interactions 
+2026-11-17T14:19:36.5655553Z ##[error]  2) [chromium] › e2e/boards.spec.ts:144:7 › AxApp regions 1440 dark: artboard diff and CSP interactions 
