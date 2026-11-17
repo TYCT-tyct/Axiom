@@ -65,6 +65,8 @@ PR 描述写明属于哪几类，跨类取并集，拿不准按更严的。负�
 
 流水线 `~/axiom-ops/srv/pipeline.py` 在开发机上（不在仓库里），systemd 定时器每 3 分钟跑一次：派写手、开 PR、派评审、交回意见、排队。事件写进同目录的 `events.log`，要编排者处理的（`ESCALATE`）汇成一条评论发到 #309。本节写它现在的做法，改流水线时同步改这里。做法版本 1（2026-11-14）；待试的改动和基线在 #740。
 
+每次写手和评审的运行都显示在负责人的 Agent Board 上（项目 `axiom`，单元是分支名）：流水线经同目录的 `board.py` 用 HTTP 报给开发机本机的看板服务，dsh 的日志交给看板的 dsh 翻译器算出步数和 token；在本仓库里开的 Claude Code 会话由 `.claude/settings.local.json` 的钩子（`agb hook`）上报，这个文件只在本机、不入库。同一次运行只由一种方式上报，写手和评审在各自的 worktree 里跑，不会触发这个钩子。看板挂了不影响流水线和会话：请求 1.2 秒超时，出错只记一行日志。关掉：删掉 `settings.local.json` 里的钩子；流水线一侧在 `pipeline.py` 的 `main()` 里去掉 `on_board`，直接调用 `do_write`、`do_review`。
+
 | 用途 | 模型（推理档） | 什么时候用 |
 |---|---|---|
 | 写手 | pi `workbuddy/cn:deepseek-v4.1-flash`（high） | 默认，额度宽 |

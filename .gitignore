@@ -4,6 +4,7 @@
 !.env.example
 
 # OS and editor files
+.claude/settings.local.json
 .DS_Store
 Thumbs.db
 .idea/
