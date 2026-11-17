@@ -74,7 +74,7 @@ class RunnerLabels(unittest.TestCase):
         # Execute only the pure label selector, never the host installer or its system/API commands.
         selector = shell_function("runner_labels")
         for train, only, labels in (
-            (None, None, "axiom,axiom-temp"),                     # 4 train runners, the first 2 the train's alone
+            (None, None, "axiom,axiom-temp"),                     # every runner a train runner, the first 2 the train's alone
             ("2", "2", "axiom,axiom-temp"),                       # no runner shared
             ("0", "0", "axiom,axiom-train,axiom-temp"),           # no train pool: every runner serves PRs
             ("8", "8", "axiom,axiom-train,axiom-pr,axiom-temp"),  # every runner the train's alone
@@ -93,7 +93,7 @@ class RunnerLabels(unittest.TestCase):
                 )
                 rows = [line.split(",") for line in result.stdout.splitlines()]
                 self.assertEqual(len(rows), 8)
-                t, o = int(train or 4), int(only or 2)
+                t, o = int(train or 10), int(only or 2)
                 for i, row in enumerate(rows, 1):
                     want = ["axiom", "axiom-temp"] + (["axiom-train"] if i <= t else []) + (["axiom-pr"] if i > o else [])
                     self.assertEqual(row, want)
