@@ -47,8 +47,12 @@ test("the console offers a reload after a deployment, in either language", async
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
   await expect(page).toHaveTitle("概览 · Axiom");
   await expect(newVersionNotice(page)).toBeVisible();
-  // The notice takes its room inside the frame: the sidebar's controls stay on screen and the page does not scroll.
-  expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(900);
+  // The notice takes its room from the page column, never from the sidebar, whose controls stay on screen. The overview
+  // is taller than the window, as its board is, so the document's own height says nothing about the notice.
+  const sidebar = await page.getByRole("navigation", { name: "主导航" }).boundingBox();
+  expect((await newVersionNotice(page).boundingBox())?.x ?? 0).toBeGreaterThanOrEqual(
+    (sidebar?.x ?? 0) + (sidebar?.width ?? Number.POSITIVE_INFINITY),
+  );
   await expect(page.getByRole("navigation").getByRole("group", { name: "语言" })).toBeInViewport({ ratio: 1 });
 
   await page.getByRole("group", { name: "语言" }).getByText("English").click();
