@@ -241,11 +241,13 @@ jobs:
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
 
-  # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request.
+  # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request unless its frontend inputs changed, so a broken page fails before its train.
   e2e:
     name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
     needs: changes
-    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && github.event_name != 'pull_request')
+    # a shard takes about 11 minutes; without a limit a hung one held the merge train for an hour (GitHub's default is 6 h)
+    timeout-minutes: 30
+    if: needs.changes.result == 'success' && (inputs.gate_stress || needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'))
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
       matrix:
