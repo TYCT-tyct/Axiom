@@ -5,6 +5,7 @@ import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
 import { en as routingPresets } from "./routing-presets";
 import { en as settings } from "./settings";
+import { en as shell } from "./shell";
 import { en as statement } from "./statement";
 import { en as workspaces } from "./workspaces";
 import type zh from "./zh";
@@ -14,6 +15,7 @@ export default {
 
   forbiddenHint: "Ask an admin of the workspace if you need it.",
 
+  shell,
   nav: {
     models: "Models & prices",
     overview: "Overview",

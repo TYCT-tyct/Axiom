@@ -1,0 +1,75 @@
+/* The rules the regions' inline geometry cannot carry (packages/boards/regions.ts sets the document scroll): the
+   selectors start inside the region's [data-shell] app, which outranks the board's own rules, three classes deep. */
+.root {
+  min-height: 100dvh;
+}
+
+/* An entry the session may not open is hidden even where the board's rules give it a display: theirs reach (0,2,1) on
+   these elements. */
+.root [data-shell] [hidden] {
+  display: none;
+}
+
+/* The page's own box, which the shown board's slot holds; it adds nothing to the layout. */
+.page {
+  display: contents;
+}
+
+.logo {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5.5px;
+  object-fit: contain;
+}
+
+.skip {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  z-index: 90;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--pop);
+  color: var(--t1);
+  transform: translateY(-200%);
+}
+
+.skip:focus {
+  transform: none;
+}
+
+/* The notices float over the page's corner, above the phone's tabs, and never take room from the frame. */
+.banner {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  z-index: 80;
+  max-width: min(440px, calc(100vw - 32px));
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+@media (max-width: 599px) {
+  .banner {
+    bottom: 92px;
+  }
+}
+
+/* Paper gets the page alone, in one column: none of the bar, sidebar, tabs or notices (docs/frontend.md「打印」). */
+@media print {
+  .root [data-shell] :is(header, aside, nav[data-shell="tabs"]),
+  .banner,
+  .skip {
+    display: none;
+  }
+
+  .root [data-shell] div[data-shell="body"] {
+    display: block;
+  }
+
+  .root [data-shell] div[data-shell="panel"] {
+    margin: 0;
+    box-shadow: none;
+  }
+}

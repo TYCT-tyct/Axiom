@@ -8,4 +8,7 @@
 
 @source "./";
 @source "../../packages/app/src";
+/* Of the boards the console runs only the regions, which carry no Tailwind class; the drawings' sources stay unread. */
 @source "../../packages/boards/src";
+@source not "../../packages/boards/src/**/{Board.tsx,logic.ts,*.demo.ts}";
+@source not "../../packages/boards/src/engines";

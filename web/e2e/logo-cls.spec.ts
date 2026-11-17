@@ -91,19 +91,20 @@ async function observeShifts(page: Page) {
   });
 }
 
-// One Logo is visible at a time: in the sidebar at a desk, in the top bar below 1024px, on a sign-in page in its header.
-// The hidden copy in the drawer and the other breakpoint's copy have no layout box.
-const logoSlot = (page: Page) =>
-  page
-    .locator("header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg)")
-    .filter({ visible: true });
+// One Logo is visible at a time: in the admin's sidebar at a desk, in its top bar below 1024px, on a sign-in page in its
+// header, and in the console's bar, where the board's mark holds it. The hidden copy in the drawer and the other
+// breakpoint's copy have no layout box.
+const slotSelector = "header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg)";
+// The console's mark, which shows the site's initial when there is no logo, as the board draws Axiom's A.
+const boardMark = "header a.glogo > span";
+const logoSlot = (page: Page) => page.locator(`${slotSelector}, ${boardMark}`).filter({ visible: true });
 
 async function waitForLogo(page: Page, path: string, failing: boolean) {
   const slot = logoSlot(page);
   await expect(slot, "one visible logo slot").toHaveCount(1);
   if (failing) {
-    await expect(slot.locator("svg")).toHaveCount(1);
     await expect(slot.locator("img")).toHaveCount(0);
+    await expect(slot.locator("svg").or(slot.getByText(/^\S$/))).toHaveCount(1);
     return;
   }
   const image = slot.locator("img");
@@ -130,12 +131,15 @@ async function shiftsAroundLogo(page: Page) {
     type Source = { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly };
     type Entry = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Source[] };
     const entries = (window as unknown as { __logoShifts?: Entry[] }).__logoShifts ?? [];
-    const slots = [...document.querySelectorAll<HTMLElement>("header > span, nav span")].filter((span) => {
-      if (span.getClientRects().length === 0) {
-        return false;
-      }
-      return [...span.children].some((child) => ["img", "svg"].includes(child.tagName.toLowerCase()));
-    });
+    const slots = [...document.querySelectorAll<HTMLElement>("header > span, nav span, header a.glogo > span")].filter(
+      (span) => {
+        if (span.getClientRects().length === 0) {
+          return false;
+        }
+        const mark = span.matches("a.glogo > span");
+        return mark || [...span.children].some((child) => ["img", "svg"].includes(child.tagName.toLowerCase()));
+      },
+    );
     const touches = (source: Source) => {
       const node = source.node;
       return node !== null && slots.some((slot) => slot === node || slot.contains(node));
@@ -193,10 +197,14 @@ async function checkSurface(browser: Browser, app: App, surface: string, logo: L
   await page.waitForLoadState("networkidle");
   await frames(page);
 
-  const mark = await logoSlot(page).locator("img, svg").first().boundingBox();
+  // The console's initial in place of a failed logo is the board's own 24px mark, not a 20x20 box.
+  const lettered = app.name === "console" && surface !== "sign-in" && logo.fail;
+  const slot = logoSlot(page);
+  const mark = await (lettered ? slot : slot.locator("img, svg")).first().boundingBox();
   expect(mark, "the logo mark").not.toBeNull();
-  expect(mark?.width, "the logo mark's width").toBeCloseTo(20, 1);
-  expect(mark?.height, "the logo mark's height").toBeCloseTo(20, 1);
+  const side = lettered ? 24 : 20;
+  expect(mark?.width, "the logo mark's width").toBeCloseTo(side, 1);
+  expect(mark?.height, "the logo mark's height").toBeCloseTo(side, 1);
   const outcome = await shiftsAroundLogo(page);
   expect(outcome.slots, "one visible logo slot").toBe(1);
   expect(outcome.shifts, `${app.name} ${surface} with a ${logo.name} logo at ${width}px`).toEqual([]);

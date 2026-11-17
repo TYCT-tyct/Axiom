@@ -8,13 +8,13 @@ import { useTranslation } from "react-i18next";
 import { billingPreferenceQuery } from "../queries";
 
 // Settings is where the account chooses how calls are paid for (docs/domains/billing.md「资金来源」). The site sets a
-// default; the account may follow it or choose one of the four orders. It is also the way to the workspaces page before
-// the menu shows it, which is once the account has a second workspace.
+// default; the account may follow it or choose one of the four orders. It is also the way to the workspaces page, for
+// whoever may read keys; the page checks the managing permission for each change itself.
 export default function Settings() {
   const { t } = useTranslation();
   const preference = useQuery(billingPreferenceQuery);
   const session = useSession();
-  const workspaces = can(session, "workspaces.manage") && can(session, "api_keys.view");
+  const workspaces = can(session, "api_keys.view");
   return (
     <>
       <PageHeader title={t("nav.settings")} description={t("settings.description")} />

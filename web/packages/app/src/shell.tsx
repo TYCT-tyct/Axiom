@@ -9,13 +9,9 @@ import { NewVersionNotice } from "./version";
 // hold the permission) are left out; the server decides again on every request.
 export type NavItem = { to: LinkProps["to"]; label: string; icon: IconName; permission?: string };
 
-const allLinks = (nav: NavItem[]) => nav;
-
-// useNav, when an app gives one, narrows the links by what the account's data says, such as the console's workspaces
-// page once there is a second workspace. It runs inside the session, where the app's queries may ask.
-function NavLinks({ nav, useNav = allLinks }: { nav: NavItem[]; useNav?: (nav: NavItem[]) => NavItem[] }) {
+function NavLinks({ nav }: { nav: NavItem[] }) {
   const session = useSession();
-  return useNav(nav)
+  return nav
     .filter((item) => item.permission === undefined || can(session, item.permission))
     .map((item) => (
       <SideNavItem key={item.to}>
@@ -33,13 +29,11 @@ function NavLinks({ nav, useNav = allLinks }: { nav: NavItem[]; useNav?: (nav: N
 export function Shell({
   brand,
   nav,
-  useNav,
   forbiddenHint,
   children,
 }: {
   brand: { name?: string; logo_url?: string; brand_color?: string } | undefined;
   nav: NavItem[];
-  useNav?: (nav: NavItem[]) => NavItem[];
   forbiddenHint: string;
   children: ReactNode;
 }) {
@@ -53,7 +47,7 @@ export function Shell({
         sidebar={
           <>
             <Logo className="mb-4 px-2 py-1" name={brand?.name} logoUrl={brand?.logo_url} />
-            <NavLinks nav={nav} useNav={useNav} />
+            <NavLinks nav={nav} />
             <div className="mt-auto space-y-3 pt-4">
               <SignedInAs />
               <PreferenceSwitches className="flex flex-wrap gap-2" />

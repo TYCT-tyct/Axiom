@@ -4,12 +4,40 @@ import { emitter, jsx } from "./region-jsx.ts";
 import { rows } from "./region-rows.ts";
 import { JSDOM } from "./template.ts";
 
+const within = (roots: Element[], selector: string) =>
+  roots.flatMap((root) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)]);
+
 function cut(document: Document, region: Region) {
   const roots = region.roots.flatMap((selector) => [...document.querySelectorAll(selector)]);
   if (!roots.length) throw new Error(`${region.board}/${region.name}: roots match nothing`);
   for (const selector of region.omit ?? [])
     for (const root of roots) for (const el of root.querySelectorAll(selector)) el.remove();
   return roots;
+}
+
+// A changed tag keeps the board's classes and children, so the board's CSS still selects the element.
+export function retag(original: Element, tag: string) {
+  const element = original.ownerDocument.createElement(tag);
+  for (const { name, value } of original.attributes) element.setAttribute(name, value);
+  element.append(...original.childNodes);
+  original.replaceWith(element);
+  return element;
+}
+
+type Change = NonNullable<Region["elements"]>[string];
+function change(original: Element, { tag, set = {}, unless }: Change, state: ReturnType<typeof emitter>) {
+  if (tag === "link") state.links.add(original);
+  const element = tag && tag !== "link" ? retag(original, tag) : original;
+  if (unless) state.unless.set(element, unless);
+  for (const [name, value] of Object.entries(set)) element.setAttribute(name, value);
+}
+
+function edit(roots: Element[], state: ReturnType<typeof emitter>) {
+  for (const [selector, declared] of Object.entries(state.region.elements ?? {})) {
+    const found = within(roots, selector);
+    if (!found.length) throw new Error(`${state.region.board}/${state.region.name}: ${selector} matches nothing`);
+    for (const element of found) change(element, declared, state);
+  }
 }
 
 const states = ["on", "off", "open", "active", "sel", "bad", "warn", "ok", "hot", "in", "out"];
@@ -45,6 +73,13 @@ function imports(fields: string, body: string, hasRows: boolean) {
   ].join("\n");
 }
 
+// The region's slots by prop name: children, and the named ones whose content the page supplies.
+const slots = (region: Region): Record<string, string> => ({
+  ...(region.children ? { children: region.children } : {}),
+  ...region.slots,
+});
+const slotProps = (names: string[]) => names.map((name) => `${name}?: import("react").ReactNode;`).join(" ");
+
 function source(
   region: Region,
   body: string,
@@ -63,12 +98,19 @@ function source(
     fields ? "values: v = {}" : "",
     hasRows ? "rows" : "",
     hasText ? "text" : "",
-    region.children ? "children" : "",
+    ...Object.keys(slots(region)),
+    state.links.size ? 'link: Link = "a"' : "",
   ]
     .filter(Boolean)
     .join(", ");
-  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}`;
-  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
+  const link = state.links.size
+    ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
+    : "";
+  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}${region.slots ? ` ${slotProps(Object.keys(region.slots))}` : ""}`;
+  const inline = [...state.inline]
+    .map(([text, name]) => `const ${name} = boardStyle(${JSON.stringify(text)});`)
+    .join("\n");
+  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body + inline, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${inline}\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
 function locales(region: Region, state: ReturnType<typeof emitter>, marker: string) {
@@ -85,7 +127,7 @@ function locales(region: Region, state: ReturnType<typeof emitter>, marker: stri
 }
 
 function expose(roots: Element[], state: ReturnType<typeof emitter>) {
-  const matches = (selector: string) => roots.flatMap((root) => [...root.querySelectorAll(selector)]);
+  const matches = (selector: string) => within(roots, selector);
   const bind = (name: string, nodes: (Node | Attr)[]) => {
     if (!nodes.length) throw new Error(`${state.region.name}: ${name} matches nothing`);
     for (const [index, node] of nodes.entries()) {
@@ -113,18 +155,23 @@ export function convertRegion(markup: string, css: string, region: Region, marke
   try {
     const roots = cut(document, region);
     const state = emitter(region);
-    if (region.children)
-      for (const el of document.querySelectorAll(region.children)) {
+    edit(roots, state);
+    // A named slot's demo shows the drawing's own content, its text, so the demo still draws the board.
+    const slotDemo = new Map<string, string>();
+    for (const [name, selector] of Object.entries(slots(region)))
+      for (const el of document.querySelectorAll(selector)) {
+        if (name !== "children") slotDemo.set(name, state.literal(el.textContent ?? ""));
         el.replaceChildren();
         // Keep the slot's own element in JSX and CSS, replacing only its content.
-        el.append(document.createComment("region children"));
-        state.replacements.set(el.firstChild as Node, "{children}");
+        el.append(document.createComment(`region ${name}`));
+        state.replacements.set(el.firstChild as Node, `{${name}}`);
       }
     expose(roots, state);
     const repeated = rows(roots, state);
     const body = roots.map((root) => jsx(root, state)).join("\n");
     const textDemo = [...state.texts].map(([name, text]) => `${name}: ${state.literal(text)}`).join(",\n");
-    const demo = `({ t, values: {}, ${state.texts.size ? `text: {${textDemo}},` : ""} ${repeated.length ? `rows: {${repeated.map((g) => `${g.name}: ${g.demo}`).join(",\n")}}` : ""} })`;
+    const slotsDemo = [...slotDemo].map(([name, value]) => `${name}: ${value},`).join(" ");
+    const demo = `({ t, values: {}, ${state.texts.size ? `text: {${textDemo}},` : ""} ${slotsDemo}${repeated.length ? `rows: {${repeated.map((g) => `${g.name}: ${g.demo}`).join(",\n")}}` : ""} })`;
     const elements = new Set(roots.flatMap((root) => [root, ...root.querySelectorAll("*")]));
     classStates(document, region, css);
     const files = {
