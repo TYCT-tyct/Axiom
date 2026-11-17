@@ -318,9 +318,9 @@ web-checks: web-embed
     {{ web }} test
     {{ web }} budget
 
-# Keep the shard index and count in the cached command: a partial pass cannot stand for any other shard or the suite.
+# Cache the selected test list: a partial pass cannot stand for any other shard or the suite.
 web-e2e shard="1/1": web-embed
-    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py e2e --version "$version" -- {{ web }} e2e --shard={{ quote(shard) }}
+    version="$({{ axiom_version }})" && {{ python }} scripts/ci/playwright.py e2e {{ quote(shard) }} --version "$version"
 
 # One browser against a real node with real PostgreSQL and Valkey (web/README.md「测试」): register, sign in, key, top-up,
 # call, statement. It needs Docker, so it runs beside the e2e shards, not in their container.
@@ -329,7 +329,7 @@ web-journey: web-embed
 
 # The web vitals of the console and admin (web/README.md「测试」), alone on the machine: they are timings.
 web-vitals: web-embed
-    {{ web }} vitals
+    version="$({{ axiom_version }})" && {{ python }} scripts/web_cache.py vitals --version "$version" -- {{ web }} vitals
 
 # The local entry point retains every check; the workflow schedules the two parts independently.
 web: web-checks web-e2e web-vitals

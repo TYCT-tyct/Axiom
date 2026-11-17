@@ -87,4 +87,34 @@ export const rulings: Ruling[] = [
     board: { canvas: "canvas.cw" },
     page: { canvas: "canvas.cw" },
   },
+  // The board runs no engines for product comparisons (board.ts): it draws no sea, and without prefs.js its theme
+  // button keeps the light page's moon in both schemes. The page's sea and switches are fx.spec.ts's.
+  {
+    scene: "site home",
+    basis: "§8.2: engines are off on the board; the sea is tested by fx.spec.ts",
+    page: { canvas: "canvas.sea" },
+  },
+  {
+    scene: "site home",
+    basis: "§8.2: engines are off on the board; the theme switch is tested by fx.spec.ts",
+    board: { selector: ".bar .theme" },
+    page: { selector: ".bar .theme" },
+  },
+  // The site has no Chinese cut at 500 until the coverage crawl (port design §5.4) says which characters need one: the
+  // buttons' Chinese is drawn at 400 (docs/frontend.md「字体」).
+  {
+    scene: "site home",
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    board: { selector: ".ho .btn" },
+    page: { selector: ".ho .btn" },
+  },
+  // Links and controls with nowhere to go yet are left out until their pages come: the docs page (S4) and the screens
+  // below the first, which the tour goes through (S2). The rows they sat in close up.
+  {
+    scene: "site home",
+    basis: "S4: no docs page yet",
+    board: { selector: ".bar .nav.mid, .hs > .main .cta" },
+    page: { selector: ".bar .nav.mid, .hs > main .cta" },
+  },
+  { scene: "site home", basis: "S2: no screens below the first yet", board: { selector: ".tour" } },
 ];

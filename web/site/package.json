@@ -9,6 +9,8 @@
   },
   "dependencies": {
     "@axiom/api": "workspace:*",
+    "@axiom/boards": "workspace:*",
+    "@axiom/fx": "workspace:*",
     "@axiom/ui": "workspace:*",
     "i18next": "26.6.0",
     "react": "19.3.1",

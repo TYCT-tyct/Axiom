@@ -10,7 +10,7 @@ type Brand = Pick<Schemas["Site"], "logo_url"> & { name?: string };
 
 // The site's name and logo, from the same public call the console's sign-in page uses. A host the API does not know, or
 // a failed request, leaves the default mark and name: the page is still the product's.
-function useSiteBrand(): Brand | undefined {
+export function useSiteBrand(): Brand | undefined {
   const [brand, setBrand] = useState<Brand>();
   useEffect(() => {
     const call = new AbortController();

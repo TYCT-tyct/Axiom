@@ -17,6 +17,8 @@ it.each(["site", "console", "admin"])("%s's stylesheet names every package with 
   const used = Object.keys(JSON.parse(readFileSync(join(web, app, "package.json"), "utf8")).dependencies ?? {})
     .filter((name) => name.startsWith("@axiom/"))
     .map((name) => join(web, "packages", name.slice("@axiom/".length), "src"))
-    .filter(hasComponents);
+    .filter(hasComponents)
+    // the boards' generated components take every class from their own CSS Modules, none from Tailwind
+    .filter((dir) => dir !== join(web, "packages/boards/src"));
   expect(used.filter((dir) => !named.includes(dir))).toEqual([]);
 });

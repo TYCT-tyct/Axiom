@@ -74,7 +74,7 @@
       }
     },
     {
-      "family": "Axiom Serif",
+      "family": "AX Serif Latin",
       "source": "instrument-serif-italic",
       "weight": "400",
       "style": "italic",
@@ -124,7 +124,7 @@
       }
     },
     {
-      "family": "Axiom CJK Serif",
+      "family": "AX Serif",
       "source": "cjk-serif",
       "weight": "600",
       "split": true,
@@ -132,7 +132,7 @@
       "text": {
         "script": "han",
         "keys": {
-          "site": ["hero.title"]
+          "site": ["board.m2e2a3b1e5d"]
         }
       }
     }

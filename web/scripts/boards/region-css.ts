@@ -39,10 +39,20 @@ function selectors(source: string): string[] {
 }
 
 function potential(selector: string) {
-  return selector
-    .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
-    .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
-    .replace(/:not\([^()]*\)/g, ":is(*)");
+  return (
+    selector
+      .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
+      .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
+      // The board is cut as its markup first stands: the page's language and the states engines and components set at
+      // run time (the data-* the Site engines set, aria-expanded="true") are not in it yet, so their rules are kept
+      // regardless. Only those: widening further copies rules into regions that never match them.
+      .replace(/:lang\([^()]*\)/g, "")
+      // the one class an engine adds itself: prefs.js marks the language row the arrow keys are on
+      .replace(/(\.lp li)\.act(?![\w-])/g, "$1")
+      .replace(/\[data-(?:open|enter|eff|on|t)(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g, ":is(*)")
+      .replace(/\[(aria-[\w-]+)[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*)\]/g, "[$1]")
+      .replace(/:not\([^()]*\)/g, ":is(*)")
+  );
 }
 
 function scoped(selector: string) {
