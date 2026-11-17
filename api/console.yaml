@@ -2332,6 +2332,42 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/console/v1/statement/daily:
+    get:
+      operationId: listStatementDaily
+      tags: [Balance]
+      summary: The account's credit statement by calendar day
+      description: >-
+        The same visible movements as listStatement, grouped in the requested IANA time zone, newest day first.
+        Only days with a balance or refund-hold movement appear. Spent is call charges net of call reversals;
+        topped_up is paid and offline credit net of cash refunds and chargebacks, including chargeback reversals;
+        gifted includes gifts and redeem codes; expired is credit written off. Freezes and unfreezes affect none
+        of those totals. Closing balance follows the last ledger movement of the day with a known balance,
+        or is null when every movement predates ledger sequencing. Totals are exact integer billionths, never floats.
+        Cursors require the same time_zone. Pages read live history; new movements can update a day's totals.
+        At most 31 days are returned even when limit is greater. This additive read may be unavailable on older nodes.
+      security:
+        - session: []
+      x-axiom-level: signed_in
+      x-axiom-permission: balance.view
+      parameters:
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+        - in: query
+          name: time_zone
+          required: false
+          description: An IANA time zone name; invalid names are 400.
+          schema: {type: string, minLength: 1, maxLength: 128, default: UTC, example: Asia/Shanghai}
+      responses:
+        "200":
+          description: A page of daily credit totals.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/StatementDaily"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/console/v1/statement.csv:
     get:
       operationId: exportStatement
@@ -4336,6 +4372,27 @@ components:
           type: array
           items: {$ref: "#/components/schemas/StatementRow"}
         next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    StatementDay:
+      type: object
+      required: [day, spent, topped_up, gifted, expired, closing_balance]
+      properties:
+        day: {type: string, pattern: '^[0-9]{4}-[0-9]{2}-[0-9]{2}$', description: Calendar date in time_zone.}
+        spent: {$ref: "#/components/schemas/Money"}
+        topped_up: {$ref: "#/components/schemas/Money"}
+        gifted: {$ref: "#/components/schemas/Money"}
+        expired: {$ref: "#/components/schemas/Money"}
+        closing_balance:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          nullable: true
+    StatementDaily:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          maxItems: 31
+          items: {$ref: "#/components/schemas/StatementDay"}
+        next_cursor: {type: string, nullable: true, description: Null on the last page.}
     KeyId: {type: string, pattern: '^key_[0-9a-hjkmnp-tv-z]{26}$', description: "An API key's ID (TypeID)."}
     SessionId: {type: string, pattern: '^sess_[0-9a-hjkmnp-tv-z]{26}$', description: "A session's ID (TypeID)."}
     WorkspaceId: {type: string, pattern: '^ws_[0-9a-hjkmnp-tv-z]{26}$', description: "A workspace's ID (TypeID)."}

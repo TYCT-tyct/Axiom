@@ -1301,6 +1301,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/console/v1/statement/daily": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The account's credit statement by calendar day
+         * @description The same visible movements as listStatement, grouped in the requested IANA time zone, newest day first. Only days with a balance or refund-hold movement appear. Spent is call charges net of call reversals; topped_up is paid and offline credit net of cash refunds and chargebacks, including chargeback reversals; gifted includes gifts and redeem codes; expired is credit written off. Freezes and unfreezes affect none of those totals. Closing balance follows the last ledger movement of the day with a known balance, or is null when every movement predates ledger sequencing. Totals are exact integer billionths, never floats. Cursors require the same time_zone. Pages read live history; new movements can update a day's totals. At most 31 days are returned even when limit is greater. This additive read may be unavailable on older nodes.
+         */
+        get: operations["listStatementDaily"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/console/v1/statement.csv": {
         parameters: {
             query?: never;
@@ -2469,6 +2489,20 @@ export interface components {
         };
         Statement: {
             data: components["schemas"]["StatementRow"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        StatementDay: {
+            /** @description Calendar date in time_zone. */
+            day: string;
+            spent: components["schemas"]["Money"];
+            topped_up: components["schemas"]["Money"];
+            gifted: components["schemas"]["Money"];
+            expired: components["schemas"]["Money"];
+            closing_balance: components["schemas"]["Money"] | null;
+        };
+        StatementDaily: {
+            data: components["schemas"]["StatementDay"][];
             /** @description Null on the last page. */
             next_cursor: string | null;
         };
@@ -5477,6 +5511,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Statement"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listStatementDaily: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+                /** @description An IANA time zone name; invalid names are 400. */
+                time_zone?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of daily credit totals. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StatementDaily"];
                 };
             };
             400: components["responses"]["BadRequest"];

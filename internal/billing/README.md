@@ -16,7 +16,7 @@
 | 额度 | `OpenBalance`、`AddCredit`、`CreditPaid`、`CreditRedeem`、`CreditsFor`、`ReadCredit`、`ReadCredits`、`TopUpRate`、`MinorUnits` | 写入要平台范围事务（审计） |
 | 退款与拒付 | `PrepareRefund`、`FreezeRefund`、`QuoteRefund`、`SettleRefund`、`ReleaseRefund`、`RefundRecordedAt`、`ChargeBack`、`ReverseChargeBack` | 重复调用由 payments 的订单行挡住，失败须回滚整个事务 |
 | 套餐 | `CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans`、`CreditSubscription`、`RequestSubscriptionRefund`/`ApproveSubscriptionRefund`、`Subscriptions`、`RegisterSubscriptions` | 见[订阅套餐](#订阅套餐) |
-| 只读 | `ReadBalance`、`ReadFunds`、`KeysUsed`、`ReadKeyUsage(s)`、`ReadBudgetUsage`、`KeyDailySpend`、`ReadCreditBatches`、`ListStatement`、`NewChargeReader`（`ReadCharges`、`SettledFinals`）、`LedgerOf`、`ReadPlatformReport`、`ListCashMovements`、`MerchantCash`、`MerchantBatches` | 账户范围、不加锁；`LedgerOf` 含供应商成本，只在运营或管理处理器里用平台范围调用 |
+| 只读 | `ReadBalance`、`ReadFunds`、`KeysUsed`、`ReadKeyUsage(s)`、`ReadBudgetUsage`、`KeyDailySpend`、`ReadCreditBatches`、`ListStatement`、`ListStatementDaily`、`NewChargeReader`（`ReadCharges`、`SettledFinals`）、`LedgerOf`、`ReadPlatformReport`、`ListCashMovements`、`MerchantCash`、`MerchantBatches` | 账户范围、不加锁；`LedgerOf` 含供应商成本，只在运营或管理处理器里用平台范围调用 |
 | 分配缓存 | `AdvanceCreditBatches(ctx, db, scope, account, pages)` | 写：按页在自己的短事务里锁余额行、推进重放并保存位置；不能在已持有该账户余额行锁的事务里调用 |
 | 定价 | `Rules`、`CreateRule`、`UpdateRule`、`Sell`、`PreviewPrices`、`RefreshPrices`、`PublishedPrices`、`PublishPrice`、`SetPricePolicy`、`PriceMove`、`ByokFee`、`SegmentPolicy`、`DefaultSegments` | 见[定价规则](#定价规则) |
 | 汇率 | `SetExchangeRate`、`ExchangeRates`、`ExchangeRateHistory`、`RegisterExchangeSync` | 见[汇率与成本依据](#汇率与成本依据) |
@@ -27,7 +27,7 @@
 - 后续事务（追加、结算、`SettleOrphan`）的账户范围只能来自 `accounts.Admission.Scope()`；gateway 把 `accounts.Admission` 转成 `Admitted`。
 - `ReserveRequest.Segments` 是路由计划时冻结的值，热更新不改已计划请求的报价；`Segmentable` 由 routing 按条目算。
 - **输出上界**：字节上界 = 已读完事件里解码后的正文、推理、工具参数、签名和加密推理的 UTF-8 字节（[protocol 的「转发」](../protocol/README.md#转发)）+ 未读完事件已到的字节，加 `ToolCalls × ToolCallTokens`；`Final` 标明之前，输出 = max(已报告, 字节上界)，且不超过 `OutputCap()`。`Relay.Next` 每次至多读 16 KiB，两次计量之间漏计不超过一次读。
-- **只读接口的上限**：`KeyDailySpend` 只读最近 14 个 UTC 日；`ListStatement` 每页最多 200、一次最多读 8 轮候选，长段零变动可返回空页加游标，游标带下一行的余额和冻结额起点，序号之前的行 `Balance` 为 nil；`ExchangeRateHistory` 每页最多 100 行，`before_version` 是排他游标；`ConsumeBalanceNotices` 一次认领并删除最多 1000 行。
+- **只读接口的上限**：`KeyDailySpend` 只读最近 14 个 UTC 日；`ListStatement` 每页最多 200、一次最多读 8 轮候选，长段零变动可返回空页加游标，游标带下一行的余额和冻结额起点，序号之前的行 `Balance` 为 nil；`ListStatementDaily` 每页最多 31 个非空本地日，直接聚合该账户历史账本，金额合计用整数文本；调用方校验 IANA 时区，续页日期由 `ParseStatementDailyCursor` 解析并绑定同一时区，余额未知为 nil；`ExchangeRateHistory` 每页最多 100 行，`before_version` 是排他游标；`ConsumeBalanceNotices` 一次认领并删除最多 1000 行。
 - **`InputEstimate` ≤ `InputBound`**：每一项都不大于上界的对应项，暂估永远不超过预留（`TestInputEstimateNeverExceedsTheBound`）。
 
 ## 报价
