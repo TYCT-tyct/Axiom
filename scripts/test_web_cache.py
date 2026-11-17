@@ -277,6 +277,12 @@ class BoardAndVitalsCache(unittest.TestCase):
             with self.assertRaises(OSError):
                 self.key()
 
+    def test_board_script_directories_are_hashed_recursively(self):
+        self.repo.write("web/scripts/boards/regions.ts", "converter\n")
+        before = self.key()
+        self.repo.write("web/scripts/boards/regions.ts", "changed converter\n")
+        self.assertNotEqual(before, self.key())
+
     def test_concurrent_writers_can_publish_the_same_pass(self):
         marker = self.cache / "boards/AxApp/pass"
         barrier = threading.Barrier(2)

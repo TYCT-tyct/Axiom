@@ -276,7 +276,8 @@ def boards_key(root: Path, board: str, boards: list[str], semantic: dict, select
         if board != "_all" and relative[0] == "inputs" and path.name.split(".")[0] in boards and path.name.split(".")[0] != board:
             continue
         paths.append(path)
-    paths += list((root / "web/scripts").glob("boards*"))
+    for path in (root / "web/scripts").glob("boards*"):
+        paths += walk_files(path, SKIP_DIRS) if path.is_dir() else [path]
     paths += list((root / "web/e2e").glob("boards*.spec.ts"))
     paths += walk_files(root / "web/e2e/design")
     paths += [path for path in (root / "web").iterdir() if path.is_file()]
