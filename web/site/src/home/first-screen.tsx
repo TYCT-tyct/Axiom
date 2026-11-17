@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import { links } from "./links";
 import { type BoardKey, words } from "./words";
 
-// The first screen: the headline, the lede and the two ways on, as the board draws them. The words the preference
+// The first screen: the headline, the lede and the way on, as the board draws them. The words the preference
 // engine rewrites in place are written once, in the language the page opened in (frame.tsx says why); the headline in
 // Chinese is the board's own markup, its phrases and the key in italics, and in another language plain text, which the
 // engine lays out the same way when it decodes into it.
@@ -19,9 +19,7 @@ export function FirstScreen() {
       text={{
         lede: opened(words.lede),
         signUp: opened(words.signUpForKey),
-        docs: opened(words.readDocs),
         signUpHref: links.signUp,
-        docsHref: links.docs,
       }}
     >
       {first.zh ? <Headline t={opened} /> : opened(words.headline)}

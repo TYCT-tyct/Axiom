@@ -124,6 +124,10 @@ test("under reduced motion nothing runs: the sea is one still frame and the entr
   expect(await drawn()).toBe(first);
   expect(await loop(page)).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
   expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
+  // the other theme switches at once, and the still sea is drawn again in it
+  await page.getByRole("button", { name: /切换到/ }).click();
+  await expect.poll(drawn).not.toBe(first);
+  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
 });
 
 test("a sea that fails to load leaves the page working, with no unhandled error", async ({ page }) => {
@@ -155,7 +159,7 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One key for every model");
   await expect(decode).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Read the docs" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
 
   await page.getByRole("button", { name: "Switch to dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");

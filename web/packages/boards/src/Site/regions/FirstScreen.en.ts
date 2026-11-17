@@ -4,7 +4,6 @@ import type zh from "./FirstScreen.zh.ts";
 export default {
   "m2e2a3b1e5d": "One key for every model",
   "m0d0cee5072": "Every route is tested. You pay for the route that served you.",
-  "mcaf724c6bd": "Sign up and get an API key",
-  "md006830a9e": "Read the docs"
+  "mcaf724c6bd": "Sign up and get an API key"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

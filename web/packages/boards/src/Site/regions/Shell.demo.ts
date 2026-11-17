@@ -4,19 +4,16 @@ import type { Props } from "./Shell.tsx";
 import type en from "./Shell.en.ts";
 export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {models: t("mc98e118e0a"),
 pricing: t("m0f4371a7a9"),
-docs: t("m2687ccdbb1"),
 language: t("m9937e365aa"),
 signIn: t("m1e2df9c307"),
 signUp: t("mc4fb62202b"),
 home: "#",
 modelsHref: "#",
 pricingHref: "#",
-docsHref: "#",
 signInHref: "#",
 signUpHref: "#",
 menuModelsHref: "#",
 menuPricingHref: "#",
-menuDocsHref: "#",
 menuSignInHref: "#",
 menuSignUpHref: "#"},  });
 /* jscpd:ignore-end */

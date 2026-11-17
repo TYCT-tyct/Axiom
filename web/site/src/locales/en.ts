@@ -12,6 +12,15 @@ export default {
   signIn: "Sign in",
   board: { ...wide, ...narrow, ...first, ...headline },
   language: "English",
+  sections: {
+    surface: "Surface",
+    connect: "Connect",
+    models: "Models and routes",
+    steps: "Three steps",
+    production: "Before production",
+    faq: "FAQ",
+    seabed: "Seabed",
+  },
   theme: {
     toDark: "Switch to dark",
     toLight: "Switch to light",

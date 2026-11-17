@@ -13,6 +13,16 @@ export default {
   board: { ...wide, ...narrow, ...first, ...headline },
   // the language as its own switch names it
   language: "简体中文",
+  // the sections of the home page from the top, as its island names them
+  sections: {
+    surface: "海面",
+    connect: "接入",
+    models: "模型与线路",
+    steps: "三步开始",
+    production: "上生产前",
+    faq: "常见问题",
+    seabed: "海底",
+  },
   theme: {
     toDark: "切换到深色",
     toLight: "切换到浅色",

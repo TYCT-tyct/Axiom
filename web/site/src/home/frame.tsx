@@ -26,26 +26,23 @@ const depthText = (depth: number) => (depth === 0 ? "0 m" : `−${depth.toLocale
 const frameText = (word: (key: BoardKey) => string, language: string) => ({
   models: word(words.models),
   pricing: word(words.pricing),
-  docs: word(words.docs),
   language,
   signIn: word(words.signIn),
   signUp: word(words.signUp),
   home: links.home,
   modelsHref: links.models,
   pricingHref: links.pricing,
-  docsHref: links.docs,
   signInHref: links.signIn,
   signUpHref: links.signUp,
   menuModelsHref: links.models,
   menuPricingHref: links.pricing,
-  menuDocsHref: links.docs,
   menuSignInHref: links.signIn,
   menuSignUpHref: links.signUp,
   sheetSignUpHref: links.signUp,
 });
 
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
-// the island and the tour, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
+// and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
 // its engines through packages/fx: the sea after the first content, the switches when first used (switches.ts).
 //
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
@@ -84,12 +81,10 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     setCanvas,
     barCls: scroll.solid ? "away" : "",
     islCls: scroll.solid ? (scroll.bottom ? "on hide" : `on${island ? " open" : ""}`) : "",
-    secTxt: board(sections[scroll.sec]?.name ?? "m6ebdfb798f"),
+    secTxt: t(`sections.${sections[scroll.sec]?.name ?? "surface"}`),
     depthTxt: depthText(scroll.depth),
-    tourCls: scroll.solid ? "gone" : "",
     sheetCls: menu ? "on" : "",
     sheetHide: menu ? "false" : "true",
-    ...Object.fromEntries(sections.map((_, i) => [`t${i}`, i === scroll.sec ? "on" : ""])),
   };
   const text = frameText((key) => opened(`board.${key}`), opened("language"));
   return wide ? (

@@ -42,6 +42,9 @@ type Limit = { target: number; ceiling?: number };
 const budget = {
   lcpDesktop: { target: 1500, ceiling: 1500 },
   lcpPhone: { target: 2500, ceiling: 6000 },
+  // The website's own phone target (docs/frontend.md「前端性能指标」); the ceiling is its first measurement, 2.05 s
+  // scaled, with the same 1.5x room for a slower host as the console's.
+  lcpSitePhone: { target: 2000, ceiling: 3100 },
   inp: { target: 100 },
   cls: { target: 0.05 },
   lateFrames: { target: 0.05 },
@@ -341,7 +344,8 @@ test.describe("loading", () => {
       test(`${suite.app} ${sceneName}: LCP and CLS on ${name}`, async ({ browser }) => {
         const scene = sceneOf(suite, sceneName);
         const reference = { suite: consoleSuite, scene: overview, lcp: overviewMs[name] };
-        await measurePage(browser, profile, device, suite, scene, reference, name, lcp);
+        const limit = suite === siteSuite && name === "phone" ? budget.lcpSitePhone : lcp;
+        await measurePage(browser, profile, device, suite, scene, reference, name, limit);
       });
     }
   }

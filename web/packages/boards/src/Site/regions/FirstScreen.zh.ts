@@ -3,7 +3,6 @@
 export default {
   "m2e2a3b1e5d": "一个key，接入所有模型",
   "m0d0cee5072": "每条线路实测，按实际服务的线路计费。",
-  "mcaf724c6bd": "注册，获取API key",
-  "md006830a9e": "查看文档"
+  "mcaf724c6bd": "注册，获取API key"
 } as const;
 /* jscpd:ignore-end */

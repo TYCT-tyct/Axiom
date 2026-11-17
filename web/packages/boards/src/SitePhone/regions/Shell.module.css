@@ -92,6 +92,7 @@
 :global(.ho .lp-s input:not(.under *)):where(.scope)::placeholder{color:var(--text2)}
 :global(.ho .lp ul:not(.under *)):where(.scope){list-style:none;margin:0;padding:0}
 :global(.ho .lp li:not(.under *)):where(.scope){display:flex;align-items:center;gap:12px;height:40px;padding:0 12px;border-radius:8px;cursor:pointer;color:var(--text1)}
+:global(.ho .lp li.act:not(.under *)):where(.scope){background:var(--hover)}
 :global(.ho .lp li .nm:not(.under *)):where(.scope){flex:none}
 :global(.ho .lp li .sub:not(.under *)):where(.scope){flex:1;min-width:0;text-align:right;font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 :global(.ho .lp li svg:not(.under *)):where(.scope){flex:none;color:var(--ring);visibility:hidden}
@@ -148,18 +149,8 @@
 :global(.site .shh):where(.scope){display:flex;align-items:center;justify-content:space-between;height:56px}
 :global(.site .shl):where(.scope){display:flex;flex-direction:column;margin-top:24px}
 :global(.site .shl .big):where(.scope){font-size:28px;line-height:56px;color:var(--text1);box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--line)}
-:global(.site .shs):where(.scope){display:flex;flex-direction:column;margin-top:32px}
-:global(.site .shc):where(.scope){font-size:12px;line-height:18px;color:var(--text2);margin-bottom:8px}
-:global(.site .sml):where(.scope){all:unset;display:flex;justify-content:space-between;height:36px;align-items:center;font-size:16px;color:var(--text2);cursor:pointer}
-:global(.site .sml .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace;font-size:12px}
-:global(.site .sml.on):where(.scope){color:var(--text1)}
-:global(.site .sml.on .mono):where(.scope){color:var(--accent)}
 :global(.site .shf):where(.scope){margin-top:auto}
 :global(.site .shf .btn):where(.scope){width:100%}
 :global(.site .shx):where(.scope){all:unset;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin-right:-12px;color:var(--text1);cursor:pointer}
-:global(.site .tour):where(.scope){position:absolute;left:24px;bottom:24px;z-index:12;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:0;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--line);font:inherit;font-size:12px;line-height:18px;color:var(--text2);cursor:pointer;transition:color 250ms ease-out,opacity 250ms ease-out}
-:global(.site .tour:hover):where(.scope){color:var(--text1)}
-:global(.site .tour.gone):where(.scope){opacity:0;pointer-events:none}
-:global(.site.m .tour):where(.scope){left:12px;bottom:12px}
 :global(.tr:focus):where(.scope){outline:none}
 /* jscpd:ignore-end */

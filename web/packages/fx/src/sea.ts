@@ -85,7 +85,13 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
   if (still) {
     root.dataset.enter = "done";
     engine.still();
-    // a resized canvas is blank until drawn again, and no frame will come to draw it
+    // A resized canvas is blank, and a new scheme only repaints the engine's ground, until the sea is drawn again;
+    // no frame will come to draw it. Whoever switches the scheme (the page, the theme switch) goes through setLight.
+    const setLight = engine.setLight.bind(engine);
+    engine.setLight = (light) => {
+      setLight(light);
+      engine.still();
+    };
     const resized = new ResizeObserver(() => engine.still());
     resized.observe(canvas);
     return {

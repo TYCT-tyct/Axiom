@@ -46,6 +46,8 @@ function potential(selector: string) {
       // The board is cut as its markup first stands: the page's language and the states engines and components set at
       // run time (data-open, data-enter, aria-expanded="true") are not in it yet, so their rules are kept regardless.
       .replace(/:lang\([^()]*\)/g, "")
+      // the one class an engine adds itself: prefs.js marks the language row the arrow keys are on
+      .replace(/(\.lp li)\.act(?![\w-])/g, "$1")
       .replace(/\[data-[\w-]+(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g, ":is(*)")
       .replace(/\[([\w-]+)[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*)\]/g, "[$1]")
       .replace(/:not\([^()]*\)/g, ":is(*)")

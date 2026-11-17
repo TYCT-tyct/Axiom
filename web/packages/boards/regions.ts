@@ -83,7 +83,6 @@ const siteEnglish: Record<string, string> = {
   m4ce4cafdd0: "Menu",
   mc98e118e0a: "Models",
   m0f4371a7a9: "Pricing",
-  m2687ccdbb1: "Docs",
   m1e2df9c307: "Log in",
   mc4fb62202b: "Sign up",
   m3272fe53c0: "Take the tour",
@@ -91,26 +90,26 @@ const siteEnglish: Record<string, string> = {
   m3fd47edce4: "Close",
   m4144869c18: "Search languages",
   m9937e365aa: "简体中文",
-  m854975fac5: "On this page",
-  m6ebdfb798f: "Surface",
-  mf3b3924597: "Connect",
-  m446d270979: "Models and routes",
-  mc7765bcffd: "Three steps",
-  m97d3aaa40b: "Before production",
-  m45a6d115fd: "FAQ",
-  m8c0f8088c6: "Seabed",
   mcaf724c6bd: "Sign up and get an API key",
   m2e2a3b1e5d: "One key for every model",
   m0d0cee5072: "Every route is tested. You pay for the route that served you.",
-  md006830a9e: "Read the docs",
 };
 const links = (anchors: string) =>
   Object.fromEntries(
-    ["menuModelsHref", "menuPricingHref", "menuDocsHref", "menuSignInHref"].map((name, i) => [
+    ["menuModelsHref", "menuPricingHref", "menuSignInHref"].map((name, i) => [
       name,
       { selector: `${anchors}:nth-child(${i + 1})`, attribute: "href" },
     ]),
   );
+// What has nowhere to go yet: the docs page comes with S4, the screens below the first (the menu sheet's sections and
+// the tour through them) with S2. They are cut out until then; the links that remain close up in the board's order.
+const notYet = [
+  ".bar .nav.mid a:nth-child(3)",
+  ".isl .ixi a:nth-child(3)",
+  ".sheet .shl a:nth-child(3)",
+  ".sheet .shs",
+  ".tr .tour",
+];
 const otherLanguages = ["zh-TW", "ja", "ko", "es", "de", "fr", "pt", "ru"].map((code) => `#lp-${code}`);
 const siteRegions: Region[] = [
   ...["Site", "SitePhone"].map(
@@ -119,12 +118,11 @@ const siteRegions: Region[] = [
       name: "Shell",
       roots: [".tr.site"],
       // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
-      omit: [".tr > .cw", ".tr > .wh", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...otherLanguages],
+      omit: [".tr > .cw", ".tr > .wh", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...otherLanguages],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
         pricing: ".bar .nav.mid a:nth-child(2) > span",
-        docs: ".bar .nav.mid a:nth-child(3) > span",
         language: ".bar .lang [data-i18n]",
         signIn: ".bar .login > span",
         signUp: ".bar .btn.primary > span",
@@ -133,7 +131,6 @@ const siteRegions: Region[] = [
         home: { selector: ".bar .brand", attribute: "href" },
         modelsHref: { selector: ".bar .nav.mid a:nth-child(1)", attribute: "href" },
         pricingHref: { selector: ".bar .nav.mid a:nth-child(2)", attribute: "href" },
-        docsHref: { selector: ".bar .nav.mid a:nth-child(3)", attribute: "href" },
         signInHref: { selector: ".bar .login", attribute: "href" },
         signUpHref: { selector: ".bar .btn.primary", attribute: "href" },
         // the same pages again in the island (wide) or in the menu sheet (narrow)
@@ -145,7 +142,6 @@ const siteRegions: Region[] = [
         modeCls: ["dark", "light"],
         barCls: ["away"],
         islCls: ["on", "hide", "open"],
-        tourCls: ["gone"],
         sheetCls: ["on"],
       },
       english: siteEnglish,
@@ -155,15 +151,14 @@ const siteRegions: Region[] = [
     board: "Site",
     name: "FirstScreen",
     roots: [".hs > main"],
+    omit: [".cta .outline"],
     children: "h1 > [data-i18n]",
     text: {
       lede: ".lede > span",
       signUp: ".cta .primary > span",
-      docs: ".cta .outline > span",
     },
     attributes: {
       signUpHref: { selector: ".cta .primary", attribute: "href" },
-      docsHref: { selector: ".cta .outline", attribute: "href" },
     },
     english: siteEnglish,
   },

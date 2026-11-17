@@ -32,20 +32,11 @@ function scrolled(scroller: HTMLElement, offsets: number[]): Scroll & { dim: num
   };
 }
 
-// scrolling is the frame's scroller: where its sections start, what scrolling it says, gliding to a place (native
-// smooth scrolling, not the board's eased frames; a jump under reduced motion) and the tour through the sections.
+// scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top (native
+// smooth scrolling, not the board's eased frames; a jump under reduced motion). Gliding to a section and the tour
+// through them come with the sections, in S2.
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
   let offsets = [0];
-  let timer = 0;
-  const glide = (top: number) => scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
-  const step = (i: number) => {
-    if (i < offsets.length) {
-      glide(offsets[i] ?? 0);
-      timer = window.setTimeout(() => step(i + 1), 3200);
-    } else {
-      timer = window.setTimeout(() => glide(0), 3000);
-    }
-  };
   return {
     measure: () => {
       offsets = [0, ...[...scroller.querySelectorAll<HTMLElement>(".under > .hfm")].map((s) => s.offsetTop)];
@@ -55,16 +46,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
       if (depth) depth.style.opacity = dim.toFixed(3);
       show(scroll);
     },
-    glide,
-    section: (n: number) => glide(offsets[n] ?? 0),
-    // the tour does not play under reduced motion: it goes to the next section once
-    tour: () => {
-      clearTimeout(timer);
-      const first = scroller.scrollTop > 10 ? 0 : 1;
-      if (reducedMotion()) glide(offsets[first] ?? 0);
-      else step(first);
-    },
-    stop: () => clearTimeout(timer),
+    toTop: () => scroller.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" }),
   };
 }
 
@@ -79,7 +61,7 @@ function clickActions(
       (_, e) => {
         e.preventDefault();
         setMenu(false);
-        page.glide(0);
+        page.toTop();
       },
     ],
     [
@@ -90,14 +72,6 @@ function clickActions(
       },
     ],
     [".shx", () => setMenu(false)],
-    [
-      ".sml",
-      (control) => {
-        setMenu(false);
-        page.section(Number(control.dataset.sec));
-      },
-    ],
-    [".tour", () => page.tour()],
     ["[data-go]", () => setMenu(false)],
   ];
 }
@@ -110,8 +84,7 @@ const islandEvents = [
 ] as const;
 
 // useFrameBehaviour runs the board's own behaviours on the frame root points at: the header and the island while
-// scrolling, the island opening under the pointer or the keyboard (wide layout), the menu sheet and the tour. What
-// the board does on a click, by the control clicked (Site.dc.html onClick).
+// scrolling, the island opening under the pointer or the keyboard (wide layout) and the menu sheet.
 export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boolean) {
   const [scroll, setScroll] = useState(atTop);
   const [island, setIsland] = useState(false);
@@ -142,7 +115,6 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     frame.addEventListener("click", onClick);
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);
     return () => {
-      page.stop();
       resized.disconnect();
       scroller.removeEventListener("scroll", page.onScroll);
       frame.removeEventListener("click", onClick);

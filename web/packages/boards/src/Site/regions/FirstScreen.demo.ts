@@ -4,7 +4,5 @@ import type { Props } from "./FirstScreen.tsx";
 import type en from "./FirstScreen.en.ts";
 export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {lede: t("m0d0cee5072"),
 signUp: t("mcaf724c6bd"),
-docs: t("md006830a9e"),
-signUpHref: "#",
-docsHref: "#"},  });
+signUpHref: "#"},  });
 /* jscpd:ignore-end */
