@@ -23,7 +23,8 @@ def tests(report: dict, parents: tuple = ()) -> dict:
     for spec in report.get("specs", []):
         for test in spec["tests"]:
             name = " › ".join((f'[{test["projectName"]}]', spec["file"], *parents, spec["title"]))
-            found[name] = {"file": spec["file"], "title": spec["title"], "test": test}
+            found[name] = {"file": spec["file"], "title": spec["title"],
+                           "title_path": " › ".join((*parents, spec["title"])), "test": test}
     return found
 
 
@@ -58,6 +59,25 @@ def green(report: dict, selected: list[str]) -> bool:
         and all(result["status"] == "passed" for result in item["test"]["results"])
         for item in found.values()
     )
+
+
+def quarantined(report: dict, selected: list[str], entries: list[dict]) -> list[str]:
+    found = tests(report)
+    if report.get("errors") or set(found) != set(selected):
+        return []
+    failed = []
+    for name, item in found.items():
+        test = item["test"]
+        if test["status"] == "unexpected":
+            if not any(result["status"] in ("failed", "timedOut") for result in test["results"]):
+                return []
+            if not any(item["file"] == entry["spec"] and item["title_path"] == entry["title"] for entry in entries):
+                return []
+            failed.append(name)
+        elif test["status"] != "expected" and test.get("expectedStatus") != "skipped":
+            # An unexecuted dependent test must not disappear behind a successful isolated retry.
+            return []
+    return failed
 
 
 def execute(root: Path, cache: Path, suite: str, shard: str, version: str) -> int:
@@ -130,7 +150,29 @@ def execute(root: Path, cache: Path, suite: str, shard: str, version: str) -> in
         args.append(f"--output={evidence}")
     status = subprocess.run(args, cwd=root, env=env).returncode
     if status:
-        return status
+        if suite != "e2e" or not result.is_file():
+            return status
+        measured = json.loads(result.read_text())
+        failed = quarantined(measured, selected, json.loads(os.environ.get("E2E_FLAKY", "[]")))
+        if not failed:
+            return status
+        print("::warning::Quarantined e2e failures: " + ", ".join(failed), flush=True)
+        if os.environ.get("E2E_FLAKY_RETRY") != "true":
+            return status
+        retry_list, retry_result = output / "retry.txt", output / "retry.json"
+        retry_list.write_text("\n".join(failed) + "\n")
+        retry_result.unlink(missing_ok=True)
+        env["PLAYWRIGHT_JSON_OUTPUT_FILE"] = str(retry_result)
+        retry_args = [*command, f"--test-list={retry_list}", "--reporter=github,json", "--retries=0"]
+        evidence = os.environ.get("AXIOM_TEST_RESULTS", str(root / "web/test-results"))
+        retry_args.append(f"--output={evidence}/retry")
+        retried = subprocess.run(retry_args, cwd=root, env=env).returncode
+        if retried:
+            return retried
+        if not retry_result.is_file() or not green(json.loads(retry_result.read_text()), failed):
+            return 1
+        # A quarantined pass must not hide the flake on later PR/main runs via the content cache.
+        return 0
     measured = json.loads(result.read_text())
     # e2e has intentionally skipped cases; boards must actually pass every selected comparison.
     if suite == "boards" and not green(measured, selected):

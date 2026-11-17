@@ -54,7 +54,7 @@ docker create --name "$name" \
   --volume "$pnpm_store:$pnpm_store" \
   --volume "$web_cache:/ci/axiom" \
   --env PATH --env CI --env GATE_STRESS --env E2E_SHARD_INDEX --env E2E_SHARD_COUNT --env BASE --env HOME=/tmp/axiom-web-home \
-  --env AXIOM_TEST_RESULTS --env AXIOM_PLAYWRIGHT_REPORTS \
+  --env AXIOM_TEST_RESULTS --env AXIOM_PLAYWRIGHT_REPORTS --env E2E_FLAKY --env E2E_FLAKY_RETRY \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env XDG_CACHE_HOME=/ci/axiom/xdg \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
