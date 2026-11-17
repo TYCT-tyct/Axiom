@@ -58,7 +58,6 @@
 :global(.tr > .sea:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
 :global(.tr.light > .sea:not(.under *)):where(.scope){filter:invert(1)}
 :global(.tr > .ho:not(.under *)):where(.scope){position:absolute;inset:0;z-index:1;height:auto;min-height:0;background:transparent}
-:global(.tr[data-state=login] > .ho:not(.under *)):where(.scope){visibility:hidden}
 :global(.tr .ho .btn:active:not(.under *)):where(.scope){transform:scale(.98)}
 :global(.tr .hs:not(.under *)):where(.scope){position:absolute;inset:0;z-index:2;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:none;-webkit-mask-image:linear-gradient(to bottom,transparent calc(var(--hdr) - 12px),#000 calc(var(--hdr) + 20px));mask-image:linear-gradient(to bottom,transparent calc(var(--hdr) - 12px),#000 calc(var(--hdr) + 20px))}
 :global(.tr .hs:not(.under *)):where(.scope)::-webkit-scrollbar{display:none}

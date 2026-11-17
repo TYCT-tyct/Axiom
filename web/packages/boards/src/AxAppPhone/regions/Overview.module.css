@@ -349,10 +349,6 @@
 
 
 }
-:global(.ov .rl2 :is([data-pg=susage],[data-pg=smem],[data-pg=bill],[data-pg=mkeys],[data-pg=sec],[data-pg=tset])):where(.scope),:global(.ov .rl3 :is([data-pg=smem],[data-pg=mkeys],[data-pg=sec],[data-pg=tset])):where(.scope){display:none!important}
-:global(.ov .rl4 :is([data-pg=susage],[data-pg=smem],[data-pg=bill],[data-pg=mkeys],[data-pg=sec],[data-pg=tset])):where(.scope){display:none!important}
-:global(.ov .rl4.lvW :is([data-pg=route],[data-pg=presets],[data-pg=plugins],[data-pg=byok],[data-pg=budget],[data-pg=gdef],[data-pg=classify],[data-pg=observe],[data-pg=wset])):where(.scope){display:none!important}
-:global(.ov .rl5 :is([data-pg=susage],[data-pg=smem],[data-pg=bill],[data-pg=mkeys],[data-pg=sec],[data-pg=tset])):where(.scope){display:none!important}
 :global(.ov .rlro svg):where(.scope){width:14px;height:14px;flex:none;fill:none;stroke:currentColor;stroke-width:1.5px;stroke-linecap:round;stroke-linejoin:round}
 :global(.ov :is(.pstE,.pstX) .qpg > :not(.qph)):where(.scope){display:none!important}
 :global(.ov .dny .qpg):where(.scope){display:none!important}
