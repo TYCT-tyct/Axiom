@@ -18,7 +18,7 @@
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 和列车仅在 `web/` 或 `api/*.yaml` 变化时跑，main 总跑。目标与实际门禁见[前端](../frontend.md#实测)。
 - `e2e`：两个 `playwright test --shard=i/2` 分片，准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
-- `boards`：独立运行 `playwright.boards.config.ts`，两个 worker 比较整板、区域和引擎，不启动产品 Go 服务。PR 与列车在 `web/scripts/boards*`、`web/packages/boards/**`、`web/e2e/boards*.spec.ts` 或其截图工具、共用及画板 Playwright 配置、CI 工作流变化时执行，main 总跑；路径比较失败也跑。失败保留截图和操作 trace，不反复序列化大型整板的 DOM；单例上限三分钟，作业上限一小时。
+- `boards`：独立运行 `playwright.boards.config.ts`，分四片、每片两个 worker 比较整板、区域和引擎，不启动产品 Go 服务。PR 与列车在 `web/scripts/boards*`、`web/packages/boards/**`、`web/e2e/boards*.spec.ts` 或其截图工具、共用及画板 Playwright 配置、CI 工作流变化时执行，main 总跑；路径比较失败也跑。失败保留截图和操作 trace，不反复序列化大型整板的 DOM；单例上限三分钟，每片上限 30 分钟。
 - `journey`：浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
 - `bench`：列车用 base 的 `tools/benchgate` 比分配，门禁或其模块依赖变化时再用当前版本比，两次都须过；main 用 `bench-once` 带竞态每项一次。基准不混进 `test`；非轻量改动仅纯 Markdown 或纯 `web/` 可跳过基准。
 - `deploy`：只有每个改动文件都明确不影响容器时跳过。排除 Markdown、Go 测试、testdata、`.github/`、轻量脚本、web e2e/journey 与其 Playwright 配置；生产 Go、模块文件、应用源码、迁移、deploy、Dockerfile、justfile 都触发。签名检查也在列车和 main 执行。
