@@ -168,4 +168,5 @@ const shell = (board: string): Region => ({
   elements: { ...menus, ...(board === "AxApp" ? wide : phone) },
 });
 
+/** @public loaded by regions.ts from the directory listing */
 export default ["AxApp", "AxAppPhone"].map(shell);

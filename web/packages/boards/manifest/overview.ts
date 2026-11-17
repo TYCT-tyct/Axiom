@@ -74,4 +74,5 @@ function overviewRegion(board: string): Region {
   };
 }
 
+/** @public loaded by regions.ts from the directory listing */
 export default ["AxApp", "AxAppPhone"].map(overviewRegion);

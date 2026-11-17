@@ -112,4 +112,5 @@ const siteRegions: Region[] = [
   },
 ];
 
+/** @public loaded by regions.ts from the directory listing */
 export default siteRegions;
