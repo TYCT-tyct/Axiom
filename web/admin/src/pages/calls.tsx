@@ -262,7 +262,7 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
   const format = useFormat();
   return (
     <tr>
-      <Td>
+      <Td shrink>
         {inspect ? (
           <TextLink>
             <Link to="/calls/$callId" params={{ callId: call.id }}>

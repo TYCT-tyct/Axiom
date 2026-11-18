@@ -102,10 +102,10 @@ function Row({ approval, now }: { approval: Approval; now: number }) {
       <Td>
         <ApprovalState approval={approval} now={now} />
       </Td>
-      <Td>
+      <Td shrink>
         <Minute at={approval.requested_at} />
       </Td>
-      <Td>
+      <Td shrink>
         <Minute at={approval.expires_at} />
       </Td>
     </tr>

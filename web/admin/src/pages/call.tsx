@@ -187,7 +187,7 @@ function AttemptRow({ attempt, index }: { attempt: Attempt; index: number }) {
       <Td>
         <Outcome outcome={attempt.outcome} />
       </Td>
-      <Td>
+      <Td shrink>
         <Time at={attempt.started_at} />
         {attempt.finished_at ? (
           <Text as="div" size="sm" tone="faint">

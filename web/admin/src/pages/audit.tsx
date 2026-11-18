@@ -124,7 +124,7 @@ function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
       <tbody>
         {rows.map((entry, index) => (
           <tr key={entry.id ?? index}>
-            <Td>
+            <Td shrink>
               {entry.id ? (
                 <TextLink>
                   <Link to="/audit/$entryId" params={{ entryId: entry.id }}>

@@ -177,10 +177,10 @@ function Row({ code }: { code: RedeemCode }) {
           </Text>
         ) : null}
       </Td>
-      <Td>
+      <Td shrink>
         <Time at={code.created_at} />
       </Td>
-      <Td>
+      <Td shrink>
         <Time at={code.expires_at} />
       </Td>
       <Td align="end" shrink>
