@@ -8,8 +8,9 @@ import { type Region, regions } from "../packages/boards/regions.ts";
 import { readBoard } from "../packages/boards/source.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
-import { compare } from "./design/compare.ts";
+import { compare, comparePart } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
+import { partProofScript, renderPart } from "./design/part-proof.ts";
 import { rulings } from "./design/rulings.ts";
 import { boardObserversReady, type Stage, stagePaused } from "./design/stage.ts";
 
@@ -40,12 +41,15 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { slices } from "../src/demo.ts";
-import "../src/demo-fonts.css";
 import styles from "../demo/main.module.css";
 document.body.classList.add(styles.root);
 const query = new URLSearchParams(location.search);
 const scene = slices[query.get("board")];
 const name = query.get("region");
+if (query.has("part")) {
+${partProofScript}
+} else {
+await import("../src/demo-fonts.css");
 const [Source, Shell, Slice, shellData, data, shellZH, zh] = await Promise.all([
   scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"]()
 ]);
@@ -62,6 +66,7 @@ flushSync(() => root.render(createElement(Shell,
   createElement(Slice, props)
 )));
 host.dataset.proofReady = "";
+}
 `,
       );
       try {
@@ -227,7 +232,7 @@ async function checkFragment(page: Page, reference: Page, fragment: NonNullable<
 // Both artboards and generated shells keep their authored width; the other viewport tests clipping, not a redraw.
 for (const region of regions) {
   const { render, page: pageName } = region;
-  if (!render) continue;
+  if (!render || (!render.fragment && !region.roots.includes(`.p-${pageName}`))) continue;
   if (!pageName) throw new Error(`${region.board}/${region.name}: a rendered proof needs a host page`);
   const selector = render.fragment ? Object.keys(render.fragment.styles)[0] : `.p-${pageName}`;
   if (!selector) throw new Error(`${region.board}/${region.name}: a fragment proof needs styled elements`);
@@ -317,6 +322,83 @@ async function checkPage(page: Page, reference: Page, board: string, key: string
   });
   const result = await compare(reference, page, [], key, info);
   expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+}
+
+// Keep the board's layout around the cut. Its rules stop at the cut boundary so only generated CSS can draw the part.
+const parts = new Set([
+  "AdminPrimaryButton",
+  "AdminSecondaryButton",
+  "AdminDangerButton",
+  "AdminLinkButton",
+  "AdminCheckbox",
+  "AdminCodeBlock",
+  "AdminCopyButton",
+  "AdminCopiedButton",
+  "AdminElapsedTrack",
+  "PartDialog",
+  "PartTextField",
+  "PartTextAreaField",
+  "PartFilterBar",
+  "PartLoadMore",
+  "PartListEnd",
+  "PartSortableHeader",
+  "PartLoading",
+  "PartEmpty",
+  "PartError",
+  "PartNoPermission",
+]);
+
+for (const region of regions.filter((entry) => parts.has(entry.name))) {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const viewport = region.render?.viewport as { width: number; height: number };
+    test(`${region.board} ${region.name} ${viewport.width} ${colorScheme}: part diff`, async ({
+      browser,
+      page,
+      boardsURL,
+    }, info) => {
+      const view: Stage = {
+        viewport,
+        colorScheme,
+        timezoneId: "Asia/Shanghai",
+        time: new Date("2026-10-24T04:00:00Z"),
+      };
+      const reference = await openBoard(
+        browser,
+        {
+          file: `${region.board}.dc.html`,
+          engines: [],
+          preloadFonts: false,
+          actions: region.render?.actions,
+          props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
+        },
+        referenceRoot,
+        view,
+      );
+      try {
+        await page.setViewportSize(viewport);
+        await page.emulateMedia({ colorScheme, reducedMotion: "no-preference" });
+        await stagePaused(page, view);
+        const errors = collectErrors(page);
+        const query = new URLSearchParams({ board: region.board, region: region.name, part: "true" });
+        await page.goto(`${boardsURL.rendered}?${query}`);
+        await fontsLoaded(reference.page, reference.fonts);
+        await reference.page.clock.runFor(5000);
+        const selector = region.name === "PartDialog" ? ".fr > .nkdlg" : (region.roots[0] as string);
+        const original = reference.page.locator(selector);
+        await renderPart(page, original, region);
+        const result = await comparePart(
+          original,
+          page.locator('[data-board-part="target"]'),
+          `part-${region.board}-${region.name}-${colorScheme}`,
+          info,
+        );
+        expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+        expect(errors).toEqual([]);
+      } finally {
+        await reference.close();
+      }
+    });
+  }
 }
 
 for (const board of cases)

@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { expect, type Page, type TestInfo } from "@playwright/test";
+import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { blankCanvases } from "./canvas.ts";
 import { pauseFrames, resumeFrames } from "./frames.ts";
 import type { Region, Ruling } from "./rulings.ts";
@@ -134,6 +134,31 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     blanks.push(...(await rects(board, ruling.board, ruling.basis, "board")));
     blanks.push(...(await rects(page, ruling.page, ruling.basis, "page")));
   }
+  const canvases = (side: "board" | "page") =>
+    scene.flatMap((ruling) => {
+      const region = ruling[side];
+      return region && "canvas" in region ? [region.canvas] : [];
+    });
+  const reference = await shot(board, blanks, canvases("board"));
+  const actual = await shot(page, blanks, canvases("page"));
+  return compareShots(reference, actual, key, info, scene, page);
+}
+
+export async function comparePart(board: Locator, page: Locator, key: string, info: TestInfo) {
+  await Promise.all([freeze(board.page()), freeze(page.page())]);
+  const options = { animations: "disabled", caret: "hide", scale: "css" } as const;
+  const [reference, actual] = await Promise.all([board.screenshot(options), page.screenshot(options)]);
+  return compareShots(reference, actual, key, info, []);
+}
+
+async function compareShots(
+  expected: Buffer,
+  actual: Buffer,
+  key: string,
+  info: TestInfo,
+  scene: Ruling[],
+  page?: Page,
+) {
   const reference = info.snapshotPath(key, "board.png");
   const result: Comparison = {
     board: reference,
@@ -143,13 +168,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     rulings: scene.map((ruling) => ruling.basis),
   };
   mkdirSync(dirname(reference), { recursive: true });
-  const canvases = (side: "board" | "page") =>
-    scene.flatMap((ruling) => {
-      const region = ruling[side];
-      return region && "canvas" in region ? [region.canvas] : [];
-    });
-  writeFileSync(reference, await shot(board, blanks, canvases("board")));
-  const actual = await shot(page, blanks, canvases("page"));
+  writeFileSync(reference, expected);
   writeFileSync(result.page, actual);
   try {
     expect(actual).toMatchSnapshot([key, "board.png"], { maxDiffPixels });
@@ -165,7 +184,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     if (diff) {
       result.diff = join(dirname(reference), "diff.png");
       writeFileSync(result.diff, readFileSync(diff));
-      console.info(`${key}: diff locations ${JSON.stringify(await diffLocations(page, diff))}`);
+      if (page) console.info(`${key}: diff locations ${JSON.stringify(await diffLocations(page, diff))}`);
     }
   }
   return result;

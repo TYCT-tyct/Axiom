@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import { brotliCompressSync } from "node:zlib";
@@ -114,15 +114,18 @@ function edit(root: Element, region: Region) {
 }
 
 describe("region generation", () => {
-  it.each(regions)("passes noJsxLiterals for $board/$name", ({ board, name }) => {
+  it("passes noJsxLiterals for every generated region", () => {
     const web = join(packageRoot, "../..");
-    const code = readFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), "utf8");
-    const output = execFileSync(
-      join(web, "node_modules/.bin/biome"),
-      ["lint", "--only=style/noJsxLiterals", "--write", "--stdin-file-path=scripts/region-proof.tsx"],
-      { cwd: web, input: code, encoding: "utf8" },
-    );
-    expect(output).toBe(code);
+    // Normal lint skips generated regions. Copy them into its scope and check them in one Biome process.
+    const proof = mkdtempSync(join(web, "scripts", "region-proof-"));
+    try {
+      for (const { board, name } of regions) {
+        copyFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), join(proof, `${board}-${name}.tsx`));
+      }
+      execFileSync(join(web, "node_modules/.bin/biome"), ["lint", "--only=style/noJsxLiterals", proof], { cwd: web });
+    } finally {
+      rmSync(proof, { recursive: true, force: true });
+    }
   });
   it("keeps ancestor rules, state/pseudo selectors, grouping rules and used keyframes, and drops unrelated rules", () => {
     const markup =
