@@ -57,36 +57,27 @@ const accountShell = (scene: string): Ruling[] =>
     },
   ].map((ruling) => ({ scene, ...ruling }));
 
-// The console's sign-in page against the Login board's email step (#747 S3, port design §9). The page asks the
-// product's questions in the board's parts: what the board draws for a sign-up that creates accounts on the way, it
-// leaves out. The board runs login-ui.js for its form but not the sea's engine, and the stage that forms the step's
-// shape on the sea is the transition's on the board (trans.js), so both canvases are the fx tests'.
+// The console's sign-in page against the Login board's email step (#747 S3, port design §9), with the page's words in
+// the reference (design-map.ts). The sea is animated on both sides, and the stage that forms the step's shape on it is
+// the transition's on the board (trans.js), so both canvases are the fx tests'.
 const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
 const signInRulings: Ruling[] = [
+  // The board names the website's Chinese face and serif; the console cuts its own Chinese face per app (fonts.css)
+  // and ships no serif to its sign-in pages, so their Chinese is drawn in the fallback until the font pipeline cuts
+  // those faces for console/auth or the converter maps the board's families to the app's (#747).
   signIn({
-    basis: "§9 not ported: the copy that a first sign-in creates the account; product.md: invite or open registration",
-    ...both(".lg-title, .lg-sub"),
-  }),
-  signIn({
-    basis: "product.md: the terms are accepted at registration and on the consent page, not at sign-in",
-    board: { selector: ".lg-consent" },
-  }),
-  signIn({
-    basis: "§9: third-party sign-ins and passkeys are the site's (getSite); the mocked site offers none",
-    board: { selector: ".lg-or, .lg-stack" },
-  }),
-  signIn({
-    basis: "product.md 要求、画板未画：用画板部件组合（#747）: the way to the registration page",
-    page: { selector: ".lg-form .lg-note" },
+    basis: "§5: the console's sign-in pages do not ship Axiom CJK or AX Serif; their Chinese is drawn in the fallback",
+    ...both(".lg-title, .lg-sub, .lg-label, .lg-btn, .lg-note, .lg-pitch .s, .lg-top a"),
   }),
   signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
   signIn({
-    basis: "§8.2: the sea is an engine, off on the board; it is tested by fx.spec.ts",
+    basis: "§8.2: the sea is an animated engine on both sides; it is tested by fx.spec.ts",
+    board: { canvas: "canvas.sea" },
     page: { canvas: "canvas.sea" },
   }),
   signIn({
     basis: "§9: the stage on the sea is the transition's on the board (trans.js); it is tested by fx.spec.ts",
-    page: { selector: ".lg-sea > canvas:not(.sea)" },
+    page: { canvas: ".lg-sea > canvas:not(.sea)" },
   }),
 ];
 // The steps the product needs that the board does not draw are composed of its parts and shot, not compared; the parts
@@ -99,6 +90,21 @@ const loginRulings: Ruling[] = [
     basis: composed,
     page: { selector: ".lg-step" },
   })),
+  {
+    scene: "Login 邮箱",
+    basis: "§9 not ported: the copy that a first sign-in creates the account; product.md: invite or open registration",
+    board: { selector: ".lg-title, .lg-sub" },
+  },
+  {
+    scene: "Login 邮箱",
+    basis: "product.md: the terms are accepted at registration and on the consent page, not at sign-in",
+    board: { selector: ".lg-consent" },
+  },
+  {
+    scene: "Login 邮箱",
+    basis: `${composed}: the way to the registration page, in the board's note`,
+    board: { selector: ".lg-note" },
+  },
   {
     scene: "Login 验证码",
     basis: `${composed}: the authenticator's code and the recovery code share one field until the converter types the digit cells' maxlength and inputmode`,

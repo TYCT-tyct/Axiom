@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { en as consoleAuthEn, zh as consoleAuthZh } from "../console/src/locales/auth.ts";
 import en from "../packages/ui/src/locales/en.ts";
 import zh from "../packages/ui/src/locales/zh.ts";
 import { consoleSuite } from "./console-scenes.ts";
@@ -33,11 +34,36 @@ const consoleBoards = (page: string) => ({
 });
 
 // The console's sign-in pages come from the Login boards: one per form factor, the scheme a prop (mode). The form is
-// drawn by login-ui.js, so the reference runs it; the sea's engine stays off there, as on every board (rulings.ts).
+// drawn by login-ui.js, so the reference runs it, and the sea's engine, whose opaque canvas covers the sea's edge as the
+// page's does; both seas are blanked (rulings.ts).
 const loginBoards = {
-  1440: { file: "Login.dc.html", height: 900, engines: ["login-ui"] },
-  390: { file: "LoginPhone.dc.html", height: 844, engines: ["login-ui"] },
+  1440: { file: "Login.dc.html", height: 900, engines: ["ocean-orig", "login-ui"] },
+  390: { file: "LoginPhone.dc.html", height: 844, engines: ["ocean-orig", "login-ui"] },
 };
+
+// The sign-in page asks what the product asks, in the board's parts: its title and lede, and the way to register in a
+// note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
+// does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
+// take out what the page has no counterpart for, so the comparison measures the parts and their layout.
+async function prepareSignInComparison(board: Page, _page: Page, language: "zh" | "en") {
+  const words = {
+    title: (language === "en" ? en : zh).auth.signIn.title,
+    ...(language === "en" ? consoleAuthEn : consoleAuthZh).signIn,
+  };
+  await board.evaluate((words) => {
+    const step = document.querySelector(".lg-step") as HTMLElement;
+    (step.querySelector(".lg-title") as HTMLElement).textContent = words.title;
+    (step.querySelector(".lg-sub") as HTMLElement).textContent = words.description;
+    for (const part of step.querySelectorAll(".lg-consent, .lg-or, .lg-stack")) part.remove();
+    const note = document.createElement("p");
+    note.className = "lg-note";
+    const link = document.createElement("a");
+    link.href = "#";
+    link.textContent = words.register;
+    note.append(`${words.noAccount} `, link);
+    step.append(note);
+  }, words);
+}
 
 // The website's home boards come one per width; the scheme is the system's, a prop.
 const siteBoards = {
@@ -199,6 +225,7 @@ export const designScenes: DesignScene[] = [
     fonts: "console",
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    prepareComparison: prepareSignInComparison,
   },
   {
     name: "site home",
