@@ -388,11 +388,6 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "site faq",
-    basis: "the answers say what the product does today (docs/product.md, docs/domains/billing.md)",
-    ...both(".hfm5 .ans"),
-  },
-  {
-    scene: "site faq",
     basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
     ...both(".hfm5 .qq"),
   },

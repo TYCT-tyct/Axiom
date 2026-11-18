@@ -80,6 +80,23 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
       .evaluate((el) => el.style.setProperty("text-rendering", "geometricPrecision", "important"));
     await side.evaluate(() => document.fonts.ready.then(() => {}));
   }
+  // The answers are the page's words, which say what the product does today (docs/product.md, docs/domains/billing.md): the
+  // board's get the page's text, so the layout under them is compared.
+  if (scene === "site faq") {
+    const said = await page.locator(".hfm5 .ans").allTextContents();
+    await board.locator(".hfm5 .ans").evaluateAll((els, texts) => {
+      els.forEach((el, i) => {
+        if (texts[i] !== undefined) el.textContent = texts[i];
+      });
+    }, said);
+  }
+  // The connect card's Claude Code tab has one line more than the board's: the key guide's discovery setting, which puts the
+  // site's models in the client (packages/ui key-guide.ts). The card sits centred in its frame, so a line more moves it;
+  // the line is hidden on the page for the comparison, as the board's omissions are on its side.
+  if (scene === "site connect")
+    await page
+      .locator(".hfm1 .ln", { hasText: "GATEWAY_MODEL_DISCOVERY" })
+      .evaluate((el) => el.style.setProperty("display", "none"));
   // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
   const top = (side: Page) => side.locator(`.hfm${sec} .sec`).evaluate((el) => el.getBoundingClientRect().top);
   const shift = (await top(page)) - (await top(board));
