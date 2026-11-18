@@ -98,6 +98,19 @@ export const rulings: Ruling[] = [
     basis: "§5.4: Axiom CJK Console is cut at wght 330 (sources.json), while the board draws MiSansVF at 500",
     ...both(".p-bill .qph h1"),
   },
+  { scene: "console calls", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console calls", basis: "#816: no live mode on calls", board: { selector: ".p-logs .lglive" } },
+  {
+    scene: "console calls",
+    basis: "#816 O24: no slow-than-5s quick filter",
+    board: { selector: '.p-logs [data-a="lst"][data-i="3"]' },
+  },
+  {
+    scene: "console calls",
+    basis: "#816 / C2: view switcher, export action, API filters, aggregates and API rows replace board demo data",
+    board: { selector: ".p-logs .wv.w2" },
+    page: { selector: ".p-logs .qpa, .p-logs .lgv, .p-logs .qcard" },
+  },
   // The board draws a workspace's supplier lines — latency, availability, a relative price and a switch per line — and
   // the failover switch and timeouts above them. No endpoint names a line, and a failed attempt is the platform's
   // (#816 O13); what a key routes by is a preset, which the design has no editor for (console-gap L2). So the page
