@@ -151,5 +151,7 @@
 :global(.site .shf):where(.scope){margin-top:auto}
 :global(.site .shf .btn):where(.scope){width:100%}
 :global(.site .shx):where(.scope){all:unset;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;margin-right:-12px;color:var(--text1);cursor:pointer}
+:global(.tr > canvas.wh:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
+:global(.tr[data-enter=wait] > canvas.wh:not(.under *)):where(.scope){visibility:hidden}
 :global(.tr:focus):where(.scope){outline:none}
 /* jscpd:ignore-end */

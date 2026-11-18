@@ -52,7 +52,6 @@ const siteRegions: Region[] = [
       // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
       omit: [
         ".tr > .cw",
-        ".tr > .wh",
         ".tr > .lg",
         ".tr > .fly",
         ".tr > canvas.ui",

@@ -139,5 +139,7 @@
 :global(.site .isl .ix):where(.scope){display:grid;grid-template-columns:0fr;transition:grid-template-columns 250ms ease-out}
 :global(.site .isl .ixi):where(.scope){display:flex;overflow:hidden;min-width:0}
 :global(.site .isl.open .ix):where(.scope){grid-template-columns:1fr}
+:global(.tr > canvas.wh:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
+:global(.tr[data-enter=wait] > canvas.wh:not(.under *)):where(.scope){visibility:hidden}
 :global(.tr:focus):where(.scope){outline:none}
 /* jscpd:ignore-end */

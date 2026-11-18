@@ -111,10 +111,10 @@ const trustEnglish: Record<string, string> = {
 };
 
 // A screen fades in the first time it is seen (the board's .hfm.in); the script sets the hole.
-const entrance = (screen: string, hole: string) => ({
+export const entrance = (screen: string, hole: string) => ({
   [`.under > .${screen}`]: { set: { class: `hfm ${screen} {{${hole}}}` } },
 });
-const pressable = { set: { tabindex: "0", role: "button" } };
+export const pressable = { set: { tabindex: "0", role: "button" } };
 
 const screens = (board: string): Region[] => [
   {
