@@ -2359,7 +2359,7 @@ export interface components {
             level: components["schemas"]["SessionLevel"];
             /** @description Whether the user has a second factor: a TOTP factor or a passkey. */
             mfa_enabled: boolean;
-            /** @description Whether the user has a TOTP factor, which they can replace or turn off with a code. Absent from a server older than this field; a page then reads mfa_enabled as before. */
+            /** @description Whether the user has a TOTP factor. Absent from a server older than this field; a page then reads mfa_enabled as before. */
             totp_enabled?: boolean;
             csrf_token: string;
             /**
