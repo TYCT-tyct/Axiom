@@ -115,16 +115,25 @@ test.describe("billing suite", () => {
   test("printing a receipt keeps its body visible while hiding navigation and action buttons", async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);
+    const paidOrder = state.orders.find((order) => order.state === "paid");
+    if (!paidOrder) throw new Error("The receipt scenario requires a paid order");
+    Object.assign(paidOrder, {
+      paid_at: paidOrder.created_at,
+      paid_total: paidOrder.total,
+      credited: paidOrder.credits,
+    });
+
     await page.goto("/console/orders");
-    await page.getByRole("link", { name: "收据" }).first().click();
-    const paidOrder = state.orders.find((o) => o.state === "paid");
-    expect(paidOrder).toBeDefined();
-    await expect(page.getByText(paidOrder?.id ?? "")).toBeVisible();
+    await page.getByRole("link", { name: "收据", exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`/orders/${paidOrder.id}/receipt$`));
+    const receiptOrder = page.getByText(paidOrder.id, { exact: true });
+    const navigation = page.locator('nav[aria-label="账单导航"]');
+    const back = page.getByRole("link", { name: "返回订单" });
+    const print = page.getByRole("button", { name: "打印或存为 PDF" });
+    for (const element of [receiptOrder, navigation, back, print]) await expect(element).toBeVisible();
 
     await page.emulateMedia({ media: "print" });
-    await expect(page.locator('nav[aria-label="账单导航"]')).toBeHidden();
-    await expect(page.getByRole("link", { name: "返回订单" })).toBeHidden();
-    await expect(page.getByRole("button", { name: "打印或存为 PDF" })).toBeHidden();
-    await expect(page.getByText(paidOrder?.id ?? "")).toBeVisible();
+    for (const element of [navigation, back, print]) await expect(element).toBeHidden();
+    await expect(receiptOrder).toBeVisible();
   });
 });
