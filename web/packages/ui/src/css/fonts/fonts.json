@@ -185,16 +185,16 @@
             "console/pages/security",
             "console/pages/workspaces"
           ],
-          "bytes": 6380,
-          "sha256": "2c204bfaeacb188347370d765ac31f308a04e5c01f8a6a22b0b9fd20d5527e26",
-          "chars": "丢例依信八共划则升参周善四境头好妥安封币必息抹括掉替机某框母添温照环白种纹缀让识辑返那须"
+          "bytes": 6320,
+          "sha256": "facda89f2340a9a89e6cd8c32df9fe9984734b231308657e6cb3124cd304c7dd",
+          "chars": "丢例依信八共划则升参周善四境头好妥安封币必息抹括掉替机某框母添温照环白种纹缀识辑返那须"
         },
         {
           "file": "axiom-cjk-console-400.83a1675e.woff2",
           "pages": ["console/pages/overview", "console/pages/redeem", "console/pages/routing-presets"],
-          "bytes": 5840,
-          "sha256": "95cf7a13f8ac2d90e1b1cc7e040cb9a89476d92f6a0cc1e71a622a7dc94f7b1e",
-          "chars": "严伪况几副勾吐吞品固均增尾带延影摘日比沿真着累练细绩者营落衡规训询质运迟适钮错靠高"
+          "bytes": 5896,
+          "sha256": "651b6e3277ac49ca4980a7a28f6077c21f818f992d2d3ded4d955d12a8f14568",
+          "chars": "严伪况几副勾吐吞品固均增尾带延影摘日比沿真着累练细绩者营落衡规让训询质运迟适钮错靠高"
         }
       ]
     },
