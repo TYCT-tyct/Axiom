@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
-import { Button, DataState, Icon, PageHeader, useFormat } from "@axiom/ui";
+import { ActionButton, DataState, Grid, Icon, PageHead, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
@@ -21,15 +21,15 @@ export default function AccountPage() {
     <DataState query={account} page>
       {(data) => (
         <>
-          <PageHeader title={data.owner.email} description={t("users.account.description")} />
+          <PageHead title={data.owner.email} lede={t("users.account.description")} />
           <PageBody>
             <Actions>
-              <Button asChild>
+              <ActionButton asChild>
                 <Link to="/users">
                   <Icon name="left" />
                   {t("users.account.back")}
                 </Link>
-              </Button>
+              </ActionButton>
               <GrantButton account={data} />
               <AccountActions account={data} />
             </Actions>
@@ -52,10 +52,9 @@ function GrantButton({ account }: { account: Account }) {
   }
   return (
     <>
-      <Button variant="primary" onClick={() => setOpen(true)}>
-        <Icon name="plus" />
+      <ActionButton variant="pri" icon="plus" onClick={() => setOpen(true)}>
         {t("users.credit.open")}
-      </Button>
+      </ActionButton>
       {open ? <CreditDialog account={account} onClose={() => setOpen(false)} /> : null}
     </>
   );
@@ -66,7 +65,7 @@ function Figures({ account }: { account: Account }) {
   const format = useFormat();
   const { balance } = account;
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <Grid columns={2}>
       <Stat
         label={t("users.account.available")}
         value={format.money(balance.available)}
@@ -77,7 +76,7 @@ function Figures({ account }: { account: Account }) {
         value={format.money(balance.spent_this_month)}
         note={t("users.account.spentNote")}
       />
-    </div>
+    </Grid>
   );
 }
 
@@ -86,7 +85,7 @@ function Details({ account }: { account: Account }) {
   const format = useFormat();
   const { balance } = account;
   return (
-    <div className="grid items-start gap-4 xl:grid-cols-2">
+    <Grid columns={2}>
       <Facts
         title={t("users.account.balanceTitle")}
         rows={[
@@ -132,7 +131,7 @@ function Details({ account }: { account: Account }) {
           [t("users.col.created"), <Time key="created" at={account.created_at} />],
         ]}
       />
-    </div>
+    </Grid>
   );
 }
 

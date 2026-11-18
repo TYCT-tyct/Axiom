@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { SelectField, TextField, useFormat } from "@axiom/ui";
+import { Field, Mono, Select, Text, useFormat } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
@@ -48,7 +48,7 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
   const offline = source === "offline_payment";
   return (
     <>
-      <SelectField
+      <Select
         label={t("users.credit.source")}
         hint={t(offline ? "users.credit.offlineHint" : "users.credit.giftHint")}
         name="source"
@@ -57,9 +57,9 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
       >
         <option value="gift">{t("users.credit.gift")}</option>
         <option value="offline_payment">{t("users.credit.offline")}</option>
-      </SelectField>
+      </Select>
       {offline ? (
-        <SelectField
+        <Select
           label={t("users.credit.currency")}
           name="currency"
           value={paidIn}
@@ -71,9 +71,9 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
               {code}
             </option>
           ))}
-        </SelectField>
+        </Select>
       ) : null}
-      <TextField
+      <Field
         label={t(offline ? "users.credit.paid" : "users.credit.amount", { currency: offline ? paidIn : currency })}
         hint={t(offline ? "users.credit.paidHint" : "users.credit.amountHint")}
         name="amount"
@@ -82,7 +82,7 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
         error={errors.field(error, offline ? "payment/amount" : "amount")}
       />
       {offline ? (
-        <TextField
+        <Field
           label={t("users.credit.channel")}
           hint={t("users.credit.channelHint")}
           name="channel"
@@ -91,7 +91,7 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
           error={errors.field(error, "payment/channel")}
         />
       ) : null}
-      <TextField
+      <Field
         label={t("users.credit.expires")}
         hint={t("users.credit.expiresHint")}
         name="expires_at"
@@ -112,9 +112,7 @@ function Granted({
   const format = useFormat();
   return (
     <>
-      <p className="text-t1">
-        {t("users.credit.granted", { email: account.owner.email, amount: format.money(granted.amount) })}
-      </p>
+      <Text>{t("users.credit.granted", { email: account.owner.email, amount: format.money(granted.amount) })}</Text>
       {granted.payment ? (
         <p>
           {t("users.credit.paidVia", { paid: format.money(granted.payment.amount), channel: granted.payment.channel })}
@@ -127,10 +125,10 @@ function Granted({
           available: format.money(granted.balance_after.available),
         })}
       </p>
-      <p className="text-label text-t3">
+      <Text size="sm" tone="faint">
         {t("users.credit.grantId")}
         {": "}
-        <span className="font-mono">{granted.id}</span>
+        <Mono>{granted.id}</Mono>
         {granted.expires_at ? (
           <>
             {" · "}
@@ -139,7 +137,7 @@ function Granted({
             <Time at={granted.expires_at} />
           </>
         ) : null}
-      </p>
+      </Text>
     </>
   );
 }
