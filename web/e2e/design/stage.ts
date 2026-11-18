@@ -1,6 +1,12 @@
 import type { Page } from "@playwright/test";
 import { installFrameGate } from "./frames.ts";
 
+declare global {
+  interface Window {
+    designIntersectionsReady?: () => boolean;
+  }
+}
+
 // What makes two runs of a side draw the same pixels, applied the same way to the board and the page.
 export type Stage = {
   viewport: { width: number; height: number };
@@ -54,6 +60,44 @@ export async function stage(page: Page, view: Stage, frameOrigin?: number) {
 // Paired mechanical proofs need identical frame phases after navigation, as well as the same wall clock.
 export async function stagePaused(page: Page, view: Stage) {
   await stage(page, view, view.time.getTime());
+  await page.addInitScript(() => {
+    // Native delivery runs outside the fake clock. Track the board's actual observers while keeping Chromium's
+    // intersection entries and callback order, including first entries for offscreen demos.
+    const pending = new Set<IntersectionObserver>();
+    const initialTargets = new WeakMap<IntersectionObserver, Set<Element>>();
+    window.designIntersectionsReady = () => pending.size === 0;
+    window.IntersectionObserver = class extends window.IntersectionObserver {
+      constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+        super((entries) => {
+          initialTargets.delete(this);
+          pending.delete(this);
+          callback.call(this, entries, this);
+        }, options);
+        initialTargets.set(this, new Set());
+      }
+
+      override observe(target: Element) {
+        super.observe(target);
+        const targets = initialTargets.get(this);
+        if (!targets) return;
+        targets.add(target);
+        pending.add(this);
+      }
+
+      override unobserve(target: Element) {
+        super.unobserve(target);
+        const targets = initialTargets.get(this);
+        targets?.delete(target);
+        if (targets?.size === 0) pending.delete(this);
+      }
+
+      override disconnect() {
+        super.disconnect();
+        initialTargets.get(this)?.clear();
+        pending.delete(this);
+      }
+    };
+  });
   await page.clock.pauseAt(view.time);
 }
 
@@ -88,6 +132,14 @@ export async function canvasesReady(page: Page) {
       ),
     );
   });
+}
+
+// Canvas resizes and board intersection callbacks can schedule the first demo frame. Wait for both after mounting
+// and font loading, while the clock is still paused.
+export async function boardObserversReady(page: Page) {
+  await canvasesReady(page);
+  const ready = await page.waitForFunction(() => window.designIntersectionsReady?.());
+  await ready.dispose();
 }
 
 // How long the clock runs before the shot: entrances and transitions driven by timers or animation frames reach their
