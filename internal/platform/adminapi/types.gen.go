@@ -5833,7 +5833,7 @@ type Session struct {
 	// Level What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
 	Level SessionLevel `json:"level"`
 
-	// MfaEnabled Whether the user has a TOTP factor.
+	// MfaEnabled Whether the user has a second factor this surface accepts: on the console a TOTP factor or a passkey, on the admin a TOTP factor.
 	MfaEnabled bool `json:"mfa_enabled"`
 
 	// Permissions The permission names the session holds on its own scope (the user's account on the console, the platform on the admin), for showing or hiding what the user cannot do. The server decides again on every request.

@@ -3894,7 +3894,7 @@ export interface components {
             };
             account: components["schemas"]["AccountId"];
             level: components["schemas"]["SessionLevel"];
-            /** @description Whether the user has a TOTP factor. */
+            /** @description Whether the user has a second factor this surface accepts: on the console a TOTP factor or a passkey, on the admin a TOTP factor. */
             mfa_enabled: boolean;
             /** @description Whether the user has a TOTP factor. Absent from a server older than this field; a page then reads mfa_enabled as before. */
             totp_enabled?: boolean;

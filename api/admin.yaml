@@ -7607,7 +7607,7 @@ components:
             invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
         account: {$ref: "#/components/schemas/AccountId"}
         level: {$ref: "#/components/schemas/SessionLevel"}
-        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
+        mfa_enabled: {type: boolean, description: "Whether the user has a second factor this surface accepts: on the console a TOTP factor or a passkey, on the admin a TOTP factor."}
         totp_enabled:
           type: boolean
           description: >-
