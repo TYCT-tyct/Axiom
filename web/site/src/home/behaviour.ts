@@ -166,7 +166,9 @@ function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
     // from here the press is done: a press after a stopped navigation starts a departure of its own at once
     leaving = undefined;
     const held = shown;
-    markArrival();
+    // the arrival is the sign-in page's: registration has no arrival of its own, and a marker left by it would play
+    // the decode on a later, direct visit to sign-in
+    if (new URL(href).pathname.endsWith("/sign-in")) markArrival();
     window.location.assign(href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, departSpan);
