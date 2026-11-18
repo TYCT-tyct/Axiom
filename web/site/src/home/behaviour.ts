@@ -48,6 +48,17 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
   let timer = 0;
   const glide = (top: number) => scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
+  // The screens above a section grow as their code arrives (a place is a view's height until then), which moves the
+  // section on while the page glides to it: it glides again to where the section is now, until it has stopped moving.
+  const section = (sec: number, again: number) => {
+    const top = offsets.find((offset) => offset.sec === sec)?.top ?? 0;
+    glide(top);
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      const now = places(scroller).find((place) => Number(place.dataset.place) === sec)?.offsetTop ?? top;
+      if (Math.abs(now - top) > 2 && again < 6) section(sec, again + 1);
+    }, 900);
+  };
   // the tour goes on from the section the reader is in the top of, or from the first when at the surface
   const tour = (i: number) => {
     const top = offsets[i]?.top;
@@ -67,7 +78,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
       show(scroll);
     },
     toTop: () => glide(0),
-    toSection: (sec: number) => glide(offsets.find((offset) => offset.sec === sec)?.top ?? 0),
+    toSection: (sec: number) => section(sec, 0),
     tour: () => {
       window.clearTimeout(timer);
       tour(scroller.scrollTop > 10 ? 0 : 1);
