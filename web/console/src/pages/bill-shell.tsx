@@ -19,7 +19,7 @@ const TABS: readonly { id: BillTab; to: "/balance" | "/orders" | "/statement" | 
 export function BillTabs({ active }: { active: BillTab }) {
   const { t } = useTranslation();
   return (
-    <nav aria-label={t("statement.bill.tabsLabel")}>
+    <nav aria-label={t("statement.bill.tabsLabel")} data-shell="tabs">
       <Cluster gap={8}>
         {TABS.map((item) => {
           const isCurrent = item.id === active;

@@ -18,6 +18,7 @@ import { BillPlansPanel } from "./bill-plans";
 import { BillRegion } from "./bill-region";
 import { BillShell, BillTabs } from "./bill-shell";
 import { BillTopUpModal } from "./bill-topup";
+import { useBillTopUpSession } from "./bill-topup-state";
 
 type BillProps = Parameters<typeof BillDesktop>[0];
 const SOON_MS = 7 * 24 * 60 * 60 * 1000;
@@ -209,6 +210,7 @@ function BalanceView() {
   const canTopUp = can(session, "balance.top_up");
   const navigate = useNavigate();
   const query = useQuery(balanceQuery);
+  const topUpSession = useBillTopUpSession(canTopUp);
   const [modal, setModal] = useState<{ open: boolean; initialUnits?: string }>({ open: false });
 
   const handleTableClick = (event: MouseEvent<Element>) => {
@@ -239,9 +241,10 @@ function BalanceView() {
           {canTopUp ? (
             <BillTopUpModal
               open={modal.open}
-              currency={data.available.currency}
-              currentBalance={data.available}
+              currency={data.balance.currency}
+              currentBalance={data.balance}
               initialUnits={modal.initialUnits}
+              session={topUpSession}
               onClose={() => setModal({ open: false })}
             />
           ) : null}

@@ -12,13 +12,14 @@ import {
   useFormat,
   usePageTitle,
 } from "@axiom/ui";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { type UseQueryResult, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { balanceQuery, ordersQuery, siteQuery } from "../queries";
 import { receiptState } from "../receipt";
 import { useBoardKind } from "./bill-data";
 import { BillShell } from "./bill-shell";
+import { useBillTopUpSession } from "./bill-topup-state";
 import { RefundDialog, useRefundController } from "./orders-refund";
 import { type Order, OrderState, RefundList } from "./orders-state";
 
@@ -213,18 +214,29 @@ function OrdersList({
 function OrdersTopUpModal({
   open,
   currency,
+  currencyQuery,
   currentBalance,
+  session,
   onClose,
 }: {
   open: boolean;
-  currency: string;
-  currentBalance: Schemas["Money"];
+  currency: string | undefined;
+  currencyQuery: UseQueryResult<unknown, unknown>;
+  currentBalance: Schemas["Money"] | undefined;
+  session: ReturnType<typeof useBillTopUpSession>;
   onClose: () => void;
 }) {
   if (!open) return null;
   return (
     <Suspense fallback={null}>
-      <LazyBillTopUpModal open={open} currency={currency} currentBalance={currentBalance} onClose={onClose} />
+      <LazyBillTopUpModal
+        open={open}
+        currency={currency}
+        currencyQuery={currencyQuery}
+        currentBalance={currentBalance}
+        session={session}
+        onClose={onClose}
+      />
     </Suspense>
   );
 }
@@ -251,13 +263,15 @@ export default function OrdersPage() {
   const balance = useQuery(balanceQuery);
   const site = useQuery(siteQuery);
   const scope = session.account ? `${session.user.id}/${session.account}` : session.user.id;
-  const refund = useRefundController(scope);
   const [topUpOpen, setTopUpOpen] = useState(false);
   const [sentNotice, setSentNotice] = useState(false);
+  const refund = useRefundController(scope, () => setSentNotice(true));
+  const topUpSession = useBillTopUpSession(allowed);
   usePageTitle(t("orders.title"));
 
-  const currency = balance.data?.available.currency ?? site.data?.currency ?? "USD";
-  const currentBalance = balance.data?.available ?? { amount: "0", currency };
+  const currency = balance.data?.balance.currency ?? site.data?.currency;
+  const currencyQuery = !site.data && site.isPending ? site : !balance.data && balance.isPending ? balance : site;
+  const currentBalance = balance.data?.balance;
   const unavailable = query.error instanceof ApiError && query.error.status === 404;
 
   return (
@@ -280,20 +294,25 @@ export default function OrdersPage() {
           )}
         </DataState>
       )}
-      {refund.target ? (
+      {refund.active ? (
         <RefundDialog
-          order={refund.target.order}
-          attempt={refund.target.attempt}
-          onAttempt={refund.update}
+          key={refund.active.order.id}
+          order={refund.active.order}
+          attempt={refund.active.attempt}
+          sentRequest={refund.active.sentRequest}
+          failure={refund.active.failure}
+          pending={refund.active.pending}
+          onSubmit={refund.submit}
           onReset={refund.reset}
           onClose={refund.close}
-          onSent={() => setSentNotice(true)}
         />
       ) : null}
       <OrdersTopUpModal
         open={topUpOpen}
         currency={currency}
+        currencyQuery={currencyQuery}
         currentBalance={currentBalance}
+        session={topUpSession}
         onClose={() => setTopUpOpen(false)}
       />
     </BillShell>

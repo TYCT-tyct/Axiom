@@ -14,14 +14,16 @@ export default function ReceiptPage() {
   usePageTitle(t("receipt.title"));
 
   const actions = (
-    <Cluster gap={8}>
-      <Button asChild variant="ghost" size="sm">
-        <Link to="/orders">{t("receipt.back")}</Link>
-      </Button>
-      <Button variant="secondary" size="sm" onClick={() => window.print()}>
-        {t("receipt.print")}
-      </Button>
-    </Cluster>
+    <div data-print="hidden">
+      <Cluster gap={8}>
+        <Button asChild variant="ghost" size="sm">
+          <Link to="/orders">{t("receipt.back")}</Link>
+        </Button>
+        <Button variant="secondary" size="sm" onClick={() => window.print()}>
+          {t("receipt.print")}
+        </Button>
+      </Cluster>
+    </div>
   );
 
   return (

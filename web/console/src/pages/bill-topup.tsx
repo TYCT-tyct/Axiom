@@ -3,9 +3,9 @@ import BillPayDesktop, { type Props as BillPayProps } from "@axiom/boards/AxApp/
 import BillPayEn from "@axiom/boards/AxApp/regions/BillPay.en";
 import BillPayZh from "@axiom/boards/AxApp/regions/BillPay.zh";
 import BillPayPhone from "@axiom/boards/AxAppPhone/regions/BillPay";
-import { Button, DataState, Dialog, FormError, Stack, useFormat } from "@axiom/ui";
-import { type FormEvent, useEffect, useId, useState } from "react";
-import { createPortal } from "react-dom";
+import { BoardDialog, Button, DataState, Dialog, FormError, Stack, useFormat } from "@axiom/ui";
+import type { UseQueryResult } from "@tanstack/react-query";
+import { type FormEvent, useEffect, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useOrderActions } from "../order-actions";
 import { mergeOrder } from "../order-merge";
@@ -19,15 +19,15 @@ import {
   useBoardKind,
 } from "./bill-data";
 import {
+  type ActiveOrderState,
   type Order,
   type OrderRequest,
   parsePositiveCredits,
-  readStoredOrderId,
-  useActiveOrder,
-  useBillScope,
+  type useBillTopUpSession,
   useStepOneController,
-  writeStoredOrderId,
 } from "./bill-topup-state";
+
+type TopUpSession = ReturnType<typeof useBillTopUpSession>;
 
 function useBillPayTranslator() {
   const { i18n } = useTranslation();
@@ -78,6 +78,12 @@ function useFeeTotalText(c: ReturnType<typeof useStepOneController>) {
   const { t } = useTranslation();
   const format = useFormat();
   const errors = useErrors();
+  if (c.attempt.state === "unknown") {
+    return t("topup.retrySummary", {
+      credits: format.money(c.attempt.request.credits),
+      method: c.attempt.request.method,
+    });
+  }
   if (c.activeCredits === null) return "—";
   if (c.methodsQuery.error) {
     return t("statement.bill.topUpModal.methodsError", { reason: errors.message(c.methodsQuery.error) });
@@ -95,13 +101,15 @@ function useFeeTotalText(c: ReturnType<typeof useStepOneController>) {
 
 function useStepOneTexts(
   currency: string,
-  currentBalance: Money,
+  currentBalance: Money | undefined,
   c: ReturnType<typeof useStepOneController>,
 ): BillPayProps["text"] {
   const { t } = useTranslation();
   const format = useFormat();
   const feeTotalText = useFeeTotalText(c);
-  const projected = projectedBalanceAfter(currentBalance, c.activeCredits);
+  const creditsForPreview = c.attempt.state === "unknown" ? c.attempt.request.credits.amount : c.activeCredits;
+  const projected = projectedBalanceAfter(currentBalance, creditsForPreview);
+  const preview1Value = !currentBalance ? t("orders.unavailable") : projected ? format.money(projected) : "—";
   const submitLabel = c.isUnknown
     ? t("topup.retry")
     : c.selected
@@ -112,7 +120,7 @@ function useStepOneTexts(
     subtitle: t("statement.bill.topUpModal.subtitle"),
     currencyPrefix: currencyInputPrefix(currency),
     previewLabel1: t("statement.bill.topUpModal.afterBalance"),
-    preview1Value: projected ? format.money(projected) : "—",
+    preview1Value,
     previewLabel2: t("statement.bill.topUpModal.feeAndTotal"),
     preview2Date: feeTotalText,
     preview2Extra: "",
@@ -120,6 +128,13 @@ function useStepOneTexts(
     cancelLabel: t("orders.close"),
     submitLabel,
   };
+}
+
+function clearInnerDialogRole(node: Element | null) {
+  if (!node) return;
+  node.removeAttribute("role");
+  node.removeAttribute("aria-modal");
+  node.removeAttribute("aria-labelledby");
 }
 
 function buildStepOneValues({
@@ -140,133 +155,131 @@ function buildStepOneValues({
   closeLabel: string;
   amountLabel: string;
   amountPlaceholder: string;
-}): NonNullable<BillPayProps["values"]> {
-  const editable = !c.isUnknown && !c.isBlocked;
+}): BillPayProps["values"] {
   return {
     overlayOnly: true,
-    overlayStyle: "position: fixed",
     unbuilt: true,
+    panelRef: clearInnerDialogRole,
     titleId,
     closeLabel,
-    close: onClose,
-    amountClass: hasInvalidAmount ? "bad" : "",
     amountLabel,
     amountPlaceholder,
-    amountInput: (node) => {
-      const el = node as HTMLInputElement | null;
-      c.inputRef.current = el;
-      if (el) {
-        if (el.value !== c.amountText) el.value = c.amountText;
-        el.readOnly = !editable;
+    amountClass: hasInvalidAmount ? "bad" : "",
+    amountInput: c.attachInput,
+    amountChanged: (event: FormEvent<Element>) => {
+      if (c.locked) {
+        (event.target as HTMLInputElement).value = c.amountText;
+        return;
+      }
+      c.applyAmount((event.target as HTMLInputElement).value);
+    },
+    amountKeyDown: (event) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        if (canSubmit) c.submit();
       }
     },
-    amountChanged: (event: FormEvent<Element>) => {
-      const el = event.target as HTMLInputElement;
-      if (editable) c.applyAmount(el.value);
-      else el.value = c.amountText;
-    },
-    amountKeyDown: (event) => event.key === "Enter" && canSubmit && c.submit(),
     quickClick: (event) => {
-      const units = editable ? (event.target as Element).closest("button[data-q]")?.getAttribute("data-q") : null;
+      if (c.locked) return;
+      const units = (event.target as Element).closest("button[data-q]")?.getAttribute("data-q");
       if (units) c.applyAmount(units);
     },
-    hideQuick: !editable,
-    hideMethods: c.isBlocked || c.methods.length === 0,
     methodClick: (event) => {
-      const next = editable ? (event.target as Element).closest("button[data-m]")?.getAttribute("data-m") : null;
-      if (next) c.setChosenMethod(next);
+      if (c.locked) return;
+      const method = (event.target as Element).closest("button[data-m]")?.getAttribute("data-m");
+      if (method) c.setChosenMethod(method);
     },
+    close: onClose,
+    hideQuick: c.locked,
+    hideMethods: c.methods.length === 0,
     hideSubmit: c.isBlocked,
-    submitDisabled: !canSubmit || c.creating,
-    submit: c.submit,
+    submitDisabled: !canSubmit,
+    submit: () => {
+      if (canSubmit) c.submit();
+    },
   };
 }
 
 function StepOneModal(props: {
   currency: string;
-  currentBalance: Money;
+  currentBalance: Money | undefined;
   initialUnits?: string;
   onClose: () => void;
-  onCreated: (order: Order) => void;
+  placement: TopUpSession["placement"];
 }) {
   const { t } = useTranslation();
   const billPayT = useBillPayTranslator();
   const format = useFormat();
   const boardKind = useBoardKind();
   const titleId = useId();
-  const c = useStepOneController(props);
-  useEffect(() => {
-    c.inputRef.current?.focus();
-  }, [c.inputRef]);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const c = useStepOneController(props.currency, props.initialUnits, props.placement);
   const text = useStepOneTexts(props.currency, props.currentBalance, c);
   const hasInvalidAmount = c.amountText.trim().length > 0 && parsePositiveCredits(c.amountText) === null;
-  const canSubmit = c.isUnknown || (!c.isBlocked && !c.creating && c.activeCredits !== null && Boolean(c.selected));
+  const canSubmit = !c.creating && (c.isUnknown || (!c.isBlocked && c.activeCredits !== null && Boolean(c.selected)));
   const BillPayRegion = boardKind === "phone" ? BillPayPhone : BillPayDesktop;
-  const content = (
-    <BillPayRegion
-      t={billPayT}
-      rows={{
-        quick0: buildQuickRows(c.presets, c.amountText, props.currency, format.money),
-        methods0: buildMethodRows(c.methods, c.selected?.method ?? null, format.pay, (fee) => t("orders.fee", { fee })),
-      }}
-      text={text}
-      error={
-        <AttemptFeedback
-          attempt={c.attempt}
-          failure={c.failure}
-          hasInvalidAmount={hasInvalidAmount}
-          onReset={c.reset}
-        />
-      }
-      footerLeft={
-        c.isUnknown || c.isBlocked ? (
-          <Button variant="ghost" size="sm" onClick={c.reset}>
-            {t("topup.new")}
-          </Button>
-        ) : undefined
-      }
-      values={buildStepOneValues({
-        c,
-        titleId,
-        hasInvalidAmount,
-        canSubmit,
-        onClose: props.onClose,
-        closeLabel: t("orders.dismiss"),
-        amountLabel: t("statement.bill.topUpModal.amountLabel"),
-        amountPlaceholder: t("statement.bill.topUpModal.amountPlaceholder"),
-      })}
-    />
+  const requestClose = () => {
+    if (dialogRef.current?.open) dialogRef.current.close();
+    else props.onClose();
+  };
+  return (
+    <BoardDialog labelId={titleId} dialogRef={dialogRef} initialFocusRef={c.inputRef} onClose={props.onClose}>
+      <BillPayRegion
+        t={billPayT}
+        rows={{
+          quick0: buildQuickRows(c.presets, c.amountText, props.currency, format.money),
+          methods0: buildMethodRows(c.methods, c.selected?.method ?? null, format.pay, (fee) =>
+            t("orders.fee", { fee }),
+          ),
+        }}
+        text={text}
+        error={
+          <AttemptFeedback
+            attempt={c.attempt}
+            failure={c.failure}
+            hasInvalidAmount={hasInvalidAmount}
+            creating={c.creating}
+            onReset={c.reset}
+          />
+        }
+        values={buildStepOneValues({
+          c,
+          titleId,
+          hasInvalidAmount,
+          canSubmit,
+          onClose: requestClose,
+          closeLabel: t("orders.dismiss"),
+          amountLabel: t("statement.bill.topUpModal.amountLabel"),
+          amountPlaceholder: t("statement.bill.topUpModal.amountPlaceholder"),
+        })}
+      />
+    </BoardDialog>
   );
-  const frame = typeof document !== "undefined" ? document.querySelector(".fr") : null;
-  return frame ? createPortal(content, frame) : content;
 }
 
 function AttemptFeedback({
   attempt,
   failure,
   hasInvalidAmount,
+  creating,
   onReset,
 }: {
   attempt: Attempt<OrderRequest>;
   failure: unknown;
   hasInvalidAmount: boolean;
+  creating: boolean;
   onReset: () => void;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  if (attempt.state === "unknown") {
+  if (creating) return <span role="status">{t("statement.bill.topUpModal.creating")}</span>;
+  const unknown = attempt.state === "unknown";
+  if (unknown || attempt.state === "reused" || attempt.state === "stale") {
     return (
       <Stack gap={4}>
-        <FormError>{t("topup.unknown")}</FormError>
-        <span>{t("statement.bill.topUpModal.idempotentNotice")}</span>
-      </Stack>
-    );
-  }
-  if (attempt.state === "reused" || attempt.state === "stale") {
-    return (
-      <Stack gap={4}>
-        <FormError>{t("topup.reused")}</FormError>
-        <Button variant="secondary" size="sm" onClick={onReset}>
+        <FormError>{t(unknown ? "topup.unknown" : "topup.reused")}</FormError>
+        {unknown ? <span>{t("statement.bill.topUpModal.idempotentNotice")}</span> : null}
+        <Button variant="ghost" size="sm" onClick={onReset}>
           {t("topup.new")}
         </Button>
       </Stack>
@@ -276,8 +289,6 @@ function AttemptFeedback({
   const message = failure ? errors.message(failure) : undefined;
   return message ? <FormError>{message}</FormError> : null;
 }
-
-type ActiveOrderState = { id: string; created: Order | null };
 
 function StepTwoOrderView({
   order,
@@ -324,7 +335,7 @@ function StepTwoDialog({
   onRestart,
 }: {
   active: ActiveOrderState;
-  activeOrder: ReturnType<typeof useActiveOrder>;
+  activeOrder: TopUpSession["activeOrder"];
   onClose: () => void;
   onRestart: () => void;
 }) {
@@ -373,45 +384,42 @@ function StepTwoDialog({
 export function BillTopUpModal({
   open,
   currency,
+  currencyQuery,
   currentBalance,
   initialUnits,
+  session,
   onClose,
 }: {
   open: boolean;
-  currency: string;
-  currentBalance: Money;
+  currency: string | undefined;
+  currencyQuery?: UseQueryResult<unknown, unknown>;
+  currentBalance: Money | undefined;
   initialUnits?: string;
+  session: TopUpSession;
   onClose: () => void;
 }) {
-  const scope = useBillScope();
-  const [active, setActive] = useState<ActiveOrderState | null>(() => {
-    const saved = readStoredOrderId(scope);
-    return saved ? { id: saved, created: null } : null;
-  });
-  const activeOrder = useActiveOrder(open ? (active?.id ?? null) : null);
-  const selectActive = (next: ActiveOrderState | null) => {
-    writeStoredOrderId(scope, next?.id ?? null);
-    setActive(next);
-  };
+  const { t } = useTranslation();
+  const { active, activeOrder, selectActive, placement } = session;
 
   useEffect(() => {
     if (!open || !active) return;
-    if (activeOrder.isNotFound) {
-      writeStoredOrderId(scope, null);
-      setActive(null);
-      return;
-    }
     const state = activeOrder.liveOrder?.state;
     if (!active.created && initialUnits && state && state !== "pending" && state !== "review") {
-      writeStoredOrderId(scope, null);
-      setActive(null);
+      selectActive(null);
     }
-  }, [open, active, initialUnits, activeOrder.isNotFound, activeOrder.liveOrder?.state, scope]);
+  }, [open, active, initialUnits, activeOrder.liveOrder?.state, selectActive]);
 
   if (!open) return null;
   if (active) {
     return (
       <StepTwoDialog active={active} activeOrder={activeOrder} onClose={onClose} onRestart={() => selectActive(null)} />
+    );
+  }
+  if (!currency) {
+    return (
+      <Dialog title={t("topup.title")} onClose={onClose}>
+        {currencyQuery ? <DataState query={currencyQuery}>{() => null}</DataState> : null}
+      </Dialog>
     );
   }
   return (
@@ -420,7 +428,7 @@ export function BillTopUpModal({
       currentBalance={currentBalance}
       initialUnits={initialUnits}
       onClose={onClose}
-      onCreated={(order) => selectActive({ id: order.id, created: order })}
+      placement={placement}
     />
   );
 }

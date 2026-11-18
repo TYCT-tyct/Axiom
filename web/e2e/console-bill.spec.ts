@@ -25,7 +25,7 @@ test.describe("billing suite", () => {
 
     await page.goto("/console/balance");
     await page.getByRole("button", { name: "充 US$25.00" }).click();
-    await expect(page.getByText("US$36.75")).toBeVisible();
+    await expect(page.getByText("US$37.00")).toBeVisible();
     await expect(page.getByText("¥73.73（含手续费 ¥0.73）")).toBeVisible();
 
     await page.getByRole("button", { name: /^去支付/ }).click();
@@ -83,5 +83,48 @@ test.describe("billing suite", () => {
     await page.getByRole("button", { name: "保存" }).click();
     await expect(page.getByText("当前为账户单独设置")).toBeVisible();
     expect(state.billingPreference.preference).toBe("wallet_first");
+  });
+
+  test("top-up modal traps Tab and Shift+Tab focus and returns focus to trigger on Escape", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/balance");
+    const trigger = page.getByRole("button", { name: "充值" });
+    await trigger.focus();
+    await trigger.click();
+
+    const dialog = page.getByRole("dialog", { name: "充值" });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('input[inputmode="decimal"]')).toBeFocused();
+
+    for (const key of ["Tab", "Shift+Tab"]) {
+      for (let i = 0; i < 16; i += 1) {
+        await page.keyboard.press(key);
+        const inModalOrBrowser = await page.evaluate(
+          () => document.activeElement === document.body || Boolean(document.activeElement?.closest("dialog")),
+        );
+        expect(inModalOrBrowser).toBe(true);
+      }
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveCount(0);
+    await expect(trigger).toBeFocused();
+  });
+
+  test("printing a receipt keeps its body visible while hiding navigation and action buttons", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/orders");
+    await page.getByRole("link", { name: "收据" }).first().click();
+    const paidOrder = state.orders.find((o) => o.state === "paid");
+    expect(paidOrder).toBeDefined();
+    await expect(page.getByText(paidOrder?.id ?? "")).toBeVisible();
+
+    await page.emulateMedia({ media: "print" });
+    await expect(page.locator('nav[aria-label="账单导航"]')).toBeHidden();
+    await expect(page.getByRole("link", { name: "返回订单" })).toBeHidden();
+    await expect(page.getByRole("button", { name: "打印或存为 PDF" })).toBeHidden();
+    await expect(page.getByText(paidOrder?.id ?? "")).toBeVisible();
   });
 });

@@ -151,7 +151,7 @@ const billPayElements: Region["elements"] = {
   ".p-bill > .sxP": { unless: "overlayOnly" },
   ".p-bill > .sxT": { unless: "overlayOnly" },
   ".nkscrim": { set: { style: "{{overlayStyle}}" } },
-  ".nkdlg.pyd": { set: { style: "{{overlayStyle}}", "aria-labelledby": "{{titleId}}" } },
+  ".nkdlg.pyd": { set: { ref: "{{panelRef}}", style: "{{overlayStyle}}", "aria-labelledby": "{{titleId}}" } },
   ".nkdlg.pyd > .nkh > div > h2": { set: { id: "{{titleId}}" } },
   ".nkdlg.pyd > .nkh > button.nkx": { set: { onclick: "{{close}}", "aria-label": "{{closeLabel}}" } },
   ".nkdlg.pyd .pyamt": { unless: "hideForm", set: { class: "pyamt {{amountClass}}" } },

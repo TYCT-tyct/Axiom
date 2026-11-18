@@ -147,14 +147,14 @@ function DayActivitySummary({ day }: { day: StatementDay }) {
   const { t } = useTranslation();
   const format = useFormat();
   const parts: string[] = [];
-  if (BigInt(day.topped_up.amount) > 0n)
+  if (BigInt(day.topped_up.amount) !== 0n)
     parts.push(t("statement.bill.daily.toppedUp", { amount: format.money(day.topped_up) }));
-  if (BigInt(day.gifted.amount) > 0n)
+  if (BigInt(day.gifted.amount) !== 0n)
     parts.push(t("statement.bill.daily.gifted", { amount: format.money(day.gifted) }));
-  if (BigInt(day.spent.amount) > 0n) parts.push(t("statement.bill.daily.spent", { amount: format.money(day.spent) }));
-  if (BigInt(day.expired.amount) > 0n)
+  if (BigInt(day.spent.amount) !== 0n) parts.push(t("statement.bill.daily.spent", { amount: format.money(day.spent) }));
+  if (BigInt(day.expired.amount) !== 0n)
     parts.push(t("statement.bill.daily.expired", { amount: format.money(day.expired) }));
-  return <span>{parts.length > 0 ? parts.join(" · ") : t("statement.bill.daily.noActivity")}</span>;
+  return <span>{parts.length > 0 ? parts.join(" · ") : t("statement.bill.daily.zeroNet")}</span>;
 }
 
 function DailyTable({ rows }: { rows: readonly StatementDay[] }) {
@@ -192,6 +192,7 @@ function DailyTable({ rows }: { rows: readonly StatementDay[] }) {
 
 function DailyView() {
   const { t } = useTranslation();
+  const errors = useErrors();
   const timeZone = browserTimeZone();
   const query = useInfiniteQuery({
     ...statementDailyQuery(timeZone),
@@ -207,11 +208,19 @@ function DailyView() {
     );
   }
   if (query.error instanceof ApiError && query.error.status === 400) {
-    return (
-      <Card title={t("statement.bill.daily.title")}>
-        <Note title={t("statement.bill.daily.tooMany")} />
-      </Card>
-    );
+    const badZone = errors.field(query.error, "time_zone");
+    const overBudget = query.error.fields.some(({ pointer }) => pointer === "");
+    if (badZone || overBudget) {
+      return (
+        <Card title={t("statement.bill.daily.title")}>
+          <Note
+            title={
+              badZone ? t("statement.bill.daily.badTimeZone", { tz: timeZone }) : t("statement.bill.daily.tooMany")
+            }
+          />
+        </Card>
+      );
+    }
   }
 
   return (

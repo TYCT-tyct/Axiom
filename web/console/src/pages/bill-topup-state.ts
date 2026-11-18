@@ -2,25 +2,25 @@ import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { type Attempt, failedFrom, opened, type Sendable, useSession } from "@axiom/app";
 import { moneyInput, parseMoney } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { clearAttempt, readAttempt, unanswered, writeAttempt } from "../attempt-store";
 import { balanceQuery, orderQuery, ordersQuery, paymentMethodsQuery } from "../queries";
-import { balanceMoved, orderMoved } from "../top-up";
 import { quickAmountsForCurrency } from "./bill-data";
 
 export type OrderRequest = Schemas["OrderCreate"];
 export type Order = Schemas["Order"];
+export type ActiveOrderState = { id: string; created: Order | null };
 
 const TOPUP_SESSION_KEY = "axiom.console.top-up";
 const ATTEMPT_STORE = "axiom.console.top-up.attempt";
 const POLL_MS = 3000;
 
-export function useBillScope() {
+function useBillScope() {
   const session = useSession();
   return session.account ? `${session.user.id}/${session.account}` : session.user.id;
 }
 
-export function readStoredOrderId(scope: string): string | null {
+function readStoredOrderId(scope: string): string | null {
   try {
     return sessionStorage.getItem(`${scope}/${TOPUP_SESSION_KEY}`);
   } catch {
@@ -28,7 +28,7 @@ export function readStoredOrderId(scope: string): string | null {
   }
 }
 
-export function writeStoredOrderId(scope: string, id: string | null) {
+function writeStoredOrderId(scope: string, id: string | null) {
   try {
     const key = `${scope}/${TOPUP_SESSION_KEY}`;
     if (id) sessionStorage.setItem(key, id);
@@ -36,6 +36,21 @@ export function writeStoredOrderId(scope: string, id: string | null) {
   } catch {
     // Keep session order id in React state if storage is unavailable.
   }
+}
+
+/** Reports whether an observed order transition may have updated account balance or order state. */
+export function balanceMoved(previous: Schemas["OrderState"] | undefined, state: Schemas["OrderState"]) {
+  if (previous === state) return false;
+  return previous !== undefined || state === "paid" || state === "refunded" || state === "partially_refunded";
+}
+
+/** Tracks state transitions for one watched order ID without confusing sequential orders. */
+export function orderMoved(
+  previous: { id: string; state: Schemas["OrderState"] } | undefined,
+  id: string,
+  state: Schemas["OrderState"],
+) {
+  return balanceMoved(previous?.id === id ? previous.state : undefined, state);
 }
 
 const isOrderRequest = (value: unknown): value is OrderRequest => {
@@ -54,13 +69,16 @@ export function parsePositiveCredits(raw: string): string | null {
   return BigInt(parsed) > 0n ? parsed : null;
 }
 
-export function useActiveOrder(orderId: string | null) {
+function useActiveOrder(orderId: string | null) {
   const queryClient = useQueryClient();
   const prevState = useRef<{ id: string; state: Schemas["OrderState"] } | undefined>(undefined);
   const query = useQuery({
     ...orderQuery(orderId ?? ""),
     enabled: orderId !== null,
-    refetchInterval: (q) => (q.state.data?.state === "pending" ? POLL_MS : false),
+    refetchInterval: ({ state }) => {
+      if (state.error instanceof ApiError && [401, 403, 404].includes(state.error.status)) return false;
+      return !state.data || state.data.state === "pending" ? POLL_MS : false;
+    },
   });
   const liveOrder = query.data?.id === orderId ? query.data : undefined;
   const state = liveOrder?.state;
@@ -70,10 +88,8 @@ export function useActiveOrder(orderId: string | null) {
       return;
     }
     if (!state) return;
-    if (balanceMoved(prevState.current?.id === orderId ? prevState.current.state : undefined, state)) {
-      void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
-    }
     if (orderMoved(prevState.current, orderId, state)) {
+      void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
       void queryClient.invalidateQueries({ queryKey: ordersQuery.queryKey });
     }
     prevState.current = { id: orderId, state };
@@ -82,6 +98,32 @@ export function useActiveOrder(orderId: string | null) {
   return { query, liveOrder, isNotFound };
 }
 
+/** Keeps the current active order watched across modal open/close and payment-channel redirects. */
+export function useBillTopUpSession(enabled = true) {
+  const scope = useBillScope();
+  const [active, setActive] = useState<ActiveOrderState | null>(() => {
+    const saved = readStoredOrderId(scope);
+    return saved ? { id: saved, created: null } : null;
+  });
+  const activeOrder = useActiveOrder(enabled ? (active?.id ?? null) : null);
+  const selectActive = useCallback(
+    (next: ActiveOrderState | null) => {
+      writeStoredOrderId(scope, next?.id ?? null);
+      setActive(next);
+    },
+    [scope],
+  );
+  const placement = useTopUpAttempt(scope, (order) => selectActive({ id: order.id, created: order }));
+
+  useEffect(() => {
+    if (active && activeOrder.isNotFound) selectActive(null);
+  }, [active, activeOrder.isNotFound, selectActive]);
+
+  return { active, activeOrder, selectActive, placement };
+}
+
+type Placement = { from: Sendable<OrderRequest>; request: OrderRequest };
+
 function useTopUpAttempt(scope: string, onCreated: (order: Order) => void) {
   const storeKey = `${scope}/${ATTEMPT_STORE}`;
   const queryClient = useQueryClient();
@@ -89,20 +131,15 @@ function useTopUpAttempt(scope: string, onCreated: (order: Order) => void) {
     () => readAttempt(storeKey, isOrderRequest) ?? opened(crypto.randomUUID()),
   );
   const [failure, setFailure] = useState<unknown>(null);
+  const pending = useRef(false);
 
   const commit = (next: Attempt<OrderRequest>) => {
     setAttempt(next);
     writeAttempt(storeKey, next);
   };
 
-  const reset = () => {
-    setFailure(null);
-    setAttempt(opened<OrderRequest>(crypto.randomUUID()));
-    clearAttempt(storeKey);
-  };
-
   const create = useMutation({
-    mutationFn: ({ from, request }: { from: Sendable<OrderRequest>; request: OrderRequest }) =>
+    mutationFn: ({ from, request }: Placement) =>
       unwrap(
         consoleApi.POST("/api/console/v1/orders", {
           body: request,
@@ -120,89 +157,91 @@ function useTopUpAttempt(scope: string, onCreated: (order: Order) => void) {
       void queryClient.invalidateQueries({ queryKey: ordersQuery.queryKey });
       onCreated(order);
     },
-    onError: (error, { from, request }) => failedFrom(commit, setFailure)(error, { from, request }),
+    onError: failedFrom(commit, setFailure),
+    onSettled: () => {
+      pending.current = false;
+    },
   });
 
-  return { attempt, failure, creating: create.isPending, create, reset };
+  const reset = () => {
+    if (pending.current) return;
+    setFailure(null);
+    setAttempt(opened<OrderRequest>(crypto.randomUUID()));
+    clearAttempt(storeKey);
+  };
+
+  const send = (placement: Placement) => {
+    if (pending.current) return;
+    pending.current = true;
+    create.mutate(placement);
+  };
+
+  return { attempt, failure, creating: create.isPending, send, reset };
 }
 
-function pickMethod(
-  methods: readonly Schemas["PaymentMethod"][],
-  attempt: Attempt<OrderRequest>,
-  chosenMethod: string | null,
-) {
-  const preferred = attempt.state === "unknown" ? attempt.request.method : chosenMethod;
-  return methods.find((item) => item.method === preferred) ?? methods[0];
+function pickMethod(methods: readonly Schemas["PaymentMethod"][], chosenMethod: string | undefined) {
+  return methods.find((item) => item.method === chosenMethod) ?? methods[0];
 }
 
-function useSyncedAmount(attempt: Attempt<OrderRequest>, initialUnits: string | undefined, fallback: string) {
+function useAmount(initial: string, locked: boolean) {
   const inputRef = useRef<HTMLInputElement | null>(null);
-  const [amountText, setAmountText] = useState(() =>
-    attempt.state === "unknown" ? moneyInput(attempt.request.credits.amount) : (initialUnits ?? fallback),
-  );
-  const setSynced = (next: string) => {
+  const [amountText, setAmountText] = useState(initial);
+  const attachInput: RefCallback<Element> = (node) => {
+    const input = node as HTMLInputElement | null;
+    inputRef.current = input;
+    if (input) {
+      input.readOnly = locked;
+      input.value = amountText;
+    }
+  };
+  const applyAmount = (next: string) => {
     setAmountText(next);
     if (inputRef.current) inputRef.current.value = next;
   };
-  useEffect(() => {
-    if (attempt.state === "unknown") {
-      setSynced(moneyInput(attempt.request.credits.amount));
-    } else if (initialUnits && attempt.state === "editing") {
-      setSynced(initialUnits);
-    }
-  }, [initialUnits, attempt]);
-  return { amountText, inputRef, applyAmount: setSynced };
+  return { amountText, inputRef, attachInput, applyAmount };
 }
 
-export function useStepOneController({
-  currency,
-  initialUnits,
-  onClose,
-  onCreated,
-}: {
-  currency: string;
-  initialUnits?: string;
-  onClose: () => void;
-  onCreated: (order: Order) => void;
-}) {
-  const scope = useBillScope();
+function usePaymentQuote(activeCredits: string | null, editable: boolean, chosenMethod: string | undefined) {
+  const methodsQuery = useQuery({
+    ...paymentMethodsQuery(activeCredits ?? "0"),
+    enabled: editable && activeCredits !== null,
+  });
+  const methods = editable ? (methodsQuery.data?.data ?? []) : [];
+  const selected = pickMethod(methods, chosenMethod);
+  return { methodsQuery, methods, selected };
+}
+
+export function useStepOneController(
+  currency: string,
+  initialUnits: string | undefined,
+  { attempt, failure, creating, send, reset }: ReturnType<typeof useTopUpAttempt>,
+) {
   const presets = quickAmountsForCurrency(currency);
-  const { attempt, failure, creating, create, reset } = useTopUpAttempt(scope, onCreated);
-  const { amountText, inputRef, applyAmount } = useSyncedAmount(attempt, initialUnits, presets[1] ?? "200");
-  const [chosenMethod, setChosenMethod] = useState<string | null>(null);
-
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const isUnknown = attempt.state === "unknown";
+  const sent = attempt.state === "unknown" ? attempt.request : undefined;
+  const isUnknown = !!sent && !creating;
   const isBlocked = attempt.state === "reused" || attempt.state === "stale";
-  const activeCredits = isUnknown ? attempt.request.credits.amount : parsePositiveCredits(amountText);
-  const methodsQuery = useQuery({ ...paymentMethodsQuery(activeCredits ?? "0"), enabled: activeCredits !== null });
-  const methods = methodsQuery.data?.data ?? [];
-  const selected = pickMethod(methods, attempt, chosenMethod);
+  const editable = !sent && !isBlocked;
+  const locked = creating || !editable;
+  const amount = useAmount(sent ? moneyInput(sent.credits.amount) : (initialUnits ?? presets[1] ?? "200"), locked);
+  const [chosenMethod, setChosenMethod] = useState(() => sent?.method);
+  const activeCredits = sent?.credits.amount ?? parsePositiveCredits(amount.amountText);
+  const { methodsQuery, methods, selected } = usePaymentQuote(activeCredits, editable, chosenMethod);
 
   const submit = () => {
-    if (creating) return;
-    if (attempt.state === "unknown") return create.mutate({ from: attempt, request: attempt.request });
+    if (attempt.state === "unknown") send({ from: attempt, request: attempt.request });
     if (attempt.state === "editing" && activeCredits && selected) {
-      create.mutate({
-        from: attempt,
-        request: { method: selected.method, credits: { amount: activeCredits, currency } },
-      });
+      send({ from: attempt, request: { method: selected.method, credits: { amount: activeCredits, currency } } });
     }
   };
 
   return {
     presets,
-    amountText,
-    inputRef,
+    ...amount,
     attempt,
     failure,
     creating,
     reset,
+    locked,
     isUnknown,
     isBlocked,
     activeCredits,
@@ -210,7 +249,6 @@ export function useStepOneController({
     methods,
     selected,
     setChosenMethod,
-    applyAmount,
     submit,
   };
 }

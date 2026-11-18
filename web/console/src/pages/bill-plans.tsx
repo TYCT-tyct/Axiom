@@ -1,4 +1,4 @@
-import { ApiError, consoleApi, unwrap } from "@axiom/api";
+import { ApiError } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import {
   Card,
@@ -15,21 +15,16 @@ import {
   Tag,
   useFormat,
 } from "@axiom/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import {
+  type BillingPreference,
+  type BillingPreferenceChoice,
+  billingPreferenceOptions,
+  useBillingPreferenceForm,
+} from "../billing-preference";
 import { balanceQuery, billingPreferenceQuery, siteQuery } from "../queries";
-import { type AccountSubscription, accountSubscriptionsQuery, type BillingPreferenceName } from "./bill-data";
-
-const PREFERENCE_KEYS: readonly BillingPreferenceName[] = [
-  "subscription_first",
-  "wallet_first",
-  "subscription_only",
-  "wallet_only",
-];
-
-type PreferenceChoice = BillingPreferenceName | "site";
-type PrefData = { preference: BillingPreferenceName; source: "account" | "site"; site_default: BillingPreferenceName };
+import { type AccountSubscription, accountSubscriptionsQuery } from "./bill-data";
 
 function PlanNameCell({ sub }: { sub: AccountSubscription }) {
   const { t } = useTranslation();
@@ -118,65 +113,36 @@ function SubscriptionsSection() {
     );
   }
 
-  const currency = site.data?.currency ?? balance.data?.available.currency ?? "USD";
+  const currency = site.data?.currency ?? balance.data?.balance.currency;
+  const currencySourceQuery = !site.data && site.isPending ? site : !balance.data && balance.isPending ? balance : site;
   return (
     <DataState query={subscriptions}>
-      {({ data }) =>
-        data.length === 0 ? (
-          <Card title={t("statement.bill.plans.title")} lede={t("statement.bill.plans.subtitle")}>
-            <EmptyState title={t("statement.bill.plans.empty")}>{t("statement.bill.plans.emptyBody")}</EmptyState>
-          </Card>
-        ) : (
-          <SubscriptionsTable subs={data} currency={currency} />
-        )
-      }
+      {({ data }) => {
+        if (data.length === 0) {
+          return (
+            <Card title={t("statement.bill.plans.title")} lede={t("statement.bill.plans.subtitle")}>
+              <EmptyState title={t("statement.bill.plans.empty")}>{t("statement.bill.plans.emptyBody")}</EmptyState>
+            </Card>
+          );
+        }
+        if (!currency) {
+          return <DataState query={currencySourceQuery}>{() => null}</DataState>;
+        }
+        return <SubscriptionsTable subs={data} currency={currency} />;
+      }}
     </DataState>
   );
 }
 
-function useChargeOrderSave(onSaved: () => void) {
-  const queryClient = useQueryClient();
-  return useMutation({
-    mutationFn: (preference: PreferenceChoice) =>
-      unwrap(consoleApi.PUT("/api/console/v1/billing-preference", { body: { preference } })),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(billingPreferenceQuery.queryKey, updated);
-      onSaved();
-    },
-  });
-}
-
-function chargeOrderOptions(
-  siteDefault: BillingPreferenceName,
-  t: {
-    (key: `settings.billing.values.${BillingPreferenceName}`): string;
-    (key: "settings.billing.site", opts: { value: string }): string;
-  },
-) {
-  const labels: Record<BillingPreferenceName, string> = {
-    subscription_first: t("settings.billing.values.subscription_first"),
-    wallet_first: t("settings.billing.values.wallet_first"),
-    subscription_only: t("settings.billing.values.subscription_only"),
-    wallet_only: t("settings.billing.values.wallet_only"),
-  };
-  return [
-    { value: "site", label: t("settings.billing.site", { value: labels[siteDefault] }) },
-    ...PREFERENCE_KEYS.map((key) => ({ value: key, label: labels[key] })),
-  ];
-}
-
-function ChargeOrderForm({ pref }: { pref: PrefData }) {
+function ChargeOrderForm({ pref }: { pref: BillingPreference }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const [choice, setChoice] = useState<PreferenceChoice>(() => (pref.source === "site" ? "site" : pref.preference));
-  const [savedNotice, setSavedNotice] = useState(false);
-
-  useEffect(() => {
-    setChoice(pref.source === "site" ? "site" : pref.preference);
-  }, [pref.source, pref.preference]);
-
-  const save = useChargeOrderSave(() => setSavedNotice(true));
-  const options = chargeOrderOptions(pref.site_default, t);
+  const form = useBillingPreferenceForm(pref);
+  const options = billingPreferenceOptions(
+    pref.site_default,
+    (key) => t(`settings.billing.values.${key}`),
+    (defaultLabel) => t("settings.billing.site", { value: defaultLabel }),
+  );
   const sourceNote = t(
     pref.source === "account" ? "statement.bill.plans.preferenceAccount" : "statement.bill.plans.preferenceSite",
   );
@@ -186,8 +152,7 @@ function ChargeOrderForm({ pref }: { pref: PrefData }) {
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          setSavedNotice(false);
-          save.mutate(choice);
+          form.submit();
         }}
       >
         <SettingRow
@@ -202,18 +167,15 @@ function ChargeOrderForm({ pref }: { pref: PrefData }) {
           <Cluster gap={8}>
             <Select
               label={t("settings.billing.preference")}
-              value={choice}
+              value={form.choice}
               options={options}
-              onChange={(event) => {
-                setSavedNotice(false);
-                setChoice(event.target.value as PreferenceChoice);
-              }}
+              onChange={(event) => form.selectChoice(event.target.value as BillingPreferenceChoice)}
             />
-            <SubmitButton pending={save.isPending}>{t("settings.save")}</SubmitButton>
+            <SubmitButton pending={form.pending}>{t("settings.save")}</SubmitButton>
           </Cluster>
         </SettingRow>
-        {save.error ? <FormError>{errors.message(save.error)}</FormError> : null}
-        {savedNotice ? <Note title={t("settings.saved")} /> : null}
+        {form.error ? <FormError>{errors.message(form.error)}</FormError> : null}
+        {form.saved ? <Note title={t("settings.saved")} /> : null}
       </form>
     </Card>
   );

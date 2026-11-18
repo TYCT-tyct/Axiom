@@ -8,7 +8,6 @@ export type BalanceData = Schemas["Balance"];
 export type StatementRow = Schemas["StatementRow"];
 export type StatementDay = Schemas["StatementDay"];
 export type AccountSubscription = Schemas["AccountSubscription"];
-export type BillingPreferenceName = Schemas["BillingPreferenceName"];
 export type PaymentMethodQuote = Schemas["PaymentMethod"];
 export type Money = Schemas["Money"];
 export type BoardKind = "desktop" | "phone";
@@ -46,9 +45,9 @@ export function totalFrozenFromBatches(batches: readonly CreditBatch[] | undefin
   return total.toString();
 }
 
-/** Computes post-top-up balance as exact billionths when positive credits are entered. */
-export function projectedBalanceAfter(current: Money, topUpCredits: string | null): Money | null {
-  if (!topUpCredits) return null;
+/** Computes post-top-up balance as exact billionths when balance and positive credits are both available. */
+export function projectedBalanceAfter(current: Money | undefined | null, topUpCredits: string | null): Money | null {
+  if (!current || !topUpCredits) return null;
   const delta = parseBillionths(topUpCredits);
   if (delta <= 0n) return null;
   return { amount: (parseBillionths(current.amount) + delta).toString(), currency: current.currency };

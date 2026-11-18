@@ -14,7 +14,7 @@ import {
   usePageTitle,
 } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { balanceQuery, redemptionsQuery } from "../queries";
 import {
@@ -38,16 +38,11 @@ function useRedeemController(scope: string) {
   );
   const [failure, setFailure] = useState<unknown>(null);
   const [redeemed, setRedeemed] = useState<RedeemedResult | null>(null);
+  const pending = useRef(false);
 
   const commit = (next: Redemption) => {
     setRedemption(next);
     writeRedemption(scope, next);
-  };
-
-  const reset = () => {
-    setFailure(null);
-    setRedeemed(null);
-    commit({ state: "editing", key: crypto.randomUUID() });
   };
 
   const submit = useMutation({
@@ -60,7 +55,8 @@ function useRedeemController(scope: string) {
       ),
     onMutate: ({ from, request }) => {
       setFailure(null);
-      commit({ state: "unknown", key: from.key, request });
+      // Persist only the unknown-outcome sentinel for reload recovery without showing Restart while waiting.
+      writeRedemption(scope, { state: "unknown", key: from.key, request });
     },
     onSuccess: (result) => {
       setRedeemed(result);
@@ -72,9 +68,25 @@ function useRedeemController(scope: string) {
       setFailure(error);
       commit(afterFailure(from, request, error, () => crypto.randomUUID()));
     },
+    onSettled: () => {
+      pending.current = false;
+    },
   });
 
-  return { redemption, failure, redeemed, submit, reset };
+  const reset = () => {
+    if (pending.current) return;
+    setFailure(null);
+    setRedeemed(null);
+    commit({ state: "editing", key: crypto.randomUUID() });
+  };
+
+  const send = (vars: { from: Sendable; request: RedeemRequest }) => {
+    if (pending.current) return;
+    pending.current = true;
+    submit.mutate(vars);
+  };
+
+  return { redemption, failure, redeemed, pending: submit.isPending, send, reset };
 }
 
 function RedeemedCard({ redeemed, onAgain }: { redeemed: RedeemedResult; onAgain: () => void }) {
@@ -126,7 +138,7 @@ function RedeemSubmitRow({
         <SubmitButton pending={pending}>{isUnknown ? t("redeem.resend") : t("redeem.submit")}</SubmitButton>
       ) : null}
       {isUnknown || isReused ? (
-        <Button variant="ghost" onClick={onRestart}>
+        <Button variant="ghost" disabled={pending} onClick={onRestart}>
           {t("redeem.restart")}
         </Button>
       ) : null}
@@ -163,7 +175,7 @@ function RedeemForm({
       <form
         onSubmit={(event) => {
           event.preventDefault();
-          onSubmit();
+          if (!pending) onSubmit();
         }}
       >
         <Stack gap={12}>
@@ -172,7 +184,10 @@ function RedeemForm({
             label={t("redeem.code")}
             hint={t("redeem.codeHint")}
             value={code}
-            disabled={!asking}
+            disabled={!asking || pending}
+            spellCheck={false}
+            autoComplete="off"
+            maxLength={64}
             error={fieldError}
             onChange={(event) => onCodeChange(event.target.value)}
           />
@@ -188,24 +203,27 @@ function RedeemForm({
 function submitRedemption({
   code,
   redemption,
-  mutate,
+  pending,
+  send,
   onProblem,
 }: {
   code: string;
   redemption: Redemption;
-  mutate: (vars: { from: Sendable; request: RedeemRequest }) => void;
+  pending: boolean;
+  send: (vars: { from: Sendable; request: RedeemRequest }) => void;
   onProblem: (next: "missing" | "long" | null) => void;
 }) {
+  if (pending) return;
   if (redemption.state === "unknown" && redemption.request) {
     onProblem(null);
-    mutate({ from: redemption, request: redemption.request });
+    send({ from: redemption, request: redemption.request });
     return;
   }
   const parsed = readCode({ code });
   if (parsed === "missing" || parsed === "long") return onProblem(parsed);
   onProblem(null);
   if (redemption.state === "editing" || redemption.state === "unknown") {
-    mutate({ from: redemption, request: parsed });
+    send({ from: redemption, request: parsed });
   }
 }
 
@@ -242,7 +260,7 @@ function RedeemFormCard({ allowed }: { allowed: boolean }) {
       problem={problem}
       failure={ctrl.failure}
       redemption={ctrl.redemption}
-      pending={ctrl.submit.isPending}
+      pending={ctrl.pending}
       onCodeChange={(value) => {
         setCode(value);
         if (problem) setProblem(null);
@@ -251,7 +269,8 @@ function RedeemFormCard({ allowed }: { allowed: boolean }) {
         submitRedemption({
           code,
           redemption: ctrl.redemption,
-          mutate: (vars) => ctrl.submit.mutate(vars),
+          pending: ctrl.pending,
+          send: ctrl.send,
           onProblem: setProblem,
         })
       }

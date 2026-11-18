@@ -53,19 +53,20 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "console bill",
-    basis:
-      "L15: billing tabs, live USD balance and batches replace demo CNY balance and personal statement table; breakdown card adds reserved/floor/frozen/spent",
-    board: { selector: ".p-bill .qcard.hero, .p-bill .qcard.flush" },
-    page: {
-      selector: 'nav[aria-label="账单导航"], .p-bill .qcard.hero, .p-bill .qcard.flush, .p-bill > div:last-child',
-    },
+    basis: "L15: the account balance and batch rows replace the board's demo figures and statement rows",
+    ...both(".p-bill .qcard.hero .qhl > b.qbig.xl, .p-bill .qcard.flush .qtbl tbody td"),
   },
-  // Axiom CJK Console is cut at a single static weight (wght 330, web/scripts/fonts/sources.json), whereas the board
-  // draws MiSansVF at 500/400 (h1/p) (docs/frontend.md「字体」).
   {
     scene: "console bill",
-    basis: "§5.4: Axiom CJK Console is cut at wght 330 (sources.json), while the board draws MiSansVF at 500/400",
-    ...both(".p-bill .qph .qpht"),
+    basis: "L15: billing navigation and the balance breakdown are live API sections absent from the board",
+    page: { selector: ".p-bill > .qph > .qpa nav, .p-bill > div:last-child section" },
+  },
+  // Axiom CJK Console is cut at a single static weight (wght 330, web/scripts/fonts/sources.json), whereas the board
+  // draws MiSansVF at 500 (h1) (docs/frontend.md「字体」).
+  {
+    scene: "console bill",
+    basis: "§5.4: Axiom CJK Console is cut at wght 330 (sources.json), while the board draws MiSansVF at 500",
+    ...both(".p-bill .qph h1"),
   },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
