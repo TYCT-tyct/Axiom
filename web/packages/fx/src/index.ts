@@ -1,2 +1,4 @@
+export { hash } from "./hash";
 export { reducedMotion } from "./loop";
-export { useEffectModule } from "./use-effect-module";
+export { timeline } from "./timeline";
+export { nearView, useEffectModule } from "./use-effect-module";
