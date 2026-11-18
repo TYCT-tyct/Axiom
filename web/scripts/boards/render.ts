@@ -12,7 +12,7 @@ function captures(regions: readonly Region[]) {
     const render = region.render;
     if (!render) continue;
     // A DOM cut waits for the faces used by the mounted board. Preloading every face is for canvas drawing.
-    const scene = {
+    const scene: BoardScene = {
       file: `${region.board}.dc.html`,
       props: render.props,
       actions: render.actions,
