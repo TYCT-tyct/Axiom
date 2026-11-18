@@ -49,6 +49,8 @@ const requestPresets = ["console request-presets", "console request-presets en"]
   ].map((ruling) => inScene(scene, ruling)),
 );
 
+// C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
+// #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
@@ -113,6 +115,11 @@ export const rulings: Ruling[] = [
     scene: "console overview",
     basis: "G1: the board writes ¥ in its spend axis; the page's money is in the account's currency",
     board: { selector: ".qyax, .qgl" },
+  },
+  {
+    scene: "console overview",
+    basis: "L23: the console shows site announcements, which the overview board does not draw",
+    page: { selector: ".qcard:has(> details[data-announcements])" },
   },
   {
     scene: "converted-Login",
