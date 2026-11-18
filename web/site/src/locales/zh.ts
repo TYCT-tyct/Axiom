@@ -30,6 +30,20 @@ export default {
   // the words the screens' scripts write (home/*-script.ts), and the models screen's states
   script: {
     noApi: "本站 API 地址暂不可用",
+    connect: {
+      terminal: "终端",
+      cursorSettings: "Cursor 设置 → Models",
+      alsoZshrc: "# 也可以写进 ~/.zshrc",
+      setKey: "# 在终端设置key",
+      pickModel: "# 选好模型，照常使用",
+      compatOpenai: "# 兼容 OpenAI 接口",
+      compatAnthropic: "# 兼容 Anthropic 接口",
+      hello: "你好",
+      yourKey: "你的key",
+      other: "其他工具",
+      copy: "复制配置",
+      copied: "已复制",
+    },
     faq: {
       // after the answers whose picture shows figures: they are the board's illustration, not the site's
       sample: "图中的价格、金额和 Key 是示例数据。",

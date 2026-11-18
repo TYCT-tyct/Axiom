@@ -27,6 +27,20 @@ export default {
   },
   script: {
     noApi: "This site's API address is unavailable",
+    connect: {
+      terminal: "Terminal",
+      cursorSettings: "Cursor settings → Models",
+      alsoZshrc: "# or put it in ~/.zshrc",
+      setKey: "# set the key in the terminal",
+      pickModel: "# pick a model and use it as usual",
+      compatOpenai: "# OpenAI-compatible",
+      compatAnthropic: "# Anthropic-compatible",
+      hello: "Hello",
+      yourKey: "your key",
+      other: "Other tools",
+      copy: "Copy configuration",
+      copied: "Copied",
+    },
     faq: {
       // after the answers whose picture shows figures: they are the board's illustration, not the site's
       sample: "The prices, amounts and keys in the picture are sample data.",

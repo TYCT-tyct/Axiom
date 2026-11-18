@@ -43,6 +43,13 @@ const siteBoards = {
 // scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
 // its class). The board's words are Chinese only, so these scenes are compared in Chinese.
 const screenAt = (sec: number) => async (board: Page, page: Page) => {
+  // the board's own script sets the frame's width for its stylesheet and marks the tablet layout (--fw, data-tab); the
+  // harness leaves the script's engines out, so the shot does what the script does
+  await board.locator(".tr").evaluate((root) => {
+    const ho = root.querySelector(".ho") as HTMLElement;
+    ho.style.setProperty("--fw", `${root.clientWidth}px`);
+    ho.toggleAttribute("data-tab", root.classList.contains("m") && root.clientWidth >= 700);
+  });
   await board.locator(`.hfm${sec}`).evaluate((el) => {
     el.classList.add("in");
     el.scrollIntoView({ block: "start" });
@@ -180,6 +187,7 @@ export const designScenes: DesignScene[] = [
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
   },
   ...[
+    { name: "site connect", sec: 1 },
     { name: "site faq", sec: 5 },
     { name: "site bed", sec: 6 },
   ].map(({ name, sec }) => ({

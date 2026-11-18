@@ -9,6 +9,7 @@ export default {
   "m0f4371a7a9": "Pricing",
   "m1e2df9c307": "Log in",
   "mc4fb62202b": "Sign up",
+  "m3272fe53c0": "Take the tour",
   "mb90a8ac9c4": "Choose a language",
   "m3fd47edce4": "Close",
   "m4144869c18": "Search languages",

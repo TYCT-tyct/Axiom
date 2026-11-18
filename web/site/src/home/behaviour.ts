@@ -39,13 +39,21 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
   };
 }
 
-// scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top (native
-// smooth scrolling, not the board's eased frames; a jump under reduced motion). Gliding to a section and the tour
-// through them come with the sections, in S2.
+// scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
+// section (native smooth scrolling, not the board's eased frames; a jump under reduced motion), and the tour, which
+// glides through the sections a few seconds apart and back to the top.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
 const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
+  let timer = 0;
+  const glide = (top: number) => scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
+  // the tour goes on from the section the reader is in the top of, or from the first when at the surface
+  const tour = (i: number) => {
+    const top = offsets[i]?.top;
+    timer = window.setTimeout(() => (top === undefined ? glide(0) : tour(i + 1)), top === undefined ? 3000 : 3200);
+    if (top !== undefined) glide(top);
+  };
   return {
     measure: () => {
       offsets = [
@@ -58,7 +66,13 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
       if (depth) depth.style.opacity = dim.toFixed(3);
       show(scroll);
     },
-    toTop: () => scroller.scrollTo({ top: 0, behavior: reducedMotion() ? "auto" : "smooth" }),
+    toTop: () => glide(0),
+    toSection: (sec: number) => glide(offsets.find((offset) => offset.sec === sec)?.top ?? 0),
+    tour: () => {
+      window.clearTimeout(timer);
+      tour(scroller.scrollTop > 10 ? 0 : 1);
+    },
+    stop: () => window.clearTimeout(timer),
   };
 }
 
@@ -84,6 +98,14 @@ function clickActions(
       },
     ],
     [".shx", () => setMenu(false)],
+    [
+      ".sml",
+      (control) => {
+        setMenu(false);
+        page.toSection(Number(control.dataset.sec));
+      },
+    ],
+    [".tour", () => page.tour()],
     ["[data-go]", () => setMenu(false)],
   ];
 }
@@ -129,6 +151,7 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);
     return () => {
       resized.disconnect();
+      page.stop();
       scroller.removeEventListener("scroll", page.onScroll);
       frame.removeEventListener("click", onClick);
       for (const [type, listener] of hovers) isl?.removeEventListener(type, listener);

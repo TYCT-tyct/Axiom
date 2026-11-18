@@ -42,18 +42,20 @@ const shell: Ruling[] = [
 ].map((ruling) => inScene("console shell", ruling));
 
 // The frame the home page's screens below the first are seen in: the page's header has given way to the island, which the
-// board, its engines off, does not do, the sea is the page's own, the tour button waits for the last screen (S2c), and the
-// buttons' Chinese is drawn at 400 (§5.4).
+// board, its engines off, does not do, the sea is the page's own, and the buttons' Chinese is drawn at 400 (§5.4).
 const screenFrame: Omit<Ruling, "scene">[] = [
   {
     basis: "the header gives way to the island on the page once scrolled; the board's engines are off",
     ...both(".bar, .isl"),
   },
   { basis: "§8.2: engines are off on the board; the sea is tested by fx.spec.ts", page: { canvas: "canvas.sea" } },
-  { basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
+  {
+    basis: "the tour button is the board's script's, which the harness leaves out; fx.spec.ts tests the tour",
+    ...both(".tour"),
+  },
   { basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl", ...both(".ho .btn") },
 ];
-const siteScreens = ["site faq", "site bed"];
+const siteScreens = ["site connect", "site faq", "site bed"];
 
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
@@ -239,15 +241,32 @@ export const rulings: Ruling[] = [
     board: { selector: ".ho .btn" },
     page: { selector: ".ho .btn" },
   },
-  // Links and controls with nowhere to go yet are left out until their pages come: the docs page (S4) and the tour,
-  // which goes through every screen below the first and waits for the last of them (S2c). The rows they sat in close up.
+  // Links and controls with nowhere to go yet are left out until their pages come: the docs page. The rows they sat in
+  // close up.
   {
     scene: "site home",
-    basis: "S4: no docs page yet",
+    basis: "文档页尚无，#816",
     board: { selector: ".bar .nav.mid, .hs > .main .cta" },
     page: { selector: ".bar .nav.mid, .hs > main .cta" },
   },
-  { scene: "site home", basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
+  // The connect screen (S2c): the docs link is not there (#816), the address in each tool's configuration is the site's,
+  // and the machine is drawn by the page from its own SVG and moves on its own (fx.spec.ts).
+  {
+    scene: "site connect",
+    basis: "文档页尚无，#816",
+    board: { selector: ".hfm1 .intro .more" },
+  },
+  {
+    scene: "site connect",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm1 .adr"),
+  },
+  {
+    scene: "site connect",
+    basis:
+      "§8.2: the board's machine is drawn by its script; the page's by the fetched figure, both moving on their own",
+    ...both(".hfm1 .fig, .hfm1 .rcard, .hfm1 .wire > *"),
+  },
   // The questions (S2b): the board's docs and ticket links, and its ninth question about invoices and contracts, which
   // the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
   {

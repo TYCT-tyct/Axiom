@@ -1,7 +1,7 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { useEffectModule } from "@axiom/fx";
-import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
+import { reducedMotion, useEffectModule } from "@axiom/fx";
+import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSiteBrand } from "../shell";
 import { useDeparture, useFrameBehaviour } from "./behaviour";
@@ -47,6 +47,23 @@ const frameText = (word: (key: BoardKey) => string, language: string, name: stri
   sheetSignUpHref: links.signUp,
 });
 
+// From 700 wide the narrow layout is laid out for a tablet: the board's script marks its .ho data-tab (the steps and
+// the trust screens take their side-by-side form, the connect screen drops its cable).
+function useTabletLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
+  useEffect(() => {
+    const frame = root.current;
+    const ho = frame?.querySelector(".ho");
+    if (!frame || !ho || wide) return;
+    const mark = () => ho.toggleAttribute("data-tab", frame.clientWidth >= 700);
+    mark();
+    const resized = new ResizeObserver(mark);
+    resized.observe(frame);
+    return () => resized.disconnect();
+  }, [root, wide]);
+}
+
+const tourClass = (solid: boolean) => (solid || reducedMotion() ? "gone" : "");
+
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
 // its engines through packages/fx: the sea after the first content, the switches when first used (switches.ts), the
@@ -70,6 +87,7 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   useDeparture(root, sea);
   const whale = useWhale(root, sea, !wide, scheme === "dark");
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
+  useTabletLayout(root, wide);
   const brand = useSiteBrand();
   const name = brand?.name ?? t("brand", { ns: "common" });
 
@@ -96,6 +114,9 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     depthTxt: depthText(scroll.depth),
     sheetCls: menu ? "on" : "",
     sheetHide: !menu,
+    // the tour does not play under reduced motion, so its button is not offered
+    tourCls: tourClass(scroll.solid),
+    ...Object.fromEntries(sections.map((_, i) => [`t${i}`, i === scroll.sec ? "on" : ""])),
   };
   const text = frameText((key) => opened(`board.${key}`), opened("language"), name);
   const Shell = wide ? Wide : Narrow;

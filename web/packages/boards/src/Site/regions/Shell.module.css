@@ -139,6 +139,9 @@
 :global(.site .isl .ix):where(.scope){display:grid;grid-template-columns:0fr;transition:grid-template-columns 250ms ease-out}
 :global(.site .isl .ixi):where(.scope){display:flex;overflow:hidden;min-width:0}
 :global(.site .isl.open .ix):where(.scope){grid-template-columns:1fr}
+:global(.site .tour):where(.scope){position:absolute;left:24px;bottom:24px;z-index:12;display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:0;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--line);font:inherit;font-size:12px;line-height:18px;color:var(--text2);cursor:pointer;transition:color 250ms ease-out,opacity 250ms ease-out}
+:global(.site .tour:hover):where(.scope){color:var(--text1)}
+:global(.site .tour.gone):where(.scope){opacity:0;pointer-events:none}
 :global(.tr > canvas.wh:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
 :global(.tr[data-enter=wait] > canvas.wh:not(.under *)):where(.scope){visibility:hidden}
 :global(.tr:focus):where(.scope){outline:none}
