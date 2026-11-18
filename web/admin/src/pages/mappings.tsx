@@ -1,13 +1,13 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
-import { Button, CheckField, DataState, EmptyState, PageHeader, Panel, SelectField, Table, Td, Th } from "@axiom/ui";
+import { ActionButton, Card, CheckField, DataState, EmptyState, PageHead, Select, Table, Td, Text } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { ModelField } from "../models/model-field";
-import { ChoiceFilter, Code, FilterBar, mainCell, PageBody, text } from "../parts";
+import { ChoiceFilter, Code, FilterBar, Head, PageBody, text } from "../parts";
 import { pendingMappingsQuery, suppliersQuery } from "../queries";
 
 type Pending = AdminSchemas["PendingMapping"];
@@ -23,10 +23,10 @@ export default function Mappings() {
   const [mapping, setMapping] = useState<Pending | null>(null);
   return (
     <>
-      <PageHeader title={t("nav.mappings")} description={t("mappings.description")} />
+      <PageHead title={t("nav.mappings")} lede={t("mappings.description")} />
       <PageBody>
         <Filter supplier={supplier} suppliers={[...names]} />
-        <Panel>
+        <Card layout="flush">
           <DataState
             query={pending}
             isEmpty={() => rows.length === 0}
@@ -35,7 +35,7 @@ export default function Mappings() {
             {() => <PendingTable rows={rows} names={names} onMap={manage ? setMapping : undefined} />}
           </DataState>
           <LoadMore list={pending} />
-        </Panel>
+        </Card>
       </PageBody>
       {mapping ? <MapDialog pending={mapping} onClose={() => setMapping(null)} /> : null}
     </>
@@ -54,32 +54,28 @@ function PendingTable({
   const { t } = useTranslation();
   return (
     <Table label={t("nav.mappings")}>
-      <thead>
-        <tr>
-          <Th>{t("mappings.col.name")}</Th>
-          <Th className="hidden md:table-cell">{t("mappings.col.supplier")}</Th>
-          <Th className="hidden lg:table-cell">{t("mappings.col.formats")}</Th>
-          {onMap ? <Th className="w-0" /> : null}
-        </tr>
-      </thead>
+      <Head
+        cols={[[t("mappings.col.name"), { main: true }], t("mappings.col.supplier"), t("mappings.col.formats")]}
+        action={onMap !== undefined}
+      />
       <tbody>
         {rows.map((row) => (
           <tr key={`${row.supplier_id}/${row.group_id}/${row.upstream_name}`}>
-            <Td className={mainCell}>
-              <p className="truncate text-t1" title={row.upstream_name}>
+            <Td main>
+              <Text>
                 <Code>{row.upstream_name}</Code>
-              </p>
-              <p className="truncate text-label text-t4" title={row.group_codename}>
+              </Text>
+              <Text size="sm" tone="faint">
                 {row.group_codename}
-              </p>
+              </Text>
             </Td>
-            <Td className="hidden max-w-56 truncate md:table-cell">{names.get(row.supplier_id) ?? row.supplier_id}</Td>
-            <Td className="hidden lg:table-cell">{row.formats.join(" · ")}</Td>
+            <Td>{names.get(row.supplier_id) ?? row.supplier_id}</Td>
+            <Td>{row.formats.join(" · ")}</Td>
             {onMap ? (
-              <Td className="whitespace-nowrap">
-                <Button size="sm" onClick={() => onMap(row)}>
+              <Td shrink>
+                <ActionButton size="sm" onClick={() => onMap(row)}>
                   {t("mappings.map")}
-                </Button>
+                </ActionButton>
               </Td>
             ) : null}
           </tr>
@@ -140,10 +136,10 @@ function MapDialog({ pending, onClose }: { pending: Pending; onClose: () => void
       fields={() => (
         <>
           <ModelField label={t("mappings.dialog.model")} />
-          <SelectField label={t("mappings.dialog.scope")} name="scope" defaultValue="group">
+          <Select label={t("mappings.dialog.scope")} name="scope" defaultValue="group">
             <option value="group">{t("mappings.dialog.scopeGroup", { group: pending.group_codename ?? "" })}</option>
             <option value="supplier">{t("mappings.dialog.scopeSupplier")}</option>
-          </SelectField>
+          </Select>
           <CheckField
             name="completions"
             label={t("mappings.dialog.completions")}
@@ -163,7 +159,9 @@ function MapDialog({ pending, onClose }: { pending: Pending; onClose: () => void
       done={(mapping) => (
         <>
           <p>{t("mappings.dialog.done", { name: mapping.upstream_name })}</p>
-          <p className="text-label text-t3">{t("mappings.dialog.wait")}</p>
+          <Text size="sm" tone="faint">
+            {t("mappings.dialog.wait")}
+          </Text>
         </>
       )}
       onClose={onClose}

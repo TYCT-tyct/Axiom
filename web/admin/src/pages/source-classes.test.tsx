@@ -22,7 +22,7 @@ it("edits a class whose slug is new", async () => {
     rules: { match: "all" as const, conditions: [] },
   };
   const { container, unmount } = await renderInDom(<Classes classes={[cls]} />);
-  const edit = [...container.querySelectorAll("li button")].find((b) => b.textContent === en.sourceClasses.edit);
+  const edit = [...container.querySelectorAll("tbody tr button")].find((b) => b.textContent === en.sourceClasses.edit);
   await act(async () => {
     (edit as HTMLButtonElement).click();
   });
