@@ -1,7 +1,8 @@
 import { type Attempt, accountKey, failed, opened, readForm, type Sendable, useErrors, useSession } from "@axiom/app";
-import { Button, Dialog, FormError, Icon, SubmitButton, TextAreaField, TextField } from "@axiom/ui";
+import { Dialog, TextAreaField, TextField } from "@axiom/boards/ds";
+import { FormError, Icon } from "@axiom/ui";
 import { useIsFetching, useMutation, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { unsettled } from "./unsettled";
 
@@ -115,8 +116,6 @@ function useChange<Out>(operation: string) {
   };
 }
 
-type Change<Out> = ReturnType<typeof useChange<Out>>;
-
 // The thing a dialog changes, as the person read it. The form is filled from this copy and the revision the change is
 // made against is this copy's, so a refresh of the page underneath cannot pair a new revision with the old content and
 // put that over someone else's change. reload takes what the page has now.
@@ -125,158 +124,190 @@ export function useSnapshot<T>(live: T) {
   return [read, () => setRead(live)] as const;
 }
 
+type FieldProblem = { message: string; field?: "reason" | "confirm" };
+type Change<Out> = ReturnType<typeof useChange<Out>>;
+
 export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
-  const { done, onClose, title, reload, verdict } = props;
+  const { done, onClose, title, reload, verdict, action, danger } = props;
+  const { t } = useTranslation();
   const change = useChange<Out>(props.operation);
-  // The form is made again when it is filled from what is current, so its fields take their new initial values.
-  const [form, setForm] = useState(0);
-  const { state } = change.attempt;
-  // Whether an earlier try was done is not known here: the page underneath is fetched again so it does not keep showing
-  // things from before the try, though what comes back cannot prove the try was not done (it may still be committing).
-  const uncertain = !change.mutation.isSuccess && (state === "unknown" || state === "reused");
+  const { attempt, mutation, lost } = change;
+  const { state } = attempt;
+  const form = useChangeForm(props, change);
+  const fetching = useIsFetching({ queryKey: [accountKey] }) > 0;
   const close = () => {
-    if (uncertain) {
-      void change.refresh();
-    }
+    if (!mutation.isSuccess && (state === "unknown" || state === "reused")) void change.refresh();
     onClose();
   };
-  const refill =
-    reload &&
-    (() => {
-      reload();
-      change.restart();
-      setForm((made) => made + 1);
-    });
+  const moves = {
+    state,
+    lost,
+    success: mutation.isSuccess,
+    fetching,
+    pending: mutation.isPending,
+    formId: form.id,
+    action,
+    danger,
+    reload: reload ? form.refill : undefined,
+    restart: change.restart,
+    close,
+  };
+  const labels = {
+    close: t("change.close"),
+    reload: t("change.reload"),
+    resend: t("change.resend"),
+    giveUp: t("change.giveUp"),
+    cancel: t("cancel", { ns: "common" }),
+  };
   return (
-    <Dialog title={title} onClose={close}>
-      {change.mutation.isSuccess ? (
-        <Result replayed={change.mutation.data.replayed} verdict={verdict} onClose={close}>
-          {done(change.mutation.data.data)}
+    <Dialog
+      title={title}
+      closeLabel={t("dialog.close", { ns: "common" })}
+      onClose={close}
+      primary={next(moves, labels)}
+      secondary={back(moves, labels)}
+    >
+      {mutation.isSuccess ? (
+        <Result replayed={mutation.data.replayed} verdict={verdict}>
+          {done(mutation.data.data)}
         </Result>
-      ) : change.lost ? (
-        <UnsettledChange change={change} onClose={close} />
       ) : (
-        <ChangeForm key={form} {...props} onClose={close} change={change} reload={refill} />
+        <form
+          key={form.version}
+          id={form.id}
+          noValidate
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            form.submit(event.currentTarget);
+          }}
+        >
+          <ChangeBody {...props} change={change} problem={form.problem} />
+        </form>
       )}
     </Dialog>
   );
 }
 
-// What a dialog opened again shows for a try left unsettled: the form it was typed in is gone, and the request, which is
-// all that can be sent, is not shown as editable. The person sends it again or gives it up; anything else would make a
-// second change of what may be done already.
-function UnsettledChange<Out>({ change, onClose }: { change: Change<Out>; onClose: () => void }) {
+function useChangeForm<Input, Out>({ read, send, confirm, reload }: Props<Input, Out>, change: Change<Out>) {
   const { t } = useTranslation();
-  const errors = useErrors();
   const { attempt, mutation } = change;
-  if (attempt.state !== "unknown") {
-    return (
-      <div className="space-y-4">
-        <FormError>{t(attempt.state === "reused" ? "change.reused" : "change.stale")}</FormError>
-        <div className="flex justify-end pt-2">
-          <Button variant="primary" size="md" onClick={onClose}>
-            {t("change.close")}
-          </Button>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <form
-      noValidate
-      className="space-y-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (!mutation.isPending) {
-          change.send(attempt, attempt.request);
-        }
-      }}
-    >
-      <FormError>
-        {mutation.error ? <p>{errors.message(mutation.error)}</p> : null}
-        <p className="text-t2">{t("change.unsettled")}</p>
-      </FormError>
-      <div className="flex justify-end gap-2 pt-2">
-        <Button size="md" disabled={mutation.isPending} onClick={change.restart}>
-          {t("change.giveUp")}
-        </Button>
-        <SubmitButton pending={mutation.isPending}>{t("change.resend")}</SubmitButton>
-      </div>
-    </form>
-  );
-}
-
-function ChangeForm<Input, Out>({
-  intro,
-  action,
-  danger,
-  confirm,
-  fields,
-  read,
-  send,
-  waiting,
-  explain,
-  onClose,
-  reload,
-  change,
-}: Props<Input, Out> & { change: Change<Out> }) {
-  const { t } = useTranslation();
-  const [problem, setProblem] = useState<string | null>(null);
-  const { attempt, mutation } = change;
-  const refusal = (values: Record<string, string>, reason: string) => {
-    if (!reason) {
-      return t("change.reasonMissing");
-    }
-    return confirm !== undefined && values.confirm !== confirm ? t("change.confirmMismatch") : null;
+  const id = useId();
+  // Refill remounts the form so its fields take their new initial values.
+  const [version, setVersion] = useState(0);
+  const [problem, setProblem] = useState<FieldProblem>();
+  const refill = () => {
+    reload?.();
+    change.restart();
+    setProblem(undefined);
+    setVersion((made) => made + 1);
   };
-  const submit = (form: HTMLFormElement) => {
-    if (mutation.isPending || attempt.state === "stale" || attempt.state === "reused") {
-      return;
-    }
+  const submit = (element: HTMLFormElement) => {
+    if (mutation.isPending) return;
     if (attempt.state === "unknown") {
       change.send(attempt, attempt.request);
       return;
     }
-    const values = readForm(form);
+    if (attempt.state !== "editing") return;
+    const values = readForm(element);
     const reason = (values.reason ?? "").trim();
     const input = read(values);
-    const found = isProblem(input) ? input.problem : refusal(values, reason);
-    setProblem(found);
-    if (found === null) {
+    if (isProblem(input)) {
+      setProblem({ message: input.problem });
+    } else if (!reason) {
+      setProblem({ message: t("change.reasonMissing"), field: "reason" });
+    } else if (confirm !== undefined && values.confirm !== confirm) {
+      setProblem({ message: t("change.confirmMismatch"), field: "confirm" });
+    } else {
+      setProblem(undefined);
       const { key } = attempt;
-      change.send(attempt, () => send(input as Input, { reason, key }));
+      change.send(attempt, () => send(input, { reason, key }));
     }
   };
+  return { id, version, problem, refill, submit };
+}
+
+type Moves = {
+  state: State;
+  lost: boolean;
+  success: boolean;
+  fetching: boolean;
+  pending: boolean;
+  formId: string;
+  action: string;
+  danger?: boolean;
+  reload?: () => void;
+  restart: () => void;
+  close: () => void;
+};
+
+function next(moves: Moves, labels: { reload: string; close: string; resend: string }) {
+  const { state, lost, success, fetching, pending, formId, action, danger, reload, close } = moves;
+  if (!lost && state === "stale" && reload) {
+    return { label: labels.reload, onClick: reload, disabled: fetching, busy: fetching };
+  }
+  if (success || state === "stale" || state === "reused") {
+    return { label: labels.close, onClick: close };
+  }
+  return {
+    label: state === "unknown" ? labels.resend : action,
+    form: formId,
+    disabled: pending,
+    busy: pending,
+    danger: !lost && danger,
+  };
+}
+
+function back({ state, lost, success, pending, restart, close }: Moves, labels: { giveUp: string; cancel: string }) {
+  if (success || state === "reused") return undefined;
+  if (lost) {
+    return state === "unknown" ? { label: labels.giveUp, onClick: restart, disabled: pending } : undefined;
+  }
+  return { label: labels.cancel, onClick: close };
+}
+
+function ChangeBody<Input, Out>({
+  intro,
+  fields,
+  confirm,
+  explain,
+  waiting,
+  change,
+  problem,
+}: Props<Input, Out> & { change: Change<Out>; problem?: FieldProblem }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const { attempt, mutation, lost } = change;
   const editing = attempt.state === "editing";
-  const said = <Said problem={problem} state={attempt.state} error={mutation.error} explain={explain} />;
+  const notice = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    // The dialog scrolls only its body. Bring a locked form's notice back beside the actions.
+    if (!editing) notice.current?.scrollIntoView({ block: "nearest" });
+  }, [editing]);
+  const said = (
+    <Said problem={problem?.message ?? null} state={attempt.state} error={mutation.error} explain={explain} />
+  );
+  if (lost) {
+    return attempt.state === "unknown" ? (
+      <FormError>
+        {mutation.error ? <p>{errors.message(mutation.error)}</p> : null}
+        <p className="text-t2">{t("change.unsettled")}</p>
+      </FormError>
+    ) : (
+      said
+    );
+  }
   return (
-    <form
-      noValidate
-      className="space-y-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        submit(event.currentTarget);
-      }}
-    >
+    <>
       {intro ? <div className="space-y-2 text-t2">{intro}</div> : null}
       {editing ? said : null}
-      {/* Only a form being edited can change, and not while what it holds is on its way: the request already fixed is
-          what a lost answer resends, so the form must keep showing it. */}
+      {/* A lost answer can only resend the request already fixed from these fields. */}
       <fieldset disabled={!editing || mutation.isPending} className="min-w-0 space-y-4">
-        <ChangeFields fields={fields} confirm={confirm} error={mutation.error} />
+        <ChangeFields fields={fields} confirm={confirm} error={mutation.error} problem={problem} />
       </fieldset>
-      {/* Why the button now does something else sits next to it, where the person is looking after pressing it. */}
-      {editing ? null : said}
+      {editing ? null : <div ref={notice}>{said}</div>}
       {mutation.isPending ? waiting : null}
-      <Footer
-        state={attempt.state}
-        action={action}
-        danger={danger}
-        pending={mutation.isPending}
-        reload={reload}
-        onClose={onClose}
-      />
-    </form>
+    </>
   );
 }
 
@@ -284,7 +315,11 @@ function ChangeFields({
   fields,
   confirm,
   error,
-}: Pick<Props<unknown, unknown>, "fields" | "confirm"> & { error: unknown }) {
+  problem,
+}: Pick<Props<unknown, unknown>, "fields" | "confirm"> & {
+  error: unknown;
+  problem?: FieldProblem;
+}) {
   const { t } = useTranslation();
   const errors = useErrors();
   return (
@@ -294,17 +329,15 @@ function ChangeFields({
         label={t("change.reason")}
         hint={t("change.reasonHint")}
         name="reason"
-        rows={2}
         maxLength={1000}
-        className="font-sans"
-        error={errors.field(error, "reason")}
+        error={problem?.field === "reason" ? problem.message : errors.field(error, "reason")}
       />
       {confirm === undefined ? null : (
         <TextField
           label={t("change.confirmLabel", { name: confirm })}
           name="confirm"
           autoComplete="off"
-          spellCheck={false}
+          error={problem?.field === "confirm" ? problem.message : errors.field(error, "confirm")}
         />
       )}
     </>
@@ -341,78 +374,9 @@ function Said({
   return said ? <FormError>{said}</FormError> : null;
 }
 
-type Moves = {
-  state: State;
-  action: string;
-  danger?: boolean;
-  pending: boolean;
-  reload?: () => void;
-  onClose: () => void;
-};
-
-// Footer holds the buttons. In a form taller than the screen, the message shown above them after a press would land
-// below what the person sees, so they are brought into view.
-function Footer(props: Moves) {
-  const { t } = useTranslation();
-  const ref = useRef<HTMLDivElement>(null);
-  const editing = props.state === "editing";
-  useEffect(() => {
-    if (!editing) {
-      ref.current?.scrollIntoView({ block: "nearest" });
-    }
-  }, [editing]);
-  return (
-    <div ref={ref} className="flex justify-end gap-2 pt-2">
-      {props.state === "reused" ? null : (
-        <Button size="md" onClick={props.onClose}>
-          {t("cancel", { ns: "common" })}
-        </Button>
-      )}
-      <Next {...props} />
-    </div>
-  );
-}
-
-// Next is the button that moves the change on: send it, send the same request again, fill the form from what is
-// current (once that has arrived), or close.
-function Next({ state, action, danger, pending, reload, onClose }: Moves) {
-  const { t } = useTranslation();
-  const fetching = useIsFetching({ queryKey: [accountKey] }) > 0;
-  if (state === "stale" && reload) {
-    return (
-      <Button variant="primary" size="md" disabled={fetching} aria-busy={fetching} onClick={reload}>
-        {fetching ? <Icon name="refresh" className="animate-spin" /> : null}
-        {t("change.reload")}
-      </Button>
-    );
-  }
-  if (state === "stale" || state === "reused") {
-    return (
-      <Button variant="primary" size="md" onClick={onClose}>
-        {t("change.close")}
-      </Button>
-    );
-  }
-  return (
-    <SubmitButton pending={pending} variant={danger ? "danger" : "primary"}>
-      {state === "unknown" ? t("change.resend") : action}
-    </SubmitButton>
-  );
-}
-
 // Result says what the change did. An answer that is the stored result of an earlier try is said to be one: nothing was
 // done a second time.
-function Result({
-  replayed,
-  verdict,
-  onClose,
-  children,
-}: {
-  replayed: boolean;
-  verdict?: boolean;
-  onClose: () => void;
-  children: ReactNode;
-}) {
+function Result({ replayed, verdict, children }: { replayed: boolean; verdict?: boolean; children: ReactNode }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-4">
@@ -428,11 +392,6 @@ function Result({
         </p>
       ) : null}
       <div className="space-y-2 text-t2">{children}</div>
-      <div className="flex justify-end">
-        <Button variant="primary" size="md" onClick={onClose}>
-          {t("change.close")}
-        </Button>
-      </div>
     </div>
   );
 }

@@ -2,7 +2,6 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { brotliCompressSync } from "node:zlib";
 import type { ElementType } from "react";
@@ -117,29 +116,17 @@ function edit(root: Element, region: Region) {
 describe("region generation", () => {
   it("passes noJsxLiterals for every generated region", () => {
     const web = join(packageRoot, "../..");
-    // The boards' Biome configuration excludes generated regions. Lint the copies together outside that scope.
-    const root = mkdtempSync(join(tmpdir(), "axiom-region-proof-"));
+    // Normal lint skips generated regions. Copy them into its scope and check them in one Biome process.
+    const proof = mkdtempSync(join(web, "scripts", "region-proof-"));
     try {
-      const files = regions.map(({ board, name }) => {
-        const file = `${board}-${name}.tsx`;
-        copyFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), join(root, file));
-        return file;
-      });
-      execFileSync(
-        join(web, "node_modules/.bin/biome"),
-        [
-          "lint",
-          `--config-path=${join(web, "biome.json")}`,
-          "--vcs-enabled=false",
-          "--only=style/noJsxLiterals",
-          ...files,
-        ],
-        { cwd: root },
-      );
+      for (const { board, name } of regions) {
+        copyFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), join(proof, `${board}-${name}.tsx`));
+      }
+      execFileSync(join(web, "node_modules/.bin/biome"), ["lint", "--only=style/noJsxLiterals", proof], { cwd: web });
     } finally {
-      rmSync(root, { recursive: true, force: true });
+      rmSync(proof, { recursive: true, force: true });
     }
-  }, 30_000);
+  });
   it("keeps ancestor rules, state/pseudo selectors, grouping rules and used keyframes, and drops unrelated rules", () => {
     const markup =
       '<div class="ov"><div class="shell"></div><section class="page"><b class="qtbl {{state}}">中文</b></section><section class="other"><b>other</b></section></div>';
