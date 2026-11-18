@@ -73,7 +73,10 @@ test("register, sign in, key, top-up, call, and see the call and its charge", as
   // The call is recorded and charged after the response, in batches, so the pages are read again until they have it.
   await expect(async () => {
     await page.goto(`${node.console}/console/calls`);
-    const row = page.getByRole("row", { name: /claude-opus-5-5/ });
+    const row = page
+      .getByRole("region", { name: "调用记录" })
+      .locator('[data-a="lrow"]')
+      .filter({ hasText: "claude-opus-5-5" });
     await expect(row).toContainText("成功", { timeout: 1000 });
     await expect(row).toContainText("25 / 15", { timeout: 1000 });
   }).toPass({ timeout: 30_000 });
