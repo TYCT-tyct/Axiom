@@ -102,7 +102,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
               <UnitValue supplier={supplier} />
             </Td>
             <Td shrink>
-              <ActionButton variant="gho" size="sm" asChild>
+              <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/suppliers/$supplierId"
                   params={{ supplierId: supplier.id }}

@@ -10,6 +10,7 @@ import {
   Fieldset,
   Grid,
   InlineError,
+  ScrollArea,
   Select,
   Stack,
   Text,
@@ -40,17 +41,19 @@ function ModelChoice({ models }: { models: Model[] }) {
         autoComplete="off"
         spellCheck={false}
       />
-      <Grid min="16rem" gap={8}>
-        {models.map((model, index) => (
-          <CheckField
-            key={model.id}
-            hidden={!shown.includes(model)}
-            label={model.slug}
-            name={`model_${model.id}`}
-            defaultChecked={index < startChosen}
-          />
-        ))}
-      </Grid>
+      <ScrollArea label={t("pricing.preview.modelFilter")}>
+        <Grid min="16rem" gap={8}>
+          {models.map((model, index) => (
+            <CheckField
+              key={model.id}
+              hidden={!shown.includes(model)}
+              label={model.slug}
+              name={`model_${model.id}`}
+              defaultChecked={index < startChosen}
+            />
+          ))}
+        </Grid>
+      </ScrollArea>
       {shown.length === 0 ? <Text tone="faint">{t("pricing.preview.noModels")}</Text> : null}
     </Fieldset>
   );

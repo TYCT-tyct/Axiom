@@ -24,8 +24,8 @@ export function SupplierState({ supplier, brief = false }: { supplier: AdminSche
         <State tone={tones[supplier.status]}>{t(`suppliers.state.${supplier.status}`)}</State>
       </div>
       {supplier.status_reason ? (
-        <Text size="sm" tone="muted">
-          <span title={brief ? supplier.status_reason : undefined}>{supplier.status_reason}</span>
+        <Text size="sm" tone="muted" lines={brief ? 2 : undefined} title={brief ? supplier.status_reason : undefined}>
+          {supplier.status_reason}
         </Text>
       ) : null}
     </Stack>
