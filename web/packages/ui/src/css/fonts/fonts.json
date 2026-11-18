@@ -1,5 +1,5 @@
 {
-  "inputs": "eb7f48eb579ac07b30f5d5121e9d51bf4ff267ef0e7d61c867d2258012e00cc7",
+  "inputs": "a07f2e3340255e224a6f5ee9bb14faf71aa819467f4706a19246ab5da13203a2",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -373,17 +373,34 @@
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home"],
+      "pages": ["site/home", "site/models"],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "ax-serif-600.2a493759.woff2",
-          "pages": ["site/home"],
-          "bytes": 2912,
-          "sha256": "d968e90462531378fb92b53f9348a8ca78e5b4fa73ca6f7586561cb128683561",
-          "chars": "一个入型所接有模，"
+          "file": "ax-serif-600.98219cac.woff2",
+          "pages": ["site/home", "site/models"],
+          "bytes": 3600,
+          "sha256": "baeba0b42d09af9b3a83d9642a42e0d3c1f0fbfad9b6511c34738a4a2fd950f2",
+          "chars": "一与个价入型所接有格模，"
+        }
+      ]
+    },
+    {
+      "family": "AX Serif",
+      "weight": "600",
+      "pages": ["site/models"],
+      "style": "normal",
+      "script": "latin",
+      "absent": "",
+      "files": [
+        {
+          "file": "ax-serif-600.woff2",
+          "pages": ["site/models"],
+          "bytes": 12920,
+          "sha256": "d09a631c71ca96ac17911e6dafe58e06dd1b8286bd0e5ae478417a3e7b4d7825",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
         }
       ]
     }

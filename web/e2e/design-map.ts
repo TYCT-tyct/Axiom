@@ -1,11 +1,13 @@
 import { readFileSync } from "node:fs";
-import type { Page } from "@playwright/test";
+import { expect, type Page } from "@playwright/test";
 import consoleEn from "../console/src/locales/en.ts";
 import consoleZh from "../console/src/locales/zh.ts";
 import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
 import presetsZh from "../packages/boards/src/AxApp/regions/RequestPresets.zh.ts";
 import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
 import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
+import uiEn from "../packages/ui/src/locales/en.ts";
+import uiZh from "../packages/ui/src/locales/zh.ts";
 import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import type { Suite } from "./scene.ts";
@@ -23,8 +25,8 @@ export type DesignScene = {
   fonts: string;
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
-  language?: "en";
-  localizeReference?: (page: Page) => Promise<void>;
+  languages?: ("zh" | "en")[];
+  prepareComparison?: (board: Page, page: Page, language: "zh" | "en") => Promise<void>;
   textRasterization?: "grayscale" | "unhinted";
 };
 
@@ -62,9 +64,9 @@ const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
   fonts: "console/pages/request-presets",
   boards: consoleBoards("presets"),
   schemes: consoleSchemes,
-  language: language === "en" ? "en" : undefined,
+  languages: [language],
   textRasterization: language === "zh" ? "unhinted" : "grayscale",
-  localizeReference: async (page) => {
+  prepareComparison: async (board) => {
     const messages = language === "en" ? consoleEn : consoleZh;
     const labels = messages.requestPresets.copy;
     const localized: Record<string, string> = {
@@ -83,19 +85,20 @@ const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
       const keys = ["m3187029f2b", "m98472d23f3", "m74ed19426d", "md666f38b72", "m1f87913ac5"] as const;
       for (const key of keys) localized[presetsZh[key]] = presetsEn[key];
     }
-    await page.evaluate((strings) => {
+    await board.evaluate((strings) => {
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let node = walker.nextNode(); node; node = walker.nextNode()) {
         const translation = strings[node.textContent ?? ""];
         if (translation !== undefined) node.textContent = translation;
       }
     }, localized);
-    await page.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
+    await board.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
     // The console's base typography balances headings and avoids orphaned words.
-    await page.addStyleTag({
+    await board.addStyleTag({
       content:
         ".p-presets :is(h1,h2){text-wrap:balance;word-break:keep-all;overflow-wrap:anywhere}.p-presets p{text-wrap:pretty}",
     });
+    await board.evaluate(() => document.fonts.ready.then(() => {}));
   },
 }));
 
@@ -110,6 +113,58 @@ function useProductFontWeights(faces: Record<string, Face | undefined>) {
     const axis = face.axes?.wght;
     if (typeof axis === "number") rule.style.setProperty("font-variation-settings", `"wght" ${axis}`);
   }
+}
+
+async function prepareModelsComparison(board: Page, page: Page, language: "zh" | "en") {
+  // Put the real page copy in the reference's title and lede so the comparison sees their typography and layout.
+  const { title, description } = (language === "en" ? uiEn : uiZh).publicModels;
+  await board.locator(".hl > h2").evaluate((el, title) => {
+    el.textContent = title;
+  }, title);
+  await board.locator(".hl > .lede").evaluate((el, description) => {
+    el.textContent = description;
+  }, description);
+  await board.evaluate((language) => {
+    document.documentElement.lang = language === "en" ? "en-US" : "zh-CN";
+    for (const el of document.querySelectorAll(".layer, .stats, .leads, .pick")) el.remove();
+  }, language);
+  // The shell uses slate2 in light and slate1 in dark. Removing the lens also removes the sea's grayscale text layer.
+  // The deployed MiSans body face is instanced at 330, while the reference serves the source variable font.
+  await board.addStyleTag({
+    content: `
+      @media (prefers-color-scheme: light) { .board { --bg: var(--panel) !important; } }
+      .mx .lens::before { display: none; }
+      .mx .lede { font-weight: 330; }
+      @media (width: 390px) { .sec { margin-top: 16px; } }
+    `,
+  });
+  // Compare the outlines of the source and instanced MiSans without variable-font hinting moving individual strokes.
+  if (language === "zh") {
+    for (const side of [board, page]) {
+      await side.locator(".hl > .lede").evaluate((el: HTMLElement) => {
+        el.style.textRendering = "geometricPrecision";
+      });
+    }
+  }
+  await board.evaluate(() => document.fonts.ready.then(() => {}));
+
+  // The frame is transparent, so check its spacing even where the screenshot masks the tabs and form fields.
+  const frame = (side: Page) =>
+    side.locator(".tabs.flt").evaluate((el) => {
+      const style = getComputedStyle(el);
+      const box = el.getBoundingClientRect();
+      const lede = document.querySelector(".hl > .lede")?.getBoundingClientRect();
+      return {
+        x: box.x,
+        ledeGap: lede && box.y - lede.bottom,
+        display: style.display,
+        gap: style.gap,
+        padding: style.padding,
+        margin: style.margin,
+        shadow: style.boxShadow,
+      };
+    });
+  expect(await frame(page)).toEqual(await frame(board));
 }
 
 export const designScenes: DesignScene[] = [
@@ -182,5 +237,18 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
+  },
+  {
+    name: "site models",
+    suite: siteSuite,
+    scene: "models",
+    fonts: "site/models",
+    boards: {
+      1440: { file: "Models.dc.html", height: 900 },
+      390: { file: "ModelsPhone.dc.html", height: 844 },
+    },
+    schemes: consoleSchemes,
+    languages: ["zh", "en"],
+    prepareComparison: prepareModelsComparison,
   },
 ];

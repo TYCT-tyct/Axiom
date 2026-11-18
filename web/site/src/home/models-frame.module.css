@@ -1,0 +1,58 @@
+.main {
+  padding-block: 16px 40px;
+  --text1: var(--t1);
+  --text2: var(--t2);
+}
+
+@media (width < 640px) {
+  .main {
+    padding-inline: 20px;
+  }
+}
+
+@media (width >= 1280px) {
+  .main {
+    padding-block-start: 64px;
+  }
+}
+
+/* SiteShell already supplies the margins and keeps the section in document flow. */
+.main [data-models-page] [data-models-body] {
+  position: static;
+  padding: 0;
+}
+
+/* The board calls this heading h2 in its demo. Here it is the document's h1. */
+.main [data-models-page] h1 {
+  margin: 0;
+  color: var(--text1);
+  font-size: 28px;
+  line-height: 36px;
+}
+
+.main [data-models-page] h1 + p {
+  text-wrap: wrap;
+  text-autospace: normal;
+  line-break: strict;
+}
+
+@media (width >= 1280px) {
+  .main [data-models-page] h1 {
+    font-size: 48px;
+    line-height: 56px;
+  }
+}
+
+/* The shared form uses the whole row. Its controls align with the catalogue, as the board's tab labels do. */
+.main [data-models-page] [data-models-filter-row] {
+  grid-column: 1 / -1;
+}
+
+.main [data-models-page] [data-models-filter] {
+  overflow: visible;
+}
+
+.main [data-models-filter] > form {
+  width: 100%;
+  margin-inline-start: 10px;
+}
