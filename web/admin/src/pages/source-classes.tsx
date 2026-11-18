@@ -1,11 +1,25 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange, unwrapEmptyChange } from "@axiom/api";
-import { Button, DataState, EmptyState, PageHeader, Panel, TextAreaField, TextField, useFormat } from "@axiom/ui";
+import {
+  ActionButton,
+  Card,
+  Cluster,
+  DataState,
+  EmptyState,
+  Field,
+  Grid,
+  PageHead,
+  Table,
+  Td,
+  Text,
+  TextArea,
+  useFormat,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
-import { Code, PageBody, State } from "../parts";
+import { Code, Head, PageBody, State } from "../parts";
 import { sourceClassesQuery } from "../queries";
 import { ConditionRows, type Rules, readRules } from "../source-class-rules";
 
@@ -30,18 +44,18 @@ export default function SourceClassesPage() {
   if (query.isError && query.error instanceof ApiError && query.error.status === 404) {
     return (
       <>
-        <PageHeader title={t("sourceClasses.title")} description={t("sourceClasses.description")} />
+        <PageHead title={t("sourceClasses.title")} lede={t("sourceClasses.description")} />
         <PageBody>
-          <Panel title={t("sourceClasses.unavailableTitle")}>
-            <p className="px-4 py-3 text-ui text-t2">{t("sourceClasses.unavailableBody")}</p>
-          </Panel>
+          <Card title={t("sourceClasses.unavailableTitle")}>
+            <Text tone="muted">{t("sourceClasses.unavailableBody")}</Text>
+          </Card>
         </PageBody>
       </>
     );
   }
   return (
     <>
-      <PageHeader title={t("sourceClasses.title")} description={t("sourceClasses.description")} />
+      <PageHead title={t("sourceClasses.title")} lede={t("sourceClasses.description")} />
       <PageBody>
         <DataState query={query}>{(view) => <Classes classes={view.classes} />}</DataState>
       </PageBody>
@@ -66,36 +80,45 @@ export function Classes({ classes }: { classes: Class[] }) {
   const retired = retiring === null ? undefined : classes.find((item) => item.slug === retiring);
   const full = classes.length >= 32;
   const add = (
-    <Button
-      variant="primary"
-      size="md"
+    <ActionButton
+      variant="pri"
       onClick={() => setEditing({ kind: "create" })}
       disabled={full}
       title={full ? t("sourceClasses.limitReached") : undefined}
     >
       {t("sourceClasses.add")}
-    </Button>
+    </ActionButton>
   );
   return (
     <>
-      <Panel title={t("sourceClasses.listTitle")} action={add}>
-        <p className="border-b border-b1 px-4 py-3 text-ui text-t2">{t("sourceClasses.intro")}</p>
+      <Card layout="flush" title={t("sourceClasses.listTitle")} lede={t("sourceClasses.intro")} actions={add}>
         {classes.length === 0 ? (
           <EmptyState title={t("sourceClasses.empty")} action={add} />
         ) : (
-          <ul className="divide-y divide-b1">
-            {classes.map((item) => (
-              <ClassRow
-                key={item.slug}
-                item={item}
-                chinese={chinese}
-                onEdit={() => setEditing({ kind: "edit", slug: item.slug })}
-                onRetire={() => setRetiring(item.slug)}
-              />
-            ))}
-          </ul>
+          <Table label={t("sourceClasses.listTitle")}>
+            <Head
+              cols={[
+                [t("sourceClasses.position"), { align: "end" }],
+                [t("sourceClasses.colName"), { main: true }],
+                t("sourceClasses.colRules"),
+                t("sourceClasses.updated"),
+              ]}
+              action
+            />
+            <tbody>
+              {classes.map((item) => (
+                <ClassRow
+                  key={item.slug}
+                  item={item}
+                  chinese={chinese}
+                  onEdit={() => setEditing({ kind: "edit", slug: item.slug })}
+                  onRetire={() => setRetiring(item.slug)}
+                />
+              ))}
+            </tbody>
+          </Table>
         )}
-      </Panel>
+      </Card>
       {editing === null || (editing.kind === "edit" && edited === undefined) ? null : (
         <Editor key={edited?.slug ?? ""} cls={edited} onClose={() => setEditing(null)} />
       )}
@@ -119,42 +142,40 @@ function ClassRow({
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <li className="grid min-w-0 gap-3 px-4 py-3 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
-      <div className="min-w-0 space-y-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="text-label tabular-nums text-t4">
-            {t("sourceClasses.position", { position: item.position })}
-          </span>
-          <span className="min-w-0 text-ui font-medium text-t1 [overflow-wrap:anywhere]">{nameOf(item, chinese)}</span>
+    <tr>
+      <Td align="end">{item.position}</Td>
+      <Td main>
+        <Cluster>
+          <Text medium>{nameOf(item, chinese)}</Text>
           <Code>{item.slug}</Code>
           {item.system ? <State tone="neutral">{t("sourceClasses.system")}</State> : null}
           {item.fallback ? <State tone="neutral">{t("sourceClasses.fallback")}</State> : null}
-        </div>
-        <p className="text-label text-t2 [overflow-wrap:anywhere]">
+        </Cluster>
+        <Text size="sm" tone="muted">
           {item.description || t("sourceClasses.noDescription")}
-        </p>
-        <p className="text-label text-t3">
-          {item.rules.conditions.length === 0
-            ? t("sourceClasses.noRules")
-            : `${t("sourceClasses.rulesCount", { count: item.rules.conditions.length })} · ${
-                item.rules.match === "any" ? t("sourceClasses.matchAny") : t("sourceClasses.matchAll")
-              }`}
-        </p>
-        <p className="text-label text-t4">
-          {t("sourceClasses.updated", { at: format.dateTime(new Date(item.updated_at)) })}
-        </p>
-      </div>
-      <div className="flex flex-wrap items-center gap-2 lg:justify-end">
-        <Button size="sm" onClick={onEdit}>
-          {t("sourceClasses.edit")}
-        </Button>
-        {item.system ? null : (
-          <Button size="sm" onClick={onRetire}>
-            {t("sourceClasses.retire")}
-          </Button>
-        )}
-      </div>
-    </li>
+        </Text>
+      </Td>
+      <Td>
+        {item.rules.conditions.length === 0
+          ? t("sourceClasses.noRules")
+          : `${t("sourceClasses.rulesCount", { count: item.rules.conditions.length })} · ${
+              item.rules.match === "any" ? t("sourceClasses.matchAny") : t("sourceClasses.matchAll")
+            }`}
+      </Td>
+      <Td>{format.dateTime(new Date(item.updated_at))}</Td>
+      <Td shrink>
+        <Cluster>
+          <ActionButton size="sm" onClick={onEdit}>
+            {t("sourceClasses.edit")}
+          </ActionButton>
+          {item.system ? null : (
+            <ActionButton size="sm" onClick={onRetire}>
+              {t("sourceClasses.retire")}
+            </ActionButton>
+          )}
+        </Cluster>
+      </Td>
+    </tr>
   );
 }
 
@@ -249,17 +270,17 @@ function EditorFields({ current }: { current?: Class }) {
   return (
     <>
       {current ? (
-        <p className="text-ui text-t2">
+        <Text>
           <Code>{current.slug}</Code>
-        </p>
+        </Text>
       ) : (
-        <TextField label={t("sourceClasses.slug")} hint={t("sourceClasses.slugHint")} name="slug" maxLength={32} />
+        <Field label={t("sourceClasses.slug")} hint={t("sourceClasses.slugHint")} name="slug" maxLength={32} />
       )}
-      <div className="grid gap-4 sm:grid-cols-2">
-        <TextField label={t("sourceClasses.name")} name="name" defaultValue={current?.name} maxLength={100} required />
-        <TextField label={t("sourceClasses.nameZh")} name="name_zh" defaultValue={current?.name_zh} maxLength={100} />
-      </div>
-      <TextAreaField
+      <Grid min="16rem">
+        <Field label={t("sourceClasses.name")} name="name" defaultValue={current?.name} maxLength={100} required />
+        <Field label={t("sourceClasses.nameZh")} name="name_zh" defaultValue={current?.name_zh} maxLength={100} />
+      </Grid>
+      <TextArea
         label={t("sourceClasses.descriptionField")}
         hint={t("sourceClasses.descriptionHint")}
         name="description"
@@ -267,7 +288,7 @@ function EditorFields({ current }: { current?: Class }) {
         maxLength={500}
         rows={2}
       />
-      <TextField
+      <Field
         label={t("sourceClasses.positionField")}
         hint={t("sourceClasses.positionHint")}
         name="position"
@@ -278,7 +299,7 @@ function EditorFields({ current }: { current?: Class }) {
         disabled={current?.fallback}
       />
       {current?.fallback ? (
-        <p className="text-ui text-t2">{t("sourceClasses.fallbackRules")}</p>
+        <Text tone="muted">{t("sourceClasses.fallbackRules")}</Text>
       ) : (
         <ConditionRows initial={current?.rules} />
       )}

@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { CheckField, TextAreaField } from "@axiom/ui";
+import { CheckField, Fieldset, Grid, TextArea } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import type { Problem } from "../change";
 import { billingItems, serviceTiers } from "./catalog";
@@ -22,10 +22,8 @@ export function SpecFields({ spec }: { spec?: Spec }) {
   const { t } = useTranslation();
   return (
     <>
-      <fieldset className="min-w-0 space-y-2">
-        <legend className="mb-1 text-ui font-medium text-t2">{t("models.spec.items")}</legend>
-        <p className="text-label text-t4">{t("models.spec.itemsHint")}</p>
-        <div className="grid gap-x-4 gap-y-2 min-[420px]:grid-cols-2">
+      <Fieldset legend={t("models.spec.items")} hint={t("models.spec.itemsHint")}>
+        <Grid min="12rem" gap={8}>
           {billingItems.map((item) => (
             <CheckField
               key={item}
@@ -34,12 +32,10 @@ export function SpecFields({ spec }: { spec?: Spec }) {
               defaultChecked={spec?.items?.includes(item)}
             />
           ))}
-        </div>
-      </fieldset>
-      <fieldset className="min-w-0 space-y-2">
-        <legend className="mb-1 text-ui font-medium text-t2">{t("models.spec.tiers")}</legend>
-        <p className="text-label text-t4">{t("models.spec.tiersHint")}</p>
-        <div className="grid gap-x-4 gap-y-2 min-[420px]:grid-cols-2">
+        </Grid>
+      </Fieldset>
+      <Fieldset legend={t("models.spec.tiers")} hint={t("models.spec.tiersHint")}>
+        <Grid min="12rem" gap={8}>
           {serviceTiers.map((tier) => (
             <CheckField
               key={tier}
@@ -48,9 +44,9 @@ export function SpecFields({ spec }: { spec?: Spec }) {
               defaultChecked={spec?.tiers?.includes(tier)}
             />
           ))}
-        </div>
-      </fieldset>
-      <TextAreaField
+        </Grid>
+      </Fieldset>
+      <TextArea
         label={t("models.spec.other")}
         hint={t("models.spec.otherHint")}
         name="other"

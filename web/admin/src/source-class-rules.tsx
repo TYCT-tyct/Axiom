@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Button, SelectField, TextField } from "@axiom/ui";
+import { ActionButton, Card, Cluster, Field, Grid, Select, Stack, Text } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -47,9 +47,9 @@ export function ConditionRows({ initial }: { initial?: Rules }) {
     ]);
   const remove = (key: number) => setRows((current) => current.filter((row) => row.key !== key));
   return (
-    <div className="space-y-3">
+    <Stack gap={12}>
       <input type="hidden" name="count" value={rows.length} />
-      <SelectField
+      <Select
         label={t("sourceClasses.match")}
         name="match"
         value={match}
@@ -57,15 +57,19 @@ export function ConditionRows({ initial }: { initial?: Rules }) {
       >
         <option value="all">{t("sourceClasses.all")}</option>
         <option value="any">{t("sourceClasses.any")}</option>
-      </SelectField>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui font-medium text-t1">{t("sourceClasses.conditions")}</h3>
-        <Button size="sm" onClick={add} disabled={rows.length >= 8}>
+      </Select>
+      <Cluster justify="between">
+        <Text as="h3" medium>
+          {t("sourceClasses.conditions")}
+        </Text>
+        <ActionButton size="sm" onClick={add} disabled={rows.length >= 8}>
           {t("sourceClasses.addCondition")}
-        </Button>
-      </div>
+        </ActionButton>
+      </Cluster>
       {rows.length === 0 ? (
-        <p className="text-label text-t3">{t("sourceClasses.noConditions")}</p>
+        <Text size="sm" tone="faint">
+          {t("sourceClasses.noConditions")}
+        </Text>
       ) : (
         rows.map((row, index) => (
           <ConditionRow
@@ -77,7 +81,7 @@ export function ConditionRows({ initial }: { initial?: Rules }) {
           />
         ))
       )}
-    </div>
+    </Stack>
   );
 }
 
@@ -95,50 +99,52 @@ function ConditionRow({
 }) {
   const { t } = useTranslation();
   return (
-    <fieldset className="space-y-3 rounded-btn border border-b1 p-3">
-      <div className="grid gap-3 sm:grid-cols-2">
-        <SelectField
-          label={t("sourceClasses.evidence")}
-          name={`evidence-${index}`}
-          value={row.evidence}
-          onChange={(event) => {
-            const evidence = event.target.value as Condition["evidence"];
-            onChange({ evidence, operator: "present", name: "", value: "" });
-          }}
-        >
-          <option value="header">{t("sourceClasses.header")}</option>
-          <option value="usage">{t("sourceClasses.usage")}</option>
-        </SelectField>
-        <SubjectField row={row} index={index} onChange={onChange} />
-        <SelectField
-          label={t("sourceClasses.operator")}
-          name={`operator-${index}`}
-          value={row.operator}
-          onChange={(event) => onChange({ operator: event.target.value, value: "" })}
-        >
-          {(row.evidence === "header" ? headerOperators : usageOperators).map((operator) => (
-            <option key={operator} value={operator}>
-              {t(`sourceClasses.operators.${operator}`)}
-            </option>
-          ))}
-        </SelectField>
-        {row.operator === "present" || row.operator === "absent" ? null : (
-          <TextField
-            label={t("sourceClasses.value")}
-            hint={t("sourceClasses.valueHint")}
-            name={`value-${index}`}
-            value={row.value}
-            onChange={(event) => onChange({ value: event.target.value })}
-            maxLength={256}
-          />
-        )}
-      </div>
-      <div className="flex justify-end">
-        <Button size="sm" onClick={onRemove}>
-          {t("sourceClasses.removeCondition")}
-        </Button>
-      </div>
-    </fieldset>
+    <Card>
+      <Stack gap={12}>
+        <Grid min="16rem" gap={12}>
+          <Select
+            label={t("sourceClasses.evidence")}
+            name={`evidence-${index}`}
+            value={row.evidence}
+            onChange={(event) => {
+              const evidence = event.target.value as Condition["evidence"];
+              onChange({ evidence, operator: "present", name: "", value: "" });
+            }}
+          >
+            <option value="header">{t("sourceClasses.header")}</option>
+            <option value="usage">{t("sourceClasses.usage")}</option>
+          </Select>
+          <SubjectField row={row} index={index} onChange={onChange} />
+          <Select
+            label={t("sourceClasses.operator")}
+            name={`operator-${index}`}
+            value={row.operator}
+            onChange={(event) => onChange({ operator: event.target.value, value: "" })}
+          >
+            {(row.evidence === "header" ? headerOperators : usageOperators).map((operator) => (
+              <option key={operator} value={operator}>
+                {t(`sourceClasses.operators.${operator}`)}
+              </option>
+            ))}
+          </Select>
+          {row.operator === "present" || row.operator === "absent" ? null : (
+            <Field
+              label={t("sourceClasses.value")}
+              hint={t("sourceClasses.valueHint")}
+              name={`value-${index}`}
+              value={row.value}
+              onChange={(event) => onChange({ value: event.target.value })}
+              maxLength={256}
+            />
+          )}
+        </Grid>
+        <Cluster justify="end">
+          <ActionButton size="sm" onClick={onRemove}>
+            {t("sourceClasses.removeCondition")}
+          </ActionButton>
+        </Cluster>
+      </Stack>
+    </Card>
   );
 }
 
@@ -146,7 +152,7 @@ function ConditionRow({
 function SubjectField({ row, index, onChange }: { row: Row; index: number; onChange: (patch: Partial<Row>) => void }) {
   const { t } = useTranslation();
   return row.evidence === "header" ? (
-    <TextField
+    <Field
       label={t("sourceClasses.headerName")}
       hint={t("sourceClasses.headerNameHint")}
       name={`name-${index}`}
@@ -155,7 +161,7 @@ function SubjectField({ row, index, onChange }: { row: Row; index: number; onCha
       maxLength={256}
     />
   ) : (
-    <SelectField
+    <Select
       label={t("sourceClasses.item")}
       name={`item-${index}`}
       value={row.item}
@@ -166,7 +172,7 @@ function SubjectField({ row, index, onChange }: { row: Row; index: number; onCha
           {t(`models.item.${item}`)}
         </option>
       ))}
-    </SelectField>
+    </Select>
   );
 }
 

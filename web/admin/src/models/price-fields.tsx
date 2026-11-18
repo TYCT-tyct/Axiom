@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { TextAreaField, TextField } from "@axiom/ui";
+import { Field, Fieldset, Grid, TextArea } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { isProblem, type Problem } from "../change";
 import { isPerUse, perMillion, perUnit, rateItems } from "./catalog";
@@ -19,7 +19,7 @@ export function RatesFields({ schedule, currency }: { schedule?: Schedule; curre
   const { t } = useTranslation();
   return (
     <>
-      <TextField
+      <Field
         label={t("models.price.currency")}
         hint={t("models.price.currencyHint")}
         name="currency"
@@ -30,14 +30,12 @@ export function RatesFields({ schedule, currency }: { schedule?: Schedule; curre
         spellCheck={false}
         autoCapitalize="characters"
       />
-      <fieldset className="min-w-0 space-y-3">
-        <legend className="mb-1 text-ui font-medium text-t2">{t("models.price.rates")}</legend>
-        <p className="text-label text-t4">{t("models.price.ratesHint")}</p>
-        <div className="grid gap-x-4 gap-y-3 min-[480px]:grid-cols-2">
+      <Fieldset legend={t("models.price.rates")} hint={t("models.price.ratesHint")}>
+        <Grid min="12rem" gap={12}>
           {rateItems.map((item) => {
             const price = schedule?.rates[item];
             return (
-              <TextField
+              <Field
                 key={item}
                 label={t(isPerUse(item) ? "models.price.perUse" : "models.price.perMillion", {
                   item: t(`models.item.${item}`),
@@ -49,8 +47,8 @@ export function RatesFields({ schedule, currency }: { schedule?: Schedule; curre
               />
             );
           })}
-        </div>
-      </fieldset>
+        </Grid>
+      </Fieldset>
     </>
   );
 }
@@ -60,19 +58,13 @@ function EvidenceFields() {
   const { t } = useTranslation();
   return (
     <>
-      <TextAreaField
+      <TextArea
         label={t("models.price.evidence")}
         hint={t("models.price.evidenceHint")}
         name="evidence_note"
         rows={2}
       />
-      <TextField
-        label={t("models.price.evidenceUrl")}
-        name="evidence_url"
-        type="url"
-        inputMode="url"
-        autoComplete="off"
-      />
+      <Field label={t("models.price.evidenceUrl")} name="evidence_url" type="url" inputMode="url" autoComplete="off" />
     </>
   );
 }

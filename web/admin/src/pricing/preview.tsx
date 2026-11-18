@@ -1,11 +1,11 @@
 import { type AdminSchemas, adminApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { DataState, EmptyState, Table, Td, Th, useFormat } from "@axiom/ui";
+import { Cluster, DataState, EmptyState, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { billingItems, percent } from "../models/catalog";
 import { showRate } from "../models/price-fields";
-import { Code, State } from "../parts";
+import { Code, Head, State } from "../parts";
 
 export type PreviewRequest = AdminSchemas["PricingPreviewRequest"];
 type Row = AdminSchemas["PricingPreviewRow"];
@@ -39,18 +39,22 @@ function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefin
   }
   const shown = billingItems.filter((item) => item === "input" || item === "output");
   return (
-    <span className="whitespace-nowrap tabular-nums">
+    <Cluster gap={8}>
       {shown.map((item) => {
         const price = schedule.rates[item];
         return (
-          <span key={item} className="mr-3 inline-block">
-            <span className="text-label text-t4">{t(`models.item.${item}`)}</span>{" "}
+          <Text key={item} as="span" numeric nowrap>
+            <Text as="span" size="sm" tone="faint">
+              {t(`models.item.${item}`)}
+            </Text>{" "}
             {price === undefined ? "—" : decimal(showRate(item, price))}
-          </span>
+          </Text>
         );
       })}
-      <span className="text-label text-t4">{schedule.currency}</span>
-    </span>
+      <Text as="span" size="sm" tone="faint">
+        {schedule.currency}
+      </Text>
+    </Cluster>
   );
 }
 
@@ -73,24 +77,28 @@ function PreviewTable({ rows }: { rows: Row[] }) {
   const { t } = useTranslation();
   return (
     <Table label={t("pricing.preview.title")}>
-      <thead>
-        <tr>
-          <Th>{t("pricing.preview.model")}</Th>
-          <Th>{t("pricing.preview.status")}</Th>
-          <Th>{t("pricing.preview.sale")}</Th>
-          <Th>{t("pricing.preview.current")}</Th>
-          <Th className="hidden md:table-cell">{t("pricing.preview.cost")}</Th>
-          <Th>{t("pricing.preview.marginTitle")}</Th>
-        </tr>
-      </thead>
+      <Head
+        cols={[
+          [t("pricing.preview.model"), { main: true }],
+          t("pricing.preview.status"),
+          t("pricing.preview.sale"),
+          t("pricing.preview.current"),
+          t("pricing.preview.cost"),
+          t("pricing.preview.marginTitle"),
+        ]}
+      />
       <tbody>
         {rows.map((row) => (
           <tr key={`${row.model_id}/${row.endpoint_id ?? ""}`}>
-            <Td className="max-w-56 min-w-32">
-              <p className="truncate text-t1" title={row.slug}>
+            <Td main>
+              <Text>
                 <Code>{row.slug}</Code>
-              </p>
-              {row.endpoint_id ? <p className="text-label text-t4">{row.endpoint_id.slice(0, 8)}</p> : null}
+              </Text>
+              {row.endpoint_id ? (
+                <Text size="sm" tone="faint">
+                  {row.endpoint_id.slice(0, 8)}
+                </Text>
+              ) : null}
             </Td>
             <Td>
               <State tone={tones[row.status]}>{t(`pricing.preview.state.${row.status}`)}</State>
@@ -102,10 +110,12 @@ function PreviewTable({ rows }: { rows: Row[] }) {
               {row.current_sale ? (
                 <Price schedule={row.current_sale} />
               ) : (
-                <span className="text-t3">{t("pricing.publish.unavailable")}</span>
+                <Text as="span" tone="faint">
+                  {t("pricing.publish.unavailable")}
+                </Text>
               )}
             </Td>
-            <Td className="hidden md:table-cell">
+            <Td>
               <Price schedule={row.cost} />
             </Td>
             <Td>

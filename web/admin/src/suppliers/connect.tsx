@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
 import { readForm, useErrors } from "@axiom/app";
-import { Button, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
+import { ActionButton, Cluster, Dialog, Field, FormError, Stack, Text, TextLink } from "@axiom/ui";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -42,7 +42,6 @@ function DetectDialog({
     <Dialog title={t("suppliers.connect.title")} onClose={onClose}>
       <form
         noValidate
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           const origin = (readForm(event.currentTarget).origin ?? "").trim().replace(/\/+$/, "");
@@ -52,28 +51,30 @@ function DetectDialog({
           }
         }}
       >
-        <p className="text-t2">{t("suppliers.connect.detectIntro")}</p>
-        {detect.isError || missing ? (
-          <FormError>{missing ? t("suppliers.connect.originInvalid") : errors.message(detect.error)}</FormError>
-        ) : null}
-        {detection && !detection.kind ? <FormError>{t("suppliers.connect.unrecognised")}</FormError> : null}
-        <TextField
-          label={t("suppliers.connect.origin")}
-          hint={t("suppliers.connect.originHint")}
-          name="origin"
-          type="url"
-          inputMode="url"
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={255}
-          error={errors.field(detect.error, "origin")}
-        />
-        <div className="flex justify-end gap-2 pt-2">
-          <Button size="md" onClick={onClose}>
-            {t("cancel", { ns: "common" })}
-          </Button>
-          <SubmitButton pending={detect.isPending}>{t("suppliers.connect.detect")}</SubmitButton>
-        </div>
+        <Stack>
+          <Text tone="muted">{t("suppliers.connect.detectIntro")}</Text>
+          {detect.isError || missing ? (
+            <FormError>{missing ? t("suppliers.connect.originInvalid") : errors.message(detect.error)}</FormError>
+          ) : null}
+          {detection && !detection.kind ? <FormError>{t("suppliers.connect.unrecognised")}</FormError> : null}
+          <Field
+            label={t("suppliers.connect.origin")}
+            hint={t("suppliers.connect.originHint")}
+            name="origin"
+            type="url"
+            inputMode="url"
+            autoComplete="off"
+            spellCheck={false}
+            maxLength={255}
+            error={errors.field(detect.error, "origin")}
+          />
+          <Cluster justify="end">
+            <ActionButton onClick={onClose}>{t("cancel", { ns: "common" })}</ActionButton>
+            <ActionButton variant="pri" type="submit" pending={detect.isPending}>
+              {t("suppliers.connect.detect")}
+            </ActionButton>
+          </Cluster>
+        </Stack>
       </form>
     </Dialog>
   );
@@ -117,15 +118,13 @@ function CreateDialog({ detection, onClose }: { detection: Detection; onClose: (
       }
       done={(supplier) => (
         <>
-          <p className="text-t1">{t("suppliers.connect.connecting", { name: supplier.name })}</p>
-          <p>{t("suppliers.connect.next")}</p>
-          <Link
-            to="/suppliers/$supplierId"
-            params={{ supplierId: supplier.id }}
-            className="text-accent underline underline-offset-4"
-          >
-            {t("suppliers.connect.view")}
-          </Link>
+          <Text>{t("suppliers.connect.connecting", { name: supplier.name })}</Text>
+          <Text tone="muted">{t("suppliers.connect.next")}</Text>
+          <TextLink>
+            <Link to="/suppliers/$supplierId" params={{ supplierId: supplier.id }}>
+              {t("suppliers.connect.view")}
+            </Link>
+          </TextLink>
         </>
       )}
       onClose={onClose}
@@ -138,16 +137,20 @@ function DetectedIntro({ detection }: { detection: Detection }) {
   const kind = detection.kind ?? "";
   return (
     <>
-      <p>
+      <Text>
         {t("suppliers.connect.detected", { kind })}
         {detection.generation ? ` · ${detection.generation}` : ""}
         {detection.detected_version ? ` · ${detection.detected_version}` : ""}
-      </p>
-      <p className="text-label text-t3">
+      </Text>
+      <Text size="sm" tone="faint">
         <Code>{detection.origin}</Code>
-      </p>
-      <p>{t("suppliers.connect.auto")}</p>
-      {kind === "newapi" ? <p className="text-label text-t3">{t("suppliers.connect.scopes")}</p> : null}
+      </Text>
+      <Text>{t("suppliers.connect.auto")}</Text>
+      {kind === "newapi" ? (
+        <Text size="sm" tone="faint">
+          {t("suppliers.connect.scopes")}
+        </Text>
+      ) : null}
     </>
   );
 }
@@ -157,7 +160,7 @@ function CreateFields({ error, fields, name }: { error: unknown; fields: Detecti
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t("suppliers.connect.name")}
         hint={t("suppliers.connect.nameHint")}
         name="name"
@@ -166,7 +169,7 @@ function CreateFields({ error, fields, name }: { error: unknown; fields: Detecti
         autoComplete="off"
         error={errors.field(error, "name")}
       />
-      <TextField
+      <Field
         label={t("suppliers.connect.account")}
         hint={t("suppliers.connect.accountHint")}
         name="upstream_account"
@@ -175,7 +178,7 @@ function CreateFields({ error, fields, name }: { error: unknown; fields: Detecti
         spellCheck={false}
         error={errors.field(error, "upstream_account")}
       />
-      <TextField
+      <Field
         label={t("suppliers.connect.currency")}
         hint={t("suppliers.connect.currencyHint")}
         name="settlement_currency"
