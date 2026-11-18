@@ -1,5 +1,6 @@
 import type { Messages } from "@axiom/ui";
 import { en as announcements } from "./announcements";
+import { en as callsBoard } from "./calls";
 import { en as keysMessages } from "./keys";
 import { en as overviewBoard } from "./overview";
 import { en as providerKeys } from "./provider-keys";
@@ -13,6 +14,7 @@ import type zh from "./zh";
 
 export default {
   announcements,
+  callsBoard,
 
   forbiddenHint: "Ask an admin of the workspace if you need it.",
 
@@ -338,37 +340,6 @@ export default {
     cacheHit: "Cached",
     ms: "{{value}} ms",
     tokens: "{{input}} / {{output}}",
-  },
-  call: {
-    title: "Call",
-    description: "The result, usage and cost of this call.",
-    back: "Calls",
-    notFound: "Call not found",
-    notFoundBody: "It may belong to another account, or the ID is wrong.",
-    summary: "Summary",
-    status: "Result",
-    id: "Call ID",
-    at: "Started",
-    model: "Model",
-    app: "Client",
-    requestClass: "Request class",
-    serviceTier: "Service tier",
-    finish: "Finish reason",
-    latency: "Total time",
-    firstToken: "Time to first token",
-    cache: "Response cache",
-    cacheHit: "Hit",
-    cacheHitBody:
-      "This call was answered from the response cache: no upstream request was made and nothing was charged.",
-    session: "Session",
-    subagent: "Subagent",
-    key: "Key used",
-    workspace: "Workspace",
-    ip: "Source address",
-    cost: "Cost",
-    free: "This call was free; nothing was charged.",
-    usage: "Usage",
-    noUsage: "This call used nothing.",
   },
   security: {
     description: "Two-step verification and your account details.",

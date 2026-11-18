@@ -315,7 +315,9 @@ web-checks: web-embed
     {{ web }} limits
     {{ web }} unused
     {{ web }} duplicates
-    {{ web }} test
+    # Full-board proofs compete with other test workers for CPU and Chromium resources.
+    {{ web }} test --exclude scripts/boards.test.ts --exclude packages/boards/src/regions.test.ts
+    {{ web }} test --maxWorkers=1 scripts/boards.test.ts packages/boards/src/regions.test.ts
     {{ web }} budget
 
 # Cache the selected test list: a partial pass cannot stand for any other shard or the suite.
