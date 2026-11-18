@@ -17,12 +17,10 @@ runs:
     - if: runner.environment == 'github-hosted'
       uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
       with:
-        # The action pins just and the cache client; sources.json pins every downloaded font.
-        key: ${{ runner.os }}-ci-tools-${{ inputs.node }}-${{ hashFiles('.github/actions/setup/**', 'web/scripts/fonts/sources.json') }}
+        key: ${{ runner.os }}-ci-tools-${{ inputs.node }}-${{ hashFiles('.github/actions/setup/**') }}
         path: |
           ${{ runner.tool_cache }}/just
           ${{ runner.temp }}/cache-client
-          ~/.cache/axiom/xdg/axiom-fonts
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: go.mod
@@ -48,7 +46,7 @@ runs:
       run: pnpm --dir web install --frozen-lockfile
       shell: bash
     - if: runner.environment == 'github-hosted' && inputs.node == 'true'
-      name: Prepare hosted content cache and pinned fonts
+      name: Prepare hosted content cache
       shell: bash
       run: |
         client="$RUNNER_TEMP/cache-client"
@@ -56,10 +54,32 @@ runs:
           npm install --prefix "$client" --ignore-scripts --no-audit --no-fund --no-package-lock @actions/cache@6.3.0
         fi
         echo "ACTIONS_CACHE_CLIENT=$client/node_modules/@actions/cache/lib/cache.js" >> "$GITHUB_ENV"
+    - if: runner.environment == 'github-hosted' && inputs.node == 'true'
+      id: font-key
+      shell: bash
+      run: |
+        digest=$(jq -Sc '.sources | map_values(.sha256)' web/scripts/fonts/sources.json | sha256sum)
+        echo "key=source-fonts-${digest%% *}" >> "$GITHUB_OUTPUT"
+    - if: runner.environment == 'github-hosted' && inputs.node == 'true'
+      id: fonts
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.font-key.outputs.key }}
+        path: ~/.cache/axiom/xdg/axiom-fonts
+    - if: runner.environment == 'github-hosted' && inputs.node == 'true'
+      name: Verify pinned source fonts
+      shell: bash
+      run: |
         XDG_CACHE_HOME="$HOME/.cache/axiom/xdg" node --input-type=module -e '
           const { sources, sourceFont } = await import("./web/packages/boards/fonts.ts");
           await Promise.all(Object.keys(sources).map(sourceFont));
         '
+    # Let the first verified download seed jobs that start later, even if the rest of this job fails.
+    - if: runner.environment == 'github-hosted' && inputs.node == 'true' && steps.fonts.outputs.cache-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.font-key.outputs.key }}
+        path: ~/.cache/axiom/xdg/axiom-fonts
     # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs on a hosted runner.
     # A self-hosted host has the browser's system libraries installed once; installing them per job would take the
     # host's apt lock from parallel jobs at once

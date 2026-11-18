@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 
 type Source = { url: string; sha256: string; member?: string };
 export const sources: Record<string, Source> = JSON.parse(
@@ -25,18 +26,13 @@ async function loadFont(name: string): Promise<Buffer> {
   if (!source) throw new Error(`unknown font ${name}`);
   const file = `${source.sha256}-${name}`;
   const shared = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "axiom-fonts", file);
-  let data: Buffer;
-  if (existsSync(shared)) data = readFileSync(shared);
-  else {
-    const response = await fetch(source.url);
-    if (!response.ok) throw new Error(`font download failed: ${name} ${response.status}`);
-    data = Buffer.from(await response.arrayBuffer());
-  }
+  const cached = existsSync(shared);
+  const data = cached ? readFileSync(shared) : await downloadFont(name, source.url);
   if (createHash("sha256").update(data).digest("hex") !== source.sha256)
     throw new Error(`font digest mismatch: ${name}`);
   // The shared cache outlives the checkout (CI keeps it on its web cache volume): a font is downloaded once, not on
   // every run. Written under a temporary name and renamed, so a concurrent reader never sees half a file.
-  if (!existsSync(shared)) {
+  if (!cached && !existsSync(shared)) {
     mkdirSync(dirname(shared), { recursive: true });
     const partial = `${shared}.${randomUUID()}.part`;
     try {
@@ -45,6 +41,7 @@ async function loadFont(name: string): Promise<Buffer> {
     } finally {
       rmSync(partial, { force: true });
     }
+    console.log(`cached source font: ${name}`);
   }
   if (!source.member) return data;
   return execFileSync(
@@ -56,4 +53,24 @@ async function loadFont(name: string): Promise<Buffer> {
     ],
     { input: data, maxBuffer: 64 * 1024 * 1024 },
   );
+}
+
+async function downloadFont(name: string, url: string): Promise<Buffer> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return Buffer.from(await response.arrayBuffer());
+    } catch (error) {
+      if (
+        attempt === 3 ||
+        !(error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError"))
+      ) {
+        throw new Error(`font download failed: ${name}`, { cause: error });
+      }
+      const waitMs = 1000 * 2 ** (attempt - 1);
+      console.warn(`font download interrupted: ${name} (attempt ${attempt}/3, retry in ${waitMs} ms): ${error}`);
+      await delay(waitMs);
+    }
+  }
 }

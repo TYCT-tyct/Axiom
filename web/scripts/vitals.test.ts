@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
+import { mainThreadBusyMs } from "../e2e/vitals-cpu.ts";
 import { bracketed, type Pair, scaled, scaledLcp } from "./vitals.ts";
+
+// Chrome Headless Shell 156.0.8078.4, using the Chromium build pinned for our runners.
+const localTrace = [
+  { ph: "M", name: "thread_name", pid: 2464516, tid: 2464516, args: { name: "CrRendererMain" } },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464516, tid: 2464516, dur: 310, tdur: 267 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464516, tid: 2464516, dur: 3252, tdur: 1688 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464431, tid: 2464453, dur: 87, tdur: 85 },
+  { ph: "X", name: "BlinkScheduler_PerformMicrotaskCheckpoint", pid: 2464516, tid: 2464516, dur: 9, tdur: 9 },
+];
+
+it("sums the self-hosted Chrome build's renderer tasks in milliseconds", () => {
+  expect(mainThreadBusyMs(localTrace)).toBe(1.955);
+});
+
+it("requires measured tasks on a renderer main thread", () => {
+  expect(() =>
+    mainThreadBusyMs([
+      { ph: "M", name: "thread_name", pid: 4, tid: 4, args: { name: "CrRendererMain" } },
+      { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4, tid: 4 },
+      { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 8, tid: 8, tdur: 1000 },
+    ]),
+  ).toThrow("the trace has no main-thread task durations");
+});
 
 describe("scaled", () => {
   it.each([

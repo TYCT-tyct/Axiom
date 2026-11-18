@@ -49,11 +49,13 @@
 
 仍只需把 `RUNS_ON`、`RUNS_ON_HEAVY`、`RUNS_ON_TRAIN` 指向 JSON 标签（如 `"ubuntu-latest"`）。单次比较可在本分支 dispatch 时传 `runs_on='"ubuntu-latest"'`；留空保持原池选择，不修改仓库变量，也不改变其他 PR。
 
-setup 按仓库版本安装 Go、Node、pnpm、just，托管环境通过 Actions 缓存工具和依赖。Playwright 镜像自带 Chromium、系统库和字体；源字体按 `sources.json` 的 SHA-256 下载、校验并缓存，挂入容器。只有宿主的 `axiom-ci.slice` 正在运行时才传父 cgroup 并核验其配额；每个容器仍用独立网络命名空间，CPU 上限取 runner 可用核数与 8 的较小值。
+setup 按仓库版本安装 Go、Node、pnpm、just，托管环境通过 Actions 缓存工具和依赖。Playwright 镜像自带 Chromium、系统库和字体。只有宿主的 `axiom-ci.slice` 正在运行时才传父 cgroup 并核验其配额；每个容器仍用独立网络命名空间，CPU 上限取 runner 可用核数与 8 的较小值。
+
+源字体挂入容器。托管作业按 `sources.json` 中的字体名和 SHA-256 还原独立的 Actions 缓存，自管作业读共享卷。每次读取都校验 SHA-256。下载断线或超时后分别等 1 秒、2 秒再试，最多尝试三次。托管作业首次校验完就上传缓存，供该分支随后启动的作业使用。
 
 持久 runner 继续只读写本地内容缓存。托管 runner 用官方 `@actions/cache` 客户端（setup 固定版本，避免自写缓存服务协议），在 `web_cache.py` 原键生成和成功判定之外增加存取；构建、e2e、vitals 和单板标记分别使用其原内容键，无前缀回退，归档路径相对缓存目录。故障回到实跑，失败不写通过标记；冷缓存与缓存淘汰会增加耗时。浏览器证据按实际 `runner.environment` 选择持久目录或失败 artifact，和变量是否填写无关。
 
-比较前须确认账户剩余包含额度足以覆盖全作业的超时上限总和；无法读取用量或剩余额度不足时不发起托管运行。两次整套 dispatch 均留空 base/release/gate_stress，先托管、后留空 `runs_on` 跑自管；不要 rerun，也不要改仓库变量。作业结束后运行 `python3 scripts/ci/runner-comparison.py --hosted <运行号> --self-hosted <运行号>`，把表格放进 PR。准备开销包含 setup 和缓存收尾，队列不含上游依赖等待。托管 setup 结束后记录虚拟机 CPU 时间，按 CPU 利用率近似可并行部分估算公开四核时间；这是乐观估计，串行 CPU、网络、缓存和 vitals 的绝对计时门禁不能据此证明。无托管实测不填估算数字。
+公开仓库的标准托管 runner 计算时间免费，见 [GitHub 托管 runner 规格](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)。两次整套 dispatch 均留空 base/release/gate_stress，先托管、后留空 `runs_on` 跑自管。作业结束后运行 `python3 scripts/ci/runner-comparison.py --hosted <运行号> --self-hosted <运行号>`，把实测耗时和排队放进 PR。准备开销包含 setup 和缓存收尾，队列只计作业就绪后等 runner 的时间。
 
 ## runner 管理
 
