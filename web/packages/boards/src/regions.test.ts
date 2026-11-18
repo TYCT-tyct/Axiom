@@ -114,18 +114,16 @@ function edit(root: Element, region: Region) {
 }
 
 describe("region generation", () => {
-  it("passes noJsxLiterals for every generated region", () => {
+  it.each(regions)("passes noJsxLiterals for $board/$name", ({ board, name }) => {
     const web = join(packageRoot, "../..");
-    for (const { board, name } of regions) {
-      const code = readFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), "utf8");
-      const output = execFileSync(
-        join(web, "node_modules/.bin/biome"),
-        ["lint", "--only=style/noJsxLiterals", "--write", "--stdin-file-path=scripts/region-proof.tsx"],
-        { cwd: web, input: code, encoding: "utf8" },
-      );
-      expect(output, `${board}/${name}`).toBe(code);
-    }
-  }, 30_000);
+    const code = readFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), "utf8");
+    const output = execFileSync(
+      join(web, "node_modules/.bin/biome"),
+      ["lint", "--only=style/noJsxLiterals", "--write", "--stdin-file-path=scripts/region-proof.tsx"],
+      { cwd: web, input: code, encoding: "utf8" },
+    );
+    expect(output).toBe(code);
+  });
   it("keeps ancestor rules, state/pseudo selectors, grouping rules and used keyframes, and drops unrelated rules", () => {
     const markup =
       '<div class="ov"><div class="shell"></div><section class="page"><b class="qtbl {{state}}">中文</b></section><section class="other"><b>other</b></section></div>';
@@ -211,7 +209,9 @@ describe("region generation", () => {
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const manifest = regions.filter((region) => region.board === board && !region.render);
+      const manifest = regions.filter(
+        (region) => region.board === board && (region.name === "Shell" || region.name === "Overview"),
+      );
       const drawn = fragment(markup);
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();

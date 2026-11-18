@@ -9,14 +9,14 @@ export const zh = {
   create: "新建工作区",
   default: "默认",
   keys: "查看 key",
-  keysNamed: "查看 {{name}} 的 key",
+  keysNamed: "查看 key：{{name}}",
   unavailable: {
     title: "工作区暂不可用",
     body: "当前连接的服务器还不支持工作区，稍后刷新再试。",
   },
   col: { name: "名称", status: "状态" },
   editNamed: "编辑 {{name}}",
-  budgetNamed: "{{name}} 的预算",
+  budgetNamed: "预算：{{name}}",
   form: {
     name: "名称",
     nameMissing: "填写名称。",
@@ -67,14 +67,14 @@ export const en: Messages<typeof zh> = {
   create: "New workspace",
   default: "Default",
   keys: "View keys",
-  keysNamed: "View the keys of {{name}}",
+  keysNamed: "View keys: {{name}}",
   unavailable: {
     title: "Workspaces unavailable",
     body: "The server you reached doesn’t support workspaces yet. Reload in a while.",
   },
   col: { name: "Name", status: "Status" },
   editNamed: "Edit {{name}}",
-  budgetNamed: "Budget of {{name}}",
+  budgetNamed: "Budget: {{name}}",
   form: {
     name: "Name",
     nameMissing: "Enter a name.",

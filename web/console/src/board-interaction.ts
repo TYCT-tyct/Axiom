@@ -1,6 +1,6 @@
 import { type KeyboardEvent, useSyncExternalStore } from "react";
 
-export function boardMedia(query: string) {
+function boardMedia(query: string) {
   return {
     subscribe: (listener: () => void) => {
       const list = matchMedia(query);
@@ -13,6 +13,7 @@ export function boardMedia(query: string) {
 
 // The shell uses the tablet board from 820px, with its sidebar folded below 1024px.
 export const phoneWidth = boardMedia("(max-width: 819px)");
+export const wideWidth = boardMedia("(min-width: 1024px)");
 
 export function useBoardMedia(query: ReturnType<typeof boardMedia>) {
   return useSyncExternalStore(query.subscribe, query.matches);

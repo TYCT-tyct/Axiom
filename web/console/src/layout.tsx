@@ -10,7 +10,8 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { type AnchorHTMLAttributes, type ReactNode, type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { boardMedia, phoneWidth, pressBoardButton, useBoardMedia } from "./board-interaction";
+import { useWide } from "./board";
+import { phoneWidth, pressBoardButton, useBoardMedia } from "./board-interaction";
 import { balanceQuery, siteQuery } from "./queries";
 
 // The pages the shell links to, by the board's page key: the address, what the session must hold to open it, and the
@@ -36,8 +37,6 @@ const account: Page[] = ["profile", "security", "notify"];
 
 // The board's own state classes for the personal space, as it draws it; only the level and the page vary here.
 const drawn = "spP woP wa2 rw tx0 tm1 ap0 lf0 wsk0 nks0 cz0 ck0 ct1 den0 kp0 yrc0 pico0";
-
-const wideWidth = boardMedia("(min-width: 1024px)");
 
 // The shell's departures from the drawing, which the regions leave to the page (packages/boards/manifest/shell.ts). The document
 // scrolls, not the board's fixed frame (port design §3.3): the bar sticks to the top, the sidebar below it (56px is the
@@ -212,7 +211,7 @@ function usePreferenceValues() {
 // The wide sidebar folds below 1024px until the person unfolds it.
 function useSidebarValues() {
   const { t } = useTranslation();
-  const wide = useBoardMedia(wideWidth);
+  const wide = useWide();
   const [collapsed, setCollapsed] = useState<boolean>();
   const folded = collapsed ?? !wide;
   return {

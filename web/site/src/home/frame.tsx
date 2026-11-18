@@ -4,7 +4,7 @@ import { useEffectModule } from "@axiom/fx";
 import { type ReactNode, useCallback, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSiteBrand } from "../shell";
-import { useFrameBehaviour } from "./behaviour";
+import { useDeparture, useFrameBehaviour } from "./behaviour";
 import { BrandPlaces } from "./brand";
 import { links } from "./links";
 import { useScheme } from "./scheme";
@@ -47,7 +47,8 @@ const frameText = (word: (key: BoardKey) => string, language: string, name: stri
 
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
-// its engines through packages/fx: the sea after the first content, the switches when first used (switches.ts).
+// its engines through packages/fx: the sea after the first content, the switches when first used (switches.ts), the
+// departure to the console's sign-in pages when a [data-go] link is first pressed (behaviour.ts).
 //
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
 // language. So React writes those words once, in the language the page opened in, and never again: they are the
@@ -64,6 +65,7 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     module.startSea(frame, frame.querySelector(".hs > main") ?? frame, scheme === "light"),
   );
   useSwitches(root, sea);
+  useDeparture(root, sea);
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
   const brand = useSiteBrand();
   const name = brand?.name ?? t("brand", { ns: "common" });
