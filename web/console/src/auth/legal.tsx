@@ -1,5 +1,7 @@
-import type { Schemas } from "@axiom/api";
-import { CheckField, FormError, Panel } from "@axiom/ui";
+import { ApiError, type Schemas } from "@axiom/api";
+import ModelsCard from "@axiom/boards/AxApp/regions/ModelsCard";
+import { SectionHeader } from "@axiom/boards/ds";
+import { CheckField, FormError } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -90,10 +92,18 @@ export function useLegalConsent(): LegalConsentState {
 // needs no acceptance; a failed read blocks the form rather than letting it submit into consent_required.
 export function LegalConsent({ consent }: { consent: LegalConsentState }) {
   const { t } = useTranslation();
+  const { t: common } = useTranslation("common");
   if (consent.query.isPending) {
-    return <p className="text-label text-t4">{t("legal.loading")}</p>;
+    return (
+      <p role="status" className="text-label text-t4">
+        {t("legal.loading")}
+      </p>
+    );
   }
   if (consent.query.isError) {
+    if (consent.query.error instanceof ApiError && consent.query.error.status === 403) {
+      return <FormError>{common("state.forbiddenTitle")}</FormError>;
+    }
     return (
       <FormError>
         {t("legal.error")}{" "}
@@ -107,17 +117,14 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
     return null;
   }
   return (
-    <div className="space-y-3">
+    <div className="board ax ov">
       {consent.documents.map((document) => {
         const title = t(`legal.${document.kind}`);
         return (
-          <Panel
-            key={`${document.kind}:${documentLocale(document)}`}
-            title={title}
-            action={<span className="text-label text-t4">{t("legal.version", { version: document.version })}</span>}
-          >
+          <ModelsCard t={String} key={`${document.kind}:${documentLocale(document)}`}>
+            <SectionHeader title={title} description={t("legal.version", { version: document.version })} />
             <LegalMarkdown body={document.body} label={title} />
-          </Panel>
+          </ModelsCard>
         );
       })}
       <CheckField

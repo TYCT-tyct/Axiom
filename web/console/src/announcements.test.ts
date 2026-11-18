@@ -22,7 +22,7 @@ describe("site announcement entry", () => {
   it("uses a native keyboard entry and treats administrator text as text", () => {
     const title = "维护🛠".repeat(60);
     const html = render({ data: [{ id: "notice", title, body: '<script>alert("x")</script>' }] });
-    expect(html).toContain("<details>");
+    expect(html).toContain("<details ");
     expect(html).toContain("<summary>announcements.title</summary>");
     expect(html).toContain(title);
     expect(html).toContain("&lt;script&gt;");
@@ -40,12 +40,18 @@ describe("site announcement entry", () => {
 
   it.each([
     [new ApiError(404, "request"), "announcements.unavailable"],
-    [new ApiError(403, "request"), "announcements.error"],
     [new Error("offline"), "announcements.error"],
   ])("provides a retry after a request failure", (error, message) => {
     const html = render(undefined, error);
     expect(html).toContain('role="alert"');
     expect(html).toContain(message);
     expect(html).toContain("announcements.retry");
+  });
+
+  it("shows a permission state instead of cached announcements after access is refused", () => {
+    const html = render({ data: [{ title: "Cached announcement" }] }, new ApiError(403, "request"));
+    expect(html).toContain("state.forbiddenTitle");
+    expect(html).not.toContain("Cached announcement");
+    expect(html).not.toContain("announcements.retry");
   });
 });
