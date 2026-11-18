@@ -163,6 +163,8 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           node: ${{ needs.changes.outputs.light != 'true' }}
+      - if: needs.changes.outputs.light != 'true'
+        run: node --test scripts/ci/font-download.test.mjs
       # Each known-flaky test names an open issue; once the issue closes the entry must go (CONTRIBUTING.md「合并队列」)
       - run: python3 scripts/check_flaky.py
         env:
@@ -173,10 +175,14 @@ jobs:
         run: just md-checks scope ${{ github.event_name != 'pull_request' && 'secrets' || '' }}
       - if: needs.changes.outputs.light != 'true' && github.event_name == 'pull_request'
         run: just script-tests check-static pr
+        env:
+          ACTIONS_CACHE_CLIENT: "" # cache tests use their own temporary roots
       # `train` is explicit: a batch can improve a number by more than the tolerance with no single PR crossing it, so
       # the ratchet reports the improvement instead of failing; the PR branch above passes `pr` and keeps it strict.
       - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request'
         run: just docs check-static train secrets
+        env:
+          ACTIONS_CACHE_CLIENT: ""
       # A PR or train is checked like a pull request from its base: merged migrations never change, and a schema does not
       # newly require a field that old nodes or pages lack during a rolling release. Main has no base.
       - if: env.BASE != '' && needs.changes.outputs.light != 'true'

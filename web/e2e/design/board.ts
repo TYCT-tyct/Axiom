@@ -20,6 +20,8 @@ export type BoardScene = {
   props?: Record<string, string>;
   actions?: ([string, ...unknown[]] | { click: string })[];
   engines?: string[];
+  // DOM extraction can load the faces used by the layout after mounting.
+  preloadFonts?: false;
 };
 
 export type OpenBoard = {
@@ -193,7 +195,7 @@ ${dcLogic}</script></head><body><div id="root"></div>
 <script>${script}</script>
 <script>(async () => {
 ${[look, fill, render, patch, bind, mount].join("\n")}
-${board.engines ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
+${board.engines && board.preloadFonts !== false ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
 mount(${inline(mark(template))});
 })();</script></body></html>`,
   };
@@ -247,6 +249,7 @@ export async function openBoard(
   await page.goto(`${origin}/`);
   if (board.engines) await page.locator("#root > *").first().waitFor({ state: "attached" });
   try {
+    if (board.preloadFonts === false) await page.evaluate(() => document.fonts.ready.then(() => {}));
     if (errors.length)
       throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);
     for (const action of board.actions ?? []) {

@@ -17,12 +17,13 @@ it("converts a browser-drawn subtree deterministically and reads changes in its 
     text: { heading: "h1" },
     elements: { ".draw": { set: { onclick: "{{click}}" } } },
   };
-  const source = `<x-dc><helmet><style>*{font-family:sans-serif}.host .page{color:red}.other{color:blue}</style></helmet>
-<main class="host {{rootC}}"><section class="page" ref="{{root}}" data-k="name"></section><aside class="other"></aside></main>
+  const source = `<x-dc><helmet><style>*{font-family:'Axiom Sans',sans-serif}.host .page{color:red}.other{color:blue}</style></helmet>
+<main class="host {{rootC}}"><section class="page" ref="{{root}}" data-k="name"></section><aside class="other">Outside region</aside></main>
 </x-dc><script data-dc-script>class Component extends DCLogic {
   root = el => { this.el = el; };
   renderVals() { return {root: this.root, rootC: 'lvP'}; }
   go(page) {
+    this.el.dataset.loadedSourceFonts = [...document.fonts].filter(face => face.status === 'loaded').length;
     this.el.innerHTML = '<h1>' + page + '</h1><button class="draw">Draw</button>';
     this.el.querySelector('button').addEventListener('click', () => {
       this.el.insertAdjacentHTML('beforeend', '<b class="row">中文 ' + Math.random() + '</b><b class="row">' + Date.now() + '</b>');
@@ -36,6 +37,7 @@ it("converts a browser-drawn subtree deterministically and reads changes in its 
     const first = await draw();
     expect(await draw()).toBe(first);
     expect(first).toContain('class="host lvP"');
+    expect(first).toContain('data-loaded-source-fonts="1"');
     expect(first).toContain('data-k="name"');
     expect(first).not.toMatch(/data-design-key|data-ref|data-event-/);
     expect(first).toContain("1792814400000");

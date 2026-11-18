@@ -4,7 +4,7 @@ import { expect, type Page, type TestInfo } from "@playwright/test";
 import { blankCanvases } from "./canvas.ts";
 import { pauseFrames, resumeFrames } from "./frames.ts";
 import type { Region, Ruling } from "./rulings.ts";
-import { freeze } from "./stage.ts";
+import { freeze, repaint } from "./stage.ts";
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -69,6 +69,7 @@ export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] =
   await freeze(page);
   const saved = await blankCanvases(page, canvases);
   try {
+    await repaint(page);
     return await page.screenshot({ animations: "disabled", caret: "hide", scale: "css" });
   } finally {
     await saved.evaluate((restore) => restore());
