@@ -71,3 +71,13 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^web/packages/boards/(inputs/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)\.logic\.html|src/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)/logic\.ts)$''']
 regexes = ['''^sk-ax-7f3c9a1e5b02$''']
+
+# `keyPopStyle: p.chips.keyOpts0.length` in pushed commit f280fd28 reads `key` before `: ` and flags the TypeScript
+# property access under generic-api-key (entropy 3.76). Preserve the pushed history and allow only that exact
+# expression in that file under generic-api-key; any real credential elsewhere in the file still fails.
+[[allowlists]]
+description = "keyPopStyle expression in earlier commit of console usage props"
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''^web/console/src/pages/usage-props\.ts$''']
+regexes = ['''^p\.chips\.keyOpts0\.length$''']

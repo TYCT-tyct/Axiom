@@ -238,6 +238,8 @@ export function buildRangeErrorText(
   return usageText(lang, granularity === "hour" ? "limitBannerHour" : "limitBannerDays", { days: validation.days });
 }
 
+const popScrollStyle = (count: number) => (count > 8 ? "max-height: 320px; overflow-y: auto;" : "");
+
 function makeValues(
   p: UsagePropsParams,
   extra: { presetIdx: number; chartAria: string; hoverTip: HoverTipData | null; tipStyle: string },
@@ -263,11 +265,11 @@ function makeValues(
     modelChipCls: p.openChip === "m" ? "open" : "",
     modelChipBtnCls: p.search.model ? "on" : "",
     modelChipExpanded: p.openChip === "m",
-    modelPopStyle: p.chips.modelOpts0.length > 8 ? "max-height: 320px; overflow-y: auto;" : "",
+    modelPopStyle: popScrollStyle(p.chips.modelOpts0.length),
     keyChipCls: p.openChip === "k" ? "open" : "",
     keyChipBtnCls: p.search.key_id || p.search.workspace_id ? "on" : "",
     keyChipExpanded: p.openChip === "k",
-    keyPopStyle: p.chips.keyOpts0.length > 8 ? "max-height: 320px; overflow-y: auto;" : "",
+    keyPopStyle: popScrollStyle(p.chips.keyOpts0.length),
     chartCls: p.focusGroup !== null ? "hl" : "",
     tipCls: extra.hoverTip ? "on" : "",
     tipStyle: extra.tipStyle,
