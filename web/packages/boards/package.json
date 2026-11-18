@@ -19,6 +19,7 @@
     "./SitePhone/regions/*": "./src/SitePhone/regions/*.tsx",
     "./SitePhone/regions/*.zh": "./src/SitePhone/regions/*.zh.ts",
     "./SitePhone/regions/*.en": "./src/SitePhone/regions/*.en.ts",
+    "./ds": "./src/ds.tsx",
     "./engines/*": "./src/engines/*"
   },
   "scripts": {
