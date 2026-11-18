@@ -1,10 +1,10 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th } from "@axiom/ui";
+import { ActionButton, Card, DataState, EmptyState, Icon, PageHead, Table, Td, Text } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Actions, ChoiceFilter, Code, FilterBar, mainCell, NewButton, PageBody } from "../parts";
+import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody } from "../parts";
 import { suppliersQuery } from "../queries";
 import { ConnectDialog } from "../suppliers/connect";
 import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
@@ -17,7 +17,7 @@ export default function Suppliers() {
   const rows = suppliers.data?.pages.flatMap((page) => page.data) ?? [];
   return (
     <>
-      <PageHeader title={t("nav.suppliers")} description={t("suppliers.description")} />
+      <PageHead title={t("nav.suppliers")} lede={t("suppliers.description")} />
       <PageBody>
         <Actions>
           <NewButton permission="suppliers.manage" label={t("suppliers.connect.open")}>
@@ -25,7 +25,7 @@ export default function Suppliers() {
           </NewButton>
         </Actions>
         <Filter status={status} />
-        <Panel>
+        <Card layout="flush">
           <DataState
             query={suppliers}
             isEmpty={() => rows.length === 0}
@@ -38,7 +38,7 @@ export default function Suppliers() {
             {() => <SuppliersTable rows={rows} />}
           </DataState>
           <LoadMore list={suppliers} />
-        </Panel>
+        </Card>
       </PageBody>
     </>
   );
@@ -72,39 +72,37 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
   const { t } = useTranslation();
   return (
     <Table label={t("nav.suppliers")}>
-      <thead>
-        <tr>
-          <Th>{t("suppliers.col.name")}</Th>
-          <Th>{t("suppliers.col.status")}</Th>
-          <Th className="hidden md:table-cell">{t("suppliers.col.balance")}</Th>
-          <Th className="hidden lg:table-cell">{t("suppliers.col.unit")}</Th>
-          <Th className="w-0" />
-        </tr>
-      </thead>
+      <Head
+        cols={[
+          [t("suppliers.col.name"), { main: true }],
+          t("suppliers.col.status"),
+          t("suppliers.col.balance"),
+          t("suppliers.col.unit"),
+        ]}
+        action
+      />
       <tbody>
         {rows.map((supplier) => (
           <tr key={supplier.id}>
-            <Td className={mainCell}>
-              <p className="truncate text-t1" title={supplier.name}>
-                {supplier.name}
-              </p>
-              <p className="truncate text-label text-t4" title={supplier.origin}>
+            <Td main>
+              <Text>{supplier.name}</Text>
+              <Text size="sm" tone="faint">
                 <Code>{supplier.origin}</Code>
                 {" · "}
                 {supplier.kind}
-              </p>
+              </Text>
             </Td>
-            <Td>
+            <Td main>
               <SupplierState supplier={supplier} brief />
             </Td>
-            <Td className="hidden min-w-28 tabular-nums [overflow-wrap:anywhere] md:table-cell">
+            <Td>
               <NativeBalance supplier={supplier} />
             </Td>
-            <Td className="hidden lg:table-cell">
+            <Td>
               <UnitValue supplier={supplier} />
             </Td>
-            <Td className="whitespace-nowrap">
-              <Button variant="ghost" size="icon" asChild>
+            <Td shrink>
+              <ActionButton variant="gho" size="sm" asChild>
                 <Link
                   to="/suppliers/$supplierId"
                   params={{ supplierId: supplier.id }}
@@ -112,7 +110,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
                 >
                   <Icon name="right" />
                 </Link>
-              </Button>
+              </ActionButton>
             </Td>
           </tr>
         ))}

@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { useFormat } from "@axiom/ui";
+import { Stack, Text, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { State } from "../parts";
 
@@ -19,17 +19,14 @@ const tones = {
 export function SupplierState({ supplier, brief = false }: { supplier: AdminSchemas["Supplier"]; brief?: boolean }) {
   const { t } = useTranslation();
   return (
-    <div className="space-y-1">
+    <Stack gap={4}>
       <State tone={tones[supplier.status]}>{t(`suppliers.state.${supplier.status}`)}</State>
       {supplier.status_reason ? (
-        <p
-          className={`max-w-64 text-label text-t3 [overflow-wrap:anywhere] ${brief ? "line-clamp-2" : ""}`}
-          title={brief ? supplier.status_reason : undefined}
-        >
-          {supplier.status_reason}
-        </p>
+        <Text size="sm" tone="muted">
+          <span title={brief ? supplier.status_reason : undefined}>{supplier.status_reason}</span>
+        </Text>
       ) : null}
-    </div>
+    </Stack>
   );
 }
 

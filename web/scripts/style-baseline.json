@@ -36,7 +36,6 @@
       "admin/src/pages/routing-presets.tsx": 11,
       "admin/src/pages/settings.tsx": 3,
       "admin/src/pages/source-classes.tsx": 15,
-      "admin/src/pages/suppliers.tsx": 9,
       "admin/src/pages/users.tsx": 11,
       "admin/src/parts.tsx": 1,
       "admin/src/preset-dialogs.tsx": 6,
@@ -53,13 +52,6 @@
       "admin/src/site-info.tsx": 1,
       "admin/src/site-logo.tsx": 10,
       "admin/src/source-class-rules.tsx": 7,
-      "admin/src/suppliers/checklist.tsx": 8,
-      "admin/src/suppliers/connect.tsx": 7,
-      "admin/src/suppliers/dialogs.tsx": 1,
-      "admin/src/suppliers/endpoint-test-dialog.tsx": 22,
-      "admin/src/suppliers/lists.tsx": 30,
-      "admin/src/suppliers/login-fields.tsx": 3,
-      "admin/src/suppliers/parts.tsx": 2,
       "admin/src/targets-view.tsx": 4,
       "console/src/announcements.tsx": 1,
       "console/src/auth/consent.tsx": 2,
@@ -120,7 +112,6 @@
       "site/src/main.css": 1
     },
     "style": {
-      "admin/src/suppliers/endpoint-test-dialog.tsx": 2
     }
   }
 }
