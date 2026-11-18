@@ -177,3 +177,108 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
   expect(await violations()).toEqual([]);
 });
+
+// The departure to the console's sign-in pages (port design §9): the pressed button breaks into tiles that stream to
+// where the sign-in panel will be, and half a second after the press the browser goes to the button's page, whatever
+// became of the picture on the way.
+const depart = /\/assets\/depart-[\w-]+\.js$/;
+const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
+const signUp = (page: Page) => page.getByRole("link", { name: "注册，获取API key" });
+const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
+
+// Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.
+async function watchEveryPolicy(page: Page) {
+  const seen: string[] = [];
+  await page.exposeFunction("reportPolicy", (line: string) => seen.push(line));
+  await page.addInitScript(() =>
+    document.addEventListener("securitypolicyviolation", (e) =>
+      (window as unknown as { reportPolicy: (line: string) => void }).reportPolicy(
+        `${location.pathname} ${e.violatedDirective} ${e.blockedURI}`,
+      ),
+    ),
+  );
+  return seen;
+}
+
+// The sign-in documents the tab asks for.
+function watchDeparture(page: Page) {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (request.isNavigationRequest() && /\/console\//.test(request.url())) asked.push(request.url());
+  });
+  return asked;
+}
+
+test("pressing sign in plays the departure, loaded on the press, and goes half a second later", async ({ page }) => {
+  const violations = await watchEveryPolicy(page);
+  const loaded: string[] = [];
+  page.on("request", (request) => {
+    if (depart.test(request.url())) loaded.push(request.url());
+  });
+  await open(page);
+  await running(page);
+  expect(loaded).toEqual([]);
+  // time stands still from before the press: only runFor moves it, so the deadline is measured from the press alone
+  await page.clock.install();
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+  const asked = watchDeparture(page);
+  await signIn(page).click();
+  await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
+  expect(loaded).toHaveLength(1);
+  await page.clock.runFor(150);
+  await expect(signIn(page)).toBeHidden();
+  await page.clock.runFor(340);
+  expect(asked).toEqual([]);
+  await page.clock.runFor(20);
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  expect(violations).toEqual([]);
+});
+
+test("under reduced motion the sign-up button goes at once, without the departure's code", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const loaded: string[] = [];
+  page.on("request", (request) => {
+    if (depart.test(request.url())) loaded.push(request.url());
+  });
+  await hang(page, depart);
+  await open(page);
+  await signUp(page).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  expect(loaded).toEqual([]);
+});
+
+test("a press goes though the departure's code never comes", async ({ page }) => {
+  const unhandled: string[] = [];
+  page.on("pageerror", (error) => unhandled.push(error.message));
+  await hang(page, depart);
+  await open(page);
+  await signUp(page).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  expect(unhandled).toEqual([]);
+});
+
+test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {
+  await open(page);
+  await running(page);
+  const asked = watchDeparture(page);
+  await hang(page, /\/console\/sign-in$/);
+  await signIn(page).click();
+  await expect.poll(() => asked.length).toBe(1);
+  // the browser's stop button, and a press on another way in straight after it
+  await (await page.context().newCDPSession(page)).send("Page.stopLoading");
+  await signUp(page).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  expect(asked).toHaveLength(2);
+});
+
+test("a departure whose navigation is stopped puts the page back", async ({ page }) => {
+  await open(page);
+  await running(page);
+  const asked = watchDeparture(page);
+  await hang(page, /\/console\/sign-in$/);
+  await signIn(page).click();
+  await expect.poll(() => asked.length).toBe(1);
+  await (await page.context().newCDPSession(page)).send("Page.stopLoading");
+  await expect(signIn(page)).toBeVisible();
+  await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).not.toBeAttached();
+});
