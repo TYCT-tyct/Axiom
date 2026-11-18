@@ -4,15 +4,11 @@
 // its own here: trans.js plays both pages in one document, and the sign-in page is the console's. The geometry and
 // the easing are the engine's; its clock runs faster, so the stream lands in about half a second. Under reduced motion
 // the website does not load it: the link goes at once (R7).
+import { hash } from "./hash";
 import { own } from "./loop";
 import type { OceanEngine } from "./sea";
 
 const GLYPHS = ":;t%SX8#@/\\<>=+*";
-const hash = (a: number, b: number) => {
-  let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-};
 const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 // cubic-bezier(0.2, 0, 0, 1), trans.js's E.emph ("opens fast, settles long"), and its house ease-out E.out

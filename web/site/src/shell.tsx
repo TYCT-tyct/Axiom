@@ -6,9 +6,9 @@ import { useTranslation } from "react-i18next";
 // The console lives on the same listener under /console/ (console/vite.config.ts).
 const consoleHref = "/console/";
 
-type Brand = Pick<Schemas["Site"], "logo_url"> & { name?: string };
+type Brand = Pick<Schemas["Site"], "logo_url" | "api_base_url"> & { name?: string };
 
-// The site's name and logo, from the same public call the console's sign-in page uses. A host the API does not know, or
+// The site's name, logo and API address, from the same public call the console's sign-in page uses. A host the API does not know, or
 // a failed request, leaves the default mark and name: the page is still the product's.
 export function useSiteBrand(): Brand | undefined {
   const [brand, setBrand] = useState<Brand>();
@@ -17,7 +17,7 @@ export function useSiteBrand(): Brand | undefined {
     unwrap(consoleApi.GET("/api/console/v1/site", { signal: call.signal }))
       .then((site) => {
         if (!call.signal.aborted) {
-          setBrand({ name: site.name || undefined, logo_url: site.logo_url });
+          setBrand({ name: site.name || undefined, logo_url: site.logo_url, api_base_url: site.api_base_url });
         }
       })
       .catch(() => {});
