@@ -1,7 +1,10 @@
 import { DataState, EmptyState } from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { type KeyboardEvent as KeyEvent, useSyncExternalStore } from "react";
+import { useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
+import { wideWidth } from "./board-interaction";
+
+export { pressBoardButton as pressKey } from "./board-interaction";
 
 // What the console's pages ported from the AxApp board share. The board comes in two forms, the wide one and the phone's,
 // each a region of its own, so a page renders the one the window is wide enough for: from 1024px the wide board, as the
@@ -9,24 +12,7 @@ import { useTranslation } from "react-i18next";
 // renders, not in an effect: the form may not change under a page that just took focus, which is how a phone shows
 // itself as the wide board for a moment and the focus lands on a heading that is then replaced.
 export function useWide() {
-  return useSyncExternalStore(
-    (notify) => {
-      const query = window.matchMedia("(min-width: 1024px)");
-      query.addEventListener("change", notify);
-      return () => query.removeEventListener("change", notify);
-    },
-    () => window.matchMedia("(min-width: 1024px)").matches,
-    () => true,
-  );
-}
-
-// A board element the page makes interactive — a row's name, which the board draws as text — takes a button's keys and
-// keeps its look, as the shell's menu entries do.
-export function pressKey(event: KeyEvent<Element>) {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    (event.currentTarget as HTMLElement).click();
-  }
+  return useSyncExternalStore(wideWidth.subscribe, wideWidth.matches, () => true);
 }
 
 // ListStates is a list's four states in the page's own words: loading, no permission to read it, a failed read with its

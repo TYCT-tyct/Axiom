@@ -2,20 +2,20 @@
 /* jscpd:ignore-start */
 import type zh from "./Security.zh.ts";
 export default {
-  "m2adcd12cd5": "",
-  "m602bdcadd9": "",
-  "m71e1947750": "",
-  "m498e1d59b4": "",
-  "m2f85e0a1c9": "",
-  "mdfe0487d70": "",
-  "mc70239e4f3": "",
-  "ma621ab606d": "",
-  "m4a05923454": "",
-  "m08d0080624": "",
-  "m0e219bca12": "",
-  "m2f363726b7": "",
-  "m6ba0f3509c": "",
-  "md23b4e4fe5": "",
-  "m949c8b537e": ""
+  "ma621ab606d": "Password",
+  "m4a05923454": "Last changed 3 months ago",
+  "m08d0080624": "Change password",
+  "m0e219bca12": "Two-step verification",
+  "m2f363726b7": "In addition to your password, require a 6-digit code from your authenticator app",
+  "m6ba0f3509c": ". Required for all Axiom Labs members",
+  "m2adcd12cd5": "Shanghai, now",
+  "m602bdcadd9": "This device",
+  "m71e1947750": "Shanghai, 2 hours ago",
+  "m498e1d59b4": "Sign out",
+  "m2f85e0a1c9": "Hangzhou, 5 days ago",
+  "mdfe0487d70": "Sign-in & security",
+  "mc70239e4f3": "How you sign in to Axiom.",
+  "md23b4e4fe5": "Signed-in devices",
+  "m949c8b537e": "Sign out other devices"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

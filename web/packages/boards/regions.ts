@@ -20,6 +20,9 @@ export type Region = {
     actions: ([string, ...unknown[]] | { click: string })[];
     props?: Record<string, string>;
     viewport?: { width: number; height: number };
+    // A fragment is composed inside a page, so prove the retained drawing at its own elements.
+    // Each selector names one element on both the artboard and the generated fragment.
+    fragment?: { styles: Record<string, string[]>; values?: Record<string, string | boolean> };
   };
   page?: string;
   omit?: string[];

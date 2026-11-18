@@ -2,17 +2,17 @@
 /* jscpd:ignore-start */
 import type zh from "./Profile.zh.ts";
 export default {
-  "mb94d13a45e": "",
-  "m47cc03e27e": "",
-  "m3ea2d23c90": "",
-  "m0d8f3231cc": "",
-  "m6773310492": "",
-  "m73075237fd": "",
-  "mfad68cf9c0": "",
-  "m32b60cb802": "",
-  "m99cda4403d": "",
-  "mf09d69b42a": "",
-  "ma48fa6108b": "",
-  "m0cff3c9b1c": ""
+  "m3ea2d23c90": "Avatar",
+  "m0d8f3231cc": "Lin Zhiyuan",
+  "m0cff3c9b1c": "L",
+  "m6773310492": "Name",
+  "m73075237fd": "Email",
+  "mfad68cf9c0": "Used for sign-in and notifications",
+  "mb94d13a45e": "Profile",
+  "m47cc03e27e": "Your personal details, shared across personal and team spaces.",
+  "m32b60cb802": "Delete account",
+  "m99cda4403d": "Your keys, logs, and settings will be deleted, and your balance refunded.",
+  "mf09d69b42a": "You are the owner of Axiom Labs. Transfer ownership before deleting.",
+  "ma48fa6108b": "Delete"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */
