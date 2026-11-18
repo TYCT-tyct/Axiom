@@ -34,6 +34,8 @@ const frame: Omit<Ruling, "scene">[] = [
 ];
 const inScene = (scene: string, region: Omit<Ruling, "scene">): Ruling => ({ scene, ...region });
 
+// Each console page compares the frame around its page, so it carries the frame's rulings too.
+const pageScenes = ["console overview", "console keys", "console route", "console byok"];
 const shell: Ruling[] = [
   { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
   ...frame,
@@ -59,6 +61,7 @@ const accountShell = (scene: string): Ruling[] =>
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
+  ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   ...accountShell("console settings"),
   {
     scene: "console settings",
@@ -103,10 +106,6 @@ export const rulings: Ruling[] = [
         ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd) > div, .p-notify .qnt:nth-child(4) > button:nth-of-type(1), .p-profile, .p-security",
     },
   },
-  // The console has no teams: the board's header switches between the personal space and a team (the phone board's
-  // is a single button); the page has none.
-  { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  ...frame.map((ruling) => inScene("console keys", ruling)),
   // The board's key list has nothing to narrow it by (L8), so the page keeps the filters it had behind a button beside
   // the actions, in buttons of the console's own.
   {
@@ -131,6 +130,47 @@ export const rulings: Ruling[] = [
     board: { selector: ".p-keys .wv.w2 .qcard" },
     page: { selector: ".p-keys .wv.w2 .qcard" },
   },
+  // The board draws a workspace's supplier lines — latency, availability, a relative price and a switch per line — and
+  // the failover switch and timeouts above them. No endpoint names a line, and a failed attempt is the platform's
+  // (#816 O13); what a key routes by is a preset, which the design has no editor for (console-gap L2). So the page
+  // lists presets instead, and what the board draws there is excused.
+  {
+    scene: "console route",
+    basis: "#816 O13: the failover switch, the timeouts and the sort a workspace prefers have no account-level setting",
+    board: { selector: ".qstrc, .qcard.rows" },
+  },
+  {
+    scene: "console route",
+    basis:
+      "#816: the board's line table has no API; the page lists routing presets, whose columns and cells are the account's",
+    board: { selector: ".qtbl" },
+    page: { selector: ".qtbl" },
+  },
+  // The page's own words where the board writes about lines it draws, and the console's create action, which the design
+  // puts on no page (console-gap L2).
+  {
+    scene: "console route",
+    basis: "the page's own name, description and its list's title and hint say what the console lists",
+    board: { selector: ".qph .qptl h1, .qph p, .qcard.flush .qch" },
+    page: { selector: ".qph .qptl h1, .qph p, .qcard.flush .qch" },
+  },
+  {
+    scene: "console route",
+    basis: "console-gap L2: the design draws nowhere to make a preset, so the page's action area is its own",
+    page: { selector: ".qph .qpa" },
+  },
+  // The board draws four vendors, a workspace-wide "prefer your own key" switch and no test, switch or removal per key.
+  // The API takes one provider (#816 O14) and its fallback is each key's own, and the test, switch and removal are in the
+  // row's dialog (console-gap L20), so the list and those rows are excused.
+  {
+    scene: "console byok",
+    basis: "#816 O14/L20: one provider, a fallback per key, and the per-key actions in the row's own dialog",
+    board: { selector: ".p-byok .qcard.rows" },
+    page: { selector: ".p-byok .qcard.rows" },
+  },
+  // The page's name and description are the console's words, and its action area the console's own: the design gives the
+  // BYOK page neither (console-gap L20). The whole header goes, so the two shots' differing text widths leave no edge.
+  { scene: "console byok", basis: "console-gap L20: the page's own name, description and add action", ...both(".qph") },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {
