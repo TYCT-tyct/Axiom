@@ -49,6 +49,22 @@ const shell: Ruling[] = [
   ...frame,
 ].map((ruling) => inScene("console shell", ruling));
 
+const accountShell = (scene: string): Ruling[] =>
+  [
+    { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+    { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
+    { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
+    {
+      basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+      ...both(".pnP .qnv, .otabs"),
+    },
+    { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
+    {
+      basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+      ...both(".gbar .qbct, .qph h1"),
+    },
+  ].map((ruling) => ({ scene, ...ruling }));
+
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
@@ -60,6 +76,50 @@ export const rulings: Ruling[] = [
       board: { selector: ".p-presets .ppcnt" },
     }),
   ),
+  ...accountShell("console settings"),
+  {
+    scene: "console settings",
+    basis: "#816: account deletion has no API or owner refund rule yet",
+    board: { selector: ".p-profile .qcard.danger" },
+  },
+  {
+    scene: "console settings",
+    basis:
+      "§5.4 & API account data: avatar glyph, weight-500 labels, hints and inputs differ; cards below Profile live outside the Profile artboard",
+    board: { selector: ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin" },
+    page: {
+      selector:
+        ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin, .p-profile ~ .qpg.p-security",
+    },
+  },
+  ...accountShell("console security"),
+  {
+    scene: "console security",
+    basis:
+      "#816 & §5.4: team TOTP policy lock, API row text, 500/330 CJK glyph weight inside spans, and cards below Sessions differ from board demo",
+    board: {
+      selector:
+        ".p-security .qph p, .p-security .qcard:first-of-type > .qrow:first-child > .qrl, .p-security .qcard:first-of-type > .qrow:nth-child(2), .p-security .qcard:nth-of-type(2) .qses > div, .p-security .qch h2, .p-security .btn > span, .p-security .qtag",
+    },
+    page: {
+      selector:
+        ".p-security .qph p, .p-security .qcard:first-of-type > .qrow:first-child > .qrl, .p-security .qcard:first-of-type > .qrow:nth-child(2), .p-security .qcard:nth-of-type(2) .qses > div, .p-security .qch h2, .p-security .btn > span, .p-security .qtag, .p-security ~ .qpg.p-security, .p-profile",
+    },
+  },
+  ...accountShell("console notifications"),
+  {
+    scene: "console notifications",
+    basis:
+      "#816 G9: in-app toggle column, unbuilt rows 5-6, row 3 state, unified '接收提醒' header and delivery/language cards below Alerts differ from board demo",
+    board: {
+      selector:
+        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd) > div, .p-notify .qnt:not(.hd) > button:nth-of-type(1), .p-notify .qnt:nth-child(4) > button:nth-of-type(2), .p-notify .qcard > .qnt:nth-of-type(n+6)",
+    },
+    page: {
+      selector:
+        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd) > div, .p-notify .qnt:nth-child(4) > button:nth-of-type(1), .p-profile, .p-security",
+    },
+  },
   // The board's key list has nothing to narrow it by (L8), so the page keeps the filters it had behind a button beside
   // the actions, in buttons of the console's own.
   {

@@ -26,6 +26,7 @@ export type AuthState = {
   csrfCount: number;
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
   mfaEnabled: boolean;
+  totpEnabled?: boolean;
   permissions: string[];
   version: string;
   // every request the page made, as "METHOD /path", for tests that count them

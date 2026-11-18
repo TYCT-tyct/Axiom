@@ -3,11 +3,13 @@ import { zh as announcements } from "./announcements";
 import { zh as auth } from "./auth";
 import { zh as callsBoard } from "./calls";
 import { zh as keysMessages } from "./keys";
+import { zh as notifications } from "./notifications";
 import { zh as overviewBoard } from "./overview";
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
 import { zh as requestPresets } from "./request-presets";
 import { zh as routingPresets } from "./routing-presets";
+import { zh as security } from "./security";
 import { zh as settings } from "./settings";
 import { zh as shell } from "./shell";
 import { zh as statement } from "./statement";
@@ -206,38 +208,7 @@ export default {
   },
   settings,
   receipt,
-  notifications: {
-    description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
-    title: "提醒",
-    dismiss: "关闭",
-    saved: "偏好已保存。",
-    savedPartialSpend: "其他偏好已保存；账户异常活动提醒没有保存：这个控制台节点还不支持这项设置，请等升级完成后再试。",
-    balance: {
-      title: "余额提醒",
-      body: "可用余额跌破阈值时发送一次提醒。",
-    },
-    lowBalance: "余额不足",
-    lowBalanceHint: "余额不足时发邮件并调用 webhook。",
-    threshold: "阈值",
-    thresholdHint: "单位 {{currency}}，例如 5 或 12.5。",
-    thresholdInvalid: "请输入非负金额，例如 5 或 12.5。",
-    events: { title: "其他事件" },
-    topUp: "充值到账",
-    topUpHint: "充值入账后发邮件确认。",
-    factorChanged: "安全变更",
-    factorChangedHint: "两步验证或通行密钥变更时通知我。密码修改始终会发邮件。",
-    spendAnomaly: "账户异常活动",
-    spendAnomalyHint: "这个账户的花费、来源地区或模型突然变化时通知我。如果不是您本人操作，请停用不认识的 API key。",
-    delivery: { title: "发送方式" },
-    webhook: "Webhook 地址",
-    webhookHint: "仅支持 HTTPS，留空表示不调用 webhook。",
-    language: "消息语言",
-    languageHint: "邮件和 webhook 消息的语言，不是本页面的语言。",
-    languageEn: "English",
-    languageZh: "中文",
-    siteCurrency: "站点货币",
-    save: "保存偏好",
-  },
+  notifications,
   statement,
   keys: keysMessages,
   providerKeys,
@@ -299,47 +270,5 @@ export default {
     ms: "{{value}} 毫秒",
     tokens: "{{input}} / {{output}}",
   },
-  security: {
-    description: "两步验证和你的账户信息。",
-    twoStep: {
-      title: "两步验证",
-      on: "已开启",
-      off: "未开启",
-      body: "登录时除了密码，还要输入验证器 App 里的验证码。开启时会给你一组恢复码，丢了手机也能用它登录。",
-      enable: "开启两步验证",
-      replace: "更换验证器",
-      regenerate: "重新生成恢复码",
-    },
-    passkeys: {
-      title: "通行密钥",
-      count: "已添加 {{count}} 个",
-      body: "通行密钥用指纹、面容或设备 PIN 代替密码登录。添加时要再输入当前密码；移除后其他会话会退出。",
-      empty: "还没有通行密钥。",
-      name: "名称",
-      password: "当前密码",
-      add: "添加通行密钥",
-      remove: "移除",
-      unsupported: "这个浏览器不支持通行密钥。",
-      mfaRequired: "请先完成本次会话的两步验证，再修改通行密钥。",
-    },
-    identities: {
-      title: "已绑定的登录账户",
-      body: "绑定 GitHub、Google 或 LinuxDo 账户后，可以用它登录本站。只按第三方账户的 ID 匹配，不按邮箱匹配，也不会自动创建或合并账户。",
-      linkedAs: "已绑定：{{name}}",
-      notLinked: "未绑定",
-      link: "绑定",
-      unlink: "解除绑定",
-      providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDo" },
-    },
-    pendingCodes: {
-      failed: "取不到新的恢复码。如果一直失败，请在下面重新生成一组。",
-      retry: "重试",
-      regenerate: "重新生成",
-    },
-    oauth: {
-      identity_linked: "这个第三方账户已经绑定了其他用户。",
-      identity_already_linked: "本站账户已经绑定该提供方的另一个登录，请先解除原有绑定。",
-    },
-    account: { title: "账户", invite: "我的邀请码" },
-  },
+  security,
 };

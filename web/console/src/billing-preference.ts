@@ -1,4 +1,5 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { claimSession, holdsIdentity } from "@axiom/app";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { billingPreferenceQuery } from "./queries";
@@ -7,7 +8,8 @@ export type BillingPreference = Schemas["BillingPreference"];
 type BillingPreferenceName = Schemas["BillingPreferenceName"];
 export type BillingPreferenceChoice = Schemas["BillingPreferenceRequest"]["preference"];
 
-const BILLING_PREFERENCE_KEYS: readonly BillingPreferenceName[] = [
+export const billingPreferenceChoices: readonly BillingPreferenceChoice[] = [
+  "site",
   "subscription_first",
   "wallet_first",
   "subscription_only",
@@ -15,7 +17,7 @@ const BILLING_PREFERENCE_KEYS: readonly BillingPreferenceName[] = [
 ];
 
 /** Maps an account or site-inherited preference record to the form's selectable value. */
-function billingPreferenceChoice(pref: BillingPreference): BillingPreferenceChoice {
+export function billingPreferenceChoice(pref: BillingPreference): BillingPreferenceChoice {
   return pref.source === "account" ? pref.preference : "site";
 }
 
@@ -25,15 +27,38 @@ export function billingPreferenceOptions(
   labelFor: (key: BillingPreferenceName) => string,
   siteLabel: (defaultLabel: string) => string,
 ): { value: string; label: string }[] {
-  return [
-    { value: "site", label: siteLabel(labelFor(siteDefault)) },
-    ...BILLING_PREFERENCE_KEYS.map((key) => ({ value: key, label: labelFor(key) })),
-  ];
+  return billingPreferenceChoices.map((value) => ({
+    value,
+    label: value === "site" ? siteLabel(labelFor(siteDefault)) : labelFor(value),
+  }));
 }
 
-/** Shared charge-order preference state and PUT mutation with cache synchronization. */
-export function useBillingPreferenceForm(pref: BillingPreference) {
+export function useSaveBillingPreference(
+  onSaved: (pref: BillingPreference) => void,
+  onError: (error: unknown) => void,
+) {
   const queryClient = useQueryClient();
+  return useMutation({
+    onMutate: () => claimSession(queryClient),
+    mutationFn: (preference: BillingPreferenceChoice) =>
+      unwrap(
+        consoleApi.PUT("/api/console/v1/billing-preference", {
+          body: { preference },
+        }),
+      ),
+    onSuccess: (updated, _choice, claim) => {
+      if (!claim || !holdsIdentity(queryClient, claim.identity)) return;
+      queryClient.setQueryData(billingPreferenceQuery.queryKey, updated);
+      onSaved(updated);
+    },
+    onError: (error, _choice, claim) => {
+      if (!claim || !holdsIdentity(queryClient, claim.identity)) return;
+      onError(error);
+    },
+  });
+}
+
+export function useBillingPreferenceForm(pref: BillingPreference) {
   const [choice, setChoice] = useState<BillingPreferenceChoice>(() => billingPreferenceChoice(pref));
   const [saved, setSaved] = useState(false);
 
@@ -41,22 +66,13 @@ export function useBillingPreferenceForm(pref: BillingPreference) {
     setChoice(billingPreferenceChoice(pref));
   }, [pref]);
 
-  const mutation = useMutation({
-    mutationFn: (preference: BillingPreferenceChoice) =>
-      unwrap(
-        consoleApi.PUT("/api/console/v1/billing-preference", {
-          body: { preference },
-        }),
-      ),
-    onSuccess: (updated) => {
-      queryClient.setQueryData(billingPreferenceQuery.queryKey, updated);
+  const mutation = useSaveBillingPreference(
+    (updated) => {
       setChoice(billingPreferenceChoice(updated));
       setSaved(true);
     },
-    onError: () => {
-      setSaved(false);
-    },
-  });
+    () => setSaved(false),
+  );
 
   return {
     choice,

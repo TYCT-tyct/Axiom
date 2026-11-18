@@ -1,122 +1,69 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { useErrors } from "@axiom/app";
-import {
-  Button,
-  CheckField,
-  DataState,
-  FormError,
-  moneyInput,
-  Notice,
-  PageHeader,
-  Panel,
-  parseMoney,
-  SelectField,
-  SubmitButton,
-  TextField,
-} from "@axiom/ui";
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { claimSession, holdsIdentity, useErrors } from "@axiom/app";
+import DesktopNotify from "@axiom/boards/AxApp/regions/Notify";
+import DesktopNotifyEn from "@axiom/boards/AxApp/regions/Notify.en";
+import DesktopNotifyZh from "@axiom/boards/AxApp/regions/Notify.zh";
+import PhoneNotify from "@axiom/boards/AxAppPhone/regions/Notify";
+import PhoneNotifyEn from "@axiom/boards/AxAppPhone/regions/Notify.en";
+import PhoneNotifyZh from "@axiom/boards/AxAppPhone/regions/Notify.zh";
+import { Button, DataState, FormError, Notice, parseMoney, usePageTitle } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { notificationPreferencesQuery, siteQuery } from "../queries";
+import { boardPageStyle, clickedRowIndex, makeBoardT, useBoardInputs, useEnglish, useWide } from "./account-board";
+import { AccountActionCard, AccountInputsCard } from "./account-cards";
+import {
+  buildDeliveryRows,
+  buildMessageLanguageRows,
+  buildNotificationSwitches,
+  initialSettings,
+  type NotificationSettings,
+  putPreferences,
+  spendAnomalyChange,
+} from "./notifications-data";
 
-// Notifications is where the account says when it wants to hear from Axiom: a balance that is running out, a finished
-// top-up, security changes and unusual account activity, by email and to its own webhook. The language here is the
-// messages' language, not the console's.
+export { initialSettings, putPreferences, spendAnomalyChange };
+
 export default function Notifications() {
   const { t } = useTranslation();
   const preferences = useQuery(notificationPreferencesQuery);
   const site = useQuery(siteQuery);
+  usePageTitle(t("nav.notifications"));
+
   return (
-    <>
-      <PageHeader title={t("nav.notifications")} description={t("notifications.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        <Panel title={t("notifications.title")}>
-          <DataState query={preferences}>
-            {(data) => <PreferencesForm preferences={data} currency={site.data?.currency} />}
-          </DataState>
-        </Panel>
-      </div>
-    </>
+    <DataState query={preferences}>
+      {(data) => <NotificationsBoard preferences={data} currency={site.data?.currency} />}
+    </DataState>
   );
 }
 
-// Settings is the form's state while it is being edited, one field for each preference.
-type Settings = {
-  lowBalance: boolean;
-  threshold: string;
-  topUp: boolean;
-  factorChanged: boolean;
-  spendAnomaly?: boolean; // undefined: the node predates the preference and did not advertise it
-  webhook: string;
-  language: "en" | "zh";
-};
-
-type SetSetting = <K extends keyof Settings>(key: K, value: Settings[K]) => void;
-
-// spendAnomalyChange asks to change the reminder only when the node advertised the preference and the value differs
-// from the stored one. A node that predates it rejects the unknown field (its request schema is closed), and a value
-// the page merely echoed would overwrite a change made in another tab between the read and the save.
-export function spendAnomalyChange(settings: Settings, stored: boolean | undefined): { spend_anomaly?: boolean } {
-  if (settings.spendAnomaly === undefined || settings.spendAnomaly === stored) {
-    return {};
-  }
-  return { spend_anomaly: settings.spendAnomaly };
-}
-
-// putPreferences saves the form and says whether the reminder was stored. A node that handles the save may be older
-// than the one that served the read: with its closed request schema it either rejects the unknown field or (as today's
-// decoder does) ignores it. In both cases the other settings are saved without the reminder, and the page must say so
-// instead of reporting a complete save.
-export async function putPreferences(
-  body: Schemas["NotificationPreferencesRequest"],
-  send: (body: Schemas["NotificationPreferencesRequest"]) => Promise<Schemas["NotificationPreferences"]>,
-): Promise<{ data: Schemas["NotificationPreferences"]; spendSaved: boolean }> {
-  try {
-    const data = await send(body);
-    return { data, spendSaved: body.spend_anomaly === undefined || data.spend_anomaly !== undefined };
-  } catch (error) {
-    if (body.spend_anomaly === undefined || !(error instanceof ApiError)) {
-      throw error;
-    }
-    if (error.status !== 400 && error.status !== 422) {
-      throw error;
-    }
-    const rest = { ...body };
-    delete rest.spend_anomaly;
-    const data = await send(rest);
-    return { data, spendSaved: false };
-  }
-}
-
-// initialSettings is what the form starts from: the stored preference, or the default the site sends when it is absent.
-export function initialSettings(preferences: Schemas["NotificationPreferences"]): Settings {
-  return {
-    lowBalance: preferences.low_balance ?? true,
-    threshold: moneyInput(preferences.threshold ?? "0"),
-    topUp: preferences.top_up ?? true,
-    factorChanged: preferences.factor_changed ?? true,
-    spendAnomaly: preferences.spend_anomaly,
-    webhook: preferences.webhook_url ?? "",
-    language: preferences.language ?? "en",
-  };
-}
-
-function PreferencesForm({
-  preferences,
-  currency,
-}: {
-  preferences: Schemas["NotificationPreferences"];
-  currency: string | undefined;
-}) {
-  const { t } = useTranslation();
-  const errors = useErrors();
+function useNotificationForm(preferences: Schemas["NotificationPreferences"]) {
   const client = useQueryClient();
-  const [settings, setSettings] = useState<Settings>(() => initialSettings(preferences));
+  const [settings, setSettings] = useState<NotificationSettings>(() => initialSettings(preferences));
   const [outcome, setOutcome] = useState<"saved" | "partial" | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
+  const draftVersion = useRef(0);
   const amount = parseMoney(settings.threshold);
-  const set: SetSetting = (key, value) => setSettings((held) => ({ ...held, [key]: value }));
+
+  const editSettings = (update: (held: NotificationSettings) => NotificationSettings) => {
+    draftVersion.current += 1;
+    setOutcome(null);
+    setSettings(update);
+  };
+
+  const inputs = useBoardInputs({
+    threshold: { inputMode: "decimal" },
+    webhook: { type: "url", maxLength: 2048, autoComplete: "off", placeholder: "https://" },
+  });
+
+  useEffect(() => {
+    inputs.setValue("threshold", settings.threshold);
+    inputs.setValue("webhook", settings.webhook);
+  }, [inputs, settings.threshold, settings.webhook]);
+
   const save = useMutation({
+    onMutate: () => ({ claim: claimSession(client), version: draftVersion.current }),
     mutationFn: () =>
       putPreferences(
         {
@@ -130,134 +77,140 @@ function PreferencesForm({
         },
         (body) => unwrap(consoleApi.PUT("/api/console/v1/notification-preferences", { body })),
       ),
-    onSuccess: ({ data, spendSaved }) => {
+    onSuccess: ({ data, spendSaved }, _vars, context) => {
+      if (!context?.claim || !holdsIdentity(client, context.claim.identity)) return;
       client.setQueryData(notificationPreferencesQuery.queryKey, data);
       setFailure(null);
-      setOutcome(spendSaved ? "saved" : "partial");
-      if (!spendSaved) {
-        // This node cannot store the reminder; stop showing a switch whose value it would discard again.
-        setSettings((held) => ({ ...held, spendAnomaly: undefined }));
-      }
+      if (context.version === draftVersion.current) setOutcome(spendSaved ? "saved" : "partial");
+      if (!spendSaved) setSettings((held) => ({ ...held, spendAnomaly: undefined }));
     },
-    onError: (error) => {
-      setFailure(error);
+    onError: (err, _vars, context) => {
+      if (!context?.claim || !holdsIdentity(client, context.claim.identity)) return;
+      setFailure(err);
       setOutcome(null);
     },
   });
-  return (
-    <form
-      className="max-w-xl space-y-5 p-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        if (amount !== null) {
-          save.mutate();
-        }
-      }}
-    >
-      {outcome ? (
-        <Notice action={<Button onClick={() => setOutcome(null)}>{t("notifications.dismiss")}</Button>}>
-          {t(outcome === "partial" ? "notifications.savedPartialSpend" : "notifications.saved")}
-        </Notice>
-      ) : null}
-      <BalanceAlerts currency={currency} settings={settings} set={set} invalid={amount === null} />
-      <EventAlerts settings={settings} set={set} />
-      <Delivery settings={settings} set={set} />
-      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-      <SubmitButton pending={save.isPending}>{t("notifications.save")}</SubmitButton>
-    </form>
-  );
+
+  return { settings, editSettings, amount, inputs, save, outcome, clearOutcome: () => setOutcome(null), failure };
 }
 
-// BalanceAlerts is when a balance that is running out is worth a message, and below what amount.
-function BalanceAlerts({
+function NotificationsBoard({
+  preferences,
   currency,
-  settings,
-  set,
-  invalid,
 }: {
+  preferences: Schemas["NotificationPreferences"];
   currency: string | undefined;
-  settings: Settings;
-  set: SetSetting;
-  invalid: boolean;
 }) {
   const { t } = useTranslation();
+  const wide = useWide();
+  const english = useEnglish();
+  const errors = useErrors();
+  const form = useNotificationForm(preferences);
+  const NotifyRegion = wide ? DesktopNotify : PhoneNotify;
+  const { keys: switchKeys, rows: switchRows } = buildNotificationSwitches(t, form.settings);
+  const rowStyle = wide ? "grid-template-columns: minmax(0, 1fr) 64px;" : "grid-template-columns: minmax(0, 1fr) 52px;";
+
   return (
-    <fieldset className="space-y-3">
-      <legend className="text-ui font-medium text-t1">{t("notifications.balance.title")}</legend>
-      <p className="max-w-prose text-ui text-t3">{t("notifications.balance.body")}</p>
-      <CheckField
-        label={t("notifications.lowBalance")}
-        hint={t("notifications.lowBalanceHint")}
-        checked={settings.lowBalance}
-        onChange={(event) => set("lowBalance", event.target.checked)}
+    <>
+      {form.outcome ? (
+        <Notice action={<Button onClick={form.clearOutcome}>{t("notifications.dismiss")}</Button>}>
+          {t(form.outcome === "partial" ? "notifications.savedPartialSpend" : "notifications.saved")}
+        </Notice>
+      ) : null}
+      {form.amount === null ? <FormError>{t("notifications.thresholdInvalid")}</FormError> : null}
+      {form.failure ? <FormError>{errors.message(form.failure)}</FormError> : null}
+      <NotifyRegion
+        t={makeBoardT(english, wide ? DesktopNotifyEn : PhoneNotifyEn, wide ? DesktopNotifyZh : PhoneNotifyZh, {
+          m512b281f73: t("notifications.description"),
+          m3d708e8e8b: t("notifications.channelHeader"),
+        })}
+        values={{
+          pageStyle: boardPageStyle(wide, { first: true }),
+          singleChannel: true,
+          rowStyle,
+          toggleDisabled: form.save.isPending,
+          onToggle: (event) => {
+            if (form.save.isPending) return;
+            const key = switchKeys[clickedRowIndex(event.target)];
+            if (key) form.editSettings((held) => ({ ...held, [key]: !held[key] }));
+          },
+        }}
+        rows={{ notifications0: switchRows }}
       />
-      <TextField
-        label={t("notifications.threshold")}
-        hint={t("notifications.thresholdHint", { currency: currency ?? t("notifications.siteCurrency") })}
-        inputMode="decimal"
-        value={settings.threshold}
-        onChange={(event) => set("threshold", event.target.value)}
-        error={invalid ? t("notifications.thresholdInvalid") : undefined}
-      />
-    </fieldset>
+      <NotificationsDelivery wide={wide} english={english} currency={currency} form={form} />
+    </>
   );
 }
 
-// EventAlerts is which events of the account are worth a message besides the balance.
-function EventAlerts({ settings, set }: { settings: Settings; set: SetSetting }) {
+function NotificationsDelivery({
+  wide,
+  english,
+  currency,
+  form,
+}: {
+  wide: boolean;
+  english: boolean;
+  currency: string | undefined;
+  form: ReturnType<typeof useNotificationForm>;
+}) {
   const { t } = useTranslation();
-  return (
-    <fieldset className="space-y-3">
-      <legend className="text-ui font-medium text-t1">{t("notifications.events.title")}</legend>
-      <CheckField
-        label={t("notifications.topUp")}
-        hint={t("notifications.topUpHint")}
-        checked={settings.topUp}
-        onChange={(event) => set("topUp", event.target.checked)}
-      />
-      <CheckField
-        label={t("notifications.factorChanged")}
-        hint={t("notifications.factorChangedHint")}
-        checked={settings.factorChanged}
-        onChange={(event) => set("factorChanged", event.target.checked)}
-      />
-      {settings.spendAnomaly === undefined ? null : (
-        <CheckField
-          label={t("notifications.spendAnomaly")}
-          hint={t("notifications.spendAnomalyHint")}
-          checked={settings.spendAnomaly}
-          onChange={(event) => set("spendAnomaly", event.target.checked)}
-        />
-      )}
-    </fieldset>
-  );
-}
+  const invalid = form.amount === null;
+  const submitSave = () => {
+    if (!invalid && !form.save.isPending) form.save.mutate();
+  };
 
-// Delivery is where the messages go and in which language: the person's webhook, or the account's email.
-function Delivery({ settings, set }: { settings: Settings; set: SetSetting }) {
-  const { t } = useTranslation();
   return (
-    <fieldset className="space-y-3">
-      <legend className="text-ui font-medium text-t1">{t("notifications.delivery.title")}</legend>
-      <TextField
-        label={t("notifications.webhook")}
-        hint={t("notifications.webhookHint")}
-        type="url"
-        maxLength={2048}
-        autoComplete="off"
-        placeholder="https://"
-        value={settings.webhook}
-        onChange={(event) => set("webhook", event.target.value)}
+    <>
+      <AccountInputsCard
+        wide={wide}
+        english={english}
+        inputRef={form.inputs.inputRef}
+        disabled={form.save.isPending}
+        onInput={(event: SyntheticEvent) => {
+          if (form.save.isPending || !(event.target instanceof HTMLInputElement)) return;
+          const { value, dataset } = event.target;
+          if (dataset.k === "threshold") form.editSettings((h) => ({ ...h, threshold: value }));
+          else if (dataset.k === "webhook") form.editSettings((h) => ({ ...h, webhook: value }));
+        }}
+        onKeyDown={(event: SyntheticEvent) => {
+          if ((event as unknown as KeyboardEvent).key === "Enter") {
+            event.preventDefault();
+            submitSave();
+          }
+        }}
+        rows={buildDeliveryRows(t, form.settings, currency, invalid)}
       />
-      <SelectField
-        label={t("notifications.language")}
-        hint={t("notifications.languageHint")}
-        value={settings.language}
-        onChange={(event) => set("language", event.target.value as "en" | "zh")}
-      >
-        <option value="en">{t("notifications.languageEn")}</option>
-        <option value="zh">{t("notifications.languageZh")}</option>
-      </SelectField>
-    </fieldset>
+      <AccountActionCard
+        wide={wide}
+        english={english}
+        title={t("notifications.language")}
+        rowDisabled={form.save.isPending}
+        onRowAction={(event) => {
+          if (form.save.isPending) return;
+          form.editSettings((held) => ({ ...held, language: clickedRowIndex(event.target) === 0 ? "zh" : "en" }));
+        }}
+        rows={buildMessageLanguageRows(t, form.settings.language)}
+      />
+      <AccountActionCard
+        wide={wide}
+        english={english}
+        title={t("notifications.saveTitle")}
+        last
+        rowDisabled={form.save.isPending || invalid}
+        onRowAction={submitSave}
+        rows={[
+          {
+            key: "save",
+            kind: "1",
+            f0: "qses",
+            f1: t("notifications.save"),
+            f2: t("notifications.saveHint"),
+            f3: "button",
+            f4: "btn pri sm ",
+            f5: form.save.isPending ? t("notifications.saving") : t("notifications.save"),
+          },
+        ]}
+      />
+    </>
   );
 }
