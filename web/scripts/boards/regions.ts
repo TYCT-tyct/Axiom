@@ -190,7 +190,7 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     classStates(document, region, css);
     const files = {
       [`${region.name}.tsx`]: source(region, body, state, repeated, marker),
-      [`${region.name}.module.css`]: `${marker}\n/* jscpd:ignore-start */\n${regionCSS(css, elements)}\n/* jscpd:ignore-end */\n`,
+      [`${region.name}.module.css`]: `${marker}\n/* jscpd:ignore-start */\n${regionCSS(css, elements, region.inserted)}\n/* jscpd:ignore-end */\n`,
       [`${region.name}.demo.ts`]: `${marker}\n/* jscpd:ignore-start */\nimport type { Props } from "./${region.name}.tsx";\nimport type en from "./${region.name}.en.ts";\nexport const demo = (t: (key: keyof typeof en) => string): Props => ${demo};\n/* jscpd:ignore-end */\n`,
       ...locales(region, state, marker),
     };

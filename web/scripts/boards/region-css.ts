@@ -63,6 +63,19 @@ function scoped(selector: string) {
   return `:global(${subject}):where(.scope)${pseudo}`;
 }
 
+// A rule kept for markup an engine inserts into the region at run time (an SVG fetched and parsed into place): its nodes
+// carry no scope class of their own, so the rule asks only that they sit inside an element that does.
+function inserted(selector: string) {
+  const at = selector.indexOf("::");
+  const subject = at < 0 ? selector : selector.slice(0, at);
+  const pseudo = at < 0 ? "" : selector.slice(at);
+  return `:global(${subject}):where(.scope *)${pseudo}`;
+}
+
+// insertedBy tells a selector that names one of the classes run-time markup carries (by prefix).
+const insertedBy = (prefixes: readonly string[]) => (selector: string) =>
+  prefixes.length > 0 && requiredClasses(selector).some((name) => prefixes.some((prefix) => name.startsWith(prefix)));
+
 function subject(selector: string) {
   let depth = 0;
   let start = 0;
@@ -112,22 +125,32 @@ function requiredClasses(selector: string) {
   return classes;
 }
 
-function selectBlocks(blocks: CSSBlock[], matches: (selector: string) => boolean): string {
+function selectBlocks(
+  blocks: CSSBlock[],
+  matches: (selector: string) => boolean,
+  isInserted: (selector: string) => boolean,
+): string {
   return blocks
     .map(({ selector, body }) => {
       if (selector.startsWith("@keyframes")) return `${selector}{${body}}`;
       if (selector.startsWith("@")) {
-        const inner = selectBlocks(cssBlocks(body), matches);
+        const inner = selectBlocks(cssBlocks(body), matches, isInserted);
         return inner ? `${selector}{${inner}}` : "";
       }
-      const kept = selectors(selector).filter(matches);
-      return kept.length ? `${kept.map(scoped).join(",")}{${body}}` : "";
+      const all = selectors(selector);
+      const kept = [
+        ...all.filter((one) => matches(one)).map(scoped),
+        ...all.filter((one) => !matches(one) && isInserted(one)).map(inserted),
+      ];
+      return kept.length ? `${kept.join(",")}{${body}}` : "";
     })
     .join("\n");
 }
 
-export function regionCSS(css: string, elements: Set<Element>): string {
-  const selected = selectBlocks(cssBlocks(css), matcher(elements));
+// regionCSS is the board's rules that can match the region: those its cut markup matches, and those naming a class
+// prefix in `inserted`, for markup an engine puts into the region at run time.
+export function regionCSS(css: string, elements: Set<Element>, insertedPrefixes: readonly string[] = []): string {
+  const selected = selectBlocks(cssBlocks(css), matcher(elements), insertedBy(insertedPrefixes));
   const withoutFrames = selected.replace(/@keyframes[\s\S]*?\}\s*\}/g, "");
   return cssBlocks(selected)
     .filter(({ selector }) => {

@@ -35,4 +35,7 @@ export type Region = {
   elements?: Record<string, { tag?: string; set?: Record<string, string>; unless?: string }>;
   classes?: Record<string, string[]>;
   english?: Record<string, string>;
+  // Class prefixes of markup an engine inserts into the region at run time (the connect screen's figure, an SVG fetched
+  // and parsed into place): the board's rules naming them are kept, applying to anything inside the region.
+  inserted?: string[];
 };
