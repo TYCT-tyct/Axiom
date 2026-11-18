@@ -14,6 +14,15 @@ inputs:
 runs:
   using: composite
   steps:
+    - if: runner.environment == 'github-hosted'
+      uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        # The action pins just and the cache client; sources.json pins every downloaded font.
+        key: ${{ runner.os }}-ci-tools-${{ inputs.node }}-${{ hashFiles('.github/actions/setup/**', 'web/scripts/fonts/sources.json') }}
+        path: |
+          ${{ runner.tool_cache }}/just
+          ${{ runner.temp }}/cache-client
+          ~/.cache/axiom/xdg/axiom-fonts
     - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
       with:
         go-version-file: go.mod
@@ -38,6 +47,19 @@ runs:
     - if: inputs.node == 'true'
       run: pnpm --dir web install --frozen-lockfile
       shell: bash
+    - if: runner.environment == 'github-hosted' && inputs.node == 'true'
+      name: Prepare hosted content cache and pinned fonts
+      shell: bash
+      run: |
+        client="$RUNNER_TEMP/cache-client"
+        if [ ! -f "$client/node_modules/@actions/cache/lib/cache.js" ]; then
+          npm install --prefix "$client" --ignore-scripts --no-audit --no-fund --no-package-lock @actions/cache@6.3.0
+        fi
+        echo "ACTIONS_CACHE_CLIENT=$client/node_modules/@actions/cache/lib/cache.js" >> "$GITHUB_ENV"
+        XDG_CACHE_HOME="$HOME/.cache/axiom/xdg" node --input-type=module -e '
+          const { sources, sourceFont } = await import("./web/packages/boards/fonts.ts");
+          await Promise.all(Object.keys(sources).map(sourceFont));
+        '
     # Only the headless Chromium the end-to-end tests run in, with the system libraries it needs on a hosted runner.
     # A self-hosted host has the browser's system libraries installed once; installing them per job would take the
     # host's apt lock from parallel jobs at once
@@ -57,3 +79,5 @@ runs:
         # Pinned with the release's own checksum (SHA256SUMS), so a swapped download fails.
         JUST_VERSION: "1.58.0"
         JUST_SHA256: "4a5cc2f53e6f0f8c59092a6cc38291eb729d46a7dd95d3ae582008881b84931d"
+    - if: runner.environment == 'github-hosted'
+      uses: ./.github/actions/setup/cache

@@ -154,9 +154,11 @@ async function regionMenus(page: Page, reference: Page, name: string, suffix: st
   }
 }
 
+// What the demo's regions (Shell and Overview, demo/regions.tsx) leave out, hidden on the reference. Only theirs: another
+// region of the same board, such as the admin's shell, roots at the same elements and leaves out other things.
 function omitted(board: string) {
   return regions
-    .filter((region) => region.board === board)
+    .filter((region) => region.board === board && ["Shell", "Overview"].includes(region.name))
     .flatMap((region) =>
       region.roots.flatMap((root) =>
         (region.omit ?? []).map((selector) => `${root} ${selector}{display:none!important}`),
