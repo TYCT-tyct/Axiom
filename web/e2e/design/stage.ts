@@ -199,3 +199,24 @@ export async function freeze(page: Page) {
   });
   await frame(page);
 }
+
+// Chromium can antialias the same SVG stroke differently when it repaints only a damaged part of the frame.
+// Paint once with the scene transparent, then restore it so the screenshot starts from a full repaint.
+// Opacity preserves focus and layout during that frame.
+export async function repaint(page: Page) {
+  const hidden = await page.evaluateHandle(() => {
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync("html { opacity: 0 !important }");
+    document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
+    return () => {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((current) => current !== sheet);
+    };
+  });
+  try {
+    await frame(page);
+  } finally {
+    await hidden.evaluate((restore) => restore());
+    await hidden.dispose();
+  }
+  await frame(page);
+}
