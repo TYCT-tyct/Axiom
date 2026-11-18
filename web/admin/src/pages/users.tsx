@@ -87,7 +87,7 @@ function UsersTable({ rows }: { rows: AdminSchemas["UserSummary"][] }) {
             </Td>
             <Td>{format.dateTime(new Date(user.created_at))}</Td>
             <Td shrink>
-              <ActionButton variant="gho" size="sm" asChild>
+              <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/accounts/$accountId"
                   params={{ accountId: user.account_id }}

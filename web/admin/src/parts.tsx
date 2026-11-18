@@ -110,38 +110,25 @@ export function text(value: string | undefined) {
 
 // Head is the header row of a table: a label per column, the column that names a row marked main, and an empty last
 // column for the buttons of a row. A table too wide for the window scrolls inside its box; no column is hidden.
-// A column given as a string of classes, and actionClass, are how pages wrote it before the redesign; they go when the
-// last page drops them (#747).
-type HeadColumn = string | [label: string, layout?: string | { main?: boolean; align?: "end" }];
+type HeadColumn = string | [label: string, layout?: { main?: boolean; align?: "end"; shrink?: boolean }];
 
-export function Head({
-  cols,
-  action = false,
-  actionClass,
-}: {
-  cols: HeadColumn[];
-  action?: boolean;
-  actionClass?: string;
-}) {
+export function Head({ cols, action = false }: { cols: HeadColumn[]; action?: boolean }) {
   return (
     <thead>
       <tr>
         {cols.map((col) => {
           const [label, layout] = typeof col === "string" ? [col, undefined] : col;
           return (
-            <Th key={label} {...(typeof layout === "string" ? { className: layout } : layout)}>
+            <Th key={label} {...layout}>
               {label}
             </Th>
           );
         })}
-        {action ? <Th shrink className={actionClass} /> : null}
+        {action ? <Th shrink /> : null}
       </tr>
     </thead>
   );
 }
-
-// mainCell is the classes pages gave the cell that names a row before the redesign; they move to Td's main (#747).
-export const mainCell = "w-full max-w-0 sm:w-auto sm:max-w-72 sm:min-w-40";
 
 // ChoiceFilter is a filter that picks one of a few values, or none.
 export function ChoiceFilter({

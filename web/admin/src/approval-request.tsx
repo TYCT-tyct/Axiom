@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { CodeBlock } from "@axiom/boards/ds";
-import { Card, Disclosure, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
+import { Card, Disclosure, List, ListItem, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -47,11 +47,11 @@ export function WhyAsked({ approval }: { approval: Approval }) {
   return (
     <Card title={t("approvals.why.title")}>
       {lines ? (
-        <Stack gap={8}>
+        <List>
           {lines.map((line) => (
-            <Text key={line}>{line}</Text>
+            <ListItem key={line}>{line}</ListItem>
           ))}
-        </Stack>
+        </List>
       ) : (
         <Text tone="faint">{t("approvals.why.unavailable")}</Text>
       )}
@@ -267,7 +267,13 @@ export function RuleChangePanel({ approval }: { approval: Approval }) {
           {change.moves.length === 0 ? (
             <Text tone="faint">{t("approvals.rule.none")}</Text>
           ) : (
-            change.moves.map((move, i) => <MoveLine key={`${move.model}:${i}`} move={move} />)
+            <List>
+              {change.moves.map((move, i) => (
+                <ListItem key={`${move.model}:${i}`}>
+                  <MoveLine move={move} />
+                </ListItem>
+              ))}
+            </List>
           )}
         </Stack>
       </Card>

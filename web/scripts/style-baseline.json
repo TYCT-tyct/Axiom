@@ -2,7 +2,6 @@
   "migrated": [],
   "counts": {
     "class-name": {
-      "admin/src/parts.tsx": 1,
       "console/src/announcements.tsx": 1,
       "console/src/auth/consent.tsx": 2,
       "console/src/auth/legal-markdown.tsx": 5,

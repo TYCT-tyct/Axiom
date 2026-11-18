@@ -22,6 +22,7 @@ export { Icon, type IconName } from "./components/icon";
 export { Id, IdLink, IdText } from "./components/id";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";
+export { List, ListItem } from "./components/list";
 export { ListDetail } from "./components/list-detail";
 export { LoadMore } from "./components/load-more";
 export { Logo } from "./components/logo";

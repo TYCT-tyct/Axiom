@@ -111,14 +111,19 @@ test.describe("operations approvals", () => {
     await expect(page.getByText(zhText("approvals.prices.unlisted"), { exact: true })).toHaveCount(0);
   });
 
-  test("on a phone each price is a block with its three values and their currency", async ({ page }) => {
+  test("on a phone the price table keeps its three values and their currency, scrolling inside its box", async ({
+    page,
+  }) => {
     await page.setViewportSize({ width: 360, height: 800 });
     await open(page, `/approvals/${uuid(17, 3)}`);
-    const input = page.getByRole("listitem").filter({ hasText: zhText("models.item.input") });
+    const table = page.getByRole("table", { name: words("approvals.prices.title") });
+    const input = table.getByRole("row").filter({ hasText: zhText("models.item.input") });
     await expect(input).toContainText("4 USD");
     await expect(input).toContainText("4.5 USD");
-    await expect(input.getByText(zhText("approvals.prices.cost"), { exact: true })).toBeVisible();
-    await expect(page.getByRole("table", { name: words("approvals.prices.title") })).toBeHidden();
+    await expect(table.getByRole("columnheader", { name: zhText("approvals.prices.cost"), exact: true })).toHaveCount(
+      1,
+    );
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
   });
 
   test("a top-up says each autonomous cap the server found it over, and marks those rows", async ({ page }) => {

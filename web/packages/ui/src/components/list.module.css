@@ -1,0 +1,20 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: disc;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+}
+
+.item {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.item::marker {
+  color: var(--t3);
+}
