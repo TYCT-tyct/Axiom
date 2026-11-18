@@ -17,9 +17,33 @@ const flushIdle = () => {
   for (const callback of idle.splice(0)) callback({ didTimeout: false, timeRemaining: () => 50 });
 };
 
+function paintTiming(previous?: string) {
+  let notify: ((name: string) => void) | undefined;
+  vi.stubGlobal(
+    "PerformanceObserver",
+    class {
+      static supportedEntryTypes = ["paint"];
+
+      constructor(deliver: (list: { getEntries: () => { name: string }[] }) => void) {
+        notify = (name) => deliver({ getEntries: () => [{ name }] });
+      }
+
+      observe({ buffered }: PerformanceObserverInit) {
+        if (buffered && previous) notify?.(previous);
+      }
+
+      disconnect() {
+        notify = undefined;
+      }
+    },
+  );
+  return (name: string) => notify?.(name);
+}
+
 beforeEach(() => {
   frames = [];
   idle = [];
+  vi.stubGlobal("PerformanceObserver", undefined);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   vi.stubGlobal("cancelAnimationFrame", () => {});
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => idle.push(callback));
@@ -55,11 +79,16 @@ function mount(load: () => Promise<typeof effect>) {
   return root;
 }
 
-it("loads the module only after a frame and an idle moment, and lets go of everything on unmount", async () => {
+it("waits for contentful paint even when the browser has already run a frame and gone idle", async () => {
+  const paint = paintTiming();
   const load = vi.fn(async () => effect);
   const root = mount(load);
-  expect(load).not.toHaveBeenCalled();
   flushFrames();
+  paint("first-paint");
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+
+  paint("first-contentful-paint");
   expect(load).not.toHaveBeenCalled();
   await act(async () => flushIdle());
   expect(load).toHaveBeenCalledOnce();
@@ -69,11 +98,34 @@ it("loads the module only after a frame and an idle moment, and lets go of every
   expect(window.axiomFx?.state).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
 });
 
+it("stops observing paint if the effect unmounts before first content", async () => {
+  const paint = paintTiming();
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+  act(() => root.unmount());
+
+  paint("first-contentful-paint");
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("can load when the browser painted its first content before the effect mounted", async () => {
+  paintTiming("first-contentful-paint");
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+
+  await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
+  act(() => root.unmount());
+});
+
 it("starts nothing when the page is left before the module arrives, and survives a module that fails", async () => {
   let arrive: (module: typeof effect) => void = () => {};
-  const root = mount(() => new Promise((resolve) => (arrive = resolve)));
+  const load = vi.fn(() => new Promise<typeof effect>((resolve) => (arrive = resolve)));
+  const root = mount(load);
   flushFrames();
   await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
   act(() => root.unmount());
   await act(async () => arrive(effect));
   expect(window.axiomFx?.state.owners).toBe(0);
@@ -83,37 +135,4 @@ it("starts nothing when the page is left before the module arrives, and survives
   await act(async () => flushIdle());
   expect(window.axiomFx?.state.owners).toBe(0);
   act(() => failing.unmount());
-});
-
-it("waits for first-contentful-paint before scheduling the idle load when paint timing is supported", async () => {
-  let painted = false;
-  let notify: ((list: { getEntriesByName: (name: string) => unknown[] }) => void) | undefined;
-  const disconnect = vi.fn();
-  class PaintObserver {
-    static supportedEntryTypes = ["paint"];
-    constructor(cb: (list: { getEntriesByName: (name: string) => unknown[] }) => void) {
-      notify = cb;
-    }
-    observe() {}
-    disconnect = disconnect;
-  }
-  vi.stubGlobal("PerformanceObserver", PaintObserver);
-  vi.stubGlobal("performance", {
-    now: () => 0,
-    getEntriesByName: (name: string) => (name === "first-contentful-paint" && painted ? [{}] : []),
-  });
-
-  const load = vi.fn(async () => effect);
-  const root = mount(load);
-  flushFrames();
-  await act(async () => flushIdle());
-  expect(load).not.toHaveBeenCalled();
-
-  painted = true;
-  notify?.({ getEntriesByName: () => [{}] });
-  expect(disconnect).toHaveBeenCalledOnce();
-  expect(load).not.toHaveBeenCalled();
-  await act(async () => flushIdle());
-  expect(load).toHaveBeenCalledOnce();
-  act(() => root.unmount());
 });

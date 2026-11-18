@@ -3,56 +3,36 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-const hasFirstContentfulPaint = () =>
-  typeof performance?.getEntriesByName === "function" &&
-  performance.getEntriesByName("first-contentful-paint").length > 0;
-
-function afterPaint(go: () => void) {
-  let done = false;
-  let idle = 0;
-  let observer: PerformanceObserver | undefined;
-  const finish = () => {
-    if (done) return;
-    done = true;
-    observer?.disconnect();
-    observer = undefined;
-    idle =
-      typeof requestIdleCallback === "function"
-        ? requestIdleCallback(go, { timeout: 2000 })
-        : window.setTimeout(go, 200);
+// A rendering opportunity can pass before the browser reports a contentful paint. Wait for the paint entry before
+// scheduling idle work, using a frame callback where Paint Timing is unavailable.
+function afterFirstContent(go: () => void) {
+  let cancelIdle: (() => void) | undefined;
+  const schedule = () => {
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(go, { timeout: 2000 });
+      cancelIdle = () => cancelIdleCallback(idle);
+    } else {
+      const timer = window.setTimeout(go, 200);
+      cancelIdle = () => window.clearTimeout(timer);
+    }
   };
-  if (
-    typeof PerformanceObserver !== "function" ||
-    !PerformanceObserver.supportedEntryTypes?.includes("paint") ||
-    hasFirstContentfulPaint()
-  ) {
-    finish();
-  } else {
-    observer = new PerformanceObserver((list) => {
-      if (list.getEntriesByName("first-contentful-paint").length > 0 || hasFirstContentfulPaint()) finish();
+  let cancelPaint: () => void;
+  if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("paint")) {
+    const observer = new PerformanceObserver((list) => {
+      if (list.getEntries().some((entry) => entry.name === "first-contentful-paint")) {
+        observer.disconnect();
+        schedule();
+      }
     });
     observer.observe({ type: "paint", buffered: true });
+    cancelPaint = () => observer.disconnect();
+  } else {
+    const frame = requestAnimationFrame(schedule);
+    cancelPaint = () => cancelAnimationFrame(frame);
   }
   return () => {
-    done = true;
-    observer?.disconnect();
-    observer = undefined;
-    if (typeof cancelIdleCallback === "function") cancelIdleCallback(idle);
-    clearTimeout(idle);
-  };
-}
-
-// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
-// that cancels it. A frame callback runs before commit, and Chromium records first-contentful-paint asynchronously after
-// presentation feedback, so browsers with paint timing wait for that entry before queueing the idle callback.
-function afterFirstContent(go: () => void) {
-  let cancelPaint: (() => void) | undefined;
-  const frame = requestAnimationFrame(() => {
-    cancelPaint = afterPaint(go);
-  });
-  return () => {
-    cancelAnimationFrame(frame);
-    cancelPaint?.();
+    cancelPaint();
+    cancelIdle?.();
   };
 }
 
