@@ -141,19 +141,19 @@ function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
                 {entry.module ?? ""}
               </Text>
             </Td>
-            <Td>
+            <Td shrink>
               {entry.actor_id ?? "—"}
               <Text as="div" size="sm" tone="faint">
                 {entry.actor_kind}
               </Text>
             </Td>
-            <Td>
+            <Td shrink>
               {entry.target_id ?? "—"}
               <Text as="div" size="sm" tone="faint">
                 {entry.target_kind}
               </Text>
             </Td>
-            <Td>{entry.request_id ? <Mono>{entry.request_id}</Mono> : "—"}</Td>
+            <Td shrink>{entry.request_id ? <Mono>{entry.request_id}</Mono> : "—"}</Td>
           </tr>
         ))}
       </tbody>
