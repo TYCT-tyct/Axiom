@@ -234,7 +234,7 @@
 :global(.ov .lgs):where(.scope){display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--t2)}
 :global(.ov .lgs i):where(.scope){width:6px;height:6px;border-radius:50%;background:var(--ok)}
 :global(.ov .lgs.retry i):where(.scope){background:var(--warn)}
-:global(.ov .lgend):where(.scope){padding:16px 20px;font-size:12px;color:var(--t3);text-align:center}
+:global(.ov .lgmore):where(.scope){display:flex;justify-content:center;padding:12px 0 16px}
 :global(.ov .lgd):where(.scope){position:sticky;top:16px;max-height:calc(100vh - 140px);overflow:auto;padding:0;animation:lgIn 250ms ease-out both;scrollbar-width:none}
 :global(.ov .lgd):where(.scope)::-webkit-scrollbar{display:none}
 @keyframes lgIn{from{opacity:0;transform:translateX(8px)}}

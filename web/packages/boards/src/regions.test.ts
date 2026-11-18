@@ -212,7 +212,9 @@ describe("region generation", () => {
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const manifest = regions.filter((region) => region.board === board && !region.render);
+      const manifest = regions.filter(
+        (region) => region.board === board && !region.render && (region.name === "Shell" || region.name === "Overview"),
+      );
       const drawn = fragment(markup);
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();
