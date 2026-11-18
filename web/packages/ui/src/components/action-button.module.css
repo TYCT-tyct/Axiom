@@ -92,3 +92,18 @@
     transform: none;
   }
 }
+
+.square {
+  width: 36px;
+  padding: 0;
+}
+
+.sm.square {
+  width: 32px;
+}
+
+/* A pending button keeps its place and its words; the wait shows as a lowered tone, and aria-busy says it. */
+.pending {
+  opacity: 0.6;
+  cursor: progress;
+}

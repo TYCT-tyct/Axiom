@@ -350,7 +350,6 @@ function CurrencyField({ preset, code, onCode }: { preset?: Preset; code: string
   }
   return (
     <TextField
-      className="sm:w-48"
       label={t("routingPresets.form.currency")}
       hint={t("routingPresets.form.currencyHint")}
       value={code}

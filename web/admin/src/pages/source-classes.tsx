@@ -266,7 +266,6 @@ function EditorFields({ current }: { current?: Class }) {
         defaultValue={current?.description}
         maxLength={500}
         rows={2}
-        className="font-sans"
       />
       <TextField
         label={t("sourceClasses.positionField")}

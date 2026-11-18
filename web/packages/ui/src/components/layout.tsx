@@ -23,7 +23,20 @@ export function Cluster({
 }
 
 // Grid puts blocks in equal columns: two or three stay so down to a tablet, four become two there, and every grid is a
-// single column on a phone.
-export function Grid({ columns, gap = 16, children }: { columns: 2 | 3 | 4; gap?: Gap; children: ReactNode }) {
-  return <div className={classes(s.grid, s[`c${columns}`], s[`g${gap}`])}>{children}</div>;
+// single column on a phone. min instead fits as many columns as leave each at least that wide (a form's fields, a
+// filter's), so a grid never needs a breakpoint of its own.
+export function Grid({
+  columns,
+  min,
+  gap = 16,
+  children,
+}: ({ columns: 2 | 3 | 4; min?: never } | { min: "12rem" | "16rem" | "20rem"; columns?: never }) & {
+  gap?: Gap;
+  children: ReactNode;
+}) {
+  return (
+    <div className={classes(s.grid, columns ? s[`c${columns}`] : s[`m${min?.replace("rem", "")}`], s[`g${gap}`])}>
+      {children}
+    </div>
+  );
 }

@@ -33,7 +33,6 @@ export function MerchantSecrets({
         label={t("settings.payments.settings")}
         hint={stripe ? t("settings.payments.stripeSettingsHint") : t("settings.payments.settingsHint")}
         name="settings"
-        className="min-h-40"
         defaultValue={JSON.stringify(merchant?.settings ?? defaults, null, 2)}
         error={errors.field(error, "merchant/settings")}
       />
@@ -91,7 +90,6 @@ function AlipaySecrets({ merchant, error }: { merchant: Merchant | undefined; er
         label={t("settings.payments.privateKey")}
         hint={merchant ? t("settings.payments.privateKeyKeep") : t("settings.payments.privateKeyNew")}
         name="private_key"
-        className="min-h-32"
         autoComplete="off"
         spellCheck={false}
         error={errors.field(error, "merchant/secrets")}
@@ -123,7 +121,6 @@ function WechatSecrets({ merchant, error }: { merchant: Merchant | undefined; er
         label={t("settings.payments.wechatPrivateKey")}
         hint={merchant ? t("settings.payments.wechatPrivateKeyKeep") : t("settings.payments.wechatPrivateKeyNew")}
         name="private_key"
-        className="min-h-32"
         autoComplete="off"
         spellCheck={false}
         error={errors.field(error, "merchant/secrets")}

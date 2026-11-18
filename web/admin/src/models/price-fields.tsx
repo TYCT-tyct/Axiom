@@ -28,7 +28,7 @@ export function RatesFields({ schedule, currency }: { schedule?: Schedule; curre
         readOnly={schedule !== undefined}
         autoComplete="off"
         spellCheck={false}
-        className="uppercase"
+        autoCapitalize="characters"
       />
       <fieldset className="min-w-0 space-y-3">
         <legend className="mb-1 text-ui font-medium text-t2">{t("models.price.rates")}</legend>
@@ -65,7 +65,6 @@ function EvidenceFields() {
         hint={t("models.price.evidenceHint")}
         name="evidence_note"
         rows={2}
-        className="font-sans"
       />
       <TextField
         label={t("models.price.evidenceUrl")}

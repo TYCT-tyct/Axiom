@@ -1,5 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Panel, Table, Td, useFormat } from "@axiom/ui";
+import { CodeBlock } from "@axiom/boards/ds";
+import { Card, Disclosure, Panel, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -404,26 +405,27 @@ function MoveLine({ move }: { move: RuleMove }) {
 export function RawData({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   return (
-    <Panel className="p-4">
-      <details>
-        <summary className="cursor-pointer text-t1">{t("approvals.raw.title")}</summary>
-        <div className="mt-3 space-y-3">
-          <p className="text-label text-t3">{t("approvals.raw.hint")}</p>
+    <Card>
+      <Disclosure summary={t("approvals.raw.title")}>
+        <Stack gap={12}>
+          <Text size="sm" tone="muted">
+            {t("approvals.raw.hint")}
+          </Text>
           {[
             [t("approvals.raw.summary"), approval.summary],
             [t("approvals.raw.params"), approval.params],
             // A reason this page cannot name is read here, as the server sent it.
             ...(approval.reasons ? [[t("approvals.raw.reasons"), approval.reasons]] : []),
           ].map(([label, value]) => (
-            <section key={label as string} className="space-y-1">
-              <h3 className="text-label text-t2">{label as string}</h3>
-              <pre className="max-h-96 overflow-y-auto whitespace-pre-wrap rounded-md bg-s2 p-3 font-mono text-label text-t2 [overflow-wrap:anywhere]">
-                {formatJSON(value)}
-              </pre>
-            </section>
+            <Stack key={label as string} gap={4}>
+              <Text as="h3" size="sm" tone="muted">
+                {label as string}
+              </Text>
+              <CodeBlock label={label as string}>{formatJSON(value)}</CodeBlock>
+            </Stack>
           ))}
-        </div>
-      </details>
-    </Panel>
+        </Stack>
+      </Disclosure>
+    </Card>
   );
 }

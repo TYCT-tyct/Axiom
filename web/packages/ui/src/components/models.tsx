@@ -1,7 +1,7 @@
 import { type ReactNode, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useFormat } from "../format";
-import { Button } from "./button";
+import { Button } from "./action-button";
 import { SelectField, TextField } from "./form";
 import { Icon } from "./icon";
 import { EndpointSection } from "./model-endpoints";
@@ -13,7 +13,8 @@ import {
   RateTable,
   SearchEnginePrices,
 } from "./model-pricing";
-import { Badge, Table, Td, Th } from "./panel";
+import { Badge } from "./panel";
+import { Table, Td, Th } from "./table";
 
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest

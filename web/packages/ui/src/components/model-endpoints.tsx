@@ -2,7 +2,8 @@ import { useTranslation } from "react-i18next";
 import { useFormat } from "../format";
 import { label, PriceHeads, PricingPrice, RateTable, SearchEnginePrices } from "./model-pricing";
 import type { PublicEndpoint, PublicModel } from "./models";
-import { Badge, Table, Td, Th } from "./panel";
+import { Badge } from "./panel";
+import { Table, Td, Th } from "./table";
 
 // EndpointSection lists every group that serves the model under the codename routing accepts. Each row carries the
 // attributes that have no column at this width, its own base prices and a full schedule, so a reader can see that the

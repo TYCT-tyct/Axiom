@@ -32,7 +32,7 @@ function ModelChoice({ models }: { models: Model[] }) {
         {models.map((model, index) => (
           <CheckField
             key={model.id}
-            className={shown.includes(model) ? undefined : "hidden"}
+            hidden={!shown.includes(model)}
             label={model.slug}
             name={`model_${model.id}`}
             defaultChecked={index < startChosen}

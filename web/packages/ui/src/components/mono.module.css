@@ -1,0 +1,6 @@
+.root {
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  overflow-wrap: anywhere;
+}

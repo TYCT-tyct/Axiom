@@ -182,7 +182,7 @@ function CreateFields({ error, fields, name }: { error: unknown; fields: Detecti
         maxLength={3}
         autoComplete="off"
         spellCheck={false}
-        className="uppercase"
+        autoCapitalize="characters"
         error={errors.field(error, "settlement_currency")}
       />
       <LoginFields fields={fields} />

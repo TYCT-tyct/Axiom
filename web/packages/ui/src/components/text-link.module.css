@@ -1,0 +1,22 @@
+/* The board's .pplink: words in the accent text colour, underlined on hover; .dan is the danger colour. */
+.root {
+  color: var(--accentT);
+  text-decoration: none;
+  text-underline-offset: 4px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.root:hover {
+  text-decoration: underline;
+}
+
+.root:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r4);
+}
+
+.danger {
+  color: var(--badT);
+}

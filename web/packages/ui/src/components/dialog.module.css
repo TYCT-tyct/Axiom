@@ -1,0 +1,42 @@
+/* The board's dialog: a raised card over a scrim, 32rem wide, scrolling inside itself when taller than the window. */
+.root {
+  box-sizing: border-box;
+  width: min(32rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
+  padding: 0;
+  overflow-y: auto;
+  border: 0;
+  border-radius: var(--r16);
+  background: var(--pop);
+  box-shadow: var(--shPop);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+}
+
+.root::backdrop {
+  background: var(--scrim);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 24px 24px;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs16);
+  line-height: var(--lh16);
+  font-weight: 500;
+}

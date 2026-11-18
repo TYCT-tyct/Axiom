@@ -1,0 +1,46 @@
+.root {
+  min-width: 0;
+}
+
+.summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+  cursor: pointer;
+  list-style: none;
+}
+
+.summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary:hover {
+  color: var(--t1);
+}
+
+.summary:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r4);
+}
+
+.chevron {
+  transition: transform var(--dur) var(--ease);
+}
+
+.root[open] > .summary .chevron {
+  transform: rotate(90deg);
+}
+
+.body {
+  padding-top: 12px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chevron {
+    transition: none;
+  }
+}
