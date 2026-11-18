@@ -243,9 +243,11 @@ func TestSessionInfoTellsTOTPFromAPasskey(t *testing.T) {
 	if err := s.Refresh(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	p, err := x.principal(t, console, x.signIn(t, console))
-	if err != nil {
-		t.Fatal(err)
+	// the passkey makes the password sign-in a pending one, which GetSession admits through AuthenticateAny
+	pending := x.signIn(t, console)
+	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
+	if err != nil || !p.Pending() {
+		t.Fatalf("a passkey user's password sign-in through AuthenticateAny: %v, %v", p, err)
 	}
 	if info := x.sessionInfoOf(t, p); !info.MFAEnabled || info.TOTP || info.Passkeys != 1 {
 		t.Errorf("a passkey-only user's session: MFAEnabled %v, TOTP %v, Passkeys %d", info.MFAEnabled, info.TOTP, info.Passkeys)
