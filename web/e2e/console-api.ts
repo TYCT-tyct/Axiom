@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
+import { callHandlers } from "./console-calls-api.ts";
 import {
   aKey,
   aPreset,
@@ -77,165 +78,6 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   state.user.password = body.password ?? "";
   state.legalAccepted = state.legal.length > 0;
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
-}
-
-// The filters the call list, its summary and its export share. status is a result, not the error kind: error means the
-// call failed.
-function matchesExactFilters(call: Schemas["Call"], query: URLSearchParams) {
-  const fields = ["model", "client_app", "key_id", "workspace_id", "request_id"] as const;
-  return fields.every((field) => {
-    const val = query.get(field);
-    if (!val) return true;
-    const target = field === "request_id" ? call.id : call[field];
-    return target === val;
-  });
-}
-
-function matchingCalls(calls: Schemas["Call"][], query: URLSearchParams) {
-  const since = query.get("since");
-  const until = query.get("until");
-  const status = query.get("status") as Schemas["CallStatus"] | null;
-  const fellBack = query.get("fell_back") === "true" || query.get("fell_back") === "1";
-  return calls.filter(
-    (call) =>
-      matchesExactFilters(call, query) &&
-      (!since || call.at >= new Date(since).toISOString()) &&
-      (!until || call.at < new Date(until).toISOString()) &&
-      (!status || (call.error_kind !== "") === (status === "error")) &&
-      (!fellBack || (call.attempt_count ?? 1) > 1),
-  );
-}
-
-function listCalls({ query, state }: Ctx<"/api/console/v1/calls", "get">) {
-  const status = query.get("status") as Schemas["CallStatus"] | null;
-  const fellBack = query.get("fell_back") === "true" || query.get("fell_back") === "1";
-  const page = paged(matchingCalls(state.calls, query), query);
-  return page
-    ? ({
-        status: 200,
-        json: {
-          ...page,
-          status_filter: status ?? undefined,
-          fell_back_filter: fellBack ? true : undefined,
-        },
-      } as const)
-    : fail(400, "invalid_request");
-}
-
-type SessionEntry = Schemas["CallSession"] & { amount: bigint; currency: string; maxCalls: number };
-
-function addCallToSession(sessions: Map<string, SessionEntry>, call: Schemas["Call"]) {
-  if (!call.session_id) return;
-  const callAmt = BigInt(call.price.amount);
-  const prev = sessions.get(call.session_id);
-  if (!prev) {
-    sessions.set(call.session_id, {
-      session_id: call.session_id,
-      client_app: call.client_app,
-      calls: "1",
-      price: { amount: callAmt.toString(), currency: call.price.currency },
-      main_model: call.model,
-      first_at: call.at,
-      last_at: call.at,
-      amount: callAmt,
-      currency: call.price.currency,
-      maxCalls: 1,
-    });
-    return;
-  }
-  prev.maxCalls += 1;
-  prev.calls = String(prev.maxCalls);
-  prev.amount += callAmt;
-  prev.price = { amount: prev.amount.toString(), currency: prev.currency };
-  if (!prev.first_at || call.at < prev.first_at) prev.first_at = call.at;
-  if (!prev.last_at || call.at > prev.last_at) prev.last_at = call.at;
-}
-
-function listCallSessions({ query, state }: Ctx<"/api/console/v1/calls/sessions", "get">) {
-  const sessions = new Map<string, SessionEntry>();
-  for (const call of matchingCalls(state.calls, query)) addCallToSession(sessions, call);
-  const ordered = [...sessions.values()]
-    .sort((a, b) => (b.last_at ?? "").localeCompare(a.last_at ?? ""))
-    .map(({ amount: _, currency: _c, maxCalls: _m, ...row }) => row);
-  const page = paged(ordered, query);
-  return page
-    ? ({
-        status: 200,
-        json: {
-          data: page.data,
-          next_cursor: page.next_cursor,
-          since: query.get("since") ?? "2026-09-15T00:00:00Z",
-          until: query.get("until") ?? "2026-10-15T00:00:00Z",
-        },
-      } as const)
-    : fail(400, "invalid_request");
-}
-
-// The summary groups the same calls; the window is the one the filters asked for, or the whole fixture.
-function aggregateCalls({ query, state }: Ctx<"/api/console/v1/calls/aggregate", "get">) {
-  const group = (query.get("group_by") ?? "day") as Schemas["CallAggregates"]["group_by"];
-  if (group !== "day" && group !== "model" && group !== "key") {
-    return fail(400, "invalid_request");
-  }
-  const groups = new Map<string, { calls: number; amount: bigint; currency: string }>();
-  for (const call of matchingCalls(state.calls, query)) {
-    const bucket = group === "day" ? call.at.slice(0, 10) : group === "model" ? call.model : String(call.key_id);
-    const entry = groups.get(bucket) ?? { calls: 0, amount: 0n, currency: call.price.currency };
-    entry.calls += 1;
-    entry.amount += BigInt(call.price.amount);
-    groups.set(bucket, entry);
-  }
-  const data = [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b))
-    .map(([bucket, entry]) => ({
-      bucket,
-      calls: String(entry.calls),
-      price: { amount: entry.amount.toString(), currency: entry.currency },
-    }));
-  return {
-    status: 200,
-    json: {
-      data,
-      group_by: group,
-      since: query.get("since") ?? "2026-09-15T00:00:00Z",
-      until: query.get("until") ?? "2026-10-15T00:00:00Z",
-    },
-  } as const;
-}
-
-function exportCalls({ query, state }: Ctx<"/api/console/v1/calls/export", "get">) {
-  const since = query.get("since");
-  const until = query.get("until");
-  if (since && until && Date.parse(until) - Date.parse(since) > 31 * 86_400_000) {
-    return fail(400, "invalid_request");
-  }
-  const matched = matchingCalls(state.calls, query);
-  if (matched.length > 10_000) {
-    return fail(400, "invalid_request");
-  }
-  const cell = (value: string) => (/[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value);
-  const columns = (call: Schemas["Call"]) => [
-    call.id,
-    call.at,
-    call.workspace_id,
-    call.key_id,
-    call.model,
-    call.client_app,
-    call.error_kind === "" ? "success" : "error",
-    call.error_kind,
-    call.price.amount,
-    call.price.currency,
-  ];
-  const lines = [
-    "request_id,at,workspace_id,key_id,model,client_app,status,error_kind,price,currency",
-    ...matched.map((call) => columns(call).map(cell).join(",")),
-  ];
-  return {
-    status: 200,
-    json: undefined,
-    text: `${lines.join("\n")}\n`,
-    headers: { "Content-Disposition": 'attachment; filename="calls-2026-10-14.csv"' },
-  } as const;
 }
 
 function matchingModels(models: Schemas["PublicModel"][], query: URLSearchParams) {
@@ -372,11 +214,6 @@ function deletePasskey({ body, params, state }: Ctx<"/api/console/v1/auth/passke
   return { status: 200, json: { csrf_token, recovery_codes: state.mfaEnabled ? recoveryCodes : undefined } } as const;
 }
 
-function getCall({ params, state }: Ctx<"/api/console/v1/calls/{call_id}", "get">) {
-  const call = state.calls.find((candidate) => candidate.id === params.call_id);
-  return call ? ({ status: 200, json: call } as const) : fail(404, "not_found");
-}
-
 function listStatement({ query, state }: Ctx<"/api/console/v1/statement", "get">) {
   const page = paged(state.statement, query);
   return page ? ({ status: 200, json: page } as const) : fail(400, "invalid_request");
@@ -470,11 +307,7 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/balance`, { ...signedIn, permission: "balance.view" }, ({ state }) => ok(state.balance)),
   route("get", `${base}/models`, none, listPublicModels),
   route("get", `${base}/models/account`, signedIn, listAccountModels),
-  route("get", `${base}/calls`, { ...signedIn, permission: "calls.view" }, listCalls),
-  route("get", `${base}/calls/sessions`, { ...signedIn, permission: "calls.view" }, listCallSessions),
-  route("get", `${base}/calls/aggregate`, { ...signedIn, permission: "calls.view" }, aggregateCalls),
-  route("get", `${base}/calls/export`, { ...signedIn, permission: "calls.view" }, exportCalls),
-  route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),
+  ...callHandlers,
   route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
   route("get", `${base}/orders`, { ...signedIn, permission: "balance.view" }, listOrders),
   route("get", `${base}/orders/{order_id}`, { ...signedIn, permission: "balance.view" }, getOrder),

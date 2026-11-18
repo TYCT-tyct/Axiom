@@ -69,10 +69,27 @@ const listTableElements: NonNullable<Region["elements"]> = {
     unless: "hideList",
     set: { "aria-label": "{{tableLabel}}", onclick: "{{onListClick}}" },
   },
-  ".lgr > .lgt": { tag: "a", set: { href: "#detail" } },
+  ".lgr": { set: { style: "{{rowStyle}}" } },
+  ".lgr > .lgs > i": { unless: "hideStatusDot" },
+  ".lgr > .lgt": {
+    tag: "link",
+    set: {
+      href: "#detail",
+      style:
+        "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--t2);text-decoration:none;",
+    },
+  },
+  ".lgr > .lgm": {
+    tag: "link",
+    set: {
+      "aria-label": "detail",
+      style:
+        "min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border:0;background:none;padding:0;margin:0;color:inherit;text-align:left;cursor:inherit;",
+    },
+  },
 };
 
-const detailCardElements: NonNullable<Region["elements"]> = {
+const detailNavAndIdsElements: NonNullable<Region["elements"]> = {
   ".lgscrim": { unless: "hideScrim", set: { onclick: "{{onClose}}", style: "{{scrimStyle}}" } },
   ".lgd": { unless: "hideDetail", set: { style: "{{detailStyle}}" } },
   ".lgdh .lgm > .lgs": { set: { style: "{{statusBadgeStyle}}" } },
@@ -89,8 +106,20 @@ const detailCardElements: NonNullable<Region["elements"]> = {
     unless: "hideNav",
     set: { onclick: "{{onClose}}", "aria-label": "{{closeLabel}}" },
   },
+  ".lgid > span": {
+    tag: "link",
+    set: {
+      "data-copy": "0",
+      "data-value": "",
+      "aria-label": "copy",
+      style: "color:var(--t2);font-size:12px;line-height:20px;display:inline-flex;align-items:center;gap:4px;",
+    },
+  },
+};
+
+const detailCardElements: NonNullable<Region["elements"]> = {
+  ...detailNavAndIdsElements,
   ".lgtl": { unless: "hideTimeline" },
-  ".lgid": { set: { onclick: "{{onCopy}}" } },
   ".lgsec:has(.lgct)": { unless: "unbuilt" },
   ".lgact": { unless: "unbuilt" },
 };
@@ -298,14 +327,24 @@ function logsFailRegion(board: string): Region {
         ["go", "logs"],
         { click: '.p-logs .wv.w2 [data-a="r"][data-i="2"]' },
         { click: '.p-logs .wv.w2 [data-a="lst"][data-i="2"]' },
-        { click: ".p-logs .wv.w2 .lgr" },
+        { click: ".p-logs .wv.w2 .lgr ~ .lgr" },
       ],
       viewport: viewportOf(board),
     },
+    repeats: { ...listRepeats, speedMetrics: ".lgpf > div", idCells: ".lgid > *" },
     text: {
+      heading: ".p-logs h1",
+      detailModel: ".lgdh .lgm",
+      detailStatus: ".lgdh .lgm > .lgs",
+      detailSub: ".lgdh .lgtt > p",
+      speedTitle: ".lgsec:has(.lgpf) h3",
+      idsTitle: ".lgsec:has(.lgid) h3",
       errLead: ".lgerr",
       errBody: ".lgerr p",
       errBtnLabel: ".lgerr .btn",
+    },
+    attributes: {
+      modelDotStyle: { selector: ".lgdh .lgm > i", attribute: "style" },
     },
     elements: {
       ...unbuiltElements,
@@ -314,14 +353,17 @@ function logsFailRegion(board: string): Region {
       ".usf": { unless: "onlyErr" },
       ".lgsum": { unless: "onlyErr" },
       ".lgw": { set: { style: "{{wrapStyle}}" } },
-      ".lgl": { unless: "hideList" },
-      ".lgscrim": { unless: "hideScrim" },
-      ".lgd": { unless: "hideDetail", set: { style: "{{detailStyle}}" } },
+      ...listTableElements,
+      ...detailNavAndIdsElements,
       ".lgdh": { unless: "onlyErr" },
-      ".lgsec:not(:has(.lgerr))": { unless: "onlyErr" },
       ".lgsec:has(.lgerr)": { set: { style: "{{errSecStyle}}" } },
       ".lgerr": { set: { style: "{{errStyle}}", role: "{{errRole}}" } },
       ".lgerr .btn": { unless: "hideErrBtn", set: { onclick: "{{onErrBtn}}" } },
+      ".lgsec:has(.lgstep)": { unless: "hideAttempts" },
+      ".lgsec:has(.lgpf)": { unless: "hideSpeed" },
+      ".lgsec:has(.lgct)": { unless: "unbuilt" },
+      ".lgsec:has(.lgid)": { unless: "hideIds" },
+      ".lgact": { unless: "unbuilt" },
     },
     english,
   };

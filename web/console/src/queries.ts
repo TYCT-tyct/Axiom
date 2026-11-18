@@ -220,18 +220,29 @@ export const callsQuery = (filters: CallFilters) =>
     getNextPageParam: nextCursor,
   });
 
+type SessionPageParam = { cursor: string; since?: string; until?: string };
+
 export const callSessionsQuery = (filters: CallFilters) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "calls", "sessions", filters],
     queryFn: ({ pageParam, signal }) =>
       unwrap(
         consoleApi.GET("/api/console/v1/calls/sessions", {
-          params: { query: { ...filters, cursor: pageParam, limit: pageSize } },
+          params: {
+            query: {
+              ...filters,
+              since: pageParam?.since ?? filters.since,
+              until: pageParam?.until ?? filters.until,
+              cursor: pageParam?.cursor,
+              limit: pageSize,
+            },
+          },
           signal,
         }),
       ),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (last) => last.next_cursor ?? undefined,
+    initialPageParam: undefined as SessionPageParam | undefined,
+    getNextPageParam: (last) =>
+      last.next_cursor ? { cursor: last.next_cursor, since: last.since, until: last.until } : undefined,
   });
 
 export const recentErrorsQuery = queryOptions({

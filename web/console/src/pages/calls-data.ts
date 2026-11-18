@@ -2,6 +2,7 @@ import { ApiError, type Schemas } from "@axiom/api";
 import type { CallFilters } from "../queries";
 
 export type RangePreset = "all" | "today" | "d7" | "d30" | "month" | "custom";
+export type PresetChoice = Exclude<RangePreset, "all" | "custom">;
 
 export function dateRangeForPreset(preset: Exclude<RangePreset, "custom">, now = new Date()) {
   if (preset === "all") {
@@ -27,10 +28,23 @@ export function detectRangePreset(since?: string, until?: string, now = new Date
   const ts = Date.parse(since);
   if (Number.isNaN(ts)) return "custom";
   for (const preset of ["today", "d7", "d30", "month"] as const) {
-    const target = Date.parse(dateRangeForPreset(preset, now).since ?? "");
-    if (Math.abs(ts - target) <= 60_000) return preset;
+    if (ts === Date.parse(dateRangeForPreset(preset, now).since ?? "")) return preset;
   }
   return "custom";
+}
+
+export function resolveRangePreset(
+  since?: string,
+  until?: string,
+  preset?: PresetChoice,
+  now = new Date(),
+): RangePreset {
+  if (!since && !until) return "all";
+  if (!since || until) return "custom";
+  const ts = Date.parse(since);
+  if (Number.isNaN(ts)) return "custom";
+  if (preset && ts === Date.parse(dateRangeForPreset(preset, now).since ?? "")) return preset;
+  return detectRangePreset(since, until, now);
 }
 
 export function formatSeconds(ms: number | null | undefined, suffix: string, dash: string) {
@@ -103,8 +117,72 @@ export function usageNumber(usage: Record<string, number>, ...keys: string[]) {
   return 0;
 }
 
-export function isExportLimitError(error: unknown) {
-  return error instanceof ApiError && (error.status === 400 || error.code === "invalid_request");
+export type ExportErrorKind = "rows_limit" | "window_limit" | "invalid_field" | "other";
+
+const invalidExportPointers = new Set([
+  "request_id",
+  "/request_id",
+  "key_id",
+  "/key_id",
+  "workspace_id",
+  "/workspace_id",
+  "until",
+  "/until",
+]);
+
+function fieldText(error: ApiError) {
+  return error.fields.map((f) => `${f.pointer} ${f.message}`.toLowerCase()).join(" ");
+}
+
+function windowBoundsInvalid(filters: CallFilters, nowMs: number) {
+  const sinceMs = filters.since ? Date.parse(filters.since) : undefined;
+  const untilMs = filters.until ? Date.parse(filters.until) : nowMs;
+  if (sinceMs !== undefined && (Number.isNaN(sinceMs) || Number.isNaN(untilMs))) return true;
+  if (sinceMs !== undefined && sinceMs >= untilMs) return true;
+  return false;
+}
+
+function windowExceeds31Days(filters: CallFilters, nowMs: number) {
+  if (!filters.since) return false;
+  const sinceMs = Date.parse(filters.since);
+  const untilMs = filters.until ? Date.parse(filters.until) : nowMs;
+  return !Number.isNaN(sinceMs) && !Number.isNaN(untilMs) && untilMs - sinceMs > 31 * 86_400_000;
+}
+
+export function classifyExportError(error: unknown, filters: CallFilters, now = new Date()): ExportErrorKind {
+  if (!(error instanceof ApiError) || (error.status !== 400 && error.code !== "invalid_request")) {
+    return "other";
+  }
+  const nowMs = now.getTime();
+  if (windowBoundsInvalid(filters, nowMs)) return "invalid_field";
+  if (error.fields.some((f) => invalidExportPointers.has(f.pointer))) return "invalid_field";
+  const text = fieldText(error);
+  if (text.includes("rfc3339") || text.includes("invalid identifier")) return "invalid_field";
+  if (text.includes("10000") || text.includes("more than")) return "rows_limit";
+  if (text.includes("31 days") || windowExceeds31Days(filters, nowMs)) return "window_limit";
+  return "other";
+}
+
+export function decimalToNano(amount: string): string | null {
+  const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(amount.trim());
+  if (!m) return null;
+  const [, sign = "", whole = "0", frac = ""] = m;
+  if (frac.length > 9) return null;
+  const raw = `${whole}${frac.padEnd(9, "0")}`.replace(/^0+(?=\d)/, "");
+  return raw === "0" ? "0" : `${sign}${raw}`;
+}
+
+export function formatDecimalMoney(
+  amount: string | undefined,
+  currency: string | undefined,
+  fmt: MoneyFormatter,
+  dash = "—",
+) {
+  if (!amount) return dash;
+  if (!currency) return amount;
+  const nano = decimalToNano(amount);
+  if (nano !== null) return fmt({ amount: nano, currency });
+  return `${currency} ${amount}`;
 }
 
 export function modelDotColor(model: string) {
@@ -127,8 +205,12 @@ export function formatMoneyOrDash(
     : dash;
 }
 
-export function callMoneyText(call: Schemas["Call"], freeLabel: string, fmt: MoneyFormatter) {
-  const formatted = formatMoneyOrDash(call.price, fmt);
+export function callMoneyText(call: Schemas["Call"], freeLabel: string, fmt: MoneyFormatter, dash = "—") {
+  const cd = call.charge_details;
+  const formatted =
+    cd?.charged != null && cd.charged !== ""
+      ? formatDecimalMoney(cd.charged, cd.currency || call.price.currency, fmt, dash)
+      : formatMoneyOrDash(call.price, fmt, dash);
   return call.free ? `${freeLabel} · ${formatted}` : formatted;
 }
 
@@ -185,11 +267,12 @@ const trimmed = (value?: string) => {
 };
 
 export function cleanSearchFilters(
-  next: CallFilters & { group_by?: "day" | "model" | "key"; tab?: "sessions"; call?: string },
+  next: CallFilters & { preset?: PresetChoice; group_by?: "day" | "model" | "key"; tab?: "sessions"; call?: string },
 ) {
   return {
     since: trimmed(next.since),
     until: trimmed(next.until),
+    preset: next.preset,
     model: trimmed(next.model),
     client_app: trimmed(next.client_app),
     key_id: trimmed(next.key_id),

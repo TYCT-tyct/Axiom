@@ -6,8 +6,9 @@ import LogsEmpty from "@axiom/boards/AxApp/regions/LogsEmpty";
 import emptyZh from "@axiom/boards/AxApp/regions/LogsEmpty.zh";
 import LogsFail from "@axiom/boards/AxApp/regions/LogsFail";
 import failZh from "@axiom/boards/AxApp/regions/LogsFail.zh";
+import { CopyButton } from "@axiom/ui";
 import type { TFunction } from "i18next";
-import { type ReactNode, useEffect, useState } from "react";
+import { type AnchorHTMLAttributes, type ButtonHTMLAttributes, type ReactNode, useEffect, useState } from "react";
 
 const bareErrDetailStyle = "background: transparent; box-shadow: none; margin: 0; border-radius: 0; max-width: none;";
 
@@ -32,6 +33,9 @@ export function CallsAlertBanner({
         unbuilt: true,
         hideList: true,
         hideScrim: true,
+        hideAttempts: true,
+        hideSpeed: true,
+        hideIds: true,
         wrapStyle: "grid-template-columns: minmax(0, 1fr); margin-bottom: 12px;",
         detailStyle: bareErrDetailStyle,
         errSecStyle: "padding: 0; box-shadow: none;",
@@ -39,7 +43,15 @@ export function CallsAlertBanner({
         hideErrBtn: !actionLabel || !onAction,
         onErrBtn: onAction,
       }}
+      rows={{ headers0: [], rows0: [], speedMetrics0: [], idCells0: [] }}
       text={{
+        heading: "",
+        detailModel: "",
+        detailStatus: "",
+        detailSub: "",
+        speedTitle: "",
+        idsTitle: "",
+        modelDotStyle: "",
         errLead: lead,
         errBody: body,
         errBtnLabel: actionLabel ?? "",
@@ -121,17 +133,62 @@ export function segClickIndex(e: React.SyntheticEvent) {
   return btn?.parentElement ? [...btn.parentElement.querySelectorAll("button")].indexOf(btn) : -1;
 }
 
-export function usePhoneWidth() {
-  const [phone, setPhone] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(max-width: 819px)").matches : false,
+function useMediaQuery(query: string) {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia(query).matches : false,
   );
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 819px)");
-    const update = () => setPhone(mq.matches);
+    const mq = window.matchMedia(query);
+    const update = () => setMatches(mq.matches);
+    update();
     mq.addEventListener("change", update);
     return () => mq.removeEventListener("change", update);
-  }, []);
-  return phone;
+  }, [query]);
+  return matches;
+}
+
+export function usePhoneWidth() {
+  return useMediaQuery("(max-width: 819px)");
+}
+
+export function useNarrow600() {
+  return useMediaQuery("(max-width: 600px)");
+}
+
+type LinkLikeProps = AnchorHTMLAttributes<HTMLAnchorElement> & {
+  "data-copy"?: string;
+  "data-value"?: string;
+};
+
+// Renders board `.lgr > .lgt` (native detail link), `.lgr > .lgm` (keyboard drawer button), and `.lgid > span` (with CopyButton).
+export function CallBoardLink(props: LinkLikeProps) {
+  const { href, "data-copy": dataCopy, "data-value": dataValue, "aria-label": ariaLabel, children, ...rest } = props;
+  if (href !== undefined) {
+    return (
+      <a href={href} aria-label={ariaLabel} {...rest}>
+        {children}
+      </a>
+    );
+  }
+  if (dataCopy !== undefined) {
+    return (
+      <span {...rest}>
+        {children}
+        {dataCopy === "1" && dataValue ? <CopyButton compact text={dataValue} label={ariaLabel} /> : null}
+      </span>
+    );
+  }
+  return (
+    <button type="button" aria-label={ariaLabel} {...(rest as ButtonHTMLAttributes<HTMLButtonElement>)}>
+      {children}
+    </button>
+  );
+}
+
+// Non-interactive cell for summary & session tables where rows have no detail/filter target link.
+export function PlainBoardCell(props: LinkLikeProps) {
+  const { href: _href, "aria-label": _label, "data-copy": _c, "data-value": _v, children, ...rest } = props;
+  return <span {...rest}>{children}</span>;
 }
 
 export function CallsPageShell({

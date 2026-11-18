@@ -4,6 +4,7 @@ import type { TFunction } from "i18next";
 import {
   callMoneyText,
   computeTimeline,
+  formatDecimalMoney,
   formatMoneyOrDash,
   formatSeconds,
   type MoneyFormatter,
@@ -24,6 +25,7 @@ type Format = {
 
 const iconX = "m6 6 8 8M14 6l-8 8";
 const iconOk = "m5 10.5 3.5 3.5L15 7";
+const idLabelStyle = "color:var(--t2);font-size:12px;line-height:20px;display:inline-flex;align-items:center;gap:4px;";
 
 function routeParts(route: Schemas["OwnCallRoute"] | undefined, t: TFunction): string[] {
   if (!route) return [];
@@ -70,7 +72,7 @@ function attemptResultText(result: Schemas["CallAttempt"]["result"], t: TFunctio
 }
 
 function attemptChargedText(charged: boolean | undefined, t: TFunction) {
-  if (charged === undefined) return "";
+  if (charged === undefined) return t("callsBoard.detail.attempt.chargedUnknown");
   return charged ? t("callsBoard.detail.attempt.charged") : t("callsBoard.detail.attempt.uncharged");
 }
 
@@ -116,7 +118,7 @@ export function buildDetailSteps(call: Schemas["Call"], format: Format, t: TFunc
       f4: t("callsBoard.detail.attempt.cacheServed"),
     });
   } else if (call.attempts && call.attempts.length > 0) {
-    const sorted = [...call.attempts].sort((x, y) => (x.sequence ?? 0) - (y.sequence ?? 0));
+    const sorted = [...call.attempts].sort((x, y) => aSeq(x) - aSeq(y));
     for (const [i, a] of sorted.entries()) steps.push(formatAttemptStep(a, i, t));
   } else if ((call.attempt_count ?? 0) > 0) {
     steps.push({
@@ -134,6 +136,8 @@ export function buildDetailSteps(call: Schemas["Call"], format: Format, t: TFunc
   return steps;
 }
 
+const aSeq = (a: Schemas["CallAttempt"]) => a.sequence ?? 0;
+
 function chargeItemTags(item: Schemas["ChargeItem"], t: TFunction) {
   const tags: string[] = [];
   if (item.estimated) tags.push(t("callsBoard.detail.billing.estimated"));
@@ -141,45 +145,106 @@ function chargeItemTags(item: Schemas["ChargeItem"], t: TFunction) {
   return tags.length ? ` (${tags.join(", ")})` : "";
 }
 
-function pushChargeSummaryCells(
-  push: (k: string, label: string, val: string) => void,
-  cd: Schemas["ChargeDetails"] | undefined,
-  t: TFunction,
-) {
+function chargeItemName(item: string | undefined, t: TFunction) {
+  if (!item) return "item";
+  const known = ["input", "output", "cache_read", "cache_write", "request"];
+  return known.includes(item)
+    ? t(`callsBoard.detail.billing.items.${item}` as "callsBoard.detail.billing.items.input")
+    : item;
+}
+
+function chargeItemUnit(unit: Schemas["ChargeItem"]["unit"], t: TFunction) {
+  if (!unit) return "";
+  return t(`callsBoard.detail.billing.units.${unit}` as "callsBoard.detail.billing.units.token");
+}
+
+type ChargeCtx = {
+  pushRow: (k: string, label: string, formula: string, val: string, total?: boolean) => void;
+  cd: Schemas["ChargeDetails"] | undefined;
+  currency: string | undefined;
+  format: Format;
+  t: TFunction;
+};
+
+function pushChargeSummaryCells({ pushRow, cd, currency, format, t }: ChargeCtx) {
   if (!cd) return;
-  if (cd.subtotal) push("sub", t("callsBoard.detail.billing.subtotal"), cd.subtotal);
-  if (cd.rounding && cd.rounding !== "0") push("rnd", t("callsBoard.detail.billing.rounding"), cd.rounding);
+  if (cd.subtotal) {
+    pushRow(
+      "sub",
+      t("callsBoard.detail.billing.subtotal"),
+      "",
+      formatDecimalMoney(cd.subtotal, currency, format.money),
+    );
+  }
+  if (cd.rounding && cd.rounding !== "0") {
+    pushRow(
+      "rnd",
+      t("callsBoard.detail.billing.rounding"),
+      "",
+      formatDecimalMoney(cd.rounding, currency, format.money),
+    );
+  }
   if (cd.balance_adjustment && cd.balance_adjustment !== "0") {
-    push("adj", t("callsBoard.detail.billing.adjustment"), cd.balance_adjustment);
+    pushRow(
+      "adj",
+      t("callsBoard.detail.billing.adjustment"),
+      "",
+      formatDecimalMoney(cd.balance_adjustment, currency, format.money),
+    );
+  }
+}
+
+function pushChargeItemRows({ pushRow, cd, currency, format, t }: ChargeCtx) {
+  for (const [idx, item] of (cd?.items ?? []).entries()) {
+    const qty = format.number(item.quantity ?? 0);
+    const unitText = chargeItemUnit(item.unit, t);
+    const formula = `${qty} × ${item.unit_price ?? "0"}${unitText ? ` / ${unitText}` : ""}`;
+    pushRow(
+      `ci-${idx}`,
+      `${chargeItemName(item.item, t)}${chargeItemTags(item, t)}`,
+      formula,
+      formatDecimalMoney(item.amount, currency, format.money),
+    );
   }
 }
 
 export function buildChargeCells(call: Schemas["Call"], format: Format, t: TFunction): ChargeCellItem[] {
   const cells: ChargeCellItem[] = [];
-  const push = (k: string, label: string, val: string) => {
-    cells.push({ key: `${k}-k`, kind: "0", f0: label }, { key: `${k}-v`, kind: "1", f0: "r", f1: val });
+  const pushRow = (k: string, label: string, formula: string, val: string, total = false) => {
+    cells.push(
+      total ? { key: `${k}-k`, kind: "1", f0: "lgkt", f1: label } : { key: `${k}-k`, kind: "0", f0: label },
+      { key: `${k}-x`, kind: "1", f0: total ? "lgkt lgkx" : "lgkx", f1: formula },
+      { key: `${k}-v`, kind: "1", f0: total ? "lgkt lgkvv" : "lgkvv", f1: val },
+    );
   };
-  push(
+  const cd = call.charge_details;
+  const currency = cd?.currency || call.price.currency;
+  const ctx: ChargeCtx = { pushRow, cd, currency, format, t };
+  pushRow(
     "free",
     t("callsBoard.detail.billing.free"),
-    call.free ? t("callsBoard.detail.billing.freeYes") : t("callsBoard.detail.billing.freeNo"),
+    "",
+    t(call.free ? "callsBoard.detail.billing.freeYes" : "callsBoard.detail.billing.freeNo"),
   );
-  push(
+  pushRow(
     "cache",
     t("callsBoard.detail.billing.cache"),
-    call.cache_hit ? t("callsBoard.detail.billing.cacheHit") : t("callsBoard.detail.billing.cacheMiss"),
+    "",
+    t(call.cache_hit ? "callsBoard.detail.billing.cacheHit" : "callsBoard.detail.billing.cacheMiss"),
   );
-  if (call.price_version) push("pver", t("callsBoard.detail.billing.version"), call.price_version);
-  for (const [idx, item] of (call.charge_details?.items ?? []).entries()) {
-    const qty = format.number(item.quantity ?? 0);
-    push(
-      `ci-${idx}`,
-      `${item.item ?? "item"}${chargeItemTags(item, t)}`,
-      `${qty} × ${item.unit_price ?? "0"} = ${item.amount ?? "0"}`,
-    );
-  }
-  pushChargeSummaryCells(push, call.charge_details, t);
-  push("tot", t("callsBoard.detail.billing.total"), formatMoneyOrDash(call.price, format.money));
+  if (call.price_version) pushRow("pver", t("callsBoard.detail.billing.version"), "", call.price_version);
+  pushChargeItemRows(ctx);
+  pushChargeSummaryCells(ctx);
+  const totalVal = cd?.charged
+    ? formatDecimalMoney(cd.charged, currency, format.money)
+    : formatMoneyOrDash(call.price, format.money);
+  pushRow(
+    "tot",
+    t("callsBoard.detail.billing.total"),
+    cd?.estimated ? t("callsBoard.detail.billing.estimated") : "",
+    totalVal,
+    true,
+  );
   return cells;
 }
 
@@ -241,19 +306,28 @@ export function buildSpeedMetrics(call: Schemas["Call"], format: Format, t: TFun
 export function buildIdCells(call: Schemas["Call"], t: TFunction): IdCellItem[] {
   const dash = t("callsBoard.states.dash");
   const cells: IdCellItem[] = [];
-  const push = (k: string, label: string, val: string) => {
-    cells.push({ key: `${k}-l`, kind: "0", f0: label });
+  const push = (k: string, label: string, val: string, copyable = false) => {
+    const canCopy = copyable && Boolean(val);
+    cells.push({
+      key: `${k}-l`,
+      kind: "0",
+      f0: canCopy ? "1" : "0",
+      f1: canCopy ? val : "",
+      f2: canCopy ? t("callsBoard.detail.copyValue", { label }) : "",
+      f3: idLabelStyle,
+      f4: label,
+    });
     cells.push({ key: `${k}-v`, kind: "1", f0: val || dash });
   };
-  push("id", t("callsBoard.detail.ids.callId"), call.id);
-  push("sess", t("callsBoard.detail.ids.sessionId"), call.session_id);
-  if (call.subagent_id) push("sub", t("callsBoard.detail.ids.subagentId"), call.subagent_id);
+  push("id", t("callsBoard.detail.ids.callId"), call.id, true);
+  push("sess", t("callsBoard.detail.ids.sessionId"), call.session_id, true);
+  if (call.subagent_id) push("sub", t("callsBoard.detail.ids.subagentId"), call.subagent_id, true);
   push("rcls", t("callsBoard.detail.meta.requestClass"), call.request_class);
   push("tier", t("callsBoard.detail.meta.serviceTier"), call.service_tier);
   push("fin", t("callsBoard.detail.meta.finishReason"), call.finish_reason);
   if (call.error_kind) push("err", t("callsBoard.detail.meta.errorKind"), call.error_kind);
-  push("key", t("callsBoard.detail.ids.key"), call.key_id);
-  push("ws", t("callsBoard.detail.ids.workspace"), call.workspace_id);
+  push("key", t("callsBoard.detail.ids.key"), call.key_id, true);
+  push("ws", t("callsBoard.detail.ids.workspace"), call.workspace_id, true);
   push("app", t("callsBoard.detail.meta.clientApp"), call.client_app);
   if (call.app_title) push("appt", t("callsBoard.detail.meta.appTitle"), call.app_title);
   if (call.app_referer) push("appr", t("callsBoard.detail.meta.appReferer"), call.app_referer);

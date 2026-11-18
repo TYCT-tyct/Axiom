@@ -1,7 +1,5 @@
 import type { Schemas } from "@axiom/api";
-import { can, useErrors, useSession, useSessionBound } from "@axiom/app";
-import Logs from "@axiom/boards/AxApp/regions/Logs";
-import logsZh from "@axiom/boards/AxApp/regions/Logs.zh";
+import { can, identityOf, useSession } from "@axiom/app";
 import LogsBtn from "@axiom/boards/AxApp/regions/LogsBtn";
 import btnZh from "@axiom/boards/AxApp/regions/LogsBtn.zh";
 import LogsSeg from "@axiom/boards/AxApp/regions/LogsSeg";
@@ -16,9 +14,9 @@ import {
 } from "@tanstack/react-query";
 import { useLocation, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
-import { callsCsv, callsName, filtersUnsupported } from "../calls";
+import { filtersUnsupported } from "../calls";
 import {
   type CallFilters,
   type CallGroupBy,
@@ -30,12 +28,12 @@ import {
   modelsQuery,
   workspacesQuery,
 } from "../queries";
-import { save } from "../statement";
-import { cleanSearchFilters, dateRangeForPreset, hasActiveCallFilters, isExportLimitError } from "./calls-data";
-import { InlineCallSplit } from "./calls-detail";
+import { cleanSearchFilters, dateRangeForPreset, hasActiveCallFilters, type PresetChoice } from "./calls-data";
+import { CallsBoardList, InlineCallSplit } from "./calls-detail";
+import { ExportNotice, ExportScopeNote, useCallsExport } from "./calls-export";
 import { CallsFilterBar } from "./calls-filters";
 import { buildCallListRows, callHeaders } from "./calls-rows";
-import { saveCallsScroll, saveLastCallsSearch, takeCallsScroll } from "./calls-scroll";
+import { newCallsNavId, saveCallsNavigation, takeCallsScroll } from "./calls-scroll";
 import { SessionsSection, SummarySection } from "./calls-sections";
 import {
   CallsAlertBanner,
@@ -43,60 +41,11 @@ import {
   CallsPageShell,
   CallsQueryState,
   segClickIndex,
+  useNarrow600,
   usePhoneWidth,
 } from "./calls-states";
 
-type CallsSearch = CallFilters & { group_by?: CallGroupBy; tab?: "sessions"; call?: string };
-
-function useCallsExport(filters: CallFilters) {
-  const bound = useSessionBound();
-  const [failed, setFailed] = useState<unknown>(null);
-  const [busy, setBusy] = useState(false);
-  const start = () => {
-    setBusy(true);
-    setFailed(null);
-    void bound((signal) => callsCsv(filters, signal))
-      .then((ans) => {
-        if (ans) save(new File([ans.value], callsName(), { type: "text/csv" }));
-      })
-      .catch(setFailed)
-      .finally(() => setBusy(false));
-  };
-  return { failed, busy, start, dismiss: () => setFailed(null) };
-}
-
-function ExportNotice({
-  t,
-  error,
-  onUse7d,
-  onDismiss,
-}: {
-  t: TFunction;
-  error: unknown;
-  onUse7d: () => void;
-  onDismiss: () => void;
-}) {
-  const errors = useErrors();
-  if (!error) return null;
-  if (isExportLimitError(error)) {
-    return (
-      <CallsAlertBanner
-        lead={t("callsBoard.export.limitTitle")}
-        body={t("callsBoard.export.limitBody")}
-        actionLabel={t("callsBoard.export.use7d")}
-        onAction={onUse7d}
-      />
-    );
-  }
-  return (
-    <CallsAlertBanner
-      lead={t("callsBoard.export.failed", { reason: errors.message(error) })}
-      body=""
-      actionLabel={t("callsBoard.export.dismiss")}
-      onAction={onDismiss}
-    />
-  );
-}
+type CallsSearch = CallFilters & { preset?: PresetChoice; group_by?: CallGroupBy; tab?: "sessions"; call?: string };
 
 function CallsHeaderActions({
   t,
@@ -145,6 +94,12 @@ function CallsHeaderActions({
   );
 }
 
+function isPlainLeftClick(e: React.SyntheticEvent) {
+  const native = e.nativeEvent;
+  if (!(native instanceof MouseEvent)) return true;
+  return native.button === 0 && !native.metaKey && !native.ctrlKey && !native.shiftKey && !native.altKey;
+}
+
 function handleCallRowClick(
   e: React.SyntheticEvent,
   selectedId: string | undefined,
@@ -154,6 +109,7 @@ function handleCallRowClick(
   const id = (e.target as Element).closest('[data-a="lrow"]')?.getAttribute("data-id");
   if (!id) return;
   if ((e.target as Element).closest("a.lgt")) {
+    if (!isPlainLeftClick(e)) return;
     e.preventDefault();
     onOpenCall(id);
     return;
@@ -177,23 +133,27 @@ type CallsListBodyProps = {
 };
 
 function CallsListTable(p: CallsListBodyProps) {
+  const router = useRouter();
   const format = useFormat();
   const headers = callHeaders(p.t);
-  const rows = buildCallListRows(p.callRows, p.selectedId, p.keyNames, format, p.locale, p.t);
+  const hrefOf = (callId: string) => router.buildLocation({ to: "/calls/$callId", params: { callId } }).href;
+  const rows = buildCallListRows(p.callRows, p.selectedId, p.keyNames, format, p.locale, p.t, hrefOf);
   const idx = p.selectedId ? p.callRows.findIndex((c) => c.id === p.selectedId) : -1;
-  const moreLabel = p.calls.isFetchingNextPage ? p.t("callsBoard.list.loadingMore") : p.t("callsBoard.list.loadMore");
-  const onListClick = (e: React.SyntheticEvent) => handleCallRowClick(e, p.selectedId, p.onSelectCall, p.onOpenCall);
+  const listProps = {
+    headers,
+    rows,
+    moreLabel: p.calls.isFetchingNextPage ? p.t("callsBoard.list.loadingMore") : p.t("callsBoard.list.loadMore"),
+    hideMore: !p.calls.hasNextPage,
+    moreDisabled: p.calls.isFetchingNextPage,
+    onMore: () => void p.calls.fetchNextPage(),
+    onListClick: (e: React.SyntheticEvent) => handleCallRowClick(e, p.selectedId, p.onSelectCall, p.onOpenCall),
+    t: p.t,
+  };
   if (p.selectedId) {
     return (
       <InlineCallSplit
+        {...listProps}
         phone={p.phone}
-        headers={headers}
-        rows={rows}
-        moreLabel={moreLabel}
-        hideMore={!p.calls.hasNextPage}
-        moreDisabled={p.calls.isFetchingNextPage}
-        onMore={() => void p.calls.fetchNextPage()}
-        onListClick={onListClick}
         selectedCall={idx >= 0 ? p.callRows[idx] : undefined}
         selectedQuery={p.selectedQuery}
         keyNames={p.keyNames}
@@ -202,28 +162,10 @@ function CallsListTable(p: CallsListBodyProps) {
         onPrev={() => idx > 0 && p.onSelectCall(p.callRows[idx - 1]?.id)}
         onNext={() => idx >= 0 && idx < p.callRows.length - 1 && p.onSelectCall(p.callRows[idx + 1]?.id)}
         onClose={() => p.onSelectCall(undefined)}
-        t={p.t}
       />
     );
   }
-  return (
-    <Logs
-      t={(k) => logsZh[k]}
-      values={{
-        hideHeader: true,
-        hideFilters: true,
-        hideSummary: true,
-        unbuilt: true,
-        tableLabel: p.t("callsBoard.list.tableLabel"),
-        hideMore: !p.calls.hasNextPage,
-        moreDisabled: p.calls.isFetchingNextPage,
-        onMore: () => void p.calls.fetchNextPage(),
-        onListClick,
-      }}
-      rows={{ summaryItems0: [], headers0: headers, rows0: rows }}
-      text={{ heading: "", moreLabel }}
-    />
-  );
+  return <CallsBoardList {...listProps} />;
 }
 
 function CallsListBody(p: CallsListBodyProps) {
@@ -249,16 +191,22 @@ function CallsListBody(p: CallsListBodyProps) {
   return <CallsListTable {...p} />;
 }
 
-function useCallsPageQueries(search: CallsSearch, searchStr: string, authenticated: boolean, canKeys: boolean) {
+function useCallsPageQueries(
+  search: CallsSearch,
+  searchStr: string,
+  restoreId: string | undefined,
+  identity: string,
+  canKeys: boolean,
+) {
   const router = useRouter();
-  const { group_by, tab, call: selectedId, ...filters } = search;
+  const { group_by, tab, call: selectedId, preset: _preset, ...filters } = search;
   const groupBy: CallGroupBy = group_by ?? "day";
   const sessionsTab = tab === "sessions";
   const calls = useInfiniteQuery({ ...callsQuery(filters), enabled: !sessionsTab });
   const sessions = useInfiniteQuery({ ...callSessionsQuery(filters), enabled: sessionsTab });
-  const report = useQuery(callAggregateQuery(filters, groupBy));
+  const report = useQuery({ ...callAggregateQuery(filters, groupBy), enabled: !sessionsTab });
   const selectedQuery = useQuery({ ...callQuery(selectedId ?? ""), enabled: Boolean(selectedId) });
-  const models = useQuery({ ...modelsQuery({}), enabled: authenticated });
+  const models = useQuery({ ...modelsQuery({}), enabled: identity !== "" });
   const keys = useInfiniteQuery({ ...keysQuery({}), enabled: canKeys });
   const workspaces = useQuery({ ...workspacesQuery, enabled: canKeys });
   const exported = useCallsExport(filters);
@@ -268,7 +216,7 @@ function useCallsPageQueries(search: CallsSearch, searchStr: string, authenticat
   useEffect(() => {
     const ready = sessionsTab ? sessions.isSuccess : calls.isSuccess;
     if (!ready) return;
-    const saved = takeCallsScroll(searchStr);
+    const saved = takeCallsScroll(restoreId, identity, searchStr);
     if (saved === null || saved <= 0) return;
     let cancelled = false;
     const restore = () => {
@@ -288,7 +236,7 @@ function useCallsPageQueries(search: CallsSearch, searchStr: string, authenticat
       clearTimeout(timer);
       unsub();
     };
-  }, [calls.isSuccess, sessions.isSuccess, sessionsTab, searchStr, router]);
+  }, [calls.isSuccess, sessions.isSuccess, sessionsTab, restoreId, identity, searchStr, router]);
   return {
     filters,
     group_by,
@@ -301,6 +249,7 @@ function useCallsPageQueries(search: CallsSearch, searchStr: string, authenticat
     report,
     selectedQuery,
     models,
+    keys,
     keyList,
     keyNames,
     workspaces,
@@ -313,8 +262,7 @@ function CallsResults({
   t,
   locale,
   phone,
-  search,
-  searchStr,
+  narrow,
   q,
   setSearch,
   clearAll,
@@ -323,8 +271,7 @@ function CallsResults({
   t: TFunction;
   locale: string;
   phone: boolean;
-  search: CallsSearch;
-  searchStr: string;
+  narrow: boolean;
   q: ReturnType<typeof useCallsPageQueries>;
   setSearch: (patch: Partial<CallsSearch>, replace?: boolean) => void;
   clearAll: () => void;
@@ -338,8 +285,10 @@ function CallsResults({
       {!q.sessionsTab ? (
         <SummarySection
           t={t}
+          narrow={narrow}
           report={q.report}
           loadedCalls={q.callRows}
+          loadedReady={q.calls.isSuccess}
           groupBy={q.groupBy}
           fellBackActive={Boolean(q.filters.fell_back)}
           keyNames={q.keyNames}
@@ -355,13 +304,7 @@ function CallsResults({
         />
       ) : null}
       {q.sessionsTab ? (
-        <SessionsSection
-          t={t}
-          sessions={q.sessions}
-          filtered={filtered}
-          onClear={clearAll}
-          onPickClient={(c) => setSearch({ tab: undefined, client_app: c || undefined, call: undefined })}
-        />
+        <SessionsSection t={t} narrow={narrow} sessions={q.sessions} filtered={filtered} onClear={clearAll} />
       ) : (
         <CallsListBody
           t={t}
@@ -375,30 +318,52 @@ function CallsResults({
           filtered={filtered}
           onClear={clearAll}
           onSelectCall={(call) => setSearch({ call }, true)}
-          onOpenCall={(id) => {
-            saveLastCallsSearch(search);
-            saveCallsScroll(searchStr, window.scrollY);
-            onOpenCall(id);
-          }}
+          onOpenCall={onOpenCall}
         />
       )}
     </>
   );
 }
 
-export default function Calls() {
-  const { t, i18n } = useTranslation();
-  const session = useSession();
-  const phone = usePhoneWidth();
-  const navigate = useNavigate();
-  const searchStr = useLocation({ select: (l) => l.searchStr });
-  const search: CallsSearch = useSearch({ from: "/app/calls" });
-  const q = useCallsPageQueries(search, searchStr, Boolean(session.account), can(session, "api_keys.view"));
-  usePageTitle(t("callsBoard.title"));
-  const setSearch = (patch: Partial<CallsSearch>, replace = false) =>
-    void navigate({ to: "/calls", search: cleanSearchFilters({ ...search, ...patch }), replace, resetScroll: false });
-  const clearAll = () =>
-    void navigate({ to: "/calls", search: cleanSearchFilters({ tab: q.tab }), resetScroll: false });
+function openCallWithReturn(
+  navigate: ReturnType<typeof useNavigate>,
+  identity: string,
+  search: CallsSearch,
+  searchStr: string,
+  callId: string,
+) {
+  const navId = newCallsNavId();
+  saveCallsNavigation(navId, identity, search, searchStr, window.scrollY);
+  void navigate({
+    to: "/calls/$callId",
+    params: { callId },
+    state: ((prev: unknown) => ({ ...(typeof prev === "object" && prev ? prev : {}), callsFrom: navId })) as never,
+  });
+}
+
+function CallsPageContent({
+  t,
+  locale,
+  phone,
+  narrow,
+  canKeys,
+  preset,
+  q,
+  setSearch,
+  clearAll,
+  onOpenCall,
+}: {
+  t: TFunction;
+  locale: string;
+  phone: boolean;
+  narrow: boolean;
+  canKeys: boolean;
+  preset?: PresetChoice;
+  q: ReturnType<typeof useCallsPageQueries>;
+  setSearch: (patch: Partial<CallsSearch>, replace?: boolean) => void;
+  clearAll: () => void;
+  onOpenCall: (callId: string) => void;
+}) {
   return (
     <CallsPageShell
       phone={phone}
@@ -416,31 +381,69 @@ export default function Calls() {
       <ExportNotice
         t={t}
         error={q.exported.failed}
+        filters={q.filters}
         onUse7d={() => {
           q.exported.dismiss();
-          setSearch(dateRangeForPreset("d7"));
+          setSearch({ ...dateRangeForPreset("d7"), preset: "d7", call: undefined });
         }}
         onDismiss={q.exported.dismiss}
       />
+      <ExportScopeNote t={t} filters={q.filters} />
       <CallsFilterBar
         t={t}
         filters={q.filters}
+        preset={preset}
+        canKeys={canKeys}
+        hasMoreKeys={Boolean(q.keys.hasNextPage)}
+        onLoadMoreKeys={() => void q.keys.fetchNextPage()}
         models={q.models.data?.data ?? []}
         keys={q.keyList}
         workspaces={q.workspaces.data?.data ?? []}
-        onApply={(next) => setSearch({ ...next, group_by: q.group_by, tab: q.tab })}
+        onApply={(next) => setSearch({ ...next, group_by: q.group_by, tab: q.tab, call: undefined })}
       />
       <CallsResults
         t={t}
-        locale={i18n.resolvedLanguage ?? i18n.language}
+        locale={locale}
         phone={phone}
-        search={search}
-        searchStr={searchStr}
+        narrow={narrow}
         q={q}
         setSearch={setSearch}
         clearAll={clearAll}
-        onOpenCall={(callId) => void navigate({ to: "/calls/$callId", params: { callId } })}
+        onOpenCall={onOpenCall}
       />
     </CallsPageShell>
+  );
+}
+
+export default function Calls() {
+  const { t, i18n } = useTranslation();
+  const session = useSession();
+  const identity = identityOf(session);
+  const canKeys = can(session, "api_keys.view");
+  const phone = usePhoneWidth();
+  const narrow = useNarrow600();
+  const navigate = useNavigate();
+  const searchStr = useLocation({ select: (l) => l.searchStr });
+  const restoreId = useLocation({ select: (l) => (l.state as { callsRestore?: string } | undefined)?.callsRestore });
+  const search: CallsSearch = useSearch({ from: "/app/calls" });
+  const q = useCallsPageQueries(search, searchStr, restoreId, identity, canKeys);
+  usePageTitle(t("callsBoard.title"));
+  const setSearch = (patch: Partial<CallsSearch>, replace = false) =>
+    void navigate({ to: "/calls", search: cleanSearchFilters({ ...search, ...patch }), replace, resetScroll: false });
+  const clearAll = () =>
+    void navigate({ to: "/calls", search: cleanSearchFilters({ tab: q.tab }), resetScroll: false });
+  return (
+    <CallsPageContent
+      t={t}
+      locale={i18n.resolvedLanguage ?? i18n.language}
+      phone={phone}
+      narrow={narrow}
+      canKeys={canKeys}
+      preset={search.preset}
+      q={q}
+      setSearch={setSearch}
+      clearAll={clearAll}
+      onOpenCall={(callId) => openCallWithReturn(navigate, identity, search, searchStr, callId)}
+    />
   );
 }

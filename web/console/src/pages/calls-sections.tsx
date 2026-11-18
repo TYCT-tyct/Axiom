@@ -8,7 +8,7 @@ import type { InfiniteData, UseInfiniteQueryResult, UseQueryResult } from "@tans
 import type { TFunction } from "i18next";
 import type { CallGroupBy } from "../queries";
 import { buildAggregateRows, buildSessionRows, buildSummaryItems } from "./calls-rows";
-import { CallsAlertBanner, CallsCardNotice, CallsQueryState, segClickIndex } from "./calls-states";
+import { CallsAlertBanner, CallsCardNotice, CallsQueryState, PlainBoardCell, segClickIndex } from "./calls-states";
 
 const groupOptions: readonly CallGroupBy[] = ["day", "model", "key"];
 
@@ -46,40 +46,81 @@ function SummaryGroupBar({
   );
 }
 
-export function SummarySection({
-  t,
-  report,
-  loadedCalls,
-  groupBy,
-  fellBackActive,
-  keyNames,
-  onGroupBy,
-}: {
+function summaryWindowItems(
+  data: Schemas["CallAggregates"],
+  loadedCalls: Schemas["Call"][],
+  loadedReady: boolean,
+  format: ReturnType<typeof useFormat>,
+  t: TFunction,
+) {
+  const base = buildSummaryItems(data, loadedCalls, loadedReady, format, t);
+  if (!data.since || !data.until) return base;
+  const label = t("callsBoard.summary.window", {
+    since: format.dateTime(new Date(data.since)),
+    until: format.dateTime(new Date(data.until)),
+  });
+  return [...base, { key: "sum-win", kind: "1" as const, f0: label, f1: "" }];
+}
+
+function SummaryAggTable({ t, aggTable }: { t: TFunction; aggTable: ReturnType<typeof buildAggregateRows> }) {
+  if (aggTable.rows0.length === 0) return <CallsCardNotice message={t("callsBoard.summary.empty")} />;
+  return (
+    <Logs
+      t={(k) => logsZh[k]}
+      link={PlainBoardCell}
+      values={{
+        hideHeader: true,
+        hideFilters: true,
+        hideSummary: true,
+        hideMore: true,
+        hideStatusDot: true,
+        rowStyle: "cursor: default;",
+        unbuilt: true,
+        tableLabel: t("callsBoard.summary.tableLabel"),
+      }}
+      rows={{ summaryItems0: [], ...aggTable }}
+      text={{ heading: "", moreLabel: "" }}
+    />
+  );
+}
+
+export function SummarySection(p: {
   t: TFunction;
+  narrow: boolean;
   report: UseQueryResult<Schemas["CallAggregates"], Error>;
   loadedCalls: Schemas["Call"][];
+  loadedReady: boolean;
   groupBy: CallGroupBy;
   fellBackActive: boolean;
   keyNames: Map<string, string>;
   onGroupBy: (next: CallGroupBy) => void;
 }) {
   const format = useFormat();
-  const unavailable = report.error instanceof ApiError && report.error.status === 404;
+  const unavailable = p.report.error instanceof ApiError && p.report.error.status === 404;
   if (unavailable) {
     return (
-      <CallsAlertBanner lead={t("calls.summary.unavailable")} body={t("calls.summary.unavailableBody")} role="status" />
+      <CallsAlertBanner
+        lead={p.t("calls.summary.unavailable")}
+        body={p.t("calls.summary.unavailableBody")}
+        role="status"
+      />
     );
   }
-  if (report.isPending || report.isError) {
+  if (p.report.isPending || p.report.isError) {
     return (
-      <CallsQueryState t={t} error={report.error} isPending={report.isPending} onRetry={() => void report.refetch()} />
+      <CallsQueryState
+        t={p.t}
+        error={p.report.error}
+        isPending={p.report.isPending}
+        onRetry={() => void p.report.refetch()}
+      />
     );
   }
-  const aggTable = buildAggregateRows(report.data, keyNames, groupBy, format, t);
+  const aggTable = buildAggregateRows(p.report.data, p.keyNames, p.groupBy, format, p.t, p.narrow);
   return (
-    <section aria-label={t("callsBoard.summary.title")}>
-      {fellBackActive ? <CallsCardNotice message={t("callsBoard.summary.fallbackNote")} /> : null}
-      <SummaryGroupBar t={t} groupBy={groupBy} onGroupBy={onGroupBy} />
+    <section aria-label={p.t("callsBoard.summary.title")}>
+      {p.fellBackActive ? <CallsCardNotice message={p.t("callsBoard.summary.fallbackNote")} /> : null}
+      <SummaryGroupBar t={p.t} groupBy={p.groupBy} onGroupBy={p.onGroupBy} />
       <Logs
         t={(k) => logsZh[k]}
         values={{
@@ -89,42 +130,30 @@ export function SummarySection({
           unbuilt: true,
           summaryStyle: "margin-bottom: 8px;",
         }}
-        rows={{ summaryItems0: buildSummaryItems(report.data, loadedCalls, format, t), headers0: [], rows0: [] }}
+        rows={{
+          summaryItems0: summaryWindowItems(p.report.data, p.loadedCalls, p.loadedReady, format, p.t),
+          headers0: [],
+          rows0: [],
+        }}
         text={{ heading: "", moreLabel: "" }}
       />
-      {aggTable.rows0.length === 0 ? (
-        <CallsCardNotice message={t("callsBoard.summary.empty")} />
-      ) : (
-        <Logs
-          t={(k) => logsZh[k]}
-          values={{
-            hideHeader: true,
-            hideFilters: true,
-            hideSummary: true,
-            hideMore: true,
-            unbuilt: true,
-            tableLabel: t("callsBoard.summary.tableLabel"),
-          }}
-          rows={{ summaryItems0: [], ...aggTable }}
-          text={{ heading: "", moreLabel: "" }}
-        />
-      )}
+      <SummaryAggTable t={p.t} aggTable={aggTable} />
     </section>
   );
 }
 
 export function SessionsSection({
   t,
+  narrow,
   sessions,
   filtered,
   onClear,
-  onPickClient,
 }: {
   t: TFunction;
+  narrow: boolean;
   sessions: UseInfiniteQueryResult<InfiniteData<Schemas["CallSessionList"]>, Error>;
   filtered: boolean;
   onClear: () => void;
-  onPickClient: (clientApp: string) => void;
 }) {
   const format = useFormat();
   const unavailable = sessions.error instanceof ApiError && sessions.error.status === 404;
@@ -157,25 +186,22 @@ export function SessionsSection({
       />
     );
   }
-  const table = buildSessionRows(items, format, t);
+  const table = buildSessionRows(items, format, t, narrow);
   return (
     <Logs
       t={(k) => logsZh[k]}
+      link={PlainBoardCell}
       values={{
         hideHeader: true,
         hideFilters: true,
         hideSummary: true,
+        hideStatusDot: true,
+        rowStyle: "cursor: default;",
         unbuilt: true,
         tableLabel: t("callsBoard.sessions.tableLabel"),
         hideMore: !sessions.hasNextPage,
         moreDisabled: sessions.isFetchingNextPage,
         onMore: () => void sessions.fetchNextPage(),
-        onListClick: (e) => {
-          const row = (e.target as Element).closest('[data-a="session"]');
-          const client = row?.getAttribute("data-id") ?? "";
-          if ((e.target as Element).closest("a.lgt")) e.preventDefault();
-          if (row) onPickClient(client);
-        },
       }}
       rows={{ summaryItems0: [], ...table }}
       text={{
