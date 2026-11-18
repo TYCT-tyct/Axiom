@@ -30,8 +30,7 @@
     },
     "admin": {
       "common": [""],
-      "admin": [""],
-      "console-regions": [""]
+      "admin": [""]
     },
     "site/home": {
       "common": ["brand", "preferences", "newVersion"],
