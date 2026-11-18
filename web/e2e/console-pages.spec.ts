@@ -54,7 +54,7 @@ test.describe("accepting updated documents", () => {
     await page.getByLabel("我已阅读并同意上述服务条款和隐私政策。").check();
     await expect(submit).toBeEnabled();
     await submit.click();
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
   });
 
   test("an old node's missing locale stays missing in the acceptance", async ({ page }) => {
@@ -79,7 +79,7 @@ test.describe("accepting updated documents", () => {
         { kind: "privacy", version: 2 },
       ],
     });
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
   });
 
   test("English accepts the newest shared version, not a lower Chinese one", async ({ page }) => {
@@ -102,7 +102,7 @@ test.describe("accepting updated documents", () => {
         { kind: "privacy", locale: "zh", version: 2 },
       ],
     });
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
   });
 
   test("a member can leave the consent page for another account without accepting", async ({ page }) => {
@@ -255,7 +255,8 @@ test.describe("API keys", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/keys");
-    await page.getByRole("button", { name: "修改 Laptop" }).click();
+    // A key opens from its row in the list, as the board draws it.
+    await page.getByRole("row", { name: /^Laptop / }).click();
     const dialog = page.getByRole("dialog", { name: "修改 key" });
     await expect(dialog.getByLabel(/花费上限/)).toHaveValue("20");
     await dialog.getByLabel("名称").fill("Laptop (work)");
@@ -263,7 +264,8 @@ test.describe("API keys", () => {
     await dialog.getByRole("button", { name: "保存" }).click();
     await expect(dialog).toHaveCount(0);
 
-    const row = page.getByRole("row", { name: /Laptop \(work\)/ });
+    // The row itself is the control the board draws; a key that is off says so under its name.
+    const row = page.getByRole("row", { name: /^Laptop \(work\)/ });
     await expect(row.getByText("已停用")).toBeVisible();
     expect(state.keys.find((key) => key.name === "Laptop (work)")).toMatchObject({
       disabled: true,
@@ -278,7 +280,7 @@ test.describe("API keys", () => {
     await page.goto("/console/keys");
     const limitOf = (name: string) => state.keys.find((key) => key.name === name)?.spend_limit;
     async function editLimit(name: string, amount: string) {
-      await page.getByRole("button", { name: `修改 ${name}` }).click();
+      await page.getByRole("row", { name: new RegExp(`^${name} `) }).click();
       const dialog = page.getByRole("dialog", { name: "修改 key" });
       const limit = dialog.getByLabel("花费上限（USD）");
       await expect(limit).toBeEnabled();
@@ -300,7 +302,7 @@ test.describe("API keys", () => {
     signedInAs(state);
     await page.route("**/api/console/v1/balance", (route) => route.fulfill({ status: 403 }));
     await page.goto("/console/keys");
-    await page.getByRole("button", { name: "修改 CI runner" }).click();
+    await page.getByRole("row", { name: /^CI runner / }).click();
     const dialog = page.getByRole("dialog", { name: "修改 key" });
     await expect(dialog.getByText("没能取得账户的币种")).toBeVisible();
     await expect(dialog.getByLabel(/花费上限/)).toBeDisabled();
@@ -315,12 +317,14 @@ test.describe("API keys", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/keys");
-    await page.getByRole("button", { name: "删除 CI runner" }).click();
+    await page.getByRole("row", { name: /^CI runner / }).click();
+    await page.getByRole("dialog", { name: "修改 key" }).getByRole("button", { name: "删除 CI runner" }).click();
     const dialog = page.getByRole("dialog", { name: "删除 key" });
     await dialog.getByRole("button", { name: "取消" }).click();
     expect(state.keys).toHaveLength(3);
 
-    await page.getByRole("button", { name: "删除 CI runner" }).click();
+    await page.getByRole("row", { name: /^CI runner / }).click();
+    await page.getByRole("dialog", { name: "修改 key" }).getByRole("button", { name: "删除 CI runner" }).click();
     await page.getByRole("dialog", { name: "删除 key" }).getByRole("button", { name: "删除" }).click();
     await expect(page.getByText("CI runner")).toHaveCount(0);
     expect(state.keys.map((key) => key.name)).toEqual(["Laptop", "Old key"]);
