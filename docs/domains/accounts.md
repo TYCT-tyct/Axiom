@@ -41,7 +41,7 @@
   - 已登录用户每次认证在会话查询里检查是否每种类型都接受了当前版本；未接受时 `getSession` 返回 `consent.required`，只放行 `getSession`、`acceptLegalDocuments` 和 `signOut`，其余 403 `consent_required`。控制台 `GET /api/console/v1/legal` 无需会话，带 `locales=all` 返回每种类型和语言的当前版本，省略时每种类型一个且不带 `locale`。
   - 兼容阶段：版本号按类型跨语言共享，服务端和会话检查只认每种类型的最新版本；页面在这个版本内按界面语言展示、缺失时回退，并提交实际显示的那份；省略 `locale` 的提交按类型和版本解析。历史游标接受 `kind:version` 和 `kind:locale:version`，只发出前者。清理迁移后才按语言独立编号。
 - **会话**：存在服务端，浏览器只拿一个不透明令牌，放在 `__Host-axiom_session` Cookie（HttpOnly、Secure、SameSite=Lax、Path=/），库里只存 SHA-256。改数据的请求（含登录、注册）要求 `Origin` 等于该监听面登记的源、`Content-Type: application/json`，有会话的再核对 `X-CSRF-Token`；不开放 CORS，认证响应 `no-store`。登记的源是 `http://localhost` 时 Cookie 不带 `__Host-` 和 `Secure`。会话只在签发它的站点和监听面（控制台或管理后台）有效；空闲超时和最长有效期由站点配置，默认控制台 7 天、30 天，管理后台 30 分钟、12 小时。站点改短时长立即作用于已签发的会话，之后再放宽也不延长。
-- **两步验证**：支持验证器 App（TOTP，RFC 6238：HMAC-SHA1、30 秒、6 位，接受前后各一个步长，同一步长只用一次）和通行密钥；TOTP 开启时发 10 个一次性恢复码（各 80 位，`xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256）。只有通行密钥、没有 TOTP 的用户不发恢复码。
+- **两步验证**：支持验证器 App（TOTP，RFC 6238：HMAC-SHA1、30 秒、6 位，接受前后各一个步长，同一步长只用一次）和通行密钥；TOTP 开启时发 10 个一次性恢复码（各 80 位，`xxxx-xxxx-xxxx-xxxx`，不分大小写、忽略连字符，只存 SHA-256）。只有通行密钥、没有 TOTP 的用户不发恢复码。会话接口另用 `mfa_enabled`（本监听面是否有可用第二因素：管理后台仅看 TOTP，控制台含 TOTP 或通行密钥）与可选的 `totp_enabled`（是否已配 TOTP）区分仅有通行密钥的账户，使其可首次开启 TOTP。
   - 有第二因素的用户密码通过后只拿到 `pending_mfa` 会话（5 分钟，只能调两步验证接口），一个挑战只换出一个 `mfa` 会话。
   - 持有敏感权限的人必须开启，平台管理员和站长的员工都包括在内；敏感操作只认本次会话做过两步验证，先登录、后开启或后被授权的会话不会因此变强。普通用户自愿开启；站点强制本站普通用户开启待定（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）。开启后第三方登录也要过两步验证。
   - 开启 TOTP 要密码和新密钥的一个码，已开启的拒绝；有通行密钥的用户必须在本次会话证明过通行密钥。重建恢复码要一个当前 TOTP 码。
