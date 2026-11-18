@@ -85,18 +85,16 @@ const scenes: Scene[] = [
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
   { name: "settings", signedIn: true, open: (page) => goto(page, "settings") },
   dialogScene("key-create", "keys", (page) => page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click()),
-  dialogScene("key-edit", "keys", (page) =>
-    page
-      .getByRole("button", { name: /^(修改|Edit) / })
-      .first()
-      .click(),
-  ),
-  dialogScene("key-delete", "keys", (page) =>
-    page
+  // A key opens from its row in the list, as the board draws it; its settings, and the way to delete it, are there. The
+  // first row is a key in every data set the scenes run with, from the usual account to the worst one.
+  dialogScene("key-edit", "keys", (page) => page.locator(".p-keys tbody tr").first().click()),
+  dialogScene("key-delete", "keys", async (page) => {
+    await page.locator(".p-keys tbody tr").first().click();
+    await page
+      .getByRole("dialog", { name: /^(修改 key|Edit key)$/ })
       .getByRole("button", { name: /^(删除|Delete) / })
-      .first()
-      .click(),
-  ),
+      .click();
+  }),
   dialogScene("key-secret", "keys", async (page) => {
     await page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click();
     await page.getByRole("dialog").locator("input[name=name]").fill("Deploy bot");

@@ -17,8 +17,10 @@ const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 // The shell's rulings, at every width, so each selector names the wide board's part and the phone's: what the page
 // inside the frame shows, the board's demo account and balance, and what is not built (#816).
 const both = (selector: string) => ({ board: { selector }, page: { selector } });
-const shell: Ruling[] = [
-  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+// The frame the console's pages sit in, as the shell's own scene excuses it: the board's demo account and balance, the
+// workspace level, and the entries of pages that are not built (#816). A page's scene compares the page, so it excuses
+// the same frame the same way.
+const frame: Omit<Ruling, "scene">[] = [
   { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
   { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
@@ -27,7 +29,15 @@ const shell: Ruling[] = [
     ...both(".pnP .qnv, .otabs"),
   },
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
-].map((ruling) => ({ scene: "console shell", ...ruling }));
+  // The mark is the site's, from its own brand, not the board's demo logo.
+  { basis: "the brand mark is the site's, not the board's", ...both(".glogo .bm") },
+];
+const inScene = (scene: string, region: Omit<Ruling, "scene">): Ruling => ({ scene, ...region });
+
+const shell: Ruling[] = [
+  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+  ...frame,
+].map((ruling) => inScene("console shell", ruling));
 
 const accountShell = (scene: string): Ruling[] =>
   [
@@ -94,7 +104,31 @@ export const rulings: Ruling[] = [
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  ...frame.map((ruling) => inScene("console keys", ruling)),
+  // The board's key list has nothing to narrow it by (L8), so the page keeps the filters it had behind a button beside
+  // the actions, in buttons of the console's own.
+  {
+    scene: "console keys",
+    basis: "L8: the board's list has no filters; the page's controls sit in the header's action area",
+    board: { selector: ".p-keys .qph > .qpa" },
+    page: { selector: ".p-keys .qph > .qpa" },
+  },
+  // The board calls the used column the month's spending; the API says what a key used of its limit's own window, which
+  // the page names in the header and states per row.
+  {
+    scene: "console keys",
+    basis: "G3: the used column is the limit's own period, not the calendar month the board names",
+    board: { selector: ".p-keys .qkeyt thead th:nth-child(2)" },
+    page: { selector: ".p-keys .qkeyt thead th:nth-child(2)" },
+  },
+  // The rows are the account the scene signs in as, not the board's demo account: three keys against five, and another
+  // currency, limits, names and times, so the card that holds them differs.
+  {
+    scene: "console keys",
+    basis: "G3: the rows are the scene's account keys, not the board's demo keys",
+    board: { selector: ".p-keys .wv.w2 .qcard" },
+    page: { selector: ".p-keys .wv.w2 .qcard" },
+  },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {
