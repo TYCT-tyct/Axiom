@@ -4,26 +4,16 @@
 // shared loop (loop.ts), so it rests while the tab is hidden or its owner is out of view; the entrance is stepped by
 // the same frames through its seek, the board's test hook. Under reduced motion nothing is scheduled: the sea is one
 // frame drawn from a fixed seed, and the entrance is at its end.
-import "@axiom/boards/engines/ocean-orig.js";
 import "@axiom/boards/engines/hero-enter.js";
 import { own, reducedMotion } from "./loop";
+import { buildSea, type OceanEngine, type Sea, stillSea } from "./ocean";
 
-// What the page and the preference effects use of the engine; its own members are the engine's (ocean-orig.js).
-export type OceanEngine = {
-  readonly canvas: HTMLCanvasElement;
-  held: boolean;
-  schedule(): void;
-  tick(dt: number): void;
-  still(): void;
-  setLight(light: boolean): void;
-  destroy(): void;
-};
+export type { OceanEngine, Sea } from "./ocean";
 
 type Entrance = { play(variant?: string): void; seek(ms: number): void; rise(): void; destroy(): void };
 
 declare global {
   interface Window {
-    AxiomOceanOrig: { Engine: new (canvas: HTMLCanvasElement, roster: object[], options: object) => OceanEngine };
     AxiomEnter: new (root: HTMLElement, engine: OceanEngine, options: object) => Entrance;
   }
 }
@@ -45,29 +35,7 @@ const options = {
   maxLen: 640,
   warm: 2,
   virtualScale: 1,
-  hold: true,
 };
-const stillSeed = 0x5ea;
-
-// withSeed runs make with Math.random replaced by a fixed-seed generator (mulberry32): the engine draws its sea from
-// Math.random while it is built and warmed up, so the still frame is the same on every visit.
-function withSeed<T>(seed: number, make: () => T): T {
-  const random = Math.random;
-  let state = seed;
-  Math.random = () => {
-    state = (state + 0x6d2b79f5) | 0;
-    let t = Math.imul(state ^ (state >>> 15), 1 | state);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  try {
-    return make();
-  } finally {
-    Math.random = random;
-  }
-}
-
-export type Sea = { readonly engine: OceanEngine; destroy: () => void };
 
 // startSea starts the sea on root, the frame the board's markup draws (.tr: its canvas.sea, its cover and its .ho),
 // in the light page's picture when light is set. owner is the part of the page the sea is for: the sea is fixed
@@ -78,29 +46,10 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
     throw new Error("startSea: the root has no canvas.sea");
   }
   const still = reducedMotion();
-  const make = () => new window.AxiomOceanOrig.Engine(canvas, roster, { ...options, light });
-  const engine = still ? withSeed(stillSeed, make) : make();
-  // its frames come from the shared loop: the engine's own scheduling (hold, its observer) must never start one
-  engine.schedule = () => {};
+  const engine = buildSea(canvas, roster, { ...options, light }, still);
   if (still) {
     root.dataset.enter = "done";
-    engine.still();
-    // A resized canvas is blank, and a new scheme only repaints the engine's ground, until the sea is drawn again;
-    // no frame will come to draw it. Whoever switches the scheme (the page, the theme switch) goes through setLight.
-    const setLight = engine.setLight.bind(engine);
-    engine.setLight = (light) => {
-      setLight(light);
-      engine.still();
-    };
-    const resized = new ResizeObserver(() => engine.still());
-    resized.observe(canvas);
-    return {
-      engine,
-      destroy: () => {
-        resized.disconnect();
-        engine.destroy();
-      },
-    };
+    return stillSea(engine);
   }
   // The tide: the sea rises behind a crest of ~ and the sharks swim in. The words are on the page from its first
   // frame, so they do not rise with it (port design R11); the logo plays it again, as on the board.
