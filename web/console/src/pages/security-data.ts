@@ -130,7 +130,14 @@ type SessionRows = Parameters<typeof DesktopSecurity>[0]["rows"]["sessions0"];
 
 export type TotpStatus = "off" | "on" | "unknown";
 
-export function totpStatus(mfaEnabled: boolean, passkeyCount: number | undefined): TotpStatus {
+// totpEnabled is the session's totp_enabled, which says it outright; a server older than that field omits it, and
+// the status is inferred from mfa_enabled as before.
+export function totpStatus(
+  totpEnabled: boolean | undefined,
+  mfaEnabled: boolean,
+  passkeyCount: number | undefined,
+): TotpStatus {
+  if (totpEnabled !== undefined) return totpEnabled ? "on" : "off";
   if (!mfaEnabled) return "off";
   // A passkey can account for the aggregate flag on its own. Only a loaded, empty list rules that out.
   return passkeyCount === 0 ? "on" : "unknown";

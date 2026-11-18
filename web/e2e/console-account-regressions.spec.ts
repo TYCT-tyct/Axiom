@@ -19,7 +19,7 @@ function deferred() {
 }
 
 test.describe("security factor states and recovery code replacement", () => {
-  test("a user with only a passkey can enable TOTP when authenticator status is unavailable", async ({ page }) => {
+  test("a user with only a passkey sees TOTP off, and on once enabled", async ({ page }) => {
     const state = await mockConsole(page);
     state.passkeys = [samplePasskey];
     state.totpEnabled = false;
@@ -27,10 +27,9 @@ test.describe("security factor states and recovery code replacement", () => {
     signedInAs(state, "mfa");
     await page.goto("/console/security");
 
-    await expect(page.getByText("无法确认验证器状态。尚未设置验证器时可开启。")).toBeVisible();
-    await expect(page.getByText(/^(已开启 ·|未开启$)/)).toHaveCount(0);
-    await expect(page.getByRole("button", { name: "更换验证器" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "重新生成恢复码" })).toBeVisible();
+    await expect(page.getByText(/^未开启$/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "更换验证器" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "重新生成恢复码" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "开启两步验证" }).click();
     const setup = page.getByRole("dialog", { name: "开启两步验证" });
@@ -42,7 +41,25 @@ test.describe("security factor states and recovery code replacement", () => {
     await expect(codes.getByRole("listitem")).toHaveCount(10);
     await codes.getByRole("button", { name: "我已保存" }).click();
 
+    await expect(page.getByText(/^已开启 ·/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "开启两步验证" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "更换验证器" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重新生成恢复码" })).toBeVisible();
+  });
+
+  test("a session from a server without totp_enabled leaves a passkey user's authenticator unknown", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    state.legacySession = true;
+    state.passkeys = [samplePasskey];
+    state.totpEnabled = false;
+    state.mfaEnabled = true;
+    signedInAs(state, "mfa");
+    await page.goto("/console/security");
+
     await expect(page.getByText("无法确认验证器状态。尚未设置验证器时可开启。")).toBeVisible();
+    await expect(page.getByRole("button", { name: "开启两步验证" })).toBeVisible();
     await expect(page.getByRole("button", { name: "更换验证器" })).toBeVisible();
     await expect(page.getByRole("button", { name: "重新生成恢复码" })).toBeVisible();
   });
@@ -67,8 +84,8 @@ test.describe("security factor states and recovery code replacement", () => {
     state.passkeys = [samplePasskey];
     signedInAs(state, "mfa");
     await page.goto("/console/security");
-    await expect(page.getByText("无法确认验证器状态。尚未设置验证器时可开启。")).toBeVisible();
-    await expect(page.getByRole("button", { name: "开启两步验证" })).toBeVisible();
+    await expect(page.getByText(/^已开启 ·/)).toBeVisible();
+    await expect(page.getByRole("button", { name: "开启两步验证" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "更换验证器" }).click();
     const replaceDialog = page.getByRole("dialog", { name: "更换验证器" });
@@ -96,7 +113,8 @@ test.describe("email change token security and offline recovery", () => {
     expect(page.url()).not.toContain("tok-email-secret");
 
     await page.getByLabel("邮箱").fill(knownEmail);
-    await page.getByLabel("密码").fill(knownPassword);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
     await page.getByRole("button", { name: "登录", exact: true }).click();
 
     await expect(page.getByText("邮箱已更换并完成验证。")).toBeVisible();

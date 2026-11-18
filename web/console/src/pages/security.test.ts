@@ -15,15 +15,22 @@ describe("authenticator status and actions", () => {
   const t = ((key: string) => key) as TFunction;
 
   it.each([
-    { mfa: false, passkeys: undefined, hint: "off", actions: ["enable"] },
-    { mfa: true, passkeys: 0, hint: "on", actions: ["replace", "regenerate"] },
-    { mfa: true, passkeys: 1, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
-    { mfa: true, passkeys: undefined, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
-  ])("shows $hint with $passkeys passkeys and mfa_enabled=$mfa", ({ mfa, passkeys, hint, actions }) => {
-    const rows = buildAuthRows(t, totpStatus(mfa, passkeys)).slice(1);
-    expect(rows[0]?.f3).toMatch(new RegExp(`^security\\.twoStep\\.${hint}\\b`));
-    expect(rows.map((row) => row.f7)).toEqual(actions.map((action) => `security.twoStep.${action}`));
-  });
+    // a server that says so: totp_enabled decides, whatever the passkeys
+    { totp: false, mfa: true, passkeys: 1, hint: "off", actions: ["enable"] },
+    { totp: true, mfa: true, passkeys: 1, hint: "on", actions: ["replace", "regenerate"] },
+    // an older server without the field: inferred from mfa_enabled and the passkeys
+    { totp: undefined, mfa: false, passkeys: undefined, hint: "off", actions: ["enable"] },
+    { totp: undefined, mfa: true, passkeys: 0, hint: "on", actions: ["replace", "regenerate"] },
+    { totp: undefined, mfa: true, passkeys: 1, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
+    { totp: undefined, mfa: true, passkeys: undefined, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
+  ])(
+    "shows $hint with totp_enabled=$totp, $passkeys passkeys and mfa_enabled=$mfa",
+    ({ totp, mfa, passkeys, hint, actions }) => {
+      const rows = buildAuthRows(t, totpStatus(totp, mfa, passkeys)).slice(1);
+      expect(rows[0]?.f3).toMatch(new RegExp(`^security\\.twoStep\\.${hint}\\b`));
+      expect(rows.map((row) => row.f7)).toEqual(actions.map((action) => `security.twoStep.${action}`));
+    },
+  );
 });
 
 describe("session device sorting", () => {

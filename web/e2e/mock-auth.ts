@@ -51,6 +51,7 @@ export const session = (
     account: accountId(state.account),
     level: state.level === "none" ? "password" : state.level,
     mfa_enabled: totp || (state.passkeys?.length ?? 0) > 0,
+    ...(state.legacySession ? {} : { totp_enabled: totp }),
     csrf_token: state.csrf,
     expires_at: "2026-10-15T00:00:00Z",
     permissions: state.permissions,

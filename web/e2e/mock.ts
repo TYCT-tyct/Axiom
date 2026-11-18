@@ -27,6 +27,8 @@ export type AuthState = {
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
   mfaEnabled: boolean;
   totpEnabled?: boolean;
+  // the session as a server older than totp_enabled answers it, without the field
+  legacySession?: boolean;
   permissions: string[];
   version: string;
   // every request the page made, as "METHOD /path", for tests that count them
