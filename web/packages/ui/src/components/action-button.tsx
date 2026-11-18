@@ -16,6 +16,7 @@ export function ActionButton({
   type = "button",
   asChild = false,
   pending = false,
+  square = false,
   disabled,
   children,
   ...props
@@ -26,9 +27,17 @@ export function ActionButton({
   type?: "button" | "submit";
   asChild?: boolean;
   pending?: boolean;
+  // square marks a link that holds only an icon (asChild), which the button cannot tell from its children.
+  square?: boolean;
   children?: ReactNode;
 } & Omit<ComponentProps<"button">, "className" | "style" | "type" | "children">) {
-  const className = classes(s.root, s[variant], size === "sm" && s.sm, !children && s.square, pending && s.pending);
+  const className = classes(
+    s.root,
+    s[variant],
+    size === "sm" && s.sm,
+    (square || !children) && s.square,
+    pending && s.pending,
+  );
   if (asChild) {
     return <Slot.Root className={className}>{children}</Slot.Root>;
   }

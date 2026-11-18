@@ -50,3 +50,20 @@
   white-space: nowrap;
   overflow-wrap: normal;
 }
+
+.lines2,
+.lines3 {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+}
+
+.lines2 {
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.lines3 {
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+}

@@ -42,6 +42,7 @@ export { usePageTitle } from "./components/page-title";
 export { Badge, Panel } from "./components/panel";
 export { Popover } from "./components/popover";
 export { PreferenceSwitches } from "./components/preferences";
+export { ScrollArea } from "./components/scroll-area";
 export { SegmentedControl } from "./components/segmented-control";
 export { SettingRow } from "./components/setting-row";
 export { Stat } from "./components/stat";
