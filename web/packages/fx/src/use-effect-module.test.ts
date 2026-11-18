@@ -84,3 +84,36 @@ it("starts nothing when the page is left before the module arrives, and survives
   expect(window.axiomFx?.state.owners).toBe(0);
   act(() => failing.unmount());
 });
+
+it("waits for first-contentful-paint before scheduling the idle load when paint timing is supported", async () => {
+  let painted = false;
+  let notify: ((list: { getEntriesByName: (name: string) => unknown[] }) => void) | undefined;
+  const disconnect = vi.fn();
+  class PaintObserver {
+    static supportedEntryTypes = ["paint"];
+    constructor(cb: (list: { getEntriesByName: (name: string) => unknown[] }) => void) {
+      notify = cb;
+    }
+    observe() {}
+    disconnect = disconnect;
+  }
+  vi.stubGlobal("PerformanceObserver", PaintObserver);
+  vi.stubGlobal("performance", {
+    now: () => 0,
+    getEntriesByName: (name: string) => (name === "first-contentful-paint" && painted ? [{}] : []),
+  });
+
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+  flushFrames();
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+
+  painted = true;
+  notify?.({ getEntriesByName: () => [{}] });
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(load).not.toHaveBeenCalled();
+  await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
+  act(() => root.unmount());
+});

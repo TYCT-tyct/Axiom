@@ -3,23 +3,56 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
-// that cancels it. A frame callback runs before the next paint, so the idle callback queued from it comes after that
-// paint; a browser without requestIdleCallback waits a moment instead.
-function afterFirstContent(go: () => void) {
+const hasFirstContentfulPaint = () =>
+  typeof performance?.getEntriesByName === "function" &&
+  performance.getEntriesByName("first-contentful-paint").length > 0;
+
+function afterPaint(go: () => void) {
+  let done = false;
   let idle = 0;
-  const frame = requestAnimationFrame(() => {
+  let observer: PerformanceObserver | undefined;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    observer?.disconnect();
+    observer = undefined;
     idle =
       typeof requestIdleCallback === "function"
         ? requestIdleCallback(go, { timeout: 2000 })
         : window.setTimeout(go, 200);
+  };
+  if (
+    typeof PerformanceObserver !== "function" ||
+    !PerformanceObserver.supportedEntryTypes?.includes("paint") ||
+    hasFirstContentfulPaint()
+  ) {
+    finish();
+  } else {
+    observer = new PerformanceObserver((list) => {
+      if (list.getEntriesByName("first-contentful-paint").length > 0 || hasFirstContentfulPaint()) finish();
+    });
+    observer.observe({ type: "paint", buffered: true });
+  }
+  return () => {
+    done = true;
+    observer?.disconnect();
+    observer = undefined;
+    if (typeof cancelIdleCallback === "function") cancelIdleCallback(idle);
+    clearTimeout(idle);
+  };
+}
+
+// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
+// that cancels it. A frame callback runs before commit, and Chromium records first-contentful-paint asynchronously after
+// presentation feedback, so browsers with paint timing wait for that entry before queueing the idle callback.
+function afterFirstContent(go: () => void) {
+  let cancelPaint: (() => void) | undefined;
+  const frame = requestAnimationFrame(() => {
+    cancelPaint = afterPaint(go);
   });
   return () => {
     cancelAnimationFrame(frame);
-    if (typeof cancelIdleCallback === "function") {
-      cancelIdleCallback(idle);
-    }
-    clearTimeout(idle);
+    cancelPaint?.();
   };
 }
 
