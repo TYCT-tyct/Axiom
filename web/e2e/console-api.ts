@@ -279,6 +279,31 @@ function setDefault({ body, state }: Ctx<"/api/console/v1/routing-default", "put
   return ok(state.routingDefault);
 }
 
+// The account's own provider keys: one the provider took, and one it refused, which routing skips until a test passes.
+const providerKeys: Schemas["ProviderKey"][] = [
+  {
+    id: "00000000-0000-4000-9100-000000000001",
+    name: "Work account",
+    provider: "openai",
+    hint: "Qx7d",
+    status: "active",
+    enabled: true,
+    rejected: false,
+    fallback: true,
+    created_at: "2026-10-02T09:00:00Z",
+  },
+  {
+    id: "00000000-0000-4000-9100-000000000002",
+    name: "Old key",
+    provider: "openai",
+    status: "rejected",
+    enabled: true,
+    rejected: true,
+    fallback: false,
+    created_at: "2026-09-14T09:00:00Z",
+  },
+];
+
 const sourceClasses = [
   { slug: "official", name: "Official", name_zh: "官方直连" },
   { slug: "cloud", name: "Cloud", name_zh: "云厂商" },
@@ -378,6 +403,7 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/workspaces`, { ...signedIn, permission: "api_keys.view" }, () =>
     ok({ data: [defaultWorkspace] }),
   ),
+  route("get", `${base}/provider-keys`, { ...signedIn, permission: "api_keys.view" }, () => ok({ data: providerKeys })),
   route("get", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
     ok({ data: state.presets.filter((preset) => !preset.disabled).map(withSummary) }),
   ),

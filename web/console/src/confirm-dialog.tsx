@@ -10,12 +10,15 @@ export function ConfirmDialog({
   body,
   confirm,
   action,
+  detail,
   onClose,
 }: {
   title: string;
   body: ReactNode;
   confirm: string;
   action: UseMutationResult<unknown, Error, void>;
+  // What the dialog says about a refused change, under the reason.
+  detail?: ReactNode;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
@@ -24,6 +27,7 @@ export function ConfirmDialog({
     <Dialog title={title} onClose={onClose}>
       <div className="space-y-4">
         {action.isError ? <FormError>{errors.message(action.error)}</FormError> : null}
+        {detail}
         <div className="space-y-2 text-t2 [overflow-wrap:anywhere]">{body}</div>
         <div className="flex justify-end gap-2">
           <Button size="md" onClick={onClose}>

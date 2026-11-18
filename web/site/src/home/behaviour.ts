@@ -1,4 +1,6 @@
 import { reducedMotion } from "@axiom/fx";
+import type { Departure } from "@axiom/fx/depart";
+import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useState } from "react";
 import { sections } from "./words";
 
@@ -133,4 +135,77 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     };
   }, [root, wide]);
   return { scroll, island, menu };
+}
+
+const loadDepart = () => import("@axiom/fx/depart");
+// The departure's length on the wall clock: the page goes this long after the press, whether or not its code has come.
+const departSpan = 500;
+// A page still here this long after it started to go was stopped (the browser's stop button) or failed to go: the
+// picture of its departure comes off. A page that does go is gone long before.
+const stalled = 3000;
+
+// The press under way, until its page starts to go, and the picture of a departure on screen, held until the next
+// page replaces this one. Both are the module's, not a frame's: a change of layout midway starts the frame afresh
+// (home.tsx), which takes the picture with it but must not take the way there.
+let leaving: object | undefined;
+let shown: { frame: HTMLElement; picture: Departure } | undefined;
+
+function clear() {
+  shown?.picture.destroy();
+  shown = undefined;
+}
+
+function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
+  clear();
+  const press = {};
+  leaving = press;
+  const start = performance.now();
+  const href = link.href;
+  window.setTimeout(() => {
+    if (leaving !== press) return;
+    // from here the press is done: a press after a stopped navigation starts a departure of its own at once
+    leaving = undefined;
+    const held = shown;
+    window.location.assign(href);
+    window.setTimeout(() => shown === held && clear(), stalled);
+  }, departSpan);
+  // code that comes after the page started to go, after the frame has gone, or after the page has come back, draws
+  // nothing; code that never comes only costs the picture
+  loadDepart().then(
+    ({ depart }) => {
+      if (leaving !== press || !frame.isConnected || !link.isConnected) return;
+      shown = { frame, picture: depart(frame, link, start, departSpan, sea?.engine) };
+    },
+    () => {},
+  );
+}
+
+// useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
+// pressed: signing in or up leaves the website through it, half a second after the press. Its code loads on the first
+// press. Under reduced motion, and for a press that asks for another tab or window, the link goes as a link would.
+export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
+  useEffect(() => {
+    const frame = root.current;
+    if (!frame) return;
+    const onClick = (e: MouseEvent) => {
+      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[data-go]") : null;
+      if (!link || !frame.contains(link) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (reducedMotion()) return;
+      e.preventDefault();
+      if (!leaving) leave(frame, link, sea.current);
+    };
+    // the browser's back button may bring this page back as it was left, mid-departure
+    const onShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      leaving = undefined;
+      clear();
+    };
+    frame.addEventListener("click", onClick);
+    window.addEventListener("pageshow", onShow);
+    return () => {
+      frame.removeEventListener("click", onClick);
+      window.removeEventListener("pageshow", onShow);
+      if (shown?.frame === frame) clear();
+    };
+  }, [root, sea]);
 }
