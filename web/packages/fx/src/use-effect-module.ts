@@ -3,23 +3,37 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
-// that cancels it. A frame callback runs before the next paint, so the idle callback queued from it comes after that
-// paint; a browser without requestIdleCallback waits a moment instead.
+// A frame callback can run before the browser presents any content. Wait for paint timing where available, then
+// schedule the import at idle. Browsers without paint timing fall back to scheduling from the next frame.
 function afterFirstContent(go: () => void) {
-  let idle = 0;
-  const frame = requestAnimationFrame(() => {
-    idle =
-      typeof requestIdleCallback === "function"
-        ? requestIdleCallback(go, { timeout: 2000 })
-        : window.setTimeout(go, 200);
-  });
+  let cancelIdle: (() => void) | undefined;
+  const schedule = () => {
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(go, { timeout: 2000 });
+      cancelIdle = () => cancelIdleCallback(idle);
+    } else {
+      const timer = window.setTimeout(go, 200);
+      cancelIdle = () => clearTimeout(timer);
+    }
+  };
+
+  if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("paint")) {
+    const observer = new PerformanceObserver((entries) => {
+      if (entries.getEntriesByName("first-contentful-paint").length === 0) return;
+      observer.disconnect();
+      schedule();
+    });
+    observer.observe({ type: "paint", buffered: true });
+    return () => {
+      observer.disconnect();
+      cancelIdle?.();
+    };
+  }
+
+  const frame = requestAnimationFrame(schedule);
   return () => {
     cancelAnimationFrame(frame);
-    if (typeof cancelIdleCallback === "function") {
-      cancelIdleCallback(idle);
-    }
-    clearTimeout(idle);
+    cancelIdle?.();
   };
 }
 

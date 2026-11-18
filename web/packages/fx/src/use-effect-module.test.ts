@@ -69,6 +69,35 @@ it("loads the module only after a frame and an idle moment, and lets go of every
   expect(window.axiomFx?.state).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
 });
 
+it("waits for contentful paint even if a frame and an idle callback can run earlier", async () => {
+  let reportPaint = (_paint: string) => {};
+  vi.stubGlobal(
+    "PerformanceObserver",
+    class {
+      static supportedEntryTypes = ["paint"];
+
+      constructor(notify: (entries: { getEntriesByName: (name: string) => string[] }) => void) {
+        reportPaint = (paint) => notify({ getEntriesByName: (name) => (name === paint ? [paint] : []) });
+      }
+
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+  flushFrames();
+  reportPaint("first-paint");
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+
+  reportPaint("first-contentful-paint");
+  expect(load).not.toHaveBeenCalled();
+  await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
+  act(() => root.unmount());
+});
+
 it("starts nothing when the page is left before the module arrives, and survives a module that fails", async () => {
   let arrive: (module: typeof effect) => void = () => {};
   const root = mount(() => new Promise((resolve) => (arrive = resolve)));
