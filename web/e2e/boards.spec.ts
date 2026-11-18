@@ -11,7 +11,7 @@ import { openBoard } from "./design/board.ts";
 import { compare } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
 import { rulings } from "./design/rulings.ts";
-import { canvasesReady, type Stage, stagePaused } from "./design/stage.ts";
+import { boardObserversReady, type Stage, stagePaused } from "./design/stage.ts";
 
 const root = join(import.meta.dirname, "../packages/boards");
 const design = process.env.AXIOM_DESIGN_DIR;
@@ -253,6 +253,7 @@ for (const region of regions.filter((region) => region.render))
           await expect(reference.page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
           await fontsLoaded(reference.page, reference.fonts);
           await page.evaluate(() => document.fonts.ready.then(() => {}));
+          await Promise.all([boardObserversReady(page), boardObserversReady(reference.page)]);
           await Promise.all([page.clock.runFor(5000), reference.page.clock.runFor(5000)]);
           const shell = regions.find((entry) => entry.board === region.board && entry.name === "Shell");
           await reference.page.addStyleTag({
@@ -313,7 +314,7 @@ for (const board of cases)
         try {
           await expect(reference.page.locator(board.selector).first()).toBeAttached();
           await fontsLoaded(reference.page, reference.fonts);
-          await Promise.all([canvasesReady(page), canvasesReady(reference.page)]);
+          await Promise.all([boardObserversReady(page), boardObserversReady(reference.page)]);
           await page.clock.runFor(5000);
           await reference.page.clock.runFor(5000);
           // A region leaves out what its manifest omits, so its reference is the board without those parts, as in

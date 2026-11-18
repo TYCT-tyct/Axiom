@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, type Page, test } from "@playwright/test";
-import { compare } from "./design/compare.ts";
+import { compare, shot } from "./design/compare.ts";
 import { type Ruling, rulings } from "./design/rulings.ts";
 import { stage, stagePaused } from "./design/stage.ts";
 
@@ -41,6 +41,33 @@ test("board clocks replay the same zero epoch and animation frames after navigat
     [0, 16, 16],
     [0, 16, 16],
   ]);
+});
+
+test("capture paints the same SVG stroke after a partial repaint", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 900 });
+  const cable = "M90.0 746.0C90.0 686.0 -49.6 496.9 66.0 448.3";
+  await page.setContent(`<!doctype html><body style="margin:0;background:#f0f0f3">
+    <div style="position:absolute;background:#f0f0f3;left:0;right:0;top:432px;height:80px"></div>
+    <svg style="position:absolute;inset:0" width="390" height="900" fill="none">
+      <path d="${cable}" stroke="#e0e1e6" stroke-width="1.23" transform="translate(0 1.13)" />
+      <path d="${cable}" stroke="#1c2024" stroke-width="5.72" />
+      <path d="${cable}" stroke="#f0f0f3" stroke-width="4.72" />
+      <path d="${cable}" stroke="#fcfcfd" stroke-width="1.32" transform="translate(0 -.85)" />
+    </svg>
+    <input style="position:absolute;bottom:10px" value="focused">`);
+  const input = page.locator("input");
+  await input.focus();
+  const before = await shot(page);
+  const band = page.locator("div");
+  await band.evaluate((el) => {
+    el.style.background = "#b00000";
+  });
+  await page.screenshot();
+  await band.evaluate((el) => {
+    el.style.background = "#f0f0f3";
+  });
+  expect((await shot(page)).equals(before)).toBe(true);
+  await expect(input).toBeFocused();
 });
 
 test("canvas rulings preserve overlaid text, glass, geometry and the original bitmap", async ({ context }, info) => {

@@ -13,7 +13,13 @@ export async function renderRegions(directory: string, regions: readonly Region[
       if (!scene) continue;
       const board = await openBoard(
         browser,
-        { file: `${region.board}.dc.html`, props: scene.props, actions: scene.actions, engines: [] },
+        {
+          file: `${region.board}.dc.html`,
+          props: scene.props,
+          actions: scene.actions,
+          engines: [],
+          preloadFonts: false,
+        },
         directory,
         {
           viewport: scene.viewport ?? { width: 1440, height: 900 },

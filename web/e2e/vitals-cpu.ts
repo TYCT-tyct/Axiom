@@ -13,8 +13,9 @@ type TraceEvent = {
 // mainThreadBusyMs is the page's own work during a load: the sum of the thread durations (`tdur`) of the renderer main
 // thread's tasks. `dur` is wall clock and includes the time the thread was taken off the CPU, so a busy host stretches
 // it; `tdur` is the time the thread actually ran, so it measures the page instead of the host. The nested timers inside a
-// task are not counted again: only the outermost task events are summed.
-function mainThreadBusyMs(events: TraceEvent[]): number {
+// task are not counted again: only the outermost task events are summed. Chrome can omit tdur on individual tasks.
+// Sum the recorded CPU durations and reject traces with no CPU timing for the renderer.
+export function mainThreadBusyMs(events: TraceEvent[]): number {
   const main = new Set(
     events
       .filter((event) => event.ph === "M" && event.name === "thread_name" && event.args?.name === "CrRendererMain")
@@ -24,7 +25,8 @@ function mainThreadBusyMs(events: TraceEvent[]): number {
     (event) =>
       event.ph === "X" && main.has(`${event.pid}:${event.tid}`) && event.name === "ThreadControllerImpl::RunTask",
   );
-  if (main.size === 0 || tasks.length === 0 || tasks.some((event) => event.tdur === undefined)) {
+  const durations = tasks.map((event) => event.tdur).filter((duration) => duration !== undefined);
+  if (durations.length === 0) {
     const threads = new Map<string, number>();
     for (const event of events) {
       if (event.ph === "X" && event.name === "ThreadControllerImpl::RunTask") {
@@ -36,12 +38,11 @@ function mainThreadBusyMs(events: TraceEvent[]): number {
       `the trace has no main-thread task durations: ${JSON.stringify({
         main: [...main],
         tasks: tasks.length,
-        withTdur: tasks.filter((event) => event.tdur !== undefined).length,
         threads: [...threads],
       })}`,
     );
   }
-  return tasks.reduce((total, event) => total + (event.tdur ?? 0), 0) / 1000;
+  return durations.reduce((total, duration) => total + duration, 0) / 1000;
 }
 
 // traced runs load under a Chrome trace and returns what it measured. The trace is started before the navigation and
