@@ -1,12 +1,30 @@
 import type { Schemas } from "@axiom/api";
+import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
 import {
+  buildAuthRows,
   flattenInvitees,
   passkeyRegistrationAvailability,
   sortSessions,
+  totpStatus,
   validatePasswordChange,
   validateTotpReplace,
 } from "./security-data";
+
+describe("authenticator status and actions", () => {
+  const t = ((key: string) => key) as TFunction;
+
+  it.each([
+    { mfa: false, passkeys: undefined, hint: "off", actions: ["enable"] },
+    { mfa: true, passkeys: 0, hint: "on", actions: ["replace", "regenerate"] },
+    { mfa: true, passkeys: 1, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
+    { mfa: true, passkeys: undefined, hint: "unknown", actions: ["enable", "replace", "regenerate"] },
+  ])("shows $hint with $passkeys passkeys and mfa_enabled=$mfa", ({ mfa, passkeys, hint, actions }) => {
+    const rows = buildAuthRows(t, totpStatus(mfa, passkeys)).slice(1);
+    expect(rows[0]?.f3).toMatch(new RegExp(`^security\\.twoStep\\.${hint}\\b`));
+    expect(rows.map((row) => row.f7)).toEqual(actions.map((action) => `security.twoStep.${action}`));
+  });
+});
 
 describe("session device sorting", () => {
   it("places current device first and sorts remaining devices newest first", () => {

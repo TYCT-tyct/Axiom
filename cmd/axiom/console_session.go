@@ -143,8 +143,7 @@ func (c consoleAPI) GetSession(ctx context.Context, _ consoleapi.GetSessionReque
 	}
 	session := consoleapi.Session{
 		Account: info.Account.TypeID(), CsrfToken: info.CSRFToken, ExpiresAt: info.ExpiresAt,
-		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, TotpEnabled: &info.TOTPEnabled,
-		Permissions: info.Permissions,
+		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, Permissions: info.Permissions,
 	}
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
 	pending, err := c.accounts.PendingLegalDocuments(ctx, callOf(ctx).principal)

@@ -327,7 +327,7 @@ func TestSessionInfo(t *testing.T) {
 	if p, err = x.principal(t, console, verified); err != nil {
 		t.Fatal(err)
 	}
-	if info = x.sessionInfoOf(t, p); info.Level != "mfa" || !info.MFAEnabled || !info.TOTPEnabled || !slices.Equal(info.Permissions, []string{"api_keys.view", "calls.view", "sites.manage"}) {
+	if info = x.sessionInfoOf(t, p); info.Level != "mfa" || !info.MFAEnabled || !slices.Equal(info.Permissions, []string{"api_keys.view", "calls.view", "sites.manage"}) {
 		t.Errorf("a verified session: %+v", info)
 	}
 }

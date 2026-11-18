@@ -7607,14 +7607,7 @@ components:
             invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
         account: {$ref: "#/components/schemas/AccountId"}
         level: {$ref: "#/components/schemas/SessionLevel"}
-        mfa_enabled:
-          type: boolean
-          description: "Whether the user has a second factor enabled (TOTP or, on the console, a passkey)."
-        totp_enabled:
-          type: boolean
-          description: >-
-            Whether the user has a TOTP factor configured. Optional so an older node that does not send it falls
-            back cleanly.
+        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
         csrf_token: {type: string}
         expires_at: {type: string, format: date-time, description: "When the session ends if it is not used again; the idle timeout moves it."}
         permissions:

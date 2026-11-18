@@ -3894,10 +3894,8 @@ export interface components {
             };
             account: components["schemas"]["AccountId"];
             level: components["schemas"]["SessionLevel"];
-            /** @description Whether the user has a second factor enabled (TOTP or, on the console, a passkey). */
+            /** @description Whether the user has a TOTP factor. */
             mfa_enabled: boolean;
-            /** @description Whether the user has a TOTP factor configured. Optional so an older node that does not send it falls back cleanly. */
-            totp_enabled?: boolean;
             csrf_token: string;
             /**
              * Format: date-time

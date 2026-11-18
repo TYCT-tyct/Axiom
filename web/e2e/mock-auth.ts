@@ -51,7 +51,6 @@ export const session = (
     account: accountId(state.account),
     level: state.level === "none" ? "password" : state.level,
     mfa_enabled: totp || (state.passkeys?.length ?? 0) > 0,
-    totp_enabled: totp,
     csrf_token: state.csrf,
     expires_at: "2026-10-15T00:00:00Z",
     permissions: state.permissions,
@@ -114,6 +113,7 @@ export function confirmTotp({ body, state }: WithState<Schemas["TotpConfirmReque
   if (body.code !== state.user.mfaCode) {
     return fail(401, "invalid_code");
   }
+  if (state.totpEnabled ?? state.mfaEnabled) return fail(409, "conflict");
   state.mfaEnabled = true;
   state.totpEnabled = true;
   state.level = "mfa";

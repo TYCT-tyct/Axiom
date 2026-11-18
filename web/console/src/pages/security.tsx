@@ -21,8 +21,16 @@ import { type SyntheticEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "../confirm-dialog";
 import { usePendingCodes } from "../pending-codes";
+import { passkeysQuery } from "../queries";
 import { boardPageStyle, clickedRowIndex, makeBoardT, useEnglish, useWide } from "./account-board";
-import { buildAuthRows, buildSessionRows, type SessionsState, sessionsQuery } from "./security-data";
+import {
+  buildAuthRows,
+  buildSessionRows,
+  type SessionsState,
+  sessionsQuery,
+  type TotpStatus,
+  totpStatus,
+} from "./security-data";
 import { ChangePasswordDialog, ReplaceTotpDialog } from "./security-dialogs";
 import { IdentitiesSection, InvitesSection, PasskeysSection } from "./security-sections";
 
@@ -31,7 +39,8 @@ export default function Security() {
   const wide = useWide();
   const english = useEnglish();
   const session = useSession();
-  const totpEnabled = session.totp_enabled ?? session.mfa_enabled;
+  const passkeys = useQuery(passkeysQuery);
+  const status = totpStatus(session.mfa_enabled, passkeys.isSuccess ? passkeys.data.passkeys.length : undefined);
   const beginEnable = useBeginTotp();
   const beginReplace = useBeginTotp();
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -47,7 +56,7 @@ export default function Security() {
     <>
       <SecurityBanners
         banner={banner}
-        totpEnabled={totpEnabled}
+        canRegenerate={status !== "off"}
         onDismissBanner={() => setBanner(null)}
         onRegenerate={() => setRecoveryOpen(true)}
         beginError={beginEnable.error ?? beginReplace.error}
@@ -56,15 +65,15 @@ export default function Security() {
       <SecurityMainCard
         wide={wide}
         english={english}
-        totpEnabled={totpEnabled}
+        status={status}
         sessions={sessions}
         authBusy={beginEnable.isPending || beginReplace.isPending}
         onOpenPassword={() => setPasswordOpen(true)}
-        onOpenTotp={() => (totpEnabled ? beginReplace : beginEnable).mutate()}
+        onOpenTotp={(action) => (action === "replace" ? beginReplace : beginEnable).mutate()}
         onOpenRecovery={() => setRecoveryOpen(true)}
         onOpenRevokeAll={() => setConfirmRevokeAll(true)}
       />
-      <PasskeysSection wide={wide} english={english} />
+      <PasskeysSection wide={wide} english={english} list={passkeys} />
       <IdentitiesSection wide={wide} english={english} />
       <InvitesSection wide={wide} english={english} onNotice={setBanner} />
       <SecurityModals
@@ -87,7 +96,7 @@ export default function Security() {
 function SecurityMainCard({
   wide,
   english,
-  totpEnabled,
+  status,
   sessions,
   authBusy,
   onOpenPassword,
@@ -97,17 +106,17 @@ function SecurityMainCard({
 }: {
   wide: boolean;
   english: boolean;
-  totpEnabled: boolean;
+  status: TotpStatus;
   sessions: ReturnType<typeof useSessionsControls>;
   authBusy: boolean;
   onOpenPassword: () => void;
-  onOpenTotp: () => void;
+  onOpenTotp: (action: "enable" | "replace") => void;
   onOpenRecovery: () => void;
   onOpenRevokeAll: () => void;
 }) {
   const { t } = useTranslation();
   const SecurityRegion = wide ? DesktopSecurity : PhoneSecurity;
-  const authRows = buildAuthRows(t, totpEnabled);
+  const authRows = buildAuthRows(t, status);
   const sessionRows = buildSessionRows(
     t,
     sessions.formatDateTime,
@@ -125,7 +134,7 @@ function SecurityMainCard({
           onAuthAction: (event) => {
             const key = authRows[clickedRowIndex(event.target)]?.key;
             if (key === "password") onOpenPassword();
-            if (key === "totp") onOpenTotp();
+            if (key === "enable" || key === "replace") onOpenTotp(key);
             if (key === "recovery") onOpenRecovery();
           },
           authActionDisabled: authBusy,
@@ -224,14 +233,14 @@ function SecurityModals({
 
 function SecurityBanners({
   banner,
-  totpEnabled,
+  canRegenerate,
   onDismissBanner,
   onRegenerate,
   beginError,
   sessionError,
 }: {
   banner: string | null;
-  totpEnabled: boolean;
+  canRegenerate: boolean;
   onDismissBanner: () => void;
   onRegenerate: () => void;
   beginError: unknown;
@@ -255,7 +264,7 @@ function SecurityBanners({
             <Button size="sm" onClick={pending.retry} disabled={pending.pending}>
               {t("security.pendingCodes.retry")}
             </Button>
-            {totpEnabled ? (
+            {canRegenerate ? (
               <Button size="sm" onClick={onRegenerate}>
                 {t("security.pendingCodes.regenerate")}
               </Button>

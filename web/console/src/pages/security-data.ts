@@ -128,48 +128,63 @@ export function validateTotpReplace(currentCode: string, newCode: string): "curr
 type AuthRows = Parameters<typeof DesktopSecurity>[0]["rows"]["authRows0"];
 type SessionRows = Parameters<typeof DesktopSecurity>[0]["rows"]["sessions0"];
 
-export function buildAuthRows(t: TFunction, mfaEnabled: boolean): AuthRows {
-  const rows: Parameters<typeof DesktopSecurity>[0]["rows"]["authRows0"][number][] = [
+export type TotpStatus = "off" | "on" | "unknown";
+
+export function totpStatus(mfaEnabled: boolean, passkeyCount: number | undefined): TotpStatus {
+  if (!mfaEnabled) return "off";
+  // A passkey can account for the aggregate flag on its own. Only a loaded, empty list rules that out.
+  return passkeyCount === 0 ? "on" : "unknown";
+}
+
+export function buildAuthRows(t: TFunction, status: TotpStatus): AuthRows {
+  const title = t("security.twoStep.title");
+  const rows = [
     {
       key: "password",
-      kind: "0",
-      f0: "qrow",
-      f1: "qrl",
-      f2: t("security.password.title"),
-      f3: t("security.password.hint"),
-      f4: "qrc",
-      f5: "button",
-      f6: "btn sec sm ",
-      f7: t("security.password.change"),
-    },
-    {
-      key: "totp",
-      kind: "0",
-      f0: "qrow",
-      f1: "qrl",
-      f2: t("security.twoStep.title"),
-      f3: mfaEnabled ? `${t("security.twoStep.on")} · ${t("security.twoStep.body")}` : t("security.twoStep.off"),
-      f4: "qrc",
-      f5: "button",
-      f6: mfaEnabled ? "btn sec sm " : "btn pri sm ",
-      f7: mfaEnabled ? t("security.twoStep.replace") : t("security.twoStep.enable"),
+      title: t("security.password.title"),
+      hint: t("security.password.hint"),
+      action: t("security.password.change"),
     },
   ];
-  if (mfaEnabled) {
+  if (status !== "on") {
     rows.push({
-      key: "recovery",
-      kind: "0",
-      f0: "qrow",
-      f1: "qrl",
-      f2: t("security.twoStep.codesTitle"),
-      f3: t("security.twoStep.codesHint"),
-      f4: "qrc",
-      f5: "button",
-      f6: "btn sec sm ",
-      f7: t("security.twoStep.regenerate"),
+      key: "enable",
+      title,
+      hint: t(status === "off" ? "security.twoStep.off" : "security.twoStep.unknown"),
+      action: t("security.twoStep.enable"),
     });
   }
-  return rows;
+  if (status !== "off") {
+    rows.push(
+      {
+        key: "replace",
+        title: status === "on" ? title : t("security.twoStep.authenticator"),
+        hint:
+          status === "on"
+            ? `${t("security.twoStep.on")} · ${t("security.twoStep.body")}`
+            : t("security.twoStep.replaceHint"),
+        action: t("security.twoStep.replace"),
+      },
+      {
+        key: "recovery",
+        title: t("security.twoStep.codesTitle"),
+        hint: t("security.twoStep.codesHint"),
+        action: t("security.twoStep.regenerate"),
+      },
+    );
+  }
+  return rows.map(({ key, title, hint, action }) => ({
+    key,
+    kind: "0",
+    f0: "qrow",
+    f1: "qrl",
+    f2: title,
+    f3: hint,
+    f4: "qrc",
+    f5: "button",
+    f6: key === "enable" && status === "off" ? "btn pri sm " : "btn sec sm ",
+    f7: action,
+  }));
 }
 
 export function buildSessionRows(

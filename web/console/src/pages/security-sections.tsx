@@ -1,10 +1,16 @@
 import type { Schemas } from "@axiom/api";
 import { useSession } from "@axiom/app";
 import { DataState, FormError, useFormat } from "@axiom/ui";
-import { type InfiniteData, type UseInfiniteQueryResult, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  type InfiniteData,
+  type UseInfiniteQueryResult,
+  type UseQueryResult,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { identitiesQuery, passkeysQuery, siteQuery } from "../queries";
+import { identitiesQuery, siteQuery } from "../queries";
 import { clickedRowIndex, useBoardInputs } from "./account-board";
 import { AccountActionCard, AccountInputsCard } from "./account-cards";
 import {
@@ -159,10 +165,17 @@ function PasskeysLoadedView({
   );
 }
 
-export function PasskeysSection({ wide, english }: { wide: boolean; english: boolean }) {
+export function PasskeysSection({
+  wide,
+  english,
+  list,
+}: {
+  wide: boolean;
+  english: boolean;
+  list: UseQueryResult<Schemas["Passkeys"]>;
+}) {
   const { t } = useTranslation();
   const site = useQuery(siteQuery);
-  const list = useQuery(passkeysQuery);
   const actions = usePasskeyActions();
   const availability = passkeyRegistrationAvailability(site.data, passkeysLoc(), actions.supported);
   const canRegister = site.isSuccess && availability === "ready";
