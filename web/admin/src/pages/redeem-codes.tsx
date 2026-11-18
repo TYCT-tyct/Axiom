@@ -1,15 +1,17 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { LoadMore, useErrors, useSession } from "@axiom/app";
 import {
-  Button,
+  ActionButton,
+  Card,
   DataState,
   EmptyState,
-  PageHeader,
-  Panel,
+  Field,
+  PageHead,
+  Stack,
   Table,
   Td,
-  TextAreaField,
-  TextField,
+  Text,
+  TextArea,
   useFormat,
 } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
@@ -17,7 +19,7 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
-import { ChoiceFilter, Code, FilterBar, Head, mainCell, PageBody, State, Time, text } from "../parts";
+import { ChoiceFilter, Code, FilterBar, Head, PageBody, State, Time, text } from "../parts";
 import { accountQuery, redeemCodesQuery } from "../queries";
 import { readBatch, redeemState, redeemStates } from "../redeem";
 
@@ -36,7 +38,7 @@ export default function RedeemCodes() {
   const owner = useQuery(accountQuery(useSession().account));
   return (
     <>
-      <PageHeader title={t("nav.redeemCodes")} description={t("redeem.description")} />
+      <PageHead title={t("nav.redeemCodes")} lede={t("redeem.description")} />
       <PageBody>
         <DataState query={owner}>
           {(account) => <Current siteId={account.site_id} currency={account.balance.balance.currency} />}
@@ -53,16 +55,17 @@ function Current({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; currenc
   return (
     <>
       <Filters filters={filters} />
-      <Panel
+      <Card
         title={t("redeem.codes")}
-        action={
-          <Button variant="primary" size="md" onClick={() => setGenerating(true)}>
+        layout="flush"
+        actions={
+          <ActionButton variant="pri" onClick={() => setGenerating(true)}>
             {t("redeem.generate")}
-          </Button>
+          </ActionButton>
         }
       >
         <Codes siteId={siteId} filters={filters} />
-      </Panel>
+      </Card>
       {generating ? <GenerateDialog siteId={siteId} currency={currency} onClose={() => setGenerating(false)} /> : null}
     </>
   );
@@ -93,7 +96,7 @@ function RedeemFields({ filters }: { filters: FiltersValue }) {
         any={t("redeem.filters.stateAny")}
         options={redeemStates.map((state) => ({ value: state, label: t(`redeem.state.${state}`) }))}
       />
-      <TextField
+      <Field
         label={t("redeem.filters.note")}
         hint={t("redeem.filters.noteHint")}
         name="note"
@@ -125,12 +128,12 @@ function Codes({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filters: F
           <Table label={t("redeem.codes")}>
             <Head
               cols={[
-                [t("redeem.col.code")],
-                [t("redeem.col.amount"), "text-right"],
-                [t("redeem.col.note"), "hidden lg:table-cell"],
-                [t("redeem.col.state")],
-                [t("redeem.col.created"), "hidden sm:table-cell"],
-                [t("redeem.col.expires"), "hidden md:table-cell"],
+                t("redeem.col.code"),
+                [t("redeem.col.amount"), { align: "end" }],
+                [t("redeem.col.note"), { main: true }],
+                t("redeem.col.state"),
+                t("redeem.col.created"),
+                t("redeem.col.expires"),
               ]}
               action
             />
@@ -153,40 +156,38 @@ function Row({ code }: { code: RedeemCode }) {
   const [disabling, setDisabling] = useState(false);
   const tone = code.state === "enabled" ? "neutral" : code.state === "used" ? "good" : "warn";
   return (
-    <tr className="align-top hover:bg-s2">
-      <Td className={mainCell}>
+    <tr>
+      <Td>
         <Code title={code.id}>
           {"…"}
           {code.hint}
         </Code>
-        <span className="block text-label text-t3">
+        <Text as="div" size="sm" tone="faint">
           {code.id.slice(0, 12)}
           {"…"}
-        </span>
+        </Text>
       </Td>
-      <Td className="whitespace-nowrap text-right tabular-nums">{format.money(code.amount)}</Td>
-      <Td className="hidden max-w-64 lg:table-cell">
-        <span className="block truncate" title={code.note}>
-          {code.note || "—"}
-        </span>
-      </Td>
+      <Td align="end">{format.money(code.amount)}</Td>
+      <Td main>{code.note || "—"}</Td>
       <Td>
         <State tone={tone}>{t(`redeem.state.${code.state}`)}</State>
         {code.redeemed_at ? (
-          <span className="mt-1 block text-label text-t3">{format.dateTime(new Date(code.redeemed_at))}</span>
+          <Text as="div" size="sm" tone="faint">
+            {format.dateTime(new Date(code.redeemed_at))}
+          </Text>
         ) : null}
       </Td>
-      <Td className="hidden whitespace-nowrap sm:table-cell">
+      <Td shrink>
         <Time at={code.created_at} />
       </Td>
-      <Td className="hidden whitespace-nowrap md:table-cell">
+      <Td shrink>
         <Time at={code.expires_at} />
       </Td>
-      <Td className="text-right">
+      <Td align="end" shrink>
         {code.state === "enabled" ? (
-          <Button size="sm" onClick={() => setDisabling(true)}>
+          <ActionButton size="sm" onClick={() => setDisabling(true)}>
             {t("redeem.disable")}
-          </Button>
+          </ActionButton>
         ) : null}
         {disabling ? <DisableDialog code={code} onClose={() => setDisabling(false)} /> : null}
       </Td>
@@ -212,7 +213,7 @@ function DisableDialog({ code, onClose }: { code: RedeemCode; onClose: () => voi
           }),
         )
       }
-      done={() => <p className="text-t2">{t("redeem.disabled")}</p>}
+      done={() => <Text tone="muted">{t("redeem.disabled")}</Text>}
       onClose={onClose}
     />
   );
@@ -263,7 +264,7 @@ function BatchFields({ currency, error }: { currency: string; error: unknown }) 
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t("redeem.amount", { currency })}
         hint={t("redeem.amountHint")}
         name="amount"
@@ -271,7 +272,7 @@ function BatchFields({ currency, error }: { currency: string; error: unknown }) 
         autoComplete="off"
         error={errors.field(error, "amount")}
       />
-      <TextField
+      <Field
         label={t("redeem.count")}
         hint={t("redeem.countHint")}
         name="count"
@@ -279,7 +280,7 @@ function BatchFields({ currency, error }: { currency: string; error: unknown }) 
         autoComplete="off"
         error={errors.field(error, "count")}
       />
-      <TextField
+      <Field
         label={t("redeem.note")}
         hint={t("redeem.noteHint")}
         name="note"
@@ -287,7 +288,7 @@ function BatchFields({ currency, error }: { currency: string; error: unknown }) 
         autoComplete="off"
         error={errors.field(error, "note")}
       />
-      <TextField
+      <Field
         label={t("redeem.expires")}
         hint={t("redeem.expiresHint")}
         name="expires_at"
@@ -304,14 +305,14 @@ function Issued({ list }: { list: AdminSchemas["RedeemCodeList"] }) {
   const format = useFormat();
   const codes = (list.data ?? []).flatMap((code) => (code.code ? [code.code] : []));
   return (
-    <div className="space-y-4">
+    <Stack>
       {codes.length === 0 ? (
-        <p className="text-t2">{t("redeem.issuedGone")}</p>
+        <Text tone="muted">{t("redeem.issuedGone")}</Text>
       ) : (
-        <p className="text-t2">{t("redeem.issuedIntro", { count: codes.length })}</p>
+        <Text tone="muted">{t("redeem.issuedIntro", { count: codes.length })}</Text>
       )}
       {codes.length > 0 ? (
-        <TextAreaField
+        <TextArea
           label={t("redeem.issuedLabel")}
           hint={t("redeem.issuedHint")}
           readOnly
@@ -321,8 +322,8 @@ function Issued({ list }: { list: AdminSchemas["RedeemCodeList"] }) {
         />
       ) : null}
       {list.data?.[0] ? (
-        <p className="text-t2">{t("redeem.issuedAmount", { amount: format.money(list.data[0].amount) })}</p>
+        <Text tone="muted">{t("redeem.issuedAmount", { amount: format.money(list.data[0].amount) })}</Text>
       ) : null}
-    </div>
+    </Stack>
   );
 }

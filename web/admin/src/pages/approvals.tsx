@@ -1,12 +1,12 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { DataState, EmptyState, PageHeader, Panel, Table, Td, useFormat } from "@axiom/ui";
+import { Card, DataState, EmptyState, PageHead, Table, Td, TextLink, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { ApprovalState, Minute, Target, useNow } from "../approval-parts";
 import { approvalState, approvalStates, capOf } from "../approvals";
-import { ChoiceFilter, FilterBar, Head, mainCell, PageBody } from "../parts";
+import { ChoiceFilter, FilterBar, Head, PageBody } from "../parts";
 import { approvalsQuery } from "../queries";
 
 type Approval = AdminSchemas["OperationsApproval"];
@@ -19,7 +19,7 @@ export default function Approvals() {
   const navigate = useNavigate();
   return (
     <>
-      <PageHeader title={t("nav.approvals")} description={t("approvals.description")} />
+      <PageHead title={t("nav.approvals")} lede={t("approvals.description")} />
       <PageBody>
         <FilterBar
           values={filters}
@@ -33,9 +33,9 @@ export default function Approvals() {
             options={approvalStates.map((state) => ({ value: state, label: t(`approvals.state.${state}`) }))}
           />
         </FilterBar>
-        <Panel title={t("approvals.list")}>
+        <Card title={t("approvals.list")} layout="flush">
           <List state={filters.state} />
-        </Panel>
+        </Card>
       </PageBody>
     </>
   );
@@ -61,12 +61,12 @@ function List({ state }: { state: AdminSchemas["OperationsApprovalState"] | unde
           <Table label={t("approvals.list")}>
             <Head
               cols={[
-                [t("approvals.col.operation")],
-                [t("approvals.col.target"), "hidden lg:table-cell"],
-                [t("approvals.col.amount"), "hidden text-right sm:table-cell"],
-                [t("approvals.col.state")],
-                [t("approvals.col.requested"), "hidden xl:table-cell"],
-                [t("approvals.col.expires"), "hidden 2xl:table-cell"],
+                [t("approvals.col.operation"), { main: true }],
+                t("approvals.col.target"),
+                [t("approvals.col.amount"), { align: "end" }],
+                t("approvals.col.state"),
+                t("approvals.col.requested"),
+                t("approvals.col.expires"),
               ]}
             />
             <tbody>
@@ -87,32 +87,25 @@ function Row({ approval, now }: { approval: Approval; now: number }) {
   const format = useFormat();
   const amount = capOf(approval.summary)?.amount;
   return (
-    <tr className="align-top hover:bg-s2">
-      <Td className={mainCell}>
-        <Link
-          to="/approvals/$approvalId"
-          params={{ approvalId: approval.id }}
-          className="block truncate text-accent hover:underline"
-        >
-          {t(`approvals.risk.${approval.risk}`)}
-        </Link>
-        {amount ? (
-          <span className="block text-label tabular-nums text-t3 sm:hidden">{format.money(amount)}</span>
-        ) : null}
+    <tr>
+      <Td main>
+        <TextLink>
+          <Link to="/approvals/$approvalId" params={{ approvalId: approval.id }}>
+            {t(`approvals.risk.${approval.risk}`)}
+          </Link>
+        </TextLink>
       </Td>
-      <Td className="hidden max-w-80 lg:table-cell">
+      <Td>
         <Target approval={approval} />
       </Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
-        {amount ? format.money(amount) : "—"}
-      </Td>
+      <Td align="end">{amount ? format.money(amount) : "—"}</Td>
       <Td>
         <ApprovalState approval={approval} now={now} />
       </Td>
-      <Td className="hidden whitespace-nowrap xl:table-cell">
+      <Td shrink>
         <Minute at={approval.requested_at} />
       </Td>
-      <Td className="hidden whitespace-nowrap 2xl:table-cell">
+      <Td shrink>
         <Minute at={approval.expires_at} />
       </Td>
     </tr>
