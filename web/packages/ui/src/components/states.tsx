@@ -1,10 +1,12 @@
 import { createContext, type ReactNode, useContext } from "react";
 import { useTranslation } from "react-i18next";
-import { cn } from "../cn";
+import { classes } from "../classes";
 import { useFormat } from "../format";
-import { Button } from "./button";
+import { ActionButton } from "./action-button";
 import { Icon, type IconName } from "./icon";
 import { usePageTitle } from "./page-title";
+import s from "./states.module.css";
+import { TextLink } from "./text-link";
 
 // Every view of data has four states besides showing it: loading, empty, failed, and not allowed (docs/frontend.md).
 // DataState picks the right one from a query.
@@ -23,7 +25,7 @@ function StateFrame({
   title,
   children,
   action,
-  tone = "text-t3",
+  bad = false,
   page = false,
   compact = false,
 }: {
@@ -31,21 +33,19 @@ function StateFrame({
   title: string;
   children?: ReactNode;
   action?: ReactNode;
-  tone?: string;
+  bad?: boolean;
   page?: boolean;
   compact?: boolean;
 }) {
   usePageTitle(page ? title : undefined);
   const Heading = page ? "h1" : "h2";
   return (
-    <div
-      className={cn("mx-auto flex max-w-md flex-col items-center gap-3 px-4 text-center", compact ? "py-8" : "py-16")}
-    >
-      <span className={cn("flex size-10 items-center justify-center rounded-full bg-s2", tone)}>
+    <div className={classes(s.frame, compact && s.compact)}>
+      <span className={classes(s.mark, bad && s.bad)}>
         <Icon name={icon} />
       </span>
-      <Heading className="text-[15px] text-t1">{title}</Heading>
-      {children ? <div className="space-y-1 text-ui text-t3">{children}</div> : null}
+      <Heading className={s.title}>{title}</Heading>
+      {children ? <div className={s.body}>{children}</div> : null}
       {action}
     </div>
   );
@@ -54,7 +54,7 @@ function StateFrame({
 // Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
 type Placement = { compact?: boolean; page?: boolean };
 
-const skeletonWidths = ["w-11/12", "w-4/5", "w-2/3", "w-1/2"];
+const skeletonWidths = ["w92", "w80", "w67", "w50"] as const;
 
 // Loading is a state of the page like any other: one that replaces the page area gives it a level-one heading, hidden
 // here because the bars already say the same thing to a reader who is looking, so a page waiting for its data is one a
@@ -64,12 +64,12 @@ export function LoadingState({ page }: Placement = {}) {
   const { t } = useTranslation("common");
   const label = t("state.loading");
   return (
-    <div className="p-6">
-      {page ? <h1 className="sr-only">{label}</h1> : null}
-      <div role="status" className="space-y-3">
-        <span className="sr-only">{label}</span>
+    <div className={s.loading}>
+      {page ? <h1 className={s.srOnly}>{label}</h1> : null}
+      <div role="status" className={s.bars}>
+        <span className={s.srOnly}>{label}</span>
         {skeletonWidths.map((width) => (
-          <div key={width} className={cn("h-5 animate-pulse rounded-xs bg-s2", width)} />
+          <div key={width} className={classes(s.bar, s[width])} />
         ))}
       </div>
     </div>
@@ -118,9 +118,9 @@ function GoneState(placement: Placement) {
       icon="search"
       title={t("state.goneTitle")}
       action={
-        <a href={import.meta.env.BASE_URL} className="text-accent underline-offset-4 hover:underline">
-          {t("state.home")}
-        </a>
+        <TextLink>
+          <a href={import.meta.env.BASE_URL}>{t("state.home")}</a>
+        </TextLink>
       }
       {...placement}
     >
@@ -145,23 +145,20 @@ function ErrorState({
   return (
     <StateFrame
       icon="alert"
-      tone="text-bad"
+      bad
       title={t("state.errorTitle")}
       {...placement}
       action={
         onRetry ? (
-          <Button onClick={onRetry}>
-            <Icon name="refresh" />
+          <ActionButton size="sm" icon="refresh" onClick={onRetry}>
             {t("state.retry")}
-          </Button>
+          </ActionButton>
         ) : null
       }
     >
       <p role="alert">{failure?.status === 0 ? t("state.networkError") : t("state.errorBody")}</p>
-      {failure?.requestId ? (
-        <p className="font-mono text-t4 select-all">{t("state.requestId", { id: failure.requestId })}</p>
-      ) : null}
-      {at ? <p className="text-t4">{t("state.failedAt", { time: format.dateTime(at) })}</p> : null}
+      {failure?.requestId ? <p className={s.requestId}>{t("state.requestId", { id: failure.requestId })}</p> : null}
+      {at ? <p className={s.faint}>{t("state.failedAt", { time: format.dateTime(at) })}</p> : null}
     </StateFrame>
   );
 }
@@ -219,14 +216,13 @@ export function PageFailedState() {
   return (
     <StateFrame
       icon="alert"
-      tone="text-bad"
+      bad
       title={t("state.pageFailed")}
       page
       action={
-        <Button onClick={() => window.location.reload()}>
-          <Icon name="refresh" />
+        <ActionButton size="sm" icon="refresh" onClick={() => window.location.reload()}>
           {t("state.reload")}
-        </Button>
+        </ActionButton>
       }
     >
       <p role="alert">{t("state.pageFailedBody")}</p>
@@ -243,9 +239,9 @@ export function NotFoundState() {
       icon="search"
       title={t("state.notFoundTitle")}
       action={
-        <a href={import.meta.env.BASE_URL} className="text-accent underline-offset-4 hover:underline">
-          {t("state.home")}
-        </a>
+        <TextLink>
+          <a href={import.meta.env.BASE_URL}>{t("state.home")}</a>
+        </TextLink>
       }
       page
     >

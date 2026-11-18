@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, TextField, Th } from "@axiom/ui";
+import { ActionButton, Card, DataState, EmptyState, Field, Icon, PageHead, Table, Td } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
@@ -8,7 +8,7 @@ import { Authors } from "../models/authors";
 import { modelStatus, modelStatuses } from "../models/catalog";
 import { DraftDialog } from "../models/draft-dialog";
 import { ModelState } from "../models/parts";
-import { Actions, ChoiceFilter, Code, FilterBar, NewButton, PageBody, text } from "../parts";
+import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text } from "../parts";
 import { authorsQuery, type ModelFilters, modelsQuery } from "../queries";
 
 export default function Models() {
@@ -20,7 +20,7 @@ export default function Models() {
   const filtered = Object.values(filters).some(Boolean);
   return (
     <>
-      <PageHeader title={t("nav.models")} description={t("models.description")} />
+      <PageHead title={t("nav.models")} lede={t("models.description")} />
       <PageBody>
         <Actions>
           <NewButton permission="catalog.manage" label={t("models.draft.open")}>
@@ -28,7 +28,7 @@ export default function Models() {
           </NewButton>
         </Actions>
         <Filter search={search} />
-        <Panel>
+        <Card layout="flush">
           <DataState
             query={models}
             isEmpty={() => rows.length === 0}
@@ -41,7 +41,7 @@ export default function Models() {
             {() => <ModelsTable rows={rows} />}
           </DataState>
           <LoadMore list={models} />
-        </Panel>
+        </Card>
         <Authors />
       </PageBody>
     </>
@@ -78,7 +78,7 @@ function Filter({ search }: { search: Search }) {
         any={t("models.anyAuthor")}
         options={(authors.data?.data ?? []).map((author) => ({ value: author.slug, label: author.name }))}
       />
-      <TextField
+      <Field
         label={t("models.slugPrefix")}
         name="q"
         maxLength={200}
@@ -94,30 +94,28 @@ function ModelsTable({ rows }: { rows: AdminSchemas["ModelSummary"][] }) {
   const { t } = useTranslation();
   return (
     <Table label={t("nav.models")}>
-      <thead>
-        <tr>
-          <Th>{t("models.col.slug")}</Th>
-          <Th>{t("models.col.status")}</Th>
-          <Th className="hidden md:table-cell">{t("models.col.basis")}</Th>
-          <Th className="hidden lg:table-cell">{t("models.col.source")}</Th>
-          <Th className="w-0" />
-        </tr>
-      </thead>
+      <Head
+        cols={[
+          [t("models.col.slug"), { main: true }],
+          t("models.col.status"),
+          t("models.col.basis"),
+          t("models.col.source"),
+        ]}
+        action
+      />
       <tbody>
         {rows.map((model) => (
           <tr key={model.id}>
-            <Td className="w-full max-w-0 sm:w-auto sm:max-w-80 sm:min-w-40">
-              <p className="truncate text-t1" title={model.slug}>
-                <Code>{model.slug}</Code>
-              </p>
+            <Td main>
+              <Code>{model.slug}</Code>
             </Td>
             <Td>
               <ModelState status={model.status} />
             </Td>
-            <Td className="hidden md:table-cell">{t(`models.basis.${model.version_basis}`)}</Td>
-            <Td className="hidden lg:table-cell">{t(`models.source.${model.price_source}`)}</Td>
-            <Td className="whitespace-nowrap">
-              <Button variant="ghost" size="icon" asChild>
+            <Td>{t(`models.basis.${model.version_basis}`)}</Td>
+            <Td>{t(`models.source.${model.price_source}`)}</Td>
+            <Td actions>
+              <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/models/$modelId"
                   params={{ modelId: model.id }}
@@ -125,7 +123,7 @@ function ModelsTable({ rows }: { rows: AdminSchemas["ModelSummary"][] }) {
                 >
                   <Icon name="right" />
                 </Link>
-              </Button>
+              </ActionButton>
             </Td>
           </tr>
         ))}

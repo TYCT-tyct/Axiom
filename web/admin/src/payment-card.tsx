@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, CheckField, DataState, Icon, moneyInput, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, CheckField, DataState, Field, moneyInput, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -51,11 +51,10 @@ function PaymentFacts({
             bufferKnown ? `${formatPercent(view.top_up_buffer_ppm ?? 0)}%` : t("settings.payments.bufferUnavailable"),
           ],
         ]}
-        action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
+        actions={
+          <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.payments.edit")}
-          </Button>
+          </ActionButton>
         }
       />
       {open ? <PaymentDialog siteId={siteId} currency={currency} view={view} onClose={() => setOpen(false)} /> : null}
@@ -85,7 +84,7 @@ function PaymentFields({
         value="true"
         defaultChecked={view.open === true}
       />
-      <TextField
+      <Field
         label={t("settings.payments.min")}
         hint={t("settings.payments.amountHint", { currency })}
         name="credits_min"
@@ -94,7 +93,7 @@ function PaymentFields({
         defaultValue={view.credits_min ? moneyInput(view.credits_min.amount) : ""}
         error={errors.field(error, "settings/credits_min")}
       />
-      <TextField
+      <Field
         label={t("settings.payments.max")}
         hint={t("settings.payments.amountHint", { currency })}
         name="credits_max"
@@ -104,7 +103,7 @@ function PaymentFields({
         error={errors.field(error, "settings/credits_max")}
       />
       {bufferKnown ? (
-        <TextField
+        <Field
           label={t("settings.payments.buffer")}
           hint={t("settings.payments.bufferHint")}
           name="top_up_buffer_ppm"

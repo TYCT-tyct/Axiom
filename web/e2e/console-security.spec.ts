@@ -11,7 +11,9 @@ const returnToWindow = (page: Page) =>
   page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
 
 test.describe("two-step verification settings", () => {
-  test("the recovery codes dialog uses the site's brand colour", async ({ page }) => {
+  // The primary button does not follow the brand colour (docs/frontend.md「主题与自由度」): a red brand must not turn
+  // the one button that saves the codes red, the colour the page uses for danger.
+  test("the recovery codes dialog keeps its primary button neutral under the site's brand colour", async ({ page }) => {
     const state = await mockConsole(page);
     state.mfaEnabled = true;
     state.site = { ...state.site, brand_color: "#ff0000" };
@@ -25,7 +27,7 @@ test.describe("two-step verification settings", () => {
     await expect(codes.getByRole("listitem")).toHaveCount(10);
     const button = codes.getByRole("button", { name: "我已保存" });
     await expect(button).toBeVisible();
-    expect(await button.evaluate((element) => getComputedStyle(element).backgroundColor)).toBe("rgb(255, 0, 0)");
+    expect(await button.evaluate((element) => getComputedStyle(element).backgroundColor)).not.toBe("rgb(255, 0, 0)");
   });
 
   test("turning it on shows a QR code and the recovery codes once, and later changes use the new session", async ({

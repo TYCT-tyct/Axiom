@@ -23,6 +23,9 @@ export type Region = {
     // The design's engine scripts the board needs before the cut, for markup an engine draws at run time (the Login
     // board's form, drawn by login-ui.js); they run under the paused clock the scene advances.
     engines?: string[];
+    // A fragment is composed inside a page, so prove the retained drawing at its own elements.
+    // Each selector names one element on both the artboard and the generated fragment.
+    fragment?: { styles: Record<string, string[]>; values?: Record<string, string | boolean> };
   };
   page?: string;
   omit?: string[];

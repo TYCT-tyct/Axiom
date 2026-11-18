@@ -1,5 +1,6 @@
 import { LoadMore } from "@axiom/app";
-import { DataState, EmptyState, Panel, Table } from "@axiom/ui";
+import { Card, DataState, EmptyState, Table } from "@axiom/ui";
+import type { ComponentProps } from "react";
 import { Fragment, type ReactNode } from "react";
 import { Head } from "../parts";
 import { LedgerHeading } from "./ledger-heading";
@@ -37,12 +38,12 @@ export function LedgerList<T>({
   rows: T[];
   emptyTitle: string;
   emptyBody: string;
-  columns: [string, string?][];
+  columns: ComponentProps<typeof Head>["cols"];
   renderRow: (item: T) => ReactNode;
   keyOf: (item: T, index: number) => string | number;
 }) {
   return (
-    <Panel title={title}>
+    <Card title={title} layout="flush">
       <LedgerHeading description={description} back={back} />
       <DataState
         query={query}
@@ -61,6 +62,6 @@ export function LedgerList<T>({
         )}
       </DataState>
       <LoadMore list={query} />
-    </Panel>
+    </Card>
   );
 }

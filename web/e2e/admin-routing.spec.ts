@@ -72,24 +72,24 @@ test("a new platform preset that limits a price names its currency, and one that
   ]);
 });
 
-test("one vendor rule reads in the singular, and a phone labels the key count", async ({ page }) => {
+test("one vendor rule reads in the singular, and the key count has its own column", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
   await open(page, "/routing-presets");
   await page.setViewportSize({ width: 360, height: 900 });
   // The site preset has one rule by vendor or model, and the summary under the name counts it as one.
   await expect(page.getByText(words("presetRules.summary.overrides_one")).first()).toBeVisible();
-  // Below sm the keys column is gone, so the count under the rules says what it counts, in the page's number format.
+  // No column is hidden on a phone: the table scrolls, and the key count sits in its own column in the page's number format.
   const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
-  await expect(counted.getByText("12,345 keys", { exact: true })).toBeVisible();
-  // The system preset has no count: it says what it is, as its own text does in the hidden column.
+  await expect(counted.getByRole("cell", { name: "12,345", exact: true })).toBeVisible();
+  // The system preset has no count: it says what it is.
   const system = page.getByRole("row").filter({ hasText: "Allow all" });
   await expect(system.getByText(words("routingPresets.keys.system")).first()).toBeVisible();
 });
 
-test("a phone labels the key count in Chinese with the same number format", async ({ page }) => {
+test("the key count keeps the same number format in Chinese", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "zh"));
   await open(page, "/routing-presets");
   await page.setViewportSize({ width: 360, height: 900 });
   const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
-  await expect(counted.getByText("12,345 个 key", { exact: true })).toBeVisible();
+  await expect(counted.getByRole("cell", { name: "12,345", exact: true })).toBeVisible();
 });

@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { DataState, SelectField, TextField } from "@axiom/ui";
+import { DataState, Field, Select, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
@@ -71,8 +71,10 @@ export function RemoveDialog({ supplier, onClose }: { supplier: Supplier; onClos
       }
       done={() => (
         <>
-          <p>{t("suppliers.remove.started")}</p>
-          <p className="text-label text-t3">{t("suppliers.remove.keys")}</p>
+          <Text>{t("suppliers.remove.started")}</Text>
+          <Text size="sm" tone="faint">
+            {t("suppliers.remove.keys")}
+          </Text>
         </>
       )}
       onClose={onClose}
@@ -150,7 +152,7 @@ export function QuantizationDialog({
       intro={<p>{t("suppliers.quantization.body")}</p>}
       action={t("suppliers.quantization.action")}
       fields={() => (
-        <SelectField
+        <Select
           label={t("suppliers.quantization.precision")}
           hint={t("suppliers.quantization.body")}
           name="quantization"
@@ -162,7 +164,7 @@ export function QuantizationDialog({
               {level}
             </option>
           ))}
-        </SelectField>
+        </Select>
       )}
       read={(values) => values.quantization ?? ""}
       send={(level, { reason, key }) =>
@@ -211,7 +213,7 @@ export function UnitValueDialog({ supplier, onClose }: { supplier: Supplier; onC
       }
       action={t("suppliers.unit.action")}
       fields={() => (
-        <TextField
+        <Field
           label={t("suppliers.unit.value", { currency: supplier.settlement_currency })}
           hint={
             supplier.unit_value_hint
@@ -315,14 +317,14 @@ export function BindKeyDialog({
       }
       action={t("suppliers.bind.action")}
       fields={() => (
-        <SelectField label={t("suppliers.bind.group")} name="group_id" defaultValue={guess?.id ?? ""}>
+        <Select label={t("suppliers.bind.group")} name="group_id" defaultValue={guess?.id ?? ""}>
           <option value="">{t("suppliers.bind.choose")}</option>
           {groups.map((group) => (
             <option key={group.id} value={group.id}>
               {group.codename ?? group.name}
             </option>
           ))}
-        </SelectField>
+        </Select>
       )}
       read={(values) =>
         values.group_id ? (values.group_id as AdminSchemas["Uuid"]) : { problem: t("suppliers.bind.missing") }

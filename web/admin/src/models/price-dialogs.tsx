@@ -1,5 +1,5 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
-import { CheckField, SelectField } from "@axiom/ui";
+import { CheckField, Select } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
 import { handSources } from "./catalog";
@@ -97,13 +97,13 @@ export function SourceDialog({ model: live, onClose }: { model: Model; onClose: 
       action={t("models.prices.sourceAction")}
       fields={() => (
         <>
-          <SelectField label={t("models.prices.sourceChoose")} name="source" defaultValue="official">
+          <Select label={t("models.prices.sourceChoose")} name="source" defaultValue="official">
             {handSources.map((source) => (
               <option key={source} value={source}>
                 {t(`models.source.${source}`)}
               </option>
             ))}
-          </SelectField>
+          </Select>
           <PriceFields currency={kept?.currency} />
           <CheckField
             label={t("models.prices.confirmBasis")}

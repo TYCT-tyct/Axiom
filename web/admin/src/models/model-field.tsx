@@ -1,4 +1,4 @@
-import { TextField } from "@axiom/ui";
+import { Field } from "@axiom/ui";
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useDeferredValue, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,7 +23,7 @@ export function ModelField({ label, error, currentId }: { label: string; error?:
   }
   return (
     <>
-      <TextField
+      <Field
         label={label}
         hint={hint}
         name="model"

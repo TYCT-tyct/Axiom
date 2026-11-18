@@ -20,9 +20,7 @@ it("keeps both ends of a long id, the full value and a copy button", () => {
   const value = "acct_00000000000000000000000001";
   const html = render(<Id value={value} />);
   expect(html).toContain(`title="${value}"`);
-  expect(html).toMatch(
-    /<span aria-hidden="true" class="min-w-0 truncate">acct_0+<\/span><span aria-hidden="true" class="shrink-0">00000001<\/span>/,
-  );
-  expect(html).toContain(`<span class="sr-only">${value}</span>`);
+  expect(html).toMatch(/<span aria-hidden="true"[^>]*>acct_0+<\/span><span aria-hidden="true"[^>]*>00000001<\/span>/);
+  expect(html).toMatch(new RegExp(`<span class="[^"]*">${value}</span>`));
   expect(html).toContain('aria-label="复制 ID"');
 });

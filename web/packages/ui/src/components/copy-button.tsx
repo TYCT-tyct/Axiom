@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "./button";
+import { Button } from "./action-button";
+import s from "./copy-button.module.css";
 import { Icon } from "./icon";
 
 type CopyState = "idle" | "copied" | "failed";
@@ -23,17 +24,16 @@ function CompactCopyButton({
   const failed = state === "failed";
   return (
     <>
-      <Button
-        variant="ghost"
-        size="icon"
-        className={`size-6 ${failed ? "text-bad" : "text-t4 hover:text-t1"}`}
+      <button
+        type="button"
+        className={failed ? `${s.compact} ${s.failed}` : s.compact}
         aria-label={label}
         title={label}
         onClick={onCopy}
       >
         <Icon name={icons[state]} width="14" height="14" />
-      </Button>
-      <span role="status" className={failed ? "min-w-0 text-label text-bad [overflow-wrap:anywhere]" : "sr-only"}>
+      </button>
+      <span role="status" className={failed ? s.failure : s.srOnly}>
         {message}
       </span>
     </>
@@ -68,7 +68,7 @@ export function CopyButton({ text, label, compact = false }: { text: string; lab
         <Icon name={icons[state]} />
         {state === "copied" ? t("copy.copied") : name}
       </Button>
-      <span role="status" className="text-label text-t3">
+      <span role="status" className={s.message}>
         {messages[state]}
       </span>
     </>

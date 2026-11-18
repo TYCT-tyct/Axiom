@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, DataState, Icon, PageHeader, Panel } from "@axiom/ui";
+import { ActionButton, Card, DataState, Icon, PageHead, Text, TextLink } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
@@ -19,15 +19,15 @@ export default function AuditEntry() {
     <DataState query={entry} page>
       {(data) => (
         <>
-          <PageHeader title={data.action ?? t("audit.detailTitle")} description={t("audit.detailDescription")} />
+          <PageHead title={data.action ?? t("audit.detailTitle")} lede={t("audit.detailDescription")} />
           <PageBody>
             <Actions>
-              <Button asChild>
+              <ActionButton asChild>
                 <Link to="/audit">
                   <Icon name="left" />
                   {t("audit.back")}
                 </Link>
-              </Button>
+              </ActionButton>
             </Actions>
             <Facts
               title={t("audit.detailTitle")}
@@ -43,15 +43,13 @@ export default function AuditEntry() {
                 [t("audit.reason"), data.reason ?? "—"],
               ]}
             />
-            <Panel title={t("audit.detail")}>
-              <div className="p-4">
-                {data.detail === undefined ? (
-                  <p className="text-t3">{t("audit.detailUnavailable")}</p>
-                ) : (
-                  <Json value={data.detail} label={t("audit.detail")} />
-                )}
-              </div>
-            </Panel>
+            <Card title={t("audit.detail")}>
+              {data.detail === undefined ? (
+                <Text tone="faint">{t("audit.detailUnavailable")}</Text>
+              ) : (
+                <Json value={data.detail} label={t("audit.detail")} />
+              )}
+            </Card>
           </PageBody>
         </>
       )}
@@ -61,19 +59,23 @@ export default function AuditEntry() {
 
 function Actor({ entry }: { entry: Entry }) {
   return (
-    <span>
+    <>
       <Code>{entry.actor_id ?? "—"}</Code>
-      <span className="block text-label text-t3">{entry.actor_kind ?? ""}</span>
-    </span>
+      <Text as="div" size="sm" tone="faint">
+        {entry.actor_kind ?? ""}
+      </Text>
+    </>
   );
 }
 
 function Target({ entry }: { entry: Entry }) {
   return (
-    <span>
+    <>
       <Code>{entry.target_id ?? "—"}</Code>
-      <span className="block text-label text-t3">{entry.target_kind ?? ""}</span>
-    </span>
+      <Text as="div" size="sm" tone="faint">
+        {entry.target_kind ?? ""}
+      </Text>
+    </>
   );
 }
 
@@ -89,13 +91,11 @@ function Request({ entry }: { entry: Entry }) {
     return <Code>{entry.request_id}</Code>;
   }
   return (
-    <Link
-      to="/calls"
-      search={{ request_id: entry.request_id, ...callWindow(entry.at) }}
-      className="font-mono text-label text-accent hover:underline"
-    >
-      {t("audit.openCalls")}
-    </Link>
+    <TextLink>
+      <Link to="/calls" search={{ request_id: entry.request_id, ...callWindow(entry.at) }}>
+        {t("audit.openCalls")}
+      </Link>
+    </TextLink>
   );
 }
 

@@ -1,0 +1,7 @@
+.root {
+  display: block;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--badT);
+  overflow-wrap: anywhere;
+}

@@ -1,6 +1,6 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Icon, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Field, ImageBox, Stack, Text, useFormat } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -55,7 +55,6 @@ const names: Record<LogoType, string> = { "image/svg+xml": "SVG", "image/png": "
 
 export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const { t } = useTranslation();
-  const format = useFormat();
   const logo = useQuery(siteLogoQuery(siteId));
   const [setting, setSetting] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -73,37 +72,33 @@ export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
         const rows: [string, ReactNode][] = [
           [
             t("settings.logo.current"),
-            view.logo ? <Current logo={view.logo} /> : <span className="text-t2">{t("settings.logo.none")}</span>,
+            view.logo ? (
+              <Current logo={view.logo} />
+            ) : (
+              <Text as="span" tone="muted">
+                {t("settings.logo.none")}
+              </Text>
+            ),
           ],
         ];
         if (view.logo) {
-          rows.push([
-            t("settings.logo.details"),
-            <span key="details" className="text-t2">
-              {names[view.logo.content_type as LogoType] ?? view.logo.content_type}
-              {view.logo.width > 0 && view.logo.height > 0
-                ? ` · ${t("settings.logo.pixels", { width: view.logo.width, height: view.logo.height })}`
-                : ""}
-              {` · ${t("settings.logo.bytes", { size: format.number(view.logo.size) })}`}
-            </span>,
-          ]);
+          rows.push([t("settings.logo.details"), <LogoDetails key="details" logo={view.logo} />]);
         }
         return (
           <>
             <Facts
               title={t("settings.logo.title")}
-              action={
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button size="md" onClick={() => setSetting(true)}>
-                    <Icon name="pencil" />
+              actions={
+                <Cluster>
+                  <ActionButton onClick={() => setSetting(true)} icon="pencil">
                     {t("settings.logo.set")}
-                  </Button>
+                  </ActionButton>
                   {view.logo ? (
-                    <Button size="md" variant="ghost" onClick={() => setClearing(true)}>
+                    <ActionButton variant="gho" onClick={() => setClearing(true)}>
                       {t("settings.logo.clear")}
-                    </Button>
+                    </ActionButton>
                   ) : null}
-                </div>
+                </Cluster>
               }
               rows={rows}
             />
@@ -118,17 +113,13 @@ export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
 
 function Current({ logo }: { logo: Logo }) {
   if (!logo.data_url) {
-    return <span className="text-t2">{logo.content_type}</span>;
+    return (
+      <Text as="span" tone="muted">
+        {logo.content_type}
+      </Text>
+    );
   }
-  return (
-    <img
-      src={logo.data_url}
-      alt=""
-      width={40}
-      height={40}
-      className="size-10 shrink-0 rounded-btn border border-b1 bg-s2 object-contain"
-    />
-  );
+  return <ImageBox src={logo.data_url} size={40} />;
 }
 
 // useLogoFile reads a chosen file into the contract's upload shape, with a preview, and says what is wrong with one it
@@ -185,8 +176,8 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
       intro={<p>{t("settings.logo.intro")}</p>}
       action={t("settings.logo.save")}
       fields={(error) => (
-        <div className="space-y-3">
-          <TextField
+        <Stack gap={12}>
+          <Field
             label={t("settings.logo.file")}
             hint={t("settings.logo.hint")}
             name="file"
@@ -196,12 +187,14 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
             error={problem ?? errors.field(error, "logo")}
           />
           {chosen ? (
-            <div className="flex items-center gap-3 rounded-btn border border-b1 bg-s2 p-3">
-              <img src={chosen.preview} alt="" width={48} height={48} className="size-12 shrink-0 object-contain" />
-              <span className="min-w-0 text-t2 [overflow-wrap:anywhere]">{chosen.name}</span>
-            </div>
+            <Cluster gap={12}>
+              <ImageBox src={chosen.preview} size={48} />
+              <Text as="span" tone="muted">
+                {chosen.name}
+              </Text>
+            </Cluster>
           ) : null}
-        </div>
+        </Stack>
       )}
       read={() => (chosen ? chosen.upload : { problem: t("settings.logo.choose") })}
       send={async (logo, { reason, key }) => {
@@ -230,7 +223,7 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       intro={<p>{t("settings.logo.clearIntro")}</p>}
       action={t("settings.logo.clear")}
       danger
-      fields={() => <p className="text-t2">{t("settings.logo.clearHint")}</p>}
+      fields={() => <Text tone="muted">{t("settings.logo.clearHint")}</Text>}
       read={() => ({})}
       send={async (_, { reason, key }) => {
         const sent = await unwrapChange(
@@ -245,5 +238,20 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       done={() => <p>{t("settings.logo.cleared")}</p>}
       onClose={onClose}
     />
+  );
+}
+
+// LogoDetails is what the stored image is: its type, its size in pixels when known, and its bytes.
+function LogoDetails({ logo }: { logo: Logo }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Text as="span" tone="muted">
+      {names[logo.content_type as LogoType] ?? logo.content_type}
+      {logo.width > 0 && logo.height > 0
+        ? ` · ${t("settings.logo.pixels", { width: logo.width, height: logo.height })}`
+        : ""}
+      {` · ${t("settings.logo.bytes", { size: format.number(logo.size) })}`}
+    </Text>
   );
 }

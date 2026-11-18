@@ -1,0 +1,23 @@
+/* The board's .rlro: a quiet line on the hover tint, an icon and the words in --t2, any action at the end. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 10px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--hover);
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.icon {
+  flex: none;
+  color: var(--accentT);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+}

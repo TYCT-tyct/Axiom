@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Id, Panel, Table, Td, useFormat } from "@axiom/ui";
+import { Card, Cluster, Id, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -36,10 +36,12 @@ export function ApprovalState({ approval, now }: { approval: Approval; now: numb
   const { t } = useTranslation();
   if (approval.state === "pending") {
     return decidable(approval) ? (
-      <span className="inline-flex flex-col items-start gap-1">
+      <Cluster>
         <State tone="warn">{t("approvals.state.pending")}</State>
-        <span className="text-label text-t3">{t("approvals.expiresIn", { count: minutesLeft(approval, now) })}</span>
-      </span>
+        <Text as="span" size="sm" tone="faint">
+          {t("approvals.expiresIn", { count: minutesLeft(approval, now) })}
+        </Text>
+      </Cluster>
     ) : (
       <State tone="neutral">{t("approvals.lapsed")}</State>
     );
@@ -80,14 +82,24 @@ export function Target({ approval }: { approval: Approval }) {
   const named = targetName(approval);
   const kind = approval.target.kind;
   return (
-    <span className="block min-w-0">
-      {named ? <span className="block font-medium text-t1 [overflow-wrap:anywhere]">{named.name}</span> : null}
-      {named?.detail ? <span className="block text-label text-t2 [overflow-wrap:anywhere]">{named.detail}</span> : null}
-      <span className="flex min-w-0 items-center gap-1 text-label text-t3">
-        <span className="shrink-0">{isKind(kind) ? t(`approvals.kind.${kind}`) : kind}</span>
+    <Stack gap={4}>
+      {named ? (
+        <Text as="div" medium>
+          {named.name}
+        </Text>
+      ) : null}
+      {named?.detail ? (
+        <Text as="div" size="sm" tone="muted">
+          {named.detail}
+        </Text>
+      ) : null}
+      <Cluster gap={4}>
+        <Text as="span" size="sm" tone="faint">
+          {isKind(kind) ? t(`approvals.kind.${kind}`) : kind}
+        </Text>
         <Id value={approval.target.id} />
-      </span>
-    </span>
+      </Cluster>
+    </Stack>
   );
 }
 
@@ -105,40 +117,38 @@ function Limits({
 }: {
   title: string;
   intro: string;
-  lead?: ReactNode;
+  lead?: string;
   cols: string[];
   rows: Row[];
   after?: ReactNode;
 }) {
   return (
-    <Panel title={title}>
-      <p className="px-4 pt-4 text-t2">{intro}</p>
-      {lead}
-      <Table label={title}>
-        <Head cols={cols.map((col, i) => [col, i === 0 ? undefined : "text-right"])} />
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.key}>
-              {/* A warning badge on a warning tint falls under the contrast floor, so the row is marked by a bar. */}
-              <Td className={row.flag ? "border-l-4 border-l-warn" : undefined}>
-                <span className="block">{row.label}</span>
-                {row.flag ? (
-                  <span className="mt-1 block">
-                    <State tone="warn">{row.flag}</State>
-                  </span>
-                ) : null}
-              </Td>
-              {cols.slice(1).map((col, i) => (
-                <Td key={col} className="whitespace-nowrap text-right tabular-nums">
-                  {row.values[i] ?? "—"}
+    <Stack gap={8}>
+      <Card title={title} lede={lead ? `${intro} ${lead}` : intro} layout="flush">
+        <Table label={title}>
+          <Head cols={cols.map((col, i) => (i === 0 ? col : [col, { align: "end" }]))} />
+          <tbody>
+            {rows.map((row) => (
+              <tr key={row.key}>
+                {/* The flag is in words, so a warning is never carried by colour alone. */}
+                <Td>
+                  <Cluster>
+                    {row.label}
+                    {row.flag ? <State tone="warn">{row.flag}</State> : null}
+                  </Cluster>
                 </Td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </Table>
+                {cols.slice(1).map((col, i) => (
+                  <Td key={col} align="end">
+                    {row.values[i] ?? "—"}
+                  </Td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </Table>
+      </Card>
       {after}
-    </Panel>
+    </Stack>
   );
 }
 
@@ -153,14 +163,7 @@ export function CapTable({ cap, over }: { cap: CapLimits; over: Set<CapLimit> })
     <Limits
       title={t("approvals.cap.title")}
       intro={t("approvals.cap.intro")}
-      lead={
-        <p className="px-4 pt-2 text-t1">
-          {t("approvals.cap.amount")} <span className="font-medium tabular-nums">{money(cap.amount)}</span>
-          {cap.rev === undefined ? null : (
-            <span className="ml-2 text-label text-t3">{t("approvals.cap.rev", { rev: cap.rev })}</span>
-          )}
-        </p>
-      }
+      lead={`${t("approvals.cap.amount")} ${money(cap.amount)}${cap.rev === undefined ? "" : ` · ${t("approvals.cap.rev", { rev: cap.rev })}`}`}
       cols={[t("approvals.cap.window"), t("approvals.cap.used"), t("approvals.cap.max"), t("approvals.cap.hard")]}
       rows={[
         {
@@ -194,7 +197,7 @@ export function CapTable({ cap, over }: { cap: CapLimits; over: Set<CapLimit> })
           flag: flag("count"),
         },
       ]}
-      after={cap.paused ? <p className="px-4 pt-3 pb-4 text-warn">{t("approvals.cap.paused")}</p> : null}
+      after={cap.paused ? <Text tone="warn">{t("approvals.cap.paused")}</Text> : null}
     />
   );
 }
@@ -212,11 +215,7 @@ export function EnvelopeTable({ envelope, over }: { envelope: EnvelopeLimits; ov
     <Limits
       title={t("approvals.envelope.title")}
       intro={t("approvals.envelope.intro")}
-      lead={
-        envelope.rev === undefined ? null : (
-          <p className="px-4 pt-2 text-label text-t3">{t("approvals.envelope.rev", { rev: envelope.rev })}</p>
-        )
-      }
+      lead={envelope.rev === undefined ? undefined : t("approvals.envelope.rev", { rev: envelope.rev })}
       cols={[t("approvals.envelope.item"), t("approvals.envelope.value"), t("approvals.envelope.limit")]}
       rows={[
         {
@@ -253,9 +252,7 @@ export function EnvelopeTable({ envelope, over }: { envelope: EnvelopeLimits; ov
           flag: flag("models"),
         },
       ]}
-      after={
-        envelope.movedToday ? <p className="px-4 pt-3 pb-4 text-t3">{t("approvals.envelope.movedToday")}</p> : null
-      }
+      after={envelope.movedToday ? <Text tone="faint">{t("approvals.envelope.movedToday")}</Text> : null}
     />
   );
 }

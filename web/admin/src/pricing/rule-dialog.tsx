@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { readForm } from "@axiom/app";
-import { Button } from "@axiom/ui";
+import { ActionButton, Card, InlineError, Stack } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -36,10 +36,10 @@ function RulePreview({ replaces, existing }: { replaces?: PricingRule; existing?
   const [request, setRequest] = useState<PreviewRequest | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   return (
-    <section className="space-y-3 rounded-btn border border-b2 p-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-ui font-medium text-t2">{t("pricing.preview.title")}</h3>
-        <Button
+    <Card
+      title={t("pricing.preview.title")}
+      actions={
+        <ActionButton
           size="sm"
           disabled={!models.data}
           onClick={(event) => {
@@ -61,15 +61,14 @@ function RulePreview({ replaces, existing }: { replaces?: PricingRule; existing?
           }}
         >
           {t("pricing.rule.previewRun")}
-        </Button>
-      </div>
-      {problem ? (
-        <p role="alert" className="text-bad">
-          {problem}
-        </p>
-      ) : null}
-      <PreviewResult request={request} />
-    </section>
+        </ActionButton>
+      }
+    >
+      <Stack gap={12}>
+        {problem ? <InlineError>{problem}</InlineError> : null}
+        <PreviewResult request={request} />
+      </Stack>
+    </Card>
   );
 }
 

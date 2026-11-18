@@ -1,9 +1,9 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, EmptyState, Icon, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
+import { ActionButton, Card, Cluster, EmptyState, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Time } from "../parts";
+import { Head, Time } from "../parts";
 import { isPerUse, rateItems, serviceTiers } from "./catalog";
 import { PublishPriceDialog, SourceDialog } from "./price-dialogs";
 import { showRate } from "./price-fields";
@@ -21,21 +21,20 @@ export function Prices({ model }: { model: Model }) {
   const manage = can(useSession(), "catalog.manage") && model.status !== "retired";
   const [dialog, setDialog] = useState<{ kind: "publish"; currency?: string } | { kind: "source" } | null>(null);
   return (
-    <Panel
+    <Card
       title={t("models.prices.title")}
-      action={
+      actions={
         manage ? (
-          <div className="flex flex-wrap gap-2">
+          <Cluster>
             {byHand(model) ? (
-              <Button size="sm" onClick={() => setDialog({ kind: "publish" })}>
-                <Icon name="plus" />
+              <ActionButton size="sm" icon="plus" onClick={() => setDialog({ kind: "publish" })}>
                 {t("models.prices.publish")}
-              </Button>
+              </ActionButton>
             ) : null}
-            <Button size="sm" onClick={() => setDialog({ kind: "source" })}>
+            <ActionButton size="sm" onClick={() => setDialog({ kind: "source" })}>
               {t("models.prices.changeSource")}
-            </Button>
-          </div>
+            </ActionButton>
+          </Cluster>
         ) : undefined
       }
     >
@@ -44,7 +43,7 @@ export function Prices({ model }: { model: Model }) {
           {byHand(model) ? t("models.prices.empty.body") : t("models.prices.empty.synced")}
         </EmptyState>
       ) : (
-        <div className="divide-y divide-b1">
+        <Stack gap={24}>
           {model.prices.map((price) => (
             <PriceCard
               key={price.id}
@@ -54,13 +53,13 @@ export function Prices({ model }: { model: Model }) {
               }
             />
           ))}
-        </div>
+        </Stack>
       )}
       {dialog?.kind === "publish" ? (
         <PublishPriceDialog model={model} currency={dialog.currency} onClose={() => setDialog(null)} />
       ) : null}
       {dialog?.kind === "source" ? <SourceDialog model={model} onClose={() => setDialog(null)} /> : null}
-    </Panel>
+    </Card>
   );
 }
 
@@ -69,23 +68,25 @@ function PriceCard({ price, onPublish }: { price: Price; onPublish: (() => void)
   const { t } = useTranslation();
   const { schedule } = price;
   return (
-    <section className="space-y-3 p-4" aria-label={price.currency}>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-t1">
-          {price.currency}
-          {" · "}
-          {t(`models.source.${price.source}`)}
-          <span className="ml-2 text-label text-t3">
-            <Time at={price.published_at} />
-          </span>
-        </p>
-        {onPublish ? (
-          <Button size="sm" onClick={onPublish}>
-            {t("models.prices.newVersion")}
-          </Button>
-        ) : null}
-      </div>
-      {schedule ? <Rates schedule={schedule} /> : <p className="text-t3">{t("models.prices.withdrawn")}</p>}
+    <section aria-label={price.currency}>
+      <Stack gap={12}>
+        <Cluster justify="between">
+          <Text>
+            {price.currency}
+            {" · "}
+            {t(`models.source.${price.source}`)}{" "}
+            <Text as="span" size="sm" tone="faint">
+              <Time at={price.published_at} />
+            </Text>
+          </Text>
+          {onPublish ? (
+            <ActionButton size="sm" onClick={onPublish}>
+              {t("models.prices.newVersion")}
+            </ActionButton>
+          ) : null}
+        </Cluster>
+        {schedule ? <Rates schedule={schedule} /> : <Text tone="faint">{t("models.prices.withdrawn")}</Text>}
+      </Stack>
     </section>
   );
 }
@@ -106,7 +107,7 @@ export function Rates({ schedule }: { schedule: Schedule }) {
     ([a], [b]) => serviceTiers.indexOf(a as ServiceTier) - serviceTiers.indexOf(b as ServiceTier),
   );
   return (
-    <div className="space-y-4">
+    <Stack>
       <RateTable title={t("models.prices.rates", { currency: schedule.currency })} rates={schedule.rates} />
       {schedule.context_tiers?.tiers.map((band) => (
         <RateTable key={`band:${band.above}`} title={above(band.above)} rates={band.rates} />
@@ -114,7 +115,7 @@ export function Rates({ schedule }: { schedule: Schedule }) {
       {tiers.map(([tier, prices]) => {
         const name = t(`models.tier.${tier as ServiceTier}`);
         return (
-          <div key={tier} className="space-y-4">
+          <Stack key={tier}>
             <RateTable title={t("models.prices.serviceTier", { tier: name })} rates={prices.rates} />
             {prices.context_tiers?.map((band) => (
               <RateTable
@@ -123,10 +124,10 @@ export function Rates({ schedule }: { schedule: Schedule }) {
                 rates={band.rates}
               />
             ))}
-          </div>
+          </Stack>
         );
       })}
-    </div>
+    </Stack>
   );
 }
 
@@ -136,33 +137,39 @@ function RateTable({ title, rates }: { title: string; rates: RateList }) {
   const { decimal } = useFormat();
   const priced = rateItems.filter((item) => rates[item] !== undefined);
   return (
-    <div className="space-y-1">
-      <h4 className="text-label text-t2">{title}</h4>
+    <Stack gap={4}>
+      <Text as="h3" size="sm" tone="muted">
+        {title}
+      </Text>
       {priced.length === 0 ? (
-        <p className="text-label text-t3">{t("models.prices.noRates")}</p>
+        <Text size="sm" tone="faint">
+          {t("models.prices.noRates")}
+        </Text>
       ) : (
         <Table label={title}>
-          <thead>
-            <tr>
-              <Th>{t("models.prices.item")}</Th>
-              <Th className="text-right">{t("models.prices.price")}</Th>
-            </tr>
-          </thead>
+          <Head
+            cols={[
+              [t("models.prices.item"), { main: true }],
+              [t("models.prices.price"), { align: "end" }],
+            ]}
+          />
           <tbody>
             {priced.map((item) => (
               <tr key={item}>
                 <Td>{t(`models.item.${item}`)}</Td>
-                <Td className="text-right tabular-nums">
-                  {decimal(showRate(item, rates[item] ?? ""))}
-                  <span className="ml-1 text-label text-t4">
-                    {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
-                  </span>
+                <Td align="end">
+                  <Cluster gap={4} justify="end">
+                    <span>{decimal(showRate(item, rates[item] ?? ""))}</span>
+                    <Text as="span" size="sm" tone="faint">
+                      {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
+                    </Text>
+                  </Cluster>
                 </Td>
               </tr>
             ))}
           </tbody>
         </Table>
       )}
-    </div>
+    </Stack>
   );
 }

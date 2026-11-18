@@ -47,9 +47,11 @@ export function SiteShell({ children, mainClassName = "" }: { children: ReactNod
           </a>
         </nav>
         <PreferenceSwitches className="ml-auto hidden gap-2 sm:flex" />
-        <Button asChild size="sm" className="ml-auto shrink-0 sm:ml-0">
-          <a href={consoleHref}>{t("signIn")}</a>
-        </Button>
+        <div className="ml-auto shrink-0 sm:ml-0">
+          <Button asChild size="sm">
+            <a href={consoleHref}>{t("signIn")}</a>
+          </Button>
+        </div>
       </header>
       <main className={`mx-auto flex w-full max-w-[1248px] flex-1 flex-col px-4 sm:px-6 ${mainClassName}`}>
         {children}

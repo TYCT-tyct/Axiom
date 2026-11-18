@@ -1,7 +1,18 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import { Button, DataState, EmptyState, Icon, Panel, useFormat } from "@axiom/ui";
+import {
+  ActionButton,
+  Card,
+  Cluster,
+  DataState,
+  EmptyState,
+  Mono,
+  SettingRow,
+  Stack,
+  Text,
+  useFormat,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "./change";
 import { MerchantFields } from "./merchant-form";
@@ -18,9 +29,10 @@ export function MerchantsCard({ siteId, currency }: { siteId: AdminSchemas["Site
     return <MerchantsUnavailable />;
   }
   return (
-    <Panel
+    <Card
+      layout="rows"
       title={t("settings.payments.merchants")}
-      action={
+      actions={
         <NewButton permission="sites.manage" label={t("settings.payments.add")}>
           {(close) => <MerchantDialog siteId={siteId} currency={currency} onClose={close} />}
         </NewButton>
@@ -36,14 +48,14 @@ export function MerchantsCard({ siteId, currency }: { siteId: AdminSchemas["Site
         }
       >
         {(list) => (
-          <div className="divide-y divide-b1">
+          <>
             {(list.data ?? []).map((merchant) => (
               <MerchantRow key={merchant.id} merchant={merchant} siteId={siteId} currency={currency} />
             ))}
-          </div>
+          </>
         )}
       </DataState>
-    </Panel>
+    </Card>
   );
 }
 
@@ -72,8 +84,8 @@ function MerchantRow({
   const [test, setTest] = useState(false);
   const [disable, setDisable] = useState(false);
   return (
-    <div className="space-y-2 px-4 py-3">
-      <MerchantHeader
+    <SettingRow title={merchant.name ?? merchant.id ?? ""} detail={<MerchantDetails merchant={merchant} />}>
+      <MerchantActions
         merchant={merchant}
         onTest={() => setTest(true)}
         onEdit={() => {
@@ -83,7 +95,6 @@ function MerchantRow({
         }}
         onDisable={() => setDisable(true)}
       />
-      <MerchantDetails merchant={merchant} />
       {edit ? (
         <MerchantDialog
           siteId={siteId}
@@ -95,11 +106,11 @@ function MerchantRow({
       ) : null}
       {test ? <TestDialog merchant={merchant} onClose={() => setTest(false)} /> : null}
       {disable ? <DisableDialog merchant={merchant} onClose={() => setDisable(false)} /> : null}
-    </div>
+    </SettingRow>
   );
 }
 
-function MerchantHeader({
+function MerchantActions({
   merchant,
   onTest,
   onEdit,
@@ -112,28 +123,17 @@ function MerchantHeader({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2">
-      <div className="flex min-w-0 flex-wrap items-center gap-2">
-        <span className="font-medium text-t1 [overflow-wrap:anywhere]">{merchant.name ?? merchant.id}</span>
-        <State tone={merchant.enabled ? "good" : "neutral"}>
-          {t(merchant.enabled ? "settings.payments.enabled" : "settings.payments.disabled")}
-        </State>
-        <span className="font-mono text-label text-t3">{merchant.kind}</span>
-        <span className="text-label text-t3">{merchant.currency}</span>
-      </div>
-      <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={onTest}>
-          {t("settings.payments.test")}
-        </Button>
-        <Button size="sm" onClick={onEdit}>
-          <Icon name="pencil" />
-          {t("settings.payments.editMerchant")}
-        </Button>
-        <Button size="sm" variant="danger" disabled={!merchant.enabled} onClick={onDisable}>
-          {t("settings.payments.disable")}
-        </Button>
-      </div>
-    </div>
+    <Cluster>
+      <ActionButton size="sm" onClick={onTest}>
+        {t("settings.payments.test")}
+      </ActionButton>
+      <ActionButton size="sm" onClick={onEdit} icon="pencil">
+        {t("settings.payments.editMerchant")}
+      </ActionButton>
+      <ActionButton size="sm" variant="dan" disabled={!merchant.enabled} onClick={onDisable}>
+        {t("settings.payments.disable")}
+      </ActionButton>
+    </Cluster>
   );
 }
 
@@ -142,30 +142,50 @@ function MerchantDetails({ merchant }: { merchant: Merchant }) {
   const format = useFormat();
   const money = (value: AdminSchemas["Money"] | undefined) =>
     value ? format.money(value) : t("settings.payments.none");
+  const line = (label: string, value: ReactNode) => (
+    <Text as="div" size="sm" tone="muted">
+      <Text as="span" size="sm" tone="faint">
+        {label}
+      </Text>{" "}
+      {value}
+    </Text>
+  );
   return (
-    <dl className="grid gap-x-4 gap-y-1 text-label sm:grid-cols-[10rem_minmax(0,1fr)]">
-      <dt className="text-t4">{t("settings.payments.methods")}</dt>
-      <dd className="min-w-0 space-y-1 text-t2">
-        {(merchant.methods ?? []).length === 0 ? (
-          <span>{t("settings.payments.noMethods")}</span>
+    <Stack gap={4}>
+      <Cluster>
+        <State tone={merchant.enabled ? "good" : "neutral"}>
+          {t(merchant.enabled ? "settings.payments.enabled" : "settings.payments.disabled")}
+        </State>
+        <Mono>{merchant.kind}</Mono>
+        <Text as="span" size="sm" tone="faint">
+          {merchant.currency}
+        </Text>
+      </Cluster>
+      {line(
+        t("settings.payments.methods"),
+        (merchant.methods ?? []).length === 0 ? (
+          t("settings.payments.noMethods")
         ) : (
-          (merchant.methods ?? []).map((method) => <MethodLine key={method.method} method={method} money={money} />)
-        )}
-      </dd>
-      <dt className="text-t4">{t("settings.payments.ttl")}</dt>
-      <dd className="text-t2">
-        {t("settings.payments.ttlValue", { seconds: format.number(merchant.ttl_seconds ?? 0) })}
-      </dd>
-      <dt className="text-t4">{t("settings.payments.refunds")}</dt>
-      <dd className="text-t2">
-        {t("settings.payments.refundValue", {
+          <Stack gap={4}>
+            {(merchant.methods ?? []).map((method) => (
+              <MethodLine key={method.method} method={method} money={money} />
+            ))}
+          </Stack>
+        ),
+      )}
+      {line(
+        t("settings.payments.ttl"),
+        t("settings.payments.ttlValue", { seconds: format.number(merchant.ttl_seconds ?? 0) }),
+      )}
+      {line(
+        t("settings.payments.refunds"),
+        t("settings.payments.refundValue", {
           automatic: merchant.refund_enabled ? t("settings.payments.yes") : t("settings.payments.no"),
           user: merchant.user_refund ? t("settings.payments.yes") : t("settings.payments.no"),
-        })}
-      </dd>
-      <dt className="text-t4">{t("settings.payments.revision")}</dt>
-      <dd className="font-mono text-t2">{merchant.rev ?? "—"}</dd>
-    </dl>
+        }),
+      )}
+      {line(t("settings.payments.revision"), <Mono>{merchant.rev ?? "—"}</Mono>)}
+    </Stack>
   );
 }
 
@@ -178,24 +198,30 @@ function MethodLine({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap gap-x-3 gap-y-0.5">
-      <span className="font-mono">{method.method}</span>
-      <span className="text-t4">{t("settings.payments.upstreamValue", { code: method.upstream })}</span>
+    <Cluster gap={12}>
+      <Mono>{method.method}</Mono>
+      <Text as="span" size="sm" tone="faint">
+        {t("settings.payments.upstreamValue", { code: method.upstream })}
+      </Text>
       <span>
         {t("settings.payments.feeValue", {
           percent: formatPercent(method.fee_ppm ?? 0),
           fixed: money(method.fee_fixed),
         })}
       </span>
-      <span className="text-t3">
+      <Text as="span" size="sm" tone="faint">
         {t("settings.payments.methodLimits", {
           min: money(method.single_min),
           max: money(method.single_max),
           daily: t("settings.payments.daily", { amount: money(method.daily_limit) }),
         })}
-      </span>
-      {method.enabled === false ? <span className="text-t4">{t("settings.payments.methodOff")}</span> : null}
-    </div>
+      </Text>
+      {method.enabled === false ? (
+        <Text as="span" size="sm" tone="faint">
+          {t("settings.payments.methodOff")}
+        </Text>
+      ) : null}
+    </Cluster>
   );
 }
 
