@@ -218,7 +218,9 @@ test("pressing sign in plays the departure, loaded on the press, and goes half a
   await open(page);
   await running(page);
   expect(loaded).toEqual([]);
+  // time stands still from before the press: only runFor moves it, so the deadline is measured from the press alone
   await page.clock.install();
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
   const asked = watchDeparture(page);
   await signIn(page).click();
   await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
