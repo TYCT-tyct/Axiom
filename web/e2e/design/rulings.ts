@@ -35,7 +35,15 @@ const frame: Omit<Ruling, "scene">[] = [
 const inScene = (scene: string, region: Omit<Ruling, "scene">): Ruling => ({ scene, ...region });
 
 // Each console page compares the frame around its page, so it carries the frame's rulings too.
-const pageScenes = ["console overview", "console keys", "console usage", "console route", "console byok"];
+const presetScenes = ["console request-presets", "console request-presets en"];
+const pageScenes = [
+  "console overview",
+  "console keys",
+  "console usage",
+  "console route",
+  "console byok",
+  ...presetScenes,
+];
 const shell: Ruling[] = [
   { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
   ...frame,
@@ -62,6 +70,12 @@ const accountShell = (scene: string): Ruling[] =>
 export const rulings: Ruling[] = [
   ...shell,
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
+  ...presetScenes.map((scene) =>
+    inScene(scene, {
+      basis: "#816: there is no monthly use count for request presets",
+      board: { selector: ".p-presets .ppcnt" },
+    }),
+  ),
   ...accountShell("console settings"),
   {
     scene: "console settings",

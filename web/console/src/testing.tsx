@@ -1,12 +1,12 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createInstance } from "i18next";
+import { createInstance, type Resource } from "i18next";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, vi } from "vitest";
 
 // What the component tests of the console share: a page rendered with its query cache and messages, and the ways a user
-// moves it on. Messages have no resources, so a page shows its message keys, which a test can look for.
+// moves it on. When a test supplies no translations, the page shows its message keys.
 const i18n = createInstance();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -16,9 +16,9 @@ const roots: Root[] = [];
 
 // setUpPages readies the test file's document: messages, the modal methods jsdom's dialog element lacks, and an empty
 // body after each test, with every component the test rendered unmounted.
-export function setUpPages() {
+export function setUpPages(resources: Resource = {}) {
   beforeAll(async () => {
-    await i18n.init({ lng: "en", resources: {} });
+    await i18n.init({ lng: "en", resources });
     HTMLDialogElement.prototype.showModal = function () {
       this.open = true;
     };

@@ -7,6 +7,7 @@ import { en as notifications } from "./notifications";
 import { en as overviewBoard } from "./overview";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
+import { en as requestPresets } from "./request-presets";
 import { en as routingPresets } from "./routing-presets";
 import { en as security } from "./security";
 import { en as settings } from "./settings";
@@ -223,6 +224,7 @@ export default {
   providerKeys,
   workspaces,
   routingPresets,
+  requestPresets: { copy: requestPresets },
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",
