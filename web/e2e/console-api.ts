@@ -9,7 +9,6 @@ import {
   defaultWorkspace,
   emptyState,
   goodInvite,
-  goodResetToken,
   type MockState,
   type Schemas,
   systemPreset,
@@ -17,17 +16,7 @@ import {
   worstState,
 } from "./console-data.ts";
 import { usageStatistics } from "./console-usage-api.ts";
-import {
-  breaks,
-  type Ctx as CoreCtx,
-  createRoute,
-  fail,
-  type Handler,
-  type MockData,
-  mockApi,
-  ok,
-  paged,
-} from "./mock.ts";
+import { type Ctx as CoreCtx, createRoute, fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import {
   confirmTotp,
   grant,
@@ -341,16 +330,6 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
-  // the same empty answer for every address (docs/frontend-api.md「注册与找回密码」)
-  route("post", `${base}/auth/password-reset`, none, () => ({ status: 202 as const, json: undefined })),
-  route("post", `${base}/auth/password-reset/complete`, none, ({ body, state }) => {
-    // the contract's minLength is the guard's, before the token is looked at; the token is good once
-    if (body.new_password.length < 12) return breaks("/new_password");
-    if (body.token !== goodResetToken || state.resetSpent) return fail(422, "unprocessable");
-    state.resetSpent = true;
-    state.user.password = body.new_password;
-    return { status: 204 as const, json: undefined };
-  }),
   route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
     if (!acceptsCurrent(state.legal, body.consent)) {
       return fail(403, "consent_required");

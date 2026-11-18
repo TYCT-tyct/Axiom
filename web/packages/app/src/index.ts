@@ -28,7 +28,6 @@ export {
   sessionBinding,
   stripEmailChangeToken,
   useCachedSession,
-  useCurrentSession,
   useSession,
   useSessionBound,
   useSignIn,

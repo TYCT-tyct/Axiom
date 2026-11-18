@@ -2,6 +2,7 @@ import { consoleApi, unwrap } from "@axiom/api";
 import { useStartSession } from "@axiom/app";
 import { useState } from "react";
 import { signInWithPasskey } from "../webauthn";
+import { useLive } from "./login-parts";
 
 // A passkey completes a sign-in from the guest page, or finishes a password sign-in that is waiting for its second
 // factor: the same assertion under the endpoints that bind the ceremony to the pending session.
@@ -14,6 +15,7 @@ export function usePasskeySignIn(kind: keyof typeof routes) {
   const start = useStartSession();
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
+  const live = useLive();
   async function run() {
     setPending(true);
     setFailure(null);
@@ -27,7 +29,8 @@ export function usePasskeySignIn(kind: keyof typeof routes) {
           body: credential,
         }),
       );
-      await start(grant.csrf_token);
+      // an assertion finished for a page the visitor has left signs nothing in on the page they went to
+      if (live.current) await start(grant.csrf_token);
     } catch (error) {
       setFailure(error);
     } finally {

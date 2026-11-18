@@ -14,7 +14,7 @@ import { type RefObject, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, NoteAction, NoteLink, RouteLink, WithEmail, withNext } from "./login-parts";
+import { FormProblem, NoteAction, RouteLink, useLive, WithEmail, withNext } from "./login-parts";
 import { usePasskeySignIn } from "./passkey-sign-in";
 
 export default function SignIn() {
@@ -74,7 +74,7 @@ function SignInSteps() {
       }}
     >
       {emailStep ? (
-        <EmailStep email={flow.email} problem={flow.problem} onInput={flow.typeEmail} />
+        <EmailStep email={flow.email} problem={flow.problem} methods={flow.methods} onInput={flow.typeEmail} />
       ) : (
         <PasswordStep flow={flow} />
       )}
@@ -97,6 +97,7 @@ function useSignInFlow(stage: Stage) {
   useEffect(() => {
     if (step === "password") password.current?.focus();
   }, [step]);
+  const methods = useMethodAttempts();
   const badEmail = aboutEmail(signIn.error);
   useEffect(() => {
     if (badEmail) setStep("email");
@@ -105,7 +106,8 @@ function useSignInFlow(stage: Stage) {
     const address = email.trim();
     setMissing(step === "email" ? !address : !password.current?.value);
     if (step === "email") {
-      if (address) setStep("password");
+      // the address the server refused stays here until it is edited; another way in that is out keeps the step
+      if (address && !badEmail && !methods.busy) setStep("password");
       return;
     }
     const secret = password.current?.value ?? "";
@@ -119,6 +121,7 @@ function useSignInFlow(stage: Stage) {
     step,
     email,
     signIn,
+    methods,
     password,
     submit,
     problem: missing ? missingText : failure,
@@ -138,7 +141,17 @@ function useSignInFlow(stage: Stage) {
 }
 
 // The first step: the address, and the ways in that need none (providers, passkeys), and the way to register.
-function EmailStep({ email, problem, onInput }: { email: string; problem: string; onInput: (value: string) => void }) {
+function EmailStep({
+  email,
+  problem,
+  methods,
+  onInput,
+}: {
+  email: string;
+  problem: string;
+  methods: Attempts;
+  onInput: (value: string) => void;
+}) {
   const { t } = useTranslation();
   return (
     <>
@@ -158,8 +171,8 @@ function EmailStep({ email, problem, onInput }: { email: string; problem: string
         }}
       />
       <FormProblem id="sign-in-problem" message={problem} />
-      <LoginPrimary t={String} label={<span>{t("auth.signIn.next")}</span>} />
-      <Methods />
+      <LoginPrimary t={String} label={<span>{t("auth.signIn.next")}</span>} values={{ disabled: methods.busy }} />
+      <Methods methods={methods} />
       <Register />
     </>
   );
@@ -169,7 +182,6 @@ function EmailStep({ email, problem, onInput }: { email: string; problem: string
 // sign-in is out the ways off this step are not offered: the answer, when it comes, signs in the address it was for.
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
-  const next = useSearch({ strict: false }).next;
   const pending = flow.signIn.isPending;
   return (
     <>
@@ -187,12 +199,7 @@ function PasswordStep({ flow }: { flow: Flow }) {
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
         values={{ disabled: pending }}
       />
-      {pending ? null : (
-        <>
-          <NoteLink label={t("auth.reset.forgot")} to="/reset-password" next={next} />
-          <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
-        </>
-      )}
+      {pending ? null : <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />}
     </>
   );
 }
@@ -230,11 +237,11 @@ function PasswordField({
 
 // Methods are the ways in besides the password, beside the first step. A provider is a browser round trip; a passkey
 // is a WebAuthn assertion the server checks against the public key it stored. The failure shown is the latest
-// attempt's: a new attempt replaces what an earlier one, or the provider's return, said.
-function Methods() {
+// attempt's: a new attempt replaces what an earlier one, or the provider's return, said. One attempt is out at a time:
+// while it is, every other way in on this step waits, so its answer cannot carry off a flow begun since.
+function Methods({ methods }: { methods: Attempts }) {
   const { t } = useTranslation();
   const site = useQuery(siteQuery);
-  const methods = useMethodAttempts();
   const providers = site.data?.oauth_providers ?? [];
   const passkeys = site.data?.passkeys ?? false;
   if (!passkeys && providers.length === 0) {
@@ -249,14 +256,14 @@ function Methods() {
             key={provider}
             t={String}
             label={<span>{t(`auth.signIn.providers.${provider}`)}</span>}
-            values={{ disabled: methods.oauth.pending, onPress: () => methods.startOAuth(provider) }}
+            values={{ disabled: methods.busy, onPress: () => methods.startOAuth(provider) }}
           />
         ))}
         {passkeys ? (
           <LoginButton
             t={String}
             label={<span>{t("auth.signIn.passkey")}</span>}
-            values={{ disabled: methods.passkey.pending, onPress: methods.startPasskey }}
+            values={{ disabled: methods.busy, onPress: methods.startPasskey }}
           />
         ) : null}
       </LoginStack>
@@ -264,6 +271,8 @@ function Methods() {
     </>
   );
 }
+
+type Attempts = ReturnType<typeof useMethodAttempts>;
 
 function useMethodAttempts() {
   const { t } = useTranslation();
@@ -278,6 +287,7 @@ function useMethodAttempts() {
   return {
     oauth,
     passkey,
+    busy: oauth.pending || passkey.pending,
     failure: latest === "returned" ? t("auth.signIn.oauthFailed") : failed ? errors.message(failed) : "",
     startOAuth: (provider: Schemas["OAuthProvider"]) => {
       setLatest("oauth");
@@ -310,6 +320,7 @@ function Register() {
 function useOAuthStart() {
   const [pending, setPending] = useState(false);
   const [failure, setFailure] = useState<unknown>(null);
+  const live = useLive();
   async function start(provider: Schemas["OAuthProvider"]) {
     setPending(true);
     setFailure(null);
@@ -317,7 +328,8 @@ function useOAuthStart() {
       const { authorize_url } = await unwrap(
         consoleApi.POST("/api/console/v1/auth/oauth/start", { body: { provider } }),
       );
-      window.location.assign(authorize_url);
+      // an answer for a page the visitor has left takes them nowhere
+      if (live.current) window.location.assign(authorize_url);
     } catch (error) {
       setFailure(error);
       setPending(false);

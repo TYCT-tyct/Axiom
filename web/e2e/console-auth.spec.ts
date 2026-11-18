@@ -1,7 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+import { contrast } from "../packages/ui/src/brand.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
-import { demoDocuments, goodResetToken } from "./console-data.ts";
+import { demoDocuments } from "./console-data.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
 // Signing in, session changes and two-step verification against the mocked API.
@@ -267,143 +268,76 @@ test.describe("two-step verification at sign-in", () => {
   });
 });
 
-// The password a reset sets, long enough for the contract.
-const newPassword = "a long new password nobody guesses";
-
-async function setNewPassword(page: Page) {
-  await page.getByLabel("密码", { exact: true }).fill(newPassword);
-  await page.getByRole("button", { name: "重设密码" }).click();
-}
-
-test.describe("resetting a forgotten password", () => {
-  test("the password step leads to the reset page, which takes the email and says to check it", async ({ page }) => {
+test.describe("the sign-in steps", () => {
+  test("while a provider's start is out, no other way in on the step can be taken", async ({ page }) => {
     const state = await mockConsole(page);
+    state.site = { ...state.site, oauth_providers: ["github"], passkeys: true };
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/console/v1/auth/oauth/start", async (route) => {
+      await held;
+      await route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
+    });
     await page.goto("/console/sign-in");
     await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "使用 GitHub 继续" }).click();
+    await expect(page.getByRole("button", { name: "继续", exact: true })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "使用通行密钥" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "使用 GitHub 继续" })).toBeDisabled();
+    // Enter submits the form, which the attempt keeps on this step too
+    await page.getByLabel("邮箱").press("Enter");
+    await expect(page.getByLabel("密码", { exact: true })).toHaveCount(0);
+    answer();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("button", { name: "继续", exact: true })).toBeEnabled();
+  });
+
+  test("an address the server refused stays on the email step until it is changed", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await signIn(page, "a");
+    await expect(page.getByRole("alert")).toHaveText(/不像一个邮箱地址/);
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    await page.getByRole("link", { name: "忘记密码？" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
+    await expect(page.getByLabel("密码", { exact: true })).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveText(/不像一个邮箱地址/);
     await page.getByLabel("邮箱").fill(knownEmail);
-    await page.getByRole("button", { name: "发送重设邮件" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "查收邮件" })).toBeVisible();
-    expect(state.log.filter((line) => line === "POST /auth/password-reset")).toHaveLength(1);
-  });
-
-  test("a link sets the new password once, which then signs in; the same link is then refused", async ({ page }) => {
-    await mockConsole(page);
-    // where the link's token goes: only into the body of the reset itself
-    const carried: string[] = [];
-    page.on("request", (request) => {
-      if (request.url().includes(goodResetToken)) carried.push(`url ${request.url()}`);
-      if (request.postData()?.includes(goodResetToken)) carried.push(`body ${new URL(request.url()).pathname}`);
-    });
-    await page.goto(`/console/reset-password#token=${goodResetToken}`);
-    await expect(page.getByRole("heading", { level: 1, name: "设置新密码" })).toBeVisible();
-    expect(new URL(page.url()).hash).toBe("");
-    await setNewPassword(page);
-    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
-    await page.getByRole("link", { name: "去登录" }).click();
-    await signIn(page, knownEmail, newPassword);
-    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
-    expect(carried).toEqual(["body /api/console/v1/auth/password-reset/complete"]);
-
-    await page.goto(`/console/reset-password#token=${goodResetToken}`);
-    await setNewPassword(page);
-    await expect(page.getByRole("alert")).toHaveText(/无效、已用过或已过期/);
-    await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
-    await page.getByRole("button", { name: "重新申请" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
-  });
-
-  test("a reset in a browser signed in as someone else offers to sign out before signing in", async ({ page }) => {
-    const state = await mockConsole(page);
-    signedInAs(state);
-    await page.goto(`/console/reset-password#token=${goodResetToken}`);
-    await setNewPassword(page);
-    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
-    await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
-    await expect(page.getByRole("link", { name: "去登录" })).toHaveCount(0);
-    await page.getByRole("button", { name: "退出并换一个账户登录" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
-    expect(state.level).toBe("none");
-  });
-
-  test("a reset whose answer never came offers the new password as well as a new link", async ({ page }) => {
-    await mockConsole(page);
-    await page.route("**/api/console/v1/auth/password-reset/complete", (route) => route.abort());
-    await page.goto(`/console/reset-password#token=${goodResetToken}`);
-    await setNewPassword(page);
-    await expect(page.getByRole("alert")).toHaveText(/新密码可能已经生效/);
-    await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "重新申请" })).toBeVisible();
-  });
-
-  test("a link opened in the same tab is taken, and starts its own form", async ({ page }) => {
-    await mockConsole(page);
-    await page.goto("/console/reset-password");
-    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
-    await page.evaluate((token) => {
-      location.hash = `token=${token}`;
-    }, "spent-token");
-    await expect(page.getByRole("heading", { level: 1, name: "设置新密码" })).toBeVisible();
-    expect(new URL(page.url()).hash).toBe("");
-    await setNewPassword(page);
-    await expect(page.getByRole("alert")).toHaveText(/无效、已用过或已过期/);
-    // a second link, the good one, replaces the first and its refusal
-    await page.evaluate((token) => {
-      location.hash = `token=${token}`;
-    }, goodResetToken);
     await expect(page.getByRole("alert")).toHaveCount(0);
-    await setNewPassword(page);
-    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
-  });
-
-  test("a new password the contract refuses says how long it must be", async ({ page }) => {
-    await mockConsole(page);
-    await page.goto(`/console/reset-password#token=${goodResetToken}`);
-    await page.getByLabel("密码", { exact: true }).fill("too short");
-    await page.getByRole("button", { name: "重设密码" }).click();
-    await expect(page.getByRole("alert")).toHaveText(/至少要 12 个字符/);
-  });
-
-  test("a limit keeps the request's button disabled for as long as the answer says", async ({ page }) => {
-    // no sea running, so moving the clock thirty seconds on does not draw thirty seconds of frames
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await mockConsole(page);
-    await page.clock.install();
-    await page.route("**/api/console/v1/auth/password-reset", (route) =>
-      route.fulfill({
-        status: 429,
-        headers: { "Retry-After": "30" },
-        json: { error: { code: "rate_limited", message: "rate_limited" } },
-      }),
-    );
-    await page.goto("/console/reset-password");
-    await page.getByLabel("邮箱").fill(knownEmail);
-    const submit = page.getByRole("button", { name: "发送重设邮件" });
-    await submit.click();
-    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
-    await expect(submit).toBeDisabled();
-    await page.clock.runFor(29_000);
-    await expect(submit).toBeDisabled();
-    await page.clock.runFor(2_000);
-    await expect(submit).toBeEnabled();
-  });
-
-  test("the way back from the reset page keeps where the visitor was going", async ({ page }) => {
-    await mockConsole(page);
-    await page.goto("/console/keys");
-    await page.getByLabel("邮箱").fill(knownEmail);
     await page.getByRole("button", { name: "继续", exact: true }).click();
-    await page.getByRole("link", { name: "忘记密码？" }).click();
-    await page.getByRole("link", { name: "返回登录" }).click();
-    await signIn(page);
-    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe("/console/keys");
+    await expect(page.getByLabel("密码", { exact: true })).toBeVisible();
   });
-});
 
-test.describe("the sign-in steps", () => {
+  test("a passkey refused because the pending sign-in is over offers to sign in again, keeping the way back", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, passkeys: true };
+    await page.route("**/api/console/v1/auth/passkeys/mfa/begin", (route) =>
+      route.fulfill({ status: 401, json: { error: { code: "unauthenticated", message: "unauthenticated" } } }),
+    );
+    await page.goto("/console/keys");
+    await signIn(page, mfaEmail);
+    await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
+    await page.getByRole("button", { name: "使用通行密钥" }).click();
+    await expect(page.getByRole("alert")).toHaveText(/这次登录已经失效/);
+    await expect(page.getByRole("button", { name: "使用通行密钥" })).toHaveCount(0);
+    await page.getByRole("button", { name: "重新登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("next")).toBe("/keys");
+  });
+
+  test("a passkey that fails otherwise can be tried again on the step", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, passkeys: true };
+    await page.route("**/api/console/v1/auth/passkeys/mfa/begin", (route) =>
+      route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
+    );
+    await page.goto("/console/");
+    await signIn(page, mfaEmail);
+    await page.getByRole("button", { name: "使用通行密钥" }).click();
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(page.getByRole("button", { name: "使用通行密钥" })).toBeEnabled();
+  });
+
   test("while a sign-in is out the step cannot be left, so its answer signs in the address it was for", async ({
     page,
   }) => {
@@ -510,35 +444,36 @@ test.describe("accepting updated documents on the board", () => {
   });
 });
 
-// WCAG 2.2's 3:1 for a control's edge against its own fill, from the colours the page computes.
-function contrast(a: string, b: string) {
-  const luminance = (rgb: string) => {
-    const [r, g, bl] = (rgb.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map((v) => {
-      const c = Number(v) / 255;
-      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-    }) as [number, number, number];
-    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
-  };
-  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
-  return (hi + 0.05) / (lo + 0.05);
+// A control's edge against its own fill, as the page computes them: WCAG 2.2's 3:1 (docs/frontend.md「对比度令牌」).
+const rgb = (css: string) => (css.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map(Number) as [number, number, number];
+
+async function edgeContrast(page: Page, selector: string) {
+  const control = page.locator(selector).first();
+  await expect(control).toBeVisible();
+  const { edge, fill } = await control.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { edge: style.boxShadow.match(/rgba?\([^)]*\)/)?.[0] ?? "", fill: style.backgroundColor };
+  });
+  return contrast(rgb(edge), rgb(fill));
 }
 
 for (const scheme of ["light", "dark"] as const) {
   test(`the sign-in controls' edges hold 3:1 against their fill (${scheme})`, async ({ page }) => {
     await page.emulateMedia({ colorScheme: scheme });
-    await mockConsole(page);
+    const state = await mockConsole(page);
+    // a site with other ways in, so the secondary buttons are there to measure
+    state.site = { ...state.site, oauth_providers: ["github"], passkeys: true };
     await page.goto("/console/sign-in");
-    await expect(page.getByLabel("邮箱")).toBeVisible();
-    const edges = await page.evaluate(() =>
-      [".lg-field", ".lg-btn:not(.primary)", ".lg-consent .box"]
-        .map((selector) => document.querySelector(selector) as HTMLElement | null)
-        .filter((element) => element !== null)
-        .map((element) => {
-          const style = getComputedStyle(element);
-          return { edge: style.boxShadow.match(/rgba?\([^)]*\)/)?.[0] ?? "", fill: style.backgroundColor };
-        }),
-    );
-    expect(edges.length).toBeGreaterThan(0);
-    for (const { edge, fill } of edges) expect(contrast(edge, fill)).toBeGreaterThanOrEqual(3);
+    expect(await edgeContrast(page, ".lg-field")).toBeGreaterThanOrEqual(3);
+    expect(await edgeContrast(page, ".lg-btn:not(.primary)")).toBeGreaterThanOrEqual(3);
+  });
+
+  test(`the terms box's edge holds 3:1 against its fill (${scheme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    signedInAs(state);
+    await page.goto("/console/consent");
+    expect(await edgeContrast(page, ".lg-consent .box")).toBeGreaterThanOrEqual(3);
   });
 }

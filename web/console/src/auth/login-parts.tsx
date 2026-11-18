@@ -1,11 +1,9 @@
-import { ApiError } from "@axiom/api";
 import { useErrors, useSignOut } from "@axiom/app";
 import LoginAction from "@axiom/boards/Login/regions/LoginAction";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
-import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import { Link } from "@tanstack/react-router";
-import { type AnchorHTMLAttributes, Fragment, type KeyboardEvent, type ReactNode, useEffect, useState } from "react";
+import { type AnchorHTMLAttributes, Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { pressKey } from "../board";
 
@@ -46,15 +44,6 @@ export function RouteLink({ href = "/", ...props }: AnchorHTMLAttributes<HTMLAnc
 // withNext is a sign-in page's address with the way back the visitor came with.
 export const withNext = (to: string, next?: string) => (next ? `${to}?next=${encodeURIComponent(next)}` : to);
 
-// NoteLink is a note under a step whose link goes to another sign-in page, carrying where the visitor was going.
-export function NoteLink({ label, to, next }: { label: string; to: string; next?: string }) {
-  return (
-    <LoginNote t={String}>
-      <LoginLink t={String} link={RouteLink} label={label} values={{ to: withNext(to, next) }} />
-    </LoginNote>
-  );
-}
-
 // OtherAccount ends a session that stopped halfway (a pending second step, terms not yet accepted), to start again as
 // someone else; a sign-out that fails says the visitor is still signed in.
 export function OtherAccount() {
@@ -88,18 +77,14 @@ export function WithEmail({ sentence, email }: { sentence: (email: string) => st
   );
 }
 
-// useCooldown says whether a step's submit must wait: a 429 names how long (Retry-After), and sending again sooner is
-// refused the same way, so the button stays disabled until then.
-export function useCooldown(error: unknown) {
-  const [waiting, setWaiting] = useState(false);
+// useLive says whether the component that started something is still on screen when its answer comes.
+export function useLive() {
+  const live = useRef(true);
   useEffect(() => {
-    if (!(error instanceof ApiError && error.status === 429)) return;
-    setWaiting(true);
-    const timer = window.setTimeout(() => setWaiting(false), (error.retryAfter ?? 60) * 1000);
+    live.current = true;
     return () => {
-      window.clearTimeout(timer);
-      setWaiting(false);
+      live.current = false;
     };
-  }, [error]);
-  return waiting;
+  }, []);
+  return live;
 }

@@ -53,11 +53,28 @@ const boardVars = [
 ].join("; ");
 
 // A page's handle on the stage over the sea: what it hears (the email's length, the digits typed, a refusal) reaches
-// the engine once it has loaded, and nothing before. The page makes it, so the forms it renders can tell it.
-export type Stage = { readonly hear: (heard: Heard) => void; readonly running: RefObject<Login | null> };
+// the engine, and the latest of each lasting kind is kept, so an engine that loads after the visitor has typed starts
+// from what the form shows. The page makes it, so the forms it renders can tell it.
+export type Stage = {
+  readonly hear: (heard: Heard) => void;
+  readonly running: RefObject<Login | null>;
+  readonly said: RefObject<Map<Heard["type"], Heard>>;
+};
 export function useStage(): Stage {
   const running = useRef<Login | null>(null);
-  return useMemo(() => ({ running, hear: (heard: Heard) => running.current?.hear(heard) }), []);
+  const said = useRef(new Map<Heard["type"], Heard>());
+  return useMemo(
+    () => ({
+      running,
+      said,
+      hear: (heard: Heard) => {
+        // a refusal is a moment, not a state to start from
+        if (heard.type !== "bad") said.current.set(heard.type, heard);
+        running.current?.hear(heard);
+      },
+    }),
+    [],
+  );
 }
 
 // The Login board's names for the two languages, as its switch shows them.
@@ -145,6 +162,7 @@ function useLoginEngine({
       veiled.current = false;
       running.decode(titleRef.current, decode.current);
     }
+    for (const heard of handle.said.current.values()) running.hear(heard);
     handle.running.current = running;
     return running;
   });
@@ -155,7 +173,7 @@ function useLoginEngine({
     [handle],
   );
   useEffect(() => login.current?.show(shape), [login, shape]);
-  useEffect(() => login.current?.sea.engine.setLight(!dark), [login, dark]);
+  useEffect(() => login.current?.setLight(!dark), [login, dark]);
   return {
     seaCanvas: (canvas: Element | null) => {
       root.current = canvas?.closest<HTMLElement>(".lg") ?? null;

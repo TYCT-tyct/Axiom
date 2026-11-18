@@ -1,4 +1,5 @@
-import { Gate, useErrors, useVerifyMfa } from "@axiom/app";
+import { ApiError } from "@axiom/api";
+import { Gate, useErrors, useSignOut, useVerifyMfa } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
@@ -10,7 +11,7 @@ import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, OtherAccount } from "./login-parts";
+import { FormProblem, NoteAction, OtherAccount } from "./login-parts";
 import { usePasskeySignIn } from "./passkey-sign-in";
 
 // The second step of a password sign-in: a code from the authenticator app or a recovery code, in one field (the
@@ -97,20 +98,28 @@ function CodeField({
   );
 }
 
+// The passkey as the second step. A 401 means the pending sign-in is over (its attempts are spent, or it expired):
+// the same button would be refused again, so the step says so and offers to start the sign-in again, which keeps
+// where the visitor was going. Any other failure, a cancelled prompt among them, leaves the button to try again.
 function PasskeyWay({ passkey }: { passkey: ReturnType<typeof usePasskeySignIn> }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const signOut = useSignOut();
+  const over = passkey.failure instanceof ApiError && passkey.failure.status === 401;
   return (
     <>
       <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
-      <LoginStack t={String}>
-        <LoginButton
-          t={String}
-          label={<span>{t("auth.mfa.usePasskey")}</span>}
-          values={{ disabled: passkey.pending, onPress: () => void passkey.start() }}
-        />
-      </LoginStack>
-      <FormProblem message={passkey.failure ? errors.message(passkey.failure) : ""} />
+      {over ? null : (
+        <LoginStack t={String}>
+          <LoginButton
+            t={String}
+            label={<span>{t("auth.mfa.usePasskey")}</span>}
+            values={{ disabled: passkey.pending, onPress: () => void passkey.start() }}
+          />
+        </LoginStack>
+      )}
+      <FormProblem message={over ? t("auth.mfa.over") : passkey.failure ? errors.message(passkey.failure) : ""} />
+      {over ? <NoteAction label={t("auth.mfa.again")} onPress={() => !signOut.isPending && signOut.mutate()} /> : null}
     </>
   );
 }

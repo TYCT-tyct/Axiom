@@ -525,14 +525,70 @@ test("a sign-in page whose effects fail to load still signs in, with no unhandle
   expect(unhandled).toEqual([]);
 });
 
+// How many of the stage's pixels are in the ring colour, which only its lit tiles are drawn in: none while the address is
+// empty, some once a whole one has been heard. The still frames reduced motion draws change with the time (the glyphs
+// flicker, the loose tiles drift), so the lit tiles are what a test can count on. colour names the ring's light or dark
+// value; without it, the page's own.
+async function ringPixels(page: Page, colour?: string) {
+  return stageCanvas(page).evaluate((element, colour) => {
+    const canvas = element as HTMLCanvasElement;
+    const probe = document.createElement("i");
+    probe.style.color = colour ?? "var(--ring)";
+    (canvas.closest(".lg") as HTMLElement).append(probe);
+    const ring = (getComputedStyle(probe).color.match(/\d+/g) ?? []).map(Number);
+    probe.remove();
+    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    let count = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 255 && [0, 1, 2].every((c) => Math.abs((data[i + c] ?? 0) - (ring[c] ?? 0)) <= 2)) count++;
+    }
+    return count;
+  }, colour);
+}
+
 test("what is typed reaches the stage: a whole address lights the envelope", async ({ page }) => {
-  // under reduced motion the stage draws once for each thing it hears, so its pixels say what it heard
   await page.emulateMedia({ reducedMotion: "reduce" });
   await mockConsole(page);
   await page.goto(signInPage);
   await expect(stageCanvas(page)).toBeAttached();
-  const pixels = () => stageCanvas(page).evaluate((canvas) => (canvas as HTMLCanvasElement).toDataURL());
-  const before = await pixels();
+  expect(await ringPixels(page)).toBe(0);
   await page.getByLabel("邮箱").fill(knownEmail);
-  await expect.poll(pixels).not.toBe(before);
+  await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
+});
+
+test("what was typed before the stage's code came is what the stage starts from", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockConsole(page);
+  // the stage's code is held until the address is typed
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(loginCode, async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto(signInPage);
+  await page.getByLabel("邮箱").fill(knownEmail);
+  release();
+  await expect(stageCanvas(page)).toBeAttached();
+  await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
+});
+
+test("the stage's tiles take the new scheme's colours when it changes", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  await page.getByLabel("邮箱").fill(knownEmail);
+  // the accent's light and dark values (tokens.css --accentT)
+  const light = "#10738c";
+  const dark = "#4ccce6";
+  await expect.poll(() => ringPixels(page, light)).toBeGreaterThan(0);
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "dark" });
+  await expect.poll(() => ringPixels(page, dark)).toBeGreaterThan(0);
+  expect(await ringPixels(page, light)).toBe(0);
 });

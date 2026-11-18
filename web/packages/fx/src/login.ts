@@ -173,6 +173,11 @@ class Stage {
     this.shapeAt = now + delay;
   }
 
+  // recolour reads the page's colours again on the next frame drawn: the scheme has changed
+  recolour() {
+    this.ink = undefined;
+  }
+
   hear(heard: Heard, now: number) {
     if (heard.type === "email") this.heard = { ...this.heard, len: heard.len, ok: heard.ok };
     else if (heard.type === "digit") {
@@ -441,6 +446,8 @@ export type Login = {
   readonly sea: Sea;
   show: (shape: Shape) => void;
   hear: (heard: Heard) => void;
+  // setLight turns the sea and the stage to the light or the dark page
+  setLight: (light: boolean) => void;
   // decode plays the title's decode once, for an arrival; the page passes its title and the form's decode canvas.
   decode: (title: HTMLElement, canvas: HTMLCanvasElement) => void;
   destroy: () => void;
@@ -500,6 +507,11 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
     },
     hear: (heard) => {
       stage.hear(heard, performance.now());
+      redrawStill();
+    },
+    setLight: (light) => {
+      sea.engine.setLight(light);
+      stage.recolour();
       redrawStill();
     },
     decode: (title, decodeCanvas) => {

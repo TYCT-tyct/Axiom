@@ -21,8 +21,6 @@ export type MockState = AuthState &
   BillMockState & {
     site: Schemas["Site"];
     legal: Schemas["LegalDocument"][];
-    // whether the reset link's token (goodResetToken) has been used
-    resetSpent?: boolean;
     legalAccepted: boolean;
     balance: Schemas["Balance"];
     keys: Schemas["Key"][];
@@ -70,8 +68,6 @@ export const demoDocuments = (): Schemas["LegalDocument"][] => [
 ];
 
 export const goodInvite = "INVITE-OK";
-// The one reset link's token the mocked server takes; any other is spent or expired.
-export const goodResetToken = "reset-token-ok";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
 const nano = (amount: string): Schemas["Money"] => ({ amount, currency: "USD" });

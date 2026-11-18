@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { demoDocuments, goodResetToken, type Schemas } from "./console-data.ts";
+import { demoDocuments, type Schemas } from "./console-data.ts";
 import type { MockData } from "./mock.ts";
 import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
@@ -44,8 +44,6 @@ const scenes: Scene[] = [
       await page.getByLabel(/^(密码|Password)$/).waitFor();
     },
   },
-  // the reset email's link: the new password, its token in the fragment
-  { name: "reset-password", signedIn: false, open: (page) => goto(page, `reset-password#token=${goodResetToken}`) },
   // a member whose accepted terms are behind the site's current ones
   { name: "consent", signedIn: true, open: (page) => goto(page, "consent") },
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },
