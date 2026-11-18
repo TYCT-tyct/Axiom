@@ -255,19 +255,28 @@ test("a press goes though the departure's code never comes", async ({ page }) =>
   expect(unhandled).toEqual([]);
 });
 
-test("a departure whose navigation is stopped puts the page back, and a press tries again", async ({ page }) => {
+test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {
   await open(page);
   await running(page);
   const asked = watchDeparture(page);
   await hang(page, /\/console\/sign-in$/);
   await signIn(page).click();
   await expect.poll(() => asked.length).toBe(1);
-  // the browser's stop button
+  // the browser's stop button, and a press on another way in straight after it
+  await (await page.context().newCDPSession(page)).send("Page.stopLoading");
+  await signUp(page).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  expect(asked).toHaveLength(2);
+});
+
+test("a departure whose navigation is stopped puts the page back", async ({ page }) => {
+  await open(page);
+  await running(page);
+  const asked = watchDeparture(page);
+  await hang(page, /\/console\/sign-in$/);
+  await signIn(page).click();
+  await expect.poll(() => asked.length).toBe(1);
   await (await page.context().newCDPSession(page)).send("Page.stopLoading");
   await expect(signIn(page)).toBeVisible();
   await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).not.toBeAttached();
-  await page.unroute(/\/console\/sign-in$/);
-  await signIn(page).click();
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
-  expect(asked).toHaveLength(2);
 });

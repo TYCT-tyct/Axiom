@@ -129,37 +129,41 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
 const loadDepart = () => import("@axiom/fx/depart");
 // The departure's length on the wall clock: the page goes this long after the press, whether or not its code has come.
 const departSpan = 500;
-// A navigation not done this long after it started was stopped (the browser's stop button) or failed, and the page
-// that had left is put back, so a press can try again. A page that does go is gone long before.
+// A page still here this long after it started to go was stopped (the browser's stop button) or failed to go: the
+// picture of its departure comes off. A page that does go is gone long before.
 const stalled = 3000;
 
-// The press under way, and the picture of it a frame draws. The press is the module's, not a frame's: a change of
-// layout midway starts the frame afresh (home.tsx), which takes the picture with it but must not take the way there.
-type Press = { frame?: HTMLElement; picture?: Departure };
-let leaving: Press | undefined;
+// The press under way, until its page starts to go, and the picture of a departure on screen, held until the next
+// page replaces this one. Both are the module's, not a frame's: a change of layout midway starts the frame afresh
+// (home.tsx), which takes the picture with it but must not take the way there.
+let leaving: object | undefined;
+let shown: { frame: HTMLElement; picture: Departure } | undefined;
 
-function settle() {
-  leaving?.picture?.destroy();
-  leaving = undefined;
+function clear() {
+  shown?.picture.destroy();
+  shown = undefined;
 }
 
 function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
-  const press: Press = {};
+  clear();
+  const press = {};
   leaving = press;
   const start = performance.now();
   const href = link.href;
   window.setTimeout(() => {
     if (leaving !== press) return;
+    // from here the press is done: a press after a stopped navigation starts a departure of its own at once
+    leaving = undefined;
+    const held = shown;
     window.location.assign(href);
-    window.setTimeout(() => leaving === press && settle(), stalled);
+    window.setTimeout(() => shown === held && clear(), stalled);
   }, departSpan);
-  // code that comes after the frame has gone, or after the page has gone back, draws nothing; code that never comes
-  // only costs the picture
+  // code that comes after the page started to go, after the frame has gone, or after the page has come back, draws
+  // nothing; code that never comes only costs the picture
   loadDepart().then(
     ({ depart }) => {
       if (leaving !== press || !frame.isConnected || !link.isConnected) return;
-      press.frame = frame;
-      press.picture = depart(frame, link, start, departSpan, sea?.engine);
+      shown = { frame, picture: depart(frame, link, start, departSpan, sea?.engine) };
     },
     () => {},
   );
@@ -181,16 +185,16 @@ export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject
     };
     // the browser's back button may bring this page back as it was left, mid-departure
     const onShow = (e: PageTransitionEvent) => {
-      if (e.persisted) settle();
+      if (!e.persisted) return;
+      leaving = undefined;
+      clear();
     };
     frame.addEventListener("click", onClick);
     window.addEventListener("pageshow", onShow);
     return () => {
       frame.removeEventListener("click", onClick);
       window.removeEventListener("pageshow", onShow);
-      if (leaving?.frame !== frame) return;
-      leaving.picture?.destroy();
-      leaving.picture = undefined;
+      if (shown?.frame === frame) clear();
     };
   }, [root, sea]);
 }
