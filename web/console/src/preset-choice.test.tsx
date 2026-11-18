@@ -307,12 +307,24 @@ it.each([
   );
   document.body.replaceChildren();
 
-  // The rows ask for the default and the presets only once the keys are in.
+  // The rows ask for the default and the presets only once the keys are in. The list is the board's, which has no preset
+  // column, so each key's own dialog names the preset it is routed by and says when that is not what a key made now
+  // would take (L3 in /home/ai/axiom-ops/design/console-gap.md).
   const keys = await render(<Keys />);
   await settle();
-  // jsdom applies no breakpoints: every row has both the preset column and the labelled line narrow screens show under
-  // the name, so a key bound elsewhere is noted twice and every call key is labelled once.
-  const lines = texts(keys.container.querySelectorAll("td p"));
-  expect(lines.filter((line) => line?.startsWith("routingPresets.key.notDefault"))).toEqual([...moved, ...moved]);
-  expect(lines.filter((line) => line === "routingPresets.key.labelled")).toHaveLength(3);
+  const rows = [...keys.container.querySelectorAll("tbody tr")];
+  expect(rows).toHaveLength(3);
+  const names: (string | undefined)[] = [];
+  const notes: string[] = [];
+  for (const row of rows) {
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await settle();
+    const text = keys.container.querySelector("dialog")?.textContent ?? "";
+    names.push(/Preset \d|routingPresets\.key\.hidden/.exec(text)?.[0]);
+    notes.push(...[...text.matchAll(/routingPresets\.key\.notDefault(?:Named)?/g)].map((match) => match[0]));
+  }
+  expect(names).toEqual(["Preset 1", "Preset 2", "routingPresets.key.hidden"]);
+  expect(notes).toEqual([...moved]);
 });
