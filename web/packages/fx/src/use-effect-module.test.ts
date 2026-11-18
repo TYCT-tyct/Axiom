@@ -3,12 +3,14 @@ import { act, createElement, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { own } from "./loop";
-import { type Running, useEffectModule } from "./use-effect-module";
+import { nearView, type Running, useEffectModule } from "./use-effect-module";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The browser's scheduling, run by hand: frames and idle callbacks happen when the test says.
 let frames: FrameRequestCallback[] = [];
+// The last observer's callback, as the browser calls it when its element comes near the view or goes.
+let near: ((isIntersecting: boolean) => void) | undefined;
 let idle: IdleRequestCallback[] = [];
 const flushFrames = () => {
   for (const callback of frames.splice(0)) callback(performance.now());
@@ -25,9 +27,14 @@ beforeEach(() => {
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => idle.push(callback));
   vi.stubGlobal("cancelIdleCallback", () => {});
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  near = undefined;
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      constructor(callback: IntersectionObserverCallback) {
+        near = (isIntersecting) =>
+          callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      }
       observe() {}
       unobserve() {}
       disconnect() {}
@@ -42,16 +49,16 @@ afterEach(() => vi.unstubAllGlobals());
 // An effect module as the sea is one: it owns its element on the loop until it is destroyed.
 const effect = { start: (element: HTMLElement): Running => ({ destroy: own(element, () => {}) }) };
 
-function Effect({ load }: { load: () => Promise<typeof effect> }) {
+function Effect({ load, below }: { load: () => Promise<typeof effect>; below?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffectModule(ref, load, (module, element) => module.start(element));
+  useEffectModule(ref, load, (module, element) => module.start(element), below ? nearView : undefined);
   return createElement("div", { ref });
 }
 
-function mount(load: () => Promise<typeof effect>) {
+function mount(load: () => Promise<typeof effect>, below = false) {
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
-  act(() => root.render(createElement(Effect, { load })));
+  act(() => root.render(createElement(Effect, { load, below })));
   return root;
 }
 
@@ -83,4 +90,19 @@ it("starts nothing when the page is left before the module arrives, and survives
   await act(async () => flushIdle());
   expect(window.axiomFx?.state.owners).toBe(0);
   act(() => failing.unmount());
+});
+
+it("loads what lies below the first screen only once it nears the view", async () => {
+  const load = vi.fn(async () => effect);
+  const root = mount(load, true);
+  flushFrames();
+  await act(async () => flushIdle());
+  near?.(false);
+  expect(load).not.toHaveBeenCalled();
+
+  await act(async () => near?.(true));
+  expect(load).toHaveBeenCalledOnce();
+  expect(window.axiomFx?.state.owners).toBe(1);
+  act(() => root.unmount());
+  expect(window.axiomFx?.state.owners).toBe(0);
 });

@@ -90,7 +90,7 @@ test("the sea rests while the tab is hidden or the first screen is out of view, 
   await setHidden(page, false);
   await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
 
-  // the screens below come with S2; a block as tall stands in for them
+  // far below the first screen, past every screen, nothing is in view to play
   await page.evaluate(() => {
     const scroller = document.querySelector(".hs") as HTMLElement;
     const below = document.createElement("div");
@@ -176,4 +176,72 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect.poll(() => said.evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
   expect(await violations()).toEqual([]);
+});
+
+// The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
+// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view.
+const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
+const scrollTo = (page: Page, selector: string) =>
+  page.locator(selector).evaluate((el) => el.scrollIntoView({ block: "start" }));
+
+test("each screen below the first loads as it nears the view, and plays only while it is seen", async ({ page }) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    const name = screenChunk.exec(request.url())?.[1];
+    if (name) asked.push(name);
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  // the models screen lies within a view's height of the first; the steps one below it does not
+  await expect.poll(() => asked).toEqual(["models"]);
+  await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("claude-sonnet-4");
+
+  await scrollTo(page, ".hfm3");
+  await expect.poll(() => asked).toEqual(["models", "steps", "trust"]);
+  await running(page);
+  await setHidden(page, true);
+  const hidden = (await loop(page)).frames;
+  await pause(page);
+  expect(await loop(page)).toMatchObject({ frames: hidden, pending: false });
+  await setHidden(page, false);
+  await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
+
+  // past every screen nothing is in view to play
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".hs") as HTMLElement;
+    const below = document.createElement("div");
+    below.style.height = "3000px";
+    scroller.append(below);
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+  await expect.poll(async () => (await loop(page)).pending).toBe(false);
+  const away = (await loop(page)).frames;
+  await pause(page);
+  expect((await loop(page)).frames).toBe(away);
+});
+
+test("under reduced motion the screens below show their end and do not turn", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, ".hfm3");
+  // the three steps are done: the first request has come back
+  await expect(page.locator(".hfm3 .c200.ok")).toHaveText("200");
+  await scrollTo(page, ".hfm2");
+  await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("claude-sonnet-4");
+  // no script owns anything on the loop, so the list cannot move on to the next model
+  await pause(page);
+  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
+});
+
+test("the models screen shows the call's failure, not the board's figures, when the models cannot be had", async ({
+  page,
+}) => {
+  await page.route(/\/api\/console\/v1\/models(\?|$)/, (route) => route.fulfill({ status: 500, body: "{}" }));
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, ".hfm2");
+  await expect(page.locator(".hfm2").getByRole("alert")).toBeVisible();
+  await expect(page.locator(".hfm2 .mr")).toHaveCount(0);
+  await expect(page.locator(".hfm2 .pick")).toHaveCount(0);
 });
