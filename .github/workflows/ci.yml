@@ -21,6 +21,10 @@ on:
         description: the commit a train branch was assembled on
         type: string
         default: ""
+      runs_on:
+        description: JSON runner labels for this dispatch only; empty uses RUNS_ON variables
+        type: string
+        default: ""
       release:
         description: retain the release artifact (main tip only, without base or gate_stress)
         type: boolean
@@ -52,7 +56,7 @@ jobs:
   changes:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     timeout-minutes: 1
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
       issues: read # keep the quarantine reminder on reused main builds
@@ -148,7 +152,7 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'static') && !inputs.gate_stress
     timeout-minutes: 25
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     permissions:
       contents: read
       issues: read # the issues the flaky list names
@@ -198,7 +202,7 @@ jobs:
     name: go-test (${{ matrix.shard }}/2)
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false # the other shard's log still names its own failures for the train's flaky check
@@ -232,7 +236,7 @@ jobs:
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'web') && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true')
     timeout-minutes: 12
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -250,7 +254,7 @@ jobs:
   vitals:
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'vitals') && needs.changes.outputs.vitals == 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -258,21 +262,23 @@ jobs:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
       - name: Prepare runner evidence
-        if: vars.RUNS_ON != ''
+        if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
       - name: Run the web vitals in their network namespace
         run: bash scripts/ci/web-container.sh just web-vitals
-      - if: failure() && vars.RUNS_ON == ''
+      - if: failure() && runner.environment == 'github-hosted'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: vitals-test-results
-          path: web/test-results/
+          path: |
+            web/test-results/
+            web/playwright-report/
           if-no-files-found: ignore
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
       - name: Keep runner evidence
-        if: always() && vars.RUNS_ON != ''
+        if: always() && runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py collect
         env:
           JOB_STATUS: ${{ job.status }}
@@ -296,14 +302,14 @@ jobs:
       E2E_SHARD_COUNT: ${{ inputs.gate_stress && 1 || 2 }}
       E2E_FLAKY_RETRY: ${{ inputs.base != '' && startsWith(github.ref, 'refs/heads/train/') && !inputs.gate_stress }}
       GATE_STRESS: ${{ inputs.gate_stress || false }}
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
       - name: Prepare runner evidence
-        if: vars.RUNS_ON != ''
+        if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
       - name: Read open e2e quarantine issues
         run: |
@@ -327,18 +333,20 @@ jobs:
             fi
           '
       # A later checkout removes test-results on self-hosted runners; keep each shard's evidence separately.
-      - if: failure() && vars.RUNS_ON == ''
+      - if: failure() && runner.environment == 'github-hosted'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: e2e-test-results-${{ matrix.shard }}
-          path: web/test-results/
+          path: |
+            web/test-results/
+            web/playwright-report/
           if-no-files-found: ignore
           retention-days: 2
       # Cancellation can stop the Docker client before the test process; remove only this attempt's container.
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
       - name: Keep runner evidence
-        if: always() && vars.RUNS_ON != ''
+        if: always() && runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py collect
         env:
           JOB_STATUS: ${{ job.status }}
@@ -350,7 +358,7 @@ jobs:
     name: boards (${{ matrix.shard }}/4)
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'boards') && needs.changes.outputs.boards == 'true' && !inputs.gate_stress
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
       fail-fast: false # finish the other shards and keep their evidence when one fails
@@ -363,21 +371,23 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
       - name: Prepare runner evidence
-        if: vars.RUNS_ON != ''
+        if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
       - name: Compare converted boards in their network namespace
         run: bash scripts/ci/web-container.sh python3 scripts/ci/playwright.py boards "$E2E_SHARD_INDEX/$E2E_SHARD_COUNT"
-      - if: failure() && vars.RUNS_ON == ''
+      - if: failure() && runner.environment == 'github-hosted'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: boards-test-results-${{ matrix.shard }}
-          path: web/test-results/
+          path: |
+            web/test-results/
+            web/playwright-report/
           if-no-files-found: ignore
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
       - name: Keep runner evidence
-        if: always() && vars.RUNS_ON != ''
+        if: always() && runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py collect
         env:
           JOB_STATUS: ${{ job.status }}
@@ -389,7 +399,7 @@ jobs:
   journey:
     needs: changes
     if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -405,22 +415,24 @@ jobs:
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
       - name: Prepare runner evidence
-        if: vars.RUNS_ON != ''
+        if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
       - run: just web-embed
       - name: Run the journey in the web container
         run: go run ./internal/platform/pgtest/cmd/withcluster bash scripts/ci/web-container.sh pnpm --dir web journey --output="${AXIOM_TEST_RESULTS:-test-results}"
-      - if: failure() && vars.RUNS_ON == ''
+      - if: failure() && runner.environment == 'github-hosted'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2; Node 24
         with:
           name: journey-test-results
-          path: web/test-results/
+          path: |
+            web/test-results/
+            web/playwright-report/
           if-no-files-found: ignore
           retention-days: 2
       - if: always()
         run: bash scripts/ci/web-container.sh cleanup
       - name: Keep runner evidence
-        if: always() && vars.RUNS_ON != ''
+        if: always() && runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py collect
         env:
           JOB_STATUS: ${{ job.status }}
@@ -440,7 +452,7 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.bench == 'true'
     timeout-minutes: 30
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -477,7 +489,7 @@ jobs:
       needs.changes.result == 'success' &&
       needs.changes.outputs.deploy == 'true'
     timeout-minutes: 22
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     # cosign obtains a short-lived Fulcio certificate for this workflow and ref from GitHub's OIDC token, so no signing
     # key is stored. Only the release job needs the token; every other job keeps the workflow's read-only default.
     permissions:
@@ -525,7 +537,7 @@ jobs:
       !inputs.gate_stress &&
       needs.changes.result == 'success' &&
       needs.changes.outputs.light != 'true'
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 2
     permissions:
       contents: read
@@ -546,7 +558,7 @@ jobs:
     needs: [changes, static, go-test, web, e2e, boards, vitals, journey, bench, deploy, signing]
     if: always() && (github.event_name != 'pull_request' || !github.event.pull_request.draft)
     timeout-minutes: 1
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       # GitHub accepts a skipped required check, so diagnostics must fail this check rather than skip it.
       - if: inputs.gate_stress
@@ -588,6 +600,6 @@ jobs:
     needs: [changes, web, e2e]
     if: always() && github.event_name == 'workflow_dispatch' && inputs.gate_stress
     timeout-minutes: 1
-    runs-on: ${{ fromJSON((inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - run: test '${{ needs.changes.result }}' = success && test '${{ needs.web.result }}' = success && test '${{ needs.e2e.result }}' = success

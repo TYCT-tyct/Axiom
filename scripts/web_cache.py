@@ -1,4 +1,4 @@
-"""Reuse frontend work by content on the CI host, which keeps its disk between jobs.
+"""Reuse frontend work by content on a persistent host or in the Actions cache.
 
 The build of the three apps and passing browser checks are stored under a host cache directory, keyed by a hash of
 everything that goes into them. Paths are not part of a key, so a checkout in another directory with the same content
@@ -146,6 +146,34 @@ def e2e_key(root: Path, tools: str, command: list[str]) -> str:
     return h.hexdigest()
 
 
+def remote_cache(action: str, target: Path) -> None:
+    if not os.environ.get("ACTIONS_CACHE_CLIENT"):
+        return
+    # Keep archive paths relative, so another checkout restores under its own cache root.
+    target.parent.mkdir(parents=True, exist_ok=True)
+    script = Path(__file__).resolve().parent / "ci/actions-cache.mjs"
+    command = ["node", str(script), action, target.name]
+    if action == "restore":
+        # A failed extraction can leave a pass marker behind. Publish only a fully restored archive.
+        with tempfile.TemporaryDirectory(prefix=".actions-cache-", dir=target.parent) as directory:
+            result = subprocess.run(command, cwd=directory)
+            source = Path(directory) / target.name
+            if result.returncode == 0 and source.exists():
+                if target.is_dir():
+                    shutil.rmtree(target)
+                os.replace(source, target)
+    else:
+        result = subprocess.run(command, cwd=target.parent)
+    if result.returncode:
+        print(f"::warning::Actions cache {action} failed for {target.name}; using local cache")
+
+
+def cached_pass(marker: Path) -> bool:
+    if not marker.is_file():
+        remote_cache("restore", marker)
+    return marker.is_file()
+
+
 def complete(target: Path) -> bool:
     return (target / ".complete").is_file() and all((target / app / "dist").is_dir() for app in APPS)
 
@@ -191,6 +219,8 @@ def run(command: list[str], root: Path, version: str) -> int:
 def build(root: Path, cache: Path, version: str, command: list[str], tools: str) -> int:
     key = build_key(root, version, tools)
     target = cache / "web-build" / key
+    if not complete(target):
+        remote_cache("restore", target)
     if complete(target):
         restore(root, target)
         print(f"web build cache hit {key[:12]}: restored {target}")
@@ -201,6 +231,7 @@ def build(root: Path, cache: Path, version: str, command: list[str], tools: str)
         return status
     elapsed = time.monotonic() - start
     if save(root, target):
+        remote_cache("save", target)
         print(f"web build cache miss {key[:12]}: built in {elapsed:.1f}s, saved {target}")
     elif complete(target):
         print(f"web build cache miss {key[:12]}: built in {elapsed:.1f}s, another job saved it")
@@ -215,7 +246,7 @@ def e2e(root: Path, cache: Path, version: str, command: list[str], tools: str) -
 
 
 def passing(root: Path, marker: Path, version: str, command: list[str], label: str) -> int:
-    if marker.is_file():
+    if cached_pass(marker):
         print(f"{label} cache hit: passed before at {marker}")
         return 0
     start = time.monotonic()
@@ -236,6 +267,7 @@ def record_pass(marker: Path) -> None:
         temp = Path(file.name)
     try:
         os.replace(temp, marker)
+        remote_cache("save", marker)
     finally:
         temp.unlink(missing_ok=True)
 

@@ -29,6 +29,7 @@ def ci_module(name):
 
 browser = ci_module("playwright")
 reports = ci_module("reports")
+comparison = ci_module("runner-comparison")
 train_result = ci_module("train_result")
 
 
@@ -84,14 +85,29 @@ class BuildChecks(unittest.TestCase):
     def test_self_hosted_evidence_stays_on_disk_and_fallback_uploads(self):
         for name in ("boards", "e2e", "vitals", "journey"):
             steps = job(name)
-            self.assertIn("if: failure() && vars.RUNS_ON == ''", steps)
-            self.assertIn("if: always() && vars.RUNS_ON != ''", steps)
+            self.assertIn("if: failure() && runner.environment == 'github-hosted'", steps)
+            self.assertIn("if: always() && runner.environment == 'self-hosted'", steps)
+            self.assertIn("web/playwright-report/", steps)
             self.assertIn("python3 scripts/ci/reports.py prepare", steps)
             self.assertIn("python3 scripts/ci/reports.py collect", steps)
             self.assertLess(steps.index("web-container.sh cleanup"), steps.index("reports.py collect"))
         self.assertIn("scripts/web_cache.py vitals", JUSTFILE)
         self.assertIn("shard: [1, 2, 3, 4]", job("boards"))
         self.assertIn('"$E2E_SHARD_INDEX/$E2E_SHARD_COUNT"', job("boards"))
+    def test_dispatch_runner_override_is_uniform_and_does_not_change_normal_pools(self):
+        for name in re.findall(r"^  ([\w-]+):$", WORKFLOW.split("jobs:\n", 1)[1], re.M):
+            labels = re.search(r"runs-on: \$\{\{ fromJSON\((.+)\) \}\}", job(name)).group(1)
+            self.assertTrue(labels.startswith("inputs.runs_on || "), name)
+            for override, base, expected in (("", "", "light" if name in ("changes", "build", "gate-stress") else "heavy"),
+                                             ("", "base", "train"), ('"ubuntu-latest"', "", "ubuntu-latest"),
+                                             ('"ubuntu-latest"', "base", "ubuntu-latest")):
+                value = labels
+                for key, replacement in {"inputs.runs_on": override, "inputs.base": base,
+                                         "vars.RUNS_ON_TRAIN": '"train"', "vars.RUNS_ON_HEAVY": '"heavy"',
+                                         "vars.RUNS_ON": '"light"'}.items():
+                    value = value.replace(key, repr(replacement))
+                self.assertEqual(json.loads(eval(value.replace("||", " or ").replace("&&", " and "))), expected)
+
     def test_normal_events_publish_the_literal_build_check(self):
         self.assertRegex(job("build"), r"(?m)^    name: build$")
         for event in ("pull_request", "push", "workflow_dispatch"):
@@ -535,6 +551,20 @@ class BrowserSelection(unittest.TestCase):
                 report["suites"][0]["specs"][1]["tests"][0]["results"][0]["status"] = "failed"
                 self.assertEqual(browser.execute(root, cache, "boards", "1/1", ""), 1)
                 self.assertFalse(cache.exists())
+
+
+class RunnerComparison(unittest.TestCase):
+    def test_queue_setup_and_four_core_estimate_use_measured_intervals(self):
+        job = {"created_at": "2026-11-18T00:00:00Z", "started_at": "2026-11-18T00:00:10Z",
+               "completed_at": "2026-11-18T00:01:30Z", "steps": [
+                   {"name": "Run ./.github/actions/setup", "started_at": "2026-11-18T00:00:10Z",
+                    "completed_at": "2026-11-18T00:00:25Z"},
+                   {"name": "Post Run ./.github/actions/setup", "started_at": "2026-11-18T00:01:25Z",
+                    "completed_at": "2026-11-18T00:01:30Z"}]}
+        self.assertEqual(comparison.timings(job), (80, 10, 20))
+        for busy, projected in ((0, 80), (60, 65), (120, 50)):
+            with self.subTest(cpu_seconds=busy):
+                self.assertEqual(comparison.estimate(80, {"seconds": 60, "cpu_seconds": busy, "cores": 2}), projected)
 
 
 class RunnerEvidence(unittest.TestCase):

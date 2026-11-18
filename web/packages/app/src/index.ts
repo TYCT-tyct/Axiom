@@ -28,6 +28,5 @@ export {
   useSignOut,
   useStartSession,
 } from "./session";
-export { Shell } from "./shell";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
 export { NewVersionNotice } from "./version";
