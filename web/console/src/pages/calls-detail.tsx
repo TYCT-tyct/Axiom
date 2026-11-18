@@ -309,7 +309,7 @@ function SplitUnavailableDetail(p: SplitProps) {
     <DesktopFail
       t={(k) => failZh[k]}
       link={CallBoardLink}
-      values={{ onlyErr: false, hideScrim: true, ...view.values }}
+      values={{ onlyBody: true, hideScrim: true, ...view.values }}
       rows={view.rows}
       text={view.text}
     />

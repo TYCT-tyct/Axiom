@@ -283,10 +283,11 @@ function FilterSegRow(p: FilterSourceProps & { customPicked: boolean; onPickPres
   );
 }
 
-function filterBarKey(f: CallFilters) {
+function filterBarKey(f: CallFilters, preset?: PresetChoice) {
   return [
     f.since ?? "",
     f.until ?? "",
+    preset ?? "",
     f.model ?? "",
     f.client_app ?? "",
     f.key_id ?? "",
@@ -303,6 +304,7 @@ function CallsFilterForm({
   preset,
   showMore,
   onToggleMore,
+  onReset,
   onApply,
 }: {
   t: TFunction;
@@ -310,6 +312,7 @@ function CallsFilterForm({
   preset?: PresetChoice;
   showMore: boolean;
   onToggleMore: () => void;
+  onReset: () => void;
   onApply: (next: FilterPatch) => void;
 }) {
   const [draft, setDraft] = useState<Draft>(() => draftFromFilters(filters));
@@ -342,7 +345,14 @@ function CallsFilterForm({
         text={{ label: t("callsBoard.filter.more") }}
       />
       <input type="submit" hidden />
-      <Link to="/calls" search={clearSearch}>
+      <Link
+        to="/calls"
+        search={clearSearch}
+        onClick={() => {
+          setDraft(draftFromFilters(clearSearch));
+          onReset();
+        }}
+      >
         {t("callsBoard.filter.resetShort")}
       </Link>
       {showMore ? <ExtraFields t={t} draft={draft} setDraft={setDraft} /> : null}
@@ -361,31 +371,35 @@ export function CallsFilterBar(p: FilterSourceProps) {
       missingKeyOption,
   );
   const [showMore, setShowMore] = useState(hasAdvanced);
-  const [customPicked, setCustomPicked] = useState(false);
+  const draftKey = filterBarKey(p.filters, p.preset);
+  const [customDraftKey, setCustomDraftKey] = useState<string>();
+  // Reset the date editor on navigation while keeping the range buttons mounted for keyboard focus.
+  if (customDraftKey !== undefined && customDraftKey !== draftKey) setCustomDraftKey(undefined);
   useEffect(() => {
     if (hasAdvanced) setShowMore(true);
   }, [hasAdvanced]);
   const handlePickPreset = (picked: RangePreset) => {
     if (picked === "custom") {
-      setCustomPicked(true);
+      setCustomDraftKey(draftKey);
       setShowMore(true);
       return;
     }
-    setCustomPicked(false);
+    setCustomDraftKey(undefined);
     p.onApply({ ...p.filters, ...dateRangeForPreset(picked), preset: picked === "all" ? undefined : picked });
   };
   return (
     <section aria-label={p.t("callsBoard.filter.more")}>
-      <FilterSegRow {...p} customPicked={customPicked} onPickPreset={handlePickPreset} />
+      <FilterSegRow {...p} customPicked={customDraftKey === draftKey} onPickPreset={handlePickPreset} />
       <CallsFilterForm
-        key={filterBarKey(p.filters)}
+        key={draftKey}
         t={p.t}
         filters={p.filters}
         preset={p.preset}
         showMore={showMore}
         onToggleMore={() => setShowMore((v) => !v)}
+        onReset={() => setCustomDraftKey(undefined)}
         onApply={(next) => {
-          setCustomPicked(false);
+          setCustomDraftKey(undefined);
           p.onApply(next);
         }}
       />

@@ -89,6 +89,16 @@ const listTableElements: NonNullable<Region["elements"]> = {
   },
 };
 
+const detailPageElements: NonNullable<Region["elements"]> = {
+  ...unbuiltElements,
+  ".p-logs": { unless: "hidePage", set: { style: "{{pageStyle}}" } },
+  ".qph": { unless: "onlyBody" },
+  ".usf": { unless: "onlyBody" },
+  ".lgsum": { unless: "onlyBody" },
+  ".lgw": { set: { style: "{{wrapStyle}}" } },
+  ...listTableElements,
+};
+
 const detailNavAndIdsElements: NonNullable<Region["elements"]> = {
   ".lgscrim": { unless: "hideScrim", set: { onclick: "{{onClose}}", style: "{{scrimStyle}}" } },
   ".lgd": { unless: "hideDetail", set: { style: "{{detailStyle}}" } },
@@ -297,13 +307,7 @@ function logsAttemptsRegion(board: string): Region {
       genBarStyle: { selector: ".lgtl .lgg", attribute: "style" },
     },
     elements: {
-      ...unbuiltElements,
-      ".p-logs": { unless: "hidePage", set: { style: "{{pageStyle}}" } },
-      ".qph": { unless: "onlyBody" },
-      ".usf": { unless: "onlyBody" },
-      ".lgsum": { unless: "onlyBody" },
-      ".lgw": { set: { style: "{{wrapStyle}}" } },
-      ...listTableElements,
+      ...detailPageElements,
       ".lgmore": { unless: "hideMore" },
       ".lgmore .btn": { set: { onclick: "{{onMore}}", disabled: "{{moreDisabled}}" } },
       ...detailCardElements,
@@ -347,13 +351,7 @@ function logsFailRegion(board: string): Region {
       modelDotStyle: { selector: ".lgdh .lgm > i", attribute: "style" },
     },
     elements: {
-      ...unbuiltElements,
-      ".p-logs": { unless: "hidePage", set: { style: "{{pageStyle}}" } },
-      ".qph": { unless: "onlyErr" },
-      ".usf": { unless: "onlyErr" },
-      ".lgsum": { unless: "onlyErr" },
-      ".lgw": { set: { style: "{{wrapStyle}}" } },
-      ...listTableElements,
+      ...detailPageElements,
       ...detailNavAndIdsElements,
       ".lgdh": { unless: "onlyErr" },
       ".lgsec:has(.lgerr)": { set: { style: "{{errSecStyle}}" } },

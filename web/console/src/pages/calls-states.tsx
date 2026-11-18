@@ -29,6 +29,7 @@ export function CallsAlertBanner({
     <LogsFail
       t={(k) => failZh[k]}
       values={{
+        onlyBody: true,
         onlyErr: true,
         unbuilt: true,
         hideList: true,
