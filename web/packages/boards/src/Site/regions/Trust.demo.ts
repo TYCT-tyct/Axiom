@@ -2,5 +2,5 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Trust.tsx";
 import type en from "./Trust.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {},   });
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {ledgerNote: t("m2bcc8efa57")},  });
 /* jscpd:ignore-end */

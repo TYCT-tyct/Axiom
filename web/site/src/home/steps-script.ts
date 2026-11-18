@@ -18,7 +18,8 @@ type State = {
   cStat: Word | "";
   cU0: string;
   cU1: string;
-  cUrl: string;
+  // how much of the site's API address is typed in: null for all of it
+  cUrl: number | null;
   cK0: string;
   cK1: string;
   cKey: string;
@@ -31,7 +32,6 @@ type State = {
 
 const KEY = "sk-ax-7f3c9a1e5b02";
 const KEY_MASK = "sk-ax-7f3c••••••••";
-const URL = "https://api.axiom.example/v1";
 const GL = "@%#*+=-:SXt8";
 const glyph = () => GL[Math.floor(Math.random() * GL.length)] as string;
 // the finished picture: what the screen shows at rest, before it is seen and under reduced motion
@@ -48,7 +48,7 @@ const DONE: State = {
   cStat: "saved",
   cU0: "del",
   cU1: "",
-  cUrl: URL,
+  cUrl: null,
   cK0: "del",
   cK1: "",
   cKey: KEY_MASK,
@@ -71,7 +71,7 @@ const START: State = {
   cStat: "",
   cU0: "",
   cU1: "off",
-  cUrl: "",
+  cUrl: 0,
   cK0: "",
   cK1: "off",
   cKey: "",
@@ -103,7 +103,7 @@ class StepsRun implements Script<Input> {
   private readonly clock;
   private readonly still = reducedMotion();
   private readonly seen;
-  private readonly state: State = { ...DONE };
+  private readonly state: State;
   private run = 0;
   private dead = false;
   private readonly go = [0, 1, 2].map((i) => () => {
@@ -111,10 +111,13 @@ class StepsRun implements Script<Input> {
   });
   private readonly steps = [this.makeKey, this.editConfig, this.firstRequest];
 
+  // url is where the reader's base_url goes: the site's API address
   constructor(
     stage: HTMLElement,
     private readonly changed: () => void,
+    private readonly url: () => string,
   ) {
+    this.state = { ...DONE };
     this.clock = timeline(stage);
     this.seen = firstSeen(stage, 0.35);
     this.seen.promise.then(() => {
@@ -152,9 +155,10 @@ class StepsRun implements Script<Input> {
       if (!(await this.wait(own, 40))) return false;
     }
   }
-  private async type(own: number, key: "cUrl" | "cKey", text: string, ms: number) {
-    for (let j = 1; j <= text.length; j++) {
-      this.set({ [key]: text.slice(0, j) });
+  // types n characters in, one each ms, writing how many are in with to
+  private async type(own: number, n: number, ms: number, to: (j: number) => Partial<State>) {
+    for (let j = 1; j <= n; j++) {
+      this.set(to(j));
       if (!(await this.wait(own, ms))) return false;
     }
     return true;
@@ -174,10 +178,18 @@ class StepsRun implements Script<Input> {
   private async editConfig(own: number) {
     this.rail(own, 0.5, 1, 3200);
     this.set({ cStat: "editing", cU0: "del", cU1: "" });
-    if (!(await this.wait(own, 250)) || !(await this.type(own, "cUrl", URL, 28)) || !(await this.wait(own, 250)))
+    if (
+      !(await this.wait(own, 250)) ||
+      !(await this.type(own, this.url().length, 28, (j) => ({ cUrl: j }))) ||
+      !(await this.wait(own, 250))
+    )
       return false;
     this.set({ cK0: "del", cK1: "" });
-    if (!(await this.wait(own, 250)) || !(await this.type(own, "cKey", KEY_MASK, 34))) return false;
+    if (
+      !(await this.wait(own, 250)) ||
+      !(await this.type(own, KEY_MASK.length, 34, (j) => ({ cKey: KEY_MASK.slice(0, j) })))
+    )
+      return false;
     this.set({ cStat: "saved" });
     return this.wait(own, 800);
   }
@@ -224,7 +236,7 @@ class StepsRun implements Script<Input> {
       m3_cU0: state.cU0,
       m3_cU0m: minus(state.cU0),
       m3_cU1: state.cU1,
-      m3_cUrl: state.cUrl,
+      m3_cUrl: this.url().slice(0, state.cUrl ?? undefined),
       m3_cK0: state.cK0,
       m3_cK0m: minus(state.cK0),
       m3_cK1: state.cK1,
@@ -248,4 +260,5 @@ class StepsRun implements Script<Input> {
   }
 }
 
-export const start = (stage: HTMLElement, changed: () => void): Script<Input> => new StepsRun(stage, changed);
+export const start = (stage: HTMLElement, changed: () => void, url: () => string): Script<Input> =>
+  new StepsRun(stage, changed, url);

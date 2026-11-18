@@ -119,6 +119,7 @@
 :global(.under .hfm .frame):where(.scope){position:relative!important;background:transparent!important;overflow:visible}
 :global(.under .hfm > .board > .frame):where(.scope){overflow:hidden}
 :global(.under .hfm):where(.scope){opacity:.001;transform:translateY(24px);transition:opacity 250ms ease-out,transform 250ms ease-out}
+:global(.under .hfm.in):where(.scope){opacity:1;transform:none}
 :global(.under .serif):where(.scope){font-family:'AX Serif','Axiom CJK',serif!important;font-weight:600!important;letter-spacing:-.01em!important}
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}

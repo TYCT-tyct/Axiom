@@ -129,16 +129,10 @@
 :global(.hfm4 .tx .kbar.full i):where(.scope){background:var(--warnDot)}
 :global(.hfm4 .tx .kcs):where(.scope){display:flex;gap:4px}
 :global(.hfm4 .tx .kc):where(.scope){display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:6px;background:var(--hover);color:var(--text1)}
-:global(.hfm4 .tx .ent):where(.scope){display:flex;align-items:center;gap:24px;padding:20px 24px;border-radius:12px;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--hair)}
-:global(.hfm4 .tx .et):where(.scope){display:flex;flex-direction:column;gap:2px;font-size:16px;line-height:26px}
-:global(.hfm4 .tx .et b):where(.scope){display:flex;align-items:center;gap:8px;font-weight:500;color:var(--text1)}
-:global(.hfm4 .tx .soon):where(.scope){display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:6px;font-style:normal;font-weight:400;font-size:12px;line-height:18px;background:var(--hover);color:var(--text2)}
-:global(.hfm4 .tx .et span):where(.scope){font-size:12px;line-height:18px;color:var(--text2)}
 :global(.hfm4 .d .sec):where(.scope){padding:120px 120px 0}
 :global(.hfm4 .d h2):where(.scope){font-size:48px;line-height:56px}
 :global(.hfm4 .d .cards):where(.scope){grid-template-columns:repeat(3,minmax(0,1fr));gap:24px;margin-top:56px}
 :global(.hfm4 .d .card p):where(.scope){padding-right:16px}
-:global(.hfm4 .d .ent):where(.scope){margin-top:40px}
 :global(.under .hfm > .board):where(.scope){width:100% !important}
 :global(.under .lede.lens):where(.scope){--lv:var(--veilStrong)}
 @media (min-width:1600px){
@@ -151,6 +145,7 @@
 :global(.under .hfm .frame):where(.scope){position:relative!important;background:transparent!important;overflow:visible}
 :global(.under .hfm > .board > .frame):where(.scope){overflow:hidden}
 :global(.under .hfm):where(.scope){opacity:.001;transform:translateY(24px);transition:opacity 250ms ease-out,transform 250ms ease-out}
+:global(.under .hfm.in):where(.scope){opacity:1;transform:none}
 :global(.under .serif):where(.scope){font-family:'AX Serif','Axiom CJK',serif!important;font-weight:600!important;letter-spacing:-.01em!important}
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}

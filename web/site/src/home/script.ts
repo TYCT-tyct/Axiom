@@ -1,3 +1,4 @@
+import { reducedMotion } from "@axiom/fx";
 import { type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -6,13 +7,14 @@ import { useTranslation } from "react-i18next";
 // state moves; destroy stops it for good.
 export type Script<Input> = { values: (input: Input) => Record<string, unknown>; destroy: () => void };
 
-// firstSeen resolves the first time threshold of element is in view, as the board's screens start their scripts.
+// firstSeen resolves the first time threshold of element is in view, as the board's screens start their scripts. An
+// entry can intersect with less than the threshold showing (the edge just in), so the ratio decides.
 export function firstSeen(element: Element, threshold: number) {
   let observer: IntersectionObserver | undefined;
   const promise = new Promise<void>((seen) => {
     observer = new IntersectionObserver(
       (entries) => {
-        if (entries.some((entry) => entry.isIntersecting)) {
+        if (entries.some((entry) => entry.isIntersecting && entry.intersectionRatio >= threshold)) {
           observer?.disconnect();
           seen();
         }
@@ -54,10 +56,11 @@ export const screenVars = (...extra: string[]) =>
 export function useScript<S extends Script<never>>(
   start: (stage: HTMLElement, changed: () => void) => S,
   input: NoInfer<Parameters<S["values"]>[0]>,
-): { setStage: RefCallback<Element>; script: S | null; values: Record<string, unknown> | undefined } {
+): { setStage: RefCallback<Element>; script: S | null; values: Record<string, unknown> | undefined; entered: boolean } {
   const [stage, setStageElement] = useState<HTMLElement | null>(null);
   const [script, setScript] = useState<S | null>(null);
   const [, setVersion] = useState(0);
+  const [entered, setEntered] = useState(false);
   const latest = useRef(start);
   latest.current = start;
   const setStage = useCallback((element: Element | null) => {
@@ -67,18 +70,38 @@ export function useScript<S extends Script<never>>(
     if (!stage) return;
     const running = latest.current(stage, () => setVersion((n) => n + 1));
     setScript(running);
+    // the screen fades in the first time an eighth of it is seen (the board's .hfm.in), at once under reduced motion
+    const seen = firstSeen(stage, reducedMotion() ? 0 : 0.12);
+    seen.promise.then(() => setEntered(true));
+    stage.addEventListener("keydown", press);
     return () => {
       running.destroy();
+      seen.cancel();
+      stage.removeEventListener("keydown", press);
       setScript(null);
     };
   }, [stage]);
-  return { setStage, script, values: script?.values(input) };
+  return { setStage, script, values: script?.values(input), entered };
+}
+
+// A row the board makes clickable is a button to the keyboard too (the regions' role="button"): Enter and Space press it.
+function press(e: KeyboardEvent) {
+  const control = e.target instanceof HTMLElement && e.target.matches("[role=button]") ? e.target : null;
+  if (control && (e.key === "Enter" || e.key === " ")) {
+    e.preventDefault();
+    control.click();
+  }
 }
 
 // useBoardWords gives a screen its region's own words in the page's language: they come with the screen's code, not
-// with the page's messages, which the first screen loads.
-export function useBoardWords<K extends string>(zh: Record<K, string>, en: Record<K, string>) {
+// with the page's messages, which the first screen loads. after adds the page's words to some of them, as the sample
+// data notes that say what a demonstration is.
+export function useBoardWords<K extends string>(
+  zh: Record<K, string>,
+  en: Record<K, string>,
+  after: Partial<Record<K, string>> = {},
+) {
   const { i18n } = useTranslation();
   const words = i18n.language === "en" ? en : zh;
-  return (key: K) => words[key];
+  return (key: K) => (after[key] ? `${words[key]}${after[key]}` : words[key]);
 }

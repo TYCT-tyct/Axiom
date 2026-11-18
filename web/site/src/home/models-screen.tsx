@@ -17,22 +17,19 @@ import { DataState, EmptyState, useFormat } from "@axiom/ui";
 import { useLayoutEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { links } from "./links";
+import styles from "./models-screen.module.css";
 import { start } from "./models-script";
 import { screenVars, useBoardWords, useScript } from "./script";
-import styles from "./models-screen.module.css";
 
 const zh = { ...wideZh, ...wideRowZh, ...titleZh, ...narrowZh, ...narrowRowZh };
 const en = { ...wideEn, ...wideRowEn, ...titleEn, ...narrowEn, ...narrowRowEn };
 
 const vars = screenVars(
-  "--ok: var(--ok)",
-  "--warn: var(--warn)",
-  "--bad: var(--bad)",
   "--failText: var(--badT)",
   "--pickRing: light-dark(rgba(0, 162, 199, 0.22), rgba(0, 162, 199, 0.32))",
 );
 // The columns the API cannot fill, whose figures are the board's kind of sample (models-script.ts): their headings say so.
-const sampled = new Set<keyof typeof zh>(["mddab042697", "m51694b10eb", "m16ece33056"]);
+const sampled = ["mddab042697", "m51694b10eb", "m16ece33056"] as const;
 
 // The models-and-routes screen (Site.dc.html M2): the site's models and their routes from listPublicModels, and in
 // place of the list and the panel the state of that call until it has models to show. onWhale is the whale's easter
@@ -42,7 +39,7 @@ export function ModelsScreen({ wide, onWhale = () => {} }: { wide: boolean; onWh
   const format = useFormat();
   // the script draws on every frame of its tweens: the names are made once per language
   const names = useMemo(() => new Intl.DisplayNames(i18n.language, { type: "currency" }), [i18n.language]);
-  const { setStage, script, values } = useScript(
+  const { setStage, script, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide, onWhale),
     {
       t: (word, options) => t(`script.models.${word}`, options),
@@ -51,12 +48,9 @@ export function ModelsScreen({ wide, onWhale = () => {} }: { wide: boolean; onWh
     },
   );
   useLayoutEffect(() => script?.layout());
-  const word = useBoardWords(zh, en);
-  const board = (key: keyof typeof zh) => {
-    const text = word(key);
-    return sampled.has(key) ? `${text} · ${t("script.models.sample")}` : text;
-  };
-  const v = { ...values, m2_vars: vars, m2_setStage: setStage };
+  const note = ` · ${t("script.models.sample")}`;
+  const board = useBoardWords(zh, en, Object.fromEntries(sampled.map((key) => [key, note])));
+  const v = { ...values, m2_vars: vars, m2_setStage: setStage, m2_in: entered ? "in" : "" };
   const Region = wide ? Wide : Narrow;
   const Row = wide ? WideRow : NarrowRow;
   const query = script?.query();

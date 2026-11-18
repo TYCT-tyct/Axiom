@@ -102,19 +102,19 @@ const trustEnglish: Record<string, string> = {
   mc25db45edc: "Charged",
   m8d580f9d86: "This month",
   m28e7909661: "One line per request",
-  m2bcc8efa57:
-    "Model, route, tokens and amount are recorded request by request, can be filtered by key and exported as CSV. A failed request costs nothing.",
   m9ee5734476: "Monthly limit",
   m000f03156e: "Models",
   m95ed54ee52: "IP allowlist",
   mad99584991: "Every key has its own ceiling",
   mcb7f6ab708:
     "Set a monthly limit, the models and the IPs that may call, key by key. When the limit is reached the key stops, and nothing more is charged.",
-  m68a5540554: "Paying as a company",
-  mb53be09930: "Coming",
-  m8c8a601024:
-    "Bank transfer, VAT invoices and purchase contracts are being prepared. If you need them, file a ticket and we will contact you when they open.",
 };
+
+// A screen fades in the first time it is seen (the board's .hfm.in); the script sets the hole.
+const entrance = (screen: string, hole: string) => ({
+  [`.under > .${screen}`]: { set: { class: `hfm ${screen} {{${hole}}}` } },
+});
+const pressable = { set: { tabindex: "0", role: "button" } };
 
 const screens = (board: string): Region[] => [
   {
@@ -125,9 +125,9 @@ const screens = (board: string): Region[] => [
     // the title is the page's: the board's phrases in Chinese (ModelsTitle), plain text in English; the list and the
     // panel are ModelsRow, which the page swaps for a state while the models are loading, failed or none
     slots: { title: ".hfm2 .hl h2", row: ".hfm2 .sec > .row" },
-    // the card naming the pick, left out while no model is shown
-    elements: { ".hfm2 .frame > .pick": { unless: "m2_noPick" } },
-    classes: { m2_pickCls: ["fail"] },
+    // the card naming the pick, left out while no route is picked
+    elements: { ...entrance("hfm2", "m2_in"), ".hfm2 .frame > .pick": { unless: "m2_noPick" } },
+    classes: { m2_pickCls: ["fail"], m2_in: ["in"] },
     english: modelsEnglish,
   },
   {
@@ -136,6 +136,8 @@ const screens = (board: string): Region[] => [
     roots: [".hfm2 .sec > .row > *"],
     // the API publishes no usage, so the list has no trend to show (port design R14)
     omit: [".mr > .mt"],
+    // a model is chosen from the keyboard as well (the script turns Enter and Space into its click)
+    elements: { ".mr": pressable },
     // the prices are in the site's currency, which the page names
     text: { unit: ".pf > span:first-child" },
     attributes: { moreHref: { selector: ".more", attribute: "href" } },
@@ -149,16 +151,20 @@ const screens = (board: string): Region[] => [
     // the docs page comes with S4
     omit: [".frame > canvas", ".cta .outline"],
     attributes: { signUpHref: { selector: ".cta .primary", attribute: "href" } },
-    classes: stepClasses,
+    elements: { ...entrance("hfm3", "m3_in"), ".hfm3 div.st": pressable },
+    classes: { ...stepClasses, m3_in: ["in"] },
     english: stepsEnglish,
   },
   {
     board,
     name: "Trust",
     roots: [".under > .hfm4"],
-    // there is no ticket desk to send a company's request to yet
-    omit: [".frame > canvas", ".ent .etb"],
-    classes: trustClasses,
+    // paying as a company (bank transfer, invoices) is not in the product (docs/frontend.md「不做」)
+    omit: [".frame > canvas", ".ent"],
+    // the ledger card's sentence is the page's: who is not charged is the billing rule's, not the board's wording
+    text: { ledgerNote: ".cards > article:nth-child(2) > p" },
+    elements: entrance("hfm4", "m4_in"),
+    classes: { ...trustClasses, m4_in: ["in"] },
     english: trustEnglish,
   },
 ];

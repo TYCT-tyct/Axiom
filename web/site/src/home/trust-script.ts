@@ -51,20 +51,14 @@ function routeValues(only: boolean, t: Input["t"]) {
   return v;
 }
 
-const emptyRow = (p: string) => ({ [`${p}c`]: "off", [`${p}t`]: "", [`${p}m`]: "", [`${p}r`]: "", [`${p}f`]: "" });
 const rowClass = (row: Row, last: boolean) =>
   [row.fresh && "new", row.retry && "retry", last && "old"].filter(Boolean).join(" ");
 
-// the ledger's lines, the newest on top; a retried request is not charged
+// the ledger's lines, the newest on top, always NL of them; an attempt that was retried is not charged
 function ledgerValues(rows: Row[], t: Input["t"]) {
   const v: Record<string, unknown> = {};
-  for (let i = 0; i < NL; i++) {
-    const row = rows[i];
+  for (const [i, row] of rows.entries()) {
     const p = `m4_g${i}`;
-    if (!row) {
-      Object.assign(v, emptyRow(p));
-      continue;
-    }
     v[`${p}c`] = rowClass(row, i === NL - 1);
     v[`${p}t`] = row.time;
     v[`${p}m`] = row.model;

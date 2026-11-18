@@ -9,24 +9,27 @@ const same = (a: Scroll, b: Scroll) =>
 
 // scrolled reads where the page is (Site.dc.html onScroll): the header gives way to the island once the page moves,
 // the island names the section a third of the way down the view and its depth, and the sea dims as the page goes
-// down. offsets are where the sections start.
-function scrolled(scroller: HTMLElement, offsets: number[]): Scroll & { dim: number } {
+// down. offsets are where the sections on the page start, each with its index in sections; a screen still to come is
+// not among them.
+type Offset = { sec: number; top: number };
+function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: number } {
   const y = scroller.scrollTop;
   const view = scroller.clientHeight;
   const down = Math.min(1, y / Math.max(1, scroller.scrollHeight - view));
   const probe = y + view * 0.35;
   let i = 0;
-  while (i < offsets.length - 1 && (offsets[i + 1] ?? 0) <= probe) i++;
-  const start = offsets[i] ?? 0;
-  const end = i < offsets.length - 1 ? (offsets[i + 1] ?? 0) : start + view;
+  while (i < offsets.length - 1 && (offsets[i + 1]?.top ?? 0) <= probe) i++;
+  const start = offsets[i]?.top ?? 0;
+  const end = offsets[i + 1]?.top ?? start + view;
   const k = Math.min(1, Math.max(0, (probe - start) / Math.max(1, end - start)));
   const last = sections.length - 1;
-  const from = sections[Math.min(i, last)]?.depth ?? 0;
-  const to = sections[Math.min(i + 1, last)]?.depth ?? from;
+  const sec = Math.min(offsets[i]?.sec ?? 0, last);
+  const from = sections[sec]?.depth ?? 0;
+  const to = sections[Math.min(sec + 1, last)]?.depth ?? from;
   return {
     solid: y > 8,
-    sec: Math.min(i, last),
-    depth: i >= last ? from : Math.round(from + (to - from) * k),
+    sec,
+    depth: sec >= last ? from : Math.round(from + (to - from) * k),
     bottom: down > 0.985,
     dim: 0.42 * down ** 1.3,
   };
@@ -35,11 +38,16 @@ function scrolled(scroller: HTMLElement, offsets: number[]): Scroll & { dim: num
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top (native
 // smooth scrolling, not the board's eased frames; a jump under reduced motion). Gliding to a section and the tour
 // through them come with the sections, in S2.
+// The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
+const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-sec]")];
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
-  let offsets = [0];
+  let offsets: Offset[] = [{ sec: 0, top: 0 }];
   return {
     measure: () => {
-      offsets = [0, ...[...scroller.querySelectorAll<HTMLElement>(".under > .hfm")].map((s) => s.offsetTop)];
+      offsets = [
+        { sec: 0, top: 0 },
+        ...places(scroller).map((s) => ({ sec: Number(s.dataset.sec), top: s.offsetTop })),
+      ];
     },
     onScroll: () => {
       const { dim, ...scroll } = scrolled(scroller, offsets);
@@ -110,7 +118,8 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     });
     page.measure();
     page.onScroll();
-    resized.observe(scroller);
+    // a place grows when its screen's code arrives, and the sections after it move down
+    for (const element of [scroller, ...places(scroller)]) resized.observe(element);
     scroller.addEventListener("scroll", page.onScroll, { passive: true });
     frame.addEventListener("click", onClick);
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);

@@ -24,11 +24,11 @@ async function watch(page: Page) {
 
 // Scrolls the home page's scroller to each screen in turn, letting each one's code arrive and its script draw.
 async function throughScreens(page: Page) {
-  for (const screen of [".hfm2", ".hfm3", ".hfm4"]) {
-    const element = page.locator(screen);
-    await element.waitFor({ state: "attached" });
-    await element.evaluate((el) => el.scrollIntoView({ block: "start" }));
-    await expect(element).toBeInViewport();
+  for (const sec of [2, 3, 4]) {
+    const place = page.locator(`.under [data-sec="${sec}"]`);
+    await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
+    // seen, and faded in (the board's .hfm.in)
+    await expect.poll(() => place.locator(".hfm").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
   }
 }
 

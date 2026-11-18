@@ -13,7 +13,17 @@ import { firstSeen, type Script } from "./script";
 type Word = keyof typeof zh.script.models extends infer K ? (K extends `${infer B}_${"one" | "other"}` ? B : K) : never;
 type Price = { amount: string; value: number; currency: string };
 type Route = { name: string; input?: Price; output?: Price };
-type Model = { name: string; author: string; context?: number; output?: number; routes: Route[]; from?: Price };
+// priced: the site publishes this model's prices (listPublicModels leaves every pricing out when it keeps them to
+// members); a published price may still lack an item, which is then unavailable rather than hidden
+type Model = {
+  name: string;
+  author: string;
+  context?: number;
+  output?: number;
+  routes: Route[];
+  from?: Price;
+  priced: boolean;
+};
 
 const NR = 6;
 const NROUTE = 4;
@@ -68,16 +78,26 @@ const modelOf = (m: Schemas["PublicModel"]): Model => ({
     output: priceOf(e.pricing, "output"),
   })),
   from: priceOf(m.pricing, "input"),
+  priced: m.pricing !== undefined || (m.endpoints ?? []).some((e) => e.pricing !== undefined),
 });
 
-const cost = (route: Route) => route.input?.value ?? Number.POSITIVE_INFINITY;
-// the route the gateway would pick: the cheapest one that is up
+// the route shown as the gateway's pick: the cheapest input price among those up; without comparable prices (hidden or
+// missing) none is named
 function pickOf(model: Model, down: number) {
   let best = -1;
   model.routes.forEach((route, j) => {
-    if (j !== down && (best < 0 || cost(route) < cost(model.routes[best] as Route))) best = j;
+    const low = model.routes[best]?.input?.value ?? Number.POSITIVE_INFINITY;
+    if (j !== down && route.input && route.input.value < low) best = j;
   });
   return best;
+}
+
+// The routes the panel's rows show, by index into the model's: the first ones, and the pick in the last row when it
+// lies beyond them, so the card's lead always has its row.
+function visibleRoutes(model: Model | undefined, pick: number) {
+  const first = Array.from({ length: Math.min(NROUTE, model?.routes.length ?? 0) }, (_, j) => j);
+  if (pick >= NROUTE) first[NROUTE - 1] = pick;
+  return first;
 }
 
 type Input = {
@@ -143,7 +163,8 @@ function bridge(leads: Element, row: Box | undefined, panel: Box) {
 }
 
 // the list's rows: each model's name, its lowest price and its routes; the rows beyond the list are hidden
-function listValues(list: { m: Model; i: number }[], sel: number, { t, money }: Input) {
+function listValues(list: { m: Model; i: number }[], sel: number, input: Input) {
+  const { t } = input;
   const v: Record<string, unknown> = {};
   for (let k = 0; k < NR; k++) {
     const x = list[k];
@@ -158,12 +179,16 @@ function listValues(list: { m: Model; i: number }[], sel: number, { t, money }: 
     );
     v[`${p}c`] = x.i === sel ? "on" : "";
     v[`${p}n`] = x.m.name;
-    v[`${p}p`] = cheapest ? money(cheapest) : "—";
+    v[`${p}p`] = priceText(x.m, cheapest, input);
     v[`${p}d`] = x.m.author;
     v[`${p}r`] = t("routes", { count: x.m.routes.length });
   }
   return v;
 }
+
+// a price as the list writes it: hidden prices are a dash, a published price without this item is unavailable
+const priceText = (model: Model, price: Price | undefined, { t, money }: Input) =>
+  price ? money(price) : model.priced ? t("unavailable") : "—";
 
 const noRoute = (p: string) => ({
   [`${p}c`]: "off",
@@ -178,34 +203,39 @@ const noRoute = (p: string) => ({
 // a route's cells: its prices, a bar against the dearest (top), and the sample first token and uptime; the one down
 // shows its timeout, and as the last tick of its strip
 function routeCells(
+  model: Model,
   r: Route,
   p: string,
   sample: [number, number],
   state: { chosen: boolean; down: boolean; top: number },
-  { t, money }: Input,
+  input: Input,
 ) {
   const share = r.input && state.top > 0 ? Math.round((r.input.value / state.top) * 100) : 0;
+  const { t } = input;
   return {
     [`${p}c`]: [state.chosen && "chosen", state.down && "down"].filter(Boolean).join(" "),
     [`${p}n`]: r.name,
-    [`${p}a`]: r.input ? money(r.input) : "—",
-    [`${p}b`]: r.output ? money(r.output) : "—",
+    [`${p}a`]: priceText(model, r.input, input),
+    [`${p}b`]: priceText(model, r.output, input),
     [`${p}w`]: `${share}%`,
     [`${p}t`]: state.down ? t("timeout") : sampleTtft(...sample),
     [`${p}u`]: sampleUp(...sample),
   };
 }
 
-// the panel's routes, the rows beyond the model's own hidden
+// the panel's rows (visibleRoutes), the rows beyond the model's own hidden
 function routeValues(model: Model | undefined, sel: number, down: number, input: Input) {
   const v: Record<string, unknown> = {};
   const pick = model ? pickOf(model, down) : -1;
   const top = Math.max(0, ...(model?.routes ?? []).map((r) => r.input?.value ?? 0));
-  for (let j = 0; j < NROUTE; j++) {
+  const rows = visibleRoutes(model, pick);
+  for (let row = 0; row < NROUTE; row++) {
+    const j = rows[row] ?? -1;
     const r = model?.routes[j];
-    const p = `m2_u${j}`;
-    for (let q = 0; q < NT; q++) v[`m2_q${j}_${q}`] = r && j === down && q === NT - 1 ? "x" : "";
-    Object.assign(v, r ? routeCells(r, p, [sel, j], { chosen: j === pick, down: j === down, top }, input) : noRoute(p));
+    const p = `m2_u${row}`;
+    for (let q = 0; q < NT; q++) v[`m2_q${row}_${q}`] = r && j === down && q === NT - 1 ? "x" : "";
+    const state = { chosen: j === pick, down: j === down, top };
+    Object.assign(v, model && r ? routeCells(model, r, p, [sel, j], state, input) : noRoute(p));
   }
   return v;
 }
@@ -222,7 +252,7 @@ function nameValues(name: string, mt: number | null) {
   };
 }
 
-// the panel's model and the card naming the gateway's pick, or the route it moved to after one failed
+// the panel's model and the card naming the gateway's pick, or, in the demonstrated failover, the route it would move to
 function pickValues(model: Model | undefined, down: number, fail: number, t: Input["t"]) {
   const chosen = model?.routes[model ? pickOf(model, down) : -1];
   const failed = model?.routes[fail];
@@ -245,8 +275,8 @@ function pickValues(model: Model | undefined, down: number, fail: number, t: Inp
 // the prices' unit: the site's currency, which the list's prices carry; a site that keeps its prices to members
 // publishes none (listPublicModels), and the line says so
 function unitOf(models: Model[], { t, currency }: Input) {
-  const code = models.flatMap((m) => [m.from, ...m.routes.map((r) => r.input)]).find(Boolean)?.currency;
-  return code ? t("unit", { unit: currency(code) }) : t("noPrice");
+  const code = models.flatMap((m) => [m.from, ...m.routes.flatMap((r) => [r.input, r.output])]).find(Boolean)?.currency;
+  return models.some((m) => m.priced) && code ? t("unit", { unit: currency(code) }) : t("noPrice");
 }
 
 type State = {
@@ -379,11 +409,15 @@ class ModelsRun implements ModelsScript {
     this.set({ sel: i, down: -1, fail: -1 });
     this.tween("mt", 420);
   }
+  // the panel follows the filter: its first model, or none when the filter has no models
   private pickFilter(i: number) {
     this.hold = false;
     this.set({ filter: i });
-    const first = this.all().findIndex((m) => FILTERS[i]?.(m.author));
-    if (first >= 0) this.select(first);
+    this.select(this.all().findIndex((m) => FILTERS[i]?.(m.author)));
+  }
+  // the selected model, only while the filter shows it
+  private selected() {
+    return this.shown().find((x) => x.i === this.state.sel)?.m;
   }
   private hover(k: number) {
     const x = this.shown()[k];
@@ -394,9 +428,9 @@ class ModelsRun implements ModelsScript {
   }
 
   private async failover() {
-    const model = this.all()[this.state.sel];
-    if (!model) return;
-    const was = pickOf(model, -1);
+    const model = this.selected();
+    const was = model ? pickOf(model, -1) : -1;
+    if (!model || was < 0) return;
     this.glide = true;
     this.set({ down: was, fail: was });
     if (!(await this.clock.sleep(2600))) return;
@@ -407,7 +441,7 @@ class ModelsRun implements ModelsScript {
     for (let n = 1; await this.clock.sleep(5200); ) {
       if (this.hold) continue;
       // every third turn, the chosen route drops out and the gateway moves to the next one
-      if (n++ % 3 === 0 && (this.all()[this.state.sel]?.routes.length ?? 0) > 1) {
+      if (n++ % 3 === 0 && this.canFail()) {
         await this.failover();
         continue;
       }
@@ -418,17 +452,32 @@ class ModelsRun implements ModelsScript {
     }
   }
 
+  // a failover can be shown when another priced route would take over from the pick
+  private canFail() {
+    const model = this.selected();
+    return model !== undefined && pickOf(model, pickOf(model, -1)) >= 0;
+  }
+  // the chosen route's status dot, by the panel row that shows that route
   private chosenDot() {
-    const model = this.all()[this.state.sel];
-    return model && this.parts.routes?.children[pickOf(model, this.state.down)]?.querySelector(".dot");
+    const model = this.selected();
+    const pick = model ? pickOf(model, this.state.down) : -1;
+    const row = visibleRoutes(model, pick).indexOf(pick);
+    return pick < 0 ? undefined : this.parts.routes?.children[row]?.querySelector(".dot");
   }
   private selectedRow() {
     return this.narrow ? undefined : [...(this.parts.list?.children ?? [])].find((el) => el.classList.contains("on"));
   }
+  // the chosen route's dot, the leads shown only while there is one: none is left pointing at an earlier route
+  private showLeads() {
+    const dot = this.chosenDot();
+    const { leads } = this.parts;
+    if (leads instanceof SVGElement) leads.style.visibility = dot ? "visible" : "hidden";
+    return dot;
+  }
   // the lead from the card to the chosen route, and a hairline bridge from the selected model to the panel
   private place(move: boolean) {
     const { panel, leads, pick: card } = this.parts;
-    const dotEl = this.chosenDot();
+    const dotEl = this.showLeads();
     if (!panel || !leads || !(card instanceof HTMLElement) || !dotEl) return;
     const box = measurer(this.stage);
     const dot = box(dotEl);
@@ -482,18 +531,18 @@ class ModelsRun implements ModelsScript {
     const { state } = this;
     const all = this.all();
     const known = !state.error && all.length > 0;
-    const model = all[state.sel];
+    const model = this.selected();
     const v: Record<string, unknown> = {
       ...this.refs,
       m2_rl: this.leave,
-      m2_noPick: !known,
+      m2_noPick: !model || pickOf(model, state.down) < 0,
       m2_s0: decode(known ? String(all.length) : "—", state.st),
       m2_s1: decode(known ? all.reduce((sum, m) => sum + m.routes.length, 0).toLocaleString("en-US") : "—", state.st),
       m2_s2: decode(input.t("sampleTokens"), state.st),
       m2_upd: known ? hhmm(state.at) : "—",
       ...listValues(this.shown(), state.sel, input),
       ...routeValues(model, state.sel, state.down, input),
-      ...nameValues(model?.name ?? "", state.mt),
+      ...nameValues(model?.name ?? (known ? input.t("noneInFilter") : ""), state.mt),
       ...pickValues(model, state.down, state.fail, input.t),
       unit: unitOf(all, input),
     };

@@ -16,14 +16,11 @@ export default {
   "mc25db45edc": "Charged",
   "m8d580f9d86": "This month",
   "m28e7909661": "One line per request",
-  "m2bcc8efa57": "Model, route, tokens and amount are recorded request by request, can be filtered by key and exported as CSV. A failed request costs nothing.",
   "m9ee5734476": "Monthly limit",
   "m000f03156e": "Models",
   "m95ed54ee52": "IP allowlist",
   "mad99584991": "Every key has its own ceiling",
   "mcb7f6ab708": "Set a monthly limit, the models and the IPs that may call, key by key. When the limit is reached the key stops, and nothing more is charged.",
-  "m68a5540554": "Paying as a company",
-  "mb53be09930": "Coming",
-  "m8c8a601024": "Bank transfer, VAT invoices and purchase contracts are being prepared. If you need them, file a ticket and we will contact you when they open."
+  "m2bcc8efa57": ""
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

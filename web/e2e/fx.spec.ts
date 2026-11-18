@@ -179,10 +179,20 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
 });
 
 // The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
-// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view.
+// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The
+// places (data-sec) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
 const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
-const scrollTo = (page: Page, selector: string) =>
-  page.locator(selector).evaluate((el) => el.scrollIntoView({ block: "start" }));
+const place = (page: Page, sec: number) => page.locator(`.under [data-sec="${sec}"]`);
+const scrollTo = (page: Page, sec: number) => place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
+// a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
+const shown = (page: Page, sec: number) =>
+  expect
+    .poll(() =>
+      place(page, sec)
+        .locator(".hfm")
+        .evaluate((el) => getComputedStyle(el).opacity),
+    )
+    .toBe("1");
 
 test("each screen below the first loads as it nears the view, and plays only while it is seen", async ({ page }) => {
   const asked: string[] = [];
@@ -194,10 +204,11 @@ test("each screen below the first loads as it nears the view, and plays only whi
   await open(page);
   // the models screen lies within a view's height of the first; the steps one below it does not
   await expect.poll(() => asked).toEqual(["models"]);
-  await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("claude-sonnet-4");
+  await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
-  await scrollTo(page, ".hfm3");
+  await scrollTo(page, 3);
   await expect.poll(() => asked).toEqual(["models", "steps", "trust"]);
+  await shown(page, 3);
   await running(page);
   await setHidden(page, true);
   const hidden = (await loop(page)).frames;
@@ -205,6 +216,9 @@ test("each screen below the first loads as it nears the view, and plays only whi
   expect(await loop(page)).toMatchObject({ frames: hidden, pending: false });
   await setHidden(page, false);
   await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
+
+  // the island names the section being read
+  await expect(page.locator(".isl")).toContainText("三步开始");
 
   // past every screen nothing is in view to play
   await page.evaluate(() => {
@@ -220,28 +234,63 @@ test("each screen below the first loads as it nears the view, and plays only whi
   expect((await loop(page)).frames).toBe(away);
 });
 
-test("under reduced motion the screens below show their end and do not turn", async ({ page }) => {
+test("under reduced motion the screens below show their end at once and do not turn", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  await scrollTo(page, ".hfm3");
+  for (const sec of [2, 3, 4]) {
+    await scrollTo(page, sec);
+    await shown(page, sec);
+  }
   // the three steps are done: the first request has come back
   await expect(page.locator(".hfm3 .c200.ok")).toHaveText("200");
-  await scrollTo(page, ".hfm2");
-  await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("claude-sonnet-4");
+  await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("gpt-5");
   // no script owns anything on the loop, so the list cannot move on to the next model
   await pause(page);
   expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
 });
 
+test("a model and a step are chosen from the keyboard", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 2);
+  const second = page.locator(".hfm2 .mr").nth(1);
+  await second.focus();
+  await page.keyboard.press("Enter");
+  await expect(second).toHaveClass(/\bon\b/);
+  await expect(page.locator(".hfm2 .mr .mn").nth(1)).not.toHaveText("");
+  await expect(page.locator(".hfm2 .mr[tabindex='0']")).toHaveCount(await page.locator(".hfm2 .mr").count());
+  await expect(page.locator(".hfm3 .st[role='button']")).toHaveCount(3);
+});
+
 test("the models screen shows the call's failure, not the board's figures, when the models cannot be had", async ({
   page,
 }) => {
-  await page.route(/\/api\/console\/v1\/models(\?|$)/, (route) => route.fulfill({ status: 500, body: "{}" }));
   await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await scrollTo(page, ".hfm2");
+  await mockConsole(page);
+  // after the usual mocks, so this answer is the one the page gets
+  await page.route(/\/api\/console\/v1\/models(\?|$)/, (route) => route.fulfill({ status: 500, body: "{}" }));
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 2);
   await expect(page.locator(".hfm2").getByRole("alert")).toBeVisible();
   await expect(page.locator(".hfm2 .mr")).toHaveCount(0);
   await expect(page.locator(".hfm2 .pick")).toHaveCount(0);
+});
+
+test("a screen whose code fails to arrive says so and loads on retry", async ({ page }) => {
+  let failed = false;
+  await page.route(/\/assets\/steps-screen-[\w-]+\.js$/, (route) => {
+    if (failed) return route.continue();
+    failed = true;
+    return route.abort("internetdisconnected");
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 3);
+  const retry = place(page, 3).getByRole("button");
+  await expect(retry).toBeVisible();
+  await retry.click();
+  await shown(page, 3);
 });
