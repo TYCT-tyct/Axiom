@@ -6,18 +6,10 @@ import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query
 import type { TFunction } from "i18next";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { billingPreferenceChoice, billingPreferenceChoices } from "../billing-preference";
 import { type ThemeChoice, useBoardInputs } from "./account-board";
 
 export type DisplayNameState = { available: boolean; name: string };
-export type BillingOption = "site" | Schemas["BillingPreferenceRequest"]["preference"];
-
-export const billingOptions: readonly BillingOption[] = [
-  "site",
-  "subscription_first",
-  "wallet_first",
-  "subscription_only",
-  "wallet_only",
-];
 
 // Read the personal account's display name; older backend nodes (404 or absent `name`) degrade cleanly.
 export const displayNameQuery = queryOptions({
@@ -190,8 +182,8 @@ export function buildLanguageRows(t: TFunction, english: boolean): SessionCardRo
 }
 
 export function buildBillingRows(t: TFunction, data: Schemas["BillingPreference"]): SessionCardRows {
-  const active: BillingOption = data.source === "account" ? data.preference : "site";
-  return billingOptions.map((option) => {
+  const active = billingPreferenceChoice(data);
+  return billingPreferenceChoices.map((option) => {
     const label =
       option === "site"
         ? t("settings.billing.site", { value: t(`settings.billing.values.${data.site_default}`) })

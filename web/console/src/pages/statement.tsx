@@ -1,170 +1,276 @@
-import type { Schemas } from "@axiom/api";
-import { LoadMore, useErrors, useSessionBound } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
+import { ApiError } from "@axiom/api";
+import { useErrors, useSessionBound } from "@axiom/app";
+import {
+  Button,
+  Card,
+  Cluster,
+  DataTable,
+  FormError,
+  Note,
+  SegmentedControl,
+  Stack,
+  useFormat,
+  usePageTitle,
+} from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { memo, useMemo, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { statementQuery } from "../queries";
-import { raised, save, statementCsv, statementFile } from "../statement";
+import { save, statementCsv, statementFile } from "../statement";
+import {
+  browserTimeZone,
+  dailyNetChange,
+  type StatementDay,
+  type StatementRow,
+  statementDailyQuery,
+} from "./bill-data";
+import { BillPagedList, BillShell } from "./bill-shell";
 
-export default function Statement() {
-  const { t } = useTranslation();
-  const statement = useInfiniteQuery(statementQuery);
-  const [failed, setFailed] = useState<unknown>(null);
-  const rows = useMemo(() => statement.data?.pages.flatMap((page) => page.data) ?? [], [statement.data]);
-  return (
-    <>
-      <PageHeader title={t("nav.statement")} description={t("statement.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        <Panel title={t("statement.movements")} action={<Export onFailed={setFailed} />}>
-          {failed ? <ExportFailed error={failed} /> : null}
-          <DataState
-            query={statement}
-            isEmpty={() => rows.length === 0}
-            empty={<NoMovements more={statement.hasNextPage} />}
-          >
-            {() => <StatementTable rows={rows} />}
-          </DataState>
-          <LoadMore list={statement} />
-        </Panel>
-        <p className="max-w-prose text-ui text-t3">{t("statement.note")}</p>
-      </div>
-    </>
-  );
-}
+type StatementViewMode = "movements" | "daily";
 
-function NoMovements({ more }: { more: boolean }) {
+function StatementKindText({ kind }: { kind: StatementRow["kind"] }) {
   const { t } = useTranslation();
-  return (
-    <EmptyState title={t(more ? "statement.segment.title" : "statement.empty.title")}>
-      {t(more ? "statement.segment.body" : "statement.empty.body")}
-      <p className="mt-2">
-        <Link to="/balance" className="text-accent underline-offset-4 hover:underline">
-          {t("statement.empty.balance")}
-        </Link>
-      </p>
-    </EmptyState>
-  );
-}
-
-// Export downloads the statement as a CSV file. The request is the page's own, not a query: it runs once, when asked
-// for, and a second press waits for the first. The download is bound to the session that asked, so another tab passing
-// the browser to someone else abandons it instead of saving one account's statement into the other's.
-function Export({ onFailed }: { onFailed: (error: unknown) => void }) {
-  const { t } = useTranslation();
-  const bound = useSessionBound();
-  const [busy, setBusy] = useState(false);
-  const start = () => {
-    setBusy(true);
-    onFailed(null);
-    void bound(async (signal) => statementFile(await statementCsv(signal)))
-      .then((answer) => {
-        if (answer) {
-          save(answer.value);
-        }
-      })
-      .catch(onFailed)
-      .finally(() => setBusy(false));
+  const labels: Record<StatementRow["kind"], string> = {
+    top_up: t("statement.kind.top_up"),
+    gift: t("statement.kind.gift"),
+    redeem: t("statement.kind.redeem"),
+    spend: t("statement.kind.spend"),
+    expiry: t("statement.kind.expiry"),
+    refund: t("statement.kind.refund"),
+    reversal: t("statement.kind.reversal"),
+    freeze: t("statement.kind.freeze"),
+    unfreeze: t("statement.kind.unfreeze"),
+    chargeback: t("statement.kind.chargeback"),
+    chargeback_reversal: t("statement.kind.chargeback_reversal"),
   };
-  return (
-    <Button size="sm" onClick={start} disabled={busy} aria-busy={busy}>
-      {busy ? <Icon name="refresh" className="animate-spin" /> : null}
-      {t("statement.export")}
-    </Button>
-  );
+  return <strong>{labels[kind]}</strong>;
 }
 
-function ExportFailed({ error }: { error: unknown }) {
+function isCallReference(row: StatementRow) {
+  return (row.kind === "spend" || row.kind === "reversal") && row.reference.length > 0;
+}
+
+function MovementKindCell({ row }: { row: StatementRow }) {
   const { t } = useTranslation();
-  const errors = useErrors();
+  const shortRef = row.reference ? `${row.reference.slice(0, 8)}…` : "";
   return (
-    <p role="alert" className="border-b border-b1 px-4 py-2 text-ui text-bad [overflow-wrap:anywhere]">
-      {t("statement.exportFailed", { reason: errors.message(error) })}
-    </p>
+    <Stack gap={4}>
+      <StatementKindText kind={row.kind} />
+      {isCallReference(row) ? (
+        <Link to="/calls/$callId" params={{ callId: row.reference }} title={row.reference}>
+          {t("statement.call", { id: shortRef })}
+        </Link>
+      ) : shortRef ? (
+        <span title={row.reference}>{shortRef}</span>
+      ) : null}
+    </Stack>
   );
 }
 
-function StatementTable({ rows }: { rows: Schemas["StatementRow"][] }) {
-  const { t } = useTranslation();
-  return (
-    <Table label={t("nav.statement")}>
-      <thead>
-        <tr>
-          <Th>{t("statement.col.time")}</Th>
-          <Th>{t("statement.col.kind")}</Th>
-          <Th className="text-right">{t("statement.col.amount")}</Th>
-          <Th className="text-right">{t("statement.col.balance")}</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <MovementRow key={row.id} row={row} />
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-const MovementRow = memo(function MovementRow({ row }: { row: Schemas["StatementRow"] }) {
+function MovementsTable({ rows }: { rows: readonly StatementRow[] }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const credit = raised(row.amount.amount);
-  const hold = row.kind === "freeze" || row.kind === "unfreeze";
   return (
-    <tr className="hover:bg-s2">
-      <Td className="whitespace-nowrap">{format.dateTime(new Date(row.at))}</Td>
-      <Td className="whitespace-nowrap">
-        {t(`statement.kind.${row.kind}`)}
-        <span className="block">
-          <Reference row={row} />
-        </span>
-      </Td>
-      <Td
-        className={
-          credit ? "text-right whitespace-nowrap tabular-nums text-ok" : "text-right whitespace-nowrap tabular-nums"
-        }
-      >
-        {credit ? "+" : ""}
-        {format.money(hold ? row.frozen_change : row.amount)}
-        {hold ? <span className="block text-label text-t3">{t("statement.frozenChange")}</span> : null}
-      </Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">
-        {row.balance_after ? (
-          format.money(row.balance_after)
-        ) : (
-          <span className="text-t3" title={t("statement.balanceUnknownNote")}>
-            {t("statement.balanceUnknown")}
-          </span>
-        )}
-        <span className="block text-label text-t3">
-          {t("statement.frozenAfter", { amount: format.money(row.frozen_after) })}
-        </span>
-      </Td>
-    </tr>
+    <DataTable<StatementRow>
+      label={t("nav.statement")}
+      rows={rows}
+      rowKey={(row) => row.id}
+      columns={[
+        {
+          key: "time",
+          header: t("statement.col.time"),
+          cell: (row) => format.dateTime(new Date(row.at)),
+        },
+        {
+          key: "kind",
+          header: t("statement.col.kind"),
+          cell: (row) => <MovementKindCell row={row} />,
+        },
+        {
+          key: "amount",
+          header: t("statement.col.amount"),
+          align: "end",
+          cell: (row) => {
+            const hold = row.kind === "freeze" || row.kind === "unfreeze";
+            return (
+              <Stack gap={4}>
+                <span>{format.money(hold ? row.frozen_change : row.amount)}</span>
+                {hold ? <span>{t("statement.frozenChange")}</span> : null}
+              </Stack>
+            );
+          },
+        },
+        {
+          key: "balance",
+          header: t("statement.col.balance"),
+          align: "end",
+          cell: (row) => (
+            <Stack gap={4}>
+              {row.balance_after === null ? (
+                <span title={t("statement.balanceUnknownNote")}>{t("statement.balanceUnknown")}</span>
+              ) : (
+                <span>{format.money(row.balance_after)}</span>
+              )}
+              <span>{t("statement.frozenAfter", { amount: format.money(row.frozen_after) })}</span>
+            </Stack>
+          ),
+        },
+      ]}
+    />
   );
-});
+}
 
-// A movement's reference is the call it charged, or the batch it came from: a charge opens the call, which says what the
-// money bought, and the rest are named in full on hover. It sits under the kind, so a narrow screen keeps it.
-function Reference({ row }: { row: Schemas["StatementRow"] }) {
+function MovementsView() {
   const { t } = useTranslation();
-  const short = `${row.reference.slice(0, 8)}…`;
-  if (row.kind === "spend" || row.kind === "reversal") {
+  const query = useInfiniteQuery(statementQuery);
+  return (
+    <BillPagedList
+      query={query}
+      title={t("statement.movements")}
+      lede={t("statement.note")}
+      emptyTitle={t("statement.empty.title")}
+      emptyBody={t("statement.empty.body")}
+      segmentTitle={t("statement.segment.title")}
+      segmentBody={t("statement.segment.body")}
+      emptyAction={
+        <Button asChild variant="secondary">
+          <Link to="/balance">{t("statement.empty.balance")}</Link>
+        </Button>
+      }
+      renderTable={(rows) => <MovementsTable rows={rows} />}
+    />
+  );
+}
+
+function DayActivitySummary({ day }: { day: StatementDay }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const parts: string[] = [];
+  if (BigInt(day.topped_up.amount) !== 0n)
+    parts.push(t("statement.bill.daily.toppedUp", { amount: format.money(day.topped_up) }));
+  if (BigInt(day.gifted.amount) !== 0n)
+    parts.push(t("statement.bill.daily.gifted", { amount: format.money(day.gifted) }));
+  if (BigInt(day.spent.amount) !== 0n) parts.push(t("statement.bill.daily.spent", { amount: format.money(day.spent) }));
+  if (BigInt(day.expired.amount) !== 0n)
+    parts.push(t("statement.bill.daily.expired", { amount: format.money(day.expired) }));
+  return <span>{parts.length > 0 ? parts.join(" · ") : t("statement.bill.daily.zeroNet")}</span>;
+}
+
+function DailyTable({ rows }: { rows: readonly StatementDay[] }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <DataTable<StatementDay>
+      label={t("statement.bill.daily.title")}
+      rows={rows}
+      rowKey={(day) => day.day}
+      columns={[
+        { key: "day", header: t("statement.bill.daily.col.day"), cell: (day) => day.day },
+        {
+          key: "summary",
+          header: t("statement.bill.daily.col.summary"),
+          cell: (day) => <DayActivitySummary day={day} />,
+        },
+        {
+          key: "closing",
+          header: t("statement.bill.daily.col.closing"),
+          align: "end",
+          cell: (day) =>
+            day.closing_balance === null ? t("statement.balanceUnknown") : format.money(day.closing_balance),
+        },
+        {
+          key: "net",
+          header: t("statement.bill.daily.col.net"),
+          align: "end",
+          cell: (day) => format.money({ amount: dailyNetChange(day), currency: day.spent.currency }),
+        },
+      ]}
+    />
+  );
+}
+
+function DailyView() {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const timeZone = browserTimeZone();
+  const query = useInfiniteQuery({
+    ...statementDailyQuery(timeZone),
+    retry: (count, error) =>
+      !(error instanceof ApiError && (error.status === 404 || error.status === 400)) && count < 2,
+  });
+
+  if (query.error instanceof ApiError && query.error.status === 404) {
     return (
-      <Link
-        to="/calls/$callId"
-        params={{ callId: row.reference }}
-        title={row.reference}
-        className="font-mono text-label text-t3 underline-offset-4 hover:text-t1 hover:underline"
-      >
-        {t("statement.call", { id: short })}
-      </Link>
+      <Card title={t("statement.bill.daily.title")}>
+        <Note title={t("statement.bill.daily.unavailable")} />
+      </Card>
     );
   }
+  if (query.error instanceof ApiError && query.error.status === 400) {
+    const badZone = errors.field(query.error, "time_zone");
+    const overBudget = query.error.fields.some(({ pointer }) => pointer === "");
+    if (badZone || overBudget) {
+      return (
+        <Card title={t("statement.bill.daily.title")}>
+          <Note
+            title={
+              badZone ? t("statement.bill.daily.badTimeZone", { tz: timeZone }) : t("statement.bill.daily.tooMany")
+            }
+          />
+        </Card>
+      );
+    }
+  }
+
   return (
-    <span className="font-mono text-label text-t4" title={row.reference}>
-      {short}
-    </span>
+    <BillPagedList
+      query={query}
+      title={t("statement.bill.daily.title")}
+      lede={t("statement.bill.daily.note", { tz: timeZone })}
+      emptyTitle={t("statement.bill.daily.empty")}
+      emptyBody={t("statement.bill.daily.emptyBody")}
+      renderTable={(rows) => <DailyTable rows={rows} />}
+    />
+  );
+}
+
+export default function StatementPage() {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const bound = useSessionBound();
+  const [view, setView] = useState<StatementViewMode>("movements");
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
+  usePageTitle(t("nav.statement"));
+
+  const handleExport = () => {
+    setExporting(true);
+    setExportError(null);
+    void bound(async (signal) => statementFile(await statementCsv(signal)))
+      .then((res) => res && save(res.value))
+      .catch((error) => setExportError(errors.message(error)))
+      .finally(() => setExporting(false));
+  };
+
+  return (
+    <BillShell activeTab="statement" title={t("nav.statement")} subtitle={t("statement.description")}>
+      <Cluster justify="between" gap={12}>
+        <SegmentedControl
+          label={t("statement.bill.daily.viewLabel")}
+          value={view}
+          options={[
+            { value: "movements", label: t("statement.bill.daily.movements") },
+            { value: "daily", label: t("statement.bill.daily.daily") },
+          ]}
+          onChange={setView}
+        />
+        <Button variant="secondary" size="sm" disabled={exporting} onClick={handleExport}>
+          {t("statement.export")}
+        </Button>
+      </Cluster>
+      {exportError ? <FormError>{t("statement.exportFailed", { reason: exportError })}</FormError> : null}
+      {view === "movements" ? <MovementsView /> : <DailyView />}
+    </BillShell>
   );
 }

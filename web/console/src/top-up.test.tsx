@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it } from "vitest";
 import { Checkout } from "./order-status";
-import { balanceMoved, orderMoved } from "./top-up";
+import { balanceMoved, orderMoved } from "./pages/bill-topup-state";
 
 const i18n = createInstance();
 

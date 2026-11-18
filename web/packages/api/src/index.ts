@@ -123,17 +123,6 @@ export async function unwrap<T>(call: Promise<Settled<T>>): Promise<T> {
   return (await unwrapChange(call)).data;
 }
 
-// unwrapWithStatus is unwrap and the HTTP status, for an operation whose answer means different things by status: a
-// top-up is a waiting order with a checkout (201), one the channel has not confirmed (202), or one that is no longer
-// waiting (200).
-export async function unwrapWithStatus<T>(call: Promise<Settled<T>>): Promise<{ data: T; status: number }> {
-  const { data, response } = await settle(call);
-  if (data === undefined) {
-    throw new ApiError(response.status, response.headers.get("X-Request-ID"));
-  }
-  return { data, status: response.status };
-}
-
 // unwrapEmpty is unwrap for an operation that answers 204.
 export async function unwrapEmpty(call: Promise<Settled<unknown>>) {
   await settle(call);

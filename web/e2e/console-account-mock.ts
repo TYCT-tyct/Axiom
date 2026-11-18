@@ -8,7 +8,6 @@ export type AccountMockFields = {
   displayName: string;
   pendingEmail?: string;
   emailConfirmToken?: string;
-  billingPreference: Schemas["BillingPreference"];
   notifications: Schemas["NotificationPreferences"];
   sessions: Schemas["SessionDevice"][];
   invitees: Schemas["Invitee"][];
@@ -25,7 +24,6 @@ const signedIn = { level: "signed_in" } as const;
 export function usualAccountFields(): AccountMockFields {
   return {
     displayName: "林知远",
-    billingPreference: { preference: "subscription_first", source: "site", site_default: "subscription_first" },
     notifications: {
       low_balance: true,
       top_up: true,
@@ -131,18 +129,6 @@ function confirmEmailChange({ body, state }: Ctx<"/api/console/v1/profile/email/
   return ok({ csrf_token, ...(state.mfaEnabled ? { recovery_codes: recoveryCodes } : {}) });
 }
 
-function setBillingPreference({ body, state }: Ctx<"/api/console/v1/billing-preference", "put">) {
-  state.billingPreference =
-    body.preference === "site"
-      ? {
-          preference: state.billingPreference.site_default,
-          source: "site",
-          site_default: state.billingPreference.site_default,
-        }
-      : { preference: body.preference, source: "account", site_default: state.billingPreference.site_default };
-  return ok(state.billingPreference);
-}
-
 function changePassword({ body, state }: Ctx<"/api/console/v1/password", "post">) {
   if (state.mfaEnabled && state.level !== "mfa") return fail(403, "mfa_required");
   if (body.current_password !== state.user.password) return fail(401, "invalid_credentials");
@@ -212,8 +198,6 @@ export function accountHandlers<S extends AccountState>(): Handler<S>[] {
     route("post", `${base}/profile/name`, signedIn, changeDisplayName),
     route("post", `${base}/profile/email`, signedIn, requestEmailChange),
     route("post", `${base}/profile/email/confirm`, signedIn, confirmEmailChange),
-    route("get", `${base}/billing-preference`, signedIn, ({ state }) => ok(state.billingPreference)),
-    route("put", `${base}/billing-preference`, signedIn, setBillingPreference),
     route("get", `${base}/sessions`, signedIn, ({ state }) => ok({ sessions: state.sessions })),
     route("delete", `${base}/sessions`, signedIn, revokeAllSessions),
     route("delete", `${base}/sessions/{session_id}`, signedIn, revokeOneSession),

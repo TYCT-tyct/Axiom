@@ -5,6 +5,7 @@ import {
   usualAccountFields,
   worstAccountFields,
 } from "./console-account-mock.ts";
+import { type BillMockState, emptyBillState, usualBillState, worstBillDaily } from "./console-bill-data.ts";
 import { buildMockCall } from "./console-calls-data.ts";
 import type { AuthState } from "./mock.ts";
 import { authState } from "./mock-auth.ts";
@@ -16,7 +17,8 @@ import { authState } from "./mock-auth.ts";
 export type Schemas = components["schemas"];
 
 export type MockState = AuthState &
-  AccountMockFields & {
+  AccountMockFields &
+  BillMockState & {
     site: Schemas["Site"];
     legal: Schemas["LegalDocument"][];
     legalAccepted: boolean;
@@ -27,7 +29,6 @@ export type MockState = AuthState &
     models: Schemas["PublicModel"][];
     statement: Schemas["StatementRow"][];
     orders: Schemas["Order"][];
-    methods: Schemas["PaymentMethod"][];
     presets: Schemas["RoutingPreset"][];
     routingDefault: Schemas["AccountRoutingDefault"];
     usageBackfillComplete?: boolean;
@@ -345,10 +346,7 @@ export function usualState(): MockState {
     models: range(4).map((n) => aModel(n)),
     statement: range(120).map((n) => aMovement(n)),
     orders: range(12).map((n) => anOrder(n)),
-    methods: [
-      { method: "alipay", total: cny("7373"), fee: cny("73") },
-      { method: "wxpay", total: cny("7380"), fee: cny("80") },
-    ],
+    ...usualBillState(),
     ...usualPresets(),
   };
 }
@@ -364,6 +362,7 @@ export function emptyState(): MockState {
     orders: [],
     methods: [],
     presets: [],
+    ...emptyBillState(),
     routingDefault: { version: 0, new_keys_preset_id: systemPreset },
   };
   state.balance = { ...state.balance, batches: [] };
@@ -507,6 +506,7 @@ function worstMoney(state: MockState, host: string) {
     { method, total: most, fee: most },
     ...range(8).map((n) => ({ method: `method-${n}`, total: cny(String(7000 + n)), fee: cny(String(n)) })),
   ];
+  state.statementDaily = worstBillDaily();
   state.notifications = {
     ...state.notifications,
     threshold: "9223372036854775807",

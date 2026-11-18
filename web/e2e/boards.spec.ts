@@ -240,7 +240,7 @@ for (const region of regions.filter((region) => region.render && region.roots.in
         // These roots belong to the frame, not its scrolling page. A page consumer mounts phone sheets here too.
         await page.evaluate(() => {
           const frame = document.querySelector(".fr") as Element;
-          for (const sheet of document.querySelectorAll(".lgsheet")) frame.append(sheet);
+          for (const overlay of document.querySelectorAll(".lgsheet, .nkscrim, .nkdlg")) frame.append(overlay);
         });
         const reference = await openBoard(
           browser,

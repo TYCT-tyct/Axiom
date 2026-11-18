@@ -1,4 +1,4 @@
-import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
 import { can, claimSession, holdsIdentity, useErrors, useSession } from "@axiom/app";
 import DesktopProfile from "@axiom/boards/AxApp/regions/Profile";
 import DesktopProfileEn from "@axiom/boards/AxApp/regions/Profile.en";
@@ -24,13 +24,12 @@ import { type UseQueryResult, useMutation, useQuery, useQueryClient } from "@tan
 import { useNavigate } from "@tanstack/react-router";
 import { type FormEvent, type SyntheticEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { billingPreferenceChoices, useSaveBillingPreference } from "../billing-preference";
 import { billingPreferenceQuery } from "../queries";
 import { boardPageStyle, clickedRowIndex, makeBoardT, useEnglish, useWide } from "./account-board";
 import { AccountActionCard } from "./account-cards";
 import { type EmailConfirmStatus, useEmailConfirm } from "./settings-confirm";
 import {
-  type BillingOption,
-  billingOptions,
   buildBillingRows,
   buildLanguageRows,
   buildProfileActionRows,
@@ -48,26 +47,6 @@ const emailIssueKeys = {
   unchanged: "settings.profile.emailUnchanged",
   passwordRequired: "settings.profile.emailPasswordRequired",
 } as const;
-
-function useSaveBilling(onSaved: (message: string) => void, onError: (error: unknown) => void) {
-  const { t } = useTranslation();
-  const client = useQueryClient();
-  return useMutation({
-    onMutate: () => claimSession(client),
-    mutationFn: (choice: BillingOption) =>
-      unwrap(consoleApi.PUT("/api/console/v1/billing-preference", { body: { preference: choice } })),
-    onSuccess: (next, _choice, claim) => {
-      if (!claim || !holdsIdentity(client, claim.identity)) return;
-      client.setQueryData(billingPreferenceQuery.queryKey, next);
-      onError(null);
-      onSaved(t("settings.saved"));
-    },
-    onError: (error, _choice, claim) => {
-      if (!claim || !holdsIdentity(client, claim.identity)) return;
-      onError(error);
-    },
-  });
-}
 
 export default function Settings() {
   const { t } = useTranslation();
@@ -141,7 +120,10 @@ function BillingAndWorkspaces({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const preference = useQuery(billingPreferenceQuery);
-  const saveBilling = useSaveBilling(onNotice, onBillingError);
+  const saveBilling = useSaveBillingPreference(() => {
+    onBillingError(null);
+    onNotice(t("settings.saved"));
+  }, onBillingError);
   return (
     <>
       <BillingSection
@@ -151,7 +133,7 @@ function BillingAndWorkspaces({
         preference={preference}
         saving={saveBilling.isPending}
         onBillingClick={(event) => {
-          const choice = billingOptions[clickedRowIndex(event.target)];
+          const choice = billingPreferenceChoices[clickedRowIndex(event.target)];
           if (choice && !saveBilling.isPending) saveBilling.mutate(choice);
         }}
       />
