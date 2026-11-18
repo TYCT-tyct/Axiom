@@ -180,9 +180,9 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
 
 // The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
 // and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The
-// places (data-sec) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
+// places (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
 const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
-const place = (page: Page, sec: number) => page.locator(`.under [data-sec="${sec}"]`);
+const place = (page: Page, sec: number) => page.locator(`.under [data-place="${sec}"]`);
 const scrollTo = (page: Page, sec: number) => place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
 // a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
 const shown = (page: Page, sec: number) =>
@@ -279,7 +279,7 @@ test("the models screen shows the call's failure, not the board's figures, when 
   await expect(page.locator(".hfm2 .pick")).toHaveCount(0);
 });
 
-test("a screen whose code fails to arrive says so and loads on retry", async ({ page }) => {
+test("a screen whose code fails to arrive says so, and retrying reloads the page and loads it", async ({ page }) => {
   let failed = false;
   await page.route(/\/assets\/steps-screen-[\w-]+\.js$/, (route) => {
     if (failed) return route.continue();
@@ -291,6 +291,22 @@ test("a screen whose code fails to arrive says so and loads on retry", async ({ 
   await scrollTo(page, 3);
   const retry = place(page, 3).getByRole("button");
   await expect(retry).toBeVisible();
-  await retry.click();
+  await Promise.all([page.waitForEvent("load"), retry.click()]);
+  await pageHeading(page);
+  await scrollTo(page, 3);
   await shown(page, 3);
+});
+
+test("without the site's API address the steps say so rather than show an empty one saved", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", {
+    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 3);
+  await shown(page, 3);
+  await expect(page.locator(".hfm3")).toContainText("本站 API 地址暂不可用");
+  await expect(page.locator(".hfm3")).not.toContainText("已保存");
 });

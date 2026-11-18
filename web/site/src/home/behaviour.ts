@@ -25,11 +25,13 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
   const last = sections.length - 1;
   const sec = Math.min(offsets[i]?.sec ?? 0, last);
   const from = sections[sec]?.depth ?? 0;
-  const to = sections[Math.min(sec + 1, last)]?.depth ?? from;
+  // toward the next section on the page, which need not be the next in sections; the last one holds its depth
+  const next = offsets[i + 1];
+  const to = next ? (sections[Math.min(next.sec, last)]?.depth ?? from) : from;
   return {
     solid: y > 8,
     sec,
-    depth: sec >= last ? from : Math.round(from + (to - from) * k),
+    depth: Math.round(from + (to - from) * k),
     bottom: down > 0.985,
     dim: 0.42 * down ** 1.3,
   };
@@ -39,14 +41,14 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 // smooth scrolling, not the board's eased frames; a jump under reduced motion). Gliding to a section and the tour
 // through them come with the sections, in S2.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
-const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-sec]")];
+const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
   return {
     measure: () => {
       offsets = [
         { sec: 0, top: 0 },
-        ...places(scroller).map((s) => ({ sec: Number(s.dataset.sec), top: s.offsetTop })),
+        ...places(scroller).map((s) => ({ sec: Number(s.dataset.place), top: s.offsetTop })),
       ];
     },
     onScroll: () => {

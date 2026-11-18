@@ -54,6 +54,7 @@ export default {
       justNow: "just now",
       editing: "Editing",
       saved: "Saved",
+      noApi: "This site's API address is unavailable",
       waitSend: "Waiting to send",
       waitReply: "Waiting for reply",
       ok: "OK",

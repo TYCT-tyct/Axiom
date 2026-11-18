@@ -60,6 +60,7 @@ export default {
       justNow: "刚刚",
       editing: "编辑中",
       saved: "已保存",
+      noApi: "本站 API 地址暂不可用",
       waitSend: "等待发送",
       waitReply: "等待响应",
       ok: "OK",

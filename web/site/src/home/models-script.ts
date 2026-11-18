@@ -23,6 +23,8 @@ type Model = {
   routes: Route[];
   from?: Price;
   priced: boolean;
+  // the currency the published prices are in, whatever they price (tokens, images...)
+  currency?: string;
 };
 
 const NR = 6;
@@ -79,6 +81,7 @@ const modelOf = (m: Schemas["PublicModel"]): Model => ({
   })),
   from: priceOf(m.pricing, "input"),
   priced: m.pricing !== undefined || (m.endpoints ?? []).some((e) => e.pricing !== undefined),
+  currency: (m.pricing ?? m.endpoints?.find((e) => e.pricing)?.pricing)?.currency,
 });
 
 // the route shown as the gateway's pick: the cheapest input price among those up; without comparable prices (hidden or
@@ -275,8 +278,8 @@ function pickValues(model: Model | undefined, down: number, fail: number, t: Inp
 // the prices' unit: the site's currency, which the list's prices carry; a site that keeps its prices to members
 // publishes none (listPublicModels), and the line says so
 function unitOf(models: Model[], { t, currency }: Input) {
-  const code = models.flatMap((m) => [m.from, ...m.routes.flatMap((r) => [r.input, r.output])]).find(Boolean)?.currency;
-  return models.some((m) => m.priced) && code ? t("unit", { unit: currency(code) }) : t("noPrice");
+  const code = models.find((m) => m.currency)?.currency;
+  return code ? t("unit", { unit: currency(code) }) : t("noPrice");
 }
 
 type State = {

@@ -32,12 +32,12 @@ type Loading =
   | { status: "error"; error: unknown; at: number };
 
 // Until its screen's code is there, a slot holds a view's height, so the screens after it start below the view and
-// load in turn as the reader comes near them. The place carries its section for the island (behaviour.ts). Code that
-// fails to arrive (the network dropped) leaves the failure and a retry in the place, not an empty screen.
+// load in turn as the reader comes near them. The place carries its section for the island (behaviour.ts) as
+// data-place: the screen inside it has the board's data-sec too. Code that fails to arrive (the network dropped) leaves
+// the failure in the place; retrying reloads the page, as a browser may keep a module's failed load for the document.
 function Slot({ sec, load, wide }: { sec: number; load: () => Promise<Screen>; wide: boolean }) {
   const place = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState<Loading>({ status: "pending" });
-  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let live = true;
     const cancel = nearView(place.current, () => {
@@ -50,14 +50,11 @@ function Slot({ sec, load, wide }: { sec: number; load: () => Promise<Screen>; w
       live = false;
       cancel();
     };
-  }, [load, attempt]);
-  const retry = () => {
-    setLoading({ status: "pending" });
-    setAttempt((n) => n + 1);
-  };
+  }, [load]);
+  const retry = () => window.location.reload();
   const Loaded = loading.status === "success" ? loading.screen : null;
   return (
-    <div ref={place} data-sec={sec}>
+    <div ref={place} data-place={sec}>
       {Loaded ? (
         <Loaded wide={wide} />
       ) : (

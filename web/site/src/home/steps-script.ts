@@ -218,6 +218,15 @@ class StepsRun implements Script<Input> {
     }
   }
 
+  // the address line: the site's API address as far as it is typed; without one (the site gives none, or its call
+  // failed) the line says so and the configuration is not shown as saved
+  private configValues(t: Input["t"]) {
+    const { cStat, cUrl } = this.state;
+    const url = this.url();
+    if (!url) return { m3_cUrl: t("noApi"), m3_cStat: cStat === "editing" ? t(cStat) : "" };
+    return { m3_cUrl: url.slice(0, cUrl ?? undefined), m3_cStat: cStat ? t(cStat) : "" };
+  }
+
   values({ t }: Input) {
     const { state, go } = this;
     return {
@@ -232,11 +241,10 @@ class StepsRun implements Script<Input> {
       m3_kDot: on(state.kDot),
       m3_kStat: t(state.kStat),
       m3_kTime: state.kRow === "off" ? "" : t("justNow"),
-      m3_cStat: state.cStat ? t(state.cStat) : "",
+      ...this.configValues(t),
       m3_cU0: state.cU0,
       m3_cU0m: minus(state.cU0),
       m3_cU1: state.cU1,
-      m3_cUrl: this.url().slice(0, state.cUrl ?? undefined),
       m3_cK0: state.cK0,
       m3_cK0m: minus(state.cK0),
       m3_cK1: state.cK1,
