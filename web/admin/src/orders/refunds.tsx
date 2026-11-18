@@ -1,12 +1,25 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { LoadMore, useSession } from "@axiom/app";
-import { Button, DataState, EmptyState, Panel, Table, Td, useFormat } from "@axiom/ui";
+import {
+  ActionButton,
+  Card,
+  Cluster,
+  DataState,
+  EmptyState,
+  Facts,
+  Mono,
+  Stack,
+  Table,
+  Td,
+  Text,
+  useFormat,
+} from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
-import { Code, Head, State } from "../parts";
+import { Code, Head, State, SubLine } from "../parts";
 import { paymentRefundsQuery } from "../queries";
 import { approvalOutcome, type RefundApprovalOutcome } from "./refund-approval";
 import { refundTone, shortId } from "./states";
@@ -23,8 +36,7 @@ export function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const rows = refunds.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const [decision, setDecision] = useState<Decision | null>(null);
   return (
-    <Panel title={t("orders.refund.title")}>
-      <p className="px-4 pt-4 text-t2">{t("orders.refund.description")}</p>
+    <Card title={t("orders.refund.title")} lede={t("orders.refund.description")} layout="flush">
       <DataState
         query={refunds}
         isEmpty={() => rows.length === 0}
@@ -34,12 +46,12 @@ export function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
           <Table label={t("orders.refund.title")}>
             <Head
               cols={[
-                [t("orders.refund.col.refund")],
-                [t("orders.refund.col.account"), "hidden md:table-cell"],
-                [t("orders.refund.col.credits"), "hidden text-right sm:table-cell"],
-                [t("orders.refund.col.amount"), "hidden text-right sm:table-cell"],
-                [t("orders.refund.col.reason"), "hidden lg:table-cell"],
-                [t("orders.refund.col.state"), "hidden sm:table-cell"],
+                t("orders.refund.col.refund"),
+                t("orders.refund.col.account"),
+                [t("orders.refund.col.credits"), { align: "end" }],
+                [t("orders.refund.col.amount"), { align: "end" }],
+                [t("orders.refund.col.reason"), { main: true }],
+                t("orders.refund.col.state"),
               ]}
               action
             />
@@ -59,7 +71,7 @@ export function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
       </DataState>
       <LoadMore list={refunds} />
       {decision ? <RefundDecision {...decision} onClose={() => setDecision(null)} /> : null}
-    </Panel>
+    </Card>
   );
 }
 
@@ -75,44 +87,33 @@ function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
   const format = useFormat();
   const credits = refund.credits ? format.money(refund.credits) : "—";
   return (
-    <tr className="align-top hover:bg-s2">
+    <tr>
       <Td>
         <Code title={refund.id}>{shortId(refund.id)}</Code>
-        <span className="block text-label text-t3" title={refund.created_at}>
-          {refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"}
-        </span>
-        <span className="block text-label text-t3" title={refund.order_id}>
-          {t("orders.refund.col.order")} {shortId(refund.order_id)}
-        </span>
-        {refund.via === "offline" ? (
-          <span className="block text-label text-t3">{t("orders.refund.viaOffline")}</span>
-        ) : null}
-        <span className="mt-1 block text-label text-t3 sm:hidden">
-          {refundStateText(t, refund)}
-          {" · "}
-          {credits}
-        </span>
-      </Td>
-      <Td className="hidden md:table-cell">
-        <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>
-      </Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">{credits}</Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
-        {refund.amount ? format.pay(refund.amount) : "—"}
-      </Td>
-      <Td className="hidden max-w-64 lg:table-cell">
-        <span className="block truncate" title={refund.reason}>
-          {refund.reason ?? "—"}
-        </span>
-        <span className="block text-label text-t3" title={refund.requested_by ?? refund.requested_by_agent}>
-          {refund.requested_by ?? refund.requested_by_agent ?? ""}
-        </span>
-      </Td>
-      <Td className="hidden sm:table-cell">
-        <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
-        {refund.provider_ref ? <span className="mt-1 block text-label text-t3">{refund.provider_ref}</span> : null}
+        <SubLine>{refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"}</SubLine>
+        <SubLine>
+          {t("orders.refund.col.order")} <Mono title={refund.order_id}>{shortId(refund.order_id)}</Mono>
+        </SubLine>
+        {refund.via === "offline" ? <SubLine>{t("orders.refund.viaOffline")}</SubLine> : null}
       </Td>
       <Td>
+        <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>
+      </Td>
+      <Td align="end">{credits}</Td>
+      <Td align="end">{refund.amount ? format.pay(refund.amount) : "—"}</Td>
+      <Td main>
+        {refund.reason ?? "—"}
+        <SubLine>
+          <Mono title={refund.requested_by ?? refund.requested_by_agent}>
+            {refund.requested_by ?? refund.requested_by_agent ?? ""}
+          </Mono>
+        </SubLine>
+      </Td>
+      <Td>
+        <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
+        {refund.provider_ref ? <SubLine>{refund.provider_ref}</SubLine> : null}
+      </Td>
+      <Td actions>
         <RefundActions refund={refund} self={self} firstBySelf={firstBySelf} onDecide={onDecide} />
       </Td>
     </tr>
@@ -128,20 +129,20 @@ export function RefundActions({ refund, self, firstBySelf, onDecide }: RefundRow
   }
   const second = refund.second_required === true && refund.first_approved_by !== undefined;
   return (
-    <div className="flex flex-col items-end gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+    <Cluster justify="end">
       {self || firstBySelf ? (
-        <span className="text-label text-t3">
+        <Text as="span" size="sm" tone="faint">
           {t(firstBySelf ? "orders.refund.firstApproved" : "orders.refund.secondPerson")}
-        </span>
+        </Text>
       ) : (
-        <Button size="sm" onClick={() => onDecide("approve")}>
+        <ActionButton size="sm" onClick={() => onDecide("approve")}>
           {t(second ? "orders.refund.secondApprove" : "orders.refund.approve")}
-        </Button>
+        </ActionButton>
       )}
-      <Button size="sm" variant="ghost" onClick={() => onDecide("reject")}>
+      <ActionButton size="sm" variant="gho" onClick={() => onDecide("reject")}>
         {t("orders.refund.reject")}
-      </Button>
-    </div>
+      </ActionButton>
+    </Cluster>
   );
 }
 
@@ -226,46 +227,43 @@ function outcomeText(t: TFunction, approve: boolean, outcome: RefundApprovalOutc
   return t(outcome === "offline" ? "orders.refund.approvedOffline" : "orders.refund.approved");
 }
 
-// RefundFacts keeps the decision's basis readable at every width: the queue hides its wider columns on a phone, so the
-// confirmation has the account, cash, credits, reason and requester before the person approves or rejects.
+// RefundFacts keeps the decision's basis in the confirmation: the account, cash, credits, reason and requester are
+// before the person approves or rejects.
 function RefundFacts({ refund }: { refund: Refund }) {
   const { t } = useTranslation();
   const format = useFormat();
-  return (
-    <div className="space-y-2">
-      <p className="text-label text-t3">{t("orders.refund.review")}</p>
-      <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1">
-        <dt className="text-label text-t3">{t("orders.refund.col.account")}</dt>
-        <dd>
-          <Code title={refund.account_id}>{refund.account_id ?? "—"}</Code>
-        </dd>
-        <dt className="text-label text-t3">{t("orders.refund.col.order")}</dt>
-        <dd>
-          <Code title={refund.order_id}>{refund.order_id ?? "—"}</Code>
-        </dd>
-        <dt className="text-label text-t3">{t("orders.refund.col.credits")}</dt>
-        <dd>{refund.credits ? format.money(refund.credits) : "—"}</dd>
-        <dt className="text-label text-t3">{t("orders.refund.col.amount")}</dt>
-        <dd>{refund.amount ? format.pay(refund.amount) : "—"}</dd>
-        <dt className="text-label text-t3">{t("orders.refund.col.reason")}</dt>
-        <dd className="break-words">{refund.reason ?? "—"}</dd>
-        <dt className="text-label text-t3">{t("orders.refund.col.requested")}</dt>
-        <dd>
-          <Code title={refund.requested_by ?? refund.requested_by_agent}>
-            {refund.requested_by ?? refund.requested_by_agent ?? "—"}
-          </Code>
-        </dd>
-        {refund.first_approved_by ? (
-          <>
-            <dt className="text-label text-t3">{t("orders.refund.col.firstApproved")}</dt>
-            <dd>
-              <Code title={refund.first_approved_by}>{refund.first_approved_by}</Code>
-            </dd>
-          </>
-        ) : null}
-      </dl>
-    </div>
-  );
+  const rows: [string, ReactNode][] = [
+    [
+      t("orders.refund.col.account"),
+      <Code key="account" title={refund.account_id}>
+        {refund.account_id ?? "—"}
+      </Code>,
+    ],
+    [
+      t("orders.refund.col.order"),
+      <Code key="order" title={refund.order_id}>
+        {refund.order_id ?? "—"}
+      </Code>,
+    ],
+    [t("orders.refund.col.credits"), refund.credits ? format.money(refund.credits) : "—"],
+    [t("orders.refund.col.amount"), refund.amount ? format.pay(refund.amount) : "—"],
+    [t("orders.refund.col.reason"), refund.reason ?? "—"],
+    [
+      t("orders.refund.col.requested"),
+      <Code key="requested" title={refund.requested_by ?? refund.requested_by_agent}>
+        {refund.requested_by ?? refund.requested_by_agent ?? "—"}
+      </Code>,
+    ],
+  ];
+  if (refund.first_approved_by) {
+    rows.push([
+      t("orders.refund.col.firstApproved"),
+      <Code key="first" title={refund.first_approved_by}>
+        {refund.first_approved_by}
+      </Code>,
+    ]);
+  }
+  return <Facts title={t("orders.refund.review")} rows={rows} />;
 }
 
 // The per-order refund list in the orders table, where the wider columns have room for it.
@@ -273,20 +271,32 @@ export function Refunds({ refunds }: { refunds: Refund[] | undefined }) {
   const { t } = useTranslation();
   const format = useFormat();
   if (refunds === undefined) {
-    return <span className="text-label text-t3">{t("orders.refundsUnavailable")}</span>;
+    return (
+      <Text as="span" size="sm" tone="faint">
+        {t("orders.refundsUnavailable")}
+      </Text>
+    );
   }
   if (refunds.length === 0) {
-    return <span className="text-label text-t3">{t("orders.noRefunds")}</span>;
+    return (
+      <Text as="span" size="sm" tone="faint">
+        {t("orders.noRefunds")}
+      </Text>
+    );
   }
   return (
-    <ul className="space-y-1">
+    <Stack gap={4}>
       {refunds.map((refund) => (
-        <li key={refund.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-label">
+        <Cluster key={refund.id}>
           <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
-          <span className="tabular-nums">{refund.credits ? format.money(refund.credits) : "—"}</span>
-          <span className="tabular-nums text-t3">{refund.amount ? format.pay(refund.amount) : "—"}</span>
-        </li>
+          <Text as="span" size="sm" numeric>
+            {refund.credits ? format.money(refund.credits) : "—"}
+          </Text>
+          <Text as="span" size="sm" tone="faint" numeric>
+            {refund.amount ? format.pay(refund.amount) : "—"}
+          </Text>
+        </Cluster>
       ))}
-    </ul>
+    </Stack>
   );
 }

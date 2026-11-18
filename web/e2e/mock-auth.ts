@@ -43,24 +43,27 @@ export function grant(state: AuthState, status: Schemas["SessionGrant"]["status"
 }
 
 export const session = (
-  state: AuthState & { legal?: Schemas["LegalDocument"][]; legalAccepted?: boolean },
-): Schemas["Session"] => ({
-  user: { id: userId(state.account), email: state.user.email, invite_code: state.user.inviteCode },
-  account: accountId(state.account),
-  level: state.level === "none" ? "password" : state.level,
-  mfa_enabled: state.mfaEnabled,
-  csrf_token: state.csrf,
-  expires_at: "2026-10-15T00:00:00Z",
-  permissions: state.permissions,
-  consent:
-    state.legal && state.legal.length > 0
-      ? {
-          required: state.legalAccepted
-            ? []
-            : state.legal.map(({ kind, locale, version }) => ({ kind, locale, version })),
-        }
-      : undefined,
-});
+  state: AuthState & { legal?: Schemas["LegalDocument"][]; legalAccepted?: boolean; passkeys?: Schemas["Passkey"][] },
+): Schemas["Session"] => {
+  const totp = state.totpEnabled ?? state.mfaEnabled;
+  return {
+    user: { id: userId(state.account), email: state.user.email, invite_code: state.user.inviteCode },
+    account: accountId(state.account),
+    level: state.level === "none" ? "password" : state.level,
+    mfa_enabled: totp || (state.passkeys?.length ?? 0) > 0,
+    csrf_token: state.csrf,
+    expires_at: "2026-10-15T00:00:00Z",
+    permissions: state.permissions,
+    consent:
+      state.legal && state.legal.length > 0
+        ? {
+            required: state.legalAccepted
+              ? []
+              : state.legal.map(({ kind, locale, version }) => ({ kind, locale, version })),
+          }
+        : undefined,
+  };
+};
 
 export const recoveryCodes = Array.from({ length: 10 }, (_, i) => `abcd-efgh-ijkl-${String(1000 + i)}`);
 
@@ -76,6 +79,7 @@ export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
     return fail(401, "invalid_credentials");
   }
   state.mfaEnabled = body.email === mfaEmail;
+  state.totpEnabled = state.mfaEnabled;
   state.level = state.mfaEnabled ? "pending_mfa" : "password";
   return { status: 200, json: grant(state, state.mfaEnabled ? "mfa_required" : "signed_in") } as const;
 }
@@ -109,7 +113,9 @@ export function confirmTotp({ body, state }: WithState<Schemas["TotpConfirmReque
   if (body.code !== state.user.mfaCode) {
     return fail(401, "invalid_code");
   }
+  if (state.totpEnabled ?? state.mfaEnabled) return fail(409, "conflict");
   state.mfaEnabled = true;
+  state.totpEnabled = true;
   state.level = "mfa";
   const { csrf_token } = grant(state, "signed_in");
   return { status: 200, json: { csrf_token, recovery_codes: recoveryCodes } } as const;

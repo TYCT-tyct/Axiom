@@ -13,8 +13,6 @@ export default {
   keys: {
     system: "Every unbound key",
     unknown: "Not given by the node",
-    count_one: "{{keys}} key",
-    count_other: "{{keys}} keys",
   },
   edit: "Edit",
   disable: "Disable",

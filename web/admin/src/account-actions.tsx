@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapEmptyChange } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
-import { Button, SelectField } from "@axiom/ui";
+import { ActionButton, Select, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -28,16 +28,16 @@ function ManageActions({ account }: { account: Account }) {
   return (
     <>
       {calls === undefined ? null : (
-        <Button variant={calls ? "primary" : "secondary"} onClick={() => setAction("suspension")}>
+        <ActionButton variant={calls ? "pri" : "sec"} onClick={() => setAction("suspension")}>
           {calls ? t("users.account.resume") : t("users.account.suspend")}
-        </Button>
+        </ActionButton>
       )}
       {signIn === undefined ? null : (
-        <Button variant={signIn ? "primary" : "secondary"} onClick={() => setAction("signIn")}>
+        <ActionButton variant={signIn ? "pri" : "sec"} onClick={() => setAction("signIn")}>
           {signIn ? t("users.account.enableSignIn") : t("users.account.disableSignIn")}
-        </Button>
+        </ActionButton>
       )}
-      <Button onClick={() => setAction("tier")}>{t("users.account.changeTier")}</Button>
+      <ActionButton onClick={() => setAction("tier")}>{t("users.account.changeTier")}</ActionButton>
       {action === "suspension" && calls !== undefined ? (
         <SuspensionAction account={account} suspended={calls} onClose={() => setAction(null)} />
       ) : null}
@@ -186,13 +186,13 @@ function TierField({
   const { t } = useTranslation();
   const errors = useErrors();
   if (loading) {
-    return <p className="text-t3">{t("users.account.tierChange.loading")}</p>;
+    return <Text tone="faint">{t("users.account.tierChange.loading")}</Text>;
   }
   if (tiers === undefined) {
-    return <p className="text-t3">{t("users.account.tierChange.unavailable")}</p>;
+    return <Text tone="faint">{t("users.account.tierChange.unavailable")}</Text>;
   }
   return (
-    <SelectField
+    <Select
       label={t("users.account.tierChange.field")}
       name="tier_id"
       defaultValue={current}
@@ -203,6 +203,6 @@ function TierField({
           {tier.name}
         </option>
       ))}
-    </SelectField>
+    </Select>
   );
 }

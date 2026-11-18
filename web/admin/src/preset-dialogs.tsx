@@ -10,7 +10,7 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { Button, DataState, Icon, SelectField, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, DataState, Field, Grid, Select, Stack, Text, useFormat } from "@axiom/ui";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
@@ -79,10 +79,9 @@ export function DefaultCard({
   const hold = usePresetsHold();
   const title = t(`routingPresets.defaults.title.${layer.scope}`);
   const edit = manage ? (
-    <Button size="md" onClick={() => setOpen(true)} {...hold}>
-      <Icon name="pencil" />
+    <ActionButton onClick={() => setOpen(true)} {...hold} icon="pencil">
       {t("routingPresets.defaults.edit")}
-    </Button>
+    </ActionButton>
   ) : undefined;
   return (
     <DataState query={query}>
@@ -90,7 +89,7 @@ export function DefaultCard({
         <>
           <Facts
             title={title}
-            action={edit}
+            actions={edit}
             rows={[
               [t("routingPresets.defaults.label"), <Chosen key="chosen" layer={layer} view={view} presets={presets} />],
             ]}
@@ -140,7 +139,7 @@ function DefaultDialog({
       action={t("routingPresets.defaults.save")}
       reload={reload}
       fields={() => (
-        <SelectField label={t("routingPresets.defaults.label")} name="preset_id" defaultValue={chosen}>
+        <Select label={t("routingPresets.defaults.label")} name="preset_id" defaultValue={chosen}>
           <option value="">{t(`routingPresets.defaults.none.${layer.scope}`)}</option>
           {/* The default always points at a preset the layer may choose; one the list lacks is shown by its ID. */}
           {chosen === "" || options.some((preset) => preset.id === chosen) ? null : (
@@ -151,7 +150,7 @@ function DefaultDialog({
               {preset.name}
             </option>
           ))}
-        </SelectField>
+        </Select>
       )}
       read={(values) => values.preset_id || null}
       send={(presetId, { reason, key }) => {
@@ -307,8 +306,8 @@ function Names({ preset, error }: { preset?: Preset; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <TextField
+    <Grid min="16rem">
+      <Field
         label={t("routingPresets.form.name")}
         name="name"
         defaultValue={preset?.name}
@@ -317,12 +316,14 @@ function Names({ preset, error }: { preset?: Preset; error: unknown }) {
         error={errors.field(error, "name")}
       />
       {preset ? (
-        <div className="space-y-1">
-          <p className="text-label text-t3">{t("routingPresets.form.slug")}</p>
+        <Stack gap={4}>
+          <Text size="sm" tone="faint">
+            {t("routingPresets.form.slug")}
+          </Text>
           <Code>{preset.slug}</Code>
-        </div>
+        </Stack>
       ) : (
-        <TextField
+        <Field
           label={t("routingPresets.form.slug")}
           hint={t("routingPresets.form.slugHint")}
           name="slug"
@@ -332,7 +333,7 @@ function Names({ preset, error }: { preset?: Preset; error: unknown }) {
           error={errors.field(error, "slug")}
         />
       )}
-    </div>
+    </Grid>
   );
 }
 
@@ -341,16 +342,15 @@ function CurrencyField({ preset, code, onCode }: { preset?: Preset; code: string
   const { t } = useTranslation();
   if (preset) {
     return (
-      <p className="text-ui text-t2">
+      <Text tone="muted">
         {preset.currency
           ? t("routingPresets.form.currencyFixed", { currency: preset.currency })
           : t("routingPresets.form.unpriced")}
-      </p>
+      </Text>
     );
   }
   return (
-    <TextField
-      className="sm:w-48"
+    <Field
       label={t("routingPresets.form.currency")}
       hint={t("routingPresets.form.currencyHint")}
       value={code}
@@ -413,10 +413,11 @@ export function DisablePresetDialog({
       intro={
         <>
           {pointing.map((layer) => (
-            <p key={layer.scope} className="flex gap-2 rounded-btn bg-warn-soft px-3 py-2 text-warn">
-              <Icon name="alert" className="mt-0.5 shrink-0" />
-              {t(`routingPresets.disableDefault.${layer.scope}`)}
-            </p>
+            <div key={layer.scope}>
+              <Text tone="warn" icon="alert">
+                {t(`routingPresets.disableDefault.${layer.scope}`)}
+              </Text>
+            </div>
           ))}
           {/* A node that does not count the keys gives no number, and then none is said. */}
           {read.keys === undefined ? null : (

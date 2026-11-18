@@ -1,0 +1,43 @@
+.text {
+  display: inline-flex;
+  min-width: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+}
+
+.head {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tail {
+  flex: none;
+}
+
+.id {
+  display: inline-flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  vertical-align: middle;
+  color: var(--t2);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.id > a {
+  display: inline-flex;
+  min-width: 0;
+}

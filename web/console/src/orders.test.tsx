@@ -4,7 +4,7 @@ import { createInstance } from "i18next";
 import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, expect, it } from "vitest";
-import { OrderState } from "./pages/orders";
+import { OrderState } from "./pages/orders-state";
 
 const i18n = createInstance();
 

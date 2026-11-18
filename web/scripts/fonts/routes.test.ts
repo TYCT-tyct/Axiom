@@ -39,9 +39,10 @@ describe("routeLiterals", () => {
 describe("faceTexts", () => {
   it("cuts a page's plural messages into its characters", async () => {
     // admin/pages/redeem-codes shows redeem.issuedIntro, which has only plural forms: 「这是唯一一次显示」.
+    // Only the face under test, so the run reads the admin's messages and not every board's region words.
     const manifest = readManifest();
-    const ui = manifest.faces.findIndex((face) => face.family === "Axiom CJK Admin");
-    const texts = await faceTexts(manifest);
-    expect(texts[ui]?.["admin/pages/redeem-codes"]).toContain("唯");
+    const face = manifest.faces.find((one) => one.family === "Axiom CJK Admin");
+    const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });
+    expect(texts?.["admin/pages/redeem-codes"]).toContain("唯");
   });
 });

@@ -225,7 +225,7 @@ describe("region generation", () => {
         fragment(overview.outerHTML.replace(/\{\{[^}]*\}\}/g, "")).firstChild as Node,
       );
       const files: Record<string, string> = {};
-      // CSS selection is tested separately; this checks the entire pinned markup without executing its scripts.
+      // Each conversion parses the full board, so convert only the regions rendered in this comparison.
       for (const region of manifest) Object.assign(files, convertRegion(markup, "", region, marker));
       const shell = renderer(files, board, "Shell");
       const page = renderer(files, board, "Overview");

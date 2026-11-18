@@ -1,7 +1,14 @@
+import { readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
-import en from "../packages/ui/src/locales/en.ts";
-import zh from "../packages/ui/src/locales/zh.ts";
-import { consoleSuite } from "./console-scenes.ts";
+import consoleEn from "../console/src/locales/en.ts";
+import consoleZh from "../console/src/locales/zh.ts";
+import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
+import presetsZh from "../packages/boards/src/AxApp/regions/RequestPresets.zh.ts";
+import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
+import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
+import uiEn from "../packages/ui/src/locales/en.ts";
+import uiZh from "../packages/ui/src/locales/zh.ts";
+import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import { rulings } from "./design/rulings.ts";
 import type { Suite } from "./scene.ts";
@@ -21,6 +28,7 @@ export type DesignScene = {
   schemes: Record<"light" | "dark", Record<string, string>>;
   languages?: ("zh" | "en")[];
   prepareComparison?: (board: Page, page: Page, language: "zh" | "en") => Promise<void>;
+  textRasterization?: "grayscale" | "unhinted";
 };
 
 // The boards' own "today": the console boards date their demo data around 2026-10-24 (the top-up board's pyDate).
@@ -77,10 +85,77 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
   const shift = (await top(page)) - (await top(board));
   await page.locator(".hs").evaluate((el, by) => el.scrollBy({ top: by }), shift);
 };
+type Face = { family: string; weight: string; axes?: { wght?: number | number[] } };
+const { faces }: { faces: Face[] } = JSON.parse(
+  readFileSync(new URL("../scripts/fonts/sources.json", import.meta.url), "utf8"),
+);
+const referenceFonts = [
+  ["Axiom Sans", "Axiom Sans"],
+  ["Axiom Mono", "Axiom Mono"],
+  ["Axiom CJK", "Axiom CJK Console"],
+].map(([boardFamily, shippedFamily]) => [boardFamily, faces.find(({ family }) => family === shippedFamily)] as const);
+
+const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
+  name: language === "en" ? "console request-presets en" : "console request-presets",
+  suite: consoleSuite,
+  scene: "request-presets",
+  fonts: "console/pages/request-presets",
+  boards: consoleBoards("presets"),
+  schemes: consoleSchemes,
+  languages: [language],
+  textRasterization: language === "zh" ? "unhinted" : "grayscale",
+  prepareComparison: async (board) => {
+    const messages = language === "en" ? consoleEn : consoleZh;
+    const labels = messages.requestPresets.copy;
+    const localized: Record<string, string> = {
+      [presetsZh.mf1de1e2621]: labels.title,
+      [presetsZh.ma61bc16ca0]: labels.create,
+      [presetsZh.m181bcfdf83]: labels.introEnd,
+      [presetsZh.mdfd719cbad]: labels.exampleHint,
+      [presetsZh.m99eb8c2896]: requestPresetPrompts[0],
+      [presetsZh.mab5d9c5402]: requestPresetPrompts[1],
+    };
+    if (language === "en") {
+      for (const key of Object.keys(shellEn) as (keyof typeof shellEn)[]) localized[shellZh[key]] = shellEn[key];
+      localized[shellZh.mf1de1e2621] = labels.title;
+      localized[shellZh.mb9670c85a4] = messages.nav.routingPresets;
+      // The prompts are API fixtures. Translate the UI surrounding them, including its parameter labels.
+      const keys = ["m3187029f2b", "m98472d23f3", "m74ed19426d", "md666f38b72", "m1f87913ac5"] as const;
+      for (const key of keys) localized[presetsZh[key]] = presetsEn[key];
+    }
+    await board.evaluate((strings) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const translation = strings[node.textContent ?? ""];
+        if (translation !== undefined) node.textContent = translation;
+      }
+    }, localized);
+    await board.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
+    // The console's base typography balances headings and avoids orphaned words.
+    await board.addStyleTag({
+      content:
+        ".p-presets :is(h1,h2){text-wrap:balance;word-break:keep-all;overflow-wrap:anywhere}.p-presets p{text-wrap:pretty}",
+    });
+    await board.evaluate(() => document.fonts.ready.then(() => {}));
+  },
+}));
+
+// Keep the uncut source fonts, using the console's face descriptors and pinned weight axes.
+function useProductFontWeights(faces: Record<string, Face | undefined>) {
+  for (const rule of [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules])) {
+    if (!(rule instanceof CSSFontFaceRule)) continue;
+    const family = rule.style.getPropertyValue("font-family").replaceAll(/["']/g, "");
+    const face = faces[family];
+    if (!face) continue;
+    rule.style.setProperty("font-weight", face.weight);
+    const axis = face.axes?.wght;
+    if (typeof axis === "number") rule.style.setProperty("font-variation-settings", `"wght" ${axis}`);
+  }
+}
 
 async function prepareModelsComparison(board: Page, page: Page, language: "zh" | "en") {
   // Put the real page copy in the reference's title and lede so the comparison sees their typography and layout.
-  const { title, description } = (language === "en" ? en : zh).publicModels;
+  const { title, description } = (language === "en" ? uiEn : uiZh).publicModels;
   await board.locator(".hl > h2").evaluate((el, title) => {
     el.textContent = title;
   }, title);
@@ -184,12 +259,45 @@ export const designScenes: DesignScene[] = [
     boards: consoleBoards("keys"),
     schemes: consoleSchemes,
   },
+  ...presetScenes,
+  {
+    name: "console bill",
+    suite: consoleSuite,
+    scene: "balance",
+    fonts: "console",
+    boards: consoleBoards("bill"),
+    schemes: consoleSchemes,
+  },
   {
     name: "console calls",
     suite: consoleSuite,
     scene: "calls",
     fonts: "console",
     boards: consoleBoards("logs"),
+    schemes: consoleSchemes,
+  },
+  {
+    name: "console settings",
+    suite: consoleSuite,
+    scene: "settings",
+    fonts: "console",
+    boards: consoleBoards("profile"),
+    schemes: consoleSchemes,
+  },
+  {
+    name: "console security",
+    suite: consoleSuite,
+    scene: "security",
+    fonts: "console",
+    boards: consoleBoards("security"),
+    schemes: consoleSchemes,
+  },
+  {
+    name: "console notifications",
+    suite: consoleSuite,
+    scene: "notifications",
+    fonts: "console",
+    boards: consoleBoards("notify"),
     schemes: consoleSchemes,
   },
   {

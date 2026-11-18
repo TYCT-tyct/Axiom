@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { CheckField, TextField } from "@axiom/ui";
+import { CheckField, Field } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -82,7 +82,7 @@ function MailFacts({ view, action }: { view: AdminSchemas["MailSettings"]; actio
   if (view.restart_required) {
     rows.push([t("settings.mail.restart"), t("settings.mail.restartBody")]);
   }
-  return <Facts title={t("settings.mail.title")} rows={rows} action={action} />;
+  return <Facts title={t("settings.mail.title")} rows={rows} actions={action} />;
 }
 
 function MailEditDialog({ view, onClose }: { view: AdminSchemas["MailSettings"]; onClose: () => void }) {
@@ -121,14 +121,14 @@ function MailFields({ view, error }: { view: AdminSchemas["MailSettings"]; error
         value="true"
         defaultChecked={view.enabled === true}
       />
-      <TextField
+      <Field
         label={t("settings.mail.host")}
         name="host"
         autoComplete="off"
         defaultValue={view.host ?? ""}
         error={errors.field(error, "settings/host")}
       />
-      <TextField
+      <Field
         label={t("settings.mail.port")}
         hint={t("settings.mail.portHint")}
         name="port"
@@ -137,14 +137,14 @@ function MailFields({ view, error }: { view: AdminSchemas["MailSettings"]; error
         defaultValue={view.port ?? 587}
         error={errors.field(error, "settings")}
       />
-      <TextField
+      <Field
         label={t("settings.mail.username")}
         name="username"
         autoComplete="off"
         defaultValue={view.username ?? ""}
         error={errors.field(error, "settings")}
       />
-      <TextField
+      <Field
         label={t("settings.mail.from")}
         name="from"
         inputMode="email"
@@ -152,7 +152,7 @@ function MailFields({ view, error }: { view: AdminSchemas["MailSettings"]; error
         defaultValue={view.from ?? ""}
         error={errors.field(error, "settings")}
       />
-      <TextField
+      <Field
         label={t("settings.mail.password")}
         hint={t("settings.mail.passwordHint")}
         name="password"
@@ -190,7 +190,7 @@ function MailTestDialog({ onClose }: { onClose: () => void }) {
       action={t("settings.mail.send")}
       verdict
       fields={(error) => (
-        <TextField
+        <Field
           label={t("settings.mail.to")}
           name="to"
           inputMode="email"

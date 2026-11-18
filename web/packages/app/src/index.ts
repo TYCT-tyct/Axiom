@@ -1,4 +1,4 @@
-export { type Attempt, failed, failedFrom, opened, refused, type Sendable } from "./attempt";
+export { type Attempt, failed, opened, refused, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
 export { AuthFrame, OtherAccount } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
@@ -15,12 +15,18 @@ export { QrCode } from "./qr";
 export {
   accountKey,
   can,
+  claimSession,
+  consumeEmailChangeToken,
   currentSession,
+  endUnauthenticated,
   Gate,
+  holdsIdentity,
   holdsSession,
   identityOf,
+  type SessionClaim,
   safeNext,
   sessionBinding,
+  stripEmailChangeToken,
   useCachedSession,
   useSession,
   useSessionBound,

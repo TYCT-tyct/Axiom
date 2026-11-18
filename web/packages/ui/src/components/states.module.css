@@ -1,0 +1,118 @@
+/* The board's state blocks (.stb): a mark, a heading and the words under it, centred; the loading bars pulse unless the
+   reader asked for less motion. */
+.frame {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 64px 16px;
+  text-align: center;
+}
+
+.compact {
+  padding: 32px 16px;
+}
+
+.mark {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--hover);
+  color: var(--t3);
+}
+
+.bad {
+  color: var(--badT);
+}
+
+.title {
+  margin: 0;
+  font-size: var(--fs16);
+  line-height: var(--lh16);
+  font-weight: 500;
+  color: var(--t1);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+}
+
+.body p {
+  margin: 0;
+}
+
+.requestId {
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  color: var(--t3);
+  user-select: all;
+}
+
+.faint {
+  font-size: var(--fs12);
+  color: var(--t3);
+}
+
+.loading {
+  padding: 24px;
+}
+
+.bars {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.bar {
+  height: 20px;
+  border-radius: var(--r4);
+  background: var(--hover);
+  animation: pulse 1.6s var(--ease) infinite;
+}
+
+.w92 {
+  width: 92%;
+}
+
+.w80 {
+  width: 80%;
+}
+
+.w67 {
+  width: 67%;
+}
+
+.w50 {
+  width: 50%;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bar {
+    animation: none;
+  }
+}

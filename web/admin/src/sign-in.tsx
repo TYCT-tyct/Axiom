@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Badge, Button, CheckField, DataState, Icon, TextField } from "@axiom/ui";
+import { ActionButton, Card, CheckField, Cluster, DataState, Field, SettingRow, Tag } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -32,14 +32,13 @@ function SignInCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Vi
       <Facts
         title={t("settings.signIn.title")}
         rows={rows}
-        action={
-          <Button size="md" onClick={() => setEdit(true)}>
-            <Icon name="pencil" />
+        actions={
+          <ActionButton onClick={() => setEdit(true)} icon="pencil">
             {t("settings.signIn.edit")}
-          </Button>
+          </ActionButton>
         }
       />
-      <div className="mt-3 grid gap-2">
+      <Card layout="rows">
         {view.providers.map((entry) => (
           <ProviderLine
             key={entry.provider}
@@ -48,7 +47,7 @@ function SignInCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Vi
             onRemove={() => setProvider({ name: entry, remove: true })}
           />
         ))}
-      </div>
+      </Card>
       {edit ? <SignInDialog siteId={siteId} view={view} onClose={() => setEdit(false)} /> : null}
       {provider && !provider.remove ? (
         <ProviderDialog siteId={siteId} provider={provider.name} onClose={() => setProvider(null)} />
@@ -71,24 +70,25 @@ function ProviderLine({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-b1 px-3 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-t1">{t(`settings.signIn.providers.${provider.provider}`)}</span>
-        <Badge tone={provider.configured ? "ok" : "neutral"}>
+    <SettingRow
+      title={t(`settings.signIn.providers.${provider.provider}`)}
+      detail={
+        <Tag tone={provider.configured ? "ok" : "neutral"}>
           {provider.configured ? provider.client_id : t("settings.signIn.providerOff")}
-        </Badge>
-      </div>
-      <div className="flex gap-2">
-        <Button size="sm" variant="secondary" onClick={onEdit}>
+        </Tag>
+      }
+    >
+      <Cluster>
+        <ActionButton size="sm" onClick={onEdit}>
           {provider.configured ? t("settings.signIn.providerEdit") : t("settings.signIn.providerConfigure")}
-        </Button>
+        </ActionButton>
         {provider.configured ? (
-          <Button size="sm" variant="secondary" onClick={onRemove}>
+          <ActionButton size="sm" onClick={onRemove}>
             {t("settings.signIn.providerRemove")}
-          </Button>
+          </ActionButton>
         ) : null}
-      </div>
-    </div>
+      </Cluster>
+    </SettingRow>
   );
 }
 
@@ -124,7 +124,7 @@ function SignInFields({ view, error }: { view: View; error: unknown }) {
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t("settings.signIn.loginDomain")}
         hint={t("settings.signIn.domainHint")}
         name="login_domain"
@@ -186,14 +186,14 @@ function ProviderFields({ provider, error }: { provider: Provider; error: unknow
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t("settings.signIn.clientId")}
         name="client_id"
         autoComplete="off"
         defaultValue={provider.client_id ?? ""}
         error={errors.field(error, "client_id")}
       />
-      <TextField
+      <Field
         label={t("settings.signIn.clientSecret")}
         hint={t("settings.signIn.secretHint")}
         name="client_secret"

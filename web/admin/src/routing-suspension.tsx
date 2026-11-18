@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, useFormat } from "@axiom/ui";
+import { ActionButton, useFormat } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -62,11 +62,11 @@ export function SuspensionCard({ suspension }: { suspension: Suspension }) {
     <>
       <Facts
         title={t("routingPresets.suspension.title")}
-        action={
+        actions={
           manage ? (
-            <Button size="md" onClick={() => setTarget(!suspended)}>
+            <ActionButton onClick={() => setTarget(!suspended)}>
               {t(suspended ? "routingPresets.suspension.resume" : "routingPresets.suspension.suspend")}
-            </Button>
+            </ActionButton>
           ) : undefined
         }
         rows={[

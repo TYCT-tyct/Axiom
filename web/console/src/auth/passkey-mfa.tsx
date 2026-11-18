@@ -16,7 +16,7 @@ export function PasskeyMfa() {
         type="button"
         size="md"
         variant="secondary"
-        className="w-full"
+        wide
         disabled={passkey.pending}
         onClick={() => void passkey.start()}
       >

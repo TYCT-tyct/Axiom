@@ -44,15 +44,6 @@ export function failed<Request>(
   return opened(newKey());
 }
 
-// failedFrom is a mutation's onError for an attempt it sends: the error is shown and the attempt is recorded where the
-// failure left it, so a reload or a reopened dialog resumes the same request instead of making a second change.
-export function failedFrom<Request>(change: (attempt: Attempt<Request>) => void, setFailure: (error: unknown) => void) {
-  return (error: unknown, sent: { from: Sendable<Request>; request: Request }) => {
-    setFailure(error);
-    change(failed(sent.from, sent.request, error, () => crypto.randomUUID()));
-  };
-}
-
 // refused is the only answer that proves a change was not done: the server's own refusal, a 4xx with its error body. No
 // answer, a server failure, a response that could not be read (a proxy's page after the change was made) and a success
 // without its result all leave it possible that it was. A form that keeps a secret out of its stored attempt applies the

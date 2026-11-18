@@ -4,8 +4,8 @@ import type { Region } from "../regions.ts";
 // holes the page fills: a region rendered with the drawing's own values is the drawing (boards.spec), and the console
 // supplies the document scroll, its fonts, and leaves out what is not built (#816), as values.
 const account = ["profile", "security", "notify"];
-const pages = ["ov", "usage", "logs", "keys", "route", "byok", "bill", ...account];
-const unbuiltPages = ["presets", "plugins", "budget", "observe", "mkeys", "prefs"];
+const pages = ["ov", "usage", "logs", "keys", "route", "presets", "byok", "bill", ...account];
+const unbuiltPages = ["plugins", "budget", "observe", "mkeys", "prefs"];
 const link = (selector: string, pg: string) => ({
   [selector]: { tag: "link", set: { href: `{{to_${pg}}}`, hidden: `{{hide_${pg}}}` } },
 });
@@ -118,7 +118,7 @@ const phone = {
   ".otabs": styled("tabsStyle", { "aria-label": "{{navigation}}", "data-shell": "tabs" }),
   ".otabs > a:not([data-pg])": { set: { ...button, ...expanded("moreOpen") } },
   ...links(".otabs > a", ["ov", "usage", "logs", "keys"]),
-  ...links(".qmi", ["route", "byok", "bill"]),
+  ...links(".qmi", ["route", "presets", "byok", "bill"]),
 };
 
 const shell = (board: string): Region => ({

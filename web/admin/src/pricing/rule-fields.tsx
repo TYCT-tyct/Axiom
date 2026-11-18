@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { CheckField, SelectField, TextField } from "@axiom/ui";
+import { CheckField, Field, Fieldset, Grid, Select, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -32,7 +32,7 @@ function TargetFields({ target }: { target?: Target }) {
   const [kind, setKind] = useState<Target["kind"]>(target?.kind ?? "all");
   return (
     <>
-      <SelectField
+      <Select
         label={t("pricing.rule.target")}
         name="target_kind"
         value={kind}
@@ -43,7 +43,7 @@ function TargetFields({ target }: { target?: Target }) {
             {t(`pricing.target.${value}`)}
           </option>
         ))}
-      </SelectField>
+      </Select>
       {kind === "model" ? (
         <ModelField
           label={t("pricing.rule.targetModel")}
@@ -51,17 +51,17 @@ function TargetFields({ target }: { target?: Target }) {
         />
       ) : null}
       {kind === "author" ? (
-        <SelectField label={t("pricing.rule.targetId")} name="target_author" defaultValue={target?.id ?? ""}>
+        <Select label={t("pricing.rule.targetId")} name="target_author" defaultValue={target?.id ?? ""}>
           <option value="">{t("pricing.rule.choose")}</option>
           {authors.data?.data.map((author) => (
             <option key={author.slug} value={author.slug}>
               {author.name}
             </option>
           ))}
-        </SelectField>
+        </Select>
       ) : null}
       {kind === "supplier" || kind === "group" || kind === "endpoint" || kind === "source_type" ? (
-        <TextField
+        <Field
           label={t("pricing.rule.targetId")}
           hint={t(`pricing.rule.targetHint.${kind}`)}
           name="target_id"
@@ -82,7 +82,7 @@ function AudienceFields({ audience }: { audience?: Audience }) {
   const [kind, setKind] = useState<Audience["kind"]>(audience?.kind ?? "all");
   return (
     <>
-      <SelectField
+      <Select
         label={t("pricing.rule.audience")}
         name="audience_kind"
         value={kind}
@@ -93,19 +93,19 @@ function AudienceFields({ audience }: { audience?: Audience }) {
             {t(`pricing.audience.${value}`)}
           </option>
         ))}
-      </SelectField>
+      </Select>
       {kind === "tier" ? (
-        <SelectField label={t("pricing.rule.tier")} name="audience_tier" defaultValue={audience?.id ?? ""}>
+        <Select label={t("pricing.rule.tier")} name="audience_tier" defaultValue={audience?.id ?? ""}>
           <option value="">{t("pricing.rule.choose")}</option>
           {tiers.data?.data.map((tier) => (
             <option key={tier.id} value={tier.id}>
               {tier.name}
             </option>
           ))}
-        </SelectField>
+        </Select>
       ) : null}
       {kind === "account" ? (
-        <TextField
+        <Field
           label={t("pricing.rule.account")}
           hint={t("pricing.rule.accountHint")}
           name="audience_account"
@@ -123,12 +123,12 @@ function CostPlusFields({ method }: { method?: Method }) {
   const { t } = useTranslation();
   const margin = method?.margin_ratio !== undefined;
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <SelectField label={t("pricing.method.basis")} name="basis" defaultValue={margin ? "margin" : "markup"}>
+    <Grid min="16rem">
+      <Select label={t("pricing.method.basis")} name="basis" defaultValue={margin ? "margin" : "markup"}>
         <option value="markup">{t("pricing.method.markup")}</option>
         <option value="margin">{t("pricing.method.margin")}</option>
-      </SelectField>
-      <TextField
+      </Select>
+      <Field
         label={t("pricing.method.ratio")}
         hint={t("pricing.method.ratioHint")}
         name="ratio"
@@ -136,15 +136,15 @@ function CostPlusFields({ method }: { method?: Method }) {
         autoComplete="off"
         defaultValue={method?.markup_ratio ?? method?.margin_ratio}
       />
-    </div>
+    </Grid>
   );
 }
 
 function ReferenceFields({ method }: { method?: Method }) {
   const { t } = useTranslation();
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
-      <TextField
+    <Grid min="16rem">
+      <Field
         label={t("pricing.method.multiplier")}
         hint={t("pricing.method.multiplierHint")}
         name="multiplier"
@@ -152,15 +152,15 @@ function ReferenceFields({ method }: { method?: Method }) {
         autoComplete="off"
         defaultValue={method?.multiplier}
       />
-      <SelectField
+      <Select
         label={t("pricing.method.conversion")}
         name="currency_conversion"
         defaultValue={method?.currency_conversion ?? "face"}
       >
         <option value="exchange">{t("pricing.method.exchange")}</option>
         <option value="face">{t("pricing.method.face")}</option>
-      </SelectField>
-    </div>
+      </Select>
+    </Grid>
   );
 }
 
@@ -171,7 +171,7 @@ function MethodFields({ method }: { method?: Method }) {
   const [kind, setKind] = useState<Method["kind"]>(method?.kind ?? "reference_multiplier");
   return (
     <>
-      <SelectField
+      <Select
         label={t("pricing.rule.method")}
         name="method_kind"
         value={kind}
@@ -182,7 +182,7 @@ function MethodFields({ method }: { method?: Method }) {
             {t(`pricing.method.${value}`)}
           </option>
         ))}
-      </SelectField>
+      </Select>
       {kind === "cost_plus" ? <CostPlusFields method={method} /> : null}
       {kind === "reference_multiplier" ? <ReferenceFields method={method} /> : null}
       {kind === "fixed" ? <RatesFields schedule={method?.schedule} /> : null}
@@ -194,38 +194,39 @@ function ConstraintFields({ constraints }: { constraints?: Rule["constraints"] }
   const { t } = useTranslation();
   const stored = Object.values(constraints ?? {}).some((value) => value !== undefined);
   return (
-    <fieldset disabled className="min-w-0 space-y-3">
-      <legend className="mb-1 text-ui font-medium text-t2">{t("pricing.constraints.title")}</legend>
-      <p className="text-label text-t4">{t("pricing.constraints.hint")}</p>
+    <Fieldset legend={t("pricing.constraints.title")} hint={t("pricing.constraints.hint")}>
       {stored ? (
-        <p role="status" className="text-label text-warn">
-          {t("pricing.constraints.stored")}
-        </p>
+        <Text size="sm" tone="warn">
+          <span role="status">{t("pricing.constraints.stored")}</span>
+        </Text>
       ) : null}
-      <div className="grid gap-4 sm:grid-cols-3">
-        <TextField
+      <Grid min="12rem">
+        <Field
           label={t("pricing.constraints.minMargin")}
           name="min_margin_ratio"
           inputMode="decimal"
           autoComplete="off"
           defaultValue={constraints?.min_margin_ratio}
+          disabled
         />
-        <TextField
+        <Field
           label={t("pricing.constraints.refMin")}
           name="reference_min_ratio"
           inputMode="decimal"
           autoComplete="off"
           defaultValue={constraints?.reference_min_ratio}
+          disabled
         />
-        <TextField
+        <Field
           label={t("pricing.constraints.refMax")}
           name="reference_max_ratio"
           inputMode="decimal"
           autoComplete="off"
           defaultValue={constraints?.reference_max_ratio}
+          disabled
         />
-      </div>
-    </fieldset>
+      </Grid>
+    </Fieldset>
   );
 }
 

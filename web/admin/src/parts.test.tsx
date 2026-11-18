@@ -6,6 +6,6 @@ import { Json } from "./parts";
 // focus, so the box is a named region in the tab order.
 it("puts a record in a named region keyboard users can focus to scroll", () => {
   const html = renderToStaticMarkup(<Json value={{ route: ["a", "b"] }} label="Route" />);
-  expect(html).toMatch(/^<section[^>]* aria-label="Route" tabindex="0"[^>]*><pre/);
+  expect(html).toMatch(/<pre[^>]* role="region" aria-label="Route" tabindex="0"/);
   expect(html).toContain("&quot;route&quot;");
 });

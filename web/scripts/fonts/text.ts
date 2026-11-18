@@ -108,10 +108,10 @@ async function routePages(app: string, entry: string, namespaces: string[]) {
   for (const [page, literals] of routeLiterals(app, entry)) {
     const selection: Selection = {};
     for (const namespace of namespaces) {
-      // a page shows its board's region words whole; the code names no key of them
-      selection[namespace] = (await messages(namespace))
-        .map(([key]) => key)
-        .filter((key) => namespace.endsWith("-regions") || names(literals, key));
+      // a page shows its board's region words whole ("" is every key); the code names no key of them
+      selection[namespace] = namespace.endsWith("-regions")
+        ? [""]
+        : (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
     }
     pages.set(page, selection);
   }

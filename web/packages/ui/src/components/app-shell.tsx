@@ -1,4 +1,4 @@
-import { usePageTitle } from "./page-title";
+import { PageHead } from "./page-head";
 import { LoadingState, NotFoundState, PageFailedState } from "./states";
 
 // focusPage moves focus to the page after a navigation, so a screen reader announces the new page instead of staying
@@ -30,12 +30,7 @@ export const routerDefaults = {
   defaultNotFoundComponent: NotFoundState,
 } as const;
 
+// PageHeader under the name the pages were written with (#747); pages move to PageHead as they are restyled.
 export function PageHeader({ title, description }: { title: string; description?: string }) {
-  usePageTitle(title);
-  return (
-    <div className="space-y-1 border-b border-b1 px-6 py-5">
-      <h1 className="text-xl tracking-[-0.01em] text-t1">{title}</h1>
-      {description ? <p className="text-ui text-t3">{description}</p> : null}
-    </div>
-  );
+  return <PageHead title={title} lede={description} />;
 }

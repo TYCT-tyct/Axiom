@@ -1,10 +1,11 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
 import { accountKey, can, useSession } from "@axiom/app";
-import { Button, CheckField, DataState, Panel, Table, Td, Th } from "@axiom/ui";
+import { ActionButton, Card, CheckField, DataState, Mono, Stack, Table, Td, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "../change";
+import { Head, Json } from "../parts";
 import { publicationKey } from "./publication-key";
 
 type Publication = AdminSchemas["PricePublication"];
@@ -15,17 +16,19 @@ function EndpointPriceList({ label, prices }: { label: string; prices?: Endpoint
     return null;
   }
   return (
-    <div className="space-y-2">
-      <p className="text-label text-t3">{label}</p>
+    <Stack gap={8}>
+      <Text size="sm" tone="faint">
+        {label}
+      </Text>
       {Object.entries(prices).map(([endpoint, schedule]) => (
-        <div key={endpoint} className="rounded border border-line p-2">
-          <p className="break-all text-label text-t3" title={endpoint}>
-            {endpoint}
-          </p>
-          <pre className="max-h-40 overflow-auto text-label">{JSON.stringify(schedule, null, 2)}</pre>
-        </div>
+        <Stack key={endpoint} gap={4}>
+          <Text size="sm" tone="faint">
+            <Mono>{endpoint}</Mono>
+          </Text>
+          <Json value={schedule} label={endpoint} />
+        </Stack>
       ))}
-    </div>
+    </Stack>
   );
 }
 
@@ -35,34 +38,14 @@ function PublicationAudience({ audience }: { audience: Publication["audience"] }
     return <>{t("pricing.publish.unavailable")}</>;
   }
   return (
-    <div className="max-w-48">
-      <p className="truncate">{t(`pricing.audience.${audience.kind}`)}</p>
+    <>
+      <Text>{t(`pricing.audience.${audience.kind}`)}</Text>
       {audience.id ? (
-        <p className="break-all text-label text-t3 xl:truncate" title={audience.id}>
+        <Text size="sm" tone="faint">
           {audience.id}
-        </p>
+        </Text>
       ) : null}
-    </div>
-  );
-}
-
-function PublicationModel({ publication: p }: { publication: Publication }) {
-  const { t } = useTranslation();
-  return (
-    <Td className="max-w-48">
-      <p className="break-all xl:truncate" title={p.model_id}>
-        {p.model_id}
-      </p>
-      <div className="mt-2 space-y-2 xl:hidden">
-        <PublicationAudience audience={p.audience} />
-        <p>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</p>
-        <p className="break-all text-label text-t3">
-          {t("pricing.publish.version")}
-          {": "}
-          {p.current_id ?? t("pricing.publish.unavailable")}
-        </p>
-      </div>
-    </Td>
+    </>
   );
 }
 
@@ -76,38 +59,34 @@ export function Publications() {
   });
   const current = query.data?.data?.find((p) => publicationKey(p) === editing);
   return (
-    <Panel title={t("pricing.publish.title")}>
+    <Card layout="flush" title={t("pricing.publish.title")}>
       <DataState query={query}>
         {(data) =>
           data.data ? (
             <Table label={t("pricing.publish.title")}>
-              <thead>
-                <tr>
-                  <Th>{t("pricing.publish.model")}</Th>
-                  <Th className="hidden xl:table-cell">{t("pricing.rules.audience")}</Th>
-                  <Th className="hidden xl:table-cell">{t("pricing.publish.version")}</Th>
-                  <Th className="hidden xl:table-cell">{t("pricing.publish.state")}</Th>
-                  <Th />
-                </tr>
-              </thead>
+              <Head
+                cols={[
+                  [t("pricing.publish.model"), { main: true }],
+                  t("pricing.rules.audience"),
+                  t("pricing.publish.version"),
+                  t("pricing.publish.state"),
+                ]}
+                action
+              />
               <tbody>
                 {data.data.map((p) => (
                   <tr key={publicationKey(p)}>
-                    <PublicationModel publication={p} />
-                    <Td className="hidden xl:table-cell">
+                    <Td main>{p.model_id}</Td>
+                    <Td>
                       <PublicationAudience audience={p.audience} />
                     </Td>
-                    <Td className="hidden max-w-48 xl:table-cell">
-                      <p className="truncate" title={p.current_id}>
-                        {p.current_id ?? t("pricing.publish.unavailable")}
-                      </p>
-                    </Td>
-                    <Td className="hidden xl:table-cell">
-                      {p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}
-                    </Td>
-                    <Td>
+                    <Td>{p.current_id ?? t("pricing.publish.unavailable")}</Td>
+                    <Td>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</Td>
+                    <Td actions>
                       {manage && p.schedule && p.model_id && p.candidate_id ? (
-                        <Button onClick={() => setEditing(publicationKey(p))}>{t("pricing.publish.action")}</Button>
+                        <ActionButton size="sm" onClick={() => setEditing(publicationKey(p))}>
+                          {t("pricing.publish.action")}
+                        </ActionButton>
                       ) : (
                         p.problem
                       )}
@@ -117,12 +96,12 @@ export function Publications() {
               </tbody>
             </Table>
           ) : (
-            <p className="p-4 text-t3">{t("pricing.publish.unavailable")}</p>
+            <Text tone="faint">{t("pricing.publish.unavailable")}</Text>
           )
         }
       </DataState>
       {current ? <PublishDialog live={current} onClose={() => setEditing(null)} /> : null}
-    </Panel>
+    </Card>
   );
 }
 
@@ -131,26 +110,32 @@ function PublishPrices({ price }: { price: Publication }) {
   const { t } = useTranslation();
   const hasCurrentEndpoints = !!price.current_endpoints && Object.keys(price.current_endpoints).length > 0;
   return (
-    <>
+    <Stack gap={8}>
       <EndpointPriceList
         label={t("pricing.publish.currentEndpoints")}
         prices={hasCurrentEndpoints ? price.current_endpoints : undefined}
       />
       {!hasCurrentEndpoints && price.current_schedule ? (
-        <>
-          <p className="text-label text-t3">{t("pricing.publish.currentSchedule")}</p>
-          <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.current_schedule, null, 2)}</pre>
-        </>
+        <Schedule label={t("pricing.publish.currentSchedule")} value={price.current_schedule} />
       ) : null}
-      <p className="text-label text-t3">{t("pricing.publish.requested")}</p>
-      <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.requested, null, 2)}</pre>
+      <Schedule label={t("pricing.publish.requested")} value={price.requested} />
       <EndpointPriceList label={t("pricing.publish.requestedEndpoints")} prices={price.requested_endpoints} />
-      <p className="text-label text-t3">{t("pricing.publish.safe")}</p>
-      <pre className="max-h-48 overflow-auto text-label">{JSON.stringify(price.schedule, null, 2)}</pre>
+      <Schedule label={t("pricing.publish.safe")} value={price.schedule} />
       <EndpointPriceList label={t("pricing.publish.safeEndpoints")} prices={price.endpoints} />
       <EndpointPriceList label={t("pricing.publish.endpointCosts")} prices={price.costs} />
       <EndpointPriceList label={t("pricing.publish.endpointFloors")} prices={price.floors} />
-    </>
+    </Stack>
+  );
+}
+
+function Schedule({ label, value }: { label: string; value: unknown }) {
+  return (
+    <Stack gap={4}>
+      <Text size="sm" tone="faint">
+        {label}
+      </Text>
+      <Json value={value} label={label} />
+    </Stack>
   );
 }
 

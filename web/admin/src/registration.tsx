@@ -1,6 +1,6 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, CheckField, DataState, Icon, SelectField, TextAreaField, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, CheckField, DataState, Field, Select, TextArea, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -52,13 +52,13 @@ function RegistrationCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; vi
     [t("settings.registration.domainPerHour"), <span key="perHour">{format.number(policy.domain_per_hour)}</span>],
     [
       t("settings.registration.domainAllow"),
-      <span key="allow" className="break-all">
+      <span key="allow">
         {policy.domain_allow.length ? policy.domain_allow.join(", ") : t("settings.registration.any")}
       </span>,
     ],
     [
       t("settings.registration.domainDeny"),
-      <span key="deny" className="break-all">
+      <span key="deny">
         {policy.domain_deny.length ? policy.domain_deny.join(", ") : t("settings.registration.none")}
       </span>,
     ],
@@ -68,11 +68,10 @@ function RegistrationCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; vi
       <Facts
         title={t("settings.registration.title")}
         rows={rows}
-        action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
+        actions={
+          <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.registration.edit")}
-          </Button>
+          </ActionButton>
         }
       />
       {open ? <RegistrationDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
@@ -125,7 +124,7 @@ function NumericPolicyField({
   error?: string;
 }) {
   return (
-    <TextField
+    <Field
       label={label}
       hint={hint}
       name={name}
@@ -150,7 +149,7 @@ function DomainPolicyField({
 }) {
   const { t } = useTranslation();
   return (
-    <TextAreaField
+    <TextArea
       label={label}
       hint={t("settings.registration.domainHint")}
       name={name}
@@ -165,7 +164,7 @@ function RegistrationFields({ policy, error }: { policy: Policy; error: unknown 
   const errors = useErrors();
   return (
     <>
-      <SelectField
+      <Select
         label={t("settings.registration.mode")}
         name="mode"
         defaultValue={policy.mode}
@@ -174,7 +173,7 @@ function RegistrationFields({ policy, error }: { policy: Policy; error: unknown 
         <option value="invite">{t("settings.registration.modes.invite")}</option>
         <option value="closed">{t("settings.registration.modes.closed")}</option>
         <option value="open">{t("settings.registration.modes.open")}</option>
-      </SelectField>
+      </Select>
       <CheckField
         label={t("settings.registration.humanCheck")}
         hint={t("settings.registration.humanCheckHint")}

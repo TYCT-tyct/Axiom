@@ -55,7 +55,7 @@ function ConsentPage() {
         {accept.error ? <FormError>{errors.message(accept.error)}</FormError> : null}
         {missing ? <FormError>{t("legal.missing")}</FormError> : null}
         <LegalConsent consent={legal} />
-        <SubmitButton pending={accept.isPending} disabled={!canSubmitWithLegal(legal) || missing} className="w-full">
+        <SubmitButton pending={accept.isPending} disabled={!canSubmitWithLegal(legal) || missing} wide>
           {t("legal.acceptSubmit")}
         </SubmitButton>
       </form>

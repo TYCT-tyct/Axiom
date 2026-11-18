@@ -268,6 +268,61 @@ const guestPage = /^\/(sign-in|mfa|register|enroll|consent)(?![\w-])/;
 // or plain `..` that climbs out of the base, or an address of another origin, is dropped, and the way back is returned
 // in its resolved form. A sign-in or consent page is dropped too: a way back to it would only loop. `base` is the app's, with the
 // trailing slash.
+const emailChangeTokenParam = "email-change-token";
+const emailChangeStorageKey = "axiom:email-change-token";
+let memoryEmailChangeToken: string | null = null;
+
+function stripEmailTokenHash(rawHash: string): { token: string | null; cleanHash: string } {
+  if (!rawHash.startsWith("#")) {
+    return { token: null, cleanHash: rawHash };
+  }
+  const params = new URLSearchParams(rawHash.slice(1));
+  if (!params.has(emailChangeTokenParam)) {
+    return { token: null, cleanHash: rawHash };
+  }
+  const token = params.get(emailChangeTokenParam)?.trim() ?? "";
+  params.delete(emailChangeTokenParam);
+  const rest = params.toString();
+  return { token: token || null, cleanHash: rest ? `#${rest}` : "" };
+}
+
+// Take `#email-change-token=...` out of an in-app path before putting it in `?next=` so confirmation tokens never enter
+// query strings sent to the server on navigation or refresh.
+export function stripEmailChangeToken(href: string): { token: string | null; cleanHref: string } {
+  const hashIndex = href.indexOf("#");
+  if (hashIndex === -1) {
+    return { token: null, cleanHref: href };
+  }
+  const { token, cleanHash } = stripEmailTokenHash(href.slice(hashIndex));
+  return { token, cleanHref: href.slice(0, hashIndex) + cleanHash };
+}
+
+export function stashEmailChangeToken(token: string) {
+  const trimmed = token.trim();
+  if (!trimmed) {
+    return;
+  }
+  memoryEmailChangeToken = trimmed;
+  try {
+    window.sessionStorage.setItem(emailChangeStorageKey, trimmed);
+  } catch {
+    // Keep the token in tab memory when sessionStorage is blocked.
+  }
+}
+
+export function consumeEmailChangeToken(): string | null {
+  let stored: string | null = null;
+  try {
+    stored = window.sessionStorage.getItem(emailChangeStorageKey);
+    window.sessionStorage.removeItem(emailChangeStorageKey);
+  } catch {
+    // Fall back to the in-memory token below.
+  }
+  const token = (stored ?? memoryEmailChangeToken ?? "").trim();
+  memoryEmailChangeToken = null;
+  return token || null;
+}
+
 export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
   if (typeof value !== "string" || !value.startsWith("/")) {
     return undefined;
@@ -283,16 +338,21 @@ export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
   const path = target.pathname.slice(root.length) || "/";
   // A path that begins with two slashes, as `/a/..//host` resolves to, would be read as another site's once the history
   // puts the base (empty at the root) in front of it.
-  return inApp && /^\/(?![/\\])/.test(path) && !guestPage.test(path) ? path + target.search + target.hash : undefined;
+  return inApp && /^\/(?![/\\])/.test(path) && !guestPage.test(path)
+    ? stripEmailChangeToken(path + target.search + target.hash).cleanHref
+    : undefined;
 }
 
 // Replace moves to a path of this app. The history takes the app's base in front of the path, and no route is named, so
 // one gate serves apps whose routes differ.
-function Replace({ path }: { path: string }) {
+function Replace({ path, stashToken }: { path: string; stashToken?: string | null }) {
   const router = useRouter();
   useEffect(() => {
+    if (stashToken) {
+      stashEmailChangeToken(stashToken);
+    }
     router.history.replace(import.meta.env.BASE_URL.replace(/\/$/, "") + path);
-  }, [router, path]);
+  }, [router, path, stashToken]);
   return null;
 }
 
@@ -307,10 +367,14 @@ function Redirect({ stage, page, here }: { stage: Stage; page: Stage; here: stri
   const inherited = useSearch({ strict: false }).next;
   const next = page === "member" ? undefined : inherited;
   const [from] = useState(here);
+  const { token: fromToken, cleanHref: cleanFrom } = stripEmailChangeToken(from);
+  const nextParts = next ? stripEmailChangeToken(next) : undefined;
+  const token = fromToken ?? nextParts?.token ?? null;
+  const targetNext = nextParts?.cleanHref ?? cleanFrom;
   if (stage === "member") {
-    return <Replace path={next ?? "/"} />;
+    return <Replace path={nextParts?.cleanHref ?? "/"} />;
   }
-  return <Replace path={`${guestPages[stage]}?next=${encodeURIComponent(next ?? from)}`} />;
+  return <Replace path={`${guestPages[stage]}?next=${encodeURIComponent(targetNext)}`} stashToken={token} />;
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member

@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useId, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { Button } from "./button";
-import { Icon } from "./icon";
+import { ActionButton } from "./action-button";
+import s from "./dialog.module.css";
 
 // Dialog is a modal over the page, a native <dialog>: it traps focus, closes on Escape and hands focus back by itself,
 // and needs no script that injects styles, which the content security policy blocks. The parent mounts it while it is
@@ -43,23 +43,21 @@ export function Dialog({
           ref.current?.close();
         }
       }}
-      className="m-auto max-h-[calc(100dvh-2rem)] w-[min(32rem,calc(100vw-2rem))] overflow-y-auto rounded-frame bg-s1 p-0 text-ui text-t1 shadow-modal backdrop:bg-scrim"
+      className={s.root}
     >
-      <div className="space-y-4 p-5">
-        <div className="flex items-start justify-between gap-3">
-          <h2 id={titleId} className="min-w-0 text-[15px] text-t1">
+      <div className={s.body}>
+        <div className={s.head}>
+          <h2 id={titleId} className={s.title}>
             {title}
           </h2>
           {dismissible ? (
-            <Button
-              variant="ghost"
-              size="icon"
-              className="-mt-1 -mr-2"
+            <ActionButton
+              variant="gho"
+              size="sm"
+              icon="close"
               aria-label={t("dialog.close")}
               onClick={() => ref.current?.close()}
-            >
-              <Icon name="close" />
-            </Button>
+            />
           ) : null}
         </div>
         {children}

@@ -1,5 +1,7 @@
 import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
+import { accountHandlers } from "./console-account-mock.ts";
+import { cancelOrder, createOrder, requestRefund, verifyOrder } from "./console-bill-api.ts";
 import { callHandlers } from "./console-calls-api.ts";
 import {
   aKey,
@@ -237,7 +239,8 @@ function deletePasskey({ body, params, state }: Ctx<"/api/console/v1/auth/passke
     return fail(404, "not_found");
   }
   const { csrf_token } = grant(state, "signed_in");
-  return { status: 200, json: { csrf_token, recovery_codes: state.mfaEnabled ? recoveryCodes : undefined } } as const;
+  const totp = state.totpEnabled ?? state.mfaEnabled;
+  return { status: 200, json: { csrf_token, recovery_codes: totp ? recoveryCodes : undefined } } as const;
 }
 
 function listStatement({ query, state }: Ctx<"/api/console/v1/statement", "get">) {
@@ -279,6 +282,42 @@ function getOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}", "g
   return order ? ok(order) : fail(404, "not_found");
 }
 
+function listStatementDaily({ query, state }: Ctx<"/api/console/v1/statement/daily", "get">) {
+  const page = paged(state.statementDaily, query, ["time_zone"]);
+  return page ? ok(page) : fail(400, "invalid_request");
+}
+
+function listRedemptions({ query, state }: Ctx<"/api/console/v1/redeem-codes", "get">) {
+  const page = paged(state.redemptions, query);
+  return page ? ok({ data: page.data, next_cursor: page.next_cursor ?? undefined }) : fail(400, "invalid_request");
+}
+
+function redeemCode({ body, state }: Ctx<"/api/console/v1/redeem-codes", "post">) {
+  const code = body.code.trim().toUpperCase();
+  if (code === "USED-CODE") return fail(422, "redeem_code_used");
+  if (code === "EXPIRED-CODE") return fail(422, "redeem_code_expired");
+  if (code === "DISABLED-CODE") return fail(422, "redeem_code_disabled");
+  if (!code || code.startsWith("BAD") || code === "INVALID") return fail(422, "redeem_code_invalid");
+  const created: Schemas["RedeemCodeRedemption"] = {
+    id: `rdm_${String(state.redemptions.length + 10).padStart(26, "0")}`,
+    amount: { amount: "5000000000", currency: state.site.currency },
+    code_hint: code.slice(-4),
+    redeemed_at: new Date().toISOString(),
+  };
+  state.redemptions.unshift(created);
+  return { status: 201 as const, json: created };
+}
+
+function setBillingPreference({ body, state }: Ctx<"/api/console/v1/billing-preference", "put">) {
+  const preference = body.preference === "site" ? state.billingPreference.site_default : body.preference;
+  state.billingPreference = {
+    ...state.billingPreference,
+    preference,
+    source: body.preference === "site" ? "site" : "account",
+  };
+  return ok(state.billingPreference);
+}
+
 function setNotifications({ body, state }: Ctx<"/api/console/v1/notification-preferences", "put">) {
   state.notifications = { ...state.notifications, ...body };
   return ok(state.notifications);
@@ -300,13 +339,21 @@ const handlers: Handler<MockState>[] = [
   }),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
   route("get", `${base}/session`, { level: "any" }, ({ state }) => ok(session(state))),
+  ...accountHandlers<MockState>(),
   route("post", `${base}/auth/totp/setup`, signedIn, totpSetup),
-  route("post", `${base}/auth/totp/confirm`, signedIn, confirmTotp),
-  route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
+  route("post", `${base}/auth/totp/confirm`, signedIn, (ctx) => {
+    const res = confirmTotp(ctx);
+    if (res.status === 200) ctx.state.sessions = ctx.state.sessions.filter((item) => item.current);
+    return res;
+  }),
+  route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, (ctx) => {
+    const res = regenerate(ctx);
+    if (res.status === 200) ctx.state.sessions = ctx.state.sessions.filter((item) => item.current);
+    return res;
+  }),
   route("post", `${base}/auth/recovery-codes/take`, signedIn, () => ok({ recovery_codes: [] })),
   route("get", `${base}/auth/passkeys`, signedIn, ({ state }) => ok({ passkeys: state.passkeys })),
   route("delete", `${base}/auth/passkeys/{id}`, signedIn, deletePasskey),
-  route("get", `${base}/auth/identities`, signedIn, () => ok({ identities: [] })),
   route("get", `${base}/keys`, { ...signedIn, permission: "api_keys.view" }, listKeys),
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
   route("put", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, updateKey),
@@ -337,8 +384,20 @@ const handlers: Handler<MockState>[] = [
   ...callHandlers,
   route("get", `${base}/usage/statistics`, { ...signedIn, permission: "calls.view" }, usageStatistics),
   route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
+  route("get", `${base}/statement/daily`, { ...signedIn, permission: "balance.view" }, listStatementDaily),
+  route("get", `${base}/subscriptions`, { ...signedIn, permission: "balance.view" }, ({ state }) =>
+    ok({ data: state.subscriptions }),
+  ),
+  route("get", `${base}/billing-preference`, signedIn, ({ state }) => ok(state.billingPreference)),
+  route("put", `${base}/billing-preference`, signedIn, setBillingPreference),
+  route("get", `${base}/redeem-codes`, { ...signedIn, permission: "balance.view" }, listRedemptions),
+  route("post", `${base}/redeem-codes`, { ...signedIn, permission: "balance.top_up" }, redeemCode),
   route("get", `${base}/orders`, { ...signedIn, permission: "balance.view" }, listOrders),
+  route("post", `${base}/orders`, { ...signedIn, permission: "balance.top_up" }, createOrder),
   route("get", `${base}/orders/{order_id}`, { ...signedIn, permission: "balance.view" }, getOrder),
+  route("post", `${base}/orders/{order_id}/verify`, { ...signedIn, permission: "balance.top_up" }, verifyOrder),
+  route("post", `${base}/orders/{order_id}/cancel`, { ...signedIn, permission: "balance.top_up" }, cancelOrder),
+  route("post", `${base}/orders/{order_id}/refunds`, { ...signedIn, permission: "balance.top_up" }, requestRefund),
   route("get", `${base}/payment-methods`, { ...signedIn, permission: "balance.top_up" }, ({ state }) =>
     ok({ data: state.methods }),
   ),

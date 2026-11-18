@@ -8,17 +8,10 @@ import phoneZh from "@axiom/boards/AxAppPhone/regions/Shell.zh";
 import { BoardMark, BoardShell, useFormat, useKeptPage, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
-import {
-  type AnchorHTMLAttributes,
-  type ReactNode,
-  type SyntheticEvent,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+import { type AnchorHTMLAttributes, type ReactNode, type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { pressKey } from "./board";
+import { useWide } from "./board";
+import { phoneWidth, pressBoardButton, useBoardMedia } from "./board-interaction";
 import { balanceQuery, siteQuery } from "./queries";
 
 // The pages the shell links to, by the board's page key: the address, what the session must hold to open it, and the
@@ -29,6 +22,7 @@ const pages = {
   usage: { to: "/usage", permission: "calls.view" },
   logs: { to: "/calls", permission: "calls.view" },
   keys: { to: "/keys", permission: "api_keys.view" },
+  presets: { to: "/request-presets", permission: "api_keys.view" },
   route: { to: "/routing-presets", permission: "api_keys.view" },
   byok: { to: "/provider-keys", permission: "api_keys.view" },
   bill: { to: "/balance", permission: "balance.view", under: ["/redeem", "/orders", "/statement"] },
@@ -44,21 +38,6 @@ const account: Page[] = ["profile", "security", "notify"];
 
 // The board's own state classes for the personal space, as it draws it; only the level and the page vary here.
 const drawn = "spP woP wa2 rw tx0 tm1 ap0 lf0 wsk0 nks0 cz0 ck0 ct1 den0 kp0 yrc0 pico0";
-
-// The widths the boards are drawn for: the wide board from the tablet board's 820px (AxAppTablet, the same markup with
-// its sidebar folded, as it stays below 1024px), the phone board below, where the page keeps the whole width. Only one
-// of the two is in the DOM.
-const media = (query: string) => ({
-  subscribe: (listener: () => void) => {
-    const list = matchMedia(query);
-    list.addEventListener("change", listener);
-    return () => list.removeEventListener("change", listener);
-  },
-  matches: () => matchMedia(query).matches,
-});
-const phoneWidth = media("(max-width: 819px)");
-const wideWidth = media("(min-width: 1024px)");
-const useMedia = (query: ReturnType<typeof media>) => useSyncExternalStore(query.subscribe, query.matches);
 
 // The shell's departures from the drawing, which the regions leave to the page (packages/boards/manifest/shell.ts). The document
 // scrolls, not the board's fixed frame (port design §3.3): the bar sticks to the top, the sidebar below it (56px is the
@@ -81,7 +60,7 @@ const frame = {
   unbuilt: true,
   placeholder: "visibility: hidden",
   // An entry the board draws as a <div> or <a> without an address, given a button's role: Enter and Space press it.
-  press: pressKey,
+  press: pressBoardButton,
 };
 const frameStyle = "overflow: clip; min-height: 100dvh";
 
@@ -233,7 +212,7 @@ function usePreferenceValues() {
 // The wide sidebar folds below 1024px until the person unfolds it.
 function useSidebarValues() {
   const { t } = useTranslation();
-  const wide = useMedia(wideWidth);
+  const wide = useWide();
   const [collapsed, setCollapsed] = useState<boolean>();
   const folded = collapsed ?? !wide;
   return {
@@ -274,7 +253,7 @@ function ConsoleShell({
 }) {
   const { t, i18n } = useTranslation();
   const { page, slot } = useKeptPage(children);
-  const phone = useMedia(phoneWidth);
+  const phone = useBoardMedia(phoneWidth);
   const { level, ...pageValues } = usePageValues();
   const { dark, language, locale, ...preferenceValues } = usePreferenceValues();
   const balance = useBalanceText();
@@ -291,13 +270,17 @@ function ConsoleShell({
     fnOut: signOut,
   };
   const english = i18n.language === "en";
+  const presetLabels = {
+    mf1de1e2621: t("requestPresets.copy.title"),
+    mb9670c85a4: t("nav.routingPresets"),
+  };
   const mark = <BoardMark name={name} logoUrl={logoUrl} />;
   // The page comes after the board, so the slot holds the page's element before the page's own effects run.
   return (
     <>
       {phone ? (
         <Phone
-          t={(key) => (english ? phoneEn : phoneZh)[key]}
+          t={(key) => (presetLabels as Record<string, string>)[key] ?? (english ? phoneEn : phoneZh)[key]}
           values={values}
           text={{ language, lang: locale, frameStyle }}
           link={RouterLink}
@@ -307,7 +290,7 @@ function ConsoleShell({
         </Phone>
       ) : (
         <Wide
-          t={(key) => (english ? wideEn : wideZh)[key]}
+          t={(key) => (presetLabels as Record<string, string>)[key] ?? (english ? wideEn : wideZh)[key]}
           values={values}
           text={{ language, lang: locale, frameStyle, ...balance }}
           link={RouterLink}

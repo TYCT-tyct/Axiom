@@ -1,0 +1,50 @@
+/* The icon-sized copy button of a table cell: quiet until hovered, the failure in the danger colour. */
+.compact {
+  all: unset;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r6);
+  color: var(--t3);
+  cursor: pointer;
+}
+
+.compact:hover {
+  background: var(--hover);
+  color: var(--t1);
+}
+
+.compact:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.failed {
+  color: var(--badT);
+}
+
+.failure {
+  min-width: 0;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--badT);
+  overflow-wrap: anywhere;
+}
+
+.message {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

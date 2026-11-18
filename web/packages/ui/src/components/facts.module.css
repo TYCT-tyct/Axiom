@@ -1,0 +1,38 @@
+/* The board's .qrow in a card of rows: a hairline between rows, the label in --t2 at 12rem, the value beside it. */
+.list {
+  margin: 0;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 12rem minmax(0, 1fr);
+  gap: 4px 24px;
+  align-items: baseline;
+  min-height: 48px;
+  padding: 13px 0;
+}
+
+.row + .row {
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+}
+
+.label {
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+}
+
+.value {
+  min-width: 0;
+  margin: 0;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 767px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

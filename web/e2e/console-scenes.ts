@@ -6,6 +6,12 @@ import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 
+// User content is independent of the UI language. Use the same prompts in the API and the reference.
+export const requestPresetPrompts = [
+  "Keep the meaning and shorten the text.",
+  "Outline the topic in three sections.",
+] as const;
+
 // The screens of the console M1.
 
 async function goto(page: Page, path: string) {
@@ -38,12 +44,18 @@ const scenes: Scene[] = [
     signedIn: true,
     open: async (page) => {
       await goto(page, "balance");
-      await page.locator("input[inputmode=decimal]").fill("10");
-      await page.getByRole("button", { name: /^(查看支付方式|See how to pay)$/ }).click();
-      await page.getByRole("combobox").waitFor();
+      await page
+        .getByRole("button", { name: /^(充值|Top up)$/ })
+        .first()
+        .click();
+      const amount = page.locator("input[inputmode=decimal]");
+      await amount.waitFor();
+      await amount.fill("10");
+      await page.locator("button[data-m]").first().waitFor();
     },
   },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },
+  { name: "request-presets", signedIn: true, open: (page) => goto(page, "request-presets") },
   { name: "routing-presets", signedIn: true, open: (page) => goto(page, "routing-presets") },
   dialogScene("routing-preset-create", "routing-presets", (page) =>
     page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click(),
@@ -96,6 +108,7 @@ const scenes: Scene[] = [
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
+  { name: "settings", signedIn: true, open: (page) => goto(page, "settings") },
   dialogScene("key-create", "keys", (page) => page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click()),
   // A key opens from its row in the list, as the board draws it; its settings, and the way to delete it, are there. The
   // first row is a key in every data set the scenes run with, from the usual account to the worst one.
@@ -177,6 +190,33 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
     state.csrf = "csrf-0";
   } else if (scene.signedIn) {
     signedInAs(state);
+  }
+  if (scene.name === "request-presets") {
+    await page.route("**/api/console/v1/presets?*", (route) => {
+      const presets = [
+        {
+          slug: "polish-zh",
+          name: "polish-zh",
+          config: {
+            model: "claude-sonnet-5.5",
+            system: requestPresetPrompts[0],
+            temperature: 0.4,
+            max_tokens: 2000,
+          },
+        },
+        {
+          slug: "outline",
+          name: "outline",
+          config: {
+            model: "gpt-6.1-sol",
+            system: requestPresetPrompts[1],
+            temperature: 0.6,
+            max_tokens: 600,
+          },
+        },
+      ];
+      return route.fulfill({ json: { data: data === "empty" ? [] : presets, total_count: data === "empty" ? 0 : 2 } });
+    });
   }
   return state;
 }

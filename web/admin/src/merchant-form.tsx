@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, CheckField, Icon, moneyInput, SelectField, TextField } from "@axiom/ui";
+import { ActionButton, CheckField, Field, Fieldset, Grid, moneyInput, Select, Stack, Text } from "@axiom/ui";
 import type React from "react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -101,7 +101,7 @@ function MerchantBasics({
   const errors = useErrors();
   return (
     <>
-      <SelectField
+      <Select
         label={t("settings.payments.kind")}
         hint={t("settings.payments.kindHint")}
         name="kind"
@@ -114,8 +114,8 @@ function MerchantBasics({
         <option value="alipay">{t("settings.payments.kinds.alipay")}</option>
         <option value="stripe">{t("settings.payments.kinds.stripe")}</option>
         <option value="wechatpay">{t("settings.payments.kinds.wechatpay")}</option>
-      </SelectField>
-      <TextField
+      </Select>
+      <Field
         label={t("settings.payments.name")}
         name="name"
         autoComplete="off"
@@ -123,7 +123,7 @@ function MerchantBasics({
         defaultValue={merchant?.name ?? ""}
         error={errors.field(error, "merchant/name")}
       />
-      <SelectField
+      <Select
         label={t("settings.payments.currency")}
         hint={t("settings.payments.currencyHint")}
         name="currency"
@@ -136,8 +136,8 @@ function MerchantBasics({
             {code}
           </option>
         ))}
-      </SelectField>
-      <TextField
+      </Select>
+      <Field
         label={t("settings.payments.ttl")}
         hint={t("settings.payments.ttlHint")}
         name="ttl_seconds"
@@ -146,7 +146,7 @@ function MerchantBasics({
         defaultValue={merchant?.ttl_seconds ?? 1800}
         error={errors.field(error, "merchant/ttl_seconds")}
       />
-      <TextField
+      <Field
         label={t("settings.payments.sort")}
         hint={t("settings.payments.sortHint")}
         name="sort"
@@ -203,8 +203,10 @@ function MethodsEditor({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="space-y-3">
-      <p className="text-ui font-medium text-t2">{t("settings.payments.methods")}</p>
+    <Stack gap={12}>
+      <Text medium tone="muted">
+        {t("settings.payments.methods")}
+      </Text>
       {rows.map((row, index) => (
         <MethodRow
           key={row.key}
@@ -217,11 +219,10 @@ function MethodsEditor({
           onRemove={() => setRows((current) => current.filter((entry) => entry.key !== row.key))}
         />
       ))}
-      <Button size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined, kind)])}>
-        <Icon name="plus" />
+      <ActionButton size="sm" onClick={() => setRows((current) => [...current, draftOf(undefined, kind)])} icon="plus">
         {t("settings.payments.addMethod")}
-      </Button>
-    </div>
+      </ActionButton>
+    </Stack>
   );
 }
 
@@ -244,24 +245,24 @@ function MethodRow({
 }) {
   const { t } = useTranslation();
   return (
-    <fieldset className="space-y-3 rounded-card border border-b1 p-3">
-      <legend className="px-1 text-label text-t3">{t("settings.payments.method", { number: index + 1 })}</legend>
-      <MethodCodes row={row} index={index} update={update} error={error} />
-      <MethodMoneyFields row={row} index={index} update={update} paidIn={paidIn} error={error} />
-      <CheckField
-        label={t("settings.payments.methodEnabled")}
-        name={`method-${index}-enabled`}
-        value="true"
-        checked={row.enabled}
-        onChange={(event) => update(row.key, { enabled: event.target.checked })}
-      />
-      {removable ? (
-        <Button variant="ghost" size="sm" onClick={onRemove}>
-          <Icon name="trash" />
-          {t("settings.payments.removeMethod")}
-        </Button>
-      ) : null}
-    </fieldset>
+    <Fieldset legend={t("settings.payments.method", { number: index + 1 })}>
+      <Stack gap={12}>
+        <MethodCodes row={row} index={index} update={update} error={error} />
+        <MethodMoneyFields row={row} index={index} update={update} paidIn={paidIn} error={error} />
+        <CheckField
+          label={t("settings.payments.methodEnabled")}
+          name={`method-${index}-enabled`}
+          value="true"
+          checked={row.enabled}
+          onChange={(event) => update(row.key, { enabled: event.target.checked })}
+        />
+        {removable ? (
+          <ActionButton size="sm" variant="gho" onClick={onRemove} icon="trash">
+            {t("settings.payments.removeMethod")}
+          </ActionButton>
+        ) : null}
+      </Stack>
+    </Fieldset>
   );
 }
 
@@ -269,8 +270,8 @@ function MethodCodes({ row, index, update, error }: { row: Draft; index: number;
   const { t } = useTranslation();
   const errors = useErrors();
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <TextField
+    <Grid min="16rem" gap={12}>
+      <Field
         label={t("settings.payments.methodCode")}
         name={`method-${index}-method`}
         autoComplete="off"
@@ -278,7 +279,7 @@ function MethodCodes({ row, index, update, error }: { row: Draft; index: number;
         onChange={(event) => update(row.key, { method: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/method`)}
       />
-      <TextField
+      <Field
         label={t("settings.payments.upstream")}
         name={`method-${index}-upstream`}
         autoComplete="off"
@@ -286,7 +287,7 @@ function MethodCodes({ row, index, update, error }: { row: Draft; index: number;
         onChange={(event) => update(row.key, { upstream: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/upstream`)}
       />
-    </div>
+    </Grid>
   );
 }
 
@@ -306,8 +307,8 @@ function MethodMoneyFields({
   const { t } = useTranslation();
   const errors = useErrors();
   return (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <TextField
+    <Grid min="16rem" gap={12}>
+      <Field
         label={t("settings.payments.fee")}
         hint={t("settings.payments.feeHint")}
         name={`method-${index}-percent`}
@@ -317,7 +318,7 @@ function MethodMoneyFields({
         onChange={(event) => update(row.key, { percent: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/fee_ppm`)}
       />
-      <TextField
+      <Field
         label={t("settings.payments.fixed")}
         hint={t("settings.payments.fixedHint", { currency: paidIn })}
         name={`method-${index}-fixed`}
@@ -327,7 +328,7 @@ function MethodMoneyFields({
         onChange={(event) => update(row.key, { fixed: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/fee_fixed`)}
       />
-      <TextField
+      <Field
         label={t("settings.payments.min")}
         name={`method-${index}-min`}
         inputMode="decimal"
@@ -336,7 +337,7 @@ function MethodMoneyFields({
         onChange={(event) => update(row.key, { min: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/single_min`)}
       />
-      <TextField
+      <Field
         label={t("settings.payments.max")}
         name={`method-${index}-max`}
         inputMode="decimal"
@@ -345,7 +346,7 @@ function MethodMoneyFields({
         onChange={(event) => update(row.key, { max: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/single_max`)}
       />
-      <TextField
+      <Field
         label={t("settings.payments.dailyLimit")}
         name={`method-${index}-daily`}
         inputMode="decimal"
@@ -354,6 +355,6 @@ function MethodMoneyFields({
         onChange={(event) => update(row.key, { daily: event.target.value })}
         error={errors.field(error, `merchant/methods/${index}/daily_limit`)}
       />
-    </div>
+    </Grid>
   );
 }
