@@ -1,0 +1,4 @@
+/* A screen's place until its code arrives: a view's height, so the screens after it start below the view. */
+.waiting {
+  height: 100dvh;
+}
