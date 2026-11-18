@@ -281,6 +281,11 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "site faq",
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    ...both(".hfm5 .qq"),
+  },
+  {
+    scene: "site faq",
     basis: "the address is the site's own API address, not the board's example",
     ...both(".hfm5 .w2 .ac"),
   },
