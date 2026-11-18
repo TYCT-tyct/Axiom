@@ -2,7 +2,7 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Profile.tsx";
 import type en from "./Profile.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {avatar: t("m0cff3c9b1c"),
-name: t("m0d8f3231cc"),
-email: "zhiyuan@axiomlabs.cn"},  });
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {},  rows: {rows0: [{ key: "0", kind: "0", f0: "qrow",f1: "qrl",f2: t("m3ea2d23c90"),f3: "qrc",f4: "qav lg",f5: "--p: var(--c0);",f6: t("m0d8f3231cc"),f7: t("m0cff3c9b1c") },
+{ key: "1", kind: "1", f0: "qrow",f1: "qrl",f2: t("m6773310492"),f3: "qrc",f4: "qin",f5: "name",f6: t("m0d8f3231cc"),f7: t("m6773310492") },
+{ key: "2", kind: "2", f0: "qrow",f1: "qrl",f2: t("m73075237fd"),f3: t("mfad68cf9c0"),f4: "qrc",f5: "qin",f6: "mail",f7: "zhiyuan@axiomlabs.cn",f8: t("m73075237fd") }]} });
 /* jscpd:ignore-end */

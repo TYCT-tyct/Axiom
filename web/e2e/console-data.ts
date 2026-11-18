@@ -1,4 +1,10 @@
 import type { components } from "../packages/api/src/console.gen.ts";
+import {
+  type AccountMockFields,
+  emptyAccountFields,
+  usualAccountFields,
+  worstAccountFields,
+} from "./console-account-mock.ts";
 import { type BillMockState, emptyBillState, usualBillState, worstBillDaily } from "./console-bill-data.ts";
 import { buildMockCall } from "./console-calls-data.ts";
 import type { AuthState } from "./mock.ts";
@@ -11,6 +17,7 @@ import { authState } from "./mock-auth.ts";
 export type Schemas = components["schemas"];
 
 export type MockState = AuthState &
+  AccountMockFields &
   BillMockState & {
     site: Schemas["Site"];
     legal: Schemas["LegalDocument"][];
@@ -22,7 +29,6 @@ export type MockState = AuthState &
     models: Schemas["PublicModel"][];
     statement: Schemas["StatementRow"][];
     orders: Schemas["Order"][];
-    notifications: Schemas["NotificationPreferences"];
     presets: Schemas["RoutingPreset"][];
     routingDefault: Schemas["AccountRoutingDefault"];
     usageBackfillComplete?: boolean;
@@ -305,6 +311,7 @@ export function usualState(): MockState {
     },
     legal: [],
     legalAccepted: false,
+    ...usualAccountFields(),
     balance: {
       balance: usd("12"),
       reserved: nano("250000000"),
@@ -339,15 +346,6 @@ export function usualState(): MockState {
     models: range(4).map((n) => aModel(n)),
     statement: range(120).map((n) => aMovement(n)),
     orders: range(12).map((n) => anOrder(n)),
-    notifications: {
-      low_balance: true,
-      top_up: true,
-      factor_changed: true,
-      spend_anomaly: true,
-      threshold: "5000000000",
-      webhook_url: "",
-      language: "zh",
-    },
     ...usualBillState(),
     ...usualPresets(),
   };
@@ -356,6 +354,7 @@ export function usualState(): MockState {
 export function emptyState(): MockState {
   const state = {
     ...usualState(),
+    ...emptyAccountFields(),
     keys: [],
     calls: [],
     models: [],
@@ -375,7 +374,7 @@ const long = (text: string, length: number) => text.repeat(Math.ceil(length / te
 // The longest values the contract allows, mixed over the rows: a 100-character key name, 200-character model names, a
 // 254-character email, a 200-character API address, the biggest amounts, a debt, and a lot of rows.
 export function worstState(): MockState {
-  const state = usualState();
+  const state = { ...usualState(), ...worstAccountFields(long) };
   state.user.email = `${long("bartholomew.fitzgerald-", 200)}@northwind-industries-holdings.example.com`;
   const host = [long("a", 63), long("b", 63), long("c", 63)].join(".");
   state.site.api_base_url = `https://${host}.example.com`;
