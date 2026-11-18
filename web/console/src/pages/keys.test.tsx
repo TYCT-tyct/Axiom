@@ -3,8 +3,9 @@ import type { Schemas } from "@axiom/api";
 import { act, type ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { KeyFilters } from "../queries";
-import { answer, render, settle, setUpPages, submit } from "../testing";
+import { answer, choose, render, settle, setUpPages, submit } from "../testing";
 import Keys from "./keys";
+import { KeyFiltersDialog } from "./keys-filters";
 
 // What the mocked console answers, which a test moves between reads: the account's keys, the filters the node says it
 // applied, and every key the page writes back.
@@ -13,6 +14,8 @@ const api = vi.hoisted(() => ({
   filters: undefined as Schemas["KeyFilterEcho"] | undefined,
   asked: {} as Record<string, string | undefined>,
   sent: [] as Schemas["KeySettings"][],
+  workspaces: [] as Schemas["Workspace"][],
+  navigated: [] as { search: Record<string, string | undefined> }[],
   undoFails: false,
 }));
 
@@ -60,7 +63,7 @@ vi.mock("@axiom/api", async (importOriginal) => {
           case "/api/console/v1/keys":
             return answer(200, { data: api.keys, filters: api.filters });
           case "/api/console/v1/workspaces":
-            return answer(200, { data: [] });
+            return answer(200, { data: api.workspaces });
           case "/api/console/v1/routing-presets":
             return answer(200, { data: [] });
           case "/api/console/v1/routing-default":
@@ -81,7 +84,10 @@ vi.mock("@axiom/api", async (importOriginal) => {
 // link is the text it would carry.
 vi.mock("@tanstack/react-router", () => ({
   useSearch: () => api.asked as KeyFilters,
-  useNavigate: () => async () => undefined,
+  useNavigate: () => (to: { search: Record<string, string | undefined> }) => {
+    api.navigated.push(to);
+    return Promise.resolve();
+  },
   Link: (props: { children: ReactNode }) => props.children,
 }));
 
@@ -91,6 +97,8 @@ setUpPages();
 
 beforeEach(() => {
   api.keys = [aKey()];
+  api.workspaces = [];
+  api.navigated = [];
   api.filters = undefined;
   api.asked = {};
   api.sent = [];
@@ -160,4 +168,23 @@ it("undoes a switch on the key as it is now, and says why when that fails", asyn
   expect(api.sent[2]).toMatchObject({ disabled: false, name: "Laptop", spend_limit: { amount: "7500000000" } });
   expect(container.textContent).toContain("errors.stale_revision");
   expect(undo()).toBeDefined();
+});
+
+// The workspace choice is one, and what the user picks is what the address and the request carry.
+it("offers one workspace choice and keeps the one chosen", async () => {
+  const workspace = (id: string, name: string): Schemas["Workspace"] =>
+    ({
+      id,
+      name,
+      is_default: id === "ws_1",
+      disabled: false,
+      created_at: "2026-10-01T00:00:00Z",
+    }) as Schemas["Workspace"];
+  api.workspaces = [workspace("ws_1", "Personal"), workspace("ws_2", "Team")];
+  const page = await render(<KeyFiltersDialog filters={{}} onClose={() => {}} />);
+  const choices = page.container.querySelectorAll('select[name="workspace_id"]');
+  expect(choices).toHaveLength(1);
+  await choose(choices[0] as HTMLSelectElement, "ws_2");
+  await submit(page.container.querySelector("form") as HTMLFormElement);
+  expect(api.navigated.at(-1)).toMatchObject({ search: { workspace_id: "ws_2" } });
 });
