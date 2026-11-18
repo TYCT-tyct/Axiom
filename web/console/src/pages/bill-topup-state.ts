@@ -1,10 +1,11 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { type Attempt, failedFrom, opened, type Sendable, useSession } from "@axiom/app";
+import { type Attempt, failed, opened, type Sendable, useSession } from "@axiom/app";
 import { moneyInput, parseMoney } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { clearAttempt, readAttempt, unanswered, writeAttempt } from "../attempt-store";
 import { balanceQuery, orderQuery, ordersQuery, paymentMethodsQuery } from "../queries";
+import { useBillAttempt } from "./bill-attempt";
 import { quickAmountsForCurrency } from "./bill-data";
 
 export type OrderRequest = Schemas["OrderCreate"];
@@ -101,20 +102,16 @@ function useActiveOrder(orderId: string | null) {
 /** Keeps the current active order watched across modal open/close and payment-channel redirects. */
 export function useBillTopUpSession(enabled = true) {
   const scope = useBillScope();
-  const [active, setActive] = useState<ActiveOrderState | null>(() => {
-    const saved = readStoredOrderId(scope);
-    return saved ? { id: saved, created: null } : null;
-  });
-  const activeOrder = useActiveOrder(enabled ? (active?.id ?? null) : null);
+  const { active, change, placement } = useTopUpAttempt(scope);
   const selectActive = useCallback(
-    (next: ActiveOrderState | null) => {
-      writeStoredOrderId(scope, next?.id ?? null);
-      setActive(next);
-    },
-    [scope],
+    (next: ActiveOrderState | null) =>
+      change((current) => {
+        writeStoredOrderId(scope, next?.id ?? null);
+        return { ...current, active: next };
+      }),
+    [change, scope],
   );
-  const placement = useTopUpAttempt(scope, (order) => selectActive({ id: order.id, created: order }));
-
+  const activeOrder = useActiveOrder(enabled ? (active?.id ?? null) : null);
   useEffect(() => {
     if (active && activeOrder.isNotFound) selectActive(null);
   }, [active, activeOrder.isNotFound, selectActive]);
@@ -123,21 +120,26 @@ export function useBillTopUpSession(enabled = true) {
 }
 
 type Placement = { from: Sendable<OrderRequest>; request: OrderRequest };
+type TopUpState = {
+  attempt: Attempt<OrderRequest>;
+  pending: boolean;
+  active: ActiveOrderState | null;
+  draft?: OrderRequest;
+  failure?: unknown;
+};
 
-function useTopUpAttempt(scope: string, onCreated: (order: Order) => void) {
+function freshTopUp(active: ActiveOrderState | null): TopUpState {
+  return { active, attempt: opened(crypto.randomUUID()), pending: false };
+}
+
+function useTopUpAttempt(scope: string) {
   const storeKey = `${scope}/${ATTEMPT_STORE}`;
   const queryClient = useQueryClient();
-  const [attempt, setAttempt] = useState<Attempt<OrderRequest>>(
-    () => readAttempt(storeKey, isOrderRequest) ?? opened(crypto.randomUUID()),
-  );
-  const [failure, setFailure] = useState<unknown>(null);
-  const pending = useRef(false);
-
-  const commit = (next: Attempt<OrderRequest>) => {
-    setAttempt(next);
-    writeAttempt(storeKey, next);
-  };
-
+  const { state, change, start, finish } = useBillAttempt<TopUpState>(scope, "top-up", () => {
+    const saved = readStoredOrderId(scope);
+    const initial = freshTopUp(saved ? { id: saved, created: null } : null);
+    return { ...initial, attempt: readAttempt(storeKey, isOrderRequest) ?? initial.attempt };
+  });
   const create = useMutation({
     mutationFn: ({ from, request }: Placement) =>
       unwrap(
@@ -146,41 +148,50 @@ function useTopUpAttempt(scope: string, onCreated: (order: Order) => void) {
           params: { header: { "Idempotency-Key": from.key } },
         }),
       ),
-    onMutate: ({ from, request }) => {
-      setFailure(null);
-      commit(unanswered(from, request));
+    onSuccess: (order, { from }) => {
+      const committed = finish(from.key, () => {
+        writeStoredOrderId(scope, order.id);
+        clearAttempt(storeKey);
+        return freshTopUp({ id: order.id, created: order });
+      });
+      if (committed) {
+        void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
+        void queryClient.invalidateQueries({ queryKey: ordersQuery.queryKey });
+      }
     },
-    onSuccess: (order) => {
-      setAttempt(opened(crypto.randomUUID()));
-      clearAttempt(storeKey);
-      void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
-      void queryClient.invalidateQueries({ queryKey: ordersQuery.queryKey });
-      onCreated(order);
-    },
-    onError: failedFrom(commit, setFailure),
-    onSettled: () => {
-      pending.current = false;
+    onError: (failure, { from, request }) => {
+      finish(from.key, (current) => {
+        const attempt = failed(from, request, failure, () => crypto.randomUUID());
+        writeAttempt(storeKey, attempt);
+        return { ...current, attempt, draft: request, failure };
+      });
     },
   });
 
-  const reset = () => {
-    if (pending.current) return;
-    setFailure(null);
-    setAttempt(opened<OrderRequest>(crypto.randomUUID()));
-    clearAttempt(storeKey);
+  const reset = () =>
+    change((current) => {
+      if (current.pending) return undefined;
+      clearAttempt(storeKey);
+      return freshTopUp(current.active);
+    });
+
+  const send = ({ from, request }: Placement) => {
+    if (
+      start(from.key, (current) => {
+        const attempt = unanswered(from, request);
+        writeAttempt(storeKey, attempt);
+        return { ...current, attempt, failure: undefined };
+      })
+    )
+      create.mutate({ from, request });
   };
 
-  const send = (placement: Placement) => {
-    if (pending.current) return;
-    pending.current = true;
-    create.mutate(placement);
-  };
-
-  return { attempt, failure, creating: create.isPending, send, reset };
+  const { active, pending: creating, ...placement } = state;
+  return { active, change, placement: { ...placement, creating, send, reset } };
 }
 
 function pickMethod(methods: readonly Schemas["PaymentMethod"][], chosenMethod: string | undefined) {
-  return methods.find((item) => item.method === chosenMethod) ?? methods[0];
+  return chosenMethod === undefined ? methods[0] : methods.find((item) => item.method === chosenMethod);
 }
 
 function useAmount(initial: string, locked: boolean) {
@@ -214,7 +225,7 @@ function usePaymentQuote(activeCredits: string | null, editable: boolean, chosen
 export function useStepOneController(
   currency: string,
   initialUnits: string | undefined,
-  { attempt, failure, creating, send, reset }: ReturnType<typeof useTopUpAttempt>,
+  { attempt, draft, failure, creating, send, reset }: ReturnType<typeof useTopUpAttempt>["placement"],
 ) {
   const presets = quickAmountsForCurrency(currency);
   const sent = attempt.state === "unknown" ? attempt.request : undefined;
@@ -222,8 +233,12 @@ export function useStepOneController(
   const isBlocked = attempt.state === "reused" || attempt.state === "stale";
   const editable = !sent && !isBlocked;
   const locked = creating || !editable;
-  const amount = useAmount(sent ? moneyInput(sent.credits.amount) : (initialUnits ?? presets[1] ?? "200"), locked);
-  const [chosenMethod, setChosenMethod] = useState(() => sent?.method);
+  const restored = sent ?? draft;
+  const amount = useAmount(
+    restored ? moneyInput(restored.credits.amount) : (initialUnits ?? presets[1] ?? "200"),
+    locked,
+  );
+  const [chosenMethod, setChosenMethod] = useState(() => restored?.method);
   const activeCredits = sent?.credits.amount ?? parsePositiveCredits(amount.amountText);
   const { methodsQuery, methods, selected } = usePaymentQuote(activeCredits, editable, chosenMethod);
 

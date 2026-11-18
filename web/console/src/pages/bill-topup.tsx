@@ -89,7 +89,9 @@ function useFeeTotalText(c: ReturnType<typeof useStepOneController>) {
     return t("statement.bill.topUpModal.methodsError", { reason: errors.message(c.methodsQuery.error) });
   }
   if (c.methodsQuery.isPending) return t("statement.bill.topUpModal.checkingMethods");
-  if (!c.selected) return t("topup.noMethods");
+  if (!c.selected) {
+    return c.methods.length > 0 ? t("statement.bill.topUpModal.chooseMethod") : t("topup.noMethods");
+  }
   if (BigInt(c.selected.fee.amount) > 0n) {
     return t("statement.bill.topUpModal.feeLine", {
       total: format.pay(c.selected.total),

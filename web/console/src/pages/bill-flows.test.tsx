@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { en as billEn, zh as billZh } from "../locales/bill";
 import { answer, render, settle, submit } from "../testing";
 import BalancePage from "./balance";
@@ -32,6 +32,8 @@ function TopUpTestView(props: Omit<React.ComponentProps<typeof BillTopUpModal>, 
 vi.mock("@axiom/api", async (original) => (await import("./bill-testing")).apiMock(original));
 vi.mock("@axiom/app", async (original) => (await import("./bill-testing")).appMock(original));
 vi.mock("@tanstack/react-router", async (original) => (await import("./bill-testing")).routerMock(original));
+
+afterEach(() => vi.restoreAllMocks());
 
 function setupTopUpGetMock(order: ReturnType<typeof makeTestOrder>, totalCny: string) {
   getMock.mockImplementation((path: string) => {
@@ -138,7 +140,7 @@ describe("top-up decimal precision, in-flight locks, 4xx preservation, and retry
     expect(container.textContent).toContain("statement.bill.topUpModal.amountInvalid");
   });
 
-  it("blocks reset during in-flight POST and preserves user amount & method after 4xx rejection", async () => {
+  it("restores the amount and method when the rejection arrived with the dialog closed", async () => {
     getMock.mockImplementation((path: string) =>
       path === "/api/console/v1/balance"
         ? answer(200, balance("10000000000"))
@@ -163,20 +165,33 @@ describe("top-up decimal precision, in-flight locks, 4xx preservation, and retry
     await settle();
     await act(async () => (container.querySelector('button[data-m="wxpay"]') as HTMLButtonElement).click());
     await act(async () => btn(container, "statement.bill.topUpModal.paySubmit").click());
+    await settle();
 
     expect(container.textContent).not.toContain("topup.new");
     expect(input.readOnly).toBe(true);
     await act(async () => container.querySelector("dialog")?.close());
-    await open();
-    expect(amount().value).toBe("10");
-    expect(amount().readOnly).toBe(true);
-    expect(btn(container, "topup.submit").disabled).toBe(true);
-    expect(postMock).toHaveBeenCalledTimes(1);
     await act(async () => resolveFirst(await answer(422, "invalid_request")));
+    await settle();
+    await open();
     await settle();
 
     expect(amount().value).toBe("10");
     expect(container.querySelector('button[data-m="wxpay"]')?.className).toContain("pym on");
+
+    postMock.mockImplementationOnce(() => answer(422, "invalid_request"));
+    await act(async () => btn(container, "statement.bill.topUpModal.paySubmit").click());
+    const [first, second] = postMock.mock.calls;
+    expect(second?.[1].body).toEqual({ method: "wxpay", credits: usd("10000000000") });
+    expect(second?.[1].params.header["Idempotency-Key"]).not.toBe(first?.[1].params.header["Idempotency-Key"]);
+
+    await settle();
+    await act(async () => container.querySelector("dialog")?.close());
+    getMock.mockResolvedValue(await answer(200, { data: [quote("alipay", "18000")] }));
+    await open();
+    await settle();
+    expect(container.textContent).toContain("statement.bill.topUpModal.chooseMethod");
+    expect(btn(container, "topup.submit").disabled).toBe(true);
+    expect(postMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps the sent method and amount without a new quote after a timeout", async () => {
@@ -198,6 +213,7 @@ describe("top-up decimal precision, in-flight locks, 4xx preservation, and retry
     expect(container.querySelector("button[data-m]")).toBeNull();
 
     await act(async () => btn(container, "topup.retry").click());
+    await settle();
     expect(container.textContent).not.toContain("topup.new");
     expect(postMock.mock.calls[1]).toEqual(postMock.mock.calls[0]);
     expect(postMock.mock.calls[1]?.[1].body.method).toBe("alipay");
@@ -451,7 +467,7 @@ describe("daily statement signed buckets, zero-net wording, timezone errors, red
     const { container } = await render(<RedeemPage />);
     const input = container.querySelector("input") as HTMLInputElement;
     await act(async () => setValue(input, "INFLIGHT-1"));
-    await act(async () => (container.querySelector("form") as HTMLFormElement).requestSubmit());
+    await submit(container.querySelector("form") as HTMLFormElement);
 
     expect(container.textContent).not.toContain("redeem.restart");
     expect(input.disabled).toBe(true);
@@ -460,7 +476,7 @@ describe("daily statement signed buckets, zero-net wording, timezone errors, red
     await settle();
     expect(container.textContent).toContain("redeem.restart");
 
-    await act(async () => (container.querySelector("form") as HTMLFormElement).requestSubmit());
+    await submit(container.querySelector("form") as HTMLFormElement);
     expect((btn(container, "redeem.restart") as HTMLButtonElement).disabled).toBe(true);
     await act(async () => finishSecond());
     await settle();

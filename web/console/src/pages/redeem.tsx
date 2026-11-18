@@ -26,67 +26,86 @@ import {
   type Sendable,
   writeRedemption,
 } from "../redeem";
+import { useBillAttempt } from "./bill-attempt";
 import { BillPagedList, BillShell } from "./bill-shell";
 
 type RedeemedResult = Schemas["RedeemCodeRedemption"];
 type RedemptionRow = Schemas["RedeemCodeRedemption"];
 
+type RedeemState = {
+  attempt: Redemption;
+  pending: boolean;
+  failure?: unknown;
+  redeemed?: RedeemedResult;
+};
+
+type RedeemSubmission = { from: Sendable; request: RedeemRequest };
+
 function useRedeemController(scope: string) {
   const queryClient = useQueryClient();
-  const [redemption, setRedemption] = useState<Redemption>(
-    () => readRedemption(scope) ?? { state: "editing", key: crypto.randomUUID() },
-  );
-  const [failure, setFailure] = useState<unknown>(null);
-  const [redeemed, setRedeemed] = useState<RedeemedResult | null>(null);
-  const pending = useRef(false);
-
-  const commit = (next: Redemption) => {
-    setRedemption(next);
-    writeRedemption(scope, next);
-  };
+  const { state, start, finish, change } = useBillAttempt<RedeemState>(scope, "redeem", () => ({
+    attempt: readRedemption(scope) ?? { state: "editing", key: crypto.randomUUID() },
+    pending: false,
+  }));
+  // A code stays with the form that received it. A new route can observe the key and the outcome.
+  const local = useRef<{ key: string; request: RedeemRequest } | null>(null);
 
   const submit = useMutation({
-    mutationFn: ({ from, request }: { from: Sendable; request: RedeemRequest }) =>
+    mutationFn: ({ from, request }: RedeemSubmission) =>
       unwrap(
         consoleApi.POST("/api/console/v1/redeem-codes", {
           body: request,
           params: { header: { "Idempotency-Key": from.key } },
         }),
       ),
-    onMutate: ({ from, request }) => {
-      setFailure(null);
-      // Persist only the unknown-outcome sentinel for reload recovery without showing Restart while waiting.
-      writeRedemption(scope, { state: "unknown", key: from.key, request });
+    onSuccess: (redeemed, { from }) => {
+      const committed = finish(from.key, (current) => {
+        const attempt = { state: "editing" as const, key: crypto.randomUUID() };
+        writeRedemption(scope, attempt);
+        return { ...current, attempt, redeemed };
+      });
+      if (committed) {
+        void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
+        void queryClient.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
+      }
     },
-    onSuccess: (result) => {
-      setRedeemed(result);
-      commit({ state: "editing", key: crypto.randomUUID() });
-      void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
-      void queryClient.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
-    },
-    onError: (error, { from, request }) => {
-      setFailure(error);
-      commit(afterFailure(from, request, error, () => crypto.randomUUID()));
-    },
-    onSettled: () => {
-      pending.current = false;
+    onError: (failure, { from, request }) => {
+      finish(from.key, (current) => {
+        const next = afterFailure(from, request, failure, () => crypto.randomUUID());
+        const attempt = next.state === "unknown" ? { state: "unknown" as const, key: next.key } : next;
+        writeRedemption(scope, attempt);
+        return { ...current, attempt, failure };
+      });
     },
   });
 
-  const reset = () => {
-    if (pending.current) return;
-    setFailure(null);
-    setRedeemed(null);
-    commit({ state: "editing", key: crypto.randomUUID() });
+  const reset = () =>
+    change((current) => {
+      if (current.pending) return undefined;
+      const attempt = { state: "editing" as const, key: crypto.randomUUID() };
+      writeRedemption(scope, attempt);
+      local.current = null;
+      return { attempt, pending: false };
+    });
+
+  const send = ({ from, request }: RedeemSubmission) => {
+    if (
+      start(from.key, (current) => {
+        writeRedemption(scope, { state: "unknown", key: from.key });
+        return { ...current, failure: undefined };
+      })
+    ) {
+      local.current = { key: from.key, request };
+      submit.mutate({ from, request });
+    }
   };
 
-  const send = (vars: { from: Sendable; request: RedeemRequest }) => {
-    if (pending.current) return;
-    pending.current = true;
-    submit.mutate(vars);
-  };
-
-  return { redemption, failure, redeemed, pending: submit.isPending, send, reset };
+  const { attempt, failure, redeemed, pending } = state;
+  const redemption =
+    attempt.state === "unknown" && local.current?.key === attempt.key
+      ? { ...attempt, request: local.current.request }
+      : attempt;
+  return { redemption, failure, redeemed, pending, send, reset };
 }
 
 function RedeemedCard({ redeemed, onAgain }: { redeemed: RedeemedResult; onAgain: () => void }) {
