@@ -20,6 +20,9 @@ export type Region = {
     actions: ([string, ...unknown[]] | { click: string })[];
     props?: Record<string, string>;
     viewport?: { width: number; height: number };
+    // The design's engine scripts the board needs before the cut, for markup an engine draws at run time (the Login
+    // board's form, drawn by login-ui.js); they run under the paused clock the scene advances.
+    engines?: string[];
   };
   page?: string;
   omit?: string[];
