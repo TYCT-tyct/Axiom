@@ -51,8 +51,7 @@ test.describe("calls", () => {
     await expect(page.getByLabel("模型")).toHaveValue("");
     await expect(rows).toHaveCount(51);
 
-    await page.getByLabel("模型").fill("openai/gpt-5");
-    await page.getByRole("button", { name: "筛选", exact: true }).click();
+    await page.goto("/console/calls?group_by=model&model=openai%2Fgpt-5");
     await expect(rows).toHaveCount(31);
     await page.evaluate(() => window.scrollTo(0, 600));
     await rows.nth(15).getByRole("link").click();
@@ -69,6 +68,7 @@ test.describe("calls", () => {
     await page.getByRole("link", { name: "返回列表" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "调用记录" })).toBeVisible();
     await expect(page).toHaveURL(/model=openai%2Fgpt-5/);
+    await expect(page).toHaveURL(/group_by=model/);
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(200);
   });
 
@@ -151,6 +151,11 @@ test.describe("calls", () => {
     await page.goto("/console/calls?request_id=not-a-uuid");
     await page.getByRole("button", { name: "导出 CSV" }).click();
     const invalidAlert = page.getByRole("alert").filter({ hasText: "导出筛选参数无效" });
+    await expect(invalidAlert).toBeVisible();
+    await expect(page.getByRole("button", { name: "设为近 7 天" })).toHaveCount(0);
+
+    await page.goto("/console/calls?since=not-a-date");
+    await page.getByRole("button", { name: "导出 CSV" }).click();
     await expect(invalidAlert).toBeVisible();
     await expect(page.getByRole("button", { name: "设为近 7 天" })).toHaveCount(0);
 
@@ -344,13 +349,16 @@ test.describe("calls", () => {
     signedInAs(state);
     await page.goto("/console/calls?group_by=model");
     const sum = summaryRows(page);
-    await expect(sum.nth(1)).toContainText("anthropic/claude-sonnet-4");
-    await expect(sum.nth(1)).toContainText("次");
+    await expect(sum.nth(1).getByText("anthropic/claude-sonnet-4", { exact: true })).toBeVisible();
+    await expect(sum.nth(1).getByText(/\d+ 次/)).toBeVisible();
+    await expect(sum.nth(1).locator(".lgc")).toBeVisible();
 
     await page.getByRole("button", { name: "按会话", exact: true }).click();
     const sRow = page.getByRole("region", { name: "按会话调用" }).locator('[data-a="session"]').first();
-    await expect(sRow).toContainText("session-");
-    await expect(sRow).toContainText("次");
+    await expect(sRow.locator(".lgm")).toBeVisible();
+    await expect(sRow.locator(".lgm")).toContainText("session-");
+    await expect(sRow.getByText(/\d+ 次/)).toBeVisible();
+    await expect(sRow.locator(".lgc")).toBeVisible();
 
     await page.getByRole("button", { name: "请求明细", exact: true }).click();
     await page.getByRole("region", { name: "调用记录" }).locator('[data-a="lrow"] button.lgm').first().click();

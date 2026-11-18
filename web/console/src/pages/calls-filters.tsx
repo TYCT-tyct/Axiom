@@ -300,23 +300,26 @@ function filterBarKey(f: CallFilters) {
 function CallsFilterForm({
   t,
   filters,
+  preset,
   showMore,
   onToggleMore,
   onApply,
 }: {
   t: TFunction;
   filters: CallFilters;
+  preset?: PresetChoice;
   showMore: boolean;
   onToggleMore: () => void;
   onApply: (next: FilterPatch) => void;
 }) {
   const [draft, setDraft] = useState<Draft>(() => draftFromFilters(filters));
+  const apply = () => submitDraft({ ...filters, preset }, draft, onApply);
   return (
     <form
       noValidate
       onSubmit={(e) => {
         e.preventDefault();
-        submitDraft(filters, draft, onApply);
+        apply();
       }}
     >
       <FilterInput
@@ -329,7 +332,7 @@ function CallsFilterForm({
         t={(k) => btnZh[k]}
         values={{
           btnStyle: "margin-right: 8px; margin-bottom: 8px;",
-          onClick: () => submitDraft(filters, draft, onApply),
+          onClick: apply,
         }}
         text={{ label: t("callsBoard.filter.apply") }}
       />
@@ -378,6 +381,7 @@ export function CallsFilterBar(p: FilterSourceProps) {
         key={filterBarKey(p.filters)}
         t={p.t}
         filters={p.filters}
+        preset={p.preset}
         showMore={showMore}
         onToggleMore={() => setShowMore((v) => !v)}
         onApply={(next) => {

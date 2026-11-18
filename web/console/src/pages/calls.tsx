@@ -380,8 +380,7 @@ function CallsPageContent({
     >
       <ExportNotice
         t={t}
-        error={q.exported.failed}
-        filters={q.filters}
+        failure={q.exported.failure}
         onUse7d={() => {
           q.exported.dismiss();
           setSearch({ ...dateRangeForPreset("d7"), preset: "d7", call: undefined });
@@ -423,9 +422,10 @@ export default function Calls() {
   const phone = usePhoneWidth();
   const narrow = useNarrow600();
   const navigate = useNavigate();
-  const searchStr = useLocation({ select: (l) => l.searchStr });
+  const router = useRouter();
   const restoreId = useLocation({ select: (l) => (l.state as { callsRestore?: string } | undefined)?.callsRestore });
   const search: CallsSearch = useSearch({ from: "/app/calls" });
+  const searchStr = router.buildLocation({ to: "/calls", search }).searchStr;
   const q = useCallsPageQueries(search, searchStr, restoreId, identity, canKeys);
   usePageTitle(t("callsBoard.title"));
   const setSearch = (patch: Partial<CallsSearch>, replace = false) =>

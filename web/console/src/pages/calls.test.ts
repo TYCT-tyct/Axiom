@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { ApiError, consoleApi, type Schemas } from "@axiom/api";
 import { describe, expect, it, vi } from "vitest";
 import { filtersUnsupported, withoutFellBack } from "../calls";
@@ -22,6 +24,7 @@ import {
   usageNumber,
 } from "./calls-data";
 import { buildChargeCells, buildDetailSteps, buildIdCells } from "./calls-detail-rows";
+import { draftFromFilters, submitDraft } from "./calls-filter-fields";
 import { buildAggregateRows, buildCallListRows, buildSessionRows, buildSummaryItems } from "./calls-rows";
 import {
   armCallsReturnScroll,
@@ -99,6 +102,23 @@ describe("calls filters and helpers", () => {
     const nov1Iso = dateRangeForPreset("month", nov7).since;
     expect(resolveRangePreset(nov1Iso, undefined, "month", nov7)).toBe("month");
     expect(resolveRangePreset(nov1Iso, undefined, "d7", nov7)).toBe("d7");
+  });
+
+  it("retains the chosen preset and exact dates when another filter is submitted", () => {
+    const filters = { since: "2026-11-01T00:00:00Z", until: "2026-11-07T12:03:42.123Z" };
+    const apply = vi.fn();
+    submitDraft(filters, { ...draftFromFilters(filters), client_app: "Cursor" }, apply);
+    expect(apply).toHaveBeenLastCalledWith(expect.objectContaining({ ...filters, client_app: "Cursor" }));
+
+    const month = dateRangeForPreset("month", new Date(2026, 10, 7));
+    const draft = draftFromFilters(month);
+    submitDraft({ ...month, preset: "month" }, { ...draft, model: "openai/gpt-5" }, apply);
+    expect(apply).toHaveBeenLastCalledWith(
+      expect.objectContaining({ ...month, preset: "month", model: "openai/gpt-5" }),
+    );
+
+    submitDraft({ ...month, preset: "month" }, { ...draft, sinceLocal: "2026-11-01T00:01" }, apply);
+    expect(apply).toHaveBeenLastCalledWith(expect.objectContaining({ preset: undefined }));
   });
 
   it("carries server since and until window bounds on callSessionsQuery next page", async () => {
@@ -183,9 +203,17 @@ describe("calls filters and helpers", () => {
         now,
       ),
     ).toBe("invalid_field");
-    expect(classifyExportError(badReq(), { since: "2026-10-16T00:00:00Z", until: "2026-10-10T00:00:00Z" }, now)).toBe(
-      "invalid_field",
-    );
+    const windowError = badReq([{ pointer: "since", message: "choose a nonempty window of at most 31 days" }]);
+    expect(
+      classifyExportError(windowError, { since: "2026-10-16T00:00:00Z", until: "2026-10-10T00:00:00Z" }, now),
+    ).toBe("invalid_field");
+    expect(
+      classifyExportError(
+        badReq([{ pointer: "since", message: "the value or the request body is malformed" }]),
+        { since: "2026-01-01" },
+        now,
+      ),
+    ).toBe("invalid_field");
     expect(classifyExportError(new ApiError(500, null, { body: { error: { code: "internal_error" } } }), {}, now)).toBe(
       "other",
     );

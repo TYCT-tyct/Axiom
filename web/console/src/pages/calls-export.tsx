@@ -7,42 +7,42 @@ import { useState } from "react";
 import { callsCsv, callsName } from "../calls";
 import type { CallFilters } from "../queries";
 import { save } from "../statement";
-import { classifyExportError } from "./calls-data";
+import { classifyExportError, type ExportErrorKind } from "./calls-data";
 import { CallsAlertBanner, CallsCardNotice } from "./calls-states";
+
+type ExportFailure = { error: unknown; kind: ExportErrorKind };
 
 export function useCallsExport(filters: CallFilters) {
   const bound = useSessionBound();
-  const [failed, setFailed] = useState<unknown>(null);
+  const [failure, setFailure] = useState<ExportFailure | null>(null);
   const [busy, setBusy] = useState(false);
   const start = () => {
     setBusy(true);
-    setFailed(null);
+    setFailure(null);
     void bound((signal) => callsCsv(filters, signal))
       .then((ans) => {
         if (ans) save(new File([ans.value], callsName(), { type: "text/csv" }));
       })
-      .catch(setFailed)
+      .catch((error: unknown) => setFailure({ error, kind: classifyExportError(error, filters) }))
       .finally(() => setBusy(false));
   };
-  return { failed, busy, start, dismiss: () => setFailed(null) };
+  return { failure, busy, start, dismiss: () => setFailure(null) };
 }
 
 export function ExportNotice({
   t,
-  error,
-  filters,
+  failure,
   onUse7d,
   onDismiss,
 }: {
   t: TFunction;
-  error: unknown;
-  filters: CallFilters;
+  failure: ExportFailure | null;
   onUse7d: () => void;
   onDismiss: () => void;
 }) {
   const errors = useErrors();
-  if (!error) return null;
-  const kind = classifyExportError(error, filters);
+  if (!failure) return null;
+  const { error, kind } = failure;
   if (kind === "rows_limit" || kind === "window_limit") {
     return (
       <CallsAlertBanner
@@ -75,16 +75,20 @@ export function ExportNotice({
 
 export function ExportScopeNote({ t, filters }: { t: TFunction; filters: CallFilters }) {
   const format = useFormat();
+  const boundText = (value?: string) => {
+    if (!value) return undefined;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? value : format.dateTime(date);
+  };
+  const since = boundText(filters.since);
+  const until = boundText(filters.until);
   const scopeText =
-    filters.since && filters.until
-      ? t("callsBoard.export.scopeRange", {
-          since: format.dateTime(new Date(filters.since)),
-          until: format.dateTime(new Date(filters.until)),
-        })
-      : filters.since
-        ? t("callsBoard.export.scopeSince", { since: format.dateTime(new Date(filters.since)) })
-        : filters.until
-          ? t("callsBoard.export.scopeUntil", { until: format.dateTime(new Date(filters.until)) })
+    since && until
+      ? t("callsBoard.export.scopeRange", { since, until })
+      : since
+        ? t("callsBoard.export.scopeSince", { since })
+        : until
+          ? t("callsBoard.export.scopeUntil", { until })
           : t("callsBoard.export.scopeDefault");
   return (
     <>

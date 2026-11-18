@@ -47,17 +47,23 @@ export function draftFromFilters(f: CallFilters): Draft {
   };
 }
 
-export function submitDraft(filters: CallFilters, draft: Draft, onApply: (next: FilterPatch) => void) {
+function draftInstant(local: string, previous?: string) {
+  return local && local === toLocalInput(previous) ? previous : toInstant(local);
+}
+
+export function submitDraft(filters: FilterPatch, draft: Draft, onApply: (next: FilterPatch) => void) {
+  const since = draftInstant(draft.sinceLocal, filters.since);
+  const until = draftInstant(draft.untilLocal, filters.until);
   onApply({
     ...filters,
-    preset: undefined,
+    preset: since === filters.since && until === filters.until ? filters.preset : undefined,
     model: draft.model.trim() || undefined,
     client_app: draft.client_app.trim() || undefined,
     request_id: draft.request_id.trim() || undefined,
     key_id: draft.key_id.trim() || undefined,
     workspace_id: draft.workspace_id.trim() || undefined,
-    since: toInstant(draft.sinceLocal),
-    until: toInstant(draft.untilLocal),
+    since,
+    until,
   });
 }
 

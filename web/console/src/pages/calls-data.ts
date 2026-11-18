@@ -119,48 +119,20 @@ export function usageNumber(usage: Record<string, number>, ...keys: string[]) {
 
 export type ExportErrorKind = "rows_limit" | "window_limit" | "invalid_field" | "other";
 
-const invalidExportPointers = new Set([
-  "request_id",
-  "/request_id",
-  "key_id",
-  "/key_id",
-  "workspace_id",
-  "/workspace_id",
-  "until",
-  "/until",
-]);
-
-function fieldText(error: ApiError) {
-  return error.fields.map((f) => `${f.pointer} ${f.message}`.toLowerCase()).join(" ");
-}
-
-function windowBoundsInvalid(filters: CallFilters, nowMs: number) {
-  const sinceMs = filters.since ? Date.parse(filters.since) : undefined;
-  const untilMs = filters.until ? Date.parse(filters.until) : nowMs;
-  if (sinceMs !== undefined && (Number.isNaN(sinceMs) || Number.isNaN(untilMs))) return true;
-  if (sinceMs !== undefined && sinceMs >= untilMs) return true;
-  return false;
-}
-
-function windowExceeds31Days(filters: CallFilters, nowMs: number) {
-  if (!filters.since) return false;
-  const sinceMs = Date.parse(filters.since);
-  const untilMs = filters.until ? Date.parse(filters.until) : nowMs;
-  return !Number.isNaN(sinceMs) && !Number.isNaN(untilMs) && untilMs - sinceMs > 31 * 86_400_000;
-}
-
 export function classifyExportError(error: unknown, filters: CallFilters, now = new Date()): ExportErrorKind {
-  if (!(error instanceof ApiError) || (error.status !== 400 && error.code !== "invalid_request")) {
+  if (!(error instanceof ApiError) || error.status !== 400 || error.code !== "invalid_request") {
     return "other";
   }
-  const nowMs = now.getTime();
-  if (windowBoundsInvalid(filters, nowMs)) return "invalid_field";
-  if (error.fields.some((f) => invalidExportPointers.has(f.pointer))) return "invalid_field";
-  const text = fieldText(error);
-  if (text.includes("rfc3339") || text.includes("invalid identifier")) return "invalid_field";
-  if (text.includes("10000") || text.includes("more than")) return "rows_limit";
-  if (text.includes("31 days") || windowExceeds31Days(filters, nowMs)) return "window_limit";
-  return "other";
+  const field = error.fields.length === 1 ? error.fields[0] : undefined;
+  if (field?.pointer === "since") {
+    if (/^more than \d+ calls; narrow the window or filters$/.test(field.message)) return "rows_limit";
+    // The API reports inverted and overlong windows with the same reason.
+    if (field.message === "choose a nonempty window of at most 31 days" && filters.since) {
+      const until = filters.until ? Date.parse(filters.until) : now.getTime();
+      if (Date.parse(filters.since) < until) return "window_limit";
+    }
+  }
+  return "invalid_field";
 }
 
 export function decimalToNano(amount: string): string | null {
