@@ -92,6 +92,22 @@ const routeTree = root.addChildren([
     }),
     createRoute({
       getParentRoute: () => app,
+      path: "/usage",
+      validateSearch: (search: Record<string, unknown>) => ({
+        range: usageRange(search.range),
+        since: text(search.since),
+        until: text(search.until),
+        granularity: usageGranularity(search.granularity),
+        metric: usageMetric(search.metric),
+        group_by: usageGroupBy(search.group_by),
+        model: text(search.model),
+        key_id: text(search.key_id),
+        workspace_id: text(search.workspace_id),
+      }),
+      component: lazyRouteComponent(() => import("./pages/usage")),
+    }),
+    createRoute({
+      getParentRoute: () => app,
       path: "/calls",
       validateSearch: (search: Record<string, unknown>) => ({
         since: text(search.since),
@@ -166,6 +182,24 @@ function callStatus(value: unknown) {
 
 function callGroupBy(value: unknown) {
   return value === "day" || value === "model" || value === "key" ? value : undefined;
+}
+
+function usageRange(value: unknown) {
+  return value === "today" || value === "d7" || value === "d30" || value === "month" || value === "custom"
+    ? value
+    : undefined;
+}
+
+function usageGranularity(value: unknown) {
+  return value === "hour" || value === "day" || value === "week" ? value : undefined;
+}
+
+function usageMetric(value: unknown) {
+  return value === "spend" || value === "requests" || value === "tokens" ? value : undefined;
+}
+
+function usageGroupBy(value: unknown) {
+  return value === "model" || value === "key" || value === "workspace" ? value : undefined;
 }
 
 // An ability from the address is one the contract names; anything else is no filter, not a request it would refuse.

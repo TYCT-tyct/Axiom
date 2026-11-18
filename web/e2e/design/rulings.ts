@@ -23,7 +23,7 @@ const shell: Ruling[] = [
   { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
   { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
   {
-    basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+    basis: "#816: routing, plugins, budgets, observability and management keys are not built",
     ...both(".pnP .qnv, .otabs"),
   },
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
@@ -35,6 +35,47 @@ export const rulings: Ruling[] = [
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console usage", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  {
+    scene: "console usage",
+    basis: "#816: the workspace level is not built",
+    board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" },
+  },
+  {
+    scene: "console usage",
+    basis: "the account and the balance are the API's, not the board's demo",
+    ...both(".gbal, .qgav"),
+  },
+  {
+    scene: "console usage",
+    basis: "#816: routing, plugins, budgets, observability and management keys are not built",
+    ...both(".pnP .qnv, .otabs"),
+  },
+  {
+    scene: "console usage",
+    basis: "#816: the command palette is not built",
+    ...both(".gsr, .gsi"),
+  },
+  {
+    scene: "console usage",
+    basis: "#816 O23: month-end forecast and budget have no basis",
+    board: { selector: ".usfc" },
+  },
+  {
+    scene: "console usage",
+    basis: "#816 O23: today/future dashed projection bars have no basis",
+    board: { selector: ".usfut" },
+  },
+  {
+    scene: "console usage",
+    basis: "G1: the usage page adds hour/day/week granularity and workspace grouping controls",
+    ...both(".usc .qch .usct:nth-child(2)"),
+  },
+  {
+    scene: "console usage",
+    basis: "G1: comparison range, KPIs, series, table, token mix and movers show live API data without O23 savings",
+    ...both(".uscmp, .usm, .usch, .ust, .ustk, .usd"),
+  },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {

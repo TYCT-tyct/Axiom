@@ -12,6 +12,7 @@ import {
   usualState,
   worstState,
 } from "./console-data.ts";
+import { usageStatistics } from "./console-usage-api.ts";
 import { type Ctx as CoreCtx, createRoute, fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
 import {
   confirmTotp,
@@ -401,6 +402,7 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/calls/aggregate`, { ...signedIn, permission: "calls.view" }, aggregateCalls),
   route("get", `${base}/calls/export`, { ...signedIn, permission: "calls.view" }, exportCalls),
   route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),
+  route("get", `${base}/usage/statistics`, { ...signedIn, permission: "calls.view" }, usageStatistics),
   route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
   route("get", `${base}/orders`, { ...signedIn, permission: "balance.view" }, listOrders),
   route("get", `${base}/orders/{order_id}`, { ...signedIn, permission: "balance.view" }, getOrder),

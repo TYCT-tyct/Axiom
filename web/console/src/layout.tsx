@@ -26,6 +26,7 @@ import { balanceQuery, siteQuery } from "./queries";
 // reached from the settings page, as the board's workspace level needs team spaces.
 const pages = {
   ov: { to: "/" },
+  usage: { to: "/usage", permission: "calls.view" },
   logs: { to: "/calls", permission: "calls.view" },
   keys: { to: "/keys", permission: "api_keys.view" },
   presets: { to: "/routing-presets", permission: "api_keys.view" },
@@ -71,14 +72,12 @@ const frame = {
   appStyle: "position: relative; inset: auto; min-height: 100dvh",
   barStyle: "position: sticky; top: 0; background: var(--page)",
   mainStyle: "overflow: visible; flex: 1 0 auto",
-  pagesStyle: "padding: 0; max-width: none",
   bodyStyle: "flex: 1 0 auto",
   sidebarStyle: "position: sticky; top: 56px; height: calc(100dvh - 56px)",
   panelStyle: "overflow: clip",
   monoStyle: "font-family: var(--family-mono)",
   sheetStyle: "position: fixed",
-  // The board's fifth tab is not built.
-  tabsStyle: "position: sticky; bottom: 0; grid-template-columns: repeat(4, 1fr)",
+  tabsStyle: "position: sticky; bottom: 0",
   unbuilt: true,
   placeholder: "visibility: hidden",
   // An entry the board draws as a <div> or <a> without an address, given a button's role: Enter and Space press it.
@@ -193,6 +192,8 @@ function usePageValues() {
   const email = session.user.email;
   return {
     level: `lv${level} pg-${page ?? "none"}`,
+    // Ported board pages (like usage) keep the shell's own board padding and width; unported pages supply Tailwind padding.
+    pagesStyle: page === "usage" ? "" : "padding: 0; max-width: none",
     ...Object.fromEntries(
       keys.flatMap((key) => {
         const { to, permission }: { to: string; permission?: string } = pages[key];

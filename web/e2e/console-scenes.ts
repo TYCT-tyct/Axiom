@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
+import type { Schemas } from "./console-data.ts";
 import type { MockData } from "./mock.ts";
 import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
@@ -80,6 +81,7 @@ const scenes: Scene[] = [
         .hover();
     },
   },
+  { name: "usage", signedIn: true, open: (page) => goto(page, "usage") },
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
@@ -139,9 +141,28 @@ const mfaScene: Scene = {
   open: (page) => goto(page, "mfa"),
 };
 
+function spreadUsageCalls(calls: Schemas["Call"][], endUtcMs: number): Schemas["Call"][] {
+  const dayMs = 86_400_000;
+  const endDay = Math.floor(endUtcMs / dayMs);
+  const anchor = endDay * dayMs + 8 * 3_600_000;
+  const out: Schemas["Call"][] = [];
+  calls.forEach((call, i) => {
+    const dayOffset = Math.floor(i / 4) % 24;
+    out.push({ ...call, at: new Date(anchor - dayOffset * dayMs - (i % 7) * 60_000).toISOString() });
+    if (i % 3 !== 0) {
+      out.push({ ...call, at: new Date(anchor - (25 + dayOffset) * dayMs - (i % 5) * 60_000).toISOString() });
+    }
+  });
+  return out;
+}
+
 // prepare mocks the API for a scene on a page: with the data the scene is shown with, and the session it needs.
 async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
   const state = await mockConsole(page, data);
+  if (scene.name === "usage" && data !== "empty") {
+    const demoAnchor = Date.UTC(2026, 9, 24, 2, 0, 0);
+    state.calls = [...spreadUsageCalls(state.calls, demoAnchor), ...spreadUsageCalls(state.calls, Date.now())];
+  }
   if (scene.name === "mfa") {
     state.level = "pending_mfa";
     state.csrf = "csrf-0";

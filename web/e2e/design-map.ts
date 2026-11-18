@@ -57,6 +57,14 @@ export const designScenes: DesignScene[] = [
     schemes: consoleSchemes,
   },
   {
+    name: "console usage",
+    suite: consoleSuite,
+    scene: "usage",
+    fonts: "console",
+    boards: consoleBoards("usage"),
+    schemes: consoleSchemes,
+  },
+  {
     name: "console keys",
     suite: consoleSuite,
     scene: "keys",
