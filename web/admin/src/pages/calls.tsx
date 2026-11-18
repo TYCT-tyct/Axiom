@@ -1,17 +1,18 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
 import {
-  Button,
+  ActionButton,
+  Card,
   DataState,
   EmptyState,
+  Field,
   Icon,
   Id,
   Notice,
-  PageHeader,
-  Panel,
+  PageHead,
   Table,
   Td,
-  TextField,
+  TextLink,
   useFormat,
 } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
@@ -144,29 +145,27 @@ export default function Calls() {
   );
   return (
     <>
-      <PageHeader title={t("nav.calls")} description={t("calls.description")} />
+      <PageHead title={t("nav.calls")} lede={t("calls.description")} />
       <PageBody>
         <Filters filters={filters} />
         {filters.site_id ? (
           <Notice>
             {t("calls.filters.siteScoped")}{" "}
-            <Link
-              to="/calls"
-              search={{ ...filters, site_id: undefined }}
-              className="text-accent underline-offset-4 hover:underline"
-            >
-              {t("calls.filters.allSites")}
-            </Link>
+            <TextLink>
+              <Link to="/calls" search={{ ...filters, site_id: undefined }}>
+                {t("calls.filters.allSites")}
+              </Link>
+            </TextLink>
           </Notice>
         ) : null}
-        <Panel>
+        <Card layout="flush">
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
           <CoverageNotice coverage={coverage} availableSince={availableSince} />
           <DataState query={calls} isEmpty={() => rows.length === 0} empty={<CallEmpty kind={emptyKind} />}>
             {() => <CallsTable rows={rows} />}
           </DataState>
           <LoadMore list={calls} />
-        </Panel>
+        </Card>
       </PageBody>
     </>
   );
@@ -180,7 +179,7 @@ function Filters({ filters }: { filters: CallFilters }) {
       values={filters}
       onApply={(values) => navigate({ to: "/calls", search: callSearch(values, filters.site_id) })}
     >
-      <TextField
+      <Field
         label={t("calls.filters.account")}
         hint={t("calls.filters.accountHint")}
         name="account_id"
@@ -189,7 +188,7 @@ function Filters({ filters }: { filters: CallFilters }) {
         autoComplete="off"
         spellCheck={false}
       />
-      <TextField
+      <Field
         label={t("calls.filters.request")}
         hint={t("calls.filters.requestHint")}
         name="request_id"
@@ -197,7 +196,7 @@ function Filters({ filters }: { filters: CallFilters }) {
         autoComplete="off"
         spellCheck={false}
       />
-      <TextField
+      <Field
         label={t("calls.filters.model")}
         hint={t("calls.filters.modelHint")}
         name="model"
@@ -216,13 +215,13 @@ function Filters({ filters }: { filters: CallFilters }) {
           { value: "error", label: t("calls.filters.error") },
         ]}
       />
-      <TextField
+      <Field
         label={t("calls.filters.since")}
         name="since"
         type="datetime-local"
         defaultValue={toLocalInput(filters.since)}
       />
-      <TextField
+      <Field
         label={t("calls.filters.until")}
         name="until"
         type="datetime-local"
@@ -236,19 +235,18 @@ function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
   const { t } = useTranslation();
   const inspect = can(useSession(), "calls.inspect");
   return (
-    <Table label={t("nav.calls")} fixed>
+    <Table label={t("nav.calls")}>
       <Head
         cols={[
-          [t("calls.col.at"), "hidden w-40 sm:table-cell"],
-          [t("calls.requestId"), "w-[45%] sm:w-[22%]"],
-          [t("calls.col.account"), "hidden w-[14%] sm:table-cell"],
-          [t("calls.col.model"), "hidden w-36 md:table-cell"],
-          [t("calls.col.result"), "w-16"],
-          [t("calls.col.latency"), "hidden w-28 text-right lg:table-cell"],
-          [t("calls.col.price"), "hidden w-20 text-right xl:table-cell"],
+          t("calls.col.at"),
+          [t("calls.requestId"), { main: true }],
+          t("calls.col.account"),
+          t("calls.col.model"),
+          t("calls.col.result"),
+          [t("calls.col.latency"), { align: "end" }],
+          [t("calls.col.price"), { align: "end" }],
         ]}
         action={inspect}
-        actionClass="w-20 sm:w-28"
       />
       <tbody>
         {rows.map((call) => (
@@ -263,45 +261,34 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <tr className="hover:bg-s2">
-      <Td className="hidden sm:table-cell">
+    <tr>
+      <Td>
         {inspect ? (
-          <Link to="/calls/$callId" params={{ callId: call.id }} className="text-accent hover:underline">
-            <Time at={call.at} />
-          </Link>
+          <TextLink>
+            <Link to="/calls/$callId" params={{ callId: call.id }}>
+              <Time at={call.at} />
+            </Link>
+          </TextLink>
         ) : (
           <Time at={call.at} />
         )}
       </Td>
-      <Td>
-        {call.id ? <Id value={call.id} /> : "—"}
-        <span className="block text-label text-t3 sm:hidden">
-          <Time at={call.at} />
-        </span>
-      </Td>
-      <Td className="hidden sm:table-cell">{call.account_id ? <Id value={call.account_id} /> : "—"}</Td>
-      <Td className="hidden md:table-cell">
-        <span className="block truncate" title={call.model}>
-          {call.model ?? "—"}
-        </span>
-      </Td>
+      <Td main>{call.id ? <Id value={call.id} /> : "—"}</Td>
+      <Td>{call.account_id ? <Id value={call.account_id} /> : "—"}</Td>
+      <Td>{call.model ?? "—"}</Td>
       <Td>
         <State tone={call.error_kind ? "bad" : "good"}>{call.error_kind ? t("calls.failed") : t("calls.ok")}</State>
       </Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums lg:table-cell">
-        {call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}
-      </Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums xl:table-cell">
-        {call.price ? format.money(call.price) : "—"}
-      </Td>
+      <Td align="end">{call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}</Td>
+      <Td align="end">{call.price ? format.money(call.price) : "—"}</Td>
       {inspect ? (
-        <Td>
-          <Button asChild size="sm" variant="ghost">
-            <Link to="/calls/$callId" params={{ callId: call.id }} aria-label={t("calls.trace")}>
-              <span className="hidden sm:inline">{t("calls.trace")}</span>
+        <Td shrink>
+          <ActionButton asChild size="sm" variant="gho">
+            <Link to="/calls/$callId" params={{ callId: call.id }}>
+              {t("calls.trace")}
               <Icon name="right" />
             </Link>
-          </Button>
+          </ActionButton>
         </Td>
       ) : null}
     </tr>

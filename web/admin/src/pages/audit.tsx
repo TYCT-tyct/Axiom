@@ -1,10 +1,10 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { DataState, EmptyState, PageHeader, Panel, Table, Td, TextField } from "@axiom/ui";
+import { Card, DataState, EmptyState, Field, Mono, PageHead, Table, Td, Text, TextLink } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Code, FilterBar, Head, mainCell, PageBody, Time, text, toInstant, toLocalInput } from "../parts";
+import { Code, FilterBar, Head, PageBody, Time, text, toInstant, toLocalInput } from "../parts";
 import { adminAuditQuery } from "../queries";
 
 // The audit log is read-only and immutable: a search over exact fields, newest first, with the entry's detail on its own
@@ -17,10 +17,10 @@ export default function Audit() {
   const narrowed = Object.values(filters).some(Boolean);
   return (
     <>
-      <PageHeader title={t("nav.audit")} description={t("audit.description")} />
+      <PageHead title={t("nav.audit")} lede={t("audit.description")} />
       <PageBody>
         <Filters filters={filters} />
-        <Panel>
+        <Card layout="flush">
           <DataState
             query={audit}
             isEmpty={() => rows.length === 0}
@@ -33,7 +33,7 @@ export default function Audit() {
             {() => <AuditTable rows={rows} />}
           </DataState>
           <LoadMore list={audit} />
-        </Panel>
+        </Card>
       </PageBody>
     </>
   );
@@ -78,37 +78,32 @@ function Filters({ filters }: { filters: FiltersValue }) {
         })
       }
     >
-      <TextField
+      <Field
         label={t("audit.filters.since")}
         name="since"
         type="datetime-local"
         defaultValue={toLocalInput(filters.since)}
       />
-      <TextField
+      <Field
         label={t("audit.filters.until")}
         name="until"
         type="datetime-local"
         defaultValue={toLocalInput(filters.until)}
       />
-      <TextField label={t("audit.filters.action")} name="action" defaultValue={filters.action} maxLength={200} />
-      <TextField label={t("audit.filters.module")} name="module" defaultValue={filters.module} maxLength={200} />
-      <TextField
-        label={t("audit.filters.actorKind")}
-        name="actor_kind"
-        defaultValue={filters.actor_kind}
-        maxLength={200}
-      />
-      <TextField label={t("audit.filters.actor")} name="actor_id" defaultValue={filters.actor_id} maxLength={200} />
-      <TextField
+      <Field label={t("audit.filters.action")} name="action" defaultValue={filters.action} maxLength={200} />
+      <Field label={t("audit.filters.module")} name="module" defaultValue={filters.module} maxLength={200} />
+      <Field label={t("audit.filters.actorKind")} name="actor_kind" defaultValue={filters.actor_kind} maxLength={200} />
+      <Field label={t("audit.filters.actor")} name="actor_id" defaultValue={filters.actor_id} maxLength={200} />
+      <Field
         label={t("audit.filters.targetKind")}
         name="target_kind"
         defaultValue={filters.target_kind}
         maxLength={200}
       />
-      <TextField label={t("audit.filters.target")} name="target_id" defaultValue={filters.target_id} maxLength={200} />
-      <TextField label={t("audit.filters.account")} name="account_id" defaultValue={filters.account_id} />
-      <TextField label={t("audit.filters.site")} name="site_id" defaultValue={filters.site_id} />
-      <TextField label={t("audit.filters.request")} name="request_id" defaultValue={filters.request_id} />
+      <Field label={t("audit.filters.target")} name="target_id" defaultValue={filters.target_id} maxLength={200} />
+      <Field label={t("audit.filters.account")} name="account_id" defaultValue={filters.account_id} />
+      <Field label={t("audit.filters.site")} name="site_id" defaultValue={filters.site_id} />
+      <Field label={t("audit.filters.request")} name="request_id" defaultValue={filters.request_id} />
     </FilterBar>
   );
 }
@@ -119,11 +114,11 @@ function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
     <Table label={t("nav.audit")}>
       <Head
         cols={[
-          [t("audit.col.at")],
-          [t("audit.col.action")],
-          [t("audit.col.actor"), "hidden lg:table-cell"],
-          [t("audit.col.target"), "hidden md:table-cell"],
-          [t("audit.col.request"), "hidden xl:table-cell"],
+          t("audit.col.at"),
+          [t("audit.col.action"), { main: true }],
+          t("audit.col.actor"),
+          t("audit.col.target"),
+          t("audit.col.request"),
         ]}
       />
       <tbody>
@@ -131,36 +126,34 @@ function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
           <tr key={entry.id ?? index}>
             <Td>
               {entry.id ? (
-                <Link to="/audit/$entryId" params={{ entryId: entry.id }} className="text-accent hover:underline">
-                  <Time at={entry.at} />
-                </Link>
+                <TextLink>
+                  <Link to="/audit/$entryId" params={{ entryId: entry.id }}>
+                    <Time at={entry.at} />
+                  </Link>
+                </TextLink>
               ) : (
                 <Time at={entry.at} />
               )}
             </Td>
-            <Td className={mainCell}>
-              <span className="block truncate" title={entry.action}>
-                <Code>{entry.action ?? "—"}</Code>
-              </span>
-              <span className="block text-label text-t3">{entry.module ?? ""}</span>
+            <Td main>
+              <Code>{entry.action ?? "—"}</Code>
+              <Text as="div" size="sm" tone="faint">
+                {entry.module ?? ""}
+              </Text>
             </Td>
-            <Td className="hidden max-w-64 lg:table-cell">
-              <span className="block truncate" title={[entry.actor_kind, entry.actor_id].filter(Boolean).join(" ")}>
-                {entry.actor_id ?? "—"}
-              </span>
-              <span className="block text-label text-t3">{entry.actor_kind}</span>
+            <Td>
+              {entry.actor_id ?? "—"}
+              <Text as="div" size="sm" tone="faint">
+                {entry.actor_kind}
+              </Text>
             </Td>
-            <Td className="hidden max-w-64 md:table-cell">
-              <span className="block truncate" title={[entry.target_kind, entry.target_id].filter(Boolean).join(" ")}>
-                {entry.target_id ?? "—"}
-              </span>
-              <span className="block text-label text-t3">{entry.target_kind}</span>
+            <Td>
+              {entry.target_id ?? "—"}
+              <Text as="div" size="sm" tone="faint">
+                {entry.target_kind}
+              </Text>
             </Td>
-            <Td className="hidden max-w-48 xl:table-cell">
-              <span className="block truncate font-mono text-label" title={entry.request_id}>
-                {entry.request_id ?? "—"}
-              </span>
-            </Td>
+            <Td>{entry.request_id ? <Mono>{entry.request_id}</Mono> : "—"}</Td>
           </tr>
         ))}
       </tbody>

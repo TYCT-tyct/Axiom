@@ -1,9 +1,9 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Button, DataState, Icon, PageHeader, Panel, Table, Td, useFormat } from "@axiom/ui";
+import { ActionButton, Card, DataState, Grid, Icon, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Actions, Code, Facts, Head, Json, mainCell, PageBody, State, Time } from "../parts";
+import { Actions, Code, Facts, Head, Json, PageBody, State, Time } from "../parts";
 import { adminCallQuery } from "../queries";
 
 type Trace = AdminSchemas["AdminCallTrace"];
@@ -20,24 +20,24 @@ export default function Call() {
     <DataState query={call} page>
       {(data) => (
         <>
-          <PageHeader
+          <PageHead
             title={t("calls.traceTitle", { id: data.summary?.id ?? callId })}
-            description={t("calls.traceDescription")}
+            lede={t("calls.traceDescription")}
           />
           <PageBody>
             <Actions>
-              <Button asChild>
+              <ActionButton asChild>
                 <Link to="/calls">
                   <Icon name="left" />
                   {t("calls.back")}
                 </Link>
-              </Button>
+              </ActionButton>
             </Actions>
             <Summary summary={data.summary} />
-            <div className="grid gap-4 xl:grid-cols-2">
+            <Grid columns={2}>
               <Cost cost={data.cost} />
               <Route route={data.route} />
-            </div>
+            </Grid>
             <Attempts attempts={data.attempts} />
           </PageBody>
         </>
@@ -93,15 +93,13 @@ function Cost({ cost }: { cost: Trace["cost"] }) {
 function Route({ route }: { route: Trace["route"] }) {
   const { t } = useTranslation();
   return (
-    <Panel title={t("calls.routeTitle")}>
-      <div className="p-4">
-        {route === undefined ? (
-          <p className="text-t3">{t("calls.unavailable")}</p>
-        ) : (
-          <Json value={route} label={t("calls.routeTitle")} />
-        )}
-      </div>
-    </Panel>
+    <Card title={t("calls.routeTitle")}>
+      {route === undefined ? (
+        <Text tone="faint">{t("calls.unavailable")}</Text>
+      ) : (
+        <Json value={route} label={t("calls.routeTitle")} />
+      )}
+    </Card>
   );
 }
 
@@ -109,30 +107,30 @@ function Attempts({ attempts }: { attempts?: Attempt[] }) {
   const { t } = useTranslation();
   if (attempts === undefined) {
     return (
-      <Panel title={t("calls.attemptsTitle")}>
-        <p className="p-4 text-t3">{t("calls.unavailable")}</p>
-      </Panel>
+      <Card title={t("calls.attemptsTitle")}>
+        <Text tone="faint">{t("calls.unavailable")}</Text>
+      </Card>
     );
   }
   if (attempts.length === 0) {
     return (
-      <Panel title={t("calls.attemptsTitle")}>
-        <p className="p-4 text-t3">{t("calls.attemptsNone")}</p>
-      </Panel>
+      <Card title={t("calls.attemptsTitle")}>
+        <Text tone="faint">{t("calls.attemptsNone")}</Text>
+      </Card>
     );
   }
   return (
-    <Panel title={t("calls.attemptsTitle")}>
+    <Card title={t("calls.attemptsTitle")} layout="flush">
       <Table label={t("calls.attemptsTitle")}>
         <Head
           cols={[
-            [t("calls.attempt.seq"), "w-0"],
-            [t("calls.attempt.endpoint")],
-            [t("calls.attempt.supplier"), "hidden md:table-cell"],
-            [t("calls.attempt.source"), "hidden lg:table-cell"],
-            [t("calls.attempt.outcome")],
-            [t("calls.attempt.started"), "hidden xl:table-cell"],
-            [t("calls.attempt.firstToken"), "hidden lg:table-cell"],
+            t("calls.attempt.seq"),
+            [t("calls.attempt.endpoint"), { main: true }],
+            t("calls.attempt.supplier"),
+            t("calls.attempt.source"),
+            t("calls.attempt.outcome"),
+            t("calls.attempt.started"),
+            t("calls.attempt.firstToken"),
           ]}
         />
         <tbody>
@@ -141,7 +139,7 @@ function Attempts({ attempts }: { attempts?: Attempt[] }) {
           ))}
         </tbody>
       </Table>
-    </Panel>
+    </Card>
   );
 }
 
@@ -166,32 +164,38 @@ function AttemptRow({ attempt, index }: { attempt: Attempt; index: number }) {
   const format = useFormat();
   return (
     <tr>
-      <Td className="tabular-nums">{attempt.seq ?? index + 1}</Td>
-      <Td className={mainCell}>
-        <span className="block truncate" title={attempt.endpoint_id}>
-          <Code>{attempt.endpoint_id ?? missing}</Code>
-        </span>
-        {attempt.error_kind ? <span className="block text-label text-bad">{attempt.error_kind}</span> : null}
+      <Td>{attempt.seq ?? index + 1}</Td>
+      <Td main>
+        <Code>{attempt.endpoint_id ?? missing}</Code>
+        {attempt.error_kind ? (
+          <Text as="div" size="sm" tone="bad">
+            {attempt.error_kind}
+          </Text>
+        ) : null}
       </Td>
-      <Td className="hidden md:table-cell">
+      <Td>
         <Code>{attempt.supplier_id ?? missing}</Code>
       </Td>
-      <Td className="hidden lg:table-cell">
+      <Td>
         {attempt.source_class ?? missing}
-        {attempt.egress ? <span className="block text-label text-t3">{attempt.egress}</span> : null}
+        {attempt.egress ? (
+          <Text as="div" size="sm" tone="faint">
+            {attempt.egress}
+          </Text>
+        ) : null}
       </Td>
       <Td>
         <Outcome outcome={attempt.outcome} />
       </Td>
-      <Td className="hidden xl:table-cell">
+      <Td>
         <Time at={attempt.started_at} />
         {attempt.finished_at ? (
-          <span className="block text-label text-t3">
+          <Text as="div" size="sm" tone="faint">
             <Time at={attempt.finished_at} />
-          </span>
+          </Text>
         ) : null}
       </Td>
-      <Td className="hidden tabular-nums lg:table-cell">
+      <Td>
         {attempt.first_token_ms === undefined ? missing : t("calls.ms", { ms: format.number(attempt.first_token_ms) })}
       </Td>
     </tr>
