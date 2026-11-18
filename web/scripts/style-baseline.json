@@ -5,7 +5,7 @@
       "admin/src/account-actions.tsx": 2,
       "admin/src/approval-parts.tsx": 18,
       "admin/src/approval-request.tsx": 33,
-      "admin/src/change.tsx": 18,
+      "admin/src/change.tsx": 10,
       "admin/src/credit-dialog.tsx": 3,
       "admin/src/merchant-form.tsx": 6,
       "admin/src/merchant-secrets.tsx": 3,
