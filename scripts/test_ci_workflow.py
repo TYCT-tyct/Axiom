@@ -275,12 +275,27 @@ class BuildChecks(unittest.TestCase):
                 with self.subTest(event=event, docs=docs):
                     self.assertEqual(enabled("go-test", event, docs=docs), not docs and event != "pull_request")
 
-    def test_journey_runs_in_trains_and_main_not_on_pull_requests(self):
-        for event in ("pull_request", "push", "workflow_dispatch"):
-            for docs in (False, True):
-                with self.subTest(event=event, docs=docs):
-                    self.assertEqual(enabled("journey", event, docs=docs), not docs and event != "pull_request")
+    def test_journey_runs_on_frontend_pull_requests_trains_and_main(self):
+        cases = (
+            ("frontend PR", "pull_request", {"web": True}, True),
+            ("backend-only PR", "pull_request", {"web": False}, False),
+            ("docs-only PR", "pull_request", {"docs": True}, False),
+            ("train", "workflow_dispatch", {"web": False}, True),
+            ("light train", "workflow_dispatch", {"light": True}, False),
+            ("main", "push", {}, True),
+            ("verified train result on main", "push", {"reuse": ("journey",)}, False),
+            ("gate stress", "workflow_dispatch", {"stress": True}, False),
+        )
+        for name, event, outputs, expected in cases:
+            with self.subTest(name):
+                self.assertEqual(enabled("journey", event, **outputs), expected)
         self.assertIn("withcluster bash scripts/ci/web-container.sh pnpm --dir web journey", job("journey"))
+
+    def test_build_blocks_frontend_pull_requests_when_journey_fails_or_is_cancelled(self):
+        guard = re.search(r"- if: (contains\(needs\.\*\.result.+)\n", job("build"))[1]
+        for result in ("failure", "cancelled", "success"):
+            with self.subTest(result=result):
+                self.assertEqual(expression(guard, results={"journey": result}), result != "success")
 
     def test_signing_runs_where_a_release_can_and_the_build_requires_it(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
