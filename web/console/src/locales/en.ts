@@ -1,5 +1,6 @@
 import type { Messages } from "@axiom/ui";
 import { en as announcements } from "./announcements";
+import { en as auth } from "./auth";
 import { en as callsBoard } from "./calls";
 import { en as keysMessages } from "./keys";
 import { en as overviewBoard } from "./overview";
@@ -10,12 +11,15 @@ import { en as routingPresets } from "./routing-presets";
 import { en as settings } from "./settings";
 import { en as shell } from "./shell";
 import { en as statement } from "./statement";
+import { en as usageBoard } from "./usage";
 import { en as workspaces } from "./workspaces";
 import type zh from "./zh";
 
 export default {
   announcements,
+  auth,
   callsBoard,
+  usageBoard,
 
   forbiddenHint: "Ask an admin of the workspace if you need it.",
 
@@ -23,6 +27,7 @@ export default {
   nav: {
     models: "Models & prices",
     overview: "Overview",
+    usage: "Usage",
     keys: "API keys",
     providerKeys: "Provider keys",
     routingPresets: "Routing presets",
@@ -34,43 +39,6 @@ export default {
     notifications: "Notifications",
     settings: "Settings",
     security: "Account & security",
-  },
-  auth: {
-    signIn: {
-      description: "Sign in to manage keys and see your balance and calls.",
-      noAccount: "No account yet?",
-      register: "Register",
-      or: "or",
-      passkey: "Use a passkey",
-      oauthFailed: "That sign-in didn’t finish. Try again, or use your password.",
-      providers: { github: "Continue with GitHub", google: "Continue with Google", linuxdo: "Continue with LinuxDo" },
-    },
-    mfa: { orPasskey: "or use a passkey", usePasskey: "Use a passkey" },
-    register: {
-      title: "Register",
-      description: "Register with an invite code, or with your email where the site is open.",
-      invite: "Invite code",
-      passwordHint: "Use a long password you haven’t used elsewhere.",
-      submit: "Register",
-      submitOpen: "Send verification link",
-      working: "Checking your browser… keep this page open.",
-      checkEmail: "Check your email for the verification link.",
-      checkEmailHint:
-        "The link expires in 24 hours and can be used once. It asks you to choose a password. If it doesn’t arrive, check your spam folder.",
-      haveAccount: "Already have an account?",
-      signIn: "Sign in",
-      closed: "This site isn’t open for registration.",
-      signInFailed: "Your account was created, but signing in didn’t work. Go to the sign-in page.",
-    },
-    verify: {
-      title: "Verify your email",
-      description: "Choose a password to finish creating your account.",
-      done: "Your email is verified and your account is ready.",
-      signIn: "Sign in",
-      submit: "Verify and create account",
-      missing: "This link has no verification token. Open the link from your email again.",
-      again: "Register again",
-    },
   },
   legal: {
     title: "Updated terms",

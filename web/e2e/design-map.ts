@@ -135,6 +135,14 @@ export const designScenes: DesignScene[] = [
     schemes: consoleSchemes,
   },
   {
+    name: "console usage",
+    suite: consoleSuite,
+    scene: "usage",
+    fonts: "console",
+    boards: consoleBoards("usage"),
+    schemes: consoleSchemes,
+  },
+  {
     name: "console route",
     suite: consoleSuite,
     scene: "routing-presets",

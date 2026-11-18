@@ -1,5 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as announcements } from "./announcements";
+import { zh as auth } from "./auth";
 import { zh as callsBoard } from "./calls";
 import { zh as keysMessages } from "./keys";
 import { zh as overviewBoard } from "./overview";
@@ -10,11 +11,14 @@ import { zh as routingPresets } from "./routing-presets";
 import { zh as settings } from "./settings";
 import { zh as shell } from "./shell";
 import { zh as statement } from "./statement";
+import { zh as usageBoard } from "./usage";
 import { zh as workspaces } from "./workspaces";
 
 export default {
   announcements,
+  auth,
   callsBoard,
+  usageBoard,
 
   forbiddenHint: "请联系工作区的管理员。",
 
@@ -22,6 +26,7 @@ export default {
   nav: {
     models: "模型与价格",
     overview: "概览",
+    usage: "用量",
     keys: "API key",
     providerKeys: "供应商 key",
     routingPresets: "路由预设",
@@ -33,42 +38,6 @@ export default {
     notifications: "通知",
     settings: "设置",
     security: "账户与安全",
-  },
-  auth: {
-    signIn: {
-      description: "登录后管理 key、查看余额和调用记录。",
-      noAccount: "还没有账户？",
-      register: "注册",
-      or: "或",
-      passkey: "使用通行密钥",
-      oauthFailed: "这次登录没有完成，请重试或改用密码。",
-      providers: { github: "使用 GitHub 继续", google: "使用 Google 继续", linuxdo: "使用 LinuxDo 继续" },
-    },
-    mfa: { orPasskey: "或使用通行密钥", usePasskey: "使用通行密钥" },
-    register: {
-      title: "注册",
-      description: "可以用邀请码注册；本站开放注册时，也可以直接用邮箱注册。",
-      invite: "邀请码",
-      passwordHint: "用较长的、别处没用过的密码。",
-      submit: "注册",
-      submitOpen: "发送验证链接",
-      working: "正在校验浏览器，请保持页面打开。",
-      checkEmail: "请查收验证邮件。",
-      checkEmailHint: "链接 24 小时内有效，只能使用一次；打开后设置密码。如果没收到，请查看垃圾邮件。",
-      haveAccount: "已经有账户？",
-      signIn: "登录",
-      closed: "本站目前不开放注册。",
-      signInFailed: "账户已创建，但自动登录没有成功。请到登录页登录。",
-    },
-    verify: {
-      title: "验证邮箱",
-      description: "设置密码后完成账户创建。",
-      done: "邮箱已验证，账户可以用了。",
-      signIn: "登录",
-      submit: "验证并创建账户",
-      missing: "这个链接里没有验证令牌。请重新打开邮件里的链接。",
-      again: "重新注册",
-    },
   },
   legal: {
     title: "更新后的条款",
