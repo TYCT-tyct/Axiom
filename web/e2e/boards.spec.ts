@@ -281,6 +281,15 @@ for (const region of regions.filter((region) => region.render && region.roots.in
 
 // Keep the board's layout around the cut. Its rules stop at the cut boundary so only generated CSS can draw the part.
 const parts = new Set([
+  "AdminPrimaryButton",
+  "AdminSecondaryButton",
+  "AdminDangerButton",
+  "AdminLinkButton",
+  "AdminCheckbox",
+  "AdminCodeBlock",
+  "AdminCopyButton",
+  "AdminCopiedButton",
+  "AdminElapsedTrack",
   "PartDialog",
   "PartTextField",
   "PartTextAreaField",

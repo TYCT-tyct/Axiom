@@ -8,35 +8,47 @@ export async function renderPart(page: Page, original: Locator, region: Region) 
     await original.evaluate((footer) => footer.parentElement?.replaceChild(footer.cloneNode(true), footer));
   }
   const omit = region.name === "PartDialog" ? [] : (region.omit ?? []);
-  const { css, ...fixture } = await original.evaluate((target, omit) => {
-    for (const selector of omit) for (const element of target.querySelectorAll(selector)) element.remove();
-    const controls = Array.from(target.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
-    const index = controls.indexOf(document.activeElement as HTMLInputElement | HTMLTextAreaElement);
-    const focused = controls[index];
-    const active = focused ? { index, start: focused.selectionStart, end: focused.selectionEnd } : undefined;
-    const control = controls[0];
-    const field = {
-      id: control?.id,
-      initial: control?.value,
-      placeholder: control?.placeholder,
-      autocomplete: control?.autocomplete,
-      messageClass: "nkhint",
-      inputType: "text",
-    };
-    target.setAttribute("data-board-replace", "");
-    const markup = document.querySelector(".board")?.outerHTML ?? "";
-    target.removeAttribute("data-board-replace");
-    const rules = Array.from(document.styleSheets).flatMap((sheet) => Array.from(sheet.cssRules));
-    const fonts = rules.filter((rule) => rule instanceof CSSFontFaceRule);
-    const css = `${fonts.map((rule) => rule.cssText.replaceAll("https://board.local/fonts/", "/fonts/")).join("\n")}
+  const { css, ...fixture } = await original.evaluate(
+    (target, { omit, name }) => {
+      for (const selector of omit) for (const element of target.querySelectorAll(selector)) element.remove();
+      const controls = Array.from(target.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
+      const index = controls.indexOf(document.activeElement as HTMLInputElement | HTMLTextAreaElement);
+      const focused = controls[index];
+      const active = focused ? { index, start: focused.selectionStart, end: focused.selectionEnd } : undefined;
+      const control = controls[0];
+      const field = {
+        id: control?.id,
+        initial: control?.value,
+        placeholder: control?.placeholder,
+        autocomplete: control?.autocomplete,
+        messageClass: "nkhint",
+        inputType: "text",
+      };
+      target.setAttribute("data-board-replace", "");
+      const markup = document.querySelector(".board")?.outerHTML ?? "";
+      target.removeAttribute("data-board-replace");
+      const rules = Array.from(document.styleSheets).flatMap((sheet) => Array.from(sheet.cssRules));
+      const fonts = rules.filter((rule) => rule instanceof CSSFontFaceRule);
+      const css = `${fonts.map((rule) => rule.cssText.replaceAll("https://board.local/fonts/", "/fonts/")).join("\n")}
       @scope (:root) to ([data-board-part]) {
         ${rules
           .filter((rule) => !(rule instanceof CSSFontFaceRule))
           .map((rule) => rule.cssText)
           .join("\n")}
       }`;
-    return { field, markup, css, active };
-  }, omit);
+      const sample =
+        name === "AdminCodeBlock"
+          ? {
+              code: Array.from(target.childNodes, (node) => ({
+                token: node.nodeType === Node.ELEMENT_NODE,
+                text: node.textContent,
+              })),
+            }
+          : { fill: target.querySelector("i")?.getAttribute("style") };
+      return { field, markup, css, active, sample };
+    },
+    { omit, name: region.name },
+  );
   await page.route("**/part-context.css", (route) => route.fulfill({ contentType: "text/css", body: css }));
   type Fixture = typeof fixture;
   await page.waitForFunction(() => "paintPart" in window);
@@ -50,13 +62,20 @@ export async function renderPart(page: Page, original: Locator, region: Region) 
 
 // Runs in the generated demo's browser entry, where the generated imports and their CSS come from Vite.
 export const partProofScript = `
-  window.paintPart = async ({ markup, field, active }) => {
+  window.paintPart = async ({ markup, field, active, sample }) => {
     const cut = async (part, extra = {}) => {
       const [Region, demo, zh] = await Promise.all([scene[part](), scene[part + "Data"](), scene[part + "ZH"]()]);
       const props = demo(key => zh[key]);
       return createElement(Region, { ...props, ...extra, values: { ...props.values, ...extra.values } });
     };
     const extras = {
+      AdminCodeBlock: async () => ({
+        children: await Promise.all(sample.code.map(({token, text}, key) =>
+          token ? cut("AdminCodeToken", { key, text: { token: text } }) : text)),
+      }),
+      AdminCopyButton: async () => ({ values: { tone: "pri" } }),
+      AdminCopiedButton: async () => ({ values: { tone: "sec" } }),
+      AdminElapsedTrack: async () => ({ values: { fill: sample.fill } }),
       PartDialog: async () => ({ children: await cut("PartDialogSample"), values: { primaryClass: "pri", placement: "border: 0; margin: 0; padding: 0; color: inherit", dialog: element => { if (element) element.open = true; } } }),
       PartTextField: async () => ({ values: field }),
       PartTextAreaField: async () => ({ values: field }),
