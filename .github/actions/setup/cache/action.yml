@@ -1,0 +1,6 @@
+name: hosted cache runtime
+description: Expose the Actions cache runtime to content-cache scripts and measure CPU use after setup.
+runs:
+  using: node24
+  main: runtime.mjs
+  post: runtime.mjs

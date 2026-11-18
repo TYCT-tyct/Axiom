@@ -46,8 +46,14 @@ fi
 # once, instead of on every run (a cold download failed the boards e2e twice on 2026-11-17).
 # A private cgroup namespace lets Node count this quota, rather than the parent's 80 cores.
 # BASE (the commit a PR or train is measured against) lets the vitals serve that commit's frontend beside this one.
+cgroup=()
+if systemctl is-active --quiet axiom-ci.slice 2>/dev/null; then
+  cgroup=(--cgroup-parent=axiom-ci.slice)
+fi
+cpus=$(nproc)
+if [ "$cpus" -gt 8 ]; then cpus=8; fi
 docker create --name "$name" \
-  --cpus 8 --cgroup-parent=axiom-ci.slice --cgroupns=private --user "$(id -u):$(id -g)" \
+  --cpus "$cpus" "${cgroup[@]}" --cgroupns=private --user "$(id -u):$(id -g)" \
   --volume "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" --workdir "$GITHUB_WORKSPACE" \
   --volume "$RUNNER_TEMP:$RUNNER_TEMP" --volume "$RUNNER_TOOL_CACHE:$RUNNER_TOOL_CACHE:ro" \
   --volume "$go_cache:$go_cache" --volume "$module_cache:$module_cache" \
@@ -57,6 +63,8 @@ docker create --name "$name" \
   --env AXIOM_TEST_RESULTS --env AXIOM_PLAYWRIGHT_REPORTS --env E2E_FLAKY --env E2E_FLAKY_RETRY \
   --env GOCACHE="$go_cache" --env GOMODCACHE="$module_cache" --env AXIOM_CACHE_DIR=/ci/axiom \
   --env XDG_CACHE_HOME=/ci/axiom/xdg \
+  --env ACTIONS_CACHE_CLIENT --env ACTIONS_CACHE_URL --env ACTIONS_RESULTS_URL \
+  --env ACTIONS_RUNTIME_TOKEN --env ACTIONS_CACHE_SERVICE_V2 \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
   "${shared[@]}" \
   "$WEB_IMAGE" bash -e -c '
@@ -79,7 +87,9 @@ if [ "$pid" -eq 0 ]; then
 fi
 # /proc/self/cgroup inside is namespace-relative (0::/); the host PID reveals the actual shared ancestry.
 cat "/proc/$pid/cgroup"
-grep -q '/axiom.slice/axiom-ci.slice/' "/proc/$pid/cgroup"
-cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/{cpu.max,memory.high,memory.max}
+if [ "${#cgroup[@]}" -gt 0 ]; then
+  grep -q '/axiom.slice/axiom-ci.slice/' "/proc/$pid/cgroup"
+  cat /sys/fs/cgroup/axiom.slice/axiom-ci.slice/{cpu.max,memory.high,memory.max}
+fi
 docker logs --follow "$name"
 exit "$(docker wait "$name")"
