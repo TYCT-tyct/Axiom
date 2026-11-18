@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, describe, expect, it } from "vitest";
 import en from "./locales/en";
-import { ReceiptBody } from "./pages/receipt";
+import { ReceiptBody } from "./pages/receipt-body";
 
 const i18n = createInstance();
 

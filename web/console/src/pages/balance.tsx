@@ -1,162 +1,267 @@
-import type { Schemas } from "@axiom/api";
-import { Stat } from "@axiom/app";
-import { Badge, DataState, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
+import { can, useSession } from "@axiom/app";
+import type BillDesktop from "@axiom/boards/AxApp/regions/Bill";
+import { Card, DataState, EmptyState, Grid, Metric, Note, Stack, useFormat, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
+import { useLocation, useNavigate } from "@tanstack/react-router";
+import { type MouseEvent, type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { balanceQuery } from "../queries";
-import { TopUp } from "../top-up";
+import {
+  type BalanceData,
+  type CreditBatch,
+  formatQuickAmount,
+  quickAmountsForCurrency,
+  splitMoneyParts,
+  totalFrozenFromBatches,
+} from "./bill-data";
+import { BillPlansPanel } from "./bill-plans";
+import { BillRegion } from "./bill-region";
+import { BillShell, BillTabs } from "./bill-shell";
+import { BillTopUpModal } from "./bill-topup";
 
-export default function Balance() {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const balance = useQuery(balanceQuery);
-  return (
-    <>
-      <PageHeader title={t("nav.balance")} description={t("balance.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        <DataState query={balance}>
-          {(data) => (
-            <>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Stat
-                  label={t("balance.available")}
-                  value={format.money(data.available)}
-                  note={t("balance.availableNote")}
-                />
-                <Stat
-                  label={t("balance.spentThisMonth")}
-                  value={format.money(data.spent_this_month)}
-                  note={t("balance.monthNote")}
-                />
-              </div>
-              <TopUp currency={data.balance.currency} />
-              <Breakdown data={data} />
-              <Panel title={t("balance.batches")}>
-                {data.batches === undefined ? (
-                  <p className="px-4 py-3 text-t3">{t("balance.batchesUnavailable")}</p>
-                ) : data.batches.length === 0 ? (
-                  <p className="px-4 py-3 text-t3">{t("balance.noBatches")}</p>
-                ) : (
-                  <BatchTable batches={data.batches} />
-                )}
-                <p className="border-t border-b1 px-4 py-3 text-ui text-t3">{t("balance.batchesNote")}</p>
-              </Panel>
-              {/* The shell has one billing entry; the statement and redeeming a code are reached from here. */}
-              {(["/statement", "/redeem"] as const).map((to) => (
-                <Link key={to} to={to} className="mr-4 text-ui text-accent underline-offset-4 hover:underline">
-                  {t(to === "/statement" ? "nav.statement" : "nav.redeem")}
-                </Link>
-              ))}
-            </>
-          )}
-        </DataState>
-      </div>
-    </>
-  );
+type BillProps = Parameters<typeof BillDesktop>[0];
+const SOON_MS = 7 * 24 * 60 * 60 * 1000;
+
+type BatchLabels = {
+  neverExpires: string;
+  expired: string;
+  expiresSoon: string;
+  source: Record<CreditBatch["source"], string>;
+  frozen: (amount: string) => string;
+  orderLink: string;
+};
+
+function formatBatchExpiry(expiresAt: string | undefined, format: ReturnType<typeof useFormat>, labels: BatchLabels) {
+  if (!expiresAt) return labels.neverExpires;
+  const date = new Date(expiresAt);
+  const diff = date.getTime() - Date.now();
+  if (diff <= 0) return `${labels.expired} · ${format.dateTimeMinute(date)}`;
+  if (diff <= SOON_MS) return `${labels.expiresSoon} · ${format.dateTimeMinute(date)}`;
+  return format.dateTimeMinute(date);
 }
 
-// Breakdown is the balance and what is held back from it, each line saying what the figure is.
-function Breakdown({ data }: { data: Schemas["Balance"] }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Panel title={t("balance.breakdown")}>
-      <dl className="divide-y divide-b1">
-        {(
-          [
-            ["balance", data.balance],
-            ["reserved", data.reserved],
-            ["floor", data.floor],
-          ] as const
-        ).map(([name, money]) => (
-          <div key={name} className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-1 px-4 py-3">
-            <dt className="text-t1">{t(`balance.${name}`)}</dt>
-            <dd className="col-start-2 row-span-2 row-start-1 text-right text-t1 tabular-nums [overflow-wrap:anywhere]">
-              {format.money(money)}
-            </dd>
-            <dd className="max-w-prose text-label text-t3">{t(`balance.${name}Note`)}</dd>
-          </div>
-        ))}
-      </dl>
-    </Panel>
-  );
+function buildBatchRows(
+  batches: readonly CreditBatch[],
+  format: ReturnType<typeof useFormat>,
+  labels: BatchLabels,
+): BillProps["rows"]["entries0"] {
+  return batches.map((batch) => {
+    const sourceLabel = labels.source[batch.source];
+    const created = format.dateTimeMinute(new Date(batch.created_at));
+    const remainingText =
+      BigInt(batch.frozen.amount) > 0n
+        ? `${format.money(batch.remaining)} (${labels.frozen(format.money(batch.frozen))})`
+        : format.money(batch.remaining);
+    const expiryText = formatBatchExpiry(batch.expires_at, format, labels);
+    const initialText = format.money(batch.amount);
+
+    if (batch.source === "paid") {
+      return {
+        key: batch.id,
+        kind: "0" as const,
+        f0: "ppled",
+        f1: "orders",
+        f2: batch.id,
+        f3: "",
+        f4: `${sourceLabel} · ${created}`,
+        f5: "",
+        f6: expiryText,
+        f7: "ppgo",
+        f8: "/console/orders",
+        f9: labels.orderLink,
+        f10: "r num",
+        f11: remainingText,
+        f12: "r num",
+        f13: initialText,
+      };
+    }
+
+    return {
+      key: batch.id,
+      kind: "1" as const,
+      f0: "",
+      f1: "",
+      f2: `${sourceLabel} · ${created}`,
+      f3: "",
+      f4: expiryText,
+      f5: "r num",
+      f6: "",
+      f7: remainingText,
+      f8: "r num",
+      f9: initialText,
+    };
+  });
 }
 
-// BatchTable is what is left of each grant or payment and when it stops counting. The expiry is the batch's own, not the
-// site's: a batch without one never expires, and an expiry within a week is marked so it is not read past.
-function BatchTable({ batches }: { batches: NonNullable<Schemas["Balance"]["batches"]> }) {
+function BalanceBreakdown({ data }: { data: BalanceData }) {
   const { t } = useTranslation();
+  const currency = data.available.currency;
+  const frozenAmount = totalFrozenFromBatches(data.batches);
   return (
-    <Table label={t("balance.batches")}>
-      <thead>
-        <tr>
-          <Th>{t("balance.col.batch")}</Th>
-          <Th>{t("balance.col.source")}</Th>
-          <Th className="text-right">{t("balance.col.amount")}</Th>
-          <Th className="text-right">{t("balance.col.remaining")}</Th>
-          <Th>{t("balance.col.expires")}</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {batches.map((batch) => (
-          <BatchRow key={batch.id} batch={batch} />
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-function BatchRow({ batch }: { batch: NonNullable<Schemas["Balance"]["batches"]>[number] }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <tr className="hover:bg-s2">
-      <Td>
-        <span className="font-mono text-label text-t2" title={batch.id}>
-          {batch.id.slice(0, 8)}
-          {"…"}
-        </span>
-        <span className="block text-label text-t3">{format.dateTime(new Date(batch.created_at))}</span>
-      </Td>
-      <Td>
-        <Badge tone={batch.source === "paid" ? "neutral" : "ok"}>{t(`balance.source.${batch.source}`)}</Badge>
-      </Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">{format.money(batch.amount)}</Td>
-      <Td className="text-right whitespace-nowrap tabular-nums">
-        {format.money(batch.remaining)}
-        {batch.frozen.amount !== "0" ? (
-          <span className="block text-label text-t3">
-            {t("balance.frozen", { amount: format.money(batch.frozen) })}
-          </span>
+    <Card title={t("balance.breakdown")} lede={t("balance.availableNote")}>
+      <Grid columns={3} gap={16}>
+        <Metric label={t("balance.balance")} value={data.balance} />
+        <Metric label={t("balance.reserved")} value={data.reserved} />
+        {frozenAmount !== null ? (
+          <Metric label={t("statement.bill.frozenLabel")} value={{ amount: frozenAmount, currency }} />
         ) : null}
-      </Td>
-      <Td className="whitespace-nowrap">
-        <Expiry at={batch.expires_at} />
-      </Td>
-    </tr>
+        <Metric label={t("balance.floor")} value={data.floor} />
+        <Metric label={t("balance.spentThisMonth")} value={data.spent_this_month} />
+      </Grid>
+    </Card>
   );
 }
 
-function Expiry({ at }: { at: string | undefined }) {
+function BatchesFallback({ batches }: { batches: BalanceData["batches"] }) {
+  const { t } = useTranslation();
+  if (batches === undefined) {
+    return (
+      <Card title={t("balance.batches")} lede={t("balance.batchesNote")}>
+        <Note title={t("balance.batchesUnavailable")} />
+      </Card>
+    );
+  }
+  if (batches.length === 0) {
+    return (
+      <Card title={t("balance.batches")} lede={t("balance.batchesNote")}>
+        <EmptyState title={t("balance.noBatches")}>{t("balance.batchesNote")}</EmptyState>
+      </Card>
+    );
+  }
+  return null;
+}
+
+function BalanceBoardContent({
+  data,
+  canTopUp,
+  onTopUp,
+  onTableClick,
+  extra,
+}: {
+  data: BalanceData;
+  canTopUp: boolean;
+  onTopUp: (initialUnits?: string) => void;
+  onTableClick: (event: MouseEvent<Element>) => void;
+  extra: ReactNode;
+}) {
   const { t } = useTranslation();
   const format = useFormat();
-  if (!at) {
-    return <span className="text-t3">{t("balance.neverExpires")}</span>;
-  }
-  const date = new Date(at);
-  const left = date.getTime() - Date.now();
-  const expired = left <= 0;
+  const currency = data.available.currency;
+  const heroParts = splitMoneyParts(format.money(data.available));
+  const batches = data.batches;
+  const quick0 = quickAmountsForCurrency(currency).map((units) => ({
+    key: units,
+    kind: "0" as const,
+    f0: "button" as const,
+    f1: units,
+    f2: t("statement.bill.quickAmount", { amount: formatQuickAmount(units, currency, format.money) }),
+  }));
+  const cols0 = [
+    { key: "source", kind: "0" as const, f0: "", f1: t("balance.col.source") },
+    { key: "expires", kind: "0" as const, f0: "", f1: t("balance.col.expires") },
+    { key: "remaining", kind: "0" as const, f0: "r num", f1: t("balance.col.remaining") },
+    { key: "amount", kind: "0" as const, f0: "r num", f1: t("balance.col.amount") },
+  ];
+  const entries0 = batches
+    ? buildBatchRows(batches, format, {
+        neverExpires: t("balance.neverExpires"),
+        expired: t("balance.expired"),
+        expiresSoon: t("balance.expiresSoon"),
+        source: { gift: t("balance.source.gift"), paid: t("balance.source.paid"), redeem: t("balance.source.redeem") },
+        frozen: (amount) => t("balance.frozen", { amount }),
+        orderLink: t("statement.bill.batchOrderLink"),
+      })
+    : [];
   return (
-    <>
-      {format.dateTime(date)}
-      {left <= 7 * 24 * 60 * 60_000 ? (
-        <span className="mt-1 block">
-          <Badge tone={expired ? "bad" : "warn"} icon="alert">
-            {t(expired ? "balance.expired" : "balance.expiresSoon")}
-          </Badge>
-        </span>
-      ) : null}
-    </>
+    <BillRegion
+      tabs={<BillTabs active="balance" />}
+      extra={extra}
+      text={{
+        title: t("statement.bill.title"),
+        subtitle: t("statement.bill.subtitle"),
+        heroLabel: t("balance.available"),
+        heroCurrency: heroParts.currency,
+        heroWhole: heroParts.whole,
+        heroCents: heroParts.cents,
+        topUpLabel: t("topup.title"),
+        tableTitle: t("balance.batches"),
+      }}
+      rows={{ quick0, cols0, entries0 }}
+      values={{
+        unbuilt: true,
+        hideTopUp: !canTopUp,
+        hideTable: !(batches && batches.length > 0),
+        tableLabel: t("balance.batches"),
+        tableClick: onTableClick,
+        topUp: () => onTopUp(),
+        quickClick: (event) => {
+          const units = (event.target as Element).closest("button[data-amt]")?.getAttribute("data-amt");
+          if (units) onTopUp(units);
+        },
+      }}
+    />
   );
+}
+
+function BalanceView() {
+  const { t } = useTranslation();
+  const session = useSession();
+  const canTopUp = can(session, "balance.top_up");
+  const navigate = useNavigate();
+  const query = useQuery(balanceQuery);
+  const [modal, setModal] = useState<{ open: boolean; initialUnits?: string }>({ open: false });
+
+  const handleTableClick = (event: MouseEvent<Element>) => {
+    const target = event.target as Element;
+    const row = target.closest("tr[data-a='orders']");
+    if (!row) return;
+    event.preventDefault();
+    void navigate({ to: "/orders" });
+  };
+
+  return (
+    <DataState query={query} page>
+      {(data) => (
+        <>
+          <BalanceBoardContent
+            data={data}
+            canTopUp={canTopUp}
+            onTopUp={(initialUnits) => setModal({ open: true, initialUnits })}
+            onTableClick={handleTableClick}
+            extra={
+              <Stack gap={16}>
+                {!canTopUp ? <Note title={t("topup.forbidden")} /> : null}
+                <BalanceBreakdown data={data} />
+                <BatchesFallback batches={data.batches} />
+              </Stack>
+            }
+          />
+          {canTopUp ? (
+            <BillTopUpModal
+              open={modal.open}
+              currency={data.available.currency}
+              currentBalance={data.available}
+              initialUnits={modal.initialUnits}
+              onClose={() => setModal({ open: false })}
+            />
+          ) : null}
+        </>
+      )}
+    </DataState>
+  );
+}
+
+export default function BalancePage() {
+  const { t } = useTranslation();
+  const { hash } = useLocation();
+  const isPlans = hash === "plans" || hash === "#plans";
+  usePageTitle(t(isPlans ? "statement.bill.tabs.plans" : "nav.balance"));
+  if (isPlans) {
+    return (
+      <BillShell activeTab="plans" title={t("statement.bill.tabs.plans")} subtitle={t("statement.bill.plans.subtitle")}>
+        <BillPlansPanel />
+      </BillShell>
+    );
+  }
+  return <BalanceView />;
 }

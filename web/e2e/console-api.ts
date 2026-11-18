@@ -343,6 +343,100 @@ function getOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}", "g
   return order ? ok(order) : fail(404, "not_found");
 }
 
+function listStatementDaily({ query, state }: Ctx<"/api/console/v1/statement/daily", "get">) {
+  const page = paged(state.statementDaily, query, ["time_zone"]);
+  return page ? ok(page) : fail(400, "invalid_request");
+}
+
+function listRedemptions({ query, state }: Ctx<"/api/console/v1/redeem-codes", "get">) {
+  const page = paged(state.redemptions, query);
+  return page ? ok({ data: page.data, next_cursor: page.next_cursor ?? undefined }) : fail(400, "invalid_request");
+}
+
+function redeemCode({ body, state }: Ctx<"/api/console/v1/redeem-codes", "post">) {
+  const code = body.code.trim().toUpperCase();
+  if (code === "USED-CODE") return fail(422, "redeem_code_used");
+  if (code === "EXPIRED-CODE") return fail(422, "redeem_code_expired");
+  if (code === "DISABLED-CODE") return fail(422, "redeem_code_disabled");
+  if (!code || code.startsWith("BAD") || code === "INVALID") return fail(422, "redeem_code_invalid");
+  const created: Schemas["RedeemCodeRedemption"] = {
+    id: `rdm_${String(state.redemptions.length + 10).padStart(26, "0")}`,
+    amount: { amount: "5000000000", currency: state.site.currency },
+    code_hint: code.slice(-4),
+    redeemed_at: new Date().toISOString(),
+  };
+  state.redemptions.unshift(created);
+  return { status: 201 as const, json: created };
+}
+
+function createOrder({ body, state }: Ctx<"/api/console/v1/orders", "post">) {
+  const quote = state.methods.find((item) => item.method === body.method) ?? state.methods[0];
+  const order: Schemas["Order"] = {
+    id: `ord_${String(state.orders.length + 100).padStart(26, "0")}` as Schemas["OrderId"],
+    state: "pending",
+    method: body.method,
+    credits: body.credits,
+    total: quote?.total ?? { amount: "7373", currency: "CNY" },
+    fee: quote?.fee ?? { amount: "73", currency: "CNY" },
+    created_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
+    checkout: { pay_url: "https://pay.example.com/checkout/new", qr_code: "https://pay.example.com/qr/new" },
+    refund_allowed: true,
+    refunds: [],
+  };
+  state.orders.unshift(order);
+  return { status: 201 as const, json: order };
+}
+
+function verifyOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}/verify", "post">) {
+  const order = state.orders.find((item) => item.id === params.order_id);
+  if (!order) return fail(404, "not_found");
+  if (order.state === "pending") {
+    order.state = "paid";
+    order.paid_at = new Date().toISOString();
+    order.paid_total = order.total;
+    order.credited = order.credits;
+    order.checkout = undefined;
+  }
+  return ok(order);
+}
+
+function cancelOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}/cancel", "post">) {
+  const order = state.orders.find((item) => item.id === params.order_id);
+  if (!order) return fail(404, "not_found");
+  if (order.state === "pending" || order.state === "cancelled") {
+    order.state = "cancelled";
+    order.checkout = undefined;
+    return ok(order);
+  }
+  return fail(409, "conflict");
+}
+
+function requestRefund({ body, params, state }: Ctx<"/api/console/v1/orders/{order_id}/refunds", "post">) {
+  const order = state.orders.find((item) => item.id === params.order_id);
+  if (!order) return fail(404, "not_found");
+  if (!order.refund_allowed) return fail(403, "forbidden");
+  const refund: Schemas["OrderRefund"] = {
+    id: `rfd_${String((order.refunds?.length ?? 0) + 100).padStart(26, "0")}` as Schemas["RefundId"],
+    state: "pending_review",
+    credits: body.credits,
+    amount: { amount: "3650", currency: order.total.currency },
+    created_at: new Date().toISOString(),
+  };
+  order.refunds = [...(order.refunds ?? []), refund];
+  return { status: 201 as const, json: refund };
+}
+
+function setBillingPreference({ body, state }: Ctx<"/api/console/v1/billing-preference", "put">) {
+  const preference = body.preference === "site" ? state.billingPreference.site_default : body.preference;
+  state.billingPreference = {
+    ...state.billingPreference,
+    preference,
+    source: body.preference === "site" ? "site" : "account",
+  };
+  return ok(state.billingPreference);
+}
+
 function setNotifications({ body, state }: Ctx<"/api/console/v1/notification-preferences", "put">) {
   state.notifications = { ...state.notifications, ...body };
   return ok(state.notifications);
@@ -402,8 +496,22 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/calls/export`, { ...signedIn, permission: "calls.view" }, exportCalls),
   route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),
   route("get", `${base}/statement`, { ...signedIn, permission: "balance.view" }, listStatement),
+  route("get", `${base}/statement/daily`, { ...signedIn, permission: "balance.view" }, listStatementDaily),
+  route("get", `${base}/subscriptions`, { ...signedIn, permission: "balance.view" }, ({ state }) =>
+    ok({ data: state.subscriptions }),
+  ),
+  route("get", `${base}/billing-preference`, { ...signedIn, permission: "balance.view" }, ({ state }) =>
+    ok(state.billingPreference),
+  ),
+  route("put", `${base}/billing-preference`, signedIn, setBillingPreference),
+  route("get", `${base}/redeem-codes`, { ...signedIn, permission: "balance.view" }, listRedemptions),
+  route("post", `${base}/redeem-codes`, { ...signedIn, permission: "balance.top_up" }, redeemCode),
   route("get", `${base}/orders`, { ...signedIn, permission: "balance.view" }, listOrders),
+  route("post", `${base}/orders`, { ...signedIn, permission: "balance.top_up" }, createOrder),
   route("get", `${base}/orders/{order_id}`, { ...signedIn, permission: "balance.view" }, getOrder),
+  route("post", `${base}/orders/{order_id}/verify`, { ...signedIn, permission: "balance.top_up" }, verifyOrder),
+  route("post", `${base}/orders/{order_id}/cancel`, { ...signedIn, permission: "balance.top_up" }, cancelOrder),
+  route("post", `${base}/orders/{order_id}/refunds`, { ...signedIn, permission: "balance.top_up" }, requestRefund),
   route("get", `${base}/payment-methods`, { ...signedIn, permission: "balance.top_up" }, ({ state }) =>
     ok({ data: state.methods }),
   ),

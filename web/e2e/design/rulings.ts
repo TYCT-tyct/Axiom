@@ -17,17 +17,22 @@ const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 // The shell's rulings, at every width, so each selector names the wide board's part and the phone's: what the page
 // inside the frame shows, the board's demo account and balance, and what is not built (#816).
 const both = (selector: string) => ({ board: { selector }, page: { selector } });
+const consoleChrome = (scene: string): Ruling[] =>
+  [
+    { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+    { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
+    { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
+    {
+      basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+      ...both(".pnP .qnv, .otabs"),
+    },
+    { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
+  ].map((ruling) => ({ scene, ...ruling }));
+
 const shell: Ruling[] = [
-  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
-  { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
-  { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
-  {
-    basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
-    ...both(".pnP .qnv, .otabs"),
-  },
-  { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
-].map((ruling) => ({ scene: "console shell", ...ruling }));
+  { scene: "console shell", basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+  ...consoleChrome("console shell"),
+];
 
 export const rulings: Ruling[] = [
   ...shell,
@@ -35,6 +40,33 @@ export const rulings: Ruling[] = [
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  ...consoleChrome("console bill"),
+  {
+    scene: "console bill",
+    basis: "#816 O23: run-out forecast has no basis on the backend",
+    board: { selector: ".p-bill > .sxP > .qcard.hero .qhl > p, .p-bill > .sxP > .qcard.hero .qrun" },
+  },
+  {
+    scene: "console bill",
+    basis: "#816 O19, O20: auto top-up and invoices & bank transfer are not built",
+    board: { selector: ".p-bill > .sxP > .qcard.rows" },
+  },
+  {
+    scene: "console bill",
+    basis:
+      "L15: billing tabs, live USD balance and batches replace demo CNY balance and personal statement table; breakdown card adds reserved/floor/frozen/spent",
+    board: { selector: ".p-bill .qcard.hero, .p-bill .qcard.flush" },
+    page: {
+      selector: 'nav[aria-label="账单导航"], .p-bill .qcard.hero, .p-bill .qcard.flush, .p-bill > div:last-child',
+    },
+  },
+  // Axiom CJK Console is cut at a single static weight (wght 330, web/scripts/fonts/sources.json), whereas the board
+  // draws MiSansVF at 500/400 (h1/p) (docs/frontend.md「字体」).
+  {
+    scene: "console bill",
+    basis: "§5.4: Axiom CJK Console is cut at wght 330 (sources.json), while the board draws MiSansVF at 500/400",
+    ...both(".p-bill .qph .qpht"),
+  },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {
