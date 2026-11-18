@@ -10,7 +10,6 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import {
   type AnchorHTMLAttributes,
-  type KeyboardEvent as KeyEvent,
   type ReactNode,
   type SyntheticEvent,
   useEffect,
@@ -19,6 +18,7 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { pressKey } from "./board";
 import { balanceQuery, siteQuery } from "./queries";
 
 // The pages the shell links to, by the board's page key: the address, what the session must hold to open it, and the
@@ -28,7 +28,7 @@ const pages = {
   ov: { to: "/" },
   logs: { to: "/calls", permission: "calls.view" },
   keys: { to: "/keys", permission: "api_keys.view" },
-  presets: { to: "/routing-presets", permission: "api_keys.view" },
+  route: { to: "/routing-presets", permission: "api_keys.view" },
   byok: { to: "/provider-keys", permission: "api_keys.view" },
   bill: { to: "/balance", permission: "balance.view", under: ["/redeem", "/orders", "/statement"] },
   profile: { to: "/settings", under: ["/workspaces"] },
@@ -82,12 +82,7 @@ const frame = {
   unbuilt: true,
   placeholder: "visibility: hidden",
   // An entry the board draws as a <div> or <a> without an address, given a button's role: Enter and Space press it.
-  press: (event: KeyEvent) => {
-    if (event.key === "Enter" || event.key === " ") {
-      event.preventDefault();
-      (event.currentTarget as HTMLElement).click();
-    }
-  },
+  press: pressKey,
 };
 const frameStyle = "overflow: clip; min-height: 100dvh";
 

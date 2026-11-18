@@ -217,7 +217,7 @@ function ByDefault({ newKeys, accountDefault }: { newKeys: NewKeys; accountDefau
 
 // PresetOptions offers presets by name and the layer they come from, as every preset choice shows them; the one a key
 // made now takes is marked, so moving a key onto the current default is choosing it.
-export function PresetOptions({ presets, newKeys }: { presets: Schemas["RoutingPreset"][]; newKeys?: string }) {
+function PresetOptions({ presets, newKeys }: { presets: Schemas["RoutingPreset"][]; newKeys?: string }) {
   const { t } = useTranslation();
   return presets.map((preset) => (
     <option key={preset.id} value={preset.id}>
