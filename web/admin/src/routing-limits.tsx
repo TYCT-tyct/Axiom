@@ -1,6 +1,6 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Icon, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Field, Grid, useFormat } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -18,7 +18,7 @@ type Layer = (typeof layers)[number];
 // One number of the record: its form field, where the server points at it, the bounds the contract states, and how it
 // is read from and written into the record. The bytes of the global budget are typed in MiB: a value divided by a power
 // of two prints exactly and reads back to the same bytes.
-type Field = {
+type LimitField = {
   name: string;
   layer?: Layer;
   label: "active" | "total" | "kept" | "presets" | "bytes";
@@ -29,7 +29,7 @@ type Field = {
   set: (limits: Limits, value: number) => void;
 };
 
-const layerField = (layer: Layer, label: "active" | "total", max: number): Field => ({
+const layerField = (layer: Layer, label: "active" | "total", max: number): LimitField => ({
   name: `${layer}/${label}`,
   layer,
   label,
@@ -42,7 +42,7 @@ const layerField = (layer: Layer, label: "active" | "total", max: number): Field
   },
 });
 
-const fields: Field[] = [
+const fields: LimitField[] = [
   ...layers.flatMap((layer) => [layerField(layer, "active", 500), layerField(layer, "total", 5000)]),
   {
     name: "kept_versions",
@@ -140,10 +140,9 @@ export function NodeState<T>({
       <Facts
         title={title}
         action={
-          <Button size="md" disabled={query.isFetching} onClick={() => void query.refetch()}>
-            <Icon name="refresh" />
+          <ActionButton disabled={query.isFetching} onClick={() => void query.refetch()} icon="refresh">
             {t("routingPresets.limits.retry")}
-          </Button>
+          </ActionButton>
         }
         rows={[[t("routingPresets.unavailableTitle"), unavailable]]}
       />
@@ -156,7 +155,7 @@ function LimitsCard({ view }: { view: View }) {
   const { t } = useTranslation();
   const show = useShow();
   const [open, setOpen] = useState(false);
-  const shown = (field: Field): ReactNode => {
+  const shown = (field: LimitField): ReactNode => {
     const own = field.get(view.limits);
     return (
       <span key={field.name}>
@@ -168,7 +167,7 @@ function LimitsCard({ view }: { view: View }) {
   const rows: [string, ReactNode][] = [
     ...layers.map((layer): [string, ReactNode] => [
       t(`routingPresets.limits.layer.${layer}`),
-      <span key={layer} className="flex flex-wrap gap-x-4 gap-y-1">
+      <Cluster gap={16} key={layer}>
         {fields
           .filter((field) => field.layer === layer)
           .map((field) => (
@@ -176,7 +175,7 @@ function LimitsCard({ view }: { view: View }) {
               {t(`routingPresets.limits.field.${field.label}`)} {shown(field)}
             </span>
           ))}
-      </span>,
+      </Cluster>,
     ]),
     ...fields
       .filter((field) => field.layer === undefined)
@@ -187,10 +186,9 @@ function LimitsCard({ view }: { view: View }) {
       <Facts
         title={t("routingPresets.limits.title")}
         action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
+          <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("routingPresets.limits.edit")}
-          </Button>
+          </ActionButton>
         }
         rows={rows}
       />
@@ -201,7 +199,7 @@ function LimitsCard({ view }: { view: View }) {
 
 function useShow() {
   const format = useFormat();
-  return (field: Field, value: number | undefined) => {
+  return (field: LimitField, value: number | undefined) => {
     if (value === undefined) {
       return "—";
     }
@@ -223,12 +221,12 @@ function LimitsDialog({ view, onClose }: { view: View; onClose: () => void }) {
       action={t("routingPresets.limits.save")}
       reload={reload}
       fields={(error) => (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <Grid min="16rem">
           {fields.map((field) => {
             const own = field.get(read.limits);
             const label = t(`routingPresets.limits.field.${field.label}`);
             return (
-              <TextField
+              <Field
                 key={field.name}
                 name={field.name}
                 label={field.layer ? `${t(`routingPresets.limits.layer.${field.layer}`)} · ${label}` : label}
@@ -244,7 +242,7 @@ function LimitsDialog({ view, onClose }: { view: View; onClose: () => void }) {
               />
             );
           })}
-        </div>
+        </Grid>
       )}
       read={(values) => readLimits(values, t("routingPresets.limits.invalid"))}
       send={(limits, { reason, key }) =>

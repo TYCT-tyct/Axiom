@@ -1,6 +1,6 @@
 import { type Attempt, accountKey, failed, opened, readForm, type Sendable, useErrors, useSession } from "@axiom/app";
 import { Dialog, TextAreaField, TextField } from "@axiom/boards/ds";
-import { FormError, Icon } from "@axiom/ui";
+import { FormError, Stack, Tag, Text } from "@axiom/ui";
 import { useIsFetching, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -176,13 +176,14 @@ export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
           key={form.version}
           id={form.id}
           noValidate
-          className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
             form.submit(event.currentTarget);
           }}
         >
-          <ChangeBody {...props} change={change} problem={form.problem} />
+          <Stack>
+            <ChangeBody {...props} change={change} problem={form.problem} />
+          </Stack>
         </form>
       )}
     </Dialog>
@@ -291,7 +292,7 @@ function ChangeBody<Input, Out>({
     return attempt.state === "unknown" ? (
       <FormError>
         {mutation.error ? <p>{errors.message(mutation.error)}</p> : null}
-        <p className="text-t2">{t("change.unsettled")}</p>
+        <Text tone="muted">{t("change.unsettled")}</Text>
       </FormError>
     ) : (
       said
@@ -299,11 +300,17 @@ function ChangeBody<Input, Out>({
   }
   return (
     <>
-      {intro ? <div className="space-y-2 text-t2">{intro}</div> : null}
+      {intro ? (
+        <Text as="div" tone="muted">
+          <Stack gap={8}>{intro}</Stack>
+        </Text>
+      ) : null}
       {editing ? said : null}
       {/* A lost answer can only resend the request already fixed from these fields. */}
-      <fieldset disabled={!editing || mutation.isPending} className="min-w-0 space-y-4">
-        <ChangeFields fields={fields} confirm={confirm} error={mutation.error} problem={problem} />
+      <fieldset disabled={!editing || mutation.isPending}>
+        <Stack>
+          <ChangeFields fields={fields} confirm={confirm} error={mutation.error} problem={problem} />
+        </Stack>
       </fieldset>
       {editing ? null : <div ref={notice}>{said}</div>}
       {mutation.isPending ? waiting : null}
@@ -367,7 +374,7 @@ function Said({
     return (
       <FormError>
         {said ? <p>{said}</p> : null}
-        <p className="text-t2">{t("change.unknown")}</p>
+        <Text tone="muted">{t("change.unknown")}</Text>
       </FormError>
     );
   }
@@ -379,19 +386,22 @@ function Said({
 function Result({ replayed, verdict, children }: { replayed: boolean; verdict?: boolean; children: ReactNode }) {
   const { t } = useTranslation();
   return (
-    <div className="space-y-4">
+    <Stack>
       {verdict ? null : (
-        <p role="status" className="flex items-start gap-2 text-t1">
-          <Icon name="check" className="mt-0.5 shrink-0 text-ok" />
-          <span>{t("change.done")}</span>
-        </p>
+        <div role="status">
+          <Tag tone="ok" icon="check">
+            {t("change.done")}
+          </Tag>
+        </div>
       )}
       {replayed ? (
-        <p role="status" className="rounded-btn bg-s2 px-3 py-2 text-t2">
-          {t("change.replayed")}
-        </p>
+        <div role="status">
+          <Tag>{t("change.replayed")}</Tag>
+        </div>
       ) : null}
-      <div className="space-y-2 text-t2">{children}</div>
-    </div>
+      <Text as="div" tone="muted">
+        <Stack gap={8}>{children}</Stack>
+      </Text>
+    </Stack>
   );
 }

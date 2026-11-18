@@ -1,6 +1,6 @@
 import { ApiError } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Icon, TextField } from "@axiom/ui";
+import { ActionButton, DataState, Field } from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -70,10 +70,9 @@ function Values<T extends ValueView>({ view, ...form }: ValueForm<T> & { view: T
       <Facts
         title={title}
         action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
+          <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {edit}
-          </Button>
+          </ActionButton>
         }
         rows={rows}
       />
@@ -124,7 +123,7 @@ function Fields({
   return (
     <>
       {fields.map((field) => (
-        <TextField
+        <Field
           key={field.key}
           name={field.key}
           label={field.label}

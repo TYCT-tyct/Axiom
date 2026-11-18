@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { TextField } from "@axiom/ui";
+import { CheckField, Cluster, Field, Fieldset, Grid, Select, Stack, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -182,8 +182,8 @@ function LegacySearchFields({ view, error }: { view: Settings; error: unknown })
   const errors = useErrors();
   const saved = enginesOf(view)[0];
   return (
-    <div className="flex flex-col gap-4">
-      <TextField
+    <Stack>
+      <Field
         label={t("settings.search.url")}
         hint={t("settings.search.urlHint")}
         name="url"
@@ -192,7 +192,7 @@ function LegacySearchFields({ view, error }: { view: Settings; error: unknown })
         defaultValue={saved?.url ?? ""}
         error={errors.field(error, "settings/url")}
       />
-      <TextField
+      <Field
         label={t("settings.search.key")}
         hint={t("settings.search.keyHint")}
         name="key"
@@ -200,17 +200,17 @@ function LegacySearchFields({ view, error }: { view: Settings; error: unknown })
         autoComplete="new-password"
         error={errors.field(error, "settings")}
       />
-    </div>
+    </Stack>
   );
 }
 
 function SearchFields({ rows, error }: { rows: (ShownEngine | undefined)[]; error: unknown }) {
   return (
-    <div className="flex flex-col gap-6">
+    <Stack gap={24}>
       {rows.map((engine, i) => (
         <SearchEngineFields key={engine?.id ?? `new-${i}`} engine={engine} index={i} error={error} />
       ))}
-    </div>
+    </Stack>
   );
 }
 
@@ -226,46 +226,44 @@ function SearchEngineFields({
   const { t } = useTranslation();
   const errors = useErrors();
   return (
-    <fieldset className="flex flex-col gap-3 border-t pt-4">
-      <legend className="text-sm font-medium">{engine?.name || t("settings.search.newEngine")}</legend>
-      {engine ? <input type="hidden" name={`id.${index}`} value={engine.id} /> : null}
-      <div className="grid grid-cols-2 gap-3">
-        <TextField
-          label={t("settings.search.name")}
-          hint={t("settings.search.nameHint")}
-          name={`name.${index}`}
-          autoComplete="off"
-          defaultValue={engine?.name ?? ""}
-          error={errors.field(error, "settings/engines")}
-        />
-        <label className="flex flex-col gap-1 text-sm">
-          <span>{t("settings.search.kind")}</span>
-          <select name={`kind.${index}`} defaultValue={engine?.kind ?? "searxng"} className="rounded border p-2">
+    <Fieldset legend={engine?.name || t("settings.search.newEngine")}>
+      <Stack gap={12}>
+        {engine ? <input type="hidden" name={`id.${index}`} value={engine.id} /> : null}
+        <Grid columns={2} gap={12}>
+          <Field
+            label={t("settings.search.name")}
+            hint={t("settings.search.nameHint")}
+            name={`name.${index}`}
+            autoComplete="off"
+            defaultValue={engine?.name ?? ""}
+            error={errors.field(error, "settings/engines")}
+          />
+          <Select label={t("settings.search.kind")} name={`kind.${index}`} defaultValue={engine?.kind ?? "searxng"}>
             <option value="searxng">{t("settings.search.searxng")}</option>
             <option value="firecrawl">{t("settings.search.firecrawl")}</option>
-          </select>
-        </label>
-      </div>
-      <TextField
-        label={t("settings.search.url")}
-        hint={t("settings.search.urlHint")}
-        name={`url.${index}`}
-        inputMode="url"
-        autoComplete="off"
-        defaultValue={engine?.url ?? ""}
-        error={errors.field(error, "settings/engines/url")}
-      />
-      <TextField
-        label={t("settings.search.key")}
-        hint={t("settings.search.keyHint")}
-        name={`key.${index}`}
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(error, "settings")}
-      />
-      <SearchEngineCosts engine={engine} index={index} />
-      <SearchEngineSwitches engine={engine} index={index} />
-    </fieldset>
+          </Select>
+        </Grid>
+        <Field
+          label={t("settings.search.url")}
+          hint={t("settings.search.urlHint")}
+          name={`url.${index}`}
+          inputMode="url"
+          autoComplete="off"
+          defaultValue={engine?.url ?? ""}
+          error={errors.field(error, "settings/engines/url")}
+        />
+        <Field
+          label={t("settings.search.key")}
+          hint={t("settings.search.keyHint")}
+          name={`key.${index}`}
+          type="password"
+          autoComplete="new-password"
+          error={errors.field(error, "settings")}
+        />
+        <SearchEngineCosts engine={engine} index={index} />
+        <SearchEngineSwitches engine={engine} index={index} />
+      </Stack>
+    </Fieldset>
   );
 }
 
@@ -273,34 +271,34 @@ function SearchEngineCosts({ engine, index }: { engine: ShownEngine | undefined;
   const { t } = useTranslation();
   return (
     <>
-      <div className="grid grid-cols-3 gap-3">
-        <TextField
+      <Grid columns={3} gap={12}>
+        <Field
           label={t("settings.search.cost")}
           name={`cost.${index}`}
           inputMode="decimal"
           defaultValue={engine?.cost_per_search ?? "0"}
         />
-        <TextField
+        <Field
           label={t("settings.search.resultCost")}
           name={`result.${index}`}
           inputMode="decimal"
           defaultValue={engine?.cost_per_extra_result ?? "0"}
         />
-        <TextField
+        <Field
           label={t("settings.search.markup")}
           hint={t("settings.search.markupHint")}
           name={`markup.${index}`}
           inputMode="decimal"
           defaultValue={engine?.markup ?? "0"}
         />
-      </div>
+      </Grid>
       {engine ? (
-        <p className="text-xs opacity-70">
+        <Text size="sm" tone="muted">
           {t("settings.search.published", {
             search: engine.price_per_search,
             result: engine.price_per_extra_result,
           })}
-        </p>
+        </Text>
       ) : null}
     </>
   );
@@ -309,16 +307,18 @@ function SearchEngineCosts({ engine, index }: { engine: ShownEngine | undefined;
 function SearchEngineSwitches({ engine, index }: { engine: ShownEngine | undefined; index: number }) {
   const { t } = useTranslation();
   return (
-    <div className="flex gap-6 text-sm">
-      <label className="flex items-center gap-2">
-        <input type="checkbox" name={`enabled.${index}`} defaultChecked={engine?.enabled ?? true} />
-        {t("settings.search.enabled")}
-      </label>
-      <label className="flex items-center gap-2">
-        <input type="checkbox" name={`default.${index}`} defaultChecked={engine?.default ?? false} />
-        {t("settings.search.default")}
-      </label>
-    </div>
+    <Cluster gap={24}>
+      <CheckField
+        label={t("settings.search.enabled")}
+        name={`enabled.${index}`}
+        defaultChecked={engine?.enabled ?? true}
+      />
+      <CheckField
+        label={t("settings.search.default")}
+        name={`default.${index}`}
+        defaultChecked={engine?.default ?? false}
+      />
+    </Cluster>
   );
 }
 
