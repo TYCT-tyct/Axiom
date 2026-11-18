@@ -9,7 +9,7 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { Button, Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
+import { Button, Cluster, Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -61,19 +61,19 @@ function isStale(error: unknown) {
 function StaleNote({ stale }: { stale: Stale }) {
   const { t } = useTranslation();
   if (stale.state === "reading") {
-    return <p className="text-label">{t("routingPresets.form.staleReading")}</p>;
+    return <p>{t("routingPresets.form.staleReading")}</p>;
   }
   if (stale.state === "read") {
-    return <p className="text-label">{t("routingPresets.form.staleHint")}</p>;
+    return <p>{t("routingPresets.form.staleHint")}</p>;
   }
   if (stale.state === "failed") {
     return (
-      <p className="space-y-2 text-label">
-        <span>{t("routingPresets.form.staleFailed")}</span>
+      <Cluster gap={8}>
+        <p>{t("routingPresets.form.staleFailed")}</p>
         <Button size="sm" onClick={stale.read}>
           {t("routingPresets.form.retry")}
         </Button>
-      </p>
+      </Cluster>
     );
   }
   return null;

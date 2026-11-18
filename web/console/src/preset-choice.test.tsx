@@ -296,7 +296,8 @@ it.each([
   } else {
     expect(inherited).toBe(`routingPresets.${none}`);
   }
-  expect(texts(dialog.querySelectorAll("p.text-warn"))).toEqual(refused);
+  // The warnings are the shared Note's: its title is the sentence, in a <strong>.
+  expect(texts(dialog.querySelectorAll("strong"))).toEqual(refused);
   // The preset a key made now takes is marked on its row, by its slug.
   const badged = [...page.container.querySelectorAll("tbody tr")].filter((row) =>
     row.textContent?.includes("routingPresets.isDefault"),

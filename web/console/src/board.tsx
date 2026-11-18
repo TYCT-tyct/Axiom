@@ -1,21 +1,23 @@
 import { DataState, EmptyState } from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { type KeyboardEvent as KeyEvent, useEffect, useState } from "react";
+import { type KeyboardEvent as KeyEvent, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 
 // What the console's pages ported from the AxApp board share. The board comes in two forms, the wide one and the phone's,
 // each a region of its own, so a page renders the one the window is wide enough for: from 1024px the wide board, as the
-// shell switches too (the board's own container queries then measure the frame).
+// shell switches too (the board's own container queries then measure the frame). The width is read as the page first
+// renders, not in an effect: the form may not change under a page that just took focus, which is how a phone shows
+// itself as the wide board for a moment and the focus lands on a heading that is then replaced.
 export function useWide() {
-  const [wide, setWide] = useState(true);
-  useEffect(() => {
-    const query = window.matchMedia("(min-width: 1024px)");
-    const update = () => setWide(query.matches);
-    update();
-    query.addEventListener("change", update);
-    return () => query.removeEventListener("change", update);
-  }, []);
-  return wide;
+  return useSyncExternalStore(
+    (notify) => {
+      const query = window.matchMedia("(min-width: 1024px)");
+      query.addEventListener("change", notify);
+      return () => query.removeEventListener("change", notify);
+    },
+    () => window.matchMedia("(min-width: 1024px)").matches,
+    () => true,
+  );
 }
 
 // A board element the page makes interactive — a row's name, which the board draws as text — takes a button's keys and

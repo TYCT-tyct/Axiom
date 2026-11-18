@@ -1,6 +1,6 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { can, RulesSummary, useErrors, useSession } from "@axiom/app";
-import { Button, Dialog, FormError } from "@axiom/ui";
+import { Button, Cluster, Dialog, FormError, IdText, Note, Stack } from "@axiom/ui";
 import { type UseQueryResult, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -33,18 +33,16 @@ export function PresetActionsDialog({ preset, onClose }: { preset: Preset; onClo
   const own = preset.scope === "account" || preset.scope === "workspace";
   return (
     <Dialog title={preset.name} onClose={onClose}>
-      <div className="space-y-4">
-        <div className="text-label">
-          <p className="font-mono text-t4">{preset.slug}</p>
+      <Stack gap={16}>
+        <div>
+          <IdText value={preset.slug} />
           <RulesSummary summary={preset.summary} />
-          {preset.keys === undefined ? null : (
-            <p className="text-t3">{t("routingPresets.keysBound", { count: preset.keys })}</p>
-          )}
+          {preset.keys === undefined ? null : <p>{t("routingPresets.keysBound", { count: preset.keys })}</p>}
         </div>
         <Defaults preset={preset} />
-        <div className="flex flex-wrap gap-2">
+        <Cluster gap={8}>
           {!manage ? (
-            <p className="text-label text-t3">{t("routingPresets.notice")}</p>
+            <p>{t("routingPresets.notice")}</p>
           ) : (
             <>
               <Button size="md" onClick={() => setNext(own ? "edit" : "copy")}>
@@ -62,8 +60,8 @@ export function PresetActionsDialog({ preset, onClose }: { preset: Preset; onClo
               ) : null}
             </>
           )}
-        </div>
-      </div>
+        </Cluster>
+      </Stack>
     </Dialog>
   );
 }
@@ -78,33 +76,33 @@ export function Defaults({ preset }: { preset?: Preset }) {
   const errors = useErrors();
   const manage = can(useSession(), "api_keys.manage");
   const latest = useQuery(routingDefaultQuery);
-  const [note, setNote] = useState<Note>(null);
+  const [note, setNote] = useState<Result>(null);
   const { save, reload, write } = useDefaultWrite(latest, setNote);
   const read = latest.data;
   const isAccountDefault = read !== undefined && preset !== undefined && read.preset_id === preset.id;
   const settable = preset !== undefined && preset.scope !== "workspace" && !isAccountDefault;
   if (latest.isError) {
     return (
-      <div className="space-y-2">
-        <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
+      <Stack gap={8}>
+        <p>{t("routingPresets.defaults.hint")}</p>
         <FormError>{errors.message(latest.error)}</FormError>
         <Button size="md" disabled={reload.isPending} onClick={() => reload.mutate("read")}>
           {t("routingPresets.defaults.reload")}
         </Button>
-      </div>
+      </Stack>
     );
   }
   if (read === undefined) {
     return (
-      <div className="space-y-2">
-        <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
-        <p className="text-label text-t3">{t("routingPresets.defaults.loading")}</p>
-      </div>
+      <Stack gap={8}>
+        <p>{t("routingPresets.defaults.hint")}</p>
+        <p>{t("routingPresets.defaults.loading")}</p>
+      </Stack>
     );
   }
   return (
-    <div className="space-y-2">
-      <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
+    <Stack gap={8}>
+      <p>{t("routingPresets.defaults.hint")}</p>
       <Inherited read={read} />
       <NewKeysWarning />
       {manage ? (
@@ -119,7 +117,7 @@ export function Defaults({ preset }: { preset?: Preset }) {
       {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
       {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
       {note ? <p role="status">{t(NOTES[note])}</p> : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -141,7 +139,7 @@ function DefaultWrite({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap gap-2">
+    <Cluster gap={8}>
       {preset ? (
         <Button size="md" disabled={busy} onClick={() => onWrite(preset.id)}>
           {t("routingPresets.defaults.set")}
@@ -152,17 +150,17 @@ function DefaultWrite({
           {t(isAccountDefault ? "routingPresets.defaults.clear" : "routingPresets.defaults.clearAccount")}
         </Button>
       ) : null}
-    </div>
+    </Cluster>
   );
 }
 
 // What the last write said: the account's default was set, cleared, or read again after another change raced with it.
-type Note = "saved" | "cleared" | "reloaded" | null;
+type Result = "saved" | "cleared" | "reloaded" | null;
 
 // useDefaultWrite points the account's default at a preset, or clears it. The version the page read goes with the
 // change; a change made elsewhere meanwhile is refused (stale_revision) instead of overwritten, and the page then loads
 // the default as it now is, so the next press sends the current version.
-function useDefaultWrite(latest: UseQueryResult<Schemas["AccountRoutingDefault"]>, setNote: (note: Note) => void) {
+function useDefaultWrite(latest: UseQueryResult<Schemas["AccountRoutingDefault"]>, setNote: (note: Result) => void) {
   const queryClient = useQueryClient();
   const save = useMutation({
     mutationFn: (presetId: string | null) =>
@@ -208,7 +206,7 @@ function Inherited({ read }: { read: Schemas["AccountRoutingDefault"] }) {
     return null;
   }
   return (
-    <p className="text-label text-t3">
+    <p>
       {newKeys.layer !== "workspace" && newKeys.name
         ? t("routingPresets.defaults.noneNamed", { name: newKeys.name })
         : t("routingPresets.defaults.none")}
@@ -226,14 +224,10 @@ function NewKeysWarning() {
   const byWorkspace = newKeys.layer === "workspace";
   if (newKeys.refused) {
     return (
-      <p className="text-label text-warn">
-        {t(byWorkspace ? "routingPresets.defaults.refusedWorkspace" : "routingPresets.defaults.refused")}
-      </p>
+      <Note title={t(byWorkspace ? "routingPresets.defaults.refusedWorkspace" : "routingPresets.defaults.refused")} />
     );
   }
   return byWorkspace && newKeys.id ? (
-    <p className="text-label text-warn [overflow-wrap:anywhere]">
-      {t("routingPresets.defaults.workspace", { name: newKeys.name ?? newKeys.id })}
-    </p>
+    <Note title={t("routingPresets.defaults.workspace", { name: newKeys.name ?? newKeys.id })} />
   ) : null;
 }

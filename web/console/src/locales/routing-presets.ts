@@ -52,7 +52,7 @@ export const zh = {
     rulesRefused: "规则没有通过检查：{{detail}}",
     staleHint: "列表已重新读取。关掉对话框重新打开，再改一次。",
     staleReading: "预设刚被别处改过，正在读取最新的…",
-    staleFailed: "预设刚被别处改过，但列表没能重新读取。",
+    staleFailed: "预设刚被别处改过。列表没能重新读取。",
     retry: "重新读取",
   },
   disable: {
