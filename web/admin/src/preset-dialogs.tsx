@@ -10,7 +10,7 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { ActionButton, DataState, Field, Grid, Select, Stack, Tag, Text, useFormat } from "@axiom/ui";
+import { ActionButton, DataState, Field, Grid, Select, Stack, Text, useFormat } from "@axiom/ui";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
@@ -89,7 +89,7 @@ export function DefaultCard({
         <>
           <Facts
             title={title}
-            action={edit}
+            actions={edit}
             rows={[
               [t("routingPresets.defaults.label"), <Chosen key="chosen" layer={layer} view={view} presets={presets} />],
             ]}
@@ -414,9 +414,9 @@ export function DisablePresetDialog({
         <>
           {pointing.map((layer) => (
             <div key={layer.scope}>
-              <Tag tone="warn" icon="alert">
+              <Text tone="warn" icon="alert">
                 {t(`routingPresets.disableDefault.${layer.scope}`)}
-              </Tag>
+              </Text>
             </div>
           ))}
           {/* A node that does not count the keys gives no number, and then none is said. */}

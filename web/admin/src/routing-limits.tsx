@@ -139,7 +139,7 @@ export function NodeState<T>({
     return (
       <Facts
         title={title}
-        action={
+        actions={
           <ActionButton disabled={query.isFetching} onClick={() => void query.refetch()} icon="refresh">
             {t("routingPresets.limits.retry")}
           </ActionButton>
@@ -185,7 +185,7 @@ function LimitsCard({ view }: { view: View }) {
     <>
       <Facts
         title={t("routingPresets.limits.title")}
-        action={
+        actions={
           <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("routingPresets.limits.edit")}
           </ActionButton>

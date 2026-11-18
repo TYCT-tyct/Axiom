@@ -203,7 +203,7 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
       <Td align="end">{keys}</Td>
       <Td align="end">{preset.version}</Td>
       {manage ? (
-        <Td shrink>
+        <Td actions>
           {fixed ? null : (
             <Cluster justify="end">
               {(["edit", "disable"] as const).map((kind) => (

@@ -63,8 +63,7 @@
 
 /* As many columns as leave each at least --min wide, top-aligned so a field's hint never pushes its neighbours. */
 .m12,
-.m16,
-.m20 {
+.m16 {
   grid-template-columns: repeat(auto-fill, minmax(min(var(--min), 100%), 1fr));
   align-items: start;
 }
@@ -75,10 +74,6 @@
 
 .m16 {
   --min: 16rem;
-}
-
-.m20 {
-  --min: 20rem;
 }
 
 /* Four columns become two on a tablet; every grid is one column on a phone. */

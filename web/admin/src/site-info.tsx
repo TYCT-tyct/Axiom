@@ -39,7 +39,7 @@ function Card({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: AdminSch
       <Facts
         title={t("settings.site.title")}
         rows={[[t("settings.site.name"), view.name ?? "—"]]}
-        action={
+        actions={
           editable ? (
             <ActionButton onClick={() => setOpen(true)} icon="pencil">
               {t("settings.site.edit")}

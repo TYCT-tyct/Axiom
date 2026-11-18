@@ -19,7 +19,7 @@ import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
-import { Code, Head, State } from "../parts";
+import { Code, Head, State, SubLine } from "../parts";
 import { paymentRefundsQuery } from "../queries";
 import { approvalOutcome, type RefundApprovalOutcome } from "./refund-approval";
 import { refundTone, shortId } from "./states";
@@ -82,14 +82,6 @@ type RefundRowProps = {
   onDecide: (kind: Decision["kind"]) => void;
 };
 
-function Small({ children }: { children: ReactNode }) {
-  return (
-    <Text as="div" size="sm" tone="faint">
-      {children}
-    </Text>
-  );
-}
-
 function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
   const { t } = useTranslation();
   const format = useFormat();
@@ -98,11 +90,11 @@ function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
     <tr>
       <Td>
         <Code title={refund.id}>{shortId(refund.id)}</Code>
-        <Small>{refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"}</Small>
-        <Small>
+        <SubLine>{refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"}</SubLine>
+        <SubLine>
           {t("orders.refund.col.order")} <Mono title={refund.order_id}>{shortId(refund.order_id)}</Mono>
-        </Small>
-        {refund.via === "offline" ? <Small>{t("orders.refund.viaOffline")}</Small> : null}
+        </SubLine>
+        {refund.via === "offline" ? <SubLine>{t("orders.refund.viaOffline")}</SubLine> : null}
       </Td>
       <Td>
         <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>
@@ -111,17 +103,17 @@ function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
       <Td align="end">{refund.amount ? format.pay(refund.amount) : "—"}</Td>
       <Td main>
         {refund.reason ?? "—"}
-        <Small>
+        <SubLine>
           <Mono title={refund.requested_by ?? refund.requested_by_agent}>
             {refund.requested_by ?? refund.requested_by_agent ?? ""}
           </Mono>
-        </Small>
+        </SubLine>
       </Td>
       <Td>
         <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
-        {refund.provider_ref ? <Small>{refund.provider_ref}</Small> : null}
+        {refund.provider_ref ? <SubLine>{refund.provider_ref}</SubLine> : null}
       </Td>
-      <Td shrink>
+      <Td actions>
         <RefundActions refund={refund} self={self} firstBySelf={firstBySelf} onDecide={onDecide} />
       </Td>
     </tr>

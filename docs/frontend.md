@@ -292,5 +292,5 @@ logo 经同源公开接口按 SHA-256 提供，缓存一年；换图换地址，
 
 以下两项等负责人在 [#747](https://github.com/TYCT-tyct/Axiom/issues/747) 拍板，定了再改成定论。未定之前各项只许做下面写明的事，没写的不做：
 
-- **删除 Tailwind**：技术选型的变更（[总体架构](architecture.md#技术选型)）。推荐迁移期冻结，全部迁完后用最后一个清理 PR 删除 Tailwind、cva、tailwind-merge、`cn.ts`、`legacy.css` 和旧组件；备选是长期保留 Tailwind 与 CSS Modules 并存（样式两套来源，页面里的工具类会继续扩散）。未定之前不删 Tailwind、cva、tailwind-merge 和旧组件，旧页面照常使用；新组件按「样式归组件」写 CSS Modules。
+- **删除 Tailwind**：技术选型的变更（[总体架构](architecture.md#技术选型)）。推荐迁移期冻结，全部迁完后用最后一个清理 PR 删除 Tailwind、cva、tailwind-merge、`cn.ts`、`legacy.css` 和旧组件；备选是长期保留 Tailwind 与 CSS Modules 并存（样式两套来源，页面里的工具类会继续扩散）。负责人 2026-11-15 同意删除，在最后一个清理 PR 执行；未删之前旧页面照常使用 Tailwind，新组件按「样式归组件」写 CSS Modules。cva 只服务于旧 Button，Button 改用 ActionButton 的样式后已无调用，随之删除。
 - **设计稿里超出产品需求的内容**：上文「不做」的各项按[产品需求](product.md)本来就不做，这里只请负责人确认这份清单。未定之前，清单里的内容和产品需求之外的功能一律不做。

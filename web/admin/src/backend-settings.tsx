@@ -95,7 +95,7 @@ function BackendFacts({ prefix, view, action }: { prefix: BackendPrefix; view: B
   if (view.restart_required) {
     rows.push([t(`${prefix}.restart`), t(`${prefix}.restartBody`)]);
   }
-  return <Facts title={t(`${prefix}.title`)} rows={rows} action={action} />;
+  return <Facts title={t(`${prefix}.title`)} rows={rows} actions={action} />;
 }
 
 function BackendEditDialog<T extends BackendView>({

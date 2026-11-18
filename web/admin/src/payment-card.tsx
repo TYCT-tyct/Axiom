@@ -51,7 +51,7 @@ function PaymentFacts({
             bufferKnown ? `${formatPercent(view.top_up_buffer_ppm ?? 0)}%` : t("settings.payments.bufferUnavailable"),
           ],
         ]}
-        action={
+        actions={
           <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.payments.edit")}
           </ActionButton>

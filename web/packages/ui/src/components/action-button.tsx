@@ -17,6 +17,7 @@ export function ActionButton({
   asChild = false,
   pending = false,
   square = false,
+  wide = false,
   disabled,
   children,
   ...props
@@ -29,6 +30,8 @@ export function ActionButton({
   pending?: boolean;
   // square marks a link that holds only an icon (asChild), which the button cannot tell from its children.
   square?: boolean;
+  // wide fills its row, as a form's one submit button does on a narrow page.
+  wide?: boolean;
   children?: ReactNode;
 } & Omit<ComponentProps<"button">, "className" | "style" | "type" | "children">) {
   const className = classes(
@@ -63,28 +66,29 @@ function ButtonIcon({ name }: { name: GlyphName | IconName }) {
   );
 }
 
-// Button and SubmitButton under the names and variants the pages were written with (#747); className is the utility
-// classes some pages still add. Pages move to ActionButton as they are restyled, and these go with the last of them.
+// Button and SubmitButton under the names and variants the pages were written with (#747). Pages move to ActionButton
+// as they are restyled, and these go with the last of them.
 const variants = { primary: "pri", secondary: "sec", ghost: "gho", danger: "dan" } as const;
 
 export function Button({
   variant = "secondary",
   size = "sm",
   asChild = false,
-  className,
+  wide = false,
   type = "button",
   ...props
-}: Omit<ComponentProps<"button">, "style"> & {
+}: Omit<ComponentProps<"button">, "style" | "className"> & {
   variant?: keyof typeof variants | null;
   size?: "lg" | "md" | "sm" | "icon" | null;
   asChild?: boolean;
+  wide?: boolean;
 }) {
   const look = classes(
     s.root,
     s[variants[variant ?? "secondary"]],
     (size === "sm" || size === "icon") && s.sm,
     size === "icon" && s.square,
-    className,
+    wide && s.wide,
   );
   return asChild ? <Slot.Root className={look} {...props} /> : <button type={type} className={look} {...props} />;
 }

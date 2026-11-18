@@ -1,6 +1,6 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, Cluster, DataState, Field, Stack, Text, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Field, ImageBox, Stack, Text, useFormat } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -88,7 +88,7 @@ export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
           <>
             <Facts
               title={t("settings.logo.title")}
-              action={
+              actions={
                 <Cluster>
                   <ActionButton onClick={() => setSetting(true)} icon="pencil">
                     {t("settings.logo.set")}
@@ -119,7 +119,7 @@ function Current({ logo }: { logo: Logo }) {
       </Text>
     );
   }
-  return <img src={logo.data_url} alt="" width={40} height={40} />;
+  return <ImageBox src={logo.data_url} size={40} />;
 }
 
 // useLogoFile reads a chosen file into the contract's upload shape, with a preview, and says what is wrong with one it
@@ -188,7 +188,7 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
           />
           {chosen ? (
             <Cluster gap={12}>
-              <img src={chosen.preview} alt="" width={48} height={48} />
+              <ImageBox src={chosen.preview} size={48} />
               <Text as="span" tone="muted">
                 {chosen.name}
               </Text>

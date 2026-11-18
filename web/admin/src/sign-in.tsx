@@ -32,7 +32,7 @@ function SignInCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Vi
       <Facts
         title={t("settings.signIn.title")}
         rows={rows}
-        action={
+        actions={
           <ActionButton onClick={() => setEdit(true)} icon="pencil">
             {t("settings.signIn.edit")}
           </ActionButton>

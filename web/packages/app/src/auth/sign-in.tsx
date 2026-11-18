@@ -60,7 +60,7 @@ function SignInForm({
         ) : null}
         <TextField label={t("auth.email")} name="email" autoComplete="username" inputMode="email" />
         <TextField label={t("auth.password")} name="password" type="password" autoComplete="current-password" />
-        <SubmitButton pending={signIn.isPending} className="w-full">
+        <SubmitButton pending={signIn.isPending} wide>
           {t("auth.signIn.submit")}
         </SubmitButton>
       </form>

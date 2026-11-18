@@ -10,6 +10,24 @@
   color: var(--t1);
 }
 
+.ordered {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding-left: 20px;
+  list-style: decimal;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+}
+
+.plain {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .item {
   min-width: 0;
   overflow-wrap: anywhere;

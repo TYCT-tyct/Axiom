@@ -9,7 +9,6 @@ import {
   PageHead,
   parseMoney,
   Select,
-  Tag,
   Text,
   useFormat,
 } from "@axiom/ui";
@@ -162,7 +161,7 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
     <>
       <Facts
         title={t("settings.title")}
-        action={
+        actions={
           <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.edit")}
           </ActionButton>
@@ -317,9 +316,9 @@ function EditDialog({
       verdict
       done={(out) => (
         <div role="status">
-          <Tag tone={out.modelPricesSaved ? "ok" : "bad"} icon={out.modelPricesSaved ? "check" : "alert"}>
+          <Text tone={out.modelPricesSaved ? "ok" : "bad"} icon={out.modelPricesSaved ? "check" : "alert"}>
             {t(out.modelPricesSaved ? "settings.saved" : "settings.publicPrices.notSaved")}
-          </Tag>
+          </Text>
         </div>
       )}
       onClose={onClose}

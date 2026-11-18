@@ -69,7 +69,7 @@ function Values<T extends ValueView>({ view, ...form }: ValueForm<T> & { view: T
     <>
       <Facts
         title={title}
-        action={
+        actions={
           <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {edit}
           </ActionButton>

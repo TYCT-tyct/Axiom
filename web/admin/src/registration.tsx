@@ -68,7 +68,7 @@ function RegistrationCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; vi
       <Facts
         title={t("settings.registration.title")}
         rows={rows}
-        action={
+        actions={
           <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.registration.edit")}
           </ActionButton>

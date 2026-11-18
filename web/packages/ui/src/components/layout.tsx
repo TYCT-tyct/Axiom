@@ -30,7 +30,7 @@ export function Grid({
   min,
   gap = 16,
   children,
-}: ({ columns: 2 | 3 | 4; min?: never } | { min: "12rem" | "16rem" | "20rem"; columns?: never }) & {
+}: ({ columns: 2 | 3 | 4; min?: never } | { min: "12rem" | "16rem"; columns?: never }) & {
   gap?: Gap;
   children: ReactNode;
 }) {

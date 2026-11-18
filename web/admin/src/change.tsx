@@ -396,7 +396,9 @@ function Result({ replayed, verdict, children }: { replayed: boolean; verdict?: 
       )}
       {replayed ? (
         <div role="status">
-          <Tag>{t("change.replayed")}</Tag>
+          <Text tone="muted" icon="refresh">
+            {t("change.replayed")}
+          </Text>
         </div>
       ) : null}
       <Text as="div" tone="muted">

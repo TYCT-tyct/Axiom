@@ -62,7 +62,7 @@ export function SuspensionCard({ suspension }: { suspension: Suspension }) {
     <>
       <Facts
         title={t("routingPresets.suspension.title")}
-        action={
+        actions={
           manage ? (
             <ActionButton onClick={() => setTarget(!suspended)}>
               {t(suspended ? "routingPresets.suspension.resume" : "routingPresets.suspension.suspend")}

@@ -183,7 +183,7 @@ function Row({ code }: { code: RedeemCode }) {
       <Td shrink>
         <Time at={code.expires_at} />
       </Td>
-      <Td align="end" shrink>
+      <Td align="end" actions>
         {code.state === "enabled" ? (
           <ActionButton size="sm" onClick={() => setDisabling(true)}>
             {t("redeem.disable")}

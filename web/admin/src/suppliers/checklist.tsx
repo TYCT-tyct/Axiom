@@ -1,4 +1,4 @@
-import { ActionButton, Card, Cluster, SettingRow } from "@axiom/ui";
+import { ActionButton, Card, Cluster, List, SettingRow } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { State } from "../parts";
 import type { SupplierView } from "../queries";
@@ -20,30 +20,33 @@ export function Checklist({ detail, onOpen }: { detail: Detail; onOpen: ((open: 
   }
   return (
     <Card layout="rows" title={t("suppliers.steps.title")}>
-      {all.map((step) => (
-        <SettingRow
-          key={step.key}
-          title={t(`suppliers.steps.${step.key}.title`)}
-          detail={
-            step.done
-              ? undefined
-              : step.key === "keys" && step.failed
-                ? t("suppliers.steps.keys.failed", { count: step.failed })
-                : t(`suppliers.steps.${step.key}.todo`)
-          }
-        >
-          <Cluster>
-            <State tone={step.done ? "good" : "warn"}>
-              {step.done ? t("suppliers.steps.done") : t("suppliers.steps.waiting")}
-            </State>
-            {!step.done && step.open && onOpen ? (
-              <ActionButton size="sm" onClick={() => step.open && onOpen(step.open)}>
-                {t("suppliers.unit.open")}
-              </ActionButton>
-            ) : null}
-          </Cluster>
-        </SettingRow>
-      ))}
+      <List ordered plain>
+        {all.map((step) => (
+          <SettingRow
+            as="li"
+            key={step.key}
+            title={t(`suppliers.steps.${step.key}.title`)}
+            detail={
+              step.done
+                ? undefined
+                : step.key === "keys" && step.failed
+                  ? t("suppliers.steps.keys.failed", { count: step.failed })
+                  : t(`suppliers.steps.${step.key}.todo`)
+            }
+          >
+            <Cluster>
+              <State tone={step.done ? "good" : "warn"}>
+                {step.done ? t("suppliers.steps.done") : t("suppliers.steps.waiting")}
+              </State>
+              {!step.done && step.open && onOpen ? (
+                <ActionButton size="sm" onClick={() => step.open && onOpen(step.open)}>
+                  {t("suppliers.unit.open")}
+                </ActionButton>
+              ) : null}
+            </Cluster>
+          </SettingRow>
+        ))}
+      </List>
     </Card>
   );
 }

@@ -79,7 +79,7 @@ export function KeyLimitsCard({
       <Facts
         title={t(`settings.keyLimits.title.${level}`)}
         rows={rows}
-        action={
+        actions={
           editable ? (
             <ActionButton onClick={() => setOpen(true)} icon="pencil">
               {t("settings.keyLimits.edit")}

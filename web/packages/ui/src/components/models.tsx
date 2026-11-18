@@ -13,8 +13,8 @@ import {
   RateTable,
   SearchEnginePrices,
 } from "./model-pricing";
-import { Badge } from "./panel";
 import { Table, Td, Th } from "./table";
+import { Tag as Badge } from "./tag";
 
 // The public models and prices page: what a visitor may see of the catalog, at the price of the audience that asked.
 // Every member but the identity is optional, so a page served by an older node shows what it has and marks the rest

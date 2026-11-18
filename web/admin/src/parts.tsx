@@ -1,45 +1,28 @@
 import { can, readForm, useSession } from "@axiom/app";
 import { CodeBlock } from "@axiom/boards/ds";
-import {
-  ActionButton,
-  Card,
-  Cluster,
-  Facts as FactList,
-  Grid,
-  Mono,
-  Select,
-  Stack,
-  Tag,
-  Th,
-  useFormat,
-} from "@axiom/ui";
+import { ActionButton, Card, Cluster, Grid, Select, Stack, Tag, Text, Th, useFormat } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatJSON } from "./lossless";
 
 export { toInstant, toLocalInput } from "@axiom/app";
-export { PageBody } from "@axiom/ui";
+// Under the names the admin's pages use: a row of the things a page offers (Actions), what is known about one thing
+// (Facts), and an identifier or name the system gives (Code).
+export { Cluster as Actions, Facts, Mono as Code, PageBody } from "@axiom/ui";
 
-// A row of the things a page offers, such as its creating button.
-export function Actions({ children }: { children: ReactNode }) {
-  return <Cluster>{children}</Cluster>;
-}
-
-// Facts is what is known about one thing, label beside value; a value may be as long as the contract allows, so it
-// wraps anywhere.
-export function Facts({ title, action, rows }: { title: string; action?: ReactNode; rows: [string, ReactNode][] }) {
-  return <FactList title={title} actions={action} rows={rows} />;
+// SubLine is a cell's second line: when, through which merchant, the quote beside an amount, a provider's reference.
+export function SubLine({ children }: { children: ReactNode }) {
+  return (
+    <Text as="div" size="sm" tone="faint">
+      {children}
+    </Text>
+  );
 }
 
 // Time is a moment in the viewer's zone, or a dash for none.
 export function Time({ at }: { at: string | undefined }) {
   const format = useFormat();
   return at ? format.dateTime(new Date(at)) : "—";
-}
-
-// Code is an identifier or a name the system gives, in the monospaced face; it may be long, so it wraps anywhere.
-export function Code({ children, title }: { children: ReactNode; title?: string }) {
-  return <Mono title={title}>{children}</Mono>;
 }
 
 // Json keeps a record's shape: the route of a call and an audit entry's detail are nested and meant to be read as they

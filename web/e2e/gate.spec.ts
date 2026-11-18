@@ -87,8 +87,14 @@ for (const suite of suites) {
             const scroller = control.closest("table")?.parentElement;
             const frame = scroller?.getBoundingClientRect();
             const out = frame && box.width > 0 && (box.left < frame.left - 0.5 || box.right > frame.right + 0.5);
+            // A row's buttons are the column under a sticky header (the actions column), whatever its own cell says, so a
+            // cell that forgot to stick is caught.
             const cell = control.closest("td, th");
-            const sticky = cell !== null && getComputedStyle(cell).position === "sticky";
+            const header =
+              cell instanceof HTMLTableCellElement
+                ? control.closest("table")?.querySelector("thead tr")?.children[cell.cellIndex]
+                : undefined;
+            const sticky = header !== undefined && getComputedStyle(header).position === "sticky";
             const scrolls = scroller !== null && scroller !== undefined && scroller.scrollWidth > scroller.clientWidth;
             return out && (sticky || !scrolls) ? [control.getAttribute("aria-label") ?? control.textContent] : [];
           }),

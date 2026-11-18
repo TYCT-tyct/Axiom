@@ -1,5 +1,4 @@
 import type { AdminSchemas } from "@axiom/api";
-import { CodeBlock } from "@axiom/boards/ds";
 import { Card, Disclosure, List, ListItem, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
@@ -15,11 +14,10 @@ import {
   type Reason,
   reasonsOf,
 } from "./approvals";
-import { formatJSON } from "./lossless";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
 import { Rates } from "./models/prices";
-import { Facts, Head } from "./parts";
+import { Facts, Head, Json } from "./parts";
 import { MethodSummary } from "./pricing/describe";
 
 type Approval = AdminSchemas["OperationsApproval"];
@@ -401,7 +399,7 @@ export function RawData({ approval }: { approval: Approval }) {
               <Text as="h3" size="sm" tone="muted">
                 {label as string}
               </Text>
-              <CodeBlock label={label as string}>{formatJSON(value)}</CodeBlock>
+              <Json value={value} label={label as string} />
             </Stack>
           ))}
         </Stack>

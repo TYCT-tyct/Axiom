@@ -82,7 +82,7 @@ function MailFacts({ view, action }: { view: AdminSchemas["MailSettings"]; actio
   if (view.restart_required) {
     rows.push([t("settings.mail.restart"), t("settings.mail.restartBody")]);
   }
-  return <Facts title={t("settings.mail.title")} rows={rows} action={action} />;
+  return <Facts title={t("settings.mail.title")} rows={rows} actions={action} />;
 }
 
 function MailEditDialog({ view, onClose }: { view: AdminSchemas["MailSettings"]; onClose: () => void }) {

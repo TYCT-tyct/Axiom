@@ -3,14 +3,13 @@ import { LoadMore, useSession } from "@axiom/app";
 import { Card, DataState, EmptyState, Field, Mono, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { orderAmounts } from "../orders/amounts";
 import { CashMovements } from "../orders/cash";
 import { PaidBatches } from "../orders/paid-batches";
 import { RefundQueue, Refunds } from "../orders/refunds";
 import { orderTone, paymentOrderState, paymentOrderStates, shortId } from "../orders/states";
-import { ChoiceFilter, Code, FilterBar, Head, PageBody, State, text, toInstant, toLocalInput } from "../parts";
+import { ChoiceFilter, Code, FilterBar, Head, PageBody, State, SubLine, text, toInstant, toLocalInput } from "../parts";
 import { accountQuery, merchantsQuery, paymentOrdersQuery } from "../queries";
 
 type Order = AdminSchemas["PaymentOrder"];
@@ -192,18 +191,18 @@ function OrderRow({ order }: { order: Order }) {
     <tr>
       <Td main>
         <Code title={order.id}>{shortId(order.id)}</Code>
-        <Sub>{order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}</Sub>
-        <Sub>{[order.merchant_name, order.method].filter(Boolean).join(" · ")}</Sub>
+        <SubLine>{order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}</SubLine>
+        <SubLine>{[order.merchant_name, order.method].filter(Boolean).join(" · ")}</SubLine>
       </Td>
       <Td>
         <Code title={order.account_id}>{shortId(order.account_id)}</Code>
-        <Sub>
+        <SubLine>
           <Mono title={order.user_id}>{shortId(order.user_id)}</Mono>
-        </Sub>
+        </SubLine>
       </Td>
       <Td>
         {order.state ? <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State> : "—"}
-        {order.trade_no ? <Sub>{order.trade_no}</Sub> : null}
+        {order.trade_no ? <SubLine>{order.trade_no}</SubLine> : null}
       </Td>
       <Td align="end">
         {credited ? (
@@ -214,9 +213,9 @@ function OrderRow({ order }: { order: Order }) {
           </Text>
         )}
         {quotedCredits ? (
-          <Sub>
+          <SubLine>
             {t("orders.quote")} {format.money(quotedCredits)}
-          </Sub>
+          </SubLine>
         ) : null}
       </Td>
       <Td align="end">
@@ -228,28 +227,19 @@ function OrderRow({ order }: { order: Order }) {
           </Text>
         )}
         {quote ? (
-          <Sub>
+          <SubLine>
             {t("orders.quote")} {format.pay(quote)}
-          </Sub>
+          </SubLine>
         ) : null}
         {paidFee ? (
-          <Sub>
+          <SubLine>
             {t("orders.fee")} {format.pay(paidFee)}
-          </Sub>
+          </SubLine>
         ) : null}
       </Td>
       <Td>
         <Refunds refunds={order.refunds} />
       </Td>
     </tr>
-  );
-}
-
-// Sub is a cell's second line: when, through which merchant, the quote beside an amount.
-function Sub({ children }: { children: ReactNode }) {
-  return (
-    <Text as="div" size="sm" tone="faint">
-      {children}
-    </Text>
   );
 }

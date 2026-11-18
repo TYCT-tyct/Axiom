@@ -115,7 +115,7 @@ function SearchFacts({ view, action }: { view: Settings; action: ReactNode }) {
   if (view.restart_required) {
     rows.push([t("settings.search.restart"), t("settings.search.restartBody")]);
   }
-  return <Facts title={t("settings.search.title")} rows={rows} action={action} />;
+  return <Facts title={t("settings.search.title")} rows={rows} actions={action} />;
 }
 
 function SearchEditDialog({ view, onClose }: { view: Settings; onClose: () => void }) {

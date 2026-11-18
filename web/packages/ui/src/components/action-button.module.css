@@ -107,3 +107,7 @@
   opacity: 0.6;
   cursor: progress;
 }
+
+.wide {
+  width: 100%;
+}

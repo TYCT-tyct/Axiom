@@ -143,7 +143,7 @@ function MerchantDetails({ merchant }: { merchant: Merchant }) {
   const money = (value: AdminSchemas["Money"] | undefined) =>
     value ? format.money(value) : t("settings.payments.none");
   const line = (label: string, value: ReactNode) => (
-    <Text size="sm" tone="muted">
+    <Text as="div" size="sm" tone="muted">
       <Text as="span" size="sm" tone="faint">
         {label}
       </Text>{" "}

@@ -21,6 +21,7 @@ export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextFiel
 export { Glyph } from "./components/glyph";
 export { Icon } from "./components/icon";
 export { Id, IdLink, IdText } from "./components/id";
+export { ImageBox } from "./components/image-box";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";
 export { List, ListItem } from "./components/list";
@@ -42,7 +43,7 @@ export { Notice } from "./components/notice";
 export { PageBody } from "./components/page-body";
 export { PageHead } from "./components/page-head";
 export { usePageTitle } from "./components/page-title";
-export { Badge, Panel } from "./components/panel";
+export { Panel } from "./components/panel";
 export { Popover } from "./components/popover";
 export { PreferenceSwitches } from "./components/preferences";
 export { ScrollArea } from "./components/scroll-area";
@@ -52,7 +53,8 @@ export { Stat } from "./components/stat";
 export { DataState, EmptyState, NotFoundState } from "./components/states";
 export { Switch } from "./components/switch";
 export { Table, Td, Th } from "./components/table";
-export { Tag } from "./components/tag";
+// Badge is the name pages were written with for a Tag (#747).
+export { Tag as Badge, Tag } from "./components/tag";
 export { Text } from "./components/text";
 export { TextLink } from "./components/text-link";
 export { moneyInput, parseMoney, useFormat } from "./format";
