@@ -1,6 +1,7 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { Button, DataState, Icon, Id, PageHeader, Panel, useFormat } from "@axiom/ui";
+import { CodeBlock } from "@axiom/boards/ds";
+import { ActionButton, Card, Cluster, DataState, Icon, Id, PageHead, Stack, Text, useFormat } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
@@ -27,7 +28,7 @@ export default function ApprovalPage() {
     <DataState query={query} page>
       {(approval) => (
         <>
-          <PageHeader title={t(`approvals.risk.${approval.risk}`)} description={t("approvals.description")} />
+          <PageHead title={t(`approvals.risk.${approval.risk}`)} lede={t("approvals.description")} />
           <PageBody>
             <Decide approval={approval} />
             <WhyAsked approval={approval} />
@@ -58,20 +59,18 @@ function Decide({ approval }: { approval: Approval }) {
   };
   return (
     <Actions>
-      <Button asChild>
+      <ActionButton asChild>
         <Link to="/approvals">
           <Icon name="left" />
           {t("approvals.back")}
         </Link>
-      </Button>
+      </ActionButton>
       {decidable(approval) ? (
         <>
-          <Button variant="primary" size="md" onClick={() => setDecision("approve")}>
+          <ActionButton variant="pri" onClick={() => setDecision("approve")}>
             {t("approvals.approve")}
-          </Button>
-          <Button size="md" onClick={() => setDecision("reject")}>
-            {t("approvals.reject")}
-          </Button>
+          </ActionButton>
+          <ActionButton onClick={() => setDecision("reject")}>{t("approvals.reject")}</ActionButton>
         </>
       ) : null}
       {decision ? <DecisionDialog kind={decision} approval={approval} onClose={close} /> : null}
@@ -112,14 +111,14 @@ function ApprovalFacts({ approval }: { approval: Approval }) {
 function AgentReason({ text }: { text: string }) {
   const { t } = useTranslation();
   return (
-    <Panel title={t("approvals.agentReason")}>
-      <div className="space-y-2 p-4">
-        <p className="text-label text-t3">{t("approvals.agentReasonHint")}</p>
-        <blockquote className="whitespace-pre-wrap border-b1 border-l-2 pl-3 text-t2 [overflow-wrap:anywhere]">
-          {text}
-        </blockquote>
-      </div>
-    </Panel>
+    <Card title={t("approvals.agentReason")}>
+      <Stack gap={8}>
+        <Text size="sm" tone="faint">
+          {t("approvals.agentReasonHint")}
+        </Text>
+        <CodeBlock label={t("approvals.agentReason")}>{text}</CodeBlock>
+      </Stack>
+    </Card>
   );
 }
 
@@ -201,10 +200,12 @@ function Outcome({ answer }: { answer: Approval }) {
   const { t } = useTranslation();
   const outcome = outcomeOf(answer);
   return (
-    <p role="status" className="space-y-2">
-      <State tone={outcomeTones[outcome]}>{t(`approvals.outcome.${outcome}`)}</State>
-      <span className="block text-t1">{outcomeText(t, answer)}</span>
-    </p>
+    <div role="status">
+      <Cluster>
+        <State tone={outcomeTones[outcome]}>{t(`approvals.outcome.${outcome}`)}</State>
+        <Text as="span">{outcomeText(t, answer)}</Text>
+      </Cluster>
+    </div>
   );
 }
 

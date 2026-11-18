@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { CodeBlock } from "@axiom/boards/ds";
-import { Card, Disclosure, Panel, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
+import { Card, Disclosure, Stack, Table, Td, Text, useFormat } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -45,17 +45,17 @@ export function WhyAsked({ approval }: { approval: Approval }) {
     return null;
   }
   return (
-    <Panel title={t("approvals.why.title")}>
+    <Card title={t("approvals.why.title")}>
       {lines ? (
-        <ul className="list-disc space-y-1 py-3 pr-4 pl-9 text-t1">
+        <Stack gap={8}>
           {lines.map((line) => (
-            <li key={line}>{line}</li>
+            <Text key={line}>{line}</Text>
           ))}
-        </ul>
+        </Stack>
       ) : (
-        <p className="p-4 text-t3">{t("approvals.why.unavailable")}</p>
+        <Text tone="faint">{t("approvals.why.unavailable")}</Text>
       )}
-    </Panel>
+    </Card>
   );
 }
 
@@ -193,78 +193,53 @@ export function PriceTable({ approval }: { approval: Approval }) {
       "—"
     ) : (
       <>
-        {decimal(showRate(item, price))} {currency}
-        <span className="ml-1 text-label text-t3">{t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}</span>
+        {decimal(showRate(item, price))} {currency}{" "}
+        <Text as="span" size="sm" tone="faint">
+          {t(`models.prices.unit.${isPerUse(item) ? "use" : "million"}`)}
+        </Text>
       </>
     );
   const title = t("approvals.prices.title", { currency });
   // Equal base prices say nothing of an endpoint's or a tier's own price; only the server knows whether they are all.
   const complete = (approval.summary as { prices_complete?: unknown }).prices_complete === true;
+  const status = t(complete ? "approvals.prices.unlisted" : "approvals.prices.partial");
   return (
-    <Panel title={title}>
-      <p className="px-4 pt-4 text-t2">{t("approvals.prices.intro")}</p>
-      <p className={complete ? "px-4 pt-2 text-t2" : "px-4 pt-2 text-warn"}>
-        {t(complete ? "approvals.prices.unlisted" : "approvals.prices.partial")}
-      </p>
+    <Card title={title} lede={`${t("approvals.prices.intro")} ${status}`} layout="flush">
       {rows.length === 0 ? (
-        <p className="p-4 text-t3">{t(complete ? "approvals.prices.none" : "approvals.prices.partialNone")}</p>
+        <Text tone="faint">{t(complete ? "approvals.prices.none" : "approvals.prices.partialNone")}</Text>
       ) : (
-        <>
-          <PriceBlocks rows={rows} title={title} show={show} />
-          <PriceRows rows={rows} title={title} show={show} />
-        </>
+        <PriceRows rows={rows} title={title} show={show} />
       )}
-    </Panel>
-  );
-}
-
-// Below sm a table of four columns cannot show its numbers, so each item is a block of its three values.
-function PriceBlocks({ rows, show }: PriceView) {
-  const { t } = useTranslation();
-  return (
-    <ul className="divide-y divide-b1 sm:hidden">
-      {rows.map((row) => (
-        <li key={row.item} className="px-4 py-3">
-          <p className="font-medium text-t1">{t(`models.item.${row.item}`)}</p>
-          <dl className="mt-1 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 tabular-nums">
-            {priceColumns.map((column) => (
-              <div key={column} className="contents">
-                <dt className="text-label text-t3">{t(`approvals.prices.${column}`)}</dt>
-                <dd className="text-t1 [overflow-wrap:anywhere]">{show(row.item, row[column])}</dd>
-              </div>
-            ))}
-          </dl>
-        </li>
-      ))}
-    </ul>
+    </Card>
   );
 }
 
 function PriceRows({ rows, title, show }: PriceView) {
   const { t } = useTranslation();
   return (
-    <div className="hidden sm:block">
-      <Table label={title}>
-        <Head
-          cols={[
-            [t("approvals.prices.item")],
-            ...priceColumns.map((column): [string, string] => [t(`approvals.prices.${column}`), "text-right"]),
-          ]}
-        />
-        <tbody>
-          {rows.map((row) => (
-            <tr key={row.item}>
-              <Td>{t(`models.item.${row.item}`)}</Td>
-              {priceColumns.map((column) => (
-                <Td key={column} className="whitespace-nowrap text-right tabular-nums">
-                  {show(row.item, row[column])}
-                </Td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </Table>
-    </div>
+    <Table label={title}>
+      <Head
+        cols={[
+          t("approvals.prices.item"),
+          ...priceColumns.map((column): [string, { align: "end" }] => [
+            t(`approvals.prices.${column}`),
+            { align: "end" },
+          ]),
+        ]}
+      />
+      <tbody>
+        {rows.map((row) => (
+          <tr key={row.item}>
+            <Td>{t(`models.item.${row.item}`)}</Td>
+            {priceColumns.map((column) => (
+              <Td key={column} align="end">
+                {show(row.item, row[column])}
+              </Td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </Table>
   );
 }
 
@@ -280,26 +255,22 @@ export function RuleChangePanel({ approval }: { approval: Approval }) {
   return (
     <>
       <RuleFacts change={change} />
-      <Panel title={t("approvals.rule.moves")}>
-        <div className="space-y-2 px-4 pt-4">
-          <p className="text-t2">{t("approvals.rule.movesIntro")}</p>
+      <Card title={t("approvals.rule.moves")}>
+        <Stack gap={12}>
+          <Text tone="muted">{t("approvals.rule.movesIntro")}</Text>
           {change.day ? <DayUse day={change.day} /> : null}
           {change.total > change.moves.length ? (
-            <p className="text-warn">
+            <Text tone="warn">
               {t("approvals.rule.truncated", { shown: change.moves.length, total: change.total })}
-            </p>
+            </Text>
           ) : null}
-        </div>
-        {change.moves.length === 0 ? (
-          <p className="p-4 text-t3">{t("approvals.rule.none")}</p>
-        ) : (
-          <ul className="divide-y divide-b1">
-            {change.moves.map((move, i) => (
-              <MoveLine key={`${move.model}:${i}`} move={move} />
-            ))}
-          </ul>
-        )}
-      </Panel>
+          {change.moves.length === 0 ? (
+            <Text tone="faint">{t("approvals.rule.none")}</Text>
+          ) : (
+            change.moves.map((move, i) => <MoveLine key={`${move.model}:${i}`} move={move} />)
+          )}
+        </Stack>
+      </Card>
     </>
   );
 }
@@ -331,11 +302,9 @@ function RuleFacts({ change }: { change: RuleChange }) {
     <>
       <Facts title={t("approvals.rule.title")} rows={rows} />
       {prices ? (
-        <Panel title={t(prices.title, { currency: prices.schedule.currency })}>
-          <div className="space-y-2 pb-3">
-            <Rates schedule={prices.schedule} />
-          </div>
-        </Panel>
+        <Card title={t(prices.title, { currency: prices.schedule.currency })}>
+          <Rates schedule={prices.schedule} />
+        </Card>
       ) : null}
     </>
   );
@@ -365,14 +334,14 @@ function DayUse({ day }: { day: NonNullable<RuleChange["day"]> }) {
   const { t } = useTranslation();
   const { number } = useFormat();
   return (
-    <p className="text-t2 tabular-nums">
+    <Text tone="muted" numeric>
       {t("approvals.rule.day", {
         changes: number(day.changes.used),
         changesMax: number(day.changes.max),
         models: number(day.models.used),
         modelsMax: number(day.models.max),
       })}
-    </p>
+    </Text>
   );
 }
 
@@ -382,21 +351,26 @@ function MoveLine({ move }: { move: RuleMove }) {
   const format = useFormat();
   const percent = percentOf(format.decimal);
   return (
-    <li className="space-y-1 px-4 py-3">
-      <p className="font-medium text-t1 [overflow-wrap:anywhere]">
+    <Stack gap={4}>
+      <Text medium>
         {move.slug ?? move.model}
         {move.audience ? (
-          <span className="ml-2 text-label text-t3">{t(`pricing.audience.${move.audience}`)}</span>
+          <>
+            {" "}
+            <Text as="span" size="sm" tone="faint">
+              {t(`pricing.audience.${move.audience}`)}
+            </Text>
+          </>
         ) : null}
-      </p>
-      <p className="text-t2 tabular-nums">
+      </Text>
+      <Text tone="muted" numeric>
         {t("approvals.rule.move", {
           change: move.change === null ? t("approvals.envelope.unmeasured") : percent(move.change),
           margin: move.margin === null ? t("approvals.envelope.unknownCost") : percent(move.margin),
           used: move.modelUsed === undefined ? unknown : percent(move.modelUsed),
         })}
-      </p>
-    </li>
+      </Text>
+    </Stack>
   );
 }
 
