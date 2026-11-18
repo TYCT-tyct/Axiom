@@ -25,6 +25,7 @@ export type MockState = AuthState &
     notifications: Schemas["NotificationPreferences"];
     presets: Schemas["RoutingPreset"][];
     routingDefault: Schemas["AccountRoutingDefault"];
+    usageBackfillComplete?: boolean;
   };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];

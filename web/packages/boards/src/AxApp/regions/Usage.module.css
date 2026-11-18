@@ -2,6 +2,7 @@
 /* jscpd:ignore-start */
 :global(.board *):where(.scope){box-sizing:border-box}
 :global(.board ):where(.scope)::selection{background:var(--selection);color:var(--text1)}
+:global(.dim):where(.scope){color:var(--text2)}
 :global(.board button:focus-visible):where(.scope){outline:2px solid var(--focus);outline-offset:2px}
 :global(.btn):where(.scope){display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 20px;border-radius:8px;font-size:16px;line-height:26px;font-weight:500;white-space:nowrap;transition:background-color 250ms ease-out,color 250ms ease-out,box-shadow 250ms ease-out,opacity 250ms ease-out}
 :global(.spec h2):where(.scope){margin:0 0 24px;font-size:16px;line-height:26px;font-weight:500}
@@ -184,12 +185,16 @@
 :global(.ov .usf .uscmp):where(.scope){margin-left:auto;font-size:12px;color:var(--t2)}
 :global(.ov .uschip):where(.scope){position:relative}
 :global(.ov .uschip > button):where(.scope){display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;border:0;background:var(--cardBg);box-shadow:inset 0 0 0 var(--bw) var(--line);font:inherit;font-size:14px;color:var(--t1);cursor:pointer}
+:global(.ov .uschip > button.on):where(.scope){box-shadow:inset 0 0 0 var(--bw) var(--t3)}
 :global(.ov .uspop):where(.scope){position:absolute;z-index:5;top:38px;left:0;min-width:220px;padding:6px;border-radius:12px;background:var(--pop);box-shadow:var(--shPop)}
 :global(.ov .uschip .uspop):where(.scope){display:block;opacity:0;visibility:hidden;transform:translateY(4px);pointer-events:none;transition:opacity 250ms ease-out,transform 250ms ease-out,visibility 0s linear 250ms}
+:global(.ov .uschip.open .uspop):where(.scope){opacity:1;visibility:visible;transform:none;pointer-events:auto;transition:opacity 250ms ease-out,transform 250ms ease-out}
 :global(.ov .uspop button):where(.scope){display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 10px;border:0;border-radius:6px;background:none;font:inherit;font-size:14px;color:var(--t1);text-align:left;cursor:pointer}
 :global(.ov .uspop button:hover):where(.scope){background:var(--hover)}
 :global(.ov .uspop button i):where(.scope){width:8px;height:8px;border-radius:2px;flex:none}
 :global(.ov .uspop button s):where(.scope){margin-left:auto;width:14px;height:14px;border-radius:4px;box-shadow:inset 0 0 0 var(--bw) var(--t3);text-decoration:none;flex:none}
+:global(.ov .uspop button.on s):where(.scope){background:var(--t1);box-shadow:none}
+:global(.ov .uspop button.on s):where(.scope)::after{content:"";display:block;width:6px;height:3px;margin:4px 0 0 4px;border-left:1.5px solid var(--cardBg);border-bottom:1.5px solid var(--cardBg);transform:rotate(-45deg)}
 :global(.ov .uspop .usclr):where(.scope){color:var(--t2);margin-top:4px;box-shadow:inset 0 var(--bw) 0 var(--line);border-radius:0 0 6px 6px}
 :global(.ov .usm):where(.scope){display:grid;grid-template-columns:repeat(5,minmax(0,1fr));padding:0}
 :global(.ov .usm > div):where(.scope){display:flex;flex-direction:column;gap:4px;padding:16px 20px;min-width:0}
@@ -212,8 +217,12 @@
 :global(.ov .usch .usxl span):where(.scope){position:absolute;transform:translateX(-50%);white-space:nowrap}
 :global(.ov .usch .usbar):where(.scope){pointer-events:none}
 :global(.ov .usch .ushit):where(.scope){fill:transparent;cursor:pointer}
+:global(.ov .usch .ushit.cur):where(.scope){fill:var(--hover)}
 :global(.ov .usch rect.usbar):where(.scope){transition:opacity 250ms ease-out}
+:global(.ov .usch.hl rect[data-g]):where(.scope){opacity:.22}
+:global(.ov .usch.hl rect[data-g].on):where(.scope){opacity:1}
 :global(.ov .usch .ustip):where(.scope){position:absolute;z-index:3;top:8px;min-width:180px;padding:8px 12px;border-radius:8px;background:var(--pop);box-shadow:var(--shPop);font-size:12px;line-height:20px;pointer-events:none;opacity:0;transition:opacity 250ms ease-out,left 250ms ease-out}
+:global(.ov .usch .ustip.on):where(.scope){opacity:1}
 :global(.ov .ust):where(.scope){width:100%;margin-top:16px;border-collapse:collapse;font-size:14px;font-variant-numeric:tabular-nums}
 :global(.ov .ust th):where(.scope){height:36px;padding:0 12px;font-size:12px;font-weight:400;color:var(--t2);text-align:right;white-space:nowrap;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--line);cursor:pointer;user-select:none}
 :global(.ov .ust th:first-child):where(.scope),:global(.ov .ust td:first-child):where(.scope){padding-left:24px;text-align:left}
@@ -222,7 +231,8 @@
 :global(.ov .ust th.ussh):where(.scope){text-align:left;cursor:default}
 :global(.ov .ust td):where(.scope){height:44px;padding:0 12px;text-align:right;white-space:nowrap;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--line)}
 :global(.ov .ust tbody tr):where(.scope){cursor:pointer}
-:global(.ov .ust tbody tr:hover td):where(.scope){background:var(--hover)}
+:global(.ov .ust tbody tr:hover td):where(.scope),:global(.ov .ust tbody tr.on td):where(.scope){background:var(--hover)}
+:global(.ov .ust tbody tr.dim td):where(.scope){color:var(--t3)}
 :global(.ov .ust tfoot td):where(.scope){color:var(--t2);box-shadow:none}
 :global(.ov .ust .usnm):where(.scope){display:inline-flex;align-items:center;gap:8px;max-width:240px;overflow:hidden;text-overflow:ellipsis}
 :global(.ov .ust .usnm i):where(.scope){width:8px;height:8px;border-radius:2px;flex:none}
