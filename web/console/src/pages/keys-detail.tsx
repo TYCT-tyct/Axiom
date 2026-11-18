@@ -18,12 +18,14 @@ export function KeyDetailDialog({
   apiKey,
   onClose,
   onDelete,
-  onToggled,
+  onSaved,
 }: {
   apiKey: Key;
   onClose: () => void;
   onDelete: (key: Key) => void;
-  onToggled: (key: Key, was: boolean) => void;
+  // Every save, with the key as it was before it: the page keeps its undo offer only for the save that flipped the
+  // switch, and drops it for any other.
+  onSaved: (key: Key, before: Key) => void;
 }) {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
@@ -31,8 +33,8 @@ export function KeyDetailDialog({
     mutationFn: (body: Schemas["KeySettings"]) =>
       unwrap(consoleApi.PUT("/api/console/v1/keys/{key_id}", { params: { path: { key_id: apiKey.id } }, body })),
     onSuccess: async (changed) => {
+      onSaved(changed, apiKey);
       await queryClient.invalidateQueries({ queryKey: [accountKey, "keys"] });
-      onToggled(changed, apiKey.disabled);
       onClose();
     },
   });

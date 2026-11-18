@@ -16,7 +16,9 @@ const api = vi.hoisted(() => ({
   sent: [] as Schemas["KeySettings"][],
   workspaces: [] as Schemas["Workspace"][],
   navigated: [] as { search: Record<string, string | undefined> }[],
-  undoFails: false,
+  // What one key's own read answers: the server's truth, which the list may have missed, and whether that read works.
+  single: undefined as Schemas["Key"] | undefined,
+  readFails: false,
 }));
 
 const aKey = (over: Partial<Schemas["Key"]> = {}): Schemas["Key"] => ({
@@ -40,16 +42,22 @@ function apply(body: Schemas["KeySettings"], id: string) {
   return api.keys.find((key) => key.id === id);
 }
 
-// Every write the page makes is recorded; undoing a switch is the one this file can make fail.
+// Every write the page makes is recorded and replaces the settings it sends, as the contract does.
 function write(
   _path: string,
   { params, body }: { params: { path: { key_id: string } }; body: Schemas["KeySettings"] },
 ) {
   api.sent.push(body);
-  if (api.undoFails && body.disabled === false && api.sent.length > 1) {
-    return answer(409, "stale_revision");
-  }
+  api.single = undefined;
   return answer(200, apply(body, params.path.key_id));
+}
+
+// One key's own read, which the page makes before undoing a switch.
+function readOne(_path: string, { params }: { params: { path: { key_id: string } } }) {
+  if (api.readFails) {
+    return answer(503, "unavailable");
+  }
+  return answer(200, api.single ?? api.keys.find((key) => key.id === params.path.key_id));
 }
 
 vi.mock("@axiom/api", async (importOriginal) => {
@@ -58,8 +66,10 @@ vi.mock("@axiom/api", async (importOriginal) => {
     ...actual,
     consoleApi: {
       ...actual.consoleApi,
-      GET: vi.fn((path: string) => {
+      GET: vi.fn((path: string, options?: { params?: { path: { key_id: string } } }) => {
         switch (path) {
+          case "/api/console/v1/keys/{key_id}":
+            return readOne(path, options as { params: { path: { key_id: string } } });
           case "/api/console/v1/keys":
             return answer(200, { data: api.keys, filters: api.filters });
           case "/api/console/v1/workspaces":
@@ -102,8 +112,21 @@ beforeEach(() => {
   api.filters = undefined;
   api.asked = {};
   api.sent = [];
-  api.undoFails = false;
+  api.single = undefined;
+  api.readFails = false;
 });
+
+// Opens a key, flips its switch and saves, as a user does.
+async function toggle(container: HTMLElement) {
+  const detail = await openKey(container);
+  await act(async () => {
+    (detail.querySelector('input[name="disabled"]') as HTMLInputElement).click();
+  });
+  await submit(detail.querySelector("form") as HTMLFormElement);
+}
+
+const undoButton = (container: HTMLElement) =>
+  [...container.querySelectorAll("button")].find((button) => button.textContent === "keys.board.undo");
 
 async function open() {
   const page = await render(<Keys />);
@@ -137,37 +160,47 @@ it("shows no rows from a node that did not apply the filters", async () => {
   expect(text).toContain("keys.filtersUnavailable.title");
 });
 
-// Switching a key off and then changing its settings: the notice still offers the switch back, on the key as it is now,
-// so undoing keeps the settings saved after the switch rather than writing the older ones back.
-it("undoes a switch on the key as it is now, and says why when that fails", async () => {
+// Switching a key off, then changing its settings: the second save moves the key on, so the offer to switch it back is
+// withdrawn rather than left holding settings the key no longer has.
+it("offers a switch back only until the key is saved again", async () => {
   const container = await open();
-  const detail = await openKey(container);
-  await act(async () => {
-    (detail.querySelector('input[name="disabled"]') as HTMLInputElement).click();
-  });
-  await submit(detail.querySelector("form") as HTMLFormElement);
+  await toggle(container);
   expect(api.sent[0]).toMatchObject({ disabled: true });
-  expect(container.textContent).toContain("keys.board.disabledNotice");
+  expect(undoButton(container)).toBeDefined();
 
-  // A second visit tightens the limit; the notice stays, and the undo must not undo this.
   const again = await openKey(container);
   await act(async () => {
     (again.querySelector('input[name="spend_limit"]') as HTMLInputElement).value = "7.5";
   });
   await submit(again.querySelector("form") as HTMLFormElement);
   expect(api.sent[1]).toMatchObject({ spend_limit: { amount: "7500000000" } });
+  expect(undoButton(container)).toBeUndefined();
+});
 
-  // The undo fails: the page says why and offers the button again.
-  api.undoFails = true;
-  const undo = () => container.querySelector("button") as HTMLButtonElement;
-  const button = [...container.querySelectorAll("button")].find((b) => b.textContent === "keys.board.undo");
+// The list may have missed a save (its own read failed): the undo reads the key first, so it writes what the server has
+// now and never what the list still shows.
+it("undoes a switch on what the server has now, and writes nothing when that read fails", async () => {
+  const container = await open();
+  await toggle(container);
+
+  // The server holds a limit the list never saw; the undo must not put the list's 20 back.
+  api.single = { ...(api.keys[0] as Schemas["Key"]), spend_limit: { amount: "7500000000", currency: "USD" } };
   await act(async () => {
-    (button as HTMLButtonElement).click();
+    (undoButton(container) as HTMLButtonElement).click();
   });
   await settle();
-  expect(api.sent[2]).toMatchObject({ disabled: false, name: "Laptop", spend_limit: { amount: "7500000000" } });
-  expect(container.textContent).toContain("errors.stale_revision");
-  expect(undo()).toBeDefined();
+  expect(api.sent[1]).toMatchObject({ disabled: false, spend_limit: { amount: "7500000000" } });
+
+  // A switch is offered again, and this time the key cannot be read: nothing is written, and the page says why.
+  await toggle(container);
+  const written = api.sent.length;
+  api.readFails = true;
+  await act(async () => {
+    (undoButton(container) as HTMLButtonElement).click();
+  });
+  await settle();
+  expect(api.sent).toHaveLength(written);
+  expect(container.textContent).toContain("errors.unavailable");
 });
 
 // The workspace choice is one, and what the user picks is what the address and the request carry.

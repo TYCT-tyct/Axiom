@@ -51,10 +51,18 @@ export default function KeysPage() {
     [list, format, t, i18n.language, now],
   );
   const close = () => setDialog(null);
-  const undone = (key: Key, was: boolean) =>
-    key.disabled === was ? undefined : setToggled({ id: key.id, name: key.name, was });
-  // The notice stands only while the key still is what the save left: a later save of the same key moves it on, and the
-  // key itself may have gone, so the switch is offered back only on the key as it now is.
+  // A save that flipped the switch offers that switch back; any other save of the same key drops the offer, because the
+  // list may not have caught it and what the list holds is not what the key now is.
+  const saved = (key: Key, before: Key) =>
+    setToggled((current) =>
+      key.disabled !== before.disabled
+        ? { id: key.id, name: key.name, was: before.disabled }
+        : current?.id === key.id
+          ? null
+          : current,
+    );
+  // The notice stands only while the list shows the state the save left: a key deleted since, or one the list has not
+  // caught up on, is not offered a switch it may not have.
   const switched = toggled ? list.find((key) => key.id === toggled.id) : undefined;
   const notice = switched && switched.disabled !== toggled?.was ? switched : undefined;
   return (
@@ -72,7 +80,7 @@ export default function KeysPage() {
         boardT={boardT}
         setDialog={setDialog}
       />
-      <Dialogs dialog={dialog} setDialog={setDialog} close={close} filters={filters} onToggled={undone} />
+      <Dialogs dialog={dialog} setDialog={setDialog} close={close} filters={filters} onSaved={saved} />
     </Frame>
   );
 }
@@ -266,13 +274,13 @@ function Dialogs({
   setDialog,
   close,
   filters,
-  onToggled,
+  onSaved,
 }: {
   dialog: Dialog | null;
   setDialog: (dialog: Dialog | null) => void;
   close: () => void;
   filters: KeyFilters;
-  onToggled: (key: Key, was: boolean) => void;
+  onSaved: (key: Key, before: Key) => void;
 }) {
   if (dialog?.kind === "create") {
     return (
@@ -295,7 +303,7 @@ function Dialogs({
         apiKey={dialog.key}
         onClose={close}
         onDelete={(key) => setDialog({ kind: "delete", key })}
-        onToggled={onToggled}
+        onSaved={onSaved}
       />
     );
   }
@@ -305,28 +313,36 @@ function Dialogs({
   return null;
 }
 
-// ToggleNotice offers a key the state it had before the last save. Undoing sends the key as the list now has it with the
-// switch flipped, since the contract replaces every setting it is given: a name or a limit changed since stays changed.
-// A failure says why, and the button stays for another try while the answer is on its way.
+// ToggleNotice offers a key the state it had before the last save. Undoing reads the key first and writes it back with
+// the switch flipped, since the contract replaces every setting it is given: a name or a limit changed since stays
+// changed, and a list that did not catch up cannot put older settings back. A failed read writes nothing. A failure says
+// why, and the button stays for another try while the answer is on its way.
 function ToggleNotice({ apiKey, name, was, onDone }: { apiKey: Key; name: string; was: boolean; onDone: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const queryClient = useQueryClient();
   const undo = useMutation({
-    mutationFn: () =>
-      unwrap(
+    mutationFn: async () => {
+      const latest = await unwrap(
+        consoleApi.GET("/api/console/v1/keys/{key_id}", { params: { path: { key_id: apiKey.id } } }),
+      );
+      if (latest.disabled === was) {
+        return latest;
+      }
+      return unwrap(
         consoleApi.PUT("/api/console/v1/keys/{key_id}", {
           params: { path: { key_id: apiKey.id } },
           body: {
-            name: apiKey.name,
+            name: latest.name,
             disabled: was,
-            spend_limit: apiKey.spend_limit,
-            limit_reset: apiKey.limit_reset,
-            models: apiKey.models,
-            ip_allow: apiKey.ip_allow,
+            spend_limit: latest.spend_limit,
+            limit_reset: latest.limit_reset,
+            models: latest.models,
+            ip_allow: latest.ip_allow,
           },
         }),
-      ),
+      );
+    },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: [accountKey, "keys"] });
       onDone();
