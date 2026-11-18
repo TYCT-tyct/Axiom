@@ -130,7 +130,6 @@ function FilterFields({ filters }: { filters: KeyFilters }) {
         defaultValue={toLocalInput(filters.created_before)}
       />
       <WorkspaceFilter value={filters.workspace_id} />
-      <WorkspaceFilter value={filters.workspace_id} />
     </Grid>
   );
 }

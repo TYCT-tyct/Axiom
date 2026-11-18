@@ -6,6 +6,9 @@ import type { Messages } from "@axiom/ui";
 export const zh = {
   board: {
     filter: "筛选",
+    // Not the board's "本月用量 / 额度": what the API can say is what a key used of its limit's own window.
+    usedHeader: "本周期已用 / 上限",
+    period: { daily: "每天", weekly: "每周", monthly: "每月", total: "不重置" },
     filterTitle: "筛选 key",
     justNow: "刚刚",
     neverUsed: "从未使用",
@@ -117,6 +120,8 @@ export const zh = {
 export const en: Messages<typeof zh> = {
   board: {
     filter: "Filter",
+    usedHeader: "Used / limit this period",
+    period: { daily: "daily", weekly: "weekly", monthly: "monthly", total: "total" },
     filterTitle: "Filter keys",
     justNow: "Just now",
     neverUsed: "Never used",

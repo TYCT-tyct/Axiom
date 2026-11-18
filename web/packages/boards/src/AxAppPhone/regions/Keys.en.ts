@@ -13,9 +13,9 @@ export default {
   "m0c184871f6": "Yesterday",
   "mcd4b7219e4": "A key works only in the workspace it was made in, and its spending is recorded under the person who made it.",
   "md44e9b3d3b": "Name",
-  "mc77c96d4f5": "Used / limit this month",
   "m0188e32b20": "Last 14 days",
   "m688f892378": "Limits",
-  "m39a9046f9c": "Last used"
+  "m39a9046f9c": "Last used",
+  "mc77c96d4f5": "Used / limit this month"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

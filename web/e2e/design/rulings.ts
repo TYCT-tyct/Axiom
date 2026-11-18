@@ -53,6 +53,14 @@ export const rulings: Ruling[] = [
     board: { selector: ".p-keys .qph > .qpa" },
     page: { selector: ".p-keys .qph > .qpa" },
   },
+  // The board calls the used column the month's spending; the API says what a key used of its limit's own window, which
+  // the page names in the header and states per row.
+  {
+    scene: "console keys",
+    basis: "G3: the used column is the limit's own period, not the calendar month the board names",
+    board: { selector: ".p-keys .qkeyt thead th:nth-child(2)" },
+    page: { selector: ".p-keys .qkeyt thead th:nth-child(2)" },
+  },
   // The rows are the account the scene signs in as, not the board's demo account: three keys against five, and another
   // currency, limits, names and times, so the card that holds them differs.
   {

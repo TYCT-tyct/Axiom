@@ -1,9 +1,9 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { accountKey, can, LoadMore, useSession } from "@axiom/app";
+import { accountKey, can, LoadMore, useErrors, useSession } from "@axiom/app";
 import Keys from "@axiom/boards/AxApp/regions/Keys";
 import KeysEN from "@axiom/boards/AxApp/regions/Keys.en";
 import KeysZH from "@axiom/boards/AxApp/regions/Keys.zh";
-import { Button, DataState, EmptyState, Icon, Note, Notice, useFormat, usePageTitle } from "@axiom/ui";
+import { Button, DataState, EmptyState, FormError, Icon, Note, Notice, useFormat, usePageTitle } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { type KeyboardEvent as KeyEvent, type MouseEvent, type ReactNode, useMemo, useState } from "react";
@@ -24,8 +24,8 @@ type Dialog =
   | { kind: "filter" }
   | { kind: "detail"; key: Key }
   | { kind: "delete"; key: Key };
-// What the notice offers to undo: the key as the server now has it, and whether it was on before the save.
-type Toggled = { key: Key; was: boolean };
+// What the notice offers to undo: which key was switched, and whether it was on before the save.
+type Toggled = { id: string; name: string; was: boolean };
 
 // The console's keys page is the board's Keys slice (#747 C1): the personal space's list, drawn from the API. The board
 // draws the same slice for both its boards — the phone's markup is the desktop's, region for region — so one region
@@ -51,10 +51,17 @@ export default function KeysPage() {
     [list, format, t, i18n.language, now],
   );
   const close = () => setDialog(null);
-  const undone = (key: Key, was: boolean) => (key.disabled === was ? undefined : setToggled({ key, was }));
+  const undone = (key: Key, was: boolean) =>
+    key.disabled === was ? undefined : setToggled({ id: key.id, name: key.name, was });
+  // The notice stands only while the key still is what the save left: a later save of the same key moves it on, and the
+  // key itself may have gone, so the switch is offered back only on the key as it now is.
+  const switched = toggled ? list.find((key) => key.id === toggled.id) : undefined;
+  const notice = switched && switched.disabled !== toggled?.was ? switched : undefined;
   return (
     <Frame>
-      {toggled ? <ToggleNotice toggled={toggled} onDone={() => setToggled(null)} /> : null}
+      {notice && toggled ? (
+        <ToggleNotice apiKey={notice} name={toggled.name} was={toggled.was} onDone={() => setToggled(null)} />
+      ) : null}
       <Content
         keys={keys}
         list={list}
@@ -91,6 +98,7 @@ function Content({
   boardT: (key: keyof typeof KeysZH) => string;
   setDialog: (dialog: Dialog | null) => void;
 }) {
+  const { t } = useTranslation();
   if (keys.isPending || keys.isError) {
     return (
       <DataState query={keys} page>
@@ -98,22 +106,20 @@ function Content({
       </DataState>
     );
   }
+  // A node before key filters answers every key and no echo of what was asked: its rows are not the filtered result,
+  // whether it sent none or many.
+  if (hasFilters(filters) && !keyFiltersApplied(filters, pages)) {
+    return <FiltersUnavailable manage={manage} onCreate={() => setDialog({ kind: "create" })} />;
+  }
   if (list.length === 0) {
-    return (
-      <EmptyList
-        filtered={hasFilters(filters)}
-        filters={filters}
-        pages={pages}
-        manage={manage}
-        onCreate={() => setDialog({ kind: "create" })}
-      />
-    );
+    return <EmptyList filtered={hasFilters(filters)} manage={manage} onCreate={() => setDialog({ kind: "create" })} />;
   }
   return (
     <>
       <Retired keys={list} />
       <Keys
         t={boardT}
+        text={{ usedHeader: t("keys.board.usedHeader") }}
         values={rowValues(manage, list, (key) => setDialog({ kind: "detail", key }))}
         rows={{ keys0: rows }}
         actions={
@@ -194,21 +200,8 @@ function Retired({ keys }: { keys: Key[] }) {
   return <Note title={t("keys.retiredModels", { models: retired.join(", ") })} />;
 }
 
-// EmptyList says why the list is empty and what to do about it: no key yet, no match for the filters, or a node that
-// predates filters, whose rows must not be shown as if the filters had applied to them.
-function EmptyList({
-  filtered,
-  filters,
-  pages,
-  manage,
-  onCreate,
-}: {
-  filtered: boolean;
-  filters: KeyFilters;
-  pages: { filters?: Schemas["KeyFilterEcho"] }[];
-  manage: boolean;
-  onCreate: () => void;
-}) {
+// EmptyList says why the list is empty and what to do about it: no key yet, or no match for the filters.
+function EmptyList({ filtered, manage, onCreate }: { filtered: boolean; manage: boolean; onCreate: () => void }) {
   const { t } = useTranslation();
   const actions = (
     <>
@@ -224,13 +217,6 @@ function EmptyList({
       ) : null}
     </>
   );
-  if (filtered && !keyFiltersApplied(filters, pages)) {
-    return (
-      <EmptyState page title={t("keys.filtersUnavailable.title")} action={actions}>
-        {t("keys.filtersUnavailable.body")}
-      </EmptyState>
-    );
-  }
   if (filtered) {
     return (
       <EmptyState page title={t("keys.noMatch")} action={actions}>
@@ -241,6 +227,34 @@ function EmptyList({
   return (
     <EmptyState page title={t("keys.empty.title")} action={manage ? actions : undefined}>
       {t("keys.empty.body")}
+    </EmptyState>
+  );
+}
+
+// FiltersUnavailable says the node answered every key because it predates key filters, so the rows it sent are not the
+// filtered list and are not shown.
+function FiltersUnavailable({ manage, onCreate }: { manage: boolean; onCreate: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <EmptyState
+      page
+      title={t("keys.filtersUnavailable.title")}
+      action={
+        <>
+          <Button size="md" asChild>
+            <Link to="/keys" search={noFilters}>
+              {t("keys.filter.reset")}
+            </Link>
+          </Button>
+          {manage ? (
+            <Button size="md" variant="primary" onClick={onCreate}>
+              {t("keys.create")}
+            </Button>
+          ) : null}
+        </>
+      }
+    >
+      {t("keys.filtersUnavailable.body")}
     </EmptyState>
   );
 }
@@ -291,28 +305,28 @@ function Dialogs({
   return null;
 }
 
-// ToggleNotice offers the state a key had before it was switched back. Undoing sends the key as the list now has it
-// with the switch flipped, since the contract replaces every setting it is given.
-function ToggleNotice({ toggled, onDone }: { toggled: Toggled; onDone: () => void }) {
+// ToggleNotice offers a key the state it had before the last save. Undoing sends the key as the list now has it with the
+// switch flipped, since the contract replaces every setting it is given: a name or a limit changed since stays changed.
+// A failure says why, and the button stays for another try while the answer is on its way.
+function ToggleNotice({ apiKey, name, was, onDone }: { apiKey: Key; name: string; was: boolean; onDone: () => void }) {
   const { t } = useTranslation();
+  const errors = useErrors();
   const queryClient = useQueryClient();
   const undo = useMutation({
-    mutationFn: () => {
-      const { key, was } = toggled;
-      return unwrap(
+    mutationFn: () =>
+      unwrap(
         consoleApi.PUT("/api/console/v1/keys/{key_id}", {
-          params: { path: { key_id: key.id } },
+          params: { path: { key_id: apiKey.id } },
           body: {
-            name: key.name,
+            name: apiKey.name,
             disabled: was,
-            spend_limit: key.spend_limit,
-            limit_reset: key.limit_reset,
-            models: key.models,
-            ip_allow: key.ip_allow,
+            spend_limit: apiKey.spend_limit,
+            limit_reset: apiKey.limit_reset,
+            models: apiKey.models,
+            ip_allow: apiKey.ip_allow,
           },
         }),
-      );
-    },
+      ),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: [accountKey, "keys"] });
       onDone();
@@ -321,12 +335,13 @@ function ToggleNotice({ toggled, onDone }: { toggled: Toggled; onDone: () => voi
   return (
     <Notice
       action={
-        <Button size="sm" onClick={() => undo.mutate()}>
+        <Button size="sm" disabled={undo.isPending} onClick={() => undo.mutate()}>
           {t("keys.board.undo")}
         </Button>
       }
     >
-      {t(toggled.key.disabled ? "keys.board.disabledNotice" : "keys.board.enabledNotice", { name: toggled.key.name })}
+      {t(apiKey.disabled ? "keys.board.disabledNotice" : "keys.board.enabledNotice", { name })}
+      {undo.isError ? <FormError>{errors.message(undo.error)}</FormError> : null}
     </Notice>
   );
 }

@@ -25,7 +25,8 @@ const keysEnglish = {
 // The board draws the key list once per space (#747 C1): the default workspace's, a team's, and the personal space's,
 // which the shell selects with wa2. The console has no team spaces (#816 O1), so only the personal list stays. Its
 // header is the page's; the actions beside it are the page's own, because the board's list has no filters and the
-// filters an account already had (L8) open from there.
+// filters an account already had (L8) open from there. The used column's header is a text the page supplies: the board
+// calls it the month's spending, and what the API can say is what the key used of its limit's own period.
 function keysRegion(board: string): Region {
   return {
     board,
@@ -35,6 +36,7 @@ function keysRegion(board: string): Region {
     omit: [".wv.w0", ".wv.w1"],
     slots: { actions: ".p-keys .qpa" },
     repeats: { keys: ".wv.w2 .qkeyt tbody > tr" },
+    text: { usedHeader: ".wv.w2 .qkeyt thead th:nth-child(2)" },
     // The rows open the key they stand for, as the board's own rows do, and also from the keyboard; the icons they
     // carry say nothing to a reader, and their aria-hidden is the page's so a row stays a row of values.
     elements: {
