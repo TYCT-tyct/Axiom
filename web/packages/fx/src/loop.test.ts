@@ -177,3 +177,37 @@ it("lets an owner leave from inside its own frame", async () => {
   runFrame();
   expect(state()).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
 });
+
+it("moves a timeline's clock only on the loop's frames, and settles its sleeps false when it ends", async () => {
+  await loop();
+  const { timeline } = await import("./timeline");
+  const element = document.createElement("div");
+  const clock = timeline(element);
+  const woke = vi.fn();
+  clock.sleep(30).then(woke);
+  const steps: number[] = [];
+  clock.each((now) => steps.push(now) < 2);
+
+  // out of view nothing moves: the screen stands still where it is
+  runFrame();
+  await Promise.resolve();
+  expect([clock.now(), woke.mock.calls.length, steps.length]).toEqual([0, 0, 0]);
+
+  intersect(element, true);
+  runFrame(); // the first frame after a pause steps nothing
+  runFrame(20);
+  runFrame(20);
+  await Promise.resolve();
+  expect(clock.now()).toBe(40);
+  expect(woke).toHaveBeenCalledWith(true);
+  // a step that returns false runs no more
+  expect(steps).toEqual([0, 20]);
+
+  const later = vi.fn();
+  clock.sleep(1000).then(later);
+  clock.end();
+  await Promise.resolve();
+  expect(later).toHaveBeenCalledWith(false);
+  expect(await clock.sleep(1)).toBe(false);
+  expect(state().owners).toBe(0);
+});

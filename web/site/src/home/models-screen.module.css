@@ -1,0 +1,4 @@
+/* The state in place of the list and the panel spans the row's twelve columns, which the two share. */
+.state {
+  grid-column: 1 / -1;
+}
