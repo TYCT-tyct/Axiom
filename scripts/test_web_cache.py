@@ -5,6 +5,7 @@ import sys
 import tempfile
 import threading
 import unittest
+import shutil
 from pathlib import Path
 from unittest import mock
 
@@ -86,6 +87,7 @@ class Hashes(unittest.TestCase):
         self.repo.close()
         self.other.close()
 
+
     def test_web_hash_is_content_not_path(self):
         self.assertEqual(web_cache.web_hash(self.repo.root), web_cache.web_hash(self.other.root))
         self.repo.write("web/site/dist/index.html", "new output\n")
@@ -104,6 +106,69 @@ class Hashes(unittest.TestCase):
         self.assertNotEqual(after_api, after_test)
         self.repo.write("web/site/src/app.test.ts", "// changed\n")
         self.assertNotEqual(after_test, web_cache.e2e_inputs_hash(self.repo.root))
+
+
+@unittest.skipUnless(shutil.which("node"), "Actions cache client runs in Node")
+class ActionsCache(unittest.TestCase):
+    def test_remote_build_and_pass_restore_by_the_existing_content_keys(self):
+        repo = Repository()
+        self.addCleanup(repo.close)
+        make_dist(repo.root)
+        cache, cloud = repo.root / "cache", repo.root / "cloud"
+        cloud.mkdir()
+        client = repo.root / "client.cjs"
+        client.write_text('''
+const fs = require('node:fs'), path = require('node:path');
+if (process.env.GITHUB_WORKSPACE !== process.cwd()) throw Error('archive base differs from cache root');
+exports.saveCache = async (paths, key) => {
+  if (paths.length !== 1 || paths[0] !== key) throw Error('wrong content key');
+  fs.cpSync(key, path.join(process.env.TEST_CLOUD, key), {recursive: true});
+};
+exports.restoreCache = async (paths, key, fallback) => {
+  if (paths.length !== 1 || paths[0] !== key || fallback?.length) throw Error('wrong content key');
+  const source = path.join(process.env.TEST_CLOUD, key);
+  if (fs.existsSync(source)) fs.cpSync(source, key, {recursive: true});
+};
+''')
+        with mock.patch.dict(os.environ, ACTIONS_CACHE_CLIENT=str(client), TEST_CLOUD=str(cloud)), \
+                mock.patch.object(web_cache, "run", return_value=0) as run, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(web_cache.build(repo.root, cache, "v1", ["build"], "tools"), 0)
+            build_key = web_cache.build_key(repo.root, "v1", "tools")
+            self.assertTrue(web_cache.complete(cloud / build_key))
+            shutil.rmtree(cache)
+            shutil.rmtree(repo.root / "web/site/dist")
+            self.assertEqual(web_cache.build(repo.root, cache, "v1", ["build"], "tools"), 0)
+            self.assertTrue((repo.root / "web/site/dist/index.html").is_file())
+            self.assertEqual(run.call_count, 1)
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test", "1/2"], "tools"), 0)
+            key = web_cache.e2e_key(repo.root, "tools", ["test", "1/2"])
+            self.assertTrue((cloud / key).is_file())
+            shutil.rmtree(cache)
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test", "1/2"], "tools"), 0)
+            self.assertEqual(run.call_count, 2)
+            run.return_value = 17
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test", "2/2"], "tools"), 17)
+            self.assertFalse((cloud / web_cache.e2e_key(repo.root, "tools", ["test", "2/2"])).exists())
+            repo.write("main.go", "changed")
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test", "1/2"], "tools"), 17)
+
+    def test_transport_failure_runs_the_check_and_never_publishes_a_failed_pass(self):
+        repo = Repository()
+        self.addCleanup(repo.close)
+        client = repo.root / "client.cjs"
+        client.write_text("""
+exports.restoreCache = async (paths, key) => { require('node:fs').writeFileSync(key, 'partial'); throw Error('offline'); };
+exports.saveCache = async () => { throw Error('offline'); };
+""")
+        with mock.patch.dict(os.environ, ACTIONS_CACHE_CLIENT=str(client)), \
+                mock.patch.object(web_cache, "run", side_effect=[17, 0]) as run, contextlib.redirect_stdout(io.StringIO()):
+            cache = repo.root / "cache"
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 17)
+            self.assertFalse((cache / "e2e" / web_cache.e2e_key(repo.root, "tools", ["test"])).exists())
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
+            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
+            self.assertEqual(run.call_count, 2)
+
 
 
 def make_dist(root: Path) -> None:

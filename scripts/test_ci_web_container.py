@@ -27,6 +27,10 @@ elif command == "docker":
         print(os.environ.get("FAKE_EXIT", "0"))
     elif args[:2] == ["container", "inspect"]:
         sys.exit(int(os.environ.get("MISSING", "0")))
+elif command == "nproc":
+    print(os.environ.get("FAKE_CPUS", "96"))
+elif command == "systemctl":
+    sys.exit(int(os.environ.get("NO_SLICE", "0")))
 elif command == "grep":
     sys.exit(int(os.environ.get("WRONG_CGROUP", "0")))
 elif command == "node":
@@ -41,7 +45,7 @@ class WebContainer(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.calls = self.root / "calls.jsonl"
-        for command in ("docker", "go", "pnpm", "cat", "grep", "node", "git"):
+        for command in ("docker", "go", "pnpm", "cat", "grep", "node", "git", "systemctl", "nproc"):
             shim = self.root / command
             shim.write_text(SHIM.format(python=sys.executable), encoding="utf-8")
             shim.chmod(0o755)
@@ -76,6 +80,18 @@ class WebContainer(unittest.TestCase):
                 result = subprocess.run(["bash", "-e", "-c", bootstrap, "bash", "true"],
                                         env=dict(self.env, HOME=str(self.root), FAKE_CPUS=cpus), capture_output=True)
                 self.assertEqual(result.returncode, expected)
+
+    def test_hosted_runner_keeps_network_isolation_without_the_host_slice(self):
+        result = self.run_script("just", "web-checks", NO_SLICE="1", FAKE_CPUS="2", WRONG_CGROUP="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        create = next(args for args in self.commands() if args[:2] == ["docker", "create"])
+        self.assertEqual(create[create.index("--cpus") + 1], "2")
+        self.assertNotIn("--cgroup-parent=axiom-ci.slice", create)
+        self.assertIn("--cgroupns=private", create)
+        self.assertNotIn("--network=host", create)
+        self.assertFalse(any(args[0] == "grep" for args in self.commands()))
+        for name in ("ACTIONS_CACHE_CLIENT", "ACTIONS_RUNTIME_TOKEN", "ACTIONS_RESULTS_URL"):
+            self.assertIn(name, create)
 
     def test_journey_reaches_the_hosts_databases_at_their_container_addresses(self):
         passwords = self.root / "kv"

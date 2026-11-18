@@ -45,6 +45,16 @@
 
 持久 self-hosted 只接受私有仓库可信贡献；开放 fork 或外部贡献前，所有 PR 作业（便宜与重作业）必须迁到 GitHub 托管 runner，不能只靠标签隔离。
 
+## 在 GitHub 托管 runner 上
+
+仍只需把 `RUNS_ON`、`RUNS_ON_HEAVY`、`RUNS_ON_TRAIN` 指向 JSON 标签（如 `"ubuntu-latest"`）。单次比较可在本分支 dispatch 时传 `runs_on='"ubuntu-latest"'`；留空保持原池选择，不修改仓库变量，也不改变其他 PR。
+
+setup 按仓库版本安装 Go、Node、pnpm、just，托管环境通过 Actions 缓存工具和依赖。Playwright 镜像自带 Chromium、系统库和字体；源字体按 `sources.json` 的 SHA-256 下载、校验并缓存，挂入容器。只有宿主的 `axiom-ci.slice` 正在运行时才传父 cgroup 并核验其配额；每个容器仍用独立网络命名空间，CPU 上限取 runner 可用核数与 8 的较小值。
+
+持久 runner 继续只读写本地内容缓存。托管 runner 用官方 `@actions/cache` 客户端（setup 固定版本，避免自写缓存服务协议），在 `web_cache.py` 原键生成和成功判定之外增加存取；构建、e2e、vitals 和单板标记分别使用其原内容键，无前缀回退，归档路径相对缓存目录。故障回到实跑，失败不写通过标记；冷缓存与缓存淘汰会增加耗时。浏览器证据按实际 `runner.environment` 选择持久目录或失败 artifact，和变量是否填写无关。
+
+比较前须确认账户剩余包含额度足以覆盖全作业的超时上限总和；无法读取用量或剩余额度不足时不发起托管运行。两次整套 dispatch 均留空 base/release/gate_stress，先托管、后留空 `runs_on` 跑自管；不要 rerun，也不要改仓库变量。作业结束后运行 `python3 scripts/ci/runner-comparison.py --hosted <运行号> --self-hosted <运行号>`，把表格放进 PR。准备开销包含 setup 和缓存收尾，队列不含上游依赖等待。托管 setup 结束后记录虚拟机 CPU 时间，按 CPU 利用率近似可并行部分估算公开四核时间；这是乐观估计，串行 CPU、网络、缓存和 vitals 的绝对计时门禁不能据此证明。无托管实测不填估算数字。
+
 ## runner 管理
 
 `scripts/ci/runner-host.sh` 统一安装、自检、删除与资源限额，工具链预置 Actions 缓存，每 runner 独立 Go 缓存。
@@ -122,6 +132,6 @@ Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时�
 
 ## runner 证据
 
-`RUNS_ON` 已设时，vitals/e2e/boards/journey 在运行前把宿主名与 `<AXIOM_CACHE_DIR>/reports/<run-id>/<job>/<shard>-<attempt>/` 写到步骤摘要；未显式配置缓存目录时统一用 `web_cache.py` 的宿主默认目录；容器挂载为 `/ci/axiom`。同一宿主的 runner 共享通过标记，分片换 runner 仍可复用；旧的 runner 独立 `_webcache` 不迁移，首次运行重新填充。通过 `AXIOM_TEST_RESULTS` / `AXIOM_PLAYWRIGHT_REPORTS` 指定容器挂载内的输出位置，让 trace、截图、diff、节点日志和 JSON 报告直接写进持久目录；这两个输出路径不进入内容键。结束时先清容器，补收工作区内的报告；绿色运行清掉截图等证据，只保留计时报告。不同分片和重试不覆盖。超时/取消也运行清理和留证步骤；若 runner 本身离线，已落盘的证据仍留在目录，摘要已有路径；尚未写完的 trace 不能保证完整。
+实际运行在 self-hosted 时，vitals/e2e/boards/journey 在运行前把宿主名与 `<AXIOM_CACHE_DIR>/reports/<run-id>/<job>/<shard>-<attempt>/` 写到步骤摘要；未显式配置缓存目录时统一用 `web_cache.py` 的宿主默认目录；容器挂载为 `/ci/axiom`。同一宿主的 runner 共享通过标记，分片换 runner 仍可复用；旧的 runner 独立 `_webcache` 不迁移，首次运行重新填充。通过 `AXIOM_TEST_RESULTS` / `AXIOM_PLAYWRIGHT_REPORTS` 指定容器挂载内的输出位置，让 trace、截图、diff、节点日志和 JSON 报告直接写进持久目录；这两个输出路径不进入内容键。结束时先清容器，补收工作区内的报告；绿色运行清掉截图等证据，只保留计时报告。不同分片和重试不覆盖。超时/取消也运行清理和留证步骤；若 runner 本身离线，已落盘的证据仍留在目录，摘要已有路径；尚未写完的 trace 不能保证完整。
 
-每个浏览器作业开始与结束都清理最近一次收集已超过两天的 run 目录，不碰构建或通过缓存。没有后续作业时不运行定时删除。self-hosted 不调用 `upload-artifact` 保存测试证据，GitHub 上只保留显式 release artifact；`RUNS_ON` 未设的 GitHub 托管回退仍上传失败证据，保留两天。
+每个浏览器作业开始与结束都清理最近一次收集已超过两天的 run 目录，不碰构建或通过缓存。没有后续作业时不运行定时删除。self-hosted 不调用 `upload-artifact` 保存测试证据，GitHub 上只保留显式 release artifact；GitHub 托管 runner 上传失败证据，保留两天。
