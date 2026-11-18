@@ -163,7 +163,7 @@ function ClassRow({
             }`}
       </Td>
       <Td>{format.dateTime(new Date(item.updated_at))}</Td>
-      <Td shrink>
+      <Td actions>
         <Cluster>
           <ActionButton size="sm" onClick={onEdit}>
             {t("sourceClasses.edit")}

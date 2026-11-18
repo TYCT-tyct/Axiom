@@ -124,7 +124,7 @@ export function Head({ cols, action = false }: { cols: HeadColumn[]; action?: bo
             </Th>
           );
         })}
-        {action ? <Th shrink /> : null}
+        {action ? <Th actions /> : null}
       </tr>
     </thead>
   );

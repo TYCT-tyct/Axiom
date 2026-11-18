@@ -94,7 +94,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
             </Td>
             <Td>{format.dateTime(new Date(rule.updated_at))}</Td>
             {onEdit ? (
-              <Td shrink>
+              <Td actions>
                 <ActionButton
                   variant="gho"
                   size="sm"

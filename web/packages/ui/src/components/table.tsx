@@ -40,13 +40,14 @@ export function Table({
   );
 }
 
-// The ways a column lays out its cells: end-aligned figures, a column that takes only what its content needs (row
-// buttons), and the column that names the row, which takes the room left and wraps rather than pushing the others off.
-// className is the utility classes pages wrote before the redesign; it goes when the last page drops it (#747).
-type Column = { align?: "end"; shrink?: boolean; main?: boolean; className?: string };
+// The ways a column lays out its cells: end-aligned figures, a column that takes only what its content needs, the
+// column that names the row, which takes the room left and wraps rather than pushing the others off, and the row's
+// buttons (actions), which stay at the box's right edge while the table scrolls under them, so they are never off
+// screen. className is the utility classes pages wrote before the redesign; it goes when the last page drops it (#747).
+type Column = { align?: "end"; shrink?: boolean; main?: boolean; actions?: boolean; className?: string };
 
-const column = ({ align, shrink, main, className }: Column) =>
-  classes(align === "end" && s.end, shrink && s.shrink, main && s.main, className);
+const column = ({ align, shrink, main, actions, className }: Column) =>
+  classes(align === "end" && s.end, (shrink || actions) && s.shrink, main && s.main, actions && s.actions, className);
 
 // A header keeps its own line: a narrow numeric column would otherwise break a two-character label one character per
 // line, which reads as two columns.

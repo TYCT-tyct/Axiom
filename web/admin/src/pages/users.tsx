@@ -67,7 +67,7 @@ function UsersTable({ rows }: { rows: AdminSchemas["UserSummary"][] }) {
           <Th>{t("users.col.tier")}</Th>
           <Th>{t("users.col.mfa")}</Th>
           <Th>{t("users.col.created")}</Th>
-          <Th shrink />
+          <Th actions />
         </tr>
       </thead>
       <tbody>
@@ -86,7 +86,7 @@ function UsersTable({ rows }: { rows: AdminSchemas["UserSummary"][] }) {
               </State>
             </Td>
             <Td>{format.dateTime(new Date(user.created_at))}</Td>
-            <Td shrink>
+            <Td actions>
               <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/accounts/$accountId"

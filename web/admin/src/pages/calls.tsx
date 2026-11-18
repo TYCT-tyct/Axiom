@@ -282,7 +282,7 @@ function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; in
       <Td align="end">{call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}</Td>
       <Td align="end">{call.price ? format.money(call.price) : "—"}</Td>
       {inspect ? (
-        <Td shrink>
+        <Td actions>
           <ActionButton asChild size="sm" variant="gho">
             <Link to="/calls/$callId" params={{ callId: call.id }}>
               {t("calls.trace")}

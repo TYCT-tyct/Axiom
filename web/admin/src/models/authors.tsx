@@ -60,7 +60,7 @@ function AuthorsTable({ authors, onEdit }: { authors: Author[]; onEdit: ((author
             </Td>
             <Td main>{author.name}</Td>
             {onEdit ? (
-              <Td shrink>
+              <Td actions>
                 <ActionButton
                   variant="gho"
                   size="sm"

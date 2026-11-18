@@ -69,6 +69,12 @@
   white-space: nowrap;
 }
 
+.actions {
+  position: sticky;
+  right: 0;
+  background: var(--cardBg);
+}
+
 .main {
   min-width: 160px;
   max-width: 288px;

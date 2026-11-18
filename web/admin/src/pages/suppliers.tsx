@@ -101,7 +101,7 @@ function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
             <Td>
               <UnitValue supplier={supplier} />
             </Td>
-            <Td shrink>
+            <Td actions>
               <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/suppliers/$supplierId"

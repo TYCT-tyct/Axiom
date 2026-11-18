@@ -82,7 +82,7 @@ export function Publications() {
                     </Td>
                     <Td>{p.current_id ?? t("pricing.publish.unavailable")}</Td>
                     <Td>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</Td>
-                    <Td shrink>
+                    <Td actions>
                       {manage && p.schedule && p.model_id && p.candidate_id ? (
                         <ActionButton size="sm" onClick={() => setEditing(publicationKey(p))}>
                           {t("pricing.publish.action")}

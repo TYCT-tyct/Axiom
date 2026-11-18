@@ -114,7 +114,7 @@ function ModelsTable({ rows }: { rows: AdminSchemas["ModelSummary"][] }) {
             </Td>
             <Td>{t(`models.basis.${model.version_basis}`)}</Td>
             <Td>{t(`models.source.${model.price_source}`)}</Td>
-            <Td shrink>
+            <Td actions>
               <ActionButton variant="gho" size="sm" square asChild>
                 <Link
                   to="/models/$modelId"

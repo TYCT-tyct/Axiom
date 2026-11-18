@@ -72,7 +72,7 @@ function PendingTable({
             <Td>{names.get(row.supplier_id) ?? row.supplier_id}</Td>
             <Td>{row.formats.join(" · ")}</Td>
             {onMap ? (
-              <Td shrink>
+              <Td actions>
                 <ActionButton size="sm" onClick={() => onMap(row)}>
                   {t("mappings.map")}
                 </ActionButton>

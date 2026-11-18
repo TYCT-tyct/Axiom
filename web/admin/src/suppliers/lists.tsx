@@ -79,7 +79,7 @@ function GroupRow({ group, onOpen }: { group: AdminSchemas["SupplierGroup"]; onO
         </Cluster>
       </Td>
       {onOpen ? (
-        <Td shrink>
+        <Td actions>
           <ActionButton size="sm" onClick={() => onOpen({ kind: "group", group })}>
             {group.selected ? t("suppliers.group.unselect.action") : t("suppliers.group.select.action")}
           </ActionButton>
@@ -189,7 +189,7 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
             <Td>{key.group_ref ? <Code>{key.group_ref}</Code> : "—"}</Td>
             <Td>{t(`suppliers.unbound.state.${key.status}`)}</Td>
             {onOpen ? (
-              <Td shrink>
+              <Td actions>
                 <ActionButton size="sm" onClick={() => onOpen({ kind: "bind", key })}>
                   {t("suppliers.bind.action")}
                 </ActionButton>
@@ -284,7 +284,7 @@ function EndpointRow({
         <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
       </Td>
       {onOpen ? (
-        <Td shrink>
+        <Td actions>
           <Cluster gap={4} justify="end">
             {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
               <ActionButton
