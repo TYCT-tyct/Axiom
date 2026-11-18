@@ -128,11 +128,24 @@
       "source": "cjk-serif",
       "weight": "600",
       "split": true,
-      "pages": ["site/home"],
+      "pages": ["site/home", "site/models"],
       "text": {
         "script": "han",
         "keys": {
+          "common": ["publicModels.title"],
           "site": ["board.m2e2a3b1e5d"]
+        }
+      }
+    },
+    {
+      "family": "AX Serif",
+      "source": "cjk-serif",
+      "weight": "600",
+      "pages": ["site/models"],
+      "text": {
+        "script": "latin",
+        "keys": {
+          "common": ["publicModels.title"]
         }
       }
     }

@@ -5,7 +5,7 @@ import narrow from "@axiom/boards/SitePhone/regions/Shell.zh";
 
 // The website's messages in Chinese, the source every other language follows.
 export default {
-  home: "首页",
+  home: "{{site}} 首页",
   navigation: "主导航",
   models: "模型与价格",
   signIn: "登录",

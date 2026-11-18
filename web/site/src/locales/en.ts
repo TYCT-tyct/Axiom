@@ -6,7 +6,7 @@ import type { Messages } from "@axiom/ui";
 import type zh from "./zh";
 
 export default {
-  home: "Home",
+  home: "{{site}} Home",
   navigation: "Main navigation",
   models: "Models & prices",
   signIn: "Sign in",
