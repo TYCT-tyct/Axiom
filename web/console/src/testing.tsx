@@ -3,7 +3,7 @@ import { createInstance } from "i18next";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, beforeAll } from "vitest";
+import { afterEach, beforeAll, vi } from "vitest";
 
 // What the component tests of the console share: a page rendered with its query cache and messages, and the ways a user
 // moves it on. Messages have no resources, so a page shows its message keys, which a test can look for.
@@ -69,4 +69,68 @@ export async function submit(form: HTMLFormElement) {
     form.requestSubmit();
   });
   await settle();
+}
+
+// answer, as a console call resolves: the data of a 200, or the error code of any other status. A call a test does not
+// name is an unavailable node, so a page that reaches outside its own requests fails that test rather than passing.
+type Call = (path: string, options?: never) => Promise<unknown>;
+type Method = "GET" | "POST" | "PUT" | "DELETE";
+
+export async function mockClient(importOriginal: <T>() => Promise<T>, handlers: Partial<Record<Method, Call>> = {}) {
+  const actual = await importOriginal<typeof import("@axiom/api")>();
+  const unavailable: Call = () => answer(503, "unavailable");
+  return {
+    ...actual,
+    consoleApi: {
+      ...actual.consoleApi,
+      GET: vi.fn((handlers.GET ?? unavailable) as never),
+      POST: vi.fn((handlers.POST ?? unavailable) as never),
+      PUT: vi.fn((handlers.PUT ?? unavailable) as never),
+      DELETE: vi.fn((handlers.DELETE ?? unavailable) as never),
+    },
+  };
+}
+
+// wideWindow is jsdom's missing matchMedia for the pages that pick the board's own form: they take the wide board, which
+// is what a desktop shows.
+export function wideWindow() {
+  beforeAll(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
+  });
+}
+
+// press clicks the element a user reaches by that role and accessible name (or by its text), the way a mouse does.
+export async function press(root: ParentNode, name: RegExp | string) {
+  const elements = [...root.querySelectorAll<HTMLElement>("[role=button], button")];
+  const element = elements.find((candidate) =>
+    name instanceof RegExp
+      ? name.test(candidate.getAttribute("aria-label") ?? candidate.textContent ?? "")
+      : (candidate.getAttribute("aria-label") ?? candidate.textContent) === name,
+  );
+  if (!element) throw new Error(`no element ${String(name)}`);
+  await act(async () => element.click());
+  await settle();
+}
+
+// setUpBoardPages readies a test of a page ported from the board: the document as setUpPages leaves it, and the wide
+// board's breakpoint, which jsdom lacks.
+export function setUpBoardPages() {
+  setUpPages();
+  wideWindow();
+}
+
+// openRow opens the row of a board-drawn list that a page supplies an accessible name for, as a reader does with the
+// keyboard or the mouse, and returns the dialog it opened.
+export async function openRow(container: HTMLElement, label: string, index = 0) {
+  const rows = [...container.querySelectorAll<HTMLElement>("[aria-label]")].filter((element) =>
+    (element.getAttribute("aria-label") ?? "").startsWith(label),
+  );
+  await act(async () => rows[index]?.click());
+  await settle();
+  return document.querySelector("dialog") as HTMLElement;
 }

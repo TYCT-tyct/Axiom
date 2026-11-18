@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import type { Schemas } from "@axiom/api";
 import type { ReactNode } from "react";
+import { act } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { SecretDialog } from "./key-dialogs";
 import { KeyForm, type KeyValues } from "./key-form";
@@ -256,4 +257,26 @@ it.each([
   const body = container.ownerDocument.body;
   expect(body.textContent).toContain(said);
   expect(body.querySelector("form") !== null).toBe(form);
+});
+
+// A workspace is stopped, never removed: the edit form's switch can be turned back on, and the page offers no way to
+// delete one (docs/domains/accounts.md「工作区」), which the default workspace's form does not even offer to stop.
+it("stops a workspace with a switch that turns it back on and offers no removal", async () => {
+  api.workspaces = [workspace(1), workspace(2, { disabled: true })];
+  const { container } = await render(<Workspaces />);
+  const body = container.ownerDocument.body;
+  const edits = [...body.querySelectorAll("button")].filter((button) =>
+    (button.getAttribute("aria-label") ?? "").startsWith("workspaces.editNamed"),
+  );
+  const edit = edits.at(-1) as HTMLButtonElement;
+  await act(async () => edit.click());
+  await settle();
+  const stop = body.querySelector("input[name=disabled]") as HTMLInputElement;
+  expect(stop.checked).toBe(true);
+  stop.checked = false;
+  await submit(body.querySelector("form") as HTMLFormElement);
+  expect(api.sent).toEqual([{ name: "Space 2", disabled: false }]);
+  expect([...body.querySelectorAll("button")].map((button) => button.textContent).join(" ")).not.toMatch(
+    /workspaces\.(delete|remove)/,
+  );
 });

@@ -35,6 +35,46 @@ export const rulings: Ruling[] = [
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console route", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console byok", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  // The board draws a workspace's supplier lines — latency, availability, a relative price and a switch per line — and
+  // the failover switch and timeouts above them. No endpoint names a line, and a failed attempt is the platform's
+  // (#816 O13); what a key routes by is a preset, which the design has no editor for (console-gap L2). So the page
+  // lists presets instead, and what the board draws there is excused.
+  {
+    scene: "console route",
+    basis: "#816 O13: the failover switch, the timeouts and the sort a workspace prefers have no account-level setting",
+    board: { selector: ".qstrc, .qcard.rows" },
+  },
+  {
+    scene: "console route",
+    basis:
+      "#816: the board's line table has no API; the page lists routing presets, whose columns and cells are the account's",
+    board: { selector: ".qtbl" },
+    page: { selector: ".qtbl" },
+  },
+  // The page's own words where the board writes about lines it draws, and the console's create action, which the design
+  // puts on no page (console-gap L2).
+  {
+    scene: "console route",
+    basis: "the page's own description and its list's title and hint say what the console lists",
+    board: { selector: ".qph p, .qcard.flush .qch" },
+    page: { selector: ".qph p, .qcard.flush .qch" },
+  },
+  {
+    scene: "console route",
+    basis: "console-gap L2: the design draws nowhere to make a preset, so the page's action area is its own",
+    page: { selector: ".qph .qpa" },
+  },
+  // The board draws four vendors, a workspace-wide "prefer your own key" switch and no test, switch or removal per key.
+  // The API takes one provider (#816 O14) and its fallback is each key's own, and the test, switch and removal are in the
+  // row's dialog (console-gap L20), so the list and those rows are excused.
+  {
+    scene: "console byok",
+    basis: "#816 O14/L20: one provider, a fallback per key, and the per-key actions in the row's own dialog",
+    board: { selector: ".p-byok .qcard.rows" },
+    page: { selector: ".p-byok .qcard.rows" },
+  },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {

@@ -7,7 +7,7 @@ import { KeyForm, type KeyValues } from "./key-form";
 import Keys from "./pages/keys";
 import RoutingPresets from "./pages/routing-presets";
 import { DisablePresetDialog } from "./preset-dialogs";
-import { choose, render, settle, setUpPages, submit } from "./testing";
+import { choose, openRow, press, render, settle, setUpBoardPages, submit } from "./testing";
 
 // What the mocked console answers, which a test changes between reads: the presets a key may use (or a failed read),
 // the account's default, the account's keys, and every default the page sends.
@@ -36,38 +36,34 @@ const preset = (n: number) => ({
 const workspacePreset = { ...preset(3), scope: "workspace", workspace_id: "ws_1" };
 
 vi.mock("@axiom/api", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@axiom/api")>();
-  const { answer } = await import("./testing");
-  return {
-    ...actual,
-    consoleApi: {
-      ...actual.consoleApi,
-      GET: vi.fn((path: string) => {
-        switch (path) {
-          case "/api/console/v1/routing-presets":
-            return api.presetsFail
-              ? answer(503, "unavailable")
-              : answer(200, { data: [preset(1), preset(2), workspacePreset] });
-          case "/api/console/v1/routing-default":
-            return api.defaultFail ? answer(503, "unavailable") : answer(200, api.routingDefault);
-          case "/api/console/v1/keys":
-            return answer(200, { data: api.keys });
-          case "/api/console/v1/balance":
-            return answer(500, "internal");
-          default:
-            return Promise.reject(new Error(`unexpected GET ${path}`));
-        }
-      }),
-      PUT: vi.fn((_path: string, { body }: { body: { preset_id: string | null; version: number } }) => {
-        api.sent.push(body);
-        if (body.version !== api.routingDefault.version) {
-          return answer(409, "stale_revision");
-        }
-        api.routingDefault = { preset_id: body.preset_id ?? undefined, version: api.routingDefault.version + 1 };
-        return answer(200, api.routingDefault);
-      }),
+  const { answer, mockClient } = await import("./testing");
+  return mockClient(importOriginal, {
+    GET: (path: string) => {
+      switch (path) {
+        case "/api/console/v1/routing-presets":
+          return api.presetsFail
+            ? answer(503, "unavailable")
+            : answer(200, { data: [preset(1), preset(2), workspacePreset] });
+        case "/api/console/v1/routing-default":
+          return api.defaultFail ? answer(503, "unavailable") : answer(200, api.routingDefault);
+        case "/api/console/v1/keys":
+          return answer(200, { data: api.keys });
+        case "/api/console/v1/balance":
+          return answer(500, "internal");
+        default:
+          return Promise.reject(new Error(`unexpected GET ${path}`));
+      }
     },
-  };
+    PUT: (_path: string, options?: { body?: { preset_id: string | null; version: number } }) => {
+      const body = options?.body as { preset_id: string | null; version: number };
+      api.sent.push(body);
+      if (body.version !== api.routingDefault.version) {
+        return answer(409, "stale_revision");
+      }
+      api.routingDefault = { preset_id: body.preset_id ?? undefined, version: api.routingDefault.version + 1 };
+      return answer(200, api.routingDefault);
+    },
+  });
 });
 
 // The keys page keeps its filters in the address; here there are none.
@@ -79,7 +75,7 @@ vi.mock("@tanstack/react-router", () => ({
 
 vi.mock("@axiom/app", async (importOriginal) => (await import("./testing")).everyPermission(importOriginal));
 
-setUpPages();
+setUpBoardPages();
 
 beforeEach(() => {
   api.presetsFail = false;
@@ -88,6 +84,10 @@ beforeEach(() => {
   api.keys = [];
   api.sent = [];
 });
+
+// The default's two buttons say what they do; with no messages in a test, they are their keys.
+const pressDefault = (dialog: HTMLElement, which: "set" | "clear" | "reloaded") =>
+  press(dialog, `routingPresets.defaults.${which}`);
 
 // A preset chosen for a new key is sent even when the list is read again and that read fails: the choice must not fall
 // back to the layers' default, which may not limit what the chosen preset limits.
@@ -129,46 +129,32 @@ it("offers no preset for a management key", async () => {
   expect(container.querySelector("select[name=preset_id]")).toBeNull();
 });
 
-// The default is sent at the version its choice was made against. A background read that brings a newer default does
-// not move that version, so the save is refused instead of overwriting. A reload that fails says so and keeps the
-// refusal, so it can be tried again; one that succeeds takes the newer default as the base.
-it("sends the default at the version the choice was made against", async () => {
-  const { client, container } = await render(<RoutingPresets />);
-  const form = container.querySelector("form") as HTMLFormElement;
-  const select = form.querySelector("select") as HTMLSelectElement;
-  await choose(select, preset(2).id);
-  api.routingDefault = { preset_id: undefined, version: 2 };
-  await act(async () => {
-    await client.refetchQueries({ queryKey: [accountKey, "routing-presets", "default"] });
-  });
-  await settle();
-  await submit(form);
+// The default is sent at the version the page read. A change made elsewhere meanwhile is refused instead of
+// overwritten: the page says so and loads the default as it now is, so the next press sends the current version.
+it("sends the default at the version the page read and reloads it when it moved on", async () => {
+  const { container } = await render(<RoutingPresets />);
+  const dialog = await openRow(container, "routingPresets.openNamed", 1);
+  await pressDefault(dialog, "set");
   expect(api.sent).toEqual([{ preset_id: preset(2).id, version: 1 }]);
-  expect(api.routingDefault).toEqual({ preset_id: undefined, version: 2 });
-  const reload = () =>
-    [...form.querySelectorAll("button")].find((b) => b.textContent === "routingPresets.defaults.reload");
-  const clickReload = async () => {
-    await act(async () => {
-      reload()?.click();
-    });
-    await settle();
-  };
-  api.defaultFail = true;
-  await clickReload();
-  expect(form.querySelectorAll("[role=alert]")).toHaveLength(2);
-  expect(select.value).toBe(preset(2).id);
-  expect(reload()).toBeDefined();
-  api.defaultFail = false;
-  await clickReload();
-  expect(form.querySelectorAll("[role=alert]")).toHaveLength(0);
-  expect(select.value).toBe("");
-  await choose(select, preset(2).id);
-  await submit(form);
-  expect(api.sent).toEqual([
-    { preset_id: preset(2).id, version: 1 },
-    { preset_id: preset(2).id, version: 2 },
-  ]);
-  expect(api.routingDefault).toEqual({ preset_id: preset(2).id, version: 3 });
+  expect(api.routingDefault).toEqual({ preset_id: preset(2).id, version: 2 });
+  // The page now shows preset 1 as the default, so the same button clears it.
+  expect(dialog.textContent).toContain("routingPresets.defaults.saved");
+  await pressDefault(dialog, "clear");
+  expect(api.sent.at(-1)).toEqual({ preset_id: null, version: 2 });
+});
+
+// A default another tab changed: the version the page read went on, so the write is refused, the page says it loaded the
+// latest, and the next press sends the version that is current.
+it("refuses a stale default and sends the current version next", async () => {
+  const { container } = await render(<RoutingPresets />);
+  const dialog = await openRow(container, "routingPresets.openNamed", 1);
+  api.routingDefault = { preset_id: undefined, version: 2 };
+  await pressDefault(dialog, "set");
+  expect(api.sent).toEqual([{ preset_id: preset(2).id, version: 1 }]);
+  expect(dialog.textContent).toContain("routingPresets.defaults.reloaded");
+  await pressDefault(dialog, "set");
+  expect(api.sent.at(-1)).toEqual({ preset_id: preset(2).id, version: 2 });
+  expect(api.routingDefault.version).toBe(3);
 });
 
 // Before disabling, the dialog says how many of the account's keys still route by the preset and, when it is the
@@ -280,15 +266,22 @@ it.each([
   document.body.replaceChildren();
 
   const page = await render(<RoutingPresets />);
-  const defaultOptions = [...page.container.querySelectorAll<HTMLOptionElement>("form select option")];
-  expect(defaultOptions[0]?.textContent).toBe(`routingPresets.${none}`);
-  expect(defaultOptions.map((o) => o.value)).not.toContain(workspacePreset.id);
-  expect(texts(page.container.querySelectorAll("form p.text-warn"))).toEqual(refused);
-  // Each row's slug sits right under its name, and the badge after it.
+  const dialog = await openRow(page.container, "routingPresets.openNamed");
+  // What the account's own default leaves to the site or the platform, and what the account's does not decide.
+  const said = [...dialog.querySelectorAll("p")].map((p) => p.textContent ?? "");
+  const inherited = said.find((line) => line.startsWith("routingPresets.defaults.none"));
+  // What the account's default leaves to the site or the platform is said only while it sets none.
+  if (read.preset_id) {
+    expect(inherited).toBeUndefined();
+  } else {
+    expect(inherited).toBe(`routingPresets.${none}`);
+  }
+  expect(texts(dialog.querySelectorAll("p.text-warn"))).toEqual(refused);
+  // The preset a key made now takes is marked on its row, by its slug.
   const badged = [...page.container.querySelectorAll("tbody tr")].filter((row) =>
     row.textContent?.includes("routingPresets.isDefault"),
   );
-  expect(badged.map((row) => row.querySelector("p.font-mono")?.textContent)).toEqual(
+  expect(badged.map((row) => row.querySelector(".mut")?.textContent?.split(" · ")[0])).toEqual(
     badge ? [`p${badge.slice(-1)}`] : [],
   );
   document.body.replaceChildren();

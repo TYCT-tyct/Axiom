@@ -12,6 +12,13 @@ async function goto(page: Page, path: string) {
   await pageHeading(page);
 }
 
+// A row of the routing page's table: its name is the button that opens the preset, which the board's table draws. The
+// row of the preset a key made now takes is the one the page marks, whichever data and language it shows.
+async function openPreset(page: Page, which: "first" | "default") {
+  const row = which === "default" ? page.locator("tbody tr[data-default=true]") : page.locator("tbody tr").first();
+  await row.locator("b[role=button]").click();
+}
+
 // A screen whose dialog opens after a click on the page.
 const dialogScene = (name: string, path: string, open: (page: Page) => Promise<void>): Scene =>
   scene(name, (page) => goto(page, path), open);
@@ -40,13 +47,15 @@ const scenes: Scene[] = [
   dialogScene("routing-preset-create", "routing-presets", (page) =>
     page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click(),
   ),
-  // A copy of a preset that asks for a product score, which the editor offers only to remove.
-  dialogScene("routing-preset-copy", "routing-presets", (page) =>
-    page
-      .getByRole("button", { name: /^(复制|Copy) / })
-      .first()
-      .click(),
-  ),
+  // The row's name opens the preset, which is where its ways on live: a copy that asks for a product score, which the
+  // editor offers only to remove.
+  dialogScene("routing-preset-copy", "routing-presets", async (page) => {
+    await openPreset(page, "first");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^(复制|Copy)$/ })
+      .click();
+  }),
   // A rule whose data policies keep no endpoint, as the check says, refused on save.
   dialogScene("routing-preset-refused", "routing-presets", async (page) => {
     await page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click();
@@ -62,24 +71,26 @@ const scenes: Scene[] = [
     await dialog.locator("button[type=submit]").click();
     await dialog.locator("[data-invalid]").waitFor();
   }),
-  // The account's first preset is its default and has keys bound (console-data.ts), so the dialog says both.
-  dialogScene("routing-preset-disable", "routing-presets", (page) =>
+  // The preset a key made now takes is the account's own, which has keys bound (console-data.ts), so the dialog says
+  // both.
+  dialogScene("routing-preset-disable", "routing-presets", async (page) => {
+    await openPreset(page, "default");
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /^(停用|Disable)$/ })
+      .click();
+  }),
+  // The preset's own dialog: its rules in a line, the account's default, and the ways on.
+  dialogScene("routing-preset-detail", "routing-presets", (page) => openPreset(page, "default")),
+  // The board's BYOK page: the account's own provider keys, each row opening its test, switch and removal.
+  { name: "provider-keys", signedIn: true, open: (page) => goto(page, "provider-keys") },
+  dialogScene("provider-key-detail", "provider-keys", (page) =>
     page
-      .getByRole("button", { name: /^(停用|Disable) / })
+      .getByRole("button", { name: /^(打开|Open) / })
       .first()
       .click(),
   ),
-  {
-    name: "routing-presets-tip",
-    signedIn: true,
-    open: async (page) => {
-      await goto(page, "routing-presets");
-      await page
-        .getByRole("button", { name: /^(修改|Edit) / })
-        .first()
-        .hover();
-    },
-  },
+  { name: "workspaces", signedIn: true, open: (page) => goto(page, "workspaces") },
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },

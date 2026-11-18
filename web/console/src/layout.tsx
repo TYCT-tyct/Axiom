@@ -28,7 +28,7 @@ const pages = {
   ov: { to: "/" },
   logs: { to: "/calls", permission: "calls.view" },
   keys: { to: "/keys", permission: "api_keys.view" },
-  presets: { to: "/routing-presets", permission: "api_keys.view" },
+  route: { to: "/routing-presets", permission: "api_keys.view" },
   byok: { to: "/provider-keys", permission: "api_keys.view" },
   bill: { to: "/balance", permission: "balance.view", under: ["/redeem", "/orders", "/statement"] },
   profile: { to: "/settings", under: ["/workspaces"] },

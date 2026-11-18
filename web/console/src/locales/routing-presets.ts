@@ -14,9 +14,16 @@ export const zh = {
   actions: { copy: "复制", edit: "修改", disable: "停用" },
   unavailable: "这个节点还不支持路由预设，请稍后刷新。",
   empty: { title: "还没有可用的预设", body: "新建一个预设，再在 key 上选它。" },
+  noPermission: { title: "没有查看预设的权限", body: "需要能看 key 的权限。请账户的所有者给你开。" },
+  notice: "只有能改 key 的人才能改路由预设，你可以查看。",
+  list: {
+    title: "预设",
+    hint: "停用的预设不在列表里；绑定它的 key 继续按它路由。",
+  },
   col: { name: "名称", layer: "来自", rules: "规则", keys: "我的 key", version: "版本" },
   layer: { platform: "平台", site: "本站", account: "我的账户", workspace: "工作区" },
   isDefault: "新 key 默认",
+  openNamed: "打开 {{name}}",
   disabled: "已停用",
   defaults: {
     title: "新 key 的默认预设",
@@ -31,6 +38,9 @@ export const zh = {
     save: "保存默认",
     saved: "已保存。",
     reload: "载入最新的默认",
+    set: "设为新 key 的默认",
+    clear: "不再作为新 key 的默认",
+    reloaded: "别处刚改过默认，已载入最新的。要改的话再点一次。",
   },
   form: {
     slug: "标识",
@@ -89,9 +99,19 @@ export const en: Messages<typeof zh> = {
   actions: { copy: "Copy", edit: "Edit", disable: "Disable" },
   unavailable: "This node doesn’t support routing presets yet. Refresh in a little while.",
   empty: { title: "No presets to use yet", body: "Make a preset, then choose it on a key." },
+  noPermission: {
+    title: "No permission to see presets",
+    body: "Seeing presets needs the permission to see keys. Ask the account’s owner for it.",
+  },
+  notice: "Only someone who can change keys can change routing presets; you can see them.",
+  list: {
+    title: "Presets",
+    hint: "Disabled presets aren’t listed; keys bound to one keep routing by it.",
+  },
   col: { name: "Name", layer: "From", rules: "Rules", keys: "My keys", version: "Version" },
   layer: { platform: "Platform", site: "This site", account: "My account", workspace: "Workspace" },
   isDefault: "Default for new keys",
+  openNamed: "Open {{name}}",
   disabled: "Disabled",
   defaults: {
     title: "Default preset for new keys",
@@ -108,6 +128,9 @@ export const en: Messages<typeof zh> = {
     save: "Save default",
     saved: "Saved.",
     reload: "Load the latest default",
+    set: "Make it the default for new keys",
+    clear: "Stop being the default for new keys",
+    reloaded: "The default was just changed elsewhere, so the latest one is loaded. Press again to change it.",
   },
   form: {
     slug: "Identifier",
