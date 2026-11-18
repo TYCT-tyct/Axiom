@@ -6,8 +6,9 @@ import KeysZH from "@axiom/boards/AxApp/regions/Keys.zh";
 import { Button, DataState, EmptyState, FormError, Icon, Note, Notice, useFormat, usePageTitle } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { type KeyboardEvent as KeyEvent, type MouseEvent, type ReactNode, useMemo, useState } from "react";
+import { type MouseEvent, type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { pressBoardButton } from "../board-interaction";
 import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
 import { type KeyFilters, keysQuery } from "../queries";
@@ -185,7 +186,7 @@ function rowValues(manage: boolean, list: Key[], choose: (key: Key) => void) {
   if (!manage) {
     return { kr2_0: "", rowTab: "-1", decorative: true };
   }
-  return { kr2_0: "", rowTab: "0", decorative: true, press, ko2_0: openRow(list, choose) };
+  return { kr2_0: "", rowTab: "0", decorative: true, press: pressBoardButton, ko2_0: openRow(list, choose) };
 }
 
 // The key a row stands for, from the row the event came from: the list's rows are the page's, in its order.
@@ -198,13 +199,6 @@ function openRow(list: Key[], choose: (key: Key) => void) {
       choose(key);
     }
   };
-}
-
-function press(event: KeyEvent<Element>) {
-  if (event.key === "Enter" || event.key === " ") {
-    event.preventDefault();
-    (event.currentTarget as HTMLElement).click();
-  }
 }
 
 // A model the catalog has retired cannot serve a key that names it, and the board's list has no column to say it in

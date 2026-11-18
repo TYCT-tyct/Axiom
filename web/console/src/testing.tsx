@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createInstance } from "i18next";
+import { createInstance, type Resource } from "i18next";
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
@@ -12,9 +12,9 @@ const i18n = createInstance();
 
 // setUpPages readies the test file's document: messages, the modal methods jsdom's dialog element lacks, and an empty
 // body after each test.
-export function setUpPages() {
+export function setUpPages(resources: Resource = {}) {
   beforeAll(async () => {
-    await i18n.init({ lng: "en", resources: {} });
+    await i18n.init({ lng: "en", resources });
     HTMLDialogElement.prototype.showModal = function () {
       this.open = true;
     };

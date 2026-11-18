@@ -4,6 +4,7 @@ import { en as keysMessages } from "./keys";
 import { en as overviewBoard } from "./overview";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
+import { en as requestPresets } from "./request-presets";
 import { en as routingPresets } from "./routing-presets";
 import { en as settings } from "./settings";
 import { en as shell } from "./shell";
@@ -284,6 +285,7 @@ export default {
   providerKeys,
   workspaces,
   routingPresets,
+  requestPresets: { copy: requestPresets },
   calls: {
     priceVersion: "Price version {{version}}",
     priceVersionUnavailable: "Price version unavailable",

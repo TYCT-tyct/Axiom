@@ -3,9 +3,9 @@
 import type zh from "./RequestPresetEditor.zh.ts";
 export default {
   "mffac84b31a": "Use the reference in code and update the request preset here.",
-  "mc93ed832fd": "",
+  "mc93ed832fd": "Name @preset/ Use lowercase letters, numbers, and hyphens.",
   "m3fd47edce4": "Close",
-  "md6d8ddd71a": "",
+  "md6d8ddd71a": "Put this first in each request.",
   "m2cd0f3be87": "Cancel",
   "ma61bc16ca0": "New request preset",
   "m449597f5dd": "Press Enter to create",

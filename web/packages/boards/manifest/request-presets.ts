@@ -14,7 +14,9 @@ const english = {
   ma61bc16ca0: "New request preset",
   m3fd47edce4: "Close",
   m6773310492: "Name",
+  mc93ed832fd: "Name @preset/ Use lowercase letters, numbers, and hyphens.",
   mf4c4e8ad48: "System prompt",
+  md6d8ddd71a: "Put this first in each request.",
   mffac84b31a: "Use the reference in code and update the request preset here.",
   m449597f5dd: "Press Enter to create",
   m2cd0f3be87: "Cancel",
@@ -30,12 +32,14 @@ function list(board: string): Region {
     name: "RequestPresets",
     english,
     page: "presets",
-    roots: [".p-presets"],
-    omit: [".wv.w0", ".wv.w1", ".ppcnt"],
+    roots: [".qpages:has(> .p-presets)"],
+    omit: [".qpages > :not(.p-presets)", ".wv.w0", ".wv.w1", ".ppcnt"],
     repeats: { presets: ".wv.w2 .qpre" },
     text: { title: ".qptl h1", create: ".qpa button > span", example: ".qcode2 > span:nth-of-type(2)" },
     elements: {
+      ".qpages": { set: { class: "{{loadingClass}}" } },
       ".p-presets": { set: { style: "{{layout}}" } },
+      ".qptl h1": { set: { tabindex: "-1" } },
       ".qpa": { unless: "readOnly" },
       ".qpre": {
         set: {
@@ -48,6 +52,7 @@ function list(board: string): Region {
       },
       ".qhow": { unless: "noExample" },
     },
+    classes: { loadingClass: ["pstL"] },
   };
 }
 

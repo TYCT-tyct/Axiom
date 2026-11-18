@@ -1,10 +1,12 @@
+import { readFileSync } from "node:fs";
 import type { Page } from "@playwright/test";
-import { requestPresetText } from "../console/src/locales/request-presets.ts";
+import consoleEn from "../console/src/locales/en.ts";
+import consoleZh from "../console/src/locales/zh.ts";
 import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
 import presetsZh from "../packages/boards/src/AxApp/regions/RequestPresets.zh.ts";
 import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
 import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
-import { consoleSuite } from "./console-scenes.ts";
+import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import type { Suite } from "./scene.ts";
 import { siteSuite } from "./site-scenes.ts";
@@ -23,6 +25,7 @@ export type DesignScene = {
   schemes: Record<"light" | "dark", Record<string, string>>;
   language?: "en";
   localizeReference?: (page: Page) => Promise<void>;
+  textRasterization?: "grayscale" | "unhinted";
 };
 
 // The boards' own "today": the console boards date their demo data around 2026-10-24 (the top-up board's pyDate).
@@ -42,26 +45,40 @@ const siteBoards = {
   390: { file: "SitePhone.dc.html", height: 844 },
 };
 
+type Face = { family: string; weight: string; axes?: { wght?: number | number[] } };
+const { faces }: { faces: Face[] } = JSON.parse(
+  readFileSync(new URL("../scripts/fonts/sources.json", import.meta.url), "utf8"),
+);
+const referenceFonts = [
+  ["Axiom Sans", "Axiom Sans"],
+  ["Axiom Mono", "Axiom Mono"],
+  ["Axiom CJK", "Axiom CJK Console"],
+].map(([boardFamily, shippedFamily]) => [boardFamily, faces.find(({ family }) => family === shippedFamily)] as const);
+
 const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
   name: language === "en" ? "console request-presets en" : "console request-presets",
   suite: consoleSuite,
   scene: "request-presets",
-  fonts: "console",
+  fonts: "console/pages/request-presets",
   boards: consoleBoards("presets"),
   schemes: consoleSchemes,
   language: language === "en" ? "en" : undefined,
+  textRasterization: language === "zh" ? "unhinted" : "grayscale",
   localizeReference: async (page) => {
-    const labels = requestPresetText(language);
+    const messages = language === "en" ? consoleEn : consoleZh;
+    const labels = messages.requestPresets.copy;
     const localized: Record<string, string> = {
       [presetsZh.mf1de1e2621]: labels.title,
       [presetsZh.ma61bc16ca0]: labels.create,
       [presetsZh.m181bcfdf83]: labels.introEnd,
       [presetsZh.mdfd719cbad]: labels.exampleHint,
+      [presetsZh.m99eb8c2896]: requestPresetPrompts[0],
+      [presetsZh.mab5d9c5402]: requestPresetPrompts[1],
     };
     if (language === "en") {
       for (const key of Object.keys(shellEn) as (keyof typeof shellEn)[]) localized[shellZh[key]] = shellEn[key];
       localized[shellZh.mf1de1e2621] = labels.title;
-      localized[shellZh.mb9670c85a4] = "Routing presets";
+      localized[shellZh.mb9670c85a4] = messages.nav.routingPresets;
       // The prompts are API fixtures. Translate the UI surrounding them, including its parameter labels.
       const keys = ["m3187029f2b", "m98472d23f3", "m74ed19426d", "md666f38b72", "m1f87913ac5"] as const;
       for (const key of keys) localized[presetsZh[key]] = presetsEn[key];
@@ -73,8 +90,27 @@ const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
         if (translation !== undefined) node.textContent = translation;
       }
     }, localized);
+    await page.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
+    // The console's base typography balances headings and avoids orphaned words.
+    await page.addStyleTag({
+      content:
+        ".p-presets :is(h1,h2){text-wrap:balance;word-break:keep-all;overflow-wrap:anywhere}.p-presets p{text-wrap:pretty}",
+    });
   },
 }));
+
+// Keep the uncut source fonts, using the console's face descriptors and pinned weight axes.
+function useProductFontWeights(faces: Record<string, Face | undefined>) {
+  for (const rule of [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules])) {
+    if (!(rule instanceof CSSFontFaceRule)) continue;
+    const family = rule.style.getPropertyValue("font-family").replaceAll(/["']/g, "");
+    const face = faces[family];
+    if (!face) continue;
+    rule.style.setProperty("font-weight", face.weight);
+    const axis = face.axes?.wght;
+    if (typeof axis === "number") rule.style.setProperty("font-variation-settings", `"wght" ${axis}`);
+  }
+}
 
 export const designScenes: DesignScene[] = [
   // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet

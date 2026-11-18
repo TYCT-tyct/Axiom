@@ -1,10 +1,15 @@
-const en = {
+export const en = {
   title: "Request presets",
   create: "New request preset",
   edit: "Edit request preset",
   detail: "Request preset",
+  introStart: "Save a model, system prompt, and parameters under one name. Use ",
+  introReference: "@preset/name",
   introEnd: " in code and update the request preset here.",
+  exampleTitle: "Use in code",
   exampleHint: "Replace the model name with the request preset reference.",
+  close: "Close",
+  cancel: "Cancel",
   loading: "Loading request presets…",
   empty: "No request presets yet",
   emptyHint: "Save a model, system prompt, and parameters under a name you can use in code.",
@@ -18,8 +23,10 @@ const en = {
   slug: "Reference ID",
   model: "Model",
   system: "System prompt",
+  systemHint: "Put this first in each request.",
   temperature: "Temperature",
   tokens: "Max tokens",
+  maxSummary: "Max {{value}} tokens",
   fallback: "Fallback models (JSON array)",
   save: "Save",
   saving: "Saving…",
@@ -35,13 +42,18 @@ const en = {
   follow: "Falls back to",
 };
 
-const zh: typeof en = {
+export const zh: typeof en = {
   title: "命名预设",
   create: "新建命名预设",
   edit: "编辑命名预设",
   detail: "命名预设",
+  introStart: "把模型、系统提示和参数存成一个名字。代码里写 ",
+  introReference: "@preset/名字",
   introEnd: "，以后改命名预设不用改代码。",
+  exampleTitle: "在代码里用",
   exampleHint: "把模型名换成命名预设的引用标识，其余照常写",
+  close: "关闭",
+  cancel: "取消",
   loading: "正在加载命名预设…",
   empty: "还没有命名预设",
   emptyHint: "把常用的模型、系统提示和参数存成一个名字，在代码里直接用。",
@@ -55,8 +67,10 @@ const zh: typeof en = {
   slug: "引用标识",
   model: "模型",
   system: "系统提示",
+  systemHint: "每次请求都会放在最前面",
   temperature: "温度",
   tokens: "最长输出",
+  maxSummary: "最长 {{value}} Token",
   fallback: "回退模型（JSON 数组）",
   save: "保存",
   saving: "正在保存…",
@@ -71,7 +85,3 @@ const zh: typeof en = {
   referenceHint: "在代码中的 @preset/ 后填入引用标识。",
   follow: "失败时换到",
 };
-
-export function requestPresetText(language: string) {
-  return language.startsWith("en") ? en : zh;
-}

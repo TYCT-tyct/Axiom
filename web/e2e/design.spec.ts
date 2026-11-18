@@ -82,11 +82,28 @@ function record(key: string, comparison: Comparison & { blocked: string[] }) {
   writeFileSync(file, `${JSON.stringify(summary, null, 2)}\n`);
 }
 
+// Use the same text antialiasing on both sides. MiSans at the pinned axis also needs the same unhinted outlines.
+function grayscaleText(args: string[]) {
+  return test.extend({
+    launchOptions: [
+      async ({ launchOptions }, use) => {
+        await use({ ...launchOptions, args: [...(launchOptions.args ?? []), "--disable-lcd-text", ...args] });
+      },
+      { scope: "worker" },
+    ],
+  });
+}
+const textScenarios = {
+  grayscale: grayscaleText([]),
+  unhinted: grayscaleText(["--font-render-hinting=none"]),
+};
+
 for (const design of designScenes) {
+  const scenario = design.textRasterization ? textScenarios[design.textRasterization] : test;
   for (const [width, board] of Object.entries(design.boards)) {
     for (const scheme of ["light", "dark"] as const) {
       const key = `${design.name.replaceAll(" ", "-")}-${width}-${scheme}`;
-      test(`${design.name} ${width} ${scheme}`, async ({ browser, page }, info) => {
+      scenario(`${design.name} ${width} ${scheme}`, async ({ browser, page }, info) => {
         const staged = view(Number(width), board.height, scheme);
         const opened = await readyBoard(browser, { ...board, props: design.schemes[scheme] }, staged);
         try {

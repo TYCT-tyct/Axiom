@@ -2,6 +2,7 @@
 import type { Schemas } from "@axiom/api";
 import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { en } from "../locales/request-presets";
 import { render, settle, setUpPages, submit } from "../testing";
 import RequestPresetsPage from "./request-presets";
 
@@ -37,7 +38,7 @@ function field(container: HTMLElement, name: string) {
   return input;
 }
 
-setUpPages();
+setUpPages({ en: { translation: { requestPresets: { copy: en } } } });
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
@@ -113,5 +114,6 @@ describe("request presets", () => {
     expect(api.DELETE).toHaveBeenCalledExactlyOnceWith(detailPath, { params: { path: { slug: "bot" } } });
     expect(container.querySelector(".qpre")).toBeNull();
     expect(container.textContent).toContain("No request presets yet");
+    expect(document.activeElement).toBe(container.querySelector("h1"));
   });
 });

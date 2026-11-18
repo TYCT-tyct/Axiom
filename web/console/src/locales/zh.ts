@@ -4,6 +4,7 @@ import { zh as keysMessages } from "./keys";
 import { zh as overviewBoard } from "./overview";
 import { zh as providerKeys } from "./provider-keys";
 import { zh as receipt } from "./receipt";
+import { zh as requestPresets } from "./request-presets";
 import { zh as routingPresets } from "./routing-presets";
 import { zh as settings } from "./settings";
 import { zh as shell } from "./shell";
@@ -271,6 +272,7 @@ export default {
   providerKeys,
   workspaces,
   routingPresets,
+  requestPresets: { copy: requestPresets },
   calls: {
     priceVersion: "价格版本 {{version}}",
     priceVersionUnavailable: "价格版本不可用",

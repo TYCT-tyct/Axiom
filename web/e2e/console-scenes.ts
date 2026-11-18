@@ -5,6 +5,12 @@ import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 import { type Scene, type Suite, dialogScene as scene } from "./scene.ts";
 
+// User content is independent of the UI language. Use the same prompts in the API and the reference.
+export const requestPresetPrompts = [
+  "Keep the meaning and shorten the text.",
+  "Outline the topic in three sections.",
+] as const;
+
 // The screens of the console M1.
 
 async function goto(page: Page, path: string) {
@@ -155,7 +161,7 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
           name: "polish-zh",
           config: {
             model: "claude-sonnet-5.5",
-            system: "润色下面的中文，保留原意，句子更短。",
+            system: requestPresetPrompts[0],
             temperature: 0.4,
             max_tokens: 2000,
           },
@@ -165,7 +171,7 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
           name: "outline",
           config: {
             model: "gpt-6.1-sol",
-            system: "把主题拆成五个小节的大纲，每节一句话。",
+            system: requestPresetPrompts[1],
             temperature: 0.6,
             max_tokens: 600,
           },

@@ -1,16 +1,12 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey } from "@axiom/app";
 import Editor from "@axiom/boards/AxApp/regions/RequestPresetEditor";
-import editorEn from "@axiom/boards/AxApp/regions/RequestPresetEditor.en";
-import editorZh from "@axiom/boards/AxApp/regions/RequestPresetEditor.zh";
 import Input from "@axiom/boards/AxApp/regions/RequestPresetInput";
-import inputEn from "@axiom/boards/AxApp/regions/RequestPresetInput.en";
-import inputZh from "@axiom/boards/AxApp/regions/RequestPresetInput.zh";
 import { type QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useId, useRef, useState } from "react";
-import { requestPresetText } from "../locales/request-presets";
+import type { zh } from "../locales/request-presets";
 
-type Copy = ReturnType<typeof requestPresetText>;
+type Copy = typeof zh;
 const path = "/api/console/v1/presets/{slug}";
 type Change = { kind: "save"; body: Schemas["PresetRequest"] } | { kind: "delete" };
 
@@ -19,14 +15,14 @@ export function PresetDialog({
   opener,
   manage,
   listKey,
-  language,
+  copy: text,
   onClose,
 }: {
   slug: string;
   opener: HTMLElement;
   manage: boolean;
   listKey: QueryKey;
-  language: string;
+  copy: Copy;
   onClose: () => void;
 }) {
   const params = { path: { slug } };
@@ -41,18 +37,22 @@ export function PresetDialog({
   const mutation = usePresetWrite(slug, listKey, onClose);
   const busy = mutation.isPending;
   const ref = useModal(opener, busy, onClose);
-  const text = requestPresetText(language);
   const titleId = useId();
   const preset = detail.data;
   const ready = !slug || !!preset;
   const edit = manage && ready;
   const draft = usePresetDraft(preset, edit, text, mutation);
   const title = !slug ? text.create : manage ? text.edit : text.detail;
+  const labels: Record<string, string> = {
+    m3fd47edce4: text.close,
+    md6d8ddd71a: text.systemHint,
+    m2cd0f3be87: text.cancel,
+  };
 
   return (
     <form onSubmit={draft.submit}>
       <Editor
-        t={(key) => (language.startsWith("en") ? editorEn : editorZh)[key]}
+        t={(key) => labels[key] ?? ""}
         text={{
           title,
           save: busy ? text.saving : text.save,
@@ -72,9 +72,7 @@ export function PresetDialog({
           deletePreset: draft.remove,
           system: asText(preset?.config?.system),
         }}
-        inputs={
-          ready && <PresetInputs preset={preset} language={language} titleId={titleId} busy={busy} readOnly={!edit} />
-        }
+        inputs={ready && <PresetInputs preset={preset} text={text} titleId={titleId} busy={busy} readOnly={!edit} />}
         note={
           ready ? (
             <EditorNote notice={draft.notice} slug={slug} hint={text.referenceHint} />
@@ -192,19 +190,17 @@ function mutationMessage(change: Change | undefined, error: unknown, text: Copy)
 
 function PresetInputs({
   preset,
-  language,
+  text,
   titleId,
   busy,
   readOnly,
 }: {
   preset?: Schemas["Preset"];
-  language: string;
+  text: Copy;
   titleId: string;
   busy: boolean;
   readOnly: boolean;
 }) {
-  const text = requestPresetText(language);
-  const labels = language.startsWith("en") ? inputEn : inputZh;
   const c = preset?.config ?? {};
   const fields = [
     { name: "name", label: text.name, value: preset?.name ?? "" },
@@ -219,7 +215,7 @@ function PresetInputs({
     .map(({ name, label, value }) => (
       <Input
         key={name}
-        t={(key) => labels[key]}
+        t={() => ""}
         text={{ label }}
         values={{ id: `${titleId}-${name}`, name, initial: value, readOnly, busy }}
       />
