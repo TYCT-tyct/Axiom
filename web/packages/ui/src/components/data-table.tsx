@@ -1,6 +1,5 @@
 import type { Key, ReactNode } from "react";
-import { classes } from "../classes";
-import s from "./data-table.module.css";
+import { Table, Td, Th } from "./table";
 
 type Column<Row> = {
   key: string;
@@ -13,8 +12,8 @@ type Column<Row> = {
   width?: number;
 };
 
-// DataTable lists rows under named columns. The scrolling box is focusable and named, so a keyboard can scroll a
-// table wider than the window. A long identifier goes in the cell as an Id, in a fixed table with the column's width.
+// DataTable lists rows under named columns, from data: the Table with its columns described once. A long identifier
+// goes in the cell as an Id, in a fixed table with the column's width.
 export function DataTable<Row>({
   label,
   columns,
@@ -28,45 +27,29 @@ export function DataTable<Row>({
   rowKey: (row: Row) => Key;
   fixed?: boolean;
 }) {
-  const cell = (column: Column<Row>, head: boolean) =>
-    classes(head ? s.th : s.td, column.align === "end" && s.end, !head && column.muted && s.muted);
+  const align = (column: Column<Row>) => (column.align === "end" ? "end" : undefined);
   return (
-    // biome-ignore lint/a11y/noNoninteractiveTabindex: a keyboard needs focus on the box to scroll a wide table.
-    <section className={s.scroll} aria-label={label} tabIndex={0}>
-      <table className={classes(s.table, fixed && s.fixed)}>
-        <caption className={s.caption}>{label}</caption>
-        {fixed ? (
-          <colgroup>
+    <Table label={label} fixed={fixed} widths={columns.map((column) => column.width)}>
+      <thead>
+        <tr>
+          {columns.map((column) => (
+            <Th key={column.key} align={align(column)}>
+              {column.header}
+            </Th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <tr key={rowKey(row)}>
             {columns.map((column) => (
-              <col
-                key={column.key}
-                className={s.col}
-                style={column.width ? ({ "--w": `${column.width}px` } as Record<`--${string}`, string>) : undefined}
-              />
-            ))}
-          </colgroup>
-        ) : null}
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <th key={column.key} scope="col" className={cell(column, true)}>
-                {column.header}
-              </th>
+              <Td key={column.key} align={align(column)} muted={column.muted}>
+                {column.cell(row)}
+              </Td>
             ))}
           </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => (
-            <tr key={rowKey(row)}>
-              {columns.map((column) => (
-                <td key={column.key} className={cell(column, false)}>
-                  {column.cell(row)}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </section>
+        ))}
+      </tbody>
+    </Table>
   );
 }

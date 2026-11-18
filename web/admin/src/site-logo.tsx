@@ -55,7 +55,6 @@ const names: Record<LogoType, string> = { "image/svg+xml": "SVG", "image/png": "
 
 export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const { t } = useTranslation();
-  const format = useFormat();
   const logo = useQuery(siteLogoQuery(siteId));
   const [setting, setSetting] = useState(false);
   const [clearing, setClearing] = useState(false);
@@ -83,16 +82,7 @@ export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
           ],
         ];
         if (view.logo) {
-          rows.push([
-            t("settings.logo.details"),
-            <Text as="span" tone="muted" key="details">
-              {names[view.logo.content_type as LogoType] ?? view.logo.content_type}
-              {view.logo.width > 0 && view.logo.height > 0
-                ? ` · ${t("settings.logo.pixels", { width: view.logo.width, height: view.logo.height })}`
-                : ""}
-              {` · ${t("settings.logo.bytes", { size: format.number(view.logo.size) })}`}
-            </Text>,
-          ]);
+          rows.push([t("settings.logo.details"), <LogoDetails key="details" logo={view.logo} />]);
         }
         return (
           <>
@@ -248,5 +238,20 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       done={() => <p>{t("settings.logo.cleared")}</p>}
       onClose={onClose}
     />
+  );
+}
+
+// LogoDetails is what the stored image is: its type, its size in pixels when known, and its bytes.
+function LogoDetails({ logo }: { logo: Logo }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Text as="span" tone="muted">
+      {names[logo.content_type as LogoType] ?? logo.content_type}
+      {logo.width > 0 && logo.height > 0
+        ? ` · ${t("settings.logo.pixels", { width: logo.width, height: logo.height })}`
+        : ""}
+      {` · ${t("settings.logo.bytes", { size: format.number(logo.size) })}`}
+    </Text>
   );
 }

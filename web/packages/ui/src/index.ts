@@ -19,7 +19,7 @@ export { Fieldset } from "./components/fieldset";
 export { type Filter, FilterBar, filterDefaults } from "./components/filter-bar";
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
 export { Glyph } from "./components/glyph";
-export { Icon, type IconName } from "./components/icon";
+export { Icon } from "./components/icon";
 export { Id, IdLink, IdText } from "./components/id";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";

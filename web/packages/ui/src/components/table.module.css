@@ -23,6 +23,10 @@
   table-layout: fixed;
 }
 
+.col {
+  width: var(--w);
+}
+
 .table th {
   height: 40px;
   padding: 0 16px;

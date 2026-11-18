@@ -3,12 +3,11 @@ import { can, Stat, useSession } from "@axiom/app";
 import { ActionButton, DataState, Grid, Icon, PageHead, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { AccountActions } from "../account-actions";
 import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
-import { Actions, Facts, PageBody, State, Time } from "../parts";
+import { Actions, Facts, NewButton, PageBody, State, Time } from "../parts";
 import { accountQuery } from "../queries";
 
 type Account = AdminSchemas["AccountDetail"];
@@ -45,18 +44,10 @@ export default function AccountPage() {
 
 function GrantButton({ account }: { account: Account }) {
   const { t } = useTranslation();
-  const allowed = can(useSession(), "credits.grant");
-  const [open, setOpen] = useState(false);
-  if (!allowed) {
-    return null;
-  }
   return (
-    <>
-      <ActionButton variant="pri" icon="plus" onClick={() => setOpen(true)}>
-        {t("users.credit.open")}
-      </ActionButton>
-      {open ? <CreditDialog account={account} onClose={() => setOpen(false)} /> : null}
-    </>
+    <NewButton permission="credits.grant" label={t("users.credit.open")}>
+      {(close) => <CreditDialog account={account} onClose={close} />}
+    </NewButton>
   );
 }
 

@@ -178,8 +178,22 @@ function Figures({ data, window, anchor }: { data: Overview; window: Window; anc
       <CoverageNotice data={data} />
       <TargetsSection targets={targets} anchor={anchor} currency={currency} />
       <Grid min="16rem" gap={12}>
-        <CallsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
-        <ErrorsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+        <CountFigure
+          metric="calls"
+          data={data}
+          window={window}
+          site={site}
+          targets={targets}
+          showTarget={targetNotes}
+        />
+        <CountFigure
+          metric="errors"
+          data={data}
+          window={window}
+          site={site}
+          targets={targets}
+          showTarget={targetNotes}
+        />
         <RevenueFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CostFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CashFigure data={data} window={window} showTarget={targetNotes} />
@@ -241,35 +255,26 @@ function BusinessFigures({
   );
 }
 
-function CallsFigure({ data, window, site, targets, showTarget }: FigureProps) {
+// CountFigure is the number of calls in the window, or of failed ones, opening the call list narrowed the same way.
+function CountFigure({
+  metric,
+  data,
+  window,
+  site,
+  targets,
+  showTarget,
+}: FigureProps & { metric: "calls" | "errors" }) {
   const { t } = useTranslation();
   const format = useFormat();
+  const count = data[metric];
   return (
-    <CardLink>
-      <Link to="/calls" search={callsDrill(window, { site })}>
-        <Stat
-          label={t("overview.calls")}
-          value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
-          note={withTarget(showTarget, <TargetNote metric="calls" comparison={targets?.calls} />)}
-        />
-      </Link>
-    </CardLink>
-  );
-}
-
-function ErrorsFigure({ data, window, site, targets, showTarget }: FigureProps) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <CardLink>
-      <Link to="/calls" search={callsDrill(window, { site, status: "error" })}>
-        <Stat
-          label={t("overview.errors")}
-          value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
-          note={withTarget(showTarget, <TargetNote metric="errors" comparison={targets?.errors} />)}
-        />
-      </Link>
-    </CardLink>
+    <CallsLink search={callsDrill(window, metric === "errors" ? { site, status: "error" } : { site })}>
+      <Stat
+        label={t(`overview.${metric}`)}
+        value={count === undefined ? t("overview.unavailable") : format.number(count)}
+        note={withTarget(showTarget, <TargetNote metric={metric} comparison={targets?.[metric]} />)}
+      />
+    </CallsLink>
   );
 }
 
@@ -277,19 +282,17 @@ function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps)
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <CardLink>
-      <Link to="/calls" search={callsDrill(window, { site })}>
-        <Stat
-          label={t("overview.revenue")}
-          value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
-          note={withTarget(
-            showTarget,
-            <TargetNote metric="revenue" comparison={targets?.revenue} />,
-            t("overview.revenueNote"),
-          )}
-        />
-      </Link>
-    </CardLink>
+    <CallsLink search={callsDrill(window, { site })}>
+      <Stat
+        label={t("overview.revenue")}
+        value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="revenue" comparison={targets?.revenue} />,
+          t("overview.revenueNote"),
+        )}
+      />
+    </CallsLink>
   );
 }
 
@@ -300,19 +303,17 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
     ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
     : t("overview.costNote");
   return (
-    <CardLink>
-      <Link to="/calls" search={callsDrill(window, { site })}>
-        <Stat
-          label={t("overview.cost")}
-          value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
-          note={withTarget(
-            showTarget,
-            <TargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
-            note,
-          )}
-        />
-      </Link>
-    </CardLink>
+    <CallsLink search={callsDrill(window, { site })}>
+      <Stat
+        label={t("overview.cost")}
+        value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
+          note,
+        )}
+      />
+    </CallsLink>
   );
 }
 
@@ -390,19 +391,17 @@ function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps
 function GrossMarginFigure({ data, window, site, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   return (
-    <CardLink>
-      <Link to="/calls" search={callsDrill(window, { site })}>
-        <Stat
-          label={t("overview.grossMargin")}
-          value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
-          note={withTarget(
-            showTarget,
-            <TargetNote metric="gross_margin" comparison={targets?.gross_margin} />,
-            t("overview.grossMarginNote"),
-          )}
-        />
-      </Link>
-    </CardLink>
+    <CallsLink search={callsDrill(window, { site })}>
+      <Stat
+        label={t("overview.grossMargin")}
+        value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
+        note={withTarget(
+          showTarget,
+          <TargetNote metric="gross_margin" comparison={targets?.gross_margin} />,
+          t("overview.grossMarginNote"),
+        )}
+      />
+    </CallsLink>
   );
 }
 
@@ -527,5 +526,16 @@ function RankId({ id, drill }: { id: string; drill: (id: string) => ReturnType<t
         </Link>
       )}
     />
+  );
+}
+
+// CallsLink makes a figure's card open the call list narrowed as it counted.
+function CallsLink({ search, children }: { search: ReturnType<typeof callsDrill>; children: ReactNode }) {
+  return (
+    <CardLink>
+      <Link to="/calls" search={search}>
+        {children}
+      </Link>
+    </CardLink>
   );
 }

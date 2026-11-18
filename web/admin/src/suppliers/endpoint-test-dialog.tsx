@@ -89,7 +89,6 @@ const outcomes = { passed: "good", failed: "bad", inconclusive: "warn" } as cons
 // and both request IDs.
 function Verdict({ result }: { result: Result }) {
   const { t } = useTranslation();
-  const format = useFormat();
   const cause = result.problem ? t(`suppliers.test.cause.${result.problem.cause}`) : "";
   const scope = t(`suppliers.test.scope.${result.problem?.scope ?? "own"}`);
   const status = result.upstream_status ? String(result.upstream_status) : t("suppliers.test.noAnswer");
@@ -120,20 +119,7 @@ function Verdict({ result }: { result: Result }) {
             ),
           ],
           [t("suppliers.test.total"), <Duration key="total" ms={result.total_ms} />],
-          [
-            t("suppliers.test.cost"),
-            <Stack key="cost" gap={4}>
-              <Text>
-                {t("suppliers.balanceNative", {
-                  value: format.decimal(result.estimated_native),
-                  unit: t(`suppliers.native.${result.native_unit}`),
-                })}
-              </Text>
-              <Text size="sm" tone="faint">
-                {t("suppliers.test.costHint")}
-              </Text>
-            </Stack>,
-          ],
+          [t("suppliers.test.cost"), <TestCost key="cost" result={result} />],
           [
             t("suppliers.test.requestId"),
             <Copyable key="request" text={result.request_id} label={t("suppliers.test.copyRequestId")} />,
@@ -169,5 +155,24 @@ function Copyable({ text, label }: { text: string; label: string }) {
       <Code>{text}</Code>
       <CopyButton text={text} label={label} />
     </Cluster>
+  );
+}
+
+// TestCost is what the test is estimated to have cost on the supplier, in its own unit, and that it is an estimate.
+function TestCost({ result }: { result: Result }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <Stack gap={4}>
+      <Text>
+        {t("suppliers.balanceNative", {
+          value: format.decimal(result.estimated_native),
+          unit: t(`suppliers.native.${result.native_unit}`),
+        })}
+      </Text>
+      <Text size="sm" tone="faint">
+        {t("suppliers.test.costHint")}
+      </Text>
+    </Stack>
   );
 }
