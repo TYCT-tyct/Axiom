@@ -51,6 +51,7 @@ func TestSessionLifecycle(t *testing.T) {
 		Level: "password", CsrfToken: s.csrf, ExpiresAt: got.ExpiresAt, Account: got.Account,
 		Permissions: []string{"api_keys.manage", "api_keys.view", "balance.top_up", "balance.view", "calls.view", "workspaces.manage"},
 		Consent:     &consoleapi.SessionConsent{Required: []consoleapi.LegalDocumentVersion{}},
+		TotpEnabled: new(false),
 	}
 	want.User.Email, want.User.Id, want.User.InviteCode = ownerEmail, got.User.Id, got.User.InviteCode
 	if diff := cmp.Diff(want, got); diff != "" || !got.ExpiresAt.After(time.Now()) {

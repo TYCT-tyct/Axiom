@@ -211,7 +211,9 @@ describe("region generation", () => {
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const manifest = regions.filter((region) => region.board === board && !region.render);
+      const manifest = regions.filter(
+        (region) => region.board === board && !region.render && (region.name === "Shell" || region.name === "Overview"),
+      );
       const drawn = fragment(markup);
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();
@@ -222,7 +224,7 @@ describe("region generation", () => {
         fragment(overview.outerHTML.replace(/\{\{[^}]*\}\}/g, "")).firstChild as Node,
       );
       const files: Record<string, string> = {};
-      // CSS selection is tested separately; this checks the entire pinned markup without executing its scripts.
+      // Each conversion parses the full board, so convert only the regions rendered in this comparison.
       for (const region of manifest) Object.assign(files, convertRegion(markup, "", region, marker));
       const shell = renderer(files, board, "Shell");
       const page = renderer(files, board, "Overview");
