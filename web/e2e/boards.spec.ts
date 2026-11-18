@@ -8,8 +8,9 @@ import { regions } from "../packages/boards/regions.ts";
 import { readBoard } from "../packages/boards/source.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
-import { compare } from "./design/compare.ts";
+import { compare, comparePart } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
+import { partProofScript, renderPart } from "./design/part-proof.ts";
 import { rulings } from "./design/rulings.ts";
 import { canvasesReady, type Stage, stagePaused } from "./design/stage.ts";
 
@@ -37,6 +38,7 @@ const test = base.extend<object, { boardsURL: { url: string; rendered: string } 
         join(proof, "main.tsx"),
         `
 import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { slices } from "../src/demo.ts";
 import "../src/demo-fonts.css";
@@ -45,6 +47,9 @@ document.body.classList.add(styles.root);
 const query = new URLSearchParams(location.search);
 const scene = slices[query.get("board")];
 const name = query.get("region");
+if (query.has("part")) {
+${partProofScript}
+} else {
 const [Source, Shell, Slice, shellData, data, shellZH, zh] = await Promise.all([
   scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"]()
 ]);
@@ -56,6 +61,7 @@ createRoot(document.getElementById("root")).render(createElement(Shell,
   {...shellData(key => shellZH[key]), values: model.renderVals()},
   createElement(Slice, data(key => zh[key]))
 ));
+}
 `,
       );
       try {
@@ -199,7 +205,7 @@ async function boardInteractions(page: Page, name: string) {
 test.use({ timezoneId: "Asia/Shanghai" });
 
 // Both artboards and generated shells keep their authored width; the other viewport tests clipping, not a redraw.
-for (const region of regions.filter((region) => region.render))
+for (const region of regions.filter((region) => region.render && region.roots.includes(`.p-${region.page}`)))
   for (const width of [1440, 390])
     for (const colorScheme of ["light", "dark"] as const) {
       test(`${region.board} ${region.name} rendered ${width} ${colorScheme}: artboard diff`, async ({
@@ -272,6 +278,73 @@ for (const region of regions.filter((region) => region.render))
         }
       });
     }
+
+// Keep the board's layout around the cut. Its rules stop at the cut boundary so only generated CSS can draw the part.
+const parts = new Set([
+  "PartDialog",
+  "PartTextField",
+  "PartTextAreaField",
+  "PartFilterBar",
+  "PartLoadMore",
+  "PartListEnd",
+  "PartSortableHeader",
+  "PartLoading",
+  "PartEmpty",
+  "PartError",
+  "PartNoPermission",
+]);
+
+for (const region of regions.filter((entry) => parts.has(entry.name))) {
+  for (const colorScheme of ["light", "dark"] as const) {
+    const viewport = region.render?.viewport as { width: number; height: number };
+    test(`${region.board} ${region.name} ${viewport.width} ${colorScheme}: part diff`, async ({
+      browser,
+      page,
+      boardsURL,
+    }, info) => {
+      const view: Stage = {
+        viewport,
+        colorScheme,
+        timezoneId: "Asia/Shanghai",
+        time: new Date("2026-10-24T04:00:00Z"),
+      };
+      const reference = await openBoard(
+        browser,
+        {
+          file: `${region.board}.dc.html`,
+          engines: [],
+          actions: region.render?.actions,
+          props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
+        },
+        referenceRoot,
+        view,
+      );
+      try {
+        await page.setViewportSize(viewport);
+        await page.emulateMedia({ colorScheme, reducedMotion: "no-preference" });
+        await stagePaused(page, view);
+        const errors = collectErrors(page);
+        const query = new URLSearchParams({ board: region.board, region: region.name, part: "true" });
+        await page.goto(`${boardsURL.rendered}?${query}`);
+        await fontsLoaded(reference.page, reference.fonts);
+        await reference.page.clock.runFor(5000);
+        const selector = region.name === "PartDialog" ? ".fr > .nkdlg" : (region.roots[0] as string);
+        const original = reference.page.locator(selector);
+        await renderPart(page, original, region);
+        const result = await comparePart(
+          original,
+          page.locator('[data-board-part="target"]'),
+          `part-${region.board}-${region.name}-${colorScheme}`,
+          info,
+        );
+        expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+        expect(errors).toEqual([]);
+      } finally {
+        await reference.close();
+      }
+    });
+  }
+}
 
 for (const board of cases)
   for (const width of [1440, 390])
