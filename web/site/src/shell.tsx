@@ -31,11 +31,12 @@ export function useSiteBrand(): Brand | undefined {
 export function SiteShell({ children, mainClassName = "" }: { children: ReactNode; mainClassName?: string }) {
   const { t } = useTranslation();
   const brand = useSiteBrand();
+  const name = brand?.name ?? t("brand", { ns: "common" });
   return (
     <div className="flex min-h-dvh flex-col">
       <header className="mx-auto flex h-16 w-full max-w-[1248px] items-center gap-4 px-4 sm:px-6">
-        <a href="/" className="min-w-0 shrink" aria-label={t("home")}>
-          <Logo name={brand?.name} logoUrl={brand?.logo_url} />
+        <a href="/" className="min-w-0 shrink" aria-label={t("home", { site: name })}>
+          <Logo name={name} logoUrl={brand?.logo_url} />
         </a>
         <nav aria-label={t("navigation")} className="flex shrink-0 items-center gap-1">
           <a
