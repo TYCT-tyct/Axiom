@@ -1,19 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
-import {
-  CopyButton,
-  DataState,
-  EmptyState,
-  IdText,
-  Notice,
-  PageHeader,
-  Panel,
-  Segmented,
-  Table,
-  Td,
-  Th,
-  useFormat,
-} from "@axiom/ui";
+import { Cell, PageHeader, Row, SectionHeader, Segmented, Table } from "@axiom/boards/ds";
+import { CopyButton, DataState, EmptyState, IdText, Notice, useFormat, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
 import { type ReactNode, useMemo, useState } from "react";
@@ -29,7 +17,7 @@ import {
   retentionOrdersDrill,
   type Window,
 } from "../overview";
-import { mainCell, PageBody } from "../parts";
+import { PageBody } from "../parts";
 import { overviewQuery } from "../queries";
 import { formatTargetRate, targetsEmpty } from "../targets";
 import { TargetNote, TargetsAction } from "../targets-view";
@@ -48,16 +36,25 @@ const amount = `${figure} lg:col-span-2`;
 // the accounts and models behind them (docs/domains/operations.md「运营看板」). A session without sites.manage sees the
 // first page it may use instead, as before.
 export default function Home() {
-  const { t } = useTranslation();
   const session = useSession();
   if (!can(session, "sites.manage")) {
     const first = nav.find((item) => item.to !== "/" && can(session, item.permission));
     if (first) {
       return <Navigate to={first.to} replace />;
     }
-    return <PageHeader title={t("home.noAccessTitle")} description={t("home.noAccessBody")} />;
+    return <NoAccess />;
   }
   return <Dashboard />;
+}
+
+function NoAccess() {
+  const { t } = useTranslation();
+  usePageTitle(t("home.noAccessTitle"));
+  return (
+    <PageBody>
+      <PageHeader title={t("home.noAccessTitle")} description={t("home.noAccessBody")} />
+    </PageBody>
+  );
 }
 
 function Dashboard() {
@@ -69,27 +66,27 @@ function Dashboard() {
   const [anchor] = useState(() => new Date());
   const window = useMemo(() => overviewWindow(range, anchor), [range, anchor]);
   const overview = useQuery(overviewQuery(window.since, window.until));
+  usePageTitle(t("home.title"));
   return (
-    <>
+    <PageBody>
       <PageHeader title={t("home.title")} description={t("home.description")} />
-      <PageBody>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Segmented<OverviewRange>
-            label={t("overview.rangeLabel")}
-            value={range}
-            options={overviewRanges.map((value) => ({ value, label: t(`overview.range.${value}`) }))}
-            onChange={(value) => navigate({ to: "/", search: { range: value }, replace: true })}
-          />
-          <p className="text-label text-t3">
-            {t("overview.window", {
-              since: format.dateTime(new Date(window.since)),
-              until: format.dateTime(new Date(window.until)),
-            })}
-          </p>
-        </div>
-        <DataState query={overview}>{(data) => <Figures data={data} window={window} anchor={anchor} />}</DataState>
-      </PageBody>
-    </>
+      {/* The board sets its choice at the row's end. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-label text-t3">
+          {t("overview.window", {
+            since: format.dateTime(new Date(window.since)),
+            until: format.dateTime(new Date(window.until)),
+          })}
+        </p>
+        <Segmented<OverviewRange>
+          label={t("overview.rangeLabel")}
+          value={range}
+          options={overviewRanges.map((value) => ({ value, label: t(`overview.range.${value}`) }))}
+          onChange={(value) => navigate({ to: "/", search: { range: value }, replace: true })}
+        />
+      </div>
+      <DataState query={overview}>{(data) => <Figures data={data} window={window} anchor={anchor} />}</DataState>
+    </PageBody>
   );
 }
 
@@ -206,7 +203,7 @@ function BusinessFigures({
   const { t } = useTranslation();
   return (
     <>
-      <h2 className="text-ui font-medium text-t2">{t("overview.business")}</h2>
+      <SectionHeader title={t("overview.business")} />
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <PaidUsersFigure
           data={data}
@@ -415,103 +412,102 @@ function RetentionFigure({ data, window, targets, showTarget }: FigureProps) {
   );
 }
 
-function RankHead({ first }: { first: string }) {
+// A ranking's columns: what is ranked, then its calls and errors.
+const rankColumns = "minmax(0, 1fr) 6rem 6rem";
+
+type Ranked = { id?: string; calls?: number; errors?: number };
+
+// Ranking is the accounts or models with the most calls in the window, each a link to its calls.
+function Ranking({
+  title,
+  first,
+  empty,
+  ranked,
+  drill,
+}: {
+  title: string;
+  first: string;
+  empty: { title: string; body: string };
+  ranked?: Ranked[];
+  drill: (id: string) => ReturnType<typeof callsDrill>;
+}) {
   const { t } = useTranslation();
+  const format = useFormat();
   return (
-    <thead>
-      <tr>
-        <Th>{first}</Th>
-        <Th className="text-right">{t("overview.col.calls")}</Th>
-        <Th className="text-right">{t("overview.col.errors")}</Th>
-      </tr>
-    </thead>
+    <section>
+      <SectionHeader title={title} />
+      {ranked === undefined ? (
+        <p className="text-t3">{t("overview.unavailable")}</p>
+      ) : ranked.length === 0 ? (
+        <EmptyState compact title={empty.title}>
+          {empty.body}
+        </EmptyState>
+      ) : (
+        <Table
+          label={title}
+          columns={rankColumns}
+          head={
+            <>
+              <Cell head>{first}</Cell>
+              <Cell head kind="num">
+                {t("overview.col.calls")}
+              </Cell>
+              <Cell head kind="num">
+                {t("overview.col.errors")}
+              </Cell>
+            </>
+          }
+        >
+          {ranked.map((row) => (
+            <Row key={row.id ?? ""}>
+              <Cell>
+                {row.id ? (
+                  <span className="flex min-w-0 items-center gap-1">
+                    <Link
+                      to="/calls"
+                      search={drill(row.id)}
+                      className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
+                    >
+                      <IdText value={row.id} />
+                    </Link>
+                    <CopyButton compact text={row.id} />
+                  </span>
+                ) : (
+                  "—"
+                )}
+              </Cell>
+              <Cell kind="num">{format.number(row.calls ?? 0)}</Cell>
+              <Cell kind="num">{format.number(row.errors ?? 0)}</Cell>
+            </Row>
+          ))}
+        </Table>
+      )}
+    </section>
   );
 }
 
 function TopAccounts({ data, window, site }: { data: Overview; window: Window; site?: string }) {
   const { t } = useTranslation();
-  const format = useFormat();
   return (
-    <Panel title={t("overview.topAccounts")}>
-      {data.top_accounts === undefined ? (
-        <p className="p-4 text-t3">{t("overview.unavailable")}</p>
-      ) : data.top_accounts.length === 0 ? (
-        <EmptyState compact title={t("overview.noAccounts.title")}>
-          {t("overview.noAccounts.body")}
-        </EmptyState>
-      ) : (
-        <Table label={t("overview.topAccounts")}>
-          <RankHead first={t("overview.col.account")} />
-          <tbody>
-            {data.top_accounts.map((account) => (
-              <tr key={account.account_id}>
-                <Td className={mainCell}>
-                  {account.account_id ? (
-                    <span className="flex min-w-0 items-center gap-1">
-                      <Link
-                        to="/calls"
-                        search={callsDrill(window, { site, account: account.account_id })}
-                        className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
-                      >
-                        <IdText value={account.account_id} />
-                      </Link>
-                      <CopyButton compact text={account.account_id} />
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </Td>
-                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(account.calls ?? 0)}</Td>
-                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(account.errors ?? 0)}</Td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      )}
-    </Panel>
+    <Ranking
+      title={t("overview.topAccounts")}
+      first={t("overview.col.account")}
+      empty={{ title: t("overview.noAccounts.title"), body: t("overview.noAccounts.body") }}
+      ranked={data.top_accounts?.map((row) => ({ ...row, id: row.account_id }))}
+      drill={(account) => callsDrill(window, { site, account })}
+    />
   );
 }
 
 function TopModels({ data, window, site }: { data: Overview; window: Window; site?: string }) {
   const { t } = useTranslation();
-  const format = useFormat();
   return (
-    <Panel title={t("overview.topModels")}>
-      {data.top_models === undefined ? (
-        <p className="p-4 text-t3">{t("overview.unavailable")}</p>
-      ) : data.top_models.length === 0 ? (
-        <EmptyState compact title={t("overview.noModels.title")}>
-          {t("overview.noModels.body")}
-        </EmptyState>
-      ) : (
-        <Table label={t("overview.topModels")}>
-          <RankHead first={t("overview.col.model")} />
-          <tbody>
-            {data.top_models.map((model) => (
-              <tr key={model.model}>
-                <Td className={mainCell}>
-                  {model.model ? (
-                    <span className="flex min-w-0 items-center gap-1">
-                      <Link
-                        to="/calls"
-                        search={callsDrill(window, { site, model: model.model })}
-                        className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
-                      >
-                        <IdText value={model.model} />
-                      </Link>
-                      <CopyButton compact text={model.model} />
-                    </span>
-                  ) : (
-                    "—"
-                  )}
-                </Td>
-                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(model.calls ?? 0)}</Td>
-                <Td className="whitespace-nowrap text-right tabular-nums">{format.number(model.errors ?? 0)}</Td>
-              </tr>
-            ))}
-          </tbody>
-        </Table>
-      )}
-    </Panel>
+    <Ranking
+      title={t("overview.topModels")}
+      first={t("overview.col.model")}
+      empty={{ title: t("overview.noModels.title"), body: t("overview.noModels.body") }}
+      ranked={data.top_models?.map((row) => ({ ...row, id: row.model }))}
+      drill={(model) => callsDrill(window, { site, model })}
+    />
   );
 }

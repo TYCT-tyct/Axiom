@@ -29,7 +29,7 @@ test("the admin sign-in page and shell show the site's logo", async ({ page }) =
 
   signedInAs(state, "mfa");
   await page.goto("/");
-  await expect(page.locator(`nav img[src='${logoSVG}']`)).toBeVisible();
+  await expect(page.getByRole("banner").locator(`img[src='${logoSVG}']`)).toBeVisible();
 });
 
 test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
@@ -55,7 +55,7 @@ test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
     .last()
     .click();
   await expect(page.locator("#main img[src^='data:image/svg+xml']")).toBeVisible();
-  await expect(page.locator("nav img[src^='data:image/svg+xml']")).toBeVisible();
+  await expect(page.getByRole("banner").locator("img[src^='data:image/svg+xml']")).toBeVisible();
 
   await page.getByRole("button", { name: words("settings.logo.clear") }).click();
   await dialog.getByLabel(words("change.reason")).fill("remove the brand");

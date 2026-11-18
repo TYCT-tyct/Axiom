@@ -10,8 +10,6 @@ export default {
     language: "Language",
   },
   shell: {
-    openMenu: "Open menu",
-    closeMenu: "Close menu",
     navigation: "Main navigation",
     skipToContent: "Skip to content",
   },
@@ -22,7 +20,6 @@ export default {
   cancel: "Cancel",
   loadMore: "Load more",
   loadingMore: "Loading",
-  nav: { signOut: "Sign out" },
   signOutFailed: "Couldn’t sign out. You’re still signed in. {{reason}} Try again.",
   errors: {
     invalid_request: "Some of what you entered isn’t valid. Check it and try again.",

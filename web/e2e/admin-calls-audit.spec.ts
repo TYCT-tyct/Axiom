@@ -110,22 +110,14 @@ test.describe("calls and audit", () => {
     await expect(h1(page, words("nav.calls"))).toBeVisible();
   });
 
-  test("the sidebar reaches the end of a page longer than the window", async ({ page }) => {
+  // The document scrolls, not a box inside the frame, and the sidebar stays in view, as in the console.
+  test("the sidebar stays in view on a page longer than the window", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 900 });
     await open(page, "/calls");
     await expect(page.getByRole("row").nth(10)).toBeVisible();
-    const fill = await page.evaluate(() => {
-      const nav = document.querySelector("nav");
-      const links = nav?.firstElementChild;
-      return {
-        page: document.documentElement.scrollHeight,
-        bottom: (nav?.getBoundingClientRect().bottom ?? 0) + window.scrollY,
-        links: links?.getBoundingClientRect().height ?? 0,
-        viewport: innerHeight,
-      };
-    });
-    expect(fill.page).toBeGreaterThan(fill.viewport);
-    expect(fill.bottom).toBeGreaterThanOrEqual(fill.page - 1);
-    expect(fill.links).toBe(fill.viewport);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
+    const nav = page.getByRole("navigation", { name: "主导航" });
+    await expect(nav.getByRole("link", { name: zhText("nav.calls") })).toBeInViewport();
   });
 });

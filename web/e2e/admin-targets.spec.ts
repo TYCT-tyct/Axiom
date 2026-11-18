@@ -240,7 +240,7 @@ test.describe("business targets", () => {
     expect((await first.boundingBox())?.height ?? 0).toBeLessThan(50);
     const head = text.locator("span[aria-hidden]").first();
     const box = await head.evaluate((el) => {
-      const cell = el.closest("td")?.getBoundingClientRect();
+      const cell = el.closest("[role=cell]")?.getBoundingClientRect();
       const rect = el.getBoundingClientRect();
       return {
         right: rect.right,

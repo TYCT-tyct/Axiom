@@ -56,8 +56,6 @@ export default {
     language: "语言",
   },
   shell: {
-    openMenu: "打开菜单",
-    closeMenu: "关闭菜单",
     navigation: "主导航",
     skipToContent: "跳到正文",
   },
@@ -68,7 +66,6 @@ export default {
   cancel: "取消",
   loadMore: "加载更多",
   loadingMore: "正在加载",
-  nav: { signOut: "退出登录" },
   signOutFailed: "没能退出登录，你仍在登录状态。{{reason}}请重试。",
   errors: {
     ...codes,
