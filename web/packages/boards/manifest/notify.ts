@@ -49,7 +49,7 @@ export default ["AxApp", "AxAppPhone"].map(
       ".qph": { unless: "hideHead" },
       ".qnt": { set: { style: "{{rowStyle}}" } },
       ".qnt.hd > span:nth-child(3)": { unless: "singleChannel" },
-      ".qnt:not(.hd) > button:nth-of-type(1)": { set: { onclick: "{{onToggle}}" } },
+      ".qnt:not(.hd) > button:nth-of-type(1)": { set: { onclick: "{{onToggle}}", disabled: "{{toggleDisabled}}" } },
       ".qnt:not(.hd) > button:nth-of-type(2)": { unless: "singleChannel" },
     },
     english,

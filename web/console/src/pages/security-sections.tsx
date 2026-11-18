@@ -1,6 +1,7 @@
+import type { Schemas } from "@axiom/api";
 import { useSession } from "@axiom/app";
 import { DataState, FormError, useFormat } from "@axiom/ui";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { type InfiniteData, type UseInfiniteQueryResult, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { identitiesQuery, passkeysQuery, siteQuery } from "../queries";
@@ -11,7 +12,9 @@ import {
   buildInvitationRows,
   buildPasskeyRows,
   flattenInvitees,
+  type InvitationsPage,
   invitationsQuery,
+  passkeyRegistrationAvailability,
   useIdentityActions,
   usePasskeyActions,
 } from "./security-data";
@@ -67,39 +70,83 @@ function PasskeyPasswordCard({
   );
 }
 
-export function PasskeysSection({ wide, english }: { wide: boolean; english: boolean }) {
+function PasskeysCard({
+  wide,
+  english,
+  actions,
+  canRegister,
+  rows,
+  onRemove,
+  onOpenAdd,
+}: {
+  wide: boolean;
+  english: boolean;
+  actions: ReturnType<typeof usePasskeyActions>;
+  canRegister: boolean;
+  rows: ReturnType<typeof buildPasskeyRows>;
+  onRemove: (index: number) => void;
+  onOpenAdd: () => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <AccountActionCard
+      wide={wide}
+      english={english}
+      title={t("security.passkeys.title")}
+      actionLabel={canRegister ? t("security.passkeys.add") : ""}
+      actionDisabled={actions.busy}
+      onAction={onOpenAdd}
+      rowDisabled={actions.busy || actions.password === ""}
+      onRowAction={(event) => onRemove(clickedRowIndex(event.target))}
+      rows={rows}
+    />
+  );
+}
+
+function passkeysLoc() {
+  return typeof window !== "undefined"
+    ? { origin: window.location.origin, hostname: window.location.hostname }
+    : undefined;
+}
+
+function PasskeysLoadedView({
+  wide,
+  english,
+  passkeys,
+  actions,
+  availability,
+  canRegister,
+}: {
+  wide: boolean;
+  english: boolean;
+  passkeys: readonly Schemas["Passkey"][];
+  actions: ReturnType<typeof usePasskeyActions>;
+  availability: ReturnType<typeof passkeyRegistrationAvailability>;
+  canRegister: boolean;
+}) {
   const { t } = useTranslation();
   const format = useFormat();
-  const list = useQuery(passkeysQuery);
-  const actions = usePasskeyActions();
   const [addOpen, setAddOpen] = useState(false);
-  const passkeys = list.data?.passkeys ?? [];
   const serverFailure = actions.failure ? actions.errors.message(actions.failure) : null;
+  const shownError = actions.localError ?? serverFailure;
 
   return (
     <>
-      {(actions.localError ?? serverFailure) ? <FormError>{actions.localError ?? serverFailure}</FormError> : null}
-      {list.isError ? (
-        <DataState query={list} compact>
-          {() => null}
-        </DataState>
-      ) : null}
+      {shownError ? <FormError>{shownError}</FormError> : null}
       {passkeys.length > 0 ? <PasskeyPasswordCard wide={wide} english={english} actions={actions} /> : null}
-      <AccountActionCard
+      <PasskeysCard
         wide={wide}
         english={english}
-        title={t("security.passkeys.title")}
-        actionLabel={actions.supported ? t("security.passkeys.add") : ""}
-        actionDisabled={actions.busy}
-        onAction={() => setAddOpen(true)}
-        rowDisabled={actions.busy || actions.password === ""}
-        onRowAction={(event) => {
-          const pk = passkeys[clickedRowIndex(event.target)];
+        actions={actions}
+        canRegister={canRegister}
+        onOpenAdd={() => setAddOpen(true)}
+        onRemove={(index) => {
+          const pk = passkeys[index];
           if (pk) void actions.remove(pk.id);
         }}
-        rows={buildPasskeyRows(t, format.dateTime, passkeys, actions.supported)}
+        rows={buildPasskeyRows(t, format.dateTime, passkeys, availability)}
       />
-      {addOpen ? (
+      {addOpen && canRegister ? (
         <AddPasskeyDialog
           initialPassword={actions.password}
           busy={actions.busy}
@@ -112,18 +159,69 @@ export function PasskeysSection({ wide, english }: { wide: boolean; english: boo
   );
 }
 
-export function IdentitiesSection({ wide, english }: { wide: boolean; english: boolean }) {
+export function PasskeysSection({ wide, english }: { wide: boolean; english: boolean }) {
   const { t } = useTranslation();
   const site = useQuery(siteQuery);
-  const list = useQuery(identitiesQuery);
+  const list = useQuery(passkeysQuery);
+  const actions = usePasskeyActions();
+  const availability = passkeyRegistrationAvailability(site.data, passkeysLoc(), actions.supported);
+  const canRegister = site.isSuccess && availability === "ready";
+  const passkeys = list.data?.passkeys;
+
+  if (list.isError) {
+    return (
+      <DataState query={list} compact>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (passkeys?.length === 0 && site.isError) {
+    return (
+      <DataState query={site} compact>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (!passkeys || (passkeys.length === 0 && site.isPending)) {
+    return (
+      <PasskeysCard
+        wide={wide}
+        english={english}
+        actions={actions}
+        canRegister={false}
+        onOpenAdd={() => {}}
+        onRemove={() => {}}
+        rows={[{ key: "loading", kind: "0", f0: "qses", f1: t("security.loading"), f2: "", f3: "", f4: "" }]}
+      />
+    );
+  }
+  return (
+    <PasskeysLoadedView
+      wide={wide}
+      english={english}
+      passkeys={passkeys}
+      actions={actions}
+      availability={site.isSuccess ? availability : "ready"}
+      canRegister={canRegister}
+    />
+  );
+}
+
+function IdentitiesLoadedView({
+  wide,
+  english,
+  names,
+  linked,
+}: {
+  wide: boolean;
+  english: boolean;
+  names: Schemas["OAuthProvider"][];
+  linked: Map<Schemas["OAuthProvider"], Schemas["Identity"]>;
+}) {
+  const { t } = useTranslation();
   const session = useSession();
   const actions = useIdentityActions();
   const [mfaNotice, setMfaNotice] = useState(false);
-  const providers = site.data?.oauth_providers ?? [];
-  const linked = new Map((list.data?.identities ?? []).map((identity) => [identity.provider, identity]));
-  const names = [...new Set([...providers, ...linked.keys()])];
-  if (names.length === 0) return null;
-
   const needsMfa = session.mfa_enabled && session.level !== "mfa";
 
   return (
@@ -156,6 +254,43 @@ export function IdentitiesSection({ wide, english }: { wide: boolean; english: b
   );
 }
 
+export function IdentitiesSection({ wide, english }: { wide: boolean; english: boolean }) {
+  const { t } = useTranslation();
+  const site = useQuery(siteQuery);
+  const list = useQuery(identitiesQuery);
+
+  if (list.isError) {
+    return (
+      <DataState query={list} compact>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (site.isError) {
+    return (
+      <DataState query={site} compact>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (!list.isSuccess || !site.isSuccess) {
+    return (
+      <AccountActionCard
+        wide={wide}
+        english={english}
+        title={t("security.identities.title")}
+        rows={[{ key: "loading", kind: "0", f0: "qses", f1: t("security.loading"), f2: "", f3: "", f4: "" }]}
+      />
+    );
+  }
+
+  const providers = site.data.oauth_providers ?? [];
+  const linked = new Map(list.data.identities.map((identity) => [identity.provider, identity]));
+  const names = [...new Set([...providers, ...linked.keys()])];
+  if (names.length === 0) return null;
+  return <IdentitiesLoadedView wide={wide} english={english} names={names} linked={linked} />;
+}
+
 function useCopyInviteLink(link: string, onNotice: (message: string) => void) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
@@ -183,7 +318,10 @@ export function InvitesSection({
 }) {
   const { t } = useTranslation();
   const { user } = useSession();
-  const link = `${window.location.origin}${import.meta.env.BASE_URL}register?invite=${encodeURIComponent(user.invite_code)}`;
+  const invitations = useInfiniteQuery(invitationsQuery);
+  const flat = invitations.isSuccess ? flattenInvitees(invitations.data) : null;
+  const fallbackLink = `${window.location.origin}${import.meta.env.BASE_URL}register?invite=${encodeURIComponent(user.invite_code)}`;
+  const link = flat?.link || fallbackLink;
   const { copied, copyLink } = useCopyInviteLink(link, onNotice);
 
   return (
@@ -215,39 +353,58 @@ export function InvitesSection({
           },
         ]}
       />
-      <InvitesRecordsCard wide={wide} english={english} />
+      <InvitesRecordsCard wide={wide} english={english} invitations={invitations} />
     </>
   );
 }
 
-function InvitesRecordsCard({ wide, english }: { wide: boolean; english: boolean }) {
+function InvitesRecordsCard({
+  wide,
+  english,
+  invitations,
+}: {
+  wide: boolean;
+  english: boolean;
+  invitations: UseInfiniteQueryResult<InfiniteData<InvitationsPage>>;
+}) {
   const { t } = useTranslation();
   const format = useFormat();
-  const invitations = useInfiniteQuery(invitationsQuery);
-  const flat = flattenInvitees(invitations.data);
-  return (
-    <>
-      {invitations.isError ? (
-        <DataState query={invitations} compact>
-          {() => null}
-        </DataState>
-      ) : null}
+
+  if (invitations.isError) {
+    return (
+      <DataState query={invitations} compact>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (!invitations.isSuccess) {
+    return (
       <AccountActionCard
         wide={wide}
         english={english}
         title={t("security.invitations.title")}
         last
-        actionLabel={
-          invitations.hasNextPage
-            ? invitations.isFetchingNextPage
-              ? t("security.loading")
-              : t("security.invitations.loadMore")
-            : ""
-        }
-        actionDisabled={invitations.isFetchingNextPage}
-        onAction={() => void invitations.fetchNextPage()}
-        rows={buildInvitationRows(t, format.dateTime, flat)}
+        rows={[{ key: "loading", kind: "0", f0: "qses", f1: t("security.loading"), f2: "", f3: "", f4: "" }]}
       />
-    </>
+    );
+  }
+
+  return (
+    <AccountActionCard
+      wide={wide}
+      english={english}
+      title={t("security.invitations.title")}
+      last
+      actionLabel={
+        invitations.hasNextPage
+          ? invitations.isFetchingNextPage
+            ? t("security.loading")
+            : t("security.invitations.loadMore")
+          : ""
+      }
+      actionDisabled={invitations.isFetchingNextPage}
+      onAction={() => void invitations.fetchNextPage()}
+      rows={buildInvitationRows(t, format.dateTime, flattenInvitees(invitations.data))}
+    />
   );
 }

@@ -1,5 +1,14 @@
 import { consoleApi, unwrap, unwrapEmpty } from "@axiom/api";
-import { RecoveryDialog, TotpSetupDialog, useBeginTotp, useErrors, useSession } from "@axiom/app";
+import {
+  claimSession,
+  holdsIdentity,
+  holdsSession,
+  RecoveryDialog,
+  TotpSetupDialog,
+  useBeginTotp,
+  useErrors,
+  useSession,
+} from "@axiom/app";
 import DesktopSecurity from "@axiom/boards/AxApp/regions/Security";
 import DesktopSecurityEn from "@axiom/boards/AxApp/regions/Security.en";
 import DesktopSecurityZh from "@axiom/boards/AxApp/regions/Security.zh";
@@ -22,6 +31,7 @@ export default function Security() {
   const wide = useWide();
   const english = useEnglish();
   const session = useSession();
+  const totpEnabled = session.totp_enabled ?? session.mfa_enabled;
   const beginEnable = useBeginTotp();
   const beginReplace = useBeginTotp();
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -37,6 +47,7 @@ export default function Security() {
     <>
       <SecurityBanners
         banner={banner}
+        totpEnabled={totpEnabled}
         onDismissBanner={() => setBanner(null)}
         onRegenerate={() => setRecoveryOpen(true)}
         beginError={beginEnable.error ?? beginReplace.error}
@@ -45,11 +56,11 @@ export default function Security() {
       <SecurityMainCard
         wide={wide}
         english={english}
-        mfaEnabled={session.mfa_enabled}
+        totpEnabled={totpEnabled}
         sessions={sessions}
         authBusy={beginEnable.isPending || beginReplace.isPending}
         onOpenPassword={() => setPasswordOpen(true)}
-        onOpenTotp={() => (session.mfa_enabled ? beginReplace : beginEnable).mutate()}
+        onOpenTotp={() => (totpEnabled ? beginReplace : beginEnable).mutate()}
         onOpenRecovery={() => setRecoveryOpen(true)}
         onOpenRevokeAll={() => setConfirmRevokeAll(true)}
       />
@@ -76,7 +87,7 @@ export default function Security() {
 function SecurityMainCard({
   wide,
   english,
-  mfaEnabled,
+  totpEnabled,
   sessions,
   authBusy,
   onOpenPassword,
@@ -86,7 +97,7 @@ function SecurityMainCard({
 }: {
   wide: boolean;
   english: boolean;
-  mfaEnabled: boolean;
+  totpEnabled: boolean;
   sessions: ReturnType<typeof useSessionsControls>;
   authBusy: boolean;
   onOpenPassword: () => void;
@@ -96,15 +107,15 @@ function SecurityMainCard({
 }) {
   const { t } = useTranslation();
   const SecurityRegion = wide ? DesktopSecurity : PhoneSecurity;
-  const authRows = buildAuthRows(t, mfaEnabled);
+  const authRows = buildAuthRows(t, totpEnabled);
+  const sessionRows = buildSessionRows(
+    t,
+    sessions.formatDateTime,
+    sessions.query.isSuccess ? { status: "ready", data: sessions.query.data } : { status: "pending" },
+  );
 
   return (
     <>
-      {sessions.query.isError ? (
-        <DataState query={sessions.query} compact>
-          {() => null}
-        </DataState>
-      ) : null}
       <SecurityRegion
         t={makeBoardT(english, wide ? DesktopSecurityEn : PhoneSecurityEn, wide ? DesktopSecurityZh : PhoneSecurityZh, {
           mc70239e4f3: t("security.description"),
@@ -118,15 +129,21 @@ function SecurityMainCard({
             if (key === "recovery") onOpenRecovery();
           },
           authActionDisabled: authBusy,
-          hideRevokeOthers: !sessions.state.available || sessions.otherCount === 0,
+          hideCard2: sessions.query.isError,
+          hideRevokeOthers: !sessions.query.isSuccess || !sessions.query.data.available || sessions.otherCount === 0,
           revokeOthersDisabled: sessions.busy,
           onRevokeOthers: onOpenRevokeAll,
           sessionRevokeDisabled: sessions.busy,
           onSessionRevoke: sessions.onSessionRevoke,
         }}
-        rows={{ authRows0: authRows, sessions0: buildSessionRows(t, sessions.formatDateTime, sessions.state) }}
+        rows={{ authRows0: authRows, sessions0: sessionRows }}
         text={{ sessionsTitle: t("security.sessions.title"), sessionsClearLabel: t("security.sessions.revokeAll") }}
       />
+      {sessions.query.isError ? (
+        <DataState query={sessions.query} compact>
+          {() => null}
+        </DataState>
+      ) : null}
     </>
   );
 }
@@ -207,12 +224,14 @@ function SecurityModals({
 
 function SecurityBanners({
   banner,
+  totpEnabled,
   onDismissBanner,
   onRegenerate,
   beginError,
   sessionError,
 }: {
   banner: string | null;
+  totpEnabled: boolean;
   onDismissBanner: () => void;
   onRegenerate: () => void;
   beginError: unknown;
@@ -220,7 +239,6 @@ function SecurityBanners({
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const session = useSession();
   const pending = usePendingCodes();
   const oauth = new URLSearchParams(window.location.search).get("oauth");
 
@@ -237,7 +255,7 @@ function SecurityBanners({
             <Button size="sm" onClick={pending.retry} disabled={pending.pending}>
               {t("security.pendingCodes.retry")}
             </Button>
-            {session.mfa_enabled ? (
+            {totpEnabled ? (
               <Button size="sm" onClick={onRegenerate}>
                 {t("security.pendingCodes.regenerate")}
               </Button>
@@ -259,30 +277,38 @@ function useSessionsControls(onBanner: (message: string) => void, closeConfirm: 
   const format = useFormat();
   const client = useQueryClient();
   const query = useQuery(sessionsQuery);
-  const state: SessionsState = query.data ?? { available: true, sessions: [] };
-  const otherCount = state.sessions.filter((item) => !item.current).length;
+  const sessions = query.data?.sessions ?? [];
+  const otherCount = sessions.filter((item) => !item.current).length;
 
   const revokeOne = useMutation({
+    onMutate: () => claimSession(client),
     mutationFn: (sessionId: string) =>
       unwrapEmpty(
         consoleApi.DELETE("/api/console/v1/sessions/{session_id}", { params: { path: { session_id: sessionId } } }),
       ),
-    onSuccess: (_res, sessionId) => {
-      client.setQueryData<SessionsState>(sessionsQuery.queryKey, (prev) =>
-        prev ? { ...prev, sessions: prev.sessions.filter((item) => item.id !== sessionId) } : prev,
-      );
+    onSuccess: (_res, sessionId, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
+      if (holdsSession(client, claim.binding)) {
+        client.setQueryData<SessionsState>(sessionsQuery.queryKey, (prev) =>
+          prev ? { ...prev, sessions: prev.sessions.filter((item) => item.id !== sessionId) } : prev,
+        );
+      }
       void client.invalidateQueries({ queryKey: sessionsQuery.queryKey });
       onBanner(t("security.sessions.revokedOne"));
     },
   });
 
   const revokeAll = useMutation({
+    onMutate: () => claimSession(client),
     mutationFn: () => unwrap(consoleApi.DELETE("/api/console/v1/sessions")),
-    onSuccess: (res) => {
+    onSuccess: (res, _vars, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
       const ended = res.revoked ?? otherCount;
-      client.setQueryData<SessionsState>(sessionsQuery.queryKey, (prev) =>
-        prev ? { ...prev, sessions: prev.sessions.filter((item) => item.current) } : prev,
-      );
+      if (holdsSession(client, claim.binding)) {
+        client.setQueryData<SessionsState>(sessionsQuery.queryKey, (prev) =>
+          prev ? { ...prev, sessions: prev.sessions.filter((item) => item.current) } : prev,
+        );
+      }
       void client.invalidateQueries({ queryKey: sessionsQuery.queryKey });
       closeConfirm();
       onBanner(t("security.sessions.revokedAll", { count: ended }));
@@ -291,14 +317,13 @@ function useSessionsControls(onBanner: (message: string) => void, closeConfirm: 
 
   return {
     query,
-    state,
     otherCount,
     formatDateTime: format.dateTime,
     busy: revokeOne.isPending || revokeAll.isPending,
     actionError: revokeOne.error ?? revokeAll.error,
     revokeAll,
     onSessionRevoke: (event: SyntheticEvent) => {
-      const item = state.sessions[clickedRowIndex(event.target)];
+      const item = sessions[clickedRowIndex(event.target)];
       if (item && !item.current && item.id && !revokeOne.isPending) revokeOne.mutate(item.id);
     },
   };

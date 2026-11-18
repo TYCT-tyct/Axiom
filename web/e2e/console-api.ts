@@ -297,7 +297,8 @@ function deletePasskey({ body, params, state }: Ctx<"/api/console/v1/auth/passke
     return fail(404, "not_found");
   }
   const { csrf_token } = grant(state, "signed_in");
-  return { status: 200, json: { csrf_token, recovery_codes: state.mfaEnabled ? recoveryCodes : undefined } } as const;
+  const totp = state.totpEnabled ?? state.mfaEnabled;
+  return { status: 200, json: { csrf_token, recovery_codes: totp ? recoveryCodes : undefined } } as const;
 }
 
 function getCall({ params, state }: Ctx<"/api/console/v1/calls/{call_id}", "get">) {
@@ -380,7 +381,6 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/recovery-codes/take`, signedIn, () => ok({ recovery_codes: [] })),
   route("get", `${base}/auth/passkeys`, signedIn, ({ state }) => ok({ passkeys: state.passkeys })),
   route("delete", `${base}/auth/passkeys/{id}`, signedIn, deletePasskey),
-  route("get", `${base}/auth/identities`, signedIn, () => ok({ identities: [] })),
   route("get", `${base}/keys`, { ...signedIn, permission: "api_keys.view" }, listKeys),
   route("post", `${base}/keys`, { ...signedIn, permission: "api_keys.manage" }, createKey),
   route("put", `${base}/keys/{key_id}`, { ...signedIn, permission: "api_keys.manage" }, updateKey),

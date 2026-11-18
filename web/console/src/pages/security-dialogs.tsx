@@ -1,5 +1,13 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { QrCode, useErrors, useSession, useSessionBound, useShowRecoveryCodes, useStartSession } from "@axiom/app";
+import {
+  holdsIdentity,
+  QrCode,
+  useErrors,
+  useSession,
+  useSessionBound,
+  useShowRecoveryCodes,
+  useStartSession,
+} from "@axiom/app";
 import { Button, Cluster, Dialog, Field, FormError, Stack, SubmitButton } from "@axiom/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
@@ -31,6 +39,7 @@ function useChangePassword(onSaved: () => void, onClose: () => void) {
         showCodes({ csrf_token: csrf_token ?? session.csrf_token, recovery_codes }, answer.claim.identity);
       }
       await start(csrf_token ?? "").catch(() => {});
+      if (!holdsIdentity(client, answer.claim.identity)) return;
       await client.invalidateQueries({ queryKey: sessionsQuery.queryKey });
       onSaved();
       onClose();
@@ -126,6 +135,7 @@ function useReplaceTotp(onReplaced: () => void, onClose: () => void) {
       const { csrf_token, recovery_codes } = answer.value;
       if (recovery_codes.length) showCodes({ csrf_token, recovery_codes }, answer.claim.identity);
       await start(csrf_token).catch(() => {});
+      if (!holdsIdentity(client, answer.claim.identity)) return;
       await client.invalidateQueries({ queryKey: sessionsQuery.queryKey });
       onReplaced();
       onClose();
@@ -155,7 +165,7 @@ export function ReplaceTotpDialog({
     const issue = validateTotpReplace(currentCode, newCode);
     if (issue) {
       return setValidationError(
-        t(issue === "currentMissing" ? "security.twoStep.currentCode" : "security.twoStep.codeInvalid"),
+        t(issue === "currentMissing" ? "security.twoStep.currentCodeRequired" : "security.twoStep.codeInvalid"),
       );
     }
     setValidationError(null);

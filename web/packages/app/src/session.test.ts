@@ -1,6 +1,16 @@
 import { QueryClient } from "@tanstack/react-query";
 import { describe, expect, it } from "vitest";
-import { claimSession, holdsIdentity, holdsSession, type Session, safeNext, sessionBinding } from "./session";
+import {
+  claimSession,
+  consumeEmailChangeToken,
+  holdsIdentity,
+  holdsSession,
+  type Session,
+  safeNext,
+  sessionBinding,
+  stashEmailChangeToken,
+  stripEmailChangeToken,
+} from "./session";
 
 const session = (over: Partial<Session> = {}) =>
   ({
@@ -115,4 +125,19 @@ it("malformed addresses are dropped under the root too", () => {
   for (const value of ["//", "//[", "//evil.example:bad", "/%2e%2e//["]) {
     expect(safeNext(value, "/")).toBeUndefined();
   }
+});
+
+it("strips email-change-token fragments before building next URLs and preserves other hashes", () => {
+  expect(stripEmailChangeToken("/settings#email-change-token=secret-1")).toEqual({
+    token: "secret-1",
+    cleanHref: "/settings",
+  });
+  expect(stripEmailChangeToken("/settings?a=1#tab=2&email-change-token=secret-2")).toEqual({
+    token: "secret-2",
+    cleanHref: "/settings?a=1#tab=2",
+  });
+  expect(safeNext("/settings#email-change-token=example")).toBe("/settings");
+  stashEmailChangeToken("secret-3");
+  expect(consumeEmailChangeToken()).toBe("secret-3");
+  expect(consumeEmailChangeToken()).toBeNull();
 });

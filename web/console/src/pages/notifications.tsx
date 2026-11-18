@@ -1,5 +1,5 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { useErrors } from "@axiom/app";
+import { claimSession, holdsIdentity, useErrors } from "@axiom/app";
 import DesktopNotify from "@axiom/boards/AxApp/regions/Notify";
 import DesktopNotifyEn from "@axiom/boards/AxApp/regions/Notify.en";
 import DesktopNotifyZh from "@axiom/boards/AxApp/regions/Notify.zh";
@@ -8,7 +8,7 @@ import PhoneNotifyEn from "@axiom/boards/AxAppPhone/regions/Notify.en";
 import PhoneNotifyZh from "@axiom/boards/AxAppPhone/regions/Notify.zh";
 import { Button, DataState, FormError, Notice, parseMoney, usePageTitle } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type SyntheticEvent, useEffect, useState } from "react";
+import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { notificationPreferencesQuery, siteQuery } from "../queries";
 import { boardPageStyle, clickedRowIndex, makeBoardT, useBoardInputs, useEnglish, useWide } from "./account-board";
@@ -43,7 +43,14 @@ function useNotificationForm(preferences: Schemas["NotificationPreferences"]) {
   const [settings, setSettings] = useState<NotificationSettings>(() => initialSettings(preferences));
   const [outcome, setOutcome] = useState<"saved" | "partial" | null>(null);
   const [failure, setFailure] = useState<unknown>(null);
+  const draftVersion = useRef(0);
   const amount = parseMoney(settings.threshold);
+
+  const editSettings = (update: (held: NotificationSettings) => NotificationSettings) => {
+    draftVersion.current += 1;
+    setOutcome(null);
+    setSettings(update);
+  };
 
   const inputs = useBoardInputs({
     threshold: { inputMode: "decimal" },
@@ -56,6 +63,7 @@ function useNotificationForm(preferences: Schemas["NotificationPreferences"]) {
   }, [inputs, settings.threshold, settings.webhook]);
 
   const save = useMutation({
+    onMutate: () => ({ claim: claimSession(client), version: draftVersion.current }),
     mutationFn: () =>
       putPreferences(
         {
@@ -69,19 +77,21 @@ function useNotificationForm(preferences: Schemas["NotificationPreferences"]) {
         },
         (body) => unwrap(consoleApi.PUT("/api/console/v1/notification-preferences", { body })),
       ),
-    onSuccess: ({ data, spendSaved }) => {
+    onSuccess: ({ data, spendSaved }, _vars, context) => {
+      if (!context?.claim || !holdsIdentity(client, context.claim.identity)) return;
       client.setQueryData(notificationPreferencesQuery.queryKey, data);
       setFailure(null);
-      setOutcome(spendSaved ? "saved" : "partial");
+      if (context.version === draftVersion.current) setOutcome(spendSaved ? "saved" : "partial");
       if (!spendSaved) setSettings((held) => ({ ...held, spendAnomaly: undefined }));
     },
-    onError: (err) => {
+    onError: (err, _vars, context) => {
+      if (!context?.claim || !holdsIdentity(client, context.claim.identity)) return;
       setFailure(err);
       setOutcome(null);
     },
   });
 
-  return { settings, setSettings, amount, inputs, save, outcome, clearOutcome: () => setOutcome(null), failure };
+  return { settings, editSettings, amount, inputs, save, outcome, clearOutcome: () => setOutcome(null), failure };
 }
 
 function NotificationsBoard({
@@ -112,14 +122,17 @@ function NotificationsBoard({
       <NotifyRegion
         t={makeBoardT(english, wide ? DesktopNotifyEn : PhoneNotifyEn, wide ? DesktopNotifyZh : PhoneNotifyZh, {
           m512b281f73: t("notifications.description"),
+          m3d708e8e8b: t("notifications.channelHeader"),
         })}
         values={{
           pageStyle: boardPageStyle(wide, { first: true }),
           singleChannel: true,
           rowStyle,
+          toggleDisabled: form.save.isPending,
           onToggle: (event) => {
+            if (form.save.isPending) return;
             const key = switchKeys[clickedRowIndex(event.target)];
-            if (key) form.setSettings((held) => ({ ...held, [key]: !held[key] }));
+            if (key) form.editSettings((held) => ({ ...held, [key]: !held[key] }));
           },
         }}
         rows={{ notifications0: switchRows }}
@@ -154,10 +167,10 @@ function NotificationsDelivery({
         inputRef={form.inputs.inputRef}
         disabled={form.save.isPending}
         onInput={(event: SyntheticEvent) => {
-          if (!(event.target instanceof HTMLInputElement)) return;
+          if (form.save.isPending || !(event.target instanceof HTMLInputElement)) return;
           const { value, dataset } = event.target;
-          if (dataset.k === "threshold") form.setSettings((h) => ({ ...h, threshold: value }));
-          else if (dataset.k === "webhook") form.setSettings((h) => ({ ...h, webhook: value }));
+          if (dataset.k === "threshold") form.editSettings((h) => ({ ...h, threshold: value }));
+          else if (dataset.k === "webhook") form.editSettings((h) => ({ ...h, webhook: value }));
         }}
         onKeyDown={(event: SyntheticEvent) => {
           if ((event as unknown as KeyboardEvent).key === "Enter") {
@@ -171,9 +184,11 @@ function NotificationsDelivery({
         wide={wide}
         english={english}
         title={t("notifications.language")}
-        onRowAction={(event) =>
-          form.setSettings((held) => ({ ...held, language: clickedRowIndex(event.target) === 0 ? "zh" : "en" }))
-        }
+        rowDisabled={form.save.isPending}
+        onRowAction={(event) => {
+          if (form.save.isPending) return;
+          form.editSettings((held) => ({ ...held, language: clickedRowIndex(event.target) === 0 ? "zh" : "en" }));
+        }}
         rows={buildMessageLanguageRows(t, form.settings.language)}
       />
       <AccountActionCard

@@ -1,16 +1,6 @@
-import type { TFunction } from "i18next";
+import { stripEmailChangeToken } from "@axiom/app";
 import { describe, expect, it } from "vitest";
-import {
-  buildBillingRows,
-  initialGlyph,
-  readEmailChangeToken,
-  stripEmailChangeHash,
-  validateDisplayName,
-  validateEmailChange,
-} from "./settings-data";
-
-const t = ((key: string, opts?: Record<string, string>) =>
-  opts ? `${key}:${JSON.stringify(opts)}` : key) as unknown as TFunction;
+import { initialGlyph, validateDisplayName, validateEmailChange } from "./settings-data";
 
 describe("display name validation", () => {
   it("counts Unicode code points after trimming whitespace", () => {
@@ -30,40 +20,20 @@ describe("email change validation and hash token helpers", () => {
   });
 
   it("extracts and removes email-change-token without dropping pathname or query", () => {
-    expect(readEmailChangeToken("#email-change-token=tok_123")).toBe("tok_123");
-    expect(readEmailChangeToken("#other=1&email-change-token=tok_456")).toBe("tok_456");
-    expect(readEmailChangeToken("#other=1")).toBeNull();
-    expect(
-      stripEmailChangeHash({
-        pathname: "/console/settings",
-        search: "?tab=1",
-        hash: "#other=1&email-change-token=tok_456",
-      }),
-    ).toBe("/console/settings?tab=1#other=1");
-    expect(
-      stripEmailChangeHash({
-        pathname: "/console/settings",
-        search: "",
-        hash: "#email-change-token=tok_123",
-      }),
-    ).toBe("/console/settings");
+    expect(stripEmailChangeToken("/console/settings?tab=1#other=1&email-change-token=tok_456")).toEqual({
+      token: "tok_456",
+      cleanHref: "/console/settings?tab=1#other=1",
+    });
+    expect(stripEmailChangeToken("/console/settings#email-change-token=tok_123")).toEqual({
+      token: "tok_123",
+      cleanHref: "/console/settings",
+    });
   });
 });
 
-describe("profile glyph and billing rows", () => {
+describe("profile glyph", () => {
   it("uses display name initial before email", () => {
     expect(initialGlyph("  林知远 ", "alice@example.com")).toEqual({ glyph: "林", title: "林知远" });
     expect(initialGlyph("", "alice@example.com")).toEqual({ glyph: "A", title: "alice@example.com" });
-  });
-
-  it("marks active billing choice with a tag and inactive options with buttons", () => {
-    const rows = buildBillingRows(t, {
-      source: "account",
-      preference: "wallet_first",
-      site_default: "subscription_first",
-    });
-    expect(rows.find((row) => row.key === "wallet_first")).toMatchObject({ kind: "0", f3: "qtag ok" });
-    expect(rows.find((row) => row.key === "site")).toMatchObject({ kind: "1" });
-    expect(rows.find((row) => row.key === "subscription_only")).toMatchObject({ kind: "1" });
   });
 });

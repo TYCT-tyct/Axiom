@@ -1,5 +1,5 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { can, useErrors, useSession } from "@axiom/app";
+import { can, claimSession, holdsIdentity, useErrors, useSession } from "@axiom/app";
 import DesktopProfile from "@axiom/boards/AxApp/regions/Profile";
 import DesktopProfileEn from "@axiom/boards/AxApp/regions/Profile.en";
 import DesktopProfileZh from "@axiom/boards/AxApp/regions/Profile.zh";
@@ -27,6 +27,7 @@ import { useTranslation } from "react-i18next";
 import { billingPreferenceQuery } from "../queries";
 import { boardPageStyle, clickedRowIndex, makeBoardT, useEnglish, useWide } from "./account-board";
 import { AccountActionCard } from "./account-cards";
+import { type EmailConfirmStatus, useEmailConfirm } from "./settings-confirm";
 import {
   type BillingOption,
   billingOptions,
@@ -37,8 +38,6 @@ import {
   buildThemeRows,
   type DisplayNameState,
   displayNameQuery,
-  type EmailConfirmStatus,
-  useEmailConfirm,
   useProfileActions,
   validateEmailChange,
 } from "./settings-data";
@@ -54,14 +53,19 @@ function useSaveBilling(onSaved: (message: string) => void, onError: (error: unk
   const { t } = useTranslation();
   const client = useQueryClient();
   return useMutation({
+    onMutate: () => claimSession(client),
     mutationFn: (choice: BillingOption) =>
       unwrap(consoleApi.PUT("/api/console/v1/billing-preference", { body: { preference: choice } })),
-    onSuccess: (next) => {
+    onSuccess: (next, _choice, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
       client.setQueryData(billingPreferenceQuery.queryKey, next);
       onError(null);
       onSaved(t("settings.saved"));
     },
-    onError,
+    onError: (error, _choice, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
+      onError(error);
+    },
   });
 }
 
@@ -232,7 +236,6 @@ function ProfileSection({
             email,
             nameAvailable,
             nameFeedback: profile.nameMessage,
-            nameKeySuffix: displayName.isSuccess ? "ready" : "pending",
           }),
         }}
       />
@@ -339,6 +342,19 @@ function BillingSection({
   );
 }
 
+function useSendEmailChange(onSent: (address: string) => void) {
+  const client = useQueryClient();
+  return useMutation({
+    onMutate: () => claimSession(client),
+    mutationFn: (body: { email: string; current_password: string; language: "zh" | "en" }) =>
+      unwrapEmpty(consoleApi.POST("/api/console/v1/profile/email", { body })),
+    onSuccess: (_res, variables, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
+      onSent(variables.email);
+    },
+  });
+}
+
 function EmailChangeDialog({
   currentEmail,
   initialEmail,
@@ -357,12 +373,7 @@ function EmailChangeDialog({
   const [email, setEmail] = useState(initialEmail === currentEmail ? "" : initialEmail);
   const [password, setPassword] = useState("");
   const [validationError, setValidationError] = useState<string | null>(null);
-
-  const send = useMutation({
-    mutationFn: (body: { email: string; current_password: string; language: "zh" | "en" }) =>
-      unwrapEmpty(consoleApi.POST("/api/console/v1/profile/email", { body })),
-    onSuccess: (_res, variables) => onSent(variables.email),
-  });
+  const send = useSendEmailChange(onSent);
 
   function submit(event: FormEvent) {
     event.preventDefault();

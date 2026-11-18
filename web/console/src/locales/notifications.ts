@@ -2,8 +2,9 @@
 import type { Messages } from "@axiom/ui";
 
 export const zh = {
-  description: "Axiom 什么时候给你发邮件或调用你的 webhook。",
+  description: "决定邮件和 webhook 何时提醒，同开关控制两者。",
   title: "提醒",
+  channelHeader: "接收提醒",
   dismiss: "关闭",
   saved: "偏好已保存。",
   savedPartialSpend: "其他偏好已保存；账户异常活动提醒没有保存：这个控制台节点还不支持这项设置，请等升级完成后再试。",
@@ -12,17 +13,17 @@ export const zh = {
     body: "可用余额跌破阈值时发送一次提醒。",
   },
   lowBalance: "余额不足",
-  lowBalanceHint: "余额不足时发邮件并调用 webhook。",
+  lowBalanceHint: "余额不足时通过邮件和 webhook 提醒。",
   threshold: "阈值",
   thresholdHint: "单位 {{currency}}，例如 5 或 12.5。",
   thresholdInvalid: "请输入非负金额，例如 5 或 12.5。",
   events: { title: "其他事件" },
   topUp: "充值到账",
-  topUpHint: "充值入账后发邮件确认。",
+  topUpHint: "充值到账时通过邮件和 webhook 提醒。",
   factorChanged: "安全变更",
-  factorChangedHint: "两步验证或通行密钥变更时通知我。密码修改始终会发邮件。",
+  factorChangedHint: "安全变更通知邮件和 webhook，改密必发。",
   spendAnomaly: "账户异常活动",
-  spendAnomalyHint: "这个账户的花费、来源地区或模型突然变化时通知我。如果不是您本人操作，请停用不认识的 API key。",
+  spendAnomalyHint: "花费突变发邮件和 webhook；可疑请停 key。",
   delivery: { title: "发送方式" },
   webhook: "Webhook 地址",
   webhookHint: "仅支持 HTTPS，留空表示不调用 webhook。",
@@ -45,8 +46,9 @@ export const zh = {
 };
 
 export const en: Messages<typeof zh> = {
-  description: "When Axiom emails you or calls your webhook.",
+  description: "When Axiom alerts you by email and any configured webhook; each toggle controls both.",
   title: "Alerts",
+  channelHeader: "Alerts",
   dismiss: "Close",
   saved: "Preferences saved.",
   savedPartialSpend:
@@ -56,18 +58,19 @@ export const en: Messages<typeof zh> = {
     body: "A reminder is sent when the available balance crosses below the threshold.",
   },
   lowBalance: "Low balance",
-  lowBalanceHint: "Email and call the webhook when the balance runs low.",
+  lowBalanceHint: "Send an email and call the webhook when the balance runs low.",
   threshold: "Threshold",
   thresholdHint: "In {{currency}}, as an amount like 5 or 12.5.",
   thresholdInvalid: "Enter a non-negative amount, such as 5 or 12.5.",
   events: { title: "Other events" },
   topUp: "Finished top-ups",
-  topUpHint: "Confirm by email when a top-up is credited.",
+  topUpHint: "Notify by email and configured webhook when a top-up is credited.",
   factorChanged: "Security changes",
-  factorChangedHint: "Tell me when two-step verification or a passkey changes. Password changes are always emailed.",
+  factorChangedHint:
+    "Notify by email and configured webhook when two-step verification or a passkey changes. Password changes are always emailed.",
   spendAnomaly: "Unusual account activity",
   spendAnomalyHint:
-    "Tell me when this account's spend, source regions or models change sharply. If it was not you, disable any API keys you do not recognize.",
+    "Notify by email and configured webhook when this account's spend, source regions or models change sharply. If it was not you, disable any API keys you do not recognize.",
   delivery: { title: "Delivery" },
   webhook: "Webhook URL",
   webhookHint: "HTTPS only. Leave empty to turn webhooks off.",

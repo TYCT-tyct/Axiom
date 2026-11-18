@@ -12,6 +12,7 @@ export type AccountMockFields = {
   notifications: Schemas["NotificationPreferences"];
   sessions: Schemas["SessionDevice"][];
   invitees: Schemas["Invitee"][];
+  identities: Schemas["Identity"][];
 };
 
 type AccountState = AuthState & AccountMockFields;
@@ -64,6 +65,7 @@ export function usualAccountFields(): AccountMockFields {
       { registered_at: "2026-10-22T09:30:00Z", available: true },
       { registered_at: "2026-10-18T14:20:00Z", available: false },
     ],
+    identities: [],
   };
 }
 
@@ -154,6 +156,7 @@ function changePassword({ body, state }: Ctx<"/api/console/v1/password", "post">
 }
 
 function replaceTotp({ body, state }: Ctx<"/api/console/v1/auth/totp/replace", "post">) {
+  if (!(state.totpEnabled ?? state.mfaEnabled)) return fail(409, "conflict");
   const current = body.current_code.trim().toLowerCase();
   if ((current !== state.user.mfaCode && current !== state.user.recoveryCode) || body.code !== state.user.mfaCode) {
     return fail(401, "invalid_code");
@@ -161,6 +164,18 @@ function replaceTotp({ body, state }: Ctx<"/api/console/v1/auth/totp/replace", "
   state.sessions = state.sessions.filter((item) => item.current);
   const { csrf_token } = grant(state, "signed_in");
   return ok({ csrf_token, recovery_codes: recoveryCodes.toReversed() });
+}
+
+function unlinkIdentity({ params, state }: Ctx<"/api/console/v1/auth/identities/{provider}", "delete">) {
+  const before = state.identities.length;
+  state.identities = state.identities.filter((item) => item.provider !== params.provider);
+  if (state.identities.length === before) return fail(404, "not_found");
+  state.sessions = state.sessions.filter((item) => item.current);
+  const { csrf_token } = grant(state, "signed_in");
+  return ok({
+    csrf_token,
+    ...((state.totpEnabled ?? state.mfaEnabled) ? { recovery_codes: recoveryCodes } : {}),
+  });
 }
 
 function revokeAllSessions({ state }: Ctx<"/api/console/v1/sessions", "delete">) {
@@ -190,6 +205,8 @@ function listInvitations({ query, state }: Ctx<"/api/console/v1/invitations", "g
 export function accountHandlers<S extends AccountState>(): Handler<S>[] {
   return [
     route("post", `${base}/auth/totp/replace`, { level: "mfa" }, replaceTotp),
+    route("get", `${base}/auth/identities`, signedIn, ({ state }) => ok({ identities: state.identities })),
+    route("delete", `${base}/auth/identities/{provider}`, signedIn, unlinkIdentity),
     route("post", `${base}/password`, signedIn, changePassword),
     route("get", `${base}/profile/name`, signedIn, ({ state }) => ok({ name: state.displayName })),
     route("post", `${base}/profile/name`, signedIn, changeDisplayName),

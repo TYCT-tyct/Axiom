@@ -466,6 +466,9 @@ func removePasskey(t *testing.T, x site, s *accounts.Service, verified accounts.
 	if err != nil {
 		t.Fatal(err)
 	}
+	if info, err := s.SessionInfo(t.Context(), verifiedPrincipal); err != nil || !info.MFAEnabled || info.TOTPEnabled || info.Passkeys != 1 {
+		t.Errorf("passkey-only session info: %+v, %v", info, err)
+	}
 	if _, _, err := s.DeletePasskey(t.Context(), verifiedPrincipal, passkey.ID, password, client, "test"); err != nil {
 		t.Fatal(err)
 	}

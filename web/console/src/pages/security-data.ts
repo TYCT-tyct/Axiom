@@ -1,5 +1,12 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { accountKey, useErrors, useSessionBound, useShowRecoveryCodes, useStartSession } from "@axiom/app";
+import {
+  accountKey,
+  holdsIdentity,
+  useErrors,
+  useSessionBound,
+  useShowRecoveryCodes,
+  useStartSession,
+} from "@axiom/app";
 import type DesktopSecurity from "@axiom/boards/AxApp/regions/Security";
 import { type InfiniteData, infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
@@ -9,9 +16,9 @@ import { identitiesQuery, passkeysQuery } from "../queries";
 import { registerPasskey } from "../webauthn";
 
 export type SessionsState = { available: boolean; sessions: Schemas["SessionDevice"][] };
+export type PasskeyRegistrationAvailability = "ready" | "unsupported" | "site_disabled" | "wrong_domain";
 export type InvitationsPage = {
   available: boolean;
-  code?: string;
   link?: string;
   invitees: Schemas["Invitee"][];
   next_cursor: string | null;
@@ -52,7 +59,6 @@ export const invitationsQuery = infiniteQueryOptions({
       );
       return {
         available: true,
-        code: data.code,
         link: data.link,
         invitees: data.invitees ?? [],
         next_cursor: data.next_cursor ?? null,
@@ -68,12 +74,12 @@ export const invitationsQuery = infiniteQueryOptions({
   getNextPageParam: (page) => (page.available ? (page.next_cursor ?? undefined) : undefined),
 });
 
-export function flattenInvitees(data: InfiniteData<InvitationsPage> | undefined): {
+export function flattenInvitees(data: InfiniteData<InvitationsPage>): {
   available: boolean;
   invitees: Schemas["Invitee"][];
   link?: string;
 } {
-  if (!data || data.pages.length === 0) return { available: true, invitees: [] };
+  if (data.pages.length === 0) return { available: false, invitees: [] };
   const first = data.pages[0];
   if (first && !first.available) return { available: false, invitees: [] };
   return {
@@ -81,6 +87,24 @@ export function flattenInvitees(data: InfiniteData<InvitationsPage> | undefined)
     invitees: data.pages.flatMap((page) => page.invitees),
     link: first?.link,
   };
+}
+
+export function passkeyRegistrationAvailability(
+  site: Schemas["Site"] | undefined,
+  loc: { origin: string; hostname: string } | undefined,
+  supported: boolean,
+): PasskeyRegistrationAvailability {
+  if (!supported) return "unsupported";
+  if (!site?.passkeys) return "site_disabled";
+  if (!loc) return "wrong_domain";
+  if (site.login_origin) {
+    try {
+      return new URL(site.login_origin).origin === loc.origin ? "ready" : "wrong_domain";
+    } catch {
+      return "wrong_domain";
+    }
+  }
+  return site.login_domain && site.login_domain === loc.hostname ? "ready" : "wrong_domain";
 }
 
 export function validatePasswordChange(
@@ -151,15 +175,20 @@ export function buildAuthRows(t: TFunction, mfaEnabled: boolean): AuthRows {
 export function buildSessionRows(
   t: TFunction,
   formatDateTime: (date: Date) => string,
-  state: SessionsState,
+  state: { status: "pending" } | { status: "ready"; data: SessionsState },
 ): SessionRows {
-  if (!state.available) {
+  if (state.status === "pending") {
+    return [{ key: "loading", kind: "0", f0: "qses", f1: t("security.loading"), f2: "", f3: "", f4: "" }];
+  }
+  if (!state.data.available) {
+    return [
+      { key: "unavailable", kind: "0", f0: "qses", f1: t("security.sessions.unavailable"), f2: "", f3: "", f4: "" },
+    ];
+  }
+  if (state.data.sessions.length === 0) {
     return [{ key: "empty", kind: "0", f0: "qses", f1: t("security.sessions.empty"), f2: "", f3: "", f4: "" }];
   }
-  if (state.sessions.length === 0) {
-    return [{ key: "empty", kind: "0", f0: "qses", f1: t("security.sessions.empty"), f2: "", f3: "", f4: "" }];
-  }
-  return state.sessions.map((device, index) => {
+  return state.data.sessions.map((device, index) => {
     const network = device.ip_group?.trim() || t("security.sessions.unknownNetwork");
     const lastSeen = device.last_seen_at ? formatDateTime(new Date(device.last_seen_at)) : "-";
     const created = device.created_at ? formatDateTime(new Date(device.created_at)) : "-";
@@ -189,11 +218,18 @@ export function buildSessionRows(
   });
 }
 
+const passkeyUnavailableHint = {
+  ready: "security.passkeys.body",
+  unsupported: "security.passkeys.unsupported",
+  site_disabled: "security.passkeys.disabledBySite",
+  wrong_domain: "security.passkeys.wrongDomain",
+} as const;
+
 export function buildPasskeyRows(
   t: TFunction,
   formatDateTime: (date: Date) => string,
   passkeys: readonly Schemas["Passkey"][],
-  supported: boolean,
+  availability: PasskeyRegistrationAvailability,
 ): SessionRows {
   if (passkeys.length === 0) {
     return [
@@ -202,13 +238,13 @@ export function buildPasskeyRows(
         kind: "0",
         f0: "qses",
         f1: t("security.passkeys.empty"),
-        f2: supported ? t("security.passkeys.body") : t("security.passkeys.unsupported"),
+        f2: t(passkeyUnavailableHint[availability]),
         f3: "",
         f4: "",
       },
     ];
   }
-  return passkeys.map((passkey) => {
+  const rows: SessionRows = passkeys.map((passkey) => {
     const created = formatDateTime(new Date(passkey.created_at));
     const lastUsed = passkey.last_used_at
       ? t("security.passkeys.lastUsed", { time: formatDateTime(new Date(passkey.last_used_at)) })
@@ -224,6 +260,20 @@ export function buildPasskeyRows(
       f5: t("security.passkeys.remove"),
     };
   });
+  return availability === "ready"
+    ? rows
+    : [
+        ...rows,
+        {
+          key: "availability-hint",
+          kind: "0",
+          f0: "qses",
+          f1: t(passkeyUnavailableHint[availability]),
+          f2: "",
+          f3: "",
+          f4: "",
+        },
+      ];
 }
 
 export function buildIdentityRows(
@@ -325,7 +375,6 @@ async function runAddPasskey(passkeyName: string, passkeyPassword: string, signa
 export function usePasskeyActions() {
   const { t } = useTranslation();
   const errors = useErrors();
-  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
   const { failure, busy, run } = usePasskeyChange();
@@ -334,7 +383,6 @@ export function usePasskeyActions() {
   async function add(passkeyName: string, passkeyPassword: string) {
     return run(async (signal) => {
       const res = await runAddPasskey(passkeyName, passkeyPassword, signal);
-      setName("");
       setPassword("");
       return res;
     });
@@ -357,7 +405,6 @@ export function usePasskeyActions() {
 
   return {
     errors,
-    name,
     password,
     localError,
     failure,
@@ -365,7 +412,6 @@ export function usePasskeyActions() {
     supported,
     add,
     remove,
-    setName,
     setPasswordValue: (v: string) => {
       setPassword(v);
       setLocalError(null);
@@ -413,7 +459,9 @@ export function useIdentityActions() {
         show({ csrf_token: grant.csrf_token, recovery_codes: grant.recovery_codes }, answer.claim.identity);
       }
       await start(grant.csrf_token).catch(() => {});
+      if (!holdsIdentity(queryClient, answer.claim.identity)) return;
       await queryClient.invalidateQueries({ queryKey: identitiesQuery.queryKey });
+      await queryClient.invalidateQueries({ queryKey: sessionsQuery.queryKey });
     } catch (error) {
       setFailure(error);
     } finally {
@@ -421,5 +469,5 @@ export function useIdentityActions() {
     }
   }
 
-  return { errors, failure, busy, link, unlink, clearFailure: () => setFailure(null) };
+  return { errors, failure, busy, link, unlink };
 }

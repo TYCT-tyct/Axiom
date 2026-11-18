@@ -1,5 +1,5 @@
 import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
-import { accountKey, useErrors, useSessionBound, useShowRecoveryCodes, useStartSession } from "@axiom/app";
+import { accountKey, claimSession, holdsIdentity, useErrors } from "@axiom/app";
 import type DesktopProfile from "@axiom/boards/AxApp/regions/Profile";
 import type DesktopSecurity from "@axiom/boards/AxApp/regions/Security";
 import { queryOptions, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -10,11 +10,6 @@ import { type ThemeChoice, useBoardInputs } from "./account-board";
 
 export type DisplayNameState = { available: boolean; name: string };
 export type BillingOption = "site" | Schemas["BillingPreferenceRequest"]["preference"];
-export type EmailConfirmStatus =
-  | { state: "idle" }
-  | { state: "pending" }
-  | { state: "confirmed" }
-  | { state: "error"; error: unknown };
 
 export const billingOptions: readonly BillingOption[] = [
   "site",
@@ -59,19 +54,6 @@ export function validateEmailChange(
   return null;
 }
 
-export function readEmailChangeToken(hash: string): string | null {
-  if (!hash.startsWith("#")) return null;
-  const token = new URLSearchParams(hash.slice(1)).get("email-change-token")?.trim() ?? "";
-  return token || null;
-}
-
-export function stripEmailChangeHash(loc: Pick<Location, "pathname" | "search" | "hash">): string {
-  const params = new URLSearchParams(loc.hash.startsWith("#") ? loc.hash.slice(1) : loc.hash);
-  params.delete("email-change-token");
-  const rest = params.toString();
-  return `${loc.pathname}${loc.search}${rest ? `#${rest}` : ""}`;
-}
-
 export function initialGlyph(name: string, email: string): { glyph: string; title: string } {
   const source = (name.trim() || email.trim() || "?").trim();
   return {
@@ -89,7 +71,6 @@ export function buildProfileRows(opts: {
   email: string;
   nameAvailable: boolean;
   nameFeedback: string | null;
-  nameKeySuffix: string;
 }): ProfileRows {
   const { glyph, title } = initialGlyph(opts.name, opts.email);
   const nameHint = opts.nameAvailable
@@ -109,7 +90,7 @@ export function buildProfileRows(opts: {
       f7: glyph,
     },
     {
-      key: `name:${opts.nameKeySuffix}`,
+      key: "name",
       kind: "2",
       f0: "qrow",
       f1: "qrl",
@@ -256,15 +237,20 @@ function useDisplayNameMutation(
   const errors = useErrors();
   const client = useQueryClient();
   return useMutation({
+    onMutate: () => claimSession(client),
     mutationFn: (trimmed: string) =>
       unwrapEmpty(consoleApi.POST("/api/console/v1/profile/name", { body: { name: trimmed } })),
-    onSuccess: (_res, trimmed) => {
+    onSuccess: (_res, trimmed, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
       client.setQueryData(displayNameQuery.queryKey, { available: true, name: trimmed });
       setNameDraft(trimmed);
       setNameMessage(t("settings.profile.nameSaved"));
       onSaved(trimmed);
     },
-    onError: (err) => setNameMessage(errors.message(err)),
+    onError: (err, _trimmed, claim) => {
+      if (!claim || !holdsIdentity(client, claim.identity)) return;
+      setNameMessage(errors.message(err));
+    },
   });
 }
 
@@ -345,7 +331,7 @@ function buildProfileCallbacks(opts: {
       }),
     onActionIndex: (rows: readonly { key: string }[]) => (index: number) => {
       const key = rows[index]?.key;
-      if (key === "save-name") opts.submitName(opts.nameDraft || opts.serverName);
+      if (key === "save-name") opts.submitName(opts.nameDirty.current ? opts.nameDraft : opts.serverName);
       if (key === "change-email") opts.openEmailModal();
     },
   };
@@ -380,10 +366,13 @@ export function useProfileActions(nameData: DisplayNameState | undefined, curren
   }
 
   const inputs = useBoardInputs({
-    name: { maxLength: 100, onBlur: (el) => nameDirty.current && submitName(el.value) },
+    name: { onBlur: (el) => nameDirty.current && submitName(el.value) },
     email: { type: "email", autoComplete: "email" },
   });
   useProfileInputSync(nameDirty, nameData, currentEmail, setNameDraft, setEmailDraft, inputs.setValue);
+  useEffect(() => {
+    inputs.setDisabled("name", saveName.isPending || nameData?.available === false);
+  }, [inputs, nameData?.available, saveName.isPending]);
 
   return {
     inputs,
@@ -412,46 +401,4 @@ export function useProfileActions(nameData: DisplayNameState | undefined, curren
       setEmailModalOpen(false);
     },
   };
-}
-
-export function useEmailConfirm(): { status: EmailConfirmStatus; dismiss: () => void } {
-  const start = useStartSession();
-  const showCodes = useShowRecoveryCodes();
-  const bound = useSessionBound("identity");
-  const client = useQueryClient();
-  const handled = useRef<string | null>(null);
-  const actionsRef = useRef({ start, showCodes, bound, client });
-  actionsRef.current = { start, showCodes, bound, client };
-  const [status, setStatus] = useState<EmailConfirmStatus>({ state: "idle" });
-
-  useEffect(() => {
-    const run = () => {
-      const token = readEmailChangeToken(window.location.hash);
-      if (!token || handled.current === token) return;
-      handled.current = token;
-      window.history.replaceState(null, "", stripEmailChangeHash(window.location));
-      setStatus({ state: "pending" });
-      const current = actionsRef.current;
-      void current
-        .bound((signal) =>
-          unwrap(consoleApi.POST("/api/console/v1/profile/email/confirm", { body: { token }, signal })),
-        )
-        .then(async (answer) => {
-          if (!answer) return;
-          const { csrf_token, recovery_codes } = answer.value;
-          if (recovery_codes?.length && csrf_token) {
-            current.showCodes({ csrf_token, recovery_codes }, answer.claim.identity);
-          }
-          await current.start(csrf_token ?? "").catch(() => {});
-          await current.client.invalidateQueries({ queryKey: [accountKey] });
-          setStatus({ state: "confirmed" });
-        })
-        .catch((error: unknown) => setStatus({ state: "error", error }));
-    };
-    run();
-    window.addEventListener("hashchange", run);
-    return () => window.removeEventListener("hashchange", run);
-  }, []);
-
-  return { status, dismiss: () => setStatus({ state: "idle" }) };
 }

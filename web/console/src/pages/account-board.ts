@@ -26,10 +26,10 @@ export function useEnglish(): boolean {
 // Replicate .pin.qpages padding because layout.tsx zeros page padding; display:block shows cross-board regions
 // (e.g. Security cards rendered inside /settings or /notifications) that CSS otherwise hides by page class.
 export function boardPageStyle(wide: boolean, opts?: { first?: boolean; last?: boolean }): string {
-  const pt = opts?.first ? (wide ? 30 : 12) : 0;
+  const pt = opts?.first ? (wide ? 30 : 14) : 0;
   const px = wide ? 40 : 16;
   const pb = opts?.last ? (wide ? 96 : 120) : 0;
-  return `display: block; max-width: 1180px; padding: ${pt}px ${px}px ${pb}px; overflow-wrap: anywhere;`;
+  return `display: block; width: 100%; max-width: 1180px; margin: 0 auto; padding: ${pt}px ${px}px ${pb}px; overflow-wrap: anywhere;`;
 }
 
 // Identify the clicked row inside a generated card regardless of whether preceding rows are tags or buttons.
@@ -88,5 +88,10 @@ export function useBoardInputs(specs: Record<string, InputFieldSpec>) {
     if (el && el.value !== value) el.value = value;
   }, []);
 
-  return { inputRef, setValue };
+  const setDisabled = useCallback((key: string, disabled: boolean) => {
+    const el = elementsRef.current.get(key);
+    if (el) el.disabled = disabled;
+  }, []);
+
+  return { inputRef, setValue, setDisabled };
 }

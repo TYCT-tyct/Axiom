@@ -101,7 +101,7 @@ test.describe("security page extended flows (#747 C6)", () => {
 
     await page.getByRole("button", { name: "更换验证器" }).click();
     const replaceDialog = page.getByRole("dialog", { name: "更换验证器" });
-    await replaceDialog.getByLabel("当前验证器中的 6 位验证码").fill("123456");
+    await replaceDialog.getByLabel("当前 6 位验证码或恢复码").fill("123456");
     await replaceDialog.getByLabel("新验证器中的 6 位验证码").fill("000000");
     await replaceDialog.getByRole("button", { name: "确认更换" }).click();
     await expect(replaceDialog.getByRole("alert")).toContainText(/验证码/);

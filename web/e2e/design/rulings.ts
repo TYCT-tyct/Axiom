@@ -56,29 +56,39 @@ export const rulings: Ruling[] = [
   {
     scene: "console settings",
     basis:
-      "§5.4 & API account data: avatar glyph, weight-500 labels, display-name hint and shifted email row differ from board demo",
+      "§5.4 & API account data: avatar glyph, weight-500 labels, hints and inputs differ; cards below Profile live outside the Profile artboard",
     board: { selector: ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin" },
     page: {
-      selector: ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin, .qpg.p-security",
+      selector:
+        ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin, .p-profile ~ .qpg.p-security",
     },
   },
   ...accountShell("console security"),
   {
     scene: "console security",
-    basis: "#816: team TOTP policy lock is omitted; auth statuses, sessions, passkeys and invitations come from API",
-    board: { selector: ".p-security .qph p, .p-security .qcard" },
-    page: { selector: ".p-security .qph p, .p-security .qcard, .p-profile" },
+    basis:
+      "#816 & §5.4: team TOTP policy lock, API row text, 500/330 CJK glyph weight inside spans, and cards below Sessions differ from board demo",
+    board: {
+      selector:
+        ".p-security .qph p, .p-security .qcard:first-of-type > .qrow:first-child > .qrl, .p-security .qcard:first-of-type > .qrow:nth-child(2), .p-security .qcard:nth-of-type(2) .qses > div, .p-security .qch h2, .p-security .btn > span, .p-security .qtag",
+    },
+    page: {
+      selector:
+        ".p-security .qph p, .p-security .qcard:first-of-type > .qrow:first-child > .qrl, .p-security .qcard:first-of-type > .qrow:nth-child(2), .p-security .qcard:nth-of-type(2) .qses > div, .p-security .qch h2, .p-security .btn > span, .p-security .qtag, .p-security ~ .qpg.p-security, .p-profile",
+    },
   },
   ...accountShell("console notifications"),
   {
     scene: "console notifications",
-    basis: "#816 G9: in-app channel and unbuilt team/digest notification rows have no API yet",
+    basis:
+      "#816 G9: in-app toggle column, unbuilt rows 5-6, row 3 state, unified '接收提醒' header and delivery/language cards below Alerts differ from board demo",
     board: {
-      selector: ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd)",
+      selector:
+        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd) > div, .p-notify .qnt:not(.hd) > button:nth-of-type(1), .p-notify .qnt:nth-child(4) > button:nth-of-type(2), .p-notify .qcard > .qnt:nth-of-type(n+6)",
     },
     page: {
       selector:
-        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd), .p-profile, .p-security",
+        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd) > div, .p-notify .qnt:nth-child(4) > button:nth-of-type(1), .p-profile, .p-security",
     },
   },
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
