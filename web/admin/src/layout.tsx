@@ -164,27 +164,14 @@ export function Layout() {
   );
 }
 
-function AdminShell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
-  const { t, i18n } = useTranslation();
-  const { page, slot } = useKeptPage(children);
-  const brand = useAdminBrand();
+// The account menu: who is signed in, the language and theme switches, and signing out, as the board draws them.
+function useAccountValues(signOut: () => void) {
   const session = useSession();
   const preferences = usePreferences();
-  const phone = useWidth("(max-width: 819px)");
-  const wide = useWidth("(min-width: 1024px)");
-  const [folded, setFolded] = useState<boolean>();
-  const sidebarFolded = folded ?? !wide;
-  const pages = usePages();
   const theme = preferences.themes.indexOf(preferences.theme);
   const email = session.user.email;
-  const values = {
-    ...departures,
-    ...useMenus(),
-    press,
+  return {
     rootC: `${rootState}${preferences.dark ? " thD" : ""}`,
-    to_ov: "/",
-    home: brand.name,
-    navigation: t("shell.navigation", { ns: "common" }),
     meN: email.split("@")[0],
     meE: email,
     meI: email.slice(0, 1).toUpperCase(),
@@ -201,10 +188,65 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
       ]),
     ),
     fnOut: signOut,
-    cold: sidebarFolded ? "cold" : "",
-    tgCol: () => setFolded(!sidebarFolded),
-    sidebarOpen: !sidebarFolded,
-    colT: t(sidebarFolded ? "shell.expand" : "shell.collapse"),
+  };
+}
+
+// The wide sidebar folds below 1024px until the person unfolds it.
+function useSidebarValues() {
+  const { t } = useTranslation();
+  const wide = useWidth("(min-width: 1024px)");
+  const [folded, setFolded] = useState<boolean>();
+  const shut = folded ?? !wide;
+  return {
+    cold: shut ? "cold" : "",
+    tgCol: () => setFolded(!shut),
+    sidebarOpen: !shut,
+    colT: t(shut ? "shell.expand" : "shell.collapse"),
+  };
+}
+
+// The phone's tabs: the pages with a tab's icon, then the button that opens the sheet of the rest.
+function PhoneTabs({ tabs, more, menus }: { tabs: Page[]; more: Page[]; menus: ReturnType<typeof useMenus> }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {tabs.map((p) => (
+        <PhoneTab key={p.to} t={String} values={entry(p, "on", tabIcons)} link={RouterLink} label={p.label} />
+      ))}
+      {more.length ? (
+        <PhoneTab
+          t={String}
+          values={{
+            ...only(tabIcons),
+            moreC: menus.moreOpen ? "on" : "",
+            oMore: menus.oMore,
+            moreOpen: menus.moreOpen,
+            press,
+          }}
+          label={t("nav.more")}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function AdminShell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
+  const { t, i18n } = useTranslation();
+  const { page, slot } = useKeptPage(children);
+  const brand = useAdminBrand();
+  const preferences = usePreferences();
+  const phone = useWidth("(max-width: 819px)");
+  const pages = usePages();
+  const menus = useMenus();
+  const values = {
+    ...departures,
+    ...menus,
+    ...useAccountValues(signOut),
+    ...useSidebarValues(),
+    press,
+    to_ov: "/",
+    home: brand.name,
+    navigation: t("shell.navigation", { ns: "common" }),
   };
   const text = { language: preferences.other.name, lang: preferences.locale, frameStyle };
   const words = (zh: Record<string, string>, en: Record<string, string>) => (key: string) =>
@@ -212,6 +254,7 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
   const mark = <BoardMark name={brand.name} logoUrl={brand.logo_url} />;
   const tabs = pages.filter((p) => (tabIcons as readonly string[]).includes(p.icon));
   const more = pages.filter((p) => !tabs.includes(p));
+  const columns = tabs.length + (more.length ? 1 : 0);
   // The page comes after the board, so the slot holds the page's element before the page's own effects run.
   return (
     <>
@@ -220,31 +263,12 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           t={words(phoneZh, phoneEn)}
           values={{
             ...values,
-            tabsStyle: `position: sticky; bottom: 0; grid-template-columns: repeat(${tabs.length + (more.length ? 1 : 0)}, 1fr)`,
+            tabsStyle: `position: sticky; bottom: 0; grid-template-columns: repeat(${columns}, 1fr)`,
           }}
           text={text}
           link={RouterLink}
           mark={mark}
-          tabs={
-            <>
-              {tabs.map((p) => (
-                <PhoneTab key={p.to} t={String} values={entry(p, "on", tabIcons)} link={RouterLink} label={p.label} />
-              ))}
-              {more.length ? (
-                <PhoneTab
-                  t={String}
-                  values={{
-                    ...only(tabIcons),
-                    moreC: values.moreOpen ? "on" : "",
-                    oMore: values.oMore,
-                    moreOpen: values.moreOpen,
-                    press,
-                  }}
-                  label={t("nav.more")}
-                />
-              ) : null}
-            </>
-          }
+          tabs={<PhoneTabs tabs={tabs} more={more} menus={menus} />}
           more={more.map((p) => (
             <PhoneMore key={p.to} t={String} values={entry(p, "on", sheetIcons)} link={RouterLink} label={p.label} />
           ))}

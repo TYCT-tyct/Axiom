@@ -197,8 +197,9 @@ async function checkSurface(browser: Browser, app: App, surface: string, logo: L
   await page.waitForLoadState("networkidle");
   await frames(page);
 
-  // The console's initial in place of a failed logo is the board's own 24px mark, not a 20x20 box.
-  const lettered = app.name === "console" && surface !== "sign-in" && logo.fail;
+  // The shell's initial in place of a failed logo (console and admin wear the AxApp shell) is the board's own 24px mark,
+  // not a 20x20 box.
+  const lettered = surface !== "sign-in" && logo.fail;
   const slot = logoSlot(page);
   const mark = await (lettered ? slot : slot.locator("img, svg")).first().boundingBox();
   expect(mark, "the logo mark").not.toBeNull();
