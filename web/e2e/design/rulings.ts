@@ -364,6 +364,11 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "site connect",
+    basis: "the call the card names is the one the script is on at that moment (fx-screens.spec.ts reads it)",
+    ...both(".hfm1 .rcard .rc-m, .hfm1 .rcard .rc-p"),
+  },
+  {
+    scene: "site connect",
     basis:
       "§8.2: the board's machine is drawn by its script; the page's by the fetched figure, both moving on their own",
     ...both(".hfm1 .fig, .hfm1 .wire > *"),
