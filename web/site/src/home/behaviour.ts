@@ -1,4 +1,6 @@
 import { reducedMotion } from "@axiom/fx";
+import type { Departure } from "@axiom/fx/depart";
+import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useState } from "react";
 import { sections } from "./words";
 
@@ -122,4 +124,43 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     };
   }, [root, wide]);
   return { scroll, island, menu };
+}
+
+const loadDepart = () => import("@axiom/fx/depart");
+
+// useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
+// pressed: signing in or up leaves the website through it. Its code loads on the first press. A press that asks for
+// another tab or window is the browser's, and without its code the link goes as a link would.
+export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
+  useEffect(() => {
+    const frame = root.current;
+    if (!frame) return;
+    let running: Departure | undefined;
+    const onClick = (e: MouseEvent) => {
+      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[data-go]") : null;
+      if (!link || !frame.contains(link) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      if (running) return;
+      running = { destroy: () => {} };
+      loadDepart().then(
+        ({ depart }) => {
+          running = depart(frame, link, link.href, sea.current?.engine);
+        },
+        () => window.location.assign(link.href),
+      );
+    };
+    // the browser's back button may bring this page back as it was left, mid-departure
+    const onShow = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      running?.destroy();
+      running = undefined;
+    };
+    frame.addEventListener("click", onClick);
+    window.addEventListener("pageshow", onShow);
+    return () => {
+      frame.removeEventListener("click", onClick);
+      window.removeEventListener("pageshow", onShow);
+      running?.destroy();
+    };
+  }, [root, sea]);
 }

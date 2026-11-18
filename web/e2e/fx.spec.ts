@@ -177,3 +177,52 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).not.toHaveAttribute("data-theme");
   expect(await violations()).toEqual([]);
 });
+
+// The departure to the console's sign-in pages (port design §9): the pressed button breaks into tiles that stream to
+// where the sign-in panel will be, and about half a second later the browser is on the button's page, which finds the
+// one-shot marker of an arrival from the website.
+const depart = /\/assets\/depart-[\w-]+\.js$/;
+const arrival = (page: Page) => page.evaluate(() => sessionStorage.getItem("axiom.arrival"));
+const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
+
+test("pressing sign in plays the departure, loaded on the press, and lands on the sign-in page", async ({ page }) => {
+  const violations = await watchPolicy(page);
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (depart.test(request.url())) asked.push(request.url());
+  });
+  await open(page);
+  await running(page);
+  expect(asked).toEqual([]);
+  const pressed = Date.now();
+  await signIn(page).click();
+  await expect(page.locator(".tr > canvas:last-child")).toHaveAttribute("aria-hidden", "true");
+  await expect(signIn(page)).toBeHidden();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  expect(Date.now() - pressed).toBeGreaterThanOrEqual(400);
+  expect(asked).toHaveLength(1);
+  expect(await arrival(page)).toBe("tiles");
+  expect(await violations()).toEqual([]);
+});
+
+test("under reduced motion the sign-up button goes at once, and without its code a press still goes", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await open(page);
+  await page.getByRole("link", { name: "注册，获取API key" }).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  expect(await arrival(page)).toBe("tiles");
+
+  await page.emulateMedia({ reducedMotion: "no-preference" });
+  // the sign-in page reports its own guest's 401; what matters is that nothing went unhandled on the way
+  const unhandled: string[] = [];
+  page.on("pageerror", (error) => unhandled.push(error.message));
+  await page.route(depart, (route) => route.fulfill({ status: 404, body: "" }));
+  await open(page);
+  const failed = page.waitForResponse(depart);
+  await signIn(page).click();
+  expect((await failed).status()).toBe(404);
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  expect(unhandled).toEqual([]);
+});
