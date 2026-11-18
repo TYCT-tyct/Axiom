@@ -2,12 +2,12 @@ import type { AdminSchemas } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
 import { Cell, PageHeader, Row, SectionHeader, Segmented, Table } from "@axiom/boards/ds";
 import {
+  CardLink,
   Cluster,
-  CopyButton,
   DataState,
   EmptyState,
   Grid,
-  IdText,
+  IdLink,
   Notice,
   Text,
   useFormat,
@@ -34,9 +34,7 @@ import { formatTargetRate, targetsEmpty } from "../targets";
 import { TargetNote, TargetsAction } from "../targets-view";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
-// end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
-const figure =
-  "block h-full rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&>section]:h-full [&>section]:transition-colors [&>section]:duration-150 hover:[&>section]:border-b3";
+// end; the whole card is the target (CardLink).
 
 // The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, the
 // paid top-ups that made accounts paying customers, the margin between call revenue and supplier cost, retention, and
@@ -247,13 +245,15 @@ function CallsFigure({ data, window, site, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
-      <Stat
-        label={t("overview.calls")}
-        value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
-        note={withTarget(showTarget, <TargetNote metric="calls" comparison={targets?.calls} />)}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/calls" search={callsDrill(window, { site })}>
+        <Stat
+          label={t("overview.calls")}
+          value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
+          note={withTarget(showTarget, <TargetNote metric="calls" comparison={targets?.calls} />)}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -261,13 +261,15 @@ function ErrorsFigure({ data, window, site, targets, showTarget }: FigureProps) 
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={figure}>
-      <Stat
-        label={t("overview.errors")}
-        value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
-        note={withTarget(showTarget, <TargetNote metric="errors" comparison={targets?.errors} />)}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/calls" search={callsDrill(window, { site, status: "error" })}>
+        <Stat
+          label={t("overview.errors")}
+          value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
+          note={withTarget(showTarget, <TargetNote metric="errors" comparison={targets?.errors} />)}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -275,17 +277,19 @@ function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps)
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
-      <Stat
-        label={t("overview.revenue")}
-        value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
-        note={withTarget(
-          showTarget,
-          <TargetNote metric="revenue" comparison={targets?.revenue} />,
-          t("overview.revenueNote"),
-        )}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/calls" search={callsDrill(window, { site })}>
+        <Stat
+          label={t("overview.revenue")}
+          value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
+          note={withTarget(
+            showTarget,
+            <TargetNote metric="revenue" comparison={targets?.revenue} />,
+            t("overview.revenueNote"),
+          )}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -296,17 +300,19 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
     ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
     : t("overview.costNote");
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
-      <Stat
-        label={t("overview.cost")}
-        value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
-        note={withTarget(
-          showTarget,
-          <TargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
-          note,
-        )}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/calls" search={callsDrill(window, { site })}>
+        <Stat
+          label={t("overview.cost")}
+          value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
+          note={withTarget(
+            showTarget,
+            <TargetNote metric="cost" comparison={targets?.cost} costUnknown={Boolean(data.unknown_cost_calls)} />,
+            note,
+          )}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -323,21 +329,25 @@ function CashFigure({ data, window, showTarget }: { data: Overview; window: Wind
       ))
     : t("overview.unavailable");
   return (
-    <Link to="/orders" search={ordersDrill(window)} className={figure}>
-      <Stat
-        label={t("overview.cash")}
-        value={cash}
-        note={withTarget(showTarget, t("overview.targets.cashNoTarget"), t("overview.cashNote"))}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={ordersDrill(window)}>
+        <Stat
+          label={t("overview.cash")}
+          value={cash}
+          note={withTarget(showTarget, t("overview.targets.cashNoTarget"), t("overview.cashNote"))}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
 function PaidBatchesFigure({ window, children }: { window: Window; children: ReactNode }) {
   return (
-    <Link to="/orders" search={paidOrdersDrill(window)} className={figure}>
-      {children}
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={paidOrdersDrill(window)}>
+        {children}
+      </Link>
+    </CardLink>
   );
 }
 
@@ -380,17 +390,19 @@ function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps
 function GrossMarginFigure({ data, window, site, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
-      <Stat
-        label={t("overview.grossMargin")}
-        value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
-        note={withTarget(
-          showTarget,
-          <TargetNote metric="gross_margin" comparison={targets?.gross_margin} />,
-          t("overview.grossMarginNote"),
-        )}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/calls" search={callsDrill(window, { site })}>
+        <Stat
+          label={t("overview.grossMargin")}
+          value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
+          note={withTarget(
+            showTarget,
+            <TargetNote metric="gross_margin" comparison={targets?.gross_margin} />,
+            t("overview.grossMarginNote"),
+          )}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -407,13 +419,15 @@ function RetentionFigure({ data, window, targets, showTarget }: FigureProps) {
         })
     : t("overview.retentionUnavailable");
   return (
-    <Link to="/orders" search={retentionOrdersDrill(window)} className={figure}>
-      <Stat
-        label={t("overview.retention")}
-        value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
-        note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={retentionOrdersDrill(window)}>
+        <Stat
+          label={t("overview.retention")}
+          value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
+          note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -465,22 +479,7 @@ function Ranking({
         >
           {ranked.map((row) => (
             <Row key={row.id ?? ""}>
-              <Cell>
-                {row.id ? (
-                  <span className="flex min-w-0 items-center gap-1">
-                    <Link
-                      to="/calls"
-                      search={drill(row.id)}
-                      className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
-                    >
-                      <IdText value={row.id} />
-                    </Link>
-                    <CopyButton compact text={row.id} />
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </Cell>
+              <Cell>{row.id ? <RankId id={row.id} drill={drill} /> : "—"}</Cell>
               <Cell kind="num">{format.number(row.calls ?? 0)}</Cell>
               <Cell kind="num">{format.number(row.errors ?? 0)}</Cell>
             </Row>
@@ -513,6 +512,20 @@ function TopModels({ data, window, site }: { data: Overview; window: Window; sit
       empty={{ title: t("overview.noModels.title"), body: t("overview.noModels.body") }}
       ranked={data.top_models?.map((row) => ({ ...row, id: row.model }))}
       drill={(model) => callsDrill(window, { site, model })}
+    />
+  );
+}
+
+// RankId is a ranked row's account or key: a link to its calls in the same window, with its copy button.
+function RankId({ id, drill }: { id: string; drill: (id: string) => ReturnType<typeof callsDrill> }) {
+  return (
+    <IdLink
+      value={id}
+      link={(content) => (
+        <Link to="/calls" search={drill(id)}>
+          {content}
+        </Link>
+      )}
     />
   );
 }

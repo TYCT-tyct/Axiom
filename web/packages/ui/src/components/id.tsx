@@ -1,6 +1,8 @@
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { CopyButton } from "./copy-button";
 import s from "./id.module.css";
+import { TextLink } from "./text-link";
 
 // IdText shows an identifier as both of its ends: two IDs that share a long prefix usually differ at the tail, and a
 // narrow column can spare only the middle. The head truncates when the space runs out, so an ID that fits is shown
@@ -28,6 +30,18 @@ export function Id({ value }: { value: string }) {
   return (
     <span className={s.id}>
       <IdText value={value} />
+      <CopyButton compact text={value} label={t("copy.id")} />
+    </span>
+  );
+}
+
+// IdLink is an ID that leads somewhere, with the copy button beside the link, never inside it, on one line: link
+// receives the ID's text and returns the router link around it.
+export function IdLink({ value, link }: { value: string; link: (content: ReactNode) => ReactNode }) {
+  const { t } = useTranslation("common");
+  return (
+    <span className={s.id}>
+      <TextLink>{link(<IdText value={value} />)}</TextLink>
       <CopyButton compact text={value} label={t("copy.id")} />
     </span>
   );

@@ -6,6 +6,7 @@ export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { Avatar } from "./components/avatar";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
 export { Card } from "./components/card";
+export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
 export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
@@ -18,7 +19,7 @@ export { type Filter, FilterBar, filterDefaults } from "./components/filter-bar"
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
 export { Glyph } from "./components/glyph";
 export { Icon, type IconName } from "./components/icon";
-export { Id, IdText } from "./components/id";
+export { Id, IdLink, IdText } from "./components/id";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";
 export { ListDetail } from "./components/list-detail";
