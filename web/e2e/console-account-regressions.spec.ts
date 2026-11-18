@@ -121,6 +121,33 @@ test.describe("email change token security and offline recovery", () => {
     await expect(page.getByLabel("邮箱")).toHaveValue("retry@example.com");
     expect(attempts).toBe(2);
   });
+
+  test("new hash verification link clears a stale stashed token and sends only one confirm POST", async ({ page }) => {
+    const state = await mockConsole(page);
+    await page.goto("/console/settings#email-change-token=tok-expired");
+    await expect(page).toHaveURL(/\/console\/sign-in\?next=%2Fsettings$/);
+
+    await page.goto("/console/register");
+    signedInAs(state);
+    state.pendingEmail = "fresh@example.com";
+    state.emailConfirmToken = "tok-fresh";
+
+    const postedTokens: string[] = [];
+    await page.route("**/api/console/v1/profile/email/confirm", async (route) => {
+      const body = route.request().postDataJSON() as { token?: string } | null;
+      if (body?.token) postedTokens.push(body.token);
+      return route.fallback();
+    });
+
+    await page.goto("/console/settings#email-change-token=tok-fresh");
+    await expect(page.getByText("邮箱已更换并完成验证。")).toBeVisible();
+    await expect(page.getByLabel("邮箱")).toHaveValue("fresh@example.com");
+
+    await page.goto("/console/settings");
+    await expect(page.getByLabel("邮箱")).toHaveValue("fresh@example.com");
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    expect(postedTokens).toEqual(["tok-fresh"]);
+  });
 });
 
 test.describe("cross-account isolation on delayed mutations", () => {

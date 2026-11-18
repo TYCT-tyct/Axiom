@@ -105,7 +105,8 @@ function resolveConfirmTask(identity: string, deps: ConfirmDeps): ConfirmTask | 
   if (!claim) return null;
   const loc = window.location;
   const { token: hashToken, cleanHref } = stripEmailChangeToken(`${loc.pathname}${loc.search}${loc.hash}`);
-  const token = hashToken ?? consumeEmailChangeToken();
+  const stashedToken = consumeEmailChangeToken();
+  const token = hashToken ?? stashedToken;
   if (token) {
     if (hashToken) window.history.replaceState(null, "", cleanHref);
     return runEmailConfirmTask(claim, token, deps);
