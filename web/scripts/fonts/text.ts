@@ -1,7 +1,7 @@
 // The characters each font face must cover on each page, computed from the translation files: the pipeline subsets the
 // fonts to them (build.py runs this file and reads its output), and coverage.test.ts checks the committed fonts still
 // cover them. One definition, so the two cannot disagree on what a page shows.
-import { readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,7 +10,13 @@ import { names, routeLiterals } from "./routes.ts";
 const web = join(import.meta.dirname, "..", "..");
 
 // Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n).
+// The screens' words are not in the apps' message files: they come with the generated regions of the boards the pages
+// are cut from (packages/boards/src/<Board>/regions/*.zh.ts and .en.ts, by hash keys), which a page shows whole.
+const regions = (...boards: string[]) =>
+  boards.flatMap((board) => ["zh", "en"].map((language) => `packages/boards/src/${board}/regions/*.${language}.ts`));
 const namespaces: Record<string, string[]> = {
+  "site-regions": regions("Site", "SitePhone", "SiteTablet", "SiteTabletWide"),
+  "console-regions": regions("AxApp", "AxAppPhone", "AxAppDark", "AxAppPhoneDark", "AxAppTablet", "AxDS"),
   common: ["packages/ui/src/locales/zh.ts", "packages/ui/src/locales/en.ts"],
   site: ["site/src/locales/zh.ts", "site/src/locales/en.ts"],
   console: ["console/src/locales/zh.ts", "console/src/locales/en.ts"],
@@ -58,7 +64,9 @@ async function load(namespace: string) {
     throw new Error(`${manifestPath}: no namespace ${namespace}; known: ${Object.keys(namespaces).join(", ")}`);
   }
   const out: [string, string][] = [];
-  for (const file of files) {
+  for (const file of files.flatMap((pattern) =>
+    pattern.includes("*") ? globSync(pattern, { cwd: web }).sort() : [pattern],
+  )) {
     const { default: tree } = await import(pathToFileURL(join(web, file)).href);
     out.push(...flatten(tree, "", new Map()));
   }
@@ -100,7 +108,10 @@ async function routePages(app: string, entry: string, namespaces: string[]) {
   for (const [page, literals] of routeLiterals(app, entry)) {
     const selection: Selection = {};
     for (const namespace of namespaces) {
-      selection[namespace] = (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
+      // a page shows its board's region words whole; the code names no key of them
+      selection[namespace] = (await messages(namespace))
+        .map(([key]) => key)
+        .filter((key) => namespace.endsWith("-regions") || names(literals, key));
     }
     pages.set(page, selection);
   }

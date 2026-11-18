@@ -56,6 +56,16 @@ describe("the committed fonts", () => {
     expect(missing).toEqual([]);
   });
 
+  // The screens' words come from the generated regions, not the apps' message files: a heading there (the sea bed's
+  // "模型会变，接入不变") must be in the serif face's corpus, which the old corpus, the message files alone, lacked.
+  it("count a screen's heading words, which only the boards' regions hold, in the serif face", () => {
+    const at = manifest.faces.findIndex(
+      (face) => face.family === "AX Serif" && "script" in face.text && face.text.script === "han",
+    );
+    const serif = (texts[at] ?? {})["site/home"] ?? "";
+    expect([..."会变接入不变"].filter((c) => !serif.includes(c))).toEqual([]);
+  });
+
   it(`are the files fonts.json describes (${rerun})`, () => {
     for (const file of built.faces.flatMap((face) => face.files)) {
       expect(sha256(readFileSync(join(dir, file.file))), file.file).toBe(file.sha256);
