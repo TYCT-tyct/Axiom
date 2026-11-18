@@ -179,50 +179,95 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
 });
 
 // The departure to the console's sign-in pages (port design §9): the pressed button breaks into tiles that stream to
-// where the sign-in panel will be, and about half a second later the browser is on the button's page, which finds the
-// one-shot marker of an arrival from the website.
+// where the sign-in panel will be, and half a second after the press the browser goes to the button's page, whatever
+// became of the picture on the way.
 const depart = /\/assets\/depart-[\w-]+\.js$/;
-const arrival = (page: Page) => page.evaluate(() => sessionStorage.getItem("axiom.arrival"));
 const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
+const signUp = (page: Page) => page.getByRole("link", { name: "注册，获取API key" });
+const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
 
-test("pressing sign in plays the departure, loaded on the press, and lands on the sign-in page", async ({ page }) => {
-  const violations = await watchPolicy(page);
+// Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.
+async function watchEveryPolicy(page: Page) {
+  const seen: string[] = [];
+  await page.exposeFunction("reportPolicy", (line: string) => seen.push(line));
+  await page.addInitScript(() =>
+    document.addEventListener("securitypolicyviolation", (e) =>
+      (window as unknown as { reportPolicy: (line: string) => void }).reportPolicy(
+        `${location.pathname} ${e.violatedDirective} ${e.blockedURI}`,
+      ),
+    ),
+  );
+  return seen;
+}
+
+// The sign-in documents the tab asks for.
+function watchDeparture(page: Page) {
   const asked: string[] = [];
   page.on("request", (request) => {
-    if (depart.test(request.url())) asked.push(request.url());
+    if (request.isNavigationRequest() && /\/console\//.test(request.url())) asked.push(request.url());
+  });
+  return asked;
+}
+
+test("pressing sign in plays the departure, loaded on the press, and goes half a second later", async ({ page }) => {
+  const violations = await watchEveryPolicy(page);
+  const loaded: string[] = [];
+  page.on("request", (request) => {
+    if (depart.test(request.url())) loaded.push(request.url());
   });
   await open(page);
   await running(page);
-  expect(asked).toEqual([]);
-  const pressed = Date.now();
+  expect(loaded).toEqual([]);
+  await page.clock.install();
+  const asked = watchDeparture(page);
   await signIn(page).click();
-  await expect(page.locator(".tr > canvas:last-child")).toHaveAttribute("aria-hidden", "true");
+  await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
+  expect(loaded).toHaveLength(1);
+  await page.clock.runFor(150);
   await expect(signIn(page)).toBeHidden();
+  await page.clock.runFor(340);
+  expect(asked).toEqual([]);
+  await page.clock.runFor(20);
   await expect(page).toHaveURL(/\/console\/sign-in$/);
-  expect(Date.now() - pressed).toBeGreaterThanOrEqual(400);
-  expect(asked).toHaveLength(1);
-  expect(await arrival(page)).toBe("tiles");
-  expect(await violations()).toEqual([]);
+  expect(violations).toEqual([]);
 });
 
-test("under reduced motion the sign-up button goes at once, and without its code a press still goes", async ({
-  page,
-}) => {
+test("under reduced motion the sign-up button goes at once, without the departure's code", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
+  const loaded: string[] = [];
+  page.on("request", (request) => {
+    if (depart.test(request.url())) loaded.push(request.url());
+  });
+  await hang(page, depart);
   await open(page);
-  await page.getByRole("link", { name: "注册，获取API key" }).click();
+  await signUp(page).click();
   await expect(page).toHaveURL(/\/console\/register$/);
-  expect(await arrival(page)).toBe("tiles");
+  expect(loaded).toEqual([]);
+});
 
-  await page.emulateMedia({ reducedMotion: "no-preference" });
-  // the sign-in page reports its own guest's 401; what matters is that nothing went unhandled on the way
+test("a press goes though the departure's code never comes", async ({ page }) => {
   const unhandled: string[] = [];
   page.on("pageerror", (error) => unhandled.push(error.message));
-  await page.route(depart, (route) => route.fulfill({ status: 404, body: "" }));
+  await hang(page, depart);
   await open(page);
-  const failed = page.waitForResponse(depart);
-  await signIn(page).click();
-  expect((await failed).status()).toBe(404);
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await signUp(page).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
   expect(unhandled).toEqual([]);
+});
+
+test("a departure whose navigation is stopped puts the page back, and a press tries again", async ({ page }) => {
+  await open(page);
+  await running(page);
+  const asked = watchDeparture(page);
+  await hang(page, /\/console\/sign-in$/);
+  await signIn(page).click();
+  await expect.poll(() => asked.length).toBe(1);
+  // the browser's stop button
+  await (await page.context().newCDPSession(page)).send("Page.stopLoading");
+  await expect(signIn(page)).toBeVisible();
+  await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).not.toBeAttached();
+  await page.unroute(/\/console\/sign-in$/);
+  await signIn(page).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  expect(asked).toHaveLength(2);
 });

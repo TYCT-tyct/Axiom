@@ -127,40 +127,70 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
 }
 
 const loadDepart = () => import("@axiom/fx/depart");
+// The departure's length on the wall clock: the page goes this long after the press, whether or not its code has come.
+const departSpan = 500;
+// A navigation not done this long after it started was stopped (the browser's stop button) or failed, and the page
+// that had left is put back, so a press can try again. A page that does go is gone long before.
+const stalled = 3000;
+
+// The press under way, and the picture of it a frame draws. The press is the module's, not a frame's: a change of
+// layout midway starts the frame afresh (home.tsx), which takes the picture with it but must not take the way there.
+type Press = { frame?: HTMLElement; picture?: Departure };
+let leaving: Press | undefined;
+
+function settle() {
+  leaving?.picture?.destroy();
+  leaving = undefined;
+}
+
+function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
+  const press: Press = {};
+  leaving = press;
+  const start = performance.now();
+  const href = link.href;
+  window.setTimeout(() => {
+    if (leaving !== press) return;
+    window.location.assign(href);
+    window.setTimeout(() => leaving === press && settle(), stalled);
+  }, departSpan);
+  // code that comes after the frame has gone, or after the page has gone back, draws nothing; code that never comes
+  // only costs the picture
+  loadDepart().then(
+    ({ depart }) => {
+      if (leaving !== press || !frame.isConnected || !link.isConnected) return;
+      press.frame = frame;
+      press.picture = depart(frame, link, start, departSpan, sea?.engine);
+    },
+    () => {},
+  );
+}
 
 // useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
-// pressed: signing in or up leaves the website through it. Its code loads on the first press. A press that asks for
-// another tab or window is the browser's, and without its code the link goes as a link would.
+// pressed: signing in or up leaves the website through it, half a second after the press. Its code loads on the first
+// press. Under reduced motion, and for a press that asks for another tab or window, the link goes as a link would.
 export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
-    let running: Departure | undefined;
     const onClick = (e: MouseEvent) => {
       const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[data-go]") : null;
       if (!link || !frame.contains(link) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if (reducedMotion()) return;
       e.preventDefault();
-      if (running) return;
-      running = { destroy: () => {} };
-      loadDepart().then(
-        ({ depart }) => {
-          running = depart(frame, link, link.href, sea.current?.engine);
-        },
-        () => window.location.assign(link.href),
-      );
+      if (!leaving) leave(frame, link, sea.current);
     };
     // the browser's back button may bring this page back as it was left, mid-departure
     const onShow = (e: PageTransitionEvent) => {
-      if (!e.persisted) return;
-      running?.destroy();
-      running = undefined;
+      if (e.persisted) settle();
     };
     frame.addEventListener("click", onClick);
     window.addEventListener("pageshow", onShow);
     return () => {
       frame.removeEventListener("click", onClick);
       window.removeEventListener("pageshow", onShow);
-      running?.destroy();
+      if (leaving?.frame !== frame) return;
+      leaving.picture?.destroy();
+      leaving.picture = undefined;
     };
   }, [root, sea]);
 }

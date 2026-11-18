@@ -3,8 +3,8 @@
 // button's page. It is the departure of trans.js's tiles style (STYLES.tiles start and frame), which cannot run on
 // its own here: trans.js plays both pages in one document, and the sign-in page is the console's. The geometry and
 // the easing are the engine's; its clock runs faster, so the stream lands in about half a second. Under reduced motion
-// nothing plays and the browser goes at once (R7).
-import { own, reducedMotion } from "./loop";
+// the website does not load it: the link goes at once (R7).
+import { own } from "./loop";
 import type { OceanEngine } from "./sea";
 
 const GLYPHS = ":;t%SX8#@/\\<>=+*";
@@ -39,16 +39,11 @@ function bezier(x1: number, y1: number, x2: number, y2: number) {
 const emph = bezier(0.2, 0, 0, 1);
 const out = bezier(0.16, 1, 0.3, 1);
 
-// The departure lasts this long on the wall clock; the engine's own run takes about 0.73 s to land its stream.
-const duration = 500;
-// The key the console's sign-in page reads, once, to play its arrival (§9).
-const arrivalKey = "axiom.arrival";
-
 // The sign-in page's form panel, where the Login board puts it: the right 44% (at least 440px) of a wide window,
 // everything under the 208px sea on a phone.
 function panel(W: number, H: number) {
   if (W < 768) return { x: 0, y: 208, w: W, h: Math.max(1, H - 208) };
-  const w = Math.min(W, Math.max(440, W * 0.44));
+  const w = Math.max(440, W * 0.44);
   return { x: W - w, y: 0, w, h: H };
 }
 
@@ -64,7 +59,7 @@ function colour(root: HTMLElement, value: string) {
 
 type Box = { x: number; y: number; w: number; h: number };
 type Bit = { sx: number; sy: number; tx: number; ty: number; d: number; ft: number; arc: number };
-type Cell = Box & { at: number; g: string };
+type Cell = Box & { at: number; d: number; g: string };
 type Grid = { cw: number; ch: number };
 
 // Where the stream enters the panel: the button itself if it is over the panel (a phone), else the nearest edge; and
@@ -102,7 +97,7 @@ function buttonBits(b: DOMRect, P: Box, e: Entry, { cw, ch }: Grid): Bit[] {
     }
   }
   found.sort((p, q) => p.d0 - q.d0);
-  const ft = e.gap > 2 ? clamp(220 + e.gap * 0.18, 260, 420) : 160;
+  const ft = clamp(220 + e.gap * 0.18, 260, 420);
   const side = e.ex <= P.x + 1 ? cw * 2 : 0;
   return found.map((p, i) => {
     const lx = clamp(e.ex + (hash(i, 3) - 0.5) * cw * 8 + side * hash(i, 4), P.x, P.x + P.w - cw);
@@ -140,6 +135,7 @@ function panelCells(P: Box, e: Entry, t0: number, { cw, ch }: Grid) {
         w: Math.min((c + 1) * gw, P.x + P.w) - x,
         h: Math.min((r + 1) * gh, P.y + P.h) - y,
         at: t0 + d * 560 + h * (e.over && d === 0 ? 30 : 50),
+        d,
         g: h < 0.34 ? (GLYPHS[Math.floor(hash(c, r) * GLYPHS.length)] ?? "") : "",
       });
     }
@@ -154,7 +150,7 @@ function plan(b: DOMRect, W: number, H: number, grid: Grid) {
   const e = entry(b, P);
   const bits = buttonBits(b, P, e, grid);
   const arrivals = bits.map((p) => p.d + p.ft);
-  const t0 = e.over ? 50 : bits.length ? Math.max(40, Math.min(...arrivals) - 30) : 120;
+  const t0 = e.over ? 50 : bits.length ? Math.min(...arrivals) - 30 : 120;
   return { bits, ...panelCells(P, e, t0, grid), landed: Math.max(t0 + 560, ...arrivals) };
 }
 type Run = ReturnType<typeof plan>;
@@ -176,7 +172,8 @@ function drawCells(x: CanvasRenderingContext2D, run: Run, t: number, ink: Ink) {
     const fresh = 1 - clamp((t - cl.at - 60) / 140, 0, 1);
     const s = 0.4 + 0.6 * on;
     x.globalAlpha = a * (0.3 + 0.4 * fresh);
-    x.fillStyle = ink.tile;
+    // near where the stream comes in (or the button's own outline, over the panel) a fresh cell is the button's colour
+    x.fillStyle = fresh > 0.5 && cl.d < 0.08 ? ink.button : ink.tile;
     x.fillRect(
       cl.x + (cl.w * (1 - s)) / 2,
       cl.y + (cl.h * (1 - s)) / 2,
@@ -225,31 +222,11 @@ function drawButton(x: CanvasRenderingContext2D, run: Run, b: DOMRect, t: number
   }
 }
 
-export type Departure = { destroy: () => void };
-
-// depart plays the departure from the button pressed, on the frame the website's board draws (.tr), over its sea,
-// and then goes to href. destroy takes everything it changed off the page: a page the browser keeps for its back
-// button comes back as it was.
-export function depart(frame: HTMLElement, button: HTMLElement, href: string, sea?: OceanEngine): Departure {
-  // storage the browser refuses (a private window's quota) only loses the arrival's decode, never the way there
-  try {
-    sessionStorage.setItem(arrivalKey, "tiles");
-  } catch {}
-  const go = () => window.location.assign(href);
-  if (reducedMotion()) {
-    go();
-    return { destroy: () => {} };
-  }
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  const R = (sea as { renderer?: { cw?: number; ch?: number } } | undefined)?.renderer;
-  const grid = { cw: R?.cw || 10, ch: R?.ch || R?.cw || 10 };
-  const b = button.getBoundingClientRect();
-  const run = plan(b, W, H, grid);
-  const speed = run.landed / duration;
+// inkOf reads the colours the run draws in from the page.
+function inkOf(frame: HTMLElement, button: HTMLElement): Ink {
   const css = getComputedStyle(frame);
   const background = getComputedStyle(button).backgroundColor;
-  const ink: Ink = {
+  return {
     bg: css.getPropertyValue("--bg").trim(),
     ring: css.getPropertyValue("--ring").trim(),
     tile: colour(frame, "light-dark(var(--n8), var(--n7))"),
@@ -258,6 +235,10 @@ export function depart(frame: HTMLElement, button: HTMLElement, href: string, se
     button:
       background === "transparent" || background.endsWith(", 0)") ? css.getPropertyValue("--text1").trim() : background,
   };
+}
+
+// overlay is the canvas the run draws on, fixed over the whole window and above the frame's own layers.
+function overlay(frame: HTMLElement, W: number, H: number) {
   const canvas = document.createElement("canvas");
   canvas.setAttribute("aria-hidden", "true");
   Object.assign(canvas.style, {
@@ -272,23 +253,49 @@ export function depart(frame: HTMLElement, button: HTMLElement, href: string, se
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
-  const x = canvas.getContext("2d");
-  // what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + span] ms of the engine's clock
-  const leaving = [
-    [".hs > main h1, .hs > main .lede", 120, 360],
-    [".cta, .fam", 200, 200],
-    [".hs > .under, .isl", 60, 360],
-    [".glow", 0, 460],
-  ] as const;
-  const faded = leaving.flatMap(([selector, from, span]) =>
-    [...frame.querySelectorAll<HTMLElement>(selector)].map((el) => ({ el, from, span })),
+  return { canvas, x: canvas.getContext("2d"), dpr };
+}
+
+// what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + span] ms of the engine's clock
+const leaving = [
+  [".hs > main h1, .hs > main .lede", 120, 360],
+  [".cta, .fam", 200, 200],
+  [".hs > .under, .isl", 60, 360],
+  [".glow", 0, 460],
+] as const;
+
+export type Departure = { destroy: () => void };
+
+// depart draws the departure from the button pressed, on the frame the website's board draws (.tr), over its sea: the
+// run started at start (performance.now()) and lands its stream span ms later, on the wall clock, so a page that
+// leaves at start + span leaves on the run's last frame however few frames came. It only draws: the caller goes. After
+// the last frame it holds the picture without frames; destroy takes everything it changed off the page.
+export function depart(
+  frame: HTMLElement,
+  button: HTMLElement,
+  start: number,
+  span: number,
+  sea?: OceanEngine,
+): Departure {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const R = (sea as { renderer?: { cw?: number; ch?: number } } | undefined)?.renderer;
+  const grid = { cw: R?.cw || 10, ch: R?.ch || R?.cw || 10 };
+  const b = button.getBoundingClientRect();
+  const run = plan(b, W, H, grid);
+  const speed = run.landed / span;
+  const ink = inkOf(frame, button);
+  const { canvas, x, dpr } = overlay(frame, W, H);
+  const faded = leaving.flatMap(([selector, from, fade]) =>
+    [...frame.querySelectorAll<HTMLElement>(selector)].map((el) => ({ el, from, fade })),
   );
-  let elapsed = 0;
-  const draw = (dt: number) => {
-    elapsed += dt * 1000;
+  let release = () => {};
+  const draw = (_dt: number, now: number) => {
+    const elapsed = clamp(now - start, 0, span);
     const t = elapsed * speed;
     button.style.visibility = t >= 60 ? "hidden" : "";
-    for (const { el, from, span } of faded) el.style.opacity = String(1 - out(clamp((t - from) / span, 0, 1)));
+    for (const { el, from, fade } of faded) el.style.opacity = String(1 - out(clamp((t - from) / fade, 0, 1)));
+    if (elapsed >= span) release();
     if (!x) return;
     x.setTransform(dpr, 0, 0, dpr, 0, 0);
     x.clearRect(0, 0, W, H);
@@ -296,13 +303,10 @@ export function depart(frame: HTMLElement, button: HTMLElement, href: string, se
     drawButton(x, run, b, t, ink, grid);
     x.globalAlpha = 1;
   };
-  draw(0);
-  const release = own(canvas, draw);
-  // the page goes on the wall clock, not on frames: a tab hidden midway still leaves
-  const leave = window.setTimeout(go, duration);
+  release = own(canvas, draw);
+  draw(0, performance.now());
   return {
     destroy: () => {
-      clearTimeout(leave);
       release();
       canvas.remove();
       button.style.visibility = "";
