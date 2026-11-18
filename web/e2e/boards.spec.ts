@@ -31,7 +31,7 @@ const test = base.extend<object, { boardsURL: { url: string; rendered: string } 
       // none of its refs, draw methods or lifecycle hooks may fill in missing region content.
       writeFileSync(
         join(proof, "index.html"),
-        '<html><body><div id="root"></div><script type="module" src="./main.tsx"></script></body></html>',
+        '<!doctype html><html lang="zh-CN"><body><div id="root"></div><script type="module" src="./main.tsx"></script></body></html>',
       );
       writeFileSync(
         join(proof, "main.tsx"),
@@ -227,6 +227,7 @@ for (const region of regions.filter((region) => region.render))
           theme: colorScheme,
         });
         await page.goto(`${boardsURL.rendered}?${query}`);
+        expect(await page.evaluate(() => document.compatMode)).toBe("CSS1Compat");
         await expect(page.locator(`.p-${region.page}`)).toBeAttached();
         // These roots belong to the frame, not its scrolling page. A page consumer mounts phone sheets here too.
         await page.evaluate(() => {

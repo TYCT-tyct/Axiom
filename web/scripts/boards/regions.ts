@@ -52,7 +52,12 @@ function classStates(document: Document, region: Region, css: string) {
     element.setAttribute(
       "class",
       (element.getAttribute("class") ?? "").replace(/\{\{\s*(\w+)\s*\}\}/g, (_, hole: string) => {
-        const known: Record<string, string[]> = { mo: ["mred"], cold: ["cold"], rootC: rootStates };
+        const known: Record<string, string[]> = {
+          mo: ["mred"],
+          cold: ["cold"],
+          rootC: rootStates,
+          segAc: ["cur", "up"],
+        };
         return (region.classes?.[hole] ?? known[hole] ?? states).join(" ");
       }),
     );

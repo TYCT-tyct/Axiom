@@ -143,6 +143,18 @@ describe("region generation", () => {
     expect(files["Test/regions/Page.zh.ts"]).toContain("中文");
   });
 
+  it("keeps the breadcrumb's parent state when its class comes from a template hole", () => {
+    const files = convertRegion(
+      '<nav class="qbc"><button class="qbcb {{segAc}}"><b>Personal</b></button></nav>',
+      ".qbc .qbcb.up b{font-weight:400}.qbc .qbcb.up:hover b{color:red}.qbc .qbcb.other b{color:blue}",
+      { board: "Test", name: "Breadcrumb", roots: [".qbc"] },
+      marker,
+    );
+    expect(files["Test/regions/Breadcrumb.module.css"]).toContain(".qbc .qbcb.up b");
+    expect(files["Test/regions/Breadcrumb.module.css"]).toContain(".qbc .qbcb.up:hover b");
+    expect(files["Test/regions/Breadcrumb.module.css"]).not.toContain(".other");
+  });
+
   it("copies repeated templates in order, including variant shapes and interleaved elements, with typed props and locale keys", () => {
     const markup =
       '<main><b class="row" title="提示">第一行</b><i>between</i><b class="row">第二行<span>子项</span></b><b class="row">第三行</b></main>';
