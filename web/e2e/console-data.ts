@@ -1,4 +1,5 @@
 import type { components } from "../packages/api/src/console.gen.ts";
+import { buildMockCall } from "./console-calls-data.ts";
 import type { AuthState } from "./mock.ts";
 import { authState } from "./mock-auth.ts";
 
@@ -77,31 +78,9 @@ export function aPreset(n: number, over: Partial<Schemas["RoutingPreset"]> = {})
 }
 
 const models = ["anthropic/claude-sonnet-4", "openai/gpt-5", "google/gemini-2.5-pro", "deepseek/deepseek-v3"];
-const apps = ["Claude Code", "Codex", "Cursor", ""];
 
 function aCall(n: number, over: Partial<Schemas["Call"]> = {}): Schemas["Call"] {
-  const failed = n % 7 === 0;
-  return {
-    id: callId(n) as Schemas["CallId"],
-    at: new Date(Date.UTC(2026, 9, 14, 8, 30) - n * 60_000).toISOString(),
-    workspace_id: workspace,
-    key_id: keyId(1 + (n % 3)),
-    ip: "203.0.113.7",
-    client_app: apps[n % apps.length] ?? "",
-    session_id: n % 2 === 0 ? `session-${n}` : "",
-    subagent_id: "",
-    request_class: "chat",
-    model: models[n % models.length] ?? "",
-    usage: failed ? {} : { input: 1200 + n, output: 300 + n, cache_read: 4000 },
-    service_tier: "standard",
-    price: failed || n % 11 === 0 ? usd("0") : nano(String(31_000 + n * 1_000)),
-    free: n % 11 === 0 && !failed,
-    latency_ms: 800 + n,
-    first_token_ms: failed ? 0 : 240,
-    finish_reason: failed ? "" : "stop",
-    error_kind: failed ? "upstream_timeout" : "",
-    ...over,
-  };
+  return buildMockCall(n, workspace, over);
 }
 
 // tokenRate is a per-token rate as a node sends it: the amount per million tokens to show (the amount with its point

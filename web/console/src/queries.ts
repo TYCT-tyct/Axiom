@@ -185,6 +185,7 @@ export type CallFilters = {
   key_id?: string;
   workspace_id?: string;
   status?: "success" | "error";
+  fell_back?: boolean;
   request_id?: string;
 };
 export type CallGroupBy = "day" | "model" | "key";
@@ -203,17 +204,19 @@ export type UsageFilters = {
 
 // The summary of the same filters, grouped for the page. It covers at most 31 days and defaults to the last 30, so its
 // window is shown beside the table.
-export const callAggregateQuery = (filters: CallFilters, groupBy: CallGroupBy) =>
-  queryOptions({
-    queryKey: [accountKey, "calls", "aggregate", filters, groupBy],
+export const callAggregateQuery = (filters: CallFilters, groupBy: CallGroupBy) => {
+  const { fell_back: _, ...query } = filters;
+  return queryOptions({
+    queryKey: [accountKey, "calls", "aggregate", query, groupBy],
     queryFn: ({ signal }) =>
       unwrap(
         consoleApi.GET("/api/console/v1/calls/aggregate", {
-          params: { query: { ...filters, group_by: groupBy } },
+          params: { query: { ...query, group_by: groupBy } },
           signal,
         }),
       ),
   });
+};
 
 // Hourly rollups for /usage: up to 90 days for day/week granularity, or 7 days for hour granularity, with UTC whole-hour bounds.
 export const usageStatisticsQuery = (filters: UsageFilters, enabled = true) =>
@@ -241,6 +244,31 @@ export const callsQuery = (filters: CallFilters) =>
       ),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: nextCursor,
+  });
+
+type SessionPageParam = { cursor: string; since?: string; until?: string };
+
+export const callSessionsQuery = (filters: CallFilters) =>
+  infiniteQueryOptions({
+    queryKey: [accountKey, "calls", "sessions", filters],
+    queryFn: ({ pageParam, signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/calls/sessions", {
+          params: {
+            query: {
+              ...filters,
+              since: pageParam?.since ?? filters.since,
+              until: pageParam?.until ?? filters.until,
+              cursor: pageParam?.cursor,
+              limit: pageSize,
+            },
+          },
+          signal,
+        }),
+      ),
+    initialPageParam: undefined as SessionPageParam | undefined,
+    getNextPageParam: (last) =>
+      last.next_cursor ? { cursor: last.next_cursor, since: last.since, until: last.until } : undefined,
   });
 
 export const recentErrorsQuery = queryOptions({

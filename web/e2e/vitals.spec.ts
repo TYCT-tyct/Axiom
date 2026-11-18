@@ -389,10 +389,10 @@ test.describe("interaction", () => {
   test("console calls: INP of filtering, paging and opening a detail", async ({ browser }) => {
     const { page, scene } = await slowPage(browser, consoleSuite, "calls");
     await scene.open(page);
-    const rows = page.getByRole("table", { name: "调用记录" }).getByRole("row");
+    const rows = page.getByRole("region", { name: "调用记录" }).locator('.lgh, [data-a="lrow"]');
     await page.getByRole("button", { name: "加载更多" }).click();
     await page.getByLabel("模型").fill("openai/gpt-5");
-    await page.getByRole("button", { name: "筛选" }).click();
+    await page.getByRole("button", { name: "筛选", exact: true }).click();
     await expect(page).toHaveURL(/model=openai%2Fgpt-5/);
     await rows.nth(1).getByRole("link").click();
     await expect(page.getByRole("heading", { level: 1, name: "调用详情" })).toBeVisible();
@@ -497,7 +497,7 @@ test.describe("long list", () => {
       id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
     }));
     await page.goto("/console/calls");
-    await loadRows(page, page.getByRole("table", { name: "调用记录" }).getByRole("row"), 1000);
+    await loadRows(page, page.getByRole("region", { name: "调用记录" }).locator('.lgh, [data-a="lrow"]'), 1000);
     expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeGreaterThan(10_000);
     const outcome = await scroll(page);
     record("late frames, console calls", outcome.late / outcome.total, budget.lateFrames);
