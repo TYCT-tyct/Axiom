@@ -7,9 +7,11 @@ import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.t
 
 test.use({ timezoneId: "Asia/Shanghai" });
 
+// The page asks for the email, then the password, and sends both in one sign-in.
 async function signIn(page: Page, email = knownEmail, password = knownPassword) {
   await page.getByLabel("邮箱").fill(email);
-  await page.getByLabel("密码").fill(password);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
 }
 
@@ -27,7 +29,8 @@ test.describe("signing in", () => {
 
     await signIn(page, knownEmail, "wrong");
     await expect(page.getByRole("alert")).toHaveText(/邮箱或密码不对/);
-    await signIn(page);
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
     expect(state.log.filter((line) => line === "POST /auth/sign-in")).toHaveLength(2);
     // the browser logs the two 401s (no session yet, a wrong password) itself
@@ -37,9 +40,14 @@ test.describe("signing in", () => {
   test("an empty form is told what is missing, and a limit says how long to wait", async ({ page }) => {
     await mockConsole(page);
     await page.goto("/console/sign-in");
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveText(/请填写邮箱/);
+    await page.getByLabel("邮箱").fill(limitedEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await expect(page.getByRole("alert")).toHaveText(/请填写邮箱和密码/);
-    await signIn(page, limitedEmail);
+    await expect(page.getByRole("alert")).toHaveText(/请填写密码/);
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
     await expect(page.getByRole("alert")).toHaveText(/30 秒/);
   });
 
@@ -55,7 +63,8 @@ test.describe("signing in", () => {
     });
     await page.goto("/console/sign-in");
     await page.getByLabel("邮箱").fill(knownEmail);
-    await page.getByLabel("密码").fill(knownPassword);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
     const submit = page.getByRole("button", { name: "登录", exact: true });
     await submit.click();
     await expect(submit).toBeDisabled();

@@ -91,10 +91,11 @@ async function observeShifts(page: Page) {
   });
 }
 
-// One Logo is visible at a time: in the admin's sidebar at a desk, in its top bar below 1024px, on a sign-in page in its
-// header, and in the console's bar, where the board's mark holds it. The hidden copy in the drawer and the other
-// breakpoint's copy have no layout box.
-const slotSelector = "header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg)";
+// One Logo is visible at a time: in the admin's sidebar at a desk, in its top bar below 1024px, on the admin's sign-in
+// page in its header, on the console's in the Login board's brand over the sea, and in the console's bar, where the
+// board's mark holds it. The hidden copy in the drawer and the other breakpoint's copy have no layout box.
+const slotSelector =
+  "header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg), .lg-sea > a.brand";
 // The console's mark, which shows the site's initial when there is no logo, as the board draws Axiom's A.
 const boardMark = "header a.glogo > span";
 const logoSlot = (page: Page) => page.locator(`${slotSelector}, ${boardMark}`).filter({ visible: true });
@@ -131,15 +132,15 @@ async function shiftsAroundLogo(page: Page) {
     type Source = { node: Node | null; previousRect: DOMRectReadOnly; currentRect: DOMRectReadOnly };
     type Entry = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Source[] };
     const entries = (window as unknown as { __logoShifts?: Entry[] }).__logoShifts ?? [];
-    const slots = [...document.querySelectorAll<HTMLElement>("header > span, nav span, header a.glogo > span")].filter(
-      (span) => {
-        if (span.getClientRects().length === 0) {
-          return false;
-        }
-        const mark = span.matches("a.glogo > span");
-        return mark || [...span.children].some((child) => ["img", "svg"].includes(child.tagName.toLowerCase()));
-      },
-    );
+    const slots = [
+      ...document.querySelectorAll<HTMLElement>("header > span, nav span, header a.glogo > span, .lg-sea > a.brand"),
+    ].filter((span) => {
+      if (span.getClientRects().length === 0) {
+        return false;
+      }
+      const mark = span.matches("a.glogo > span");
+      return mark || [...span.children].some((child) => ["img", "svg"].includes(child.tagName.toLowerCase()));
+    });
     const touches = (source: Source) => {
       const node = source.node;
       return node !== null && slots.some((slot) => slot === node || slot.contains(node));

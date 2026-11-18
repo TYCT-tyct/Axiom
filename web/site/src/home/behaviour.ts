@@ -1,4 +1,4 @@
-import { reducedMotion } from "@axiom/fx";
+import { markArrival, reducedMotion } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useState } from "react";
@@ -166,6 +166,7 @@ function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
     // from here the press is done: a press after a stopped navigation starts a departure of its own at once
     leaving = undefined;
     const held = shown;
+    markArrival();
     window.location.assign(href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, departSpan);

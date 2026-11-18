@@ -35,6 +35,38 @@ export type MockState = AuthState &
   };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
+// The legal documents a site publishes, in both languages, as the consent and registration pages show them.
+export const demoDocuments = (): Schemas["LegalDocument"][] => [
+  {
+    kind: "terms",
+    locale: "zh",
+    version: 3,
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 服务条款（示例）\n\n## 服务说明\n\n这是服务条款的演示文本。",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "privacy",
+    locale: "zh",
+    version: 2,
+    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 隐私政策（示例）\n\n## 引言与适用范围\n\n这是隐私政策的演示文本。",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "terms",
+    locale: "en",
+    version: 1,
+    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Terms of Service (Demo)\n\n## The Service\n\nThis is demo terms text.",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+  {
+    kind: "privacy",
+    locale: "en",
+    version: 1,
+    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Privacy Policy (Demo)\n\n## Introduction and Scope\n\nThis is demo privacy text.",
+    published_at: "2026-11-04T00:00:00Z",
+  },
+];
+
 export const goodInvite = "INVITE-OK";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });

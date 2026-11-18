@@ -57,10 +57,74 @@ const accountShell = (scene: string): Ruling[] =>
     },
   ].map((ruling) => ({ scene, ...ruling }));
 
+// The console's sign-in page against the Login board's email step (#747 S3, port design §9). The page asks the
+// product's questions in the board's parts: what the board draws for a sign-up that creates accounts on the way, it
+// leaves out. The board runs login-ui.js for its form but not the sea's engine, and the stage that forms the step's
+// shape on the sea is the transition's on the board (trans.js), so both canvases are the fx tests'.
+const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
+const signInRulings: Ruling[] = [
+  signIn({
+    basis: "§9 not ported: the copy that a first sign-in creates the account; product.md: invite or open registration",
+    ...both(".lg-title, .lg-sub"),
+  }),
+  signIn({
+    basis: "product.md: the terms are accepted at registration and on the consent page, not at sign-in",
+    board: { selector: ".lg-consent" },
+  }),
+  signIn({
+    basis: "§9: third-party sign-ins and passkeys are the site's (getSite); the mocked site offers none",
+    board: { selector: ".lg-or, .lg-stack" },
+  }),
+  signIn({
+    basis: "product.md 要求、画板未画：用画板部件组合（#747）: the way to the registration page",
+    page: { selector: ".lg-form .lg-note" },
+  }),
+  signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
+  signIn({
+    basis: "§8.2: the sea is an engine, off on the board; it is tested by fx.spec.ts",
+    page: { canvas: "canvas.sea" },
+  }),
+  signIn({
+    basis: "§9: the stage on the sea is the transition's on the board (trans.js); it is tested by fx.spec.ts",
+    page: { selector: ".lg-sea > canvas:not(.sea)" },
+  }),
+];
+// The steps the product needs that the board does not draw are composed of its parts and shot, not compared; the parts
+// of the board's flow the product does not have are left out (§9). Neither has a board screen to compare with, so these
+// name the console's scenes and the board's own steps.
+const composed = "product.md 要求、画板未画：用画板部件组合（#747）";
+const loginRulings: Ruling[] = [
+  ...["console sign-in-password", "console mfa", "console consent"].map((scene) => ({
+    scene,
+    basis: composed,
+    page: { selector: ".lg-step" },
+  })),
+  {
+    scene: "Login 验证码",
+    basis: `${composed}: the authenticator's code and the recovery code share one field until the converter types the digit cells' maxlength and inputmode`,
+    board: { selector: ".lg-digits, .lg-row" },
+  },
+  { scene: "Login 验证码", basis: "§9 not ported: the 000000 demo code", board: { selector: ".lg-digits" } },
+  { scene: "Login 微信扫码", basis: "§9 not ported: WeChat sign-in (product: later)", board: { selector: ".lg-qr" } },
+  {
+    scene: "Login 邮箱 加手机号",
+    basis: "§9 not ported: phone sign-in (product: later)",
+    board: { selector: ".lg-seg, .lg-phone" },
+  },
+  {
+    scene: "Login 第一把 key",
+    basis:
+      "§9 not ported: the first key and the tools' setup on the sign-in page; the Keys page makes a new user's first key",
+    board: { selector: ".lg-key, .lg-code, .lg-seg.tools" },
+  },
+];
+
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
+  ...signInRulings,
+  ...loginRulings,
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   ...accountShell("console settings"),
   {

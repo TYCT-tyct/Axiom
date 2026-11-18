@@ -3,7 +3,7 @@ import ModelsCard from "@axiom/boards/AxApp/regions/ModelsCard";
 import { SectionHeader } from "@axiom/boards/ds";
 import { CheckField, FormError } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { legalQuery } from "../queries";
 import { LegalMarkdown } from "./legal-markdown";
@@ -117,8 +117,28 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
     return null;
   }
   return (
+    <LegalDocuments documents={consent.documents}>
+      <CheckField
+        label={t("legal.accept")}
+        checked={consent.accepted}
+        onChange={(event) => consent.setAccepted(event.currentTarget.checked)}
+      />
+    </LegalDocuments>
+  );
+}
+
+// LegalDocuments shows each document with its version, as the form that accepts them sends it; children follow them.
+export function LegalDocuments({
+  documents,
+  children,
+}: {
+  documents: Schemas["LegalDocument"][];
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
+  return (
     <div className="board ax ov">
-      {consent.documents.map((document) => {
+      {documents.map((document) => {
         const title = t(`legal.${document.kind}`);
         return (
           <ModelsCard t={String} key={`${document.kind}:${documentLocale(document)}`}>
@@ -127,11 +147,7 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
           </ModelsCard>
         );
       })}
-      <CheckField
-        label={t("legal.accept")}
-        checked={consent.accepted}
-        onChange={(event) => consent.setAccepted(event.currentTarget.checked)}
-      />
+      {children}
     </div>
   );
 }

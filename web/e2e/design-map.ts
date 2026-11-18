@@ -32,6 +32,13 @@ const consoleBoards = (page: string) => ({
   390: { file: "AxAppPhone.dc.html", height: 844, actions: [["go", page]] as [string, string][] },
 });
 
+// The console's sign-in pages come from the Login boards: one per form factor, the scheme a prop (mode). The form is
+// drawn by login-ui.js, so the reference runs it; the sea's engine stays off there, as on every board (rulings.ts).
+const loginBoards = {
+  1440: { file: "Login.dc.html", height: 900, engines: ["login-ui"] },
+  390: { file: "LoginPhone.dc.html", height: 844, engines: ["login-ui"] },
+};
+
 // The website's home boards come one per width; the scheme is the system's, a prop.
 const siteBoards = {
   1440: { file: "Site.dc.html", height: 900 },
@@ -184,6 +191,14 @@ export const designScenes: DesignScene[] = [
     fonts: "console",
     boards: consoleBoards("notify"),
     schemes: consoleSchemes,
+  },
+  {
+    name: "console sign-in",
+    suite: consoleSuite,
+    scene: "sign-in",
+    fonts: "console",
+    boards: loginBoards,
+    schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
   },
   {
     name: "site home",

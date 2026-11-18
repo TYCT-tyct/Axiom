@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
+import { knownEmail, knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The website's first-screen effects on the shared frame loop (port design §8.2, docs/frontend.md「动效运行时」): the sea
@@ -419,4 +420,105 @@ test("a departure whose navigation is stopped puts the page back", async ({ page
   await (await page.context().newCDPSession(page)).send("Page.stopLoading");
   await expect(signIn(page)).toBeVisible();
   await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).not.toBeAttached();
+});
+
+// The console's sign-in pages (port design §9): the sea and the stage on it, loaded after the first content, and the
+// title's decode, which plays once for a visitor the website's departure brought (its one-shot marker) and never for a
+// direct visit.
+// the engine's own chunk, not the frame's (login-frame-*.js)
+const loginCode = /\/assets\/login-[\w-]{8}\.js$/;
+const signInPage = `${apps[0].url.replace(/\/$/, "")}/console/sign-in`;
+const stageCanvas = (page: Page) => page.locator(".lg-sea > canvas:not(.sea)");
+
+// Whether any of the title's characters was hidden for the decode, recorded from the document's first script.
+async function watchDecode(page: Page) {
+  await page.addInitScript(() => {
+    const seen = { hidden: false };
+    (window as unknown as { decode: typeof seen }).decode = seen;
+    new MutationObserver((records) => {
+      for (const record of records) {
+        const target = record.target as HTMLElement;
+        if (target.matches?.(".lg-title .ch") && target.style.color === "transparent") seen.hidden = true;
+      }
+    }).observe(document, { subtree: true, attributes: true, attributeFilter: ["style"] });
+  });
+  return () => page.evaluate(() => (window as unknown as { decode: { hidden: boolean } }).decode.hidden);
+}
+
+test("arriving through the departure decodes the title once, after the first content; a direct visit does not", async ({
+  page,
+}) => {
+  const decoded = await watchDecode(page);
+  const asked: boolean[] = [];
+  await page.route(loginCode, async (route) => {
+    asked.push(await page.evaluate(() => performance.getEntriesByName("first-contentful-paint").length > 0));
+    await route.fallback();
+  });
+  await open(page);
+  await signIn(page).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await pageHeading(page);
+  await running(page);
+  await expect(stageCanvas(page)).toBeAttached();
+  await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
+  expect(await decoded()).toBe(true);
+  expect(asked).toEqual([true]);
+  // the marker was taken: the same page again is a direct visit
+  expect(await page.evaluate(() => sessionStorage.getItem("axiom:arrival"))).toBeNull();
+  await page.reload();
+  await pageHeading(page);
+  await running(page);
+  await pause(page);
+  expect(await decoded()).toBe(false);
+});
+
+test("the sign-in page's sea and stage rest while the tab is hidden, and leave nothing behind once signed in", async ({
+  page,
+}) => {
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await pageHeading(page);
+  await running(page);
+  await setHidden(page, true);
+  const frames = (await loop(page)).frames;
+  await pause(page);
+  expect((await loop(page)).frames).toBe(frames);
+  expect((await loop(page)).pending).toBe(false);
+  await setHidden(page, false);
+  await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(frames);
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  expect(await loop(page)).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
+});
+
+test("under reduced motion an arrival's sign-in page is still: the formed shape and the title as it is", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const decoded = await watchDecode(page);
+  await mockConsole(page);
+  await page.goto(apps[0].url);
+  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  await pause(page);
+  expect((await loop(page)).frames).toBe(0);
+  expect(await decoded()).toBe(false);
+});
+
+test("a sign-in page whose effects fail to load still signs in, with no unhandled error", async ({ page }) => {
+  const unhandled: string[] = [];
+  page.on("pageerror", (error) => unhandled.push(error.message));
+  await page.route(loginCode, (route) => route.fulfill({ status: 404 }));
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  expect(unhandled).toEqual([]);
 });
