@@ -15,6 +15,12 @@ export type Region = {
   board: string;
   name: string;
   roots: string[];
+  render?: {
+    root: string;
+    actions: ([string, ...unknown[]] | { click: string })[];
+    props?: Record<string, string>;
+    viewport?: { width: number; height: number };
+  };
   page?: string;
   omit?: string[];
   children?: string;
