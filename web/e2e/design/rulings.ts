@@ -14,11 +14,11 @@ export type Ruling = { scene: string; basis: string; board?: Region; page?: Regi
 
 const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 
-// The shell's rulings, at every width, so each selector names the wide board's part and the phone's: what the page
-// inside the frame shows, the board's demo account and balance, and what is not built (#816).
+// The shell's rulings, at every width, so each selector names the wide board's part and the phone's: the board's demo
+// account and balance, and what is not built (#816). A page's own scene compares the frame around its page too, so it
+// carries the same rulings; only the shell's scene leaves the page's area out, because each page is compared in its own.
 const both = (selector: string) => ({ board: { selector }, page: { selector } });
-const shell: Ruling[] = [
-  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+const frame = [
   { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
   { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
@@ -27,16 +27,22 @@ const shell: Ruling[] = [
     ...both(".pnP .qnv, .otabs"),
   },
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
+  // The site's mark, or its initial where the board draws an A, fills the logo's place on the page (manifest/shell.ts).
+  { basis: "the site's mark is the site's, not the board's A", ...both(".glogo .bm") },
+];
+const pageScenes = ["console overview", "console keys", "console route", "console byok"];
+const shell: Ruling[] = [
+  { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
+  ...frame,
 ].map((ruling) => ({ scene: "console shell", ...ruling }));
+const pages: Ruling[] = pageScenes.flatMap((scene) => frame.map((ruling) => ({ scene, ...ruling })));
 
 export const rulings: Ruling[] = [
   ...shell,
+  ...pages,
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  { scene: "console route", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
-  { scene: "console byok", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   // The board draws a workspace's supplier lines — latency, availability, a relative price and a switch per line — and
   // the failover switch and timeouts above them. No endpoint names a line, and a failed attempt is the platform's
   // (#816 O13); what a key routes by is a preset, which the design has no editor for (console-gap L2). So the page
@@ -57,9 +63,9 @@ export const rulings: Ruling[] = [
   // puts on no page (console-gap L2).
   {
     scene: "console route",
-    basis: "the page's own description and its list's title and hint say what the console lists",
-    board: { selector: ".qph p, .qcard.flush .qch" },
-    page: { selector: ".qph p, .qcard.flush .qch" },
+    basis: "the page's own name, description and its list's title and hint say what the console lists",
+    board: { selector: ".qph .qptl h1, .qph p, .qcard.flush .qch" },
+    page: { selector: ".qph .qptl h1, .qph p, .qcard.flush .qch" },
   },
   {
     scene: "console route",
@@ -75,6 +81,9 @@ export const rulings: Ruling[] = [
     board: { selector: ".p-byok .qcard.rows" },
     page: { selector: ".p-byok .qcard.rows" },
   },
+  // The page's name and description are the console's words, and its action area the console's own: the design gives the
+  // BYOK page neither (console-gap L20). The whole header goes, so the two shots' differing text widths leave no edge.
+  { scene: "console byok", basis: "console-gap L20: the page's own name, description and add action", ...both(".qph") },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {

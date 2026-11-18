@@ -1,4 +1,4 @@
-import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
+import { ApiError, consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey, can, useErrors, useSession } from "@axiom/app";
 import Wide from "@axiom/boards/AxApp/regions/Byok";
 import wideEn from "@axiom/boards/AxApp/regions/Byok.en";
@@ -9,11 +9,11 @@ import phoneZh from "@axiom/boards/AxAppPhone/regions/Byok.zh";
 import { Button, Dialog, FormError, Icon, SubmitButton, useFormat, usePageTitle } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { type SyntheticEvent, useState } from "react";
+import { type ReactNode, type SyntheticEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ListStates, pressKey, useWide } from "../board";
 import { AddProviderKeyDialog } from "../provider-key-dialog";
 import { providerKeysQuery } from "../queries";
-import { ListStates, pressKey, useWide } from "./board";
 
 type ProviderKey = Schemas["ProviderKey"];
 type Props = Parameters<typeof Wide>[0];
@@ -29,13 +29,28 @@ export default function ProviderKeys() {
   const view = can(session, "api_keys.view");
   const manage = can(session, "api_keys.manage");
   const keys = useQuery({ ...providerKeysQuery, enabled: view });
-  const [open, setOpen] = useState<ProviderKey | "add" | null>(null);
+  // The dialog shows the key as the list now has it, not as it was when it was opened: a switch, a test or another tab's
+  // change moves it, and a key that is gone (removed here or elsewhere) closes its dialog.
+  const [open, setOpen] = useState<"add" | string | null>(null);
   const wide = useWide();
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   usePageTitle(t("nav.providerKeys"));
-  const rows = (keys.data?.data ?? []).map((key) => row(key, t));
+  // A session that loses `api_keys.view`, or a node that refuses the read, keeps what the query cache holds: the page
+  // shows its states instead of the rows, and closes whatever dialog was open.
+  const refused = keys.error instanceof ApiError && keys.error.status === 403;
+  const allowed = view && !refused && !keys.isError;
+  const list = allowed ? (keys.data?.data ?? []) : [];
+  const opened = open && open !== "add" ? list.find((key) => key.id === open) : undefined;
+  useEffect(() => {
+    if (!allowed) {
+      setOpen(null);
+    }
+  }, [allowed]);
+  const closeKey = (id: string) => setOpen((current) => (current === id ? null : current));
+  const closeAdd = () => setOpen((current) => (current === "add" ? null : current));
+  const rows = list.map((key) => row(key, t));
   const values = {
-    openKey: (event: SyntheticEvent) => setOpen(keyOf(keys.data?.data, event) ?? null),
+    openKey: (event: SyntheticEvent) => setOpen(keyOf(list, event) ?? null),
     press: pressKey,
   };
   const text = { title: t("nav.providerKeys"), notice: t("providerKeys.notice") };
@@ -48,37 +63,85 @@ export default function ProviderKeys() {
   const description = t("providerKeys.description");
   return (
     <>
-      <ListStates query={keys} allowed={view} ns="providerKeys" />
-      {wide ? (
-        <Wide
-          t={(key) => (english ? wideEn : wideZh)[key]}
-          values={values}
-          text={text}
-          rows={{ keys0: rows }}
-          description={description}
-          create={create}
-        />
-      ) : (
-        <Phone
-          t={(key) => (english ? phoneEn : phoneZh)[key]}
-          values={values}
-          text={text}
-          rows={{ keys0: rows }}
-          description={description}
-          create={create}
-        />
-      )}
-      {open === "add" ? <AddProviderKeyDialog onClose={() => setOpen(null)} /> : null}
-      {open && open !== "add" ? <KeyDialog providerKey={open} manage={manage} onClose={() => setOpen(null)} /> : null}
+      <ListStates query={keys} view={view} ns="providerKeys" />
+      <Board
+        wide={wide}
+        english={english}
+        values={values}
+        text={text}
+        rows={rows}
+        description={description}
+        create={create}
+      />
+      <Opened open={open} key0={opened} manage={manage} onClose={(id) => (id === "add" ? closeAdd() : closeKey(id))} />
     </>
   );
 }
 
-// keyOf is the row an event came from: every row carries its key's id.
-function keyOf(keys: ProviderKey[] | undefined, event: SyntheticEvent) {
-  const row = (event.currentTarget as HTMLElement).closest(".qrow") as HTMLElement | null;
-  const id = row?.dataset.id;
-  return keys?.find((key) => key.id === id);
+// Board is the page in the board's own form: the wide board from 1024px, the phone's below.
+function Board({
+  wide,
+  english,
+  values,
+  text,
+  rows,
+  description,
+  create,
+}: {
+  wide: boolean;
+  english: boolean;
+  values: Parameters<typeof Wide>[0]["values"];
+  text: Parameters<typeof Wide>[0]["text"];
+  rows: Props["rows"]["keys0"];
+  description: string;
+  create: ReactNode;
+}) {
+  const text_ = (en: Record<string, string>, zh: Record<string, string>) => (key: string) =>
+    (english ? en : zh)[key] as string;
+  return wide ? (
+    <Wide
+      t={text_(wideEn, wideZh) as never}
+      values={values}
+      text={text}
+      rows={{ keys0: rows }}
+      description={description}
+      create={create}
+    />
+  ) : (
+    <Phone
+      t={text_(phoneEn, phoneZh) as never}
+      values={values}
+      text={text}
+      rows={{ keys0: rows }}
+      description={description}
+      create={create}
+    />
+  );
+}
+
+// Opened is the add dialog or the key a row's name opened, always as the list now has that key; the board draws neither
+// (console-gap L20).
+function Opened({
+  open,
+  key0,
+  manage,
+  onClose,
+}: {
+  open: "add" | string | null;
+  key0: ProviderKey | undefined;
+  manage: boolean;
+  onClose: (id: "add" | string) => void;
+}) {
+  if (open === "add") {
+    return <AddProviderKeyDialog onClose={() => onClose("add")} />;
+  }
+  return key0 ? <KeyDialog providerKey={key0} manage={manage} onClose={() => onClose(key0.id)} /> : null;
+}
+
+// keyOf is the key whose row an event came from: every row carries its key's id.
+function keyOf(keys: ProviderKey[], event: SyntheticEvent) {
+  const id = ((event.currentTarget as HTMLElement).closest(".qrow") as HTMLElement | null)?.dataset.id;
+  return keys.find((key) => key.id === id)?.id;
 }
 
 // row is one provider key as the board draws it: its name, and a line with the provider, the last four characters, how
@@ -96,11 +159,13 @@ function row(key: ProviderKey, t: TFunction): Row {
     f5: t("providerKeys.openNamed", { name: key.name }),
     f6: key.name,
   };
-  // The board sets a key's last four characters in its monospace face, where there is one.
+  // The board sets a key's last four characters in its monospace face where there is one; the rest of the line, which
+  // says the provider, how routing sees the key and its fallback, is the same either way.
+  const rest = [key.provider, state, fallback];
   if (key.hint) {
-    return { ...common, kind: "1", f7: "mono", f8: `•••• ${key.hint}`, f9: ` · ${fallback}` };
+    return { ...common, kind: "1", f7: "mono", f8: `•••• ${key.hint}`, f9: ` · ${rest.join(" · ")}` };
   }
-  return { ...common, kind: "0", f7: [key.provider, state, fallback].join(" · ") };
+  return { ...common, kind: "0", f7: rest.join(" · ") };
 }
 
 // KeyDialog is a provider key's own page in a dialog: what the key is, whether the provider takes it, its switch, its
@@ -180,6 +245,9 @@ function KeyActions({
         }),
       ),
     onSuccess: async (result) => {
+      // The list first, so the line the dialog shows and the message about the test agree: a key the provider refused and
+      // then accepted must not read as both.
+      await refresh();
       onTested(
         result.inconclusive
           ? t("providerKeys.test.inconclusive")
@@ -187,7 +255,6 @@ function KeyActions({
             ? t("providerKeys.test.ok")
             : t("providerKeys.test.refused"),
       );
-      await refresh();
     },
   });
   const toggle = useMutation({

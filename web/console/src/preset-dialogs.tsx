@@ -33,6 +33,16 @@ function useRefreshPresets() {
     ]);
 }
 
+// A change made elsewhere moved the revision on: reading the list again gives the row a dialog was opened from the one a
+// second attempt names.
+function onStale(refresh: () => Promise<unknown>) {
+  return (error: Error) => {
+    if (error instanceof ApiError && error.code === "stale_revision") {
+      void refresh();
+    }
+  };
+}
+
 // SaveError says why a save failed. The format's checks name the rule they refuse (an override that widens, a price with
 // too many decimals) in the server's words, which a translated sentence could not; a stale revision says what to do.
 function SaveError({ error }: { error: unknown }) {
@@ -107,6 +117,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
       await refresh();
       onClose();
     },
+    onError: onStale(refresh),
   });
   const submit = (form: HTMLFormElement) => {
     const written = rulesOf(draft);
@@ -215,6 +226,7 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
       await refresh();
       onClose();
     },
+    onError: onStale(refresh),
   });
   return (
     <ConfirmDialog

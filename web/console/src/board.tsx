@@ -3,9 +3,9 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { type KeyboardEvent as KeyEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-// What the pages ported from the AxApp board share. The board comes in two forms, the wide one and the phone's, each a
-// region of its own, so the page renders the one the window is wide enough for: from 1024px the wide board, as the shell
-// switches too (the board's own container queries then measure the frame).
+// What the console's pages ported from the AxApp board share. The board comes in two forms, the wide one and the phone's,
+// each a region of its own, so a page renders the one the window is wide enough for: from 1024px the wide board, as the
+// shell switches too (the board's own container queries then measure the frame).
 export function useWide() {
   const [wide, setWide] = useState(true);
   useEffect(() => {
@@ -27,30 +27,31 @@ export function pressKey(event: KeyEvent<Element>) {
   }
 }
 
-// ListStates is a list's four states in the page's own words: no permission to read it, a read that failed with its
-// reason and a retry, or nothing yet. The board's own markup keeps its place meanwhile, as the overview's cards do.
+// ListStates is a list's four states in the page's own words: loading, no permission to read it, a failed read with its
+// reason and a retry (a node that refuses the read is a forbidden state, with its request ID), or nothing yet. The
+// board's own markup keeps its place meanwhile, as the overview's cards do.
 export function ListStates({
   query,
-  allowed,
+  view,
   ns,
 }: {
   query: UseQueryResult<{ data: unknown[] }>;
-  allowed: boolean;
+  view: boolean;
   ns: "routingPresets" | "providerKeys";
 }) {
   const { t } = useTranslation();
   const text = (key: string) => t(key as never) as string;
-  if (!allowed) {
+  if (!view) {
     return <EmptyState title={text(`${ns}.noPermission.title`)}>{text(`${ns}.noPermission.body`)}</EmptyState>;
   }
-  if (query.isError) {
-    return (
-      <DataState query={query} compact>
-        {() => null}
-      </DataState>
-    );
-  }
-  return query.data && query.data.data.length === 0 ? (
-    <EmptyState title={text(`${ns}.empty.title`)}>{text(`${ns}.empty.body`)}</EmptyState>
-  ) : null;
+  return (
+    <DataState
+      query={query}
+      compact
+      isEmpty={(data) => data.data.length === 0}
+      empty={<EmptyState title={text(`${ns}.empty.title`)}>{text(`${ns}.empty.body`)}</EmptyState>}
+    >
+      {() => null}
+    </DataState>
+  );
 }

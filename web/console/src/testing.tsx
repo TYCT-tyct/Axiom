@@ -91,19 +91,6 @@ export async function mockClient(importOriginal: <T>() => Promise<T>, handlers: 
   };
 }
 
-// wideWindow is jsdom's missing matchMedia for the pages that pick the board's own form: they take the wide board, which
-// is what a desktop shows.
-export function wideWindow() {
-  beforeAll(() => {
-    window.matchMedia = ((query: string) => ({
-      matches: true,
-      media: query,
-      addEventListener() {},
-      removeEventListener() {},
-    })) as unknown as typeof window.matchMedia;
-  });
-}
-
 // press clicks the element a user reaches by that role and accessible name (or by its text), the way a mouse does.
 export async function press(root: ParentNode, name: RegExp | string) {
   const elements = [...root.querySelectorAll<HTMLElement>("[role=button], button")];
@@ -118,10 +105,31 @@ export async function press(root: ParentNode, name: RegExp | string) {
 }
 
 // setUpBoardPages readies a test of a page ported from the board: the document as setUpPages leaves it, and the wide
-// board's breakpoint, which jsdom lacks.
+// board's breakpoint, which jsdom lacks and which such a page asks for (a desktop shows the wide board).
 export function setUpBoardPages() {
   setUpPages();
-  wideWindow();
+  beforeAll(() => {
+    window.matchMedia = ((query: string) => ({
+      matches: true,
+      media: query,
+      addEventListener() {},
+      removeEventListener() {},
+    })) as unknown as typeof window.matchMedia;
+  });
+  // jsdom's dialog has no close(); the browser's closes the element and tells its owner, which is how a page's dialogs
+  // are dismissed.
+  beforeAll(() => {
+    HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+      this.removeAttribute("open");
+      this.dispatchEvent(new Event("close"));
+    };
+  });
+}
+
+// sessionWith is @axiom/app for a page test: the session may do what the test's can says, and the rest as usual.
+export async function sessionWith(importOriginal: <T>() => Promise<T>, can: (permission: string) => boolean) {
+  const actual = await importOriginal<typeof import("@axiom/app")>();
+  return { ...actual, can: (_session: unknown, permission: string) => can(permission), useSession: () => ({}) };
 }
 
 // openRow opens the row of a board-drawn list that a page supplies an accessible name for, as a reader does with the

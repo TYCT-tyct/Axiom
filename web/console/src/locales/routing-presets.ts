@@ -8,11 +8,7 @@ export const zh = {
   createTitle: "新建路由预设",
   editTitle: "修改路由预设",
   copyTitle: "复制为我的预设",
-  editNamed: "修改 {{name}}",
-  copyNamed: "复制 {{name}}",
-  disableNamed: "停用 {{name}}",
   actions: { copy: "复制", edit: "修改", disable: "停用" },
-  unavailable: "这个节点还不支持路由预设，请稍后刷新。",
   empty: { title: "还没有可用的预设", body: "新建一个预设，再在 key 上选它。" },
   noPermission: { title: "没有查看预设的权限", body: "需要能看 key 的权限。请账户的所有者给你开。" },
   notice: "只有能改 key 的人才能改路由预设，你可以查看。",
@@ -24,22 +20,24 @@ export const zh = {
   layer: { platform: "平台", site: "本站", account: "我的账户", workspace: "工作区" },
   isDefault: "新 key 默认",
   openNamed: "打开 {{name}}",
+  keysBound_one: "{{count}} 个 key 绑定它",
+  keysBound_other: "{{count}} 个 key 绑定它",
   disabled: "已停用",
   defaults: {
-    title: "新 key 的默认预设",
     hint: "只影响之后创建的 key；已经建好的 key 保持原来的预设。",
-    label: "默认预设",
     none: "不设置（沿用站点或平台的默认）",
     noneNamed: "不设置（沿用站点或平台的默认：{{name}}）",
     refused: "现在的默认不可用：不选预设的新 key 会被拒绝。设一个账户的默认，或者请站点管理员换掉站点的默认。",
     refusedWorkspace:
       "默认工作区自己的默认不可用：不选预设的新 key 会被拒绝。改账户的默认没有用，要先换掉或清空工作区的默认。",
     workspace: "默认工作区设了自己的默认“{{name}}”，新 key 落在它上面；账户的默认要等工作区清空自己的默认才生效。",
-    save: "保存默认",
     saved: "已保存。",
     reload: "载入最新的默认",
     set: "设为新 key 的默认",
     clear: "不再作为新 key 的默认",
+    clearAccount: "清除账户的默认",
+    cleared: "已清除，新 key 沿用站点或平台的默认。",
+    loading: "正在读取现在的默认…",
     reloaded: "别处刚改过默认，已载入最新的。要改的话再点一次。",
   },
   form: {
@@ -52,7 +50,7 @@ export const zh = {
     create: "创建",
     copyNote: "副本只带筛选、排序和价格；平台的内部调参不会复制。平台以后改原预设，不影响副本。",
     rulesRefused: "规则没有通过检查：{{detail}}",
-    staleHint: "预设刚被别处改过。关掉对话框重新打开，再改一次。",
+    staleHint: "预设刚被别处改过，列表已重新读取。关掉对话框重新打开，再改一次。",
   },
   disable: {
     title: "停用路由预设",
@@ -61,7 +59,7 @@ export const zh = {
     noKeys: "你的 key 都没有绑定它。",
     keys_one: "你有 {{keys}} 个 key 绑定它。",
     keys_other: "你有 {{keys}} 个 key 绑定它。",
-    isDefault: "它是新 key 的默认预设：先在上方换一个默认，否则停用会被拒绝。",
+    isDefault: "它是新 key 的默认预设：先关掉这里，在预设详情里换一个默认，否则停用会被拒绝。",
   },
   key: {
     col: "路由预设",
@@ -93,11 +91,7 @@ export const en: Messages<typeof zh> = {
   createTitle: "New routing preset",
   editTitle: "Edit routing preset",
   copyTitle: "Copy as my preset",
-  editNamed: "Edit {{name}}",
-  copyNamed: "Copy {{name}}",
-  disableNamed: "Disable {{name}}",
   actions: { copy: "Copy", edit: "Edit", disable: "Disable" },
-  unavailable: "This node doesn’t support routing presets yet. Refresh in a little while.",
   empty: { title: "No presets to use yet", body: "Make a preset, then choose it on a key." },
   noPermission: {
     title: "No permission to see presets",
@@ -112,11 +106,11 @@ export const en: Messages<typeof zh> = {
   layer: { platform: "Platform", site: "This site", account: "My account", workspace: "Workspace" },
   isDefault: "Default for new keys",
   openNamed: "Open {{name}}",
+  keysBound_one: "{{count}} key is bound to it",
+  keysBound_other: "{{count}} keys are bound to it",
   disabled: "Disabled",
   defaults: {
-    title: "Default preset for new keys",
     hint: "Only keys made from now on take it; existing keys keep their presets.",
-    label: "Default preset",
     none: "None (use the site’s or the platform’s default)",
     noneNamed: "None (use the site’s or the platform’s default: {{name}})",
     refused:
@@ -125,11 +119,13 @@ export const en: Messages<typeof zh> = {
       "The default workspace’s own default can’t be used: new keys made without a preset are refused. Changing the account’s default won’t help; change or clear the workspace’s first.",
     workspace:
       "The default workspace sets its own default, “{{name}}”, and new keys take it. The account’s default applies only once the workspace clears its own.",
-    save: "Save default",
     saved: "Saved.",
     reload: "Load the latest default",
     set: "Make it the default for new keys",
     clear: "Stop being the default for new keys",
+    clearAccount: "Clear the account’s default",
+    cleared: "Cleared: new keys take the site’s or the platform’s default.",
+    loading: "Reading the current default…",
     reloaded: "The default was just changed elsewhere, so the latest one is loaded. Press again to change it.",
   },
   form: {
@@ -143,7 +139,8 @@ export const en: Messages<typeof zh> = {
     copyNote:
       "A copy takes the filters, sorting and prices only, not the platform’s internal tuning. Later changes to the original don’t touch the copy.",
     rulesRefused: "The rules didn’t pass the check: {{detail}}",
-    staleHint: "The preset was just changed elsewhere. Close this dialog, open it again and redo your change.",
+    staleHint:
+      "The preset was just changed elsewhere and the list is read again. Close this dialog, open it again and redo your change.",
   },
   disable: {
     title: "Disable routing preset",
@@ -152,7 +149,8 @@ export const en: Messages<typeof zh> = {
     noKeys: "None of your keys is bound to it.",
     keys_one: "{{keys}} of your keys is bound to it.",
     keys_other: "{{keys}} of your keys are bound to it.",
-    isDefault: "It’s the default for new keys: choose another default above first, or disabling it is refused.",
+    isDefault:
+      "It’s the default for new keys: close this and choose another default in a preset’s own dialog first, or disabling it is refused.",
   },
   key: {
     col: "Routing preset",

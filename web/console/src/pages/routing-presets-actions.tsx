@@ -1,7 +1,7 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { can, RulesSummary, useErrors, useSession } from "@axiom/app";
 import { Button, Dialog, FormError } from "@axiom/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type UseQueryResult, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNewKeys } from "../key-form";
@@ -10,10 +10,16 @@ import { routingDefaultQuery } from "../queries";
 
 type Preset = Schemas["RoutingPreset"];
 
-// PresetActionsDialog is a preset row's ways on: make it the account's default for new keys or stop being it, open it to
-// change it, copy it into one of the account's own, or disable it. The board's table draws a row's name as a button and
-// nothing else, so what it cannot draw lives here; only the account's own presets (and its workspaces') can be changed
-// or disabled.
+// What the last write said: the account's default was set, cleared, or read again after another change raced with it.
+const NOTES = {
+  saved: "routingPresets.defaults.saved",
+  cleared: "routingPresets.defaults.cleared",
+  reloaded: "routingPresets.defaults.reloaded",
+} as const;
+
+// PresetActionsDialog is a preset row's ways on: open it to change it, copy it into one of the account's own, or disable
+// it, and what a key made now takes. The board's table draws a row's name as a button and nothing else, so what it
+// cannot draw lives here; only the account's own presets (and its workspaces') can be changed or disabled.
 export function PresetActionsDialog({ preset, onClose }: { preset: Preset; onClose: () => void }) {
   const { t } = useTranslation();
   const manage = can(useSession(), "api_keys.manage");
@@ -31,8 +37,11 @@ export function PresetActionsDialog({ preset, onClose }: { preset: Preset; onClo
         <div className="text-label">
           <p className="font-mono text-t4">{preset.slug}</p>
           <RulesSummary summary={preset.summary} />
+          {preset.keys === undefined ? null : (
+            <p className="text-t3">{t("routingPresets.keysBound", { count: preset.keys })}</p>
+          )}
         </div>
-        {manage ? <DefaultButton preset={preset} /> : null}
+        <Defaults preset={preset} />
         <div className="flex flex-wrap gap-2">
           {!manage ? (
             <p className="text-label text-t3">{t("routingPresets.notice")}</p>
@@ -59,74 +68,141 @@ export function PresetActionsDialog({ preset, onClose }: { preset: Preset; onClo
   );
 }
 
-// DefaultButton points the account's default at this preset, or clears it when the preset already is the default. The
-// version the page read goes with the change, so one made elsewhere meanwhile is refused (stale_revision) instead of
-// overwritten; the page then loads the default as it now is, so the next press sends the current version.
-function DefaultButton({ preset }: { preset: Preset }) {
+// Defaults says what a key made now takes, and lets a manager point the account's own default at the preset in hand or
+// clear it. The account's default is the preset it names — not what new keys take, which the default workspace's own
+// default comes before — so only the account's `preset_id` decides these buttons, and a workspace's preset cannot be the
+// account's default at all. Clearing is its own control, so the account can go back to the site's or the platform's
+// default even when the preset it named is not in the list.
+export function Defaults({ preset }: { preset?: Preset }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const queryClient = useQueryClient();
+  const manage = can(useSession(), "api_keys.manage");
   const latest = useQuery(routingDefaultQuery);
-  const [note, setNote] = useState<"saved" | "reloaded" | null>(null);
-  const save = useMutation({
-    mutationFn: (presetId: string | null) =>
-      unwrap(
-        consoleApi.PUT("/api/console/v1/routing-default", {
-          body: { preset_id: presetId, version: latest.data?.version ?? 0 },
-        }),
-      ),
-    onSuccess: (saved) => {
-      queryClient.setQueryData(routingDefaultQuery.queryKey, saved);
-      setNote("saved");
-    },
-  });
-  // After a refusal the page loads the default as it now is, which drops the refusal: the only way on is the current
-  // version, and the button says what happened so the press can be repeated.
-  const reload = useMutation({
-    mutationFn: () => queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 }),
-    onSuccess: () => {
-      save.reset();
-      setNote("reloaded");
-    },
-  });
-  const isDefault = preset.id === newKeysPreset(latest.data);
+  const [note, setNote] = useState<Note>(null);
+  const { save, reload, write } = useDefaultWrite(latest, setNote);
+  const read = latest.data;
+  const isAccountDefault = read !== undefined && preset !== undefined && read.preset_id === preset.id;
+  const settable = preset !== undefined && preset.scope !== "workspace" && !isAccountDefault;
+  if (latest.isError) {
+    return (
+      <div className="space-y-2">
+        <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
+        <FormError>{errors.message(latest.error)}</FormError>
+        <Button size="md" disabled={reload.isPending} onClick={() => reload.mutate()}>
+          {t("routingPresets.defaults.reload")}
+        </Button>
+      </div>
+    );
+  }
+  if (read === undefined) {
+    return (
+      <div className="space-y-2">
+        <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
+        <p className="text-label text-t3">{t("routingPresets.defaults.loading")}</p>
+      </div>
+    );
+  }
   return (
     <div className="space-y-2">
       <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
-      <Inherited read={latest.data} />
+      <Inherited read={read} />
       <NewKeysWarning />
-      <Button
-        size="md"
-        disabled={save.isPending}
-        onClick={() =>
-          save.mutate(isDefault ? null : preset.id, {
-            onError: (error) => {
-              if (error instanceof ApiError && error.code === "stale_revision") {
-                reload.mutate();
-              }
-            },
-          })
-        }
-      >
-        {t(isDefault ? "routingPresets.defaults.clear" : "routingPresets.defaults.set")}
-      </Button>
+      {manage ? (
+        <DefaultWrite
+          busy={save.isPending}
+          hasDefault={read.preset_id !== undefined}
+          isAccountDefault={isAccountDefault}
+          preset={settable ? preset : undefined}
+          onWrite={write}
+        />
+      ) : null}
       {save.isError ? <FormError>{errors.message(save.error)}</FormError> : null}
       {reload.isError ? <FormError>{errors.message(reload.error)}</FormError> : null}
-      {note ? (
-        <p role="status">
-          {t(note === "saved" ? "routingPresets.defaults.saved" : "routingPresets.defaults.reloaded")}
-        </p>
+      {note ? <p role="status">{t(NOTES[note])}</p> : null}
+    </div>
+  );
+}
+
+// DefaultWrite is what a manager can do to the account's default: point it at the preset in hand, or clear it — which is
+// its own control, so the account can go back to the site's or the platform's default even when the preset it named is
+// not in the list, and a workspace's preset, which cannot be the account's default, offers only the clear.
+function DefaultWrite({
+  busy,
+  hasDefault,
+  isAccountDefault,
+  preset,
+  onWrite,
+}: {
+  busy: boolean;
+  hasDefault: boolean;
+  isAccountDefault: boolean;
+  preset: Preset | undefined;
+  onWrite: (presetId: string | null) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <div className="flex flex-wrap gap-2">
+      {preset ? (
+        <Button size="md" disabled={busy} onClick={() => onWrite(preset.id)}>
+          {t("routingPresets.defaults.set")}
+        </Button>
+      ) : null}
+      {hasDefault ? (
+        <Button size="md" disabled={busy} onClick={() => onWrite(null)}>
+          {t(isAccountDefault ? "routingPresets.defaults.clear" : "routingPresets.defaults.clearAccount")}
+        </Button>
       ) : null}
     </div>
   );
 }
 
+// What the last write said: the account's default was set, cleared, or read again after another change raced with it.
+type Note = "saved" | "cleared" | "reloaded" | null;
+
+// useDefaultWrite points the account's default at a preset, or clears it. The version the page read goes with the
+// change; a change made elsewhere meanwhile is refused (stale_revision) instead of overwritten, and the page then loads
+// the default as it now is, so the next press sends the current version.
+function useDefaultWrite(latest: UseQueryResult<Schemas["AccountRoutingDefault"]>, setNote: (note: Note) => void) {
+  const queryClient = useQueryClient();
+  const save = useMutation({
+    mutationFn: (presetId: string | null) =>
+      unwrap(
+        consoleApi.PUT("/api/console/v1/routing-default", {
+          // The read is what the write is based on: no version, no write.
+          body: { preset_id: presetId, version: latest.data?.version as number },
+        }),
+      ),
+    onMutate: () => setNote(null),
+    onSuccess: (saved, presetId) => {
+      queryClient.setQueryData(routingDefaultQuery.queryKey, saved);
+      setNote(presetId === null ? "cleared" : "saved");
+    },
+  });
+  const reload = useMutation({
+    mutationFn: () => queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 }),
+    onMutate: () => setNote(null),
+    onSuccess: () => {
+      save.reset();
+      setNote("reloaded");
+    },
+  });
+  const write = (presetId: string | null) =>
+    save.mutate(presetId, {
+      onError: (error) => {
+        if (error instanceof ApiError && error.code === "stale_revision") {
+          reload.mutate();
+        }
+      },
+    });
+  return { save, reload, write };
+}
+
 // Inherited says what the account's own default leaves to the site or the platform, naming the preset a key made now
 // takes when the node names it. The names of the layers' presets are only known while the account sets none.
-function Inherited({ read }: { read: Schemas["AccountRoutingDefault"] | undefined }) {
+function Inherited({ read }: { read: Schemas["AccountRoutingDefault"] }) {
   const { t } = useTranslation();
   const newKeys = useNewKeys();
-  if (!read || read.preset_id) {
+  if (read.preset_id) {
     return null;
   }
   return (
@@ -140,7 +216,8 @@ function Inherited({ read }: { read: Schemas["AccountRoutingDefault"] | undefine
 
 // NewKeysWarning says when the account's default does not decide what a key made now takes: the default refuses new
 // keys, or the default workspace, where the console makes keys, sets its own default, which comes before the account's.
-// An older node says neither, and nothing is said.
+// An older node says neither, and nothing is said. It is read by everyone who may see presets: a member who may not
+// change them still needs to know that a key made without a preset is refused.
 function NewKeysWarning() {
   const { t } = useTranslation();
   const newKeys = useNewKeys();
@@ -157,10 +234,4 @@ function NewKeysWarning() {
       {t("routingPresets.defaults.workspace", { name: newKeys.name ?? newKeys.id })}
     </p>
   ) : null;
-}
-
-// newKeysPreset is the preset a key made now takes: the node names it, or names none because the default refuses new
-// keys; only an older node, which says neither, leaves the account's own default to stand for it.
-function newKeysPreset(read: Schemas["AccountRoutingDefault"] | undefined) {
-  return read?.new_keys_refused ? undefined : (read?.new_keys_preset_id ?? read?.preset_id);
 }

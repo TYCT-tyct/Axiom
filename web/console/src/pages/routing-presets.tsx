@@ -1,5 +1,5 @@
-import type { Schemas } from "@axiom/api";
-import { can, useSession } from "@axiom/app";
+import { ApiError, type Schemas } from "@axiom/api";
+import { can, summaryLine, useSession } from "@axiom/app";
 import Wide from "@axiom/boards/AxApp/regions/Route";
 import wideEn from "@axiom/boards/AxApp/regions/Route.en";
 import wideZh from "@axiom/boards/AxApp/regions/Route.zh";
@@ -9,21 +9,17 @@ import phoneZh from "@axiom/boards/AxAppPhone/regions/Route.zh";
 import { Button, Icon, useFormat, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { type SyntheticEvent, useState } from "react";
+import { type SyntheticEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { ListStates, pressKey, useWide } from "../board";
 import { PresetDialog } from "../preset-dialogs";
 import { routingDefaultQuery, routingPresetsQuery } from "../queries";
-import { ListStates, pressKey, useWide } from "./board";
-import { PresetActionsDialog } from "./routing-presets-actions";
+import { Defaults, PresetActionsDialog } from "./routing-presets-actions";
 
 type Preset = Schemas["RoutingPreset"];
-type Summary = Schemas["RoutingRulesSummary"];
 type Props = Parameters<typeof Wide>[0];
 type Row = Props["rows"]["presets0"][number];
 type Format = ReturnType<typeof useFormat>;
-
-// The sorts the contract names, in the order the rules editor offers them.
-const sorts = ["balanced", "price", "throughput", "latency", "quality"] as const;
 
 // RoutingPresets is the board's Routing page (#747): the presets a key of the account may be bound to, the widest layer
 // first (docs/domains/routing.md「路由预设」). A row's name opens the preset, which the design has no editor for
@@ -40,24 +36,23 @@ export default function RoutingPresets() {
   const format = useFormat();
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   usePageTitle(t("nav.routingPresets"));
-  const rows = (presets.data?.data ?? []).map((preset) =>
+  // A session that loses `api_keys.view`, or a node that then refuses the read, keeps what the query cache holds: the
+  // page shows its states instead of the rows, and closes a preset it was showing.
+  const refused = presets.error instanceof ApiError && presets.error.status === 403;
+  const allowed = view && !refused && !presets.isError;
+  useEffect(() => {
+    if (!allowed) {
+      setOpen(null);
+    }
+  }, [allowed]);
+  const rows = (allowed ? (presets.data?.data ?? []) : []).map((preset) =>
     row(preset, preset.id === newKeysPreset(defaults.data), t, format),
   );
   const values = {
-    openPreset: (event: SyntheticEvent) => setOpen(presetOf(presets.data?.data, event) ?? null),
+    openPreset: (event: SyntheticEvent) => setOpen(presetOf(allowed ? presets.data?.data : undefined, event) ?? null),
     press: pressKey,
   };
-  const text = {
-    title: t("nav.routingPresets"),
-    notice: t("routingPresets.notice"),
-    listTitle: t("routingPresets.list.title"),
-    listHint: t("routingPresets.list.hint"),
-    colName: t("routingPresets.col.name"),
-    colLayer: t("routingPresets.col.layer"),
-    colRules: t("routingPresets.col.rules"),
-    colKeys: t("routingPresets.col.keys"),
-    colVersion: t("routingPresets.col.version"),
-  };
+  const text = labels(t);
   const create = manage ? (
     <Button variant="primary" size="md" onClick={() => setOpen("create")}>
       <Icon name="plus" />
@@ -73,16 +68,40 @@ export default function RoutingPresets() {
   };
   return (
     <>
-      <ListStates query={presets} allowed={view} ns="routingPresets" />
+      <ListStates query={presets} view={view} ns="routingPresets" />
+      {/* An account with no preset yet still needs to know what a key made now takes, and whether it is refused. */}
+      {allowed && presets.data?.data.length === 0 ? <Defaults /> : null}
       {wide ? (
         <Wide t={(key) => (english ? wideEn : wideZh)[key]} {...props} />
       ) : (
         <Phone t={(key) => (english ? phoneEn : phoneZh)[key]} {...props} />
       )}
-      {open === "create" ? <PresetDialog edit={{ kind: "create" }} onClose={() => setOpen(null)} /> : null}
-      {open && open !== "create" ? <PresetActionsDialog preset={open} onClose={() => setOpen(null)} /> : null}
+      <Opened open={open} onClose={() => setOpen(null)} />
     </>
   );
+}
+
+// Opened is the preset a row's name opened, or the console's create dialog; the board draws neither (console-gap L2).
+function Opened({ open, onClose }: { open: Preset | "create" | null; onClose: () => void }) {
+  if (open === "create") {
+    return <PresetDialog edit={{ kind: "create" }} onClose={onClose} />;
+  }
+  return open ? <PresetActionsDialog preset={open} onClose={onClose} /> : null;
+}
+
+// labels are the board's texts in the console's words: the page's name, what the list holds, and its columns.
+function labels(t: TFunction) {
+  return {
+    title: t("nav.routingPresets"),
+    notice: t("routingPresets.notice"),
+    listTitle: t("routingPresets.list.title"),
+    listHint: t("routingPresets.list.hint"),
+    colName: t("routingPresets.col.name"),
+    colLayer: t("routingPresets.col.layer"),
+    colRules: t("routingPresets.col.rules"),
+    colKeys: t("routingPresets.col.keys"),
+    colVersion: t("routingPresets.col.version"),
+  };
 }
 
 // newKeysPreset is the preset a key made now takes: the node names it, or names none because the default refuses new
@@ -118,29 +137,10 @@ function row(preset: Preset, isDefault: boolean, t: TFunction, format: Format): 
     f11: "qsd ok",
     f12: t(`routingPresets.layer.${preset.scope}`),
     f13: "r num",
-    f14: rulesLine(preset.summary, t),
+    f14: summaryLine(t, preset.summary),
     f15: "r num",
     f16: preset.keys === undefined ? "—" : format.number(preset.keys),
     f17: "r",
     f18: format.number(preset.version),
   };
-}
-
-// rulesLine is a preset's rules in one line, as the list shows them: the sort, the sources kept, the verified and price
-// thresholds, and how many overrides follow. An older node, or rules this node cannot read, give none.
-function rulesLine(summary: Summary | undefined, t: TFunction) {
-  if (!summary) {
-    return t("presetRules.summary.unavailable", { ns: "common" });
-  }
-  const parts = [
-    // A sort a newer node added has no words here yet; its name is shown as it is.
-    sorts.includes(summary.sort as (typeof sorts)[number])
-      ? t(`presetRules.sorts.${summary.sort}`, { ns: "common" })
-      : summary.sort,
-    summary.classes ? summary.classes.join(", ") : t("presetRules.summary.allClasses", { ns: "common" }),
-    summary.verified_only ? t("presetRules.summary.verified", { ns: "common" }) : null,
-    summary.priced ? t("presetRules.summary.priced", { ns: "common" }) : null,
-    summary.overrides > 0 ? t("presetRules.summary.overrides", { count: summary.overrides, ns: "common" }) : null,
-  ].filter(Boolean);
-  return parts.join(" · ");
 }

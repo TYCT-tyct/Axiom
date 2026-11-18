@@ -86,7 +86,7 @@ beforeEach(() => {
 });
 
 // The default's two buttons say what they do; with no messages in a test, they are their keys.
-const pressDefault = (dialog: HTMLElement, which: "set" | "clear" | "reloaded") =>
+const pressDefault = (dialog: HTMLElement, which: "set" | "clear" | "reload") =>
   press(dialog, `routingPresets.defaults.${which}`);
 
 // A preset chosen for a new key is sent even when the list is read again and that read fails: the choice must not fall
@@ -155,6 +155,24 @@ it("refuses a stale default and sends the current version next", async () => {
   await pressDefault(dialog, "set");
   expect(api.sent.at(-1)).toEqual({ preset_id: preset(2).id, version: 2 });
   expect(api.routingDefault.version).toBe(3);
+});
+
+// A reload after a refusal can fail too: the page then says why and offers the reload again, and once it succeeds the
+// next press sends the version the account has.
+it("keeps the refusal when the reload fails, and tries it again", async () => {
+  const { container } = await render(<RoutingPresets />);
+  const dialog = await openRow(container, "routingPresets.openNamed", 1);
+  api.routingDefault = { preset_id: undefined, version: 2 };
+  api.defaultFail = true;
+  await pressDefault(dialog, "set");
+  expect(api.sent).toHaveLength(1);
+  // A default that cannot be read offers no write, only the read again.
+  expect(dialog.textContent).not.toContain("routingPresets.defaults.set");
+  api.defaultFail = false;
+  await pressDefault(dialog, "reload");
+  expect(dialog.textContent).toContain("routingPresets.defaults.reloaded");
+  await pressDefault(dialog, "set");
+  expect(api.sent.at(-1)).toEqual({ preset_id: preset(2).id, version: 2 });
 });
 
 // Before disabling, the dialog says how many of the account's keys still route by the preset and, when it is the
