@@ -61,4 +61,36 @@ test.describe("models and prices", () => {
       await expect(endpoints.getByText("流式输出 否", { exact: true })).toBeVisible();
     }
   });
+
+  test("announcements open on demand even when the model list fails", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.route("**/api/console/v1/models/account", (route) =>
+      route.fulfill({ status: 500, json: { error: { code: "internal", message: "Model list failed" } } }),
+    );
+    let reads = 0;
+    await page.route("**/api/console/v1/announcements", (route) => {
+      reads += 1;
+      return route.fulfill({
+        json: {
+          data: [
+            { id: "first", title: "Maintenance", body: "The first announcement." },
+            { id: "second", title: "Service update", body: "The second announcement." },
+          ],
+        },
+      });
+    });
+
+    await page.goto("/console/models");
+    await expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重试" })).toBeVisible();
+    const announcements = page.getByText("站内公告", { exact: true });
+    await expect(announcements).toBeVisible();
+    expect(reads).toBe(0);
+    await announcements.press("Enter");
+    await expect(page.getByText("The first announcement.")).toBeVisible();
+    await expect(page.getByText("The second announcement.")).toBeVisible();
+    expect(reads).toBe(1);
+    await expect(page.getByRole("heading", { name: "没能加载" })).toBeVisible();
+  });
 });

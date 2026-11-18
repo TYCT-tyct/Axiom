@@ -9,7 +9,8 @@ import { nearView, type Running, useEffectModule } from "./use-effect-module";
 
 // The browser's scheduling, run by hand: frames and idle callbacks happen when the test says.
 let frames: FrameRequestCallback[] = [];
-// The last observer's callback, as the browser calls it when its element comes near the view or goes.
+// The last observer's callback, as the browser calls it when its element comes near the view or goes; gone once the
+// observer is disconnected.
 let near: ((isIntersecting: boolean) => void) | undefined;
 let idle: IdleRequestCallback[] = [];
 const flushFrames = () => {
@@ -19,9 +20,33 @@ const flushIdle = () => {
   for (const callback of idle.splice(0)) callback({ didTimeout: false, timeRemaining: () => 50 });
 };
 
+function paintTiming(previous?: string) {
+  let notify: ((name: string) => void) | undefined;
+  vi.stubGlobal(
+    "PerformanceObserver",
+    class {
+      static supportedEntryTypes = ["paint"];
+
+      constructor(deliver: (list: { getEntries: () => { name: string }[] }) => void) {
+        notify = (name) => deliver({ getEntries: () => [{ name }] });
+      }
+
+      observe({ buffered }: PerformanceObserverInit) {
+        if (buffered && previous) notify?.(previous);
+      }
+
+      disconnect() {
+        notify = undefined;
+      }
+    },
+  );
+  return (name: string) => notify?.(name);
+}
+
 beforeEach(() => {
   frames = [];
   idle = [];
+  vi.stubGlobal("PerformanceObserver", undefined);
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
   vi.stubGlobal("cancelAnimationFrame", () => {});
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => idle.push(callback));
@@ -37,7 +62,9 @@ beforeEach(() => {
       }
       observe() {}
       unobserve() {}
-      disconnect() {}
+      disconnect() {
+        near = undefined;
+      }
     },
   );
 });
@@ -49,24 +76,29 @@ afterEach(() => vi.unstubAllGlobals());
 // An effect module as the sea is one: it owns its element on the loop until it is destroyed.
 const effect = { start: (element: HTMLElement): Running => ({ destroy: own(element, () => {}) }) };
 
-function Effect({ load, below }: { load: () => Promise<typeof effect>; below?: boolean }) {
+function Effect({ load }: { load: () => Promise<typeof effect> }) {
   const ref = useRef<HTMLDivElement>(null);
-  useEffectModule(ref, load, (module, element) => module.start(element), below ? nearView : undefined);
+  useEffectModule(ref, load, (module, element) => module.start(element));
   return createElement("div", { ref });
 }
 
-function mount(load: () => Promise<typeof effect>, below = false) {
+function mount(load: () => Promise<typeof effect>) {
   const host = document.body.appendChild(document.createElement("div"));
   const root = createRoot(host);
-  act(() => root.render(createElement(Effect, { load, below })));
+  act(() => root.render(createElement(Effect, { load })));
   return root;
 }
 
-it("loads the module only after a frame and an idle moment, and lets go of everything on unmount", async () => {
+it("waits for contentful paint even when the browser has already run a frame and gone idle", async () => {
+  const paint = paintTiming();
   const load = vi.fn(async () => effect);
   const root = mount(load);
-  expect(load).not.toHaveBeenCalled();
   flushFrames();
+  paint("first-paint");
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+
+  paint("first-contentful-paint");
   expect(load).not.toHaveBeenCalled();
   await act(async () => flushIdle());
   expect(load).toHaveBeenCalledOnce();
@@ -76,11 +108,34 @@ it("loads the module only after a frame and an idle moment, and lets go of every
   expect(window.axiomFx?.state).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
 });
 
+it("stops observing paint if the effect unmounts before first content", async () => {
+  const paint = paintTiming();
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+  act(() => root.unmount());
+
+  paint("first-contentful-paint");
+  await act(async () => flushIdle());
+  expect(load).not.toHaveBeenCalled();
+});
+
+it("can load when the browser painted its first content before the effect mounted", async () => {
+  paintTiming("first-contentful-paint");
+  const load = vi.fn(async () => effect);
+  const root = mount(load);
+
+  await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
+  act(() => root.unmount());
+});
+
 it("starts nothing when the page is left before the module arrives, and survives a module that fails", async () => {
   let arrive: (module: typeof effect) => void = () => {};
-  const root = mount(() => new Promise((resolve) => (arrive = resolve)));
+  const load = vi.fn(() => new Promise<typeof effect>((resolve) => (arrive = resolve)));
+  const root = mount(load);
   flushFrames();
   await act(async () => flushIdle());
+  expect(load).toHaveBeenCalledOnce();
   act(() => root.unmount());
   await act(async () => arrive(effect));
   expect(window.axiomFx?.state.owners).toBe(0);
@@ -92,17 +147,16 @@ it("starts nothing when the page is left before the module arrives, and survives
   act(() => failing.unmount());
 });
 
-it("loads what lies below the first screen only once it nears the view", async () => {
-  const load = vi.fn(async () => effect);
-  const root = mount(load, true);
-  flushFrames();
-  await act(async () => flushIdle());
+it("calls what lies below the first screen only once it nears the view, and not after it is cancelled", () => {
+  const go = vi.fn();
+  nearView(document.body.appendChild(document.createElement("div")), go);
   near?.(false);
-  expect(load).not.toHaveBeenCalled();
+  expect(go).not.toHaveBeenCalled();
+  near?.(true);
+  expect(go).toHaveBeenCalledOnce();
 
-  await act(async () => near?.(true));
-  expect(load).toHaveBeenCalledOnce();
-  expect(window.axiomFx?.state.owners).toBe(1);
-  act(() => root.unmount());
-  expect(window.axiomFx?.state.owners).toBe(0);
+  const late = vi.fn();
+  const cancel = nearView(document.body.appendChild(document.createElement("div")), late);
+  cancel();
+  expect(near).toBeUndefined();
 });

@@ -3,23 +3,36 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
-// that cancels it. A frame callback runs before the next paint, so the idle callback queued from it comes after that
-// paint; a browser without requestIdleCallback waits a moment instead.
+// A rendering opportunity can pass before the browser reports a contentful paint. Wait for the paint entry before
+// scheduling idle work, using a frame callback where Paint Timing is unavailable.
 function afterFirstContent(go: () => void) {
-  let idle = 0;
-  const frame = requestAnimationFrame(() => {
-    idle =
-      typeof requestIdleCallback === "function"
-        ? requestIdleCallback(go, { timeout: 2000 })
-        : window.setTimeout(go, 200);
-  });
-  return () => {
-    cancelAnimationFrame(frame);
-    if (typeof cancelIdleCallback === "function") {
-      cancelIdleCallback(idle);
+  let cancelIdle: (() => void) | undefined;
+  const schedule = () => {
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(go, { timeout: 2000 });
+      cancelIdle = () => cancelIdleCallback(idle);
+    } else {
+      const timer = window.setTimeout(go, 200);
+      cancelIdle = () => window.clearTimeout(timer);
     }
-    clearTimeout(idle);
+  };
+  let cancelPaint: () => void;
+  if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("paint")) {
+    const observer = new PerformanceObserver((list) => {
+      if (list.getEntries().some((entry) => entry.name === "first-contentful-paint")) {
+        observer.disconnect();
+        schedule();
+      }
+    });
+    observer.observe({ type: "paint", buffered: true });
+    cancelPaint = () => observer.disconnect();
+  } else {
+    const frame = requestAnimationFrame(schedule);
+    cancelPaint = () => cancelAnimationFrame(frame);
+  }
+  return () => {
+    cancelPaint();
+    cancelIdle?.();
   };
 }
 
@@ -43,23 +56,21 @@ export function nearView(element: HTMLElement | null, go: () => void) {
   return () => observer.disconnect();
 }
 
-// useEffectModule loads an effect's code when `when` says, after the first content at idle unless told otherwise
-// (nearView for what lies below the first screen), and starts it on the element ref points at; it ends the effect when
-// the component unmounts. A module that fails to load leaves the page as it is: the effect is decoration, and the page
-// works without it. The handle, once started, is in the returned ref.
+// useEffectModule loads an effect's code after the first content, at idle, and starts it on the element ref points at;
+// it ends the effect when the component unmounts. A module that fails to load leaves the page as it is: the effect is
+// decoration, and the page works without it. The handle, once started, is in the returned ref.
 export function useEffectModule<M, R extends Running>(
   ref: RefObject<HTMLElement | null>,
   load: () => Promise<M>,
   start: (module: M, element: HTMLElement) => R,
-  when: (element: HTMLElement | null, go: () => void) => () => void = (_, go) => afterFirstContent(go),
 ): RefObject<R | null> {
   const running = useRef<R | null>(null);
   // The latest functions, read when the module arrives: a re-render does not reload it.
-  const latest = useRef({ load, start, when });
-  latest.current = { load, start, when };
+  const latest = useRef({ load, start });
+  latest.current = { load, start };
   useEffect(() => {
     let live = true;
-    const cancel = latest.current.when(ref.current, () => {
+    const cancel = afterFirstContent(() => {
       latest.current
         .load()
         .then((module) => {
