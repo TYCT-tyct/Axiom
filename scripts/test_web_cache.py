@@ -127,7 +127,10 @@ exports.saveCache = async (paths, key) => {
 exports.restoreCache = async (paths, key, fallback) => {
   if (paths.length !== 1 || paths[0] !== key || fallback?.length) throw Error('wrong content key');
   const source = path.join(process.env.TEST_CLOUD, key);
-  if (fs.existsSync(source)) fs.cpSync(source, key, {recursive: true});
+  if (fs.existsSync(source)) {
+    fs.cpSync(source, key, {recursive: true});
+    return key;
+  }
 };
 ''')
         with mock.patch.dict(os.environ, ACTIONS_CACHE_CLIENT=str(client), TEST_CLOUD=str(cloud)), \
@@ -157,17 +160,23 @@ exports.restoreCache = async (paths, key, fallback) => {
         self.addCleanup(repo.close)
         client = repo.root / "client.cjs"
         client.write_text("""
-exports.restoreCache = async (paths, key) => { require('node:fs').writeFileSync(key, 'partial'); throw Error('offline'); };
+exports.restoreCache = async (paths, key) => {
+  require('node:fs').writeFileSync(key, 'partial');
+  if (process.env.TEST_RESTORE === 'throw') throw Error('offline');
+  return process.env.TEST_RESTORE === 'mismatch' ? key + '-other' : undefined;
+};
 exports.saveCache = async () => { throw Error('offline'); };
 """)
-        with mock.patch.dict(os.environ, ACTIONS_CACHE_CLIENT=str(client)), \
-                mock.patch.object(web_cache, "run", side_effect=[17, 0]) as run, contextlib.redirect_stdout(io.StringIO()):
-            cache = repo.root / "cache"
-            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 17)
-            self.assertFalse((cache / "e2e" / web_cache.e2e_key(repo.root, "tools", ["test"])).exists())
-            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
-            self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
-            self.assertEqual(run.call_count, 2)
+        for result in ("throw", "miss", "mismatch"):
+            with self.subTest(result=result), \
+                    mock.patch.dict(os.environ, ACTIONS_CACHE_CLIENT=str(client), TEST_RESTORE=result), \
+                    mock.patch.object(web_cache, "run", side_effect=[17, 0]) as run, contextlib.redirect_stdout(io.StringIO()):
+                cache = repo.root / result
+                self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 17)
+                self.assertFalse((cache / "e2e" / web_cache.e2e_key(repo.root, "tools", ["test"])).exists())
+                self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
+                self.assertEqual(web_cache.e2e(repo.root, cache, "v1", ["test"], "tools"), 0)
+                self.assertEqual(run.call_count, 2)
 
 
 
