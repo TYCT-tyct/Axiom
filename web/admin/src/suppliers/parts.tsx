@@ -20,7 +20,9 @@ export function SupplierState({ supplier, brief = false }: { supplier: AdminSche
   const { t } = useTranslation();
   return (
     <Stack gap={4}>
-      <State tone={tones[supplier.status]}>{t(`suppliers.state.${supplier.status}`)}</State>
+      <div>
+        <State tone={tones[supplier.status]}>{t(`suppliers.state.${supplier.status}`)}</State>
+      </div>
       {supplier.status_reason ? (
         <Text size="sm" tone="muted">
           <span title={brief ? supplier.status_reason : undefined}>{supplier.status_reason}</span>
