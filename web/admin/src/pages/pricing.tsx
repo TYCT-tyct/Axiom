@@ -1,10 +1,10 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th, useFormat } from "@axiom/ui";
+import { ActionButton, Card, DataState, EmptyState, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Actions, Code, mainCell, PageBody, State } from "../parts";
+import { Actions, Code, Head, PageBody, State } from "../parts";
 import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
 import { Publications } from "../pricing/publications";
@@ -24,17 +24,16 @@ export default function Pricing() {
   const current = rules.data?.data.find((rule) => rule.id === editing);
   return (
     <>
-      <PageHeader title={t("nav.pricing")} description={t("pricing.description")} />
+      <PageHead title={t("nav.pricing")} lede={t("pricing.description")} />
       <PageBody>
         {manage ? (
           <Actions>
-            <Button variant="primary" size="md" onClick={() => setEditing(newRule)}>
-              <Icon name="plus" />
+            <ActionButton variant="pri" icon="plus" onClick={() => setEditing(newRule)}>
               {t("pricing.rule.new")}
-            </Button>
+            </ActionButton>
           </Actions>
         ) : null}
-        <Panel title={t("pricing.rules.title")}>
+        <Card layout="flush" title={t("pricing.rules.title")}>
           <DataState
             query={rules}
             isEmpty={(data) => data.data.length === 0}
@@ -42,7 +41,7 @@ export default function Pricing() {
           >
             {(data) => <RulesTable rules={data.data} onEdit={manage ? (rule) => setEditing(rule.id) : undefined} />}
           </DataState>
-        </Panel>
+        </Card>
         <Publications />
         <PreviewPanel />
       </PageBody>
@@ -56,36 +55,36 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
   const format = useFormat();
   return (
     <Table label={t("pricing.rules.title")}>
-      <thead>
-        <tr>
-          <Th>{t("pricing.rules.target")}</Th>
-          <Th className="hidden sm:table-cell">{t("pricing.rules.audience")}</Th>
-          <Th className="hidden md:table-cell">{t("pricing.rules.method")}</Th>
-          <Th>{t("pricing.rules.state")}</Th>
-          <Th className="hidden xl:table-cell">{t("pricing.rules.updated")}</Th>
-          {onEdit ? <Th className="w-0" /> : null}
-        </tr>
-      </thead>
+      <Head
+        cols={[
+          [t("pricing.rules.target"), { main: true }],
+          t("pricing.rules.audience"),
+          t("pricing.rules.method"),
+          t("pricing.rules.state"),
+          t("pricing.rules.updated"),
+        ]}
+        action={onEdit !== undefined}
+      />
       <tbody>
         {rules.map((rule) => (
           <tr key={rule.id}>
-            <Td className={mainCell}>
-              <p className="truncate text-t1">{t(`pricing.target.${rule.target.kind}`)}</p>
+            <Td main>
+              <Text>{t(`pricing.target.${rule.target.kind}`)}</Text>
               {rule.target.id ? (
-                <p className="truncate text-label text-t4" title={rule.target.id}>
+                <Text size="sm" tone="faint">
                   <Code>{rule.target.id}</Code>
-                </p>
+                </Text>
               ) : null}
             </Td>
-            <Td className="hidden max-w-48 min-w-24 sm:table-cell">
-              <p className="truncate">{t(`pricing.audience.${rule.audience.kind}`)}</p>
+            <Td>
+              <Text>{t(`pricing.audience.${rule.audience.kind}`)}</Text>
               {rule.audience.id ? (
-                <p className="truncate text-label text-t4" title={rule.audience.id}>
+                <Text size="sm" tone="faint">
                   <Code>{rule.audience.id}</Code>
-                </p>
+                </Text>
               ) : null}
             </Td>
-            <Td className="hidden md:table-cell">
+            <Td>
               <MethodSummary method={rule.method} />
             </Td>
             <Td>
@@ -93,17 +92,16 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
                 {rule.enabled ? t("pricing.on") : t("pricing.off")}
               </State>
             </Td>
-            <Td className="hidden whitespace-nowrap xl:table-cell">{format.dateTime(new Date(rule.updated_at))}</Td>
+            <Td>{format.dateTime(new Date(rule.updated_at))}</Td>
             {onEdit ? (
-              <Td className="whitespace-nowrap">
-                <Button
-                  variant="ghost"
-                  size="icon"
+              <Td shrink>
+                <ActionButton
+                  variant="gho"
+                  size="sm"
+                  icon="pencil"
                   aria-label={t("pricing.rules.edit", { target: t(`pricing.target.${rule.target.kind}`) })}
                   onClick={() => onEdit(rule)}
-                >
-                  <Icon name="pencil" />
-                </Button>
+                />
               </Td>
             ) : null}
           </tr>
