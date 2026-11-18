@@ -1,6 +1,6 @@
-import { JSDOM } from "jsdom";
 import { expect, it } from "vitest";
 import { regionCSS } from "./region-css.ts";
+import { JSDOM } from "./template.ts";
 
 const css = ".ov .card{color:red}\n.ov .iso-wire{stroke:blue}\n.ov .other{color:green}";
 

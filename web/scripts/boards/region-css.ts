@@ -55,21 +55,14 @@ function potential(selector: string) {
   );
 }
 
-function scoped(selector: string) {
+// scoped ties a rule to the region: its subject carries the region's scope class, or, for markup an engine inserts at
+// run time (an SVG fetched and parsed into place), whose nodes carry no scope class of their own, sits inside an
+// element that does. :where contributes no specificity; original classes also allow ancestors from another region.
+function scoped(selector: string, inside = false) {
   const at = selector.indexOf("::");
   const subject = at < 0 ? selector : selector.slice(0, at);
   const pseudo = at < 0 ? "" : selector.slice(at);
-  // :where contributes no specificity. Original classes also allow ancestors supplied by another region.
-  return `:global(${subject}):where(.scope)${pseudo}`;
-}
-
-// A rule kept for markup an engine inserts into the region at run time (an SVG fetched and parsed into place): its nodes
-// carry no scope class of their own, so the rule asks only that they sit inside an element that does.
-function inserted(selector: string) {
-  const at = selector.indexOf("::");
-  const subject = at < 0 ? selector : selector.slice(0, at);
-  const pseudo = at < 0 ? "" : selector.slice(at);
-  return `:global(${subject}):where(.scope *)${pseudo}`;
+  return `:global(${subject}):where(.scope${inside ? " *" : ""})${pseudo}`;
 }
 
 // insertedBy tells a selector that names one of the classes run-time markup carries (by prefix).
@@ -139,8 +132,8 @@ function selectBlocks(
       }
       const all = selectors(selector);
       const kept = [
-        ...all.filter((one) => matches(one)).map(scoped),
-        ...all.filter((one) => !matches(one) && isInserted(one)).map(inserted),
+        ...all.filter((one) => matches(one)).map((one) => scoped(one)),
+        ...all.filter((one) => !matches(one) && isInserted(one)).map((one) => scoped(one, true)),
       ];
       return kept.length ? `${kept.join(",")}{${body}}` : "";
     })
