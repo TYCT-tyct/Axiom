@@ -23,6 +23,7 @@ export const boardNames = [
   "AxAppPhone",
   "AxAppDark",
   "AxAppPhoneDark",
+  "AxDS",
 ] as const;
 
 export const engineNames = [

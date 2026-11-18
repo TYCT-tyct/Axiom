@@ -2,7 +2,7 @@
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
 export { useBrandStyle } from "./brand";
 export { ActionButton } from "./components/action-button";
-export { AppShell, focusPage, PageHeader, routerDefaults, SideNavItem } from "./components/app-shell";
+export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { Avatar } from "./components/avatar";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
 export { Button, SubmitButton } from "./components/button";
@@ -36,7 +36,6 @@ export { usePageTitle } from "./components/page-title";
 export { Badge, Panel, Table, Td, Th } from "./components/panel";
 export { Popover } from "./components/popover";
 export { PreferenceSwitches } from "./components/preferences";
-export { Segmented } from "./components/segmented";
 export { SegmentedControl } from "./components/segmented-control";
 export { SettingRow } from "./components/setting-row";
 export { DataState, EmptyState, NotFoundState } from "./components/states";
