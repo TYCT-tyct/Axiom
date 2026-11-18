@@ -151,8 +151,12 @@ const bed = (board: string): Region => ({
   elements: {
     ...entrance("hfm6", "m6_in"),
     ".hfm6 .seg .sg": pressable,
-    ".hfm6 .seg:nth-child(1) > .sg:nth-child(1)": { set: { class: "sg {{m6_zhOn}}", "aria-pressed": "{{m6_zhP}}", "data-pick": "zh" } },
-    ".hfm6 .seg:nth-child(1) > .sg:nth-child(2)": { set: { class: "sg {{m6_enOn}}", "aria-pressed": "{{m6_enP}}", "data-pick": "en" } },
+    ".hfm6 .seg:nth-child(1) > .sg:nth-child(1)": {
+      set: { class: "sg {{m6_zhOn}}", "aria-pressed": "{{m6_zhP}}", "data-pick": "zh" },
+    },
+    ".hfm6 .seg:nth-child(1) > .sg:nth-child(2)": {
+      set: { class: "sg {{m6_enOn}}", "aria-pressed": "{{m6_enP}}", "data-pick": "en" },
+    },
     ".hfm6 .seg:nth-child(2) > .sg:nth-child(1)": { set: { "aria-pressed": "{{m6_sunP}}", "data-pick": "light" } },
     ".hfm6 .seg:nth-child(2) > .sg:nth-child(2)": { set: { "aria-pressed": "{{m6_moonP}}", "data-pick": "dark" } },
   },

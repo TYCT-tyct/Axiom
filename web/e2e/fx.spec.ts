@@ -178,11 +178,14 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   expect(await violations()).toEqual([]);
 });
 
-// The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
-// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The
-// places (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
-const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
+// The screens below the first (§8.2's rows for the screens): each one's code comes as its place nears the view, and its
+// script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The places
+// (data-place) are there before the code, so the cases scroll to them, and a screen added to the page is a place more
+// here, not an edit. The usual mock data lists gpt-5 first.
+const screenChunk = /\/assets\/([a-z]+)-screen-[\w-]+\.js$/;
 const place = (page: Page, sec: number) => page.locator(`.under [data-place="${sec}"]`);
+const sections = (page: Page) =>
+  page.locator(".under [data-place]").evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.place)));
 const scrollTo = (page: Page, sec: number) => place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
 // a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
 const shown = (page: Page, sec: number) =>
@@ -206,11 +209,14 @@ test("each screen below the first loads as it nears the view, and plays only whi
   // steps screen starts exactly a view's height below the first screen's end, at the edge of that margin
   await expect.poll(() => asked).toContain("models");
   expect(asked).not.toContain("trust");
+  // the last screen is far below
+  await expect(place(page, (await sections(page)).at(-1) as number).locator(".hfm")).toHaveCount(0);
   await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
   await scrollTo(page, 3);
   // the models and steps chunks are both asked for at the top, in either order: which ones came is what counts
-  await expect.poll(() => [...asked].sort()).toEqual(["models", "steps", "trust"]);
+  await expect.poll(() => asked).toEqual(expect.arrayContaining(["models", "steps", "trust"]));
+  const last = (await sections(page)).at(-1) as number;
   await shown(page, 3);
   await running(page);
   await setHidden(page, true);
@@ -222,6 +228,11 @@ test("each screen below the first loads as it nears the view, and plays only whi
 
   // the island names the section being read
   await expect(page.locator(".isl")).toContainText("三步开始");
+
+  // every screen's code comes once the reader has been down to it, each chunk once
+  await scrollTo(page, last);
+  await shown(page, last);
+  await expect.poll(async () => new Set(asked).size).toBe((await sections(page)).length);
 
   // past every screen nothing is in view to play
   await page.evaluate(() => {
@@ -241,7 +252,7 @@ test("under reduced motion the screens below show their end at once and do not t
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  for (const sec of [2, 3, 4]) {
+  for (const sec of await sections(page)) {
     await scrollTo(page, sec);
     await shown(page, sec);
   }
@@ -313,6 +324,142 @@ test("without the site's API address the steps say so rather than show an empty 
   await shown(page, 3);
   await expect(page.locator(".hfm3")).toContainText("本站 API 地址暂不可用");
   await expect(page.locator(".hfm3")).not.toContainText("已保存");
+});
+
+// The questions (§8.2's Faq row): the first answer's picture sends its request to one vendor after another on a timer of
+// the screen's own, which runs on the shared loop: it stops with the tab hidden, and under reduced motion it never starts.
+const vendor = (page: Page) => page.locator(".hfm5 .fan text.ft.on").textContent();
+
+test("the first answer's picture moves on while it is seen, and stops while the tab is hidden", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  const first = await vendor(page);
+  await expect.poll(() => vendor(page)).not.toBe(first);
+  await setHidden(page, true);
+  await pause(page);
+  const held = await vendor(page);
+  // two turns of its timer, were it running
+  await page.waitForTimeout(3200);
+  expect(await vendor(page)).toBe(held);
+  await setHidden(page, false);
+  await expect.poll(() => vendor(page)).not.toBe(held);
+});
+
+test("a question is chosen by pointing at it, the cable follows it, and under reduced motion nothing moves on its own", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  const first = await vendor(page);
+  await page.locator(".hfm5 .qs .q").nth(2).hover();
+  await expect(page.locator(".hfm5 .qs .q.on")).toContainText("03");
+  await expect(page.locator(".hfm5 .patch .ring")).toHaveAttribute("cy", String(2 * 48 + 24));
+  await page.locator(".hfm5 .qs .q").first().hover();
+  await expect.poll(() => vendor(page)).toBe(first);
+  await pause(page);
+  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
+});
+
+test("on a phone the questions are an accordion: a second press closes the open one", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  await page.locator(".hfm5 .fq .q").nth(1).click();
+  await expect(page.locator(".hfm5 .fq.on")).toHaveCount(1);
+  await expect(page.locator(".hfm5 .fq.on .q")).toContainText("02");
+  await page.locator(".hfm5 .fq .q").nth(1).click();
+  await expect(page.locator(".hfm5 .fq.on")).toHaveCount(0);
+});
+
+// The sea bed (§8.2's Bed row) is the page's footer: the credit for the Chinese font stays, what the site has no page for
+// is left out, and its language and appearance switches are the header's.
+test("the footer keeps the font's credit, names no page the site lacks, and its switches change the page", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  const last = (await sections(page)).at(-1) as number;
+  await scrollTo(page, last);
+  await shown(page, last);
+  const footer = page.locator(".hfm6 .ft");
+  await expect(footer).toContainText("MiSans");
+  for (const sec of [".hfm5", ".hfm6"])
+    await expect(page.locator(sec)).not.toContainText(/ICP|公网安备|api\.axiom\.example|接入文档|查看文档|工单/);
+  await expect(footer.locator("[data-pick=zh]")).toHaveAttribute("aria-pressed", "true");
+
+  await footer.locator("[data-pick=en]").click();
+  await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
+  await expect(footer.locator("[data-pick=en]")).toHaveAttribute("aria-pressed", "true");
+  await expect(footer).toContainText("One key for every model.");
+  await footer.locator("[data-pick=dark]").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(footer.locator("[data-pick=dark]")).toHaveAttribute("aria-pressed", "true");
+  // pressing the one already chosen changes nothing
+  await footer.locator("[data-pick=dark]").click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+});
+
+// The whale (§8.2's whale row): its code is not asked for until the egg is called, by typing deepseek anywhere or by
+// pressing the word in the first screen's strip, and under reduced motion it is never asked for.
+const whale = /\/assets\/whale-[\w-]+\.js$/;
+const watchWhale = (page: Page) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    if (whale.test(request.url())) asked.push(request.url());
+  });
+  return asked;
+};
+// the whale's canvas has something on it: the shadow, or the whale
+const painted = (page: Page) =>
+  page.locator(".tr > canvas.wh").evaluate((canvas: HTMLCanvasElement) => {
+    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    return data.some((value, i) => i % 4 === 3 && value > 0);
+  });
+
+test("the whale's code comes when deepseek is typed, not before, and the whale swims on the sea", async ({ page }) => {
+  const asked = watchWhale(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  await scrollTo(page, (await sections(page)).at(-1) as number);
+  await page.keyboard.type("deeps");
+  expect(asked).toEqual([]);
+  await page.keyboard.type("eek");
+  await expect.poll(() => asked).toHaveLength(1);
+  await expect.poll(() => painted(page)).toBe(true);
+});
+
+test("pressing deepseek in the first screen's strip calls the whale", async ({ page }) => {
+  const asked = watchWhale(page);
+  await open(page);
+  await running(page);
+  expect(asked).toEqual([]);
+  await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
+  await expect.poll(() => asked).toHaveLength(1);
+  await expect.poll(() => painted(page)).toBe(true);
+});
+
+test("under reduced motion the whale is never called", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const asked = watchWhale(page);
+  await open(page);
+  await page.keyboard.type("deepseek");
+  await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
+  await pause(page);
+  expect(asked).toEqual([]);
+  expect(await painted(page)).toBe(false);
 });
 
 // The departure to the console's sign-in pages (port design §9): the pressed button breaks into tiles that stream to

@@ -26,6 +26,11 @@ export default {
     toLight: "Switch to light",
   },
   script: {
+    noApi: "This site's API address is unavailable",
+    faq: {
+      // after the answers whose picture shows figures: they are the board's illustration, not the site's
+      sample: "The prices, amounts and keys in the picture are sample data.",
+    },
     models: {
       routes_one: "{{count}} route",
       routes_other: "{{count}} routes",

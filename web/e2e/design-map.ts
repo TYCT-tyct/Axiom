@@ -39,6 +39,24 @@ const siteBoards = {
   390: { file: "SitePhone.dc.html", height: 844 },
 };
 
+// A screen of the home page below the first: both sides are scrolled until the screen's section is at the top of the
+// scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
+// its class). The board's words are Chinese only, so these scenes are compared in Chinese.
+const screenAt = (sec: number) => async (board: Page, page: Page) => {
+  await board.locator(`.hfm${sec}`).evaluate((el) => {
+    el.classList.add("in");
+    el.scrollIntoView({ block: "start" });
+  });
+  const place = page.locator(`.under [data-place="${sec}"]`);
+  await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await expect.poll(() => place.locator(".hfm").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+  for (const side of [board, page]) await side.evaluate(() => document.fonts.ready.then(() => {}));
+  // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
+  const top = (side: Page) => side.locator(`.hfm${sec} .sec`).evaluate((el) => el.getBoundingClientRect().top);
+  const shift = (await top(page)) - (await top(board));
+  await page.locator(".hs").evaluate((el, by) => el.scrollBy({ top: by }), shift);
+};
+
 async function prepareModelsComparison(board: Page, page: Page, language: "zh" | "en") {
   // Put the real page copy in the reference's title and lede so the comparison sees their typography and layout.
   const { title, description } = (language === "en" ? en : zh).publicModels;
@@ -161,6 +179,18 @@ export const designScenes: DesignScene[] = [
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
   },
+  ...[
+    { name: "site faq", sec: 5 },
+    { name: "site bed", sec: 6 },
+  ].map(({ name, sec }) => ({
+    name,
+    suite: siteSuite,
+    scene: "home",
+    fonts: "site/home",
+    boards: siteBoards,
+    schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
+    prepareComparison: screenAt(sec),
+  })),
   {
     name: "site models",
     suite: siteSuite,

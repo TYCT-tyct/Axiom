@@ -41,10 +41,25 @@ const shell: Ruling[] = [
   ...frame,
 ].map((ruling) => inScene("console shell", ruling));
 
+// The frame the home page's screens below the first are seen in: the page's header has given way to the island, which the
+// board, its engines off, does not do, the sea is the page's own, the tour button waits for the last screen (S2c), and the
+// buttons' Chinese is drawn at 400 (§5.4).
+const screenFrame: Omit<Ruling, "scene">[] = [
+  {
+    basis: "the header gives way to the island on the page once scrolled; the board's engines are off",
+    ...both(".bar, .isl"),
+  },
+  { basis: "§8.2: engines are off on the board; the sea is tested by fx.spec.ts", page: { canvas: "canvas.sea" } },
+  { basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
+  { basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl", ...both(".ho .btn") },
+];
+const siteScreens = ["site faq", "site bed"];
+
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
+  ...siteScreens.flatMap((scene) => screenFrame.map((ruling) => inScene(scene, ruling))),
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   // The board's key list has nothing to narrow it by (L8), so the page keeps the filters it had behind a button beside
   // the actions, in buttons of the console's own.
@@ -233,6 +248,51 @@ export const rulings: Ruling[] = [
     page: { selector: ".bar .nav.mid, .hs > main .cta" },
   },
   { scene: "site home", basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
+  // The questions (S2b): the board's docs and ticket links, and its ninth question about invoices and contracts, which
+  // the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
+  {
+    scene: "site faq",
+    basis: "#816: no docs page, and the product has no tickets",
+    board: { selector: ".hfm5 .hd .links" },
+  },
+  {
+    scene: "site faq",
+    basis: "docs/frontend.md「不做」: invoices, contracts and bank transfer are not in the product",
+    board: { selector: ".hfm5 .qs > .q:nth-child(10), .hfm5 .qs > .fq:nth-child(9)" },
+  },
+  {
+    scene: "site faq",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm5 .w2 .ac"),
+  },
+  // The sea bed and the page's footer (S2b): what the site has no page for is left out (#816), with the board's demo ICP
+  // numbers; the legal line carries the credit for the Chinese font (docs/frontend.md「字体」); the address is the site's.
+  {
+    scene: "site bed",
+    basis: "#816: no docs page",
+    board: { selector: ".hfm6 .cta .btn.outline" },
+  },
+  {
+    scene: "site bed",
+    basis: "#816: no docs, API reference, changelog, status, tickets, contact, terms or privacy pages",
+    board: { selector: ".hfm6 .fcols nav.fc:nth-of-type(n + 2), .hfm6 .fc > a:nth-of-type(3)" },
+  },
+  {
+    scene: "site bed",
+    basis: "the legal line is the site's credit for MiSans; the board's demo ICP numbers are not the site's",
+    ...both(".hfm6 .legal"),
+  },
+  {
+    scene: "site bed",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm6 .pr2 .pv"),
+  },
+  {
+    scene: "site bed",
+    basis: "§8.2: engines are off on the board; the dune is drawn by script and tested by fx.spec.ts",
+    board: { canvas: "canvas.art" },
+    page: { canvas: "canvas.art" },
+  },
   {
     scene: "site models",
     basis: "S4: compare the public title and lede with the board typography, without the demo sea or figures",

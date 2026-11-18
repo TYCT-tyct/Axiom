@@ -49,11 +49,11 @@ console/pages/usage          Axiom CJK Console 400 normal: 438 chars in 4 files,
 console/pages/workspaces     Axiom CJK Console 400 normal: 420 chars in 3 files, 64024 bytes
 site/home                    AX Serif 600 normal: 12 chars in 1 files, 3600 bytes
 site/home                    AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
-site/home                    Axiom CJK 400 normal: 176 chars in 1 files, 21600 bytes
+site/home                    Axiom CJK 400 normal: 177 chars in 1 files, 21764 bytes
 site/home                    Axiom Mono 400 normal: 97 chars in 1 files, 16384 bytes
 site/home                    Axiom Sans 400 600 normal: 97 chars in 1 files, 20036 bytes
 site/models                  AX Serif 600 normal: 12 chars in 1 files, 3600 bytes
 site/models                  AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
-site/models                  Axiom CJK 400 normal: 328 chars in 2 files, 41020 bytes
+site/models                  Axiom CJK 400 normal: 328 chars in 2 files, 41028 bytes
 site/models                  Axiom Mono 400 normal: 98 chars in 1 files, 16384 bytes
 site/models                  Axiom Sans 400 600 normal: 98 chars in 1 files, 20036 bytes

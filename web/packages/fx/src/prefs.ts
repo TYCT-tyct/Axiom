@@ -9,6 +9,9 @@ import type { OceanEngine } from "./sea";
 
 export type Prefs = {
   open(): void;
+  // choose picks a language (the engine's code, "zh-CN" or "en") from a control other than the globe; origin is where
+  // the decode's ring starts
+  choose(code: string, origin?: Element): void;
   toggleTheme(): void;
   setSystem(system: "light" | "dark"): void;
   destroy(): void;

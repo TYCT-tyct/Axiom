@@ -8,7 +8,9 @@ import { useDeparture, useFrameBehaviour } from "./behaviour";
 import { BrandPlaces } from "./brand";
 import { links } from "./links";
 import { useScheme } from "./scheme";
+import { WhaleContext } from "./screens";
 import { useSwitches } from "./switches";
+import { useWhale } from "./whale";
 import { type BoardKey, sections, words } from "./words";
 
 const loadSea = () => import("@axiom/fx/sea");
@@ -66,6 +68,7 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   );
   useSwitches(root, sea);
   useDeparture(root, sea);
+  const whale = useWhale(root, sea, !wide, scheme === "dark");
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
   const brand = useSiteBrand();
   const name = brand?.name ?? t("brand", { ns: "common" });
@@ -98,9 +101,11 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   const Shell = wide ? Wide : Narrow;
   return (
     <>
-      <Shell t={board} values={values} text={text}>
-        {children}
-      </Shell>
+      <WhaleContext value={whale}>
+        <Shell t={board} values={values} text={text}>
+          {children}
+        </Shell>
+      </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
     </>
   );

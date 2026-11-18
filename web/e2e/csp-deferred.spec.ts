@@ -22,9 +22,13 @@ async function watch(page: Page) {
   });
 }
 
-// Scrolls the home page's scroller to each screen in turn, letting each one's code arrive and its script draw.
+// Scrolls the home page's scroller to each screen in turn, letting each one's code arrive and its script draw. The
+// screens are the places the page makes (data-place), so a screen added to the page is walked without an edit here.
 async function throughScreens(page: Page) {
-  for (const sec of [2, 3, 4]) {
+  const secs = await page
+    .locator(".under [data-place]")
+    .evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.place)));
+  for (const sec of secs) {
     const place = page.locator(`.under [data-place="${sec}"]`);
     await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
     // seen, and faded in (the board's .hfm.in)
@@ -45,6 +49,28 @@ test("the website, wide: every screen, then the language and the theme, with no 
   const report = await watch(page);
   await openHome(page, 1440);
   await throughScreens(page);
+
+  // the easter egg's whale is loaded late too: typing its word anywhere calls it, once the sea is there to swim in, and
+  // it draws on its canvas
+  await expect
+    .poll(() =>
+      page.evaluate(() => (window as unknown as { axiomFx: { state: { frames: number } } }).axiomFx.state.frames),
+    )
+    .toBeGreaterThan(0);
+  await page.keyboard.type("deepseek");
+  await expect
+    .poll(
+      () =>
+        page
+          .locator(".tr > canvas.wh")
+          .evaluate((canvas: HTMLCanvasElement) =>
+            (canvas.getContext("2d") as CanvasRenderingContext2D)
+              .getImageData(0, 0, canvas.width, canvas.height)
+              .data.some((value, i) => i % 4 === 3 && value > 0),
+          ),
+      { timeout: 20_000 },
+    )
+    .toBe(true);
 
   await page.locator(".hs").evaluate((el) => el.scrollTo({ top: 0 }));
   await page.getByRole("banner").getByRole("button", { name: "简体中文" }).click();

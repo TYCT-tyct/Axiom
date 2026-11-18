@@ -29,6 +29,11 @@ export default {
   },
   // the words the screens' scripts write (home/*-script.ts), and the models screen's states
   script: {
+    noApi: "本站 API 地址暂不可用",
+    faq: {
+      // after the answers whose picture shows figures: they are the board's illustration, not the site's
+      sample: "图中的价格、金额和 Key 是示例数据。",
+    },
     models: {
       routes_one: "{{count}} 条线路",
       routes_other: "{{count}} 条线路",

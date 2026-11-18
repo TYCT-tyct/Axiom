@@ -50,15 +50,7 @@ const siteRegions: Region[] = [
       name: "Shell",
       roots: [".tr.site"],
       // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
-      omit: [
-        ".tr > .cw",
-        ".tr > .lg",
-        ".tr > .fly",
-        ".tr > canvas.ui",
-        ...notYet,
-        ...brand,
-        ...otherLanguages,
-      ],
+      omit: [".tr > .cw", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...brand, ...otherLanguages],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
