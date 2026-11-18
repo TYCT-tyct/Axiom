@@ -1,5 +1,43 @@
 import { describe, expect, it } from "vitest";
+import { mainThreadBusyMs } from "../e2e/vitals-cpu.ts";
 import { bracketed, type Pair, scaled, scaledLcp } from "./vitals.ts";
+
+// Chrome Headless Shell 156.0.8078.4, using the Chromium build pinned for our runners.
+const localTrace = [
+  { ph: "M", name: "thread_name", pid: 2464516, tid: 2464516, args: { name: "CrRendererMain" } },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464516, tid: 2464516, dur: 310, tdur: 267 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464516, tid: 2464516, dur: 3252, tdur: 1688 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 2464431, tid: 2464453, dur: 87, tdur: 85 },
+  { ph: "X", name: "BlinkScheduler_PerformMicrotaskCheckpoint", pid: 2464516, tid: 2464516, dur: 9, tdur: 9 },
+];
+
+// GitHub-hosted vitals job 134532063362. Some renderer tasks have wall duration alone.
+const hostedTrace = [
+  { ph: "M", name: "thread_name", pid: 4143, tid: 4143, args: { name: "CrRendererMain" } },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4143, tid: 4143, dur: 54, tdur: 36 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4143, tid: 4143, dur: 1446, tdur: 1444 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4143, tid: 4143, dur: 1 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4143, tid: 4143, dur: 1 },
+  { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4084, tid: 4084, dur: 46, tdur: 16 },
+  { ph: "X", name: "BlinkScheduler_PerformMicrotaskCheckpoint", pid: 4143, tid: 4143, dur: 3, tdur: 3 },
+];
+
+it.each([
+  { runner: "self-hosted", trace: localTrace, want: 1.955 },
+  { runner: "GitHub-hosted", trace: hostedTrace, want: 1.48 },
+])("sums measured renderer tasks in milliseconds on $runner", ({ trace, want }) => {
+  expect(mainThreadBusyMs(trace)).toBe(want);
+});
+
+it("requires measured tasks on a renderer main thread", () => {
+  expect(() =>
+    mainThreadBusyMs([
+      { ph: "M", name: "thread_name", pid: 4, tid: 4, args: { name: "CrRendererMain" } },
+      { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 4, tid: 4 },
+      { ph: "X", name: "ThreadControllerImpl::RunTask", pid: 8, tid: 8, tdur: 1000 },
+    ]),
+  ).toThrow("the trace has no main-thread task durations");
+});
 
 describe("scaled", () => {
   it.each([
