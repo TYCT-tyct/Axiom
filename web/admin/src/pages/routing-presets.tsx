@@ -163,7 +163,7 @@ function PresetsTable({
       <Head
         cols={[
           [t("routingPresets.col.name"), { main: true }],
-          t("routingPresets.col.rules"),
+          [t("routingPresets.col.rules"), { main: true }],
           [t("routingPresets.col.keys"), { align: "end" }],
           [t("routingPresets.col.version"), { align: "end" }],
         ]}
@@ -197,7 +197,7 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
           </Cluster>
         </Stack>
       </Td>
-      <Td>
+      <Td main>
         <RulesSummary summary={preset.summary} />
       </Td>
       <Td align="end">{keys}</Td>

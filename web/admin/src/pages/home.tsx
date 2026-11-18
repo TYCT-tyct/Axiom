@@ -10,7 +10,6 @@ import {
   IdText,
   Notice,
   Text,
-  TextLink,
   useFormat,
   usePageTitle,
 } from "@axiom/ui";
@@ -468,14 +467,16 @@ function Ranking({
             <Row key={row.id ?? ""}>
               <Cell>
                 {row.id ? (
-                  <Cluster gap={4}>
-                    <TextLink>
-                      <Link to="/calls" search={drill(row.id)}>
-                        <IdText value={row.id} />
-                      </Link>
-                    </TextLink>
+                  <span className="flex min-w-0 items-center gap-1">
+                    <Link
+                      to="/calls"
+                      search={drill(row.id)}
+                      className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
+                    >
+                      <IdText value={row.id} />
+                    </Link>
                     <CopyButton compact text={row.id} />
-                  </Cluster>
+                  </span>
                 ) : (
                   "—"
                 )}
