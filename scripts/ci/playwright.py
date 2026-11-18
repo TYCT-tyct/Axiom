@@ -119,7 +119,7 @@ def execute(root: Path, cache: Path, suite: str, shard: str, version: str) -> in
                 semantic = inputs["inputs"] if board == "_all" else inputs["inputs"].get(board, {})
                 key = web_cache.boards_key(root, board, inputs["boards"], semantic, names, tools)
                 marker = cache / "boards" / board / key
-                if marker.is_file():
+                if web_cache.cached_pass(marker):
                     print(f"boards cache hit {board}: {len(names)} comparisons ({marker})")
                 else:
                     print(f"boards cache miss {board}: {len(names)} comparisons")
@@ -132,7 +132,7 @@ def execute(root: Path, cache: Path, suite: str, shard: str, version: str) -> in
     elif os.environ.get("GATE_STRESS") != "true":
         key = web_cache.e2e_key(root, tools, [*command, *selected])
         marker = cache / "e2e" / key
-        if marker.is_file():
+        if web_cache.cached_pass(marker):
             print(f"e2e cache hit: shard {shard} ({marker})")
             return 0
         markers[marker] = selected
