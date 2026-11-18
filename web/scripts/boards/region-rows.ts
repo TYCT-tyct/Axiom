@@ -28,7 +28,13 @@ function rowGroup(nodes: Element[], name: string, state: Emitter) {
     if (!variant) {
       const kind = String(variants.size);
       const mapping = new Map(slots.map((field, i) => [field, `item.f${i}`]));
-      const type = `{ key: string; kind: ${JSON.stringify(kind)}; ${slots.map((_, i) => `f${i}: string;`).join(" ")} }`;
+      const type = `{ key: string; kind: ${JSON.stringify(kind)}; ${slots
+        .map((field, i) => {
+          const buttonType =
+            field.nodeType === 2 && field.nodeName === "type" && (field as Attr).ownerElement?.localName === "button";
+          return `f${i}: ${buttonType ? '"button" | "submit" | "reset"' : "string"};`;
+        })
+        .join(" ")} }`;
       variant = { kind, jsx: jsx(node, state, mapping), type };
       variants.set(signature, variant);
     }

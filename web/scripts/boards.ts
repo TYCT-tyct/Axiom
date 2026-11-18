@@ -47,14 +47,18 @@ export function convert(html: string, name: string): Record<string, string> {
 
 // `names` narrows a run to some boards for the tests; the shared files (engines, fonts, demo routes) come out the same
 // for any subset, so a narrowed run never writes a truncated demo.ts.
-function outputs(input = inputRoot, names: readonly string[] = boardNames): Record<string, string> {
+async function outputs(input = inputRoot, names: readonly string[] = boardNames): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
+  const renderedRegions = regions.filter((region) => names.includes(region.board) && region.render);
+  const rendered = renderedRegions.length
+    ? await (await import("./boards/render.ts")).renderRegions(input, renderedRegions)
+    : new Map();
   for (const name of names) {
     const html = readBoard(join(input, `${name}.dc.html`));
     Object.assign(result, convert(html, name));
     const { markup, css } = parts(html);
     for (const region of regions.filter((region) => region.board === name))
-      Object.assign(result, convertRegion(markup, css, region, marker));
+      Object.assign(result, convertRegion(rendered.get(region) ?? markup, css, region, marker));
   }
   result["demo-fonts.css"] =
     `${marker}\n@font-face{font-family:'Axiom Sans';font-weight:400 700;size-adjust:105%;src:url('/fonts/instrument-sans')}
@@ -96,8 +100,8 @@ export function generatedBoard(path: string, text: string): boolean {
   return path.startsWith("packages/boards/src/") && text.startsWith(`${marker}\n`);
 }
 
-export function checkGenerated(root = packageRoot, names?: readonly string[]): string[] {
-  const expected = outputs(join(root, "inputs"), names);
+export async function checkGenerated(root = packageRoot, names?: readonly string[]): Promise<string[]> {
+  const expected = await outputs(join(root, "inputs"), names);
   const files = readdirSync(join(root, "src"), { recursive: true }).filter((p) => typeof p === "string") as string[];
   const marked = files.filter(
     (p) => /\.(tsx?|js|css)$/.test(p) && readFileSync(join(root, "src", p), "utf8").startsWith(marker),
@@ -110,8 +114,8 @@ export function checkGenerated(root = packageRoot, names?: readonly string[]): s
   );
 }
 
-export function generate(root = packageRoot, names?: readonly string[]) {
-  for (const [path, text] of Object.entries(outputs(join(root, "inputs"), names))) {
+export async function generate(root = packageRoot, names?: readonly string[]) {
+  for (const [path, text] of Object.entries(await outputs(join(root, "inputs"), names))) {
     const file = join(root, "src", path);
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, text);
@@ -120,7 +124,7 @@ export function generate(root = packageRoot, names?: readonly string[]) {
 
 if (import.meta.main) {
   if (process.argv.includes("--check")) {
-    const stale = checkGenerated();
+    const stale = await checkGenerated();
     if (stale.length) throw new Error(`run pnpm boards; stale generated files: ${stale.join(", ")}`);
   } else {
     const design = process.env.AXIOM_DESIGN_DIR;
@@ -131,6 +135,6 @@ if (import.meta.main) {
       for (const name of engineNames)
         writeFileSync(join(inputRoot, `${name}.js.txt`), readFileSync(join(source, `${name}.js`)));
     }
-    generate();
+    await generate();
   }
 }
