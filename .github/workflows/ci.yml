@@ -404,7 +404,7 @@ jobs:
   # keeps the browser's trace and the node's log.
   journey:
     needs: changes
-    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true')
     runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
