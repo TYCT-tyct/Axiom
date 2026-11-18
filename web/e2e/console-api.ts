@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
+import { cancelOrder, createOrder, requestRefund, verifyOrder } from "./console-bill-api.ts";
 import {
   aKey,
   aPreset,
@@ -279,6 +280,31 @@ function setDefault({ body, state }: Ctx<"/api/console/v1/routing-default", "put
   return ok(state.routingDefault);
 }
 
+// The account's own provider keys: one the provider took, and one it refused, which routing skips until a test passes.
+const providerKeys: Schemas["ProviderKey"][] = [
+  {
+    id: "00000000-0000-4000-9100-000000000001",
+    name: "Work account",
+    provider: "openai",
+    hint: "Qx7d",
+    status: "active",
+    enabled: true,
+    rejected: false,
+    fallback: true,
+    created_at: "2026-10-02T09:00:00Z",
+  },
+  {
+    id: "00000000-0000-4000-9100-000000000002",
+    name: "Old key",
+    provider: "openai",
+    status: "rejected",
+    enabled: true,
+    rejected: true,
+    fallback: false,
+    created_at: "2026-09-14T09:00:00Z",
+  },
+];
+
 const sourceClasses = [
   { slug: "official", name: "Official", name_zh: "官方直连" },
   { slug: "cloud", name: "Cloud", name_zh: "云厂商" },
@@ -369,64 +395,6 @@ function redeemCode({ body, state }: Ctx<"/api/console/v1/redeem-codes", "post">
   return { status: 201 as const, json: created };
 }
 
-function createOrder({ body, state }: Ctx<"/api/console/v1/orders", "post">) {
-  const quote = state.methods.find((item) => item.method === body.method) ?? state.methods[0];
-  const order: Schemas["Order"] = {
-    id: `ord_${String(state.orders.length + 100).padStart(26, "0")}` as Schemas["OrderId"],
-    state: "pending",
-    method: body.method,
-    credits: body.credits,
-    total: quote?.total ?? { amount: "7373", currency: "CNY" },
-    fee: quote?.fee ?? { amount: "73", currency: "CNY" },
-    created_at: new Date().toISOString(),
-    expires_at: new Date(Date.now() + 15 * 60_000).toISOString(),
-    checkout: { pay_url: "https://pay.example.com/checkout/new", qr_code: "https://pay.example.com/qr/new" },
-    refund_allowed: true,
-    refunds: [],
-  };
-  state.orders.unshift(order);
-  return { status: 201 as const, json: order };
-}
-
-function verifyOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}/verify", "post">) {
-  const order = state.orders.find((item) => item.id === params.order_id);
-  if (!order) return fail(404, "not_found");
-  if (order.state === "pending") {
-    order.state = "paid";
-    order.paid_at = new Date().toISOString();
-    order.paid_total = order.total;
-    order.credited = order.credits;
-    order.checkout = undefined;
-  }
-  return ok(order);
-}
-
-function cancelOrder({ params, state }: Ctx<"/api/console/v1/orders/{order_id}/cancel", "post">) {
-  const order = state.orders.find((item) => item.id === params.order_id);
-  if (!order) return fail(404, "not_found");
-  if (order.state === "pending" || order.state === "cancelled") {
-    order.state = "cancelled";
-    order.checkout = undefined;
-    return ok(order);
-  }
-  return fail(409, "conflict");
-}
-
-function requestRefund({ body, params, state }: Ctx<"/api/console/v1/orders/{order_id}/refunds", "post">) {
-  const order = state.orders.find((item) => item.id === params.order_id);
-  if (!order) return fail(404, "not_found");
-  if (!order.refund_allowed) return fail(403, "forbidden");
-  const refund: Schemas["OrderRefund"] = {
-    id: `rfd_${String((order.refunds?.length ?? 0) + 100).padStart(26, "0")}` as Schemas["RefundId"],
-    state: "pending_review",
-    credits: body.credits,
-    amount: { amount: "3650", currency: order.total.currency },
-    created_at: new Date().toISOString(),
-  };
-  order.refunds = [...(order.refunds ?? []), refund];
-  return { status: 201 as const, json: refund };
-}
-
 function setBillingPreference({ body, state }: Ctx<"/api/console/v1/billing-preference", "put">) {
   const preference = body.preference === "site" ? state.billingPreference.site_default : body.preference;
   state.billingPreference = {
@@ -472,6 +440,7 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/workspaces`, { ...signedIn, permission: "api_keys.view" }, () =>
     ok({ data: [defaultWorkspace] }),
   ),
+  route("get", `${base}/provider-keys`, { ...signedIn, permission: "api_keys.view" }, () => ok({ data: providerKeys })),
   route("get", `${base}/routing-presets`, { ...signedIn, permission: "api_keys.view" }, ({ state }) =>
     ok({ data: state.presets.filter((preset) => !preset.disabled).map(withSummary) }),
   ),
