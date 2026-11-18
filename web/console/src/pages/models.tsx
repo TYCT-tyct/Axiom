@@ -1,8 +1,12 @@
 import { ApiError } from "@axiom/api";
-import { Button, DataState, EmptyState, ModelCatalog, ModelFilterForm, PageHeader, Panel } from "@axiom/ui";
+import ModelsCard from "@axiom/boards/AxApp/regions/ModelsCard";
+import ModelsFrame from "@axiom/boards/AxApp/regions/ModelsFrame";
+import { PageHeader } from "@axiom/boards/ds";
+import { Button, DataState, EmptyState, ModelCatalog, ModelFilterForm, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { Announcements } from "../announcements";
 import { type ModelFilters, modelsQuery } from "../queries";
 
 export default function Models() {
@@ -12,48 +16,50 @@ export default function Models() {
   const models = useQuery(modelsQuery(filters));
   const navigate = useNavigate();
   const unavailable = models.error instanceof ApiError && models.error.status === 404;
+  const title = t("nav.models");
+  usePageTitle(title);
   return (
-    <>
-      <PageHeader title={t("nav.models")} description={common("publicModels.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        <Panel className="p-4">
-          <ModelFilterForm
-            filters={filters}
-            onApply={(next) => void navigate({ to: "/models", search: next })}
-            reset={
-              <Button size="md" asChild>
-                <Link to="/models" search={{ q: undefined, author: undefined, ability: undefined }}>
-                  {common("publicModels.reset")}
-                </Link>
-              </Button>
+    <ModelsFrame t={String}>
+      <PageHeader title={title} description={common("publicModels.description")} />
+      <Announcements />
+      <ModelsCard t={String}>
+        <ModelFilterForm
+          filters={filters}
+          onApply={(next) => void navigate({ to: "/models", search: next })}
+          reset={
+            <Button size="md" asChild>
+              <Link to="/models" search={{ q: undefined, author: undefined, ability: undefined }}>
+                {common("publicModels.reset")}
+              </Link>
+            </Button>
+          }
+        />
+      </ModelsCard>
+      <ModelsCard t={String}>
+        {unavailable ? (
+          <EmptyState
+            title={common("publicModels.unavailableTitle")}
+            action={<Button onClick={() => models.refetch()}>{common("state.retry")}</Button>}
+          >
+            {common("publicModels.unavailableBody")}
+          </EmptyState>
+        ) : (
+          <DataState
+            query={models}
+            isEmpty={(data) => data.data.length === 0}
+            empty={
+              <EmptyState title={common("publicModels.emptyTitle")}>{common("publicModels.emptyBody")}</EmptyState>
             }
-          />
-        </Panel>
-        <Panel>
-          {unavailable ? (
-            <EmptyState title={common("publicModels.unavailableTitle")}>
-              {common("publicModels.unavailableBody")}
-            </EmptyState>
-          ) : (
-            <DataState
-              query={models}
-              isEmpty={(data) => data.data.length === 0}
-              empty={
-                <EmptyState title={common("publicModels.emptyTitle")}>{common("publicModels.emptyBody")}</EmptyState>
-              }
-            >
-              {(data) => (
-                <>
-                  <p className="border-b border-b1 px-4 py-2 text-ui text-t3">
-                    {common("publicModels.count", { count: data.data.length })}
-                  </p>
-                  <ModelCatalog models={data.data} note={common("publicModels.tierNote")} />
-                </>
-              )}
-            </DataState>
-          )}
-        </Panel>
-      </div>
-    </>
+          >
+            {(data) => (
+              <>
+                <p>{common("publicModels.count", { count: data.data.length })}</p>
+                <ModelCatalog models={data.data} note={common("publicModels.tierNote")} />
+              </>
+            )}
+          </DataState>
+        )}
+      </ModelsCard>
+    </ModelsFrame>
   );
 }

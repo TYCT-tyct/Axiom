@@ -3,23 +3,36 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-// afterFirstContent calls go once the page has drawn its first content and the browser is idle, and returns a function
-// that cancels it. A frame callback runs before the next paint, so the idle callback queued from it comes after that
-// paint; a browser without requestIdleCallback waits a moment instead.
+// A rendering opportunity can pass before the browser reports a contentful paint. Wait for the paint entry before
+// scheduling idle work, using a frame callback where Paint Timing is unavailable.
 function afterFirstContent(go: () => void) {
-  let idle = 0;
-  const frame = requestAnimationFrame(() => {
-    idle =
-      typeof requestIdleCallback === "function"
-        ? requestIdleCallback(go, { timeout: 2000 })
-        : window.setTimeout(go, 200);
-  });
-  return () => {
-    cancelAnimationFrame(frame);
-    if (typeof cancelIdleCallback === "function") {
-      cancelIdleCallback(idle);
+  let cancelIdle: (() => void) | undefined;
+  const schedule = () => {
+    if (typeof requestIdleCallback === "function") {
+      const idle = requestIdleCallback(go, { timeout: 2000 });
+      cancelIdle = () => cancelIdleCallback(idle);
+    } else {
+      const timer = window.setTimeout(go, 200);
+      cancelIdle = () => window.clearTimeout(timer);
     }
-    clearTimeout(idle);
+  };
+  let cancelPaint: () => void;
+  if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("paint")) {
+    const observer = new PerformanceObserver((list) => {
+      if (list.getEntries().some((entry) => entry.name === "first-contentful-paint")) {
+        observer.disconnect();
+        schedule();
+      }
+    });
+    observer.observe({ type: "paint", buffered: true });
+    cancelPaint = () => observer.disconnect();
+  } else {
+    const frame = requestAnimationFrame(schedule);
+    cancelPaint = () => cancelAnimationFrame(frame);
+  }
+  return () => {
+    cancelPaint();
+    cancelIdle?.();
   };
 }
 
