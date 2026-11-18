@@ -150,6 +150,15 @@ it("shows the rows a node applied the filters to", async () => {
   expect((await open()).textContent).toContain("Laptop");
 });
 
+// The address can carry parameters that are not key filters (a link that kept x=1): they narrow nothing, so the list is
+// the account's keys rather than an unfiltered answer to a filter nobody set.
+it("ignores address parameters that are not key filters", async () => {
+  api.asked = { x: "1" } as unknown as KeyFilters;
+  const text = (await open()).textContent ?? "";
+  expect(text).toContain("Laptop");
+  expect(text).not.toContain("keys.filtersUnavailable.title");
+});
+
 // A node before key filters ignores the parameters and echoes none: its list is every key, and showing it as the
 // filtered result would say the filters matched rows they never saw.
 it("shows no rows from a node that did not apply the filters", async () => {

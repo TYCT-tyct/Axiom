@@ -84,10 +84,11 @@ const scenes: Scene[] = [
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
   dialogScene("key-create", "keys", (page) => page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click()),
-  // A key opens from its row in the list, as the board draws it; its settings, and the way to delete it, are there.
-  dialogScene("key-edit", "keys", (page) => page.getByRole("button", { name: /^Laptop / }).click()),
+  // A key opens from its row in the list, as the board draws it; its settings, and the way to delete it, are there. The
+  // first row is a key in every data set the scenes run with, from the usual account to the worst one.
+  dialogScene("key-edit", "keys", (page) => page.locator(".p-keys tbody tr").first().click()),
   dialogScene("key-delete", "keys", async (page) => {
-    await page.getByRole("button", { name: /^Laptop / }).click();
+    await page.locator(".p-keys tbody tr").first().click();
     await page
       .getByRole("dialog", { name: /^(修改 key|Edit key)$/ })
       .getByRole("button", { name: /^(删除|Delete) / })
