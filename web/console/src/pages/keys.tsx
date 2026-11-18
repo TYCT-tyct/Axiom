@@ -179,13 +179,13 @@ function Actions({ manage, onFilter, onCreate }: { manage: boolean; onFilter: ()
   );
 }
 
-// What the region's rows need from the page. A row is a control only for an account that may change keys; others read
+// What the region's rows need from the page. A row opens its key only for an account that may change keys; others read
 // the list, and every row's icon says nothing to a reader either way. Pressing a row presses the click it stands for.
 function rowValues(manage: boolean, list: Key[], choose: (key: Key) => void) {
   if (!manage) {
-    return { kr2_0: "", rowRole: "row", rowTab: "-1", decorative: true };
+    return { kr2_0: "", rowTab: "-1", decorative: true };
   }
-  return { kr2_0: "", rowRole: "button", rowTab: "0", decorative: true, press, ko2_0: openRow(list, choose) };
+  return { kr2_0: "", rowTab: "0", decorative: true, press, ko2_0: openRow(list, choose) };
 }
 
 // The key a row stands for, from the row the event came from: the list's rows are the page's, in its order.

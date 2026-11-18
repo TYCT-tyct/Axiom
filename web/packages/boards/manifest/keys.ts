@@ -37,10 +37,11 @@ function keysRegion(board: string): Region {
     slots: { actions: ".p-keys .qpa" },
     repeats: { keys: ".wv.w2 .qkeyt tbody > tr" },
     text: { usedHeader: ".wv.w2 .qkeyt thead th:nth-child(2)" },
-    // The rows open the key they stand for, as the board's own rows do, and also from the keyboard; the icons they
-    // carry say nothing to a reader, and their aria-hidden is the page's so a row stays a row of values.
+    // The rows open the key they stand for, as the board's own rows do, and also from the keyboard. They stay rows of
+    // the table: a role of their own would take the cells' headers away from a reader, and the page's own tests and the
+    // journey read them as rows. The icons say nothing to a reader, and their aria-hidden is the page's.
     elements: {
-      ".wv.w2 .qkeyt tbody > tr": { set: { role: "{{rowRole}}", tabindex: "{{rowTab}}", onkeydown: "{{press}}" } },
+      ".wv.w2 .qkeyt tbody > tr": { set: { tabindex: "{{rowTab}}", onkeydown: "{{press}}" } },
       ".wv.w2 .qkeyt tbody svg": { set: { "aria-hidden": "{{decorative}}" } },
     },
     english: keysEnglish,
