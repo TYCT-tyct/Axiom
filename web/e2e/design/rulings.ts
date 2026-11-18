@@ -73,8 +73,10 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "console usage",
-    basis: "G1: comparison range, KPIs, series, table, token mix and movers show live API data without O23 savings",
-    ...both(".uscmp, .usm, .usch, .ust, .ustk, .usd"),
+    basis: "G1: live API comparison text, KPI values, series bars, table rows and movers replace board demo numbers",
+    ...both(
+      ".uscmp, .usm b, .usm em, .usch svg rect, .usch .usgl, .usch .usyl > span, .usch .usxl > span, .ust tbody, .ust tfoot, .ustk .usbar, .ustk .usrw > span:nth-of-type(2), .ustk .usrw em, .ustk p, .usd .usrw",
+    ),
   },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.

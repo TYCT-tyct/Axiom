@@ -23,7 +23,9 @@ import {
   aggregateGroups,
   buildBucketSlots,
   buildUsageCsv,
+  currenciesOfUsage,
   defaultGranularity,
+  hasUsageStatisticsPayload,
   previousWindow,
   selectCurrency,
   seriesColor,
@@ -35,9 +37,41 @@ import {
   validateUsageRange,
 } from "./usage-model";
 import { buildFilterChips, buildRangeErrorText, buildUsageProps } from "./usage-props";
+import type { MoversPrevStatus } from "./usage-view";
 
 const noClientRetry = (count: number, error: unknown) =>
   !(error instanceof ApiError && [400, 403, 404].includes(error.status)) && count < 2;
+
+const nonEmptyTotals = (t: ReturnType<typeof toUsageTotals>): boolean =>
+  Boolean(t && (t.requests > 0n || t.spendNano > 0n || t.tokens > 0n));
+
+function resolvePrevStatus(
+  prevRaw: readonly unknown[] | undefined,
+  prevHasCalls: boolean,
+  prevBreakdown: { isPending: boolean; isError: boolean; data?: Parameters<typeof hasUsageStatisticsPayload>[0] },
+): MoversPrevStatus {
+  if (prevRaw === undefined) return "missing";
+  if (!prevHasCalls) return "ready";
+  if (prevBreakdown.isPending) return "loading";
+  if (prevBreakdown.isError) return "error";
+  return hasUsageStatisticsPayload(prevBreakdown.data) ? "ready" : "missing";
+}
+
+function summarizeMainPayload(
+  main: { isSuccess: boolean; data?: Parameters<typeof currenciesOfUsage>[0] },
+  currencies: readonly string[],
+  preferred: string | undefined,
+) {
+  const missingFields = main.isSuccess && !hasUsageStatisticsPayload(main.data);
+  const hasPayload = main.isSuccess && !missingFields;
+  const currency = selectCurrency(main.data?.totals, preferred, currencies) ?? preferred ?? "USD";
+  const totals = hasPayload ? toUsageTotals(main.data?.totals, currency, true) : null;
+  const hasUsage = Boolean(hasPayload && (nonEmptyTotals(totals) || (main.data?.buckets?.length ?? 0) > 0));
+  const prevRaw = hasPayload ? main.data?.previous : undefined;
+  const prevTotals = hasPayload ? toUsageTotals(prevRaw, currency, true) : null;
+  const prevHasCalls = nonEmptyTotals(prevTotals);
+  return { missingFields, currency, totals, hasUsage, prevRaw, prevTotals, prevHasCalls };
+}
 
 function useUsageQueries(params: {
   since: string;
@@ -64,35 +98,39 @@ function useUsageQueries(params: {
   const keys = useInfiniteQuery({ ...keysQuery(), enabled: can(session, "api_keys.view"), retry: noClientRetry });
   const workspaces = useQuery({ ...workspacesQuery, retry: noClientRetry });
   const models = useQuery({ ...modelsQuery({}), retry: noClientRetry });
-  const preferred = balance.data?.available.currency ?? site.data?.currency;
-  const currency = selectCurrency(main.data?.totals, preferred) ?? preferred ?? "USD";
-  const totals = toUsageTotals(main.data?.totals, currency);
-  const hasUsage = totals !== null && totals.requests > 0n;
+  const currencies = useMemo(
+    () => (main.isSuccess && hasUsageStatisticsPayload(main.data) ? currenciesOfUsage(main.data) : []),
+    [main.isSuccess, main.data],
+  );
+  const preferred = search.currency ?? balance.data?.available.currency ?? site.data?.currency;
+  const summary = summarizeMainPayload(main, currencies, preferred);
   const prevBreakdown = useQuery({
     ...usageStatisticsQuery(
       { since: prevRange?.since, until: prevRange?.until, granularity: "week", group_by: groupBy, ...base },
-      Boolean(valid && prevRange && hasUsage),
+      Boolean(valid && prevRange && summary.hasUsage && summary.prevRaw !== undefined && summary.prevHasCalls),
     ),
     retry: noClientRetry,
   });
-  return { main, prevBreakdown, keys, workspaces, models, currency, totals, hasUsage };
+  const prevStatus = resolvePrevStatus(summary.prevRaw, summary.prevHasCalls, prevBreakdown);
+  return { main, prevBreakdown, keys, workspaces, models, currencies, prevStatus, ...summary };
 }
 
 function useUsageState(now: Date, resolved: ReturnType<typeof resolveRange>) {
   const [openChip, setOpenChip] = useState<"m" | "k" | null>(null);
   const [sortCol, setSortCol] = useState<UsageSortCol | null>(null);
   const [focusGroup, setFocusGroup] = useState<string | null>(null);
-  const [hoverGroup, setHoverGroup] = useState<string | null>(null);
   const [hoverSlot, setHoverSlot] = useState<number | null>(null);
   const [chartWidth, setChartWidth] = useState(964);
   const [filterBarEl, setFilterBarEl] = useState<Element | null>(null);
+  const [keyPopEl, setKeyPopEl] = useState<Element | null>(null);
+  const [chartSvgEl, setChartSvgEl] = useState<Element | null>(null);
+  const [moversEl, setMoversEl] = useState<Element | null>(null);
   const [cal, setCal] = useState<CalState>(() => ({
     open: false,
     leftYm: now.getUTCFullYear() * 12 + now.getUTCMonth() - 1,
     start: resolved.startDay,
     end: resolved.endDay,
     hover: null,
-    quick: null,
   }));
   return {
     openChip,
@@ -101,14 +139,18 @@ function useUsageState(now: Date, resolved: ReturnType<typeof resolveRange>) {
     setSortCol,
     focusGroup,
     setFocusGroup,
-    hoverGroup,
-    setHoverGroup,
     hoverSlot,
     setHoverSlot,
     chartWidth,
     setChartWidth,
     filterBarEl,
     setFilterBarEl,
+    keyPopEl,
+    setKeyPopEl,
+    chartSvgEl,
+    setChartSvgEl,
+    moversEl,
+    setMoversEl,
     cal,
     setCal,
   };
@@ -125,14 +167,11 @@ function useDerivedUsage(
     [q.main.data?.buckets, q.currency, granularity],
   );
   const prevGroups = useMemo(() => {
-    const pt = toUsageTotals(q.prevBreakdown.data?.totals, q.currency);
-    return pt && pt.requests > 0n ? aggregateGroups(q.prevBreakdown.data?.buckets, q.currency, "week") : null;
-  }, [q.prevBreakdown.data, q.currency]);
+    if (q.prevStatus !== "ready") return null;
+    if (!q.prevHasCalls) return [];
+    return aggregateGroups(q.prevBreakdown.data?.buckets, q.currency, "week");
+  }, [q.prevStatus, q.prevHasCalls, q.prevBreakdown.data?.buckets, q.currency]);
   const effectiveTotals = q.totals ?? sumGroupTotals(currGroups, q.currency);
-  const prevTotals = useMemo(
-    () => toUsageTotals(q.main.data?.previous, q.currency),
-    [q.main.data?.previous, q.currency],
-  );
   const colorMap = useMemo(() => {
     const sorted = [...currGroups].sort((a, b) =>
       a.totals.spendNano !== b.totals.spendNano
@@ -160,7 +199,7 @@ function useDerivedUsage(
     currGroups,
     prevGroups,
     effectiveTotals,
-    prevTotals,
+    prevTotals: q.prevTotals,
     colorMap,
     keyNames,
     workspacesList,
@@ -173,6 +212,7 @@ function useDerivedUsage(
 
 const CSV_KEYS = [
   "csvHeaderBucket",
+  "csvHeaderCurrency",
   "csvHeaderGroup",
   "csvHeaderRequests",
   "csvHeaderSuccesses",
@@ -189,7 +229,7 @@ function useUsageParams() {
   const format = useFormat("UTC");
   const navigate = useNavigate();
   const search: UsageSearch = useSearch({ from: "/app/usage" });
-  const now = useMemo(() => new Date(), []);
+  const [now, setNow] = useState(() => new Date());
   const todayDay = useMemo(() => utcDayOf(now), [now]);
   const resolved = resolveRange(search, now);
   const granularity: UsageGranularity = search.granularity ?? defaultGranularity(resolved.preset, resolved.days || 1);
@@ -205,6 +245,7 @@ function useUsageParams() {
     format,
     search,
     now,
+    setNow,
     todayDay,
     resolved,
     granularity,
@@ -232,13 +273,16 @@ function buildUsageResult(
     keyFilter: p.search.key_id,
     workspaceFilter: p.search.workspace_id,
   });
-  const unavailable = q.main.error instanceof ApiError && q.main.error.status === 404;
-  const showState = !p.validation.ok || q.main.isPending || q.main.isError || !q.hasUsage;
+  const unavailable = (q.main.error instanceof ApiError && q.main.error.status === 404) || q.missingFields;
+  const showState = !p.validation.ok || unavailable || q.main.isPending || q.main.isError || !q.hasUsage;
   const built = buildUsageProps({
     ...p,
     ...st,
     ...d,
     currency: q.currency,
+    currencies: q.currencies,
+    prevStatus: q.prevStatus,
+    prevHasCalls: q.prevHasCalls,
     chips,
     unavailable,
     showState,
@@ -260,10 +304,22 @@ function buildUsageResult(
       ),
     unavailable,
     hasUsage: q.hasUsage,
-    backfillIncomplete: q.main.data?.backfill_complete === false,
+    backfillIncomplete: Boolean(q.main.data && q.main.data.backfill_complete === false),
+    currencies: q.currencies,
+    currency: q.currency,
+    onSelectCurrency: (code: string) => p.updateSearch({ currency: code }),
+    hasMoreKeys: p.groupBy !== "workspace" && Boolean(q.keys.hasNextPage),
+    loadingMoreKeys: q.keys.isFetchingNextPage,
+    moreKeysError: q.keys.isFetchNextPageError,
+    onLoadMoreKeys: () => void q.keys.fetchNextPage(),
+    onRetryMovers: () => void q.prevBreakdown.refetch(),
     calOpen: st.cal.open,
     filterBarEl: st.filterBarEl,
+    keyPopEl: st.keyPopEl,
+    moversEl: st.moversEl,
     hoverTip: built.hoverTip,
+    moversStatusNote: built.moversStatusNote,
+    moversError: built.moversError,
     usageProps: built.usageProps,
     calendarProps: built.calendarProps,
   };
@@ -283,18 +339,18 @@ export function useUsagePage() {
     p.search.model,
     p.search.key_id,
     p.search.workspace_id,
+    p.search.currency,
     setFocusGroup,
     setHoverSlot,
   ]);
   usePopEffects({
-    filterBarEl: st.filterBarEl,
-    chartWidth: st.chartWidth,
+    chartSvgEl: st.chartSvgEl,
     setChartWidth: st.setChartWidth,
+    setNow: p.setNow,
     openChip: st.openChip,
     setOpenChip: st.setOpenChip,
     calOpen: st.cal.open,
     closeCal: () => st.setCal((c) => (c.open ? { ...c, open: false, hover: null } : c)),
-    valid: p.validation.ok,
   });
   const q = useUsageQueries({
     since: p.resolved.since,
@@ -312,10 +368,10 @@ export function useUsagePage() {
     slots: d.slots,
   });
   const onExport = () => {
-    if (!q.hasUsage) return;
+    if (!q.hasUsage || q.missingFields || !p.validation.ok) return;
     const headers = CSV_KEYS.map((k) => usageText(p.language, k, { currency: q.currency }));
     const csv = buildUsageCsv(headers, d.slots, d.currGroups, d.groupNames);
-    const name = `usage-${p.groupBy}-${p.resolved.since.slice(0, 10)}.csv`;
+    const name = `usage-${p.groupBy}-${q.currency}-${p.resolved.since.slice(0, 10)}.csv`;
     save(new File([csv], name, { type: "text/csv;charset=utf-8" }));
   };
   return buildUsageResult(p, st, q, d, handlers, onExport);

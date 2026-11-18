@@ -46,7 +46,9 @@ function UsageTipContent({ tip }: { tip: HoverTipData | null }) {
   );
 }
 
-function UsageStatusView({ page }: { page: ReturnType<typeof useUsagePage> }) {
+type UsagePage = ReturnType<typeof useUsagePage>;
+
+function UsageStatusView({ page }: { page: UsagePage }) {
   const txt = (k: Parameters<typeof usageText>[1]) => usageText(page.language, k);
   if (!page.validation.ok) {
     const actionLabel = page.granularity === "hour" ? txt("switchToDay") : txt("switchTo7d");
@@ -74,12 +76,91 @@ function UsageStatusView({ page }: { page: ReturnType<typeof useUsagePage> }) {
   }
   if (!page.hasUsage) {
     return (
-      <EmptyState compact title={txt("emptyTitle")}>
-        {txt("emptyBody")}
+      <EmptyState compact title={page.backfillIncomplete ? txt("backfillEmptyTitle") : txt("emptyTitle")}>
+        {page.backfillIncomplete ? txt("backfillEmptyBody") : txt("emptyBody")}
       </EmptyState>
     );
   }
   return null;
+}
+
+function CurrencyBar({ page }: { page: UsagePage }) {
+  if (page.currencies.length <= 1) return null;
+  const label = usageText(page.language, "currencyLabel");
+  return (
+    <fieldset>
+      <legend>{label}</legend>
+      {page.currencies.map((code) => (
+        <Button
+          key={code}
+          size="sm"
+          variant={code === page.currency ? "primary" : "secondary"}
+          aria-pressed={code === page.currency}
+          onClick={() => page.onSelectCurrency(code)}
+        >
+          {code}
+        </Button>
+      ))}
+    </fieldset>
+  );
+}
+
+function UsagePortals({ page, phone }: { page: UsagePage; phone: boolean }) {
+  const txt = (k: Parameters<typeof usageText>[1]) => usageText(page.language, k);
+  const Cal = phone ? PhoneCalendar : DesktopCalendar;
+  const calT = (key: keyof typeof desktopCalZh) =>
+    (phone ? (page.english ? phoneCalEn : phoneCalZh) : page.english ? desktopCalEn : desktopCalZh)[key];
+  const moreLabel = page.loadingMoreKeys
+    ? txt("loadingMoreKeys")
+    : page.moreKeysError
+      ? txt("retryMoreKeys")
+      : txt("loadMoreKeys");
+  return (
+    <>
+      {page.calOpen && page.calendarProps && page.filterBarEl
+        ? createPortal(<Cal {...page.calendarProps} t={calT} />, page.filterBarEl)
+        : null}
+      {page.hasMoreKeys && page.keyPopEl
+        ? createPortal(
+            <button
+              type="button"
+              data-a="morek"
+              disabled={page.loadingMoreKeys}
+              onClick={(e) => {
+                e.stopPropagation();
+                page.onLoadMoreKeys();
+              }}
+            >
+              {moreLabel}
+            </button>,
+            page.keyPopEl,
+          )
+        : null}
+      {page.moversStatusNote && page.moversEl
+        ? createPortal(
+            page.moversError ? (
+              <div role="alert">
+                <p>{page.moversStatusNote}</p>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  data-a="retrymov"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    page.onRetryMovers();
+                  }}
+                >
+                  {txt("moversRetry")}
+                </Button>
+              </div>
+            ) : (
+              <p role="status">{page.moversStatusNote}</p>
+            ),
+            page.moversEl,
+          )
+        : null}
+    </>
+  );
 }
 
 export default function Usage() {
@@ -93,19 +174,12 @@ export default function Usage() {
   const regionT = (key: keyof typeof desktopZh) =>
     (phone ? (page.english ? phoneEn : phoneZh) : page.english ? desktopEn : desktopZh)[key];
 
-  const Cal = phone ? PhoneCalendar : DesktopCalendar;
-  const calT = (key: keyof typeof desktopCalZh) =>
-    (phone ? (page.english ? phoneCalEn : phoneCalZh) : page.english ? desktopCalEn : desktopCalZh)[key];
-
   return (
     <>
-      {page.backfillIncomplete && page.hasUsage ? (
-        <p role="status">{usageText(page.language, "backfillNotice")}</p>
-      ) : null}
+      <CurrencyBar page={page} />
+      {page.backfillIncomplete ? <p role="status">{usageText(page.language, "backfillNotice")}</p> : null}
       <Region {...page.usageProps} t={regionT} tip={<UsageTipContent tip={page.hoverTip} />} />
-      {page.calOpen && page.filterBarEl
-        ? createPortal(<Cal {...page.calendarProps} t={calT} />, page.filterBarEl)
-        : null}
+      <UsagePortals page={page} phone={phone} />
       <UsageStatusView page={page} />
     </>
   );

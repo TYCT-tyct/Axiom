@@ -100,6 +100,7 @@ const routeTree = root.addChildren([
         granularity: usageGranularity(search.granularity),
         metric: usageMetric(search.metric),
         group_by: usageGroupBy(search.group_by),
+        currency: text(search.currency),
         model: text(search.model),
         key_id: text(search.key_id),
         workspace_id: text(search.workspace_id),

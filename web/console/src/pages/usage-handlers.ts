@@ -9,6 +9,7 @@ import {
   type UsageMetricKey,
   type UsageRangePreset,
   type UsageSortCol,
+  utcDayOf,
   windowFromDays,
 } from "./usage-model";
 
@@ -19,6 +20,7 @@ export type UsageSearch = {
   granularity?: UsageGranularity;
   metric?: UsageMetricKey;
   group_by?: UsageGroupBy;
+  currency?: string;
   model?: string;
   key_id?: string;
   workspace_id?: string;
@@ -30,7 +32,6 @@ export type CalState = {
   start: number | null;
   end: number | null;
   hover: number | null;
-  quick: number | null;
 };
 
 const MAX_HOUR_DAYS = 7;
@@ -62,44 +63,67 @@ export function resolveRange(search: UsageSearch, now: Date) {
   };
 }
 
-function quickPresetDays(idx: number, today: number): { start: number; end: number; quick: number } {
-  if (idx === 0) return { start: today - 1, end: today - 1, quick: 0 };
+function quickPresetDays(idx: number, today: number): { start: number; end: number } {
+  if (idx === 0) return { start: today - 1, end: today - 1 };
   if (idx === 1) {
     const weekday = (new Date(today * DAY_MS).getUTCDay() + 6) % 7;
     const thisMon = today - weekday;
-    return { start: thisMon - 7, end: thisMon - 1, quick: 1 };
+    return { start: thisMon - 7, end: thisMon - 1 };
   }
   if (idx === 2) {
     const d = new Date(today * DAY_MS);
     const firstCur = Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1);
     const firstPrev = Date.UTC(d.getUTCFullYear(), d.getUTCMonth() - 1, 1);
-    return { start: Math.floor(firstPrev / DAY_MS), end: Math.floor(firstCur / DAY_MS) - 1, quick: 2 };
+    return { start: Math.floor(firstPrev / DAY_MS), end: Math.floor(firstCur / DAY_MS) - 1 };
   }
-  return { start: today - 89, end: today, quick: 3 };
+  return { start: today - 89, end: today };
 }
 
 export function usePopEffects(params: {
-  filterBarEl: Element | null;
-  chartWidth: number;
-  setChartWidth: (w: number) => void;
+  chartSvgEl: Element | null;
+  setChartWidth: (updater: number | ((w: number) => number)) => void;
+  setNow: (d: Date) => void;
   openChip: "m" | "k" | null;
   setOpenChip: (v: "m" | "k" | null) => void;
   calOpen: boolean;
   closeCal: () => void;
-  valid: boolean;
 }) {
-  const { filterBarEl, chartWidth, setChartWidth, openChip, setOpenChip, calOpen, closeCal, valid } = params;
+  const { chartSvgEl, setChartWidth, setNow, openChip, setOpenChip, calOpen, closeCal } = params;
   useEffect(() => {
-    const svg = filterBarEl?.closest(".usv")?.querySelector(".usch svg") ?? null;
-    if (!svg) return;
+    if (!chartSvgEl) return;
     const measure = () => {
-      if (svg.clientWidth > 100 && Math.abs(svg.clientWidth - chartWidth) > 2) setChartWidth(svg.clientWidth);
+      if (chartSvgEl.clientWidth > 100) {
+        setChartWidth((cur) => (Math.abs(chartSvgEl.clientWidth - cur) > 2 ? chartSvgEl.clientWidth : cur));
+      }
     };
     measure();
     const ro = new ResizeObserver(measure);
-    ro.observe(svg);
+    ro.observe(chartSvgEl);
     return () => ro.disconnect();
-  }, [filterBarEl, chartWidth, setChartWidth, valid]);
+  }, [chartSvgEl, setChartWidth]);
+
+  useEffect(() => {
+    let timer = 0;
+    const syncDay = () => {
+      const fresh = new Date();
+      setNow(fresh);
+      const nextMidnight = (utcDayOf(fresh) + 1) * DAY_MS;
+      timer = window.setTimeout(syncDay, Math.max(1_000, nextMidnight - fresh.getTime() + 50));
+    };
+    const nextMidnight = (utcDayOf(new Date()) + 1) * DAY_MS;
+    timer = window.setTimeout(syncDay, Math.max(1_000, nextMidnight - Date.now() + 50));
+    const onWake = () => {
+      if (document.visibilityState === "hidden") return;
+      setNow(new Date());
+    };
+    window.addEventListener("focus", onWake);
+    document.addEventListener("visibilitychange", onWake);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+    };
+  }, [setNow]);
 
   useEffect(() => {
     if (!openChip && !calOpen) return;
@@ -159,16 +183,14 @@ function handleCalButton(ctx: {
   if (a === "cnav") setCal((c) => ({ ...c, leftYm: c.leftYm + i }));
   else if (a === "cd") {
     setCal((c) =>
-      c.start === null || c.end !== null
-        ? { ...c, start: i, end: null, hover: null, quick: null }
-        : { ...c, end: i, hover: null, quick: null },
+      c.start === null || c.end !== null ? { ...c, start: i, end: null, hover: null } : { ...c, end: i, hover: null },
     );
   } else if (a === "cq") {
     const q = quickPresetDays(i, todayDay);
     const { since, until } = windowFromDays(q.start, q.end);
     const days = q.end - q.start + 1;
     const nextGran = granularity === "hour" && days > MAX_HOUR_DAYS ? (days > 62 ? "week" : "day") : granularity;
-    setCal((c) => ({ ...c, open: false, start: q.start, end: q.end, hover: null, quick: q.quick }));
+    setCal((c) => ({ ...c, open: false, start: q.start, end: q.end, hover: null }));
     updateSearch({ range: "custom", since, until, granularity: nextGran });
   } else if (a === "ccancel") setCal((c) => ({ ...c, open: false, hover: null }));
   else if (a === "cok" && cal.start !== null) {
@@ -230,31 +252,32 @@ function handleBodyFilterAction(ctx: {
 
 function applyRangePresetAction(params: {
   idx: number;
-  now: Date;
+  setNow: (d: Date) => void;
   resolved: ReturnType<typeof resolveRange>;
   setOpenChip: (v: "m" | "k" | null) => void;
   setCal: (updater: CalState | ((c: CalState) => CalState)) => void;
   updateSearch: (patch: Partial<UsageSearch>) => void;
 }) {
-  const { idx, now, resolved, setOpenChip, setCal, updateSearch } = params;
+  const { idx, setNow, resolved, setOpenChip, setCal, updateSearch } = params;
+  const freshNow = new Date();
+  setNow(freshNow);
   if (idx === 4) {
     setOpenChip(null);
-    const maxYm = now.getUTCFullYear() * 12 + now.getUTCMonth() - 1;
-    const target = resolved.endDay !== null ? new Date(resolved.endDay * DAY_MS) : now;
+    const maxYm = freshNow.getUTCFullYear() * 12 + freshNow.getUTCMonth() - 1;
+    const target = resolved.endDay !== null ? new Date(resolved.endDay * DAY_MS) : freshNow;
     const clamped = Math.min(maxYm, Math.max(maxYm - 23, target.getUTCFullYear() * 12 + target.getUTCMonth() - 1));
-    setCal((c) => ({
-      open: !c.open,
+    setCal({
+      open: true,
       leftYm: clamped,
       start: resolved.startDay,
       end: resolved.endDay,
       hover: null,
-      quick: null,
-    }));
+    });
     return;
   }
   const order: Exclude<UsageRangePreset, "custom">[] = ["today", "d7", "d30", "month"];
   const nextPreset = order[idx] ?? "month";
-  const span = presetDaySpan(nextPreset, now);
+  const span = presetDaySpan(nextPreset, freshNow);
   setCal((c) => ({ ...c, open: false, hover: null }));
   updateSearch({
     range: nextPreset,
@@ -268,13 +291,10 @@ function makeChartInteractions(params: {
   slotsLength: number;
   hoverSlot: number | null;
   setHoverSlot: (updater: number | null | ((c: number | null) => number | null)) => void;
-  setHoverGroup: (v: string | null) => void;
   openSlotCalls: (idx: number) => void;
 }) {
-  const { slotsLength, hoverSlot, setHoverSlot, setHoverGroup, openSlotCalls } = params;
+  const { slotsLength, hoverSlot, setHoverSlot, openSlotCalls } = params;
   const onChartMove = (e: ReactMouseEvent<Element>) => {
-    const row = (e.target as Element).closest<HTMLElement>('tr[data-a="row"], .usrw[data-a="row"]');
-    if (row) setHoverGroup(row.dataset.i ?? null);
     const hit = (e.target as Element).closest<HTMLElement>("rect.ushit[data-i]");
     const next = hit ? Number(hit.dataset.i) : null;
     if (next !== hoverSlot) setHoverSlot(next);
@@ -295,8 +315,17 @@ function makeChartInteractions(params: {
   return { onChartMove, onChartKeyDown };
 }
 
+const onBodyKeyDown = (e: ReactKeyboardEvent<Element>) => {
+  if (e.key !== "Enter" && e.key !== " ") return;
+  if ((e.target as Element).closest("button, input, a")) return;
+  const target = (e.target as Element).closest<HTMLElement>("[data-a]");
+  if (!target) return;
+  e.preventDefault();
+  target.click();
+};
+
 export function useUsageHandlers(params: {
-  now: Date;
+  setNow: (d: Date) => void;
   todayDay: number;
   resolved: ReturnType<typeof resolveRange>;
   search: UsageSearch;
@@ -309,14 +338,13 @@ export function useUsageHandlers(params: {
   setCal: (updater: CalState | ((c: CalState) => CalState)) => void;
   hoverSlot: number | null;
   setHoverSlot: (updater: number | null | ((c: number | null) => number | null)) => void;
-  setHoverGroup: (v: string | null) => void;
   groupBy: UsageGroupBy;
   slots: readonly { sinceIso: string; untilIso: string }[];
   updateSearch: (patch: Partial<UsageSearch>) => void;
 }) {
   const navigate = useNavigate();
   const {
-    now,
+    setNow,
     todayDay,
     resolved,
     search,
@@ -329,7 +357,6 @@ export function useUsageHandlers(params: {
     setCal,
     hoverSlot,
     setHoverSlot,
-    setHoverGroup,
     groupBy,
     slots,
     updateSearch,
@@ -345,7 +372,9 @@ export function useUsageHandlers(params: {
     if (!target) return void (focusGroup !== null && setFocusGroup(null));
     const a = target.dataset.a ?? "";
     const val = target.dataset.i ?? "";
-    if (a === "r") applyRangePresetAction({ idx: Number(val), now, resolved, setOpenChip, setCal, updateSearch });
+    if (a === "r" && val === "4" && cal.open) setCal((c) => ({ ...c, open: false, hover: null }));
+    else if (a === "r")
+      applyRangePresetAction({ idx: Number(val), setNow, resolved, setOpenChip, setCal, updateSearch });
     else if (a === "row") setFocusGroup((cur) => (cur === val ? null : val));
     else if (a === "day") openSlotCalls(Number(val));
     else handleBodyFilterAction({ a, val, search, setOpenChip, setSortCol, setCal, updateSearch });
@@ -364,12 +393,11 @@ export function useUsageHandlers(params: {
     if (nextHover !== cal.hover) setCal((c) => ({ ...c, hover: nextHover }));
   };
 
-  const chart = makeChartInteractions({
-    slotsLength: slots.length,
-    hoverSlot,
-    setHoverSlot,
-    setHoverGroup,
-    openSlotCalls,
-  });
-  return { onBodyClick, onCalClick, onCalMove, ...chart };
+  return {
+    onBodyClick,
+    onBodyKeyDown,
+    onCalClick,
+    onCalMove,
+    ...makeChartInteractions({ slotsLength: slots.length, hoverSlot, setHoverSlot, openSlotCalls }),
+  };
 }

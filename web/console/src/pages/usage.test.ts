@@ -4,9 +4,14 @@ import {
   aggregateGroups,
   buildBucketSlots,
   buildUsageCsv,
+  compareUsageTotals,
+  currenciesOfUsage,
   defaultGranularity,
+  formatAvgPerRequest,
+  formatBigDeltaPercent,
   formatCompactTokens,
-  formatDeltaPercent,
+  formatSpendPerMillion,
+  hasUsageStatisticsPayload,
   niceAxisScale,
   presetDaySpan,
   selectCurrency,
@@ -17,13 +22,17 @@ import {
   validateUsageRange,
   windowFromDays,
 } from "./usage-model";
-import { buildCalendarView } from "./usage-view";
+import { buildCalendarView, buildMoversView, buildTableView, buildTokenView } from "./usage-view";
 
 const fmt: Formatters = {
-  number: (n) => Number(n).toLocaleString("en-US"),
+  number: (n) => BigInt(n).toLocaleString("en-US"),
   money: ({ amount, currency }) => {
-    const val = (Number(amount) / 1e9).toFixed(2);
-    return currency === "CNY" ? `¥${val}` : `$${val}`;
+    const v = BigInt(amount);
+    const whole = v / 1_000_000_000n;
+    const frac9 = (v % 1_000_000_000n).toString().padStart(9, "0");
+    const tail = frac9.slice(2).replace(/0+$/, "");
+    const sym = currency === "CNY" ? "¥" : "$";
+    return `${sym}${whole}.${frac9.slice(0, 2)}${tail}`;
   },
   day: (d) => `${d.getUTCMonth() + 1}/${d.getUTCDate()}`,
   dayFull: (d) => `${d.getUTCFullYear()}-${d.getUTCMonth() + 1}-${d.getUTCDate()}`,
@@ -44,8 +53,13 @@ const labels: UsageViewLabels = {
   successOnly: (r) => `${r} succeeded`,
   deltaWithSuccess: (d, r) => `${d} · ${r} succeeded`,
   cacheHitSummary: (r, c) => `Hit ${r} across ${c}`,
+  cacheHitZeroDenom: (c) => `Eligible ${c}, 0 physical input`,
   cacheHitNone: "No cache calls",
   noMovers: "No prior usage",
+  moversLoading: "Loading movers",
+  moversFailed: "Failed movers",
+  moversMissingPrev: "Missing prev",
+  noMetricChange: "No metric change",
   chartAria: (t, b, tot) => `${t} ${b} ${tot}`,
 };
 
@@ -97,90 +111,87 @@ describe("usage range limits", () => {
 });
 
 describe("group sum equals total invariant", () => {
-  it.each(["model", "key", "workspace"] as const)(
-    "preserves exact BigInt sum === totals when grouped by %s including unnamed groups",
-    () => {
-      const currency = "USD";
-      const buckets = [
-        {
-          at: "2026-10-14T00:00:00Z",
-          group: "g-1",
-          metrics: {
-            spend: { amount: "12345678901", currency },
-            requests: "120",
-            successes: "118",
-            tokens: { input: "1000000", output: "250000", cache_read: "500000", cache_write: "25000" },
-            cache_rate_requests: "100",
-          },
+  it("preserves exact BigInt sum === totals when grouped including unnamed groups", () => {
+    const currency = "USD";
+    const buckets = [
+      {
+        at: "2026-10-14T00:00:00Z",
+        group: "g-1",
+        metrics: {
+          spend: { amount: "12345678901", currency },
+          requests: "120",
+          successes: "118",
+          tokens: { input: "1000000", output: "250000", cache_read: "500000", cache_write: "25000" },
+          cache_rate_requests: "100",
         },
-        {
-          at: "2026-10-15T00:00:00Z",
-          group: "g-1",
-          metrics: {
-            spend: { amount: "500000000", currency },
-            requests: "5",
-            successes: "5",
-            tokens: { input: "50000", output: "10000", cache_read: "0", cache_write: "0" },
-            cache_rate_requests: "5",
-          },
+      },
+      {
+        at: "2026-10-15T00:00:00Z",
+        group: "g-1",
+        metrics: {
+          spend: { amount: "500000000", currency },
+          requests: "5",
+          successes: "5",
+          tokens: { input: "50000", output: "10000", cache_read: "0", cache_write: "0" },
+          cache_rate_requests: "5",
         },
-        {
-          at: "2026-10-15T00:00:00Z",
-          group: "",
-          metrics: {
-            spend: { amount: "999999999", currency },
-            requests: "10",
-            successes: "9",
-            tokens: { input: "100000", output: "20000", cache_read: "10000", cache_write: "5000" },
-            cache_rate_requests: "10",
-          },
+      },
+      {
+        at: "2026-10-15T00:00:00Z",
+        group: "",
+        metrics: {
+          spend: { amount: "999999999", currency },
+          requests: "10",
+          successes: "9",
+          tokens: { input: "100000", output: "20000", cache_read: "10000", cache_write: "5000" },
+          cache_rate_requests: "10",
         },
-        {
-          at: "2026-10-15T00:00:00Z",
-          group: "other-currency",
-          metrics: {
-            spend: { amount: "888888888", currency: "CNY" },
-            requests: "9",
-            successes: "9",
-            tokens: { input: "9000", output: "1000", cache_read: "0", cache_write: "0" },
-          },
-        },
-      ];
-      const serverTotals = [
-        {
-          spend: { amount: "13845678900", currency },
-          requests: "135",
-          successes: "132",
-          tokens: { input: "1150000", output: "280000", cache_read: "510000", cache_write: "30000" },
-          cache_rate_requests: "115",
-          cache_hit_rate: 510000 / 1660000,
-          success_rate: 132 / 135,
-        },
-        {
+      },
+      {
+        at: "2026-10-15T00:00:00Z",
+        group: "other-currency",
+        metrics: {
           spend: { amount: "888888888", currency: "CNY" },
           requests: "9",
           successes: "9",
           tokens: { input: "9000", output: "1000", cache_read: "0", cache_write: "0" },
         },
-      ];
+      },
+    ];
+    const serverTotals = [
+      {
+        spend: { amount: "13845678900", currency },
+        requests: "135",
+        successes: "132",
+        tokens: { input: "1150000", output: "280000", cache_read: "510000", cache_write: "30000" },
+        cache_rate_requests: "115",
+        cache_hit_rate: 510000 / 1660000,
+        success_rate: 132 / 135,
+      },
+      {
+        spend: { amount: "888888888", currency: "CNY" },
+        requests: "9",
+        successes: "9",
+        tokens: { input: "9000", output: "1000", cache_read: "0", cache_write: "0" },
+      },
+    ];
 
-      expect(selectCurrency(serverTotals, "USD")).toBe("USD");
-      const totals = toUsageTotals(serverTotals, "USD");
-      const groups = aggregateGroups(buckets, "USD", "day");
-      const groupedSum = sumGroupTotals(groups, "USD");
+    expect(selectCurrency(serverTotals, "USD")).toBe("USD");
+    const totals = toUsageTotals(serverTotals, "USD");
+    const groups = aggregateGroups(buckets, "USD", "day");
+    const groupedSum = sumGroupTotals(groups, "USD");
 
-      expect(totals).not.toBeNull();
-      expect(groups).toHaveLength(2);
-      expect(groupedSum.spendNano).toBe(totals?.spendNano);
-      expect(groupedSum.requests).toBe(totals?.requests);
-      expect(groupedSum.successes).toBe(totals?.successes);
-      expect(groupedSum.input).toBe(totals?.input);
-      expect(groupedSum.output).toBe(totals?.output);
-      expect(groupedSum.cacheRead).toBe(totals?.cacheRead);
-      expect(groupedSum.cacheWrite).toBe(totals?.cacheWrite);
-      expect(groupedSum.tokens).toBe(totals?.tokens);
-    },
-  );
+    expect(totals).not.toBeNull();
+    expect(groups).toHaveLength(2);
+    expect(groupedSum.spendNano).toBe(totals?.spendNano);
+    expect(groupedSum.requests).toBe(totals?.requests);
+    expect(groupedSum.successes).toBe(totals?.successes);
+    expect(groupedSum.input).toBe(totals?.input);
+    expect(groupedSum.output).toBe(totals?.output);
+    expect(groupedSum.cacheRead).toBe(totals?.cacheRead);
+    expect(groupedSum.cacheWrite).toBe(totals?.cacheWrite);
+    expect(groupedSum.tokens).toBe(totals?.tokens);
+  });
 });
 
 describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
@@ -231,8 +242,9 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
     expect(kpi.totals4).toBe("25.0");
     expect(kpi.changes4).toBe("+3.0 pp");
     expect(formatCompactTokens(4_800_000n, fmt.number)).toBe("4.8M");
-    expect(formatDeltaPercent(5, 0, "New")).toBe("New");
+    expect(formatBigDeltaPercent(5n, 0n, "New")).toBe("New");
     expect(niceAxisScale(14).ticks).toEqual([5, 10, 15]);
+    expect(niceAxisScale(1, true).ticks).toEqual([1]);
   });
 
   it("disables calendar Apply when selected span exceeds active granularity limit", () => {
@@ -244,7 +256,6 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
       hoverDay: null,
       todayDay: today,
       granularity: "hour",
-      quickIndex: null,
       language: "en",
       format: fmt,
       labels: {
@@ -259,7 +270,7 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
     expect(cal.text.calStatus).toBe("Over limit: 10 > 7");
   });
 
-  it("produces empty bar list when empty and escapes formula values in CSV", () => {
+  it("produces empty bar list when empty and escapes formula values after whitespace in CSV", () => {
     const emptyTotals = sumGroupTotals([], "USD");
     const slots = buildBucketSlots(Date.parse("2026-10-24T00:00:00Z"), Date.parse("2026-10-25T00:00:00Z"), "day");
     const chart = buildChartView({
@@ -273,7 +284,6 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
       chartWidth: 800,
       hoverSlot: null,
       focusGroup: null,
-      hoverGroup: null,
       format: fmt,
       currency: "USD",
       labels,
@@ -287,17 +297,181 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
           group: "=SUM(1,2)",
           metrics: { spend: { amount: "1000000000", currency: "USD" }, requests: "1", successes: "1" },
         },
+        {
+          at: "2026-10-24T00:00:00Z",
+          group: "  =1+1",
+          metrics: { spend: { amount: "500000000", currency: "USD" }, requests: "1", successes: "1" },
+        },
       ],
       "USD",
       "day",
     );
     const csv = buildUsageCsv(
-      ["bucket", "group", "req", "ok", "spend", "in", "out", "cr", "cw"],
+      ["bucket", "currency", "group", "req", "ok", "spend", "in", "out", "cr", "cw"],
       slots,
       groups,
       new Map(),
     );
     expect(csv.startsWith("\uFEFF")).toBe(true);
-    expect(csv).toContain(`"'=SUM(1,2)"`);
+    expect(csv).toContain(`"'=SUM(1,2)",1,1,1,,,,\n`);
+    expect(csv).toContain(`,USD,'  =1+1,1,1,0.5,,,,\n`);
+  });
+
+  it("distinguishes unreported fields from zero and handles zero physical input cache denominator", () => {
+    const metrics = [{ spend: { amount: "1000000000", currency: "USD" }, requests: "2", cache_rate_requests: "2" }];
+    const totals = toUsageTotals(metrics, "USD", true);
+    expect(totals).not.toBeNull();
+    if (!totals) return;
+    const kpi = buildKpiView(totals, null, "USD", fmt, labels);
+    expect(kpi.totals2).toBe("—");
+    expect(kpi.totals3).toBe("—");
+    expect(kpi.ppmCurrency).toBe("");
+    expect(kpi.hrUnit).toBe("");
+    expect(formatSpendPerMillion(totals)).toBe("—");
+
+    const tok = buildTokenView(totals, fmt, labels);
+    expect(tok.tokens0[0]?.f4).toBe("—");
+    expect(tok.cacheHitNote).toBe("Eligible 2, 0 physical input");
+
+    const groups = aggregateGroups([{ at: "2026-10-24T00:00:00Z", group: "m1", metrics: metrics[0] }], "USD", "day");
+    const table = buildTableView({
+      groups,
+      totals,
+      names: new Map(),
+      colors: new Map(),
+      metric: "spend",
+      groupBy: "model",
+      sortCol: "spend",
+      focusGroup: null,
+      format: fmt,
+      currency: "USD",
+      labels,
+    });
+    expect(table.models0[0]?.f18).toBe("—");
+    expect(table.models0[0]?.f20).toBe("—");
+  });
+
+  it("preserves exact BigInt money precision, small averages, partial week labels, and focused aria", () => {
+    const groups = aggregateGroups(
+      [
+        {
+          at: "2026-10-14T00:00:00Z",
+          group: "g1",
+          metrics: { spend: { amount: "9007199254740992", currency: "USD" }, requests: "1" },
+        },
+        {
+          at: "2026-10-14T00:00:00Z",
+          group: "g2",
+          metrics: { spend: { amount: "1", currency: "USD" }, requests: "1" },
+        },
+      ],
+      "USD",
+      "week",
+    );
+    const total = sumGroupTotals(groups, "USD");
+    expect(total.spendNano).toBe(9007199254740993n);
+
+    const slots = buildBucketSlots(Date.parse("2026-10-14T00:00:00Z"), Date.parse("2026-10-16T00:00:00Z"), "week");
+    const chartAll = buildChartView({
+      slots,
+      groups,
+      totals: total,
+      names: new Map(),
+      colors: new Map(),
+      metric: "spend",
+      granularity: "week",
+      chartWidth: 800,
+      hoverSlot: 0,
+      focusGroup: null,
+      format: fmt,
+      currency: "USD",
+      labels,
+    });
+    expect(chartAll.hoverTip?.bucketLabel).toBe("10/14 – 10/15");
+    expect(chartAll.hoverTip?.totalFormatted).toBe("$9007199.254740993");
+
+    const chartFocused = buildChartView({
+      slots,
+      groups,
+      totals: total,
+      names: new Map(),
+      colors: new Map(),
+      metric: "spend",
+      granularity: "week",
+      chartWidth: 800,
+      hoverSlot: null,
+      focusGroup: "g2",
+      format: fmt,
+      currency: "USD",
+      labels,
+    });
+    expect(chartFocused.chartAria).toContain("$0.000000001");
+
+    const smallTot = toUsageTotals([{ spend: { amount: "1499999", currency: "USD" }, requests: "1" }], "USD");
+    expect(smallTot && formatAvgPerRequest(smallTot, fmt.money, "USD")).toBe("$0.001499999");
+
+    const bigA = groups[0]?.totals;
+    const bigB = groups[1]?.totals;
+    expect(bigA && bigB ? compareUsageTotals(bigA, bigB, "avg") : 0).toBe(1);
+  });
+
+  it("distinguishes previous-period states, payload validation, and multiple currencies", () => {
+    const emptyPrev = toUsageTotals([], "USD", true);
+    const curr = toUsageTotals([{ spend: { amount: "5000000000", currency: "USD" }, requests: "10" }], "USD");
+    expect(curr && buildKpiView(curr, emptyPrev, "USD", fmt, labels).changes0).toBe("New");
+    expect(curr && buildKpiView(curr, null, "USD", fmt, labels).changes0).toBe("—");
+
+    const freeGroups = aggregateGroups(
+      [
+        {
+          at: "2026-10-14T00:00:00Z",
+          group: "m1",
+          metrics: { spend: { amount: "0", currency: "USD" }, requests: "10" },
+        },
+      ],
+      "USD",
+      "week",
+    );
+    expect(
+      buildMoversView({
+        currGroups: freeGroups,
+        prevGroups: freeGroups,
+        prevStatus: "ready",
+        prevHasCalls: true,
+        names: new Map(),
+        colors: new Map(),
+        metric: "spend",
+        format: fmt,
+        currency: "USD",
+        labels,
+      }).statusNote,
+    ).toBe("No metric change");
+    expect(
+      buildMoversView({
+        currGroups: freeGroups,
+        prevGroups: null,
+        prevStatus: "error",
+        prevHasCalls: true,
+        names: new Map(),
+        colors: new Map(),
+        metric: "spend",
+        format: fmt,
+        currency: "USD",
+        labels,
+      }),
+    ).toMatchObject({ isError: true, statusNote: "Failed movers" });
+
+    expect(
+      currenciesOfUsage({
+        totals: [
+          { spend: { amount: "100", currency: "USD" }, requests: "1" },
+          { spend: { amount: "200", currency: "CNY" }, requests: "1" },
+        ],
+        buckets: [],
+      }),
+    ).toEqual(["USD", "CNY"]);
+    expect(hasUsageStatisticsPayload({ totals: [] })).toBe(false);
+    expect(hasUsageStatisticsPayload({ buckets: [] })).toBe(false);
+    expect(hasUsageStatisticsPayload({ totals: [], buckets: [] })).toBe(true);
   });
 });

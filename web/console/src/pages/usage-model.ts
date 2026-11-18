@@ -1,4 +1,5 @@
 import type { Schemas } from "@axiom/api";
+import { moneyInput } from "@axiom/ui";
 import type { UsageGranularity } from "../queries";
 
 export type UsageMetricKey = "spend" | "requests" | "tokens";
@@ -19,13 +20,21 @@ export const SERIES_COLORS = ["var(--c0)", "var(--c4)", "var(--c1)", "var(--c3)"
 export type UsageTotals = {
   currency: string;
   spendNano: bigint;
+  spendReported: boolean;
   requests: bigint;
+  requestsReported: boolean;
   successes: bigint;
+  successesReported: boolean;
   input: bigint;
+  inputReported: boolean;
   output: bigint;
+  outputReported: boolean;
   cacheRead: bigint;
+  cacheReadReported: boolean;
   cacheWrite: bigint;
+  cacheWriteReported: boolean;
   tokens: bigint;
+  totalTokensReported: boolean;
   cacheRateRequests: bigint;
   cacheHitRate: number | null;
   successRate: number | null;
@@ -47,7 +56,13 @@ export type RangeValidation =
   | { ok: true; sinceMs: number; untilMs: number; hours: number; days: number }
   | { ok: false; reason: "hour" | "order" | "limit"; days: number; limitDays: number };
 
-const parseBig = (value?: string): bigint => (value && /^\d+$/.test(value) ? BigInt(value) : 0n);
+const parseOptBig = (value?: string): { value: bigint; reported: boolean } =>
+  value !== undefined && /^\d+$/.test(value)
+    ? { value: BigInt(value), reported: true }
+    : { value: 0n, reported: false };
+
+const bigRatio = (num: bigint, den: bigint): number | null =>
+  den > 0n ? Number((num * 10_000n + den / 2n) / den) / 10_000 : null;
 
 export const seriesColor = (index: number) => SERIES_COLORS[index % SERIES_COLORS.length] as string;
 
@@ -108,71 +123,142 @@ export function previousWindow(sinceMs: number, untilMs: number) {
   };
 }
 
-function emptyTotals(currency: string): UsageTotals {
+function emptyTotals(currency: string, allReported = false): UsageTotals {
   return {
     currency,
     spendNano: 0n,
+    spendReported: allReported,
     requests: 0n,
+    requestsReported: allReported,
     successes: 0n,
+    successesReported: allReported,
     input: 0n,
+    inputReported: allReported,
     output: 0n,
+    outputReported: allReported,
     cacheRead: 0n,
+    cacheReadReported: allReported,
     cacheWrite: 0n,
+    cacheWriteReported: allReported,
     tokens: 0n,
+    totalTokensReported: allReported,
     cacheRateRequests: 0n,
     cacheHitRate: null,
     successRate: null,
   };
 }
 
-function addMetric(target: UsageTotals, metric: Schemas["UsageMetrics"]): UsageTotals {
-  const input = target.input + parseBig(metric.tokens?.input);
-  const output = target.output + parseBig(metric.tokens?.output);
-  const cacheRead = target.cacheRead + parseBig(metric.tokens?.cache_read);
-  const cacheWrite = target.cacheWrite + parseBig(metric.tokens?.cache_write);
-  const requests = target.requests + parseBig(metric.requests);
-  const successes = target.successes + parseBig(metric.successes);
+function fromMetric(currency: string, metric: Schemas["UsageMetrics"]): UsageTotals {
+  const spend = parseOptBig(metric.spend?.amount);
+  const requests = parseOptBig(metric.requests);
+  const successes = parseOptBig(metric.successes);
+  const input = parseOptBig(metric.tokens?.input);
+  const output = parseOptBig(metric.tokens?.output);
+  const cacheRead = parseOptBig(metric.tokens?.cache_read);
+  const cacheWrite = parseOptBig(metric.tokens?.cache_write);
+  const cacheRateRequests = parseOptBig(metric.cache_rate_requests);
+  const totalTokensReported = input.reported || output.reported || cacheRead.reported || cacheWrite.reported;
   return {
-    currency: target.currency,
-    spendNano: target.spendNano + parseBig(metric.spend?.amount),
-    requests,
-    successes,
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    tokens: input + output + cacheRead + cacheWrite,
-    cacheRateRequests: target.cacheRateRequests + parseBig(metric.cache_rate_requests),
-    cacheHitRate: target.cacheHitRate,
-    successRate: requests > 0n ? Number(successes) / Number(requests) : null,
+    currency,
+    spendNano: spend.value,
+    spendReported: spend.reported,
+    requests: requests.value,
+    requestsReported: requests.reported,
+    successes: successes.value,
+    successesReported: successes.reported,
+    input: input.value,
+    inputReported: input.reported,
+    output: output.value,
+    outputReported: output.reported,
+    cacheRead: cacheRead.value,
+    cacheReadReported: cacheRead.reported,
+    cacheWrite: cacheWrite.value,
+    cacheWriteReported: cacheWrite.reported,
+    tokens: input.value + output.value + cacheRead.value + cacheWrite.value,
+    totalTokensReported,
+    cacheRateRequests: cacheRateRequests.value,
+    cacheHitRate: metric.cache_hit_rate ?? null,
+    successRate:
+      metric.success_rate ??
+      (requests.reported && successes.reported ? bigRatio(successes.value, requests.value) : null),
   };
 }
+
+function mergeUsageTotals(a: UsageTotals, b: UsageTotals): UsageTotals {
+  const requests = a.requests + b.requests;
+  const successes = a.successes + b.successes;
+  const requestsReported = a.requestsReported || b.requestsReported;
+  const successesReported = a.successesReported || b.successesReported;
+  const input = a.input + b.input;
+  const output = a.output + b.output;
+  const cacheRead = a.cacheRead + b.cacheRead;
+  const cacheWrite = a.cacheWrite + b.cacheWrite;
+  return {
+    currency: a.currency,
+    spendNano: a.spendNano + b.spendNano,
+    spendReported: a.spendReported || b.spendReported,
+    requests,
+    requestsReported,
+    successes,
+    successesReported,
+    input,
+    inputReported: a.inputReported || b.inputReported,
+    output,
+    outputReported: a.outputReported || b.outputReported,
+    cacheRead,
+    cacheReadReported: a.cacheReadReported || b.cacheReadReported,
+    cacheWrite,
+    cacheWriteReported: a.cacheWriteReported || b.cacheWriteReported,
+    tokens: input + output + cacheRead + cacheWrite,
+    totalTokensReported: a.totalTokensReported || b.totalTokensReported,
+    cacheRateRequests: a.cacheRateRequests + b.cacheRateRequests,
+    cacheHitRate: null,
+    successRate: requestsReported && successesReported ? bigRatio(successes, requests) : null,
+  };
+}
+
+export function currenciesOfUsage(data: Schemas["UsageStatistics"] | undefined): string[] {
+  const out: string[] = [];
+  const push = (c?: string) => {
+    if (c && !out.includes(c)) out.push(c);
+  };
+  for (const item of data?.totals ?? []) push(item.spend?.currency);
+  for (const bucket of data?.buckets ?? []) push(bucket.metrics?.spend?.currency);
+  for (const item of data?.previous ?? []) push(item.spend?.currency);
+  return out;
+}
+
+export const hasUsageStatisticsPayload = (data: Schemas["UsageStatistics"] | undefined): boolean =>
+  Boolean(data && Array.isArray(data.totals) && Array.isArray(data.buckets));
+
+const metricForCurrency = (metric: Schemas["UsageMetrics"], currency: string, hasOtherCurrency: boolean): boolean =>
+  metric.spend?.currency ? metric.spend.currency === currency : !hasOtherCurrency;
 
 export function selectCurrency(
   totals: readonly Schemas["UsageMetrics"][] | undefined,
   preferred?: string,
+  allCurrencies: readonly string[] = [],
 ): string | undefined {
-  if (!totals?.length) return preferred;
-  if (preferred && totals.some((item) => item.spend?.currency === preferred)) return preferred;
-  return totals[0]?.spend?.currency ?? preferred;
+  const present = totals?.map((item) => item.spend?.currency).filter((c): c is string => Boolean(c)) ?? [];
+  const candidates = allCurrencies.length ? allCurrencies : present;
+  if (!candidates.length) return preferred;
+  if (preferred && candidates.includes(preferred)) return preferred;
+  return candidates[0] ?? preferred;
 }
 
 export function toUsageTotals(
   metrics: readonly Schemas["UsageMetrics"][] | undefined,
   currency: string,
+  emptyAsZero = false,
 ): UsageTotals | null {
-  const matching = metrics?.filter((item) => (item.spend?.currency ?? currency) === currency) ?? [];
-  if (!matching.length) return null;
+  if (!Array.isArray(metrics)) return null;
+  const hasOther = metrics.some((item) => Boolean(item.spend?.currency && item.spend.currency !== currency));
+  const matching = metrics.filter((item) => metricForCurrency(item, currency, hasOther));
+  if (!matching.length) return emptyAsZero ? emptyTotals(currency, true) : null;
+  if (matching.length === 1) return fromMetric(currency, matching[0] as Schemas["UsageMetrics"]);
   let acc = emptyTotals(currency);
-  for (const item of matching) acc = addMetric(acc, item);
-  if (matching.length === 1) {
-    const single = matching[0] as Schemas["UsageMetrics"];
-    acc.cacheHitRate = single.cache_hit_rate ?? null;
-    acc.successRate = single.success_rate ?? null;
-  } else {
-    const denom = acc.input + acc.cacheRead;
-    acc.cacheHitRate = acc.cacheRateRequests > 0n && denom > 0n ? Number(acc.cacheRead) / Number(denom) : null;
-  }
+  for (const item of matching) acc = mergeUsageTotals(acc, fromMetric(currency, item));
+  acc.cacheHitRate = acc.cacheRateRequests > 0n ? bigRatio(acc.cacheRead, acc.input + acc.cacheRead) : null;
   return acc;
 }
 
@@ -204,17 +290,19 @@ function addBucket(
   bucket: Schemas["UsageBucket"],
   currency: string,
   granularity: UsageGranularity,
+  hasOtherCurrency: boolean,
 ) {
   const m = bucket.metrics;
-  if (!m || (m.spend?.currency ?? currency) !== currency) return;
+  if (!m || !metricForCurrency(m, currency, hasOtherCurrency)) return;
+  const item = fromMetric(currency, m);
   const id = bucket.group ?? "";
   const entry = map.get(id) ?? { id, totals: emptyTotals(currency), bySlot: new Map<number, UsageTotals>() };
   map.set(id, entry);
-  entry.totals = addMetric(entry.totals, m);
+  entry.totals = mergeUsageTotals(entry.totals, item);
   const parsedAt = bucket.at ? Date.parse(bucket.at) : Number.NaN;
   if (!Number.isFinite(parsedAt)) return;
   const slotMs = alignBucketMs(parsedAt, granularity);
-  entry.bySlot.set(slotMs, addMetric(entry.bySlot.get(slotMs) ?? emptyTotals(currency), m));
+  entry.bySlot.set(slotMs, mergeUsageTotals(entry.bySlot.get(slotMs) ?? emptyTotals(currency), item));
 }
 
 export function aggregateGroups(
@@ -222,45 +310,25 @@ export function aggregateGroups(
   currency: string,
   granularity: UsageGranularity,
 ): GroupAggregate[] {
+  const list = buckets ?? [];
+  const hasOther = list.some((b) => Boolean(b.metrics?.spend?.currency && b.metrics.spend.currency !== currency));
   const map = new Map<string, GroupAggregate>();
-  for (const bucket of buckets ?? []) addBucket(map, bucket, currency, granularity);
+  for (const bucket of list) addBucket(map, bucket, currency, granularity, hasOther);
   return [...map.values()];
 }
 
-export function sumGroupTotals(groups: readonly GroupAggregate[], currency: string): UsageTotals {
-  let spendNano = 0n;
-  let requests = 0n;
-  let successes = 0n;
-  let input = 0n;
-  let output = 0n;
-  let cacheRead = 0n;
-  let cacheWrite = 0n;
-  let cacheRateRequests = 0n;
-  for (const group of groups) {
-    spendNano += group.totals.spendNano;
-    requests += group.totals.requests;
-    successes += group.totals.successes;
-    input += group.totals.input;
-    output += group.totals.output;
-    cacheRead += group.totals.cacheRead;
-    cacheWrite += group.totals.cacheWrite;
-    cacheRateRequests += group.totals.cacheRateRequests;
-  }
-  return {
-    currency,
-    spendNano,
-    requests,
-    successes,
-    input,
-    output,
-    cacheRead,
-    cacheWrite,
-    tokens: input + output + cacheRead + cacheWrite,
-    cacheRateRequests,
-    cacheHitRate: null,
-    successRate: requests > 0n ? Number(successes) / Number(requests) : null,
-  };
+export function sumUsageTotals(items: readonly UsageTotals[], currency: string): UsageTotals {
+  let acc = emptyTotals(currency);
+  for (const item of items) acc = mergeUsageTotals(acc, item);
+  if (acc.cacheRateRequests > 0n) acc.cacheHitRate = bigRatio(acc.cacheRead, acc.input + acc.cacheRead);
+  return acc;
 }
+
+export const sumGroupTotals = (groups: readonly GroupAggregate[], currency: string): UsageTotals =>
+  sumUsageTotals(
+    groups.map((g) => g.totals),
+    currency,
+  );
 
 export function metricValue(totals: UsageTotals, metric: UsageMetricKey): number {
   if (metric === "spend") return Number(totals.spendNano) / 1e9;
@@ -268,12 +336,30 @@ export function metricValue(totals: UsageTotals, metric: UsageMetricKey): number
   return Number(totals.tokens);
 }
 
-export function sortValue(totals: UsageTotals, col: UsageSortCol): number {
-  if (col === "spend") return Number(totals.spendNano);
-  if (col === "requests") return Number(totals.requests);
-  if (col === "input") return Number(totals.input);
-  if (col === "output") return Number(totals.output);
-  return totals.requests > 0n ? Number(totals.spendNano) / Number(totals.requests) : 0;
+const cmpBig = (a: bigint, b: bigint): number => (a < b ? -1 : a > b ? 1 : 0);
+const cmpReported = (aOk: boolean, bOk: boolean, cmp: () => number): number =>
+  (aOk ? 1 : 0) - (bOk ? 1 : 0) || (aOk ? cmp() : 0);
+
+const sortComparators: Record<UsageSortCol, (a: UsageTotals, b: UsageTotals) => number> = {
+  spend: (a, b) => cmpBig(a.spendNano, b.spendNano),
+  requests: (a, b) => cmpBig(a.requests, b.requests),
+  input: (a, b) => cmpReported(a.inputReported, b.inputReported, () => cmpBig(a.input, b.input)),
+  output: (a, b) => cmpReported(a.outputReported, b.outputReported, () => cmpBig(a.output, b.output)),
+  avg: (a, b) =>
+    cmpReported(
+      a.spendReported && a.requestsReported && a.requests > 0n,
+      b.spendReported && b.requestsReported && b.requests > 0n,
+      () => cmpBig(a.spendNano * b.requests, b.spendNano * a.requests),
+    ),
+};
+
+export const compareUsageTotals = (a: UsageTotals, b: UsageTotals, col: UsageSortCol): number =>
+  sortComparators[col](a, b);
+
+export function metricBigValue(totals: UsageTotals, metric: UsageMetricKey): bigint {
+  if (metric === "spend") return totals.spendNano;
+  if (metric === "requests") return totals.requests;
+  return totals.tokens;
 }
 
 export function sortColForMetric(metric: UsageMetricKey): UsageSortCol {
@@ -282,24 +368,29 @@ export function sortColForMetric(metric: UsageMetricKey): UsageSortCol {
   return "spend";
 }
 
-export function niceAxisScale(maxValue: number): { step: number; top: number; ticks: number[] } {
+export function niceAxisScale(maxValue: number, integerOnly = false): { step: number; top: number; ticks: number[] } {
   const mx = maxValue > 0 ? maxValue : 1;
   const raw = mx / 3;
   const pow = 10 ** Math.floor(Math.log10(raw));
   const frac = raw / pow;
-  const step = Number(((frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10) * pow).toPrecision(10));
+  const baseStep = Number(((frac <= 1 ? 1 : frac <= 2 ? 2 : frac <= 5 ? 5 : 10) * pow).toPrecision(10));
+  const step = integerOnly ? Math.max(1, baseStep) : baseStep;
   const top = Math.max(1, Math.ceil(mx / step)) * step * 1.02;
   const ticks: number[] = [];
   for (let i = 1; i * step < top; i++) ticks.push(Number((i * step).toPrecision(10)));
   return { step, top, ticks };
 }
 
+function formatScaledUnit(value: bigint, div: bigint, suffix: string): string {
+  const tenths = (value * 10n + div / 2n) / div;
+  return `${tenths / 10n}.${tenths % 10n}${suffix}`;
+}
+
 export function formatCompactTokens(tokens: bigint, integerFmt: (n: bigint | number) => string): string {
   if (tokens < 1000n) return integerFmt(tokens);
-  const n = Number(tokens);
-  if (n < 1_000_000) return `${(n / 1e3).toFixed(1)}k`;
-  if (n < 1_000_000_000) return `${(n / 1e6).toFixed(1)}M`;
-  return `${(n / 1e9).toFixed(1)}B`;
+  if (tokens < 999_950n) return formatScaledUnit(tokens, 1_000n, "k");
+  if (tokens < 999_950_000n) return formatScaledUnit(tokens, 1_000_000n, "M");
+  return formatScaledUnit(tokens, 1_000_000_000n, "B");
 }
 
 export function splitCurrency(formatted: string): { symbol: string; number: string } {
@@ -307,42 +398,32 @@ export function splitCurrency(formatted: string): { symbol: string; number: stri
   return m ? { symbol: (m[1] ?? "").trim(), number: (m[2] ?? formatted).trim() } : { symbol: "", number: formatted };
 }
 
-function nanoToMoneyString(nano: bigint): string {
-  const sign = nano < 0n ? "-" : "";
-  const abs = nano < 0n ? -nano : nano;
-  const whole = abs / 1_000_000_000n;
-  const frac = (abs % 1_000_000_000n).toString().padStart(9, "0").replace(/0+$/, "");
-  return frac ? `${sign}${whole}.${frac}` : `${sign}${whole}`;
-}
-
-export function formatSpendPerMillion(spendNano: bigint, tokens: bigint): string {
-  if (tokens <= 0n || spendNano <= 0n) return "0.00";
-  const ppm = Number(spendNano) / (Number(tokens) * 1e3);
-  return ppm.toFixed(2);
+export function formatSpendPerMillion(totals: UsageTotals): string {
+  if (!totals.spendReported || !totals.totalTokensReported || totals.tokens <= 0n) return "—";
+  const cents = (totals.spendNano + totals.tokens * 5n) / (totals.tokens * 10n);
+  return `${cents / 100n}.${(cents % 100n).toString().padStart(2, "0")}`;
 }
 
 export function formatAvgPerRequest(
-  spendNano: bigint,
-  requests: bigint,
+  totals: UsageTotals,
   moneyFmt: (m: { amount: string; currency: string }) => string,
   currency: string,
 ): string {
-  if (requests <= 0n) return "—";
-  const roundedNano = (spendNano + requests / 2n) / requests;
-  if (roundedNano > 0n && roundedNano < 10_000_000n) {
-    const millRounded = ((roundedNano + 500_000n) / 1_000_000n) * 1_000_000n;
-    const formatted = moneyFmt({ amount: millRounded.toString(), currency });
-    const parts = /^(.*\.\d{2})(\d)$/.exec(formatted);
-    return parts ? formatted : moneyFmt({ amount: roundedNano.toString(), currency });
-  }
+  if (!totals.spendReported || !totals.requestsReported || totals.requests <= 0n) return "—";
+  const roundedNano = (totals.spendNano + totals.requests / 2n) / totals.requests;
   return moneyFmt({ amount: roundedNano.toString(), currency });
 }
 
-export function formatDeltaPercent(curr: number, prev: number | null, newLabel: string): string {
+export function formatBigDeltaPercent(curr: bigint, prev: bigint | null, newLabel: string): string {
   if (prev === null) return "—";
-  if (prev === 0) return curr > 0 ? newLabel : "—";
-  const pct = (curr / prev - 1) * 100;
-  return `${pct >= 0 ? "+" : "−"}${Math.abs(pct).toFixed(Math.abs(pct) < 10 ? 1 : 0)}%`;
+  if (prev === 0n) return curr > 0n ? newLabel : "0%";
+  const diff = curr - prev;
+  const sign = diff >= 0n ? "+" : "−";
+  const absDiff = diff >= 0n ? diff : -diff;
+  const tenths = (absDiff * 1000n + prev / 2n) / prev;
+  if (tenths < 100n) return `${sign}${tenths / 10n}.${tenths % 10n}%`;
+  const whole = (absDiff * 100n + prev / 2n) / prev;
+  return `${sign}${whole}%`;
 }
 
 export function xTickIndices(count: number, granularity: UsageGranularity): number[] {
@@ -363,21 +444,25 @@ export function xTickIndices(count: number, granularity: UsageGranularity): numb
 }
 
 const csvSafe = (value: string): string => {
-  const trimmed = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
-  return /[",\n\r]/.test(trimmed) ? `"${trimmed.replaceAll('"', '""')}"` : trimmed;
+  const lead = value.trimStart();
+  const escaped = /^[=+\-@\t\r]/.test(value) || /^[=+\-@]/.test(lead) ? `'${value}` : value;
+  return /[",\n\r]/.test(escaped) ? `"${escaped.replaceAll('"', '""')}"` : escaped;
 };
+
+const optCell = (reported: boolean, val: bigint) => (reported ? val.toString() : "");
 
 const csvRow = (slotIso: string, groupName: string, m: UsageTotals) =>
   [
     slotIso,
+    m.currency,
     groupName,
-    m.requests.toString(),
-    m.successes.toString(),
-    nanoToMoneyString(m.spendNano),
-    m.input.toString(),
-    m.output.toString(),
-    m.cacheRead.toString(),
-    m.cacheWrite.toString(),
+    optCell(m.requestsReported, m.requests),
+    optCell(m.successesReported, m.successes),
+    m.spendReported ? moneyInput(m.spendNano.toString()) : "",
+    optCell(m.inputReported, m.input),
+    optCell(m.outputReported, m.output),
+    optCell(m.cacheReadReported, m.cacheRead),
+    optCell(m.cacheWriteReported, m.cacheWrite),
   ]
     .map(csvSafe)
     .join(",");
@@ -392,7 +477,9 @@ export function buildUsageCsv(
   for (const slot of slots) {
     for (const group of groups) {
       const m = group.bySlot.get(slot.atMs);
-      if (m && m.requests > 0n) lines.push(csvRow(slot.sinceIso, groupNames.get(group.id) ?? group.id, m));
+      if (m && (m.requests > 0n || m.spendNano > 0n || m.tokens > 0n)) {
+        lines.push(csvRow(slot.sinceIso, groupNames.get(group.id) ?? group.id, m));
+      }
     }
   }
   return `\uFEFF${lines.join("\n")}\n`;

@@ -10,9 +10,13 @@ type UsageAcc = {
   requests: number;
   successes: number;
   input: number;
+  hasInput: boolean;
   output: number;
+  hasOutput: boolean;
   cacheRead: number;
+  hasCacheRead: boolean;
   cacheWrite: number;
+  hasCacheWrite: boolean;
   cacheRateRequests: number;
 };
 
@@ -35,9 +39,13 @@ const emptyAcc = (currency: string): UsageAcc => ({
   requests: 0,
   successes: 0,
   input: 0,
+  hasInput: false,
   output: 0,
+  hasOutput: false,
   cacheRead: 0,
+  hasCacheRead: false,
   cacheWrite: 0,
+  hasCacheWrite: false,
   cacheRateRequests: 0,
 });
 
@@ -45,27 +53,40 @@ function accumulateCall(acc: UsageAcc, call: Schemas["Call"]) {
   acc.spend += BigInt(call.price.amount);
   acc.requests += 1;
   if (call.error_kind === "") acc.successes += 1;
-  const inp = call.usage?.input ?? 0;
-  const cr = call.usage?.cache_read ?? 0;
-  acc.input += inp;
-  acc.output += call.usage?.output ?? 0;
-  acc.cacheRead += cr;
-  acc.cacheWrite += call.usage?.cache_write ?? 0;
-  if (inp + cr > 0) acc.cacheRateRequests += 1;
+  const u = call.usage;
+  if (u?.input !== undefined) {
+    acc.input += u.input;
+    acc.hasInput = true;
+  }
+  if (u?.output !== undefined) {
+    acc.output += u.output;
+    acc.hasOutput = true;
+  }
+  if (u?.cache_read !== undefined) {
+    acc.cacheRead += u.cache_read;
+    acc.hasCacheRead = true;
+  }
+  if (u?.cache_write !== undefined) {
+    acc.cacheWrite += u.cache_write;
+    acc.hasCacheWrite = true;
+  }
+  if (u?.input !== undefined && u?.cache_read !== undefined) acc.cacheRateRequests += 1;
 }
 
 function toUsageMetrics(acc: UsageAcc): Schemas["UsageMetrics"] {
+  const tokens: Schemas["UsageTokens"] = {
+    ...(acc.hasInput ? { input: String(acc.input) } : {}),
+    ...(acc.hasOutput ? { output: String(acc.output) } : {}),
+    ...(acc.hasCacheRead ? { cache_read: String(acc.cacheRead) } : {}),
+    ...(acc.hasCacheWrite ? { cache_write: String(acc.cacheWrite) } : {}),
+  };
+  const hasAnyToken = acc.hasInput || acc.hasOutput || acc.hasCacheRead || acc.hasCacheWrite;
   const denom = acc.input + acc.cacheRead;
   return {
     spend: { amount: acc.spend.toString(), currency: acc.currency },
     requests: String(acc.requests),
     successes: String(acc.successes),
-    tokens: {
-      input: String(acc.input),
-      output: String(acc.output),
-      cache_read: String(acc.cacheRead),
-      cache_write: String(acc.cacheWrite),
-    },
+    ...(hasAnyToken ? { tokens } : {}),
     cache_rate_requests: String(acc.cacheRateRequests),
     ...(acc.cacheRateRequests > 0 && denom > 0 ? { cache_hit_rate: acc.cacheRead / denom } : {}),
     ...(acc.requests > 0 ? { success_rate: acc.successes / acc.requests } : {}),
@@ -114,7 +135,7 @@ function validHourWindow(sinceMs: number, untilMs: number, gran: string) {
 }
 
 function parseUsageQuery(query: URLSearchParams) {
-  const gran = query.get("granularity") ?? "hour";
+  const gran = query.get("granularity") ?? "day";
   const groupRaw = query.get("group_by");
   if (!GRANS.has(gran)) return null;
   if (groupRaw && !GROUPS.has(groupRaw)) return null;

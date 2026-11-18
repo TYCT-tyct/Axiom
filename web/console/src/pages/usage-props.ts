@@ -23,7 +23,13 @@ import {
   type UsageSortCol,
   type validateUsageRange,
 } from "./usage-model";
-import { buildCalendarView, buildMoversView, buildTableView, buildTokenView } from "./usage-view";
+import {
+  buildCalendarView,
+  buildMoversView,
+  buildTableView,
+  buildTokenView,
+  type MoversPrevStatus,
+} from "./usage-view";
 
 export function getUsageLabels(language: UsageLanguage): UsageViewLabels & {
   quick: readonly [string, string, string, string];
@@ -64,8 +70,13 @@ export function getUsageLabels(language: UsageLanguage): UsageViewLabels & {
     successOnly: (rate) => txt("successRate", { rate }),
     deltaWithSuccess: (delta, rate) => txt("deltaWithSuccess", { delta, rate }),
     cacheHitSummary: (rate, count) => txt("cacheHitSummary", { rate, count }),
+    cacheHitZeroDenom: (count) => txt("cacheHitZeroDenom", { count }),
     cacheHitNone: txt("cacheHitNone"),
     noMovers: txt("noMovers"),
+    moversLoading: txt("moversLoading"),
+    moversFailed: txt("moversFailed"),
+    moversMissingPrev: txt("moversMissingPrev"),
+    noMetricChange: txt("noMetricChange"),
     chartAria: (title, buckets, total) => txt("chartAria", { title, buckets, total }),
     quick: [txt("quickYesterday"), txt("quickLastWeek"), txt("quickLastMonth"), txt("quick90d")],
     ranges: [txt("rangeToday"), txt("range7d"), txt("range30d"), txt("rangeMonth"), txt("rangeCustom")],
@@ -237,24 +248,27 @@ function makeValues(
     omitForecast: true,
     omitSavings: true,
     filterBarRef: (el) => p.setFilterBarEl(el),
+    keyPopRef: (el) => p.setKeyPopEl(el),
+    chartSvgRef: (el) => p.setChartSvgEl(el),
+    moversRef: (el) => p.setMoversEl(el),
     exportDisabled: p.showState,
     onExport: p.onExport,
     onBodyClick: p.handlers.onBodyClick,
+    onBodyKeyDown: p.handlers.onBodyKeyDown,
     onChartMove: p.handlers.onChartMove,
-    onChartLeave: () => {
-      p.setHoverSlot(null);
-      p.setHoverGroup(null);
-    },
+    onChartLeave: () => p.setHoverSlot(null),
     onChartKeyDown: p.handlers.onChartKeyDown,
     chartAria: extra.chartAria,
     rangeSegStyle: `--n: 5; --i: ${extra.presetIdx};`,
     modelChipCls: p.openChip === "m" ? "open" : "",
     modelChipBtnCls: p.search.model ? "on" : "",
     modelChipExpanded: p.openChip === "m",
+    modelPopStyle: p.chips.modelOpts0.length > 8 ? "max-height: 320px; overflow-y: auto;" : "",
     keyChipCls: p.openChip === "k" ? "open" : "",
     keyChipBtnCls: p.search.key_id || p.search.workspace_id ? "on" : "",
     keyChipExpanded: p.openChip === "k",
-    chartCls: p.focusGroup !== null || p.hoverGroup !== null ? "hl" : "",
+    keyPopStyle: p.chips.keyOpts0.length > 8 ? "max-height: 320px; overflow-y: auto;" : "",
+    chartCls: p.focusGroup !== null ? "hl" : "",
     tipCls: extra.hoverTip ? "on" : "",
     tipStyle: extra.tipStyle,
   };
@@ -272,16 +286,18 @@ export type UsagePropsParams = {
   sortCol: UsageSortCol | null;
   openChip: "m" | "k" | null;
   focusGroup: string | null;
-  hoverGroup: string | null;
   hoverSlot: number | null;
   chartWidth: number;
   cal: CalState;
   prevRange: { since: string; until: string } | null;
   currency: string;
+  currencies: readonly string[];
   effectiveTotals: NonNullable<ReturnType<typeof toUsageTotals>>;
   prevTotals: ReturnType<typeof toUsageTotals>;
   currGroups: ReturnType<typeof aggregateGroups>;
   prevGroups: ReturnType<typeof aggregateGroups> | null;
+  prevStatus: MoversPrevStatus;
+  prevHasCalls: boolean;
   groupNames: ReadonlyMap<string, string>;
   colorMap: ReadonlyMap<string, string>;
   slots: ReturnType<typeof buildBucketSlots>;
@@ -290,8 +306,10 @@ export type UsagePropsParams = {
   showState: boolean;
   handlers: ReturnType<typeof useUsageHandlers>;
   setFilterBarEl: (el: Element | null) => void;
+  setKeyPopEl: (el: Element | null) => void;
+  setChartSvgEl: (el: Element | null) => void;
+  setMoversEl: (el: Element | null) => void;
   setHoverSlot: (v: number | null) => void;
-  setHoverGroup: (v: string | null) => void;
   onExport: () => void;
 };
 
@@ -303,7 +321,6 @@ function buildCalendarBlock(p: UsagePropsParams, quick: readonly [string, string
     hoverDay: p.cal.hover,
     todayDay: p.todayDay,
     granularity: p.granularity,
-    quickIndex: p.cal.quick,
     language: p.language,
     format: p.format,
     labels: {
@@ -337,15 +354,15 @@ function buildSubViews(p: UsagePropsParams, labels: ReturnType<typeof getUsageLa
     sortCol: p.sortCol ?? sortColForMetric(p.metric),
   });
   const tok = buildTokenView(p.effectiveTotals, p.format, labels);
-  const movers0 = buildMoversView({ ...p, ...shared });
-  return { chart, table, tok, movers0 };
+  const movers = buildMoversView({ ...p, ...shared });
+  return { chart, table, tok, movers };
 }
 
 function buildRowsAndText(p: UsagePropsParams, labels: ReturnType<typeof getUsageLabels>) {
   const presetIdx = ["today", "d7", "d30", "month", "custom"].indexOf(p.resolved.preset);
   const ranges = [...labels.ranges.slice(0, 4), customButtonLabel(p.resolved, p.format, labels.ranges[4])];
   const kpi = buildKpiView(p.effectiveTotals, p.prevTotals, p.currency, p.format, labels);
-  const { chart, table, tok, movers0 } = buildSubViews(p, labels);
+  const { chart, table, tok, movers } = buildSubViews(p, labels);
   const rows: UsageProps["rows"] = {
     ranges0: ranges.map((lbl, i) => ({
       key: `r-${i}`,
@@ -367,9 +384,14 @@ function buildRowsAndText(p: UsagePropsParams, labels: ReturnType<typeof getUsag
     models0: table.models0,
     tokenBars0: tok.tokenBars0,
     tokens0: tok.tokens0,
-    movers0,
+    movers0: movers.rows,
   };
+  const exportLabel =
+    p.currencies.length > 1
+      ? usageText(p.language, "exportCurrency", { currency: p.currency })
+      : usageText(p.language, "exportCsv");
   const text: UsageProps["text"] = {
+    exportLabel,
     ...kpi,
     modelChipLabel: p.chips.modelChipLabel,
     keyChipLabel: p.chips.keyChipLabel,
@@ -383,12 +405,12 @@ function buildRowsAndText(p: UsagePropsParams, labels: ReturnType<typeof getUsag
     tfootTotals4: table.tfootTotals4,
     cacheHitNote: tok.cacheHitNote,
   };
-  return { presetIdx, chart, rows, text };
+  return { presetIdx, chart, rows, text, moversStatusNote: movers.statusNote, moversError: movers.isError };
 }
 
 export function buildUsageProps(p: UsagePropsParams) {
   const labels = getUsageLabels(p.language);
-  const { presetIdx, chart, rows, text } = buildRowsAndText(p, labels);
+  const { presetIdx, chart, rows, text, moversStatusNote, moversError } = buildRowsAndText(p, labels);
   const values = makeValues(p, {
     presetIdx,
     chartAria: chart.chartAria,
@@ -397,7 +419,9 @@ export function buildUsageProps(p: UsagePropsParams) {
   });
   return {
     hoverTip: chart.hoverTip,
+    moversStatusNote,
+    moversError,
     usageProps: { values, rows, text },
-    calendarProps: buildCalendarBlock(p, labels.quick),
+    calendarProps: p.cal.open ? buildCalendarBlock(p, labels.quick) : null,
   };
 }

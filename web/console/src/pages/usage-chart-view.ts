@@ -2,14 +2,16 @@ import type { Props as UsageProps } from "@axiom/boards/AxApp/regions/Usage";
 import type { UsageGranularity, UsageGroupBy } from "../queries";
 import {
   type BucketSlot,
+  formatBigDeltaPercent,
   formatCompactTokens,
-  formatDeltaPercent,
   formatSpendPerMillion,
   type GroupAggregate,
+  metricBigValue,
   metricValue,
   niceAxisScale,
   SERIES_COLORS,
   splitCurrency,
+  sumUsageTotals,
   type UsageMetricKey,
   type UsageTotals,
   xTickIndices,
@@ -45,39 +47,48 @@ export type UsageViewLabels = {
   successOnly: (rate: string) => string;
   deltaWithSuccess: (delta: string, rate: string) => string;
   cacheHitSummary: (rate: string, count: string) => string;
+  cacheHitZeroDenom: (count: string) => string;
   cacheHitNone: string;
   noMovers: string;
+  moversLoading: string;
+  moversFailed: string;
+  moversMissingPrev: string;
+  noMetricChange: string;
   chartAria: (title: string, buckets: number, total: string) => string;
 };
 
 const formatSuccessPct = (rate: number) => `${(rate * 100).toFixed(1)}%`;
 
+export const isMetricReported = (t: UsageTotals, metric: UsageMetricKey): boolean =>
+  metric === "spend" ? t.spendReported : metric === "requests" ? t.requestsReported : t.totalTokensReported;
+
 export function formatMetricValue(
-  value: number,
   totals: UsageTotals | null,
   metric: UsageMetricKey,
   format: Formatters,
   currency: string,
 ): string {
-  if (metric === "spend") {
-    const nano = totals ? totals.spendNano : BigInt(Math.round(value * 1e9));
-    return format.money({ amount: nano.toString(), currency });
-  }
-  if (metric === "requests") {
-    return format.number(totals ? totals.requests : Math.round(value));
-  }
-  return formatCompactTokens(totals ? totals.tokens : BigInt(Math.round(value)), format.number);
+  if (!totals || !isMetricReported(totals, metric)) return "—";
+  if (metric === "spend") return format.money({ amount: totals.spendNano.toString(), currency });
+  if (metric === "requests") return format.number(totals.requests);
+  return formatCompactTokens(totals.tokens, format.number);
 }
 
 const formatReqChange = (totals: UsageTotals, previous: UsageTotals | null, labels: UsageViewLabels): string => {
-  const reqDelta = formatDeltaPercent(
-    Number(totals.requests),
-    previous ? Number(previous.requests) : null,
-    labels.newLabel,
-  );
+  const prevReq = previous?.requestsReported ? previous.requests : null;
+  const reqDelta = totals.requestsReported ? formatBigDeltaPercent(totals.requests, prevReq, labels.newLabel) : "—";
   if (totals.successRate === null) return reqDelta;
   const rate = formatSuccessPct(totals.successRate);
-  return previous ? labels.deltaWithSuccess(reqDelta, rate) : labels.successOnly(rate);
+  return prevReq !== null && totals.requestsReported
+    ? labels.deltaWithSuccess(reqDelta, rate)
+    : labels.successOnly(rate);
+};
+
+const formatPpmChange = (totals: UsageTotals, previous: UsageTotals | null, newLabel: string): string => {
+  if (!totals.spendReported || !totals.totalTokensReported || totals.tokens <= 0n) return "—";
+  if (!previous?.spendReported || !previous.totalTokensReported || previous.tokens <= 0n) return "—";
+  if (previous.spendNano === 0n) return totals.spendNano > 0n ? newLabel : "0%";
+  return formatBigDeltaPercent(totals.spendNano * previous.tokens, previous.spendNano * totals.tokens, newLabel);
 };
 
 const formatHitChange = (
@@ -99,29 +110,22 @@ export function buildKpiView(
 ) {
   const spendParts = splitCurrency(format.money({ amount: totals.spendNano.toString(), currency }));
   const oneParts = splitCurrency(format.money({ amount: "1000000000", currency }));
-  const currPpm = totals.tokens > 0n ? Number(totals.spendNano) / (Number(totals.tokens) * 1e3) : 0;
-  const prevPpm =
-    previous && previous.tokens > 0n
-      ? Number(previous.spendNano) / (Number(previous.tokens) * 1e3)
-      : previous
-        ? 0
-        : null;
+  const ppmText = formatSpendPerMillion(totals);
+  const spendOk = totals.spendReported && previous?.spendReported;
+  const tokOk = totals.totalTokensReported && previous?.totalTokensReported;
   return {
-    spendCurrency: spendParts.symbol,
-    ppmCurrency: oneParts.symbol,
-    totals0: spendParts.number,
-    totals1: format.number(totals.requests),
-    totals2: formatCompactTokens(totals.tokens, format.number),
-    totals3: formatSpendPerMillion(totals.spendNano, totals.tokens),
+    spendCurrency: totals.spendReported ? spendParts.symbol : "",
+    ppmCurrency: ppmText !== "—" ? oneParts.symbol : "",
+    hrUnit: totals.cacheHitRate !== null ? "%" : "",
+    totals0: totals.spendReported ? spendParts.number : "—",
+    totals1: totals.requestsReported ? format.number(totals.requests) : "—",
+    totals2: totals.totalTokensReported ? formatCompactTokens(totals.tokens, format.number) : "—",
+    totals3: ppmText,
     totals4: totals.cacheHitRate !== null ? (totals.cacheHitRate * 100).toFixed(1) : "—",
-    changes0: formatDeltaPercent(
-      Number(totals.spendNano),
-      previous ? Number(previous.spendNano) : null,
-      labels.newLabel,
-    ),
+    changes0: spendOk ? formatBigDeltaPercent(totals.spendNano, previous.spendNano, labels.newLabel) : "—",
     changes1: formatReqChange(totals, previous, labels),
-    changes2: formatDeltaPercent(Number(totals.tokens), previous ? Number(previous.tokens) : null, labels.newLabel),
-    changes3: formatDeltaPercent(currPpm, prevPpm, labels.newLabel),
+    changes2: tokOk ? formatBigDeltaPercent(totals.tokens, previous.tokens, labels.newLabel) : "—",
+    changes3: formatPpmChange(totals, previous, labels.newLabel),
     changes4: formatHitChange(totals.cacheHitRate, previous?.cacheHitRate, labels.ppDelta),
   };
 }
@@ -135,6 +139,9 @@ function formatTickValue(value: number, metric: UsageMetricKey, format: Formatte
   return formatCompactTokens(BigInt(Math.round(value)), format.number);
 }
 
+const sameUtcDay = (a: Date, b: Date) =>
+  a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
+
 function formatBucketLabel(
   slot: BucketSlot,
   granularity: UsageGranularity,
@@ -142,7 +149,7 @@ function formatBucketLabel(
   long: boolean,
   format: Formatters,
 ) {
-  const start = new Date(slot.atMs);
+  const start = new Date(Date.parse(slot.sinceIso));
   if (granularity === "hour") {
     const h = format.hour(start);
     return long || (multiDay && start.getUTCHours() === 0) ? `${format.day(start)} ${h}` : h;
@@ -150,7 +157,7 @@ function formatBucketLabel(
   if (granularity === "week") {
     if (!long) return format.day(start);
     const end = new Date(Date.parse(slot.untilIso) - 1);
-    return `${format.day(start)} – ${format.day(end)}`;
+    return sameUtcDay(start, end) ? format.dayFull(start) : `${format.day(start)} – ${format.day(end)}`;
   }
   return long ? format.dayFull(start) : format.day(start);
 }
@@ -279,20 +286,29 @@ function buildHoverTip(params: {
   const items = shown
     .map((g) => ({ group: g, slotTotals: g.bySlot.get(slot.atMs) }))
     .filter((x): x is { group: GroupAggregate; slotTotals: UsageTotals } =>
-      Boolean(x.slotTotals && metricValue(x.slotTotals, metric) > 0),
+      Boolean(x.slotTotals && metricBigValue(x.slotTotals, metric) > 0n),
     )
-    .sort((a, b) => metricValue(b.slotTotals, metric) - metricValue(a.slotTotals, metric));
-  const slotSum = items.reduce((s, x) => s + metricValue(x.slotTotals, metric), 0);
+    .sort((a, b) => {
+      const av = metricBigValue(a.slotTotals, metric);
+      const bv = metricBigValue(b.slotTotals, metric);
+      return bv > av ? 1 : bv < av ? -1 : 0;
+    });
+  const slotTotals = sumUsageTotals(
+    items.map((x) => x.slotTotals),
+    currency,
+  );
+  const tipWidth = Math.min(200, Math.max(160, width));
   const rightX = (hoverSlot + 1) * bw + 8;
-  const leftX = rightX + 200 > width ? Math.max(0, hoverSlot * bw - 208) : rightX;
+  const leftX =
+    rightX + tipWidth <= width ? rightX : Math.max(0, Math.min(width - tipWidth, hoverSlot * bw - tipWidth - 8));
   const hoverTip: HoverTipData = {
     bucketLabel: formatBucketLabel(slot, granularity, multiDay, true, format),
-    totalFormatted: formatMetricValue(slotSum, null, metric, format, currency),
-    items: items.slice(0, 4).map(({ group, slotTotals }) => ({
+    totalFormatted: formatMetricValue(items.length ? slotTotals : null, metric, format, currency),
+    items: items.slice(0, 4).map(({ group, slotTotals: st }) => ({
       id: group.id,
       name: names.get(group.id) ?? (group.id || unknownGroup),
       color: colors.get(group.id) ?? SERIES_COLORS[0],
-      valueFormatted: formatMetricValue(metricValue(slotTotals, metric), slotTotals, metric, format, currency),
+      valueFormatted: formatMetricValue(st, metric, format, currency),
     })),
   };
   return { hoverTip, tipStyle: `left: ${Math.round(leftX)}px;` };
@@ -319,15 +335,17 @@ export type ChartViewParams = {
   chartWidth: number;
   hoverSlot: number | null;
   focusGroup: string | null;
-  hoverGroup: string | null;
   format: Formatters;
   currency: string;
   labels: UsageViewLabels;
 };
 
-export function buildChartView(p: ChartViewParams) {
-  const width = Math.max(240, Math.round(p.chartWidth));
-  const sorted = [...p.groups].sort((a, b) => metricValue(b.totals, p.metric) - metricValue(a.totals, p.metric));
+function buildSeriesAndScale(p: ChartViewParams, width: number) {
+  const sorted = [...p.groups].sort((a, b) => {
+    const av = metricBigValue(a.totals, p.metric);
+    const bv = metricBigValue(b.totals, p.metric);
+    return bv > av ? 1 : bv < av ? -1 : 0;
+  });
   const shown = p.focusGroup === null ? sorted : sorted.filter((g) => g.id === p.focusGroup);
   const colSums = p.slots.map((s) =>
     shown.reduce(
@@ -335,9 +353,8 @@ export function buildChartView(p: ChartViewParams) {
       0,
     ),
   );
-  const { top, ticks } = niceAxisScale(Math.max(0, ...colSums));
+  const { top, ticks } = niceAxisScale(Math.max(0, ...colSums), p.metric !== "spend");
   const bw = p.slots.length ? width / p.slots.length : width;
-  const { gridLines0, yLabels0 } = buildGridAndY(ticks, top, width, 200, p.metric, p.format, p.currency);
   const bars0 = buildBarRects({
     slots: p.slots,
     shown,
@@ -347,8 +364,15 @@ export function buildChartView(p: ChartViewParams) {
     bw,
     top,
     hoverSlot: p.hoverSlot,
-    hlGroup: p.hoverGroup ?? p.focusGroup,
+    hlGroup: p.focusGroup,
   });
+  return { shown, bw, top, ticks, bars0 };
+}
+
+export function buildChartView(p: ChartViewParams) {
+  const width = Math.max(240, Math.round(p.chartWidth));
+  const { shown, bw, top, ticks, bars0 } = buildSeriesAndScale(p, width);
+  const { gridLines0, yLabels0 } = buildGridAndY(ticks, top, width, 200, p.metric, p.format, p.currency);
   const slotObj = p.hoverSlot !== null ? p.slots[p.hoverSlot] : undefined;
   const tip = slotObj
     ? buildHoverTip({
@@ -367,6 +391,13 @@ export function buildChartView(p: ChartViewParams) {
         unknownGroup: p.labels.unknownGroup,
       })
     : { hoverTip: null, tipStyle: "" };
+  const drawnTotals =
+    p.focusGroup === null
+      ? p.totals
+      : sumUsageTotals(
+          shown.map((g) => g.totals),
+          p.currency,
+        );
   const title = `${p.labels.unitByGranularity[p.granularity]}${p.labels.metricLabels[p.metric]}`;
   return {
     chartTitle: title,
@@ -374,7 +405,7 @@ export function buildChartView(p: ChartViewParams) {
     chartAria: p.labels.chartAria(
       title,
       p.slots.length,
-      formatMetricValue(metricValue(p.totals, p.metric), p.totals, p.metric, p.format, p.currency),
+      formatMetricValue(drawnTotals, p.metric, p.format, p.currency),
     ),
     gridLines0,
     bars0,
