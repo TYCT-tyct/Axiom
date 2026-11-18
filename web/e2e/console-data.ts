@@ -30,6 +30,7 @@ export type MockState = AuthState &
     methods: Schemas["PaymentMethod"][];
     presets: Schemas["RoutingPreset"][];
     routingDefault: Schemas["AccountRoutingDefault"];
+    usageBackfillComplete?: boolean;
   };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];

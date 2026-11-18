@@ -1,0 +1,76 @@
+import type { Messages } from "@axiom/ui";
+
+export const zh = {
+  signIn: {
+    description: "登录后管理 key、查看余额和调用记录。",
+    noAccount: "还没有账户？",
+    register: "注册",
+    or: "或",
+    passkey: "使用通行密钥",
+    oauthFailed: "这次登录没有完成，请重试或改用密码。",
+    providers: { github: "使用 GitHub 继续", google: "使用 Google 继续", linuxdo: "使用 LinuxDo 继续" },
+  },
+  mfa: { orPasskey: "或使用通行密钥", usePasskey: "使用通行密钥" },
+  register: {
+    title: "注册",
+    description: "可以用邀请码注册；本站开放注册时，也可以直接用邮箱注册。",
+    invite: "邀请码",
+    passwordHint: "用较长的、别处没用过的密码。",
+    submit: "注册",
+    submitOpen: "发送验证链接",
+    working: "正在校验浏览器，请保持页面打开。",
+    checkEmail: "请查收验证邮件。",
+    checkEmailHint: "链接 24 小时内有效，只能使用一次；打开后设置密码。如果没收到，请查看垃圾邮件。",
+    haveAccount: "已经有账户？",
+    signIn: "登录",
+    closed: "本站目前不开放注册。",
+    signInFailed: "账户已创建，但自动登录没有成功。请到登录页登录。",
+  },
+  verify: {
+    title: "验证邮箱",
+    description: "设置密码后完成账户创建。",
+    done: "邮箱已验证，账户可以用了。",
+    signIn: "登录",
+    submit: "验证并创建账户",
+    missing: "这个链接里没有验证令牌。请重新打开邮件里的链接。",
+    again: "重新注册",
+  },
+};
+
+export const en: Messages<typeof zh> = {
+  signIn: {
+    description: "Sign in to manage keys and see your balance and calls.",
+    noAccount: "No account yet?",
+    register: "Register",
+    or: "or",
+    passkey: "Use a passkey",
+    oauthFailed: "That sign-in didn’t finish. Try again, or use your password.",
+    providers: { github: "Continue with GitHub", google: "Continue with Google", linuxdo: "Continue with LinuxDo" },
+  },
+  mfa: { orPasskey: "or use a passkey", usePasskey: "Use a passkey" },
+  register: {
+    title: "Register",
+    description: "Register with an invite code, or with your email where the site is open.",
+    invite: "Invite code",
+    passwordHint: "Use a long password you haven’t used elsewhere.",
+    submit: "Register",
+    submitOpen: "Send verification link",
+    working: "Checking your browser… keep this page open.",
+    checkEmail: "Check your email for the verification link.",
+    checkEmailHint:
+      "The link expires in 24 hours and can be used once. It asks you to choose a password. If it doesn’t arrive, check your spam folder.",
+    haveAccount: "Already have an account?",
+    signIn: "Sign in",
+    closed: "This site isn’t open for registration.",
+    signInFailed: "Your account was created, but signing in didn’t work. Go to the sign-in page.",
+  },
+  verify: {
+    title: "Verify your email",
+    description: "Choose a password to finish creating your account.",
+    done: "Your email is verified and your account is ready.",
+    signIn: "Sign in",
+    submit: "Verify and create account",
+    missing: "This link has no verification token. Open the link from your email again.",
+    again: "Register again",
+  },
+};

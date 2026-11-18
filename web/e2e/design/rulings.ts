@@ -25,7 +25,7 @@ const frame: Omit<Ruling, "scene">[] = [
   { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
   { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
   {
-    basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+    basis: "#816: plugins, budgets, observability and management keys are not built",
     ...both(".pnP .qnv, .otabs"),
   },
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
@@ -35,7 +35,7 @@ const frame: Omit<Ruling, "scene">[] = [
 const inScene = (scene: string, region: Omit<Ruling, "scene">): Ruling => ({ scene, ...region });
 
 // Each console page compares the frame around its page, so it carries the frame's rulings too.
-const pageScenes = ["console overview", "console keys", "console route", "console byok"];
+const pageScenes = ["console overview", "console keys", "console usage", "console route", "console byok"];
 const shell: Ruling[] = [
   { basis: "the page in the frame is compared in its own scene", ...both(".qpages") },
   ...frame,
@@ -129,6 +129,28 @@ export const rulings: Ruling[] = [
     basis: "G3: the rows are the scene's account keys, not the board's demo keys",
     board: { selector: ".p-keys .wv.w2 .qcard" },
     page: { selector: ".p-keys .wv.w2 .qcard" },
+  },
+  {
+    scene: "console usage",
+    basis: "#816 O23: month-end forecast and budget have no basis",
+    board: { selector: ".usfc" },
+  },
+  {
+    scene: "console usage",
+    basis: "#816 O23: today/future dashed projection bars have no basis",
+    board: { selector: ".usfut" },
+  },
+  {
+    scene: "console usage",
+    basis: "G1: the usage page adds hour/day/week granularity and workspace grouping controls",
+    ...both(".usc .qch .usct:nth-child(2)"),
+  },
+  {
+    scene: "console usage",
+    basis: "G1: live API comparison text, KPI values, series bars, table rows and movers replace board demo numbers",
+    ...both(
+      ".uscmp, .usm b, .usm em, .usch svg rect, .usch .usgl, .usch .usyl > span, .usch .usxl > span, .ust tbody, .ust tfoot, .ustk .usbar, .ustk .usrw > span:nth-of-type(2), .ustk .usrw em, .ustk p, .usd .usrw",
+    ),
   },
   { scene: "console calls", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console calls", basis: "#816: no live mode on calls", board: { selector: ".p-logs .lglive" } },
