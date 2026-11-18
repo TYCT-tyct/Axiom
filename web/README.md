@@ -38,7 +38,7 @@
 | `just web-journey` | 构建、嵌入并运行真实服务的旅程（要 Docker）；不含在 `just web` 里，CI 的 `journey` 作业只在列车和 `main` 上跑 |
 | `just web` | 前端的全部检查：类型、lint、函数和文件长度、未使用的代码、重复代码、单元测试、构建、体积预算、端到端测试；`just check` 包含它 |
 | `just generate` | 重新生成接口类型；`just generated` 检查生成结果已提交 |
-| `pnpm --dir web site-assets` | 重新切出接入屏的等距图（`site/src/home/connect-figure.svg` 和 `connect-figure.gen.ts`，来自 Site 画板脚本的 `FIG` 与绘图函数），产物入库；加 `--check` 只检查是否最新 |
+| `pnpm --dir web site-assets` | 重新切出接入屏的等距图（`site/src/home/connect-figure.svg` 和 `connect-figure.gen.ts`，来自 Site 画板脚本的 `FIG` 与绘图函数），产物入库，`just generate` 也会跑它；加 `--check` 只检查是否最新 |
 | `pnpm --dir web fonts` | 重新裁剪字体（要 Python 3 和网络；第一次下载源字体），产物入库；见下文「字体」 |
 
 ## 规则
