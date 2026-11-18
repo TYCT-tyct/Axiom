@@ -78,7 +78,13 @@
       "source": "instrument-serif-italic",
       "weight": "400",
       "style": "italic",
-      "pages": ["site/home"],
+      "pages": [
+        "site/home",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "text": {
         "chars": "keyvrKEY"
       }
@@ -91,7 +97,14 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["site/home", "site/models"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "text": {
         "script": "han"
       },
@@ -105,7 +118,27 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["console/*"],
+      "pages": [
+        "console/auth/register",
+        "console/auth/verify-email",
+        "console/pages/balance",
+        "console/pages/call",
+        "console/pages/calls",
+        "console/pages/keys",
+        "console/pages/models",
+        "console/pages/notifications",
+        "console/pages/orders",
+        "console/pages/overview",
+        "console/pages/provider-keys",
+        "console/pages/receipt",
+        "console/pages/redeem",
+        "console/pages/routing-presets",
+        "console/pages/security",
+        "console/pages/settings",
+        "console/pages/statement",
+        "console/pages/usage",
+        "console/pages/workspaces"
+      ],
       "text": {
         "script": "han"
       }
@@ -128,12 +161,28 @@
       "source": "cjk-serif",
       "weight": "600",
       "split": true,
-      "pages": ["site/home", "site/models"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "text": {
         "script": "han",
         "keys": {
-          "common": ["publicModels.title"],
-          "site": ["board.m2e2a3b1e5d"]
+          "common": ["publicModels.title", "auth.signIn.title", "auth.mfa.title"],
+          "site": ["board.m2e2a3b1e5d"],
+          "console": [
+            "auth.pitch",
+            "auth.signIn.passwordTitle",
+            "legal.title",
+            "auth.reset.title",
+            "auth.reset.sentTitle",
+            "auth.reset.newTitle",
+            "auth.reset.doneTitle"
+          ]
         }
       }
     },
@@ -141,11 +190,26 @@
       "family": "AX Serif",
       "source": "cjk-serif",
       "weight": "600",
-      "pages": ["site/models"],
+      "pages": [
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "text": {
         "script": "latin",
         "keys": {
-          "common": ["publicModels.title"]
+          "common": ["publicModels.title", "auth.signIn.title", "auth.mfa.title"],
+          "console": [
+            "auth.pitch",
+            "auth.signIn.passwordTitle",
+            "legal.title",
+            "auth.reset.title",
+            "auth.reset.sentTitle",
+            "auth.reset.newTitle",
+            "auth.reset.doneTitle"
+          ]
         }
       }
     }

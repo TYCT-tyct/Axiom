@@ -62,12 +62,16 @@ const accountShell = (scene: string): Ruling[] =>
 // the transition's on the board (trans.js), so both canvases are the fx tests'.
 const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
 const signInRulings: Ruling[] = [
-  // The board names the website's Chinese face and serif; the console cuts its own Chinese face per app (fonts.css)
-  // and ships no serif to its sign-in pages, so their Chinese is drawn in the fallback until the font pipeline cuts
-  // those faces for console/auth or the converter maps the board's families to the app's (#747).
+  // The sign-in pages draw their Chinese in the faces the board names, cut from their messages: the title and the
+  // label match the board's. The lede is the generated region's, which the font corpus does not read yet; the buttons'
+  // Chinese at 500 is drawn at 400 (§5.4); and a few body characters still differ from the board's source rendering.
   signIn({
-    basis: "§5: the console's sign-in pages do not ship Axiom CJK or AX Serif; their Chinese is drawn in the fallback",
-    ...both(".lg-title, .lg-sub, .lg-label, .lg-btn, .lg-note, .lg-pitch .s, .lg-top a"),
+    basis: "§5/§5.4: the lede's characters are not in the font corpus yet; Chinese at 500 is drawn at 400",
+    ...both(".lg-pitch .s, .lg-btn, .lg-top a"),
+  }),
+  signIn({
+    basis: "§5: a few characters of the cut body face differ from the board's source face (not yet explained)",
+    ...both(".lg-sub, .lg-note"),
   }),
   signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
   signIn({

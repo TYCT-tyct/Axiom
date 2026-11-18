@@ -7,7 +7,7 @@
 
 const kB = 1000;
 
-export type FontFile = { file: string; pages: string[]; bytes: number; preload?: boolean };
+export type FontFile = { file: string; pages: string[]; bytes: number; preload?: string[] };
 export type FontManifest = { faces: { family: string; weight: string; script: "latin" | "han"; files: FontFile[] }[] };
 
 const budgets = { latin: 60 * kB, han: 100 * kB };

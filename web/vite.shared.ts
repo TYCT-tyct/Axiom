@@ -95,12 +95,13 @@ function fontPreload(): Plugin {
       base = config.base;
     },
     transformIndexHtml(_, { bundle = {} }) {
-      const fonts: { faces: { files: { file: string; pages: string[]; preload?: boolean }[] }[] } = JSON.parse(
+      const fonts: { faces: { files: { file: string; pages: string[]; preload?: string[] }[] }[] } = JSON.parse(
         readFileSync(join(import.meta.dirname, "packages/ui/src/css/fonts/fonts.json"), "utf8"),
       );
+      // a slice the website preloads can also serve the console's sign-in pages, which preload nothing
       const stems = fonts.faces
         .flatMap((face) => face.files)
-        .filter((file) => file.preload && file.pages.some((page) => page.split("/")[0] === app))
+        .filter((file) => file.preload?.some((page) => page.split("/")[0] === app))
         .map((file) => `${file.file.replace(/\.woff2$/, "")}-`);
       return Object.values(bundle)
         .filter((asset) => asset.type === "asset" && stems.some((stem) => basename(asset.fileName).startsWith(stem)))

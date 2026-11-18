@@ -191,7 +191,7 @@
 ### 字体
 
 - fontTools 仅开发机运行，Python 依赖带哈希固定；按 URL/SHA-256 下载源到仓库外缓存，压缩源取清单指定文件，校验失败即停。源不入库、生成 woff2 入库且重跑逐字节一致，CI 不依赖 Python。
-- MiSans VF 的 Regular 轴值 330 对应 CSS 400（轴 150–700、Medium 380）；每应用独立字形，官网 `Axiom CJK`、控制台 `Axiom CJK Console`、后台 `Axiom CJK Admin`。各应用 main.css 将 `--family-ui` 设为自身栈，正文与 font-sans 都读它；默认 local 栈不含裁剪中文。字形不跨应用共用，避免接口文字触发其他应用的分片。
+- MiSans VF 的 Regular 轴值 330 对应 CSS 400（轴 150–700、Medium 380）；每应用独立字形，官网 `Axiom CJK`、控制台 `Axiom CJK Console`、后台 `Axiom CJK Admin`；控制台的登录、两步验证、条款和找回密码页例外，它们穿 Login 画板，画板写的是官网的 `Axiom CJK` 和 `AX Serif`，这几页就按这两个字体裁剪、不加载 `Axiom CJK Console`。分片按页面标记预载（`fonts.json` 的 `preload` 列出页面），与官网共用的分片只在官网首屏预载。各应用 main.css 将 `--family-ui` 设为自身栈，正文与 font-sans 都读它；默认 local 栈不含裁剪中文。字形不跨应用共用，避免接口文字触发其他应用的分片。
 - 字符来自中文翻译和页面所用键；控制台/后台沿 import 与实际用到的导出追踪键、点前缀、模板固定前缀，官网页在 sources.json 列出。覆盖爬取尚待交付：按计算字体/字重收字，跳过 `data-user-content`，再决定 500 与衬线分片；目前只静态取字、中文 500 用 400 显示，不合成粗体。字体保留 hinting，避免小字号字距不匀。
 - 按「哪些页面用到此字」切片，一个字只属一个文件，再按总代价合并：文件表约 0.5KB、请求按 1KB，兼顾本页下载和全字形最坏情况，只在合计更省时合并。`coverage.test.ts` 检查每页字覆盖、管线输入指纹与产物；源缺字记录 absent 并回退。
 - 预算见[性能指标](#前端性能指标)，十进制 KB；fonts.json 按本页字形全部文件去重求和，因为接口文字能触发任意片，另报告文案子集。缺文件也失败。仅官网预载清单标记的首屏中文正文，入口必须恰好匹配；控制台后台不预载。
