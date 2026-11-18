@@ -25,7 +25,7 @@ const frame: Omit<Ruling, "scene">[] = [
   { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
   { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
   {
-    basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+    basis: "#816: the navigation differs where pages are still missing",
     ...both(".pnP .qnv, .otabs"),
   },
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
@@ -39,12 +39,34 @@ const shell: Ruling[] = [
   ...frame,
 ].map((ruling) => inScene("console shell", ruling));
 
+const requestPresets = ["console request-presets", "console request-presets en"].flatMap((scene) =>
+  [
+    ...frame,
+    {
+      basis: "#816: there is no monthly use count for request presets",
+      board: { selector: ".p-presets .ppcnt" },
+    },
+    {
+      basis: "docs/frontend.md 字体: the console uses cut fonts at the product weights, including monospace at 400",
+      ...both(".p-presets h1, .p-presets .qpa button > span, .p-presets .qpreh b, .p-presets .qhow h2"),
+    },
+    {
+      basis: "docs/frontend.md 字体: copy uses cut fonts, and prompt text can contain characters outside those cuts",
+      ...both(".p-presets .qpht p, .p-presets .qpre > p, .p-presets .qhow .qch p"),
+    },
+    ...(scene.endsWith(" en")
+      ? []
+      : [{ basis: "docs/frontend.md 字体: the console cut lacks 温", ...both(".p-presets .qpre > .mut") }]),
+  ].map((ruling) => inScene(scene, ruling)),
+);
+
 export const rulings: Ruling[] = [
   ...shell,
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   ...frame.map((ruling) => inScene("console keys", ruling)),
+  ...requestPresets,
   // The board's key list has nothing to narrow it by (L8), so the page keeps the filters it had behind a button beside
   // the actions, in buttons of the console's own.
   {

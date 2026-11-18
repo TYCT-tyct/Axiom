@@ -62,6 +62,9 @@ async function readyPage(page: Page, design: DesignScene, staged: Stage) {
   await page.setViewportSize(staged.viewport);
   await page.emulateMedia({ colorScheme: staged.colorScheme });
   await stage(page, staged);
+  if (design.language) {
+    await page.addInitScript((language) => localStorage.setItem("axiom.language", language), design.language);
+  }
   await design.suite.prepare(page, scene);
   await scene.open(page);
   await page.waitForLoadState("networkidle");
@@ -87,6 +90,7 @@ for (const design of designScenes) {
         const staged = view(Number(width), board.height, scheme);
         const opened = await readyBoard(browser, { ...board, props: design.schemes[scheme] }, staged);
         try {
+          await design.localizeReference?.(opened.page);
           await readyPage(page, design, staged);
           const used = rulings.filter((ruling) => ruling.scene === design.name);
           const comparison = await compare(opened.page, page, used, key, info);

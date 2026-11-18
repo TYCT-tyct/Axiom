@@ -36,6 +36,7 @@ const scenes: Scene[] = [
     },
   },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },
+  { name: "request-presets", signedIn: true, open: (page) => goto(page, "request-presets") },
   { name: "routing-presets", signedIn: true, open: (page) => goto(page, "routing-presets") },
   dialogScene("routing-preset-create", "routing-presets", (page) =>
     page.getByRole("button", { name: /^(新建预设|New preset)$/ }).click(),
@@ -145,6 +146,33 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
     state.csrf = "csrf-0";
   } else if (scene.signedIn) {
     signedInAs(state);
+  }
+  if (scene.name === "request-presets") {
+    await page.route("**/api/console/v1/presets?*", (route) => {
+      const presets = [
+        {
+          slug: "polish-zh",
+          name: "polish-zh",
+          config: {
+            model: "claude-sonnet-5.5",
+            system: "润色下面的中文，保留原意，句子更短。",
+            temperature: 0.4,
+            max_tokens: 2000,
+          },
+        },
+        {
+          slug: "outline",
+          name: "outline",
+          config: {
+            model: "gpt-6.1-sol",
+            system: "把主题拆成五个小节的大纲，每节一句话。",
+            temperature: 0.6,
+            max_tokens: 600,
+          },
+        },
+      ];
+      return route.fulfill({ json: { data: data === "empty" ? [] : presets, total_count: data === "empty" ? 0 : 2 } });
+    });
   }
   return state;
 }

@@ -1,3 +1,9 @@
+import type { Page } from "@playwright/test";
+import { requestPresetText } from "../console/src/locales/request-presets.ts";
+import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
+import presetsZh from "../packages/boards/src/AxApp/regions/RequestPresets.zh.ts";
+import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
+import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import type { Suite } from "./scene.ts";
@@ -15,6 +21,8 @@ export type DesignScene = {
   fonts: string;
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
+  language?: "en";
+  localizeReference?: (page: Page) => Promise<void>;
 };
 
 // The boards' own "today": the console boards date their demo data around 2026-10-24 (the top-up board's pyDate).
@@ -33,6 +41,40 @@ const siteBoards = {
   820: { file: "SiteTablet.dc.html", height: 1180 },
   390: { file: "SitePhone.dc.html", height: 844 },
 };
+
+const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
+  name: language === "en" ? "console request-presets en" : "console request-presets",
+  suite: consoleSuite,
+  scene: "request-presets",
+  fonts: "console",
+  boards: consoleBoards("presets"),
+  schemes: consoleSchemes,
+  language: language === "en" ? "en" : undefined,
+  localizeReference: async (page) => {
+    const labels = requestPresetText(language);
+    const localized: Record<string, string> = {
+      [presetsZh.mf1de1e2621]: labels.title,
+      [presetsZh.ma61bc16ca0]: labels.create,
+      [presetsZh.m181bcfdf83]: labels.introEnd,
+      [presetsZh.mdfd719cbad]: labels.exampleHint,
+    };
+    if (language === "en") {
+      for (const key of Object.keys(shellEn) as (keyof typeof shellEn)[]) localized[shellZh[key]] = shellEn[key];
+      localized[shellZh.mf1de1e2621] = labels.title;
+      localized[shellZh.mb9670c85a4] = "Routing presets";
+      // The prompts are API fixtures. Translate the UI surrounding them, including its parameter labels.
+      const keys = ["m3187029f2b", "m98472d23f3", "m74ed19426d", "md666f38b72", "m1f87913ac5"] as const;
+      for (const key of keys) localized[presetsZh[key]] = presetsEn[key];
+    }
+    await page.evaluate((strings) => {
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const translation = strings[node.textContent ?? ""];
+        if (translation !== undefined) node.textContent = translation;
+      }
+    }, localized);
+  },
+}));
 
 export const designScenes: DesignScene[] = [
   // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet
@@ -64,6 +106,7 @@ export const designScenes: DesignScene[] = [
     boards: consoleBoards("keys"),
     schemes: consoleSchemes,
   },
+  ...presetScenes,
   {
     name: "site home",
     suite: siteSuite,

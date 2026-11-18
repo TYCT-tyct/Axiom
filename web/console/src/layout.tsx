@@ -28,7 +28,8 @@ const pages = {
   ov: { to: "/" },
   logs: { to: "/calls", permission: "calls.view" },
   keys: { to: "/keys", permission: "api_keys.view" },
-  presets: { to: "/routing-presets", permission: "api_keys.view" },
+  presets: { to: "/request-presets", permission: "api_keys.view" },
+  route: { to: "/routing-presets", permission: "api_keys.view" },
   byok: { to: "/provider-keys", permission: "api_keys.view" },
   bill: { to: "/balance", permission: "balance.view", under: ["/redeem", "/orders", "/statement"] },
   profile: { to: "/settings", under: ["/workspaces"] },
@@ -295,13 +296,17 @@ function ConsoleShell({
     fnOut: signOut,
   };
   const english = i18n.language === "en";
+  const presetLabels = {
+    mf1de1e2621: english ? "Request presets" : "命名预设",
+    mb9670c85a4: english ? "Routing presets" : "路由预设",
+  };
   const mark = <BoardMark name={name} logoUrl={logoUrl} />;
   // The page comes after the board, so the slot holds the page's element before the page's own effects run.
   return (
     <>
       {phone ? (
         <Phone
-          t={(key) => (english ? phoneEn : phoneZh)[key]}
+          t={(key) => (presetLabels as Record<string, string>)[key] ?? (english ? phoneEn : phoneZh)[key]}
           values={values}
           text={{ language, lang: locale, frameStyle }}
           link={RouterLink}
@@ -311,7 +316,7 @@ function ConsoleShell({
         </Phone>
       ) : (
         <Wide
-          t={(key) => (english ? wideEn : wideZh)[key]}
+          t={(key) => (presetLabels as Record<string, string>)[key] ?? (english ? wideEn : wideZh)[key]}
           values={values}
           text={{ language, lang: locale, frameStyle, ...balance }}
           link={RouterLink}
