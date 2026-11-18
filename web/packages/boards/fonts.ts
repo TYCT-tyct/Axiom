@@ -56,21 +56,40 @@ async function loadFont(name: string): Promise<Buffer> {
 }
 
 async function downloadFont(name: string, url: string): Promise<Buffer> {
+  const maxAttempts = 3;
+  const chunks: Uint8Array[] = [];
+  let received = 0;
   for (let attempt = 1; ; attempt++) {
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(120_000) });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return Buffer.from(await response.arrayBuffer());
+      await readFontResponse(url, received, chunks);
+      return Buffer.concat(chunks);
     } catch (error) {
       if (
-        attempt === 3 ||
+        attempt === maxAttempts ||
         !(error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError"))
       ) {
         throw new Error(`font download failed: ${name}`, { cause: error });
       }
+      received = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
       const waitMs = 1000 * 2 ** (attempt - 1);
-      console.warn(`font download interrupted: ${name} (attempt ${attempt}/3, retry in ${waitMs} ms): ${error}`);
+      console.warn(
+        `font download interrupted: ${name} after ${received} bytes (attempt ${attempt}/${maxAttempts}, retry in ${waitMs} ms): ${error}`,
+      );
       await delay(waitMs);
     }
+  }
+}
+
+async function readFontResponse(url: string, received: number, chunks: Uint8Array[]): Promise<void> {
+  const headers = new Headers({ "accept-encoding": "identity" });
+  if (received) headers.set("range", `bytes=${received}-`);
+  const response = await fetch(url, { headers, signal: AbortSignal.timeout(120_000) });
+  if (!response.ok || !response.body) throw new Error(`HTTP ${response.status}: no font body`);
+  // A server that ignores Range sends the whole font. The pinned digest verifies the assembled bytes either way.
+  if (response.status !== 206) chunks.length = 0;
+  const reader = response.body.getReader();
+  // Keep each chunk as it arrives so a later read error can resume at the right offset.
+  for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+    chunks.push(chunk.value);
   }
 }
