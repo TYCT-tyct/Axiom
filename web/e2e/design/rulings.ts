@@ -198,4 +198,19 @@ export const rulings: Ruling[] = [
     page: { selector: ".bar .nav.mid, .hs > main .cta" },
   },
   { scene: "site home", basis: "S2: no screens below the first yet", board: { selector: ".tour" } },
+  {
+    scene: "site models",
+    basis: "S4: compare the public title and lede with the board typography, without the demo sea or figures",
+  },
+  {
+    scene: "site models",
+    basis: "S4: the table, details and filter controls are the shared ModelCatalog and ModelFilterForm",
+    board: { selector: ".flt > button, .lst > :not(.flt), .pnl" },
+    page: { selector: ".flt > form, #model-results" },
+  },
+  {
+    scene: "site models",
+    basis: "S4: SiteShell supplies the header, footer and surface, with the site's MiSans body weight",
+    page: { selector: "header, footer" },
+  },
 ];

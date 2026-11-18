@@ -1,5 +1,5 @@
 {
-  "inputs": "eb7f48eb579ac07b30f5d5121e9d51bf4ff267ef0e7d61c867d2258012e00cc7",
+  "inputs": "a07f2e3340255e224a6f5ee9bb14faf71aa819467f4706a19246ab5da13203a2",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -132,54 +132,60 @@
             "console/pages/statement",
             "console/pages/workspaces"
           ],
-          "bytes": 53672,
-          "sha256": "385b7a32dc62c62b1cec62c33dde6860ab75f8b89040059acd0ebba69012378e",
-          "chars": "、。一万三上下不与两个中串为主么之也了事二于些产人什仅仍从他付代令以们件价任份优会位何余作你使供便保修值做停允先兑入全公关其具内册再写冲决准出分列刚创删别到制刷刻前剩力功加务动包化匹区匿单印即厂原及发取受变口另只可台号各合同名后向否吧含启员和哪售商器回因图在均型域基填处备复外多大天太失如始字存它完定宜客容密对导小少尝就展工己已布带常平年并序应废建开式引张弱弹当录径得快态性总恢情意成我或户所手才打扣执扫找把拒择持指按换据排接控推描提搜操擎支收改放政效数整文断新方无旧时明是显暂更最月有服期未本权条来构析果查标校格档检模次款止正步段每求没法注流浅测浏消深清游源点片版牌状现理生用由申留登百的目直相看码础确示私秒称移稍稳空突立站端笔符第等策筛算管箱类精系索繁级线组经绑结给络绝统继续维缓编网置联能自至航色节花行表被要见观览解言计认记许设证试话该详语误请读调负责败账费资走起超足跟路跳转载较输达过近还这进连述退送选通速邀邮部都配里重量金钥钱链长闭问间阅附限除随隐需面音页项顺预频题额首验默（），：；？"
+          "bytes": 51116,
+          "sha256": "74afcb611141be190e4e71568a3f5be4b563954e2be3ed661a8f136765cc49b6",
+          "chars": "、。一万三上下不与两个中串为主么之也了事二于些产人什仅仍他付代令以们件价任份优会位何余作你使供便保修值做停允先兑入全公关其具内册再写冲决准出分列刚创删别到制刷刻前力功加务动化匹区匿单印即厂原及发取受变口另只可台号各合同名后否吧含启员和哪售商器回因图在均型域基填处备复外多大太失如始字存它完定宜容密对导小少尝就展工已布带常平年并应废建开式引张弱弹当录径得快态性恢情意成我或户所手才打扣执扫找把拒择持指按换据排接控推描提搜操擎支收改放政效数整文断新方无旧时明是显暂更最月有服期未本权条来构析果查标校格档检模次款正步每求没法注流浅测浏消深游源点片版牌状现理生用由留登百的目直相看码础确示私秒称移稍稳空突立站端笔符第等策筛管箱精系索繁级组经绑结给络绝统继续维缓网置联能自航色节花行表被要见观览解言计认记许设证试话该详语误请读调负责败账费资走起超足跟路跳转载较输达过近还这连述退送选通速邀邮部配里重量金钥链长闭问间阅附限除随隐需面音页项预频题额首验默（），：；？"
         },
         {
-          "file": "axiom-cjk-console-400.af386ae9.woff2",
+          "file": "axiom-cjk-console-400.f580d12a.woff2",
           "pages": [
             "console/auth/mfa",
-            "console/pages/balance",
-            "console/pages/keys",
-            "console/pages/notifications",
-            "console/pages/orders",
-            "console/pages/receipt",
-            "console/pages/statement"
-          ],
-          "bytes": 4116,
-          "sha256": "d991561d1c7dcb9137ed6b4cad86b93fd5397b350cecf6d727a4d2ff0f3ec9af",
-          "chars": "依充冻善境妥度形早水渠然环缀翻订赠返途道那"
-        },
-        {
-          "file": "axiom-cjk-console-400.7fb6755f.woff2",
-          "pages": [
-            "console/auth/register",
-            "console/pages/balance",
-            "console/pages/call",
-            "console/pages/calls",
-            "console/pages/orders",
-            "console/pages/redeem"
-          ],
-          "bytes": 5216,
-          "sha256": "9772866099dc116264cf87120ba73741e39a5183f704ce66b9b2c40960ac466a",
-          "chars": "买交但低免减去固圾垃实审将尾底待批束核毫永答耗致角购透钮键际降"
-        },
-        {
-          "file": "axiom-cjk-console-400.5c18729d.woff2",
-          "pages": [
             "console/pages/call",
             "console/pages/calls",
             "console/pages/keys",
             "console/pages/models",
             "console/pages/notifications",
             "console/pages/overview",
+            "console/pages/receipt",
             "console/pages/routing-presets",
             "console/pages/workspaces"
           ],
-          "bytes": 4360,
-          "sha256": "71699512fbeaaa3a6c19ec34552bdccac3b998c3f19a0e5734929fcd73c08c99",
-          "chars": "例共况则告周命响地址头好子宽尚层属币报括日概汇照白种细识询辑错"
+          "bytes": 5752,
+          "sha256": "42c4e5449496b718aa9281ef354c420a1f1e90efd4dd857cdc8799f8ba3875c5",
+          "chars": "例依共况则告周命响善地址境头好妥子宽尚层属币形报括日概汇照环白种细缀识询辑返那错"
+        },
+        {
+          "file": "axiom-cjk-console-400.ed58e452.woff2",
+          "pages": [
+            "console/auth/register",
+            "console/pages/balance",
+            "console/pages/notifications",
+            "console/pages/orders",
+            "console/pages/receipt",
+            "console/pages/statement"
+          ],
+          "bytes": 5676,
+          "sha256": "64095150552fec53abea25ea7cd692d7dc513cd02a51f866c772a79b26c8d980",
+          "chars": "买交但低充冻减去圾垃实审将底度待早核水永渠然翻致订购赠透途道际降"
+        },
+        {
+          "file": "axiom-cjk-console-400.87257ac8.woff2",
+          "pages": [
+            "console/pages/balance",
+            "console/pages/call",
+            "console/pages/calls",
+            "console/pages/keys",
+            "console/pages/orders",
+            "console/pages/provider-keys",
+            "console/pages/redeem",
+            "console/pages/routing-presets",
+            "console/pages/settings",
+            "console/pages/statement",
+            "console/pages/workspaces"
+          ],
+          "bytes": 5152,
+          "sha256": "00cc3c8c0a4deb47e20a267ed9c882287b38f74fc84a843f1146c0ddb1dd021e",
+          "chars": "从免剩包向固天客尾己序总批束止段毫清申答算类线编耗至角进都钮钱键顺"
         },
         {
           "file": "axiom-cjk-console-400.63c13d9a.woff2",
@@ -191,16 +197,16 @@
             "console/pages/security",
             "console/pages/settings"
           ],
-          "bytes": 6336,
-          "sha256": "89f0b19a030efb662f90684a226d73ec37a1ae6aed16de3159d1ff9842b2d927",
-          "chars": "「」丢信候偏升四够套安封异必怎息您抹掉替机某框活添知破窗纹终菜让货跌醒阈非须餐"
+          "bytes": 6252,
+          "sha256": "cb78fddfaf47ae0417cdcc7879c6513169a39e999ed88dc2d741d05bb86258ac",
+          "chars": "「」丢信候偏升四够套安封异必怎息您抹掉替机某框活添知破窗纹终菜货跌醒阈非须餐"
         },
         {
           "file": "axiom-cjk-console-400.ed4a4739.woff2",
           "pages": ["console/pages/routing-presets"],
-          "bytes": 5044,
-          "sha256": "5faaf3c6010df2393ca75e0665a66045159661f06e8cb6ffb6ae3bc93039016c",
-          "chars": "严伪几副勾参吐吞品增延影摘母比沿真着累练绩者营落衡规训质运迟适靠高"
+          "bytes": 5140,
+          "sha256": "79e23dbe9825fd844e70489db4469c3997f5445d865e324119a23f3cb5c0ebb4",
+          "chars": "严伪几副勾参吐吞品增延影摘母比沿真着累练绩者营落衡规让训质运迟适靠高"
         }
       ]
     },
@@ -368,17 +374,34 @@
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home"],
+      "pages": ["site/home", "site/models"],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "ax-serif-600.2a493759.woff2",
-          "pages": ["site/home"],
-          "bytes": 2912,
-          "sha256": "d968e90462531378fb92b53f9348a8ca78e5b4fa73ca6f7586561cb128683561",
-          "chars": "一个入型所接有模，"
+          "file": "ax-serif-600.98219cac.woff2",
+          "pages": ["site/home", "site/models"],
+          "bytes": 3600,
+          "sha256": "baeba0b42d09af9b3a83d9642a42e0d3c1f0fbfad9b6511c34738a4a2fd950f2",
+          "chars": "一与个价入型所接有格模，"
+        }
+      ]
+    },
+    {
+      "family": "AX Serif",
+      "weight": "600",
+      "pages": ["site/models"],
+      "style": "normal",
+      "script": "latin",
+      "absent": "",
+      "files": [
+        {
+          "file": "ax-serif-600.woff2",
+          "pages": ["site/models"],
+          "bytes": 12920,
+          "sha256": "d09a631c71ca96ac17911e6dafe58e06dd1b8286bd0e5ae478417a3e7b4d7825",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
         }
       ]
     }

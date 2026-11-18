@@ -1,4 +1,5 @@
 import { ApiError, consoleApi, unwrap } from "@axiom/api";
+import ModelsPage from "@axiom/boards/Models/regions/ModelsPage";
 import {
   Button,
   DataState,
@@ -12,6 +13,8 @@ import {
 } from "@axiom/ui";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useWide } from "./home/wide";
+import styles from "./models.module.css";
 import { SiteShell } from "./shell";
 
 function readFilters(): ModelFilters {
@@ -67,6 +70,7 @@ function usePublicModels(filters: ModelFilters, attempt: number) {
 
 export function Models() {
   const { t } = useTranslation("common");
+  const wide = useWide();
   const [filters, setFilters] = useState<ModelFilters>(readFilters);
   const [attempt, setAttempt] = useState(0);
   const query = usePublicModels(filters, attempt);
@@ -82,22 +86,24 @@ export function Models() {
     window.history.pushState(null, "", urlOf(next));
   };
   return (
-    <SiteShell mainClassName="gap-6 py-10">
-      <div className="max-w-3xl">
-        <h1 className="text-3xl leading-tight tracking-[-0.02em] text-t1">{t("publicModels.title")}</h1>
-        <p className="mt-3 text-[15px] leading-relaxed text-t2">{t("publicModels.description")}</p>
-      </div>
-      <Panel className="p-4">
-        <ModelFilterForm
-          filters={filters}
-          onApply={apply}
-          reset={
-            <Button size="md" type="button" onClick={() => apply({})}>
-              {t("publicModels.reset")}
-            </Button>
-          }
-        />
-      </Panel>
+    <SiteShell mainClassName={styles.main}>
+      <ModelsPage
+        t={String}
+        values={{ layout: wide ? "d" : "m" }}
+        title={t("publicModels.title")}
+        lede={t("publicModels.description")}
+        filters={
+          <ModelFilterForm
+            filters={filters}
+            onApply={apply}
+            reset={
+              <Button size="md" type="button" onClick={() => apply({})}>
+                {t("publicModels.reset")}
+              </Button>
+            }
+          />
+        }
+      />
       <ModelResults query={query} onRetry={() => setAttempt((n) => n + 1)} onReset={() => apply({})} />
     </SiteShell>
   );
@@ -107,7 +113,7 @@ function ModelResults({ query, onRetry, onReset }: { query: Query; onRetry: () =
   const { t } = useTranslation("common");
   const unavailable = query.error instanceof ApiError && query.error.status === 404;
   return (
-    <Panel>
+    <Panel id="model-results">
       {unavailable ? (
         <EmptyState title={t("publicModels.unavailableTitle")}>{t("publicModels.unavailableBody")}</EmptyState>
       ) : (

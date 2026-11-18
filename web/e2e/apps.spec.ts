@@ -55,6 +55,7 @@ test("the website reaches models and prices on a phone", async ({ page }) => {
 });
 
 test("the website lists models and prices and filters them in the address", async ({ page }) => {
+  const errors = collectErrors(page);
   await mockConsole(page);
   await page.goto(`${apps[0].url}models`);
   await expect(page.getByRole("heading", { level: 1, name: "模型与价格" })).toBeVisible();
@@ -70,6 +71,8 @@ test("the website lists models and prices and filters them in the address", asyn
   await expect(table.getByRole("row")).toHaveCount(5);
   await table.getByRole("button", { name: "详情" }).first().click();
   await expect(page.getByRole("table", { name: /模型价格/ })).toBeVisible();
+  await expect(page.locator("canvas")).toHaveCount(0);
+  expect(errors).toEqual([]);
 });
 
 test("the website's sign-in and sign-up open the console's pages", async ({ page }) => {
