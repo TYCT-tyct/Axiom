@@ -85,7 +85,7 @@ const signInRulings: Ruling[] = [
 // name the console's scenes and the board's own steps.
 const composed = "product.md 要求、画板未画：用画板部件组合（#747）";
 const loginRulings: Ruling[] = [
-  ...["console sign-in-password", "console mfa", "console consent"].map((scene) => ({
+  ...["console sign-in-password", "console mfa", "console consent", "console reset-password"].map((scene) => ({
     scene,
     basis: composed,
     page: { selector: ".lg-step" },

@@ -13,7 +13,7 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { type AnchorHTMLAttributes, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
-import { FormProblem, LoginFrame, NoteAction, useHear } from "./login-frame";
+import { FormProblem, LoginFrame, NoteAction, NoteLink, useHear } from "./login-frame";
 import { usePasskeySignIn } from "./passkey-sign-in";
 
 export default function SignIn() {
@@ -182,6 +182,7 @@ function PasswordStep({
       />
       <FormProblem id="sign-in-problem" message={problem} />
       <LoginPrimary t={String} label={t("auth.signIn.submit", { ns: "common" })} values={{ disabled: pending }} />
+      <NoteLink label={t("auth.reset.forgot")} to="/reset-password" />
       <NoteAction label={t("auth.signIn.changeEmail")} onPress={onBack} />
     </>
   );

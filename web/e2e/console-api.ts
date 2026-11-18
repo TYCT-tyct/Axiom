@@ -9,6 +9,7 @@ import {
   defaultWorkspace,
   emptyState,
   goodInvite,
+  goodResetToken,
   type MockState,
   type Schemas,
   systemPreset,
@@ -330,6 +331,14 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
+  // the same empty answer for every address (docs/frontend-api.md「注册与找回密码」)
+  route("post", `${base}/auth/password-reset`, none, () => ({ status: 202 as const, json: undefined })),
+  route("post", `${base}/auth/password-reset/complete`, none, ({ body, state }) => {
+    if (body.token !== goodResetToken) return fail(422, "unprocessable");
+    if (body.new_password.length < 12) return fail(422, "weak_password");
+    state.user.password = body.new_password;
+    return { status: 204 as const, json: undefined };
+  }),
   route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
     if (!acceptsCurrent(state.legal, body.consent)) {
       return fail(403, "consent_required");

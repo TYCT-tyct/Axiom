@@ -68,6 +68,8 @@ export const demoDocuments = (): Schemas["LegalDocument"][] => [
 ];
 
 export const goodInvite = "INVITE-OK";
+// The one reset link's token the mocked server takes; any other is spent or expired.
+export const goodResetToken = "reset-token-ok";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
 const nano = (amount: string): Schemas["Money"] => ({ amount, currency: "USD" });

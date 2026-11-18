@@ -4,6 +4,7 @@ import LoginChar from "@axiom/boards/Login/regions/LoginChar";
 import LoginDecode from "@axiom/boards/Login/regions/LoginDecode";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginLanguage from "@axiom/boards/Login/regions/LoginLanguage";
+import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginMark from "@axiom/boards/Login/regions/LoginMark";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginOtherLanguage from "@axiom/boards/Login/regions/LoginOtherLanguage";
@@ -17,7 +18,9 @@ import { reducedMotion, takeArrival, useEffectModule } from "@axiom/fx";
 import type { Heard, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import {
+  type AnchorHTMLAttributes,
   createContext,
   type FormEvent,
   type KeyboardEvent,
@@ -218,5 +221,20 @@ export function OtherAccount() {
       <NoteAction label={t("auth.mfa.otherAccount")} onPress={() => !signOut.isPending && signOut.mutate()} />
       <FormProblem message={signOut.error ? t("signOutFailed", { reason: errors.message(signOut.error) }) : ""} />
     </>
+  );
+}
+
+// The router's link where the board draws a note's <a>: a page of this app, without the search it may carry.
+function RouteLink({ href = "/", ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
+  return <Link to={href} {...props} />;
+}
+
+// NoteLink is a note under a step whose link goes to another sign-in page.
+export function NoteLink({ label, to, before }: { label: string; to: string; before?: ReactNode }) {
+  return (
+    <LoginNote t={String}>
+      {before}
+      <LoginLink t={String} link={RouteLink} label={label} values={{ to }} />
+    </LoginNote>
   );
 }

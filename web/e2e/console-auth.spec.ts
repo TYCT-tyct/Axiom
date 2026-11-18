@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
+import { goodResetToken } from "./console-data.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
 // Signing in, session changes and two-step verification against the mocked API.
@@ -263,5 +264,49 @@ test.describe("two-step verification at sign-in", () => {
     await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
     await page.getByRole("button", { name: "换一个账户登录" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+  });
+});
+
+test.describe("resetting a forgotten password", () => {
+  test("the password step leads to the reset page, which takes the email and says to check it", async ({ page }) => {
+    const state = await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByRole("link", { name: "忘记密码？" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "发送重设邮件" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "查收邮件" })).toBeVisible();
+    expect(state.log.filter((line) => line === "POST /auth/password-reset")).toHaveLength(1);
+  });
+
+  test("a valid link sets the new password, leaves the address, and leads to sign-in", async ({ page }) => {
+    await mockConsole(page);
+    // where the link's token goes: only into the body of the reset itself
+    const carried: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes(goodResetToken)) carried.push(`url ${request.url()}`);
+      if (request.postData()?.includes(goodResetToken)) carried.push(`body ${new URL(request.url()).pathname}`);
+    });
+    await page.goto(`/console/reset-password#token=${goodResetToken}`);
+    await expect(page.getByRole("heading", { level: 1, name: "设置新密码" })).toBeVisible();
+    expect(new URL(page.url()).hash).toBe("");
+    await page.getByLabel("密码", { exact: true }).fill("a long new password nobody guesses");
+    await page.getByRole("button", { name: "重设密码" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
+    await page.getByRole("link", { name: "去登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(carried).toEqual(["body /api/console/v1/auth/password-reset/complete"]);
+  });
+
+  test("a spent or expired link says so and offers a new one", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/reset-password#token=spent");
+    await page.getByLabel("密码", { exact: true }).fill("a long new password nobody guesses");
+    await page.getByRole("button", { name: "重设密码" }).click();
+    await expect(page.getByRole("alert")).toHaveText(/无效或已过期/);
+    await page.getByRole("button", { name: "重新申请" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
   });
 });
