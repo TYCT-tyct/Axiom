@@ -1,5 +1,4 @@
 import { ApiError, consoleApi, unwrap } from "@axiom/api";
-import ModelsPage from "@axiom/boards/Models/regions/ModelsPage";
 import {
   Button,
   DataState,
@@ -13,9 +12,7 @@ import {
 } from "@axiom/ui";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useWide } from "./home/wide";
-import styles from "./models.module.css";
-import { SiteShell } from "./shell";
+import { ModelsFrame } from "./home/models-frame";
 
 function readFilters(): ModelFilters {
   const params = new URLSearchParams(window.location.search);
@@ -70,7 +67,6 @@ function usePublicModels(filters: ModelFilters, attempt: number) {
 
 export function Models() {
   const { t } = useTranslation("common");
-  const wide = useWide();
   const [filters, setFilters] = useState<ModelFilters>(readFilters);
   const [attempt, setAttempt] = useState(0);
   const query = usePublicModels(filters, attempt);
@@ -86,26 +82,21 @@ export function Models() {
     window.history.pushState(null, "", urlOf(next));
   };
   return (
-    <SiteShell mainClassName={styles.main}>
-      <ModelsPage
-        t={String}
-        values={{ layout: wide ? "d" : "m" }}
-        title={t("publicModels.title")}
-        lede={t("publicModels.description")}
-        filters={
-          <ModelFilterForm
-            filters={filters}
-            onApply={apply}
-            reset={
-              <Button size="md" type="button" onClick={() => apply({})}>
-                {t("publicModels.reset")}
-              </Button>
-            }
-          />
-        }
-      />
+    <ModelsFrame
+      filters={
+        <ModelFilterForm
+          filters={filters}
+          onApply={apply}
+          reset={
+            <Button size="md" type="button" onClick={() => apply({})}>
+              {t("publicModels.reset")}
+            </Button>
+          }
+        />
+      }
+    >
       <ModelResults query={query} onRetry={() => setAttempt((n) => n + 1)} onReset={() => apply({})} />
-    </SiteShell>
+    </ModelsFrame>
   );
 }
 
