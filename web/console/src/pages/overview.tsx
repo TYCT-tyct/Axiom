@@ -7,9 +7,10 @@ import PhoneZH from "@axiom/boards/AxAppPhone/regions/Overview.zh";
 import { DataState, useFormat, usePageTitle } from "@axiom/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Announcements } from "../announcements";
+import { useWide } from "../board";
 import { useBoardData } from "./overview-data";
 
 // The console's overview is the board's Overview slice (#747). The Shell slice that carries the board's frame and its
@@ -187,17 +188,4 @@ function boardLabels(t: TFunction, copy: CopyState, apiBase: string | undefined,
         return undefined;
     }
   };
-}
-
-// The page meets the board's container queries and card layout from 1024px up; below, the phone slice is the design.
-function useWide() {
-  return useSyncExternalStore(
-    (notify) => {
-      const query = window.matchMedia("(min-width: 1024px)");
-      query.addEventListener("change", notify);
-      return () => query.removeEventListener("change", notify);
-    },
-    () => window.matchMedia("(min-width: 1024px)").matches,
-    () => true,
-  );
 }

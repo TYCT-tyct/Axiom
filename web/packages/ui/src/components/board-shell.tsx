@@ -80,12 +80,20 @@ export function BoardMark({ name, logoUrl }: { name?: string; logoUrl?: string }
 // puts it. Pass it to the router's onResolved event. The heading is made focusable here, for every page has one
 // (docs/frontend.md「工程要求」); a page without one hands focus to #main. Focus does not scroll: the router has put the
 // new page at its top.
+//
+// The router resolves before React has rendered the page, and a page built from a board slice sits in a region the shell
+// shows only once it has the page's own class: focusing the heading it just found would do nothing, for an element in a
+// `display: none` subtree takes no focus. So the focus waits for the frame that renders the page, with the heading the
+// page has then.
 export function focusHeading({ fromLocation, pathChanged }: { fromLocation?: unknown; pathChanged: boolean }) {
-  if (fromLocation && pathChanged) {
+  if (!fromLocation || !pathChanged) {
+    return;
+  }
+  requestAnimationFrame(() => {
     const heading = document.querySelector<HTMLElement>("#main h1");
     heading?.setAttribute("tabindex", "-1");
     (heading ?? document.getElementById("main"))?.focus({ preventScroll: true });
-  }
+  });
 }
 
 const darkScheme = () => matchMedia("(prefers-color-scheme: dark)");
