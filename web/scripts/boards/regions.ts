@@ -52,7 +52,12 @@ function classStates(document: Document, region: Region, css: string) {
     element.setAttribute(
       "class",
       (element.getAttribute("class") ?? "").replace(/\{\{\s*(\w+)\s*\}\}/g, (_, hole: string) => {
-        const known: Record<string, string[]> = { mo: ["mred"], cold: ["cold"], rootC: rootStates };
+        const known: Record<string, string[]> = {
+          mo: ["mred"],
+          cold: ["cold"],
+          rootC: rootStates,
+          segAc: ["cur", "up"],
+        };
         return (region.classes?.[hole] ?? known[hole] ?? states).join(" ");
       }),
     );
@@ -153,6 +158,13 @@ export function convertRegion(markup: string, css: string, region: Region, marke
   const dom = new JSDOM(`<body>${markup}</body>`);
   const document = dom.window.document;
   try {
+    // The browser fills class holes. Keep their other states for CSS pruning, without emitting harness metadata or
+    // changing the captured state in JSX (in particular, a light capture must retain the board's dark-theme rules).
+    const authoredClasses = [...document.querySelectorAll("[data-design-class]")].map((element) => {
+      const classes = decodeURIComponent(element.getAttribute("data-design-class") as string);
+      element.removeAttribute("data-design-class");
+      return { element, classes };
+    });
     const roots = cut(document, region);
     const state = emitter(region);
     edit(roots, state);
@@ -173,6 +185,8 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     const slotsDemo = [...slotDemo].map(([name, value]) => `${name}: ${value},`).join(" ");
     const demo = `({ t, values: {}, ${state.texts.size ? `text: {${textDemo}},` : ""} ${slotsDemo}${repeated.length ? `rows: {${repeated.map((g) => `${g.name}: ${g.demo}`).join(",\n")}}` : ""} })`;
     const elements = new Set(roots.flatMap((root) => [root, ...root.querySelectorAll("*")]));
+    for (const { element, classes } of authoredClasses)
+      element.setAttribute("class", `${element.getAttribute("class") ?? ""} ${classes}`);
     classStates(document, region, css);
     const files = {
       [`${region.name}.tsx`]: source(region, body, state, repeated, marker),

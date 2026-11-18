@@ -114,9 +114,7 @@ function edit(root: Element, region: Region) {
 }
 
 describe("region generation", () => {
-  // A biome run per region, about 0.4 s each: the default 5 s stops being enough as pages add their regions, which is
-  // the check's own cost, not the test's subject.
-  it("passes noJsxLiterals for every generated region", { timeout: 30_000 }, () => {
+  it("passes noJsxLiterals for every generated region", () => {
     const web = join(packageRoot, "../..");
     for (const { board, name } of regions) {
       const code = readFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), "utf8");
@@ -127,7 +125,7 @@ describe("region generation", () => {
       );
       expect(output, `${board}/${name}`).toBe(code);
     }
-  });
+  }, 30_000);
   it("keeps ancestor rules, state/pseudo selectors, grouping rules and used keyframes, and drops unrelated rules", () => {
     const markup =
       '<div class="ov"><div class="shell"></div><section class="page"><b class="qtbl {{state}}">中文</b></section><section class="other"><b>other</b></section></div>';
@@ -143,6 +141,18 @@ describe("region generation", () => {
     expect(cssBlocks(result)).toHaveLength(5);
     expect(files["Test/regions/Page.tsx"]).not.toMatch(/DCLogic|@ts-nocheck|中文/);
     expect(files["Test/regions/Page.zh.ts"]).toContain("中文");
+  });
+
+  it("keeps the breadcrumb's parent state when its class comes from a template hole", () => {
+    const files = convertRegion(
+      '<nav class="qbc"><button class="qbcb {{segAc}}"><b>Personal</b></button></nav>',
+      ".qbc .qbcb.up b{font-weight:400}.qbc .qbcb.up:hover b{color:red}.qbc .qbcb.other b{color:blue}",
+      { board: "Test", name: "Breadcrumb", roots: [".qbc"] },
+      marker,
+    );
+    expect(files["Test/regions/Breadcrumb.module.css"]).toContain(".qbc .qbcb.up b");
+    expect(files["Test/regions/Breadcrumb.module.css"]).toContain(".qbc .qbcb.up:hover b");
+    expect(files["Test/regions/Breadcrumb.module.css"]).not.toContain(".other");
   });
 
   it("copies repeated templates in order, including variant shapes and interleaved elements, with typed props and locale keys", () => {
@@ -201,7 +211,7 @@ describe("region generation", () => {
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const manifest = regions.filter((region) => region.board === board);
+      const manifest = regions.filter((region) => region.board === board && !region.render);
       const drawn = fragment(markup);
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();

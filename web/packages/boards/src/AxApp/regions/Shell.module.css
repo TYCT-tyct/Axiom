@@ -218,6 +218,7 @@
 :global(.ov .pmi.on):where(.scope){background:var(--hover)}
 :global(.ov .qav):where(.scope){display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border-radius:50%;background:var(--accentWash);color:var(--accentT);font-size:12px;font-weight:500}
 :global(.ov .qav.lg):where(.scope){width:48px;height:48px;font-size:16px}
+:global(.ov .up):where(.scope){color:var(--accentT)}
 :global(.ov .sw2.qsw.on):where(.scope){background:var(--t1)}
 :global(.ov .sw2.qsw.on i):where(.scope){background:var(--page)}
 @container ov (max-width: 600px){
@@ -402,6 +403,8 @@
 :global(.ov .ghlp .hdot):where(.scope){display:none;position:absolute;top:7px;right:7px;width:6px;height:6px;border-radius:50%;background:var(--warn);box-shadow:0 0 0 2px var(--page)}
 :global(.ov .ghlp.warn .hdot):where(.scope){display:block}
 :global(.ov .g11 .qgav):where(.scope){margin-left:6px}
+:global(.ov .qbc .qbcb.up b):where(.scope){font-weight:400;color:var(--t2);transition:color var(--dur) var(--ease)}
+:global(.ov .qbc .qbcb.up:hover b):where(.scope){color:var(--t1)}
 :global(.ov .qbc .qbcs):where(.scope){margin:0;font-size:14px;font-weight:400;color:var(--t3);opacity:1}
 :global(.ov .qhlp):where(.scope){width:240px}
 :global(.ov .qhlp .qsd):where(.scope){margin-left:auto}

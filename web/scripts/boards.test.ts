@@ -75,13 +75,13 @@ describe("board conversion", () => {
   });
 
   // AxApp is a 1 MiB artboard; these integration checks parse its complete DOM.
-  it("CI regenerates every pinned board and engine without a diff", () => {
-    expect(checkGenerated()).toEqual([]);
-  }, 60_000);
+  it("CI regenerates every pinned board and engine without a diff", async () => {
+    expect(await checkGenerated()).toEqual([]);
+  }, 180_000);
 
   // Converting one board, not the 1 MiB AxApp artboard, keeps this at a couple of seconds: the check compares the bytes
   // the converter would write against what the tree holds, so it still proves staleness detection, not the catalog.
-  it("detects a changed input as stale and regenerates it", () => {
+  it("detects a changed input as stale and regenerates it", async () => {
     const root = mkdtempSync(join(tmpdir(), "axiom-boards-"));
     try {
       cpSync(join(packageRoot, "inputs"), join(root, "inputs"), { recursive: true });
@@ -92,9 +92,9 @@ describe("board conversion", () => {
         readFileSync(input, "utf8").replace("</helmet>", "<style>.source-change{color:red}</style></helmet>"),
       );
       writeFileSync(join(root, "src/wrapper.tsx"), "export const wrapper = 1;");
-      expect(checkGenerated(root, ["Login"])).toEqual(["Login/board.css"]);
-      generate(root, ["Login"]);
-      expect(checkGenerated(root, ["Login"])).toEqual([]);
+      expect(await checkGenerated(root, ["Login"])).toEqual(["Login/board.css"]);
+      await generate(root, ["Login"]);
+      expect(await checkGenerated(root, ["Login"])).toEqual([]);
       expect(readFileSync(join(root, "src/Login/board.css"), "utf8")).toContain(".source-change{color:red}");
       expect(readFileSync(join(root, "src/wrapper.tsx"), "utf8")).toBe("export const wrapper = 1;");
     } finally {
@@ -107,4 +107,17 @@ describe("board conversion", () => {
     expect(generatedBoard("console/src/page.tsx", `${marker}\n`)).toBe(false);
     expect(generatedBoard("packages/boards/src/runtime.tsx", "export class Runtime {}")).toBe(false);
   });
+
+  it("detects stale rendered regions when only the board script changes", async () => {
+    const root = mkdtempSync(join(tmpdir(), "axiom-drawn-boards-"));
+    try {
+      cpSync(join(packageRoot, "inputs"), join(root, "inputs"), { recursive: true });
+      cpSync(join(packageRoot, "src"), join(root, "src"), { recursive: true });
+      const input = join(root, "inputs/AxApp.logic.html");
+      writeFileSync(input, readFileSync(input, "utf8").replace("平均首字", "平均首字（更新）"));
+      expect(await checkGenerated(root, ["AxApp"])).toContain("AxApp/regions/Logs.zh.ts");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 120_000);
 });
