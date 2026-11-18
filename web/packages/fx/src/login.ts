@@ -4,6 +4,7 @@
 // view, and under reduced motion each is one still frame in its final state. The gathering from the panel's edge and
 // the decode play only for a visitor who arrived through the website's departure (arrival.ts); a direct visit opens
 // on the formed shape and a resolved title.
+import { colour } from "./colour";
 import { hash } from "./hash";
 import { own, reducedMotion } from "./loop";
 import { buildSea, type OceanEngine, type Sea, stillSea } from "./ocean";
@@ -223,14 +224,13 @@ class Stage {
 
   private colours(now: number): Ink {
     if (!this.ink || now - this.inkAt > 400) {
-      const cs = getComputedStyle(this.lg);
-      const read = (name: string, fallback: string) => cs.getPropertyValue(name).trim() || fallback;
+      const read = (name: string) => colour(this.lg, `var(${name})`);
       this.ink = {
-        t1: read("--text1", "#1c2024"),
-        t2: read("--text2", "#60646c"),
-        ring: read("--ring", "#107d98"),
-        err: read("--err", "#d13415"),
-        bg: read("--bg", "#fcfcfd"),
+        t1: read("--text1"),
+        t2: read("--text2"),
+        ring: read("--ring"),
+        err: read("--err"),
+        bg: read("--bg"),
       };
       this.inkAt = now;
     }
@@ -297,28 +297,41 @@ class Stage {
   }
 
   private tile(p: Tile, i: number, f: Frame) {
-    const { now, g, k } = f;
-    const x = this.context;
     const { px, py, u } = this.place(p, i, f);
     const lit = p.free ? 0 : this.lit(p);
     if (lit < 0) {
-      if (u < 1) return;
-      x.globalAlpha = this.alpha * 0.5;
-      x.fillStyle = k.t2;
-      x.fillRect(px + Math.round(g.cw / 2) - 1, py + Math.round(g.ch / 2) - 1, 2, 2);
+      if (u >= 1) this.dot(px, py, f);
       return;
     }
     const hot = lit > 0;
+    this.fill(p, hot, f);
+    this.context.fillRect(px + 1, py + 1, f.g.cw - 1, f.g.ch - 1);
+    const flicker = u < 1 || hash(i, f.tick) < 0.05 || (hot && f.now - this.pulse < 260);
+    if (!p.free && f.g.cw >= 8 && flicker) this.letter(px, py, i, f);
+  }
+
+  // a tile's ink: faint while loose, the ring colour when lit, the error colour for a moment after a refusal
+  private fill(p: Tile, hot: boolean, f: Frame) {
+    const x = this.context;
     const warn = f.badT < 900 && !p.free && p.c !== "#";
     x.globalAlpha = this.alpha * (p.free ? 0.16 + p.s * 0.14 : hot ? 1 : 0.74 + p.s * 0.2);
-    x.fillStyle = warn ? k.err : hot ? k.ring : k.t1;
-    x.fillRect(px + 1, py + 1, g.cw - 1, g.ch - 1);
-    const flicker = u < 1 || hash(i, f.tick) < 0.05 || (hot && now - this.pulse < 260);
-    if (!p.free && g.cw >= 8 && flicker) {
-      x.globalAlpha *= 0.8;
-      x.fillStyle = k.bg;
-      x.fillText(glyph(i, f.tick), px + g.cw / 2 + 0.5, py + g.ch / 2 + 1);
-    }
+    x.fillStyle = warn ? f.k.err : hot ? f.k.ring : f.k.t1;
+  }
+
+  // a digit not typed yet: a dot in its cell
+  private dot(px: number, py: number, f: Frame) {
+    const x = this.context;
+    x.globalAlpha = this.alpha * 0.5;
+    x.fillStyle = f.k.t2;
+    x.fillRect(px + Math.round(f.g.cw / 2) - 1, py + Math.round(f.g.ch / 2) - 1, 2, 2);
+  }
+
+  // a glyph cut out of a tile, as it settles or now and then after
+  private letter(px: number, py: number, i: number, f: Frame) {
+    const x = this.context;
+    x.globalAlpha *= 0.8;
+    x.fillStyle = f.k.bg;
+    x.fillText(glyph(i, f.tick), px + f.g.cw / 2 + 0.5, py + f.g.ch / 2 + 1);
   }
 
   destroy() {
@@ -326,15 +339,12 @@ class Stage {
   }
 }
 
-// decode resolves the title's characters one after another, as the website's hero does: a dot while a character
-// waits, a cycling glyph as it comes close, the ring colour on the next one, and the caret blinking twice after the
-// last. The characters' colour is set through the CSSOM while they wait, and given back as each resolves.
-function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
-  const chars = [...title.querySelectorAll<HTMLElement>(".ch")];
-  const box = canvas.parentElement;
-  if (!chars.length || !box) return () => {};
+type TitleCell = { x: number; y: number; r: number; blank: boolean };
+
+// The title's characters where they are drawn, in the decode canvas's box.
+function cellsOf(chars: HTMLElement[], box: HTMLElement): TitleCell[] {
   const frame = box.getBoundingClientRect();
-  const cells = chars.map((n) => {
+  return chars.map((n) => {
     const b = n.getBoundingClientRect();
     return {
       x: b.left - frame.left + b.width / 2,
@@ -343,36 +353,49 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
       blank: (n.textContent ?? "").trim() === "",
     };
   });
-  const fs = Number.parseFloat(getComputedStyle(chars[0] as HTMLElement).fontSize) || 40;
+}
+
+// A character d ms before it resolves: a dot while it waits, a cycling glyph as it comes close, the ring colour next.
+function waiting(
+  x: CanvasRenderingContext2D,
+  c: TitleCell,
+  d: number,
+  g: string,
+  ink: { ring: string; dim: string; fs: number },
+) {
+  x.globalAlpha = d <= 60 ? 1 : d <= 240 ? 0.85 : 0.5;
+  x.fillStyle = d <= 60 ? ink.ring : ink.dim;
+  if (d <= 240) {
+    x.fillText(g, c.x, c.y);
+    return;
+  }
+  x.beginPath();
+  x.arc(c.x, c.y, Math.max(1.5, ink.fs * 0.04), 0, Math.PI * 2);
+  x.fill();
+}
+
+// decode resolves the title's characters one after another, as the website's hero does, and blinks the caret twice
+// after the last. The characters' colour is set through the CSSOM while they wait, and given back as each resolves.
+function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
+  const chars = [...title.querySelectorAll<HTMLElement>(".ch")];
+  const box = canvas.parentElement;
+  if (!chars.length || !box) return () => {};
+  const cells = cellsOf(chars, box);
+  const ink = {
+    ring: colour(box, "var(--ring)"),
+    dim: colour(box, "var(--text2)"),
+    fs: Number.parseFloat(getComputedStyle(chars[0] as HTMLElement).fontSize) || 40,
+  };
   const at = (i: number) => 80 + i * 60;
   const end = at(cells.length - 1);
-  const cs = getComputedStyle(box);
-  const ring = cs.getPropertyValue("--ring").trim();
-  const dim = cs.getPropertyValue("--text2").trim();
+  const last = cells[cells.length - 1] as TitleCell;
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const W = box.offsetWidth;
   const H = box.offsetHeight;
   canvas.width = Math.round(W * dpr);
   canvas.height = Math.round(H * dpr);
   const x = canvas.getContext("2d") as CanvasRenderingContext2D;
-  const last = cells[cells.length - 1] as (typeof cells)[number];
   let ms = 0;
-  // a character d ms before it resolves: a dot while it waits, a cycling glyph as it comes close, the ring colour next
-  const waiting = (c: (typeof cells)[number], d: number, g: string) => {
-    x.globalAlpha = d <= 60 ? 1 : d <= 240 ? 0.85 : 0.5;
-    x.fillStyle = d <= 60 ? ring : dim;
-    if (d <= 240) {
-      x.fillText(g, c.x, c.y);
-      return;
-    }
-    x.beginPath();
-    x.arc(c.x, c.y, Math.max(1.5, fs * 0.04), 0, Math.PI * 2);
-    x.fill();
-  };
-  const reveal = () => {
-    for (const c of chars) c.style.removeProperty("color");
-    x.clearRect(0, 0, canvas.width, canvas.height);
-  };
   for (const c of chars) c.style.color = "transparent";
   const release = own(canvas, (dt) => {
     ms += dt * 1000;
@@ -381,27 +404,30 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     x.clearRect(0, 0, W, H);
     x.textAlign = "center";
     x.textBaseline = "middle";
-    x.font = `500 ${Math.round(fs * 0.62)}px "Axiom Mono", ui-monospace, monospace`;
+    x.font = `500 ${Math.round(ink.fs * 0.62)}px "Axiom Mono", ui-monospace, monospace`;
     cells.forEach((c, i) => {
       const d = at(i) - ms;
       if (d <= 0) (chars[i] as HTMLElement).style.removeProperty("color");
-      else if (!c.blank) waiting(c, d, glyph(i, tick));
+      else if (!c.blank) waiting(x, c, d, glyph(i, tick), ink);
     });
     const after = ms - end;
-    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) {
-      x.globalAlpha = 1;
-      x.fillStyle = ring;
-      const w = Math.max(2, Math.round(fs * 0.05));
-      x.fillRect(Math.round(last.r + fs * 0.06), Math.round(last.y - fs * 0.42), w, Math.round(fs * 0.84));
-    }
+    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) caret(x, last, ink);
     x.globalAlpha = 1;
     if (after >= 700) stop();
   });
   const stop = () => {
     release();
-    reveal();
+    for (const c of chars) c.style.removeProperty("color");
+    x.clearRect(0, 0, canvas.width, canvas.height);
   };
   return stop;
+}
+
+function caret(x: CanvasRenderingContext2D, last: TitleCell, ink: { ring: string; fs: number }) {
+  x.globalAlpha = 1;
+  x.fillStyle = ink.ring;
+  const w = Math.max(2, Math.round(ink.fs * 0.05));
+  x.fillRect(Math.round(last.r + ink.fs * 0.06), Math.round(last.y - ink.fs * 0.42), w, Math.round(ink.fs * 0.84));
 }
 
 // The Login board's sea (its ROSTER and the options its boot passes the engine).
@@ -420,14 +446,10 @@ export type Login = {
   destroy: () => void;
 };
 
-// startLogin starts the sea and the stage on frame, the Login board's .lg, showing shape.
-export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arrived: boolean): Login {
-  const canvas = frame.querySelector<HTMLCanvasElement>("canvas.sea");
-  const seaBox = frame.querySelector<HTMLElement>(".lg-sea");
-  if (!canvas || !seaBox) throw new Error("startLogin: the frame has no .lg-sea with a canvas.sea");
-  const still = reducedMotion();
+// The options the Login board's boot passes its sea, sized to the frame.
+function seaOptions(frame: HTMLElement, canvas: HTMLCanvasElement, light: boolean) {
   const side = Math.min(frame.clientWidth || innerWidth, frame.clientHeight || innerHeight);
-  const opts = {
+  return {
     font: '"Geist Mono", ui-monospace, Menlo, monospace',
     light,
     whale: null,
@@ -439,6 +461,15 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
     virtualScale: 1,
     cell: Math.min(13, Math.max(8, Math.round((frame.clientWidth || innerWidth) / 124))),
   };
+}
+
+// startLogin starts the sea and the stage on frame, the Login board's .lg, showing shape.
+export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arrived: boolean): Login {
+  const canvas = frame.querySelector<HTMLCanvasElement>("canvas.sea");
+  const seaBox = frame.querySelector<HTMLElement>(".lg-sea");
+  if (!canvas || !seaBox) throw new Error("startLogin: the frame has no .lg-sea with a canvas.sea");
+  const still = reducedMotion();
+  const opts = seaOptions(frame, canvas, light);
   const engine = buildSea(canvas, roster, opts, still);
   const stage = new Stage(frame, seaBox, engine);
   stage.first(shape, performance.now(), arrived && !still);
@@ -454,11 +485,9 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
     redraw();
   } else {
     sea = { engine, destroy: () => engine.destroy() };
-    let now = 0;
     release = own(canvas, (dt, at) => {
-      now = at;
       engine.tick(dt);
-      stage.draw(now);
+      stage.draw(at);
     });
   }
   const redrawStill = () => still && stage.draw(performance.now());
