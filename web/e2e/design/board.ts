@@ -18,7 +18,7 @@ const origin = "https://board.local";
 export type BoardScene = {
   file: string;
   props?: Record<string, string>;
-  actions?: [string, ...unknown[]][];
+  actions?: ([string, ...unknown[]] | { click: string })[];
   engines?: string[];
 };
 
@@ -59,7 +59,9 @@ function mark(template: string) {
       return whole;
     }
     n += 1;
-    return `<${name}${attributes} data-k="${n}">${text}`;
+    const classes = attributes.match(/\bclass="([^"]*\{\{[^"]*)"/)?.[1];
+    const authored = classes ? ` data-design-class="${encodeURIComponent(classes)}"` : "";
+    return `<${name}${attributes}${authored} data-design-key="${n}">${text}`;
   });
 }
 
@@ -116,8 +118,8 @@ export function render(text: string, scope: Record<string, unknown>, refs: unkno
   const items = list
     .map((item, index) =>
       render(inner, { ...scope, [as]: item, $index: index }, refs).replace(
-        / data-k="([\d.]+)"/g,
-        (_, k) => ` data-k="${k}.${index}"`,
+        / data-design-key="([\d.]+)"/g,
+        (_, k) => ` data-design-key="${k}.${index}"`,
       ),
     )
     .join("");
@@ -127,10 +129,11 @@ export function render(text: string, scope: Record<string, unknown>, refs: unkno
 // patch carries what a re-render changed onto the live elements the marks pair up, and says false without changing
 // anything when the marked elements differ, as when a loop's list grew or shrank: the caller then renders anew.
 function patch(root: HTMLElement, next: HTMLElement) {
-  const marks = (tree: HTMLElement) => [...tree.querySelectorAll<HTMLElement>("[data-k]")].map((el) => el.dataset.k);
+  const marks = (tree: HTMLElement) =>
+    [...tree.querySelectorAll<HTMLElement>("[data-design-key]")].map((el) => el.dataset.designKey);
   if (marks(root).join() !== marks(next).join()) return false;
-  for (const fresh of next.querySelectorAll<HTMLElement>("[data-k]")) {
-    const live = root.querySelector(`[data-k="${fresh.dataset.k}"]`) as Element;
+  for (const fresh of next.querySelectorAll<HTMLElement>("[data-design-key]")) {
+    const live = root.querySelector(`[data-design-key="${fresh.dataset.designKey}"]`) as Element;
     for (const name of ["class", "style", "aria-hidden", "aria-pressed", "lang", "title"]) {
       const value = fresh.getAttribute(name);
       if (value !== null && live.getAttribute(name) !== value) live.setAttribute(name, value);
@@ -153,8 +156,8 @@ export function bind(root: HTMLElement, refs: unknown[]) {
 }
 
 // mount renders the board, binds its refs, re-renders on every setState (DCLogic calls __patch), calls
-// componentDidMount and then the scene's actions.
-function mount(template: string, actions: [string, ...unknown[]][]) {
+// componentDidMount. Actions run after mounting, so clicks can wait for content drawn by native observers.
+function mount(template: string) {
   const c = new Component();
   const values = () => (c.renderVals as () => Record<string, unknown>)();
   const root = document.getElementById("root") as HTMLElement;
@@ -171,9 +174,9 @@ function mount(template: string, actions: [string, ...unknown[]][]) {
     }
   };
   (c.componentDidMount as (() => void) | undefined)?.call(c);
-  for (const [name, ...args] of actions) {
-    (c[name] as (...a: unknown[]) => void).apply(c, args);
-  }
+  Object.assign(window, {
+    __boardAction: ([name, ...args]: [string, ...unknown[]]) => (c[name] as (...a: unknown[]) => void).apply(c, args),
+  });
 }
 
 // boardDocument builds the page served at board.local: the board's helmet with its fonts replaced by the frozen source fonts,
@@ -191,7 +194,7 @@ ${dcLogic}</script></head><body><div id="root"></div>
 <script>(async () => {
 ${[look, fill, render, patch, bind, mount].join("\n")}
 ${board.engines ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
-mount(${inline(mark(template))}, ${inline(board.actions ?? [])});
+mount(${inline(mark(template))});
 })();</script></body></html>`,
   };
 }
@@ -213,6 +216,7 @@ export async function openBoard(
     timezoneId: view.timezoneId,
     colorScheme: view.colorScheme,
   });
+  context.setDefaultTimeout(30_000);
   const blocked: string[] = [];
   await context.route("**/*", async (route) => {
     const url = route.request().url();
@@ -242,11 +246,16 @@ export async function openBoard(
   else await stage(page, view);
   await page.goto(`${origin}/`);
   if (board.engines) await page.locator("#root > *").first().waitFor({ state: "attached" });
-  if (errors.length) {
-    await context.close();
-    throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);
-  }
   try {
+    for (const action of board.actions ?? []) {
+      if (Array.isArray(action))
+        await page.evaluate((action) => {
+          (window as unknown as { __boardAction: (action: [string, ...unknown[]]) => void }).__boardAction(action);
+        }, action);
+      else await page.locator(action.click).first().dispatchEvent("click");
+    }
+    if (errors.length)
+      throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);
     return { page, fonts: await usedFaces(page, fonts), blocked, close: () => context.close() };
   } catch (error) {
     await context.close();

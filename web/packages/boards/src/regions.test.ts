@@ -125,7 +125,7 @@ describe("region generation", () => {
       );
       expect(output, `${board}/${name}`).toBe(code);
     }
-  });
+  }, 30_000);
   it("keeps ancestor rules, state/pseudo selectors, grouping rules and used keyframes, and drops unrelated rules", () => {
     const markup =
       '<div class="ov"><div class="shell"></div><section class="page"><b class="qtbl {{state}}">中文</b></section><section class="other"><b>other</b></section></div>';
@@ -199,7 +199,7 @@ describe("region generation", () => {
     (board) => {
       const html = readBoard(join(packageRoot, "inputs", `${board}.dc.html`));
       const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1] as string;
-      const manifest = regions.filter((region) => region.board === board);
+      const manifest = regions.filter((region) => region.board === board && !region.render);
       const drawn = fragment(markup);
       const overview = drawn.querySelector(".p-ov") as Element;
       (drawn.querySelector(".qpages") as Element).replaceChildren();

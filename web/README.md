@@ -116,6 +116,8 @@
 
 产品页面使用区域入口，例如 `@axiom/boards/AxApp/regions/Shell` 和 `@axiom/boards/AxApp/regions/Overview`；手机对应 AxAppPhone。
 区域由手写的 `packages/boards/manifest/<页面>.ts` 描述（每页一个文件，默认导出该页的区域，`regions.ts` 按文件名汇总）：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽，`slots` 按属性名再给出其他插槽（如标志），由页面传入内容。
+脚本绘制的页面声明 `render: { root: ".p-logs", actions: [["go", "logs"], { click: ".lgr" }] }`：复用隔离画板浏览器，依次调用画板方法或点击首个匹配节点，再从 `root` 的运行时 DOM 中按 `roots` 切区域。`props` 可设置画板属性，`viewport` 默认为 1440×900；手机清单明确设置 390×900。只有选中的条目含 `render` 时才启动一个共享 Chromium（首次运行需 `pnpm --dir web exec playwright install chromium`），每条在独立离线上下文中运行；时间固定为 2026-10-24 12:00（上海），随机数、源字体和 5 秒收敛时间与画板证明一致。`boards --check` 同样重放渲染，不缓存快照；画板脚本始终只在浏览器中执行。
+渲染来源与静态来源共用孔洞、重复行、文案、CSP 和 CSS 筛选；保留模板类孔洞的其他状态供 CSS 筛选，避免浅色快照丢掉深色规则。画板的 ref、事件绑定和定位标记不会成为组件行为，产品通过 `elements` 声明自己的事件孔洞。`Logs`、`LogsFilters`、`LogsDetail`、`LogsAttempts` 分别固定列表、筛选弹层、详情和重试线路详情；手机详情的 `.lgsheet` 根由调用方放在 `.fr` 下，与画板一致。各区域的 `.demo.ts` 从该状态取数据。
 `text` 只替换所选元素的直接文本节点，不破坏货币、小数等子元素；`attributes` 替换指定属性。多处匹配按文档顺序生成编号字段。
 `elements` 补画板没画的产品需要：按选择器（含根节点）换标签（如可点击的 `<div>` 换成 `<button>`）、设置属性（值可含孔洞），`tag: "link"` 渲染页面通过 `link` 传入的路由链接。布尔 ARIA 状态的孔洞类型为 `boolean`。选择器不匹配即生成失败。
 `repeats` 把连续的同级节点提取为类型化数组，原有不同节点结构成为联合类型，渲染模板仍由工具复制；数据字段 `fN` 对应模板中按顺序遍历的属性和文本，具体值见旁边的 `.demo.ts`。
