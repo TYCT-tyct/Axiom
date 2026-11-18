@@ -44,9 +44,14 @@ const scenes: Scene[] = [
     signedIn: true,
     open: async (page) => {
       await goto(page, "balance");
-      await page.locator("input[inputmode=decimal]").fill("10");
-      await page.getByRole("button", { name: /^(查看支付方式|See how to pay)$/ }).click();
-      await page.getByRole("combobox").waitFor();
+      await page
+        .getByRole("button", { name: /^(充值|Top up)$/ })
+        .first()
+        .click();
+      const amount = page.locator("input[inputmode=decimal]");
+      await amount.waitFor();
+      await amount.fill("10");
+      await page.locator("button[data-m]").first().waitFor();
     },
   },
   { name: "keys", signedIn: true, open: (page) => goto(page, "keys") },

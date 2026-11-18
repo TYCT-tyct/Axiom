@@ -223,6 +223,14 @@ export const designScenes: DesignScene[] = [
   },
   ...presetScenes,
   {
+    name: "console bill",
+    suite: consoleSuite,
+    scene: "balance",
+    fonts: "console",
+    boards: consoleBoards("bill"),
+    schemes: consoleSchemes,
+  },
+  {
     name: "console calls",
     suite: consoleSuite,
     scene: "calls",

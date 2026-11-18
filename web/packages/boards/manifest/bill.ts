@@ -1,8 +1,88 @@
 import type { Region } from "../regions.ts";
 
-/** @public loaded by regions.ts from the directory listing */
-export default ["AxApp", "AxAppPhone"].map(
-  (board): Region => ({
+const billViewport = (board: string) => ({ width: board === "AxAppPhone" ? 390 : 1440, height: 900 });
+
+const billEnglish: Record<string, string> = {
+  m70d0c1b336: "Date",
+  m21c04b2eee: "Summary",
+  mffc624300d: "Amount",
+  mdc569f3d8d: "Balance",
+  m8bd3480856: "Oct 12 – Oct 24",
+  mac02af9bcc: "Model usage",
+  m8d885a8f51: "View usage",
+  m5692855bd0: "Oct 12",
+  m2909c0c397: "Top up, WeChat Pay",
+  m2df12f424b: "Oct 1 – Oct 11",
+  mbd6dfffa49: "Oct 1",
+  m385c36a393: "Sep closing balance",
+  mc15323851b: "Billing & top-up",
+  m426e98aced: "Your balance, shared across all keys.",
+  m1d585347ce: "Team balance, shared across all workspaces.",
+  md1f3e891d3: "At ¥8.88/day (7-day avg), lasts until ",
+  m3bb8a15d6e: "Nov 17",
+  m9e576b565a: ".",
+  md5f5a7a010: "Today",
+  m47912ebb84: "Nov",
+  m57844391cf: "Dec",
+  m2c363db2ea: "Top up",
+  m0370bac54b: "Auto top-up",
+  m3dd27ff56e: "Top up ¥200 using last method when balance falls below ¥50",
+  m81c5ebb35d: "Trigger threshold",
+  m9f03e7a1ec: "Below ¥50",
+  m31b932bd0c: "Below ¥100",
+  mdd222fff71: "Add ¥100",
+  md462585147: "Add ¥200",
+  m73d3e7cec8: "Add ¥500",
+  ma152365659: "Invoices",
+  mc529f3e8e2: "Personal invoices",
+  mb53be09930: "Coming soon",
+  m0fb688b74c: "Statement",
+  md711568daf: "At ¥47.04/day (7-day avg), lasts until ",
+  mf0b3ec59c3: "Nov 20",
+  m743695ea68: "Top up ¥1,000 using last method when balance falls below ¥300",
+  ma5537a0cc1: "Below ¥300",
+  me322dc9112: "Below ¥500",
+  mc092bb642d: "Add ¥1,000",
+  mf6e95287a3: "Add ¥3,000",
+  m2b421abb5b: "Add ¥5,000",
+  m5096195c1a: "Invoices & bank transfer",
+  m0fdc44abba: "Issue VAT invoices or pay via company bank transfer",
+  m8236b09813: "Who can top up",
+  md51d6f8c2d: "Owners, admins, and billing members (manage roles in Members)",
+  m0d8f3231cc: "Zhiyuan Lin",
+  m0cff3c9b1c: "L",
+  mcac625fc6b: "Yutong Chen",
+  mc3a05bd593: "C",
+  m77c2b847de: "Ke Wang",
+  m3399a0e651: "W",
+  m68ce6bc494: "Oct 21 – Oct 24",
+  m49ba9aa240: "Model usage, 2 workspaces",
+  m61302965f6: "Oct 21",
+  mf87c048184: "Top up, Alipay",
+  m9415ab2a81: "Oct 1 – Oct 20",
+};
+
+const payEnglish: Record<string, string> = {
+  m29e475b344: "W",
+  m064464bf64: "WeChat Pay",
+  m05ce0d5546: "Scan with WeChat",
+  mecd6031c95: "Last used",
+  mbd73499ce7: "A",
+  m276a8bc458: "Alipay",
+  mf93cf1f66b: "Scan with Alipay",
+  mcda07a1a53: "Shared across all keys once credited",
+  m3fd47edce4: "Close",
+  mcc9852921f: "Balance after",
+  m9575579380: "At 7-day pace lasts until",
+  macfad75567: "Dec 9",
+  m05a716eb46: "+23 days",
+  mca7223717f: "Payment method",
+  m2cd0f3be87: "Cancel",
+  mb38328f243: "Pay ¥200",
+};
+
+function billRegion(board: string): Region {
+  return {
     board,
     name: "Bill",
     roots: [".p-bill"],
@@ -10,8 +90,114 @@ export default ["AxApp", "AxAppPhone"].map(
     render: {
       root: ".p-bill",
       actions: [["go", "bill"]],
-      viewport: { width: board === "AxAppPhone" ? 390 : 1440, height: 900 },
+      viewport: billViewport(board),
     },
-    repeats: { entries: ".qtbl tbody > tr" },
-  }),
-);
+    slots: {
+      tabs: ".p-bill > .qph > .qpa",
+    },
+    children: ".p-bill > div:last-child",
+    text: {
+      title: ".p-bill > .qph h1",
+      subtitle: ".p-bill .qph .sxP",
+      heroLabel: ".p-bill > .sxP > .qcard.hero .qhl > span",
+      heroCurrency: ".p-bill > .sxP > .qcard.hero .qhl > b.qbig.xl > .cy",
+      heroWhole: ".p-bill > .sxP > .qcard.hero .qhl > b.qbig.xl",
+      heroCents: ".p-bill > .sxP > .qcard.hero .qhl > b.qbig.xl > .ct",
+      topUpLabel: ".p-bill > .sxP > .qcard.hero .qhr.pyh > .btn.pri > span",
+      tableTitle: ".p-bill > .sxP > .qcard.flush > .qch > div > h2",
+    },
+    repeats: {
+      quick: ".p-bill > .sxP .pyqk > button",
+      cols: ".p-bill > .sxP > .qcard.flush .qtbl thead th",
+      entries: ".p-bill > .sxP > .qcard.flush .qtbl tbody > tr",
+    },
+    elements: {
+      ".p-bill": { set: { style: "{{pageStyle}}" } },
+      ".p-bill > .qph": { unless: "hideHeader" },
+      ".p-bill .qph .sxT": { unless: "unbuilt" },
+      ".p-bill > .sxT": { set: { class: "" } },
+      ".p-bill > .sxP > .qcard.hero": { unless: "hideHero" },
+      ".p-bill > .sxP > .qcard.hero .qhl > p": { unless: "unbuilt" },
+      ".p-bill > .sxP > .qcard.hero .qrun": { unless: "unbuilt" },
+      ".p-bill > .sxP > .qcard.hero .qhr.pyh": { unless: "hideTopUp" },
+      ".p-bill > .sxP > .qcard.hero .qhr.pyh > .btn.pri": { set: { onclick: "{{topUp}}" } },
+      ".p-bill > .sxP > .qcard.hero .pyqk": { set: { onclick: "{{quickClick}}" } },
+      ".p-bill > .sxP > .qcard.rows": { unless: "unbuilt" },
+      ".p-bill > .sxP > .qcard.flush": { unless: "hideTable" },
+      ".p-bill > .sxP > .qcard.flush .qtbl": { set: { "aria-label": "{{tableLabel}}" } },
+      ".p-bill > .sxP > .qcard.flush .qtbl tbody": { set: { onclick: "{{tableClick}}" } },
+      ".p-bill > .sxP > .qcard.flush .qtbl tbody > tr:first-child .ppgo": { tag: "a", set: { href: "#" } },
+    },
+    english: billEnglish,
+  };
+}
+
+const billPayText: Region["text"] = {
+  title: ".nkdlg.pyd > .nkh > div > h2",
+  subtitle: ".nkdlg.pyd > .nkh > div > p",
+  currencyPrefix: ".nkdlg.pyd .pyamt > span",
+  previewLabel1: ".nkdlg.pyd .pypv > .pyr:nth-of-type(1) > span",
+  preview1Value: ".pypv > .pyr:nth-of-type(1) > b",
+  previewLabel2: ".nkdlg.pyd .pypv > .pyr:nth-of-type(2) > span",
+  preview2Date: ".pypv > .pyr:nth-of-type(2) > b",
+  preview2Extra: ".pypv > .pyr:nth-of-type(2) > b > em",
+  methodsLabel: ".nkdlg.pyd .pyl",
+  cancelLabel: ".nkdlg.pyd .nkfoot > .btn.sec",
+  submitLabel: ".nkdlg.pyd .nkfoot > .btn.pri > span",
+};
+
+const billPayElements: Region["elements"] = {
+  ".p-bill > .qph": { unless: "overlayOnly" },
+  ".p-bill > .sxP": { unless: "overlayOnly" },
+  ".p-bill > .sxT": { unless: "overlayOnly" },
+  ".nkscrim": { set: { style: "{{overlayStyle}}" } },
+  ".nkdlg.pyd": { set: { ref: "{{panelRef}}", style: "{{overlayStyle}}", "aria-labelledby": "{{titleId}}" } },
+  ".nkdlg.pyd > .nkh > div > h2": { set: { id: "{{titleId}}" } },
+  ".nkdlg.pyd > .nkh > button.nkx": { set: { onclick: "{{close}}", "aria-label": "{{closeLabel}}" } },
+  ".nkdlg.pyd .pyamt": { unless: "hideForm", set: { class: "pyamt {{amountClass}}" } },
+  ".nkdlg.pyd .pyamt > input": {
+    set: {
+      ref: "{{amountInput}}",
+      inputmode: "decimal",
+      oninput: "{{amountChanged}}",
+      onkeydown: "{{amountKeyDown}}",
+      placeholder: "{{amountPlaceholder}}",
+      "aria-label": "{{amountLabel}}",
+    },
+  },
+  ".nkdlg.pyd .pyq": { unless: "hideQuick", set: { onclick: "{{quickClick}}" } },
+  ".nkdlg.pyd .pyerr": { unless: "hideForm" },
+  ".nkdlg.pyd .pypv": { unless: "hidePreview" },
+  ".nkdlg.pyd .pypv > .pyr:nth-of-type(2) > b > em": { unless: "unbuilt" },
+  ".nkdlg.pyd .pybar": { unless: "unbuilt" },
+  ".nkdlg.pyd .pybl": { unless: "unbuilt" },
+  ".nkdlg.pyd .pyl": { unless: "hideMethods" },
+  ".nkdlg.pyd .pyms": { unless: "hideMethods", set: { onclick: "{{methodClick}}" } },
+  ".nkdlg.pyd .nkfoot > .btn.sec": { unless: "hideCancel", set: { onclick: "{{close}}" } },
+  ".nkdlg.pyd .nkfoot > .btn.pri": {
+    unless: "hideSubmit",
+    set: { onclick: "{{submit}}", disabled: "{{submitDisabled}}" },
+  },
+};
+
+function billPayRegion(board: string): Region {
+  return {
+    board,
+    name: "BillPay",
+    roots: [".p-bill", ".nkscrim", ".nkdlg.pyd"],
+    page: "bill",
+    render: {
+      root: ".fr",
+      actions: [["go", "bill"], { click: '.p-bill .sxP .pyqk button[data-amt="200"]' }],
+      viewport: billViewport(board),
+    },
+    slots: { footerLeft: ".nkfoot .nkfl", error: ".nkdlg.pyd .pyerr" },
+    text: billPayText,
+    repeats: { quick: ".pyq button", methods: ".pyms > button" },
+    elements: billPayElements,
+    english: { ...billEnglish, ...payEnglish },
+  };
+}
+
+/** @public loaded by regions.ts from the directory listing */
+export default ["AxApp", "AxAppPhone"].flatMap((board): Region[] => [billRegion(board), billPayRegion(board)]);

@@ -1,10 +1,14 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
 import { DataState, FormError, Notice, PageHeader, Panel, SelectField, SubmitButton } from "@axiom/ui";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  type BillingPreference,
+  type BillingPreferenceChoice,
+  billingPreferenceOptions,
+  useBillingPreferenceForm,
+} from "../billing-preference";
 import { billingPreferenceQuery } from "../queries";
 
 // Settings is where the account chooses how calls are paid for (docs/domains/billing.md「资金来源」). The site sets a
@@ -37,8 +41,6 @@ export default function Settings() {
   );
 }
 
-const preferences = ["subscription_first", "wallet_first", "subscription_only", "wallet_only"] as const;
-
 function SavedNotice({ onDismiss }: { onDismiss: () => void }) {
   const { t } = useTranslation();
   return (
@@ -54,59 +56,40 @@ function SavedNotice({ onDismiss }: { onDismiss: () => void }) {
   );
 }
 
-function PreferenceForm({ data }: { data: Schemas["BillingPreference"] }) {
+function PreferenceForm({ data }: { data: BillingPreference }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const client = useQueryClient();
-  const [value, setValue] = useState<string>(data.source === "account" ? data.preference : "site");
-  const [saved, setSaved] = useState(false);
-  const [failure, setFailure] = useState<unknown>(null);
-  const save = useMutation({
-    mutationFn: () =>
-      unwrap(
-        consoleApi.PUT("/api/console/v1/billing-preference", {
-          body: { preference: value as Schemas["BillingPreferenceRequest"]["preference"] },
-        }),
-      ),
-    onSuccess: (next) => {
-      client.setQueryData(billingPreferenceQuery.queryKey, next);
-      setValue(next.source === "account" ? next.preference : "site");
-      setFailure(null);
-      setSaved(true);
-    },
-    onError: (error) => {
-      setFailure(error);
-      setSaved(false);
-    },
-  });
+  const form = useBillingPreferenceForm(data);
+  const options = billingPreferenceOptions(
+    data.site_default,
+    (key) => t(`settings.billing.values.${key}`),
+    (defaultLabel) => t("settings.billing.site", { value: defaultLabel }),
+  );
   return (
     <form
       className="max-w-xl space-y-5 p-4"
       onSubmit={(event) => {
         event.preventDefault();
-        save.mutate();
+        form.submit();
       }}
     >
-      {saved ? <SavedNotice onDismiss={() => setSaved(false)} /> : null}
+      {form.saved ? <SavedNotice onDismiss={form.dismissSaved} /> : null}
       <SelectField
         label={t("settings.billing.preference")}
         hint={t("settings.billing.hint", { fallback: t(`settings.billing.values.${data.site_default}`) })}
         name="preference"
-        value={value}
-        onChange={(event) => setValue(event.target.value)}
+        value={form.choice}
+        onChange={(event) => form.selectChoice(event.target.value as BillingPreferenceChoice)}
       >
-        <option value="site">
-          {t("settings.billing.site", { value: t(`settings.billing.values.${data.site_default}`) })}
-        </option>
-        {preferences.map((name) => (
-          <option key={name} value={name}>
-            {t(`settings.billing.values.${name}`)}
+        {options.map((option) => (
+          <option key={option.value} value={option.value}>
+            {option.label}
           </option>
         ))}
       </SelectField>
       <p className="max-w-prose text-ui text-t3">{t("settings.billing.fallback")}</p>
-      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-      <SubmitButton pending={save.isPending}>{t("settings.save")}</SubmitButton>
+      {form.error ? <FormError>{errors.message(form.error)}</FormError> : null}
+      <SubmitButton pending={form.pending}>{t("settings.save")}</SubmitButton>
     </form>
   );
 }

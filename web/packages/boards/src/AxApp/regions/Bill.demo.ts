@@ -2,12 +2,23 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Bill.tsx";
 import type en from "./Bill.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {},  rows: {entries0: [{ key: "0", kind: "0", f0: "ppled",f1: "103",f2: "115",f3: "",f4: t("m8bd3480856"),f5: "",f6: t("mac02af9bcc"),f7: "ppgo",f8: t("m8d885a8f51"),f9: "r num",f10: "−¥108.83",f11: "r num",f12: "¥215.40" },
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {title: t("mc15323851b"),
+subtitle: t("m426e98aced"),
+heroLabel: t("mdc569f3d8d"),
+heroCurrency: "¥",
+heroWhole: "215",
+heroCents: ".40",
+topUpLabel: t("m2c363db2ea"),
+tableTitle: t("m0fb688b74c")}, tabs: "",rows: {quick0: [{ key: "0", kind: "0", f0: "button",f1: "100",f2: "¥100" },
+{ key: "1", kind: "0", f0: "button",f1: "200",f2: "¥200" },
+{ key: "2", kind: "0", f0: "button",f1: "500",f2: "¥500" },
+{ key: "3", kind: "0", f0: "button",f1: "1000",f2: "¥1,000" }],
+cols0: [{ key: "0", kind: "0", f0: "",f1: t("m70d0c1b336") },
+{ key: "1", kind: "0", f0: "",f1: t("m21c04b2eee") },
+{ key: "2", kind: "0", f0: "r num",f1: t("mffc624300d") },
+{ key: "3", kind: "0", f0: "r num",f1: t("mdc569f3d8d") }],
+entries0: [{ key: "0", kind: "0", f0: "ppled",f1: "103",f2: "115",f3: "",f4: t("m8bd3480856"),f5: "",f6: t("mac02af9bcc"),f7: "ppgo",f8: "#",f9: t("m8d885a8f51"),f10: "r num",f11: "−¥108.83",f12: "r num",f13: "¥215.40" },
 { key: "1", kind: "1", f0: "ppled",f1: "",f2: t("m5692855bd0"),f3: "",f4: t("m2909c0c397"),f5: "r num",f6: "up",f7: "+¥200.00",f8: "r num",f9: "¥324.23" },
-{ key: "2", kind: "0", f0: "ppled",f1: "92",f2: "102",f3: "",f4: t("m2df12f424b"),f5: "",f6: t("mac02af9bcc"),f7: "ppgo",f8: t("m8d885a8f51"),f9: "r num",f10: "−¥77.47",f11: "r num",f12: "¥124.23" },
-{ key: "3", kind: "2", f0: "",f1: t("mbd6dfffa49"),f2: "",f3: t("m385c36a393"),f4: "r num",f5: "r num",f6: "¥201.70" }],
-entries1: [{ key: "0", kind: "0", f0: "ppled",f1: "3",f2: "112",f3: "115",f4: "",f5: t("m68ce6bc494"),f6: "",f7: t("m49ba9aa240"),f8: "ppgo",f9: t("m8d885a8f51"),f10: "r num",f11: "−¥174.16",f12: "r num",f13: "¥1,284.60" },
-{ key: "1", kind: "1", f0: "ppled",f1: "",f2: t("m61302965f6"),f3: "",f4: t("mf87c048184"),f5: "r num",f6: "up",f7: "+¥1,000.00",f8: "r num",f9: "¥1,458.76" },
-{ key: "2", kind: "0", f0: "ppled",f1: "3",f2: "92",f3: "111",f4: "",f5: t("m9415ab2a81"),f6: "",f7: t("m49ba9aa240"),f8: "ppgo",f9: t("m8d885a8f51"),f10: "r num",f11: "−¥786.41",f12: "r num",f13: "¥458.76" },
-{ key: "3", kind: "2", f0: "",f1: t("mbd6dfffa49"),f2: "",f3: t("m385c36a393"),f4: "r num",f5: "r num",f6: "¥1,245.17" }]} });
+{ key: "2", kind: "2", f0: "ppled",f1: "92",f2: "102",f3: "",f4: t("m2df12f424b"),f5: "",f6: t("mac02af9bcc"),f7: "ppgo",f8: t("m8d885a8f51"),f9: "r num",f10: "−¥77.47",f11: "r num",f12: "¥124.23" },
+{ key: "3", kind: "3", f0: "",f1: t("mbd6dfffa49"),f2: "",f3: t("m385c36a393"),f4: "r num",f5: "r num",f6: "¥201.70" }]} });
 /* jscpd:ignore-end */

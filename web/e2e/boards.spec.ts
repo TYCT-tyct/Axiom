@@ -271,7 +271,7 @@ for (const region of regions) {
         // A module's load event precedes its awaited font loads and first React render.
         await page.locator("#root[data-proof-ready]").waitFor({ state: "attached" });
         expect(await page.locator(selector).count(), selector).toBe(1);
-        if (!render.fragment) await movePhoneSheets(page);
+        if (!render.fragment) await moveFrameOverlays(page);
         const reference = await openBoard(
           browser,
           {
@@ -307,11 +307,11 @@ for (const region of regions) {
     }
 }
 
-async function movePhoneSheets(page: Page) {
-  // A page consumer mounts phone sheets in the frame, outside the scrolling page.
+async function moveFrameOverlays(page: Page) {
+  // The product mounts these overlays in the frame, outside the scrolling page.
   await page.evaluate(() => {
     const frame = document.querySelector(".fr") as Element;
-    for (const sheet of document.querySelectorAll(".lgsheet")) frame.append(sheet);
+    for (const overlay of document.querySelectorAll(".lgsheet, .nkscrim, .nkdlg")) frame.append(overlay);
   });
 }
 

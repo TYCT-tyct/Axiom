@@ -2,8 +2,10 @@
 // code-line limit in scripts/limits.ts, so they live in their own module; both languages stay together because a label
 // and its translation are edited as a pair.
 import type { Messages } from "@axiom/ui";
+import { en as billEn, zh as billZh } from "./bill";
 
 export const zh = {
+  bill: billZh,
   description: "账户额度的充值、赠送、扣费、到期、退款冻结与已完成退款。",
   movements: "流水",
   export: "导出 CSV",
@@ -37,6 +39,7 @@ export const zh = {
 };
 
 export const en: Messages<typeof zh> = {
+  bill: billEn,
   description: "Top-ups, gifts, charges, expiries, refund holds and completed refunds.",
   movements: "Movements",
   export: "Export CSV",
