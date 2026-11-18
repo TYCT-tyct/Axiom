@@ -3,12 +3,15 @@ import { act, createElement, useRef } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { own } from "./loop";
-import { type Running, useEffectModule } from "./use-effect-module";
+import { nearView, type Running, useEffectModule } from "./use-effect-module";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 // The browser's scheduling, run by hand: frames and idle callbacks happen when the test says.
 let frames: FrameRequestCallback[] = [];
+// The last observer's callback, as the browser calls it when its element comes near the view or goes; gone once the
+// observer is disconnected.
+let near: ((isIntersecting: boolean) => void) | undefined;
 let idle: IdleRequestCallback[] = [];
 const flushFrames = () => {
   for (const callback of frames.splice(0)) callback(performance.now());
@@ -49,12 +52,19 @@ beforeEach(() => {
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => idle.push(callback));
   vi.stubGlobal("cancelIdleCallback", () => {});
   vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
+  near = undefined;
   vi.stubGlobal(
     "IntersectionObserver",
     class {
+      constructor(callback: IntersectionObserverCallback) {
+        near = (isIntersecting) =>
+          callback([{ isIntersecting } as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      }
       observe() {}
       unobserve() {}
-      disconnect() {}
+      disconnect() {
+        near = undefined;
+      }
     },
   );
 });
@@ -135,4 +145,18 @@ it("starts nothing when the page is left before the module arrives, and survives
   await act(async () => flushIdle());
   expect(window.axiomFx?.state.owners).toBe(0);
   act(() => failing.unmount());
+});
+
+it("calls what lies below the first screen only once it nears the view, and not after it is cancelled", () => {
+  const go = vi.fn();
+  nearView(document.body.appendChild(document.createElement("div")), go);
+  near?.(false);
+  expect(go).not.toHaveBeenCalled();
+  near?.(true);
+  expect(go).toHaveBeenCalledOnce();
+
+  const late = vi.fn();
+  const cancel = nearView(document.body.appendChild(document.createElement("div")), late);
+  cancel();
+  expect(near).toBeUndefined();
 });

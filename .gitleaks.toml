@@ -64,12 +64,13 @@ regexes = ['''^sk-ax-3f9a8c2e71b04d6e9a5f0c3b$''']
 
 # Steps decodes this fixed display value into its simulated key row; Site embeds the same Steps animation. The
 # request animation only updates state and never sends a request. Keep the authored bytes and pushed history,
-# allowing only this exact value in these five boards' pinned logic and generated controllers.
+# allowing only this exact value in these five boards' pinned logic and generated controllers, and in the home
+# page's steps screen, which plays the same animation.
 [[allowlists]]
-description = "fixed display key in the Steps animation and the Site boards embedding it"
+description = "fixed display key in the Steps animation, the Site boards embedding it and the home page's steps screen"
 targetRules = ["generic-api-key"]
 condition = "AND"
-paths = ['''^web/packages/boards/(inputs/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)\.logic\.html|src/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)/logic\.ts)$''']
+paths = ['''^(web/packages/boards/(inputs/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)\.logic\.html|src/(Steps|Site|SitePhone|SiteTablet|SiteTabletWide)/logic\.ts)|web/site/src/home/steps-script\.ts)$''']
 regexes = ['''^sk-ax-7f3c9a1e5b02$''']
 
 # `keyPopStyle: p.chips.keyOpts0.length` in pushed commit f280fd28 reads `key` before `: ` and flags the TypeScript
