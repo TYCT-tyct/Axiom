@@ -50,32 +50,6 @@ export function CreateKeyDialog({
   );
 }
 
-export function EditKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () => void }) {
-  const { t } = useTranslation();
-  const refresh = useRefreshKeys();
-  const update = useMutation({
-    mutationFn: (body: Schemas["KeySettings"]) =>
-      unwrap(consoleApi.PUT("/api/console/v1/keys/{key_id}", { params: { path: { key_id: apiKey.id } }, body })),
-    onSuccess: async () => {
-      await refresh();
-      onClose();
-    },
-  });
-  return (
-    <Dialog title={t("keys.edit")} onClose={onClose}>
-      <KeyForm
-        apiKey={apiKey}
-        pending={update.isPending}
-        error={update.error}
-        onCancel={onClose}
-        onSubmit={({ expires_at: _expires, workspace_id: _workspace, preset_id, ...body }) =>
-          update.mutate(preset_id && preset_id !== apiKey.preset_id ? { ...body, preset_id } : body)
-        }
-      />
-    </Dialog>
-  );
-}
-
 export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () => void }) {
   const { t } = useTranslation();
   const refresh = useRefreshKeys();

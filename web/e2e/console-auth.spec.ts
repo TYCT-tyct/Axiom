@@ -70,7 +70,7 @@ test.describe("signing in", () => {
     await page.goto("/console/keys?x=1");
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     await signIn(page);
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/console/keys");
   });
 
@@ -90,7 +90,7 @@ test.describe("signing in", () => {
     expect(new URL(page.url()).search).toBe("?next=%2Fkeys");
     release();
     await signIn(page);
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
   });
 
   test("an address to return to that leaves the app is dropped", async ({ page }) => {
@@ -106,7 +106,7 @@ test.describe("signing in", () => {
     await page.goto("/console/keys?x=1&next=/calls");
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     await signIn(page);
-    await expect(page.getByRole("heading", { level: 1, name: "API key" })).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
     const back = new URL(page.url());
     expect(back.pathname).toBe("/console/keys");
     expect([back.searchParams.get("x"), back.searchParams.get("next")]).toEqual(["1", "/calls"]);

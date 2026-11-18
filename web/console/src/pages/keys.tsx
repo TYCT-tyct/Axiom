@@ -1,425 +1,332 @@
-import type { Schemas } from "@axiom/api";
-import { can, LoadMore, readForm, useSession } from "@axiom/app";
-import {
-  Badge,
-  Button,
-  DataState,
-  EmptyState,
-  Icon,
-  PageHeader,
-  Panel,
-  SelectField,
-  Table,
-  Td,
-  TextField,
-  Th,
-  useFormat,
-} from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useMemo, useRef, useState } from "react";
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { accountKey, can, LoadMore, useSession } from "@axiom/app";
+import Keys from "@axiom/boards/AxApp/regions/Keys";
+import KeysEN from "@axiom/boards/AxApp/regions/Keys.en";
+import KeysZH from "@axiom/boards/AxApp/regions/Keys.zh";
+import { Button, DataState, EmptyState, Icon, Note, Notice, useFormat, usePageTitle } from "@axiom/ui";
+import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Link, useSearch } from "@tanstack/react-router";
+import { type KeyboardEvent as KeyEvent, type MouseEvent, type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CreateKeyDialog, DeleteKeyDialog, EditKeyDialog, SecretDialog } from "../key-dialogs";
+import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
-import { useNewKeys, usePresetName } from "../key-form";
-import { maskedKey, toInstant, toLocalInput } from "../parts";
 import { type KeyFilters, keysQuery } from "../queries";
-import { useWorkspaces } from "../workspaces";
+import { keyRow, today } from "./keys-data";
+import { KeyDetailDialog } from "./keys-detail";
+import { hasFilters, KeyFiltersDialog, noFilters } from "./keys-filters";
 
 type Key = Schemas["Key"];
+type Page = { data: Key[]; next_cursor?: string | null; filters?: Schemas["KeyFilterEcho"] };
+type ListQuery = ReturnType<typeof useInfiniteQuery<Page>>;
 type Dialog =
   | { kind: "create" }
-  | { kind: "edit"; key: Key }
-  | { kind: "delete"; key: Key }
-  | { kind: "secret"; created: Schemas["CreatedKey"]; asked: string | undefined };
+  | { kind: "secret"; created: Schemas["CreatedKey"]; asked: string | undefined }
+  | { kind: "filter" }
+  | { kind: "detail"; key: Key }
+  | { kind: "delete"; key: Key };
+// What the notice offers to undo: the key as the server now has it, and whether it was on before the save.
+type Toggled = { key: Key; was: boolean };
 
-export default function Keys() {
-  const { t } = useTranslation();
+// The console's keys page is the board's Keys slice (#747 C1): the personal space's list, drawn from the API. The board
+// draws the same slice for both its boards — the phone's markup is the desktop's, region for region — so one region
+// serves both widths. A key opens in the console's dialog with its settings (see keys-detail.tsx); the create form and
+// the key's one-time text are the console's too, because the board draws its versions of both in JavaScript, which the
+// region converter does not read.
+export default function KeysPage() {
+  const { t, i18n } = useTranslation();
   const manage = can(useSession(), "api_keys.manage");
+  const format = useFormat();
   const filters: KeyFilters = useSearch({ from: "/app/keys" });
   const keys = useInfiniteQuery(keysQuery(filters));
-  const filtered = Object.values(filters).some(Boolean);
   const pages = keys.data?.pages ?? [];
-  const filtersApplied = keyFiltersApplied(filters, pages);
-  const rows = useMemo(() => keys.data?.pages.flatMap((page) => page.data) ?? [], [keys.data]);
+  const list = useMemo(() => pages.flatMap((page) => page.data), [pages]);
   const [dialog, setDialog] = useState<Dialog | null>(null);
+  const [toggled, setToggled] = useState<Toggled | null>(null);
+  usePageTitle(t("nav.keys"));
+  const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
+  const boardT = (key: keyof typeof KeysZH) => (english ? KeysEN[key] : KeysZH[key]);
+  const now = Date.now();
+  const rows = useMemo(
+    () => list.map((key) => keyRow(key, { format, t, language: i18n.language, now, today: today(now) })),
+    [list, format, t, i18n.language, now],
+  );
   const close = () => setDialog(null);
-  const workspaces = useWorkspaces();
-  // With one workspace, a key's needs no saying.
-  const workspaceOf = (key: Key) => (workspaces.several ? (workspaces.named(key.workspace_id) ?? "—") : undefined);
+  const undone = (key: Key, was: boolean) => (key.disabled === was ? undefined : setToggled({ key, was }));
+  return (
+    <Frame>
+      {toggled ? <ToggleNotice toggled={toggled} onDone={() => setToggled(null)} /> : null}
+      <Content
+        keys={keys}
+        list={list}
+        rows={rows}
+        pages={pages}
+        filters={filters}
+        manage={manage}
+        boardT={boardT}
+        setDialog={setDialog}
+      />
+      <Dialogs dialog={dialog} setDialog={setDialog} close={close} filters={filters} onToggled={undone} />
+    </Frame>
+  );
+}
+
+// Content is what the page shows of the account's keys: the board's list when it has any, and the state that replaces
+// the list while it loads, when the account has none, and when the filters find none or a node that predates them.
+function Content({
+  keys,
+  list,
+  rows,
+  pages,
+  filters,
+  manage,
+  boardT,
+  setDialog,
+}: {
+  keys: ListQuery;
+  list: Key[];
+  rows: ReturnType<typeof keyRow>[];
+  pages: { filters?: Schemas["KeyFilterEcho"] }[];
+  filters: KeyFilters;
+  manage: boolean;
+  boardT: (key: keyof typeof KeysZH) => string;
+  setDialog: (dialog: Dialog | null) => void;
+}) {
+  if (keys.isPending || keys.isError) {
+    return (
+      <DataState query={keys} page>
+        {() => null}
+      </DataState>
+    );
+  }
+  if (list.length === 0) {
+    return (
+      <EmptyList
+        filtered={hasFilters(filters)}
+        filters={filters}
+        pages={pages}
+        manage={manage}
+        onCreate={() => setDialog({ kind: "create" })}
+      />
+    );
+  }
   return (
     <>
-      <PageHeader title={t("nav.keys")} description={t("keys.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        {manage ? (
-          <Button variant="primary" size="md" onClick={() => setDialog({ kind: "create" })}>
-            <Icon name="plus" />
-            {t("keys.create")}
-          </Button>
-        ) : null}
-        <Filters filters={filters} />
-        <Panel>
-          <DataState
-            query={keys}
-            isEmpty={() => filtersApplied && rows.length === 0}
-            empty={<NoKeys filtered={filtered} />}
-          >
-            {() =>
-              filtersApplied ? (
-                <KeysTable
-                  keys={rows}
-                  manage={manage}
-                  workspaceOf={workspaceOf}
-                  onEdit={(key) => setDialog({ kind: "edit", key })}
-                  onDelete={(key) => setDialog({ kind: "delete", key })}
-                />
-              ) : (
-                <EmptyState title={t("keys.filtersUnavailable.title")}>{t("keys.filtersUnavailable.body")}</EmptyState>
-              )
-            }
-          </DataState>
-          {filtersApplied ? <LoadMore list={keys} /> : null}
-        </Panel>
-      </div>
-      {dialog?.kind === "create" ? (
-        <CreateKeyDialog
-          workspace={filters.workspace_id}
-          onClose={close}
-          onCreated={(created, asked) => setDialog({ kind: "secret", created, asked })}
-        />
-      ) : null}
-      {dialog?.kind === "edit" ? <EditKeyDialog apiKey={dialog.key} onClose={close} /> : null}
-      {dialog?.kind === "delete" ? <DeleteKeyDialog apiKey={dialog.key} onClose={close} /> : null}
-      {dialog?.kind === "secret" ? (
-        <SecretDialog created={dialog.created} asked={dialog.asked} onClose={close} />
+      <Retired keys={list} />
+      <Keys
+        t={boardT}
+        values={rowValues(manage, list, (key) => setDialog({ kind: "detail", key }))}
+        rows={{ keys0: rows }}
+        actions={
+          <Actions
+            manage={manage}
+            onFilter={() => setDialog({ kind: "filter" })}
+            onCreate={() => setDialog({ kind: "create" })}
+          />
+        }
+      />
+      <LoadMore list={keys} />
+    </>
+  );
+}
+
+// The shell gives the page its whole width; the board's page sits in a column of its own, which the page brings until
+// the shell does. The padding is the board's page padding at each width.
+function Frame({ children }: { children: ReactNode }) {
+  return <div className="mx-auto w-full max-w-[1180px] px-4 py-3.5 sm:px-10 sm:py-[30px]">{children}</div>;
+}
+
+// Actions are the page's own, beside the board's title: the list has no filters of its own (L8), and an account that
+// may change keys makes one here.
+function Actions({ manage, onFilter, onCreate }: { manage: boolean; onFilter: () => void; onCreate: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <>
+      <Button size="md" onClick={onFilter}>
+        <Icon name="search" />
+        {t("keys.board.filter")}
+      </Button>
+      {manage ? (
+        <Button size="md" variant="primary" onClick={onCreate}>
+          <Icon name="plus" />
+          {t("keys.create")}
+        </Button>
       ) : null}
     </>
   );
 }
 
-function NoKeys({ filtered }: { filtered: boolean }) {
+// What the region's rows need from the page. A row is a control only for an account that may change keys; others read
+// the list, and every row's icon says nothing to a reader either way. Pressing a row presses the click it stands for.
+function rowValues(manage: boolean, list: Key[], choose: (key: Key) => void) {
+  if (!manage) {
+    return { kr2_0: "", rowRole: "row", rowTab: "-1", decorative: true };
+  }
+  return { kr2_0: "", rowRole: "button", rowTab: "0", decorative: true, press, ko2_0: openRow(list, choose) };
+}
+
+// The key a row stands for, from the row the event came from: the list's rows are the page's, in its order.
+function openRow(list: Key[], choose: (key: Key) => void) {
+  return (event: MouseEvent<Element>) => {
+    const row = (event.currentTarget as Element).closest("tr");
+    const body = row?.parentElement;
+    const key = row && body ? list[[...body.children].indexOf(row)] : undefined;
+    if (key) {
+      choose(key);
+    }
+  };
+}
+
+function press(event: KeyEvent<Element>) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    (event.currentTarget as HTMLElement).click();
+  }
+}
+
+// A model the catalog has retired cannot serve a key that names it, and the board's list has no column to say it in
+// (L7): the names are here, once, above the list.
+function Retired({ keys }: { keys: Key[] }) {
   const { t } = useTranslation();
+  const retired = [...new Set(keys.flatMap((key) => key.retired_models ?? []))];
+  if (retired.length === 0) {
+    return null;
+  }
+  return <Note title={t("keys.retiredModels", { models: retired.join(", ") })} />;
+}
+
+// EmptyList says why the list is empty and what to do about it: no key yet, no match for the filters, or a node that
+// predates filters, whose rows must not be shown as if the filters had applied to them.
+function EmptyList({
+  filtered,
+  filters,
+  pages,
+  manage,
+  onCreate,
+}: {
+  filtered: boolean;
+  filters: KeyFilters;
+  pages: { filters?: Schemas["KeyFilterEcho"] }[];
+  manage: boolean;
+  onCreate: () => void;
+}) {
+  const { t } = useTranslation();
+  const actions = (
+    <>
+      <Button size="md" asChild>
+        <Link to="/keys" search={noFilters}>
+          {t("keys.filter.reset")}
+        </Link>
+      </Button>
+      {manage ? (
+        <Button size="md" variant="primary" onClick={onCreate}>
+          {t("keys.create")}
+        </Button>
+      ) : null}
+    </>
+  );
+  if (filtered && !keyFiltersApplied(filters, pages)) {
+    return (
+      <EmptyState page title={t("keys.filtersUnavailable.title")} action={actions}>
+        {t("keys.filtersUnavailable.body")}
+      </EmptyState>
+    );
+  }
+  if (filtered) {
+    return (
+      <EmptyState page title={t("keys.noMatch")} action={actions}>
+        {t("keys.noMatchBody")}
+      </EmptyState>
+    );
+  }
   return (
-    <EmptyState title={filtered ? t("keys.noMatch") : t("keys.empty.title")}>
-      {filtered ? t("keys.noMatchBody") : t("keys.empty.body")}
+    <EmptyState page title={t("keys.empty.title")} action={manage ? actions : undefined}>
+      {t("keys.empty.body")}
     </EmptyState>
   );
 }
 
-function filtersOf(form: HTMLFormElement): KeyFilters {
-  const values = readForm(form);
-  return {
-    name: values.name?.trim() || undefined,
-    prefix: values.prefix?.trim() || undefined,
-    status: statusOf(values.status),
-    created_after: toInstant(values.created_after),
-    created_before: toInstant(values.created_before),
-    workspace_id: values.workspace_id || undefined,
-  };
-}
-
-function statusOf(value: string | undefined): KeyFilters["status"] {
-  return value === "active" || value === "disabled" || value === "expired" ? value : undefined;
-}
-
-// The filters live in the address, so a reload, the back button and a link keep them. The form is rebuilt when they
-// change from outside it.
-function Filters({ filters }: { filters: KeyFilters }) {
-  const navigate = useNavigate();
-  const form = useRef<HTMLFormElement>(null);
-  return (
-    <Panel className="p-4">
-      <form
-        ref={form}
-        key={JSON.stringify(filters)}
-        noValidate
-        className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3"
-        onSubmit={(event) => {
-          event.preventDefault();
-          void navigate({ to: "/keys", search: filtersOf(event.currentTarget) });
-        }}
-      >
-        <KeyFilterFields filters={filters} />
-        <KeyFilterActions onClear={() => form.current?.reset()} />
-      </form>
-    </Panel>
-  );
-}
-
-function KeyFilterFields({ filters }: { filters: KeyFilters }) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <TextField
-        label={t("keys.filter.name")}
-        name="name"
-        maxLength={100}
-        defaultValue={filters.name}
-        autoComplete="off"
-      />
-      <TextField
-        label={t("keys.filter.prefix")}
-        name="prefix"
-        maxLength={16}
-        defaultValue={filters.prefix}
-        autoComplete="off"
-        spellCheck={false}
-      />
-      <SelectField label={t("keys.filter.status")} name="status" defaultValue={filters.status ?? ""}>
-        <option value="">{t("keys.filter.anyStatus")}</option>
-        <option value="active">{t("keys.enabled")}</option>
-        <option value="disabled">{t("keys.disabled")}</option>
-        <option value="expired">{t("keys.expired")}</option>
-      </SelectField>
-      <TextField
-        label={t("keys.filter.createdAfter")}
-        name="created_after"
-        type="datetime-local"
-        defaultValue={toLocalInput(filters.created_after)}
-      />
-      <TextField
-        label={t("keys.filter.createdBefore")}
-        name="created_before"
-        type="datetime-local"
-        defaultValue={toLocalInput(filters.created_before)}
-      />
-      <WorkspaceFilter value={filters.workspace_id} />
-    </>
-  );
-}
-
-// The workspace filter is offered once there is a second workspace. A workspace in the address that the list no longer
-// has stays chosen, so applying the other filters does not drop it.
-function WorkspaceFilter({ value }: { value: string | undefined }) {
-  const { t } = useTranslation();
-  const { list, several, named } = useWorkspaces();
-  if (!several) {
-    return value ? <input type="hidden" name="workspace_id" value={value} /> : null;
-  }
-  return (
-    <SelectField label={t("workspaces.key.filter")} name="workspace_id" defaultValue={value ?? ""}>
-      <option value="">{t("workspaces.key.any")}</option>
-      {value && !named(value) ? <option value={value}>{value}</option> : null}
-      {list.map((workspace) => (
-        <option key={workspace.id} value={workspace.id}>
-          {workspace.name}
-        </option>
-      ))}
-    </SelectField>
-  );
-}
-
-function KeyFilterActions({ onClear }: { onClear: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <div className="flex items-end gap-2">
-      <Button variant="primary" size="md" type="submit">
-        {t("keys.filter.apply")}
-      </Button>
-      <Button size="md" asChild>
-        <Link
-          to="/keys"
-          search={{
-            name: undefined,
-            prefix: undefined,
-            status: undefined,
-            created_after: undefined,
-            created_before: undefined,
-            workspace_id: undefined,
-          }}
-          onClick={onClear}
-        >
-          {t("keys.filter.reset")}
-        </Link>
-      </Button>
-    </div>
-  );
-}
-
-function KeysTable({
-  keys,
-  manage,
-  workspaceOf,
-  onEdit,
-  onDelete,
+// Dialogs holds the page's modals: the filters, the key that was just made and its one-time text, a key's settings, and
+// the confirmation that deletes it.
+function Dialogs({
+  dialog,
+  setDialog,
+  close,
+  filters,
+  onToggled,
 }: {
-  keys: Key[];
-  manage: boolean;
-  workspaceOf: (key: Key) => string | undefined;
-  onEdit: (key: Key) => void;
-  onDelete: (key: Key) => void;
+  dialog: Dialog | null;
+  setDialog: (dialog: Dialog | null) => void;
+  close: () => void;
+  filters: KeyFilters;
+  onToggled: (key: Key, was: boolean) => void;
 }) {
-  const { t } = useTranslation();
-  return (
-    <Table label={t("nav.keys")}>
-      <thead>
-        <tr>
-          <Th>{t("keys.col.name")}</Th>
-          <Th>{t("keys.col.status")}</Th>
-          <Th className="hidden md:table-cell">{t("keys.col.limit")}</Th>
-          <Th className="hidden xl:table-cell">{t("routingPresets.key.col")}</Th>
-          <Th className="hidden lg:table-cell">{t("keys.col.expires")}</Th>
-          <Th className="hidden 2xl:table-cell">{t("keys.col.created")}</Th>
-          {manage ? <Th className="w-0" /> : null}
-        </tr>
-      </thead>
-      <tbody>
-        {keys.map((key) => (
-          <KeyRow
-            key={key.id}
-            apiKey={key}
-            workspace={workspaceOf(key)}
-            manage={manage}
-            onEdit={onEdit}
-            onDelete={onDelete}
-          />
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-function KeyStatus({ apiKey }: { apiKey: Key }) {
-  const { t } = useTranslation();
-  if (apiKey.expires_at !== undefined && new Date(apiKey.expires_at) <= new Date()) {
+  if (dialog?.kind === "create") {
     return (
-      <Badge tone="bad" icon="alert">
-        {t("keys.expired")}
-      </Badge>
+      <CreateKeyDialog
+        workspace={filters.workspace_id}
+        onClose={close}
+        onCreated={(created, asked) => setDialog({ kind: "secret", created, asked })}
+      />
     );
   }
-  return (
-    <Badge tone={apiKey.disabled ? "warn" : "ok"} icon={apiKey.disabled ? "alert" : "check"}>
-      {apiKey.disabled ? t("keys.disabled") : t("keys.enabled")}
-    </Badge>
-  );
-}
-
-function KeyLimit({ apiKey }: { apiKey: Key }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  if (!apiKey.spend_limit) {
-    return t("keys.noLimit");
+  if (dialog?.kind === "secret") {
+    return <SecretDialog created={dialog.created} asked={dialog.asked} onClose={close} />;
   }
-  return (
-    <>
-      <p>{t("keys.limitLeft", { left: apiKey.limit_remaining ? format.money(apiKey.limit_remaining) : "—" })}</p>
-      <p className="text-label text-t4">
-        {t("keys.limitOf", { limit: format.money(apiKey.spend_limit) })}
-        {apiKey.limit_reset ? ` · ${t(`keys.reset.${apiKey.limit_reset}`)}` : ""}
-      </p>
-    </>
-  );
-}
-
-// A management key calls no model, so it has no preset. A call key without one routes by the system's allow-all: an
-// older key, or a node that gives no preset. A key keeps the preset it was made with when the default moves on
-// (docs/domains/routing.md「默认链与 key 落章」), so one bound to another than a key made now takes says so; a key
-// without a preset is not compared, since the node that listed it may be one that gives none, and neither is a key of
-// another than the default workspace, whose own default chain the page does not read. Under the key's name, where
-// narrow screens show it instead of the column, it is labelled, and a management key shows nothing. Names wrap rather
-// than truncate (docs/frontend.md「中英文」): two presets may differ only at the end.
-function KeyPreset({ apiKey, labelled = false }: { apiKey: Key; labelled?: boolean }) {
-  const { t } = useTranslation();
-  const presetName = usePresetName();
-  const newKeys = useNewKeys();
-  const elsewhere = useWorkspaces().scopeOf(apiKey.workspace_id) !== undefined;
-  const label = (text: string) => (labelled ? t("routingPresets.key.labelled", { name: text }) : text);
-  if (apiKey.kind === "management") {
-    return labelled ? null : <span className="text-t4">{t("routingPresets.key.notApplicable")}</span>;
+  if (dialog?.kind === "filter") {
+    return <KeyFiltersDialog filters={filters} onClose={close} />;
   }
-  if (!apiKey.preset_id) {
+  if (dialog?.kind === "detail") {
     return (
-      <p className="text-t4" title={t("routingPresets.key.noneHint")}>
-        {label(t("routingPresets.key.none"))}
-      </p>
+      <KeyDetailDialog
+        apiKey={dialog.key}
+        onClose={close}
+        onDelete={(key) => setDialog({ kind: "delete", key })}
+        onToggled={onToggled}
+      />
     );
   }
-  const name = presetName(apiKey);
-  const moved = !elsewhere && newKeys.id !== undefined && newKeys.id !== apiKey.preset_id;
-  const note = newKeys.name
-    ? t("routingPresets.key.notDefaultNamed", { name: newKeys.name })
-    : t("routingPresets.key.notDefault");
-  return (
-    <>
-      <p className="wrap-anywhere">{label(name)}</p>
-      {moved ? (
-        <p className="text-label text-t4 wrap-anywhere" title={t("routingPresets.key.notDefaultHint")}>
-          {note}
-        </p>
-      ) : null}
-    </>
-  );
+  if (dialog?.kind === "delete") {
+    return <DeleteKeyDialog apiKey={dialog.key} onClose={close} />;
+  }
+  return null;
 }
 
-function KeyRow({
-  apiKey,
-  workspace,
-  manage,
-  onEdit,
-  onDelete,
-}: {
-  apiKey: Key;
-  workspace: string | undefined;
-  manage: boolean;
-  onEdit: (key: Key) => void;
-  onDelete: (key: Key) => void;
-}) {
+// ToggleNotice offers the state a key had before it was switched back. Undoing sends the key as the list now has it
+// with the switch flipped, since the contract replaces every setting it is given.
+function ToggleNotice({ toggled, onDone }: { toggled: Toggled; onDone: () => void }) {
   const { t } = useTranslation();
-  const format = useFormat();
-  const retired = apiKey.retired_models?.join(", ");
+  const queryClient = useQueryClient();
+  const undo = useMutation({
+    mutationFn: () => {
+      const { key, was } = toggled;
+      return unwrap(
+        consoleApi.PUT("/api/console/v1/keys/{key_id}", {
+          params: { path: { key_id: key.id } },
+          body: {
+            name: key.name,
+            disabled: was,
+            spend_limit: key.spend_limit,
+            limit_reset: key.limit_reset,
+            models: key.models,
+            ip_allow: key.ip_allow,
+          },
+        }),
+      );
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: [accountKey, "keys"] });
+      onDone();
+    },
+  });
   return (
-    <tr>
-      <Td className="w-full max-w-0 sm:w-auto sm:max-w-64 sm:min-w-40">
-        <p className="truncate text-t1" title={apiKey.name}>
-          {apiKey.name}
-        </p>
-        <p className="truncate font-mono text-label text-t4">{maskedKey(apiKey)}</p>
-        {workspace ? (
-          <p className="text-label text-t3 wrap-anywhere">{t("workspaces.key.in", { name: workspace })}</p>
-        ) : null}
-        <div className="text-label text-t3 xl:hidden">
-          <KeyPreset apiKey={apiKey} labelled />
-        </div>
-        {retired ? (
-          <p className="truncate text-label text-warn" title={t("keys.retiredModels", { models: retired })}>
-            {t("keys.retiredModels", { models: retired })}
-          </p>
-        ) : null}
-      </Td>
-      <Td>
-        <KeyStatus apiKey={apiKey} />
-      </Td>
-      <Td className="hidden tabular-nums md:table-cell">
-        <KeyLimit apiKey={apiKey} />
-      </Td>
-      <Td className="hidden max-w-48 xl:table-cell">
-        <KeyPreset apiKey={apiKey} />
-      </Td>
-      <Td className="hidden whitespace-nowrap lg:table-cell">
-        {apiKey.expires_at ? format.dateTime(new Date(apiKey.expires_at)) : t("keys.neverExpires")}
-      </Td>
-      <Td className="hidden whitespace-nowrap 2xl:table-cell">{format.dateTime(new Date(apiKey.created_at))}</Td>
-      {manage ? (
-        <Td className="whitespace-nowrap">
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("keys.editNamed", { name: apiKey.name })}
-            onClick={() => onEdit(apiKey)}
-          >
-            <Icon name="pencil" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            aria-label={t("keys.deleteNamed", { name: apiKey.name })}
-            onClick={() => onDelete(apiKey)}
-          >
-            <Icon name="trash" />
-          </Button>
-        </Td>
-      ) : null}
-    </tr>
+    <Notice
+      action={
+        <Button size="sm" onClick={() => undo.mutate()}>
+          {t("keys.board.undo")}
+        </Button>
+      }
+    >
+      {t(toggled.key.disabled ? "keys.board.disabledNotice" : "keys.board.enabledNotice", { name: toggled.key.name })}
+    </Notice>
   );
 }

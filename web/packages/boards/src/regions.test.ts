@@ -114,7 +114,9 @@ function edit(root: Element, region: Region) {
 }
 
 describe("region generation", () => {
-  it("passes noJsxLiterals for every generated region", () => {
+  // A biome run per region, about 0.4 s each: the default 5 s stops being enough as pages add their regions, which is
+  // the check's own cost, not the test's subject.
+  it("passes noJsxLiterals for every generated region", { timeout: 30_000 }, () => {
     const web = join(packageRoot, "../..");
     for (const { board, name } of regions) {
       const code = readFileSync(join(packageRoot, `src/${board}/regions/${name}.tsx`), "utf8");
