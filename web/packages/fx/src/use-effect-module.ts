@@ -36,6 +36,26 @@ function afterFirstContent(go: () => void) {
   };
 }
 
+// nearView calls go once element comes within a view's height of being seen in the box that scrolls it, and returns a
+// function that cancels it. The box is the nearest scrolling ancestor: an observer on the viewport would see the element
+// only once it is in view, because the box clips it until then.
+export function nearView(element: HTMLElement | null, go: () => void) {
+  if (!element) return () => {};
+  let root = element.parentElement;
+  while (root && !/auto|scroll/.test(getComputedStyle(root).overflowY)) root = root.parentElement;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        observer.disconnect();
+        go();
+      }
+    },
+    { root, rootMargin: "100% 0px" },
+  );
+  observer.observe(element);
+  return () => observer.disconnect();
+}
+
 // useEffectModule loads an effect's code after the first content, at idle, and starts it on the element ref points at;
 // it ends the effect when the component unmounts. A module that fails to load leaves the page as it is: the effect is
 // decoration, and the page works without it. The handle, once started, is in the returned ref.

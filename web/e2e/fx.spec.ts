@@ -90,7 +90,7 @@ test("the sea rests while the tab is hidden or the first screen is out of view, 
   await setHidden(page, false);
   await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
 
-  // the screens below come with S2; a block as tall stands in for them
+  // far below the first screen, past every screen, nothing is in view to play
   await page.evaluate(() => {
     const scroller = document.querySelector(".hs") as HTMLElement;
     const below = document.createElement("div");
@@ -159,7 +159,7 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One key for every model");
   await expect(decode).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
+  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
 
   await page.getByRole("button", { name: "Switch to dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -178,12 +178,150 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   expect(await violations()).toEqual([]);
 });
 
+// The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
+// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The
+// places (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
+const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
+const place = (page: Page, sec: number) => page.locator(`.under [data-place="${sec}"]`);
+const scrollTo = (page: Page, sec: number) => place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
+// a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
+const shown = (page: Page, sec: number) =>
+  expect
+    .poll(() =>
+      place(page, sec)
+        .locator(".hfm")
+        .evaluate((el) => getComputedStyle(el).opacity),
+    )
+    .toBe("1");
+
+test("each screen below the first loads as it nears the view, and plays only while it is seen", async ({ page }) => {
+  const asked: string[] = [];
+  page.on("request", (request) => {
+    const name = screenChunk.exec(request.url())?.[1];
+    if (name) asked.push(name);
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  // the models screen lies within a view's height of the first, and the trust screen well below that does not; the
+  // steps screen starts exactly a view's height below the first screen's end, at the edge of that margin
+  await expect.poll(() => asked).toContain("models");
+  expect(asked).not.toContain("trust");
+  await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
+
+  await scrollTo(page, 3);
+  // the models and steps chunks are both asked for at the top, in either order: which ones came is what counts
+  await expect.poll(() => [...asked].sort()).toEqual(["models", "steps", "trust"]);
+  await shown(page, 3);
+  await running(page);
+  await setHidden(page, true);
+  const hidden = (await loop(page)).frames;
+  await pause(page);
+  expect(await loop(page)).toMatchObject({ frames: hidden, pending: false });
+  await setHidden(page, false);
+  await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
+
+  // the island names the section being read
+  await expect(page.locator(".isl")).toContainText("三步开始");
+
+  // past every screen nothing is in view to play
+  await page.evaluate(() => {
+    const scroller = document.querySelector(".hs") as HTMLElement;
+    const below = document.createElement("div");
+    below.style.height = "3000px";
+    scroller.append(below);
+    scroller.scrollTop = scroller.scrollHeight;
+  });
+  await expect.poll(async () => (await loop(page)).pending).toBe(false);
+  const away = (await loop(page)).frames;
+  await pause(page);
+  expect((await loop(page)).frames).toBe(away);
+});
+
+test("under reduced motion the screens below show their end at once and do not turn", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  for (const sec of [2, 3, 4]) {
+    await scrollTo(page, sec);
+    await shown(page, sec);
+  }
+  // the three steps are done: the first request has come back
+  await expect(page.locator(".hfm3 .c200.ok")).toHaveText("200");
+  await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("gpt-5");
+  // no script owns anything on the loop, so the list cannot move on to the next model
+  await pause(page);
+  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
+});
+
+test("a model and a step are chosen from the keyboard", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 2);
+  const second = page.locator(".hfm2 .mr").nth(1);
+  await second.focus();
+  await page.keyboard.press("Enter");
+  await expect(second).toHaveClass(/\bon\b/);
+  await expect(page.locator(".hfm2 .mr .mn").nth(1)).not.toHaveText("");
+  await expect(page.locator(".hfm2 .mr[tabindex='0']")).toHaveCount(await page.locator(".hfm2 .mr").count());
+  await expect(page.locator(".hfm3 .st[role='button']")).toHaveCount(3);
+});
+
+test("the models screen shows the call's failure, not the board's figures, when the models cannot be had", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page);
+  // after the usual mocks, so this answer is the one the page gets
+  await page.route(/\/api\/console\/v1\/models(\?|$)/, (route) => route.fulfill({ status: 500, body: "{}" }));
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 2);
+  await expect(page.locator(".hfm2").getByRole("alert")).toBeVisible();
+  await expect(page.locator(".hfm2 .mr")).toHaveCount(0);
+  await expect(page.locator(".hfm2 .pick")).toHaveCount(0);
+});
+
+test("a screen whose code fails to arrive says so, and retrying reloads the page and loads it", async ({ page }) => {
+  // the network is down for the chunk until the failure shows: the page asks for it twice, its module preload and the
+  // import itself, so failing only the first request would fail the preload and let the import through
+  let down = true;
+  await page.route(/\/assets\/steps-screen-[\w-]+\.js$/, (route) =>
+    down ? route.abort("internetdisconnected") : route.continue(),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 3);
+  const retry = place(page, 3).getByRole("button");
+  await expect(retry).toBeVisible();
+  down = false;
+  await Promise.all([page.waitForEvent("load"), retry.click()]);
+  await pageHeading(page);
+  await scrollTo(page, 3);
+  await shown(page, 3);
+});
+
+test("without the site's API address the steps say so rather than show an empty one saved", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", {
+    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 3);
+  await shown(page, 3);
+  await expect(page.locator(".hfm3")).toContainText("本站 API 地址暂不可用");
+  await expect(page.locator(".hfm3")).not.toContainText("已保存");
+});
+
 // The departure to the console's sign-in pages (port design §9): the pressed button breaks into tiles that stream to
 // where the sign-in panel will be, and half a second after the press the browser goes to the button's page, whatever
 // became of the picture on the way.
 const depart = /\/assets\/depart-[\w-]+\.js$/;
 const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
-const signUp = (page: Page) => page.getByRole("link", { name: "注册，获取API key" });
+// the first screen's way on: the steps screen below has one of the same name
+const signUp = (page: Page) => page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" });
 const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
 
 // Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.
