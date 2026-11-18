@@ -61,6 +61,21 @@
   --columns: 4;
 }
 
+/* As many columns as leave each at least --min wide, top-aligned so a field's hint never pushes its neighbours. */
+.m12,
+.m16 {
+  grid-template-columns: repeat(auto-fill, minmax(min(var(--min), 100%), 1fr));
+  align-items: start;
+}
+
+.m12 {
+  --min: 12rem;
+}
+
+.m16 {
+  --min: 16rem;
+}
+
 /* Four columns become two on a tablet; every grid is one column on a phone. */
 @media (max-width: 1023px) {
   .c4 {
@@ -69,7 +84,9 @@
 }
 
 @media (max-width: 767px) {
-  .grid {
+  .c2,
+  .c3,
+  .c4 {
     --columns: 1;
   }
 }

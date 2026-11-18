@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Button, DataState, Icon, PageHeader, Panel, useFormat } from "@axiom/ui";
+import { ActionButton, Card, DataState, Icon, PageHead, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useState } from "react";
@@ -32,7 +32,7 @@ export default function SupplierPage() {
     <DataState query={detail} page>
       {(data) => (
         <>
-          <PageHeader title={data.supplier.name} description={t("suppliers.detail.description")} />
+          <PageHead title={data.supplier.name} lede={t("suppliers.detail.description")} />
           <PageBody>
             <Body detail={data} />
           </PageBody>
@@ -53,12 +53,12 @@ function Body({ detail }: { detail: Detail }) {
   return (
     <>
       <Actions>
-        <Button asChild>
+        <ActionButton asChild>
           <Link to="/suppliers">
             <Icon name="left" />
             {t("suppliers.detail.back")}
           </Link>
-        </Button>
+        </ActionButton>
         {act ? <SupplierActions supplier={supplier} onOpen={act} /> : null}
       </Actions>
       <Checklist detail={detail} onOpen={act} />
@@ -82,18 +82,18 @@ function Body({ detail }: { detail: Detail }) {
           [t("suppliers.detail.currency"), supplier.settlement_currency],
         ]}
       />
-      <Panel title={t("suppliers.groups.title")}>
+      <Card layout="flush" title={t("suppliers.groups.title")}>
         <Groups groups={detail.groups} onOpen={act} />
-      </Panel>
-      <Panel title={t("suppliers.credentials.title")}>
+      </Card>
+      <Card layout="flush" title={t("suppliers.credentials.title")}>
         <Credentials credentials={detail.credentials} groups={detail.groups} />
-      </Panel>
-      <Panel title={t("suppliers.endpoints.title")}>
+      </Card>
+      <Card layout="flush" title={t("suppliers.endpoints.title")}>
         <Endpoints endpoints={detail.endpoints} groups={detail.groups} onOpen={act} />
-      </Panel>
-      <Panel title={t("suppliers.unbound.title")}>
+      </Card>
+      <Card layout="flush" title={t("suppliers.unbound.title")}>
         <UnboundKeys keys={detail.unbound_keys} onOpen={act} />
-      </Panel>
+      </Card>
       <Dialogs detail={detail} open={open} onClose={() => setOpen(null)} />
     </>
   );
@@ -107,18 +107,17 @@ function SupplierActions({ supplier, onOpen }: { supplier: AdminSchemas["Supplie
   return (
     <>
       {pausable ? (
-        <Button onClick={() => onOpen({ kind: "pause" })}>{t("suppliers.status.paused.action")}</Button>
+        <ActionButton onClick={() => onOpen({ kind: "pause" })}>{t("suppliers.status.paused.action")}</ActionButton>
       ) : null}
       {status === "paused" ? (
-        <Button onClick={() => onOpen({ kind: "resume" })}>{t("suppliers.status.active.action")}</Button>
+        <ActionButton onClick={() => onOpen({ kind: "resume" })}>{t("suppliers.status.active.action")}</ActionButton>
       ) : null}
-      <Button onClick={() => onOpen({ kind: "unit" })}>{t("suppliers.unit.open")}</Button>
-      <Button onClick={() => onOpen({ kind: "login" })}>{t("suppliers.login.open")}</Button>
+      <ActionButton onClick={() => onOpen({ kind: "unit" })}>{t("suppliers.unit.open")}</ActionButton>
+      <ActionButton onClick={() => onOpen({ kind: "login" })}>{t("suppliers.login.open")}</ActionButton>
       {removable ? (
-        <Button variant="danger" onClick={() => onOpen({ kind: "remove" })}>
-          <Icon name="trash" />
+        <ActionButton variant="dan" icon="trash" onClick={() => onOpen({ kind: "remove" })}>
           {t("suppliers.remove.open")}
-        </Button>
+        </ActionButton>
       ) : null}
     </>
   );

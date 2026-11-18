@@ -78,12 +78,25 @@ for (const suite of suites) {
         await scene.open(page);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow).toBeLessThanOrEqual(0);
+        // A table too wide for its box scrolls inside it, so a control in a middle column may wait off screen until the
+        // box is scrolled; a row's own buttons (a sticky actions cell) and every control of a box that cannot scroll
+        // must be on screen (docs/frontend.md「表格与标识符」).
         const hidden = await page.evaluate(() =>
           [...document.querySelectorAll("table :is(a, button)")].flatMap((control) => {
             const box = control.getBoundingClientRect();
-            const frame = control.closest("table")?.parentElement?.getBoundingClientRect();
+            const scroller = control.closest("table")?.parentElement;
+            const frame = scroller?.getBoundingClientRect();
             const out = frame && box.width > 0 && (box.left < frame.left - 0.5 || box.right > frame.right + 0.5);
-            return out ? [control.getAttribute("aria-label") ?? control.textContent] : [];
+            // A row's buttons are the column under a sticky header (the actions column), whatever its own cell says, so a
+            // cell that forgot to stick is caught.
+            const cell = control.closest("td, th");
+            const header =
+              cell instanceof HTMLTableCellElement
+                ? control.closest("table")?.querySelector("thead tr")?.children[cell.cellIndex]
+                : undefined;
+            const sticky = header !== undefined && getComputedStyle(header).position === "sticky";
+            const scrolls = scroller !== null && scroller !== undefined && scroller.scrollWidth > scroller.clientWidth;
+            return out && (sticky || !scrolls) ? [control.getAttribute("aria-label") ?? control.textContent] : [];
           }),
         );
         expect(hidden).toEqual([]);

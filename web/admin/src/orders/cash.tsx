@@ -25,11 +25,11 @@ export function CashMovements(props: LedgerListProps) {
       emptyTitle={t("orders.cash.emptyTitle")}
       emptyBody={t("orders.cash.emptyBody")}
       columns={[
-        [t("orders.cash.col.at")],
-        [t("orders.cash.col.kind")],
-        [t("orders.cash.col.account"), "hidden md:table-cell"],
-        [t("orders.cash.col.amount")],
-        [t("orders.cash.col.source"), "hidden sm:table-cell"],
+        t("orders.cash.col.at"),
+        t("orders.cash.col.kind"),
+        t("orders.cash.col.account"),
+        t("orders.cash.col.amount"),
+        t("orders.cash.col.source"),
       ]}
       keyOf={(movement, index) => movement.id ?? index}
       renderRow={(movement) => <CashRow movement={movement} />}
@@ -44,9 +44,9 @@ function CashRow({ movement }: { movement: AdminSchemas["CashMovement"] }) {
     <tr>
       <Td>{movement.at ? format.dateTime(new Date(movement.at)) : "—"}</Td>
       <Td>{movement.kind ? t(`orders.cash.kind.${movement.kind}`) : "—"}</Td>
-      <Td className="hidden md:table-cell">{movement.account_id ? <Code>{movement.account_id}</Code> : "—"}</Td>
+      <Td>{movement.account_id ? <Code>{movement.account_id}</Code> : "—"}</Td>
       <Td>{movement.amount ? format.money(movement.amount) : "—"}</Td>
-      <Td className="hidden sm:table-cell">
+      <Td>
         {movement.offline_channel
           ? t("orders.cash.offline", { channel: movement.offline_channel })
           : movement.order_id

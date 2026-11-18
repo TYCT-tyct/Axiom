@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { SelectField, TextField } from "@axiom/ui";
+import { Field, Select, TextLink } from "@axiom/ui";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem } from "../change";
@@ -52,13 +52,11 @@ export function DraftDialog({ onClose }: { onClose: () => void }) {
           <p>
             {t("models.draft.done")} <Code>{model.slug}</Code>
           </p>
-          <Link
-            to="/models/$modelId"
-            params={{ modelId: model.id }}
-            className="text-accent underline underline-offset-4"
-          >
-            {t("models.draft.review")}
-          </Link>
+          <TextLink>
+            <Link to="/models/$modelId" params={{ modelId: model.id }}>
+              {t("models.draft.review")}
+            </Link>
+          </TextLink>
         </>
       )}
       onClose={onClose}
@@ -71,7 +69,7 @@ function DraftFields({ error }: { error: unknown }) {
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t("models.draft.slug")}
         hint={t("models.draft.slugHint")}
         name="slug"
@@ -80,20 +78,20 @@ function DraftFields({ error }: { error: unknown }) {
         spellCheck={false}
         error={errors.field(error, "slug")}
       />
-      <SelectField label={t("models.draft.basis")} name="version_basis" defaultValue="dated">
+      <Select label={t("models.draft.basis")} name="version_basis" defaultValue="dated">
         {versionBases.map((basis) => (
           <option key={basis} value={basis}>
             {t(`models.basis.${basis}`)}
           </option>
         ))}
-      </SelectField>
-      <SelectField label={t("models.draft.source")} name="price_source" defaultValue="official">
+      </Select>
+      <Select label={t("models.draft.source")} name="price_source" defaultValue="official">
         {priceSources.map((source) => (
           <option key={source} value={source}>
             {t(`models.source.${source}`)}
           </option>
         ))}
-      </SelectField>
+      </Select>
       <SpecFields />
     </>
   );

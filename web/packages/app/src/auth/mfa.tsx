@@ -45,9 +45,8 @@ function MfaForm({ brand, extra }: { brand?: Brand; extra?: ReactNode }) {
           autoComplete="one-time-code"
           autoCapitalize="none"
           spellCheck={false}
-          className="font-mono tracking-wider"
         />
-        <SubmitButton pending={verify.isPending} className="w-full">
+        <SubmitButton pending={verify.isPending} wide>
           {t("auth.mfa.submit")}
         </SubmitButton>
       </form>

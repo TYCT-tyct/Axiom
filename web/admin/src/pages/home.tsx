@@ -1,10 +1,21 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, Stat, useSession } from "@axiom/app";
 import { Cell, PageHeader, Row, SectionHeader, Segmented, Table } from "@axiom/boards/ds";
-import { CopyButton, DataState, EmptyState, IdText, Notice, useFormat, usePageTitle } from "@axiom/ui";
+import {
+  CardLink,
+  Cluster,
+  DataState,
+  EmptyState,
+  Grid,
+  IdLink,
+  Notice,
+  Text,
+  useFormat,
+  usePageTitle,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
-import { type ReactNode, useMemo, useState } from "react";
+import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nav } from "../nav";
 import {
@@ -23,13 +34,7 @@ import { formatTargetRate, targetsEmpty } from "../targets";
 import { TargetNote, TargetsAction } from "../targets-view";
 
 // The figures are links: each opens the call or order list narrowed to the same window, so a number is never a dead
-// end. The whole card is the target, and the keyboard sees one focus ring around it; the pointer sees its border lift.
-const figure =
-  "block h-full rounded-card focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent [&>section]:h-full [&>section]:transition-colors [&>section]:duration-150 hover:[&>section]:border-b3";
-// The counts share the first row and the money the second: five cards in one row left about 190px at 1280px, too
-// little for an amount, which then broke in the middle of its digits.
-const count = `${figure} lg:col-span-3`;
-const amount = `${figure} lg:col-span-2`;
+// end; the whole card is the target (CardLink).
 
 // The admin's home is the operations dashboard: the site's calls, what they earned and cost, the cash that moved, the
 // paid top-ups that made accounts paying customers, the margin between call revenue and supplier cost, retention, and
@@ -71,20 +76,20 @@ function Dashboard() {
     <PageBody>
       <PageHeader title={t("home.title")} description={t("home.description")} />
       {/* The board sets its choice at the row's end. */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-label text-t3">
+      <Cluster gap={12} justify="between">
+        <Text size="sm" tone="faint">
           {t("overview.window", {
             since: format.dateTime(new Date(window.since)),
             until: format.dateTime(new Date(window.until)),
           })}
-        </p>
+        </Text>
         <Segmented<OverviewRange>
           label={t("overview.rangeLabel")}
           value={range}
           options={overviewRanges.map((value) => ({ value, label: t(`overview.range.${value}`) }))}
           onChange={(value) => navigate({ to: "/", search: { range: value }, replace: true })}
         />
-      </div>
+      </Cluster>
       <DataState query={overview}>{(data) => <Figures data={data} window={window} anchor={anchor} />}</DataState>
     </PageBody>
   );
@@ -129,10 +134,10 @@ function TargetsSection({
   }
   return (
     <>
-      <div className="flex flex-wrap items-end justify-between gap-3">
-        <p className="max-w-3xl text-ui text-t3">{t("overview.targets.description")}</p>
+      <Cluster gap={12} justify="between">
+        <Text tone="faint">{t("overview.targets.description")}</Text>
         {currency ? <TargetsAction anchor={anchor} currency={currency} /> : null}
-      </div>
+      </Cluster>
       {targetsEmpty(targets) ? <Notice>{t("overview.targets.empty")}</Notice> : null}
     </>
   );
@@ -146,7 +151,8 @@ function withTarget(show: boolean, target: ReactNode, base?: ReactNode): ReactNo
   }
   return base ? (
     <>
-      <span className="block">{base}</span>
+      {base}
+      <br />
       {target}
     </>
   ) : (
@@ -171,18 +177,32 @@ function Figures({ data, window, anchor }: { data: Overview; window: Window; anc
     <>
       <CoverageNotice data={data} />
       <TargetsSection targets={targets} anchor={anchor} currency={currency} />
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <CallsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
-        <ErrorsFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
+      <Grid min="16rem" gap={12}>
+        <CountFigure
+          metric="calls"
+          data={data}
+          window={window}
+          site={site}
+          targets={targets}
+          showTarget={targetNotes}
+        />
+        <CountFigure
+          metric="errors"
+          data={data}
+          window={window}
+          site={site}
+          targets={targets}
+          showTarget={targetNotes}
+        />
         <RevenueFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CostFigure data={data} window={window} site={site} targets={targets} showTarget={targetNotes} />
         <CashFigure data={data} window={window} showTarget={targetNotes} />
-      </div>
+      </Grid>
       <BusinessFigures data={data} window={window} site={site} targets={targets} targetNotes={targetNotes} />
-      <div className="grid gap-4 xl:grid-cols-2">
+      <Grid columns={2}>
         <TopAccounts data={data} window={window} site={site} />
         <TopModels data={data} window={window} site={site} />
-      </div>
+      </Grid>
     </>
   );
 }
@@ -204,7 +224,7 @@ function BusinessFigures({
   return (
     <>
       <SectionHeader title={t("overview.business")} />
-      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Grid columns={4} gap={12}>
         <PaidUsersFigure
           data={data}
           window={window}
@@ -230,36 +250,31 @@ function BusinessFigures({
           targets={targets}
           showTarget={targetNotes && (data.retention !== undefined || targets?.retention !== undefined)}
         />
-      </div>
+      </Grid>
     </>
   );
 }
 
-function CallsFigure({ data, window, site, targets, showTarget }: FigureProps) {
+// CountFigure is the number of calls in the window, or of failed ones, opening the call list narrowed the same way.
+function CountFigure({
+  metric,
+  data,
+  window,
+  site,
+  targets,
+  showTarget,
+}: FigureProps & { metric: "calls" | "errors" }) {
   const { t } = useTranslation();
   const format = useFormat();
+  const count = data[metric];
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={count}>
+    <CallsLink search={callsDrill(window, metric === "errors" ? { site, status: "error" } : { site })}>
       <Stat
-        label={t("overview.calls")}
-        value={data.calls === undefined ? t("overview.unavailable") : format.number(data.calls)}
-        note={withTarget(showTarget, <TargetNote metric="calls" comparison={targets?.calls} />)}
+        label={t(`overview.${metric}`)}
+        value={count === undefined ? t("overview.unavailable") : format.number(count)}
+        note={withTarget(showTarget, <TargetNote metric={metric} comparison={targets?.[metric]} />)}
       />
-    </Link>
-  );
-}
-
-function ErrorsFigure({ data, window, site, targets, showTarget }: FigureProps) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Link to="/calls" search={callsDrill(window, { site, status: "error" })} className={count}>
-      <Stat
-        label={t("overview.errors")}
-        value={data.errors === undefined ? t("overview.unavailable") : format.number(data.errors)}
-        note={withTarget(showTarget, <TargetNote metric="errors" comparison={targets?.errors} />)}
-      />
-    </Link>
+    </CallsLink>
   );
 }
 
@@ -267,7 +282,7 @@ function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps)
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+    <CallsLink search={callsDrill(window, { site })}>
       <Stat
         label={t("overview.revenue")}
         value={data.revenue ? format.money(data.revenue) : t("overview.unavailable")}
@@ -277,7 +292,7 @@ function RevenueFigure({ data, window, site, targets, showTarget }: FigureProps)
           t("overview.revenueNote"),
         )}
       />
-    </Link>
+    </CallsLink>
   );
 }
 
@@ -288,7 +303,7 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
     ? t("overview.unknownCost", { calls: format.number(data.unknown_cost_calls) })
     : t("overview.costNote");
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={amount}>
+    <CallsLink search={callsDrill(window, { site })}>
       <Stat
         label={t("overview.cost")}
         value={data.cost ? format.money(data.cost) : t("overview.unavailable")}
@@ -298,7 +313,7 @@ function CostFigure({ data, window, site, targets, showTarget }: FigureProps) {
           note,
         )}
       />
-    </Link>
+    </CallsLink>
   );
 }
 
@@ -308,31 +323,32 @@ function CashFigure({ data, window, showTarget }: { data: Overview; window: Wind
   // One line per currency: joined on one line, a second amount broke in the middle of its digits.
   const cash = data.cash?.length
     ? data.cash.map((amount) => (
-        <span key={amount.currency} className="block">
+        <Fragment key={amount.currency}>
           {format.money(amount)}
-        </span>
+          <br />
+        </Fragment>
       ))
     : t("overview.unavailable");
   return (
-    <Link to="/orders" search={ordersDrill(window)} className={amount}>
-      <Stat
-        label={t("overview.cash")}
-        value={cash}
-        note={withTarget(
-          showTarget,
-          <span className="block">{t("overview.targets.cashNoTarget")}</span>,
-          t("overview.cashNote"),
-        )}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={ordersDrill(window)}>
+        <Stat
+          label={t("overview.cash")}
+          value={cash}
+          note={withTarget(showTarget, t("overview.targets.cashNoTarget"), t("overview.cashNote"))}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
 function PaidBatchesFigure({ window, children }: { window: Window; children: ReactNode }) {
   return (
-    <Link to="/orders" search={paidOrdersDrill(window)} className={figure}>
-      {children}
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={paidOrdersDrill(window)}>
+        {children}
+      </Link>
+    </CardLink>
   );
 }
 
@@ -375,7 +391,7 @@ function MonthlyRevenueFigure({ data, window, targets, showTarget }: FigureProps
 function GrossMarginFigure({ data, window, site, targets, showTarget }: FigureProps) {
   const { t } = useTranslation();
   return (
-    <Link to="/calls" search={callsDrill(window, { site })} className={figure}>
+    <CallsLink search={callsDrill(window, { site })}>
       <Stat
         label={t("overview.grossMargin")}
         value={data.gross_margin === undefined ? t("overview.unavailable") : formatTargetRate(data.gross_margin)}
@@ -385,7 +401,7 @@ function GrossMarginFigure({ data, window, site, targets, showTarget }: FigurePr
           t("overview.grossMarginNote"),
         )}
       />
-    </Link>
+    </CallsLink>
   );
 }
 
@@ -402,13 +418,15 @@ function RetentionFigure({ data, window, targets, showTarget }: FigureProps) {
         })
     : t("overview.retentionUnavailable");
   return (
-    <Link to="/orders" search={retentionOrdersDrill(window)} className={figure}>
-      <Stat
-        label={t("overview.retention")}
-        value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
-        note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
-      />
-    </Link>
+    <CardLink>
+      <Link to="/orders" search={retentionOrdersDrill(window)}>
+        <Stat
+          label={t("overview.retention")}
+          value={retention?.rate === undefined ? t("overview.unavailable") : formatTargetRate(retention.rate)}
+          note={withTarget(showTarget, <TargetNote metric="retention" comparison={targets?.retention} />, note)}
+        />
+      </Link>
+    </CardLink>
   );
 }
 
@@ -437,7 +455,7 @@ function Ranking({
     <section>
       <SectionHeader title={title} />
       {ranked === undefined ? (
-        <p className="text-t3">{t("overview.unavailable")}</p>
+        <Text tone="faint">{t("overview.unavailable")}</Text>
       ) : ranked.length === 0 ? (
         <EmptyState compact title={empty.title}>
           {empty.body}
@@ -460,22 +478,7 @@ function Ranking({
         >
           {ranked.map((row) => (
             <Row key={row.id ?? ""}>
-              <Cell>
-                {row.id ? (
-                  <span className="flex min-w-0 items-center gap-1">
-                    <Link
-                      to="/calls"
-                      search={drill(row.id)}
-                      className="inline-flex min-w-0 text-accent underline-offset-4 hover:underline"
-                    >
-                      <IdText value={row.id} />
-                    </Link>
-                    <CopyButton compact text={row.id} />
-                  </span>
-                ) : (
-                  "—"
-                )}
-              </Cell>
+              <Cell>{row.id ? <RankId id={row.id} drill={drill} /> : "—"}</Cell>
               <Cell kind="num">{format.number(row.calls ?? 0)}</Cell>
               <Cell kind="num">{format.number(row.errors ?? 0)}</Cell>
             </Row>
@@ -509,5 +512,30 @@ function TopModels({ data, window, site }: { data: Overview; window: Window; sit
       ranked={data.top_models?.map((row) => ({ ...row, id: row.model }))}
       drill={(model) => callsDrill(window, { site, model })}
     />
+  );
+}
+
+// RankId is a ranked row's account or key: a link to its calls in the same window, with its copy button.
+function RankId({ id, drill }: { id: string; drill: (id: string) => ReturnType<typeof callsDrill> }) {
+  return (
+    <IdLink
+      value={id}
+      link={(content) => (
+        <Link to="/calls" search={drill(id)}>
+          {content}
+        </Link>
+      )}
+    />
+  );
+}
+
+// CallsLink makes a figure's card open the call list narrowed as it counted.
+function CallsLink({ search, children }: { search: ReturnType<typeof callsDrill>; children: ReactNode }) {
+  return (
+    <CardLink>
+      <Link to="/calls" search={search}>
+        {children}
+      </Link>
+    </CardLink>
   );
 }

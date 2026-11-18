@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Icon, TextField } from "@axiom/ui";
+import { ActionButton, DataState, Field, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -39,16 +39,15 @@ function Card({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: AdminSch
       <Facts
         title={t("settings.site.title")}
         rows={[[t("settings.site.name"), view.name ?? "—"]]}
-        action={
+        actions={
           editable ? (
-            <Button size="md" onClick={() => setOpen(true)}>
-              <Icon name="pencil" />
+            <ActionButton onClick={() => setOpen(true)} icon="pencil">
               {t("settings.site.edit")}
-            </Button>
+            </ActionButton>
           ) : undefined
         }
       />
-      {editable ? null : <p className="text-t2">{t("settings.site.oldNode")}</p>}
+      {editable ? null : <Text tone="muted">{t("settings.site.oldNode")}</Text>}
       {editable && open ? <EditDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
     </>
   );
@@ -72,7 +71,7 @@ function EditDialog({
       intro={<p>{t("settings.site.intro")}</p>}
       action={t("settings.site.save")}
       fields={(error) => (
-        <TextField
+        <Field
           label={t("settings.site.name")}
           name="name"
           autoComplete="off"

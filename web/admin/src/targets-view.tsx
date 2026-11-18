@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, DataState, Dialog, Icon, MonthField, moneyInput, TextField, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Dialog, Field, MonthField, moneyInput, Text, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -28,19 +28,18 @@ export function TargetsAction({ anchor, currency }: { anchor: Date; currency: st
   const [month, setMonth] = useState(() => targetMonth(anchor));
   const [open, setOpen] = useState(false);
   return (
-    <div className="flex flex-wrap items-end gap-2">
+    <Cluster>
       <MonthField
         label={t("overview.targets.month")}
         hint={t("overview.targets.monthHint", { zone: format.zone() })}
         value={month}
         onChange={setMonth}
       />
-      <Button size="md" onClick={() => setOpen(true)}>
-        <Icon name="pencil" />
+      <ActionButton onClick={() => setOpen(true)} icon="pencil">
         {t("overview.targets.edit")}
-      </Button>
+      </ActionButton>
       {open ? <TargetsDialog month={month} currency={currency} onClose={() => setOpen(false)} /> : null}
-    </div>
+    </Cluster>
   );
 }
 
@@ -144,7 +143,7 @@ function LegacyTargetFields({ view, currency, error }: TargetFieldProps) {
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         name="calls"
         label={t("overview.targets.calls")}
         hint={t("overview.targets.callsHint")}
@@ -153,7 +152,7 @@ function LegacyTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.calls}
         error={errors.field(error, "calls")}
       />
-      <TextField
+      <Field
         name="errors"
         label={t("overview.targets.errors")}
         hint={t("overview.targets.errorsHint")}
@@ -162,7 +161,7 @@ function LegacyTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.errors}
         error={errors.field(error, "errors")}
       />
-      <TextField
+      <Field
         name="revenue"
         label={t("overview.targets.revenue", { currency })}
         hint={t("overview.targets.revenueHint")}
@@ -171,7 +170,7 @@ function LegacyTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.revenue ? moneyInput(view.revenue.amount) : undefined}
         error={errors.field(error, "revenue")}
       />
-      <TextField
+      <Field
         name="cost"
         label={t("overview.targets.cost", { currency })}
         hint={t("overview.targets.costHint")}
@@ -189,7 +188,7 @@ function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         name="paid_users"
         label={t("overview.targets.paidUsers")}
         hint={t("overview.targets.paidUsersHint")}
@@ -198,7 +197,7 @@ function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.paid_users}
         error={errors.field(error, "paid_users")}
       />
-      <TextField
+      <Field
         name="monthly_revenue"
         label={t("overview.targets.monthlyRevenue", { currency })}
         hint={t("overview.targets.monthlyRevenueHint")}
@@ -207,7 +206,7 @@ function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.monthly_revenue ? moneyInput(view.monthly_revenue.amount) : undefined}
         error={errors.field(error, "monthly_revenue")}
       />
-      <TextField
+      <Field
         name="gross_margin"
         label={t("overview.targets.grossMargin")}
         hint={t("overview.targets.grossMarginHint")}
@@ -216,7 +215,7 @@ function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
         defaultValue={view.gross_margin === undefined ? undefined : formatTargetRate(view.gross_margin).slice(0, -1)}
         error={errors.field(error, "gross_margin")}
       />
-      <TextField
+      <Field
         name="retention"
         label={t("overview.targets.retention")}
         hint={t("overview.targets.retentionHint")}
@@ -242,7 +241,11 @@ export function TargetNote({
 }) {
   const { t } = useTranslation();
   if (comparison === undefined) {
-    return <span className="text-t4">{t("overview.targets.none")}</span>;
+    return (
+      <Text as="span" tone="faint">
+        {t("overview.targets.none")}
+      </Text>
+    );
   }
   const { target, gap } = comparison;
   const money = isMoneyMetric(metric);
@@ -301,7 +304,9 @@ function TargetLine({
       <span>
         {t("overview.targets.target", { value })}
         {" · "}
-        <span className="text-t4">{incomplete ?? t("overview.targets.incomplete")}</span>
+        <Text as="span" tone="faint">
+          {incomplete ?? t("overview.targets.incomplete")}
+        </Text>
       </span>
     );
   }
@@ -309,21 +314,20 @@ function TargetLine({
   const tone = targetTone(metric, sign);
   const absolute = gap.startsWith("-") ? gap.slice(1) : gap;
   const amount = targetText(metric, absolute, currency, format);
-  const toneClass = toneClassOf(tone);
   return (
     <span>
       {t("overview.targets.target", { value })}
       {" · "}
-      <span className={toneClass}>
+      <Text as="span" tone={textToneOf(tone)}>
         {tone === "at" ? t("overview.targets.at") : t(`overview.targets.${tone}`, { amount })}
-      </span>
+      </Text>
     </span>
   );
 }
 
-function toneClassOf(tone: TargetTone): string {
+function textToneOf(tone: TargetTone): "ok" | "faint" | "bad" {
   if (tone === "ahead" || tone === "under") {
-    return "text-ok";
+    return "ok";
   }
-  return tone === "at" ? "text-t3" : "text-bad";
+  return tone === "at" ? "faint" : "bad";
 }

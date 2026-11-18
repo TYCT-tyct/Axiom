@@ -173,7 +173,7 @@ function InviteRegisterForm() {
       {failure ? <FormError>{made ? t("auth.register.signInFailed") : errors.message(failure)}</FormError> : null}
       <RegisterFields error={register.error} invite />
       <LegalConsent consent={legal} />
-      <SubmitButton pending={pending} disabled={!canSubmitWithLegal(legal)} className="w-full">
+      <SubmitButton pending={pending} disabled={!canSubmitWithLegal(legal)} wide>
         {t("auth.register.submit")}
       </SubmitButton>
     </form>
@@ -231,7 +231,7 @@ function OpenRegisterForm({ site }: { site: Schemas["Site"] }) {
       {register.error ? <FormError>{errors.message(register.error)}</FormError> : null}
       {working ? <p className="text-t3 text-sm">{t("auth.register.working")}</p> : null}
       <RegisterFields error={register.error} invite={false} password={false} />
-      <SubmitButton pending={pending} className="w-full">
+      <SubmitButton pending={pending} wide>
         {t("auth.register.submitOpen")}
       </SubmitButton>
     </form>

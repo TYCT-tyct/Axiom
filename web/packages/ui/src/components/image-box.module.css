@@ -1,0 +1,17 @@
+.s40,
+.s48 {
+  flex: none;
+  object-fit: contain;
+  border-radius: var(--r6);
+  background: var(--hover);
+}
+
+.s40 {
+  width: 40px;
+  height: 40px;
+}
+
+.s48 {
+  width: 48px;
+  height: 48px;
+}

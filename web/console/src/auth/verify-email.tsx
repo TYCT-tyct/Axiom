@@ -67,7 +67,7 @@ function VerifyForm({
         error={errors.field(verify.error, "password")}
       />
       <LegalConsent consent={legal} />
-      <SubmitButton pending={verify.isPending} disabled={!canSubmitWithLegal(legal)} className="w-full">
+      <SubmitButton pending={verify.isPending} disabled={!canSubmitWithLegal(legal)} wide>
         {t("auth.verify.submit")}
       </SubmitButton>
       {verify.error ? (

@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore, useSession } from "@axiom/app";
-import { DataState, EmptyState, PageHeader, Panel, Table, Td, TextField, useFormat } from "@axiom/ui";
+import { Card, DataState, EmptyState, Field, Mono, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
@@ -9,18 +9,7 @@ import { CashMovements } from "../orders/cash";
 import { PaidBatches } from "../orders/paid-batches";
 import { RefundQueue, Refunds } from "../orders/refunds";
 import { orderTone, paymentOrderState, paymentOrderStates, shortId } from "../orders/states";
-import {
-  ChoiceFilter,
-  Code,
-  FilterBar,
-  Head,
-  mainCell,
-  PageBody,
-  State,
-  text,
-  toInstant,
-  toLocalInput,
-} from "../parts";
+import { ChoiceFilter, Code, FilterBar, Head, PageBody, State, SubLine, text, toInstant, toLocalInput } from "../parts";
 import { accountQuery, merchantsQuery, paymentOrdersQuery } from "../queries";
 
 type Order = AdminSchemas["PaymentOrder"];
@@ -32,7 +21,7 @@ export default function Orders() {
   const owner = useQuery(accountQuery(useSession().account));
   return (
     <>
-      <PageHeader title={t("nav.orders")} description={t("orders.description")} />
+      <PageHead title={t("nav.orders")} lede={t("orders.description")} />
       <PageBody>
         <DataState query={owner}>{(account) => <Current siteId={account.site_id} />}</DataState>
       </PageBody>
@@ -73,7 +62,7 @@ function OrdersList({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filte
   return (
     <>
       <Filters siteId={siteId} filters={filters} />
-      <Panel>
+      <Card layout="flush">
         <DataState
           query={orders}
           isEmpty={() => rows.length === 0}
@@ -86,7 +75,7 @@ function OrdersList({ siteId, filters }: { siteId: AdminSchemas["SiteId"]; filte
           {() => <OrdersTable rows={rows} />}
         </DataState>
         <LoadMore list={orders} />
-      </Panel>
+      </Card>
     </>
   );
 }
@@ -123,7 +112,7 @@ function FilterFields({ filters, channels }: { filters: FiltersValue; channels: 
   const { t } = useTranslation();
   return (
     <>
-      <TextField
+      <Field
         label={t("orders.filters.account")}
         hint={t("orders.filters.accountHint")}
         name="account_id"
@@ -132,7 +121,7 @@ function FilterFields({ filters, channels }: { filters: FiltersValue; channels: 
         autoComplete="off"
         spellCheck={false}
       />
-      <TextField
+      <Field
         label={t("orders.filters.user")}
         hint={t("orders.filters.userHint")}
         name="user_id"
@@ -155,13 +144,13 @@ function FilterFields({ filters, channels }: { filters: FiltersValue; channels: 
         any={t("orders.filters.channelAny")}
         options={channels}
       />
-      <TextField
+      <Field
         label={t("orders.filters.since")}
         name="since"
         type="datetime-local"
         defaultValue={toLocalInput(filters.since)}
       />
-      <TextField
+      <Field
         label={t("orders.filters.until")}
         name="until"
         type="datetime-local"
@@ -177,12 +166,12 @@ function OrdersTable({ rows }: { rows: Order[] }) {
     <Table label={t("nav.orders")}>
       <Head
         cols={[
-          [t("orders.col.order")],
-          [t("orders.col.account"), "hidden md:table-cell"],
-          [t("orders.col.state")],
-          [t("orders.col.credits"), "text-right"],
-          [t("orders.col.total"), "hidden text-right sm:table-cell"],
-          [t("orders.col.refunds"), "hidden lg:table-cell"],
+          [t("orders.col.order"), { main: true }],
+          t("orders.col.account"),
+          t("orders.col.state"),
+          [t("orders.col.credits"), { align: "end" }],
+          [t("orders.col.total"), { align: "end" }],
+          t("orders.col.refunds"),
         ]}
       />
       <tbody>
@@ -199,58 +188,56 @@ function OrderRow({ order }: { order: Order }) {
   const format = useFormat();
   const { paid, paidFee, quote, credited, quotedCredits, paidMissing, creditedMissing } = orderAmounts(order);
   return (
-    <tr className="align-top hover:bg-s2">
-      <Td className={mainCell}>
+    <tr>
+      <Td main>
         <Code title={order.id}>{shortId(order.id)}</Code>
-        <span className="block text-label text-t3" title={order.created_at}>
-          {order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}
-        </span>
-        <span className="block text-label text-t3">
-          {[order.merchant_name, order.method].filter(Boolean).join(" · ")}
-        </span>
+        <SubLine>{order.created_at ? format.dateTime(new Date(order.created_at)) : "—"}</SubLine>
+        <SubLine>{[order.merchant_name, order.method].filter(Boolean).join(" · ")}</SubLine>
       </Td>
-      <Td className="hidden md:table-cell">
+      <Td>
         <Code title={order.account_id}>{shortId(order.account_id)}</Code>
-        <span className="block text-label text-t3" title={order.user_id}>
-          {shortId(order.user_id)}
-        </span>
+        <SubLine>
+          <Mono title={order.user_id}>{shortId(order.user_id)}</Mono>
+        </SubLine>
       </Td>
       <Td>
         {order.state ? <State tone={orderTone(order.state)}>{t(`orders.state.${order.state}`)}</State> : "—"}
-        {order.trade_no ? <span className="mt-1 block text-label text-t3">{order.trade_no}</span> : null}
+        {order.trade_no ? <SubLine>{order.trade_no}</SubLine> : null}
       </Td>
-      <Td className="whitespace-nowrap text-right tabular-nums">
+      <Td align="end">
         {credited ? (
           format.money(credited)
         ) : (
-          <span className="text-label text-t3">
+          <Text as="span" size="sm" tone="faint">
             {t(creditedMissing ? "orders.creditedUnavailable" : "orders.notCredited")}
-          </span>
+          </Text>
         )}
         {quotedCredits ? (
-          <span className="block text-label text-t3">
+          <SubLine>
             {t("orders.quote")} {format.money(quotedCredits)}
-          </span>
+          </SubLine>
         ) : null}
       </Td>
-      <Td className="hidden whitespace-nowrap text-right tabular-nums sm:table-cell">
+      <Td align="end">
         {paid ? (
           format.pay(paid)
         ) : (
-          <span className="text-label text-t3">{t(paidMissing ? "orders.paidUnavailable" : "orders.notPaid")}</span>
+          <Text as="span" size="sm" tone="faint">
+            {t(paidMissing ? "orders.paidUnavailable" : "orders.notPaid")}
+          </Text>
         )}
         {quote ? (
-          <span className="block text-label text-t3">
+          <SubLine>
             {t("orders.quote")} {format.pay(quote)}
-          </span>
+          </SubLine>
         ) : null}
         {paidFee ? (
-          <span className="block text-label text-t3">
+          <SubLine>
             {t("orders.fee")} {format.pay(paidFee)}
-          </span>
+          </SubLine>
         ) : null}
       </Td>
-      <Td className="hidden max-w-72 lg:table-cell">
+      <Td>
         <Refunds refunds={order.refunds} />
       </Td>
     </tr>

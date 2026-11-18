@@ -1,9 +1,9 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Icon, SelectField, TextField } from "@axiom/ui";
+import { Field, Select, Stack } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem, useSnapshot } from "../change";
-import { Code } from "../parts";
+import { Code, State } from "../parts";
 import { readiness } from "./readiness";
 import { readSpec, SpecFields } from "./spec-fields";
 
@@ -58,7 +58,7 @@ export function NameDialog({ model, onClose }: { model: Model; onClose: () => vo
       action={t("models.names.action")}
       fields={(error) => (
         <>
-          <TextField
+          <Field
             label={t("models.names.name")}
             name="name"
             maxLength={200}
@@ -67,10 +67,10 @@ export function NameDialog({ model, onClose }: { model: Model; onClose: () => vo
             defaultValue={model.slug}
             error={errors.field(error, "name")}
           />
-          <SelectField label={t("models.names.visibility")} name="visibility" defaultValue="public">
+          <Select label={t("models.names.visibility")} name="visibility" defaultValue="public">
             <option value="public">{t("models.names.public")}</option>
             <option value="internal">{t("models.names.internal")}</option>
-          </SelectField>
+          </Select>
         </>
       )}
       read={read}
@@ -111,17 +111,13 @@ export function ModelStatusDialog({
         <>
           <p>{t(`models.status.${to}.body`)}</p>
           {checks.length > 0 ? (
-            <ul className="space-y-1">
+            <Stack gap={4}>
               {checks.map((check) => (
-                <li key={check.key} className="flex items-start gap-2">
-                  <Icon
-                    name={check.ok ? "check" : "alert"}
-                    className={check.ok ? "mt-0.5 text-ok" : "mt-0.5 text-warn"}
-                  />
-                  <span>{t(`models.ready.${check.key}`)}</span>
-                </li>
+                <div key={check.key}>
+                  <State tone={check.ok ? "good" : "warn"}>{t(`models.ready.${check.key}`)}</State>
+                </div>
               ))}
-            </ul>
+            </Stack>
           ) : null}
         </>
       }

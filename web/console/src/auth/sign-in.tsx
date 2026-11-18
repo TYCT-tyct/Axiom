@@ -89,14 +89,7 @@ function ProviderButton({
 }) {
   const { t } = useTranslation();
   return (
-    <Button
-      type="button"
-      size="md"
-      variant="secondary"
-      className="w-full"
-      disabled={pending}
-      onClick={() => void onStart(provider)}
-    >
+    <Button type="button" size="md" variant="secondary" wide disabled={pending} onClick={() => void onStart(provider)}>
       <Icon name="key" />
       {t(`auth.signIn.providers.${provider}`)}
     </Button>
@@ -106,14 +99,7 @@ function ProviderButton({
 function PasskeyButton({ pending, onStart }: { pending: boolean; onStart: () => Promise<void> }) {
   const { t } = useTranslation();
   return (
-    <Button
-      type="button"
-      size="md"
-      variant="secondary"
-      className="w-full"
-      disabled={pending}
-      onClick={() => void onStart()}
-    >
+    <Button type="button" size="md" variant="secondary" wide disabled={pending} onClick={() => void onStart()}>
       <Icon name="shield" />
       {t("auth.signIn.passkey")}
     </Button>

@@ -1,7 +1,7 @@
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { parseMoney, useFormat } from "../format";
-import { Table, Td, Th } from "./panel";
+import { Table, Td, Th } from "./table";
 
 type PublicModelRate = {
   service_tier: string;

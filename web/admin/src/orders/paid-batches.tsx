@@ -1,5 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Td, useFormat } from "@axiom/ui";
+import { Td, Text, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Code } from "../parts";
@@ -25,10 +25,10 @@ export function PaidBatches(props: LedgerListProps) {
       emptyTitle={t("orders.paidBatches.emptyTitle")}
       emptyBody={t("orders.paidBatches.emptyBody")}
       columns={[
-        [t("orders.paidBatches.col.at")],
-        [t("orders.paidBatches.col.account"), "hidden md:table-cell"],
-        [t("orders.paidBatches.col.amount"), "text-right"],
-        [t("orders.paidBatches.col.channel"), "hidden sm:table-cell"],
+        t("orders.paidBatches.col.at"),
+        t("orders.paidBatches.col.account"),
+        [t("orders.paidBatches.col.amount"), { align: "end" }],
+        t("orders.paidBatches.col.channel"),
       ]}
       keyOf={(batch) => batch.id}
       renderRow={(batch) => <PaidBatchRow batch={batch} />}
@@ -43,13 +43,15 @@ function PaidBatchRow({ batch }: { batch: AdminSchemas["PaidBatch"] }) {
     <tr>
       <Td>
         <Code title={batch.id}>{shortId(batch.id)}</Code>
-        <span className="block text-label text-t3">{format.dateTime(new Date(batch.created_at))}</span>
+        <Text as="div" size="sm" tone="faint">
+          {format.dateTime(new Date(batch.created_at))}
+        </Text>
       </Td>
-      <Td className="hidden md:table-cell">
+      <Td>
         <Code title={batch.account_id}>{shortId(batch.account_id)}</Code>
       </Td>
-      <Td className="whitespace-nowrap text-right tabular-nums">{format.money(batch.amount)}</Td>
-      <Td className="hidden sm:table-cell">
+      <Td align="end">{format.money(batch.amount)}</Td>
+      <Td>
         {batch.online
           ? t("orders.paidBatches.online")
           : batch.offline_channel

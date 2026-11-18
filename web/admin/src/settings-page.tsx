@@ -1,5 +1,5 @@
 import { ApiError } from "@axiom/api";
-import { Button, DataState, Icon } from "@axiom/ui";
+import { ActionButton, Cluster, DataState } from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { Facts } from "./parts";
@@ -49,16 +49,14 @@ export function SettingsPage<T>({
           {facts({
             view,
             action: (
-              <div className="flex gap-2">
-                <Button size="md" onClick={() => setTesting(true)}>
-                  <Icon name="check" />
+              <Cluster>
+                <ActionButton onClick={() => setTesting(true)} icon="check">
                   {labels.test}
-                </Button>
-                <Button size="md" onClick={() => setEditing(true)}>
-                  <Icon name="pencil" />
+                </ActionButton>
+                <ActionButton onClick={() => setEditing(true)} icon="pencil">
                   {labels.edit}
-                </Button>
-              </div>
+                </ActionButton>
+              </Cluster>
             ),
           })}
           {editing ? dialogs.edit({ view, onClose: () => setEditing(false) }) : null}

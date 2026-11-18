@@ -1,0 +1,28 @@
+.root {
+  display: block;
+  height: 100%;
+  border-radius: var(--r12);
+  color: inherit;
+  text-decoration: none;
+}
+
+.root:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.root > section {
+  height: 100%;
+  box-sizing: border-box;
+  transition: box-shadow var(--dur) var(--ease);
+}
+
+.root:hover > section {
+  box-shadow: 0 0 0 var(--bw) var(--n8);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .root > section {
+    transition: none;
+  }
+}
