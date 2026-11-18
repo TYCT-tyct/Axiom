@@ -3,6 +3,7 @@ import en from "../packages/ui/src/locales/en.ts";
 import zh from "../packages/ui/src/locales/zh.ts";
 import { consoleSuite } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
+import { rulings } from "./design/rulings.ts";
 import type { Suite } from "./scene.ts";
 import { siteSuite } from "./site-scenes.ts";
 
@@ -42,10 +43,16 @@ const siteBoards = {
 // A screen of the home page below the first: both sides are scrolled until the screen's section is at the top of the
 // scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
 // its class). The board's words are Chinese only, so these scenes are compared in Chinese.
-const screenAt = (sec: number) => async (board: Page, page: Page) => {
+const screenAt = (sec: number, scene: string) => async (board: Page, page: Page) => {
+  // what the page leaves out (the rulings with only a board side) is out of the board's layout too, so what follows
+  // it lines up; the ruling still names it
+  const omitted = rulings
+    .filter((ruling) => ruling.scene === scene && ruling.board && !ruling.page && "selector" in ruling.board)
+    .map((ruling) => (ruling.board as { selector: string }).selector);
+  await board.addStyleTag({ content: `${omitted.join(",")}{display:none !important}` });
   // the board's own script sets the frame's width for its stylesheet and marks the tablet layout (--fw, data-tab); the
   // harness leaves the script's engines out, so the shot does what the script does
-  await board.locator(".tr").evaluate((root) => {
+  await board.locator(".tr.site").evaluate((root) => {
     const ho = root.querySelector(".ho") as HTMLElement;
     ho.style.setProperty("--fw", `${root.clientWidth}px`);
     ho.toggleAttribute("data-tab", root.classList.contains("m") && root.clientWidth >= 700);
@@ -57,7 +64,12 @@ const screenAt = (sec: number) => async (board: Page, page: Page) => {
   const place = page.locator(`.under [data-place="${sec}"]`);
   await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
   await expect.poll(() => place.locator(".hfm").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
-  for (const side of [board, page]) await side.evaluate(() => document.fonts.ready.then(() => {}));
+  // the deployed MiSans body face is instanced at 330, the board's is the source variable font: compare the outlines, without
+  // variable-font hinting moving single strokes (as the models page's scene does)
+  for (const side of [board, page]) {
+    await side.addStyleTag({ content: ".under *{text-rendering:geometricPrecision !important}" });
+    await side.evaluate(() => document.fonts.ready.then(() => {}));
+  }
   // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
   const top = (side: Page) => side.locator(`.hfm${sec} .sec`).evaluate((el) => el.getBoundingClientRect().top);
   const shift = (await top(page)) - (await top(board));
@@ -197,7 +209,7 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
-    prepareComparison: screenAt(sec),
+    prepareComparison: screenAt(sec, name),
   })),
   {
     name: "site models",
