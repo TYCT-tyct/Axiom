@@ -1,9 +1,11 @@
 import type { Messages } from "@axiom/ui";
 import { en as announcements } from "./announcements";
+import { en as notifications } from "./notifications";
 import { en as overviewBoard } from "./overview";
 import { en as providerKeys } from "./provider-keys";
 import { en as receipt } from "./receipt";
 import { en as routingPresets } from "./routing-presets";
+import { en as security } from "./security";
 import { en as settings } from "./settings";
 import { en as shell } from "./shell";
 import { en as statement } from "./statement";
@@ -244,40 +246,7 @@ export default {
   },
   settings,
   receipt,
-  notifications: {
-    description: "When Axiom emails you or calls your webhook.",
-    title: "Alerts",
-    dismiss: "Close",
-    saved: "Preferences saved.",
-    savedPartialSpend:
-      "Your other preferences were saved. The unusual-activity reminder was not: this console node does not support it yet, so try again after the rollout.",
-    balance: {
-      title: "Balance reminders",
-      body: "A reminder is sent when the available balance crosses below the threshold.",
-    },
-    lowBalance: "Low balance",
-    lowBalanceHint: "Email and call the webhook when the balance runs low.",
-    threshold: "Threshold",
-    thresholdHint: "In {{currency}}, as an amount like 5 or 12.5.",
-    thresholdInvalid: "Enter a non-negative amount, such as 5 or 12.5.",
-    events: { title: "Other events" },
-    topUp: "Finished top-ups",
-    topUpHint: "Confirm by email when a top-up is credited.",
-    factorChanged: "Security changes",
-    factorChangedHint: "Tell me when two-step verification or a passkey changes. Password changes are always emailed.",
-    spendAnomaly: "Unusual account activity",
-    spendAnomalyHint:
-      "Tell me when this account's spend, source regions or models change sharply. If it was not you, disable any API keys you do not recognize.",
-    delivery: { title: "Delivery" },
-    webhook: "Webhook URL",
-    webhookHint: "HTTPS only. Leave empty to turn webhooks off.",
-    language: "Message language",
-    languageHint: "The language of emails and webhook messages, not of this page.",
-    languageEn: "English",
-    languageZh: "中文",
-    siteCurrency: "the site’s currency",
-    save: "Save preferences",
-  },
+  notifications,
   statement,
   keys: {
     description: "Create and manage the keys you call Axiom with.",
@@ -457,47 +426,5 @@ export default {
     usage: "Usage",
     noUsage: "This call used nothing.",
   },
-  security: {
-    description: "Two-step verification and your account details.",
-    twoStep: {
-      title: "Two-step verification",
-      on: "On",
-      off: "Off",
-      body: "Signing in then needs a code from your authenticator app as well as your password. You get a set of recovery codes to sign in if you lose your phone.",
-      enable: "Turn on two-step verification",
-      replace: "Replace authenticator",
-      regenerate: "Make new recovery codes",
-    },
-    passkeys: {
-      title: "Passkeys",
-      count: "{{count}} added",
-      body: "A passkey signs you in with your fingerprint, face or device PIN instead of a password. Adding one asks for your current password; removing one ends your other sessions.",
-      empty: "No passkey yet.",
-      name: "Name",
-      password: "Current password",
-      add: "Add a passkey",
-      remove: "Remove",
-      unsupported: "This browser doesn’t support passkeys.",
-      mfaRequired: "Finish two-step verification for this session before changing passkeys.",
-    },
-    identities: {
-      title: "Linked sign-in accounts",
-      body: "A linked GitHub, Google or LinuxDo account can sign you in here. It is matched by the provider’s account ID, never by email, and it never creates or merges an account.",
-      linkedAs: "Linked as {{name}}",
-      notLinked: "Not linked",
-      link: "Link",
-      unlink: "Unlink",
-      providers: { github: "GitHub", google: "Google", linuxdo: "LinuxDo" },
-    },
-    pendingCodes: {
-      failed: "The new recovery codes could not be fetched. If that keeps happening, make new ones below.",
-      retry: "Try again",
-      regenerate: "Make new codes",
-    },
-    oauth: {
-      identity_linked: "That provider account is already linked to a different user.",
-      identity_already_linked: "This account already has a different login from that provider; unlink it first.",
-    },
-    account: { title: "Account", invite: "My invite code" },
-  },
+  security,
 } satisfies Messages<typeof zh>;

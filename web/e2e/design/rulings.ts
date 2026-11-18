@@ -29,8 +29,58 @@ const shell: Ruling[] = [
   { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
 ].map((ruling) => ({ scene: "console shell", ...ruling }));
 
+const accountShell = (scene: string): Ruling[] =>
+  [
+    { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+    { basis: "#816: the workspace level is not built", board: { selector: ".gbar .qbc > .onW, .gbar > .qbcp" } },
+    { basis: "the account and the balance are the API's, not the board's demo", ...both(".gbal, .qgav") },
+    {
+      basis: "#816: usage, routing, plugins, budgets, observability and management keys are not built",
+      ...both(".pnP .qnv, .otabs"),
+    },
+    { basis: "#816: the command palette is not built", ...both(".gsr, .gsi") },
+    {
+      basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+      ...both(".gbar .qbct, .qph h1"),
+    },
+  ].map((ruling) => ({ scene, ...ruling }));
+
 export const rulings: Ruling[] = [
   ...shell,
+  ...accountShell("console settings"),
+  {
+    scene: "console settings",
+    basis: "#816: account deletion has no API or owner refund rule yet",
+    board: { selector: ".p-profile .qcard.danger" },
+  },
+  {
+    scene: "console settings",
+    basis:
+      "§5.4 & API account data: avatar glyph, weight-500 labels, display-name hint and shifted email row differ from board demo",
+    board: { selector: ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin" },
+    page: {
+      selector: ".p-profile .qph p, .p-profile .qav.lg, .p-profile .qrow .qrl, .p-profile .qin, .qpg.p-security",
+    },
+  },
+  ...accountShell("console security"),
+  {
+    scene: "console security",
+    basis: "#816: team TOTP policy lock is omitted; auth statuses, sessions, passkeys and invitations come from API",
+    board: { selector: ".p-security .qph p, .p-security .qcard" },
+    page: { selector: ".p-security .qph p, .p-security .qcard, .p-profile" },
+  },
+  ...accountShell("console notifications"),
+  {
+    scene: "console notifications",
+    basis: "#816 G9: in-app channel and unbuilt team/digest notification rows have no API yet",
+    board: {
+      selector: ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd)",
+    },
+    page: {
+      selector:
+        ".p-notify .qph p, .p-notify .qnt.hd > span:not(:first-child), .p-notify .qnt:not(.hd), .p-profile, .p-security",
+    },
+  },
   // The console has no teams: the board's header switches between the personal space and a team (the phone board's
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },

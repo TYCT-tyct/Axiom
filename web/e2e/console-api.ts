@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import type { paths } from "../packages/api/src/console.gen.ts";
+import { accountHandlers } from "./console-account-mock.ts";
 import {
   aKey,
   aPreset,
@@ -364,9 +365,18 @@ const handlers: Handler<MockState>[] = [
   }),
   route("post", `${base}/auth/sign-out`, { level: "any" }, signOut),
   route("get", `${base}/session`, { level: "any" }, ({ state }) => ok(session(state))),
+  ...accountHandlers<MockState>(),
   route("post", `${base}/auth/totp/setup`, signedIn, totpSetup),
-  route("post", `${base}/auth/totp/confirm`, signedIn, confirmTotp),
-  route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, regenerate),
+  route("post", `${base}/auth/totp/confirm`, signedIn, (ctx) => {
+    const res = confirmTotp(ctx);
+    if (res.status === 200) ctx.state.sessions = ctx.state.sessions.filter((item) => item.current);
+    return res;
+  }),
+  route("post", `${base}/auth/recovery-codes`, { level: "mfa" }, (ctx) => {
+    const res = regenerate(ctx);
+    if (res.status === 200) ctx.state.sessions = ctx.state.sessions.filter((item) => item.current);
+    return res;
+  }),
   route("post", `${base}/auth/recovery-codes/take`, signedIn, () => ok({ recovery_codes: [] })),
   route("get", `${base}/auth/passkeys`, signedIn, ({ state }) => ok({ passkeys: state.passkeys })),
   route("delete", `${base}/auth/passkeys/{id}`, signedIn, deletePasskey),

@@ -83,6 +83,7 @@ const scenes: Scene[] = [
   { name: "calls", signedIn: true, open: (page) => goto(page, "calls") },
   { name: "call", signedIn: true, open: (page) => goto(page, "calls/00000000-0000-4000-8000-000000000001") },
   { name: "security", signedIn: true, open: (page) => goto(page, "security") },
+  { name: "settings", signedIn: true, open: (page) => goto(page, "settings") },
   dialogScene("key-create", "keys", (page) => page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click()),
   dialogScene("key-edit", "keys", (page) =>
     page
