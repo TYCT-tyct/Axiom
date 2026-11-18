@@ -189,6 +189,18 @@ export type CallFilters = {
   request_id?: string;
 };
 export type CallGroupBy = "day" | "model" | "key";
+export type UsageGranularity = "hour" | "day" | "week";
+export type UsageGroupBy = "model" | "key" | "workspace";
+export type UsageFilters = {
+  since?: string;
+  until?: string;
+  model?: string;
+  key_id?: string;
+  workspace_id?: string;
+  granularity?: UsageGranularity;
+  group_by?: UsageGroupBy;
+  compare?: "previous";
+};
 
 // The summary of the same filters, grouped for the page. It covers at most 31 days and defaults to the last 30, so its
 // window is shown beside the table.
@@ -205,6 +217,20 @@ export const callAggregateQuery = (filters: CallFilters, groupBy: CallGroupBy) =
       ),
   });
 };
+
+// Hourly rollups for /usage: up to 90 days for day/week granularity, or 7 days for hour granularity, with UTC whole-hour bounds.
+export const usageStatisticsQuery = (filters: UsageFilters, enabled = true) =>
+  queryOptions({
+    queryKey: [accountKey, "usage", "statistics", filters],
+    queryFn: ({ signal }) =>
+      unwrap(
+        consoleApi.GET("/api/console/v1/usage/statistics", {
+          params: { query: filters },
+          signal,
+        }),
+      ),
+    enabled,
+  });
 
 export const callsQuery = (filters: CallFilters) =>
   infiniteQueryOptions({
