@@ -72,8 +72,19 @@ const editor: Region = {
   board: "AxApp",
   name: "RequestPresetEditor",
   english,
+  page: "presets",
   roots: [".fr"],
-  render: editorScene,
+  render: {
+    ...editorScene,
+    fragment: {
+      styles: {
+        ".nkdlg": ["display", "flex-direction", "background-color", "border-radius", "box-shadow"],
+        ".nkh h2": ["font-size", "line-height", "font-weight"],
+        ".nkb textarea": ["height", "padding", "font-size", "line-height", "background-color", "border-radius"],
+        ".nkfoot .pri": ["height", "background-color", "color", "border-radius"],
+      },
+    },
+  },
   omit: [".nkmore", ".nkf:has(.nkchips)"],
   text: {
     title: ".nkh h2",
@@ -112,8 +123,19 @@ const input: Region = {
   board: "AxApp",
   name: "RequestPresetInput",
   english,
+  page: "presets",
   roots: [field],
-  render: editorScene,
+  render: {
+    ...editorScene,
+    fragment: {
+      styles: {
+        ".nkf:has(.ppinw) .nkl": ["display", "font-size", "font-weight", "color", "margin-bottom"],
+        ".ppinw": ["display", "height", "border-radius", "background-color"],
+        // The board reduces the left padding while its @preset/ prefix is present.
+        ".ppinw input": ["font-family", "font-size", "color", "padding-right"],
+      },
+    },
+  },
   omit: [".ppinw > span", ".nkhint"],
   text: { label: "label" },
   elements: {
@@ -136,8 +158,23 @@ const state: Region = {
   board: "AxApp",
   name: "RequestPresetsState",
   english,
+  page: "presets",
   roots: [stateRoot],
-  render: { root: stateRoot, viewport, actions: [["go", "presets"]], props: { view: "出错" } },
+  render: {
+    root: stateRoot,
+    viewport,
+    actions: [["go", "presets"]],
+    props: { view: "出错" },
+    fragment: {
+      values: { tone: "err", stateRole: "alert" },
+      styles: {
+        ".stb.err": ["display", "flex-direction", "align-items", "padding"],
+        ".stb.err .stbi": ["display", "width", "height", "color", "background-color", "border-radius"],
+        ".stb.err h2": ["font-size", "line-height", "font-weight", "color"],
+        ".stb.err [data-st=retry]": ["height", "background-color", "color", "border-radius"],
+      },
+    },
+  },
   omit: ['[data-st="report"]', ".stbid"],
   text: { title: "h2", detail: "p", action: "button > span" },
   elements: {

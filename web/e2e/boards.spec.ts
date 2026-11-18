@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
 import { build, preview } from "vite";
 import { boardEngines, boardNames } from "../packages/boards/catalog.ts";
-import { regions } from "../packages/boards/regions.ts";
+import { type Region, regions } from "../packages/boards/regions.ts";
 import { readBoard } from "../packages/boards/source.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { openBoard } from "./design/board.ts";
@@ -37,6 +37,7 @@ const test = base.extend<object, { boardsURL: { url: string; rendered: string } 
         join(proof, "main.tsx"),
         `
 import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { slices } from "../src/demo.ts";
 import "../src/demo-fonts.css";
@@ -52,10 +53,15 @@ class Model extends Source { setState(patch) { Object.assign(this.state, patch);
 const model = new Model({theme: query.get("theme") === "dark" ? "深色" : "浅色"});
 model.go(query.get("page"));
 await Promise.all(["Axiom Sans", "Axiom CJK", "Axiom Mono"].map(font => document.fonts.load('400 16px "' + font + '"')));
-createRoot(document.getElementById("root")).render(createElement(Shell,
+const host = document.getElementById("root");
+const root = createRoot(host);
+const props = data(key => zh[key]);
+if (query.has("values")) Object.assign(props.values, JSON.parse(query.get("values")));
+flushSync(() => root.render(createElement(Shell,
   {...shellData(key => shellZH[key]), values: model.renderVals()},
-  createElement(Slice, data(key => zh[key]))
-));
+  createElement(Slice, props)
+)));
+host.dataset.proofReady = "";
 `,
       );
       try {
@@ -198,11 +204,37 @@ async function boardInteractions(page: Page, name: string) {
 
 test.use({ timezoneId: "Asia/Shanghai" });
 
+type Render = NonNullable<Region["render"]>;
+
+// A fragment has a different surrounding DOM in the artboard and in its host page. Compare the retained styles
+// independently of where the consumer places the fragment or what it puts in the fragment's slots.
+async function checkFragment(page: Page, reference: Page, fragment: NonNullable<Render["fragment"]>) {
+  await page.locator("dialog").evaluateAll((dialogs) => {
+    for (const dialog of dialogs) (dialog as HTMLDialogElement).show();
+  });
+  for (const [selector, properties] of Object.entries(fragment.styles)) {
+    await expect(page.locator(selector)).toBeVisible();
+    await expect(reference.locator(selector)).toBeVisible();
+    const read = (page: Page) =>
+      page.locator(selector).evaluate((element, properties) => {
+        const style = getComputedStyle(element);
+        return Object.fromEntries(properties.map((name) => [name, style.getPropertyValue(name)]));
+      }, properties);
+    expect(await read(page), selector).toEqual(await read(reference));
+  }
+}
+
 // Both artboards and generated shells keep their authored width; the other viewport tests clipping, not a redraw.
-for (const region of regions.filter((region) => region.render))
+for (const region of regions) {
+  const { render, page: pageName } = region;
+  if (!render) continue;
+  if (!pageName) throw new Error(`${region.board}/${region.name}: a rendered proof needs a host page`);
+  const selector = render.fragment ? Object.keys(render.fragment.styles)[0] : `.p-${pageName}`;
+  if (!selector) throw new Error(`${region.board}/${region.name}: a fragment proof needs styled elements`);
   for (const width of [1440, 390])
     for (const colorScheme of ["light", "dark"] as const) {
-      test(`${region.board} ${region.name} rendered ${width} ${colorScheme}: artboard diff`, async ({
+      const proof = render.fragment ? "fragment styles" : "artboard diff";
+      test(`${region.board} ${region.name} rendered ${width} ${colorScheme}: ${proof}`, async ({
         browser,
         page,
         boardsURL,
@@ -225,54 +257,67 @@ for (const region of regions.filter((region) => region.render))
         const query = new URLSearchParams({
           board: region.board,
           region: region.name,
-          page: region.page as string,
+          page: pageName,
           theme: colorScheme,
         });
+        if (render.fragment?.values) query.set("values", JSON.stringify(render.fragment.values));
         await page.goto(`${boardsURL.rendered}?${query}`);
         expect(await page.evaluate(() => document.compatMode)).toBe("CSS1Compat");
-        await expect(page.locator(`.p-${region.page}`)).toBeAttached();
-        // These roots belong to the frame, not its scrolling page. A page consumer mounts phone sheets here too.
-        await page.evaluate(() => {
-          const frame = document.querySelector(".fr") as Element;
-          for (const sheet of document.querySelectorAll(".lgsheet")) frame.append(sheet);
-        });
+        // A module's load event precedes its awaited font loads and first React render.
+        await page.locator("#root[data-proof-ready]").waitFor({ state: "attached" });
+        expect(await page.locator(selector).count(), selector).toBe(1);
+        if (!render.fragment) await movePhoneSheets(page);
         const reference = await openBoard(
           browser,
           {
             file: `${region.board}.dc.html`,
             engines: [],
-            props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
-            actions: region.render?.actions,
+            props: { ...render.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
+            actions: render.actions,
           },
           referenceRoot,
           view,
         );
         try {
-          const captureWidth = region.render?.viewport?.width ?? 1440;
-          await expect(page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
-          await expect(reference.page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+          if (!render.fragment) {
+            const captureWidth = render.viewport?.width ?? 1440;
+            await expect(page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+            await expect(reference.page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+          }
           await fontsLoaded(reference.page, reference.fonts);
           await page.evaluate(() => document.fonts.ready.then(() => {}));
           await Promise.all([boardObserversReady(page), boardObserversReady(reference.page)]);
           await Promise.all([page.clock.runFor(5000), reference.page.clock.runFor(5000)]);
-          const shell = regions.find((entry) => entry.board === region.board && entry.name === "Shell");
-          await reference.page.addStyleTag({
-            content: (shell?.omit ?? []).map((selector) => `${selector}{display:none!important}`).join("\n"),
-          });
-          const result = await compare(
-            reference.page,
-            page,
-            [],
-            `rendered-${region.board}-${region.name}-${width}-${colorScheme}`,
-            info,
-          );
-          expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+          if (render.fragment) {
+            await checkFragment(page, reference.page, render.fragment);
+          } else {
+            const key = `rendered-${region.board}-${region.name}-${width}-${colorScheme}`;
+            await checkPage(page, reference.page, region.board, key, info);
+          }
           expect(errors).toEqual([]);
         } finally {
           await reference.close();
         }
       });
     }
+}
+
+async function movePhoneSheets(page: Page) {
+  // A page consumer mounts phone sheets in the frame, outside the scrolling page.
+  await page.evaluate(() => {
+    const frame = document.querySelector(".fr") as Element;
+    for (const sheet of document.querySelectorAll(".lgsheet")) frame.append(sheet);
+  });
+}
+
+async function checkPage(page: Page, reference: Page, board: string, key: string, info: TestInfo) {
+  const shell = regions.find((entry) => entry.board === board && entry.name === "Shell");
+  await reference.addStyleTag({
+    content: (shell?.omit ?? []).map((selector) => `${selector}{display:none!important}`).join("\n"),
+  });
+  const result = await compare(reference, page, [], key, info);
+  expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+}
 
 for (const board of cases)
   for (const width of [1440, 390])
