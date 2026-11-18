@@ -11,6 +11,7 @@ import {
   formatBigDeltaPercent,
   formatCompactTokens,
   formatSpendPerMillion,
+  hasCurrencyBuckets,
   hasUsageStatisticsPayload,
   niceAxisScale,
   presetDaySpan,
@@ -62,6 +63,25 @@ const labels: UsageViewLabels = {
   noMetricChange: "No metric change",
   chartAria: (t, b, tot) => `${t} ${b} ${tot}`,
 };
+
+const baseView = {
+  names: new Map<string, string>(),
+  colors: new Map<string, string>(),
+  format: fmt,
+  currency: "USD",
+  labels,
+};
+const mkBucket = (
+  at: string,
+  group: string,
+  spend: string,
+  requests: string,
+  tokens?: { input?: string; output?: string },
+) => ({
+  at,
+  group,
+  metrics: { spend: { amount: spend, currency: "USD" }, requests, ...(tokens ? { tokens } : {}) },
+});
 
 describe("usage range limits", () => {
   it("enforces 7-day limit for hour granularity and 90-day limit for day/week", () => {
@@ -354,16 +374,8 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
   it("preserves exact BigInt money precision, small averages, partial week labels, and focused aria", () => {
     const groups = aggregateGroups(
       [
-        {
-          at: "2026-10-14T00:00:00Z",
-          group: "g1",
-          metrics: { spend: { amount: "9007199254740992", currency: "USD" }, requests: "1" },
-        },
-        {
-          at: "2026-10-14T00:00:00Z",
-          group: "g2",
-          metrics: { spend: { amount: "1", currency: "USD" }, requests: "1" },
-        },
+        mkBucket("2026-10-14T00:00:00Z", "g1", "9007199254740992", "1"),
+        mkBucket("2026-10-14T00:00:00Z", "g2", "1", "1"),
       ],
       "USD",
       "week",
@@ -373,43 +385,34 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
 
     const slots = buildBucketSlots(Date.parse("2026-10-14T00:00:00Z"), Date.parse("2026-10-16T00:00:00Z"), "week");
     const chartAll = buildChartView({
+      ...baseView,
       slots,
       groups,
       totals: total,
-      names: new Map(),
-      colors: new Map(),
       metric: "spend",
       granularity: "week",
       chartWidth: 800,
       hoverSlot: 0,
       focusGroup: null,
-      format: fmt,
-      currency: "USD",
-      labels,
     });
     expect(chartAll.hoverTip?.bucketLabel).toBe("10/14 – 10/15");
     expect(chartAll.hoverTip?.totalFormatted).toBe("$9007199.254740993");
 
     const chartFocused = buildChartView({
+      ...baseView,
       slots,
       groups,
       totals: total,
-      names: new Map(),
-      colors: new Map(),
       metric: "spend",
       granularity: "week",
       chartWidth: 800,
       hoverSlot: null,
       focusGroup: "g2",
-      format: fmt,
-      currency: "USD",
-      labels,
     });
     expect(chartFocused.chartAria).toContain("$0.000000001");
 
     const smallTot = toUsageTotals([{ spend: { amount: "1499999", currency: "USD" }, requests: "1" }], "USD");
     expect(smallTot && formatAvgPerRequest(smallTot, fmt.money, "USD")).toBe("$0.001499999");
-
     const bigA = groups[0]?.totals;
     const bigB = groups[1]?.totals;
     expect(bigA && bigB ? compareUsageTotals(bigA, bigB, "avg") : 0).toBe(1);
@@ -421,43 +424,25 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
     expect(curr && buildKpiView(curr, emptyPrev, "USD", fmt, labels).changes0).toBe("New");
     expect(curr && buildKpiView(curr, null, "USD", fmt, labels).changes0).toBe("—");
 
-    const freeGroups = aggregateGroups(
-      [
-        {
-          at: "2026-10-14T00:00:00Z",
-          group: "m1",
-          metrics: { spend: { amount: "0", currency: "USD" }, requests: "10" },
-        },
-      ],
-      "USD",
-      "week",
-    );
+    const freeGroups = aggregateGroups([mkBucket("2026-10-14T00:00:00Z", "m1", "0", "10")], "USD", "week");
     expect(
       buildMoversView({
+        ...baseView,
         currGroups: freeGroups,
         prevGroups: freeGroups,
         prevStatus: "ready",
         prevHasCalls: true,
-        names: new Map(),
-        colors: new Map(),
         metric: "spend",
-        format: fmt,
-        currency: "USD",
-        labels,
       }).statusNote,
     ).toBe("No metric change");
     expect(
       buildMoversView({
+        ...baseView,
         currGroups: freeGroups,
         prevGroups: null,
         prevStatus: "error",
         prevHasCalls: true,
-        names: new Map(),
-        colors: new Map(),
         metric: "spend",
-        format: fmt,
-        currency: "USD",
-        labels,
       }),
     ).toMatchObject({ isError: true, statusNote: "Failed movers" });
 
@@ -473,5 +458,58 @@ describe("bucket slots, KPI rates, calendar limit guard, and CSV", () => {
     expect(hasUsageStatisticsPayload({ totals: [] })).toBe(false);
     expect(hasUsageStatisticsPayload({ buckets: [] })).toBe(false);
     expect(hasUsageStatisticsPayload({ totals: [], buckets: [] })).toBe(true);
+  });
+
+  it("distinguishes unreported from zero in table share, movers, hover tips, and currency buckets", () => {
+    const unreportedCurr = aggregateGroups([mkBucket("2026-10-14T00:00:00Z", "m1", "0", "1")], "USD", "day");
+    const unreportedTot = sumGroupTotals(unreportedCurr, "USD");
+    const unreportedTable = buildTableView({
+      ...baseView,
+      groups: unreportedCurr,
+      totals: unreportedTot,
+      metric: "tokens",
+      groupBy: "model",
+      sortCol: "spend",
+      focusGroup: null,
+    });
+    expect(unreportedTable.models0[0]?.f14).toBe("—");
+
+    const reportedPrev = aggregateGroups(
+      [
+        mkBucket("2026-10-07T00:00:00Z", "m1", "0", "1", { input: "100" }),
+        mkBucket("2026-10-07T00:00:00Z", "m2", "0", "1", { input: "50" }),
+      ],
+      "USD",
+      "week",
+    );
+    expect(
+      buildMoversView({
+        ...baseView,
+        currGroups: unreportedCurr,
+        prevGroups: reportedPrev,
+        prevStatus: "ready",
+        prevHasCalls: true,
+        metric: "tokens",
+      }).rows.map((r) => [r.f2, r.f9, r.f11]),
+    ).toEqual([["m2", "50 → —", "−100%"]]);
+
+    const freeSlots = buildBucketSlots(Date.parse("2026-10-14T00:00:00Z"), Date.parse("2026-10-15T00:00:00Z"), "day");
+    const freeChart = buildChartView({
+      ...baseView,
+      groups: unreportedCurr,
+      totals: unreportedTot,
+      slots: freeSlots,
+      metric: "spend",
+      granularity: "day",
+      focusGroup: null,
+      hoverSlot: 0,
+      chartWidth: 400,
+    });
+    expect(freeChart.hoverTip?.totalFormatted).toBe("$0.00");
+    expect(freeChart.hoverTip?.items).toEqual([]);
+
+    const usdBuckets = [mkBucket("2026-10-14T00:00:00Z", "m1", "100", "1")];
+    expect(hasCurrencyBuckets(usdBuckets, "USD")).toBe(true);
+    expect(hasCurrencyBuckets(usdBuckets, "CNY")).toBe(false);
   });
 });

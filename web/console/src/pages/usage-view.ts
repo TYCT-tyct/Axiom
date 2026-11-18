@@ -68,6 +68,7 @@ function buildTableRow(
   ctx: {
     metric: UsageMetricKey;
     metricTotal: bigint;
+    totalsReported: boolean;
     names: ReadonlyMap<string, string>;
     colors: ReadonlyMap<string, string>;
     focusGroup: string | null;
@@ -76,8 +77,9 @@ function buildTableRow(
     unknownGroup: string;
   },
 ): UsageProps["rows"]["models0"][number] {
-  const { metric, metricTotal, names, colors, focusGroup, format, currency, unknownGroup } = ctx;
-  const share = isMetricReported(g.totals, metric) ? sharePct(metricBigValue(g.totals, metric), metricTotal) : 0;
+  const { metric, metricTotal, totalsReported, names, colors, focusGroup, format, currency, unknownGroup } = ctx;
+  const reported = totalsReported && isMetricReported(g.totals, metric);
+  const share = reported ? sharePct(metricBigValue(g.totals, metric), metricTotal) : 0;
   const color = colors.get(g.id) ?? SERIES_COLORS[0];
   return {
     key: `row-${g.id || "_"}`,
@@ -96,7 +98,7 @@ function buildTableRow(
     f11: "usshb",
     f12: `width: ${share.toFixed(1)}%; background: ${color};`,
     f13: "usmut",
-    f14: `${Math.round(share)}%`,
+    f14: reported ? `${Math.round(share)}%` : "—",
     f15: "usrq",
     f16: g.totals.requestsReported ? format.number(g.totals.requests) : "—",
     f17: "ustc",
@@ -122,11 +124,13 @@ export function buildTableView(params: {
   labels: UsageViewLabels;
 }) {
   const { groups, totals, names, colors, metric, groupBy, sortCol, focusGroup, format, currency, labels } = params;
-  const metricTotal = metricBigValue(totals, metric);
+  const totalsReported = isMetricReported(totals, metric);
+  const metricTotal = totalsReported ? metricBigValue(totals, metric) : 0n;
   const sorted = [...groups].sort((a, b) => compareUsageTotals(b.totals, a.totals, sortCol));
   const rowCtx = {
     metric,
     metricTotal,
+    totalsReported,
     names,
     colors,
     focusGroup,
@@ -211,15 +215,15 @@ export function buildMoversView(params: {
   const prevMap = new Map(prevGroups.map((g) => [g.id, g.totals]));
   const ids = new Set([...currMap.keys(), ...prevMap.keys()]);
   const rows = [...ids]
-    .map((id) => {
+    .flatMap((id) => {
       const cTot = currMap.get(id) ?? null;
       const pTot = prevMap.get(id) ?? null;
+      if ((cTot && !isMetricReported(cTot, metric)) || (pTot && !isMetricReported(pTot, metric))) return [];
       const cVal = cTot ? metricBigValue(cTot, metric) : 0n;
       const pVal = pTot ? metricBigValue(pTot, metric) : 0n;
       const abs = cVal >= pVal ? cVal - pVal : pVal - cVal;
-      return { id, cTot, pTot, cVal, pVal, abs };
+      return abs > 0n ? [{ id, cTot, pTot, cVal, pVal, abs }] : [];
     })
-    .filter((item) => item.abs > 0n)
     .sort((a, b) => (b.abs > a.abs ? 1 : b.abs < a.abs ? -1 : 0))
     .slice(0, 4);
   if (!rows.length) return { rows: [], statusNote: labels.noMetricChange, isError: false };
@@ -238,13 +242,9 @@ export function buildMoversView(params: {
       f6: `background: ${colors.get(row.id) ?? SERIES_COLORS[0]};`,
       f7: names.get(row.id) ?? (row.id || labels.unknownGroup),
       f8: "num",
-      f9: `${row.pTot ? formatMetricValue(row.pTot, metric, format, currency) : formatMetricValue(null, metric, format, currency)} → ${formatMetricValue(row.cTot, metric, format, currency)}`,
+      f9: `${formatMetricValue(row.pTot, metric, format, currency)} → ${formatMetricValue(row.cTot, metric, format, currency)}`,
       f10: "num",
-      f11: formatBigDeltaPercent(
-        row.cVal,
-        row.pTot && isMetricReported(row.pTot, metric) ? row.pVal : 0n,
-        labels.newLabel,
-      ),
+      f11: formatBigDeltaPercent(row.cVal, row.pVal, labels.newLabel),
     })),
   };
 }

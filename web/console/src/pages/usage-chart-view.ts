@@ -283,27 +283,29 @@ function buildHoverTip(params: {
     currency,
     unknownGroup,
   } = params;
-  const items = shown
+  const reported = shown
     .map((g) => ({ group: g, slotTotals: g.bySlot.get(slot.atMs) }))
     .filter((x): x is { group: GroupAggregate; slotTotals: UsageTotals } =>
-      Boolean(x.slotTotals && metricBigValue(x.slotTotals, metric) > 0n),
-    )
+      Boolean(x.slotTotals && isMetricReported(x.slotTotals, metric)),
+    );
+  const slotTotals = sumUsageTotals(
+    reported.map((x) => x.slotTotals),
+    currency,
+  );
+  const items = reported
+    .filter((x) => metricBigValue(x.slotTotals, metric) > 0n)
     .sort((a, b) => {
       const av = metricBigValue(a.slotTotals, metric);
       const bv = metricBigValue(b.slotTotals, metric);
       return bv > av ? 1 : bv < av ? -1 : 0;
     });
-  const slotTotals = sumUsageTotals(
-    items.map((x) => x.slotTotals),
-    currency,
-  );
   const tipWidth = Math.min(200, Math.max(160, width));
   const rightX = (hoverSlot + 1) * bw + 8;
   const leftX =
     rightX + tipWidth <= width ? rightX : Math.max(0, Math.min(width - tipWidth, hoverSlot * bw - tipWidth - 8));
   const hoverTip: HoverTipData = {
     bucketLabel: formatBucketLabel(slot, granularity, multiDay, true, format),
-    totalFormatted: formatMetricValue(items.length ? slotTotals : null, metric, format, currency),
+    totalFormatted: formatMetricValue(reported.length ? slotTotals : null, metric, format, currency),
     items: items.slice(0, 4).map(({ group, slotTotals: st }) => ({
       id: group.id,
       name: names.get(group.id) ?? (group.id || unknownGroup),

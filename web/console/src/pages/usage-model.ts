@@ -246,6 +246,18 @@ export function selectCurrency(
   return candidates[0] ?? preferred;
 }
 
+export const hasNonEmptyTotals = (t: UsageTotals | null): boolean =>
+  Boolean(t && (t.requests > 0n || t.spendNano > 0n || t.tokens > 0n));
+
+export function hasCurrencyBuckets(buckets: readonly Schemas["UsageBucket"][] | undefined, currency: string): boolean {
+  const list = buckets ?? [];
+  const hasOther = list.some((b) => Boolean(b.metrics?.spend?.currency && b.metrics.spend.currency !== currency));
+  return list.some((b) => {
+    const m = b.metrics;
+    return Boolean(m && metricForCurrency(m, currency, hasOther) && hasNonEmptyTotals(fromMetric(currency, m)));
+  });
+}
+
 export function toUsageTotals(
   metrics: readonly Schemas["UsageMetrics"][] | undefined,
   currency: string,
@@ -341,8 +353,8 @@ const cmpReported = (aOk: boolean, bOk: boolean, cmp: () => number): number =>
   (aOk ? 1 : 0) - (bOk ? 1 : 0) || (aOk ? cmp() : 0);
 
 const sortComparators: Record<UsageSortCol, (a: UsageTotals, b: UsageTotals) => number> = {
-  spend: (a, b) => cmpBig(a.spendNano, b.spendNano),
-  requests: (a, b) => cmpBig(a.requests, b.requests),
+  spend: (a, b) => cmpReported(a.spendReported, b.spendReported, () => cmpBig(a.spendNano, b.spendNano)),
+  requests: (a, b) => cmpReported(a.requestsReported, b.requestsReported, () => cmpBig(a.requests, b.requests)),
   input: (a, b) => cmpReported(a.inputReported, b.inputReported, () => cmpBig(a.input, b.input)),
   output: (a, b) => cmpReported(a.outputReported, b.outputReported, () => cmpBig(a.output, b.output)),
   avg: (a, b) =>

@@ -25,6 +25,8 @@ import {
   buildUsageCsv,
   currenciesOfUsage,
   defaultGranularity,
+  hasCurrencyBuckets,
+  hasNonEmptyTotals,
   hasUsageStatisticsPayload,
   previousWindow,
   selectCurrency,
@@ -41,9 +43,6 @@ import type { MoversPrevStatus } from "./usage-view";
 
 const noClientRetry = (count: number, error: unknown) =>
   !(error instanceof ApiError && [400, 403, 404].includes(error.status)) && count < 2;
-
-const nonEmptyTotals = (t: ReturnType<typeof toUsageTotals>): boolean =>
-  Boolean(t && (t.requests > 0n || t.spendNano > 0n || t.tokens > 0n));
 
 function resolvePrevStatus(
   prevRaw: readonly unknown[] | undefined,
@@ -66,10 +65,12 @@ function summarizeMainPayload(
   const hasPayload = main.isSuccess && !missingFields;
   const currency = selectCurrency(main.data?.totals, preferred, currencies) ?? preferred ?? "USD";
   const totals = hasPayload ? toUsageTotals(main.data?.totals, currency, true) : null;
-  const hasUsage = Boolean(hasPayload && (nonEmptyTotals(totals) || (main.data?.buckets?.length ?? 0) > 0));
+  const hasUsage = Boolean(
+    hasPayload && (hasNonEmptyTotals(totals) || hasCurrencyBuckets(main.data?.buckets, currency)),
+  );
   const prevRaw = hasPayload ? main.data?.previous : undefined;
   const prevTotals = hasPayload ? toUsageTotals(prevRaw, currency, true) : null;
-  const prevHasCalls = nonEmptyTotals(prevTotals);
+  const prevHasCalls = hasNonEmptyTotals(prevTotals);
   return { missingFields, currency, totals, hasUsage, prevRaw, prevTotals, prevHasCalls };
 }
 

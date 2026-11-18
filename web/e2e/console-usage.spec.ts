@@ -316,4 +316,46 @@ test.describe("usage", () => {
     expect((box?.x ?? 999) + (box?.width ?? 999)).toBeLessThanOrEqual(390);
     expect(errors.filter((e) => !/500/.test(e))).toEqual([]);
   });
+
+  test("treats previous-only currency as empty state and disables CSV export", async ({ page }) => {
+    const errors = collectErrors(page);
+    const state = await mockConsole(page);
+    signedInAs(state);
+
+    // Current range has USD calls while previous only had CNY.
+    await page.route("**/api/console/v1/usage/statistics*", async (route) => {
+      const url = new URL(route.request().url());
+      if (url.searchParams.get("compare") !== "previous") {
+        await route.fallback();
+        return;
+      }
+      await route.fulfill({
+        status: 200,
+        json: {
+          totals: [{ spend: { amount: "8200000", currency: "USD" }, requests: "1", tokens: { input: "100" } }],
+          previous: [{ spend: { amount: "500000000", currency: "CNY" }, requests: "2", tokens: { input: "200" } }],
+          buckets: [
+            {
+              at: "2026-10-14T00:00:00Z",
+              group: "claude-sonnet-4-6",
+              metrics: { spend: { amount: "8200000", currency: "USD" }, requests: "1", tokens: { input: "100" } },
+            },
+          ],
+          backfill_complete: true,
+        },
+      });
+    });
+
+    await page.goto(rangeUrl("2026-10-14T00:00:00Z", "2026-10-15T00:00:00Z", "&granularity=day"));
+    const usdExport = page.getByRole("button", { name: "导出 CSV (USD)" });
+    await expect(usdExport).toBeEnabled();
+
+    await page.getByRole("group", { name: "币种" }).getByRole("button", { name: "CNY" }).click();
+    await expect(page.getByText("这段时间没有调用记录")).toBeVisible();
+    await expect(page.getByRole("button", { name: "导出 CSV (CNY)" })).toBeDisabled();
+
+    await page.getByRole("group", { name: "币种" }).getByRole("button", { name: "USD" }).click();
+    await expect(usdExport).toBeEnabled();
+    expect(errors).toEqual([]);
+  });
 });
