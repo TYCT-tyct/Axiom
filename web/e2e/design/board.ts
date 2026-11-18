@@ -247,6 +247,8 @@ export async function openBoard(
   await page.goto(`${origin}/`);
   if (board.engines) await page.locator("#root > *").first().waitFor({ state: "attached" });
   try {
+    if (errors.length)
+      throw new Error(`the board ${board.file} failed to render: ${errors.map((e) => e.message).join("; ")}`);
     for (const action of board.actions ?? []) {
       if (Array.isArray(action))
         await page.evaluate((action) => {

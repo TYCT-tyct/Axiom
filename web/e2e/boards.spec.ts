@@ -7,7 +7,7 @@ import { boardEngines, boardNames } from "../packages/boards/catalog.ts";
 import { regions } from "../packages/boards/regions.ts";
 import { readBoard } from "../packages/boards/source.ts";
 import { collectErrors } from "./collect-errors.ts";
-import { type BoardScene, openBoard } from "./design/board.ts";
+import { openBoard } from "./design/board.ts";
 import { compare } from "./design/compare.ts";
 import { fontsLoaded } from "./design/fonts.ts";
 import { rulings } from "./design/rulings.ts";
@@ -196,6 +196,7 @@ async function boardInteractions(page: Page, name: string) {
 
 test.use({ timezoneId: "Asia/Shanghai" });
 
+// Both artboards and generated shells keep their authored width; the other viewport tests clipping, not a redraw.
 for (const region of regions.filter((region) => region.render))
   for (const width of [1440, 390])
     for (const colorScheme of ["light", "dark"] as const) {
@@ -238,12 +239,15 @@ for (const region of regions.filter((region) => region.render))
             file: `${region.board}.dc.html`,
             engines: [],
             props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
-            actions: region.render?.actions as BoardScene["actions"],
+            actions: region.render?.actions,
           },
           referenceRoot,
           view,
         );
         try {
+          const captureWidth = region.render?.viewport?.width ?? 1440;
+          await expect(page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+          await expect(reference.page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
           await fontsLoaded(reference.page, reference.fonts);
           await page.evaluate(() => document.fonts.ready.then(() => {}));
           await Promise.all([page.clock.runFor(5000), reference.page.clock.runFor(5000)]);

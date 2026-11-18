@@ -113,6 +113,7 @@
 画板及引擎随路由加载；演示字体复用 F1a 固定源，按摘要校验后原子写入共享下载缓存，归档从已校验内存解包，生产页面的构建入口不变。
 `pnpm --dir web e2e --config=playwright.boards.config.ts` 对固定画板做 1440/390、深浅色截图和真实 CSP 交互检查，保留完整动画。
 参考演示不压缩 CSS，保留透明颜色的小数精度；画板检查独立运行，不进入产品端到端分片。
+AxApp 画板及生成的外壳固定宽 1440px，AxAppPhone 固定宽 390px；两种浏览器视口验证截取和裁切，不改变画板的布局宽度。渲染区域比较会断言两侧框架都保持清单的截取宽度。
 
 产品页面使用区域入口，例如 `@axiom/boards/AxApp/regions/Shell` 和 `@axiom/boards/AxApp/regions/Overview`；手机对应 AxAppPhone。
 区域由手写的 `packages/boards/manifest/<页面>.ts` 描述（每页一个文件，默认导出该页的区域，`regions.ts` 按文件名汇总）：`roots` 选择原始节点，`omit` 去掉区域外节点，`children` 保留容器并把内容变为插槽，`slots` 按属性名再给出其他插槽（如标志），由页面传入内容。

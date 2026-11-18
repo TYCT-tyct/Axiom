@@ -61,3 +61,29 @@ it("converts a browser-drawn subtree deterministically and reads changes in its 
     rmSync(directory, { recursive: true, force: true });
   }
 }, 30_000);
+
+it("reports a board mount error before attempting its scene actions", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "axiom-board-mount-"));
+  try {
+    writeFileSync(
+      join(directory, "Broken.dc.html"),
+      `<x-dc><helmet></helmet><main></main></x-dc>
+<script data-dc-script>class Component extends DCLogic {
+  renderVals() { return {}; }
+  componentDidMount() { throw new Error('original mount failure'); }
+  go() {}
+}</script>`,
+    );
+    const region: Region = {
+      board: "Broken",
+      name: "Broken",
+      roots: ["main"],
+      render: { root: "main", actions: [["go", "logs"]] },
+    };
+    await expect(renderRegions(directory, [region])).rejects.toThrow(
+      "the board Broken.dc.html failed to render: original mount failure",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}, 30_000);
