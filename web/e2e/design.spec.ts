@@ -56,11 +56,12 @@ async function readyBoard(browser: Browser, board: BoardScene, staged: Stage) {
 }
 
 // The page side: the scene's mocks and session, opened, with no request pending, its fonts loaded and settled.
-async function readyPage(page: Page, design: DesignScene, staged: Stage) {
+async function readyPage(page: Page, design: DesignScene, staged: Stage, language?: "zh" | "en") {
   const scene = design.suite.scenes.find((s) => s.name === design.scene);
   if (!scene) throw new Error(`${design.suite.app} has no scene ${design.scene}`);
   await page.setViewportSize(staged.viewport);
   await page.emulateMedia({ colorScheme: staged.colorScheme });
+  if (language) await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
   await stage(page, staged);
   await design.suite.prepare(page, scene);
   await scene.open(page);
@@ -82,20 +83,24 @@ function record(key: string, comparison: Comparison & { blocked: string[] }) {
 for (const design of designScenes) {
   for (const [width, board] of Object.entries(design.boards)) {
     for (const scheme of ["light", "dark"] as const) {
-      const key = `${design.name.replaceAll(" ", "-")}-${width}-${scheme}`;
-      test(`${design.name} ${width} ${scheme}`, async ({ browser, page }, info) => {
-        const staged = view(Number(width), board.height, scheme);
-        const opened = await readyBoard(browser, { ...board, props: design.schemes[scheme] }, staged);
-        try {
-          await readyPage(page, design, staged);
-          const used = rulings.filter((ruling) => ruling.scene === design.name);
-          const comparison = await compare(opened.page, page, used, key, info);
-          record(key, { ...comparison, blocked: opened.blocked });
-          expect(comparison.error, `see ${comparison.diff ?? comparison.page}`).toBeUndefined();
-        } finally {
-          await opened.close();
-        }
-      });
+      for (const language of design.languages ?? [undefined]) {
+        const name = [design.name, width, scheme, language].filter(Boolean).join(" ");
+        const key = name.replaceAll(" ", "-");
+        test(name, async ({ browser, page }, info) => {
+          const staged = view(Number(width), board.height, scheme);
+          const opened = await readyBoard(browser, { ...board, props: design.schemes[scheme] }, staged);
+          try {
+            await readyPage(page, design, staged, language);
+            await design.prepareComparison?.(opened.page, page, language ?? "zh");
+            const used = rulings.filter((ruling) => ruling.scene === design.name);
+            const comparison = await compare(opened.page, page, used, key, info);
+            record(key, { ...comparison, blocked: opened.blocked });
+            expect(comparison.error, `see ${comparison.diff ?? comparison.page}`).toBeUndefined();
+          } finally {
+            await opened.close();
+          }
+        });
+      }
     }
   }
 }
