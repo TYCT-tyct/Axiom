@@ -3,8 +3,8 @@ import { type RefObject, useEffect, useRef } from "react";
 // What an effect module's start returns: the running effect, ended by destroy.
 export type Running = { destroy: () => void };
 
-// A frame callback can run before the browser presents any content. Wait for paint timing where available, then
-// schedule the import at idle. Browsers without paint timing fall back to scheduling from the next frame.
+// A rendering opportunity can pass before the browser reports a contentful paint. Wait for the paint entry before
+// scheduling idle work, using a frame callback where Paint Timing is unavailable.
 function afterFirstContent(go: () => void) {
   let cancelIdle: (() => void) | undefined;
   const schedule = () => {
@@ -13,26 +13,25 @@ function afterFirstContent(go: () => void) {
       cancelIdle = () => cancelIdleCallback(idle);
     } else {
       const timer = window.setTimeout(go, 200);
-      cancelIdle = () => clearTimeout(timer);
+      cancelIdle = () => window.clearTimeout(timer);
     }
   };
-
+  let cancelPaint: () => void;
   if (globalThis.PerformanceObserver?.supportedEntryTypes?.includes("paint")) {
-    const observer = new PerformanceObserver((entries) => {
-      if (entries.getEntriesByName("first-contentful-paint").length === 0) return;
-      observer.disconnect();
-      schedule();
+    const observer = new PerformanceObserver((list) => {
+      if (list.getEntries().some((entry) => entry.name === "first-contentful-paint")) {
+        observer.disconnect();
+        schedule();
+      }
     });
     observer.observe({ type: "paint", buffered: true });
-    return () => {
-      observer.disconnect();
-      cancelIdle?.();
-    };
+    cancelPaint = () => observer.disconnect();
+  } else {
+    const frame = requestAnimationFrame(schedule);
+    cancelPaint = () => cancelAnimationFrame(frame);
   }
-
-  const frame = requestAnimationFrame(schedule);
   return () => {
-    cancelAnimationFrame(frame);
+    cancelPaint();
     cancelIdle?.();
   };
 }
