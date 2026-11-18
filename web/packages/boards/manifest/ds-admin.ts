@@ -122,6 +122,13 @@ const parts: Part[] = [
     classes: { checkedClass: ["on", "pplock"] },
   },
   {
+    name: "AdminFieldFrame",
+    roots: [field],
+    page: "keys",
+    render: newKey,
+    children: field,
+  },
+  {
     name: "AdminFieldFeedback",
     roots: [`${field} > .nkhint`],
     page: "keys",
@@ -139,6 +146,14 @@ const parts: Part[] = [
     elements: {
       [code]: { set: { role: "region", "aria-label": h("label"), tabindex: "0" } },
     },
+  },
+  {
+    name: "AdminCodeViewport",
+    roots: [".lgd"],
+    page: "logs",
+    render: { root: ".fr", actions: [["go", "logs"], { click: ".p-logs .wv.w2 .lgr" }] },
+    children: ".lgd",
+    elements: { ".lgd": { set: { class: "lgd", tabindex: "-1" } } },
   },
   {
     name: "AdminCodeToken",

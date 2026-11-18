@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import CheckboxRegion from "./AxApp/regions/AdminCheckbox.tsx";
 import FeedbackRegion from "./AxApp/regions/AdminFieldFeedback.tsx";
+import FieldFrame from "./AxApp/regions/AdminFieldFrame.tsx";
 import SelectRegion from "./AxApp/regions/AdminSelectField.tsx";
 import InputRegion from "./AxApp/regions/PartTextField.tsx";
 import { ActionButton } from "./ds-admin-actions.tsx";
@@ -139,7 +140,7 @@ export function CheckboxField({
   const id = useId();
   const { text, values, describedBy } = useFeedback(field);
   return (
-    <div className="nkf">
+    <FieldFrame t={String}>
       <CheckboxRegion
         t={String}
         text={{ label }}
@@ -155,7 +156,7 @@ export function CheckboxField({
       />
       <input type="checkbox" name={name} value={value} checked={checked} disabled={disabled} hidden readOnly />
       <FeedbackRegion t={String} text={{ feedback: text }} values={values} />
-    </div>
+    </FieldFrame>
   );
 }
 
@@ -171,7 +172,7 @@ export function FileField({
   const [selected, setSelected] = useState("");
   const { text, values, describedBy } = useFeedback(field);
   return (
-    <div className="nkf">
+    <FieldFrame t={String}>
       <ActionButton describedBy={describedBy} disabled={disabled} onClick={() => control.current?.click()}>
         {label}
       </ActionButton>
@@ -190,6 +191,6 @@ export function FileField({
       />
       <div role="status">{selected}</div>
       <FeedbackRegion t={String} text={{ feedback: text }} values={values} />
-    </div>
+    </FieldFrame>
   );
 }

@@ -185,6 +185,7 @@ const consoleParts: ConsolePart[] = [
         set: { ref: hole("dialog"), style: hole("placement"), "aria-labelledby": hole("titleId"), tabindex: "-1" },
       },
       ".nkh h2": { set: { id: hole("titleId") } },
+      ".nkb": { set: { tabindex: "0" } },
       ".nkh p": { unless: "hideDescription" },
       ".nkx": { set: { onclick: hole("close") } },
       ".nkfl": { unless: "hideHint" },
@@ -339,6 +340,17 @@ const consoleParts: ConsolePart[] = [
     roots: [skeleton],
     children: skeleton,
     elements: { [skeleton]: { set: { role: "status", "aria-label": hole("label"), "aria-busy": "true" } } },
+  },
+  {
+    name: "PartLoadingFrame",
+    page: "ov",
+    render: { root: ".p-ov", actions: [["go", "ov"]], props: { view: "加载中" } },
+    roots: [".qpages"],
+    children: '[data-part="loading"]',
+    elements: {
+      ".qpages": { set: { class: "pg-ov pstL", style: hole("frameStyle") } },
+      ".p-ov": { set: { class: "qpg p-ov", "data-part": "loading" } },
+    },
   },
   {
     name: "PartLoadingSample",

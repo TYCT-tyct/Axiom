@@ -41,7 +41,6 @@ import { createElement } from "react";
 import { flushSync } from "react-dom";
 import { createRoot } from "react-dom/client";
 import { slices } from "../src/demo.ts";
-import "../src/demo-fonts.css";
 import styles from "../demo/main.module.css";
 document.body.classList.add(styles.root);
 const query = new URLSearchParams(location.search);
@@ -50,6 +49,7 @@ const name = query.get("region");
 if (query.has("part")) {
 ${partProofScript}
 } else {
+await import("../src/demo-fonts.css");
 const [Source, Shell, Slice, shellData, data, shellZH, zh] = await Promise.all([
   scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"]()
 ]);
@@ -322,6 +322,7 @@ for (const region of regions.filter((entry) => parts.has(entry.name))) {
         {
           file: `${region.board}.dc.html`,
           engines: [],
+          preloadFonts: false,
           actions: region.render?.actions,
           props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
         },

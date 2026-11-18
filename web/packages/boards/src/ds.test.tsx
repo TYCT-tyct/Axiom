@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, type ReactNode, useState } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
@@ -80,6 +81,43 @@ it("keeps focus in a labelled dialog, closes on Escape and returns focus to the 
   key(close, "Escape");
   expect(document.querySelector('[role="dialog"]')).toBeNull();
   expect(document.activeElement).toBe(trigger);
+});
+
+it("keeps the scrollable body in the tab order and prevents a reload from submitting its replacement form", () => {
+  const submit = vi.fn();
+  function Example() {
+    const [editing, setEditing] = useState(false);
+    return (
+      <Dialog
+        title="Edit"
+        closeLabel="Close"
+        onClose={() => {}}
+        primary={
+          editing
+            ? { label: "Save", form: "refilled" }
+            : { label: "Reload", onClick: () => flushSync(() => setEditing(true)) }
+        }
+      >
+        {editing ? (
+          <form
+            id="refilled"
+            onSubmit={(event) => {
+              event.preventDefault();
+              submit();
+            }}
+          />
+        ) : null}
+      </Dialog>
+    );
+  }
+  render(<Example />);
+  expect(element(".nkb").tabIndex).toBe(0);
+  const action = element<HTMLButtonElement>(".nkfoot button");
+  click(action);
+  expect(action.type).toBe("submit");
+  expect(submit).not.toHaveBeenCalled();
+  click(action);
+  expect(submit).toHaveBeenCalledOnce();
 });
 
 it.each([

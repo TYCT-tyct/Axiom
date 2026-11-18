@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import EmptyRegion from "./AxApp/regions/PartEmpty.tsx";
 import ErrorRegion from "./AxApp/regions/PartError.tsx";
 import LoadingRegion from "./AxApp/regions/PartLoading.tsx";
+import LoadingFrame from "./AxApp/regions/PartLoadingFrame.tsx";
 import NoPermissionRegion from "./AxApp/regions/PartNoPermission.tsx";
 
 type Action = { label: string; onClick: () => void; disabled?: boolean };
@@ -9,13 +10,11 @@ type Message = { title: string; description?: string };
 
 export function Loading({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="pstL">
-      <div className="qpg">
-        <LoadingRegion t={String} values={{ label }}>
-          {children}
-        </LoadingRegion>
-      </div>
-    </div>
+    <LoadingFrame t={String}>
+      <LoadingRegion t={String} values={{ label }}>
+        {children}
+      </LoadingRegion>
+    </LoadingFrame>
   );
 }
 

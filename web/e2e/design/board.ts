@@ -20,6 +20,7 @@ export type BoardScene = {
   props?: Record<string, string>;
   actions?: ([string, ...unknown[]] | { click: string })[];
   engines?: string[];
+  preloadFonts?: boolean;
 };
 
 export type OpenBoard = {
@@ -193,7 +194,7 @@ ${dcLogic}</script></head><body><div id="root"></div>
 <script>${script}</script>
 <script>(async () => {
 ${[look, fill, render, patch, bind, mount].join("\n")}
-${board.engines ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
+${board.engines && board.preloadFonts !== false ? `await Promise.all(${inline(fonts.faces)}.map(f => document.fonts.load(f.style + ' ' + f.weight.split(' ')[0] + ' 16px "' + f.family + '"')));` : ""}
 mount(${inline(mark(template))});
 })();</script></body></html>`,
   };

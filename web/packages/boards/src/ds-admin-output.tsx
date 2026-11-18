@@ -1,18 +1,18 @@
 import { useEffect, useState } from "react";
 import CodeRegion from "./AxApp/regions/AdminCodeBlock.tsx";
+import CodeViewport from "./AxApp/regions/AdminCodeViewport.tsx";
 import Track from "./AxApp/regions/AdminElapsedTrack.tsx";
-import detail from "./AxApp/regions/LogsDetail.module.css";
 
 // The page supplies formatted code so a JSON reader can preserve the original numbers.
 export function CodeBlock({ label, children }: { label: string; children: string }) {
   return (
     <div>
       {/* The board's log detail sets the height bound. Its own parent keeps the panel in the page flow. */}
-      <div className={`lgd ${detail.scope}`} tabIndex={-1}>
+      <CodeViewport t={String}>
         <CodeRegion t={String} values={{ label }}>
           {children}
         </CodeRegion>
-      </div>
+      </CodeViewport>
     </div>
   );
 }

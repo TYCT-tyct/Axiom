@@ -106,6 +106,7 @@ export function Dialog({
 }) {
   const id = useId();
   const { panel, host } = useDialogFocus(onClose);
+  const command = primary.onClick;
   return createPortal(
     <DialogRegion
       t={String}
@@ -128,7 +129,13 @@ export function Dialog({
         hideSecondary: !secondary,
         hideHint: !keyboardHint,
         primaryClass: primary.danger ? "sec dan2" : "pri",
-        primary: primary.onClick,
+        // A command can re-render this button as a submitter before the browser runs its default action.
+        primary: command
+          ? (event) => {
+              event.preventDefault();
+              command();
+            }
+          : undefined,
         form: primary.form,
         primaryButton: (node) => {
           if (!(node instanceof HTMLButtonElement)) return;
