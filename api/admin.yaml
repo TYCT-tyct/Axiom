@@ -7607,7 +7607,12 @@ components:
             invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
         account: {$ref: "#/components/schemas/AccountId"}
         level: {$ref: "#/components/schemas/SessionLevel"}
-        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
+        mfa_enabled: {type: boolean, description: "Whether the user has a second factor: a TOTP factor or a passkey."}
+        totp_enabled:
+          type: boolean
+          description: >-
+            Whether the user has a TOTP factor, which they can replace or turn off with a code. Absent from a server
+            older than this field; a page then reads mfa_enabled as before.
         csrf_token: {type: string}
         expires_at: {type: string, format: date-time, description: "When the session ends if it is not used again; the idle timeout moves it."}
         permissions:
