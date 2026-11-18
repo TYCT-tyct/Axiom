@@ -47,7 +47,9 @@ def main() -> None:
         if name in hosted:
             job = hosted[name]
             h = timings(job)
-            log = subprocess.check_output(["gh", "api", f"repos/{args.repo}/actions/jobs/{job['id']}/logs"], text=True)
+            log = subprocess.check_output([
+                "gh", "api", f"repos/{args.repo}/actions/jobs/{job['id']}/logs", "--allow-escape-sequences",
+            ], text=True)
             if measured := re.search(r"CI_CPU=(\{[^\n]+\})", log):
                 projected = f"{estimate(h[0], json.loads(measured[1])):.1f}"
         if name in own:
