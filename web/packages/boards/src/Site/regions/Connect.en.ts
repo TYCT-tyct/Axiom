@@ -2,7 +2,7 @@
 /* jscpd:ignore-start */
 import type zh from "./Connect.zh.ts";
 export default {
-  "m15e09730c0": "Change one address,",
+  "m15e09730c0": "Change one address",
   "mc1259c84e3": "and every model works",
   "m95aa50a5d2": "Point your tool’s API address at Axiom and enter your key. Your commands, code and workflows stay as they are.",
   "me2c2f3d5e7": "Choose a tool",

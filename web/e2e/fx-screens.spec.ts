@@ -1,5 +1,8 @@
 import { expect, type Page, test } from "@playwright/test";
+import { apps } from "./apps.ts";
+import { mockConsole } from "./console-api.ts";
 import { loop, open, pause, place, running, screenChunk, scrollTo, sections, setHidden, shown } from "./fx-helpers.ts";
+import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
 // its place nears the view; the card shows the site's address in the tool's configuration.
@@ -27,17 +30,119 @@ test("the machine is fetched after the screen's code, once, and the card carries
   await expect(page.locator(".hfm1 pre")).toContainText("[model_providers.axiom]");
 });
 
-test("the machine's animations rest while the tab is hidden", async ({ page }) => {
+// The machine's story runs on the shared loop, from when its screen is seen: the display names each call's model, and
+// while the tab is hidden the story stands where it is.
+const display = (page: Page) => page.locator('.hfm1 [data-disp="m"]').textContent();
+
+test("the machine's story runs while it is seen, stands while the tab is hidden, and goes on when it is back", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
   await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
-  await running(page);
+  await expect.poll(() => display(page), { timeout: 30_000 }).not.toBe("AXIOM");
   await setHidden(page, true);
   await pause(page);
-  const states = () =>
-    page.locator(".hfm1 .fig").evaluate((el) => el.getAnimations({ subtree: true }).map((a) => a.playState));
-  await expect.poll(async () => (await states()).every((state) => state !== "running")).toBe(true);
+  const held = await display(page);
+  // longer than a call takes
+  await page.waitForTimeout(8000);
+  expect(await display(page)).toBe(held);
   await setHidden(page, false);
+  await expect.poll(() => display(page), { timeout: 30_000 }).not.toBe(held);
+});
+
+test("after a call the card names the model, and the copied check shows once the clipboard has taken the text", async ({
+  context,
+  page,
+}) => {
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  await expect
+    .poll(() => page.locator(".hfm1 .rcard").evaluate((el) => getComputedStyle(el).opacity), { timeout: 30_000 })
+    .toBe("1");
+  await expect(page.locator(".hfm1 .rc-m")).not.toHaveText("");
+  // the Codex tab copies the file alone: the key is set in the terminal, and a TOML parser would stop at the export
+  await page.locator(".hfm1 .tab").nth(1).click();
+  await page.locator(".hfm1 .cpy").click();
+  await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("data-state", "done");
+  await expect.poll(() => page.locator(".hfm1 .cpy .ok").evaluate((el) => getComputedStyle(el).opacity)).not.toBe("0");
+  const copied = await page.evaluate(() => navigator.clipboard.readText());
+  expect(copied).toContain('base_url = "https://api.example.com/v1"');
+  expect(copied).toContain('model = "<model>"');
+  expect(copied).not.toContain("export");
+});
+
+test("a clipboard that refuses is not reported as copied, and without an API address there is nothing to copy", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => Promise.reject(new DOMException("denied", "NotAllowedError")) },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
+  await page.locator(".hfm1 .cpy").click();
+  await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("aria-label", /复制失败/);
+  await expect(page.locator(".hfm1 .cpy")).not.toHaveAttribute("data-state", "done");
+});
+
+test("without the site's API address the card says so and the copy button is disabled", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", {
+    site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await expect(page.locator(".hfm1 pre")).toContainText("本站 API 地址暂不可用");
+  await expect(page.locator(".hfm1 .cpy")).toBeDisabled();
+  await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("aria-label", /无法复制/);
+});
+
+test("at 820 the page is laid out for a tablet as the board's script lays it out", async ({ page }) => {
+  await page.setViewportSize({ width: 820, height: 1180 });
+  await open(page);
+  await expect(page.locator(".ho")).toHaveAttribute("data-tab", "");
+  // the connect screen drops its cable, which the board's tablet rule hides
+  await expect.poll(() => page.locator(".hfm1 .wire").evaluate((el) => getComputedStyle(el).display)).toBe("none");
+  await page.setViewportSize({ width: 600, height: 900 });
+  await expect(page.locator(".ho")).not.toHaveAttribute("data-tab");
+});
+
+test("the page asks for the site once, and the footer carries the site's own name", async ({ page }) => {
+  let asked = 0;
+  page.on("request", (request) => {
+    if (/\/api\/console\/v1\/site(\?|$)/.test(request.url())) asked++;
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", {
+    site: {
+      name: "Acme Relay",
+      currency: "USD",
+      key_prefix: "sk-ax-v1-",
+      registration: "invite",
+      api_base_url: "https://api.acme.example",
+    },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  for (const sec of await sections(page)) {
+    await scrollTo(page, sec);
+    await shown(page, sec);
+  }
+  await expect(page.locator(".hfm6 .ft .brand")).toContainText("Acme Relay");
+  await expect(page.locator(".hfm6 .ft")).toContainText("MiSans");
+  expect(asked).toBe(1);
 });
 
 // The tour and the menu's list of sections (the last screen's card): the tour glides through the screens, the list goes
@@ -60,6 +165,10 @@ test("under reduced motion the tour is not offered", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open(page);
   await expect(page.locator(".tour")).toHaveClass(/\bgone\b/);
+  // not reachable by the keyboard either: pressing Enter on it would start the tour
+  await page.locator(".tour").focus();
+  await expect(page.locator(".tour")).not.toBeFocused();
+  await expect(page.locator(".tour")).toHaveAttribute("inert", "");
 });
 
 // The questions (§8.2's Faq row): the first answer's picture sends its request to one vendor after another on a timer of

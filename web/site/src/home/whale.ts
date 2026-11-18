@@ -24,6 +24,18 @@ function typing(then: () => void) {
   };
 }
 
+// Asking for reduced motion while the whale swims takes it down; the returned function stops listening.
+function takeDownOnReducedMotion(visit: RefObject<Whale | null>) {
+  const motion = matchMedia("(prefers-reduced-motion: reduce)");
+  const onChange = () => {
+    if (!motion.matches) return;
+    visit.current?.destroy();
+    visit.current = null;
+  };
+  motion.addEventListener("change", onChange);
+  return () => motion.removeEventListener("change", onChange);
+}
+
 type Options = { engine: Sea["engine"]; narrow: boolean; dark: boolean };
 
 // useWhale returns what calls the whale of the easter egg (packages/fx whale), which is loaded the first time it is
@@ -33,32 +45,36 @@ type Options = { engine: Sea["engine"]; narrow: boolean; dark: boolean };
 export function useWhale(
   root: RefObject<HTMLElement | null>,
   sea: RefObject<Sea | null>,
+  met: RefObject<boolean>,
   narrow: boolean,
   dark: boolean,
 ) {
   const visit = useRef<Whale | null>(null);
   const loading = useRef(false);
-  const met = useRef(false);
   const live = useRef(true);
   const latest = useRef({ narrow, dark });
   latest.current = { narrow, dark };
 
-  const play = useCallback(async (frame: HTMLElement, { engine, narrow, dark }: Options) => {
-    const { startWhale } = await loadWhale();
-    if (!live.current) return;
-    const end = (done: Whale) => {
-      done.destroy();
-      if (visit.current === done) visit.current = null;
-    };
-    const whale: Whale = startWhale(frame, engine, {
-      dark,
-      phone: narrow,
-      onDone: () => queueMicrotask(() => end(whale)),
-    });
-    visit.current = whale;
-    if (whale.summon(null)) met.current = true;
-    else end(whale);
-  }, []);
+  const play = useCallback(
+    async (frame: HTMLElement, { engine, narrow, dark }: Options) => {
+      const { startWhale } = await loadWhale();
+      // the reader may have asked for reduced motion while the code was on its way
+      if (!live.current || reducedMotion()) return;
+      const end = (done: Whale) => {
+        done.destroy();
+        if (visit.current === done) visit.current = null;
+      };
+      const whale: Whale = startWhale(frame, engine, {
+        dark,
+        phone: narrow,
+        onDone: () => queueMicrotask(() => end(whale)),
+      });
+      visit.current = whale;
+      if (whale.summon(null)) met.current = true;
+      else end(whale);
+    },
+    [met],
+  );
 
   const summon = useCallback(
     (force: boolean) => {
@@ -74,7 +90,7 @@ export function useWhale(
           loading.current = false;
         });
     },
-    [root, sea, play],
+    [root, sea, met, play],
   );
 
   useEffect(() => {
@@ -85,10 +101,12 @@ export function useWhale(
     const onClick = (e: MouseEvent) => {
       if (e.target instanceof Element && e.target.closest(".hs > .main .fam [data-egg=deepseek]")) summon(true);
     };
+    const stopMotion = takeDownOnReducedMotion(visit);
     document.addEventListener("keydown", onKey);
     frame.addEventListener("click", onClick);
     return () => {
       live.current = false;
+      stopMotion();
       document.removeEventListener("keydown", onKey);
       frame.removeEventListener("click", onClick);
       visit.current?.destroy();

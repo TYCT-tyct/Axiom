@@ -156,6 +156,7 @@
 :global(.hfm6 .bx .reelw):where(.scope){position:relative;height:78px;overflow:hidden;-webkit-mask-image:linear-gradient(to bottom,transparent,#000 34%,#000 66%,transparent);mask-image:linear-gradient(to bottom,transparent,#000 34%,#000 66%,transparent)}
 :global(.hfm6 .bx .reel):where(.scope){display:flex;flex-direction:column;will-change:transform}
 :global(.hfm6 .bx .ri):where(.scope){display:block;height:26px;font-size:16px;line-height:26px;color:var(--text2);white-space:nowrap;transition:color 250ms ease-out}
+:global(.hfm6 .bx .ri.on):where(.scope){color:var(--accent)}
 :global(.hfm6 .bx .pc):where(.scope){display:flex;justify-content:space-between;gap:16px;padding-top:12px;font-size:12px;line-height:18px;color:var(--text2)}
 :global(.hfm6 .bx .pc b):where(.scope){font-weight:400;color:var(--text1)}
 :global(.hfm6 .bx .ac):where(.scope){color:var(--accent)}
@@ -193,4 +194,6 @@
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.under .seg .sg):where(.scope){cursor:pointer}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
+:global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
+:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 /* jscpd:ignore-end */

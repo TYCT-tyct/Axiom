@@ -1,4 +1,5 @@
 import { hash } from "@axiom/fx";
+import { keyGuide } from "@axiom/ui";
 import type zh from "../locales/zh";
 
 // The configurations the connect screen shows for each tool (Site.dc.html M1's TOOLS): lines of runs, the address and
@@ -18,32 +19,38 @@ const t = (text: string): Run => ["t", text];
 const key: Run = ["k"];
 const w = (word: Word): Run => ["w", word];
 
+// The configurations of Claude Code and Codex, and the address Cursor takes, are the console's key guide's (packages/ui
+// key-guide.ts), so what the home page shows and what the console's new-key dialog hands over are one text. Built with
+// stand-ins for the site's address and the key, which the lines show as runs and a copy fills in.
+const standIn = { root: "\u0001root\u0001", key: "\u0001key\u0001" };
+const guide = keyGuide(standIn.root, standIn.key);
+const guided = (id: "claude-code" | "codex" | "cursor") =>
+  guide?.clients.find((client) => client.id === id)?.text ?? "";
+// a line of the guide's text as runs: the address (with /v1 or without) and the key stand where the guide puts them
+const guideLine = (text: string): Line => {
+  const runs: Run[] = text
+    .split(new RegExp(`(${standIn.root}/v1|${standIn.root}|${standIn.key})`))
+    .filter(Boolean)
+    .map((part): Run => {
+      if (part === `${standIn.root}/v1`) return ["u", "v1"];
+      if (part === standIn.root) return ["u", "root"];
+      return part === standIn.key ? key : t(part);
+    });
+  return a(...runs);
+};
+const guideLines = (id: "claude-code" | "codex") => guided(id).split("\n").filter(Boolean).map(guideLine);
+
 export const tools: Tool[] = [
   {
     name: t("Claude Code"),
     file: w("terminal"),
-    lines: [
-      c("alsoZshrc"),
-      a(t("export ANTHROPIC_BASE_URL="), ["u", "root"]),
-      a(t("export ANTHROPIC_AUTH_TOKEN="), key),
-      blank,
-      { kind: "r", runs: [t("claude")] },
-    ],
+    lines: [c("alsoZshrc"), ...guideLines("claude-code"), blank, { kind: "r", runs: [t("claude")] }],
   },
+  // the file's lines only: the key is set in the terminal, and the guide's file does not hold it
   {
     name: t("Codex"),
     file: t("~/.codex/config.toml"),
-    lines: [
-      a(t('model_provider = "axiom"')),
-      blank,
-      a(t("[model_providers.axiom]")),
-      a(t('name = "Axiom"')),
-      a(t('base_url = "'), ["u", "v1"], t('"')),
-      a(t('env_key = "AXIOM_API_KEY"')),
-      blank,
-      c("setKey"),
-      a(t("export AXIOM_API_KEY="), key),
-    ],
+    lines: [...guideLines("codex"), c("setKey"), a(t("export AXIOM_API_KEY="), key)],
   },
   {
     name: t("Cursor"),
@@ -60,8 +67,8 @@ export const tools: Tool[] = [
       a(t('    base_url="'), ["u", "v1"], t('",')),
       a(t('    api_key="'), key, t('",')),
       n(t(")")),
-      blank,
-      { kind: "r", runs: [t('client.responses.create(model="claude-opus-5.5", input="'), ["w", "hello"], t('")')] },
+      c("modelList"),
+      { kind: "r", runs: [t('client.responses.create(model="<model>", input="'), w("hello"), t('")')] },
     ],
   },
   {
@@ -82,7 +89,8 @@ export const tools: Tool[] = [
 export const addressLine = tools.map((tool) => tool.lines.findIndex((line) => line.runs.some((run) => run[0] === "u")));
 export const keyLine = tools.map((tool) => tool.lines.findIndex((line) => line.runs.some((run) => run[0] === "k")));
 
-export type Texts = { word: (word: Word) => string; root: string; v1: string };
+// known: whether the site has an API address to put in them; without one there is nothing to copy
+export type Texts = { word: (word: Word) => string; root: string; v1: string; known: boolean };
 // a run's text: what it says in the language and for the site
 export const textOf = (run: Run, { word, root, v1 }: Texts) => {
   if (run[0] === "t") return run[1];
@@ -92,13 +100,17 @@ export const textOf = (run: Run, { word, root, v1 }: Texts) => {
 };
 const GLYPHS = ":;t%SX8#@/<>=+*";
 
-// What the tool's configuration copies: the lines with their comments left out, the key as a placeholder.
-export function copyText(tool: Tool, texts: Texts) {
+// What the tool's configuration copies: for the tools the key guide knows, its text; for the others, the lines with their
+// comments left out. The key is a placeholder, and the model one to fill in from the key's model list.
+export function copyText(index: number, texts: Texts) {
+  const tool = tools[index] as Tool;
+  const secret = `<${texts.word("yourKey")}>`;
+  const id = (["claude-code", "codex", "cursor"] as const)[index];
+  const fill = (text: string) => text.replaceAll(standIn.root, texts.root).replaceAll(standIn.key, secret);
+  if (id) return fill(guided(id));
   return tool.lines
     .filter((line) => line.kind !== "c")
-    .map((line) =>
-      line.runs.map((run) => (run[0] === "k" ? `<${texts.word("yourKey")}>` : textOf(run, texts))).join(""),
-    )
+    .map((line) => line.runs.map((run) => (run[0] === "k" ? secret : textOf(run, texts))).join(""))
     .join("\n")
     .trim();
 }

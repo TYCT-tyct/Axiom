@@ -41,4 +41,7 @@ export type Region = {
   // Class prefixes of markup an engine inserts into the region at run time (the connect screen's figure, an SVG fetched
   // and parsed into place): the board's rules naming them are kept, applying to anything inside the region.
   inserted?: string[];
+  // Classes and attributes a script or an engine sets at run time (on, wh-lit, data-tab): the board's rules that need
+  // them are kept although the cut markup does not carry them yet.
+  states?: string[];
 };

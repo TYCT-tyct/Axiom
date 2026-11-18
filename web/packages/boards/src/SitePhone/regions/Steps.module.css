@@ -167,6 +167,9 @@
 :global(.hfm3 .sx .st > h3):where(.scope)::before,:global(.hfm3 .sx .st > p):where(.scope)::before{content:'';position:absolute;inset:-8px -12px;z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--veilStrong);-webkit-mask-image:linear-gradient(to right,transparent,#000 12px,#000 calc(100% - 12px),transparent),linear-gradient(to bottom,transparent,#000 12px,#000 calc(100% - 12px),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 12px,#000 calc(100% - 12px),transparent),linear-gradient(to bottom,transparent,#000 12px,#000 calc(100% - 12px),transparent);mask-composite:intersect}
 :global(.under .lede.lens):where(.scope){--lv:var(--veilStrong)}
 :global(.tr.m .under .hfm3 .sec):where(.scope){padding-left:var(--tm);padding-right:var(--tm)}
+:global(.ho[data-tab] .hfm3 .m .sb):where(.scope){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,350px);column-gap:40px;align-items:center}
+:global(.ho[data-tab] .hfm3 .m .cta):where(.scope){flex-direction:row}
+:global(.ho[data-tab] .hfm3 .m .cta .btn):where(.scope){width:auto}
 @media (min-width:1600px){
 }
 @media (max-height:640px) and (min-width:768px){
@@ -181,4 +184,6 @@
 :global(.under .serif):where(.scope){font-family:'AX Serif','Axiom CJK',serif!important;font-weight:600!important;letter-spacing:-.01em!important}
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
+:global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
+:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 /* jscpd:ignore-end */

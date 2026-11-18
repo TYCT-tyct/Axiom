@@ -18,7 +18,7 @@ import { firstSeen, type Script } from "./script";
 // The connect screen's script (Site.dc.html M1): the tool's configuration is decoded in; the machine plugs into the one
 // input, a call runs down the cable, the shaft climbs to its vendor's level, the wiper turns to the model's contact, and
 // the vendor's module lights. The machine is an SVG fetched as the screen nears the view and put in place; its
-// animations rest while the screen is out of view or the tab hidden, and under reduced motion it stands in its wired
+// story rests while the screen is out of view or the tab hidden, and under reduced motion it stands in its wired
 // state, with the key in and the lamp on.
 type Input = Texts;
 
@@ -46,17 +46,23 @@ const scramble = (text: string, from: number, count: number, tick: number) =>
 type State = {
   tool: number;
   ct: number | null;
-  copied: boolean;
+  copied: "" | "done" | "failed";
   pulse: boolean;
   call: [number, number, string] | null;
   rct: number | null;
+};
+
+// which of the copy button's words fits: it cannot copy without an address, and it says how a copy ended
+const copyState = (known: boolean, copied: "" | "done" | "failed") => {
+  if (!known) return "copyUnavailable";
+  return ({ "": "copy", done: "copied", failed: "copyFailed" } as const)[copied];
 };
 
 class ConnectRun implements Script<Input> {
   private readonly clock;
   private readonly still = reducedMotion();
   private readonly seen;
-  private readonly state: State = { tool: 0, ct: null, copied: false, pulse: false, call: null, rct: null };
+  private readonly state: State = { tool: 0, ct: null, copied: "", pulse: false, call: null, rct: null };
   private machine: Machine | undefined;
   private wire: Wire | undefined;
   private texts: Texts | undefined;
@@ -64,8 +70,6 @@ class ConnectRun implements Script<Input> {
   private dead = false;
   private copyTimer = 0;
   private readonly resize: ResizeObserver;
-  private readonly view: IntersectionObserver;
-  private visible = false;
   private readonly picks = tools.map((_, i) => () => this.pick(i));
   private readonly hovers = Array.from({ length: rows }, (_, i) => () => this.hover(i));
 
@@ -79,12 +83,6 @@ class ConnectRun implements Script<Input> {
     this.seen = firstSeen(stage, 0.3);
     this.resize = new ResizeObserver(() => this.place());
     this.resize.observe(stage);
-    this.view = new IntersectionObserver((entries) => {
-      this.visible = entries.some((entry) => entry.isIntersecting);
-      this.rest();
-    });
-    this.view.observe(stage);
-    document.addEventListener("visibilitychange", this.rest);
     this.fetchMachine();
   }
 
@@ -99,22 +97,12 @@ class ConnectRun implements Script<Input> {
         this.machine = new Machine(fig, asset);
         this.wire = new Wire(this.stage, fig, this.narrow);
         this.place();
-        this.rest();
         if (this.still) this.wired();
         else this.seen.promise.then(() => this.intro());
       })
       // the card works without the picture: the machine is only the illustration
       .catch(() => {});
   }
-  // the machine's own CSS animations (the wire's flow, the points' pulse) go on only while it is seen
-  private readonly rest = () => {
-    const run = this.visible && !document.hidden && !this.still;
-    for (const animation of this.machine?.fig.getAnimations({ subtree: true }) ?? []) {
-      if (this.still) animation.cancel();
-      else if (run) animation.play();
-      else animation.pause();
-    }
-  };
   // the wired state: the key in the lock, the lamp on, the display reading what the machine says when it is ready
   private wired() {
     this.machine?.swap("key", 1);
@@ -308,7 +296,7 @@ class ConnectRun implements Script<Input> {
     // once the card is drawn for the new tool, its height eases to the new one and the cable follows
     const after = () => {
       const now = card?.offsetHeight ?? 0;
-      if (card && Math.abs(now - before) > 1) {
+      if (card && !this.still && Math.abs(now - before) > 1) {
         card.animate([{ height: `${before}px` }, { height: `${now}px` }], { duration: 250, easing: "ease-out" });
         this.tween(260, () => this.wire?.draw(this.state.tool));
       }
@@ -330,12 +318,21 @@ class ConnectRun implements Script<Input> {
     this.machine?.hover("key", i === keyLine[tool]);
   }
   private readonly leave = () => this.hover(-1);
-  private readonly copy = () => {
+  // The copy is reported once the clipboard has taken it: a refusal, or no clipboard, says to select it by hand.
+  private readonly copy = async () => {
     const texts = this.texts;
-    if (texts) navigator.clipboard?.writeText(copyText(tools[this.state.tool] as Tool, texts)).catch(() => {});
-    this.set({ copied: true });
+    if (!texts?.known) return;
     window.clearTimeout(this.copyTimer);
-    this.copyTimer = window.setTimeout(() => this.set({ copied: false }), 1600);
+    let outcome: "done" | "failed" = "failed";
+    try {
+      await navigator.clipboard.writeText(copyText(this.state.tool, texts));
+      outcome = "done";
+    } catch {
+      // the reader copies it by hand
+    }
+    if (this.dead) return;
+    this.set({ copied: outcome });
+    this.copyTimer = window.setTimeout(() => this.set({ copied: "" }), outcome === "done" ? 1600 : 4000);
   };
 
   values(texts: Input) {
@@ -351,6 +348,9 @@ class ConnectRun implements Script<Input> {
       pulse,
       rows,
     );
+    const copyWord = copyState(texts.known, copied);
+    // the button is the board's, not a prop of the region: without an address there is nothing to copy
+    this.stage.querySelector<HTMLButtonElement>(".cpy")?.toggleAttribute("disabled", !texts.known);
     const name = call?.[2] ?? "";
     const progress = rct === null ? Number.POSITIVE_INFINITY : Math.floor((rct / 380) * (name.length + 3));
     const done = Math.min(name.length, progress);
@@ -371,9 +371,9 @@ class ConnectRun implements Script<Input> {
       m1_noteCls: "n-card",
       m1_file: textOf(current.file, texts),
       m1_copy: this.copy,
-      m1_copied: copied ? "done" : "",
-      m1_copyLabel: word(copied ? "copied" : "copy"),
-      m1_live: copied ? word("copied") : "",
+      m1_copied: copied === "done" ? "done" : "",
+      m1_copyLabel: word(copyWord),
+      m1_live: copied ? word(copyWord) : "",
       m1_rcA: name.slice(0, done),
       m1_rcG: scramble(name, done, tumbling, Math.floor((rct ?? 0) / 50)),
       m1_rcC: name.slice(done + tumbling),
@@ -386,8 +386,6 @@ class ConnectRun implements Script<Input> {
     this.dead = true;
     this.seen.cancel();
     this.resize.disconnect();
-    this.view.disconnect();
-    document.removeEventListener("visibilitychange", this.rest);
     window.clearTimeout(this.copyTimer);
     this.clock.end();
   }

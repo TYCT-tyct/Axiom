@@ -108,14 +108,11 @@
 :global(.hfm5 .fx .wf):where(.scope),:global(.hfm5 .fx .wr):where(.scope){display:flex;align-items:center;justify-content:space-between;gap:8px}
 :global(.hfm5 .fx .wf):where(.scope){margin-top:4px}
 :global(.hfm5 .fx .tag):where(.scope){display:inline-flex;align-items:center;height:20px;padding:0 6px;border-radius:6px;background:var(--hover);color:var(--text1);white-space:nowrap}
-:global(.hfm5 .fx .tag.of):where(.scope){background:transparent;color:var(--accent);box-shadow:inset 0 0 0 var(--bw) var(--accent)}
 :global(.hfm5 .fx .chs):where(.scope){display:flex;flex-wrap:wrap;justify-content:flex-start;gap:6px}
 :global(.hfm5 .fx .cl):where(.scope){display:flex;white-space:nowrap;overflow:hidden;color:var(--text1)}
 :global(.hfm5 .fx .cm):where(.scope){color:var(--text2)}
 :global(.hfm5 .fx .rt):where(.scope){display:grid;grid-template-columns:32px 1fr auto;align-items:center;height:28px}
 :global(.hfm5 .fx .rth):where(.scope){height:auto;padding-bottom:6px;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--hair)}
-:global(.hfm5 .fx .tg):where(.scope){position:relative;width:28px;height:16px;border-radius:8px;background:var(--line2x)}
-:global(.hfm5 .fx .tg i):where(.scope){position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--bg)}
 :global(.hfm5 .fx .fm):where(.scope){display:grid;grid-template-columns:32px 1fr 64px 64px;row-gap:8px;column-gap:8px;align-items:center}
 :global(.hfm5 .fx .fm.sum):where(.scope){grid-template-columns:1fr auto;margin-top:2px;padding-top:10px;box-shadow:inset 0 var(--bw) 0 var(--hair)}
 :global(.hfm5 .fx .big):where(.scope){font-size:16px;line-height:26px}
@@ -189,4 +186,6 @@
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr:focus):where(.scope){outline:none}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
+:global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
+:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 /* jscpd:ignore-end */

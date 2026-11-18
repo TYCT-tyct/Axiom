@@ -1,3 +1,4 @@
+import { useRef } from "react";
 import { FirstScreen } from "./home/first-screen";
 import { SiteFrame } from "./home/frame";
 import { Screens } from "./home/screens";
@@ -7,8 +8,10 @@ import { useWide } from "./home/wide";
 // it (home/screens.tsx). A change of layout starts the frame afresh, its effects with it: they hold the old markup.
 export function Home() {
   const wide = useWide();
+  // whether the whale has come on its own: once per page load, whatever the layout
+  const met = useRef(false);
   return (
-    <SiteFrame key={wide ? "wide" : "narrow"} wide={wide}>
+    <SiteFrame key={wide ? "wide" : "narrow"} wide={wide} met={met}>
       <FirstScreen />
       <Screens wide={wide} />
     </SiteFrame>

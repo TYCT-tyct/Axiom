@@ -9,6 +9,7 @@ import { BrandPlaces } from "./brand";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
+import { SiteContext } from "./site-context";
 import { useSwitches } from "./switches";
 import { useWhale } from "./whale";
 import { type BoardKey, sections, words } from "./words";
@@ -72,7 +73,7 @@ const tourClass = (solid: boolean) => (solid || reducedMotion() ? "gone" : "");
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
 // language. So React writes those words once, in the language the page opened in, and never again: they are the
 // regions' text props, fixed at mount. The other words follow the language as usual.
-export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNode }) {
+export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObject<boolean>; children: ReactNode }) {
   const { t, i18n } = useTranslation();
   const scheme = useScheme();
   const [opened] = useState(() => i18n.getFixedT(i18n.language));
@@ -85,7 +86,7 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   );
   useSwitches(root, sea);
   useDeparture(root, sea);
-  const whale = useWhale(root, sea, !wide, scheme === "dark");
+  const whale = useWhale(root, sea, met, !wide, scheme === "dark");
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
   useTabletLayout(root, wide);
   const brand = useSiteBrand();
@@ -102,6 +103,12 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
     frame.querySelector(".bar .theme")?.setAttribute("aria-label", themeLabel);
     sea.current?.engine.setLight(scheme === "light");
   }, [language, scheme, themeLabel, sea]);
+
+  // a button that is not offered is not in the keyboard's way either
+  const tourGone = tourClass(scroll.solid) === "gone";
+  useLayoutEffect(() => {
+    root.current?.querySelector(".tour")?.toggleAttribute("inert", tourGone);
+  }, [root, tourGone]);
 
   const board = (key: BoardKey) => t(`board.${key}`);
   const values = {
@@ -122,11 +129,13 @@ export function SiteFrame({ wide, children }: { wide: boolean; children: ReactNo
   const Shell = wide ? Wide : Narrow;
   return (
     <>
-      <WhaleContext value={whale}>
-        <Shell t={board} values={values} text={text}>
-          {children}
-        </Shell>
-      </WhaleContext>
+      <SiteContext value={{ brand, name }}>
+        <WhaleContext value={whale}>
+          <Shell t={board} values={values} text={text}>
+            {children}
+          </Shell>
+        </WhaleContext>
+      </SiteContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
     </>
   );

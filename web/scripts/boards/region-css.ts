@@ -38,9 +38,19 @@ function selectors(source: string): string[] {
   return [...result, source.slice(start).trim()];
 }
 
-function potential(selector: string) {
+// The run-time states a region declares (Region.states): classes an engine or script toggles (on, wh-lit) and attributes it
+// sets (data-tab). Their rules are kept, as the markup does not carry them as cut.
+const stateless = (selector: string, states: readonly string[]) =>
+  states.reduce((text, name) => {
+    const escaped = name.replace(/[-\\^$*+?.()|[\]{}]/g, "\\$&");
+    return /^(data|aria)-/.test(name)
+      ? text.replace(new RegExp(`\\[${escaped}(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\\]]*))?\\]`, "g"), "")
+      : text.replace(new RegExp(`\\.${escaped}(?![\\w-])`, "g"), "");
+  }, selector);
+
+function potential(selector: string, states: readonly string[]) {
   return (
-    selector
+    stateless(selector, states)
       .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
       .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
       // The board is cut as its markup first stands: the page's language and the states engines and components set at
@@ -65,9 +75,20 @@ function scoped(selector: string, inside = false) {
   return `:global(${subject}):where(.scope${inside ? " *" : ""})${pseudo}`;
 }
 
-// insertedBy tells a selector that names one of the classes run-time markup carries (by prefix).
-const insertedBy = (prefixes: readonly string[]) => (selector: string) =>
-  prefixes.length > 0 && requiredClasses(selector).some((name) => prefixes.some((prefix) => name.startsWith(prefix)));
+// insertedBy tells a selector that names one of the classes run-time markup carries (by prefix), and no class that is
+// neither that nor in the region: a rule for a part of the board the region does not have, whatever the engine inserts,
+// is not kept.
+const insertedBy = (prefixes: readonly string[], elements: Set<Element>) => {
+  const present = new Set<string>();
+  for (const element of elements)
+    for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement)
+      for (const name of ancestor.classList) present.add(name);
+  const carried = (name: string) => prefixes.some((prefix) => name.startsWith(prefix));
+  return (selector: string) => {
+    const named = requiredClasses(selector);
+    return prefixes.length > 0 && named.some(carried) && named.every((name) => present.has(name) || carried(name));
+  };
+};
 
 function subject(selector: string) {
   let depth = 0;
@@ -80,7 +101,7 @@ function subject(selector: string) {
   return selector.slice(start);
 }
 
-function matcher(elements: Set<Element>) {
+function matcher(elements: Set<Element>, states: readonly string[]) {
   const index = new Map<string, Element[]>();
   const available = new Set<string>();
   for (const element of elements) {
@@ -94,7 +115,7 @@ function matcher(elements: Set<Element>) {
       for (const name of ancestor.classList) available.add(name);
   }
   return (selector: string) => {
-    const test = potential(selector);
+    const test = potential(selector, states);
     if (!/[+~]/.test(test) && requiredClasses(test).some((name) => !available.has(name))) return false;
     const direct = subject(test).match(/^(?:[\w-]+|\*)?(?:\.[\w-]+)*/)?.[0] ?? "";
     const keys = direct.match(/^[\w-]+|\.[\w-]+/g) ?? [];
@@ -130,20 +151,26 @@ function selectBlocks(
         const inner = selectBlocks(cssBlocks(body), matches, isInserted);
         return inner ? `${selector}{${inner}}` : "";
       }
-      const all = selectors(selector);
-      const kept = [
-        ...all.filter((one) => matches(one)).map((one) => scoped(one)),
-        ...all.filter((one) => !matches(one) && isInserted(one)).map((one) => scoped(one, true)),
-      ];
+      // each selector is matched once: it applies to the region's own elements, or to run-time markup inside it
+      const kept = selectors(selector).flatMap((one) => {
+        if (matches(one)) return [scoped(one)];
+        return isInserted(one) ? [scoped(one, true)] : [];
+      });
       return kept.length ? `${kept.join(",")}{${body}}` : "";
     })
     .join("\n");
 }
 
 // regionCSS is the board's rules that can match the region: those its cut markup matches, and those naming a class
-// prefix in `inserted`, for markup an engine puts into the region at run time.
-export function regionCSS(css: string, elements: Set<Element>, insertedPrefixes: readonly string[] = []): string {
-  const selected = selectBlocks(cssBlocks(css), matcher(elements), insertedBy(insertedPrefixes));
+// prefix in `inserted`, for markup an engine puts into the region at run time, and those that only the run-time
+// `states` (classes and attributes a script sets) keep from matching.
+export function regionCSS(
+  css: string,
+  elements: Set<Element>,
+  insertedPrefixes: readonly string[] = [],
+  states: readonly string[] = [],
+): string {
+  const selected = selectBlocks(cssBlocks(css), matcher(elements, states), insertedBy(insertedPrefixes, elements));
   const withoutFrames = selected.replace(/@keyframes[\s\S]*?\}\s*\}/g, "");
   return cssBlocks(selected)
     .filter(({ selector }) => {

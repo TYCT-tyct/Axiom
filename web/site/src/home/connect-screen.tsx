@@ -52,11 +52,11 @@ const en = { ...wideEn, ...narrowEn };
 export function ConnectScreen({ wide, onWhale }: { wide: boolean; onWhale: () => void }) {
   const { t } = useTranslation();
   const scheme = useScheme();
-  const { root, v1 } = useApiAddress();
+  const { known, root, v1 } = useApiAddress();
   const word = useBoardWords(zh, en);
   const { setStage, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide, onWhale),
-    { word: (w) => t(`script.connect.${w}`), root, v1 },
+    { word: (w) => t(`script.connect.${w}`), root, v1, known },
   );
   const Region = wide ? Wide : Narrow;
   return (

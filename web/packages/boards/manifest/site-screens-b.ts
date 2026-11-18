@@ -1,5 +1,5 @@
 import type { Region } from "../regions.ts";
-import { entrance, pressable } from "./site-screens-a.ts";
+import { entrance, pressable, runTime } from "./site-screens-a.ts";
 
 // Two more of the home page's screens below the first (#747 S2b), cut as site-screens-a.ts cuts its three: the
 // questions (.hfm5) and the sea bed with the page's footer (.hfm6), from the Site board and the SitePhone board.
@@ -30,21 +30,6 @@ const faqEnglish: Record<string, string> = {
   m728483a98b: "Why do prices change?",
   mb3e6985586: "What if my key leaks?",
   m6a3fc5442c: "Does signing up cost anything?",
-  m5ad3e46da2:
-    "One key calls every model, with no separate account or top-up for each vendor. Behind one model there are several routes: Axiom picks one by price and availability and moves to the next when one fails. There is one bill.",
-  m0a6b58d599:
-    "A route the model\u2019s maker does not run itself, usually cheaper than the official one. The models page says whether each route is the official API or a third party. If your data is sensitive, turn on \u201cOfficial routes only\u201d in settings.",
-  m580f9d34c3:
-    "Claude Code, Codex, Cursor and the OpenAI SDK all work as they are: change the address and the key. So does any other tool that speaks the OpenAI or Anthropic API.",
-  m7908066605:
-    "Billing is per token. Each route has its own price, and you pay the price of the route that served the request. The models page shows the lowest price across all routes.",
-  m59549165d5:
-    "Axiom retries on another route. The failed attempt is not charged, and the console shows it together with the retry.",
-  m9799ce84e2:
-    "Route prices follow the upstream. The models page shows when a price was last updated, and each charge uses the price at the moment the request was sent.",
-  m475efcf60a:
-    "Delete the key in the console and create a new one. Set a spending limit and an IP allowlist on every key in advance, and a leak can only cost so much.",
-  ma60cdd302f: "Signing up is free. There is no trial credit for now: you pay by usage, only for what you use.",
   mab79bd5670: "Model / claude-sonnet-5.5",
   mf850f24755: "Model / claude-sonnet-5.5 / Price",
   m223b24b821: "Route",
@@ -114,15 +99,27 @@ const faq = (board: string): Region => {
       ".hfm5 .frame > canvas",
       // the docs page does not exist (#816) and the product has no tickets
       ".hfm5 .hd > .links",
+      // the source tags and the official-only switch of the second picture, and the last-change line of the sixth: the
+      // site shows no source label, has no such switch, and no change time (docs/product.md「售卖形式」)
+      ".hfm5 .w1 .rt .tag",
+      ".hfm5 .w1 .rth > span:nth-child(2)",
+      ".hfm5 .w1 .wf",
+      ".hfm5 .w5 .wf",
       // the ninth question, its pane and its patch point
       ...(wide
         ? [".hfm5 .qs > .q:nth-child(10)", ".hfm5 .card > .pane:nth-child(9)", ".hfm5 .patch > .pad:nth-child(9)"]
         : [".hfm5 .qs > .fq:nth-child(9)"]),
     ],
     // the address the reader's tools are set to is the site's own
-    text: { apiRoot: ".hfm5 .w2 .cl:nth-child(2) > .ac", apiV1: ".hfm5 .w2 .cl:nth-child(3) > .ac" },
+    // the answers are the page's words: they say what the product does today (script.faq)
+    text: {
+      ans: ".hfm5 .ans",
+      apiRoot: ".hfm5 .w2 .cl:nth-child(2) > .ac",
+      apiV1: ".hfm5 .w2 .cl:nth-child(3) > .ac",
+    },
     elements: entrance("hfm5", "m5_in"),
     classes: faqClasses,
+    states: runTime,
     english: faqEnglish,
   };
 };
@@ -140,6 +137,8 @@ const bed = (board: string): Region => ({
     ".hfm6 .fcols > nav.fc:nth-of-type(n + 2)",
     ".hfm6 .fcols > nav.fc > a:nth-of-type(3)",
     ".hfm6 .legal > span:nth-child(n + 2)",
+    // the site's own name and logo take the brand's place (the page fills it, as it does the header's)
+    ".hfm6 .ft .brand > *",
   ],
   text: { credit: ".hfm6 .legal > span:first-child", apiV1: ".hfm6 .pr2 .pv" },
   attributes: {
@@ -161,6 +160,7 @@ const bed = (board: string): Region => ({
     ".hfm6 .seg:nth-child(2) > .sg:nth-child(2)": { set: { "aria-pressed": "{{m6_moonP}}", "data-pick": "dark" } },
   },
   classes: bedClasses,
+  states: runTime,
   english: bedEnglish,
 });
 

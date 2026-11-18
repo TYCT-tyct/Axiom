@@ -2,6 +2,14 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Faq.tsx";
 import type en from "./Faq.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {apiRoot: "https://api.axiom.example",
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {ans0: t("m5ad3e46da2"),
+ans1: t("m0a6b58d599"),
+ans2: t("m580f9d34c3"),
+ans3: t("m7908066605"),
+ans4: t("m59549165d5"),
+ans5: t("m9799ce84e2"),
+ans6: t("m475efcf60a"),
+ans7: t("ma60cdd302f"),
+apiRoot: "https://api.axiom.example",
 apiV1: "https://api.axiom.example/v1"},  });
 /* jscpd:ignore-end */

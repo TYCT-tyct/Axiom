@@ -366,7 +366,7 @@ export const rulings: Ruling[] = [
     scene: "site connect",
     basis:
       "§8.2: the board's machine is drawn by its script; the page's by the fetched figure, both moving on their own",
-    ...both(".hfm1 .fig, .hfm1 .rcard, .hfm1 .wire > *"),
+    ...both(".hfm1 .fig, .hfm1 .wire > *"),
   },
   // The questions (S2b): the board's docs and ticket links, and its ninth question about invoices and contracts, which
   // the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
@@ -379,6 +379,17 @@ export const rulings: Ruling[] = [
     scene: "site faq",
     basis: "docs/frontend.md「不做」: invoices, contracts and bank transfer are not in the product",
     board: { selector: ".hfm5 .qs > .q:nth-child(10), .hfm5 .qs > .fq:nth-child(9)" },
+  },
+  {
+    scene: "site faq",
+    basis:
+      "docs/product.md「售卖形式」: the site shows no source labels, has no official-only switch and no price-change time",
+    board: { selector: ".hfm5 .w1 .rt .tag, .hfm5 .w1 .rth > span:nth-child(2), .hfm5 .w1 .wf, .hfm5 .w5 .wf" },
+  },
+  {
+    scene: "site faq",
+    basis: "the answers say what the product does today (docs/product.md, docs/domains/billing.md)",
+    ...both(".hfm5 .ans"),
   },
   {
     scene: "site faq",

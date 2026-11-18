@@ -22,15 +22,28 @@ const vars = (scheme: "light" | "dark") =>
 const zh = { ...wideZh, ...narrowZh };
 const en = { ...wideEn, ...narrowEn };
 // The answers whose picture shows prices, bills or keys: the figures there are the board's illustration.
-const illustrated = ["m0a6b58d599", "m7908066605", "m59549165d5", "m9799ce84e2", "m475efcf60a"] as const;
+const illustrated = [0, 1, 3, 4, 5, 6];
 
 // The questions people ask first (Site.dc.html M5): the board's own answers, each with its small picture. The addresses
 // in the picture of the tools' settings are the site's.
 export function FaqScreen({ wide }: { wide: boolean }) {
   const { t } = useTranslation();
-  const word = useBoardWords(zh, en, Object.fromEntries(illustrated.map((key) => [key, ` ${t("script.faq.sample")}`])));
+  const word = useBoardWords(zh, en);
   const scheme = useScheme();
   const { root, v1 } = useApiAddress();
+  const said = [
+    t("script.faq.a0"),
+    t("script.faq.a1"),
+    t("script.faq.a2"),
+    t("script.faq.a3"),
+    t("script.faq.a4"),
+    t("script.faq.a5"),
+    t("script.faq.a6"),
+    t("script.faq.a7"),
+  ];
+  const answers = Object.fromEntries(
+    said.map((answer, i) => [`ans${i}`, illustrated.includes(i) ? `${answer} ${t("script.faq.sample")}` : answer]),
+  );
   const { setStage, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide),
     {},
@@ -48,7 +61,7 @@ export function FaqScreen({ wide }: { wide: boolean }) {
           m5_in: entered ? "in" : "",
         } as Props["values"]
       }
-      text={{ apiRoot: root, apiV1: v1 }}
+      text={{ ...answers, apiRoot: root, apiV1: v1 } as Props["text"]}
     />
   );
 }

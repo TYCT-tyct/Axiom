@@ -80,6 +80,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
     toTop: () => glide(0),
     toSection: (sec: number) => section(sec, 0),
     tour: () => {
+      if (reducedMotion()) return;
       window.clearTimeout(timer);
       tour(scroller.scrollTop > 10 ? 0 : 1);
     },

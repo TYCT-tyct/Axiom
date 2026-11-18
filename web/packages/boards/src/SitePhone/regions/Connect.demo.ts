@@ -2,7 +2,8 @@
 /* jscpd:ignore-start */
 import type { Props } from "./Connect.tsx";
 import type en from "./Connect.en.ts";
-export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {signUpHref0: "#",
+export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {comma: "，",
+signUpHref0: "#",
 signUpHref1: "#",
 signUpHref2: "#",
 signUpHref3: "#",

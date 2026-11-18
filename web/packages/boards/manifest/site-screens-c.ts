@@ -1,5 +1,5 @@
 import type { Region } from "../regions.ts";
-import { entrance } from "./site-screens-a.ts";
+import { entrance, runTime } from "./site-screens-a.ts";
 
 // The connect screen (#747 S2c), cut from the Site board (.hfm1) and the SitePhone board (whose markup the tablets
 // repeat). The isometric machine in its .fig is not in the cut: the board's script inserts it at run time, and the page
@@ -23,7 +23,18 @@ const classes: Record<string, string[]> = {
 };
 // The classes of the machine's parts and of what the script draws into it.
 const inserted = [
-  "iso-",
+  "iso-svg",
+  "iso-solid",
+  "iso-fill",
+  "iso-shade",
+  "iso-top",
+  "iso-line",
+  "iso-edge",
+  "iso-crease",
+  "iso-bevel",
+  "iso-halo",
+  "iso-dots",
+  "iso-face-text",
   "mod",
   "pin",
   "band",
@@ -39,7 +50,7 @@ const inserted = [
 ];
 
 const english: Record<string, string> = {
-  m15e09730c0: "Change one address,",
+  m15e09730c0: "Change one address",
   mc1259c84e3: "and every model works",
   m95aa50a5d2:
     "Point your tool\u2019s API address at Axiom and enter your key. Your commands, code and workflows stay as they are.",
@@ -56,9 +67,12 @@ const connect = (board: string): Region => ({
   omit: [".hfm1 .frame > canvas", ".hfm1 .loupe", ".hfm1 .intro .more"],
   // the key's place in each line of the configuration is the way to sign up
   attributes: { signUpHref: { selector: ".hfm1 .kc", attribute: "href" } },
+  // the comma after the first phrase is the language's: the Chinese keeps the board's kern, the English writes its own
+  text: { comma: ".hfm1 h2 .kern" },
   elements: entrance("hfm1", "m1_in"),
   classes,
   inserted,
+  states: runTime,
   english,
 });
 
