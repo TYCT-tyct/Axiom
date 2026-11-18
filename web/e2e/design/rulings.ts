@@ -189,15 +189,15 @@ export const rulings: Ruling[] = [
     board: { selector: ".ho .btn" },
     page: { selector: ".ho .btn" },
   },
-  // Links and controls with nowhere to go yet are left out until their pages come: the docs page (S4) and the screens
-  // below the first, which the tour goes through (S2). The rows they sat in close up.
+  // Links and controls with nowhere to go yet are left out until their pages come: the docs page (S4) and the tour,
+  // which goes through every screen below the first and waits for the last of them (S2c). The rows they sat in close up.
   {
     scene: "site home",
     basis: "S4: no docs page yet",
     board: { selector: ".bar .nav.mid, .hs > .main .cta" },
     page: { selector: ".bar .nav.mid, .hs > main .cta" },
   },
-  { scene: "site home", basis: "S2: no screens below the first yet", board: { selector: ".tour" } },
+  { scene: "site home", basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
   {
     scene: "site models",
     basis: "S4: compare the public title and lede with the board typography, without the demo sea or figures",

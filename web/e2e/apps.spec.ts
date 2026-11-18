@@ -81,7 +81,8 @@ test("the website's sign-in and sign-up open the console's pages", async ({ page
   await page.getByRole("banner").getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/console\/sign-in$/);
   await page.goto(apps[0].url);
-  await page.getByRole("link", { name: "注册，获取API key" }).click();
+  // the first screen's: the steps screen below has the same way on
+  await page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" }).click();
   await expect(page).toHaveURL(/\/console\/register$/);
 });
 
