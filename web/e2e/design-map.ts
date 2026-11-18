@@ -67,7 +67,9 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
   // the deployed MiSans body face is instanced at 330, the board's is the source variable font: compare the outlines, without
   // variable-font hinting moving single strokes (as the models page's scene does)
   for (const side of [board, page]) {
-    await side.addStyleTag({ content: ".under *{text-rendering:geometricPrecision !important}" });
+    await side
+      .locator(".under")
+      .evaluate((el) => el.style.setProperty("text-rendering", "geometricPrecision", "important"));
     await side.evaluate(() => document.fonts.ready.then(() => {}));
   }
   // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
