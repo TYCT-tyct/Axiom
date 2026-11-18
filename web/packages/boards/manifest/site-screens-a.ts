@@ -136,8 +136,21 @@ const screens = (board: string): Region[] => [
     roots: [".hfm2 .sec > .row > *"],
     // the API publishes no usage, so the list has no trend to show (port design R14)
     omit: [".mr > .mt"],
-    // a model is chosen from the keyboard as well (the script turns Enter and Space into its click)
-    elements: { ".mr": pressable },
+    // The list is a choice of one model, and a model is chosen from the keyboard as well (the script turns Enter and
+    // Space into its click); the panel's route rows are the table the board marks them as, under their column heads.
+    elements: {
+      ".mrows": { set: { role: "listbox", "aria-label": "{{m2_listLabel}}" } },
+      ...Object.fromEntries(
+        range(6).map((k) => [
+          `.mrows > .mr:nth-child(${k + 1})`,
+          { set: { tabindex: "0", role: "option", "aria-selected": `{{m2_r${k}s}}` } },
+        ]),
+      ),
+      ".pnl": { set: { role: "table" } },
+      ...Object.fromEntries(
+        [1, 2, 3, 5, 6].map((n) => [`.rh > span:nth-child(${n})`, { set: { role: "columnheader" } }]),
+      ),
+    },
     // the prices are in the site's currency, which the page names
     text: { unit: ".pf > span:first-child" },
     attributes: { moreHref: { selector: ".more", attribute: "href" } },

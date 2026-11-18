@@ -159,7 +159,7 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One key for every model");
   await expect(decode).toHaveCount(0);
-  await expect(page.getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
+  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
 
   await page.getByRole("button", { name: "Switch to dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -202,8 +202,10 @@ test("each screen below the first loads as it nears the view, and plays only whi
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  // the models screen lies within a view's height of the first; the steps one below it does not
-  await expect.poll(() => asked).toEqual(["models"]);
+  // the models screen lies within a view's height of the first, and the trust screen well below that does not; the
+  // steps screen starts exactly a view's height below the first screen's end, at the edge of that margin
+  await expect.poll(() => asked).toContain("models");
+  expect(asked).not.toContain("trust");
   await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
   await scrollTo(page, 3);
@@ -280,17 +282,18 @@ test("the models screen shows the call's failure, not the board's figures, when 
 });
 
 test("a screen whose code fails to arrive says so, and retrying reloads the page and loads it", async ({ page }) => {
-  let failed = false;
-  await page.route(/\/assets\/steps-screen-[\w-]+\.js$/, (route) => {
-    if (failed) return route.continue();
-    failed = true;
-    return route.abort("internetdisconnected");
-  });
+  // the network is down for the chunk until the failure shows: the page asks for it twice, its module preload and the
+  // import itself, so failing only the first request would fail the preload and let the import through
+  let down = true;
+  await page.route(/\/assets\/steps-screen-[\w-]+\.js$/, (route) =>
+    down ? route.abort("internetdisconnected") : route.continue(),
+  );
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 3);
   const retry = place(page, 3).getByRole("button");
   await expect(retry).toBeVisible();
+  down = false;
   await Promise.all([page.waitForEvent("load"), retry.click()]);
   await pageHeading(page);
   await scrollTo(page, 3);
@@ -316,7 +319,8 @@ test("without the site's API address the steps say so rather than show an empty 
 // became of the picture on the way.
 const depart = /\/assets\/depart-[\w-]+\.js$/;
 const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
-const signUp = (page: Page) => page.getByRole("link", { name: "注册，获取API key" });
+// the first screen's way on: the steps screen below has one of the same name
+const signUp = (page: Page) => page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" });
 const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
 
 // Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.

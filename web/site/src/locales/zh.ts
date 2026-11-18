@@ -45,6 +45,7 @@ export default {
       sampleTokens: "42.1 亿",
       sample: "示例数据",
       unavailable: "不可用",
+      listLabel: "模型",
       noneInFilter: "这个开发方没有上架的模型",
       emptyTitle: "还没有上架的模型",
       emptyBody: "上架之后，模型和它们的线路会显示在这里。",

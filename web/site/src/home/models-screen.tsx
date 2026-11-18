@@ -50,7 +50,13 @@ export function ModelsScreen({ wide, onWhale = () => {} }: { wide: boolean; onWh
   useLayoutEffect(() => script?.layout());
   const note = ` · ${t("script.models.sample")}`;
   const board = useBoardWords(zh, en, Object.fromEntries(sampled.map((key) => [key, note])));
-  const v = { ...values, m2_vars: vars, m2_setStage: setStage, m2_in: entered ? "in" : "" };
+  const v = {
+    ...values,
+    m2_vars: vars,
+    m2_setStage: setStage,
+    m2_in: entered ? "in" : "",
+    m2_listLabel: t("script.models.listLabel"),
+  };
   const Region = wide ? Wide : Narrow;
   const Row = wide ? WideRow : NarrowRow;
   const query = script?.query();

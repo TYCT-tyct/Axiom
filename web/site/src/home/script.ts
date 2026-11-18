@@ -84,9 +84,10 @@ export function useScript<S extends Script<never>>(
   return { setStage, script, values: script?.values(input), entered };
 }
 
-// A row the board makes clickable is a button to the keyboard too (the regions' role="button"): Enter and Space press it.
+// A row the board makes clickable is a button or an option to the keyboard too (the regions' roles): Enter and Space
+// press it.
 function press(e: KeyboardEvent) {
-  const control = e.target instanceof HTMLElement && e.target.matches("[role=button]") ? e.target : null;
+  const control = e.target instanceof HTMLElement && e.target.matches("[role=button], [role=option]") ? e.target : null;
   if (control && (e.key === "Enter" || e.key === " ")) {
     e.preventDefault();
     control.click();

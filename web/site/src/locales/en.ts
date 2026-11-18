@@ -40,6 +40,7 @@ export default {
       sampleTokens: "4.2B",
       sample: "sample data",
       unavailable: "Unavailable",
+      listLabel: "Models",
       noneInFilter: "No models from this developer yet",
       emptyTitle: "No models are listed yet",
       emptyBody: "Once they are, the models and their routes show here.",

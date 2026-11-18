@@ -1,7 +1,8 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { reducedMotion, timeline } from "@axiom/fx";
+import { hash, reducedMotion, timeline } from "@axiom/fx";
 import { parseMoney } from "@axiom/ui";
 import type zh from "../locales/zh";
+import { bridge, leadOf, measurer } from "./models-leads";
 import { firstSeen, type Script } from "./script";
 
 // The models-and-routes screen's script (Site.dc.html M2) on the site's published models (listPublicModels): the list
@@ -40,11 +41,6 @@ const FILTERS: ((author: string) => boolean)[] = [
   (a) => a === "google",
   (a) => DOMESTIC.includes(a),
 ];
-const hash = (a: number, b: number) => {
-  let h = Math.imul(a | 0, 374761393) ^ Math.imul(b | 0, 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-};
 const glyph = (i: number, tick: number) => GLYPHS[Math.floor(hash(i, tick) * GLYPHS.length)] as string;
 // writes txt in like the entrance: settled characters, a few tumbling ones, then blanks
 const decode = (txt: string, t: number | null) => {
@@ -122,49 +118,6 @@ type Query = {
 
 export type ModelsScript = Script<Input> & { layout: () => void; query: () => Query };
 
-type Box = { x: number; y: number; w: number; h: number };
-const fixed = (n: number) => n.toFixed(1);
-
-// measurer gives an element's box in the stage's own pixels, which a scaled stage draws smaller or larger
-function measurer(stage: HTMLElement) {
-  const S = stage.getBoundingClientRect();
-  const k = stage.offsetWidth ? S.width / stage.offsetWidth : 1;
-  return (el: Element): Box => {
-    const r = el.getBoundingClientRect();
-    return { x: (r.left - S.left) / k, y: (r.top - S.top) / k, w: r.width / k, h: r.height / k };
-  };
-}
-
-// leadOf draws the lead from the card's corner a, over to the column mid, up or down to by and in to the dot at b
-function leadOf(leads: Element, a: readonly [number, number], b: readonly [number, number], mid: number) {
-  const [ld, ldt, ldc] = [".ld", ".ldt", ".ldc"].map((s) => leads.querySelector(s));
-  if (!ld || !ldt || !ldc) return undefined;
-  const draw = (by: number) => {
-    ld.setAttribute(
-      "d",
-      `M${fixed(a[0])} ${fixed(a[1])}V${fixed(a[1] - 12)}H${fixed(mid)}V${fixed(by)}H${fixed(b[0] + 6)}`,
-    );
-    ldt.setAttribute("cx", fixed(b[0]));
-    ldt.setAttribute("cy", fixed(by));
-    ldc.setAttribute("cx", fixed(a[0]));
-    ldc.setAttribute("cy", fixed(a[1]));
-  };
-  return { draw, to: b[1], lit: [ld, ldt] };
-}
-
-// bridge joins the selected model's row to the panel's edge with a hairline; without a row (the narrow layout) it hides
-function bridge(leads: Element, row: Box | undefined, panel: Box) {
-  const [br, bd] = [".br", ".bd"].map((s) => leads.querySelector(s));
-  if (!(br instanceof SVGElement) || !(bd instanceof SVGElement)) return;
-  br.style.opacity = row ? "1" : "0";
-  bd.style.opacity = row ? "1" : "0";
-  if (!row) return;
-  const y = row.y + row.h / 2;
-  br.setAttribute("d", `M${fixed(row.x + row.w + 4)} ${fixed(y)}H${fixed(panel.x - 4)}`);
-  bd.setAttribute("cx", fixed(panel.x - 4));
-  bd.setAttribute("cy", fixed(y));
-}
-
 // the list's rows: each model's name, its lowest price and its routes; the rows beyond the list are hidden
 function listValues(list: { m: Model; i: number }[], sel: number, input: Input) {
   const { t } = input;
@@ -173,7 +126,14 @@ function listValues(list: { m: Model; i: number }[], sel: number, input: Input) 
     const x = list[k];
     const p = `m2_r${k}`;
     if (!x) {
-      Object.assign(v, { [`${p}c`]: "off", [`${p}n`]: "", [`${p}p`]: "", [`${p}d`]: "", [`${p}r`]: "" });
+      Object.assign(v, {
+        [`${p}c`]: "off",
+        [`${p}s`]: false,
+        [`${p}n`]: "",
+        [`${p}p`]: "",
+        [`${p}d`]: "",
+        [`${p}r`]: "",
+      });
       continue;
     }
     const cheapest = x.m.routes.reduce<Price | undefined>(
@@ -181,6 +141,7 @@ function listValues(list: { m: Model; i: number }[], sel: number, input: Input) 
       x.m.from,
     );
     v[`${p}c`] = x.i === sel ? "on" : "";
+    v[`${p}s`] = x.i === sel;
     v[`${p}n`] = x.m.name;
     v[`${p}p`] = priceText(x.m, cheapest, input);
     v[`${p}d`] = x.m.author;
