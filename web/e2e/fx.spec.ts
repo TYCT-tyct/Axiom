@@ -209,7 +209,8 @@ test("each screen below the first loads as it nears the view, and plays only whi
   await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
   await scrollTo(page, 3);
-  await expect.poll(() => asked).toEqual(["models", "steps", "trust"]);
+  // the models and steps chunks are both asked for at the top, in either order: which ones came is what counts
+  await expect.poll(() => [...asked].sort()).toEqual(["models", "steps", "trust"]);
   await shown(page, 3);
   await running(page);
   await setHidden(page, true);
