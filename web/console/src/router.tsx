@@ -101,8 +101,12 @@ const routeTree = root.addChildren([
         key_id: text(search.key_id),
         workspace_id: text(search.workspace_id),
         status: callStatus(search.status),
+        fell_back:
+          search.fell_back === true || search.fell_back === "true" || search.fell_back === "1" ? true : undefined,
         request_id: text(search.request_id),
         group_by: callGroupBy(search.group_by),
+        tab: search.tab === "sessions" ? ("sessions" as const) : undefined,
+        call: text(search.call),
       }),
       component: lazyRouteComponent(() => import("./pages/calls")),
     }),

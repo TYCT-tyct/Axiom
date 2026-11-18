@@ -81,29 +81,93 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
 
 // The filters the call list, its summary and its export share. status is a result, not the error kind: error means the
 // call failed.
+function matchesExactFilters(call: Schemas["Call"], query: URLSearchParams) {
+  const fields = ["model", "client_app", "key_id", "workspace_id", "request_id"] as const;
+  return fields.every((field) => {
+    const val = query.get(field);
+    if (!val) return true;
+    const target = field === "request_id" ? call.id : call[field];
+    return target === val;
+  });
+}
+
 function matchingCalls(calls: Schemas["Call"][], query: URLSearchParams) {
-  const same = (value: string, filter: string | null) => !filter || value === filter;
   const since = query.get("since");
   const until = query.get("until");
   const status = query.get("status") as Schemas["CallStatus"] | null;
+  const fellBack = query.get("fell_back") === "true" || query.get("fell_back") === "1";
   return calls.filter(
     (call) =>
-      same(call.model, query.get("model")) &&
-      same(call.client_app, query.get("client_app")) &&
-      same(call.key_id, query.get("key_id")) &&
-      same(call.workspace_id, query.get("workspace_id")) &&
-      same(call.id, query.get("request_id")) &&
+      matchesExactFilters(call, query) &&
       (!since || call.at >= new Date(since).toISOString()) &&
       (!until || call.at < new Date(until).toISOString()) &&
-      (!status || (call.error_kind !== "") === (status === "error")),
+      (!status || (call.error_kind !== "") === (status === "error")) &&
+      (!fellBack || (call.attempt_count ?? 1) > 1),
   );
 }
 
 function listCalls({ query, state }: Ctx<"/api/console/v1/calls", "get">) {
   const status = query.get("status") as Schemas["CallStatus"] | null;
+  const fellBack = query.get("fell_back") === "true" || query.get("fell_back") === "1";
   const page = paged(matchingCalls(state.calls, query), query);
   return page
-    ? ({ status: 200, json: { ...page, status_filter: status ?? undefined } } as const)
+    ? ({
+        status: 200,
+        json: {
+          ...page,
+          status_filter: status ?? undefined,
+          fell_back_filter: fellBack ? true : undefined,
+        },
+      } as const)
+    : fail(400, "invalid_request");
+}
+
+type SessionEntry = Schemas["CallSession"] & { amount: bigint; currency: string; maxCalls: number };
+
+function addCallToSession(sessions: Map<string, SessionEntry>, call: Schemas["Call"]) {
+  if (!call.session_id) return;
+  const callAmt = BigInt(call.price.amount);
+  const prev = sessions.get(call.session_id);
+  if (!prev) {
+    sessions.set(call.session_id, {
+      session_id: call.session_id,
+      client_app: call.client_app,
+      calls: "1",
+      price: { amount: callAmt.toString(), currency: call.price.currency },
+      main_model: call.model,
+      first_at: call.at,
+      last_at: call.at,
+      amount: callAmt,
+      currency: call.price.currency,
+      maxCalls: 1,
+    });
+    return;
+  }
+  prev.maxCalls += 1;
+  prev.calls = String(prev.maxCalls);
+  prev.amount += callAmt;
+  prev.price = { amount: prev.amount.toString(), currency: prev.currency };
+  if (!prev.first_at || call.at < prev.first_at) prev.first_at = call.at;
+  if (!prev.last_at || call.at > prev.last_at) prev.last_at = call.at;
+}
+
+function listCallSessions({ query, state }: Ctx<"/api/console/v1/calls/sessions", "get">) {
+  const sessions = new Map<string, SessionEntry>();
+  for (const call of matchingCalls(state.calls, query)) addCallToSession(sessions, call);
+  const ordered = [...sessions.values()]
+    .sort((a, b) => (b.last_at ?? "").localeCompare(a.last_at ?? ""))
+    .map(({ amount: _, currency: _c, maxCalls: _m, ...row }) => row);
+  const page = paged(ordered, query);
+  return page
+    ? ({
+        status: 200,
+        json: {
+          data: page.data,
+          next_cursor: page.next_cursor,
+          since: query.get("since") ?? "2026-09-15T00:00:00Z",
+          until: query.get("until") ?? "2026-10-15T00:00:00Z",
+        },
+      } as const)
     : fail(400, "invalid_request");
 }
 
@@ -140,6 +204,15 @@ function aggregateCalls({ query, state }: Ctx<"/api/console/v1/calls/aggregate",
 }
 
 function exportCalls({ query, state }: Ctx<"/api/console/v1/calls/export", "get">) {
+  const since = query.get("since");
+  const until = query.get("until");
+  if (since && until && Date.parse(until) - Date.parse(since) > 31 * 86_400_000) {
+    return fail(400, "invalid_request");
+  }
+  const matched = matchingCalls(state.calls, query);
+  if (matched.length > 10_000) {
+    return fail(400, "invalid_request");
+  }
   const cell = (value: string) => (/[",\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value);
   const columns = (call: Schemas["Call"]) => [
     call.id,
@@ -155,7 +228,7 @@ function exportCalls({ query, state }: Ctx<"/api/console/v1/calls/export", "get"
   ];
   const lines = [
     "request_id,at,workspace_id,key_id,model,client_app,status,error_kind,price,currency",
-    ...matchingCalls(state.calls, query).map((call) => columns(call).map(cell).join(",")),
+    ...matched.map((call) => columns(call).map(cell).join(",")),
   ];
   return {
     status: 200,
@@ -398,6 +471,7 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/models`, none, listPublicModels),
   route("get", `${base}/models/account`, signedIn, listAccountModels),
   route("get", `${base}/calls`, { ...signedIn, permission: "calls.view" }, listCalls),
+  route("get", `${base}/calls/sessions`, { ...signedIn, permission: "calls.view" }, listCallSessions),
   route("get", `${base}/calls/aggregate`, { ...signedIn, permission: "calls.view" }, aggregateCalls),
   route("get", `${base}/calls/export`, { ...signedIn, permission: "calls.view" }, exportCalls),
   route("get", `${base}/calls/{call_id}`, { ...signedIn, permission: "calls.view" }, getCall),

@@ -35,6 +35,19 @@ export const rulings: Ruling[] = [
   // is a single button); the page has none.
   { scene: "console overview", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console keys", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console calls", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
+  { scene: "console calls", basis: "#816: no live mode on calls", board: { selector: ".p-logs .lglive" } },
+  {
+    scene: "console calls",
+    basis: "#816 O24: no slow-than-5s quick filter",
+    board: { selector: '.p-logs [data-a="lst"][data-i="3"]' },
+  },
+  {
+    scene: "console calls",
+    basis: "#816 / C2: view switcher, export action, API filters, aggregates and API rows replace board demo data",
+    board: { selector: ".p-logs .wv.w2" },
+    page: { selector: ".p-logs .qpa, .p-logs .lgv, .p-logs .qcard" },
+  },
   // #816 lists what the API cannot answer yet: the overview leaves those panels out, and the board's own account data
   // is not what the page shows, so the board's rendering of them is excused.
   {
