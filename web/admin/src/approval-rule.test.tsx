@@ -154,7 +154,7 @@ it("shows the whole price list a fixed-price rule asks for", async () => {
   const { container, unmount } = await renderInDom(<RuleChangePanel approval={fixed} />);
   // Each heading with the prices under it, as the table reads row by row: item, price, unit.
   const section = (name: string) =>
-    [...container.querySelectorAll("h4")].find((h) => h.textContent === name)?.parentElement?.textContent ?? "";
+    [...container.querySelectorAll("h3")].find((h) => h.textContent === name)?.parentElement?.textContent ?? "";
   expect(container.textContent).toContain("The fixed price asked for (USD)");
   expect(section("Standard prices (USD)")).toContain("Input3per 1M tokens");
   expect(section("Standard prices (USD)")).toContain("Output15per 1M tokens");

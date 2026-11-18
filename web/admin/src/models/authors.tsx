@@ -1,11 +1,11 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
-import { Button, DataState, EmptyState, Icon, Panel, Table, Td, TextField, Th } from "@axiom/ui";
+import { ActionButton, Card, DataState, EmptyState, Field, Table, Td } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
-import { Code, mainCell } from "../parts";
+import { Code, Head } from "../parts";
 import { authorsQuery } from "../queries";
 
 type Author = AdminSchemas["Author"];
@@ -18,14 +18,14 @@ export function Authors() {
   const manage = can(useSession(), "catalog.manage");
   const [editing, setEditing] = useState<Author | "new" | null>(null);
   return (
-    <Panel
+    <Card
+      layout="flush"
       title={t("models.authors.title")}
-      action={
+      actions={
         manage ? (
-          <Button size="sm" onClick={() => setEditing("new")}>
-            <Icon name="plus" />
+          <ActionButton size="sm" icon="plus" onClick={() => setEditing("new")}>
             {t("models.authors.add")}
-          </Button>
+          </ActionButton>
         ) : undefined
       }
     >
@@ -40,7 +40,7 @@ export function Authors() {
       {editing ? (
         <AuthorDialog author={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
       ) : null}
-    </Panel>
+    </Card>
   );
 }
 
@@ -48,36 +48,26 @@ function AuthorsTable({ authors, onEdit }: { authors: Author[]; onEdit: ((author
   const { t } = useTranslation();
   return (
     <Table label={t("models.authors.title")}>
-      <thead>
-        <tr>
-          <Th>{t("models.authors.slug")}</Th>
-          <Th>{t("models.authors.name")}</Th>
-          {onEdit ? <Th className="w-0" /> : null}
-        </tr>
-      </thead>
+      <Head
+        cols={[t("models.authors.slug"), [t("models.authors.name"), { main: true }]]}
+        action={onEdit !== undefined}
+      />
       <tbody>
         {authors.map((author) => (
           <tr key={author.slug}>
-            <Td className="max-w-48">
-              <p className="truncate" title={author.slug}>
-                <Code>{author.slug}</Code>
-              </p>
+            <Td>
+              <Code>{author.slug}</Code>
             </Td>
-            <Td className={mainCell}>
-              <span className="block truncate" title={author.name}>
-                {author.name}
-              </span>
-            </Td>
+            <Td main>{author.name}</Td>
             {onEdit ? (
-              <Td className="whitespace-nowrap">
-                <Button
-                  variant="ghost"
-                  size="icon"
+              <Td shrink>
+                <ActionButton
+                  variant="gho"
+                  size="sm"
+                  icon="pencil"
                   aria-label={t("models.authors.rename", { name: author.name })}
                   onClick={() => onEdit(author)}
-                >
-                  <Icon name="pencil" />
-                </Button>
+                />
               </Td>
             ) : null}
           </tr>
@@ -107,7 +97,7 @@ function AuthorDialog({ author, onClose }: { author?: Author; onClose: () => voi
       action={t("models.authors.save")}
       fields={(error) => (
         <>
-          <TextField
+          <Field
             label={t("models.authors.slug")}
             hint={t("models.authors.slugHint")}
             name="slug"
@@ -118,7 +108,7 @@ function AuthorDialog({ author, onClose }: { author?: Author; onClose: () => voi
             readOnly={author !== undefined}
             error={errors.field(error, "slug")}
           />
-          <TextField
+          <Field
             label={t("models.authors.name")}
             name="name"
             maxLength={100}
