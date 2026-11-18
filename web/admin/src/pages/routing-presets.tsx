@@ -1,6 +1,19 @@
 import { type AdminSchemas, ApiError } from "@axiom/api";
 import { can, RulesSummary, systemPreset, useSession } from "@axiom/app";
-import { Badge, Button, DataState, EmptyState, PageHeader, Panel, Table, Td, useFormat } from "@axiom/ui";
+import {
+  ActionButton,
+  Card,
+  Cluster,
+  DataState,
+  EmptyState,
+  PageHead,
+  Stack,
+  Table,
+  Tag,
+  Td,
+  Text,
+  useFormat,
+} from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -27,9 +40,9 @@ export default function RoutingPresetsPage() {
   if (platform.error instanceof ApiError && platform.error.status === 404) {
     return (
       <Frame>
-        <Panel title={t("routingPresets.unavailableTitle")}>
-          <p className="px-4 py-3 text-ui text-t2">{t("routingPresets.unavailableBody")}</p>
-        </Panel>
+        <Card title={t("routingPresets.unavailableTitle")}>
+          <Text tone="muted">{t("routingPresets.unavailableBody")}</Text>
+        </Card>
       </Frame>
     );
   }
@@ -63,7 +76,7 @@ function Frame({ children }: { children: ReactNode }) {
   const { t } = useTranslation();
   return (
     <>
-      <PageHeader title={t("routingPresets.title")} description={t("routingPresets.description")} />
+      <PageHead title={t("routingPresets.title")} lede={t("routingPresets.description")} />
       <PageBody>{children}</PageBody>
     </>
   );
@@ -108,14 +121,14 @@ function Layer({
   const chosen = open?.kind === "create" ? undefined : presets.find((preset) => preset.id === open?.id);
   const close = () => setOpen(null);
   const create = manage ? (
-    <Button variant="primary" size="md" onClick={() => setOpen({ kind: "create" })} {...hold}>
+    <ActionButton variant="pri" onClick={() => setOpen({ kind: "create" })} {...hold}>
       {t("routingPresets.create")}
-    </Button>
+    </ActionButton>
   ) : undefined;
   return (
     <>
       <DefaultCard layer={layer} presets={[...presets, ...platform]} currency={currency} manage={manage} />
-      <Panel title={t(`routingPresets.layer.${layer.scope}`)} action={create}>
+      <Card layout="flush" title={t(`routingPresets.layer.${layer.scope}`)} actions={create}>
         <DataState
           query={query}
           isEmpty={(data) => data.data.length === 0}
@@ -123,7 +136,7 @@ function Layer({
         >
           {(data) => <PresetsTable presets={data.data} manage={manage} onOpen={setOpen} />}
         </DataState>
-      </Panel>
+      </Card>
       {open?.kind === "create" ? <PresetDialog layer={layer} currency={currency} onClose={close} /> : null}
       {open?.kind === "edit" && chosen ? (
         <PresetDialog key={chosen.id} layer={layer} preset={chosen} currency={currency} onClose={close} />
@@ -149,10 +162,10 @@ function PresetsTable({
     <Table label={t("routingPresets.title")}>
       <Head
         cols={[
-          [t("routingPresets.col.name")],
-          [t("routingPresets.col.rules"), "hidden md:table-cell"],
-          [t("routingPresets.col.keys"), "hidden sm:table-cell"],
-          [t("routingPresets.col.version"), "hidden lg:table-cell"],
+          [t("routingPresets.col.name"), { main: true }],
+          t("routingPresets.col.rules"),
+          [t("routingPresets.col.keys"), { align: "end" }],
+          [t("routingPresets.col.version"), { align: "end" }],
         ]}
         action={manage}
       />
@@ -173,43 +186,38 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
   const keys = <Keys preset={preset} />;
   return (
     <tr>
-      {/* On a phone the name takes the width of the hidden columns: the rules and the keys sit under it, and it wraps. */}
-      <Td className="w-full max-w-0 space-y-0.5 md:w-auto md:max-w-72 md:min-w-40">
-        <p className="text-t1 [overflow-wrap:anywhere]">{preset.name}</p>
-        <Code>{preset.slug}</Code>
-        <div className="flex flex-wrap gap-1 pt-0.5">
-          {preset.id === systemPreset ? <Badge tone="neutral">{t("routingPresets.system")}</Badge> : null}
-          {preset.disabled ? <Badge tone="warn">{t("routingPresets.disabled")}</Badge> : null}
-          {preset.currency ? <Badge tone="neutral">{preset.currency}</Badge> : null}
-        </div>
-        <div className="pt-1 text-label md:hidden">
-          <RulesSummary summary={preset.summary} />
-          <p className="text-t3 sm:hidden">
-            <Keys preset={preset} labelled />
-          </p>
-        </div>
+      <Td main>
+        <Stack gap={4}>
+          <Text as="span">{preset.name}</Text>
+          <Code>{preset.slug}</Code>
+          <Cluster gap={4}>
+            {preset.id === systemPreset ? <Tag tone="neutral">{t("routingPresets.system")}</Tag> : null}
+            {preset.disabled ? <Tag tone="warn">{t("routingPresets.disabled")}</Tag> : null}
+            {preset.currency ? <Tag tone="neutral">{preset.currency}</Tag> : null}
+          </Cluster>
+        </Stack>
       </Td>
-      <Td className="hidden md:table-cell">
+      <Td>
         <RulesSummary summary={preset.summary} />
       </Td>
-      <Td className="hidden whitespace-nowrap tabular-nums sm:table-cell">{keys}</Td>
-      <Td className="hidden tabular-nums lg:table-cell">{preset.version}</Td>
+      <Td align="end">{keys}</Td>
+      <Td align="end">{preset.version}</Td>
       {manage ? (
-        <Td className="w-0 whitespace-nowrap">
+        <Td shrink>
           {fixed ? null : (
-            <div className="flex justify-end gap-2">
+            <Cluster justify="end">
               {(["edit", "disable"] as const).map((kind) => (
-                <Button
-                  key={kind}
+                <ActionButton
                   size="sm"
+                  key={kind}
                   aria-label={t(`routingPresets.${kind}Named`, { name: preset.name })}
                   onClick={() => onOpen({ kind, id: preset.id })}
                   {...hold}
                 >
                   {t(`routingPresets.${kind}`)}
-                </Button>
+                </ActionButton>
               ))}
-            </div>
+            </Cluster>
           )}
         </Td>
       ) : null}
@@ -218,8 +226,8 @@ function PresetRow({ preset, manage, onOpen }: { preset: Preset; manage: boolean
 }
 
 // Keys is how many keys of every account are bound to the preset. A node that does not count them, and the system
-// preset, give no number: that is said, not shown as none. labelled adds the unit where the column header is hidden.
-function Keys({ preset, labelled = false }: { preset: Preset; labelled?: boolean }) {
+// preset, give no number: that is said, not shown as none.
+function Keys({ preset }: { preset: Preset }) {
   const { t } = useTranslation();
   const format = useFormat();
   if (preset.id === systemPreset) {
@@ -228,9 +236,7 @@ function Keys({ preset, labelled = false }: { preset: Preset; labelled?: boolean
   if (preset.keys === undefined) {
     return t("routingPresets.keys.unknown");
   }
-  return labelled
-    ? t("routingPresets.keys.count", { count: preset.keys, keys: format.number(preset.keys) })
-    : format.number(preset.keys);
+  return format.number(preset.keys);
 }
 
 export { default as messages } from "../locales/settings";

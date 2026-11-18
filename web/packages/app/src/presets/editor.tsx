@@ -1,4 +1,17 @@
-import { Button, CheckField, Icon, SelectField, TextField } from "@axiom/ui";
+import {
+  ActionButton,
+  Card,
+  CheckField,
+  Cluster,
+  Field,
+  Fieldset,
+  Grid,
+  InlineError,
+  Select,
+  Stack,
+  Tag,
+  Text,
+} from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,7 +30,7 @@ import {
 } from "./rules";
 
 type Option = { value: string; label: string };
-type Field = Invalid["field"] | undefined;
+type InvalidField = Invalid["field"] | undefined;
 
 // The most overrides a preset holds (docs/domains/routing.md「规则内容」).
 const maxOverrides = 100;
@@ -69,8 +82,7 @@ function SetField({
   const toggle = (option: string, on: boolean) =>
     onChange(on ? [...(value ?? []), option] : (value ?? []).filter((v) => v !== option));
   return (
-    <fieldset className="space-y-2">
-      <legend className="text-ui font-medium text-t2">{legend}</legend>
+    <Fieldset legend={legend} hint={hint}>
       <CheckField
         label={limit}
         hint={value === null ? t("presetRules.now", { state: free }) : undefined}
@@ -80,7 +92,7 @@ function SetField({
         onChange={(event) => onChange(event.currentTarget.checked ? options.map((o) => o.value) : null)}
       />
       {value !== null ? (
-        <div className="flex flex-wrap gap-x-5 gap-y-2 ps-6">
+        <Cluster gap={16}>
           {options.map((option) => (
             <CheckField
               key={option.value}
@@ -89,27 +101,26 @@ function SetField({
               onChange={(event) => toggle(option.value, event.currentTarget.checked)}
             />
           ))}
-        </div>
+        </Cluster>
       ) : null}
-      {hint ? <p className="text-label text-t4">{hint}</p> : null}
       {error ? <Refusal>{error}</Refusal> : null}
-    </fieldset>
+    </Fieldset>
   );
 }
 
 // Refusal says why a save was refused, under what it refuses; the dialog scrolls the first one into view.
 function Refusal({ children }: { children: ReactNode }) {
   return (
-    <p data-invalid className="text-label text-bad">
-      {children}
-    </p>
+    <div data-invalid>
+      <InlineError>{children}</InlineError>
+    </div>
   );
 }
 
 type RuleProps = {
   rule: RuleDraft;
   parent: RuleDraft | null;
-  invalid: Field;
+  invalid: InvalidField;
   currency: string;
   classes: ClassChoices;
   onChange: (rule: RuleDraft) => void;
@@ -118,7 +129,7 @@ type RuleProps = {
 function SortField({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent" | "onChange">) {
   const { t } = useTranslation("common");
   return (
-    <SelectField
+    <Select
       label={t("presetRules.sort")}
       value={parent ? rule.sort : rule.sort || "balanced"}
       onChange={(event) => onChange({ ...rule, sort: event.currentTarget.value })}
@@ -129,7 +140,7 @@ function SortField({ rule, parent, onChange }: Pick<RuleProps, "rule" | "parent"
           {t(`presetRules.sorts.${sort}`)}
         </option>
       ))}
-    </SelectField>
+    </Select>
   );
 }
 
@@ -173,7 +184,7 @@ function SetFields({ rule, parent, invalid, classes, onChange }: Omit<RuleProps,
 
 function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "parent" | "classes">) {
   const { t } = useTranslation("common");
-  const wrong = (field: Field, message: string) => (invalid === field ? message : undefined);
+  const wrong = (field: InvalidField, message: string) => (invalid === field ? message : undefined);
   // The page refuses only a price it cannot write, so one it can is the server's: no endpoint sells at or below it.
   const price = t(
     priceItems.some((item) => invalid === item && decimal.test(rule.maxPrice[item].trim()))
@@ -191,11 +202,10 @@ function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "par
       {scored(rule) ? (
         <ScoreNotice refused={invalid === "score"} onRemove={() => onChange(withoutScore(rule))} />
       ) : null}
-      <fieldset className="space-y-2">
-        <legend className="text-ui font-medium text-t2">{t("presetRules.maxPrice", { currency })}</legend>
-        <div className="grid gap-4 sm:grid-cols-3">
+      <Fieldset legend={t("presetRules.maxPrice", { currency })} hint={t("presetRules.priceHint")}>
+        <Grid columns={3}>
           {priceItems.map((item) => (
-            <TextField
+            <Field
               key={item}
               label={t(`presetRules.prices.${item}`)}
               inputMode="decimal"
@@ -207,9 +217,8 @@ function LimitFields({ rule, invalid, currency, onChange }: Omit<RuleProps, "par
               }
             />
           ))}
-        </div>
-        <p className="text-label text-t4">{t("presetRules.priceHint")}</p>
-      </fieldset>
+        </Grid>
+      </Fieldset>
     </>
   );
 }
@@ -220,33 +229,47 @@ function ScoreNotice({ refused, onRemove }: { refused: boolean; onRemove: () => 
   const { t } = useTranslation("common");
   const text = t("presetRules.scored");
   return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-btn bg-warn-soft px-3 py-2">
-      {refused ? <Refusal>{text}</Refusal> : <p className="text-label text-t1">{text}</p>}
-      <Button onClick={onRemove}>{t("presetRules.removeScore")}</Button>
-    </div>
+    <Cluster justify="between">
+      {refused ? (
+        <Refusal>{text}</Refusal>
+      ) : (
+        <Tag tone="warn" icon="alert">
+          {text}
+        </Tag>
+      )}
+      <ActionButton size="sm" onClick={onRemove}>
+        {t("presetRules.removeScore")}
+      </ActionButton>
+    </Cluster>
   );
 }
 
 function RuleFields(props: RuleProps) {
   const { t } = useTranslation("common");
   return (
-    <div className="space-y-4">
+    <Stack>
       {props.invalid === "rule" ? <Refusal>{t("presetRules.unmatched.rule")}</Refusal> : null}
       <SortField {...props} />
       <SetFields {...props} />
       <LimitFields {...props} />
-    </div>
+    </Stack>
   );
 }
 
 function Section({ title, hint, children }: { title: string; hint: string; children: ReactNode }) {
   return (
-    <section className="space-y-4 border-t border-b1 pt-4">
-      <div className="space-y-1">
-        <h3 className="text-ui font-medium text-t1">{title}</h3>
-        <p className="text-label text-t3">{hint}</p>
-      </div>
-      {children}
+    <section>
+      <Stack>
+        <Stack gap={4}>
+          <Text as="h3" medium>
+            {title}
+          </Text>
+          <Text size="sm" tone="faint">
+            {hint}
+          </Text>
+        </Stack>
+        {children}
+      </Stack>
     </section>
   );
 }
@@ -269,44 +292,46 @@ function OverrideCard({
 }) {
   const { t } = useTranslation("common");
   return (
-    <div className="space-y-4 rounded-btn border border-b1 p-4">
-      <div className="flex items-center justify-between gap-2">
-        <h4 className="text-ui font-medium text-t1">{t("presetRules.ruleTitle", { index: index + 1 })}</h4>
-        <Button variant="ghost" size="icon" aria-label={t("presetRules.remove")} onClick={onRemove}>
-          <Icon name="trash" />
-        </Button>
-      </div>
-      <div className="grid gap-4 sm:grid-cols-[minmax(0,12rem)_minmax(0,1fr)]">
-        <SelectField
-          label={t("presetRules.target")}
-          value={rule.target}
-          onChange={(event) =>
-            onChange({ ...rule, target: event.currentTarget.value === "model" ? "model" : "author" })
-          }
-        >
-          <option value="author">{t("presetRules.author")}</option>
-          <option value="model">{t("presetRules.model")}</option>
-        </SelectField>
-        <TextField
-          label={t("presetRules.targetName")}
-          hint={t("presetRules.targetHint")}
-          value={rule.name}
-          maxLength={200}
-          autoComplete="off"
-          spellCheck={false}
-          error={invalid === "name" ? t("presetRules.invalid.name") : undefined}
-          onChange={(event) => onChange({ ...rule, name: event.currentTarget.value })}
+    <Card>
+      <Stack>
+        <Cluster justify="between">
+          <Text as="h3" medium>
+            {t("presetRules.ruleTitle", { index: index + 1 })}
+          </Text>
+          <ActionButton size="sm" variant="gho" aria-label={t("presetRules.remove")} onClick={onRemove} icon="trash" />
+        </Cluster>
+        <Grid min="12rem">
+          <Select
+            label={t("presetRules.target")}
+            value={rule.target}
+            onChange={(event) =>
+              onChange({ ...rule, target: event.currentTarget.value === "model" ? "model" : "author" })
+            }
+          >
+            <option value="author">{t("presetRules.author")}</option>
+            <option value="model">{t("presetRules.model")}</option>
+          </Select>
+          <Field
+            label={t("presetRules.targetName")}
+            hint={t("presetRules.targetHint")}
+            value={rule.name}
+            maxLength={200}
+            autoComplete="off"
+            spellCheck={false}
+            error={invalid === "name" ? t("presetRules.invalid.name") : undefined}
+            onChange={(event) => onChange({ ...rule, name: event.currentTarget.value })}
+          />
+        </Grid>
+        <RuleFields
+          rule={rule}
+          parent={base}
+          invalid={invalid}
+          currency={currency}
+          classes={classes}
+          onChange={(next) => onChange({ ...rule, ...next })}
         />
-      </div>
-      <RuleFields
-        rule={rule}
-        parent={base}
-        invalid={invalid}
-        currency={currency}
-        classes={classes}
-        onChange={(next) => onChange({ ...rule, ...next })}
-      />
-    </div>
+      </Stack>
+    </Card>
   );
 }
 
@@ -361,10 +386,12 @@ export function RulesEditor({
           />
         ))}
         {draft.overrides.length < maxOverrides ? (
-          <Button size="md" onClick={() => onChange({ ...draft, overrides: [...draft.overrides, newOverride()] })}>
-            <Icon name="plus" />
+          <ActionButton
+            onClick={() => onChange({ ...draft, overrides: [...draft.overrides, newOverride()] })}
+            icon="plus"
+          >
             {t("presetRules.add")}
-          </Button>
+          </ActionButton>
         ) : null}
       </Section>
     </>
