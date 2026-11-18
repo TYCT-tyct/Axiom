@@ -264,7 +264,8 @@ test.describe("API keys", () => {
     await dialog.getByRole("button", { name: "保存" }).click();
     await expect(dialog).toHaveCount(0);
 
-    const row = page.getByRole("row", { name: /Laptop \(work\)/ });
+    // The row itself is the control the board draws; a key that is off says so under its name.
+    const row = page.getByRole("button", { name: /^Laptop \(work\)/ });
     await expect(row.getByText("已停用")).toBeVisible();
     expect(state.keys.find((key) => key.name === "Laptop (work)")).toMatchObject({
       disabled: true,
