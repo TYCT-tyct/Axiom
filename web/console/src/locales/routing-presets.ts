@@ -36,7 +36,7 @@ export const zh = {
     set: "设为新 key 的默认",
     clear: "不再作为新 key 的默认",
     clearAccount: "清除账户的默认",
-    cleared: "已清除，新 key 沿用站点或平台的默认。",
+    cleared: "已清除账户的默认。",
     loading: "正在读取现在的默认…",
     reloaded: "别处刚改过默认，已载入最新的。要改的话再点一次。",
   },
@@ -50,7 +50,10 @@ export const zh = {
     create: "创建",
     copyNote: "副本只带筛选、排序和价格；平台的内部调参不会复制。平台以后改原预设，不影响副本。",
     rulesRefused: "规则没有通过检查：{{detail}}",
-    staleHint: "预设刚被别处改过，列表已重新读取。关掉对话框重新打开，再改一次。",
+    staleHint: "列表已重新读取。关掉对话框重新打开，再改一次。",
+    staleReading: "预设刚被别处改过，正在读取最新的…",
+    staleFailed: "预设刚被别处改过，但列表没能重新读取。",
+    retry: "重新读取",
   },
   disable: {
     title: "停用路由预设",
@@ -124,7 +127,7 @@ export const en: Messages<typeof zh> = {
     set: "Make it the default for new keys",
     clear: "Stop being the default for new keys",
     clearAccount: "Clear the account’s default",
-    cleared: "Cleared: new keys take the site’s or the platform’s default.",
+    cleared: "The account’s default is cleared.",
     loading: "Reading the current default…",
     reloaded: "The default was just changed elsewhere, so the latest one is loaded. Press again to change it.",
   },
@@ -139,8 +142,10 @@ export const en: Messages<typeof zh> = {
     copyNote:
       "A copy takes the filters, sorting and prices only, not the platform’s internal tuning. Later changes to the original don’t touch the copy.",
     rulesRefused: "The rules didn’t pass the check: {{detail}}",
-    staleHint:
-      "The preset was just changed elsewhere and the list is read again. Close this dialog, open it again and redo your change.",
+    staleHint: "The list is read again. Close this dialog, open it again and redo your change.",
+    staleReading: "The preset was just changed elsewhere; reading the latest…",
+    staleFailed: "The preset was just changed elsewhere, but the list could not be read again.",
+    retry: "Read it again",
   },
   disable: {
     title: "Disable routing preset",

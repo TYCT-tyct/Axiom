@@ -1,8 +1,11 @@
 import type { Schemas } from "@axiom/api";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { type Sort, sorts } from "./rules";
 
-type Text = (key: never, options?: never) => string;
+// The summary's words are the common namespace's: taking a translator bound to it makes a page that passes its own
+// namespace's fail to compile, rather than show the keys.
+type Text = TFunction<"common">;
 
 // summaryParts is a preset's rules as a list shows them, from the summary the server makes of them: the default rule's
 // sort, its sources, the verified threshold and price limits. A sort a newer node added has no words here yet, so its

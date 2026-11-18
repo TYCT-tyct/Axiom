@@ -4,7 +4,7 @@ import { accountKey } from "@axiom/app";
 import { act } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import RoutingPresets from "./pages/routing-presets";
-import { openRow, press, render, settle, setUpBoardPages } from "./testing";
+import { failRead, fill, openRow, press, render, settle, setUpBoardPages } from "./testing";
 
 type Preset = Schemas["RoutingPreset"];
 
@@ -19,6 +19,8 @@ const api = vi.hoisted(() => ({
   view: true,
   presets: [] as Preset[],
   presetReads: 0,
+  hold: undefined as undefined | "read" | "fail",
+  release: undefined as undefined | (() => void),
 }));
 
 const id = (n: number) => `00000000-0000-4000-9000-00000000000${n}`;
@@ -53,6 +55,15 @@ vi.mock("@axiom/api", async (importOriginal) => {
     GET: (path: string) => {
       if (path === "/api/console/v1/routing-presets") {
         api.presetReads += 1;
+        if (api.hold) {
+          const how = api.hold;
+          api.hold = undefined;
+          return new Promise((resolve) => {
+            api.release = () => {
+              void resolve(how === "fail" ? answer(503, "unavailable") : answer(200, { data: api.presets }));
+            };
+          });
+        }
         return answer(200, { data: api.presets });
       }
       if (path !== "/api/console/v1/routing-default") {
@@ -99,12 +110,21 @@ beforeEach(() => {
   api.sent = [];
   api.presets = presets.map((entry) => ({ ...entry }));
   api.presetReads = 0;
+  api.hold = undefined;
+  api.release = undefined;
   api.status = 200;
   api.read = { preset_id: id(3), version: 2, new_keys_preset_id: id(3) };
   api.reads = 0;
   api.manage = true;
   api.view = true;
 });
+
+// openEditor opens the preset at that row and its editor, which every change to a preset starts from.
+async function openEditor(container: HTMLElement, index: number) {
+  await openRow(container, "routingPresets.openNamed", index);
+  await press(document.querySelector("dialog") as HTMLElement, "routingPresets.actions.edit");
+  return document.querySelector("dialog") as HTMLElement;
+}
 
 // Each preset is one row of the board's table: its name and slug, the layer it comes from, its rules in a line, the
 // account's keys bound to it and its rules' version.
@@ -146,6 +166,9 @@ it("clears the account's default, never a workspace's", async () => {
   expect(dialog.textContent).not.toContain("routingPresets.defaults.set");
   await press(dialog, "routingPresets.defaults.clearAccount");
   expect(api.sent).toEqual([{ preset_id: null, version: 2 }]);
+  // Clearing says only that: what a key made now takes is read from the default, not promised by the message.
+  expect(dialog.textContent).toContain("routingPresets.defaults.cleared");
+  expect(dialog.textContent).not.toContain("routingPresets.defaults.reloaded");
 });
 
 // A workspace's preset cannot be the account's default, which the node refuses: no button offers it.
@@ -194,15 +217,9 @@ it("replaces the last result with the current one", async () => {
 it("refuses to overwrite a preset changed elsewhere and reads it again", async () => {
   const { container } = await render(<RoutingPresets />);
   const edit = async () => {
-    await openRow(container, "routingPresets.openNamed", 2);
-    await press(document.querySelector("dialog") as HTMLElement, "routingPresets.actions.edit");
-    const dialog = document.querySelector("dialog") as HTMLElement;
+    const dialog = await openEditor(container, 2);
     const form = dialog.querySelector("form") as HTMLFormElement;
-    await act(async () => {
-      const input = form.querySelector("input") as HTMLInputElement;
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, "Renamed");
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-    });
+    await fill(form.querySelector("input") as HTMLInputElement, "Renamed");
     await act(async () => form.requestSubmit());
     await settle();
     return dialog;
@@ -246,6 +263,13 @@ it("hides the presets read before the permission was taken away", async () => {
   });
   await settle();
   expect(container.textContent).not.toContain("Official only");
+  // Nothing to make either: the permission is what the create action and the dialogs hang on, so a form cannot be opened
+  // again behind a closed dialog.
+  const creates = [...container.querySelectorAll("button")].filter(
+    (button) => (button.getAttribute("aria-label") ?? button.textContent) === "routingPresets.create",
+  );
+  expect(creates).toHaveLength(0);
+  expect(document.querySelector("dialog")).toBeNull();
 });
 
 // A node that refuses the read is a forbidden state, not the rows it answered before.
@@ -260,4 +284,51 @@ it("shows an old node's refusal instead of the presets it read before", async ()
   });
   await settle();
   expect(container.textContent).not.toContain("Official only");
+});
+
+// A refused change is not the same as a read that has the new revision: the dialog says "reopen" only once that read has
+// it, and says it is reading until then.
+it("says a preset was changed elsewhere only after the list was read again", async () => {
+  const { container } = await render(<RoutingPresets />);
+  api.presets = api.presets.map((entry) => (entry.id === id(3) ? { ...entry, revision: 2 } : entry));
+  api.hold = "read";
+  const dialog = await openEditor(container, 2);
+  const form = dialog.querySelector("form") as HTMLFormElement;
+  await act(async () => form.requestSubmit());
+  await settle();
+  expect(dialog.textContent).toContain("routingPresets.form.staleReading");
+  expect(dialog.textContent).not.toContain("routingPresets.form.staleHint");
+  await act(async () => api.release?.());
+  await settle();
+  expect(dialog.textContent).toContain("routingPresets.form.staleHint");
+});
+
+// A read of the list that fails after the refusal offers the read again, and only then what to do.
+it("offers the read again when the list could not be read after a refusal", async () => {
+  const { container } = await render(<RoutingPresets />);
+  api.presets = api.presets.map((entry) => (entry.id === id(3) ? { ...entry, revision: 2 } : entry));
+  const editor = await openEditor(container, 2);
+  const form = editor.querySelector("form") as HTMLFormElement;
+  api.hold = "fail";
+  await act(async () => form.requestSubmit());
+  await settle();
+  await act(async () => api.release?.());
+  await settle();
+  const dialog = document.querySelector("dialog") as HTMLElement;
+  expect(dialog.textContent).toContain("routingPresets.form.staleFailed");
+  await press(dialog, "routingPresets.form.retry");
+  expect(dialog.textContent).toContain("routingPresets.form.staleHint");
+});
+
+// A read that fails for another reason is not a reason to throw away what the person typed: the dialog stays, the list
+// offers the retry.
+it("keeps a dialog open when the list read fails", async () => {
+  const { client, container } = await render(<RoutingPresets />);
+  await press(container, "routingPresets.create");
+  const dialog = document.querySelector("dialog") as HTMLElement;
+  await fill(dialog.querySelector("input") as HTMLInputElement, "Draft");
+  await failRead(client, [accountKey, "routing-presets"]);
+  await settle();
+  expect(document.querySelector("dialog")).not.toBeNull();
+  expect((document.querySelector("dialog") as HTMLElement).querySelector("input")?.value).toBe("Draft");
 });

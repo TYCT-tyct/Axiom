@@ -26,6 +26,8 @@ type Format = ReturnType<typeof useFormat>;
 // (console-gap L2), and the account's default for new keys is set from there too.
 export default function RoutingPresets() {
   const { t, i18n } = useTranslation();
+  // The rules summary's words are the common namespace's, which the editor and the detail share.
+  const { t: common } = useTranslation("common");
   const session = useSession();
   const view = can(session, "api_keys.view");
   const manage = can(session, "api_keys.manage");
@@ -37,48 +39,66 @@ export default function RoutingPresets() {
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   usePageTitle(t("nav.routingPresets"));
   // A session that loses `api_keys.view`, or a node that then refuses the read, keeps what the query cache holds: the
-  // page shows its states instead of the rows, and closes a preset it was showing.
+  // page shows its states instead of the rows, offers nothing to make, and closes a preset it was showing. A read that
+  // merely failed keeps the page as it is — a draft open in its dialog is the person's — and the list offers a retry.
   const refused = presets.error instanceof ApiError && presets.error.status === 403;
-  const allowed = view && !refused && !presets.isError;
+  const permitted = view && !refused;
+  const rows = (permitted && !presets.isError ? (presets.data?.data ?? []) : []).map((preset) =>
+    row(preset, preset.id === newKeysPreset(defaults.data), t, common, format),
+  );
   useEffect(() => {
-    if (!allowed) {
+    if (!permitted) {
       setOpen(null);
     }
-  }, [allowed]);
-  const rows = (allowed ? (presets.data?.data ?? []) : []).map((preset) =>
-    row(preset, preset.id === newKeysPreset(defaults.data), t, format),
-  );
+  }, [permitted]);
   const values = {
-    openPreset: (event: SyntheticEvent) => setOpen(presetOf(allowed ? presets.data?.data : undefined, event) ?? null),
+    openPreset: (event: SyntheticEvent) =>
+      setOpen(presetOf(rows.length ? presets.data?.data : undefined, event) ?? null),
     press: pressKey,
   };
   const text = labels(t);
-  const create = manage ? (
-    <Button variant="primary" size="md" onClick={() => setOpen("create")}>
-      <Icon name="plus" />
-      {t("routingPresets.create")}
-    </Button>
-  ) : undefined;
   const props = {
     values,
     text,
     rows: { presets0: rows },
     description: t("routingPresets.description"),
-    create,
+    create: <CreatePreset manage={manage} permitted={permitted} onOpen={() => setOpen("create")} />,
   };
   return (
     <>
       <ListStates query={presets} view={view} ns="routingPresets" />
-      {/* An account with no preset yet still needs to know what a key made now takes, and whether it is refused. */}
-      {allowed && presets.data?.data.length === 0 ? <Defaults /> : null}
+      <EmptyNote presets={presets.data?.data} permitted={permitted} />
       {wide ? (
         <Wide t={(key) => (english ? wideEn : wideZh)[key]} {...props} />
       ) : (
         <Phone t={(key) => (english ? phoneEn : phoneZh)[key]} {...props} />
       )}
-      <Opened open={open} onClose={() => setOpen(null)} />
+      {permitted ? <Opened open={open} onClose={() => setOpen(null)} /> : null}
     </>
   );
+}
+
+// CreatePreset is the page's action, where the board leaves the page's actions empty: only someone who may change
+// presets and may read them at all gets it.
+function CreatePreset({ manage, permitted, onOpen }: { manage: boolean; permitted: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
+  if (!manage || !permitted) {
+    return null;
+  }
+  return (
+    <Button variant="primary" size="md" onClick={onOpen}>
+      <Icon name="plus" />
+      {t("routingPresets.create")}
+    </Button>
+  );
+}
+
+// EmptyNote is what an account with no preset yet still needs: what a key made now takes, and whether it is refused.
+function EmptyNote({ presets, permitted }: { presets: Preset[] | undefined; permitted: boolean }) {
+  if (!permitted || presets?.length !== 0) {
+    return null;
+  }
+  return <Defaults />;
 }
 
 // Opened is the preset a row's name opened, or the console's create dialog; the board draws neither (console-gap L2).
@@ -119,7 +139,7 @@ function presetOf(presets: Preset[] | undefined, event: SyntheticEvent) {
 
 // row is one preset as the board's table draws it: its name and slug, the layer it comes from, its rules in a line, the
 // account's keys bound to it, and its rules' version.
-function row(preset: Preset, isDefault: boolean, t: TFunction, format: Format): Row {
+function row(preset: Preset, isDefault: boolean, t: TFunction, common: TFunction<"common">, format: Format): Row {
   return {
     key: preset.id,
     kind: "0",
@@ -137,7 +157,7 @@ function row(preset: Preset, isDefault: boolean, t: TFunction, format: Format): 
     f11: "qsd ok",
     f12: t(`routingPresets.layer.${preset.scope}`),
     f13: "r num",
-    f14: summaryLine(t, preset.summary),
+    f14: summaryLine(common, preset.summary),
     f15: "r num",
     f16: preset.keys === undefined ? "—" : format.number(preset.keys),
     f17: "r",

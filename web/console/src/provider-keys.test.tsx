@@ -4,7 +4,7 @@ import { accountKey } from "@axiom/app";
 import { act } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import ProviderKeys from "./pages/provider-keys";
-import { press, render, settle, setUpBoardPages } from "./testing";
+import { failRead, fill, press, render, settle, setUpBoardPages } from "./testing";
 
 type ProviderKey = Schemas["ProviderKey"];
 
@@ -147,11 +147,7 @@ it("does not close a form opened while a removal is still running", async () => 
   await settle();
   await press(container, "providerKeys.add");
   const form = dialog().querySelector("form") as HTMLFormElement;
-  const name = form.querySelector("input") as HTMLInputElement;
-  await act(async () => {
-    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(name, "Second key");
-    name.dispatchEvent(new Event("input", { bubbles: true }));
-  });
+  await fill(form.querySelector("input") as HTMLInputElement, "Second key");
   api.held?.();
   await settle();
   expect(dialog()).not.toBeNull();
@@ -171,6 +167,19 @@ it("hides the keys read before the permission was taken away", async () => {
   await settle();
   expect(container.textContent).not.toContain("Key 1");
   expect(container.textContent).toContain("providerKeys.noPermission.title");
+  // The add action goes with the rows: no form can be opened behind the closed dialog.
+  expect(container.textContent).not.toContain("providerKeys.add");
+});
+
+// A read that fails for another reason keeps the page as it is: a form being filled stays, and the list offers the retry.
+it("keeps a form open when the keys cannot be read", async () => {
+  const { client, container } = await render(<ProviderKeys />);
+  await press(container, "providerKeys.add");
+  await fill(dialog().querySelector("input") as HTMLInputElement, "Second key");
+  await failRead(client, [accountKey, "provider-keys"]);
+  await settle();
+  expect(document.querySelector("dialog")).not.toBeNull();
+  expect((document.querySelector("dialog") as HTMLElement).querySelector("input")?.value).toBe("Second key");
 });
 
 it("shows a node's refusal instead of the keys it read before", async () => {

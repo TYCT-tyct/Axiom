@@ -88,7 +88,7 @@ export function Defaults({ preset }: { preset?: Preset }) {
       <div className="space-y-2">
         <p className="text-label text-t2">{t("routingPresets.defaults.hint")}</p>
         <FormError>{errors.message(latest.error)}</FormError>
-        <Button size="md" disabled={reload.isPending} onClick={() => reload.mutate()}>
+        <Button size="md" disabled={reload.isPending} onClick={() => reload.mutate("read")}>
           {t("routingPresets.defaults.reload")}
         </Button>
       </div>
@@ -178,19 +178,21 @@ function useDefaultWrite(latest: UseQueryResult<Schemas["AccountRoutingDefault"]
       setNote(presetId === null ? "cleared" : "saved");
     },
   });
+  // Reading the default again says two different things: after a refusal it is the way on, and the page says so; from the
+  // button a failed first read left, it is only the read that now works, and the lines below say what the default is.
   const reload = useMutation({
-    mutationFn: () => queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 }),
+    mutationFn: (_kind: "conflict" | "read") => queryClient.fetchQuery({ ...routingDefaultQuery, staleTime: 0 }),
     onMutate: () => setNote(null),
-    onSuccess: () => {
+    onSuccess: (_read, kind) => {
       save.reset();
-      setNote("reloaded");
+      setNote(kind === "conflict" ? "reloaded" : null);
     },
   });
   const write = (presetId: string | null) =>
     save.mutate(presetId, {
       onError: (error) => {
         if (error instanceof ApiError && error.code === "stale_revision") {
-          reload.mutate();
+          reload.mutate("conflict");
         }
       },
     });

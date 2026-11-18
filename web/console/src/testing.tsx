@@ -142,3 +142,22 @@ export async function openRow(container: HTMLElement, label: string, index = 0) 
   await settle();
   return document.querySelector("dialog") as HTMLElement;
 }
+
+// fill sets an input the way a person does: the value, then the input event React listens to.
+export async function fill(input: HTMLInputElement, value: string) {
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+
+// failRead makes a read that already answered fail, as an offline or a refusing node would, without touching the cache:
+// what a page does with data it already has is the point.
+export async function failRead(client: QueryClient, key: readonly unknown[]) {
+  await act(async () => {
+    client
+      .getQueryCache()
+      .find({ queryKey: key })
+      ?.setState({ status: "error", error: new Error("offline") });
+  });
+}

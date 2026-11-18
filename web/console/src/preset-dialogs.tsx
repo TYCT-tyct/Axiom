@@ -9,12 +9,12 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
+import { Button, Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
-import { routingDefaultQuery, siteQuery, sourceClassesQuery } from "./queries";
+import { routingDefaultQuery, routingPresetsQuery, siteQuery, sourceClassesQuery } from "./queries";
 import { Actions } from "./workspace-dialogs";
 
 type Preset = Schemas["RoutingPreset"];
@@ -33,33 +33,68 @@ function useRefreshPresets() {
     ]);
 }
 
-// A change made elsewhere moved the revision on: reading the list again gives the row a dialog was opened from the one a
-// second attempt names.
-function onStale(refresh: () => Promise<unknown>) {
-  return (error: Error) => {
-    if (error instanceof ApiError && error.code === "stale_revision") {
-      void refresh();
-    }
+// A change made elsewhere moved the revision on. Reading the list again gives the row a dialog was opened from the
+// revision a second attempt names, and the dialog says to reopen only once that read has it: while it reads it says so,
+// and if it fails it offers the read again.
+type Stale = { state: "idle" | "reading" | "read" | "failed"; read: () => void; reset: () => void };
+function useStaleRefresh(): Stale {
+  const queryClient = useQueryClient();
+  const [state, setState] = useState<Stale["state"]>("idle");
+  const read = () => {
+    setState("reading");
+    // The list the dialog was opened from, read as the node now has it: it is what the next attempt takes its revision
+    // from, so a read that fails is said rather than passed over.
+    queryClient.fetchQuery({ ...routingPresetsQuery, staleTime: 0 }).then(
+      () => setState("read"),
+      () => setState("failed"),
+    );
   };
+  return { state, read, reset: () => setState("idle") };
+}
+
+function isStale(error: unknown) {
+  return error instanceof ApiError && error.code === "stale_revision";
+}
+
+// StaleNote says what the dialog knows of that read: that it is reading, then what to do — or that it could not read,
+// with the read again.
+function StaleNote({ stale }: { stale: Stale }) {
+  const { t } = useTranslation();
+  if (stale.state === "reading") {
+    return <p className="text-label">{t("routingPresets.form.staleReading")}</p>;
+  }
+  if (stale.state === "read") {
+    return <p className="text-label">{t("routingPresets.form.staleHint")}</p>;
+  }
+  if (stale.state === "failed") {
+    return (
+      <p className="space-y-2 text-label">
+        <span>{t("routingPresets.form.staleFailed")}</span>
+        <Button size="sm" onClick={stale.read}>
+          {t("routingPresets.form.retry")}
+        </Button>
+      </p>
+    );
+  }
+  return null;
 }
 
 // SaveError says why a save failed. The format's checks name the rule they refuse (an override that widens, a price with
 // too many decimals) in the server's words, which a translated sentence could not; a stale revision says what to do.
-function SaveError({ error }: { error: unknown }) {
+function SaveError({ error, stale }: { error: unknown; stale: Stale }) {
   const { t } = useTranslation();
   const errors = useErrors();
   if (!error) {
     return null;
   }
   const detail = error instanceof ApiError ? error.fields.find((field) => field.pointer === "/rules") : undefined;
-  const stale = error instanceof ApiError && error.code === "stale_revision";
   return (
     <FormError>
       <p>{errors.message(error)}</p>
       {detail ? (
         <p className="text-label">{t("routingPresets.form.rulesRefused", { detail: detail.message })}</p>
       ) : null}
-      {stale ? <p className="text-label">{t("routingPresets.form.staleHint")}</p> : null}
+      {isStale(error) ? <StaleNote stale={stale} /> : null}
     </FormError>
   );
 }
@@ -103,6 +138,7 @@ function useEditorChoices() {
 export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () => void }) {
   const { t } = useTranslation();
   const refresh = useRefreshPresets();
+  const stale = useStaleRefresh();
   const choices = useEditorChoices();
   const source = edit.kind === "create" ? undefined : edit.preset;
   const [slug, setSlug] = useState(edit.kind === "copy" ? edit.preset.slug : "");
@@ -113,11 +149,9 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
   const unmatched = useRulesCheck(draft, checkRules, []);
   const mutation = useMutation({
     mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
-    onSuccess: async () => {
-      await refresh();
-      onClose();
-    },
-    onError: onStale(refresh),
+    onSuccess: () => refresh().then(onClose),
+    onMutate: stale.reset,
+    onError: (error) => isStale(error) && stale.read(),
   });
   const submit = (form: HTMLFormElement) => {
     const written = rulesOf(draft);
@@ -140,7 +174,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
           submit(event.currentTarget);
         }}
       >
-        <SaveError error={mutation.error} />
+        <SaveError error={mutation.error} stale={stale} />
         {edit.kind === "copy" ? <p className="text-label text-t3">{t("routingPresets.form.copyNote")}</p> : null}
         <Names
           edit={edit}
@@ -215,6 +249,7 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
   const format = useFormat();
   const isDefault = useQuery(routingDefaultQuery).data?.preset_id === preset.id;
   const refresh = useRefreshPresets();
+  const stale = useStaleRefresh();
   const disable = useMutation({
     mutationFn: () =>
       unwrapEmpty(
@@ -226,10 +261,12 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
       await refresh();
       onClose();
     },
-    onError: onStale(refresh),
+    onMutate: stale.reset,
+    onError: (error) => isStale(error) && stale.read(),
   });
   return (
     <ConfirmDialog
+      detail={<StaleNote stale={stale} />}
       title={t("routingPresets.disable.title")}
       body={
         <>

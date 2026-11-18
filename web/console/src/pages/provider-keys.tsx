@@ -36,16 +36,17 @@ export default function ProviderKeys() {
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   usePageTitle(t("nav.providerKeys"));
   // A session that loses `api_keys.view`, or a node that refuses the read, keeps what the query cache holds: the page
-  // shows its states instead of the rows, and closes whatever dialog was open.
+  // shows its states instead of the rows, offers nothing to make, and closes whatever dialog was open. A read that
+  // merely failed keeps the page as it is — a draft stays — and the list offers a retry.
   const refused = keys.error instanceof ApiError && keys.error.status === 403;
-  const allowed = view && !refused && !keys.isError;
-  const list = allowed ? (keys.data?.data ?? []) : [];
+  const permitted = view && !refused;
+  const list = permitted && !keys.isError ? (keys.data?.data ?? []) : [];
   const opened = open && open !== "add" ? list.find((key) => key.id === open) : undefined;
   useEffect(() => {
-    if (!allowed) {
+    if (!permitted) {
       setOpen(null);
     }
-  }, [allowed]);
+  }, [permitted]);
   const closeKey = (id: string) => setOpen((current) => (current === id ? null : current));
   const closeAdd = () => setOpen((current) => (current === "add" ? null : current));
   const rows = list.map((key) => row(key, t));
@@ -54,12 +55,13 @@ export default function ProviderKeys() {
     press: pressKey,
   };
   const text = { title: t("nav.providerKeys"), notice: t("providerKeys.notice") };
-  const create = manage ? (
-    <Button variant="primary" size="md" onClick={() => setOpen("add")}>
-      <Icon name="plus" />
-      {t("providerKeys.add")}
-    </Button>
-  ) : undefined;
+  const create =
+    manage && permitted ? (
+      <Button variant="primary" size="md" onClick={() => setOpen("add")}>
+        <Icon name="plus" />
+        {t("providerKeys.add")}
+      </Button>
+    ) : undefined;
   const description = t("providerKeys.description");
   return (
     <>
@@ -73,7 +75,14 @@ export default function ProviderKeys() {
         description={description}
         create={create}
       />
-      <Opened open={open} key0={opened} manage={manage} onClose={(id) => (id === "add" ? closeAdd() : closeKey(id))} />
+      {permitted ? (
+        <Opened
+          open={open}
+          key0={opened}
+          manage={manage}
+          onClose={(id) => (id === "add" ? closeAdd() : closeKey(id))}
+        />
+      ) : null}
     </>
   );
 }

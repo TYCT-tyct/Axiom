@@ -170,7 +170,9 @@ it("keeps the refusal when the reload fails, and tries it again", async () => {
   expect(dialog.textContent).not.toContain("routingPresets.defaults.set");
   api.defaultFail = false;
   await pressDefault(dialog, "reload");
-  expect(dialog.textContent).toContain("routingPresets.defaults.reloaded");
+  // The read works again, so the write is offered again; the lines below say what the default now is.
+  expect(dialog.textContent).toContain("routingPresets.defaults.set");
+  expect(dialog.textContent).not.toContain("routingPresets.defaults.reloaded");
   await pressDefault(dialog, "set");
   expect(api.sent.at(-1)).toEqual({ preset_id: preset(2).id, version: 2 });
 });
