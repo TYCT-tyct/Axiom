@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createInstance } from "i18next";
 import { act, type ReactNode } from "react";
-import { createRoot } from "react-dom/client";
+import { createRoot, type Root } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, vi } from "vitest";
 
@@ -10,8 +10,12 @@ import { afterEach, beforeAll, vi } from "vitest";
 const i18n = createInstance();
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// The roots a test rendered, unmounted after it: a component left mounted keeps its timers, and one that fires after
+// the file's document is gone throws into the runner instead of the test.
+const roots: Root[] = [];
+
 // setUpPages readies the test file's document: messages, the modal methods jsdom's dialog element lacks, and an empty
-// body after each test.
+// body after each test, with every component the test rendered unmounted.
 export function setUpPages() {
   beforeAll(async () => {
     await i18n.init({ lng: "en", resources: {} });
@@ -19,7 +23,12 @@ export function setUpPages() {
       this.open = true;
     };
   });
-  afterEach(() => {
+  afterEach(async () => {
+    await act(async () => {
+      for (const root of roots.splice(0)) {
+        root.unmount();
+      }
+    });
     document.body.replaceChildren();
   });
 }
@@ -45,8 +54,10 @@ export async function render(node: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
   const container = document.createElement("div");
   document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
   await act(async () => {
-    createRoot(container).render(
+    root.render(
       <QueryClientProvider client={client}>
         <I18nextProvider i18n={i18n}>{node}</I18nextProvider>
       </QueryClientProvider>,
