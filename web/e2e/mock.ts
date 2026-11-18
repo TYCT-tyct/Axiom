@@ -99,6 +99,18 @@ export const fail = <C extends number>(status: C, code: ErrorCode, extra?: Recor
   headers: extra,
 });
 
+// What the contract's guard answers before any handler runs: a 400 naming the member the request breaks.
+export const breaks = (pointer: string) => ({
+  status: 400 as const,
+  json: {
+    error: {
+      code: "invalid_request",
+      message: "the request breaks the contract",
+      fields: [{ pointer, message: "invalid" }],
+    },
+  } satisfies Schemas["Error"],
+});
+
 export const ok = <J>(json: J) => ({ status: 200 as const, json });
 
 // A page of a list: the cursor is the offset, tied to the filters it was made for, and a made-up one is a 400.

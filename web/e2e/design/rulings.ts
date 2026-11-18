@@ -72,10 +72,12 @@ const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sig
 const signInRulings: Ruling[] = [
   // The sign-in pages draw their Chinese in the faces the board names, cut from their messages: the title and the
   // label match the board's. The lede is the generated region's, which the font corpus does not read yet; the buttons'
-  // Chinese at 500 is drawn at 400 (§5.4); and a few body characters still differ from the board's source rendering.
+  // Chinese at 500 is drawn at 400 (§5.4), so only their labels' boxes are excused, not their fill, border or place;
+  // the language links have neither fill nor border at rest; and a few body characters still differ from the board's
+  // source rendering.
   signIn({
     basis: "§5/§5.4: the lede's characters are not in the font corpus yet; Chinese at 500 is drawn at 400",
-    ...both(".lg-pitch .s, .lg-btn, .lg-top a"),
+    ...both(".lg-pitch .s, .lg-btn > span, .lg-top a"),
   }),
   signIn({
     basis: "§5: a few characters of the cut body face differ from the board's source face (not yet explained)",

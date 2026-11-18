@@ -394,6 +394,8 @@ test("a press goes though the departure's code never comes", async ({ page }) =>
   await signUp(page).click();
   await expect(page).toHaveURL(/\/console\/register$/);
   expect(unhandled).toEqual([]);
+  // registration is not an arrival: it leaves no marker for a later sign-in to decode on
+  expect(await page.evaluate(() => sessionStorage.getItem("axiom:arrival"))).toBeNull();
 });
 
 test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {
@@ -521,4 +523,16 @@ test("a sign-in page whose effects fail to load still signs in, with no unhandle
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
   expect(unhandled).toEqual([]);
+});
+
+test("what is typed reaches the stage: a whole address lights the envelope", async ({ page }) => {
+  // under reduced motion the stage draws once for each thing it hears, so its pixels say what it heard
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  const pixels = () => stageCanvas(page).evaluate((canvas) => (canvas as HTMLCanvasElement).toDataURL());
+  const before = await pixels();
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await expect.poll(pixels).not.toBe(before);
 });

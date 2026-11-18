@@ -1,5 +1,5 @@
 import type { components } from "../packages/api/src/console.gen.ts";
-import { type AuthState, fail } from "./mock.ts";
+import { type AuthState, breaks, fail } from "./mock.ts";
 
 // The answers to the Session tag, which both surfaces offer under their own path with the same shapes. A person signs in
 // as a user chosen by the email typed: a plain one, one with two-step verification, and one that is rate limited.
@@ -73,6 +73,7 @@ type WithState<B> = { body: B; state: AuthState };
 // Sign-in is decided by the email: a known user, one with two-step verification (which waits for its second step), one
 // that is rate limited; any other email, or a wrong password, is refused alike.
 export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
+  if (body.email.length < 3) return breaks("/email");
   if (body.email === limitedEmail) {
     return fail(429, "rate_limited", { "Retry-After": "30" });
   }

@@ -43,6 +43,7 @@ const routeTree = root.addChildren([
   createRoute({
     getParentRoute: () => root,
     path: "/reset-password",
+    validateSearch: guestSearch,
     component: lazyRouteComponent(() => import("./auth/reset-password")),
   }),
   createRoute({

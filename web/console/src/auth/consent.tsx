@@ -5,8 +5,9 @@ import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { canSubmitWithLegal, LegalDocuments, useLegalConsent } from "./legal";
-import { FormProblem, LoginFrame, NoteAction, OtherAccount } from "./login-frame";
+import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, useLegalConsent } from "./legal";
+import { LoginFrame } from "./login-frame";
+import { FormProblem, NoteAction, OtherAccount, WithEmail } from "./login-parts";
 
 // A member whose accepted versions are behind the site's current ones lands here, outside the shell: every shell page
 // would be refused with consent_required until this succeeds.
@@ -18,14 +19,9 @@ export default function Consent() {
   );
 }
 
-function ConsentStep() {
-  const { t } = useTranslation();
-  const { t: common } = useTranslation("common");
-  const errors = useErrors();
-  const session = useSession();
-  const legal = useLegalConsent();
+function useAccept(legal: LegalConsentState) {
   const client = useQueryClient();
-  const accept = useMutation({
+  return useMutation({
     mutationFn: (body: Schemas["LegalAcceptance"]) =>
       unwrapEmpty(consoleApi.POST("/api/console/v1/legal/accept", { body })),
     onSuccess: () => client.invalidateQueries({ queryKey: ["session"] }),
@@ -35,18 +31,20 @@ function ConsentStep() {
       }
     },
   });
+}
+
+function ConsentStep() {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const session = useSession();
+  const legal = useLegalConsent();
+  const accept = useAccept(legal);
   const missing = legal.query.isSuccess && legal.documents.length === 0;
-  const failed = legal.query.isError
-    ? legal.query.error instanceof ApiError && legal.query.error.status === 403
-      ? common("state.forbiddenTitle")
-      : t("legal.error")
-    : "";
-  // The box is the board's own and keeps its state: a new version on screen starts it unticked again.
-  const versions = JSON.stringify(legal.versions ?? []);
   return (
     <LoginFrame
       title={t("legal.title")}
-      sub={t("legal.description", { email: session.user.email })}
+      sub={<WithEmail sentence={(email) => t("legal.description", { email })} email={session.user.email} />}
+      step="consent"
       shape="start"
       onSubmit={(event) => {
         event.preventDefault();
@@ -55,35 +53,51 @@ function ConsentStep() {
         }
       }}
     >
-      {legal.query.isPending ? (
-        <LoginNote t={String}>
-          <span role="status">{t("legal.loading")}</span>
-        </LoginNote>
-      ) : null}
-      <FormProblem message={failed} />
-      {failed && !(legal.query.error instanceof ApiError && legal.query.error.status === 403) ? (
-        <NoteAction label={t("legal.retry")} onPress={legal.reload} />
-      ) : null}
-      {legal.documents.length > 0 ? (
-        <>
-          <LegalDocuments documents={legal.documents} />
-          <LoginConsent
-            key={versions}
-            t={String}
-            label={t("legal.accept")}
-            values={{
-              onInput: (event) => legal.setAccepted((event.currentTarget as HTMLInputElement).checked),
-            }}
-          />
-        </>
-      ) : null}
+      <Documents legal={legal} />
       <FormProblem message={missing ? t("legal.missing") : accept.error ? errors.message(accept.error) : ""} />
       <LoginPrimary
         t={String}
-        label={t("legal.acceptSubmit")}
+        label={<span>{t("legal.acceptSubmit")}</span>}
         values={{ disabled: accept.isPending || !canSubmitWithLegal(legal) || missing }}
       />
       <OtherAccount />
     </LoginFrame>
+  );
+}
+
+// The documents and the box that accepts them, or why they are not there. The box shows the answer the form would
+// send: a new version on screen, or a reload after a refusal, clears it.
+function Documents({ legal }: { legal: LegalConsentState }) {
+  const { t } = useTranslation();
+  const { t: common } = useTranslation("common");
+  if (legal.query.isPending) {
+    return (
+      <LoginNote t={String}>
+        <span role="status">{t("legal.loading")}</span>
+      </LoginNote>
+    );
+  }
+  if (legal.query.isError) {
+    const forbidden = legal.query.error instanceof ApiError && legal.query.error.status === 403;
+    return (
+      <>
+        <FormProblem message={forbidden ? common("state.forbiddenTitle") : t("legal.error")} />
+        {forbidden ? null : <NoteAction label={t("legal.retry")} onPress={legal.reload} />}
+      </>
+    );
+  }
+  if (legal.documents.length === 0) return null;
+  return (
+    <>
+      <LegalDocuments documents={legal.documents} />
+      <LoginConsent
+        t={String}
+        label={t("legal.accept")}
+        values={{
+          checked: legal.accepted,
+          onToggle: (event) => legal.setAccepted((event.currentTarget as HTMLInputElement).checked),
+        }}
+      />
+    </>
   );
 }

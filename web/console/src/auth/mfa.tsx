@@ -9,7 +9,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
-import { FormProblem, LoginFrame, OtherAccount, useHear } from "./login-frame";
+import { LoginFrame, type Stage, useStage } from "./login-frame";
+import { FormProblem, OtherAccount } from "./login-parts";
 import { usePasskeySignIn } from "./passkey-sign-in";
 
 // The second step of a password sign-in: a code from the authenticator app or a recovery code, in one field (the
@@ -25,8 +26,8 @@ export default function Mfa() {
 function MfaStep() {
   const { t } = useTranslation();
   const errors = useErrors();
-  const hear = useHear();
-  const site = useQuery(siteQuery);
+  const stage = useStage();
+  const passkeys = useQuery(siteQuery).data?.passkeys ?? false;
   const verify = useVerifyMfa();
   const passkey = usePasskeySignIn("mfa");
   const code = useRef<HTMLInputElement | null>(null);
@@ -35,53 +36,81 @@ function MfaStep() {
     <LoginFrame
       title={t("auth.mfa.title", { ns: "common" })}
       sub={t("auth.mfa.description", { ns: "common" })}
+      step="mfa"
       shape={passkey.pending ? "key" : verify.isSuccess ? "enter" : "code"}
+      stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
         const value = (code.current?.value ?? "").trim();
         if (value && !verify.isPending) {
-          verify.mutate({ code: value }, { onError: () => hear({ type: "bad" }) });
+          verify.mutate({ code: value }, { onError: () => stage.hear({ type: "bad" }) });
         }
       }}
     >
-      <LoginField
-        t={String}
-        text={{ label: t("auth.mfa.code", { ns: "common" }) }}
-        values={{
-          id: "mfa-code",
-          name: "code",
-          type: "text",
-          autoComplete: "one-time-code",
-          fieldCls: problem ? "bad" : "",
-          describedBy: problem ? "mfa-problem mfa-hint" : "mfa-hint",
-          input: (element) => {
-            code.current = element as HTMLInputElement | null;
-          },
-          onInput: (event) => {
-            const value = (event.currentTarget as HTMLInputElement).value;
-            hear({ type: "digit", n: Math.min(6, value.replace(/\D/g, "").length) });
-          },
-        }}
-      />
+      <CodeField problem={problem} code={code} stage={stage} />
       <FormProblem id="mfa-problem" message={problem} />
-      <LoginPrimary t={String} label={t("auth.mfa.submit", { ns: "common" })} values={{ disabled: verify.isPending }} />
+      <LoginPrimary
+        t={String}
+        label={<span>{t("auth.mfa.submit", { ns: "common" })}</span>}
+        values={{ disabled: verify.isPending }}
+      />
       <LoginNote t={String}>
         <span id="mfa-hint">{t("auth.mfa.hint", { ns: "common" })}</span>
       </LoginNote>
-      {site.data?.passkeys ? (
-        <>
-          <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
-          <LoginStack t={String}>
-            <LoginButton
-              t={String}
-              label={t("auth.mfa.usePasskey")}
-              values={{ disabled: passkey.pending, onPress: () => void passkey.start() }}
-            />
-          </LoginStack>
-          <FormProblem message={passkey.failure ? errors.message(passkey.failure) : ""} />
-        </>
-      ) : null}
+      {passkeys ? <PasskeyWay passkey={passkey} /> : null}
       <OtherAccount />
     </LoginFrame>
+  );
+}
+
+// The code's field: each digit typed lights a stud of the padlock on the sea.
+function CodeField({
+  problem,
+  code,
+  stage,
+}: {
+  problem: string;
+  code: { current: HTMLInputElement | null };
+  stage: Stage;
+}) {
+  const { t } = useTranslation();
+  return (
+    <LoginField
+      t={String}
+      text={{ label: t("auth.mfa.code", { ns: "common" }) }}
+      values={{
+        id: "mfa-code",
+        name: "code",
+        type: "text",
+        autoComplete: "one-time-code",
+        fieldCls: problem ? "bad" : "",
+        describedBy: problem ? "mfa-problem mfa-hint" : "mfa-hint",
+        input: (element) => {
+          code.current = element as HTMLInputElement | null;
+        },
+        onInput: (event) => {
+          const value = (event.currentTarget as HTMLInputElement).value;
+          stage.hear({ type: "digit", n: Math.min(6, value.replace(/\D/g, "").length) });
+        },
+      }}
+    />
+  );
+}
+
+function PasskeyWay({ passkey }: { passkey: ReturnType<typeof usePasskeySignIn> }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
+      <LoginStack t={String}>
+        <LoginButton
+          t={String}
+          label={<span>{t("auth.mfa.usePasskey")}</span>}
+          values={{ disabled: passkey.pending, onPress: () => void passkey.start() }}
+        />
+      </LoginStack>
+      <FormProblem message={passkey.failure ? errors.message(passkey.failure) : ""} />
+    </>
   );
 }

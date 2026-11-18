@@ -59,6 +59,13 @@ export function useCachedSession(): Session | null {
   return useQuery({ ...sessionQuery(api), enabled: false }).data ?? null;
 }
 
+// useCurrentSession asks for the session on a page outside the gate: who, if anyone, this browser is signed in as
+// (a reset's last step, which must not take the visitor into another person's console).
+export function useCurrentSession() {
+  const { api } = useAuth();
+  return useQuery(sessionQuery(api));
+}
+
 // SessionClaim names the session an answer belongs to: the person the page showed and the session it asked under, both
 // read before the request went out.
 export type SessionClaim = { binding: string; identity: string };

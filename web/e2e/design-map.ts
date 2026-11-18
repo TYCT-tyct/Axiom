@@ -23,7 +23,7 @@ export type DesignScene = {
   suite: Suite;
   scene: string;
   // The page of fonts.json the build's page belongs to: the faces it must have loaded.
-  fonts: string;
+  fonts: string | string[];
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
   languages?: ("zh" | "en")[];
@@ -53,7 +53,22 @@ const loginBoards = {
 // note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
 // does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
 // take out what the page has no counterpart for, so the comparison measures the parts and their layout.
-async function prepareSignInComparison(board: Page, _page: Page, language: "zh" | "en") {
+async function prepareSignInComparison(board: Page, page: Page, language: "zh" | "en") {
+  // The page edges its controls in the console's control edge (docs/frontend.md「对比度令牌」), where the board draws a
+  // lighter line: the reference takes the page's resolved colour, so the controls' place and fill stay compared.
+  const edge = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.color = "var(--ctl-line)";
+    (document.querySelector(".lg") as HTMLElement).append(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  });
+  await board.evaluate((edge) => {
+    const lg = document.querySelector(".lg") as HTMLElement;
+    for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
+    lg.style.setProperty("--bw", "1px");
+  }, edge);
   const words = {
     title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
     ...(language === "en" ? consoleAuthEn : consoleAuthZh).signIn,
@@ -70,6 +85,12 @@ async function prepareSignInComparison(board: Page, _page: Page, language: "zh" 
     link.textContent = words.register;
     note.append(`${words.noAccount} `, link);
     step.append(note);
+    // the page sets a button's label in a span of its own, which the rulings excuse instead of the whole button
+    for (const button of document.querySelectorAll(".lg-btn")) {
+      const label = document.createElement("span");
+      label.append(...button.childNodes);
+      button.append(label);
+    }
   }, words);
 }
 
@@ -299,7 +320,8 @@ export const designScenes: DesignScene[] = [
     name: "console sign-in",
     suite: consoleSuite,
     scene: "sign-in",
-    fonts: "console",
+    // the console's Latin faces, and the sign-in route's own: the Chinese and the serif the Login board names
+    fonts: ["console", "console/auth/sign-in"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
     prepareComparison: prepareSignInComparison,

@@ -1,12 +1,7 @@
-import { useErrors, useSignOut } from "@axiom/app";
-import LoginAction from "@axiom/boards/Login/regions/LoginAction";
 import LoginChar from "@axiom/boards/Login/regions/LoginChar";
 import LoginDecode from "@axiom/boards/Login/regions/LoginDecode";
-import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginLanguage from "@axiom/boards/Login/regions/LoginLanguage";
-import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginMark from "@axiom/boards/Login/regions/LoginMark";
-import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginOtherLanguage from "@axiom/boards/Login/regions/LoginOtherLanguage";
 import LoginShell from "@axiom/boards/Login/regions/LoginShell";
 import ShellEN from "@axiom/boards/Login/regions/LoginShell.en";
@@ -15,25 +10,20 @@ import LoginStep from "@axiom/boards/Login/regions/LoginStep";
 import LoginSub from "@axiom/boards/Login/regions/LoginSub";
 import LoginTitle from "@axiom/boards/Login/regions/LoginTitle";
 import { reducedMotion, takeArrival, useEffectModule } from "@axiom/fx";
-import type { Heard, Shape } from "@axiom/fx/login";
+import type { Heard, Login, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
 import {
-  type AnchorHTMLAttributes,
-  createContext,
   type FormEvent,
-  type KeyboardEvent,
   type ReactNode,
-  use,
-  useCallback,
+  type RefObject,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { pressKey } from "../board";
 import { siteQuery } from "../queries";
 
 const loadLogin = () => import("@axiom/fx/login");
@@ -50,44 +40,136 @@ function claimArrival() {
 // How long an arrival's title waits, hidden, for the decode's code before it is shown as it is.
 const veilFor = 1500;
 
-const StageContext = createContext<(heard: Heard) => void>(() => {});
-// useHear tells the stage on the sea what the visitor is doing (the email's length, the digits typed, a refusal).
-export const useHear = () => use(StageContext);
+// The console's tokens on the board's own controls. The focus ring and the accent the stage and the decode draw in
+// follow the console's accent, which brandStyle derives from the site's colour (the primary button stays neutral,
+// R10). The controls' edges are the console's control edge, solid 1px, which holds 3:1 against what is around them
+// (docs/frontend.md「对比度令牌」); the board's own edge is lighter, and only half a pixel on a dense screen.
+const boardVars = [
+  "--focus: var(--accentT)",
+  "--ring: var(--accentT)",
+  "--lineStrong1x: var(--ctl-line)",
+  "--lineStrong2x: var(--ctl-line)",
+  "--bw: 1px",
+].join("; ");
+
+// A page's handle on the stage over the sea: what it hears (the email's length, the digits typed, a refusal) reaches
+// the engine once it has loaded, and nothing before. The page makes it, so the forms it renders can tell it.
+export type Stage = { readonly hear: (heard: Heard) => void; readonly running: RefObject<Login | null> };
+export function useStage(): Stage {
+  const running = useRef<Login | null>(null);
+  return useMemo(() => ({ running, hear: (heard: Heard) => running.current?.hear(heard) }), []);
+}
 
 // The Login board's names for the two languages, as its switch shows them.
 const languageLabels = { zh: "中文", en: "EN" } as const;
 
-// LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
-// question on the other, in a form that submits through onSubmit. The sea, the stage that forms shape on it and the
-// title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
-export function LoginFrame({
-  title,
-  sub,
-  shape,
-  onSubmit,
-  children,
-}: {
+type FrameProps = {
   title: string;
   sub?: ReactNode;
+  // which question the form asks: the form is kept while its words change language, and starts afresh for another
+  step: string;
   shape: Shape;
+  stage?: Stage;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
-}) {
+};
+
+// LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
+// question on the other, in a form that submits through onSubmit. The sea, the stage that forms shapes on it and the
+// title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
+export function LoginFrame({ title, sub, step, shape, stage, onSubmit, children }: FrameProps) {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
   const prefs = usePreferences();
   usePageTitle(title);
   useBrandStyle(site.data?.brand_color);
-  const [arrived] = useState(claimArrival);
-  const root = useRef<HTMLElement | null>(null);
   const titleRef = useRef<HTMLElement | null>(null);
-  const decodeCanvas = useRef<HTMLCanvasElement | null>(null);
-  const veiled = useRef(false);
-  const latest = useRef({ shape, dark: prefs.dark });
-  latest.current = { shape, dark: prefs.dark };
+  const engine = useLoginEngine({ stage, shape, dark: prefs.dark, titleRef });
+  const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
+  const name = site.data?.name ?? t("brand", { ns: "common" });
+  return (
+    <LoginShell
+      t={(key) => (english ? ShellEN : ShellZH)[key]}
+      values={{
+        modeCls: prefs.dark ? "dark" : "light",
+        lang: prefs.locale,
+        noKern: english,
+        vars: boardVars,
+        seaCanvas: engine.seaCanvas,
+      }}
+      text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), home: "/" }}
+      brand={
+        <>
+          <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
+          <span>{name}</span>
+        </>
+      }
+      languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
+    >
+      <form noValidate onSubmit={onSubmit}>
+        <LoginStep key={step} t={String} values={{ stepCls: "in", shape }}>
+          <FrameTitle title={title} titleRef={titleRef} />
+          {sub ? <LoginSub t={String}>{sub}</LoginSub> : null}
+          {children}
+        </LoginStep>
+      </form>
+      <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
+    </LoginShell>
+  );
+}
 
-  // An arrival's title is hidden from its first frame until the decode resolves it, or for veilFor if the decode's
-  // code is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back.
+// useLoginEngine runs the sea, the stage and an arrival's decode on the frame once their code has loaded, keeps them
+// on the step's shape and the scheme, and hands the running engine to the page's stage.
+function useLoginEngine({
+  stage,
+  shape,
+  dark,
+  titleRef,
+}: {
+  stage?: Stage;
+  shape: Shape;
+  dark: boolean;
+  titleRef: RefObject<HTMLElement | null>;
+}) {
+  const own = useStage();
+  const handle = stage ?? own;
+  const [arrived] = useState(claimArrival);
+  const veiled = useArrivalVeil(titleRef, arrived);
+  const root = useRef<HTMLElement | null>(null);
+  const decode = useRef<HTMLCanvasElement | null>(null);
+  const latest = useRef({ shape, dark });
+  latest.current = { shape, dark };
+  const login = useEffectModule(root, loadLogin, (module, frame) => {
+    const running = module.startLogin(frame, !latest.current.dark, latest.current.shape, arrived);
+    if (veiled.current && titleRef.current && decode.current) {
+      veiled.current = false;
+      running.decode(titleRef.current, decode.current);
+    }
+    handle.running.current = running;
+    return running;
+  });
+  useEffect(
+    () => () => {
+      handle.running.current = null;
+    },
+    [handle],
+  );
+  useEffect(() => login.current?.show(shape), [login, shape]);
+  useEffect(() => login.current?.sea.engine.setLight(!dark), [login, dark]);
+  return {
+    seaCanvas: (canvas: Element | null) => {
+      root.current = canvas?.closest<HTMLElement>(".lg") ?? null;
+    },
+    decodeCanvas: (element: Element | null) => {
+      decode.current = element as HTMLCanvasElement | null;
+    },
+  };
+}
+
+// An arrival's title is hidden from its first frame until the decode resolves it, or for veilFor if the decode's code
+// is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back.
+function useArrivalVeil(titleRef: RefObject<HTMLElement | null>, arrived: boolean) {
+  const veiled = useRef(false);
   useLayoutEffect(() => {
     const chars = titleRef.current?.querySelectorAll<HTMLElement>(".ch") ?? [];
     if (!arrived || reducedMotion()) return;
@@ -98,24 +180,32 @@ export function LoginFrame({
       for (const c of chars) c.style.removeProperty("color");
     }, veilFor);
     return () => window.clearTimeout(timer);
-  }, [arrived]);
+  }, [arrived, titleRef]);
+  return veiled;
+}
 
-  const login = useEffectModule(root, loadLogin, (module, frame) => {
-    const running = module.startLogin(frame, !latest.current.dark, latest.current.shape, arrived);
-    if (veiled.current && titleRef.current && decodeCanvas.current) {
-      veiled.current = false;
-      running.decode(titleRef.current, decodeCanvas.current);
-    }
-    return running;
-  });
-  useEffect(() => login.current?.show(shape), [login, shape]);
-  useEffect(() => login.current?.sea.engine.setLight(!prefs.dark), [login, prefs.dark]);
-  const hear = useCallback((heard: Heard) => login.current?.hear(heard), [login]);
+function FrameTitle({ title, titleRef }: { title: string; titleRef: RefObject<HTMLElement | null> }) {
+  return (
+    <LoginTitle
+      t={String}
+      text={{ label: title }}
+      values={{
+        title: (element) => {
+          titleRef.current = element as HTMLElement | null;
+        },
+      }}
+    >
+      {[...title].map((char, i) => (
+        <LoginChar key={`${i}${char}`} t={String} text={{ char: char === " " ? " " : char }} />
+      ))}
+    </LoginTitle>
+  );
+}
 
-  const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
-  const current = english ? "en" : "zh";
-  const name = site.data?.name ?? t("brand", { ns: "common" });
-  const languages = (["zh", "en"] as const).map((language) =>
+// The board's language switch: the page's own language marked current, the other one a press away, in the board's
+// order whichever is current.
+function Languages({ current, choose }: { current: "zh" | "en"; choose: () => void }) {
+  return (["zh", "en"] as const).map((language) =>
     language === current ? (
       <LoginLanguage key={language} t={String} text={{ label: languageLabels[language] }} />
     ) : (
@@ -126,115 +216,10 @@ export function LoginFrame({
         values={{
           onPress: (event) => {
             event.preventDefault();
-            prefs.other.choose();
+            choose();
           },
         }}
       />
     ),
-  );
-  return (
-    <StageContext value={hear}>
-      <LoginShell
-        t={(key) => (english ? ShellEN : ShellZH)[key]}
-        values={{
-          modeCls: prefs.dark ? "dark" : "light",
-          lang: prefs.locale,
-          noKern: english,
-          seaCanvas: (canvas) => {
-            root.current = canvas?.closest<HTMLElement>(".lg") ?? null;
-          },
-        }}
-        text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), home: "/" }}
-        brand={
-          <>
-            <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
-            <span>{name}</span>
-          </>
-        }
-        languages={languages}
-      >
-        <form noValidate onSubmit={onSubmit}>
-          <LoginStep key={title} t={String} values={{ stepCls: "in", shape }}>
-            <LoginTitle
-              t={String}
-              text={{ label: title }}
-              values={{
-                title: (element) => {
-                  titleRef.current = element as HTMLElement | null;
-                },
-              }}
-            >
-              {[...title].map((char, i) => (
-                <LoginChar key={i} t={String} text={{ char: char === " " ? " " : char }} />
-              ))}
-            </LoginTitle>
-            {sub ? <LoginSub t={String}>{sub}</LoginSub> : null}
-            {children}
-          </LoginStep>
-        </form>
-        <LoginDecode
-          t={String}
-          values={{
-            canvas: (element) => {
-              decodeCanvas.current = element as HTMLCanvasElement | null;
-            },
-          }}
-        />
-      </LoginShell>
-    </StageContext>
-  );
-}
-
-// FormProblem is a step's error line, announced as it appears; id lets the field it is about point at it.
-export function FormProblem({ id, message }: { id?: string; message: ReactNode }) {
-  return message ? <LoginError t={String} text={{ message: String(message) }} values={{ id: id ?? "" }} /> : null;
-}
-
-// NoteAction is a note under a step whose link does something on this page (go back a step, sign out, try again).
-export function NoteAction({ label, onPress, before }: { label: string; onPress: () => void; before?: ReactNode }) {
-  return (
-    <LoginNote t={String}>
-      {before}
-      <LoginAction
-        t={String}
-        label={label}
-        values={{
-          onPress: (event) => {
-            event.preventDefault();
-            onPress();
-          },
-          onKeyDown: (event) => pressKey(event as KeyboardEvent<Element>),
-        }}
-      />
-    </LoginNote>
-  );
-}
-
-// OtherAccount ends a session that stopped halfway (a pending second step, terms not yet accepted), to start again as
-// someone else; a sign-out that fails says the visitor is still signed in.
-export function OtherAccount() {
-  const { t } = useTranslation("common");
-  const errors = useErrors();
-  const signOut = useSignOut();
-  return (
-    <>
-      <NoteAction label={t("auth.mfa.otherAccount")} onPress={() => !signOut.isPending && signOut.mutate()} />
-      <FormProblem message={signOut.error ? t("signOutFailed", { reason: errors.message(signOut.error) }) : ""} />
-    </>
-  );
-}
-
-// The router's link where the board draws a note's <a>: a page of this app, without the search it may carry.
-function RouteLink({ href = "/", ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  return <Link to={href} {...props} />;
-}
-
-// NoteLink is a note under a step whose link goes to another sign-in page.
-export function NoteLink({ label, to, before }: { label: string; to: string; before?: ReactNode }) {
-  return (
-    <LoginNote t={String}>
-      {before}
-      <LoginLink t={String} link={RouteLink} label={label} values={{ to }} />
-    </LoginNote>
   );
 }

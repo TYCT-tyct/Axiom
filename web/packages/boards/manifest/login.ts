@@ -83,7 +83,8 @@ export default [
     text: { pitch: ".lg-pitch .h" },
     attributes: { home: { selector: ".lg-sea .brand", attribute: "href" } },
     elements: {
-      ".lg": { set: { class: `lg ${h("modeCls")}`, lang: h("lang") } },
+      // the site's brand reaches the focus ring and the accent (port design R10: not the primary button)
+      ".lg": { set: { class: `lg ${h("modeCls")}`, lang: h("lang"), style: h("vars") } },
       "canvas.sea": { set: { ref: h("seaCanvas") } },
       ".lg-pitch .kern": { unless: "noKern" },
       ".lg-side": { set: { id: "main", tabindex: "-1" } },
@@ -144,11 +145,12 @@ export default [
     slots: { label: ".lg-consent > span:last-child" },
     elements: {
       ".lg-consent": { set: { class: `lg-consent ${h("consentCls")}` } },
-      ".lg-consent input": { set: { oninput: h("onInput"), "aria-describedby": h("describedBy") } },
+      ".lg-consent input": {
+        set: { checked: h("checked"), onclick: h("onToggle"), "aria-describedby": h("describedBy") },
+      },
     },
     classes: { consentCls: ["bad"] },
   }),
-  part("LoginRow", ".lg-row", code, { children: ".lg-row" }),
   // A note under a step; a link in it goes to another page (link) or does something on this one (action).
   part("LoginNote", note, code, { children: note }),
   part("LoginLink", `${note} > a`, code, {

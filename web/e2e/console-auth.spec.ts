@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
-import { goodResetToken } from "./console-data.ts";
+import { demoDocuments, goodResetToken } from "./console-data.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail } from "./mock-auth.ts";
 
 // Signing in, session changes and two-step verification against the mocked API.
@@ -267,6 +267,14 @@ test.describe("two-step verification at sign-in", () => {
   });
 });
 
+// The password a reset sets, long enough for the contract.
+const newPassword = "a long new password nobody guesses";
+
+async function setNewPassword(page: Page) {
+  await page.getByLabel("密码", { exact: true }).fill(newPassword);
+  await page.getByRole("button", { name: "重设密码" }).click();
+}
+
 test.describe("resetting a forgotten password", () => {
   test("the password step leads to the reset page, which takes the email and says to check it", async ({ page }) => {
     const state = await mockConsole(page);
@@ -281,7 +289,7 @@ test.describe("resetting a forgotten password", () => {
     expect(state.log.filter((line) => line === "POST /auth/password-reset")).toHaveLength(1);
   });
 
-  test("a valid link sets the new password, leaves the address, and leads to sign-in", async ({ page }) => {
+  test("a link sets the new password once, which then signs in; the same link is then refused", async ({ page }) => {
     await mockConsole(page);
     // where the link's token goes: only into the body of the reset itself
     const carried: string[] = [];
@@ -292,21 +300,245 @@ test.describe("resetting a forgotten password", () => {
     await page.goto(`/console/reset-password#token=${goodResetToken}`);
     await expect(page.getByRole("heading", { level: 1, name: "设置新密码" })).toBeVisible();
     expect(new URL(page.url()).hash).toBe("");
-    await page.getByLabel("密码", { exact: true }).fill("a long new password nobody guesses");
-    await page.getByRole("button", { name: "重设密码" }).click();
+    await setNewPassword(page);
     await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
     await page.getByRole("link", { name: "去登录" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    await signIn(page, knownEmail, newPassword);
+    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
     expect(carried).toEqual(["body /api/console/v1/auth/password-reset/complete"]);
-  });
 
-  test("a spent or expired link says so and offers a new one", async ({ page }) => {
-    await mockConsole(page);
-    await page.goto("/console/reset-password#token=spent");
-    await page.getByLabel("密码", { exact: true }).fill("a long new password nobody guesses");
-    await page.getByRole("button", { name: "重设密码" }).click();
-    await expect(page.getByRole("alert")).toHaveText(/无效或已过期/);
+    await page.goto(`/console/reset-password#token=${goodResetToken}`);
+    await setNewPassword(page);
+    await expect(page.getByRole("alert")).toHaveText(/无效、已用过或已过期/);
+    await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
     await page.getByRole("button", { name: "重新申请" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
   });
+
+  test("a reset in a browser signed in as someone else offers to sign out before signing in", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto(`/console/reset-password#token=${goodResetToken}`);
+    await setNewPassword(page);
+    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
+    await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
+    await expect(page.getByRole("link", { name: "去登录" })).toHaveCount(0);
+    await page.getByRole("button", { name: "退出并换一个账户登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(state.level).toBe("none");
+  });
+
+  test("a reset whose answer never came offers the new password as well as a new link", async ({ page }) => {
+    await mockConsole(page);
+    await page.route("**/api/console/v1/auth/password-reset/complete", (route) => route.abort());
+    await page.goto(`/console/reset-password#token=${goodResetToken}`);
+    await setNewPassword(page);
+    await expect(page.getByRole("alert")).toHaveText(/新密码可能已经生效/);
+    await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "重新申请" })).toBeVisible();
+  });
+
+  test("a link opened in the same tab is taken, and starts its own form", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/reset-password");
+    await expect(page.getByRole("heading", { level: 1, name: "找回密码" })).toBeVisible();
+    await page.evaluate((token) => {
+      location.hash = `token=${token}`;
+    }, "spent-token");
+    await expect(page.getByRole("heading", { level: 1, name: "设置新密码" })).toBeVisible();
+    expect(new URL(page.url()).hash).toBe("");
+    await setNewPassword(page);
+    await expect(page.getByRole("alert")).toHaveText(/无效、已用过或已过期/);
+    // a second link, the good one, replaces the first and its refusal
+    await page.evaluate((token) => {
+      location.hash = `token=${token}`;
+    }, goodResetToken);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await setNewPassword(page);
+    await expect(page.getByRole("heading", { level: 1, name: "密码已重设" })).toBeVisible();
+  });
+
+  test("a new password the contract refuses says how long it must be", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto(`/console/reset-password#token=${goodResetToken}`);
+    await page.getByLabel("密码", { exact: true }).fill("too short");
+    await page.getByRole("button", { name: "重设密码" }).click();
+    await expect(page.getByRole("alert")).toHaveText(/至少要 12 个字符/);
+  });
+
+  test("a limit keeps the request's button disabled for as long as the answer says", async ({ page }) => {
+    // no sea running, so moving the clock thirty seconds on does not draw thirty seconds of frames
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await mockConsole(page);
+    await page.clock.install();
+    await page.route("**/api/console/v1/auth/password-reset", (route) =>
+      route.fulfill({
+        status: 429,
+        headers: { "Retry-After": "30" },
+        json: { error: { code: "rate_limited", message: "rate_limited" } },
+      }),
+    );
+    await page.goto("/console/reset-password");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    const submit = page.getByRole("button", { name: "发送重设邮件" });
+    await submit.click();
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+    await expect(submit).toBeDisabled();
+    await page.clock.runFor(29_000);
+    await expect(submit).toBeDisabled();
+    await page.clock.runFor(2_000);
+    await expect(submit).toBeEnabled();
+  });
+
+  test("the way back from the reset page keeps where the visitor was going", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/keys");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByRole("link", { name: "忘记密码？" }).click();
+    await page.getByRole("link", { name: "返回登录" }).click();
+    await signIn(page);
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/console/keys");
+  });
 });
+
+test.describe("the sign-in steps", () => {
+  test("while a sign-in is out the step cannot be left, so its answer signs in the address it was for", async ({
+    page,
+  }) => {
+    await mockConsole(page);
+    let answer!: () => void;
+    const held = new Promise<void>((resolve) => (answer = resolve));
+    await page.route("**/api/console/v1/auth/sign-in", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+    await page.getByRole("button", { name: "登录", exact: true }).click();
+    await expect(page.getByRole("button", { name: "换个邮箱" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "忘记密码？" })).toHaveCount(0);
+    answer();
+    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  });
+
+  test("an address the contract refuses takes the visitor back to the email step", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await signIn(page, "a");
+    await expect(page.getByLabel("邮箱")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveText(/不像一个邮箱地址/);
+  });
+
+  test("switching the language keeps what was typed", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+    await page.getByRole("link", { name: "EN", exact: true }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "Enter your password" })).toBeVisible();
+    await expect(page.getByLabel("Password", { exact: true })).toHaveValue(knownPassword);
+  });
+
+  test("the latest way in says why it failed, not an earlier one", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, oauth_providers: ["github"], passkeys: true };
+    await page.route("**/api/console/v1/auth/oauth/start", (route) =>
+      route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
+    );
+    await page.route("**/api/console/v1/auth/passkeys/begin", (route) =>
+      route.fulfill({
+        status: 429,
+        headers: { "Retry-After": "30" },
+        json: { error: { code: "rate_limited", message: "rate_limited" } },
+      }),
+    );
+    await page.goto("/console/sign-in?oauth=failed");
+    await expect(page.getByRole("alert")).toHaveText(/这次登录没有完成/);
+    await page.getByRole("button", { name: "使用 GitHub 继续" }).click();
+    await expect(page.getByRole("alert")).not.toHaveText(/这次登录没有完成/);
+    await page.getByRole("button", { name: "使用通行密钥" }).click();
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+  });
+
+  test("a long address breaks inside the phone's form", async ({ page }) => {
+    await mockConsole(page);
+    await page.setViewportSize({ width: 360, height: 800 });
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").fill(`${"w".repeat(64)}@example.com`);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await expect(page.getByLabel("密码", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
+  });
+
+  test("the site's brand colour is the focus ring of the sign-in fields", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, brand_color: "#335ddf" };
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").focus();
+    const { ring, accent } = await page.evaluate(() => {
+      const field = document.querySelector(".lg-field") as HTMLElement;
+      const probe = document.createElement("i");
+      probe.style.color = "var(--accentT)";
+      field.append(probe);
+      const accent = getComputedStyle(probe).color;
+      probe.remove();
+      return { ring: getComputedStyle(field).outlineColor, accent };
+    });
+    expect(ring).toBe(accent);
+    expect(ring).not.toBe("rgb(7, 151, 185)");
+  });
+});
+
+test.describe("accepting updated documents on the board", () => {
+  test("switching the language keeps the box as the form would send it", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.legal = demoDocuments().filter((document) => document.locale === "zh");
+    signedInAs(state);
+    await page.goto("/console/consent");
+    const box = page.getByLabel("我已阅读并同意上述服务条款和隐私政策。");
+    await box.check();
+    await page.getByRole("link", { name: "EN", exact: true }).click();
+    await expect(
+      page.getByLabel("I have read and agree to the terms of service and privacy policy above."),
+    ).toBeChecked();
+    await expect(page.getByRole("button", { name: "Accept and continue" })).toBeEnabled();
+  });
+});
+
+// WCAG 2.2's 3:1 for a control's edge against its own fill, from the colours the page computes.
+function contrast(a: string, b: string) {
+  const luminance = (rgb: string) => {
+    const [r, g, bl] = (rgb.match(/\d+(\.\d+)?/g) ?? []).slice(0, 3).map((v) => {
+      const c = Number(v) / 255;
+      return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    }) as [number, number, number];
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+for (const scheme of ["light", "dark"] as const) {
+  test(`the sign-in controls' edges hold 3:1 against their fill (${scheme})`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await expect(page.getByLabel("邮箱")).toBeVisible();
+    const edges = await page.evaluate(() =>
+      [".lg-field", ".lg-btn:not(.primary)", ".lg-consent .box"]
+        .map((selector) => document.querySelector(selector) as HTMLElement | null)
+        .filter((element) => element !== null)
+        .map((element) => {
+          const style = getComputedStyle(element);
+          return { edge: style.boxShadow.match(/rgba?\([^)]*\)/)?.[0] ?? "", fill: style.backgroundColor };
+        }),
+    );
+    expect(edges.length).toBeGreaterThan(0);
+    for (const { edge, fill } of edges) expect(contrast(edge, fill)).toBeGreaterThanOrEqual(3);
+  });
+}

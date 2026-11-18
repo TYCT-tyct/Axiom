@@ -38,7 +38,8 @@ const scenes: Scene[] = [
     signedIn: false,
     open: async (page) => {
       await goto(page, "sign-in");
-      await page.getByLabel(/^(邮箱|Email)$/).fill("you@example.com");
+      // the longest unbroken address the contract allows a local part, which the step's sentence must wrap
+      await page.getByLabel(/^(邮箱|Email)$/).fill(`${"w".repeat(64)}@example.com`);
       await page.getByRole("button", { name: /^(继续|Continue)$/ }).click();
       await page.getByLabel(/^(密码|Password)$/).waitFor();
     },

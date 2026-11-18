@@ -21,6 +21,8 @@ export type MockState = AuthState &
   BillMockState & {
     site: Schemas["Site"];
     legal: Schemas["LegalDocument"][];
+    // whether the reset link's token (goodResetToken) has been used
+    resetSpent?: boolean;
     legalAccepted: boolean;
     balance: Schemas["Balance"];
     keys: Schemas["Key"][];
