@@ -1,5 +1,4 @@
 import { FormError, SubmitButton, TextField } from "@axiom/ui";
-import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
 import { readForm } from "../forms";
@@ -7,15 +6,15 @@ import { Gate, useVerifyMfa } from "../session";
 import { AuthFrame, type Brand, OtherAccount } from "./frame";
 
 // MfaPage asks a signed-in password for its second step.
-export function MfaPage({ brand, extra }: { brand?: Brand; extra?: ReactNode }) {
+export function MfaPage({ brand }: { brand?: Brand }) {
   return (
     <Gate stage="pending">
-      <MfaForm brand={brand} extra={extra} />
+      <MfaForm brand={brand} />
     </Gate>
   );
 }
 
-function MfaForm({ brand, extra }: { brand?: Brand; extra?: ReactNode }) {
+function MfaForm({ brand }: { brand?: Brand }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const verify = useVerifyMfa();
@@ -50,7 +49,6 @@ function MfaForm({ brand, extra }: { brand?: Brand; extra?: ReactNode }) {
           {t("auth.mfa.submit")}
         </SubmitButton>
       </form>
-      {extra}
     </AuthFrame>
   );
 }

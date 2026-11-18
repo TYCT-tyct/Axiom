@@ -1,48 +1,27 @@
 import { FormError, SubmitButton, TextField } from "@axiom/ui";
-import { type ReactNode, useState } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
 import { readForm } from "../forms";
 import { Gate, useSignIn } from "../session";
 import { AuthFrame, type Brand } from "./frame";
 
-// SignInPage is the page of an app's guests; what it says about the app's purpose and where else a guest can go is the
-// app's (description, footer).
-export function SignInPage({
-  description,
-  footer,
-  brand,
-  extra,
-}: {
-  description: string;
-  footer?: ReactNode;
-  brand?: Brand;
-  extra?: ReactNode;
-}) {
+// SignInPage is the page of an app's guests; what it says about the app's purpose is the app's (description).
+export function SignInPage({ description, brand }: { description: string; brand?: Brand }) {
   return (
     <Gate stage="guest">
-      <SignInForm description={description} footer={footer} brand={brand} extra={extra} />
+      <SignInForm description={description} brand={brand} />
     </Gate>
   );
 }
 
-function SignInForm({
-  description,
-  footer,
-  brand,
-  extra,
-}: {
-  description: string;
-  footer?: ReactNode;
-  brand?: Brand;
-  extra?: ReactNode;
-}) {
+function SignInForm({ description, brand }: { description: string; brand?: Brand }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const [missing, setMissing] = useState(false);
   const signIn = useSignIn();
   return (
-    <AuthFrame title={t("auth.signIn.title")} description={description} footer={footer} brand={brand}>
+    <AuthFrame title={t("auth.signIn.title")} description={description} brand={brand}>
       <form
         noValidate
         className="space-y-4"
@@ -64,7 +43,6 @@ function SignInForm({
           {t("auth.signIn.submit")}
         </SubmitButton>
       </form>
-      {extra}
     </AuthFrame>
   );
 }
