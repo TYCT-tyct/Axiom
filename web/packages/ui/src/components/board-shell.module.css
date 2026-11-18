@@ -58,7 +58,7 @@
 
 /* Paper gets the page alone, in one column: none of the bar, sidebar, tabs or notices (docs/frontend.md「打印」). */
 @media print {
-  .root [data-shell] :is(header, aside, nav[data-shell="tabs"]),
+  .root [data-shell] :is(header, aside, nav[data-shell="tabs"], [data-print="hidden"]),
   .banner,
   .skip {
     display: none;

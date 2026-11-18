@@ -70,6 +70,34 @@ export const rulings: Ruling[] = [
     board: { selector: ".p-keys .wv.w2 .qcard" },
     page: { selector: ".p-keys .wv.w2 .qcard" },
   },
+  ...frame.map((ruling) => inScene("console bill", ruling)),
+  {
+    scene: "console bill",
+    basis: "#816 O23: run-out forecast has no basis on the backend",
+    board: { selector: ".p-bill > .sxP > .qcard.hero .qhl > p, .p-bill > .sxP > .qcard.hero .qrun" },
+  },
+  {
+    scene: "console bill",
+    basis: "#816 O19, O20: auto top-up and invoices & bank transfer are not built",
+    board: { selector: ".p-bill > .sxP > .qcard.rows" },
+  },
+  {
+    scene: "console bill",
+    basis: "L15: the account balance and batch rows replace the board's demo figures and statement rows",
+    ...both(".p-bill .qcard.hero .qhl > b.qbig.xl, .p-bill .qcard.flush .qtbl tbody td"),
+  },
+  {
+    scene: "console bill",
+    basis: "L15: billing navigation and the balance breakdown are live API sections absent from the board",
+    page: { selector: ".p-bill > .qph > .qpa nav, .p-bill > div:last-child section" },
+  },
+  // Axiom CJK Console is cut at a single static weight (wght 330, web/scripts/fonts/sources.json), whereas the board
+  // draws MiSansVF at 500 (h1) (docs/frontend.md「字体」).
+  {
+    scene: "console bill",
+    basis: "§5.4: Axiom CJK Console is cut at wght 330 (sources.json), while the board draws MiSansVF at 500",
+    ...both(".p-bill .qph h1"),
+  },
   {
     scene: "console usage",
     basis: "#816 O23: month-end forecast and budget have no basis",

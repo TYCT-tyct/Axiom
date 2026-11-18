@@ -1,21 +1,20 @@
-import { consoleApi, type Schemas, unwrapWithStatus } from "@axiom/api";
-import { can, LoadMore, readForm, useErrors, useSession } from "@axiom/app";
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { can, useErrors, useSession } from "@axiom/app";
 import {
   Button,
-  DataState,
-  EmptyState,
+  Card,
+  Cluster,
+  DataTable,
+  Field,
   FormError,
-  PageHeader,
-  Panel,
+  Note,
+  Stack,
   SubmitButton,
-  Table,
-  Td,
-  TextField,
-  Th,
   useFormat,
+  usePageTitle,
 } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { balanceQuery, redemptionsQuery } from "../queries";
 import {
@@ -27,263 +26,332 @@ import {
   type Sendable,
   writeRedemption,
 } from "../redeem";
+import { useBillAttempt } from "./bill-attempt";
+import { BillPagedList, BillShell } from "./bill-shell";
 
-// The redeem page turns a code into credit and lists what this account redeemed before. A code is shown once by the
-// person who hands it out; the page never reads it back, and the history carries its last four characters only.
-export default function Redeem() {
-  const { t } = useTranslation();
-  return (
-    <>
-      <PageHeader title={t("nav.redeem")} description={t("redeem.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
-        <RedeemPanel />
-        <History />
-      </div>
-    </>
-  );
-}
+type RedeemedResult = Schemas["RedeemCodeRedemption"];
+type RedemptionRow = Schemas["RedeemCodeRedemption"];
 
-// useRedeemRequest is the redemption being made: the code in this page's memory and the key that makes a retry the
-// same redemption. Only the key of an answer that did not arrive survives a reload, and the form asks for the code
-// again under it; a refusal is the only answer that allows a new key.
-function useRedeemRequest(onRedeemed: (redemption: Schemas["RedeemCodeRedemption"]) => void) {
-  const client = useQueryClient();
-  const { user, account } = useSession();
-  const scope = `${user.id}/${account}/redeem`;
-  const [initial] = useState(() => readRedemption(scope));
-  const [redemption, setRedemption] = useState<Redemption>(
-    () => initial ?? { state: "editing", key: crypto.randomUUID() },
-  );
-  const [failure, setFailure] = useState<unknown>(null);
-  const change = (next: Redemption) => {
-    setRedemption(next);
-    writeRedemption(scope, next);
-  };
-  type Sent = { from: Sendable; request: RedeemRequest };
-  const redeem = useMutation({
-    // Recorded before it is sent: a lost answer leaves this key to send the code again.
-    onMutate: ({ from, request }: Sent) => change({ state: "unknown", key: from.key, request }),
-    mutationFn: ({ from, request }: Sent) =>
-      unwrapWithStatus(
+type RedeemState = {
+  attempt: Redemption;
+  pending: boolean;
+  failure?: unknown;
+  redeemed?: RedeemedResult;
+};
+
+type RedeemSubmission = { from: Sendable; request: RedeemRequest };
+
+function useRedeemController(scope: string) {
+  const queryClient = useQueryClient();
+  const { state, start, finish, change } = useBillAttempt<RedeemState>(scope, "redeem", () => ({
+    attempt: readRedemption(scope) ?? { state: "editing", key: crypto.randomUUID() },
+    pending: false,
+  }));
+  // A code stays with the form that received it. A new route can observe the key and the outcome.
+  const local = useRef<{ key: string; request: RedeemRequest } | null>(null);
+
+  const submit = useMutation({
+    mutationFn: ({ from, request }: RedeemSubmission) =>
+      unwrap(
         consoleApi.POST("/api/console/v1/redeem-codes", {
-          params: { header: { "Idempotency-Key": from.key } },
           body: request,
+          params: { header: { "Idempotency-Key": from.key } },
         }),
       ),
-    onSuccess: ({ data }) => {
-      setFailure(null);
-      onRedeemed(data);
-      change({ state: "editing", key: crypto.randomUUID() });
-      void client.invalidateQueries({ queryKey: balanceQuery.queryKey });
-      void client.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
+    onSuccess: (redeemed, { from }) => {
+      const committed = finish(from.key, (current) => {
+        const attempt = { state: "editing" as const, key: crypto.randomUUID() };
+        writeRedemption(scope, attempt);
+        return { ...current, attempt, redeemed };
+      });
+      if (committed) {
+        void queryClient.invalidateQueries({ queryKey: balanceQuery.queryKey });
+        void queryClient.invalidateQueries({ queryKey: redemptionsQuery.queryKey });
+      }
     },
-    onError: (error: unknown, sent: Sent) => {
-      setFailure(error);
-      change(afterFailure(sent.from, sent.request, error, () => crypto.randomUUID()));
+    onError: (failure, { from, request }) => {
+      finish(from.key, (current) => {
+        const next = afterFailure(from, request, failure, () => crypto.randomUUID());
+        const attempt = next.state === "unknown" ? { state: "unknown" as const, key: next.key } : next;
+        writeRedemption(scope, attempt);
+        return { ...current, attempt, failure };
+      });
     },
   });
-  return { redemption, failure, setFailure, redeeming: redeem.isPending, redeem, change };
+
+  const reset = () =>
+    change((current) => {
+      if (current.pending) return undefined;
+      const attempt = { state: "editing" as const, key: crypto.randomUUID() };
+      writeRedemption(scope, attempt);
+      local.current = null;
+      return { attempt, pending: false };
+    });
+
+  const send = ({ from, request }: RedeemSubmission) => {
+    if (
+      start(from.key, (current) => {
+        writeRedemption(scope, { state: "unknown", key: from.key });
+        return { ...current, failure: undefined };
+      })
+    ) {
+      local.current = { key: from.key, request };
+      submit.mutate({ from, request });
+    }
+  };
+
+  const { attempt, failure, redeemed, pending } = state;
+  const redemption =
+    attempt.state === "unknown" && local.current?.key === attempt.key
+      ? { ...attempt, request: local.current.request }
+      : attempt;
+  return { redemption, failure, redeemed, pending, send, reset };
 }
 
-function RedeemPanel() {
+function RedeemedCard({ redeemed, onAgain }: { redeemed: RedeemedResult; onAgain: () => void }) {
   const { t } = useTranslation();
-  const allowed = can(useSession(), "balance.top_up");
-  const [done, setDone] = useState<Schemas["RedeemCodeRedemption"] | null>(null);
-  const { redemption, failure, setFailure, redeeming, redeem, change } = useRedeemRequest(setDone);
-  const [problem, setProblem] = useState<"missing" | "long" | null>(null);
-  const submit = (form: HTMLFormElement) => {
-    if (redeeming || redemption.state === "reused") {
-      return;
-    }
-    // A code this page still holds goes out again as it was sent; after a reload it is asked for again, under the key
-    // that came back from storage.
-    if (redemption.state === "unknown" && redemption.request) {
-      setProblem(null);
-      redeem.mutate({ from: redemption, request: redemption.request });
-      return;
-    }
-    const read = readCode(readForm(form));
-    if (read === "missing" || read === "long") {
-      setFailure(null);
-      setProblem(read);
-      return;
-    }
-    setProblem(null);
-    redeem.mutate({ from: redemption, request: read });
-  };
-  if (!allowed) {
-    return (
-      <Panel title={t("redeem.title")}>
-        <p className="px-4 py-3 text-t3">{t("redeem.forbidden")}</p>
-      </Panel>
-    );
-  }
-  if (done) {
-    return <Redeemed redemption={done} onAgain={() => setDone(null)} />;
-  }
+  const format = useFormat();
   return (
-    <Panel title={t("redeem.title")}>
-      <CodeForm
-        redemption={redemption}
-        failure={failure}
-        problem={problem}
-        pending={redeeming}
-        onSubmit={submit}
-        onRestart={() => change({ state: "editing", key: crypto.randomUUID() })}
-      />
-    </Panel>
+    <Card title={t("redeem.redeemed")}>
+      <Stack gap={12}>
+        <p>{t("redeem.redeemedBody", { amount: format.money(redeemed.amount), hint: redeemed.code_hint })}</p>
+        <span>
+          {redeemed.expires_at
+            ? t("redeem.redeemedExpires", { at: format.dateTime(new Date(redeemed.expires_at)) })
+            : t("redeem.redeemedNever")}
+        </span>
+        <Cluster gap={8}>
+          <Button variant="secondary" onClick={onAgain}>
+            {t("redeem.again")}
+          </Button>
+        </Cluster>
+      </Stack>
+    </Card>
   );
 }
 
-// CodeForm asks for one code and says where the redemption stands. A code is shown once, by whoever hands it out, so
-// the field is never filled from what was sent; after a reload of an unanswered attempt it is asked for again.
-function CodeForm({
+function RedeemStatusNotice({ redemption }: { redemption: Redemption }) {
+  const { t } = useTranslation();
+  if (redemption.state === "reused") return <FormError>{t("redeem.reused")}</FormError>;
+  if (redemption.state === "unknown") {
+    return <Note title={t(redemption.request ? "redeem.unknown" : "redeem.unknownAgain")} />;
+  }
+  return null;
+}
+
+function RedeemSubmitRow({
   redemption,
-  failure,
-  problem,
   pending,
-  onSubmit,
   onRestart,
 }: {
   redemption: Redemption;
-  failure: unknown;
-  problem: "missing" | "long" | null;
   pending: boolean;
-  onSubmit: (form: HTMLFormElement) => void;
+  onRestart: () => void;
+}) {
+  const { t } = useTranslation();
+  const isUnknown = redemption.state === "unknown";
+  const isReused = redemption.state === "reused";
+  return (
+    <Cluster gap={8}>
+      {!isReused ? (
+        <SubmitButton pending={pending}>{isUnknown ? t("redeem.resend") : t("redeem.submit")}</SubmitButton>
+      ) : null}
+      {isUnknown || isReused ? (
+        <Button variant="ghost" disabled={pending} onClick={onRestart}>
+          {t("redeem.restart")}
+        </Button>
+      ) : null}
+    </Cluster>
+  );
+}
+
+function RedeemForm({
+  code,
+  problem,
+  failure,
+  redemption,
+  pending,
+  onCodeChange,
+  onSubmit,
+  onRestart,
+}: {
+  code: string;
+  problem: "missing" | "long" | null;
+  failure: unknown;
+  redemption: Redemption;
+  pending: boolean;
+  onCodeChange: (value: string) => void;
+  onSubmit: () => void;
   onRestart: () => void;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const asking = redemption.state === "editing" || (redemption.state === "unknown" && !redemption.request);
+  const fieldError = problem === "long" ? t("redeem.tooLong") : failure ? errors.field(failure, "code") : undefined;
+  const formError = failure ? errors.message(failure) : undefined;
   return (
-    <form
-      noValidate
-      className="space-y-4 p-4"
-      onSubmit={(event) => {
-        event.preventDefault();
-        onSubmit(event.currentTarget);
-      }}
-    >
-      <p className="max-w-prose text-ui text-t2">{t("redeem.intro")}</p>
-      <TextField
-        label={t("redeem.code")}
-        hint={t("redeem.codeHint")}
-        name="code"
-        maxLength={64}
-        autoComplete="off"
-        spellCheck={false}
-        disabled={!asking}
-        error={problem === "long" ? t("redeem.tooLong") : errors.field(failure, "code")}
-      />
-      {problem === "missing" ? <FormError>{t("redeem.missing")}</FormError> : null}
-      {failure ? <FormError>{errors.message(failure)}</FormError> : null}
-      {redemption.state === "unknown" ? (
-        <p className="text-label text-t3">{redemption.request ? t("redeem.unknown") : t("redeem.unknownAgain")}</p>
-      ) : null}
-      {redemption.state === "reused" ? <p className="text-label text-t3">{t("redeem.reused")}</p> : null}
-      <CodeActions redemption={redemption} pending={pending} onRestart={onRestart} />
-    </form>
+    <Card title={t("redeem.title")} lede={t("redeem.intro")}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!pending) onSubmit();
+        }}
+      >
+        <Stack gap={12}>
+          <RedeemStatusNotice redemption={redemption} />
+          <Field
+            label={t("redeem.code")}
+            hint={t("redeem.codeHint")}
+            value={code}
+            disabled={!asking || pending}
+            spellCheck={false}
+            autoComplete="off"
+            maxLength={64}
+            error={fieldError}
+            onChange={(event) => onCodeChange(event.target.value)}
+          />
+          {problem === "missing" ? <FormError>{t("redeem.missing")}</FormError> : null}
+          {formError ? <FormError>{formError}</FormError> : null}
+          <RedeemSubmitRow redemption={redemption} pending={pending} onRestart={onRestart} />
+        </Stack>
+      </form>
+    </Card>
   );
 }
 
-// CodeActions offers what the state allows: a new attempt once the old one is known to be over, and a send while the
-// code can still be typed.
-function CodeActions({
+function submitRedemption({
+  code,
   redemption,
   pending,
-  onRestart,
+  send,
+  onProblem,
 }: {
+  code: string;
   redemption: Redemption;
   pending: boolean;
-  onRestart: () => void;
+  send: (vars: { from: Sendable; request: RedeemRequest }) => void;
+  onProblem: (next: "missing" | "long" | null) => void;
 }) {
+  if (pending) return;
+  if (redemption.state === "unknown" && redemption.request) {
+    onProblem(null);
+    send({ from: redemption, request: redemption.request });
+    return;
+  }
+  const parsed = readCode({ code });
+  if (parsed === "missing" || parsed === "long") return onProblem(parsed);
+  onProblem(null);
+  if (redemption.state === "editing" || redemption.state === "unknown") {
+    send({ from: redemption, request: parsed });
+  }
+}
+
+function RedeemFormCard({ allowed }: { allowed: boolean }) {
   const { t } = useTranslation();
+  const session = useSession();
+  const scope = session.account ? `${session.user.id}/${session.account}` : session.user.id;
+  const ctrl = useRedeemController(scope);
+  const [code, setCode] = useState("");
+  const [problem, setProblem] = useState<"missing" | "long" | null>(null);
+
+  if (!allowed) {
+    return (
+      <Card title={t("redeem.title")} lede={t("redeem.intro")}>
+        <Note title={t("redeem.forbidden")} />
+      </Card>
+    );
+  }
+  if (ctrl.redeemed) {
+    return (
+      <RedeemedCard
+        redeemed={ctrl.redeemed}
+        onAgain={() => {
+          setCode("");
+          setProblem(null);
+          ctrl.reset();
+        }}
+      />
+    );
+  }
   return (
-    <div className="flex justify-end gap-2">
-      {redemption.state === "editing" ? null : (
-        <Button size="md" onClick={onRestart} disabled={pending}>
-          {t("redeem.restart")}
-        </Button>
+    <RedeemForm
+      code={code}
+      problem={problem}
+      failure={ctrl.failure}
+      redemption={ctrl.redemption}
+      pending={ctrl.pending}
+      onCodeChange={(value) => {
+        setCode(value);
+        if (problem) setProblem(null);
+      }}
+      onSubmit={() =>
+        submitRedemption({
+          code,
+          redemption: ctrl.redemption,
+          pending: ctrl.pending,
+          send: ctrl.send,
+          onProblem: setProblem,
+        })
+      }
+      onRestart={() => {
+        setProblem(null);
+        ctrl.reset();
+      }}
+    />
+  );
+}
+
+function RedeemHistoryCard() {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const query = useInfiniteQuery(redemptionsQuery);
+  return (
+    <BillPagedList
+      query={query}
+      title={t("redeem.history")}
+      emptyTitle={t("redeem.empty")}
+      emptyBody={t("redeem.emptyBody")}
+      renderTable={(rows) => (
+        <DataTable<RedemptionRow>
+          label={t("redeem.history")}
+          rows={rows}
+          rowKey={(row) => row.id}
+          columns={[
+            { key: "code", header: t("redeem.col.code"), cell: (row) => row.code_hint },
+            {
+              key: "amount",
+              header: t("redeem.col.amount"),
+              align: "end",
+              cell: (row) => format.money(row.amount),
+            },
+            {
+              key: "redeemed",
+              header: t("redeem.col.redeemed"),
+              cell: (row) => format.dateTime(new Date(row.redeemed_at)),
+            },
+            {
+              key: "expires",
+              header: t("redeem.col.expires"),
+              cell: (row) => (row.expires_at ? format.dateTime(new Date(row.expires_at)) : t("redeem.never")),
+            },
+          ]}
+        />
       )}
-      {redemption.state === "editing" || redemption.state === "unknown" ? (
-        <SubmitButton pending={pending}>
-          {redemption.state === "unknown" ? t("redeem.resend") : t("redeem.submit")}
-        </SubmitButton>
-      ) : null}
-    </div>
+    />
   );
 }
 
-function Redeemed({ redemption, onAgain }: { redemption: Schemas["RedeemCodeRedemption"]; onAgain: () => void }) {
+export default function RedeemPage() {
   const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Panel title={t("redeem.redeemed")}>
-      <div className="space-y-3 p-4">
-        <p className="text-t1">
-          {t("redeem.redeemedBody", { amount: format.money(redemption.amount), hint: redemption.code_hint })}
-        </p>
-        <p className="text-ui text-t3">
-          {redemption.expires_at
-            ? t("redeem.redeemedExpires", { at: format.dateTime(new Date(redemption.expires_at)) })
-            : t("redeem.redeemedNever")}
-        </p>
-        <Button size="md" onClick={onAgain}>
-          {t("redeem.again")}
-        </Button>
-      </div>
-    </Panel>
-  );
-}
+  const allowed = can(useSession(), "balance.top_up");
+  usePageTitle(t("nav.redeem"));
 
-function History() {
-  const { t } = useTranslation();
-  const history = useInfiniteQuery(redemptionsQuery);
-  const rows = history.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   return (
-    <Panel title={t("redeem.history")}>
-      <DataState
-        query={history}
-        isEmpty={() => rows.length === 0}
-        empty={<EmptyState title={t("redeem.empty")}>{t("redeem.emptyBody")}</EmptyState>}
-      >
-        {() => <HistoryTable rows={rows} />}
-      </DataState>
-      <LoadMore list={history} />
-    </Panel>
-  );
-}
-
-function HistoryTable({ rows }: { rows: Schemas["RedeemCodeRedemption"][] }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Table label={t("redeem.history")}>
-      <thead>
-        <tr>
-          <Th>{t("redeem.col.code")}</Th>
-          <Th className="text-right">{t("redeem.col.amount")}</Th>
-          <Th>{t("redeem.col.redeemed")}</Th>
-          <Th>{t("redeem.col.expires")}</Th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.id} className="hover:bg-s2">
-            <Td>
-              <span className="font-mono text-label">
-                {"…"}
-                {row.code_hint}
-              </span>
-            </Td>
-            <Td className="whitespace-nowrap text-right tabular-nums">{format.money(row.amount)}</Td>
-            <Td className="whitespace-nowrap">{format.dateTime(new Date(row.redeemed_at))}</Td>
-            <Td className="whitespace-nowrap">
-              {row.expires_at ? format.dateTime(new Date(row.expires_at)) : t("redeem.never")}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <BillShell activeTab="redeem" title={t("redeem.title")} subtitle={t("redeem.description")}>
+      <Stack gap={16}>
+        <RedeemFormCard allowed={allowed} />
+        <RedeemHistoryCard />
+      </Stack>
+    </BillShell>
   );
 }
