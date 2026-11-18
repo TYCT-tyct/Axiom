@@ -134,47 +134,46 @@
             "console/pages/statement",
             "console/pages/workspaces"
           ],
-          "bytes": 52488,
-          "sha256": "81d6e2398e4deef1e9b8b2dbc7022193fab2a074c7dc8ef9807fb1b180b5bb58",
-          "chars": "、。一万三上下不与两个中串为主么之也了事二于些人什仅仍从他付代令以们件价任份优会位何余作你使供便保修值做停允先兑入全公关其具内册再写冲准出分列刚创删别到制刷刻前力功加务动包化匹区匿单印厂原及发取受变口另只可台号各合同名后向否吧含启告员命和哪售商器回因图在地址型域基填处备复外多大太失如始字存它完定宜容密对导小少尚尝就展工已布常平年并序应废度建开式引张弱弹当录形径得快态性恢情意成我或户所手才打扣执扫找把报拒择持指按换据排接控推描提搜操擎支收改放政效数整文断新方无旧时明是显暂更最月有服期未本权条来构析果查标校格档检概模次款正步每求没法注流浅浏消深游源点片版牌状现理生用由申留登百的目直相看码础确示私秒称移稍稳空突立站端笔符第等策筛管箱精系索繁级线组经绑结给络绝统继续维缓编网置联能自航色节花行表被要见观览解言计认记许设证试话该详语误请读调负责败账费资走起超足跟路跳转载较输达过近还这连述退送选通速邀邮部都配里重量金钥链长闭问间阅附限除随隐需面音页项顺预频题额首验默（），：；？"
+          "bytes": 52096,
+          "sha256": "043054a931abe191f36d95fc22fd205c9a9105adc0bb508c8f3c510f05875a59",
+          "chars": "、。一万三上下不与两个中串为主么之也了事二于些人什仅仍他付代令以们件价任份优会位何余作你使例供便保修值做停允先兑入全公关其具内册再写冲准出分列刚创删别到制刷刻前力功加务动包化匹区匿单印厂原及发取受变口另只可台号各合同名后向否吧含启员命和哪售商器回因图在均型域基填处备复外多大太失如始字存它完定宜容密对导小少尝就展工已布常平年并序应废度建开式引张弱弹当录形径得快态性恢情意成我或户所手才打扣执扫找把拒择持指按换据排接控推描提搜操擎支收改放政效数整文断新方无旧时明是显暂更最月有服期未本权条来构析果查标校格档检模次款正步每求没法注流浅测浏消深游源点片版牌状现理生用由申留登百的目直相看码础确示私秒称移稍稳空突立站端笔符第等策筛算管箱精系索繁级线组经绑结给络绝统继续维缓网置联能自航色节花行表被要见观览角解言计认记许设证识试该详语误请读调负责败账费资走起超跟路跳转载较输达过近还这连述退送选通速邀邮部都配里重量金钥链长闭问间阅附限除随隐需面音页项顺预频题额首验默（），：；？"
         },
         {
-          "file": "axiom-cjk-console-400.8ab8ff36.woff2",
+          "file": "axiom-cjk-console-400.da3ded06.woff2",
           "pages": [
             "console/auth/register",
             "console/pages/balance",
-            "console/pages/notifications",
             "console/pages/orders",
             "console/pages/receipt",
             "console/pages/redeem",
-            "console/pages/settings",
             "console/pages/statement"
           ],
-          "bytes": 9008,
-          "sha256": "bdbd2f480173079556d18deb0659fd95406e219b8362ada3e8dd883d7db6599c",
-          "chars": "「」买交但低候偏充冻减去圾垃够套实审将底异待怎您批早核水永活渠然知破窗终致菜角订货购赠跌透途道醒键阈际降非餐"
+          "bytes": 5160,
+          "sha256": "6220c4e30035ffcb867ebc266fa475c16fe49ca1e13898ee4f5036fcc92931d5",
+          "chars": "买但低依去圾垃实审将待批早核水永渠答翻致订购赠透途道键际降"
         },
         {
-          "file": "axiom-cjk-console-400.64f996b4.woff2",
+          "file": "axiom-cjk-console-400.69b824fd.woff2",
           "pages": [
             "console/pages/balance",
             "console/pages/call",
             "console/pages/calls",
             "console/pages/keys",
-            "console/pages/orders",
-            "console/pages/provider-keys",
-            "console/pages/routing-presets",
-            "console/pages/settings",
-            "console/pages/statement",
-            "console/pages/workspaces"
+            "console/pages/models",
+            "console/pages/notifications",
+            "console/pages/overview",
+            "console/pages/settings"
           ],
-          "bytes": 4736,
-          "sha256": "5a27e2b73fe5930249fcca89fa9a2d027ae9ff106544bb8b80442dfdd2c39cb1",
-          "chars": "产免决剩即响天子客宽层属己总束止段毫汇测清答算类翻耗至进钱"
+          "bytes": 9824,
+          "sha256": "9813560b563a310726cd034bb21ce2479650f99ec781471627a743bf286020f1",
+          "chars": "「」义今估候偏免况减告善围地址境够套妥子尚屉底异归忽怎您截报抽日昨束概止此汇活滤环略知短破程窗细终缀缩舍范菜询货足跃跌那醒错阈非餐"
         },
         {
-          "file": "axiom-cjk-console-400.a87f4904.woff2",
+          "file": "axiom-cjk-console-400.33dc5827.woff2",
           "pages": [
+            "console/pages/balance",
+            "console/pages/call",
+            "console/pages/calls",
             "console/pages/keys",
             "console/pages/notifications",
             "console/pages/orders",
@@ -183,18 +182,26 @@
             "console/pages/request-presets",
             "console/pages/routing-presets",
             "console/pages/security",
+            "console/pages/statement",
             "console/pages/workspaces"
           ],
-          "bytes": 6320,
-          "sha256": "facda89f2340a9a89e6cd8c32df9fe9984734b231308657e6cb3124cd304c7dd",
-          "chars": "丢例依信八共划则升参周善四境头好妥安封币必息抹括掉替机某框母添温照环白种纹缀识辑返那须"
+          "bytes": 7100,
+          "sha256": "9642caa98a6b0bb00cc3eb419b25a50cc9c661d018d3689a9a4dc48c603b27ae",
+          "chars": "丢交从信充共决冻则剩升即参周响天头好安客属币总息掉替机框段母添清然照白种类纹编耗至衡规话辑返进"
         },
         {
-          "file": "axiom-cjk-console-400.83a1675e.woff2",
-          "pages": ["console/pages/overview", "console/pages/redeem", "console/pages/routing-presets"],
-          "bytes": 5896,
-          "sha256": "651b6e3277ac49ca4980a7a28f6077c21f818f992d2d3ded4d955d12a8f14568",
-          "chars": "严伪况几副勾吐吞品固均增尾带延影摘日比沿真着累练细绩者营落衡规让训询质运迟适钮错靠高"
+          "file": "axiom-cjk-console-400.7dde901d.woff2",
+          "pages": [
+            "console/pages/provider-keys",
+            "console/pages/redeem",
+            "console/pages/request-presets",
+            "console/pages/routing-presets",
+            "console/pages/settings",
+            "console/pages/workspaces"
+          ],
+          "bytes": 6432,
+          "sha256": "685ac86b0a4a014a67768f464d47da4c86189a4bd61595159984d155d450a1fd",
+          "chars": "严产伪八几划副勾吐吞品四固增封尾层己带延影必抹括摘某比沿温真着累练绩者营落让训质运迟适钮钱靠须高"
         }
       ]
     },

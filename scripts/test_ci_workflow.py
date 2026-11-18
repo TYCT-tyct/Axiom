@@ -363,7 +363,13 @@ class BuildChecks(unittest.TestCase):
     def test_web_checks_keep_every_non_browser_check(self):
         recipe = re.search(r"^web-checks: web-embed\n(.*?)(?=^\S|\Z)", JUSTFILE, re.M | re.S).group(1)
         commands = re.findall(r"^    \{\{ web \}\} (.+)$", recipe, re.M)
-        self.assertEqual(commands, ["typecheck", "lint", "limits", "unused", "duplicates", "test", "budget"])
+        proofs = ("scripts/boards.test.ts", "packages/boards/src/regions.test.ts")
+        self.assertEqual(commands, [
+            "typecheck", "lint", "limits", "unused", "duplicates",
+            f"test --exclude {proofs[0]} --exclude {proofs[1]}",
+            f"test --maxWorkers=1 {' '.join(proofs)}",
+            "budget",
+        ])
 
 
 def browser_report(names, status="passed"):

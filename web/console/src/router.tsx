@@ -101,13 +101,18 @@ const routeTree = root.addChildren([
       validateSearch: (search: Record<string, unknown>) => ({
         since: text(search.since),
         until: text(search.until),
+        preset: callRangePreset(search.preset),
         model: text(search.model),
         client_app: text(search.client_app),
         key_id: text(search.key_id),
         workspace_id: text(search.workspace_id),
         status: callStatus(search.status),
+        fell_back:
+          search.fell_back === true || search.fell_back === "true" || search.fell_back === "1" ? true : undefined,
         request_id: text(search.request_id),
         group_by: callGroupBy(search.group_by),
+        tab: search.tab === "sessions" ? ("sessions" as const) : undefined,
+        call: text(search.call),
       }),
       component: lazyRouteComponent(() => import("./pages/calls")),
     }),
@@ -171,6 +176,10 @@ function callStatus(value: unknown) {
 
 function callGroupBy(value: unknown) {
   return value === "day" || value === "model" || value === "key" ? value : undefined;
+}
+
+function callRangePreset(value: unknown) {
+  return value === "today" || value === "d7" || value === "d30" || value === "month" ? value : undefined;
 }
 
 // An ability from the address is one the contract names; anything else is no filter, not a request it would refuse.

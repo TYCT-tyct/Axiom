@@ -1,5 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
 import { zh as announcements } from "./announcements";
+import { zh as callsBoard } from "./calls";
 import { zh as keysMessages } from "./keys";
 import { zh as overviewBoard } from "./overview";
 import { zh as providerKeys } from "./provider-keys";
@@ -13,6 +14,7 @@ import { zh as workspaces } from "./workspaces";
 
 export default {
   announcements,
+  callsBoard,
 
   forbiddenHint: "请联系工作区的管理员。",
 
@@ -327,36 +329,6 @@ export default {
     cacheHit: "缓存",
     ms: "{{value}} 毫秒",
     tokens: "{{input}} / {{output}}",
-  },
-  call: {
-    title: "调用详情",
-    description: "这次调用的结果、用量和费用。",
-    back: "调用记录",
-    notFound: "找不到这次调用",
-    notFoundBody: "它可能不属于这个账户，或编号有误。",
-    summary: "概要",
-    status: "结果",
-    id: "调用编号",
-    at: "开始时间",
-    model: "模型",
-    app: "客户端",
-    requestClass: "请求类别",
-    serviceTier: "服务层级",
-    finish: "结束原因",
-    latency: "总耗时",
-    firstToken: "首个 token 耗时",
-    cache: "响应缓存",
-    cacheHit: "命中",
-    cacheHitBody: "这次调用由响应缓存作答，没有请求上游，也没有计费。",
-    session: "会话",
-    subagent: "子 agent",
-    key: "使用的 key",
-    workspace: "工作区",
-    ip: "来源地址",
-    cost: "费用",
-    free: "这次调用免单，没有收费。",
-    usage: "用量",
-    noUsage: "这次调用没有产生用量。",
   },
   security: {
     description: "两步验证和你的账户信息。",
