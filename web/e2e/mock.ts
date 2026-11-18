@@ -105,7 +105,11 @@ export function paged<T>(items: T[], query: URLSearchParams, ignore: readonly st
     .filter(([name]) => name !== "cursor" && name !== "limit" && !ignore.includes(name))
     .join("&");
   const cursor = query.get("cursor");
-  const [stamp, offset] = cursor ? cursor.split(":") : [filters, "0"];
+  const sep = cursor ? cursor.lastIndexOf(":") : -1;
+  if (cursor && sep < 0) {
+    return undefined;
+  }
+  const [stamp, offset] = cursor ? [cursor.slice(0, sep), cursor.slice(sep + 1)] : [filters, "0"];
   const start = Number(offset);
   if (stamp !== filters || !Number.isInteger(start)) {
     return undefined;
