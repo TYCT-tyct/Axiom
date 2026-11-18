@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test as base, expect, type Page, type TestInfo } from "@playwright/test";
@@ -20,18 +20,64 @@ const referenceRoot = design
     ? join(design, "project")
     : design
   : join(root, "inputs");
-const test = base.extend<object, { boardsURL: string }>({
+const test = base.extend<object, { boardsURL: { url: string; rendered: string } }>({
   boardsURL: [
     // biome-ignore lint/correctness/noEmptyPattern: Playwright requires a destructured fixture argument.
     async ({}, use) => {
       // The production build cache restores only site, console and admin. Build this isolated demo from this tree.
       const outDir = mkdtempSync(join(tmpdir(), "axiom-boards-demo-"));
-      await build({ root, logLevel: "error", build: { outDir } });
+      const proof = mkdtempSync(join(root, "rendered-proof-"));
+      // A pure region plus its demo data, inside the existing shell. The controller supplies only shell values;
+      // none of its refs, draw methods or lifecycle hooks may fill in missing region content.
+      writeFileSync(
+        join(proof, "index.html"),
+        '<!doctype html><html lang="zh-CN"><body><div id="root"></div><script type="module" src="./main.tsx"></script></body></html>',
+      );
+      writeFileSync(
+        join(proof, "main.tsx"),
+        `
+import { createElement } from "react";
+import { createRoot } from "react-dom/client";
+import { slices } from "../src/demo.ts";
+import "../src/demo-fonts.css";
+import styles from "../demo/main.module.css";
+document.body.classList.add(styles.root);
+const query = new URLSearchParams(location.search);
+const scene = slices[query.get("board")];
+const name = query.get("region");
+const [Source, Shell, Slice, shellData, data, shellZH, zh] = await Promise.all([
+  scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"]()
+]);
+class Model extends Source { setState(patch) { Object.assign(this.state, patch); } }
+const model = new Model({theme: query.get("theme") === "dark" ? "深色" : "浅色"});
+model.go(query.get("page"));
+await Promise.all(["Axiom Sans", "Axiom CJK", "Axiom Mono"].map(font => document.fonts.load('400 16px "' + font + '"')));
+createRoot(document.getElementById("root")).render(createElement(Shell,
+  {...shellData(key => shellZH[key]), values: model.renderVals()},
+  createElement(Slice, data(key => zh[key]))
+));
+`,
+      );
+      try {
+        await build({
+          root,
+          logLevel: "error",
+          build: {
+            outDir,
+            rollupOptions: {
+              input: [join(root, "index.html"), join(proof, "index.html")],
+            },
+          },
+        });
+      } finally {
+        rmSync(proof, { recursive: true, force: true });
+      }
       const server = await preview({ root, build: { outDir }, preview: { port: 0, strictPort: true } });
       const address = server.httpServer.address();
       if (!address || typeof address === "string") throw new Error("no demo server port");
       try {
-        await use(`http://localhost:${address.port}`);
+        const url = `http://localhost:${address.port}`;
+        await use({ url, rendered: `${url}/${proof.slice(root.length + 1)}/index.html` });
       } finally {
         await new Promise<void>((resolve, reject) =>
           server.httpServer.close((error) => (error ? reject(error) : resolve())),
@@ -150,6 +196,81 @@ async function boardInteractions(page: Page, name: string) {
 
 test.use({ timezoneId: "Asia/Shanghai" });
 
+// Both artboards and generated shells keep their authored width; the other viewport tests clipping, not a redraw.
+for (const region of regions.filter((region) => region.render))
+  for (const width of [1440, 390])
+    for (const colorScheme of ["light", "dark"] as const) {
+      test(`${region.board} ${region.name} rendered ${width} ${colorScheme}: artboard diff`, async ({
+        browser,
+        page,
+        boardsURL,
+      }, info) => {
+        const view: Stage = {
+          viewport: { width, height: 900 },
+          colorScheme,
+          timezoneId: "Asia/Shanghai",
+          time: new Date("2026-10-24T04:00:00Z"),
+        };
+        const errors = collectErrors(page);
+        await page.addInitScript(() => {
+          document.addEventListener("securitypolicyviolation", (event) =>
+            console.error(`CSP ${event.violatedDirective}: ${event.blockedURI}`),
+          );
+        });
+        await page.setViewportSize(view.viewport);
+        await page.emulateMedia({ colorScheme, reducedMotion: "no-preference" });
+        await stagePaused(page, view);
+        const query = new URLSearchParams({
+          board: region.board,
+          region: region.name,
+          page: region.page as string,
+          theme: colorScheme,
+        });
+        await page.goto(`${boardsURL.rendered}?${query}`);
+        expect(await page.evaluate(() => document.compatMode)).toBe("CSS1Compat");
+        await expect(page.locator(`.p-${region.page}`)).toBeAttached();
+        // These roots belong to the frame, not its scrolling page. A page consumer mounts phone sheets here too.
+        await page.evaluate(() => {
+          const frame = document.querySelector(".fr") as Element;
+          for (const sheet of document.querySelectorAll(".lgsheet")) frame.append(sheet);
+        });
+        const reference = await openBoard(
+          browser,
+          {
+            file: `${region.board}.dc.html`,
+            engines: [],
+            props: { ...region.render?.props, theme: colorScheme === "dark" ? "深色" : "浅色" },
+            actions: region.render?.actions,
+          },
+          referenceRoot,
+          view,
+        );
+        try {
+          const captureWidth = region.render?.viewport?.width ?? 1440;
+          await expect(page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+          await expect(reference.page.locator(".fr")).toHaveJSProperty("clientWidth", captureWidth);
+          await fontsLoaded(reference.page, reference.fonts);
+          await page.evaluate(() => document.fonts.ready.then(() => {}));
+          await Promise.all([page.clock.runFor(5000), reference.page.clock.runFor(5000)]);
+          const shell = regions.find((entry) => entry.board === region.board && entry.name === "Shell");
+          await reference.page.addStyleTag({
+            content: (shell?.omit ?? []).map((selector) => `${selector}{display:none!important}`).join("\n"),
+          });
+          const result = await compare(
+            reference.page,
+            page,
+            [],
+            `rendered-${region.board}-${region.name}-${width}-${colorScheme}`,
+            info,
+          );
+          expect(result.error, `see ${result.diff ?? result.page}`).toBeUndefined();
+          expect(errors).toEqual([]);
+        } finally {
+          await reference.close();
+        }
+      });
+    }
+
 for (const board of cases)
   for (const width of [1440, 390])
     for (const colorScheme of ["light", "dark"] as const) {
@@ -173,7 +294,7 @@ for (const board of cases)
         await page.setViewportSize(view.viewport);
         await page.emulateMedia({ colorScheme, reducedMotion: "no-preference" });
         await stagePaused(page, view);
-        await page.goto(`${boardsURL}/${board.name}${board.region ? "/regions" : ""}?theme=${colorScheme}`);
+        await page.goto(`${boardsURL.url}/${board.name}${board.region ? "/regions" : ""}?theme=${colorScheme}`);
         await expect(page.locator(board.selector).first()).toBeAttached();
         await page.evaluate(() => document.fonts.ready.then(() => {}));
         const reference = await openBoard(
