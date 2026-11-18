@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { TextField } from "@axiom/ui";
+import { Field } from "@axiom/ui";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -132,7 +132,7 @@ function BackendFields({ prefix, view, error }: { prefix: BackendPrefix; view: B
   const errors = useErrors();
   return (
     <>
-      <TextField
+      <Field
         label={t(`${prefix}.url`)}
         hint={t(`${prefix}.urlHint`)}
         name="url"
@@ -141,7 +141,7 @@ function BackendFields({ prefix, view, error }: { prefix: BackendPrefix; view: B
         defaultValue={view.url ?? ""}
         error={errors.field(error, "settings/url")}
       />
-      <TextField
+      <Field
         label={t(`${prefix}.key`)}
         hint={t(`${prefix}.keyHint`)}
         name="key"

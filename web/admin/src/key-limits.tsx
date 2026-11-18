@@ -1,6 +1,6 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Button, Icon, TextField } from "@axiom/ui";
+import { ActionButton, Field } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "./change";
@@ -81,10 +81,9 @@ export function KeyLimitsCard({
         rows={rows}
         action={
           editable ? (
-            <Button size="md" onClick={() => setOpen(true)}>
-              <Icon name="pencil" />
+            <ActionButton onClick={() => setOpen(true)} icon="pencil">
               {t("settings.keyLimits.edit")}
-            </Button>
+            </ActionButton>
           ) : undefined
         }
       />
@@ -120,7 +119,7 @@ function KeyLimitsDialog({
       fields={(error) => (
         <>
           {limits.map(({ name }) => (
-            <TextField
+            <Field
               key={name}
               label={t(`settings.keyLimits.field.${name}`)}
               hint={t(`settings.keyLimits.hint.${level}`, { min, max })}

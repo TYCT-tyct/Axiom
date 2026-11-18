@@ -1,15 +1,16 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors, useSession } from "@axiom/app";
 import {
-  Button,
+  ActionButton,
   CheckField,
   DataState,
-  Icon,
+  Field,
   moneyInput,
-  PageHeader,
+  PageHead,
   parseMoney,
-  SelectField,
-  TextField,
+  Select,
+  Tag,
+  Text,
   useFormat,
 } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -49,7 +50,7 @@ export default function SettingsPage() {
   const owner = useQuery(accountQuery(useSession().account));
   return (
     <>
-      <PageHeader title={t("nav.settings")} description={t("settings.description")} />
+      <PageHead title={t("nav.settings")} lede={t("settings.description")} />
       <PageBody>
         <DataState query={owner}>
           {(account) => (
@@ -123,7 +124,10 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
     return [
       t(`settings.field.${name}`),
       <span key={name}>
-        {duration(shown)} <span className="text-t4">{t("settings.raw", { seconds: format.number(shown) })}</span>{" "}
+        {duration(shown)}{" "}
+        <Text as="span" tone="faint">
+          {t("settings.raw", { seconds: format.number(shown) })}
+        </Text>{" "}
         {value === undefined ? standard : own}
       </span>,
     ];
@@ -159,10 +163,9 @@ function Current({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: Admin
       <Facts
         title={t("settings.title")}
         action={
-          <Button size="md" onClick={() => setOpen(true)}>
-            <Icon name="pencil" />
+          <ActionButton onClick={() => setOpen(true)} icon="pencil">
             {t("settings.edit")}
-          </Button>
+          </ActionButton>
         }
         rows={rows}
       />
@@ -233,7 +236,7 @@ function SettingsFields({
   return (
     <>
       {durations.map(({ name, min, max }) => (
-        <TextField
+        <Field
           key={name}
           label={t(`settings.field.${name}`)}
           hint={t("settings.hint", {
@@ -248,7 +251,7 @@ function SettingsFields({
           error={errors.field(error, name)}
         />
       ))}
-      <SelectField
+      <Select
         label={t("settings.field.billing_preference")}
         hint={t("settings.billing.hint")}
         name="billing_preference"
@@ -258,7 +261,7 @@ function SettingsFields({
         <option value="wallet_first">{t("settings.billing.values.wallet_first")}</option>
         <option value="subscription_only">{t("settings.billing.values.subscription_only")}</option>
         <option value="wallet_only">{t("settings.billing.values.wallet_only")}</option>
-      </SelectField>
+      </Select>
       {view.defaults.model_prices_public !== undefined ? (
         <CheckField
           label={t("settings.field.model_prices_public")}
@@ -268,7 +271,7 @@ function SettingsFields({
           defaultChecked={view.settings.model_prices_public ?? view.defaults.model_prices_public}
         />
       ) : null}
-      <TextField
+      <Field
         label={t("settings.field.new_key_daily_limit")}
         hint={t("settings.limitHint", { currency: currency ?? "" })}
         name="new_key_daily_limit"
@@ -313,13 +316,11 @@ function EditDialog({
       }}
       verdict
       done={(out) => (
-        <p role="status" className="flex items-start gap-2 text-t1">
-          <Icon
-            name={out.modelPricesSaved ? "check" : "alert"}
-            className={out.modelPricesSaved ? "mt-0.5 shrink-0 text-ok" : "mt-0.5 shrink-0 text-bad"}
-          />
-          <span>{t(out.modelPricesSaved ? "settings.saved" : "settings.publicPrices.notSaved")}</span>
-        </p>
+        <div role="status">
+          <Tag tone={out.modelPricesSaved ? "ok" : "bad"} icon={out.modelPricesSaved ? "check" : "alert"}>
+            {t(out.modelPricesSaved ? "settings.saved" : "settings.publicPrices.notSaved")}
+          </Tag>
+        </div>
       )}
       onClose={onClose}
     />
