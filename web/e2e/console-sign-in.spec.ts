@@ -134,6 +134,28 @@ test.describe("the sign-in steps", () => {
     await expect.poll(() => asked.length).toBe(1);
   });
 
+  for (const before of ["nothing", "another address"] as const) {
+    test(`the email step sends the address the field holds, written without input events over ${before}`, async ({
+      page,
+    }) => {
+      await mockConsole(page);
+      await page.goto("/console/sign-in");
+      const field = page.getByLabel("邮箱");
+      if (before === "another address") await field.fill("old@example.com");
+      // a password manager's fill: the value changes, the page hears nothing
+      await field.evaluate((input, email) => {
+        (input as HTMLInputElement).value = email;
+      }, knownEmail);
+      await page.getByRole("button", { name: "继续", exact: true }).click();
+      await expect(page.getByText(`用 ${knownEmail} 登录`)).toBeVisible();
+      await page.getByLabel("密码", { exact: true }).fill(knownPassword);
+      const sent = page.waitForRequest("**/api/console/v1/auth/sign-in");
+      await page.getByRole("button", { name: "登录", exact: true }).click();
+      expect((await sent).postDataJSON().email).toBe(knownEmail);
+      await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+    });
+  }
+
   test("an older server's session, without totp_enabled, is asked for a code as before", async ({ page }) => {
     const state = await mockConsole(page);
     state.legacySession = true;

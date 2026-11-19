@@ -101,21 +101,25 @@ function useSignInFlow(stage: Stage, ready: boolean) {
   const start = useStartSession();
   const { attempt, returned } = useSignInAttempt();
   const [step, setStep] = useState<"email" | "password">("email");
-  const [email, setEmail] = useState("");
   const [missing, setMissing] = useState(false);
   const password = useRef<HTMLInputElement | null>(null);
   const failed = attempt.failure?.kind === "password" ? attempt.failure.error : null;
   const refused = aboutEmail(failed);
+  const { email, emailInput, typeEmail } = useAddress(stage, attempt, refused, () => setMissing(false));
+  // The email step takes the address the field holds when it is sent, which a password manager may have written
+  // without a word to the page; that is the one the password step shows and signs in.
+  const confirmAddress = () => {
+    const typed = emailInput.current?.value ?? email;
+    if (typed !== email) typeEmail(typed);
+    setMissing(!typed.trim());
+    if (ready && typed.trim() && (!refused || typed !== email)) setStep("password");
+  };
   const submit = () => {
+    if (step === "email") return confirmAddress();
     const address = email.trim();
     const secret = password.current?.value ?? "";
-    setMissing(step === "email" ? !address : !secret);
-    if (!ready) return;
-    if (step === "email") {
-      if (address && !refused) setStep("password");
-      return;
-    }
-    if (!secret) return;
+    setMissing(!secret);
+    if (!ready || !secret) return;
     // not cancellable: a sign-in sent may set its cookie, and its answer is the session the page then shows
     attempt.run(
       "password",
@@ -140,14 +144,10 @@ function useSignInFlow(stage: Stage, ready: boolean) {
     ready,
     returned,
     password,
+    emailInput,
     submit,
     problem: missing ? missingText : failure,
-    typeEmail: (value: string) => {
-      setEmail(value);
-      setMissing(false);
-      if (refused) attempt.dismiss();
-      stage.hear({ type: "email", len: value.trim().length, ok: looksLikeEmail(value.trim()) });
-    },
+    typeEmail,
     typePassword: () => setMissing(false),
     back: () => {
       attempt.dismiss();
@@ -155,6 +155,20 @@ function useSignInFlow(stage: Stage, ready: boolean) {
       setStep("email");
     },
   };
+}
+
+// useAddress holds the address the email step has heard, the field it is typed in, and what typing it does: it
+// clears a refusal of the address before, and tells the stage how whole it looks.
+function useAddress(stage: Stage, attempt: Attempt, refused: boolean, typed: () => void) {
+  const [email, setEmail] = useState("");
+  const emailInput = useRef<HTMLInputElement | null>(null);
+  const typeEmail = (value: string) => {
+    setEmail(value);
+    typed();
+    if (refused) attempt.dismiss();
+    stage.hear({ type: "email", len: value.trim().length, ok: looksLikeEmail(value.trim()) });
+  };
+  return { email, emailInput, typeEmail };
 }
 
 // The page's request (attempt.ts), and the provider's failed return, which is said until the first request starts and
@@ -200,6 +214,9 @@ function EmailStep({ flow }: { flow: Flow }) {
           fieldCls: problem ? "bad" : "",
           describedBy: problem ? "sign-in-problem" : "",
           invalid: problem ? true : undefined,
+          input: (element) => {
+            flow.emailInput.current = element as HTMLInputElement | null;
+          },
           onInput: (event) => flow.typeEmail((event.currentTarget as HTMLInputElement).value),
         }}
       />
