@@ -217,13 +217,47 @@ export function useSignIn() {
   });
 }
 
+// A second step answers a 401 for its own pending sign-in being over, which the step ends itself (useEndPending): the
+// cache's rule that a 401 ends the session on the page (providers.tsx) would leave the cookie naming it.
 export function useVerifyMfa() {
   const { api } = useAuth();
   const start = useStartSession();
   return useMutation({
     mutationFn: api.verifyMfa,
     onSuccess: (grant) => start(grant.csrf_token),
+    meta: { pendingStep: true },
   });
+}
+
+// pendingOver reports a second step's answer that the pending sign-in itself is over: its attempts are spent, or it
+// expired. No code or passkey can finish it any more, even a right one; a wrong code is invalid_code instead.
+export const pendingOver = (error: unknown) =>
+  error instanceof ApiError && error.status === 401 && error.code === "unauthenticated";
+
+// A pending sign-in that is over is signed out by its step (useEndPending), so the cookie holds no session and a
+// reload lands on the sign-in page, never on a step that cannot be finished; that page says why the visitor is back
+// (useSignInEnded).
+let ended = false;
+
+export function useEndPending() {
+  const signOut = useSignOut();
+  return async () => {
+    ended = true;
+    try {
+      await signOut.mutateAsync();
+    } catch (error) {
+      ended = false;
+      throw error;
+    }
+  };
+}
+
+export function useSignInEnded() {
+  const [shown] = useState(() => ended);
+  useEffect(() => {
+    ended = false;
+  }, []);
+  return shown;
 }
 
 // A sign-out's answer expired the cookie, so the browser has no session: a read of it still out from before must not

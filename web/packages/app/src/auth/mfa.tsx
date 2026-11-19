@@ -2,10 +2,11 @@ import { FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
 import { readForm } from "../forms";
-import { Gate, useVerifyMfa } from "../session";
+import { Gate, pendingOver, useEndPending, useVerifyMfa } from "../session";
 import { AuthFrame, type Brand, OtherAccount } from "./frame";
 
-// MfaPage asks a signed-in password for its second step.
+// MfaPage asks a signed-in password for its second step. A pending sign-in that is over is signed out, and the sign-in
+// page says so.
 export function MfaPage({ brand }: { brand?: Brand }) {
   return (
     <Gate stage="pending">
@@ -18,6 +19,7 @@ function MfaForm({ brand }: { brand?: Brand }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const verify = useVerifyMfa();
+  const endPending = useEndPending();
   return (
     <AuthFrame
       title={t("auth.mfa.title")}
@@ -32,7 +34,7 @@ function MfaForm({ brand }: { brand?: Brand }) {
           event.preventDefault();
           const code = (readForm(event.currentTarget).code ?? "").trim();
           if (code && !verify.isPending) {
-            verify.mutate({ code });
+            verify.mutate({ code }, { onError: (error) => pendingOver(error) && void endPending().catch(() => {}) });
           }
         }}
       >

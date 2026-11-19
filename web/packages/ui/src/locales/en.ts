@@ -76,7 +76,7 @@ export default {
     email: "Email",
     password: "Password",
     missing: "Enter your email and password.",
-    signIn: { title: "Sign in", submit: "Sign in" },
+    signIn: { title: "Sign in", submit: "Sign in", ended: "Your last sign-in ended. Sign in again." },
     mfa: {
       title: "Two-step verification",
       description: "Enter the 6-digit code from your authenticator app, or a recovery code.",
@@ -84,6 +84,8 @@ export default {
       hint: "A recovery code looks like xxxx-xxxx-xxxx-xxxx and works once.",
       submit: "Verify",
       otherAccount: "Sign in as someone else",
+      over: "This sign-in has ended. Sign in again.",
+      again: "Sign in again",
     },
     enroll: {
       title: "Turn on two-step verification first",

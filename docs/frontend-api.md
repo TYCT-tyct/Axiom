@@ -62,7 +62,8 @@
 | `level` | `pending_mfa`（密码对了、等第二因素）、`password`、`mfa`；契约里每个操作的 `x-axiom-level` 写它至少要到哪一级 |
 | `csrf_token` | 页面启动时从这里拿，只放内存（Cookie 读不到，刷新页面就重新问） |
 | `permissions` | 本会话在自己范围（控制台是用户的账户，后台是平台）上的权限名，**只用来显示或隐藏**；每个请求服务端都会重新判断 |
-| `mfa_enabled` | 用户有没有 TOTP；后台据此决定是否进入开启流程 |
+| `mfa_enabled` | 用户有没有第二因素：控制台是 TOTP 或通行密钥，后台只算 TOTP（后台没有通行密钥）；后台据此决定是否进入开启流程 |
+| `totp_enabled` | 用户有没有设置验证器（TOTP），与通行密钥无关；可选，旧节点不返回，缺省时只能从 `mfa_enabled` 推断（有通行密钥时无法确认）。待验证会话里它为 `false` 表示第二步只能用通行密钥 |
 | `consent.required` | 还没接受的当前法律文本；有就先展示并调用 `acceptLegalDocuments`，在那之前除 `getSession`、`acceptLegalDocuments`、`signOut` 外的控制台操作都是 403 `consent_required` |
 
 ### 密码登录与第二因素
@@ -74,7 +75,7 @@ signIn ──200 status=signed_in──────────────▶ �
           └─ beginPasskeyMfa → 浏览器 WebAuthn → finishPasskeyMfa ───────▶ level=mfa
 ```
 
-- 只有签发会话的响应带新的 `Set-Cookie` 和 `csrf_token`（`SessionGrant`）：`signIn`、`verifyMfa`、`finishPasskeySignIn`、`finishPasskeyMfa`，页面要换掉内存里的旧令牌。`beginPasskeyMfa`、`beginPasskeySignIn` 只回挑战，不带令牌，**不要拿它的响应更新令牌**，否则下一个改数据的请求会因令牌为空而 403 `origin_rejected`。待验证会话只被 `verifyMfa`、通行密钥的第二步、`getSession` 和 `signOut` 接受，别的操作对它一律 401。
+- 只有签发会话的响应带新的 `Set-Cookie` 和 `csrf_token`（`SessionGrant`）：`signIn`、`verifyMfa`、`finishPasskeySignIn`、`finishPasskeyMfa`，页面要换掉内存里的旧令牌。`beginPasskeyMfa`、`beginPasskeySignIn` 只回挑战，不带令牌，**不要拿它的响应更新令牌**，否则下一个改数据的请求会因令牌为空而 403 `origin_rejected`。待验证会话只被 `verifyMfa`、通行密钥的第二步、`getSession` 和 `signOut` 接受，别的操作对它一律 401。第二步的 401 `unauthenticated`（尝试次数用完或过期；错码是 `invalid_code`）说明这次待验证登录已经结束，正确的码也不再有效：现有页面调 `signOut` 清掉它，回到登录页并说明原因，刷新也不会回到无法完成的第二步。
 - 邮箱不存在、密码错、用户停用的答案相同（`unauthenticated` 或 `invalid_credentials`）；页面不要区分。
 - **后台只认 `mfa` 级会话。** 没有 TOTP 的管理员登录后（`level=password`、`mfa_enabled=false`）只能走开启流程：`beginTotpSetup` 拿到密钥和 `otpauth` 地址（现有页面在本地画二维码，不把密钥交给外部服务）→ `confirmTotpSetup`（再填一次密码和新密钥生成的码）。后台没有通行密钥和第三方登录。
 - 改了认证因素（密码、TOTP、恢复码、通行密钥、第三方身份）后，这个用户的旧会话全部失效，当前设备拿到新会话（响应的 `Set-Cookie`）。令牌和恢复码怎么回来，**按操作区分**，不能一概按 `FactorChange` 处理：

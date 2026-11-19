@@ -77,7 +77,7 @@ export default {
     email: "邮箱",
     password: "密码",
     missing: "请填写邮箱和密码。",
-    signIn: { title: "登录", submit: "登录" },
+    signIn: { title: "登录", submit: "登录", ended: "上一次登录已经失效，请重新登录。" },
     mfa: {
       title: "两步验证",
       description: "输入验证器 App 里的 6 位验证码，或一条恢复码。",
@@ -85,6 +85,8 @@ export default {
       hint: "恢复码形如 xxxx-xxxx-xxxx-xxxx，每条只能用一次。",
       submit: "验证",
       otherAccount: "换一个账户登录",
+      over: "这次登录已经失效，请重新登录。",
+      again: "重新登录",
     },
     enroll: {
       title: "先开启两步验证",

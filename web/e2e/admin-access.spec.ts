@@ -55,6 +55,26 @@ test.describe("signing in", () => {
     expect(errors.filter((line) => !line.startsWith("Failed to load resource"))).toEqual([]);
   });
 
+  test("a two-step sign-in that is spent is signed out, and stays so after a reload", async ({ page }) => {
+    const state = await mockAdmin(page);
+    await page.goto("/");
+    await signIn(page, mfaEmail);
+    await expect(h1(page, "两步验证")).toBeVisible();
+    for (let i = 0; i < 5; i++) {
+      await page.getByLabel("验证码或恢复码").fill("000000");
+      await page.getByRole("button", { name: "验证" }).click();
+      await expect(page.getByRole("alert")).toHaveText(/验证码不对/);
+    }
+    // a right code once the attempts are spent: the server answers that the sign-in is over
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(h1(page, "登录")).toBeVisible();
+    await expect(page.getByText("上一次登录已经失效，请重新登录。")).toBeVisible();
+    expect(state.level).toBe("none");
+    await page.reload();
+    await expect(h1(page, "登录")).toBeVisible();
+  });
+
   test("a rate limit says how long to wait", async ({ page }) => {
     await mockAdmin(page);
     await page.goto("/sign-in");
