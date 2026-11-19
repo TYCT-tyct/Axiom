@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { loginPhoneWidth, useBoardMedia } from "../board-interaction";
 import { siteQuery } from "../queries";
 import type { Attempt } from "./attempt";
 import { NoteAction } from "./login-parts";
@@ -81,10 +82,13 @@ export function useStage(): Stage {
   );
 }
 
-// A site's name can be 100 characters: the brand keeps clear of the language switch, which on a phone sits over the sea
-// beside it, and the name ends in an ellipsis inside the room left (the board draws only short names).
+// A site's name can be 100 characters (the board draws only short ones): the brand keeps clear of the language switch,
+// which on a phone sits over the sea beside it, and the name wraps in the room left, anywhere if it must, whole on a
+// wide window. A phone's sea is a band 208px high, with the pitch under the brand: three lines are what fits, so there a
+// name longer than about 36 characters ends in an ellipsis rather than run into the pitch.
 const brandStyle = "right: 128px";
-const brandNameStyle = "min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap";
+const brandNameStyle = (phone: boolean) =>
+  `min-width: 0; overflow-wrap: anywhere${phone ? "; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden" : ""}`;
 
 // The Login board's names for the two languages, as its switch shows them.
 const languageLabels = { zh: "中文", en: "EN" } as const;
@@ -127,6 +131,7 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   });
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
+  const phone = useBoardMedia(loginPhoneWidth);
   return (
     <LoginShell
       t={(key) => (english ? ShellEN : ShellZH)[key]}
@@ -142,7 +147,7 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
       brand={
         <>
           <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
-          <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle }} />
+          <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle(phone) }} />
         </>
       }
       languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}

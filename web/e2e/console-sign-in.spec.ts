@@ -234,21 +234,23 @@ test.describe("the sign-in page's parts", () => {
     ).toBeVisible();
   });
 
-  test("a site name of 100 characters ends before the language switch on a phone", async ({ page }) => {
+  test("a site name of 100 characters wraps beside the language switch, whole on a wide window", async ({ page }) => {
     const state = await mockConsole(page);
-    state.site = { ...state.site, name: "W".repeat(100) };
-    await page.setViewportSize({ width: 360, height: 800 });
-    await page.goto("/console/sign-in");
+    state.site = { ...state.site, name: `${"W".repeat(60)} ${"W".repeat(39)}` };
     const brand = page.locator(".lg-sea .brand");
+    const name = brand.locator("span").last();
+    const cut = () => name.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+    await page.goto("/console/sign-in");
     await expect(brand).toContainText("WWW");
+    expect(await cut()).toBe(false);
+    await page.setViewportSize({ width: 360, height: 800 });
     const nav = await page.locator(".lg-top").boundingBox();
     const box = await brand.boundingBox();
+    const pitch = await page.locator(".lg-pitch").boundingBox();
+    // clear of the language switch beside it and of the pitch under it
     expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(nav?.x ?? 0);
-    const truncated = await brand
-      .locator("span")
-      .last()
-      .evaluate((name) => name.scrollWidth > name.clientWidth);
-    expect(truncated).toBe(true);
+    expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(pitch?.y ?? 0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(360);
   });
 });
 
