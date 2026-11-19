@@ -1,0 +1,13 @@
+/* On the phone a configuration line breaks before the address rather than inside the command, and anywhere in a word
+   longer than the line, without a character put into the text, which a reader copying it by hand would carry into the
+   command: the address is a box of its own, which the line moves down whole when it does not fit after the command. The
+   board's elements are named by attribute, which a module leaves as written. */
+.connect [class~="m"] pre span[class~="ln"] {
+  overflow-wrap: anywhere;
+}
+
+.connect [class~="m"] pre span[class~="adr"] {
+  display: inline-block;
+  max-width: 100%;
+  vertical-align: top;
+}

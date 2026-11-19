@@ -1,5 +1,5 @@
+import { type GuideClient, type GuideProtocol, keyGuide } from "@axiom/ui";
 import { expect, it } from "vitest";
-import { type GuideClient, type GuideProtocol, keyGuide } from "./key-guide";
 import en from "./locales/en";
 import zh from "./locales/zh";
 

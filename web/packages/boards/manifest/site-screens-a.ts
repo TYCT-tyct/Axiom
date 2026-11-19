@@ -5,6 +5,9 @@ import type { Region } from "../regions.ts";
 // steps (.hfm3) and what to settle before production (.hfm4). Each screen's script writes its holes (values); the page
 // runs the board's script on the shared frame loop (site/src/home/screens). The canvases each screen draws its own sea
 // on are the board's stand-ins (its screens below share the first screen's sea) and are left out.
+// What the screens' scripts and the engines set at run time, whose rules the regions keep: the current row, the lit
+// deepseek rows, the glass the whale passes behind, the tablet layout the frame marks.
+export const runTime = ["on", "hl", "hot", "lit", "wh-lit", "wh-under", "data-tab", "data-state"];
 const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
 // The states the scripts write into each class hole, so the region keeps the rules that select them.
@@ -111,10 +114,10 @@ const trustEnglish: Record<string, string> = {
 };
 
 // A screen fades in the first time it is seen (the board's .hfm.in); the script sets the hole.
-const entrance = (screen: string, hole: string) => ({
+export const entrance = (screen: string, hole: string) => ({
   [`.under > .${screen}`]: { set: { class: `hfm ${screen} {{${hole}}}` } },
 });
-const pressable = { set: { tabindex: "0", role: "button" } };
+export const pressable = { set: { tabindex: "0", role: "button" } };
 
 const screens = (board: string): Region[] => [
   {
@@ -189,4 +192,7 @@ const title: Region = { board: "Site", name: "ModelsTitle", roots: [".hfm2 .hl h
 const under: Region = { board: "Site", name: "Under", roots: [".hs > .under"], children: ".hs > .under" };
 
 /** @public loaded by regions.ts from the directory listing */
-export default [...["Site", "SitePhone"].flatMap(screens), title, under];
+export default [...["Site", "SitePhone"].flatMap(screens), title, under].map((region) => ({
+  ...region,
+  states: runTime,
+}));

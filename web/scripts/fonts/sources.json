@@ -25,7 +25,8 @@
   "pages": {
     "console": {
       "common": [""],
-      "console": [""]
+      "console": [""],
+      "console-regions": [""]
     },
     "admin": {
       "common": [""],
@@ -33,16 +34,24 @@
     },
     "site/home": {
       "common": ["brand", "preferences", "newVersion"],
-      "site": [""]
+      "site": [""],
+      "site-regions": [""]
     },
     "site/models": {
       "common": ["brand", "preferences", "newVersion", "publicModels", "state"],
       "site": [""]
+    },
+    "site/first": {
+      "common": ["brand", "preferences"],
+      "site": ["home", "navigation", "models", "signIn", "board", "language", "theme"]
     }
   },
   "routes": {
     "console": "console/src/main.tsx",
     "admin": "admin/src/main.tsx"
+  },
+  "entries": {
+    "site/models": "site/src/models.tsx"
   },
   "faces": [
     {
@@ -91,11 +100,11 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["site/home", "site/models"],
+      "pages": ["site/home", "site/models", "site/first"],
       "text": {
         "script": "han"
       },
-      "preload": ["site/home"]
+      "preload": ["site/first"]
     },
     {
       "family": "Axiom CJK Console",
@@ -133,7 +142,20 @@
         "script": "han",
         "keys": {
           "common": ["publicModels.title"],
-          "site": ["board.m2e2a3b1e5d"]
+          "site": ["board.m2e2a3b1e5d", "script.connect.comma", "script.connect.every"],
+          "site-regions": [
+            "m78d48a1986",
+            "m46cfd15f68",
+            "m5378bf24f6",
+            "m660c2c2cea",
+            "m9b68aa6c7d",
+            "m27dffa08b5",
+            "mc6aef08746",
+            "m45a6d115fd",
+            "m4ba35a8f55",
+            "m46ff80e47d",
+            "m15e09730c0"
+          ]
         }
       }
     },
@@ -141,11 +163,25 @@
       "family": "AX Serif",
       "source": "cjk-serif",
       "weight": "600",
-      "pages": ["site/models"],
+      "pages": ["site/home", "site/models"],
       "text": {
         "script": "latin",
         "keys": {
-          "common": ["publicModels.title"]
+          "common": ["publicModels.title"],
+          "site": ["board.m2e2a3b1e5d", "script.connect.comma", "script.connect.every"],
+          "site-regions": [
+            "m78d48a1986",
+            "m46cfd15f68",
+            "m5378bf24f6",
+            "m660c2c2cea",
+            "m9b68aa6c7d",
+            "m27dffa08b5",
+            "mc6aef08746",
+            "m45a6d115fd",
+            "m4ba35a8f55",
+            "m46ff80e47d",
+            "m15e09730c0"
+          ]
         }
       }
     }

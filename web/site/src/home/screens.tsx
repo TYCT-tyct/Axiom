@@ -1,27 +1,33 @@
 import Under from "@axiom/boards/Site/regions/Under";
 import { nearView } from "@axiom/fx";
 import { DataState } from "@axiom/ui";
-import { type ComponentType, useEffect, useRef, useState } from "react";
+import { type ComponentType, createContext, useContext, useEffect, useRef, useState } from "react";
 import styles from "./screens.module.css";
 
-type Screen = ComponentType<{ wide: boolean }>;
+type Screen = ComponentType<{ wide: boolean; onWhale: () => void }>;
+
+// What a screen calls when it meets a DeepSeek model (the whale's easter egg): the frame provides it, and it only comes
+// to anything when the whale is allowed to come (whale.ts).
+export const WhaleContext = createContext<() => void>(() => {});
 
 // The screens below the first, in the board's order (Site.template.html's sections, data-sec 1 to 6). Each one's code
-// loads when its place nears the view; a screen still to come (S2b, S2c) has nothing to load and takes no place.
-const slots: { sec: number; load?: () => Promise<Screen> }[] = [
-  { sec: 1 },
+// loads when its place nears the view.
+const slots: { sec: number; load: () => Promise<Screen> }[] = [
+  { sec: 1, load: () => import("./connect-screen").then((m) => m.ConnectScreen) },
   { sec: 2, load: () => import("./models-screen").then((m) => m.ModelsScreen) },
   { sec: 3, load: () => import("./steps-screen").then((m) => m.StepsScreen) },
   { sec: 4, load: () => import("./trust-screen").then((m) => m.TrustScreen) },
-  { sec: 5 },
-  { sec: 6 },
+  { sec: 5, load: () => import("./faq-screen").then((m) => m.FaqScreen) },
+  { sec: 6, load: () => import("./bed-screen").then((m) => m.BedScreen) },
 ];
 
 // Screens are the home page's screens below the first, inside the board's .under, which their rules select under.
 export function Screens({ wide }: { wide: boolean }) {
   return (
     <Under t={() => ""}>
-      {slots.map(({ sec, load }) => (load ? <Slot key={sec} sec={sec} load={load} wide={wide} /> : null))}
+      {slots.map(({ sec, load }) => (
+        <Slot key={sec} sec={sec} load={load} wide={wide} />
+      ))}
     </Under>
   );
 }
@@ -51,12 +57,13 @@ function Slot({ sec, load, wide }: { sec: number; load: () => Promise<Screen>; w
       cancel();
     };
   }, [load]);
+  const onWhale = useContext(WhaleContext);
   const retry = () => window.location.reload();
   const Loaded = loading.status === "success" ? loading.screen : null;
   return (
     <div ref={place} data-place={sec}>
       {Loaded ? (
-        <Loaded wide={wide} />
+        <Loaded wide={wide} onWhale={onWhale} />
       ) : (
         <div className={styles.waiting}>
           {loading.status === "error" ? (

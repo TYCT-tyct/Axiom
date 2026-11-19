@@ -18,6 +18,21 @@ const workspacePackages = new Map(
 );
 const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
+// exported finds what a package exports at a subpath as Node does: the exact entry, or else the pattern ("./x/*.zh")
+// with the longest part before its "*", then the longest key, whose two parts the subpath starts and ends with.
+function exported(exports: Record<string, string>, key: string) {
+  if (exports[key]) return exports[key];
+  const fits = Object.entries(exports)
+    .map(([pattern, target]) => ({ pattern, target, star: pattern.indexOf("*") }))
+    .filter(({ pattern, star }) => {
+      const [before, after] = [pattern.slice(0, star), pattern.slice(star + 1)];
+      return star >= 0 && key.startsWith(before) && key.endsWith(after) && key.length > before.length + after.length;
+    })
+    .sort((a, b) => b.star - a.star || b.pattern.length - a.pattern.length);
+  const best = fits[0];
+  return best?.target.replace("*", key.slice(best.star, key.length - (best.pattern.length - best.star - 1)));
+}
+
 function resolveImport(from: string, specifier: string) {
   if (specifier.startsWith(".")) {
     const base = join(dirname(from), specifier);
@@ -25,8 +40,8 @@ function resolveImport(from: string, specifier: string) {
   }
   const [, name = "", sub = ""] = /^(@[^/]+\/[^/]+)(\/.*)?$/.exec(specifier) ?? [];
   const pkg = workspacePackages.get(name);
-  const target = pkg?.exports[`.${sub}`];
-  return pkg && target && /\.tsx?$/.test(target) ? join(pkg.dir, target) : undefined;
+  const target = pkg && exported(pkg.exports, `.${sub}`);
+  return pkg && target && /\.tsx?$/.test(target) && isFile(join(pkg.dir, target)) ? join(pkg.dir, target) : undefined;
 }
 
 // A module's string literals, and what it takes from others: an import names the exports it uses ("*" for all of them,
@@ -128,16 +143,25 @@ function run(file: string, names: string[], walk: Walk) {
 
 const literalsOf = (files: Iterable<string>) => [...files].flatMap((file) => parse(file).literals);
 
-// routeLiterals returns an app's pages ("console/pages/keys") and the string literals each runs, the shell's included.
+// routeLiterals returns an app's pages ("console/pages/keys") with the modules each runs and the string literals in
+// them, the shell's included.
 export function routeLiterals(app: string, entry: string) {
   const shell = run(join(web, entry), [], { lazy: false, seen: new Set(), ran: new Set() });
-  const pages = new Map<string, Set<string>>();
+  const pages = new Map<string, { literals: Set<string>; files: Set<string> }>();
   for (const page of [...new Set([...shell].flatMap((file) => parse(file).lazy))].sort()) {
     const ran = run(page, ["default"], { lazy: true, seen: new Set(), ran: new Set() });
     const name = relative(join(web, app, "src"), page).replace(/\.tsx?$/, "");
-    pages.set(`${app}/${name}`, new Set([...literalsOf(shell), ...literalsOf(ran)]));
+    const files = new Set([...shell, ...ran]);
+    pages.set(`${app}/${name}`, { literals: new Set(literalsOf(files)), files });
   }
   return pages;
+}
+
+// moduleLiterals returns the modules a page module runs, now and later, and the string literals in them: a page that is
+// its own document (the website's models page) and not a route of an app's shell.
+export function moduleLiterals(file: string) {
+  const files = run(join(web, file), ["*"], { lazy: true, seen: new Set(), ran: new Set() });
+  return { literals: new Set(literalsOf(files)), files };
 }
 
 // names tells whether code naming these literals can show a key: a literal that is the key (or its plural forms' base),

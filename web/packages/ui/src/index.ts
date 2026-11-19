@@ -59,6 +59,7 @@ export { Text } from "./components/text";
 export { TextLink } from "./components/text-link";
 export { moneyInput, parseMoney, useFormat } from "./format";
 export { type CommonMessages, chooseLanguage, type Messages } from "./i18n";
+export { type GuideClient, type GuideProtocol, keyGuide } from "./key-guide";
 export { chooseTheme, currentTheme, subscribeTheme } from "./preferences";
 export { startApp } from "./start";
 export { writeStored } from "./storage";

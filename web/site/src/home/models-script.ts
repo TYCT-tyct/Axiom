@@ -1,8 +1,9 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import type { Schemas } from "@axiom/api";
 import { hash, reducedMotion, timeline } from "@axiom/fx";
 import { parseMoney } from "@axiom/ui";
 import type zh from "../locales/zh";
 import { bridge, leadOf, measurer } from "./models-leads";
+import { ask, subscribe } from "./public-models";
 import { firstSeen, type Script } from "./script";
 
 // The models-and-routes screen's script (Site.dc.html M2) on the site's published models (listPublicModels): the list
@@ -262,7 +263,6 @@ type Part = "list" | "panel" | "routes" | "leads" | "pick";
 class ModelsRun implements ModelsScript {
   private readonly clock;
   private readonly still = reducedMotion();
-  private readonly call = new AbortController();
   private readonly seen;
   private readonly resized = new ResizeObserver(() => this.place(false));
   private state: State = {
@@ -315,7 +315,15 @@ class ModelsRun implements ModelsScript {
     const arrived = new Promise<void>((done) => {
       this.arrive = done;
     });
-    this.fetchModels();
+    // the list and the time it came, from the page's one answer; a retry from here or anywhere replaces it for all
+    this.stopModels = subscribe((answer) => {
+      if (this.dead) return;
+      if (answer.status === "ready") {
+        this.set({ models: answer.models.data.map(modelOf), at: answer.at, error: undefined });
+        this.arrive();
+      } else if (answer.status === "failed") this.set({ error: { error: answer.error, at: answer.at } });
+      else this.set({ error: undefined });
+    });
     this.seen = firstSeen(stage, 0.3);
     Promise.all([this.seen.promise, arrived]).then(() => this.begin());
   }
@@ -334,21 +342,9 @@ class ModelsRun implements ModelsScript {
       .slice(0, NR);
   }
 
-  private fetchModels() {
-    unwrap(consoleApi.GET("/api/console/v1/models", { signal: this.call.signal })).then(
-      (data) => {
-        this.set({ models: data.data.map(modelOf), at: new Date(), error: undefined });
-        this.arrive();
-      },
-      (error: unknown) => {
-        if (!this.call.signal.aborted) this.set({ error: { error, at: Date.now() } });
-      },
-    );
-  }
-  private readonly refetch = () => {
-    this.set({ error: undefined });
-    this.fetchModels();
-  };
+  // the page's one answer for the models (public-models.ts), which the footer reads too
+  private readonly stopModels: () => void;
+  private readonly refetch = () => ask();
 
   private begin() {
     if (this.dead || this.still || this.all().length === 0) return;
@@ -531,7 +527,7 @@ class ModelsRun implements ModelsScript {
 
   destroy() {
     this.dead = true;
-    this.call.abort();
+    this.stopModels();
     this.seen.cancel();
     this.resized.disconnect();
     this.clock.end();

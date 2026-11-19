@@ -145,6 +145,21 @@ it("schedules nothing under reduced motion, and stops when it is turned on", asy
   expect(state().pending).toBe(false);
 });
 
+it("tells a script each change of the setting, as it happens, until it stops listening", async () => {
+  const { onMotion } = await loop();
+  const heard: boolean[] = [];
+  const stop = onMotion((allowed) => heard.push(allowed));
+  const change = (to: boolean) => {
+    reduce = to;
+    for (const listener of [...motionListeners]) listener();
+  };
+  change(true);
+  change(false);
+  stop();
+  change(true);
+  expect(heard).toEqual([false, true]);
+});
+
 it("lets go of everything when the last owner leaves, and the counter starts again from 0", async () => {
   const { own } = await loop();
   const [a, b] = [document.createElement("div"), document.createElement("div")];
@@ -210,4 +225,20 @@ it("moves a timeline's clock only on the loop's frames, and settles its sleeps f
   expect(later).toHaveBeenCalledWith(false);
   expect(await clock.sleep(1)).toBe(false);
   expect(state().owners).toBe(0);
+});
+
+it("tells a step still waiting when its timeline ends, and a step added after the end at once", async () => {
+  await loop();
+  const { timeline } = await import("./timeline");
+  const clock = timeline(document.createElement("div"));
+  const ended = vi.fn();
+  const done = vi.fn();
+  clock.each(() => false, done);
+  clock.each(() => true, ended);
+  clock.end();
+  expect(ended).toHaveBeenCalledTimes(1);
+  expect(done).toHaveBeenCalledTimes(1);
+  const late = vi.fn();
+  clock.each(() => true, late);
+  expect(late).toHaveBeenCalledTimes(1);
 });

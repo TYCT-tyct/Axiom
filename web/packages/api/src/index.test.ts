@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { consoleApi, isTransient, setCsrfToken, unwrap, unwrapEmpty } from "./index";
+import { consoleApi, isTransient, registrationOf, setCsrfToken, unwrap, unwrapEmpty } from "./index";
 
 function respond(status: number, data?: unknown) {
   return Promise.resolve({ data, response: new Response(null, { status, headers: { "X-Request-ID": "req-1" } }) });
@@ -124,5 +124,17 @@ describe("the requests that change data", () => {
     const get = await sent(() => consoleApi.GET("/api/console/v1/session", { baseUrl: "http://localhost" }));
     expect(get.headers.get("X-CSRF-Token")).toBeNull();
     expect(get.headers.get("Content-Type")).toBeNull();
+  });
+});
+
+describe("registrationOf", () => {
+  it.each([
+    [{ registration: "open", email_verification: true }, "open"],
+    [{ registration: "open", email_verification: false }, "closed"],
+    [{ registration: "open" }, "closed"],
+    [{ registration: "invite" }, "invite"],
+    [{ registration: "closed", email_verification: true }, "closed"],
+  ] as const)("reads %j as %s", (site, mode) => {
+    expect(registrationOf(site)).toBe(mode);
   });
 });

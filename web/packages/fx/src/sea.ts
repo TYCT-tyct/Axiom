@@ -17,6 +17,8 @@ export type OceanEngine = {
   still(): void;
   setLight(light: boolean): void;
   destroy(): void;
+  // the engine's sharks: the whale's ghost joins them, so the fish steer around it
+  world?: { sharks: object[] };
 };
 
 type Entrance = { play(variant?: string): void; seek(ms: number): void; rise(): void; destroy(): void };

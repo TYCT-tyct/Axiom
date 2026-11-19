@@ -21,7 +21,8 @@
     "e2e": "playwright test",
     "vitals": "playwright test -c playwright.vitals.config.ts",
     "journey": "playwright test -c playwright.journey.config.ts",
-    "boards": "node scripts/boards.ts"
+    "boards": "node scripts/boards.ts",
+    "site-assets": "node scripts/site-assets/connect-figure.ts"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

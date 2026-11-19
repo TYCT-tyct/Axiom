@@ -12,8 +12,9 @@ export type Timeline = {
   now: () => number;
   // sleep resolves true after ms of the screen's time, or false once the timeline has ended.
   sleep: (ms: number) => Promise<boolean>;
-  // each runs step on every frame, with the screen's time, until it returns false or the timeline ends.
-  each: (step: (now: number) => boolean) => void;
+  // each runs step on every frame, with the screen's time, until it returns false or the timeline ends; ended, if given,
+  // is called when the timeline ends first, so work waiting on the step can give up.
+  each: (step: (now: number) => boolean, ended?: () => void) => void;
   end: () => void;
 };
 
@@ -21,7 +22,7 @@ export function timeline(element: Element): Timeline {
   let time = 0;
   let live = true;
   const sleeps = new Set<{ at: number; done: (ok: boolean) => void }>();
-  const steps = new Set<(now: number) => boolean>();
+  const steps = new Map<(now: number) => boolean, (() => void) | undefined>();
   const release = own(element, (dt) => {
     time += dt * 1000;
     for (const sleep of [...sleeps]) {
@@ -30,7 +31,7 @@ export function timeline(element: Element): Timeline {
         sleep.done(true);
       }
     }
-    for (const step of [...steps]) {
+    for (const step of [...steps.keys()]) {
       if (!step(time)) steps.delete(step);
     }
   });
@@ -41,15 +42,18 @@ export function timeline(element: Element): Timeline {
         if (live) sleeps.add({ at: time + ms, done });
         else done(false);
       }),
-    each: (step) => {
-      if (live) steps.add(step);
+    each: (step, ended) => {
+      if (live) steps.set(step, ended);
+      else ended?.();
     },
     end: () => {
       live = false;
       release();
       for (const sleep of sleeps) sleep.done(false);
       sleeps.clear();
+      const waiting = [...steps.values()];
       steps.clear();
+      for (const ended of waiting) ended?.();
     },
   };
 }

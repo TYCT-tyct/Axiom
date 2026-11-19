@@ -1,11 +1,10 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { Button, CopyButton, Dialog, FormError } from "@axiom/ui";
+import { Button, CopyButton, Dialog, FormError, keyGuide } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
 import { KeyForm } from "./key-form";
-import { keyGuide } from "./key-guide";
 import { siteQuery } from "./queries";
 import { useWorkspaces } from "./workspaces";
 

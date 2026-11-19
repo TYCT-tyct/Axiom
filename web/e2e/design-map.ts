@@ -10,6 +10,7 @@ import uiEn from "../packages/ui/src/locales/en.ts";
 import uiZh from "../packages/ui/src/locales/zh.ts";
 import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
+import { rulings } from "./design/rulings.ts";
 import type { Suite } from "./scene.ts";
 import { siteSuite } from "./site-scenes.ts";
 
@@ -47,6 +48,73 @@ const siteBoards = {
   390: { file: "SitePhone.dc.html", height: 844 },
 };
 
+// What the page writes in its own words, by scene (packages/boards/manifest/site-screens-b.ts and -c.ts, the regions' text).
+const pageWords: Record<string, string[]> = {
+  "site connect": [".hfm1 h2 > .ph:last-child", ".hfm1 .intro p"],
+  "site faq": [
+    ".hfm5 .ans",
+    ".hfm5 .w7 .kv:last-child > .t1",
+    ".hfm5 .w7 .kv:first-child > .t1",
+    ".hfm5 .w2 .cl:first-child > .cm",
+  ],
+  "site bed": [".hfm6 .el > .lede", ".hfm6 .cta .btn.primary", ".hfm6 .ft .fb > p"],
+};
+
+// A screen of the home page below the first: both sides are scrolled until the screen's section is at the top of the
+// scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
+// its class). The board's words are Chinese only, so these scenes are compared in Chinese.
+const screenAt = (sec: number, scene: string) => async (board: Page, page: Page) => {
+  // what the page leaves out (the rulings with only a board side) is out of the board's layout too, so what follows
+  // it lines up; the ruling still names it
+  const omitted = rulings
+    .filter((ruling) => ruling.scene === scene && ruling.board && !ruling.page && "selector" in ruling.board)
+    .map((ruling) => (ruling.board as { selector: string }).selector);
+  await board.addStyleTag({ content: `${omitted.join(",")}{display:none !important}` });
+  // the board's own script sets the frame's width for its stylesheet and marks the tablet layout (--fw, data-tab); the
+  // harness leaves the script's engines out, so the shot does what the script does
+  await board.locator(".tr.site").evaluate((root) => {
+    const ho = root.querySelector(".ho") as HTMLElement;
+    ho.style.setProperty("--fw", `${root.clientWidth}px`);
+    ho.toggleAttribute("data-tab", root.classList.contains("m") && root.clientWidth >= 700);
+  });
+  await board.locator(`.hfm${sec}`).evaluate((el) => {
+    el.classList.add("in");
+    el.scrollIntoView({ block: "start" });
+  });
+  const place = page.locator(`.under [data-place="${sec}"]`);
+  await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
+  await expect.poll(() => place.locator(".hfm").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+  // the deployed MiSans body face is instanced at 330, the board's is the source variable font: compare the outlines, without
+  // variable-font hinting moving single strokes (as the models page's scene does)
+  for (const side of [board, page]) {
+    await side
+      .locator(".under")
+      .evaluate((el) => el.style.setProperty("text-rendering", "geometricPrecision", "important"));
+    await side.evaluate(() => document.fonts.ready.then(() => {}));
+  }
+  // The page's own words where the board's would not hold for every site (the PR's list of sentences against the docs:
+  // the answers, the billing line, the connect heading's promise and lede, the sea bed's way in and its lines): the
+  // board's get the page's text, so the layout under them is compared.
+  for (const selector of pageWords[scene] ?? []) {
+    const said = await page.locator(selector).allTextContents();
+    await board.locator(selector).evaluateAll((els, texts) => {
+      els.forEach((el, i) => {
+        if (texts[i] !== undefined) el.textContent = texts[i];
+      });
+    }, said);
+  }
+  // The connect card's Claude Code tab has one line more than the board's: the key guide's discovery setting, which puts the
+  // site's models in the client (packages/ui key-guide.ts). The card sits centred in its frame, so a line more moves it;
+  // the line is hidden on the page for the comparison, as the board's omissions are on its side.
+  if (scene === "site connect")
+    await page
+      .locator(".hfm1 .ln", { hasText: "GATEWAY_MODEL_DISCOVERY" })
+      .evaluate((el) => el.style.setProperty("display", "none"));
+  // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
+  const top = (side: Page) => side.locator(`.hfm${sec} .sec`).evaluate((el) => el.getBoundingClientRect().top);
+  const shift = (await top(page)) - (await top(board));
+  await page.locator(".hs").evaluate((el, by) => el.scrollBy({ top: by }), shift);
+};
 type Face = { family: string; weight: string; axes?: { wght?: number | number[] } };
 const { faces }: { faces: Face[] } = JSON.parse(
   readFileSync(new URL("../scripts/fonts/sources.json", import.meta.url), "utf8"),
@@ -270,6 +338,19 @@ export const designScenes: DesignScene[] = [
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
   },
+  ...[
+    { name: "site connect", sec: 1 },
+    { name: "site faq", sec: 5 },
+    { name: "site bed", sec: 6 },
+  ].map(({ name, sec }) => ({
+    name,
+    suite: siteSuite,
+    scene: "home",
+    fonts: "site/home",
+    boards: siteBoards,
+    schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
+    prepareComparison: screenAt(sec, name),
+  })),
   {
     name: "site models",
     suite: siteSuite,

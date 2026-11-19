@@ -38,4 +38,11 @@ export type Region = {
   elements?: Record<string, { tag?: string; set?: Record<string, string>; unless?: string }>;
   classes?: Record<string, string[]>;
   english?: Record<string, string>;
+  // Markup an engine inserts into the region at run time (the connect screen's figure, an SVG fetched and parsed into
+  // place): the element it goes into, and the classes it carries. The board's rules that can match it there are
+  // kept.
+  inserted?: { into: string; classes: string[] };
+  // Classes and attributes a script or an engine sets at run time (on, wh-lit, data-tab): the board's rules that need
+  // them are kept although the cut markup does not carry them yet.
+  states?: string[];
 };

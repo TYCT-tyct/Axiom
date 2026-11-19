@@ -1,3 +1,5 @@
+import type { Region } from "../../packages/boards/regions.ts";
+
 type CSSBlock = { selector: string; body: string };
 
 // Keep declaration bytes, including strings and data URLs; only selectors and grouping rules are rewritten.
@@ -38,29 +40,136 @@ function selectors(source: string): string[] {
   return [...result, source.slice(start).trim()];
 }
 
-function potential(selector: string) {
-  return (
-    selector
-      .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
-      .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
-      // The board is cut as its markup first stands: the page's language and the states engines and components set at
-      // run time (the data-* the Site engines set, aria-expanded="true") are not in it yet, so their rules are kept
-      // regardless. Only those: widening further copies rules into regions that never match them.
-      .replace(/:lang\([^()]*\)/g, "")
-      // the one class an engine adds itself: prefs.js marks the language row the arrow keys are on
-      .replace(/(\.lp li)\.act(?![\w-])/g, "$1")
-      .replace(/\[data-(?:open|enter|eff|on|t)(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g, ":is(*)")
-      .replace(/\[(aria-[\w-]+)[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*)\]/g, "[$1]")
-      .replace(/:not\([^()]*\)/g, ":is(*)")
-  );
+// The run-time states a region declares (Region.states): classes an engine or script toggles (on, wh-lit) and attributes it
+// sets (data-tab). Their rules are kept, as the markup does not carry them as cut: each state stands for any element in
+// its place (:is(*)), so a compound that is only the state (.host .on) keeps its place, and a function around it
+// (:has(.on)) stays valid.
+const stateless = (selector: string, states: readonly string[]) =>
+  states.reduce((text, name) => {
+    const escaped = name.replace(/[-\\^$*+?.()|[\]{}]/g, "\\$&");
+    return /^(data|aria)-/.test(name)
+      ? text.replace(new RegExp(`\\[${escaped}(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\\]]*))?\\]`, "g"), ":is(*)")
+      : text.replace(new RegExp(`\\.${escaped}(?![\\w-])`, "g"), ":is(*)");
+  }, selector);
+
+// potential widens a selector to what it can match once the page runs; keepNot leaves :not() as written, for a selector
+// tried on stand-ins (insertedBy) rather than on the cut markup.
+function potential(selector: string, states: readonly string[], keepNot = false) {
+  const widened = stateless(selector, states)
+    .replace(/::[\w-]+(?:\([^)]*\))?/g, ":is(*)")
+    .replace(/:(?:hover|active|focus-visible|focus-within|focus|visited|checked|disabled|enabled)\b/g, ":is(*)")
+    // The board is cut as its markup first stands: the page's language and the states engines and components set at
+    // run time (the data-* the Site engines set, aria-expanded="true") are not in it yet, so their rules are kept
+    // regardless. Only those: widening further copies rules into regions that never match them.
+    .replace(/:lang\([^()]*\)/g, "")
+    // the one class an engine adds itself: prefs.js marks the language row the arrow keys are on
+    .replace(/(\.lp li)\.act(?![\w-])/g, "$1")
+    .replace(/\[data-(?:open|enter|eff|on|t)(?:[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*))?\]/g, ":is(*)")
+    .replace(/\[(aria-[\w-]+)[~|^$*]?=(?:"[^"]*"|'[^']*'|[^\]]*)\]/g, "[$1]")
+    // a state inside :has() (.card:has(.on)): the descendant that gets it is not in the cut markup either
+    .replace(/:has\((?:[^()]|\([^()]*\))*:is\(\*\)(?:[^()]|\([^()]*\))*\)/g, ":is(*)");
+  return keepNot ? widened : widened.replace(/:not\((?:[^()]|\([^()]*\))*\)/g, ":is(*)");
 }
 
-function scoped(selector: string) {
+// scoped ties a rule to the region: its subject carries the region's scope class, or, for markup an engine inserts at
+// run time (an SVG fetched and parsed into place), whose nodes carry no scope class of their own, sits inside an
+// element that does. :where contributes no specificity; original classes also allow ancestors from another region.
+function scoped(selector: string, inside = false) {
   const at = selector.indexOf("::");
   const subject = at < 0 ? selector : selector.slice(0, at);
   const pseudo = at < 0 ? "" : selector.slice(at);
-  // :where contributes no specificity. Original classes also allow ancestors supplied by another region.
-  return `:global(${subject}):where(.scope)${pseudo}`;
+  return `:global(${subject}):where(.scope${inside ? " *" : ""})${pseudo}`;
+}
+
+// A selector's compounds and the combinators between them, at the top level (not inside brackets or functions).
+function compounds(selector: string) {
+  const parts: string[] = [];
+  const between: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (const token of selector.matchAll(/"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[()[\]]|\s*[>+~]\s*|\s+/g)) {
+    if (token[0] === "(" || token[0] === "[") depth++;
+    else if (token[0] === ")" || token[0] === "]") depth--;
+    else if (!depth && /^\s*[>+~]?\s*$/.test(token[0]) && token.index > start) {
+      parts.push(selector.slice(start, token.index));
+      between.push(token[0].trim() || " ");
+      start = token.index + token[0].length;
+    }
+  }
+  return { parts: [...parts, selector.slice(start)], between };
+}
+
+const joined = (parts: string[], between: string[]) =>
+  parts.reduce(
+    (text, part, k) => (k ? `${text}${between[k - 1] === " " ? " " : ` ${between[k - 1]} `}${part}` : part),
+    "",
+  );
+
+// An element a compound describes, to try a rule on: its type (an SVG group when it names none), its top-level classes
+// and attributes, and the first class of each :is() or :where() in it.
+function standIn(document: Document, compound: string) {
+  const element = document.createElement(/^[a-z][\w-]*/i.exec(compound)?.[0] ?? "g");
+  const top = compound.replace(/\((?:[^()]|\([^()]*\))*\)/g, "()");
+  for (const name of requiredClasses(top)) element.classList.add(name);
+  for (const inner of compound.matchAll(/:(?:is|where)\(\s*\.([\w-]+)/g)) element.classList.add(inner[1] as string);
+  for (const [, name, value] of top.matchAll(/\[([\w-]+)(?:[~|^$*]?=["']?([^"'\]]*)["']?)?\]/g))
+    element.setAttribute(name as string, value ?? "");
+  return element;
+}
+
+// insertedBy tells a selector that can match the markup an engine inserts at the region's insertion point
+// (Region.inserted: the element it goes into and the classes it carries). The rule is tried on stand-ins for its last
+// compounds, put inside that element: they must name only inserted classes at their top level and at least one in all
+// (:is() included), or only element types when they start right inside it (.fig svg). Trying the whole selector keeps
+// its ancestors and its :not() honest, so a rule for a part of the board the region does not have, or one that excludes
+// the place the markup goes (:not(.under *)), is not kept, whatever the engine inserts.
+function insertedBy(inserted: Region["inserted"], elements: Set<Element>, states: readonly string[]) {
+  if (!inserted) return () => false;
+  const into = [...elements].filter((element) => element.matches(inserted.into));
+  if (!into.length) throw new Error(`inserted.into ${inserted.into} matches nothing in the region`);
+  const carried = (name: string) => inserted.classes.includes(name);
+  const fits = (container: Element, parts: string[], between: string[], selector: string) => {
+    let parent = container;
+    for (const [k, part] of parts.entries()) {
+      if (k > 0 && between[k - 1] !== " " && between[k - 1] !== ">") return false;
+      parent = parent.appendChild(standIn(container.ownerDocument, part));
+    }
+    const leaf = parent;
+    try {
+      return leaf.matches(selector);
+    } finally {
+      container.querySelector(":scope > :last-child")?.remove();
+    }
+  };
+  // the compounds from i on can be the inserted markup: "typed" when they name only element types, which must start
+  // right inside the insertion point
+  const insertable = (right: string[]) => {
+    const named = right.flatMap((part) => [...part.matchAll(/\.([\w-]+)/g)].map((match) => match[1] as string));
+    if (right.some((part) => requiredClasses(part).some((name) => !carried(name)))) return undefined;
+    const typed = named.length === 0 && right.every((part) => /^[a-z][\w-]*$/i.test(part));
+    return typed || named.some(carried) ? { typed } : undefined;
+  };
+  const tries = (selector: string) => {
+    const { parts, between } = compounds(selector);
+    for (let i = 1; i < parts.length; i++) {
+      if (between[i - 1] !== " " && between[i - 1] !== ">") continue;
+      const right = parts.slice(i);
+      const fit = insertable(right);
+      if (!fit) continue;
+      const left = joined(parts.slice(0, i), between);
+      const placed = into.filter((element) => !fit.typed || element.matches(left));
+      if (placed.some((container) => fits(container, right, between.slice(i), selector))) return true;
+    }
+    return false;
+  };
+  return (selector: string) => {
+    const tried = potential(selector, states, true);
+    try {
+      return tries(tried);
+    } catch (error) {
+      throw new Error(`region CSS selector ${selector} became ${tried}`, { cause: error });
+    }
+  };
 }
 
 function subject(selector: string) {
@@ -74,7 +183,7 @@ function subject(selector: string) {
   return selector.slice(start);
 }
 
-function matcher(elements: Set<Element>) {
+function matcher(elements: Set<Element>, states: readonly string[]) {
   const index = new Map<string, Element[]>();
   const available = new Set<string>();
   for (const element of elements) {
@@ -88,7 +197,7 @@ function matcher(elements: Set<Element>) {
       for (const name of ancestor.classList) available.add(name);
   }
   return (selector: string) => {
-    const test = potential(selector);
+    const test = potential(selector, states);
     if (!/[+~]/.test(test) && requiredClasses(test).some((name) => !available.has(name))) return false;
     const direct = subject(test).match(/^(?:[\w-]+|\*)?(?:\.[\w-]+)*/)?.[0] ?? "";
     const keys = direct.match(/^[\w-]+|\.[\w-]+/g) ?? [];
@@ -112,22 +221,39 @@ function requiredClasses(selector: string) {
   return classes;
 }
 
-function selectBlocks(blocks: CSSBlock[], matches: (selector: string) => boolean): string {
+function selectBlocks(
+  blocks: CSSBlock[],
+  matches: (selector: string) => boolean,
+  isInserted: (selector: string) => boolean,
+): string {
   return blocks
     .map(({ selector, body }) => {
       if (selector.startsWith("@keyframes")) return `${selector}{${body}}`;
       if (selector.startsWith("@")) {
-        const inner = selectBlocks(cssBlocks(body), matches);
+        const inner = selectBlocks(cssBlocks(body), matches, isInserted);
         return inner ? `${selector}{${inner}}` : "";
       }
-      const kept = selectors(selector).filter(matches);
-      return kept.length ? `${kept.map(scoped).join(",")}{${body}}` : "";
+      // a selector applies to the region's own elements, to run-time markup inside it, or to both (a class the cut
+      // markup and the inserted markup share), each with its own scope
+      const kept = selectors(selector).flatMap((one) => [
+        ...(matches(one) ? [scoped(one)] : []),
+        ...(isInserted(one) ? [scoped(one, true)] : []),
+      ]);
+      return kept.length ? `${kept.join(",")}{${body}}` : "";
     })
     .join("\n");
 }
 
-export function regionCSS(css: string, elements: Set<Element>): string {
-  const selected = selectBlocks(cssBlocks(css), matcher(elements));
+// regionCSS is the board's rules that can match the region: those its cut markup matches, those that can match the
+// markup an engine puts into its insertion point at run time (`inserted`), and those that only the run-time `states`
+// (classes and attributes a script sets) keep from matching.
+export function regionCSS(
+  css: string,
+  elements: Set<Element>,
+  inserted?: Region["inserted"],
+  states: readonly string[] = [],
+): string {
+  const selected = selectBlocks(cssBlocks(css), matcher(elements, states), insertedBy(inserted, elements, states));
   const withoutFrames = selected.replace(/@keyframes[\s\S]*?\}\s*\}/g, "");
   return cssBlocks(selected)
     .filter(({ selector }) => {

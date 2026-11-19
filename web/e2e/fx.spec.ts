@@ -2,6 +2,19 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
+import {
+  delivered,
+  loop,
+  open,
+  pause,
+  place,
+  running,
+  screenChunk,
+  scrollTo,
+  sections,
+  setHidden,
+  shown,
+} from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The website's first-screen effects on the shared frame loop (port design §8.2, docs/frontend.md「动效运行时」): the sea
@@ -13,10 +26,6 @@ import { pageHeading } from "./page-heading.ts";
 const sea = /\/assets\/sea-[\w-]+\.js$/;
 const prefs = /\/assets\/prefs-[\w-]+\.js$/;
 
-type LoopState = { frames: number; owners: number; listening: boolean; pending: boolean };
-const loop = (page: Page) =>
-  page.evaluate(() => (window as unknown as { axiomFx: { state: LoopState } }).axiomFx.state);
-
 // The page's policy violations, as the page reports them.
 async function watchPolicy(page: Page) {
   await page.addInitScript(() => {
@@ -27,26 +36,6 @@ async function watchPolicy(page: Page) {
   return () => page.evaluate(() => (window as unknown as { policy: string[] }).policy);
 }
 
-// setHidden makes the tab hidden or visible again, as switching tabs does.
-const setHidden = (page: Page, hidden: boolean) =>
-  page.evaluate((value) => {
-    Object.defineProperty(document, "hidden", { configurable: true, get: () => value });
-    Object.defineProperty(document, "visibilityState", {
-      configurable: true,
-      get: () => (value ? "hidden" : "visible"),
-    });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, hidden);
-
-const pause = (page: Page) => page.evaluate(() => new Promise((done) => setTimeout(done, 300)));
-
-async function open(page: Page) {
-  await mockConsole(page);
-  await page.goto(apps[0].url);
-  await pageHeading(page);
-}
-
-const running = (page: Page) => expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(0);
 const entrance = (page: Page) => page.locator(".tr").getAttribute("data-enter");
 
 test("the effects' code is not asked for before the first screen is drawn, and the entrance runs on the loop", async ({
@@ -178,22 +167,6 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   expect(await violations()).toEqual([]);
 });
 
-// The screens below the first (§8.2's Models, Steps and Trust rows): each one's code comes as its place nears the view,
-// and its script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The
-// places (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
-const screenChunk = /\/assets\/(models|steps|trust)-screen-[\w-]+\.js$/;
-const place = (page: Page, sec: number) => page.locator(`.under [data-place="${sec}"]`);
-const scrollTo = (page: Page, sec: number) => place(page, sec).evaluate((el) => el.scrollIntoView({ block: "start" }));
-// a screen has faded in once it is seen (the board's .hfm.in): a screen at its faint start would pass a visibility check
-const shown = (page: Page, sec: number) =>
-  expect
-    .poll(() =>
-      place(page, sec)
-        .locator(".hfm")
-        .evaluate((el) => getComputedStyle(el).opacity),
-    )
-    .toBe("1");
-
 test("each screen below the first loads as it nears the view, and plays only while it is seen", async ({ page }) => {
   const asked: string[] = [];
   page.on("request", (request) => {
@@ -202,15 +175,20 @@ test("each screen below the first loads as it nears the view, and plays only whi
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
+  // every screen has its place, in order, before any code has come
+  expect(await sections(page)).toEqual(delivered);
   // the models screen lies within a view's height of the first, and the trust screen well below that does not; the
   // steps screen starts exactly a view's height below the first screen's end, at the edge of that margin
   await expect.poll(() => asked).toContain("models");
   expect(asked).not.toContain("trust");
+  // the last screen is far below
+  await expect(place(page, delivered.at(-1) as number).locator(".hfm")).toHaveCount(0);
   await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
   await scrollTo(page, 3);
   // the models and steps chunks are both asked for at the top, in either order: which ones came is what counts
-  await expect.poll(() => [...asked].sort()).toEqual(["models", "steps", "trust"]);
+  await expect.poll(() => asked).toEqual(expect.arrayContaining(["models", "steps", "trust"]));
+  const last = delivered.at(-1) as number;
   await shown(page, 3);
   await running(page);
   await setHidden(page, true);
@@ -222,6 +200,13 @@ test("each screen below the first loads as it nears the view, and plays only whi
 
   // the island names the section being read
   await expect(page.locator(".isl")).toContainText("三步开始");
+
+  // every screen's code comes once the reader has been down to it, each chunk once
+  await scrollTo(page, last);
+  await shown(page, last);
+  // each screen's chunk is asked for exactly once
+  const names = ["connect", "models", "steps", "trust", "faq", "bed"];
+  await expect.poll(() => names.map((name) => asked.filter((one) => one === name).length)).toEqual(names.map(() => 1));
 
   // past every screen nothing is in view to play
   await page.evaluate(() => {
@@ -241,10 +226,12 @@ test("under reduced motion the screens below show their end at once and do not t
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  for (const sec of [2, 3, 4]) {
+  for (const sec of delivered) {
     await scrollTo(page, sec);
     await shown(page, sec);
   }
+  // the connect screen's machine stands wired: the lamp is on and the key is in
+  await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
   // the three steps are done: the first request has come back
   await expect(page.locator(".hfm3 .c200.ok")).toHaveText("200");
   await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("gpt-5");
