@@ -352,7 +352,7 @@ test.describe("the sign-in steps", () => {
       const { ring, width, line, accent } = await page.evaluate(() => {
         const field = document.querySelector(".lg-field") as HTMLElement;
         const probe = document.createElement("i");
-        probe.style.color = "var(--accent)";
+        probe.style.color = "var(--accentT)";
         field.append(probe);
         const accent = getComputedStyle(probe).color;
         probe.remove();

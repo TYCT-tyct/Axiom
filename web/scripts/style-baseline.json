@@ -31,8 +31,6 @@
     "global-css": {
       "admin/src/main.css": 1,
       "console/src/main.css": 1,
-      "packages/ui/src/css/legacy.css": 1,
-      "packages/ui/src/styles.css": 1,
       "site/src/main.css": 1
     },
     "style": {}

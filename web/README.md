@@ -9,7 +9,7 @@
 | `site/` | 官网 | 公网监听的 `/` |
 | `console/` | 用户控制台 | 公网监听的 `/console/` |
 | `admin/` | 管理后台 | 只在管理监听上，不进公网 |
-| `packages/ui/` | 设计系统：令牌和字体（`src/css/`，旧页面经 `src/styles.css` 用它们；按新设计重做期间，新令牌、字体和组件样式的归属规则见[前端与设计的「前端工程」](../docs/frontend.md#前端工程)）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
+| `packages/ui/` | 设计系统：令牌和字体（`src/css/`，全局 CSS 只有 `tokens.css`、`fonts.css` 和 `base.css`（重置与文档基础）；令牌、字体和组件样式的归属规则见[前端与设计的「前端工程」](../docs/frontend.md#前端工程)）、组件、翻译、外观与语言偏好、数字和时间的格式 | — |
 | `theme.js` | 在首次绘制前应用保存的外观；构建时按内容哈希命名，插到每个入口页 `<head>` 的开头 | 各应用的 `assets/` |
 | `packages/api/` | 由 `api/console.yaml`、`api/admin.yaml` 生成的类型（`*.gen.ts`）和调用它们的客户端（`consoleApi`、`adminApi`）；`@axiom/api/auth` 是两个界面的登录、两步验证调用，形状相同，登录页面只对着它写 | — |
 | `packages/app/` | 控制台和后台共用、又不属于设计系统的部分：会话与 `Gate`、登录、第二步、强制开启两步验证、恢复码、外壳、新版本提示、错误译文、路由预设的规则编辑器和规则摘要（`presets/`，文字在 `packages/ui/src/locales/preset-rules.ts`）。设计系统不依赖路由，所以它们不放进 `packages/ui/` | — |
@@ -46,8 +46,7 @@
 | 规则 | 靠什么保证 |
 |---|---|
 | 页面上的文字全部来自翻译文件；中文是源文件，英文的键与中文完全一致 | Biome 的 `noJsxLiterals` 拒绝写在 JSX 里的文字；`Messages<typeof zh>` 让缺键、多键都编译不过；`t()` 的键有类型。属性里的文字（`aria-label` 等）这条规则查不到，靠评审 |
-| 共用包里组件写的类名在每个用到它的应用里都生效：Tailwind 只生成 `@source` 指到的文件里的类，且跳过链接到 `node_modules` 的工作区包 | 各应用的 `src/main.css` 用 `@source` 指到它用的每个带组件的包（`ui` 由自己的 `styles.css` 指）；`scripts/sources.test.ts` 按 `package.json` 的依赖核对 |
-| 颜色只写在 `packages/ui/src/css/tokens.css`，字体族名只写在同目录的 `fonts.css`；页面只用变量 | Tailwind 自带的调色板已清空，写死的颜色没有对应的类可用；`legacy.css` 把旧变量名指到新令牌，自己不写颜色；`scripts/tokens.test.ts` 从 `tokens.css` 读值，检查文字在每个底色上不低于 4.5:1、控件边界和焦点不低于 3:1 |
+| 颜色只写在 `packages/ui/src/css/tokens.css`，字体族名只写在同目录的 `fonts.css`；页面只用变量 | `scripts/styles.ts` 拒绝 `tokens.css` 之外的颜色字面量；`scripts/tokens.test.ts` 从 `tokens.css` 读值，检查文字在每个底色上不低于 4.5:1、控件边界和焦点不低于 3:1 |
 | 样式归组件：应用代码不传 `className`、`style` 只写 `--*`、不导入 CSS；`*.module.css` 只在 `packages/ui/src/components/` 和 `site/src/home/`，只被同目录同名的 TSX 导入，选择器从本模块的类开始（`:global` 只许根元素的 `data-theme`、`data-neutral`），规则平铺（不嵌套，at 规则只用 `@media`、`@supports`、`@container`、`@layer`、`@keyframes`）；颜色字面量只在 `tokens.css`（自定义属性、`var()` 的回退值和关键帧里也算）；全局 CSS 只有 `tokens.css`、`fonts.css`、`base.css`；源码不用 `innerHTML`、`outerHTML`、`insertAdjacentHTML`、`cssText`、`dangerouslySetInnerHTML`、`setAttribute('style')`；组件里 1px 以上的边线对 sand 和 slate、深浅两套的底色不低于 3:1，经本模块自定义属性引用的按它的每个值算，边线画出的颜色必须正是一个颜色令牌或 `transparent`，混色、`currentColor`、没写颜色、未定义的名字都直接失败，`--bw` 的装饰线和带模糊的阴影不算边线 | `scripts/styles.ts`（`scripts/styles.test.ts` 对整棵树运行，随 `pnpm test` 进 CI）。旧用法按规则和文件记在 `scripts/style-baseline.json`：数量只能减少，减少时同一改动里跑 `node scripts/styles.ts --shrink` 降下基线；新文件为 0；`migrated` 里的路径一律为 0。规则见[前端的「前端工程」](../docs/frontend.md#前端工程) |
 | 数据层的组件（`ListDetail`、`FilterBar`、`BarChart`、`LineChart`、`Metric`，`packages/ui`）：长列表只画视口附近的行（固定行高，由页面滚动，`aria-setsize` 报总数）；选中的行和筛选值写在地址的查询参数里（`useUrlSelection`、`useUrlParams`），刷新和后退都保留，方向键只在窗口够宽时改选中项；平板和手机上详情是盖住列表的面板，关闭后焦点回到原来的行；图表用手写 SVG，没有新依赖，空数据、一个点、0 和极大值都能画，键盘用左右键逐点读，读屏软件读到同样数据的隐藏表格，坐标轴、提示和数字、金额经 `format.ts` 按语言、时区、币种显示，减少动态时入场动画不播放 | `packages/ui/src/components/data.test.tsx`、`url-state.test.tsx`、`format.test.ts`；组件各有 `demo.tsx` 的条目 |
 | 页面在 `vite.shared.ts` 的内容安全策略下工作：没有内联脚本，没有 `<style>` 元素 | 端到端测试在 Go 服务发送的同一策略下加载三个应用，违规会成为控制台错误，测试失败；`embed.ts` 把 `vite.shared.ts` 的字符串交给 Go 服务原样发送，测试核对响应头与它完全一致，且不含 `unsafe-` |

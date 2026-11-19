@@ -27,7 +27,7 @@ export function subscribeTheme(listener: () => void) {
 }
 
 // chooseTheme sets the page's colour scheme and keeps the choice: data-theme forces one, its absence follows the system
-// (styles.css).
+// (css/base.css).
 export function chooseTheme(theme: Theme) {
   current = theme;
   if (theme === "system") {

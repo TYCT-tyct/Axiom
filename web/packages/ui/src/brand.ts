@@ -23,7 +23,7 @@ const black: Rgb = [0, 0, 0];
 const white: Rgb = [255, 255, 255];
 
 // The surfaces accent text and the primary button sit on: the page, and the panels and dialogs on it (--bg, --s1 and
-// --s2, which css/legacy.css points at --page, --cardBg and --hover of css/tokens.css; e2e/gate.spec.ts checks the
+// --s2 (--page, --cardBg and --hover of css/tokens.css); e2e/gate.spec.ts checks the
 // rendered pages), and the extreme the accent moves toward when it is too faint. line is the button's edge when the
 // button is too close to any of the surfaces (--t1).
 export const light: Scheme = {
@@ -150,7 +150,7 @@ function tokensFor(brand: Rgb, scheme: Scheme) {
 
 // useBrandStyle puts the brand's custom properties on the document root, the one ancestor of both the page and the
 // dialogs the app renders beside it (RecoveryCodesHost). A page-level wrapper would leave those dialogs on the default
-// palette. Removing the properties restores styles.css when the colour goes away.
+// palette. Removing the properties restores tokens.css when the colour goes away.
 export function useBrandStyle(color: string | undefined) {
   useEffect(() => {
     const tokens = color ? brandStyle(color) : undefined;
@@ -170,7 +170,7 @@ export function useBrandStyle(color: string | undefined) {
 }
 
 // brandStyle is the custom properties to set on the root for a brand colour written #rrggbb, each as the light value
-// and the dark one the way styles.css writes them; undefined for any other text.
+// and the dark one the way tokens.css writes them; undefined for any other text.
 export function brandStyle(color: string): Record<string, string> | undefined {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
   if (!match) {

@@ -5,7 +5,7 @@ import s from "./logo.module.css";
 
 // The mark is an A whose crossbar is a dot, the one key; it takes the theme's text and page colours. A site brings its
 // own name and logo (docs/domains/accounts.md「站点」); a logo that does not load shows the mark.
-// className is the one the auth frame still puts on it (packages/app/src/auth/frame.tsx) and goes with that file's move.
+// className is the one a page's frame gives it to place it (auth-page.tsx).
 export function Logo({ className, name, logoUrl }: { className?: string; name?: string; logoUrl?: string }) {
   const { t } = useTranslation("common");
   // The URL that failed, not a boolean: a new logo at a new URL is tried, not hidden behind the old failure.
@@ -20,12 +20,12 @@ export function Logo({ className, name, logoUrl }: { className?: string; name?: 
           <path
             d="M5.75 14.6 9.05 6.35q.95-1.75 1.9 0l3.3 8.25"
             fill="none"
-            stroke="var(--bg)"
+            stroke="var(--page)"
             strokeWidth="1.7"
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          <circle cx="10" cy="12.3" r="1.3" fill="var(--bg)" />
+          <circle cx="10" cy="12.3" r="1.3" fill="var(--page)" />
         </svg>
       )}
       <span className={s.name}>{name ?? t("brand")}</span>

@@ -11,7 +11,7 @@ const themeIcons: Record<Theme, IconName> = { system: "monitor", light: "sun", d
 
 // PreferenceSwitches lets anyone, signed in or not, pick the colour scheme and the language; both are kept in this
 // browser. An account's own settings come with the appearance settings page.
-// className is the one the auth frame still puts on it (packages/app/src/auth/frame.tsx) and goes with that file's move.
+// className is the one a page's frame gives it to place it (auth-page.tsx, the site shell).
 export function PreferenceSwitches({ className }: { className?: string }) {
   const { t, i18n } = useTranslation("common");
   const theme = useSyncExternalStore(subscribeTheme, currentTheme);

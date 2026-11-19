@@ -49,8 +49,8 @@ const veilFor = 1500;
 // what is around them (docs/frontend.md「对比度令牌」); the board's own edge is lighter, and only half a pixel on a
 // dense screen.
 const boardVars = [
-  "--focus: var(--accent)",
-  "--ring: var(--accent)",
+  "--focus: var(--accentT)",
+  "--ring: var(--accentT)",
   "--lineStrong1x: var(--ctl-line)",
   "--lineStrong2x: var(--ctl-line)",
   "--bw: 1px",
