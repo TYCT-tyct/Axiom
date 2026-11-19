@@ -226,7 +226,8 @@ test.describe("the sign-in steps", () => {
       route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
     );
     await page.goto("/console/sign-in");
-    const heading = page.getByRole("heading", { level: 1 });
+    // by name: the router's own loading heading, set in the console's face, can show first while the page's code arrives
+    const heading = page.getByRole("heading", { level: 1, name: "没能加载" });
     await expect(heading).toBeVisible();
     const family = await heading.evaluate((element) => getComputedStyle(element).fontFamily);
     expect(family).toContain('"Axiom CJK"');
