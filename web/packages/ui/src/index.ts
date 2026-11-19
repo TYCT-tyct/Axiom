@@ -50,7 +50,7 @@ export { ScrollArea } from "./components/scroll-area";
 export { SegmentedControl } from "./components/segmented-control";
 export { SettingRow } from "./components/setting-row";
 export { Stat } from "./components/stat";
-export { DataState, EmptyState, NotFoundState } from "./components/states";
+export { DataState, EmptyState, NotFoundState, PageFailedState } from "./components/states";
 export { Switch } from "./components/switch";
 export { Table, Td, Th } from "./components/table";
 // Badge is the name pages were written with for a Tag (#747).

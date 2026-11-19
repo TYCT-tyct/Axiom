@@ -10,13 +10,24 @@ import {
   emptyState,
   goodInvite,
   type MockState,
+  otherEmail,
   type Schemas,
   systemPreset,
   usualState,
   worstState,
 } from "./console-data.ts";
 import { usageStatistics } from "./console-usage-api.ts";
-import { type Ctx as CoreCtx, createRoute, fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
+import {
+  breaks,
+  type Ctx as CoreCtx,
+  createRoute,
+  fail,
+  type Handler,
+  type MockData,
+  mockApi,
+  ok,
+  paged,
+} from "./mock.ts";
 import {
   confirmTotp,
   grant,
@@ -81,6 +92,38 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   state.user.password = body.password ?? "";
   state.legalAccepted = state.legal.length > 0;
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
+}
+
+// A reset request as the server takes it: the contract's guard refuses an address outside 3 to 254 characters (400);
+// the server refuses one that is not a plain address of printable ASCII with a 422 that names no field (emailAllowed,
+// ErrBadEmail); any other gets the same empty 202, and a registered one a new 43-character link, which leaves the
+// address's earlier one spent (internal/accounts password_change.go, password_recovery.go).
+function requestReset({ body, state }: Ctx<"/api/console/v1/auth/password-reset", "post">) {
+  const characters = [...body.email].length;
+  if (characters < 3 || characters > 254) return breaks("/email");
+  const email = body.email.trim().toLowerCase();
+  if (!/^[\x21-\x3f\x41-\x7e]+@[\x21-\x3f\x41-\x7e]+$/.test(email)) return fail(422, "unprocessable");
+  for (const [token, owner] of state.resetLinks) if (owner === email) state.resetLinks.delete(token);
+  const token = String(state.log.length).padStart(43, "m");
+  if ([state.user.email, otherEmail].includes(email)) state.resetLinks.set(token, email);
+  return { status: 202 as const, json: undefined };
+}
+
+// A reset as the server does it: the contract's guard counts the password's characters (12 to 256) before the token is
+// looked at; a link works once; the reset ends the sessions of the person it was for, here the mocked user's only when
+// the link was theirs.
+function completeReset({ body, state }: Ctx<"/api/console/v1/auth/password-reset/complete", "post">) {
+  const characters = [...body.new_password].length;
+  if (characters < 12 || characters > 256) return breaks("/new_password");
+  // the server takes only a 43-byte token for a link it issued
+  const owner = body.token.length === 43 ? state.resetLinks.get(body.token) : undefined;
+  if (owner === undefined) return fail(422, "unprocessable");
+  state.resetLinks.delete(body.token);
+  if (owner === state.user.email) {
+    state.user.password = body.new_password;
+    state.level = "none";
+  }
+  return { status: 204 as const, json: undefined };
 }
 
 function matchingModels(models: Schemas["PublicModel"][], query: URLSearchParams) {
@@ -330,6 +373,8 @@ const handlers: Handler<MockState>[] = [
   route("post", `${base}/auth/sign-in`, none, signIn),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
+  route("post", `${base}/auth/password-reset`, none, requestReset),
+  route("post", `${base}/auth/password-reset/complete`, none, completeReset),
   route("post", `${base}/legal/accept`, signedIn, ({ body, state }) => {
     if (!acceptsCurrent(state.legal, body.consent)) {
       return fail(403, "consent_required");

@@ -192,17 +192,25 @@ function endSession(queryClient: QueryClient) {
   queryClient.removeQueries({ queryKey: [accountKey] });
 }
 
-// useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
-// shown something from the change (recovery codes) can use the new session's token. A read of the session still out
-// was sent with the cookie from before, and the cache would hand it back for this one: it is cancelled first, so what
-// the pages see is the session the cookie now holds.
-export function useStartSession() {
+// useReadSession reads the session the cookie holds now, and is how a page confirms it after a request that may have
+// changed it: a read still out was sent with the cookie from before, and the cache would hand it back for this one,
+// so it is cancelled first. What it reads is the session every page then sees.
+export function useReadSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
-  return async (csrfToken: string) => {
-    setCsrfToken(csrfToken);
+  return useCallback(async () => {
     await queryClient.cancelQueries({ queryKey: sessionKey });
     return await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+  }, [queryClient, api]);
+}
+
+// useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
+// shown something from the change (recovery codes) can use the new session's token.
+export function useStartSession() {
+  const read = useReadSession();
+  return async (csrfToken: string) => {
+    setCsrfToken(csrfToken);
+    return await read();
   };
 }
 
@@ -266,15 +274,13 @@ export const pendingOver = (error: unknown) =>
 let ended = false;
 
 export function useEndPending() {
-  const queryClient = useQueryClient();
-  const { api } = useAuth();
+  const read = useReadSession();
   const signOut = useSignOut();
   return async (pending: string) => {
     // set before the read: a read that finds no session moves the gate to the sign-in page at once
     ended = true;
     try {
-      await queryClient.cancelQueries({ queryKey: sessionKey });
-      const now = await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+      const now = await read();
       if (now === null) return;
       if (sessionBinding(now) !== pending) {
         ended = false;

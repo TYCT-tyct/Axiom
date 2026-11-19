@@ -83,7 +83,9 @@ const accountShell = (scene: string): Ruling[] =>
 // The console's sign-in page against the Login board's email step (#747 S3, port design §9), with the page's words in
 // the reference (design-map.ts). The sea is animated on both sides, and the stage that forms the step's shape on it is
 // the transition's on the board (trans.js), so both canvases are the fx tests'.
-const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
+// The reset page's request for a link is the same parts, and is excused the same.
+const loginScenes = ["console sign-in", "console reset-password"];
+const signIn = (ruling: Omit<Ruling, "scene">): Ruling[] => loginScenes.map((scene) => ({ scene, ...ruling }));
 const signInRulings: Ruling[] = [
   // The sign-in pages draw their Chinese in the faces the board names, cut from their messages and the board's region
   // text: the title and the label match the board's. Only glyphs are excused, each where its text is drawn, so a line or
@@ -108,7 +110,7 @@ const signInRulings: Ruling[] = [
     basis: "§9: the stage on the sea is the transition's on the board (trans.js); it is tested by fx.spec.ts",
     page: { canvas: ".lg-sea > canvas:not(.sea)" },
   }),
-];
+].flat();
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [

@@ -29,3 +29,11 @@ export function forgetPending(binding: string) {
     inFlight = null;
   }
 }
+
+// spendPending keeps only the mark that this session's codes were taken, once they are with the dialog: the plaintext
+// leaves memory, and a later subscriber (a page entered again) gets none to show, nor sends another take.
+export function spendPending(binding: string, attempt: number) {
+  if (inFlight?.binding === binding && inFlight.attempt === attempt) {
+    inFlight = { binding, attempt, result: Promise.resolve({ codes: [] }) };
+  }
+}

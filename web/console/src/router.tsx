@@ -1,5 +1,5 @@
 import { safeNext } from "@axiom/app";
-import { focusHeading, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
+import { focusHeading, modelAbilities, NotFoundState, PageFailedState, routerDefaults } from "@axiom/ui";
 import {
   createRootRoute,
   createRoute,
@@ -8,7 +8,9 @@ import {
   Outlet,
   redirect,
 } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
 import { takeOAuthNext } from "./auth/oauth-return";
+import { dropResetLink, keepResetLink } from "./auth/reset-link";
 import { Layout } from "./layout";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
@@ -28,6 +30,13 @@ const root = createRootRoute({
     }
   },
 });
+
+// The reset page that did not load. The link's token was only in memory (auth/reset-link.ts), which a reload clears
+// (the router reloads once by itself when a page's code fails to load), so the way back from a link is the email's.
+function ResetFailed() {
+  const { t } = useTranslation();
+  return <PageFailedState body={t("auth.reset.loadFailed")} />;
+}
 
 // The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
 // in, and a registration link can carry the invite code.
@@ -63,6 +72,20 @@ const routeTree = root.addChildren([
     getParentRoute: () => root,
     path: "/verify-email",
     component: lazyRouteComponent(() => import("./auth/verify-email")),
+  }),
+  createRoute({
+    getParentRoute: () => root,
+    path: "/reset-password",
+    validateSearch: guestSearch,
+    // the link's token leaves the address before the page's code loads, and is kept for it (auth/reset-link.ts)
+    beforeLoad: ({ location, preload }) => {
+      if (preload || !location.hash) return;
+      keepResetLink(location.hash);
+      throw redirect({ to: "/reset-password", search: location.search as never, replace: true });
+    },
+    onLeave: dropResetLink,
+    errorComponent: ResetFailed,
+    component: lazyRouteComponent(() => import("./auth/reset-password")),
   }),
   createRoute({
     getParentRoute: () => root,
