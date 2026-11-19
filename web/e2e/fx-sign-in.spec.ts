@@ -286,7 +286,15 @@ test("an arrival's decode ends with the title it plays over: a new step's title 
   await page.goto(signInPage);
   await requested;
   // stopped before the title's veil (1.5 s) lifts, so the engine still finds it waiting for its decode
-  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 20));
+  // a moment just ahead of the page's clock, which runs on meanwhile: a busy machine may pass it before the pause lands
+  for (let tries = 0; ; tries++) {
+    try {
+      await page.clock.pauseAt(await page.evaluate(() => Date.now() + 50));
+      break;
+    } catch (error) {
+      if (tries === 4) throw error;
+    }
+  }
   release();
   await expect(stageCanvas(page)).toBeAttached();
   const decodeCanvas = page.locator("canvas.lg-dc");
