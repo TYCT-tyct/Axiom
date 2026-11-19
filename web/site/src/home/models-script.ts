@@ -1,8 +1,9 @@
-import { consoleApi, type Schemas, unwrap } from "@axiom/api";
+import type { Schemas } from "@axiom/api";
 import { hash, reducedMotion, timeline } from "@axiom/fx";
 import { parseMoney } from "@axiom/ui";
 import type zh from "../locales/zh";
 import { bridge, leadOf, measurer } from "./models-leads";
+import { publicModels } from "./public-models";
 import { firstSeen, type Script } from "./script";
 
 // The models-and-routes screen's script (Site.dc.html M2) on the site's published models (listPublicModels): the list
@@ -262,7 +263,6 @@ type Part = "list" | "panel" | "routes" | "leads" | "pick";
 class ModelsRun implements ModelsScript {
   private readonly clock;
   private readonly still = reducedMotion();
-  private readonly call = new AbortController();
   private readonly seen;
   private readonly resized = new ResizeObserver(() => this.place(false));
   private state: State = {
@@ -334,14 +334,16 @@ class ModelsRun implements ModelsScript {
       .slice(0, NR);
   }
 
+  // the page's one call for the models (public-models.ts), which the footer reads too
   private fetchModels() {
-    unwrap(consoleApi.GET("/api/console/v1/models", { signal: this.call.signal })).then(
+    publicModels().then(
       (data) => {
+        if (this.dead) return;
         this.set({ models: data.data.map(modelOf), at: new Date(), error: undefined });
         this.arrive();
       },
       (error: unknown) => {
-        if (!this.call.signal.aborted) this.set({ error: { error, at: Date.now() } });
+        if (!this.dead) this.set({ error: { error, at: Date.now() } });
       },
     );
   }
@@ -531,7 +533,6 @@ class ModelsRun implements ModelsScript {
 
   destroy() {
     this.dead = true;
-    this.call.abort();
     this.seen.cancel();
     this.resized.disconnect();
     this.clock.end();

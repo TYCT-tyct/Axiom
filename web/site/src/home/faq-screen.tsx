@@ -31,8 +31,8 @@ export function FaqScreen({ wide }: { wide: boolean }) {
   const { t } = useTranslation();
   const word = useBoardWords(zh, en);
   const scheme = useScheme();
-  const { root, v1 } = useApiAddress();
-  const { brand, name } = useSite();
+  const { root, v1, known } = useApiAddress();
+  const { name, join } = useSite();
   const site = { site: name };
   const said = [
     t("script.faq.a0", site),
@@ -42,7 +42,7 @@ export function FaqScreen({ wide }: { wide: boolean }) {
     t("script.faq.a4", site),
     t("script.faq.a5"),
     t("script.faq.a6"),
-    t(`script.faq.a7.${brand?.registration ?? "open"}`),
+    t(`script.faq.a7.${join}`),
   ];
   const answer = (i: number) => {
     const text = said[i] as string;
@@ -64,6 +64,8 @@ export function FaqScreen({ wide }: { wide: boolean }) {
     apiRoot: root,
     apiV1: v1,
     billing: t("script.faq.billing"),
+    signUp: t(`script.faq.signUp.${join}`),
+    envNote: known ? t("script.faq.envNote") : t("script.noApi"),
   };
   const Region = wide ? Wide : Narrow;
   return (
@@ -74,6 +76,8 @@ export function FaqScreen({ wide }: { wide: boolean }) {
           ...resting,
           ...values,
           m5_vars: vars(scheme),
+          // without an address the tools' picture shows no command, only that it is unavailable
+          m5_noApi: !known,
           m5_setStage: setStage,
           m5_in: entered ? "in" : "",
         } as Props["values"]

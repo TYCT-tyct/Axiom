@@ -38,7 +38,6 @@ const faqEnglish: Record<string, string> = {
   mb770360c59: "Official",
   m376cbd8cfc: "Third party",
   m10253bf9e7: "Official routes only",
-  m157a297814: "# Change these two lines, nothing else",
   m0794deeb5d: "Billing / request details",
   m2087c777c0: "Input",
   mfb04addb4c: "Output",
@@ -58,7 +57,6 @@ const faqEnglish: Record<string, string> = {
   mcf8ebb7d17: "Limit \u00a5500/month",
   m061246bd31: "Account",
   mc4fb62202b: "Sign-up",
-  m649a0fc723: "Free",
   m690c02e414: "Trial credit",
   mf127804b92: "None",
   m55d7debcab: "Billing method",
@@ -114,9 +112,16 @@ const faq = (board: string): Region => {
       apiRoot: ".hfm5 .w2 .cl:nth-child(2) > .ac",
       apiV1: ".hfm5 .w2 .cl:nth-child(3) > .ac",
       billing: ".hfm5 .w7 .kv:last-child > .t1",
+      // signing up, as this site does it (getSite's registration)
+      signUp: ".hfm5 .w7 .kv:first-child > .t1",
+      // what the tools' picture shows: the two addresses, not the whole configuration
+      envNote: ".hfm5 .w2 .cl:first-child > .cm",
     },
     elements: {
       ...entrance("hfm5", "m5_in"),
+      // without the site's address the picture shows no command, only that it is unavailable
+      ".hfm5 .w2 .cl:nth-child(2)": { unless: "m5_noApi" },
+      ".hfm5 .w2 .cl:nth-child(3)": { unless: "m5_noApi" },
       // in the accordion a closed answer is clipped, not gone: the expanded state takes it out of what is read too
       ...(wide
         ? {}

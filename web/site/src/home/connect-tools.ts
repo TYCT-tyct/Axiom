@@ -9,7 +9,8 @@ type Word = keyof typeof zh.script.connect;
 export type Run = ["t", string] | ["w", Word] | ["u", "root" | "v1"] | ["k"];
 // a line is a comment, a plain line, a line you add (decoded in and marked +), or the one that runs it
 type Line = { kind: "c" | "n" | "a" | "r"; runs: Run[] };
-export type Tool = { name: Run; file: Run; lines: Line[] };
+// copy names what the tool's copy button copies
+export type Tool = { name: Run; file: Run; copy: Word; lines: Line[] };
 
 const c = (word: Word): Line => ({ kind: "c", runs: [["w", word]] });
 const a = (...runs: Run[]): Line => ({ kind: "a", runs });
@@ -44,22 +45,27 @@ export const tools: Tool[] = [
   {
     name: t("Claude Code"),
     file: w("terminal"),
+    copy: "copyTerminal",
     lines: [c("alsoZshrc"), ...guideLines("claude-code"), blank, { kind: "r", runs: [t("claude")] }],
   },
-  // the file's lines only: the key is set in the terminal, and the guide's file does not hold it
+  // the file's lines: the key is set in a terminal, and the guide's file does not hold it, so its line stays a comment and
+  // the card is a valid file as it stands
   {
     name: t("Codex"),
     file: t("~/.codex/config.toml"),
-    lines: [...guideLines("codex"), c("setKey"), a(t("export AXIOM_API_KEY="), key)],
+    copy: "copyFile",
+    lines: [...guideLines("codex"), c("setKey"), { kind: "c", runs: [t("# export AXIOM_API_KEY="), key] }],
   },
   {
     name: t("Cursor"),
     file: w("cursorSettings"),
+    copy: "copyUrl",
     lines: [a(t("Override Base URL   "), ["u", "v1"]), a(t("OpenAI API Key      "), key), blank, c("pickModel")],
   },
   {
     name: t("OpenAI SDK"),
     file: t("main.py"),
+    copy: "copyCode",
     lines: [
       n(t("from openai import OpenAI")),
       blank,
@@ -74,6 +80,7 @@ export const tools: Tool[] = [
   {
     name: w("other"),
     file: t(".env"),
+    copy: "copyEnv",
     lines: [
       c("compatOpenai"),
       a(t("OPENAI_BASE_URL="), ["u", "v1"]),
@@ -85,6 +92,10 @@ export const tools: Tool[] = [
     ],
   },
 ];
+// Without the site's address a card shows no command at all, only that it is unavailable.
+const unavailable: Line[] = [c("noApiCard")];
+const linesOf = (tool: Tool, known: boolean) => (known ? tool.lines : unavailable);
+
 // the index of the line whose run is the address, and the one with the key
 export const addressLine = tools.map((tool) => tool.lines.findIndex((line) => line.runs.some((run) => run[0] === "u")));
 export const keyLine = tools.map((tool) => tool.lines.findIndex((line) => line.runs.some((run) => run[0] === "k")));
@@ -99,6 +110,8 @@ export const textOf = (run: Run, { word, root, v1 }: Texts) => {
   return "";
 };
 const GLYPHS = ":;t%SX8#@/<>=+*";
+// the glyph a decode shows at a place and a tick: the card's lines and the model the card names tumble alike
+export const glyphAt = (place: number, tick: number) => GLYPHS[Math.floor(hash(place, tick) * GLYPHS.length)] as string;
 
 // What the tool's configuration copies: for the tools the key guide knows, its text; for the others, the lines with their
 // comments left out. The key is a placeholder, and the model one to fill in from the key's model list.
@@ -125,7 +138,7 @@ function decoding(text: string, offset: number, { written, tick }: Decode) {
   const into = Math.max(0, Math.min(text.length, (written ?? 0) - offset));
   const glyphs = Math.max(0, Math.min(text.length - into, (written ?? 0) + 3 - offset - into));
   const tumbling = [...text.slice(into, into + glyphs)]
-    .map((ch, m) => (ch === " " ? " " : GLYPHS[Math.floor(hash(offset + into + m, tick) * GLYPHS.length)]))
+    .map((ch, m) => (ch === " " ? " " : glyphAt(offset + into + m, tick)))
     .join("");
   return { written: text.slice(0, into), tumbling, rest: text.slice(into + glyphs), complete: into >= text.length };
 }
@@ -190,8 +203,9 @@ export function cardHoles(index: number, texts: Texts, decode: Decode, pulse: bo
   const holes: Record<string, string> = {};
   // how many characters of what is added come before each line, for the decode that runs through them all
   let seen = 0;
+  const lines = linesOf(tool, texts.known);
   for (let i = 0; i < rows; i++) {
-    const line = tool.lines[i];
+    const line = lines[i];
     if (!line) {
       Object.assign(holes, emptyLine(i));
       continue;
@@ -203,7 +217,7 @@ export function cardHoles(index: number, texts: Texts, decode: Decode, pulse: bo
 }
 // the character count of everything the tool adds, which the decode runs through
 export const addedLength = (tool: Tool, texts: Texts) =>
-  tool.lines
+  linesOf(tool, texts.known)
     .filter((line) => line.kind === "a")
     .reduce((sum, line) => sum + line.runs.reduce((s, run) => s + textOf(run, texts).length, 0), 0);
 

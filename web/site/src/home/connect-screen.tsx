@@ -4,6 +4,7 @@ import wideZh from "@axiom/boards/Site/regions/Connect.zh";
 import Narrow from "@axiom/boards/SitePhone/regions/Connect";
 import narrowEn from "@axiom/boards/SitePhone/regions/Connect.en";
 import narrowZh from "@axiom/boards/SitePhone/regions/Connect.zh";
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
 import { start } from "./connect-script";
@@ -67,17 +68,18 @@ export function ConnectScreen({ wide, onWhale }: { wide: boolean; onWhale: () =>
   const { t } = useTranslation();
   const scheme = useScheme();
   const { known, root, v1 } = useApiAddress();
-  const { brand, name } = useSite();
+  const { name, join } = useSite();
   const word = useBoardWords(zh, en);
-  const { setStage, values, entered } = useScript(
+  const { setStage, script, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide, onWhale),
     { word: (w) => t(`script.connect.${w}`), root, v1, known },
   );
+  useEffect(() => script?.rename(name), [script, name]);
   const text: Props["text"] = {
     comma: t("script.connect.comma"),
     every: t("script.connect.every"),
     lede: t("script.connect.lede", { site: name }),
-    ...keyLinks(joinHref(brand?.registration)),
+    ...keyLinks(joinHref(join)),
   };
   const Region = wide ? Wide : Narrow;
   return (

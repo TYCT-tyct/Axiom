@@ -9,7 +9,8 @@ import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
 import { start } from "./bed-script";
 import { Brand } from "./brand";
-import { joinHref, links } from "./links";
+import { joinHref, links, pricesHref } from "./links";
+import { usePrices } from "./public-models";
 import { useScheme } from "./scheme";
 import { screenVars, useBoardWords, useScript } from "./script";
 import { useSite } from "./site-context";
@@ -36,10 +37,17 @@ export function BedScreen({ wide }: { wide: boolean }) {
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide),
     undefined,
   );
-  useEffect(() => script?.retheme(), [script, scheme]);
-  const { brand, name } = useSite();
-  // until the site has answered, the board's own way in (links.ts joinHref)
-  const join = brand?.registration ?? "open";
+  const { brand, name, join } = useSite();
+  const prices = usePrices();
+  // the dune takes the page's colours and the site's name: after the frame that applies a new brand colour, which the
+  // home page puts on the root above this screen (shell.tsx useSiteState)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => script?.retheme());
+    return () => cancelAnimationFrame(frame);
+  }, [script, scheme, brand?.brand_color]);
+  useEffect(() => script?.rename(name), [script, name]);
+  // a site that takes nobody new, or has not said yet, is entered by signing in
+  const way = join === "open" || join === "invite" ? join : "signIn";
   const on = (yes: boolean) => (yes ? "on" : "");
   const v = {
     ...values,
@@ -63,13 +71,13 @@ export function BedScreen({ wide }: { wide: boolean }) {
       text={{
         credit: t("footer"),
         apiV1: v1,
-        lede: t(`script.bed.lede.${join}`),
-        join: t(`script.bed.join.${join}`),
+        lede: t(`script.bed.lede.${way}`),
+        join: t(`script.bed.join.${way}`),
         tagline: t("script.bed.tagline"),
-        signUpHref: joinHref(brand?.registration),
+        signUpHref: joinHref(join),
         homeHref: links.home,
         modelsHref: links.models,
-        pricingHref: links.pricing,
+        pricingHref: pricesHref(prices),
       }}
       // the footer's brand is the site's own, as the header's is (brand.tsx)
       brand={<Brand logoUrl={brand?.logo_url} name={name} />}

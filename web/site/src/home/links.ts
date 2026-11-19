@@ -1,4 +1,5 @@
-import type { Registration } from "@axiom/api";
+import type { Prices } from "./public-models";
+import type { Join } from "./site-context";
 
 // Where the home page's links go. Signing in and registering are the console's pages (port design §9), which the
 // home page leaves for through the tiles departure (behaviour.ts useDeparture); prices are on the models page.
@@ -11,7 +12,9 @@ export const links = {
 };
 
 // Where a way in leads by how the site takes new users (getSite's registration): to registering, or, on a site that takes
-// nobody new, to signing in, where an existing account gets its keys. Until the site has answered, to registering, as
-// the board draws it; the register page says what the site does.
-export const joinHref = (registration: Registration | undefined) =>
-  registration === "closed" ? links.signIn : links.signUp;
+// nobody new or that has not said yet, to signing in, where an existing account gets its keys.
+export const joinHref = (join: Join) => (join === "open" || join === "invite" ? links.signUp : links.signIn);
+
+// Where the prices are: the models page publishes them, unless the site keeps them for its users, who see them on the
+// console's models page once signed in. Until that is known, the models page, which says which it is.
+export const pricesHref = (prices: Prices) => (prices === "members" ? "/console/models" : links.pricing);

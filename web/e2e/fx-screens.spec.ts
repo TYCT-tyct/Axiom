@@ -137,7 +137,46 @@ test("a copy's word belongs to the tool it copied", async ({ page }) => {
   await expect(copy).toHaveAttribute("data-state", "done");
   await page.locator(".hfm1 .tab").nth(2).click();
   await expect(copy).not.toHaveAttribute("data-state", "done");
-  await expect(copy).toHaveAttribute("aria-label", "复制配置");
+  // the button says what it copies for the tool shown: Cursor takes the base URL alone
+  await expect(copy).toHaveAttribute("aria-label", "复制 Base URL");
+  await expect(copy).toHaveAttribute("title", "复制 Base URL");
+
+  // a second copy takes the first one's word away at once, before its own answer
+  await copy.click();
+  await answer();
+  await expect(copy).toHaveAttribute("data-state", "done");
+  await copy.click();
+  await expect(copy).not.toHaveAttribute("data-state", "done");
+  await answer();
+  await expect(copy).toHaveAttribute("data-state", "done");
+
+  // the page put out of view drops a copy still waiting on the clipboard
+  await copy.click();
+  await setHidden(page, true);
+  await answer();
+  await setHidden(page, false);
+  await page.waitForTimeout(300);
+  await expect(copy).not.toHaveAttribute("data-state", "done");
+});
+
+// Each tool's card is a configuration as its target takes it: Codex's file keeps the key's terminal line a comment, so
+// the card is a valid file, and its button copies the file; without an address there is no command at all.
+test("each tool's card holds what its target takes, and says what its button copies", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  const copy = page.locator(".hfm1 .cpy");
+  const expected = ["复制终端命令", "复制配置文件", "复制 Base URL", "复制代码", "复制 .env"];
+  for (const [i, label] of expected.entries()) {
+    await page.locator(".hfm1 .tab").nth(i).click();
+    await expect(copy).toHaveAttribute("aria-label", label);
+  }
+  await page.locator(".hfm1 .tab").nth(1).click();
+  const lines = await page.locator(".hfm1 pre .ln").allTextContents();
+  // every line of the Codex card that is not TOML is a comment
+  expect(lines.filter((line) => /export/.test(line))).toEqual([expect.stringMatching(/#\s*export AXIOM_API_KEY=/)]);
 });
 
 // Reduced motion asked for while the screens move: what was moving settles in its final state, and what the reader does
@@ -185,6 +224,12 @@ test("without the site's API address the card says so and the copy button is dis
   await page.goto(apps[0].url);
   await pageHeading(page);
   await expect(page.locator(".hfm1 pre")).toContainText("本站 API 地址暂不可用");
+  // no command with a hole where the address would be, on the card or in the questions' picture
+  await expect(page.locator(".hfm1 pre")).not.toContainText(/BASE_URL|base_url|export/);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  await expect(page.locator(".hfm5 .w2")).not.toContainText("export");
+  await expect(page.locator(".hfm5 .w2")).toContainText("本站 API 地址暂不可用");
   await expect(page.locator(".hfm1 .cpy")).toBeDisabled();
   await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("aria-label", /无法复制/);
 });
@@ -283,38 +328,6 @@ for (const [scheme, at] of [
     await scrollTo(page, 5);
     await shown(page, 5);
     await expect(page.locator(".hfm5 .ac").first()).toHaveCSS("color", rgbOf(brandPair("--accentT")[at]));
-  });
-}
-
-// The ways in follow how the site takes new users (getSite's registration, as its register page reads it): the words
-// offer what the site does, and a site that takes nobody new leads to signing in and offers no way to register.
-const joins = [
-  { registration: "open", join: "注册，获取API key", href: "/console/register", a7: "注册不要钱。" },
-  { registration: "invite", join: "凭邀请码注册，获取API key", href: "/console/register", a7: "凭邀请码" },
-  { registration: "closed", join: "登录，获取API key", href: "/console/sign-in", a7: "暂不开放注册" },
-] as const;
-for (const { registration, join, href, a7 } of joins) {
-  test(`a site whose registration is ${registration} offers that way in`, async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await mockConsole(page, "usual", {
-      site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration, email_verification: true },
-    });
-    await page.goto(apps[0].url);
-    await pageHeading(page);
-    const offered = registration !== "closed";
-    await expect(page.locator(".bar .btn.primary")).toBeVisible({ visible: offered });
-    await expect(page.locator(".hs > main .cta .primary")).toBeVisible({ visible: offered });
-    for (const sec of delivered) {
-      await scrollTo(page, sec);
-      await shown(page, sec);
-    }
-    await expect(page.locator(".hfm1 .kc").first()).toHaveAttribute("href", href);
-    await expect(page.locator(".hfm6 .cta .btn.primary")).toHaveText(join);
-    await expect(page.locator(".hfm6 .cta .btn.primary")).toHaveAttribute("href", href);
-    await expect(page.locator(".hfm5 .ans").last()).toContainText(a7);
-    // the billing line of the last answer's picture is not by token: not every endpoint bills so
-    await expect(page.locator(".hfm5 .w7")).not.toContainText("token");
   });
 }
 

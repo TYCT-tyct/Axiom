@@ -51,7 +51,12 @@ const siteBoards = {
 // What the page writes in its own words, by scene (packages/boards/manifest/site-screens-b.ts and -c.ts, the regions' text).
 const pageWords: Record<string, string[]> = {
   "site connect": [".hfm1 h2 > .ph:last-child", ".hfm1 .intro p"],
-  "site faq": [".hfm5 .ans", ".hfm5 .w7 .kv:last-child > .t1"],
+  "site faq": [
+    ".hfm5 .ans",
+    ".hfm5 .w7 .kv:last-child > .t1",
+    ".hfm5 .w7 .kv:first-child > .t1",
+    ".hfm5 .w2 .cl:first-child > .cm",
+  ],
   "site bed": [".hfm6 .el > .lede", ".hfm6 .cta .btn.primary", ".hfm6 .ft .fb > p"],
 };
 

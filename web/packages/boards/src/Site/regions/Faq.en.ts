@@ -14,7 +14,6 @@ export default {
   "mab79bd5670": "Model / claude-sonnet-5.5",
   "m223b24b821": "Route",
   "mf2355ab114": "Input / million tokens",
-  "m157a297814": "# Change these two lines, nothing else",
   "m0794deeb5d": "Billing / request details",
   "m2087c777c0": "Input",
   "mfb04addb4c": "Output",
@@ -34,7 +33,6 @@ export default {
   "mcf8ebb7d17": "Limit ¥500/month",
   "m061246bd31": "Account",
   "mc4fb62202b": "Sign-up",
-  "m649a0fc723": "Free",
   "m690c02e414": "Trial credit",
   "mf127804b92": "None",
   "m55d7debcab": "Billing method",
@@ -46,6 +44,8 @@ export default {
   "m9799ce84e2": "",
   "m475efcf60a": "",
   "ma60cdd302f": "",
-  "m2fe69c47c2": ""
+  "m2fe69c47c2": "",
+  "m649a0fc723": "",
+  "m157a297814": ""
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

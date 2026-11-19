@@ -12,5 +12,7 @@ ans6: t("m475efcf60a"),
 ans7: t("ma60cdd302f"),
 apiRoot: "https://api.axiom.example",
 apiV1: "https://api.axiom.example/v1",
-billing: t("m2fe69c47c2")},  });
+billing: t("m2fe69c47c2"),
+signUp: t("m649a0fc723"),
+envNote: t("m157a297814")},  });
 /* jscpd:ignore-end */

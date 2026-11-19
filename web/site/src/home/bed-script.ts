@@ -1,4 +1,4 @@
-import { own, reducedMotion, timeline } from "@axiom/fx";
+import { onMotion, own, reducedMotion, timeline } from "@axiom/fx";
 import type { Script } from "./script";
 
 // The sea bed's script (Site.dc.html M6): a dune of glyphs with the wordmark half buried in it, stirred by the pointer,
@@ -65,19 +65,27 @@ const topAt = (x: number, t: number, width: number, height: number) =>
   surgeAt(x, t, width, height);
 
 // The wordmark, drawn once off screen and sampled cell by cell: how much of each cell the letters cover.
-function wordmark(width: number, height: number, cols: number, rows: number, cell: number, narrow: boolean) {
+function wordmark(
+  name: string,
+  width: number,
+  height: number,
+  cols: number,
+  rows: number,
+  cell: number,
+  narrow: boolean,
+) {
   const off = document.createElement("canvas");
   off.width = width;
   off.height = height;
   const o = off.getContext("2d") as CanvasRenderingContext2D;
   o.font = "600 100px 'Axiom Sans', sans-serif";
-  const w100 = o.measureText("Axiom").width;
+  const w100 = Math.max(1, o.measureText(name).width);
   const size = Math.min(((width * (narrow ? 0.94 : 0.86)) / w100) * 100, height * 1.12);
   o.font = `600 ${size}px 'Axiom Sans', sans-serif`;
-  const tw = o.measureText("Axiom").width;
+  const tw = o.measureText(name).width;
   o.fillStyle = "#000";
   o.textBaseline = "alphabetic";
-  o.fillText("Axiom", (width - tw) / 2, height * (narrow ? 0.08 : 0.16) + size * 0.72);
+  o.fillText(name, (width - tw) / 2, height * (narrow ? 0.08 : 0.16) + size * 0.72);
   const px = o.getImageData(0, 0, width, height).data;
   const offset = (width - cols * cell) / 2;
   const mask = new Float32Array(cols * rows);
@@ -192,8 +200,13 @@ function cell(bed: Bed, layers: Layers, column: Column, r: number) {
 }
 
 class BedRun implements Script<object> {
-  private readonly clock;
-  private readonly still = reducedMotion();
+  // the clock of the motion setting in force: a new one when the reader changes it
+  private clock;
+  // whether the dune moves and answers the pointer: motion allowed, read when the setting changes
+  private moving = false;
+  // the wordmark: the site's name
+  private name = "Axiom";
+  private readonly stopMotion: () => void;
   private readonly layout;
   private bed: Bed | undefined;
   private palette: Palette | undefined;
@@ -215,11 +228,45 @@ class BedRun implements Script<object> {
     this.resize = new ResizeObserver(() => this.build());
     this.resize.observe(art);
     this.place(0, false);
-    if (!this.still) {
-      stage.addEventListener("pointermove", this.move);
-      stage.addEventListener("pointerdown", this.press);
-      this.roll();
-    }
+    if (!reducedMotion()) this.go();
+    this.stopMotion = onMotion((allowed) => (allowed ? this.go() : this.stand()));
+  }
+
+  // motion allowed: the pointer stirs the dune, the dune moves on the loop and the reel rolls
+  private go() {
+    if (this.moving || this.dead) return;
+    this.moving = true;
+    this.stage.addEventListener("pointermove", this.move);
+    this.stage.addEventListener("pointerdown", this.press);
+    this.clock.end();
+    this.clock = timeline(this.stage);
+    this.roll();
+    this.attach();
+  }
+  // reduced motion: the still frame, at once, and nothing that would move it
+  private stand() {
+    this.moving = false;
+    this.stage.removeEventListener("pointermove", this.move);
+    this.stage.removeEventListener("pointerdown", this.press);
+    this.clock.end();
+    this.clock = timeline(this.stage);
+    this.release();
+    this.release = () => {};
+    this.place(0, false);
+    this.changed();
+    this.draw(0);
+  }
+  private attach() {
+    const art = this.art();
+    this.release();
+    this.release = this.moving && this.bed ? own(art, (_, now) => this.frame(now)) : () => {};
+  }
+
+  // the wordmark is the site's name, drawn again when it changes
+  rename(name: string) {
+    if (name === this.name) return;
+    this.name = name;
+    this.build();
   }
 
   private art() {
@@ -243,7 +290,7 @@ class BedRun implements Script<object> {
       accent: resolve("--accent"),
     };
     probe.remove();
-    this.draw(this.still ? 0 : performance.now() / 1000);
+    this.draw(this.moving ? performance.now() / 1000 : 0);
   }
 
   private build() {
@@ -259,7 +306,7 @@ class BedRun implements Script<object> {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cols = Math.floor(width / cell);
     const rows = Math.floor(height / cell);
-    const { mask, offset } = wordmark(width, height, cols, rows, cell, this.narrow);
+    const { mask, offset } = wordmark(this.name, width, height, cols, rows, cell, this.narrow);
     this.bed = {
       ctx,
       width,
@@ -273,8 +320,7 @@ class BedRun implements Script<object> {
       cell,
       glyph,
     };
-    this.release();
-    this.release = this.still ? () => {} : own(art, (_, now) => this.frame(now));
+    this.attach();
     this.retheme();
   }
 
@@ -379,6 +425,7 @@ class BedRun implements Script<object> {
 
   destroy() {
     this.dead = true;
+    this.stopMotion();
     this.release();
     this.resize.disconnect();
     this.stage.removeEventListener("pointermove", this.move);

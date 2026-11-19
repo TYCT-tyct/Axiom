@@ -226,3 +226,19 @@ it("moves a timeline's clock only on the loop's frames, and settles its sleeps f
   expect(await clock.sleep(1)).toBe(false);
   expect(state().owners).toBe(0);
 });
+
+it("tells a step still waiting when its timeline ends, and a step added after the end at once", async () => {
+  await loop();
+  const { timeline } = await import("./timeline");
+  const clock = timeline(document.createElement("div"));
+  const ended = vi.fn();
+  const done = vi.fn();
+  clock.each(() => false, done);
+  clock.each(() => true, ended);
+  clock.end();
+  expect(ended).toHaveBeenCalledTimes(1);
+  expect(done).toHaveBeenCalledTimes(1);
+  const late = vi.fn();
+  clock.each(() => true, late);
+  expect(late).toHaveBeenCalledTimes(1);
+});

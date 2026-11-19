@@ -2,9 +2,9 @@
 // @axiom/boards generates it, loaded the first time either switch is used. It runs unedited on the board's markup: it
 // opens and filters the language panel, writes the chosen language's words with the sonar decode, and dives into
 // the other theme. Under reduced motion both switches are made at once, without either effect (R7): the engine takes
-// an animate flag on each, and this module clears it.
+// an animate flag on each, and this module clears it, also for a switch under way when the setting changes.
 import "@axiom/boards/engines/prefs.js";
-import { reducedMotion } from "./loop";
+import { onMotion, reducedMotion } from "./loop";
 import type { OceanEngine } from "./sea";
 
 export type Prefs = {
@@ -20,6 +20,11 @@ export type Prefs = {
 type Engine = Prefs & {
   applyLang(code: string, animate: boolean): void;
   applyTheme(to: string, animate: boolean): void;
+  // what the engine runs: the language's decode under way (wave), ended at once by settle; the theme's dive (dv)
+  wave: unknown;
+  dv: unknown;
+  settle(): void;
+  effective(): string;
 };
 
 declare global {
@@ -52,5 +57,16 @@ export function startPrefs(root: HTMLElement, sea: OceanEngine | undefined, opti
   const theme = engine.applyTheme.bind(engine);
   engine.applyLang = (code, animate) => lang(code, animate && !reducedMotion());
   engine.applyTheme = (to, animate) => theme(to, animate && !reducedMotion());
+  // reduced motion asked for mid-switch: the decode and the dive end at once, in the choice they were heading to
+  const stopMotion = onMotion((allowed) => {
+    if (allowed) return;
+    if (engine.wave) engine.settle();
+    if (engine.dv) engine.applyTheme(engine.effective(), false);
+  });
+  const destroy = engine.destroy.bind(engine);
+  engine.destroy = () => {
+    stopMotion();
+    destroy();
+  };
   return engine;
 }

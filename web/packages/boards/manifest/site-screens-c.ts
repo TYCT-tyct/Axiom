@@ -67,7 +67,11 @@ const connect = (board: string): Region => ({
   // the heading's promise and the lede are the page's words, which name the site and hold for a key that may use only
   // some models (site/src/locales, script.connect)
   text: { comma: ".hfm1 h2 .kern", every: ".hfm1 h2 > .ph:last-child", lede: ".hfm1 .intro p" },
-  elements: entrance("hfm1", "m1_in"),
+  elements: {
+    ...entrance("hfm1", "m1_in"),
+    // what the copy button copies for the tool shown, said on hover too
+    ".hfm1 .cpy": { set: { title: "{{m1_copyLabel}}" } },
+  },
   classes,
   inserted: { into: ".hfm1 .fig", classes: inserted },
   states: runTime,

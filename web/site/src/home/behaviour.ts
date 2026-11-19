@@ -42,24 +42,34 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
 // section (native smooth scrolling, not the board's eased frames; a jump under reduced motion), and the tour, which
 // glides through the sections a few seconds apart and back to the top. The page moving the reader on its own (the tour's
-// next glide, a glide to a section followed while the screens above it grow) is the press's that started it: a glide
-// to the top or to a section, and stop, end it.
+// next glide, a glide to a section followed while the screens above it grow, a glide under way) is the press's that
+// started it: a glide to the top or to a section, and stop, end it; stop also halts a glide where it is.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
 const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
+const measured = (scroller: HTMLElement): Offset[] => [
+  { sec: 0, top: 0 },
+  ...places(scroller).map((s) => ({ sec: Number(s.dataset.place), top: s.offsetTop })),
+];
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
   let timer = 0;
-  const glide = (top: number) => scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
+  // a glide the page started is under way (until the browser says the scroll has ended)
+  let gliding = false;
+  // the section a glide is taking the reader to, and where it was when the glide set out
+  let following: { sec: number; top: number } | undefined;
+  const glide = (top: number) => {
+    gliding = true;
+    scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
+  };
+  const topOf = (sec: number) => offsets.find((offset) => offset.sec === sec)?.top ?? 0;
   // The screens above a section grow as their code arrives (a place is a view's height until then), which moves the
-  // section on while the page glides to it: it glides again to where the section is now, until it has stopped moving.
-  const section = (sec: number, again: number) => {
-    const top = offsets.find((offset) => offset.sec === sec)?.top ?? 0;
-    glide(top);
+  // section on while the page glides to it: each time the places are measured again, it glides on to where the section
+  // is now, for as long as the glide is the reader's latest wish (a few seconds, or until the reader takes over).
+  const section = (sec: number) => {
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      const now = places(scroller).find((place) => Number(place.dataset.place) === sec)?.offsetTop ?? top;
-      if (Math.abs(now - top) > 2 && again < 6) section(sec, again + 1);
-    }, 900);
+    following = { sec, top: topOf(sec) };
+    glide(following.top);
+    timer = window.setTimeout(stop, 6000);
   };
   // the tour goes on from the section the reader is in the top of, or from the first when at the surface
   const tour = (i: number) => {
@@ -67,29 +77,45 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
     timer = window.setTimeout(() => (top === undefined ? glide(0) : tour(i + 1)), top === undefined ? 3000 : 3200);
     if (top !== undefined) glide(top);
   };
+  // ends what the page set going: the next step, the following, and a glide under way, which stops where it is
+  const stop = () => {
+    window.clearTimeout(timer);
+    following = undefined;
+    if (!gliding) return;
+    gliding = false;
+    scroller.scrollTo({ top: scroller.scrollTop, behavior: "instant" });
+  };
   return {
     measure: () => {
-      offsets = [
-        { sec: 0, top: 0 },
-        ...places(scroller).map((s) => ({ sec: Number(s.dataset.place), top: s.offsetTop })),
-      ];
+      offsets = measured(scroller);
+      if (!following) return;
+      const now = topOf(following.sec);
+      if (Math.abs(now - following.top) <= 2) return;
+      following.top = now;
+      glide(now);
     },
     onScroll: () => {
       const { dim, ...scroll } = scrolled(scroller, offsets);
       if (depth) depth.style.opacity = dim.toFixed(3);
       show(scroll);
     },
+    onScrollEnd: () => {
+      gliding = false;
+    },
     toTop: () => {
-      window.clearTimeout(timer);
+      stop();
       glide(0);
     },
-    toSection: (sec: number) => section(sec, 0),
+    toSection: (sec: number) => {
+      stop();
+      section(sec);
+    },
     tour: () => {
       if (reducedMotion()) return;
-      window.clearTimeout(timer);
+      stop();
       tour(scroller.scrollTop > 10 ? 0 : 1);
     },
-    stop: () => window.clearTimeout(timer),
+    stop,
   };
 }
 
@@ -169,6 +195,7 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     // a place grows when its screen's code arrives, and the sections after it move down
     for (const element of [scroller, ...places(scroller)]) resized.observe(element);
     scroller.addEventListener("scroll", page.onScroll, { passive: true });
+    scroller.addEventListener("scrollend", page.onScrollEnd);
     frame.addEventListener("click", onClick);
     for (const type of takeOver) frame.addEventListener(type, page.stop, { capture: true, passive: true });
     const onHidden = () => document.hidden && page.stop();
@@ -182,6 +209,7 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
       document.removeEventListener("visibilitychange", onHidden);
       for (const type of takeOver) frame.removeEventListener(type, page.stop, { capture: true });
       scroller.removeEventListener("scroll", page.onScroll);
+      scroller.removeEventListener("scrollend", page.onScrollEnd);
       frame.removeEventListener("click", onClick);
       for (const [type, listener] of hovers) isl?.removeEventListener(type, listener);
     };

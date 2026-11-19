@@ -13,6 +13,7 @@ type Egg = {
   cv: HTMLCanvasElement;
   done: () => void;
   summon: (anchor: Element | null, force: boolean) => boolean;
+  setTheme: (dark: boolean) => void;
   destroy: () => void;
 };
 
@@ -25,6 +26,8 @@ declare global {
 export type Whale = {
   // summon starts a visit that heads for anchor (an element it passes by) and reports whether one began.
   summon: (anchor: Element | null) => boolean;
+  // setTheme recolours the whale for the page's scheme, mid-visit too.
+  setTheme: (dark: boolean) => void;
   // destroy ends the visit wherever it is: the canvas is cleared and what the visit lit or thinned is put back.
   destroy: () => void;
 };
@@ -58,6 +61,7 @@ export function startWhale(root: HTMLElement, engine: OceanEngine, { dark, phone
   };
   return {
     summon: (anchor) => egg.summon(anchor, true),
+    setTheme: (dark) => egg.setTheme(dark),
     // The egg's own destroy only stops its frames and the timer that would put its sweep's light out: what is on the
     // canvas, and the light and the thinned glass of a visit cut short, would stay.
     destroy: () => {

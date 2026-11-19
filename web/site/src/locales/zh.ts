@@ -34,16 +34,24 @@ export default {
       terminal: "终端",
       cursorSettings: "Cursor 设置 → Models",
       alsoZshrc: "# 也可以写进 ~/.zshrc",
-      setKey: "# 在终端设置key；model 填这把key的模型列表里的名字",
+      // Codex's file holds no key: the key is set in a terminal, a line that stays a comment here, so the card is a valid file
+      setKey: "# model 填这把key的模型列表里的名字；key 在终端里设置：",
       pickModel: "# 选好模型，照常使用",
       compatOpenai: "# 兼容 OpenAI 接口",
       compatAnthropic: "# 兼容 Anthropic 接口",
       hello: "你好",
       yourKey: "你的key",
       other: "其他工具",
-      copy: "复制配置",
       modelList: "# model 填这把key的模型列表（GET /v1/models）里的名字",
+      // what each tool's copy button copies
+      copyTerminal: "复制终端命令",
+      copyFile: "复制配置文件",
+      copyUrl: "复制 Base URL",
+      copyCode: "复制代码",
+      copyEnv: "复制 .env",
       copyUnavailable: "无法复制：本站 API 地址暂不可用",
+      // the card without an address: no command to show
+      noApiCard: "# 本站 API 地址暂不可用，暂时没有可用的配置",
       // shown where the file's name is, so it is short
       copyFailed: "复制失败，请手动选择",
       copied: "已复制",
@@ -51,43 +59,54 @@ export default {
       // lede, which names the site
       comma: "，",
       every: "Key允许的模型都能用",
-      lede: "把工具的接口地址换成{{site}}的，填入key。命令、代码和工作流都不用改。",
+      lede: "把工具的接口地址换成{{site}}的，填入key，其余照常使用。",
     },
-    // Each answer holds for every site's settings: what is billed (docs/domains/billing.md「计费项」「预留与结算」),
-    // when a call moves to another endpoint (docs/domains/routing.md, provider.allow_fallbacks), which models a key
-    // reaches (docs/domains/accounts.md「API key」) and how the site takes new users (getSite's registration).
+    // Each answer holds for every site's settings: what is billed and how (docs/domains/billing.md「定价」「用量来源与暂估」
+    // 「免单规则」), when a call moves to another endpoint (docs/domains/routing.md「请求覆盖」「失败怎么办」), which sources
+    // are official (docs/product.md「售卖形式」), which models a key reaches and its limits (docs/domains/accounts.md「API
+    // key」) and how the site takes new users (getSite's registration). The PR's table lists each sentence's basis.
     faq: {
-      a0: "一个Key就能调用多家厂商的模型（能调哪些，由这把Key的设置决定），不用每家各开账号、各自充值。同一个模型背后可以有多个端点，{{site}}默认按价格和健康度挑一个；允许回退时，一个失败了就换下一个可用的。账单只有一份。",
-      a1: "不是模型厂商自己提供的端点，通常更便宜。要限制来源，在控制台建一个路由预设（比如只走官方来源），再把它绑到这把Key上；只改默认预设不会改已有的Key。",
-      a2: "Claude Code、Codex、Cursor和OpenAI SDK都能用，改地址和Key，再从这把Key的模型列表里选模型。其他兼容OpenAI或Anthropic接口的工具也一样。",
-      a3: "按实际服务这次请求的那个端点收费。每个端点有自己的计费项和单价：对话一般按输入、输出token，图片按张，联网搜索这类工具按次。价格公开的站点，模型页会列出各端点的价格；不公开的站点，登录后才看得到。",
-      a4: "允许回退、还有可用的端点时，{{site}}会换一个端点重试；内容开始交给你之后就不再换。换端点之前失败的尝试不向你收费；最后一次按它的结局计费：内容已经交到你手里的，按实际用量收；已经执行的按次项目（比如搜索）照收。控制台的调用记录里能看到每次尝试。",
-      a5: "端点价格会跟着上游调整。每个请求按它发出时锁定的价格结算，之后的调价不影响已经发出的请求；价格可见的站点，模型页显示的是当前价格。",
-      a6: "在控制台删掉这个Key，再新建一个。平时给每个Key设好额度上限和IP白名单，就算泄露，损失也有限。",
-      // by how the site takes new users
+      a0: "一个Key就能调用多家厂商的模型（能调哪些，由这把Key的设置决定），不用每家各开账号、各自充值。同一个模型背后可以有多个端点，{{site}}默认按价格和健康度挑一个；遇到超时、限流、上游出错这类端点的问题，允许回退且还有合格的端点时，换下一个。账单只有一份。",
+      a1: "我们直接接入的官方 API（含云厂商）之外的端点，多是中转站的分组，按匿名代号显示，通常更便宜。要限制来源，在控制台建一个路由预设（比如只走官方来源），再把它绑到这把Key上；只改默认预设不会改已有的Key。",
+      a2: "Claude Code、Codex、Cursor和OpenAI SDK都能用：按接入屏里各自的配置设好地址和Key，再从这把Key的模型列表里选模型。其他兼容OpenAI或Anthropic接口的工具也一样。",
+      a3: "按实际服务这次请求的那个端点收费，每个端点有自己的计费项和单价：对话按输入、输出token；图片看端点，有的按张，有的按token；联网搜索这类工具按次。上游没报全用量时（比如流中途断开），缺的部分先按估算收，之后按上游的记录校正。价格公开的站点，模型页列出各端点的价格；不公开的站点，登录后在控制台的模型页看得到。",
+      a4: "遇到超时、限流、上游出错这类端点的问题，允许回退且还有合格的端点时，{{site}}会换一个端点重试；请求本身的问题（比如参数错误）和内容审核的拒绝会直接返回给你，内容开始交给你之后也不再换。换端点之前失败的尝试不向你收费；最后一次按它的结局计费：内容已经交到你手里的，按实际用量收；已经执行的按次项目（比如搜索）照收。控制台的调用记录里能看到每次尝试。",
+      a5: "端点价格由本站的定价规则决定：按成本加成或参考价定的，会随上游成本或参考价调整；固定价一般不变，但成本涨过保本线时也会上调。每个请求按它发出时锁定的价格结算，之后的调价不影响已经发出的请求。",
+      a6: "在控制台删掉这个Key，再新建一个。平时给每个Key设好额度上限和IP白名单：额度上限可以按日、周、月重置，也可以设不重置的总额；按周期重置的上限只管每个周期，泄露后每个周期都可能花满，要封住总损失，设不重置的总额，并尽快删掉泄露的Key。",
+      // by how the site takes new users, and before the site has said: then only what holds for every site
       a7: {
         open: "注册不要钱。目前没有试用额度，按用量扣费，用多少扣多少。",
         invite: "注册不要钱，不过本站要凭邀请码注册。目前没有试用额度，按用量扣费，用多少扣多少。",
         closed: "本站暂不开放注册，已有账户直接登录。没有试用额度，按用量扣费，用多少扣多少。",
+        unknown: "注册不要钱；本站是否开放注册、要不要邀请码，以注册页为准。没有试用额度，按用量扣费，用多少扣多少。",
       },
-      // the last picture's billing line: not every endpoint bills by the token
+      // the last picture's lines that depend on the site: signing up, and billing, which is not by the token everywhere
+      signUp: {
+        open: "免费",
+        invite: "凭邀请码，免费",
+        closed: "暂不开放",
+        unknown: "以注册页为准",
+      },
       billing: "按用量",
+      // the tools' picture: the two addresses, which are all it shows; without an address, no command
+      envNote: "# 两种接口的地址；key 另外设置",
       // after the answers whose picture shows figures: they are the board's illustration, not the site's
       sample: "图中的价格、金额和 Key 是示例数据。",
     },
     // The sea bed's way in and the line before it, by how the site takes new users (getSite's registration): a site that
-    // takes nobody new is entered by signing in. The brand's line holds for a key that may use only some models.
+    // takes nobody new, or has not said yet, is entered by signing in. The brand's line holds for a key that may use only
+    // some models.
     bed: {
       tagline: "一个Key，接入它能用的所有模型。",
       join: {
         open: "注册，获取API key",
         invite: "凭邀请码注册，获取API key",
-        closed: "登录，获取API key",
+        signIn: "登录，获取API key",
       },
       lede: {
-        open: "注册就能拿到Key，改两行配置，接着用你现在的工具。",
-        invite: "凭邀请码注册就能拿到Key，改两行配置，接着用你现在的工具。",
-        closed: "登录控制台建一把Key，改两行配置，接着用你现在的工具。",
+        open: "注册就能拿到Key，把工具的地址和Key换成本站的，接着用你现在的工具。",
+        invite: "凭邀请码注册就能拿到Key，把工具的地址和Key换成本站的，接着用你现在的工具。",
+        signIn: "登录控制台建一把Key，把工具的地址和Key换成本站的，接着用你现在的工具。",
       },
     },
     models: {

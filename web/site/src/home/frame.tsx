@@ -3,13 +3,12 @@ import Narrow from "@axiom/boards/SitePhone/regions/Shell";
 import { onMotion, reducedMotion, useEffectModule } from "@axiom/fx";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useSiteBrand } from "../shell";
 import { useDeparture, useFrameBehaviour } from "./behaviour";
 import { BrandPlaces } from "./brand";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
-import { SiteContext } from "./site-context";
+import { type Join, useSite } from "./site-context";
 import { useSwitches } from "./switches";
 import { useWhale } from "./whale";
 import { type BoardKey, sections, words } from "./words";
@@ -63,10 +62,12 @@ function useTabletLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
   }, [root, wide]);
 }
 
-// A site that takes nobody new offers no way to register: the header's, the island's, the menu's and the first
-// screen's go (the screens below lead to signing in instead, links.ts joinHref). Their words are the switches' engine's,
-// which writes "register" into them whatever the page says, so they are taken out rather than reworded.
-function useNoRegistration(root: RefObject<HTMLElement | null>, closed: boolean) {
+// The header's, the island's, the menu's and the first screen's ways to register are offered only once the site has said
+// it takes new users: a site that takes nobody new, or one that has not answered yet, offers signing in (the screens
+// below lead there instead, links.ts joinHref). Their words are the switches' engine's, which writes "register" into
+// them whatever the page says, so they are taken out rather than reworded.
+function useRegistration(root: RefObject<HTMLElement | null>, join: Join) {
+  const closed = join === "closed" || join === "unknown";
   useLayoutEffect(() => {
     for (const way of root.current?.querySelectorAll<HTMLElement>(`a[href="${links.signUp}"]:not(.under *)`) ?? [])
       way.style.display = closed ? "none" : "";
@@ -106,11 +107,10 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   );
   useSwitches(root, sea);
   useDeparture(root, sea);
-  const whale = useWhale(root, sea, met, !wide, scheme === "dark");
+  const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
   useTabletLayout(root, wide);
-  const brand = useSiteBrand();
-  const name = brand?.name ?? t("brand", { ns: "common" });
+  const { brand, name, join } = useSite();
 
   // What the switches' engine sets, until it is loaded: it starts from them, and keeps them the same itself.
   const language = i18n.language === "en" ? "en" : "zh-CN";
@@ -126,7 +126,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
 
   const tourCls = useTour(root, scroll.solid);
 
-  useNoRegistration(root, brand?.registration === "closed");
+  useRegistration(root, join);
   const board = (key: BoardKey) => t(`board.${key}`);
   const values = {
     modeCls: scheme,
@@ -145,13 +145,11 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const Shell = wide ? Wide : Narrow;
   return (
     <>
-      <SiteContext value={{ brand, name }}>
-        <WhaleContext value={whale}>
-          <Shell t={board} values={values} text={text}>
-            {children}
-          </Shell>
-        </WhaleContext>
-      </SiteContext>
+      <WhaleContext value={whale}>
+        <Shell t={board} values={values} text={text}>
+          {children}
+        </Shell>
+      </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
     </>
   );
