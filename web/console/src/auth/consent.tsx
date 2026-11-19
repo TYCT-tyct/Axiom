@@ -5,9 +5,10 @@ import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
+import { useAttempt } from "./attempt";
 import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, useLegalConsent } from "./legal";
 import { LoginFrame } from "./login-frame";
-import { FormProblem, NoteAction, OtherAccount, primaryLook, wrapAnywhere } from "./login-parts";
+import { FormProblem, NoteAction, primaryLook, SignOutNote, wrapAnywhere } from "./login-parts";
 
 // A member whose accepted versions are behind the site's current ones lands here, outside the shell: every shell page
 // would be refused with consent_required until this succeeds.
@@ -33,38 +34,40 @@ function useAccept(legal: LegalConsentState) {
   });
 }
 
+// Accepting and signing out are the page's requests (attempt.ts): one at a time, the page taking nothing else meanwhile.
 function ConsentStep() {
   const { t } = useTranslation();
   const errors = useErrors();
   const session = useSession();
   const legal = useLegalConsent();
   const accept = useAccept(legal);
+  const attempt = useAttempt();
   const missing = legal.query.isSuccess && legal.documents.length === 0;
+  const ready = canSubmitWithLegal(legal) && !missing;
   // waiting for the box to be ticked, or for the server: both disable the button, only the second is busy
-  const blocked = accept.isPending || !canSubmitWithLegal(legal) || missing;
+  const blocked = attempt.kind !== null || !ready;
+  const failed = attempt.failure?.kind === "accept" ? attempt.failure.error : null;
   return (
     <LoginFrame
       title={t("legal.title")}
       sub={t("legal.description", { email: session.user.email })}
       subStyle={wrapAnywhere}
       step="consent"
-      busy={accept.isPending}
+      attempt={attempt}
       shape="start"
       onSubmit={(event) => {
         event.preventDefault();
-        if (!accept.isPending && canSubmitWithLegal(legal) && !missing) {
-          accept.mutate({ consent: legal.versions ?? [] });
-        }
+        if (ready) attempt.run("accept", () => accept.mutateAsync({ consent: legal.versions ?? [] }));
       }}
     >
       <Documents legal={legal} />
-      <FormProblem message={missing ? t("legal.missing") : accept.error ? errors.message(accept.error) : ""} />
+      <FormProblem message={missing ? t("legal.missing") : failed ? errors.message(failed) : ""} />
       <LoginPrimary
         t={String}
         label={<span>{t("legal.acceptSubmit")}</span>}
         values={{ disabled: blocked, style: primaryLook(blocked) }}
       />
-      <OtherAccount />
+      <SignOutNote label={t("auth.mfa.otherAccount", { ns: "common" })} attempt={attempt} />
     </LoginFrame>
   );
 }

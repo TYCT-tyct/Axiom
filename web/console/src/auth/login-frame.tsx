@@ -26,6 +26,8 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
+import type { Attempt } from "./attempt";
+import { NoteAction } from "./login-parts";
 
 const loadLogin = () => import("@axiom/fx/login");
 
@@ -94,8 +96,8 @@ type FrameProps = {
   // which question the form asks: the form is kept while its words change language, and starts afresh for another
   step: string;
   shape: Shape;
-  // the step is waiting for the server (aria-busy), as against waiting for the visitor
-  busy?: boolean;
+  // the page's request (attempt.ts): while one is out the form is busy and the page takes no press but its cancel
+  attempt?: Attempt;
   stage?: Stage;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
@@ -104,12 +106,14 @@ type FrameProps = {
 // LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
 // question on the other, in a form that submits through onSubmit. The sea, the stage that forms shapes on it and the
 // title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
-export function LoginFrame({ title, sub, subStyle, step, shape, busy, stage, onSubmit, children }: FrameProps) {
+export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, onSubmit, children }: FrameProps) {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
   const prefs = usePreferences();
   usePageTitle(title);
   useBrandStyle(site.data?.brand_color);
+  useLock(attempt?.kind != null);
+  useReloadWhenRestored();
   const titleRef = useRef<HTMLElement | null>(null);
   const engine = useLoginEngine({ stage, shape, dark: prefs.dark, titleRef });
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
@@ -134,7 +138,7 @@ export function LoginFrame({ title, sub, subStyle, step, shape, busy, stage, onS
       }
       languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
     >
-      <form noValidate onSubmit={onSubmit} aria-busy={busy}>
+      <form noValidate onSubmit={onSubmit} aria-busy={attempt?.kind != null}>
         <LoginStep key={step} t={String} values={{ stepCls: "in", shape }}>
           <FrameTitle title={title} titleRef={titleRef} />
           {sub ? (
@@ -143,11 +147,46 @@ export function LoginFrame({ title, sub, subStyle, step, shape, busy, stage, onS
             </LoginSub>
           ) : null}
           {children}
+          {attempt?.cancel ? (
+            <div data-cancel="">
+              <NoteAction label={t("cancel", { ns: "common" })} onPress={attempt.cancel} />
+            </div>
+          ) : null}
         </LoginStep>
       </form>
       <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
     </LoginShell>
   );
+}
+
+// useLock makes the whole page inert to the visitor while a request is out, but for the cancel ([data-cancel]): a press
+// on any control or link and a submit, by mouse or keyboard, stop at the window before they reach React or the browser.
+// One rule for the page, so no control can be forgotten. A layout effect, so it is in place before the next event.
+function useLock(locked: boolean) {
+  useLayoutEffect(() => {
+    if (!locked) return;
+    const stop = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest("[data-cancel]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+    };
+    window.addEventListener("click", stop, true);
+    window.addEventListener("submit", stop, true);
+    return () => {
+      window.removeEventListener("click", stop, true);
+      window.removeEventListener("submit", stop, true);
+    };
+  }, [locked]);
+}
+
+// A page the browser shows again from its back-forward cache (back from a provider's page) is the page as the visitor
+// left it, mid-request: it loads afresh instead, from the server's session, rather than guess what became of that.
+function useReloadWhenRestored() {
+  useEffect(() => {
+    const restored = (event: PageTransitionEvent) => event.persisted && window.location.reload();
+    window.addEventListener("pageshow", restored);
+    return () => window.removeEventListener("pageshow", restored);
+  }, []);
 }
 
 // useLoginEngine runs the sea, the stage and an arrival's decode on the frame once their code has loaded, keeps them

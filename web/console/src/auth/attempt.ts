@@ -1,66 +1,69 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-// Every way in a sign-in page offers (a password, a provider, a passkey, a two-step code) is an attempt, and a page has
-// one at a time: while one is out, the others wait. An attempt ends when it settles, when the visitor leaves the page,
-// or when the browser shows the page again from its back-forward cache, and what it was still doing is cancelled.
+// A sign-in page has one request out at a time, and while it is out the page takes nothing else (LoginFrame locks
+// every press, submit and link but the cancel): so no answer can arrive for a step the visitor has since left, and no
+// two requests race for the same session. What a page shows of a request (its error, a step back, the stage's
+// refusal) comes only from that request's own outcome, while it is still the page's.
 //
-// Invariant: a result that comes for an ended attempt changes nothing on the page, with one exception. Once a request
-// that issues a session has been sent, the server may have set its cookie, so its answer is never dropped: the caller
-// adopts the session it names (useStartSession), and the page follows the session, never a cookie of its own.
+// Invariant: a request that may set or clear the session cookie (a password, a code, a passkey's finish, a sign-out) is
+// never cancelled once sent. Its answer re-reads the session (useStartSession, useSignOut) whatever became of the page,
+// so the page follows the cookie. Only what comes before such a request can be cancelled: a provider's address and the
+// navigation to it, a passkey's challenge and the browser's prompt.
+
+type Failure = { kind: string; error: unknown };
 
 export type Attempt = {
-  // aborts what the attempt is still asking for once it has ended
-  readonly signal: AbortSignal;
-  // whether this attempt is still the page's: false once it has ended, and before sending anything that would sign in
-  live: () => boolean;
-  // done ends the attempt that succeeded, or that handed the visitor to another page (a provider's)
-  done: () => void;
-  // fail ends the attempt and keeps why, to show; for an ended attempt it does nothing
-  fail: (error: unknown) => void;
-};
-
-export type Attempts = {
-  // what is out, if anything: the page disables every other way in meanwhile
+  // the kind of request out, if any
   readonly kind: string | null;
-  // the latest attempt's failure, which replaces any earlier one
-  readonly failure: { kind: string; error: unknown } | null;
-  begin: (kind: string) => Attempt | null;
+  // ends the request out and drops its outcome, where that is still possible (Run's cancellable); null otherwise
+  readonly cancel: (() => void) | null;
+  // the latest request's failure; a new request clears it
+  readonly failure: Failure | null;
+  // the kind of the latest request that succeeded, until another starts
+  readonly done: string | null;
+  run: Run;
+  // clears the failure shown, once what it was about has changed (the refused address edited)
+  dismiss: () => void;
 };
 
-export function useAttempts(): Attempts {
-  const [state, setState] = useState<Pick<Attempts, "kind" | "failure">>({ kind: null, failure: null });
-  const current = useRef<AbortController | null>(null);
-  const end = useCallback((failure: Attempts["failure"]) => {
-    current.current?.abort();
-    current.current = null;
-    setState((previous) => ({ kind: null, failure: failure ?? previous.failure }));
-  }, []);
-  useEffect(() => {
-    // a page the browser brings back from its back-forward cache shows the attempt that took the visitor away, still
-    // out: the visitor came back, so it is over
-    const restored = (event: PageTransitionEvent) => event.persisted && end(null);
-    window.addEventListener("pageshow", restored);
-    return () => {
-      window.removeEventListener("pageshow", restored);
-      current.current?.abort();
-      current.current = null;
-    };
-  }, [end]);
-  const begin = useCallback(
-    (kind: string): Attempt | null => {
-      if (current.current) return null;
-      const own = new AbortController();
-      current.current = own;
-      setState({ kind, failure: null });
-      const live = () => current.current === own;
-      return {
-        signal: own.signal,
-        live,
-        done: () => live() && end(null),
-        fail: (error) => live() && end({ kind, error }),
-      };
+// run starts work as the page's request unless one is out. The signal ends with a cancel or with the page; work
+// passes it only to what may be cancelled. onFail hears the failure if the request is still the page's.
+type Run = (
+  kind: string,
+  work: (signal: AbortSignal) => Promise<unknown>,
+  options?: { cancellable?: boolean; onFail?: (error: unknown) => void },
+) => void;
+
+type State = Pick<Attempt, "kind" | "cancel" | "failure" | "done">;
+const idle: State = { kind: null, cancel: null, failure: null, done: null };
+
+export function useAttempt(): Attempt {
+  const [state, setState] = useState<State>(idle);
+  const out = useRef<AbortController | null>(null);
+  useEffect(
+    () => () => {
+      out.current?.abort();
+      out.current = null;
     },
-    [end],
+    [],
   );
-  return { ...state, begin };
+  const run: Run = (kind, work, { cancellable = false, onFail } = {}) => {
+    if (out.current) return;
+    const own = new AbortController();
+    out.current = own;
+    // settle ends the request with its outcome, unless it is no longer the page's
+    const settle = (next: State) => {
+      if (out.current !== own) return false;
+      out.current = null;
+      setState(next);
+      return true;
+    };
+    const cancel = () => settle(idle) && own.abort();
+    setState({ ...idle, kind, cancel: cancellable ? cancel : null });
+    work(own.signal).then(
+      () => settle({ ...idle, done: kind }),
+      (error: unknown) => settle({ ...idle, failure: { kind, error } }) && onFail?.(error),
+    );
+  };
+  return { ...state, run, dismiss: () => setState((now) => ({ ...now, failure: null })) };
 }

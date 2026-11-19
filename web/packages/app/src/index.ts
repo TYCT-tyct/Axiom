@@ -33,7 +33,6 @@ export {
   useSignIn,
   useSignOut,
   useStartSession,
-  useVerifyMfa,
 } from "./session";
 export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
 export { NewVersionNotice } from "./version";

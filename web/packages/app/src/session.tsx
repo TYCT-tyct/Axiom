@@ -193,12 +193,15 @@ function endSession(queryClient: QueryClient) {
 }
 
 // useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
-// shown something from the change (recovery codes) can use the new session's token.
+// shown something from the change (recovery codes) can use the new session's token. A read of the session still out
+// was sent with the cookie from before, and the cache would hand it back for this one: it is cancelled first, so what
+// the pages see is the session the cookie now holds.
 export function useStartSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return async (csrfToken: string) => {
     setCsrfToken(csrfToken);
+    await queryClient.cancelQueries({ queryKey: sessionKey });
     return await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
   };
 }
@@ -223,12 +226,17 @@ export function useVerifyMfa() {
   });
 }
 
+// A sign-out's answer expired the cookie, so the browser has no session: a read of it still out from before must not
+// bring the old one back.
 export function useSignOut() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return useMutation({
     mutationFn: api.signOut,
-    onSuccess: () => endSession(queryClient),
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      endSession(queryClient);
+    },
   });
 }
 

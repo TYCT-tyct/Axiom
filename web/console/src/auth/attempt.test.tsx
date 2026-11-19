@@ -2,14 +2,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
-import { type Attempts, useAttempts } from "./attempt";
+import { type Attempt, useAttempt } from "./attempt";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// The page's attempts as a component holds them, read after each change.
-let held: Attempts;
+// The page's request as a component holds it, read after each change.
+let held: Attempt;
 function Probe() {
-  held = useAttempts();
+  held = useAttempt();
   return null;
 }
 
@@ -22,42 +22,60 @@ async function mount() {
 
 afterEach(() => unmount());
 
-it("holds one attempt at a time, until it is done or fails", async () => {
+// A request whose outcome the test gives, and the signal it was handed.
+function deferred() {
+  const out: { signal?: AbortSignal; resolve: () => void; reject: (error: unknown) => void } = {
+    resolve: () => {},
+    reject: () => {},
+  };
+  const work = (signal: AbortSignal) =>
+    new Promise<void>((resolve, reject) => Object.assign(out, { signal, resolve, reject }));
+  return { work, out };
+}
+
+it("holds one request at a time, keeps its failure for the next to clear, and names the one that succeeded", async () => {
   await mount();
-  let first = held.begin("passkey");
-  await act(async () => {});
-  expect(held.kind).toBe("passkey");
-  expect(held.begin("password")).toBeNull();
-  await act(async () => first?.fail(new Error("refused")));
-  expect(held).toMatchObject({ kind: null, failure: { kind: "passkey" } });
-  first = held.begin("password");
-  await act(async () => {});
+  const first = deferred();
+  const heard: unknown[] = [];
+  await act(async () => held.run("code", first.work, { onFail: (error) => heard.push(error) }));
+  expect(held.kind).toBe("code");
+  const second = deferred();
+  await act(async () => held.run("passkey", second.work));
+  expect(second.out.signal).toBeUndefined();
+  await act(async () => first.out.reject("wrong"));
+  expect(held).toMatchObject({ kind: null, failure: { kind: "code", error: "wrong" } });
+  expect(heard).toEqual(["wrong"]);
+  await act(async () => held.run("passkey", second.work));
   expect(held.failure).toBeNull();
-  await act(async () => first?.done());
-  expect(held.kind).toBeNull();
+  await act(async () => second.out.resolve());
+  expect(held).toMatchObject({ kind: null, done: "passkey", failure: null });
 });
 
-it("ends the attempt that took the visitor away when the browser brings the page back", async () => {
+it("drops the outcome of a cancelled request and frees the page at once", async () => {
   await mount();
-  const attempt = held.begin("oauth");
-  await act(async () => {});
-  await act(async () => {
-    window.dispatchEvent(Object.assign(new Event("pageshow"), { persisted: true }));
-  });
+  const request = deferred();
+  const heard: unknown[] = [];
+  await act(async () => held.run("oauth", request.work, { cancellable: true, onFail: (e) => heard.push(e) }));
+  await act(async () => held.cancel?.());
   expect(held.kind).toBeNull();
-  expect(attempt?.live()).toBe(false);
-  expect(attempt?.signal.aborted).toBe(true);
-  // its late answer changes nothing
-  await act(async () => attempt?.fail(new Error("late")));
+  expect(request.out.signal?.aborted).toBe(true);
+  await act(async () => request.out.reject(new DOMException("aborted", "AbortError")));
   expect(held.failure).toBeNull();
+  expect(heard).toEqual([]);
 });
 
-it("cancels what is out when the page goes", async () => {
+it("offers no cancel for a request that may set the session's cookie", async () => {
   await mount();
-  const attempt = held.begin("passkey");
-  await act(async () => {});
+  await act(async () => held.run("password", deferred().work));
+  expect(held.kind).toBe("password");
+  expect(held.cancel).toBeNull();
+});
+
+it("ends what is out when the page goes", async () => {
+  await mount();
+  const request = deferred();
+  await act(async () => held.run("passkey", request.work, { cancellable: true }));
   unmount();
   unmount = () => {};
-  expect(attempt?.signal.aborted).toBe(true);
-  expect(attempt?.live()).toBe(false);
+  expect(request.out.signal?.aborted).toBe(true);
 });

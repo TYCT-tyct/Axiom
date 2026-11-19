@@ -5,6 +5,7 @@ import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { pressKey } from "../board";
+import type { Attempt } from "./attempt";
 
 // The parts the sign-in pages' steps share, made of the Login board's parts.
 
@@ -32,16 +33,18 @@ export function NoteAction({ label, onPress }: { label: string; onPress: () => v
   );
 }
 
-// OtherAccount ends a session that stopped halfway (a pending second step, terms not yet accepted), to start again as
-// someone else; a sign-out that fails says the visitor is still signed in.
-export function OtherAccount() {
+// SignOutNote ends a session that stopped halfway (a pending second step, terms not yet accepted), to start again as
+// someone else or as the same person. It is one of the page's requests (attempt.ts); one that fails says the visitor is
+// still signed in.
+export function SignOutNote({ label, attempt }: { label: string; attempt: Attempt }) {
   const { t } = useTranslation("common");
   const errors = useErrors();
   const signOut = useSignOut();
+  const failed = attempt.failure?.kind === "signOut" ? attempt.failure.error : null;
   return (
     <>
-      <NoteAction label={t("auth.mfa.otherAccount")} onPress={() => !signOut.isPending && signOut.mutate()} />
-      <FormProblem message={signOut.error ? t("signOutFailed", { reason: errors.message(signOut.error) }) : ""} />
+      <NoteAction label={label} onPress={() => attempt.run("signOut", () => signOut.mutateAsync())} />
+      <FormProblem message={failed ? t("signOutFailed", { reason: errors.message(failed) }) : ""} />
     </>
   );
 }

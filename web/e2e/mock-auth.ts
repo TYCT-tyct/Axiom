@@ -83,12 +83,18 @@ export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
   state.mfaEnabled = body.email === mfaEmail;
   state.totpEnabled = state.mfaEnabled;
   state.level = state.mfaEnabled ? "pending_mfa" : "password";
+  state.codeTries = 0;
   return { status: 200, json: grant(state, state.mfaEnabled ? "mfa_required" : "signed_in") } as const;
 }
 
+// A pending session takes five wrong codes; after them it is over, and even a right code is refused as unauthenticated.
 export function verifyMfa({ body, state }: WithState<Schemas["MfaRequest"]>) {
   const code = body.code.toLowerCase();
+  if ((state.codeTries ?? 0) >= 5) {
+    return fail(401, "unauthenticated");
+  }
   if (code !== state.user.mfaCode && code !== state.user.recoveryCode) {
+    state.codeTries = (state.codeTries ?? 0) + 1;
     return fail(401, "invalid_code");
   }
   state.level = "mfa";

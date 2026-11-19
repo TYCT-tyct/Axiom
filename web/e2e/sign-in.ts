@@ -8,3 +8,10 @@ export async function signIn(page: Page, email = knownEmail, password = knownPas
   await page.getByLabel("密码", { exact: true }).fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
 }
+
+// A response the test lets through when it says: the route waits for release, then answers.
+export function hold() {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  return { held, release };
+}

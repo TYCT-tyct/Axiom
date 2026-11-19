@@ -27,6 +27,8 @@ export type AuthState = {
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
   mfaEnabled: boolean;
   totpEnabled?: boolean;
+  // the wrong codes the pending session has taken; at five even a right one ends it (the server's attempt budget)
+  codeTries?: number;
   // the session as a server older than totp_enabled answers it, without the field
   legacySession?: boolean;
   permissions: string[];

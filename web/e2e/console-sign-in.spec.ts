@@ -3,10 +3,10 @@ import { contrast } from "../packages/ui/src/brand.ts";
 import { failOnce, mockConsole, signedInAs } from "./console-api.ts";
 import { demoDocuments } from "./console-data.ts";
 import { knownEmail, knownPassword, mfaEmail } from "./mock-auth.ts";
-import { signIn } from "./sign-in.ts";
+import { hold, signIn } from "./sign-in.ts";
 
-// The sign-in pages as the Login board draws them, against the mocked API: the steps, one sign-in attempt at a time,
-// and the board's parts as the console sets them (the flows themselves are console-auth.spec.ts's).
+// The sign-in pages as the Login board draws them, against the mocked API: the steps and the board's parts as the console
+// sets them (one request at a time is console-sign-in-requests.spec.ts's; the flows are console-auth.spec.ts's).
 
 test.use({ timezoneId: "Asia/Shanghai" });
 
@@ -29,6 +29,9 @@ test.describe("the sign-in steps", () => {
     // Enter submits the form, which the attempt keeps on this step too
     await page.getByLabel("邮箱").press("Enter");
     await expect(page.getByLabel("密码", { exact: true })).toHaveCount(0);
+    // nor a link off the page
+    await page.getByRole("link", { name: "注册" }).click();
+    await expect(page).toHaveURL(/\/console\/sign-in/);
     answer();
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(page.getByRole("button", { name: "继续", exact: true })).toBeEnabled();
@@ -85,12 +88,11 @@ test.describe("the sign-in steps", () => {
     await expect(page.getByRole("button", { name: "使用通行密钥" })).toBeEnabled();
   });
 
-  test("while a sign-in is out the step cannot be left, so its answer signs in the address it was for", async ({
+  test("while a sign-in is out the step cannot be left nor cancelled, so its answer signs in the address it was for", async ({
     page,
   }) => {
     await mockConsole(page);
-    let answer!: () => void;
-    const held = new Promise<void>((resolve) => (answer = resolve));
+    const { held, release } = hold();
     await page.route("**/api/console/v1/auth/sign-in", async (route) => {
       await held;
       await route.fallback();
@@ -100,9 +102,29 @@ test.describe("the sign-in steps", () => {
     await page.getByRole("button", { name: "继续", exact: true }).click();
     await page.getByLabel("密码", { exact: true }).fill(knownPassword);
     await page.getByRole("button", { name: "登录", exact: true }).click();
-    await expect(page.getByRole("button", { name: "换个邮箱" })).toHaveCount(0);
-    answer();
+    await page.getByRole("button", { name: "换个邮箱" }).click();
+    await expect(page.getByLabel("密码", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "取消" })).toHaveCount(0);
+    release();
     await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  });
+
+  test("a page the browser shows again from its back-forward cache loads afresh", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await page.getByLabel("邮箱").fill(knownEmail);
+    await page.getByRole("button", { name: "继续", exact: true }).click();
+    await expect(page.getByLabel("密码", { exact: true })).toBeVisible();
+    // what the browser fires when it brings the page back from the cache, mid-request as the visitor left it
+    await Promise.all([
+      page.waitForEvent("load"),
+      page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }))),
+    ]);
+    const type = await page.evaluate(
+      () => (performance.getEntriesByType("navigation")[0] as PerformanceNavigationTiming).type,
+    );
+    expect(type).toBe("reload");
+    await expect(page.getByLabel("邮箱")).toHaveValue("");
   });
 
   test("switching the language keeps what was typed", async ({ page }) => {
@@ -163,146 +185,6 @@ test.describe("the sign-in steps", () => {
     });
     expect(ring).toBe(accent);
     expect(ring).not.toBe("rgb(7, 151, 185)");
-  });
-});
-
-// The browser's passkey prompt, answered when the test says: a credential the mocked server takes, or nothing while
-// it waits. Like the browser's, it is closed by the signal of the attempt it belongs to.
-async function stubPasskeyPrompt(page: Page) {
-  await page.addInitScript(() => {
-    const w = window as unknown as { passkeyAnswer?: () => void; passkeyAsked?: number };
-    w.passkeyAsked = 0;
-    (navigator.credentials as unknown as { get: (o?: CredentialRequestOptions) => Promise<unknown> }).get = (options) =>
-      new Promise((resolve, reject) => {
-        w.passkeyAsked = (w.passkeyAsked ?? 0) + 1;
-        options?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
-        w.passkeyAnswer = () => {
-          const bytes = new Uint8Array([1, 2, 3]).buffer;
-          const credential = Object.create(PublicKeyCredential.prototype);
-          const fields = {
-            id: "AQID",
-            rawId: bytes,
-            type: "public-key",
-            authenticatorAttachment: "platform",
-            response: { clientDataJSON: bytes, authenticatorData: bytes, signature: bytes, userHandle: bytes },
-            getClientExtensionResults: () => ({}),
-          };
-          for (const [key, value] of Object.entries(fields)) Object.defineProperty(credential, key, { value });
-          resolve(credential);
-        };
-      });
-  });
-  return {
-    asked: () => page.evaluate(() => (window as unknown as { passkeyAsked: number }).passkeyAsked),
-    answer: () => page.evaluate(() => (window as unknown as { passkeyAnswer: () => void }).passkeyAnswer()),
-  };
-}
-
-const challenge = { flow_id: "flow-1", public_key: { publicKey: { challenge: "AAAA", rpId: "localhost" } } };
-
-test.describe("one sign-in attempt at a time", () => {
-  test("a passkey prompt left for registration sends nothing, and signs nobody in", async ({ page }) => {
-    const state = await mockConsole(page);
-    state.site = { ...state.site, passkeys: true };
-    const prompt = await stubPasskeyPrompt(page);
-    const finished: string[] = [];
-    await page.route("**/api/console/v1/auth/passkeys/begin", (route) => route.fulfill({ json: challenge }));
-    await page.route(/\/api\/console\/v1\/auth\/passkeys\/finish/, (route) => {
-      finished.push(route.request().url());
-      return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
-    });
-    await page.goto("/console/sign-in");
-    await page.getByRole("button", { name: "使用通行密钥" }).click();
-    await expect.poll(prompt.asked).toBe(1);
-    await page.getByRole("link", { name: "注册" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "注册" })).toBeVisible();
-    await prompt.answer();
-    await page.reload();
-    await expect(page.getByRole("heading", { level: 1, name: "注册" })).toBeVisible();
-    expect(finished).toEqual([]);
-    expect(state.level).toBe("none");
-  });
-
-  test("a passkey sign-in already sent when the visitor leaves is followed: the page shows the session it made", async ({
-    page,
-  }) => {
-    const state = await mockConsole(page);
-    state.site = { ...state.site, passkeys: true };
-    const prompt = await stubPasskeyPrompt(page);
-    let answer!: () => void;
-    const held = new Promise<void>((resolve) => (answer = resolve));
-    await page.route("**/api/console/v1/auth/passkeys/begin", (route) => route.fulfill({ json: challenge }));
-    await page.route(/\/api\/console\/v1\/auth\/passkeys\/finish/, async (route) => {
-      await held;
-      signedInAs(state);
-      await route.fulfill({ json: { status: "signed_in", csrf_token: state.csrf } });
-    });
-    await page.goto("/console/sign-in");
-    await page.getByRole("button", { name: "使用通行密钥" }).click();
-    await expect.poll(prompt.asked).toBe(1);
-    const sent = page.waitForRequest(/\/api\/console\/v1\/auth\/passkeys\/finish/);
-    await prompt.answer();
-    await sent;
-    await page.getByRole("link", { name: "注册" }).click();
-    await expect(page.getByRole("heading", { level: 1, name: "注册" })).toBeVisible();
-    answer();
-    // the server set its cookie: the page follows the session, not the page the visitor had gone to
-    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
-  });
-
-  // A stopped navigation is not one a test can reproduce reliably here (the browser's stop races the request, and an
-  // aborted top-level navigation is not reported): the attempt's end on a stall and on a restore is attempt.test.tsx's.
-  test("a provider's page the visitor comes back from leaves the password free to use", async ({ page }) => {
-    const state = await mockConsole(page);
-    state.site = { ...state.site, oauth_providers: ["github"] };
-    await page.route("**/api/console/v1/auth/oauth/start", (route) =>
-      route.fulfill({ json: { authorize_url: `${new URL(route.request().url()).origin}/console/provider-away` } }),
-    );
-    await page.route("**/console/provider-away", (route) =>
-      route.fulfill({ contentType: "text/html", body: "<title>provider</title><h1>provider</h1>" }),
-    );
-    await page.goto("/console/sign-in");
-    await page.getByLabel("邮箱").fill(knownEmail);
-    await page.getByRole("button", { name: "使用 GitHub 继续" }).click();
-    await expect(page).toHaveURL(/provider-away/);
-    await page.goBack();
-    await expect(page.getByRole("button", { name: "继续", exact: true })).toBeEnabled({ timeout: 5_000 });
-    await signIn(page);
-    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
-  });
-
-  test("a code that is out keeps the passkey waiting", async ({ page }) => {
-    const state = await mockConsole(page);
-    state.site = { ...state.site, passkeys: true };
-    let answer!: () => void;
-    const held = new Promise<void>((resolve) => (answer = resolve));
-    await page.route("**/api/console/v1/auth/mfa", async (route) => {
-      await held;
-      await route.fallback();
-    });
-    await page.goto("/console/");
-    await signIn(page, mfaEmail);
-    await page.getByLabel("验证码或恢复码").fill(state.user.mfaCode);
-    await page.getByRole("button", { name: "验证" }).click();
-    await expect(page.getByRole("button", { name: "使用通行密钥" })).toBeDisabled();
-    await expect(page.locator("form")).toHaveAttribute("aria-busy", "true");
-    answer();
-    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
-  });
-
-  test("a passkey that is out keeps the code waiting", async ({ page }) => {
-    const state = await mockConsole(page);
-    state.site = { ...state.site, passkeys: true };
-    const prompt = await stubPasskeyPrompt(page);
-    await page.route("**/api/console/v1/auth/passkeys/mfa/begin", (route) => route.fulfill({ json: challenge }));
-    await page.goto("/console/");
-    await signIn(page, mfaEmail);
-    await page.getByRole("button", { name: "使用通行密钥" }).click();
-    await expect.poll(prompt.asked).toBe(1);
-    await page.getByLabel("验证码或恢复码").fill(state.user.mfaCode);
-    await expect(page.getByRole("button", { name: "验证" })).toBeDisabled();
-    await page.getByLabel("验证码或恢复码").press("Enter");
-    expect(state.log.filter((line) => line === "POST /auth/mfa")).toEqual([]);
   });
 });
 

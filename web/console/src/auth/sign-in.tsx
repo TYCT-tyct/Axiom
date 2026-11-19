@@ -1,5 +1,6 @@
 import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { Gate, useErrors, useSignIn } from "@axiom/app";
+import { consoleAuth } from "@axiom/api/auth";
+import { Gate, useErrors, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
 import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
@@ -13,9 +14,10 @@ import { Link, useSearch } from "@tanstack/react-router";
 import { type AnchorHTMLAttributes, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
-import { type Attempt, type Attempts, useAttempts } from "./attempt";
+import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
 import { FormProblem, NoteAction, primaryLook, wrapAnywhere } from "./login-parts";
+import { keepOAuthNext } from "./oauth-return";
 import { usePasskey } from "./passkey-sign-in";
 
 export default function SignIn() {
@@ -62,8 +64,8 @@ function SignInSteps() {
       sub={emailStep ? t("auth.signIn.description") : t("auth.signIn.as", { email: flow.email.trim() })}
       subStyle={emailStep ? undefined : wrapAnywhere}
       step={flow.step}
-      shape={flow.signIn.isSuccess ? "enter" : "start"}
-      busy={flow.attempts.kind !== null}
+      shape={flow.attempt.done === "password" ? "enter" : "start"}
+      attempt={flow.attempt}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
@@ -71,7 +73,7 @@ function SignInSteps() {
       }}
     >
       {emailStep ? (
-        <EmailStep email={flow.email} problem={flow.problem} attempts={flow.attempts} onInput={flow.typeEmail} />
+        <EmailStep email={flow.email} problem={flow.problem} attempt={flow.attempt} onInput={flow.typeEmail} />
       ) : (
         <PasswordStep flow={flow} />
       )}
@@ -81,14 +83,14 @@ function SignInSteps() {
 
 type Flow = ReturnType<typeof useSignInFlow>;
 
-// useSignInFlow holds the two steps' state: the address typed, which step is asked, and the page's attempts
-// (attempt.ts), the password among them. A refusal that names the email takes the visitor back to the email, where the
-// refused address stays until it is edited.
+// useSignInFlow holds the two steps' state: the address typed, which step is asked, and the page's request
+// (attempt.ts), the password among the others. A refusal that names the email takes the visitor back to the email,
+// where the refused address stays until it is edited.
 function useSignInFlow(stage: Stage) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const signIn = useSignIn();
-  const attempts = useAttempts();
+  const start = useStartSession();
+  const attempt = useAttempt();
   const [step, setStep] = useState<"email" | "password">("email");
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState(false);
@@ -96,50 +98,50 @@ function useSignInFlow(stage: Stage) {
   useEffect(() => {
     if (step === "password") password.current?.focus();
   }, [step]);
-  const badEmail = aboutEmail(signIn.error);
-  useEffect(() => {
-    if (badEmail) setStep("email");
-  }, [badEmail]);
+  const failed = attempt.failure?.kind === "password" ? attempt.failure.error : null;
+  const refused = aboutEmail(failed);
   const submit = () => {
     const address = email.trim();
-    setMissing(step === "email" ? !address : !password.current?.value);
+    const secret = password.current?.value ?? "";
+    setMissing(step === "email" ? !address : !secret);
     if (step === "email") {
-      if (address && !badEmail && !attempts.kind) setStep("password");
+      if (address && !refused) setStep("password");
       return;
     }
-    const secret = password.current?.value ?? "";
-    const attempt = secret ? attempts.begin("password") : null;
-    if (!attempt) return;
-    signIn.mutate(
-      { email: address, password: secret },
+    if (!secret) return;
+    // not cancellable: a sign-in sent may set its cookie, and its answer is the session the page then shows
+    attempt.run(
+      "password",
+      async () => {
+        const grant = await consoleAuth.signIn({ email: address, password: secret });
+        await start(grant.csrf_token);
+      },
       {
-        onSuccess: attempt.done,
-        onError: (error) => {
-          attempt.fail(error);
+        onFail: (error) => {
+          if (aboutEmail(error)) setStep("email");
           stage.hear({ type: "bad" });
         },
       },
     );
   };
   const missingText = t(step === "email" ? "auth.signIn.missingEmail" : "auth.signIn.missingPassword");
-  const failure = badEmail ? t("auth.signIn.badEmail") : signIn.isError ? errors.message(signIn.error) : "";
+  const failure = refused ? t("auth.signIn.badEmail") : failed ? errors.message(failed) : "";
   return {
     step,
     email,
-    signIn,
-    attempts,
+    attempt,
     password,
     submit,
     problem: missing ? missingText : failure,
     typeEmail: (value: string) => {
       setEmail(value);
       setMissing(false);
-      if (badEmail) signIn.reset();
+      if (refused) attempt.dismiss();
       stage.hear({ type: "email", len: value.trim().length, ok: looksLikeEmail(value.trim()) });
     },
     typePassword: () => setMissing(false),
     back: () => {
-      signIn.reset();
+      attempt.dismiss();
       setMissing(false);
       setStep("email");
     },
@@ -150,16 +152,16 @@ function useSignInFlow(stage: Stage) {
 function EmailStep({
   email,
   problem,
-  attempts,
+  attempt,
   onInput,
 }: {
   email: string;
   problem: string;
-  attempts: Attempts;
+  attempt: Attempt;
   onInput: (value: string) => void;
 }) {
   const { t } = useTranslation();
-  const busy = attempts.kind !== null;
+  const busy = attempt.kind !== null;
   return (
     <>
       <LoginEmail
@@ -183,17 +185,16 @@ function EmailStep({
         label={<span>{t("auth.signIn.next")}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
-      <Methods attempts={attempts} />
+      <Methods attempt={attempt} />
       <Register />
     </>
   );
 }
 
-// The second step: the password, which stays in its field until it is sent, never in the page's state. While the
-// sign-in is out the way back to the email is not offered: the answer, when it comes, signs in the address it was for.
+// The second step: the password, which stays in its field until it is sent, never in the page's state.
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
-  const pending = flow.attempts.kind === "password";
+  const busy = flow.attempt.kind !== null;
   return (
     <>
       {/* the address the password belongs to, for the browser's password manager */}
@@ -208,9 +209,9 @@ function PasswordStep({ flow }: { flow: Flow }) {
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
-        values={{ disabled: pending, style: primaryLook(pending) }}
+        values={{ disabled: busy, style: primaryLook(busy) }}
       />
-      {pending ? null : <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />}
+      <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
     </>
   );
 }
@@ -247,10 +248,9 @@ function PasswordField({
 }
 
 // Methods are the ways in besides the password, beside the first step: a provider is a browser round trip, a passkey a
-// WebAuthn assertion the server checks against the public key it stored. Each is one of the page's attempts, so while
-// one is out every way in waits, and the failure shown is the latest attempt's, replacing an earlier one and the
-// provider's return (?oauth=failed).
-function Methods({ attempts }: { attempts: Attempts }) {
+// WebAuthn assertion the server checks against the public key it stored. Both can be cancelled until they would sign
+// in. The failure shown is the latest request's, which replaces the provider's return (?oauth=failed).
+function Methods({ attempt }: { attempt: Attempt }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const site = useQuery(siteQuery);
@@ -258,16 +258,11 @@ function Methods({ attempts }: { attempts: Attempts }) {
   const passkey = usePasskey("signIn");
   const providers = site.data?.oauth_providers ?? [];
   const passkeys = site.data?.passkeys ?? false;
-  const busy = attempts.kind !== null;
-  const returned = search.oauth === "failed" && !attempts.failure && !busy;
-  const failure =
-    attempts.failure && attempts.failure.kind !== "password" ? errors.message(attempts.failure.error) : "";
+  const busy = attempt.kind !== null;
+  const returned = search.oauth === "failed" && !attempt.failure && !busy;
+  const failure = attempt.failure && attempt.failure.kind !== "password" ? errors.message(attempt.failure.error) : "";
   const message = returned ? t("auth.signIn.oauthFailed") : failure;
   if (!passkeys && providers.length === 0) return <FormProblem message={message} />;
-  const run = (kind: string, go: (attempt: Attempt) => Promise<void>) => () => {
-    const attempt = attempts.begin(kind);
-    if (attempt) void go(attempt);
-  };
   return (
     <>
       <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
@@ -277,14 +272,18 @@ function Methods({ attempts }: { attempts: Attempts }) {
             key={provider}
             t={String}
             label={<span>{t(`auth.signIn.providers.${provider}`)}</span>}
-            values={{ disabled: busy, onPress: run("oauth", (attempt) => startOAuth(attempt, provider)) }}
+            values={{
+              disabled: busy,
+              onPress: () =>
+                attempt.run("oauth", (signal) => startOAuth(provider, search.next, signal), { cancellable: true }),
+            }}
           />
         ))}
         {passkeys ? (
           <LoginButton
             t={String}
             label={<span>{t("auth.signIn.passkey")}</span>}
-            values={{ disabled: busy, onPress: run("passkey", passkey) }}
+            values={{ disabled: busy, onPress: () => attempt.run("passkey", passkey, { cancellable: true }) }}
           />
         ) : null}
       </LoginStack>
@@ -293,23 +292,18 @@ function Methods({ attempts }: { attempts: Attempts }) {
   );
 }
 
-// How long a page that sent the browser to a provider waits for it to go before the attempt is over: a page still here
-// was stopped (the browser's stop button) or failed to go, and its other ways in are offered again.
-const stalled = 3000;
-
-// startOAuth asks for the provider's address and sends the browser there. The attempt ends when the page is still here
-// after `stalled`, or comes back from the back-forward cache (attempt.ts).
-async function startOAuth(attempt: Attempt, provider: Schemas["OAuthProvider"]) {
-  try {
-    const { authorize_url } = await unwrap(
-      consoleApi.POST("/api/console/v1/auth/oauth/start", { body: { provider }, signal: attempt.signal }),
-    );
-    if (!attempt.live()) return;
-    window.location.assign(authorize_url);
-    window.setTimeout(attempt.done, stalled);
-  } catch (error) {
-    attempt.fail(error);
-  }
+// startOAuth asks for the provider's address and sends the browser there, keeping where the visitor was going for the
+// way back. It never settles: the page stays as it is until the browser has left it, and a cancel stops the
+// navigation still under way (a slow provider) before the form is offered again.
+async function startOAuth(provider: Schemas["OAuthProvider"], next: string | undefined, signal: AbortSignal) {
+  const { authorize_url } = await unwrap(
+    consoleApi.POST("/api/console/v1/auth/oauth/start", { body: { provider }, signal }),
+  );
+  signal.throwIfAborted();
+  keepOAuthNext(next);
+  signal.addEventListener("abort", () => window.stop(), { once: true });
+  window.location.assign(authorize_url);
+  await new Promise<never>(() => {});
 }
 
 // Register offers the registration page, keeping where the visitor was going.
