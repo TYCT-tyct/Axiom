@@ -99,6 +99,8 @@ export const zh = {
     invalid: "这个验证链接无效、已用过或已过期。如果刚才已经设好密码，就直接登录；否则请重新注册。",
     takenTitle: "这个邮箱已经注册过",
     taken: "这个邮箱已经有账户了，直接登录就行。",
+    domainTitle: "这个邮箱不能注册",
+    domain: "本站已不接受这个邮箱所在域名的注册，请换一个邮箱重新注册。",
     unknownTitle: "不确定是否已完成",
     unknown: "没收到服务器的答复，账户可能已经建好。先试着用刚设的密码登录，不行再重新注册。",
     signIn: "去登录",
@@ -212,6 +214,8 @@ export const en: Messages<typeof zh> = {
       "This verification link is invalid, used or expired. If you just chose a password, sign in with it; otherwise register again.",
     takenTitle: "Already registered",
     taken: "That email already has an account. Just sign in.",
+    domainTitle: "This email can’t register",
+    domain: "This site no longer takes registrations from this email’s domain. Register again with another email.",
     unknownTitle: "You may be registered",
     unknown:
       "The server didn’t answer, so your account may already exist. Try signing in with the password you chose, and register again if that fails.",

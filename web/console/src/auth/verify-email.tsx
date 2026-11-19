@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { canSubmitWithLegal, LegalConsent, useLegalConsent } from "./legal";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { RouteNote, useLoginFace } from "./login-parts";
+import { fieldRefused, RouteNote, useLoginFace } from "./login-parts";
 import { mailLink, onMailLink } from "./mail-link";
 import { PasswordStepBody, unanswered, usePasswordStep } from "./request-state";
 import { AfterStep, AnswerStep } from "./way-on";
@@ -19,17 +19,24 @@ export default function VerifyEmail() {
   return link.token ? <Verify key={link.n} token={link.token} /> : <Missing />;
 }
 
-// What a verification led to: the account is made, the link did not work, the address was registered meanwhile, or
-// the answer never came (it may have been made).
-type After = "done" | "invalid" | "taken" | "unknown";
+// What a verification led to: the account is made, the link did not work, the address was registered meanwhile, its
+// domain is no longer taken, or the answer never came (it may have been made).
+type After = "done" | "invalid" | "taken" | "domain" | "unknown";
 
-// What a failed verification leaves to the way on: the server's one answer for an unknown, expired or used link is
-// invalid_verification, and for an address registered in the meantime email_taken; an answer that never came may have
-// gone through. Any other refusal is the form's to say: the password's length, a limit, the documents.
+// What a failed verification leaves to the way on, as nothing on the form can change it: the server's one answer for an
+// unknown, expired or used link is invalid_verification, and its guard's for a token that is not one (cut short when
+// copied) a 400 naming /token; an address registered in the meantime is email_taken, and one whose domain the site
+// stopped taking since the mail email_domain_not_allowed; an answer that never came may have gone through. Any other
+// refusal is the form's to say: the password's length, a limit, the documents.
+const afterCodes: Record<string, After> = {
+  invalid_verification: "invalid",
+  email_taken: "taken",
+  email_domain_not_allowed: "domain",
+};
 function afterFailure(error: unknown): After | null {
   if (unanswered(error)) return "unknown";
-  if (error instanceof ApiError && error.code === "invalid_verification") return "invalid";
-  return error instanceof ApiError && error.code === "email_taken" ? "taken" : null;
+  if (fieldRefused(error, "/token")) return "invalid";
+  return (error instanceof ApiError && afterCodes[error.code ?? ""]) || null;
 }
 
 function Missing() {
@@ -116,15 +123,16 @@ const afterWords = {
   done: { title: "auth.verify.doneTitle", sub: "auth.verify.done" },
   invalid: { title: "auth.verify.invalidTitle", sub: "auth.verify.invalid" },
   taken: { title: "auth.verify.takenTitle", sub: "auth.verify.taken" },
+  domain: { title: "auth.verify.domainTitle", sub: "auth.verify.domain" },
   unknown: { title: "auth.verify.unknownTitle", sub: "auth.verify.unknown" },
 } as const;
 
-// The way on after a verification: to sign in, and, for a link that did not work or an answer that never came, to
-// register again.
+// The way on after a verification: to sign in, and, for a link that did not work, an address the site no longer takes or
+// an answer that never came, to register again.
 function Verified({ after, attempt, stage }: { after: After; attempt: Attempt; stage: Stage }) {
   const { t } = useTranslation();
   const words = afterWords[after];
-  const again = after === "invalid" || after === "unknown";
+  const again = after === "invalid" || after === "domain" || after === "unknown";
   return (
     <AfterStep
       after={after}

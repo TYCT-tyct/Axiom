@@ -2,6 +2,7 @@ import { expect, type Page, type Route, test } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { demoDocuments, goodInvite, type MockState } from "./console-data.ts";
 import { goodVerifyToken, newEmail, takenVerifyToken } from "./mail-links.ts";
+import { breaks } from "./mock.ts";
 import { knownEmail } from "./mock-auth.ts";
 import { signIn } from "./sign-in.ts";
 
@@ -13,6 +14,20 @@ test.use({ timezoneId: "Asia/Shanghai" });
 const password = "a long password nobody guesses";
 
 const heading = (page: Page, name: string) => page.getByRole("heading", { level: 1, name });
+
+const refused = (status: number, code: string, headers?: Record<string, string>) => ({
+  status,
+  headers,
+  json: { error: { code, message: code } },
+});
+
+async function inviteForm(page: Page, email = "new@example.com", secret = password) {
+  await page.goto(`/console/register?invite=${goodInvite}`);
+  await expect(heading(page, "注册")).toBeVisible();
+  await page.getByLabel("邮箱").fill(email);
+  await page.getByLabel("密码", { exact: true }).fill(secret);
+  await page.getByRole("button", { name: "注册", exact: true }).click();
+}
 
 const openSite = (state: MockState) => {
   state.site = { ...state.site, registration: "open", email_verification: true };
@@ -70,7 +85,25 @@ test.describe("open registration", () => {
     await page.getByLabel("邮箱").fill(newEmail);
     await page.getByRole("button", { name: "发送验证链接" }).click();
     await expect(heading(page, "不确定是否已注册")).toBeVisible();
-    await expect(page.getByRole("button", { name: "重新发送或换个邮箱" })).toBeVisible();
+    await page.getByRole("button", { name: "重新发送或换个邮箱" }).click();
+    await expect(heading(page, "注册")).toBeVisible();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+
+  test("a limit is the form's to say: the address is neither marked nor pointed at it", async ({ page }) => {
+    const state = await mockConsole(page);
+    openSite(state);
+    await page.route("**/api/console/v1/auth/register", (route) =>
+      route.fulfill(refused(429, "rate_limited", { "Retry-After": "30" })),
+    );
+    await page.goto("/console/register");
+    await expect(heading(page, "注册")).toBeVisible();
+    const field = page.getByLabel("邮箱");
+    await field.fill(newEmail);
+    await page.getByRole("button", { name: "发送验证链接" }).click();
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+    await expect(field).not.toHaveAttribute("aria-invalid", "true");
+    await expect(field).toHaveAttribute("aria-describedby", "");
   });
 });
 
@@ -109,6 +142,52 @@ test.describe("registration with an invite code", () => {
     for (const name of ["邀请码", "邮箱"]) {
       await expect(page.getByLabel(name)).not.toHaveAttribute("aria-invalid", "true");
     }
+  });
+
+  test("a refusal naming two fields is cleared field by field", async ({ page }) => {
+    await mockConsole(page);
+    const two = breaks("/email");
+    two.json.error.fields.push({ pointer: "/password", message: "invalid" });
+    await page.route("**/api/console/v1/auth/register", (route) => route.fulfill(two), { times: 1 });
+    await inviteForm(page, "ab", "short");
+    const email = page.getByLabel("邮箱");
+    const secret = page.getByLabel("密码", { exact: true });
+    await expect(email).toHaveAttribute("aria-invalid", "true");
+    await expect(secret).toHaveAttribute("aria-invalid", "true");
+    await email.press("x");
+    await expect(email).not.toHaveAttribute("aria-invalid", "true");
+    await expect(secret).toHaveAttribute("aria-invalid", "true");
+    await expect(page.getByRole("alert")).toHaveText("密码要 12 到 256 个字符。");
+  });
+
+  test("a field left empty after the form's refusal is said at the field alone", async ({ page }) => {
+    await mockConsole(page);
+    await page.route("**/api/console/v1/auth/register", (route) => route.fulfill(refused(403, "origin_rejected")), {
+      times: 1,
+    });
+    await inviteForm(page);
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await page.getByLabel("密码", { exact: true }).fill("");
+    await page.getByRole("button", { name: "注册", exact: true }).click();
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("alert")).toHaveText("请填写密码。");
+  });
+
+  test("an account made whose session does not hold says it is made, and is never registered again", async ({
+    page,
+  }) => {
+    await mockConsole(page);
+    let registers = 0;
+    page.on("request", (request) => {
+      if (request.method() === "POST" && request.url().endsWith("/auth/register")) registers += 1;
+    });
+    // the sign-in answers 200, but the browser keeps no session
+    await page.route("**/api/console/v1/session", (route) => route.fulfill(refused(401, "unauthenticated")));
+    await inviteForm(page);
+    await expect(heading(page, "账户已创建")).toBeFocused();
+    await expect(page.getByRole("button", { name: "注册", exact: true })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "登录" })).toBeVisible();
+    expect(registers).toBe(1);
   });
 
   test("an account made whose sign-in fails says so, and the way on is to sign in", async ({ page }) => {
@@ -151,6 +230,7 @@ test.describe("registration with an invite code", () => {
       await page.getByRole("button", { name: "重新注册" }).click();
       await expect(heading(page, "注册")).toBeVisible();
       await expect(page.getByLabel("邮箱")).toHaveValue("new@example.com");
+      await expect(page.getByRole("alert")).toHaveCount(0);
     });
   }
 });
@@ -252,6 +332,21 @@ test.describe("verifying an open registration's address", () => {
     await expect(heading(page, "邮箱已验证")).toBeVisible();
   });
 
+  for (const [name, answer, title] of [
+    ["a token cut short, which the contract's guard refuses", breaks("/token"), "链接不能用了"],
+    ["an address whose domain the site no longer takes", refused(422, "email_domain_not_allowed"), "这个邮箱不能注册"],
+  ] as const) {
+    test(`a verification refused for ${name} leaves the form for the way on`, async ({ page }) => {
+      await mockConsole(page);
+      await page.route("**/api/console/v1/auth/verify-email", (route) => route.fulfill(answer));
+      await openLink(page, goodVerifyToken);
+      await choosePassword(page);
+      await expect(heading(page, title)).toBeVisible();
+      await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
+      await expect(page.getByRole("link", { name: "重新注册" })).toBeVisible();
+    });
+  }
+
   test("a page opened without a token says to open the mail's link again", async ({ page }) => {
     await mockConsole(page);
     await page.goto("/console/verify-email");
@@ -272,13 +367,25 @@ test.describe("verifying an open registration's address", () => {
     await expect(page.getByRole("alert")).toHaveText(/回到邮件重新打开那个链接/);
   });
 
-  test("a browser signed in as someone else is named before any way to sign in", async ({ page }) => {
+  test("a browser signed in as someone else is named before any way to sign in, its recovery codes untouched", async ({
+    page,
+  }) => {
     const state = await mockConsole(page);
     signedInAs(state);
+    let takes = 0;
+    await page.route("**/api/console/v1/auth/recovery-codes/take", (route) => {
+      takes += 1;
+      return route.fulfill({ json: { recovery_codes: ["abcd-efgh-ijkl-0001"] } });
+    });
     await openLink(page, goodVerifyToken);
     await choosePassword(page);
     await expect(heading(page, "邮箱已验证")).toBeVisible();
     await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
     await expect(page.getByRole("link", { name: "去登录" })).toHaveCount(0);
+    // the sign-out is sent after the session read, so a take for that session would have gone before it
+    await page.getByRole("button", { name: "退出这个账户" }).click();
+    await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
+    expect(takes).toBe(0);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
   });
 });

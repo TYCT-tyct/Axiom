@@ -66,7 +66,8 @@ export const unanswered = (error: unknown) => !(error instanceof ApiError) || er
 
 // useEmailStep is an email step's address (a reset's request, open registration): the field and what it holds, what is
 // wrong with it (none typed, refusedBy: the server's refusal of it, cleared when it is edited) or with the request (the
-// form's to say; a limit's wait stays), and the address to send.
+// form's line, formProblem, which a limit's wait keeps), and the address to send. A failure is said once: the field's
+// line, when it has one, stands for the step's.
 export function useEmailStep(stage: Stage, attempt: Attempt, kind: string, refusedBy: (error: unknown) => boolean) {
   const { t } = useTranslation();
   const errors = useErrors();
@@ -76,12 +77,14 @@ export function useEmailStep(stage: Stage, attempt: Attempt, kind: string, refus
   const failed = attempt.failure?.kind === kind ? attempt.failure.error : null;
   const cooling = useCooldown(failed);
   const refused = refusedBy(failed);
-  const failure = badEmail(failed) ? t("auth.signIn.badEmail") : cooling.shown ? errors.message(cooling.shown) : "";
+  const refusal = badEmail(failed) ? t("auth.signIn.badEmail") : refused ? errors.message(failed) : "";
+  const said = missing ? t("auth.signIn.missingEmail") : refusal;
   return {
     input,
     email,
     blocked: attempt.kind !== null || cooling.waiting,
-    problem: missing ? t("auth.signIn.missingEmail") : failure,
+    problem: said,
+    formProblem: cooling.shown && !said ? errors.message(cooling.shown) : "",
     invalid: missing || refused,
     type: (value: string) => {
       setEmail(value);

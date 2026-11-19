@@ -201,6 +201,7 @@
             "auth.verify.doneTitle",
             "auth.verify.invalidTitle",
             "auth.verify.takenTitle",
+            "auth.verify.domainTitle",
             "auth.verify.unknownTitle"
           ]
         }
@@ -256,6 +257,7 @@
             "auth.verify.doneTitle",
             "auth.verify.invalidTitle",
             "auth.verify.takenTitle",
+            "auth.verify.domainTitle",
             "auth.verify.unknownTitle"
           ]
         }

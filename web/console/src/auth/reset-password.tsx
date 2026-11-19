@@ -4,7 +4,7 @@ import { useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { EmailField, NoteAction, primaryLook, useLoginFace, wrapAnywhere } from "./login-parts";
+import { EmailField, FormProblem, NoteAction, primaryLook, useLoginFace, wrapAnywhere } from "./login-parts";
 import { dropMailLink, mailLink, onMailLink } from "./mail-link";
 import {
   badEmail,
@@ -77,6 +77,7 @@ function RequestReset() {
         invalid={form.invalid}
         onInput={form.type}
       />
+      <FormProblem id="reset-form-problem" message={form.formProblem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.reset.submit")}</span>}

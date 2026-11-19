@@ -144,8 +144,9 @@ const emailRefused = (error: unknown) =>
   (error instanceof ApiError && (error.code === "email_domain_not_allowed" || error.code === "email_taken"));
 
 // The registration with an invite code. Not cancellable once sent: the account it makes is made, and the sign-in after
-// it sets the session cookie. A sign-in that fails after the account is made leaves the page saying so, the session
-// read again, so a cookie the failed answer may have set still moves the gate.
+// it sets the session cookie. Once the account is made (201) the page never registers again: a session the sign-in
+// started moves the gate on; none, or none that could be read, leaves the page saying the account is made, whose way on
+// reads the session again (a cookie a failed sign-in may have set included).
 function InviteRegistration({ stage, attempt }: { stage: Stage; attempt: Attempt }) {
   const { t } = useTranslation();
   const legal = useLegalConsent();
@@ -159,7 +160,12 @@ function InviteRegistration({ stage, attempt }: { stage: Stage; attempt: Attempt
         open={false}
         attempt={attempt}
         stage={stage}
-        onAgain={() => editAgain(() => setOutcome(null))}
+        onAgain={() =>
+          editAgain(() => {
+            attempt.dismiss();
+            setOutcome(null);
+          })
+        }
       />
     );
   return (
@@ -239,21 +245,20 @@ function useInviteForm(
   const read = useReadSession();
   const failed = attempt.failure?.kind === "register" ? attempt.failure.error : null;
   const cooling = useCooldown(failed);
-  const fields = useInviteFields(stage, attempt, failed);
+  const fields = useInviteFields(stage, failed);
   const blocked = attempt.kind !== null || cooling.waiting || !canSubmitWithLegal(legal);
   const register = async (body: Schemas["RegisterRequest"]) => {
     const result = await unwrap(consoleApi.POST("/api/console/v1/auth/register", { body }));
     if (!("user_id" in result)) return onOutcome("sent");
-    try {
-      await start((await consoleAuth.signIn({ email: body.email, password: body.password ?? "" })).csrf_token);
-    } catch {
-      await read().catch(() => undefined);
-      onOutcome("made");
-    }
+    const session = await consoleAuth
+      .signIn({ email: body.email, password: body.password ?? "" })
+      .then((grant) => start(grant.csrf_token), read)
+      .catch(() => null);
+    if (!session) onOutcome("made");
   };
   return {
     ...fields,
-    problem: cooling.shown && !fields.refused ? errors.message(cooling.shown) : "",
+    problem: cooling.shown && !fields.refused && !fields.said ? errors.message(cooling.shown) : "",
     blocked,
     submit: () => {
       const body = fields.read();
@@ -270,8 +275,9 @@ function useInviteForm(
 }
 
 // useInviteFields holds the invite form's three fields: what each says (none typed, or the refusal about it, in the
-// page's words where they say more), cleared when that field is edited, and what they hold when the form is sent.
-function useInviteFields(stage: Stage, attempt: Attempt, failed: unknown) {
+// page's words where they say more), cleared when that field is edited and only for it, and what they hold when the
+// form is sent.
+function useInviteFields(stage: Stage, failed: unknown) {
   const { t } = useTranslation();
   const errors = useErrors();
   const startInvite = useSearch({ strict: false }).invite ?? "";
@@ -282,7 +288,10 @@ function useInviteFields(stage: Stage, attempt: Attempt, failed: unknown) {
   };
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState({ invite: false, email: false, password: false });
-  const about = {
+  // the fields edited since the failure they were refused by
+  const [edited, setEdited] = useState<{ of: unknown; names: string[] }>({ of: null, names: [] });
+  const done = edited.of === failed ? edited.names : [];
+  const refusedAt = {
     invite: fieldRefused(failed, "/invite_code") || (failed instanceof ApiError && failed.code === "invalid_invite"),
     email: emailRefused(failed),
     password: badLength(failed, "/password"),
@@ -297,12 +306,14 @@ function useInviteFields(stage: Stage, attempt: Attempt, failed: unknown) {
     email: t("auth.signIn.missingEmail"),
     password: t("auth.signIn.missingPassword"),
   };
-  const field = (name: keyof typeof about) => ({
+  const about = (name: keyof typeof refusedAt) => refusedAt[name] && !done.includes(name);
+  const said = (name: keyof typeof refusedAt) => (missing[name] ? missingText[name] : about(name) ? refusal[name] : "");
+  const field = (name: keyof typeof refusedAt) => ({
     input: refs[name],
-    problem: missing[name] ? missingText[name] : about[name] ? refusal[name] : "",
+    problem: said(name),
     type: () => {
       setMissing((now) => ({ ...now, [name]: false }));
-      if (about[name]) attempt.dismiss();
+      if (about(name)) setEdited({ of: failed, names: [...done, name] });
     },
   });
   const typeEmail = field("email").type;
@@ -318,7 +329,8 @@ function useInviteFields(stage: Stage, attempt: Attempt, failed: unknown) {
       },
     },
     password: field("password"),
-    refused: about.invite || about.email || about.password,
+    refused: refusedAt.invite || refusedAt.email || refusedAt.password,
+    said: Boolean(said("invite") || said("email") || said("password")),
     // what the fields hold when the form is sent, or null when one is empty, which it then says
     read: () => {
       const invite = (refs.invite.current?.value ?? "").trim();
@@ -344,7 +356,12 @@ function OpenRegistration({ site, stage, attempt }: { site: Schemas["Site"]; sta
         open
         attempt={attempt}
         stage={stage}
-        onAgain={() => editAgain(() => setOutcome(null))}
+        onAgain={() =>
+          editAgain(() => {
+            attempt.dismiss();
+            setOutcome(null);
+          })
+        }
       />
     );
   return (
@@ -364,6 +381,7 @@ function OpenRegistration({ site, stage, attempt }: { site: Schemas["Site"]; sta
         invalid={form.invalid}
         onInput={form.type}
       />
+      <FormProblem id="register-form-problem" message={form.formProblem} />
       {form.working ? (
         <LoginNote t={String}>
           <span role="status">{t("auth.register.working")}</span>
