@@ -1,10 +1,22 @@
 import { expect, test } from "@playwright/test";
+import { apps } from "./apps.ts";
+import { mockConsole } from "./console-api.ts";
+import { usualState } from "./console-data.ts";
 import { open, scrollTo, shown } from "./fx-helpers.ts";
+import { pageHeading } from "./page-heading.ts";
 
 // What the home screens say and do in a single tab, held to what the product guarantees: the questions' promises about
 // charges and limits, a configuration a reader copies by hand, the one answer for the models every screen reads, the
 // menu sheet to the keyboard, and the site's own name and address in the questions' pictures. The rest of the screens'
 // cases are fx-screens.spec.ts.
+
+const site = {
+  name: "Axiom",
+  currency: "USD",
+  key_prefix: "sk-ax-v1-",
+  api_base_url: "https://api.example.com",
+  registration: "invite",
+} as const;
 
 // The promises are written out here, not taken from the page's messages: what settlement guarantees and no more.
 const promises = {
@@ -37,4 +49,57 @@ test("on a phone a configuration copied by hand is the command's own characters"
   const text = await page.locator(".hfm1 pre").innerText();
   expect(text).not.toMatch(/[\u00a0\u200b]/);
   expect(text).toContain("export ANTHROPIC_BASE_URL=https://api.example.com");
+});
+
+// The models come once for the page, and every screen reads the same answer: a retry from the models screen reaches the
+// footer, and a screen built again shows the time of the list it shows.
+const kept = () =>
+  usualState().models.map(({ pricing: _, ...model }) => ({
+    ...model,
+    endpoints: model.endpoints?.map(({ pricing: __, ...endpoint }) => endpoint),
+  }));
+test("a retry from the models screen reaches the footer's prices", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", { site, models: kept() });
+  let down = true;
+  await page.route(/\/api\/console\/v1\/models(\?|$)/, (route) =>
+    down ? route.fulfill({ status: 503, body: "{}" }) : route.fallback(),
+  );
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  for (const sec of [2, 6]) {
+    await scrollTo(page, sec);
+    await shown(page, sec);
+  }
+  await expect(page.locator(".hfm6 .fc > a").nth(1)).toHaveAttribute("href", "/models");
+  down = false;
+  await scrollTo(page, 2);
+  await page.locator(".hfm2").getByRole("button").first().click();
+  await expect(page.locator(".hfm2 .mr").first()).toBeVisible();
+  await expect(page.locator(".hfm6 .fc > a").nth(1)).toHaveAttribute("href", "/console/models");
+});
+
+test("a screen built again shows the time its list came, not the time it was built", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-11-19T10:00:00Z") });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 2);
+  await shown(page, 2);
+  const time = () =>
+    page
+      .locator(".hfm2")
+      .getByText(/\d\d:\d\d/)
+      .first()
+      .textContent();
+  await expect.poll(time).toMatch(/\d\d:\d\d/);
+  const came = await time();
+  await page.clock.runFor(15 * 60_000);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".bar .menu")).toBeVisible();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await scrollTo(page, 2);
+  await shown(page, 2);
+  await expect.poll(time).toBe(came);
 });
