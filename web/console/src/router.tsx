@@ -1,13 +1,16 @@
 import { safeNext } from "@axiom/app";
-import { focusHeading, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
+import { focusHeading, modelAbilities, NotFoundState, PageFailedState, routerDefaults } from "@axiom/ui";
 import {
   createRootRoute,
   createRoute,
   createRouter,
   lazyRouteComponent,
   Outlet,
+  type ParsedLocation,
   redirect,
 } from "@tanstack/react-router";
+import { useTranslation } from "react-i18next";
+import { dropMailLink, keepMailLink } from "./auth/mail-link";
 import { takeOAuthNext } from "./auth/oauth-return";
 import { Layout } from "./layout";
 
@@ -27,6 +30,25 @@ const root = createRootRoute({
       throw redirect({ to: "/sign-in", search: { ...search, next, invite: undefined }, replace: true });
     }
   },
+});
+
+// A page a mailed link opens that did not load. The link's token was only in memory (auth/mail-link.ts), which a reload
+// clears (the router reloads once by itself when a page's code fails to load), so the way back is the email's link.
+function MailLinkFailed() {
+  const { t } = useTranslation();
+  return <PageFailedState body={t("auth.linkFailed")} />;
+}
+
+// The options of a route a mailed link opens: its token leaves the address before the page's code loads, and is kept
+// for the page until it is left (auth/mail-link.ts).
+const mailLinkRoute = (to: "/reset-password" | "/verify-email") => ({
+  beforeLoad: ({ location, preload }: { location: ParsedLocation; preload: boolean }) => {
+    if (preload || !location.hash) return;
+    keepMailLink(location.hash);
+    throw redirect({ to, search: location.search as never, replace: true });
+  },
+  onLeave: dropMailLink,
+  errorComponent: MailLinkFailed,
 });
 
 // The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
@@ -62,7 +84,16 @@ const routeTree = root.addChildren([
   createRoute({
     getParentRoute: () => root,
     path: "/verify-email",
+    validateSearch: guestSearch,
+    ...mailLinkRoute("/verify-email"),
     component: lazyRouteComponent(() => import("./auth/verify-email")),
+  }),
+  createRoute({
+    getParentRoute: () => root,
+    path: "/reset-password",
+    validateSearch: guestSearch,
+    ...mailLinkRoute("/reset-password"),
+    component: lazyRouteComponent(() => import("./auth/reset-password")),
   }),
   createRoute({
     getParentRoute: () => root,

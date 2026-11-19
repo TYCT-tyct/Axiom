@@ -91,7 +91,7 @@ func Own(t testing.TB, opts ...Option) *Server {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), startTimeout)
 	t.Cleanup(cancel)
-	b, err := startServer(ctx, acl(password, admin, false), settings)
+	b, err := startServer(ctx, acl(password, admin, false), password, settings)
 	if err != nil {
 		t.Fatalf("start valkey: %v", err)
 	}
@@ -286,7 +286,7 @@ func StartServer(ctx context.Context) (url, passwordFile, adminPasswordFile stri
 			return "", "", "", nil, errors.Join(err, os.RemoveAll(dir))
 		}
 	}
-	b, err := startServer(ctx, acl(password, admin, true), options{memory: defaultMemory, policy: defaultPolicy})
+	b, err := startServer(ctx, acl(password, admin, true), password, options{memory: defaultMemory, policy: defaultPolicy})
 	if err != nil {
 		return "", "", "", nil, errors.Join(err, os.RemoveAll(dir))
 	}

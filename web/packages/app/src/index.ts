@@ -1,6 +1,5 @@
 export { type Attempt, failed, opened, refused, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
-export { AuthFrame } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
 export { useErrors } from "./errors";
@@ -32,12 +31,18 @@ export {
   useAdoptGrant,
   useCachedSession,
   useEndPending,
+  useReadSession,
   useSession,
   useSessionBound,
-  useSignIn,
   useSignInEnded,
   useSignOut,
   useStartSession,
 } from "./session";
-export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
+export {
+  RecoveryDialog,
+  TotpSetupDialog,
+  useBeginTotp,
+  useHideRecoveryCodes,
+  useShowRecoveryCodes,
+} from "./totp-dialogs";
 export { NewVersionNotice } from "./version";

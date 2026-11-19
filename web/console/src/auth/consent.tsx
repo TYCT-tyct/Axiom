@@ -1,14 +1,12 @@
 import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
 import { useErrors, useSession } from "@axiom/app";
-import LoginConsent from "@axiom/boards/Login/regions/LoginConsent";
-import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useAttempt } from "./attempt";
-import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, legalView, useLegalConsent } from "./legal";
+import { canSubmitWithLegal, LegalConsent, type LegalConsentState, useLegalConsent } from "./legal";
 import { LoginFrame, useStage } from "./login-frame";
-import { FormProblem, LoginGate, NoteAction, primaryLook, SignOutNote, wrapAnywhere } from "./login-parts";
+import { FormProblem, LoginGate, primaryLook, SignOutNote, wrapAnywhere } from "./login-parts";
 
 // A member whose accepted versions are behind the site's current ones lands here, outside the shell: every shell page
 // would be refused with consent_required until this succeeds.
@@ -62,7 +60,7 @@ function ConsentStep() {
         if (ready) attempt.run("accept", () => accept.mutateAsync({ consent: legal.versions ?? [] }));
       }}
     >
-      <Documents legal={legal} />
+      <LegalConsent consent={legal} />
       <FormProblem message={missing ? t("legal.missing") : failed ? errors.message(failed) : ""} />
       <LoginPrimary
         t={String}
@@ -71,43 +69,5 @@ function ConsentStep() {
       />
       <SignOutNote label={t("auth.mfa.otherAccount", { ns: "common" })} attempt={attempt} />
     </LoginFrame>
-  );
-}
-
-// The documents and the box that accepts them, or why they are not there. The box shows the answer the form would
-// send: a new version on screen, or a reload after a refusal, clears it.
-function Documents({ legal }: { legal: LegalConsentState }) {
-  const { t } = useTranslation();
-  const { t: common } = useTranslation("common");
-  const view = legalView(legal);
-  if (view === "loading") {
-    return (
-      <LoginNote t={String}>
-        <span role="status">{t("legal.loading")}</span>
-      </LoginNote>
-    );
-  }
-  if (view === "forbidden") return <FormProblem message={common("state.forbiddenTitle")} />;
-  if (view === "failed") {
-    return (
-      <>
-        <FormProblem message={t("legal.error")} />
-        <NoteAction label={t("legal.retry")} onPress={legal.reload} />
-      </>
-    );
-  }
-  if (view === "none") return null;
-  return (
-    <>
-      <LegalDocuments documents={legal.documents} />
-      <LoginConsent
-        t={String}
-        label={t("legal.accept")}
-        values={{
-          checked: legal.accepted,
-          onToggle: (event) => legal.setAccepted((event.currentTarget as HTMLInputElement).checked),
-        }}
-      />
-    </>
   );
 }

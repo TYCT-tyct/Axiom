@@ -24,4 +24,5 @@
 
 
 }
+:global(.lg-field ~ .lg-label):where(.scope){margin-top:16px}
 /* jscpd:ignore-end */

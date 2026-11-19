@@ -1,22 +1,29 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { consoleAuth } from "@axiom/api/auth";
 import { useErrors, useSignInEnded, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
-import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
-import LoginField from "@axiom/boards/Login/regions/LoginField";
-import LoginLink from "@axiom/boards/Login/regions/LoginLink";
-import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginOr from "@axiom/boards/Login/regions/LoginOr";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import LoginStack from "@axiom/boards/Login/regions/LoginStack";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { type AnchorHTMLAttributes, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, LoginGate, NoteAction, primaryLook, wrapAnywhere } from "./login-parts";
+import {
+  EmailField,
+  FormProblem,
+  fieldRefused,
+  hearAddress,
+  InputField,
+  LoginGate,
+  NoteAction,
+  primaryLook,
+  RouteNote,
+  wrapAnywhere,
+} from "./login-parts";
 import { keepOAuthNext } from "./oauth-return";
 import { usePasskey } from "./passkey-sign-in";
 
@@ -48,12 +55,8 @@ function loginOriginOf(site: Schemas["Site"] | undefined) {
   return (site.oauth_providers?.length ?? 0) > 0 || site.passkeys ? origin.replace(/\/$/, "") : undefined;
 }
 
-// Shown to the stage as an address that looks whole; the server decides what an address is.
-const looksLikeEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-
-// An answer that names the email as what is wrong (the contract's 400 with its pointer) belongs to the first step.
-const aboutEmail = (error: unknown) =>
-  error instanceof ApiError && error.fields.some(({ pointer }) => pointer === "/email");
+// An answer that names the email as what is wrong belongs to the first step.
+const aboutEmail = (error: unknown) => fieldRefused(error, "/email");
 
 // SignInSteps asks for the email, then the password, and sends both in one signIn: the two steps are only how the
 // page asks (port design §9). The server's answer moves the visitor on through the gate: to the second factor, to
@@ -147,6 +150,8 @@ function useSignInFlow(stage: Stage, ready: boolean) {
     emailInput,
     submit,
     problem: missing ? missingText : failure,
+    // the address is what is wrong: none typed on its step, or refused
+    emailInvalid: step === "email" && (missing || refused),
     typeEmail,
     typePassword: () => setMissing(false),
     back: () => {
@@ -166,7 +171,7 @@ function useAddress(stage: Stage, attempt: Attempt, refused: boolean, typed: () 
     setEmail(value);
     typed();
     if (refused) attempt.dismiss();
-    stage.hear({ type: "email", len: value.trim().length, ok: looksLikeEmail(value.trim()) });
+    hearAddress(stage, value);
   };
   return { email, emailInput, typeEmail };
 }
@@ -194,98 +199,65 @@ function useSignInAttempt() {
   };
   return { attempt, returned };
 }
-// The first step: the address, and the ways in that need none (providers, passkeys), and the way to register.
+// The first step: the address, and the ways in that need none (providers, passkeys), and the way to register, keeping
+// where the visitor was going.
 function EmailStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
+  const next = useSearch({ strict: false }).next;
   const { email, problem, attempt } = flow;
   const busy = attempt.kind !== null || !flow.ready;
   return (
     <>
-      <LoginEmail
-        t={String}
-        text={{ label: t("auth.email", { ns: "common" }) }}
-        values={{
-          id: "sign-in-email",
-          name: "email",
-          type: "email",
-          autoComplete: "username",
-          placeholder: "name@company.com",
-          value: email,
-          fieldCls: problem ? "bad" : "",
-          describedBy: problem ? "sign-in-problem" : "",
-          invalid: problem ? true : undefined,
-          input: (element) => {
-            flow.emailInput.current = element as HTMLInputElement | null;
-          },
-          onInput: (event) => flow.typeEmail((event.currentTarget as HTMLInputElement).value),
-        }}
+      <EmailField
+        id="sign-in-email"
+        problemId="sign-in-problem"
+        email={email}
+        input={flow.emailInput}
+        problem={problem}
+        invalid={flow.emailInvalid}
+        onInput={flow.typeEmail}
       />
-      <FormProblem id="sign-in-problem" message={problem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.next")}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
       <Methods attempt={attempt} returned={flow.returned} ready={flow.ready} />
-      <Register />
+      <RouteNote to="/register" lead={t("auth.signIn.noAccount")} label={t("auth.signIn.register")} next={next} />
     </>
   );
 }
 
-// The second step: the password, which stays in its field until it is sent, never in the page's state.
+// The second step: the password, which stays in its field until it is sent, never in the page's state, and the way to
+// reset a forgotten one.
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
+  const next = useSearch({ strict: false }).next;
   const busy = flow.attempt.kind !== null || !flow.ready;
   return (
     <>
       {/* the address the password belongs to, for the browser's password manager */}
       <input type="email" name="email" autoComplete="username" value={flow.email} readOnly hidden />
-      <PasswordField
+      <InputField
+        id="sign-in-password"
+        problemId="sign-in-problem"
         label={t("auth.password", { ns: "common" })}
-        problem={flow.problem}
+        name="password"
+        type="password"
+        autoComplete="current-password"
         input={flow.password}
+        problem={flow.problem}
+        invalid={flow.problem !== ""}
         onInput={flow.typePassword}
       />
-      <FormProblem id="sign-in-problem" message={flow.problem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
+      <RouteNote to="/reset-password" label={t("auth.reset.forgot")} next={next} />
       <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
     </>
-  );
-}
-
-function PasswordField({
-  label,
-  problem,
-  input,
-  onInput,
-}: {
-  label: string;
-  problem: string;
-  input: RefObject<HTMLInputElement | null>;
-  onInput: () => void;
-}) {
-  return (
-    <LoginField
-      t={String}
-      text={{ label }}
-      values={{
-        id: "sign-in-password",
-        name: "password",
-        type: "password",
-        autoComplete: "current-password",
-        fieldCls: problem ? "bad" : "",
-        describedBy: problem ? "sign-in-problem" : "",
-        invalid: problem ? true : undefined,
-        input: (element) => {
-          input.current = element as HTMLInputElement | null;
-        },
-        onInput,
-      }}
-    />
   );
 }
 
@@ -352,23 +324,4 @@ async function startOAuth(provider: Schemas["OAuthProvider"], next: string | und
   );
   window.location.assign(authorize_url);
   await new Promise<never>(() => {});
-}
-
-// Register offers the registration page, keeping where the visitor was going.
-function Register() {
-  const { t } = useTranslation();
-  const next = useSearch({ strict: false }).next;
-  const RegisterLink = useMemo(
-    () =>
-      ({ href: _, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
-        <Link to="/register" search={{ next, invite: undefined }} {...props} />
-      ),
-    [next],
-  );
-  return (
-    <LoginNote t={String}>
-      <span>{t("auth.signIn.noAccount")}</span>{" "}
-      <LoginLink t={String} link={RegisterLink} label={t("auth.signIn.register")} values={{ to: "/register" }} />
-    </LoginNote>
-  );
 }

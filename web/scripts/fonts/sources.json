@@ -87,7 +87,15 @@
       "source": "instrument-serif-italic",
       "weight": "400",
       "style": "italic",
-      "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
+      ],
       "text": {
         "chars": "keyvrKEY"
       }
@@ -106,7 +114,10 @@
         "site/first",
         "console/auth/sign-in",
         "console/auth/mfa",
-        "console/auth/consent"
+        "console/auth/consent",
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "text": {
         "script": "han"
@@ -121,7 +132,7 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["console/pages/*", "console/auth/register", "console/auth/verify-email"],
+      "pages": ["console/pages/*"],
       "text": {
         "script": "han"
       }
@@ -144,7 +155,16 @@
       "source": "cjk-serif",
       "weight": "600",
       "split": true,
-      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
+      ],
       "text": {
         "script": "han",
         "keys": {
@@ -163,7 +183,27 @@
             "m46ff80e47d",
             "m15e09730c0"
           ],
-          "console": ["auth.pitch", "auth.signIn.passwordTitle", "legal.title"]
+          "console": [
+            "auth.pitch",
+            "auth.signIn.passwordTitle",
+            "legal.title",
+            "auth.reset.title",
+            "auth.reset.sentTitle",
+            "auth.reset.newTitle",
+            "auth.reset.doneTitle",
+            "auth.reset.invalidTitle",
+            "auth.reset.unknownTitle",
+            "auth.register.title",
+            "auth.register.sentTitle",
+            "auth.register.madeTitle",
+            "auth.register.unknownTitle",
+            "auth.verify.title",
+            "auth.verify.doneTitle",
+            "auth.verify.invalidTitle",
+            "auth.verify.takenTitle",
+            "auth.verify.domainTitle",
+            "auth.verify.unknownTitle"
+          ]
         }
       }
     },
@@ -171,7 +211,16 @@
       "family": "AX Serif",
       "source": "cjk-serif",
       "weight": "600",
-      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
+      ],
       "text": {
         "script": "latin",
         "keys": {
@@ -190,7 +239,27 @@
             "m46ff80e47d",
             "m15e09730c0"
           ],
-          "console": ["auth.pitch", "auth.signIn.passwordTitle", "legal.title"]
+          "console": [
+            "auth.pitch",
+            "auth.signIn.passwordTitle",
+            "legal.title",
+            "auth.reset.title",
+            "auth.reset.sentTitle",
+            "auth.reset.newTitle",
+            "auth.reset.doneTitle",
+            "auth.reset.invalidTitle",
+            "auth.reset.unknownTitle",
+            "auth.register.title",
+            "auth.register.sentTitle",
+            "auth.register.madeTitle",
+            "auth.register.unknownTitle",
+            "auth.verify.title",
+            "auth.verify.doneTitle",
+            "auth.verify.invalidTitle",
+            "auth.verify.takenTitle",
+            "auth.verify.domainTitle",
+            "auth.verify.unknownTitle"
+          ]
         }
       }
     }

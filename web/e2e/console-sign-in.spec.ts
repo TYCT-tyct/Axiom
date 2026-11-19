@@ -226,7 +226,8 @@ test.describe("the sign-in steps", () => {
       route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
     );
     await page.goto("/console/sign-in");
-    const heading = page.getByRole("heading", { level: 1 });
+    // by name: the router's own loading heading, set in the console's face, can show first while the page's code arrives
+    const heading = page.getByRole("heading", { level: 1, name: "没能加载" });
     await expect(heading).toBeVisible();
     const family = await heading.evaluate((element) => getComputedStyle(element).fontFamily);
     expect(family).toContain('"Axiom CJK"');
@@ -248,8 +249,12 @@ test.describe("the sign-in steps", () => {
     await page.getByLabel("密码", { exact: true }).fill(knownPassword);
     await page.getByRole("button", { name: "登录", exact: true }).click();
     expect(await locked(page)).toBe(true);
-    await pressAt(page.locator("form .lg-note a"));
+    // neither the way to reset the password nor the way back to the email takes a press
+    const ways = page.locator("form .lg-note a");
+    await expect(ways).toHaveCount(2);
+    for (const way of await ways.all()) await pressAt(way);
     await expect(page.locator("#sign-in-password")).toHaveCount(1);
+    expect(new URL(page.url()).pathname).toBe("/console/sign-in");
     await expect(page.getByRole("button", { name: "取消" })).toHaveCount(0);
     release();
     await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();

@@ -144,6 +144,12 @@ describe("region generation", () => {
     expect(files["Test/regions/Page.zh.ts"]).toContain("中文");
   });
 
+  it("adds the rules the product needs that the drawing leaves out, tied to the region", () => {
+    const region = { board: "Test", name: "Field", roots: [".lbl"], css: { ".box ~ .lbl": "margin-top:16px" } };
+    const files = convertRegion('<label class="lbl">Name</label>', ".lbl{margin:0}", region, marker);
+    expect(files["Test/regions/Field.module.css"]).toContain(":global(.box ~ .lbl):where(.scope){margin-top:16px}");
+  });
+
   it("keeps the breadcrumb's parent state when its class comes from a template hole", () => {
     const files = convertRegion(
       '<nav class="qbc"><button class="qbcb {{segAc}}"><b>Personal</b></button></nav>',

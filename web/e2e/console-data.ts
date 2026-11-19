@@ -7,6 +7,7 @@ import {
 } from "./console-account-mock.ts";
 import { type BillMockState, emptyBillState, usualBillState, worstBillDaily } from "./console-bill-data.ts";
 import { buildMockCall } from "./console-calls-data.ts";
+import { mailedLinks } from "./mail-links.ts";
 import type { AuthState } from "./mock.ts";
 import { authState } from "./mock-auth.ts";
 
@@ -32,6 +33,10 @@ export type MockState = AuthState &
     presets: Schemas["RoutingPreset"][];
     routingDefault: Schemas["AccountRoutingDefault"];
     usageBackfillComplete?: boolean;
+    // the reset links the server has mailed and not yet spent, by token: the address each is for
+    resetLinks: Map<string, string>;
+    // the verification links an open registration has mailed and not yet spent, by token: the address each is for
+    verifyLinks: Map<string, string>;
   };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
@@ -334,6 +339,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
+    ...mailedLinks(),
     site: {
       name: "Axiom",
       currency: "USD",

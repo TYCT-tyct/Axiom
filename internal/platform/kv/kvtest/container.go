@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"strings"
 	"time"
@@ -25,8 +26,8 @@ type box struct {
 // a clean shutdown saves.
 const stopGrace = time.Second
 
-// startServer runs a container with the given ACL file and settings, and returns it once it accepts connections.
-func startServer(ctx context.Context, users string, settings options) (*box, error) {
+// startServer runs a container with the given ACL file and settings, and returns it once it serves the axiom user.
+func startServer(ctx context.Context, users, password string, settings options) (*box, error) {
 	// The policy pins the port, so a restarted container is found where it was: Docker gives a restarted container a new
 	// port only when it picked the first one itself.
 	container, err := containertest.Start(ctx, func() (*testcontainers.DockerContainer, error) {
@@ -37,8 +38,13 @@ func startServer(ctx context.Context, users string, settings options) (*box, err
 			}),
 			testcontainers.WithCmd("valkey-server", "--aclfile", aclPath, "--save", "", "--appendonly", "no",
 				"--maxmemory", settings.memory, "--maxmemory-policy", settings.policy),
-			testcontainers.WithWaitStrategyAndDeadline(startTimeout,
-				wait.ForLog("Ready to accept connections"), wait.ForListeningPort(port)),
+			// An authenticated PONG proves Valkey loaded the ACL and can serve commands on its published port.
+			testcontainers.WithWaitStrategyAndDeadline(startTimeout, wait.ForListeningPort(port),
+				wait.ForExec([]string{"valkey-cli", "--raw", "--no-auth-warning", "--user", "axiom", "-a", password, "PING"}).
+					WithResponseMatcher(func(body io.Reader) bool {
+						reply, err := io.ReadAll(body)
+						return err == nil && strings.TrimSpace(string(reply)) == "PONG"
+					})),
 			containertest.WithHostPolicy(ctx))
 	})
 	if err != nil {

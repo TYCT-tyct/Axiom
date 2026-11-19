@@ -6,18 +6,18 @@
 
 | 场景 | 执行 |
 |---|---|
-| PR | `static`、按路径选择的 `web` 和 `boards`，选中 `web` 时还跑两个 e2e 分片和 `journey`，在进列车前发现页面问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
-| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；Go 测试每个 PR 只在列车跑一次，失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
+| PR | `static`、按路径选择的 `web` 和 `boards`，非轻量改动跑四片 Go 测试，选中 `web` 时还跑四个 e2e 分片和 `journey`，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
+| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
 | `main` | 每次推送选择全部作业；同一提交、同一树已有成功列车构建时，复用其中实际通过的作业，其他作业照跑；无证据则全量 |
 | 轻量 PR / 列车 | 按受管的 `[lanes] light` 排除 `[lanes] code`，包括纯 Markdown；`static` 跑 `just md-checks scope`（含脚本测试），列车再跑 `secrets` |
 
 非轻量作业：
 
 - `static`：`check-ci` 中的静态部分、迁移版本与 `api-compat`；列车和 main 加 docs/secrets。
-- `go-test`：两个分片各跑 `just test i/2`（按 `go list` 顺序隔一取一，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
+- `go-test`：四个分片各跑 `just test i/4`（按 `go list` 顺序轮流分配，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 不跑；列车按页面、API、构建工具、Go 服务与测试配置输入选择，main 总是选择；成功列车在同一提交上已实测则在 main 摘要报告来源与成功结果，列车未测时 main 照跑；相同构建与相同比较基线通过后也可命中内容缓存。目标与实际门禁见[前端](../frontend.md#实测)。
-- `e2e`：两个按耗时分配的分片（`scripts/ci/playwright.py e2e i/2`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
+- `e2e`：四个按耗时分配的分片（`scripts/ci/playwright.py e2e i/4`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
 - `boards`：四个按耗时分配的分片，各两个 worker，独立运行 `playwright.boards.config.ts`，不启动产品 Go 服务。PR 与列车按画板包、转换脚本、证明及设计工具、Playwright 配置、锁文件、固定字体数据、CI 脚本和 setup action 的路径选择；main 总是选择；路径比较失败也跑。每片按单板内容和选中的测试集合复用通过结果，只有未命中的比较进入 Playwright；整个选中集合通过才记通过标记。失败保留截图、diff 和 trace，不反复序列化大型整板 DOM；单例上限三分钟，分片上限 30 分钟。
 - `journey`：浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
 - `bench`：列车用 base 的 `tools/benchgate` 比分配，门禁或其模块依赖变化时再用当前版本比，两次都须过；main 用 `bench-once` 带竞态每项一次。基准不混进 `test`；非轻量改动仅纯 Markdown 或纯 `web/` 可跳过基准。
@@ -51,7 +51,11 @@
 
 setup 按仓库版本安装 Go、Node、pnpm、just，托管环境通过 Actions 缓存工具和依赖。Playwright 镜像自带 Chromium、系统库和字体。只有宿主的 `axiom-ci.slice` 正在运行时才传父 cgroup 并核验其配额；每个容器仍用独立网络命名空间，CPU 上限取 runner 可用核数与 8 的较小值。
 
-源字体挂入容器。托管作业按 `sources.json` 中的字体名和 SHA-256 还原独立的 Actions 缓存，自管作业读共享卷。下载断线或超时后用 HTTP Range 从已收到的字节续传，分别等 1 秒、2 秒，最多尝试三次。完整文件每次读取都校验 SHA-256。托管作业首次校验完就上传缓存，供该分支随后启动的作业使用。
+源字体挂入容器。托管作业按 `sources.json` 中的字体名和 SHA-256 还原 Actions 缓存，自管作业读共享卷。源文件下载失败等一秒重试一次，并用 HTTP Range 从已收到的字节续传。完整文件每次读取都校验 SHA-256。画板和 Python 字体工具共用相同的源文件名，CI 直接使用已提交的字体子集。
+
+Go 缓存只归档模块目录，按根模块和工具模块的 `go.mod`、`go.sum` 查找，变更时可用同平台上次缓存补齐。测试服务和 Playwright 镜像各用一份归档，按平台和镜像引用查找；命中就载入 Docker，缺失时拉取，失败重试一次。Playwright 拉取固定 digest，用含该 digest 的本地标签启动，以适配只恢复标签的 Docker 镜像存储。
+
+成功下载后立即存回，避免后续测试失败丢掉缓存。PR 和列车的归档受 ref 隔离；`download-cache` 在默认分支复用列车结果时仍填充可供两者读取的归档。冷启动时并行作业可能同时下载，缓存淘汰也会再次触发下载。验收在同一 ref 的两次运行中比较缓存键、`Source font Actions cache hit`、`Pulling` 和 `Loaded cached`。
 
 持久 runner 继续只读写本地内容缓存。托管 runner 用官方 `@actions/cache` 客户端（setup 固定版本，避免自写缓存服务协议），在 `web_cache.py` 原键生成和成功判定之外增加存取；构建、e2e、vitals 和单板标记分别使用其原内容键，无前缀回退，归档路径相对缓存目录。故障回到实跑，失败不写通过标记；冷缓存与缓存淘汰会增加耗时。浏览器证据按实际 `runner.environment` 选择持久目录或失败 artifact，和变量是否填写无关。
 
@@ -83,6 +87,8 @@ runner 保留 Go 构建、模块缓存与 `AXIOM_CACHE_DIR`（默认同一 runne
 runner `.env` 设置 `AXIOM_TEST_CGROUP_PARENT=axiom-ci.slice`。`containertest.WithHostPolicy` 对 PostgreSQL（含 withcluster）、Valkey、diff 的 new-api 设置父 cgroup；空值保留开发机默认。CI diff 经 host-gateway 直连监听所有 IPv4 的宿主测试上游，Axiom 仍走回环；开发机保留端口隧道，避免 CI 使用无法定制 cgroup 的 SSHD sidecar。
 
 Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时设 `TESTCONTAINERS_RYUK_DISABLED=true`，其他作业和开发机保留 Ryuk。作业以 `GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT-GITHUB_JOB` 设置 `AXIOM_TEST_JOB`，所有测试服务标 `axiom.ci.job`，经 Untracked 读取、不污染测试缓存。
+
+测试夹具 `pgtest` 在宿主发布端口对共享 PostgreSQL 执行 `SELECT 1`，迁移比较在容器内通过 TCP 查询目标库，两者都避开只监听 socket 的初始化进程。`kvtest` 等 Valkey 的发布端口可达后，在容器内以应用测试账号认证并验证 `PONG`，确认 ACL 生效。SeaweedFS 等 S3 端口与 master 选出 leader，再通过 shell 建桶。
 
 `clean-test-containers.sh` 在测试前与结束（always）删本作业容器，并清理同标签键且创建至少 40 分钟的遗留容器；不碰无标签容器，正常共享服务由 withcluster 删除，强杀由后续作业兜底，不增加测试重试或启动期限。
 

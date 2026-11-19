@@ -96,7 +96,7 @@ const languages = {
   en: { label: "EN", name: "EN, English", lang: "en" },
 } as const;
 
-type FrameProps = {
+type Frame = {
   title: string;
   sub?: ReactNode;
   // the sub's own style, for a sentence that holds an address (wrapAnywhere)
@@ -107,6 +107,8 @@ type FrameProps = {
   // the page's request (attempt.ts): while one is out the page takes nothing but its cancel
   attempt: Attempt;
   stage: Stage;
+  // the step is a request's answer, in place of the form that sent it: its title takes the focus (useFocusAnswer)
+  answer?: boolean;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
 };
@@ -114,7 +116,7 @@ type FrameProps = {
 // LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
 // question on the other, in a form that submits through onSubmit. The sea, the stage that forms shapes on it and the
 // title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
-export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, onSubmit, children }: FrameProps) {
+export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, answer, onSubmit, children }: Frame) {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
   const prefs = usePreferences();
@@ -123,9 +125,9 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   const form = useRef<HTMLFormElement | null>(null);
   const cancel = useRef<HTMLDivElement | null>(null);
   useLock(form, cancel, attempt.kind !== null);
-  useFocusOnStep(form, step);
-  useReloadWhenRestored();
   const titleRef = useRef<HTMLElement | null>(null);
+  useFocusOnStep(form, step, titleRef, answer === true && attempt.kind === null);
+  useReloadWhenRestored();
   const engine = useLoginEngine({
     stage,
     shape,
@@ -202,8 +204,14 @@ function useLock(form: RefObject<HTMLFormElement | null>, cancel: RefObject<HTML
 }
 
 // Another step (the password, back to the address, a sign-in that is over) takes the focus to its first control, so
-// a keyboard or a screen reader is where the question is; the first step keeps the page's own.
-function useFocusOnStep(form: RefObject<HTMLFormElement | null>, step: string) {
+// a keyboard or a screen reader is where the question is; the first step keeps the page's own, unless it is a request's
+// answer (useFocusAnswer).
+function useFocusOnStep(
+  form: RefObject<HTMLFormElement | null>,
+  step: string,
+  title: RefObject<HTMLElement | null>,
+  answered: boolean,
+) {
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
@@ -212,6 +220,22 @@ function useFocusOnStep(form: RefObject<HTMLFormElement | null>, step: string) {
     }
     firstControl(form.current)?.focus();
   }, [form, step]);
+  useFocusAnswer(title, answered);
+}
+
+// A step that is a request's answer took the place of the form that sent it, and with it the focus the submit had.
+// Once the page is free (answered: useLock gives the focus back first, to a control of the old form that is gone), the
+// focus goes to the step's title, so a keyboard or a screen reader is where the answer is; once only, so a later
+// request in the same step keeps its own.
+function useFocusAnswer(title: RefObject<HTMLElement | null>, answered: boolean) {
+  const given = useRef(false);
+  useEffect(() => {
+    const heading = title.current;
+    if (!answered || given.current || !heading) return;
+    given.current = true;
+    heading.tabIndex = -1;
+    heading.focus();
+  }, [title, answered]);
 }
 
 const firstControl = (form: HTMLFormElement | null) =>

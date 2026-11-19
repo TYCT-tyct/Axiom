@@ -1,6 +1,7 @@
 {
   "migrated": [
     "console/src/announcements.tsx",
+    "console/src/auth/",
     "console/src/confirm-dialog.tsx",
     "console/src/key-dialogs.tsx",
     "console/src/key-form.tsx",
@@ -12,6 +13,7 @@
     "console/src/preset-dialogs.tsx",
     "console/src/provider-key-dialog.tsx",
     "console/src/workspace-dialogs.tsx",
+    "packages/app/src/auth/",
     "packages/app/src/presets/summary.tsx",
     "packages/app/src/qr.tsx",
     "packages/app/src/totp-dialogs.tsx",
@@ -20,15 +22,7 @@
     "site/src/shell.tsx"
   ],
   "counts": {
-    "class-name": {
-      "console/src/auth/legal-markdown.tsx": 5,
-      "console/src/auth/legal.tsx": 3,
-      "console/src/auth/register.tsx": 9,
-      "console/src/auth/verify-email.tsx": 6,
-      "packages/app/src/auth/frame.tsx": 9,
-      "packages/app/src/auth/mfa.tsx": 1,
-      "packages/app/src/auth/sign-in.tsx": 1
-    },
+    "class-name": {},
     "css-import": {
       "admin/src/main.tsx": 1,
       "console/src/main.tsx": 1,

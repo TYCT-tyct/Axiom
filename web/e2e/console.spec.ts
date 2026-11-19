@@ -1,5 +1,5 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
-import { collectErrors } from "./collect-errors.ts";
+import { blockStorage, collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { advanceUntil } from "./page-clock.ts";
 
@@ -16,17 +16,6 @@ async function openConsole(page: Page, version: string) {
 }
 
 const balancePath = "**/api/console/v1/balance";
-
-// Some private modes, and blocked site data, make even reading the storage throw.
-function blockStorage(page: Page, storage: "localStorage" | "sessionStorage") {
-  return page.addInitScript((name) => {
-    Object.defineProperty(window, name, {
-      get: () => {
-        throw new DOMException("The site's data is blocked", "SecurityError");
-      },
-    });
-  }, storage);
-}
 
 function newVersionNotice(page: Page) {
   return page.getByRole("status").filter({ hasText: "Axiom 已经更新" });
