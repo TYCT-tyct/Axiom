@@ -41,6 +41,14 @@ describe("fontBudget", () => {
       ],
     },
     {
+      name: "a route's own faces over 60 kB with the app's, which every route of the app is set in too",
+      faces: [
+        face("latin", [["sans", ["console"], 40_000]]),
+        face("latin", [["serif", ["console/auth/sign-in"], 20_001]]),
+      ],
+      failures: ["console/auth/sign-in: Latin fonts", "  sans 40.0 kB", "  serif 20.0 kB"],
+    },
+    {
       name: "another app's face, which its pages are not set in",
       faces: [
         face("han", [["console", ["console/pages/keys"], 99_000]]),

@@ -31,8 +31,9 @@ function resolveImport(from: string, specifier: string) {
 }
 
 // patternTarget resolves a subpath through the package's "*" exports as Node does: the pattern with the longest prefix
-// that matches, its "*" replaced by what the subpath has there ("./Login/regions/*" for a board's regions).
-function patternTarget(exports: Record<string, string>, key: string) {
+// that matches, and of those the longest pattern ("./Login/regions/*.zh" before "./Login/regions/*" for a region's
+// Chinese text), its "*" replaced by what the subpath has there.
+export function patternTarget(exports: Record<string, string>, key: string) {
   const matches = Object.entries(exports)
     .map(([pattern, target]) => ({ pattern, target, star: pattern.indexOf("*") }))
     .filter(({ pattern, star }) => {
@@ -41,7 +42,7 @@ function patternTarget(exports: Record<string, string>, key: string) {
         star >= 0 && key.startsWith(pattern.slice(0, star)) && key.endsWith(after) && key.length >= pattern.length - 1
       );
     })
-    .sort((a, b) => b.star - a.star);
+    .sort((a, b) => b.star - a.star || b.pattern.length - a.pattern.length);
   const best = matches[0];
   return best?.target.replace("*", key.slice(best.star, key.length - (best.pattern.length - best.star - 1)));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { names, routeLiterals } from "./routes.ts";
+import { names, patternTarget, routeLiterals } from "./routes.ts";
 import { faceTexts, readManifest } from "./text.ts";
 
 describe("names", () => {
@@ -12,6 +12,21 @@ describe("names", () => {
     ["a sibling key", ["redeem.title"], "redeem.intro", false],
   ])("%s", (_, literals, key, expected) => {
     expect(names(new Set(literals), key)).toBe(expected);
+  });
+});
+
+describe("patternTarget", () => {
+  const exports = {
+    "./Login/regions/*": "./src/Login/regions/*.tsx",
+    "./Login/regions/*.zh": "./src/Login/regions/*.zh.ts",
+    "./Login/regions/*.en": "./src/Login/regions/*.en.ts",
+  };
+  it.each([
+    ["a region", "./Login/regions/LoginShell", "./src/Login/regions/LoginShell.tsx"],
+    ["a region's Chinese text", "./Login/regions/LoginShell.zh", "./src/Login/regions/LoginShell.zh.ts"],
+    ["a region's English text", "./Login/regions/LoginShell.en", "./src/Login/regions/LoginShell.en.ts"],
+  ])("resolves %s through the longest pattern that matches", (_, key, target) => {
+    expect(patternTarget(exports, key)).toBe(target);
   });
 });
 
