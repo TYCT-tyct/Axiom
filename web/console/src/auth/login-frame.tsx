@@ -89,11 +89,11 @@ const brandStyle = "right: 128px";
 const brandNameStyle = (phone: boolean) =>
   `min-width: 0; overflow-wrap: anywhere${phone ? "; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden" : ""}`;
 
-// The Login board's names for the two languages, as its switch shows them, as a screen reader says them, and the
-// language each is written in.
+// The Login board's names for the two languages, as its switch shows them, as a screen reader says them (beginning with
+// the shown label, which WCAG 2.5.3 asks of a control's name), and the language each is written in.
 const languages = {
   zh: { label: "中文", name: "中文", lang: "zh-CN" },
-  en: { label: "EN", name: "English", lang: "en" },
+  en: { label: "EN", name: "EN, English", lang: "en" },
 } as const;
 
 type FrameProps = {

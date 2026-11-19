@@ -239,7 +239,7 @@ test.describe("the sign-in steps", () => {
     await page.getByLabel("邮箱").fill(knownEmail);
     await page.getByRole("button", { name: "继续", exact: true }).click();
     await page.getByLabel("密码", { exact: true }).fill(knownPassword);
-    await page.getByRole("link", { name: "English", exact: true }).click();
+    await page.getByRole("link", { name: "EN, English", exact: true }).click();
     await expect(page.getByRole("heading", { level: 1, name: "Enter your password" })).toBeVisible();
     await expect(page.getByLabel("Password", { exact: true })).toHaveValue(knownPassword);
   });
@@ -287,7 +287,7 @@ test.describe("the sign-in steps", () => {
     await chinese.focus();
     await page.keyboard.press("Enter");
     expect(new URL(page.url()).hash).toBe("");
-    const english = page.getByRole("link", { name: "English", exact: true });
+    const english = page.getByRole("link", { name: "EN, English", exact: true });
     await expect(english).toHaveAttribute("lang", "en");
     await english.focus();
     await page.keyboard.press("Enter");
@@ -397,7 +397,7 @@ test.describe("accepting updated documents on the board", () => {
     await page.goto("/console/consent");
     const box = page.getByLabel("我已阅读并同意上述服务条款和隐私政策。");
     await box.check();
-    await page.getByRole("link", { name: "English", exact: true }).click();
+    await page.getByRole("link", { name: "EN, English", exact: true }).click();
     await expect(
       page.getByLabel("I have read and agree to the terms of service and privacy policy above."),
     ).toBeChecked();
