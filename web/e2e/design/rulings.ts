@@ -5,10 +5,7 @@
 // on their own side. Nothing else is excused beyond anti-aliasing (compare.ts). A selector that matches nothing fails
 // the comparison, so a ruling cannot outlive the region it was written for.
 // A canvas region replaces only its bitmap, before compositing. Text and translucent layers above it remain tested.
-type Region =
-  | { selector: string }
-  | { canvas: string }
-  | { x: number; y: number; width: number; height: number };
+type Region = { selector: string } | { canvas: string } | { x: number; y: number; width: number; height: number };
 
 // glyphs: the ruling excuses only what is drawn inside its boxes, not where they are. Each side's boxes are blanked on
 // both shots, so a box that moved would be blanked at both places and pass; with glyphs the page's boxes must also sit

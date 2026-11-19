@@ -19,7 +19,7 @@ async function link(page: Page, text: string, style = "") {
   await page.goto("about:blank");
   await page.setViewportSize(view.viewport);
   await page.setContent(`<!doctype html><body style="margin:0;background:#fff">
-    <a style="display:inline-block;margin:16px;padding:8px 24px;font:16px monospace;background:#e8e8ec;border:1px solid #60646c;${style}">${text}</a>`);
+    <a style="display:inline-block;width:96px;margin:16px;padding:8px 24px;font:16px monospace;background:#e8e8ec;border:1px solid #60646c;${style}">${text}</a>`);
 }
 
 const glyphs: Ruling[] = [
@@ -32,6 +32,7 @@ test.describe("a ruling of glyphs", () => {
     { name: "fails a control whose fill changed", text: "EN", style: "background:#b00000", fails: true },
     { name: "fails a control whose border changed", text: "EN", style: "border-color:#b00000", fails: true },
     { name: "fails a box that moved", text: "EN", style: "margin-left:36px", fails: true },
+    { name: "fails text that moved inside a control that did not", text: "EN", style: "text-indent:12px", fails: true },
   ]) {
     test(name, async ({ context }, info) => {
       const board = await context.newPage();

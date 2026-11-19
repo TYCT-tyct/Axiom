@@ -57,11 +57,14 @@ describe("the committed fonts", () => {
     expect(missing).toEqual([]);
   });
 
-  // A routed page that no Chinese face names is cut for by none and checked by nothing above: its characters fall back.
-  it("give every routed page a Chinese face", () => {
+  // A routed page that no Chinese body face names is cut for by none and checked by nothing above: its text falls back.
+  // A face cut only for some messages (a title's display face, text.keys) does not set the page's body text.
+  it("give every routed page a Chinese body face", () => {
     const covered = new Set(
       manifest.faces.flatMap((face, i) =>
-        "script" in face.text && face.text.script === "han" ? Object.keys(texts[i] ?? {}) : [],
+        "script" in face.text && face.text.script === "han" && !("keys" in face.text)
+          ? Object.keys(texts[i] ?? {})
+          : [],
       ),
     );
     const routed = Object.entries(manifest.routes ?? {}).flatMap(([app, entry]) =>

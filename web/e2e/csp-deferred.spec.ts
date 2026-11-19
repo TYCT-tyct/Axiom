@@ -78,6 +78,10 @@ test("the departure to the sign-in page, its arrival and both its steps, with no
     ),
   );
   const errors = collectErrors(page);
+  const failed: string[] = [];
+  page.on("response", (response) => {
+    if (response.status() >= 400) failed.push(`${response.status()} ${new URL(response.url()).pathname}`);
+  });
   await openHome(page, 1440);
   await page.getByRole("banner").getByRole("link", { name: "登录", exact: true }).click();
   await expect(page).toHaveURL(/\/console\/sign-in$/);
@@ -96,9 +100,10 @@ test("the departure to the sign-in page, its arrival and both its steps, with no
   await page.getByLabel("密码", { exact: true }).fill(knownPassword);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
-  // the browser logs the 401 of the session asked for before signing in itself
+  // the browser logs the 401 of the session asked for before signing in itself, and nothing else may fail to load
   expect({ violations, errors: errors.filter((line) => !line.startsWith("Failed to load resource")) }).toEqual({
     violations: [],
     errors: [],
   });
+  expect(failed.filter((line) => line !== "401 /api/console/v1/session")).toEqual([]);
 });
