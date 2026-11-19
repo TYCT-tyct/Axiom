@@ -75,6 +75,29 @@ test.describe("signing in", () => {
     await expect(h1(page, "登录")).toBeVisible();
   });
 
+  test("a second step that passed but whose session could not be read offers only that read again", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    let unreadable = true;
+    await page.route("**/api/admin/v1/session", (route) => {
+      if (state.level !== "mfa" || !unreadable) return route.fallback();
+      return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } });
+    });
+    await page.goto("/");
+    await signIn(page, mfaEmail);
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page.getByText("验证已通过，但没能读取登录状态。")).toBeVisible();
+    await expect(page.getByLabel("验证码或恢复码")).toHaveCount(0);
+    unreadable = false;
+    await page.getByRole("button", { name: "重试" }).click();
+    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    expect(state.log.filter((line) => line === "POST /auth/mfa" || line === "POST /auth/sign-out")).toEqual([
+      "POST /auth/mfa",
+    ]);
+  });
+
   test("a rate limit says how long to wait", async ({ page }) => {
     await mockAdmin(page);
     await page.goto("/sign-in");

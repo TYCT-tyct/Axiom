@@ -28,6 +28,8 @@ export {
   safeNext,
   sessionBinding,
   stripEmailChangeToken,
+  UnreadSession,
+  useAdoptGrant,
   useCachedSession,
   useEndPending,
   useSession,

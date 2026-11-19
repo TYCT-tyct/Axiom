@@ -221,12 +221,35 @@ export function useSignIn() {
 // cache's rule that a 401 ends the session on the page (providers.tsx) would leave the cookie naming it.
 export function useVerifyMfa() {
   const { api } = useAuth();
-  const start = useStartSession();
+  const adopt = useAdoptGrant();
   return useMutation({
-    mutationFn: api.verifyMfa,
-    onSuccess: (grant) => start(grant.csrf_token),
+    mutationFn: async (body: Schemas["MfaRequest"]) => adopt((await api.verifyMfa(body)).csrf_token),
     meta: { pendingStep: true },
   });
+}
+
+// UnreadSession is a second step that passed, whose new session could not then be read: the cookie is already the
+// new session, so the step is over and is not offered again (a second code would be refused for want of a pending
+// session, and that refusal would sign the new session out); only the read is tried again (useAdoptGrant).
+export class UnreadSession extends Error {
+  constructor(
+    readonly csrf: string,
+    readonly reason: unknown,
+  ) {
+    super("the session the second step started could not be read");
+  }
+}
+
+// useAdoptGrant starts the session a second step's grant names, and answers a failed read as UnreadSession.
+export function useAdoptGrant() {
+  const start = useStartSession();
+  return async (csrf: string) => {
+    try {
+      return await start(csrf);
+    } catch (reason) {
+      throw new UnreadSession(csrf, reason);
+    }
+  };
 }
 
 // pendingOver reports a second step's answer that the pending sign-in itself is over: its attempts are spent, or it
@@ -236,12 +259,18 @@ export const pendingOver = (error: unknown) =>
 
 // A pending sign-in that is over is signed out by its step (useEndPending), so the cookie holds no session and a
 // reload lands on the sign-in page, never on a step that cannot be finished; that page says why the visitor is back
-// (useSignInEnded).
+// (useSignInEnded). It signs out only the pending session the step was for (its sessionBinding), read again first:
+// a cookie that already holds another session (the step passed, or the person signed in again elsewhere) is kept.
 let ended = false;
 
 export function useEndPending() {
+  const queryClient = useQueryClient();
+  const { api } = useAuth();
   const signOut = useSignOut();
-  return async () => {
+  return async (pending: string) => {
+    await queryClient.cancelQueries({ queryKey: sessionKey });
+    const now = await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+    if (sessionBinding(now) !== pending) return;
     ended = true;
     try {
       await signOut.mutateAsync();

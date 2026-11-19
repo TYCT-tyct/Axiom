@@ -1,5 +1,13 @@
 import { consoleAuth } from "@axiom/api/auth";
-import { pendingOver, sessionBinding, useEndPending, useErrors, useSession, useStartSession } from "@axiom/app";
+import {
+  pendingOver,
+  sessionBinding,
+  UnreadSession,
+  useAdoptGrant,
+  useEndPending,
+  useErrors,
+  useSession,
+} from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
@@ -32,62 +40,92 @@ export default function Mfa() {
 // older server's session, without the field, is asked as before.
 function Pending() {
   const session = useSession();
-  return <MfaStep key={sessionBinding(session)} codes={session.totp_enabled !== false} />;
+  const pending = sessionBinding(session);
+  return <MfaStep key={pending} pending={pending} codes={session.totp_enabled !== false} />;
 }
 
 // A pending sign-in that is over (pendingOver) cannot be finished, so the step signs it out (useEndPending), and the
-// sign-in page says why the visitor is back there; a sign-out that fails is said, and offered again.
-function MfaStep({ codes }: { codes: boolean }) {
+// sign-in page says why the visitor is back there; a sign-out that fails is said, and offered again. A step that passed
+// but whose new session could not be read (UnreadSession) offers only to read it again.
+function MfaStep({ pending, codes }: { pending: string; codes: boolean }) {
   const { t } = useTranslation();
   const stage = useStage();
-  const step = useSecondStep(stage);
-  const { attempt, over } = step;
+  const step = useSecondStep(stage, pending);
+  const { attempt } = step;
+  const phase = step.unread ? "unread" : step.over ? "over" : "mfa";
   const verified = attempt.done === "code" || attempt.done === "passkey";
+  const sub = {
+    unread: t("auth.mfa.unread", { ns: "common" }),
+    over: t("auth.mfa.over", { ns: "common" }),
+    mfa: codes ? t("auth.mfa.description", { ns: "common" }) : t("auth.mfa.passkeyOnly"),
+  };
+  const send = { unread: step.reread, over: step.end, mfa: codes ? step.verify : step.passkey };
   return (
     <LoginFrame
       title={t("auth.mfa.title", { ns: "common" })}
-      sub={over ? t("auth.mfa.over", { ns: "common" }) : t("auth.mfa.description", { ns: "common" })}
-      step={over ? "over" : "mfa"}
+      sub={sub[phase]}
+      step={phase}
       attempt={attempt}
       shape={attempt.kind === "passkey" || !codes ? "key" : verified ? "enter" : "code"}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
-        if (over) step.end();
-        else if (codes) step.verify();
-        else step.passkey();
+        send[phase]();
       }}
     >
-      {over ? (
-        <SignOutNote label={t("auth.mfa.again", { ns: "common" })} attempt={attempt} ended />
-      ) : (
-        <SecondFactor
-          attempt={attempt}
-          stage={stage}
-          code={step.code}
-          codes={codes}
-          problem={step.missing ? t("auth.mfa.missing") : ""}
-          onType={step.typed}
-          onPasskey={step.passkey}
-        />
-      )}
+      <StepBody step={step} phase={phase} stage={stage} codes={codes} />
     </LoginFrame>
+  );
+}
+
+// What the step asks, by where it is: the factors, the end of a sign-in that is over, or the read of a passed one.
+function StepBody({
+  step,
+  phase,
+  stage,
+  codes,
+}: {
+  step: ReturnType<typeof useSecondStep>;
+  phase: "unread" | "over" | "mfa";
+  stage: Stage;
+  codes: boolean;
+}) {
+  const { t } = useTranslation();
+  if (phase === "unread") return <Reread attempt={step.attempt} reason={step.unread?.reason} />;
+  if (phase === "over") {
+    return <SignOutNote label={t("auth.mfa.again", { ns: "common" })} attempt={step.attempt} ended />;
+  }
+  return (
+    <SecondFactor
+      attempt={step.attempt}
+      stage={stage}
+      code={step.code}
+      codes={codes}
+      problem={step.missing ? t("auth.mfa.missing") : ""}
+      onType={step.typed}
+      onPasskey={step.passkey}
+    />
   );
 }
 
 // useSecondStep holds the step's requests: the code, the passkey and, once the pending sign-in is over, its sign-out.
 // The code is sent outside the session's mutations, whose 401 would end the session on the page while its cookie
 // still names it.
-function useSecondStep(stage: Stage) {
+function useSecondStep(stage: Stage, pending: string) {
   const attempt = useAttempt();
-  const start = useStartSession();
+  const adopt = useAdoptGrant();
   const endPending = useEndPending();
   const passkey = usePasskey("mfa");
   const code = useRef<HTMLInputElement | null>(null);
   const [over, setOver] = useState(false);
+  const [unread, setUnread] = useState<UnreadSession | null>(null);
   const [missing, setMissing] = useState(false);
-  const end = () => attempt.run("signOut", endPending);
+  const end = () => attempt.run("signOut", () => endPending(pending));
   const fail = (error: unknown) => {
+    if (error instanceof UnreadSession) {
+      setUnread(error);
+      return;
+    }
     if (!pendingOver(error)) return;
     setOver(true);
     end();
@@ -96,10 +134,7 @@ function useSecondStep(stage: Stage) {
     const value = (code.current?.value ?? "").trim();
     setMissing(!value);
     if (!value) return;
-    const send = async () => {
-      const grant = await consoleAuth.verifyMfa({ code: value });
-      await start(grant.csrf_token);
-    };
+    const send = async () => adopt((await consoleAuth.verifyMfa({ code: value })).csrf_token);
     attempt.run("code", send, {
       onFail: (error) => {
         fail(error);
@@ -110,13 +145,34 @@ function useSecondStep(stage: Stage) {
   return {
     attempt,
     over,
+    unread,
     missing,
     code,
     end,
     verify,
     passkey: () => attempt.run("passkey", passkey, { cancellable: true, onFail: fail }),
     typed: () => setMissing(false),
+    reread: () => {
+      if (unread) attempt.run("session", () => adopt(unread.csrf), { onFail: fail });
+    },
   };
+}
+
+// The read of a session a passed step started, tried again; its failure is said.
+function Reread({ attempt, reason }: { attempt: Attempt; reason: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const busy = attempt.kind !== null;
+  return (
+    <>
+      <FormProblem message={errors.message(reason)} />
+      <LoginPrimary
+        t={String}
+        label={<span>{t("state.retry", { ns: "common" })}</span>}
+        values={{ disabled: busy, style: primaryLook(busy) }}
+      />
+    </>
+  );
 }
 
 type FactorProps = {
@@ -136,7 +192,10 @@ type FactorProps = {
 function SecondFactor({ attempt, stage, code, codes, problem, onType, onPasskey }: FactorProps) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const passkeys = useQuery(siteQuery).data?.passkeys ?? false;
+  // a session with no authenticator app says the person has a passkey: the server checked the domain when it issued it,
+  // so the passkey is offered whatever the site's settings say, or whether they could be read
+  const site = useQuery(siteQuery);
+  const passkeys = !codes || (site.data?.passkeys ?? false);
   const busy = attempt.kind !== null;
   const failed = attempt.failure;
   const codeProblem = problem || (failed?.kind === "code" ? errors.message(failed.error) : "");

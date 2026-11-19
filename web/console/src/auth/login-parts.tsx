@@ -1,4 +1,4 @@
-import { Gate, useEndPending, useErrors, useSignOut } from "@axiom/app";
+import { Gate, sessionBinding, useEndPending, useErrors, useSession, useSignOut } from "@axiom/app";
 import LoginAction from "@axiom/boards/Login/regions/LoginAction";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
@@ -57,12 +57,13 @@ export function SignOutNote({ label, attempt, ended }: { label: string; attempt:
   const errors = useErrors();
   const signOut = useSignOut();
   const endPending = useEndPending();
+  const pending = sessionBinding(useSession());
   const failed = attempt.failure?.kind === "signOut" ? attempt.failure.error : null;
   return (
     <>
       <NoteAction
         label={label}
-        onPress={() => attempt.run("signOut", ended ? endPending : () => signOut.mutateAsync())}
+        onPress={() => attempt.run("signOut", ended ? () => endPending(pending) : () => signOut.mutateAsync())}
       />
       <FormProblem message={failed ? t("signOutFailed", { reason: errors.message(failed) }) : ""} />
     </>

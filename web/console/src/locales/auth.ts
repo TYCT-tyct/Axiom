@@ -20,6 +20,7 @@ export const zh = {
   mfa: {
     usePasskey: "使用通行密钥",
     missing: "请填写验证码或恢复码。",
+    passkeyOnly: "用你的通行密钥完成这次登录。",
   },
   // The Login board's pitch beside the form: its first words, the italic key, and the rest.
   pitch: { lead: "一个", tail: "接入可用模型", lede: "按实际服务的端点计费。" },
@@ -69,6 +70,7 @@ export const en: Messages<typeof zh> = {
   mfa: {
     usePasskey: "Use a passkey",
     missing: "Enter a code or a recovery code.",
+    passkeyOnly: "Use your passkey to finish signing in.",
   },
   pitch: { lead: "One ", tail: " for the models you can use", lede: "You pay for the endpoint that served you." },
   register: {

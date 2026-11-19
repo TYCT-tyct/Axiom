@@ -343,4 +343,30 @@ test.describe("one request at a time", () => {
     await pressAt(page.locator(".lg-btn.primary"));
     expect(state.log.filter((line) => line === "POST /auth/mfa")).toEqual([]);
   });
+
+  test("a second step that passed but whose session could not be read offers only that read again", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    // the session, once verified, cannot be read, until the test says
+    let unreadable = true;
+    await page.route("**/api/console/v1/session", (route) => {
+      if (state.level !== "mfa" || !unreadable) return route.fallback();
+      return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } });
+    });
+    await page.goto("/console/");
+    await signIn(page, mfaEmail);
+    await page.getByLabel("验证码或恢复码").fill(state.user.mfaCode);
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page.getByText("验证已通过，但没能读取登录状态。")).toBeVisible();
+    // the step is over: no code to send again, no sign-out of the session it started
+    await expect(page.getByLabel("验证码或恢复码")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "换一个账户登录" })).toHaveCount(0);
+    unreadable = false;
+    await page.getByRole("button", { name: "重试" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+    expect(state.log.filter((line) => line === "POST /auth/mfa" || line === "POST /auth/sign-out")).toEqual([
+      "POST /auth/mfa",
+    ]);
+  });
 });

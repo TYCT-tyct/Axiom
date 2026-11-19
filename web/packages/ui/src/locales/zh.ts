@@ -87,6 +87,7 @@ export default {
       otherAccount: "换一个账户登录",
       over: "这次登录已经失效，请重新登录。",
       again: "重新登录",
+      unread: "验证已通过，但没能读取登录状态。",
     },
     enroll: {
       title: "先开启两步验证",

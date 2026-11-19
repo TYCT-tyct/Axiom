@@ -86,6 +86,7 @@ export default {
       otherAccount: "Sign in as someone else",
       over: "This sign-in has ended. Sign in again.",
       again: "Sign in again",
+      unread: "You’re verified, but the session couldn’t be read.",
     },
     enroll: {
       title: "Turn on two-step verification first",

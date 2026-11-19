@@ -134,6 +134,24 @@ test.describe("the sign-in steps", () => {
     await expect.poll(() => asked.length).toBe(1);
   });
 
+  test("a person with only a passkey is told so, and offered it though the site's settings cannot be read", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    state.site = { ...state.site, passkeys: true };
+    await page.goto("/console/");
+    await signIn(page, passkeyEmail);
+    await expect(page.getByText("用你的通行密钥完成这次登录。")).toBeVisible();
+    await page.route("**/api/console/v1/site", (route) =>
+      route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } }),
+    );
+    await page.reload();
+    await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
+    await expect(page.getByText("用你的通行密钥完成这次登录。")).toBeVisible();
+    await expect(page.getByText(/验证码/)).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "使用通行密钥" })).toBeVisible();
+  });
+
   for (const before of ["nothing", "another address"] as const) {
     test(`the email step sends the address the field holds, written without input events over ${before}`, async ({
       page,
