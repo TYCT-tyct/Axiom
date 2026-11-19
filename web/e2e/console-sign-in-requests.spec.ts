@@ -142,6 +142,8 @@ test.describe("one request at a time", () => {
     });
     await page.goto("/console/register");
     await page.getByRole("link", { name: "登录", exact: true }).click();
+    // registration has an email field too: fill only once the sign-in page has taken its place
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     await signIn(page);
     // back to registration and forward again: the sign-in page is a new one, and the request is still out
     await page.goBack();
