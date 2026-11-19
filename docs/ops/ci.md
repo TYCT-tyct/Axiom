@@ -88,7 +88,7 @@ runner `.env` 设置 `AXIOM_TEST_CGROUP_PARENT=axiom-ci.slice`。`containertest.
 
 Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时设 `TESTCONTAINERS_RYUK_DISABLED=true`，其他作业和开发机保留 Ryuk。作业以 `GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT-GITHUB_JOB` 设置 `AXIOM_TEST_JOB`，所有测试服务标 `axiom.ci.job`，经 Untracked 读取、不污染测试缓存。
 
-共享 PostgreSQL 在发布端口执行 `SELECT 1`，迁移比较也在 TCP 上查目标库，可以避开只监听 socket 的初始化进程。Valkey 等端口可达后用测试账号认证并验证 `PONG`，确认 ACL 生效。SeaweedFS 等 S3 端口与 master 选出 leader，再通过 shell 建桶。
+测试夹具 `pgtest` 在宿主发布端口对共享 PostgreSQL 执行 `SELECT 1`，迁移比较在容器内通过 TCP 查询目标库，两者都避开只监听 socket 的初始化进程。`kvtest` 等 Valkey 的发布端口可达后，在容器内以应用测试账号认证并验证 `PONG`，确认 ACL 生效。SeaweedFS 等 S3 端口与 master 选出 leader，再通过 shell 建桶。
 
 `clean-test-containers.sh` 在测试前与结束（always）删本作业容器，并清理同标签键且创建至少 40 分钟的遗留容器；不碰无标签容器，正常共享服务由 withcluster 删除，强杀由后续作业兜底，不增加测试重试或启动期限。
 
