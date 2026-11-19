@@ -464,13 +464,7 @@ class ConnectRun implements Script<Texts> {
     const { tool, ct, copied, pulse, call, rct } = this.state;
     const total = addedLength(tools[tool] as Tool, texts);
     const k = ct === null ? null : Math.floor((ct / 620) * (total + 3));
-    const holes = cardHoles(
-      tool,
-      texts,
-      { written: k, tick: Math.floor((ct ?? 0) / 50), narrow: this.narrow },
-      pulse,
-      rows,
-    );
+    const holes = cardHoles(tool, texts, { written: k, tick: Math.floor((ct ?? 0) / 50) }, pulse, rows);
     const copyWord = copyState(texts.known, copied, (tools[tool] as Tool).copy);
     // the button is the board's, not a prop of the region: without an address there is nothing to copy
     this.stage.querySelector<HTMLButtonElement>(".cpy")?.toggleAttribute("disabled", !texts.known);

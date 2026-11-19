@@ -128,9 +128,9 @@ export function copyText(index: number, texts: Texts) {
     .trim();
 }
 
-// How far the decode has got: the characters written so far (null once all are), the tick the tumbling glyphs follow,
-// and whether the card is the phone's.
-export type Decode = { written: number | null; tick: number; narrow: boolean };
+// How far the decode has got: the characters written so far (null once all are), and the tick the tumbling glyphs
+// follow.
+export type Decode = { written: number | null; tick: number };
 
 // One run of an added line mid-decode: what is written, the glyphs still tumbling, and what is yet to come. offset is the
 // number of added characters before the run.
@@ -142,8 +142,6 @@ function decoding(text: string, offset: number, { written, tick }: Decode) {
     .join("");
   return { written: text.slice(0, into), tumbling, rest: text.slice(into + glyphs), complete: into >= text.length };
 }
-// on the phone the lines hold their spaces and may break after the address
-const phone = (text: string) => text.replace(/ /g, "\u00a0");
 
 // The holes of one of a line's three runs (m1_l<i>A, G and C: what is written, the glyphs tumbling, the rest), and
 // whether the run is all written.
@@ -159,17 +157,17 @@ function runHoles(
   const text = run ? textOf(run, texts) : "";
   const live = adding && decode.written !== null;
   const parts = live ? decoding(text, offset, decode) : { written: text, tumbling: "", rest: "", complete: true };
-  // on the phone the lines hold their spaces and may break after the address
-  const wrap = decode.narrow && adding;
-  const [first, glyphs, last] = [parts.written, parts.tumbling, parts.rest].map((part) => (wrap ? phone(part) : part));
+  // the characters are the command's own, which a reader may select and copy by hand: on the phone the line breaks by
+  // CSS (connect-screen.module.css), not by spaces or marks put into the text
+  const [first, glyphs, last] = [parts.written, parts.tumbling, parts.rest];
   return {
     complete: parts.complete,
     length: text.length,
     holes: {
       [`${p}k${j}`]: run?.[0] === "u" ? "adr" : "",
-      [`${p}A${j}`]: wrap && run?.[0] === "u" ? `\u200b${first}` : (first as string),
-      [`${p}G${j}`]: glyphs as string,
-      [`${p}C${j}`]: last as string,
+      [`${p}A${j}`]: first,
+      [`${p}G${j}`]: glyphs,
+      [`${p}C${j}`]: last,
     },
   };
 }

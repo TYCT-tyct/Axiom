@@ -26,3 +26,15 @@ for (const language of ["zh", "en"] as const)
     await expect(answer(6)).toContainText(said.over);
     await expect(answer(6)).not.toContainText(said.not);
   });
+
+test("on a phone a configuration copied by hand is the command's own characters", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  // biome-ignore lint/performance/useDomNodeTextContent: a selection takes the text as laid out, which innerText is; textContent also has the key's hidden link
+  const text = await page.locator(".hfm1 pre").innerText();
+  expect(text).not.toMatch(/[\u00a0\u200b]/);
+  expect(text).toContain("export ANTHROPIC_BASE_URL=https://api.example.com");
+});

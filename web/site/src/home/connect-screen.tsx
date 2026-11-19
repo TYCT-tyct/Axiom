@@ -7,6 +7,7 @@ import narrowZh from "@axiom/boards/SitePhone/regions/Connect.zh";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
+import styles from "./connect-screen.module.css";
 import { start } from "./connect-script";
 import { joinHref } from "./links";
 import { useScheme } from "./scheme";
@@ -83,12 +84,14 @@ export function ConnectScreen({ wide, onWhale }: { wide: boolean; onWhale: () =>
   };
   const Region = wide ? Wide : Narrow;
   return (
-    <Region
-      t={word}
-      values={
-        { ...values, m1_vars: vars(scheme), m1_setStage: setStage, m1_in: entered ? "in" : "" } as Props["values"]
-      }
-      text={text}
-    />
+    <div className={styles.connect}>
+      <Region
+        t={word}
+        values={
+          { ...values, m1_vars: vars(scheme), m1_setStage: setStage, m1_in: entered ? "in" : "" } as Props["values"]
+        }
+        text={text}
+      />
+    </div>
   );
 }
