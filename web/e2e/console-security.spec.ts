@@ -37,8 +37,8 @@ test.describe("two-step verification settings", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/security");
-    await expect(page.getByText("未开启")).toBeVisible();
-    await page.getByRole("button", { name: "开启两步验证" }).click();
+    await expect(page.getByText("未设置", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "设置验证器 App" }).click();
 
     const dialog = page.getByRole("dialog", { name: "开启两步验证" });
     await expect(dialog.getByRole("img", { name: "两步验证的二维码" })).toBeVisible();
@@ -55,7 +55,7 @@ test.describe("two-step verification settings", () => {
     await page.keyboard.press("Escape");
     await expect(codes).toBeVisible();
     await codes.getByRole("button", { name: "我已保存" }).click();
-    await expect(page.getByText("已开启")).toBeVisible();
+    await expect(page.getByText(/^已设置 ·/)).toBeVisible();
 
     // The change gave this device a new CSRF token; a request that still sent the old one would be refused.
     await page.getByRole("button", { name: "重新生成恢复码" }).click();
@@ -80,7 +80,7 @@ test.describe("two-step verification settings", () => {
     const state = await mockConsole(page);
     signedInAs(state);
     await page.goto("/console/security");
-    await expect(page.getByText("未开启")).toBeVisible();
+    await expect(page.getByText("未设置", { exact: true })).toBeVisible();
     const session = "**/api/console/v1/session";
     let reads = 0;
     await page.route(session, (route) => {
@@ -88,7 +88,7 @@ test.describe("two-step verification settings", () => {
       return route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } });
     });
 
-    await page.getByRole("button", { name: "开启两步验证" }).click();
+    await page.getByRole("button", { name: "设置验证器 App" }).click();
     const dialog = page.getByRole("dialog", { name: "开启两步验证" });
     await dialog.getByLabel("密码").fill(knownPassword);
     await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
@@ -108,7 +108,7 @@ test.describe("two-step verification settings", () => {
 
     await page.unroute(session);
     await returnToWindow(page);
-    await advanceUntil(page, () => expect(page.getByText("已开启")).toBeVisible({ timeout: 100 }));
+    await advanceUntil(page, () => expect(page.getByText(/^已设置 ·/)).toBeVisible({ timeout: 100 }));
   });
 
   for (const flow of [
@@ -117,7 +117,7 @@ test.describe("two-step verification settings", () => {
       start: async (page: Page, state: Awaited<ReturnType<typeof mockConsole>>) => {
         signedInAs(state);
         await page.goto("/console/security");
-        await page.getByRole("button", { name: "开启两步验证" }).click();
+        await page.getByRole("button", { name: "设置验证器 App" }).click();
         const dialog = page.getByRole("dialog", { name: "开启两步验证" });
         await dialog.getByLabel("密码").fill(knownPassword);
         return {

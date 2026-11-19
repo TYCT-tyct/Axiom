@@ -158,10 +158,10 @@ const scenes: Scene[] = [
       .click(),
   ),
   dialogScene("totp-setup", "security", (page) =>
-    page.getByRole("button", { name: /^(开启两步验证|Turn on two-step verification)$/ }).click(),
+    page.getByRole("button", { name: /^(设置验证器 App|Set up an authenticator app)$/ }).click(),
   ),
   dialogScene("recovery-codes", "security", async (page) => {
-    await page.getByRole("button", { name: /^(开启两步验证|Turn on two-step verification)$/ }).click();
+    await page.getByRole("button", { name: /^(设置验证器 App|Set up an authenticator app)$/ }).click();
     const dialog = page.getByRole("dialog");
     await dialog.locator("input[name=password]").fill(knownPassword);
     await dialog.locator("input[name=code]").fill("123456");
