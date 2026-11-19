@@ -31,6 +31,14 @@ test("the machine is fetched after the screen's code, once, and the card carries
   // a tool's tab changes the configuration
   await page.locator(".hfm1 .tab").nth(1).click();
   await expect(page.locator(".hfm1 pre")).toContainText("[model_providers.axiom]");
+  // the screen built again for the other layout puts the figure in place without asking for it again
+  await page.setViewportSize({ width: 390, height: 844 });
+  await scrollTo(page, 1);
+  await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await scrollTo(page, 1);
+  await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
+  expect(asked.filter((name) => name === "machine")).toHaveLength(1);
 });
 
 // The machine's story runs on the shared loop, from when its screen is seen: the display names each call's model, and

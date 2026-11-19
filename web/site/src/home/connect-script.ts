@@ -69,6 +69,10 @@ const copyState = (known: boolean, copied: "" | "done" | "failed", copies: Tool[
   return copied === "done" ? "copied" : copied === "failed" ? "copyFailed" : copies;
 };
 
+// The figure once it has come: a screen built again (the layout changed) puts it in place without asking again. One still
+// on its way is the screen's, and stops with it.
+let fetched: string | undefined;
+
 class ConnectRun implements Script<Texts> {
   // the clock of the motion setting in force: a new one when the reader changes it
   private clock;
@@ -124,9 +128,14 @@ class ConnectRun implements Script<Texts> {
   private fetchMachine() {
     const fig = this.stage.querySelector<HTMLElement>(".fig");
     if (!fig) return;
-    fetch(figureUrl, { signal: this.fetching.signal })
-      .then((response) => (response.ok ? response.text() : Promise.reject(new Error(String(response.status)))))
+    const asked = fetched
+      ? Promise.resolve(fetched)
+      : fetch(figureUrl, { signal: this.fetching.signal }).then((response) =>
+          response.ok ? response.text() : Promise.reject(new Error(String(response.status))),
+        );
+    asked
       .then((asset) => {
+        fetched = asset;
         if (this.dead) return;
         this.machine = new Machine(fig, asset);
         this.wire = new Wire(this.stage, fig, this.narrow);

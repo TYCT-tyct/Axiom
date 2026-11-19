@@ -48,6 +48,31 @@ function nodes(markup: string) {
   return [...parsed.documentElement.children].map((child) => document.importNode(child, true));
 }
 
+// The opening tags of markup, with their attributes: the kit writes every attribute value in double quotes.
+const tags = (markup: string) =>
+  [...markup.matchAll(/<([a-z]+)((?:\s+[\w:-]+="[^"]*")*)\s*\/?>/gi)].map(([, name, attributes]) => ({
+    name: (name as string).toLowerCase(),
+    attributes: [...(attributes as string).matchAll(/([\w:-]+)="([^"]*)"/g)].map(([, key, value]) => [key, value]),
+  }));
+
+// redraw puts the kit's markup for a part at another angle or height into group: drawn the same way it has the same
+// elements, so only their attributes (the geometry) change and the nodes stay; anything else is drawn afresh. It runs
+// every frame of a move, where parsing and replacing the nodes would not do.
+function redraw(group: Element, markup: string) {
+  const next = tags(markup);
+  const present = [...group.querySelectorAll("*")];
+  if (next.length !== present.length || next.some((tag, i) => tag.name !== present[i]?.localName)) {
+    group.replaceChildren(...nodes(markup));
+    return;
+  }
+  next.forEach((tag, i) => {
+    const element = present[i] as Element;
+    for (const [key, value] of tag.attributes) {
+      if (element.getAttribute(key as string) !== value) element.setAttribute(key as string, value as string);
+    }
+  });
+}
+
 // a list of the drawing's points
 export const points = (list: readonly number[][] | undefined) => (list ?? []).map((_, i) => at(list, i));
 
@@ -119,15 +144,16 @@ export class Machine {
   setWiper(deg: number) {
     const group = this.variants.get("wiper");
     if (!group || this.wiper === deg) return;
-    group.replaceChildren(...nodes(wiperSvg(deg)));
+    redraw(group, wiperSvg(deg));
     this.wiper = deg;
   }
   // the shaft stands z high: the parts on it move up the drawing's vertical, and the shaft itself is drawn again
   setLift(z: number) {
     const [vx, vy] = figure.zv as [number, number];
     for (const name of ["lower", "hub", "wiper"]) this.move(name, [vx * z, vy * z]);
-    this.variants.get("mid")?.replaceChildren(...nodes(midSvg(z)));
-    this.variants.get("top")?.replaceChildren(...nodes(topSvg(z)));
+    const [mid, top] = [this.variants.get("mid"), this.variants.get("top")];
+    if (mid) redraw(mid, midSvg(z));
+    if (top) redraw(top, topSvg(z));
   }
   // rest puts the machine at the end of a call: the shaft down, the wiper home, the plug and the armature in, nothing
   // lit and no light on its way
