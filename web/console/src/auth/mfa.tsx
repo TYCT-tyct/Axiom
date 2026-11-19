@@ -1,6 +1,5 @@
-import { ApiError } from "@axiom/api";
 import { consoleAuth } from "@axiom/api/auth";
-import { Gate, sessionBinding, useErrors, useSession, useStartSession } from "@axiom/app";
+import { pendingOver, sessionBinding, useEndPending, useErrors, useSession, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
@@ -13,7 +12,7 @@ import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, primaryLook, SignOutNote } from "./login-parts";
+import { FormProblem, LoginGate, primaryLook, SignOutNote } from "./login-parts";
 import { usePasskey } from "./passkey-sign-in";
 
 // The second step of a password sign-in: a code from the authenticator app or a recovery code, in one field (the
@@ -21,103 +20,155 @@ import { usePasskey } from "./passkey-sign-in";
 // so they are requests of one page (attempt.ts).
 export default function Mfa() {
   return (
-    <Gate stage="pending">
+    <LoginGate stage="pending">
       <Pending />
-    </Gate>
+    </LoginGate>
   );
 }
 
 // The step belongs to one pending session: another one (the same person signed in again in another tab) is a new
-// step, with none of the old one's failures, the end of it among them.
+// step, with none of the old one's failures. It offers the person's own factors: a session that says they have no
+// authenticator app (totp_enabled false: only a passkey, so no recovery codes either) is not asked for a code; an
+// older server's session, without the field, is asked as before.
 function Pending() {
-  return <MfaStep key={sessionBinding(useSession())} />;
+  const session = useSession();
+  return <MfaStep key={sessionBinding(session)} codes={session.totp_enabled !== false} />;
 }
 
-// A 401 unauthenticated says the pending sign-in itself is over (its attempts are spent, or it expired): no code or
-// passkey can finish it any more, even a right one. A wrong code is a 401 too, but invalid_code: the step stays. The
-// code is sent outside the session's mutations, whose 401 would end the session on the page while its cookie still
-// names it; the page offers to sign out instead.
-const isOver = (error: unknown) =>
-  error instanceof ApiError && error.status === 401 && error.code === "unauthenticated";
-
-function MfaStep() {
+// A pending sign-in that is over (pendingOver) cannot be finished, so the step signs it out (useEndPending), and the
+// sign-in page says why the visitor is back there; a sign-out that fails is said, and offered again.
+function MfaStep({ codes }: { codes: boolean }) {
   const { t } = useTranslation();
   const stage = useStage();
-  const attempt = useAttempt();
-  const start = useStartSession();
-  const code = useRef<HTMLInputElement | null>(null);
-  // over for good: a sign-out that fails after it does not bring the step back
-  const [over, setOver] = useState(false);
-  const fail = (error: unknown) => isOver(error) && setOver(true);
+  const step = useSecondStep(stage);
+  const { attempt, over } = step;
   const verified = attempt.done === "code" || attempt.done === "passkey";
-  const submit = () => {
-    const value = (code.current?.value ?? "").trim();
-    if (!value || over) return;
-    attempt.run(
-      "code",
-      async () => {
-        const grant = await consoleAuth.verifyMfa({ code: value });
-        await start(grant.csrf_token);
-      },
-      {
-        onFail: (error) => {
-          fail(error);
-          stage.hear({ type: "bad" });
-        },
-      },
-    );
-  };
   return (
     <LoginFrame
       title={t("auth.mfa.title", { ns: "common" })}
-      sub={over ? t("auth.mfa.over") : t("auth.mfa.description", { ns: "common" })}
+      sub={over ? t("auth.mfa.over", { ns: "common" }) : t("auth.mfa.description", { ns: "common" })}
       step={over ? "over" : "mfa"}
       attempt={attempt}
-      shape={attempt.kind === "passkey" ? "key" : verified ? "enter" : "code"}
+      shape={attempt.kind === "passkey" || !codes ? "key" : verified ? "enter" : "code"}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
-        submit();
+        if (over) step.end();
+        else if (codes) step.verify();
+        else step.passkey();
       }}
     >
       {over ? (
-        <SignOutNote label={t("auth.mfa.again")} attempt={attempt} />
+        <SignOutNote label={t("auth.mfa.again", { ns: "common" })} attempt={attempt} ended />
       ) : (
-        <SecondFactor attempt={attempt} stage={stage} code={code} onFail={fail} />
+        <SecondFactor
+          attempt={attempt}
+          stage={stage}
+          code={step.code}
+          codes={codes}
+          problem={step.missing ? t("auth.mfa.missing") : ""}
+          onType={step.typed}
+          onPasskey={step.passkey}
+        />
       )}
     </LoginFrame>
   );
 }
 
-function SecondFactor({
-  attempt,
-  stage,
-  code,
-  onFail,
-}: {
+// useSecondStep holds the step's requests: the code, the passkey and, once the pending sign-in is over, its sign-out.
+// The code is sent outside the session's mutations, whose 401 would end the session on the page while its cookie
+// still names it.
+function useSecondStep(stage: Stage) {
+  const attempt = useAttempt();
+  const start = useStartSession();
+  const endPending = useEndPending();
+  const passkey = usePasskey("mfa");
+  const code = useRef<HTMLInputElement | null>(null);
+  const [over, setOver] = useState(false);
+  const [missing, setMissing] = useState(false);
+  const end = () => attempt.run("signOut", endPending);
+  const fail = (error: unknown) => {
+    if (!pendingOver(error)) return;
+    setOver(true);
+    end();
+  };
+  const verify = () => {
+    const value = (code.current?.value ?? "").trim();
+    setMissing(!value);
+    if (!value) return;
+    const send = async () => {
+      const grant = await consoleAuth.verifyMfa({ code: value });
+      await start(grant.csrf_token);
+    };
+    attempt.run("code", send, {
+      onFail: (error) => {
+        fail(error);
+        stage.hear({ type: "bad" });
+      },
+    });
+  };
+  return {
+    attempt,
+    over,
+    missing,
+    code,
+    end,
+    verify,
+    passkey: () => attempt.run("passkey", passkey, { cancellable: true, onFail: fail }),
+    typed: () => setMissing(false),
+  };
+}
+
+type FactorProps = {
   attempt: Attempt;
   stage: Stage;
   code: { current: HTMLInputElement | null };
-  onFail: (error: unknown) => void;
-}) {
+  // whether the person has an authenticator app (and recovery codes) to answer with
+  codes: boolean;
+  // the code's own problem, before anything is sent (none typed)
+  problem: string;
+  onType: () => void;
+  onPasskey: () => void;
+};
+
+// The step's ways: the code and, where the site has passkeys, the passkey beside it; a person with only a passkey has
+// the passkey as the step's one action.
+function SecondFactor({ attempt, stage, code, codes, problem, onType, onPasskey }: FactorProps) {
   const { t } = useTranslation();
   const errors = useErrors();
   const passkeys = useQuery(siteQuery).data?.passkeys ?? false;
   const busy = attempt.kind !== null;
-  const problem = attempt.failure?.kind === "code" ? errors.message(attempt.failure.error) : "";
+  const failed = attempt.failure;
+  const codeProblem = problem || (failed?.kind === "code" ? errors.message(failed.error) : "");
+  const passkeyProblem = failed?.kind === "passkey" ? errors.message(failed.error) : "";
+  const passkeyLabel = <span>{t("auth.mfa.usePasskey")}</span>;
   return (
     <>
-      <CodeField problem={problem} code={code} stage={stage} />
-      <FormProblem id="mfa-problem" message={problem} />
-      <LoginPrimary
-        t={String}
-        label={<span>{t("auth.mfa.submit", { ns: "common" })}</span>}
-        values={{ disabled: busy, style: primaryLook(busy) }}
-      />
-      <LoginNote t={String}>
-        <span id="mfa-hint">{t("auth.mfa.hint", { ns: "common" })}</span>
-      </LoginNote>
-      {passkeys ? <PasskeyWay attempt={attempt} onFail={onFail} /> : null}
+      {codes ? (
+        <>
+          <CodeField problem={codeProblem} code={code} stage={stage} onType={onType} />
+          <FormProblem id="mfa-problem" message={codeProblem} />
+          <LoginPrimary
+            t={String}
+            label={<span>{t("auth.mfa.submit", { ns: "common" })}</span>}
+            values={{ disabled: busy, style: primaryLook(busy) }}
+          />
+          <LoginNote t={String}>
+            <span id="mfa-hint">{t("auth.mfa.hint", { ns: "common" })}</span>
+          </LoginNote>
+        </>
+      ) : passkeys ? (
+        <LoginPrimary t={String} label={passkeyLabel} values={{ disabled: busy, style: primaryLook(busy) }} />
+      ) : null}
+      {codes && passkeys ? (
+        <>
+          <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
+          <LoginStack t={String}>
+            <LoginButton t={String} label={passkeyLabel} values={{ disabled: busy, onPress: onPasskey }} />
+          </LoginStack>
+        </>
+      ) : null}
+      <FormProblem message={passkeyProblem} />
       <SignOutNote label={t("auth.mfa.otherAccount", { ns: "common" })} attempt={attempt} />
     </>
   );
@@ -128,10 +179,12 @@ function CodeField({
   problem,
   code,
   stage,
+  onType,
 }: {
   problem: string;
   code: { current: HTMLInputElement | null };
   stage: Stage;
+  onType: () => void;
 }) {
   const { t } = useTranslation();
   return (
@@ -145,39 +198,16 @@ function CodeField({
         autoComplete: "one-time-code",
         fieldCls: problem ? "bad" : "",
         describedBy: problem ? "mfa-problem mfa-hint" : "mfa-hint",
+        invalid: problem ? true : undefined,
         input: (element) => {
           code.current = element as HTMLInputElement | null;
         },
         onInput: (event) => {
           const value = (event.currentTarget as HTMLInputElement).value;
+          onType();
           stage.hear({ type: "digit", n: Math.min(6, value.replace(/\D/g, "").length) });
         },
       }}
     />
-  );
-}
-
-// The passkey as the second step; a failure other than the end of the sign-in (a cancelled prompt among them) leaves
-// the button to try again.
-function PasskeyWay({ attempt, onFail }: { attempt: Attempt; onFail: (error: unknown) => void }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const passkey = usePasskey("mfa");
-  const failed = attempt.failure;
-  return (
-    <>
-      <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
-      <LoginStack t={String}>
-        <LoginButton
-          t={String}
-          label={<span>{t("auth.mfa.usePasskey")}</span>}
-          values={{
-            disabled: attempt.kind !== null,
-            onPress: () => attempt.run("passkey", passkey, { cancellable: true, onFail }),
-          }}
-        />
-      </LoginStack>
-      <FormProblem message={failed?.kind === "passkey" ? errors.message(failed.error) : ""} />
-    </>
   );
 }

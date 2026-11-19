@@ -3,7 +3,6 @@ import LoginChar from "@axiom/boards/Login/regions/LoginChar";
 import LoginDecode from "@axiom/boards/Login/regions/LoginDecode";
 import LoginLanguage from "@axiom/boards/Login/regions/LoginLanguage";
 import LoginMark from "@axiom/boards/Login/regions/LoginMark";
-import LoginOtherLanguage from "@axiom/boards/Login/regions/LoginOtherLanguage";
 import LoginShell from "@axiom/boards/Login/regions/LoginShell";
 import ShellEN from "@axiom/boards/Login/regions/LoginShell.en";
 import ShellZH from "@axiom/boards/Login/regions/LoginShell.zh";
@@ -90,8 +89,12 @@ const brandStyle = "right: 128px";
 const brandNameStyle = (phone: boolean) =>
   `min-width: 0; overflow-wrap: anywhere${phone ? "; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden" : ""}`;
 
-// The Login board's names for the two languages, as its switch shows them.
-const languageLabels = { zh: "中文", en: "EN" } as const;
+// The Login board's names for the two languages, as its switch shows them, as a screen reader says them, and the
+// language each is written in.
+const languages = {
+  zh: { label: "中文", name: "中文", lang: "zh-CN" },
+  en: { label: "EN", name: "English", lang: "en" },
+} as const;
 
 type FrameProps = {
   title: string;
@@ -101,9 +104,9 @@ type FrameProps = {
   // which question the form asks: the form is kept while its words change language, and starts afresh for another
   step: string;
   shape: Shape;
-  // the page's request (attempt.ts): while one is out the form is busy and the page takes no press but its cancel
-  attempt?: Attempt;
-  stage?: Stage;
+  // the page's request (attempt.ts): while one is out the page takes nothing but its cancel
+  attempt: Attempt;
+  stage: Stage;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
 };
@@ -117,7 +120,10 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   const prefs = usePreferences();
   usePageTitle(title);
   useBrandStyle(site.data?.brand_color);
-  useLock(attempt?.kind != null);
+  const form = useRef<HTMLFormElement | null>(null);
+  const cancel = useRef<HTMLDivElement | null>(null);
+  useLock(form, cancel, attempt.kind !== null);
+  useFocusOnStep(form, step);
   useReloadWhenRestored();
   const titleRef = useRef<HTMLElement | null>(null);
   const engine = useLoginEngine({
@@ -152,7 +158,7 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
       }
       languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
     >
-      <form noValidate onSubmit={onSubmit} aria-busy={attempt?.kind != null}>
+      <form ref={form} noValidate onSubmit={onSubmit} aria-busy={attempt.kind !== null}>
         <LoginStep key={step} t={String} values={{ stepCls: "in", shape }}>
           <FrameTitle title={title} titleRef={titleRef} />
           {sub ? (
@@ -161,37 +167,55 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
             </LoginSub>
           ) : null}
           {children}
-          {attempt?.cancel ? (
-            <div data-cancel="">
-              <NoteAction label={t("cancel", { ns: "common" })} onPress={attempt.cancel} />
-            </div>
-          ) : null}
         </LoginStep>
       </form>
+      <div ref={cancel}>
+        {attempt.cancel ? <NoteAction label={t("cancel", { ns: "common" })} onPress={attempt.cancel} /> : null}
+      </div>
       <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
     </LoginShell>
   );
 }
 
-// useLock makes the whole page inert to the visitor while a request is out, but for the cancel ([data-cancel]): a press
-// on any control or link and a submit, by mouse or keyboard, stop at the window before they reach React or the browser.
-// One rule for the page, so no control can be forgotten. A layout effect, so it is in place before the next event.
-function useLock(locked: boolean) {
+// useLock makes the page inert while a request is out: the form, the sea with its links and the language switch take
+// no press, no typing and no focus, and are out of the accessibility tree, so what is on screen is what was sent. The
+// cancel stays outside them, and takes the focus the locked control lost; once free, the page gives it back. One rule
+// for the page, so no control can be forgotten; a layout effect, so it is in place before the next event.
+function useLock(form: RefObject<HTMLFormElement | null>, cancel: RefObject<HTMLDivElement | null>, locked: boolean) {
   useLayoutEffect(() => {
-    if (!locked) return;
-    const stop = (event: Event) => {
-      if (event.target instanceof Element && event.target.closest("[data-cancel]")) return;
-      event.preventDefault();
-      event.stopPropagation();
-    };
-    window.addEventListener("click", stop, true);
-    window.addEventListener("submit", stop, true);
+    const frame = form.current?.closest(".lg");
+    if (!locked || !form.current || !frame) return;
+    const active = document.activeElement;
+    const had = active instanceof HTMLElement && active !== document.body ? active : null;
+    const regions = [form.current, frame.querySelector(".lg-sea"), frame.querySelector(".lg-top")].filter(
+      (region) => region instanceof HTMLElement,
+    );
+    for (const region of regions) region.inert = true;
+    cancel.current?.querySelector<HTMLElement>("a")?.focus();
     return () => {
-      window.removeEventListener("click", stop, true);
-      window.removeEventListener("submit", stop, true);
+      for (const region of regions) region.inert = false;
+      const lost = document.activeElement === document.body || cancel.current?.contains(document.activeElement);
+      // the control that had it, or, where the request changed the step under it, the step's first control
+      if (lost) (had?.isConnected ? had : firstControl(form.current))?.focus();
     };
-  }, [locked]);
+  }, [form, cancel, locked]);
 }
+
+// Another step (the password, back to the address, a sign-in that is over) takes the focus to its first control, so
+// a keyboard or a screen reader is where the question is; the first step keeps the page's own.
+function useFocusOnStep(form: RefObject<HTMLFormElement | null>, step: string) {
+  const first = useRef(true);
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    firstControl(form.current)?.focus();
+  }, [form, step]);
+}
+
+const firstControl = (form: HTMLFormElement | null) =>
+  form?.querySelector<HTMLElement>("input:not([hidden]), button, a[href]");
 
 // A page the browser shows again from its back-forward cache (back from a provider's page) is the page as the visitor
 // left it, mid-request: it loads afresh instead, from the server's session, rather than guess what became of that.
@@ -215,7 +239,7 @@ function useLoginEngine({
   title,
   step,
 }: {
-  stage?: Stage;
+  stage: Stage;
   shape: Shape;
   dark: boolean;
   brand: string | undefined;
@@ -223,18 +247,17 @@ function useLoginEngine({
   title: string;
   step: string;
 }) {
-  const own = useStage();
-  const handle = stage ?? own;
+  const handle = stage;
   const [arrived] = useState(claimArrival);
-  const veiled = useArrivalVeil(titleRef, arrived);
+  const veil = useArrivalVeil(titleRef, arrived);
   const root = useRef<HTMLElement | null>(null);
   const decode = useRef<HTMLCanvasElement | null>(null);
   const latest = useRef({ shape, dark });
   latest.current = { shape, dark };
   const login = useEffectModule(root, loadLogin, (module, frame) => {
     const running = module.startLogin(frame, !latest.current.dark, latest.current.shape, arrived);
-    if (veiled.current && titleRef.current && decode.current) {
-      veiled.current = false;
+    if (veil.on.current && titleRef.current && decode.current) {
+      veil.on.current = false;
       running.decode(titleRef.current, decode.current);
     }
     for (const heard of handle.said.current.values()) running.hear(heard);
@@ -250,7 +273,14 @@ function useLoginEngine({
   useEffect(() => login.current?.show(shape), [login, shape]);
   // brand is a dependency only: useBrandStyle, an effect before this one, has put its colours on the page
   useEffect(() => login.current?.recolour(!dark), [login, dark, brand]);
-  useEffect(() => () => login.current?.endDecode(), [login, title, step]);
+  // title and step are dependencies only: when either changes, the veil and the decode of the old title end
+  useEffect(
+    () => () => {
+      veil.lift();
+      login.current?.endDecode();
+    },
+    [login, veil, title, step],
+  );
   return {
     seaCanvas: (canvas: Element | null) => {
       root.current = canvas?.closest<HTMLElement>(".lg") ?? null;
@@ -262,21 +292,29 @@ function useLoginEngine({
 }
 
 // An arrival's title is hidden from its first frame until the decode resolves it, or for veilFor if the decode's code
-// is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back.
+// is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back. The veil lifts at once
+// when motion is turned off, or when its title goes (lift): a decode that comes later does not play then.
 function useArrivalVeil(titleRef: RefObject<HTMLElement | null>, arrived: boolean) {
-  const veiled = useRef(false);
+  const on = useRef(false);
+  const end = useRef(() => {});
   useLayoutEffect(() => {
     const chars = titleRef.current?.querySelectorAll<HTMLElement>(".ch") ?? [];
     if (!arrived || reducedMotion()) return;
     for (const c of chars) c.style.color = "transparent";
-    veiled.current = true;
-    const timer = window.setTimeout(() => {
-      veiled.current = false;
+    on.current = true;
+    const motion = matchMedia("(prefers-reduced-motion: reduce)");
+    const lift = () => {
+      on.current = false;
+      window.clearTimeout(timer);
+      motion.removeEventListener("change", lift);
       for (const c of chars) c.style.removeProperty("color");
-    }, veilFor);
-    return () => window.clearTimeout(timer);
+    };
+    const timer = window.setTimeout(lift, veilFor);
+    motion.addEventListener("change", lift);
+    end.current = lift;
+    return lift;
   }, [arrived, titleRef]);
-  return veiled;
+  return useMemo(() => ({ on, lift: () => on.current && end.current() }), []);
 }
 
 function FrameTitle({ title, titleRef }: { title: string; titleRef: RefObject<HTMLElement | null> }) {
@@ -297,24 +335,23 @@ function FrameTitle({ title, titleRef }: { title: string; titleRef: RefObject<HT
   );
 }
 
-// The board's language switch: the page's own language marked current, the other one a press away, in the board's
-// order whichever is current.
+// The board's language switch: both languages, in the board's order, the page's own marked current. One part for both,
+// so the one pressed stays the same element, with the focus, as it becomes current.
 function Languages({ current, choose }: { current: "zh" | "en"; choose: () => void }) {
-  return (["zh", "en"] as const).map((language) =>
-    language === current ? (
-      <LoginLanguage key={language} t={String} text={{ label: languageLabels[language] }} />
-    ) : (
-      <LoginOtherLanguage
-        key={language}
-        t={String}
-        text={{ label: languageLabels[language] }}
-        values={{
-          onPress: (event) => {
-            event.preventDefault();
-            choose();
-          },
-        }}
-      />
-    ),
-  );
+  return (["zh", "en"] as const).map((language) => (
+    <LoginLanguage
+      key={language}
+      t={String}
+      text={{ label: languages[language].label }}
+      values={{
+        current: language === current || undefined,
+        name: languages[language].name,
+        lang: languages[language].lang,
+        onPress: (event) => {
+          event.preventDefault();
+          if (language !== current) choose();
+        },
+      }}
+    />
+  ));
 }

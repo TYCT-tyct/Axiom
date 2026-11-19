@@ -64,6 +64,7 @@ const field = (name: string, inputMode: string): Region =>
           value: h("value"),
           spellcheck: "false",
           "aria-describedby": h("describedBy"),
+          "aria-invalid": h("invalid"),
           oninput: h("onInput"),
           ref: h("input"),
         },
@@ -106,13 +107,14 @@ export default [
     text: { name: ".lg-sea .brand > span" },
     elements: { ".lg-sea .brand > span": { set: { style: h("style") } } },
   }),
-  // The language switch: the page's own language, marked current, and the other one.
+  // A language of the switch, the page's own marked current: one part for both, so pressing one keeps it, and the focus.
   part("LoginLanguage", ".lg-top a:first-child", start, {
     text: { label: ".lg-top a:first-child" },
-  }),
-  part("LoginOtherLanguage", ".lg-top a:last-child", start, {
-    text: { label: ".lg-top a:last-child" },
-    elements: { ".lg-top a:last-child": { set: { onclick: h("onPress") } } },
+    elements: {
+      ".lg-top a:first-child": {
+        set: { "aria-current": h("current"), "aria-label": h("name"), lang: h("lang"), onclick: h("onPress") },
+      },
+    },
   }),
   part("LoginStep", ".lg-step", start, {
     children: ".lg-step",
@@ -156,7 +158,7 @@ export default [
     elements: {
       ".lg-consent": { set: { class: `lg-consent ${h("consentCls")}` } },
       ".lg-consent input": {
-        set: { checked: h("checked"), onclick: h("onToggle"), "aria-describedby": h("describedBy") },
+        set: { checked: h("checked"), onchange: h("onToggle"), "aria-describedby": h("describedBy") },
       },
     },
     classes: { consentCls: ["bad"] },

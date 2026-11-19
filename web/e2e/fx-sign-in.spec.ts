@@ -13,10 +13,29 @@ const loginCode = /\/assets\/login-[\w-]{8}\.js$/;
 const signInPage = `${apps[0].url.replace(/\/$/, "")}/console/sign-in`;
 const stageCanvas = (page: Page) => page.locator(".lg-sea > canvas:not(.sea)");
 
-// Whether any of the title's characters was hidden for the decode, recorded from the document's first script.
+// The stage's pixels, to tell two still frames apart.
+const stagePixels = (page: Page) =>
+  stageCanvas(page).evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum = (sum * 31 + (data[i] ?? 0)) % 2_147_483_647;
+    return sum;
+  });
+
+// the hash stagePixels gives a canvas with nothing on it
+const blankStage = 0;
+
+// Whether the decode played: the title's characters hidden for it, and its canvas drawn on (a hidden title alone could
+// be the veil, lifted by its timer), recorded from the document's first script.
 async function watchDecode(page: Page) {
   await page.addInitScript(() => {
-    const seen = { hidden: false };
+    const seen = { hidden: false, drawn: false };
     (window as unknown as { decode: typeof seen }).decode = seen;
     new MutationObserver((records) => {
       for (const record of records) {
@@ -24,8 +43,15 @@ async function watchDecode(page: Page) {
         if (target.matches?.(".lg-title .ch") && target.style.color === "transparent") seen.hidden = true;
       }
     }).observe(document, { subtree: true, attributes: true, attributeFilter: ["style"] });
+    for (const name of ["fillText", "fill", "fillRect"] as const) {
+      const draw = CanvasRenderingContext2D.prototype[name] as (...args: unknown[]) => void;
+      CanvasRenderingContext2D.prototype[name] = function (this: CanvasRenderingContext2D, ...args: unknown[]) {
+        if (this.canvas.classList.contains("lg-dc")) seen.drawn = true;
+        return draw.apply(this, args);
+      } as never;
+    }
   });
-  return () => page.evaluate(() => (window as unknown as { decode: { hidden: boolean } }).decode.hidden);
+  return () => page.evaluate(() => (window as unknown as { decode: { hidden: boolean; drawn: boolean } }).decode);
 }
 
 test("arriving through the departure decodes the title once, after the first content; a direct visit does not", async ({
@@ -44,7 +70,7 @@ test("arriving through the departure decodes the title once, after the first con
   await running(page);
   await expect(stageCanvas(page)).toBeAttached();
   await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
-  expect(await decoded()).toBe(true);
+  expect(await decoded()).toEqual({ hidden: true, drawn: true });
   expect(asked).toEqual([true]);
   // the marker was taken: the same page again is a direct visit
   expect(await page.evaluate(() => sessionStorage.getItem("axiom:arrival"))).toBeNull();
@@ -52,7 +78,7 @@ test("arriving through the departure decodes the title once, after the first con
   await pageHeading(page);
   await running(page);
   await pause(page);
-  expect(await decoded()).toBe(false);
+  expect(await decoded()).toEqual({ hidden: false, drawn: false });
 });
 
 test("the sign-in page's sea and stage rest while the tab is hidden, and leave nothing behind once signed in", async ({
@@ -89,13 +115,19 @@ test("under reduced motion an arrival's sign-in page is still: the formed shape 
   await expect(stageCanvas(page)).toBeAttached();
   await pause(page);
   expect((await loop(page)).frames).toBe(0);
-  expect(await decoded()).toBe(false);
+  expect(await decoded()).toEqual({ hidden: false, drawn: false });
+  // still, not empty: the formed shape is drawn once
+  await expect.poll(() => stagePixels(page)).not.toBe(blankStage);
 });
 
 test("a sign-in page whose effects fail to load still signs in, with no unhandled error", async ({ page }) => {
   const unhandled: string[] = [];
   page.on("pageerror", (error) => unhandled.push(error.message));
-  await page.route(loginCode, (route) => route.fulfill({ status: 404 }));
+  let refused = 0;
+  await page.route(loginCode, (route) => {
+    refused += 1;
+    return route.fulfill({ status: 404 });
+  });
   await mockConsole(page);
   await page.goto(signInPage);
   await page.getByLabel("邮箱").fill(knownEmail);
@@ -103,6 +135,7 @@ test("a sign-in page whose effects fail to load still signs in, with no unhandle
   await page.getByLabel("密码", { exact: true }).fill(knownPassword);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  expect(refused).toBe(1);
   expect(unhandled).toEqual([]);
 });
 
@@ -210,21 +243,6 @@ test("the stage takes the site's brand colour when the site's settings come afte
   expect(await ringPixels(page, "#10738c")).toBe(0);
 });
 
-// The stage's pixels, to tell two still frames apart.
-const stagePixels = (page: Page) =>
-  stageCanvas(page).evaluate((element) => {
-    const canvas = element as HTMLCanvasElement;
-    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
-    let sum = 0;
-    for (let i = 0; i < data.length; i++) sum = (sum * 31 + (data[i] ?? 0)) % 2_147_483_647;
-    return sum;
-  });
-
 test("under reduced motion the stage answers what is typed, and only that: no drift between frames, no lasting red", async ({
   page,
 }) => {
@@ -289,4 +307,45 @@ test("an arrival's decode ends with the title it plays over: a new step's title 
   await page.getByRole("button", { name: "继续", exact: true }).click();
   await expect(page.getByRole("heading", { level: 1, name: "输入密码" })).toBeVisible();
   expect(await drawn()).toBe(false);
+});
+
+test("motion turned off just after a refusal leaves no red in the still stage", async ({ page }) => {
+  await mockConsole(page);
+  await page.goto(signInPage);
+  // the engine is there, and moving
+  await expect(stageCanvas(page)).toBeAttached();
+  await running(page);
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill("wrong password");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  // the page goes still: the refusal was a moment, which is over, not drawn for good
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(async () => (await loop(page)).pending).toBe(false);
+  expect(await ringPixels(page, "var(--err)")).toBe(0);
+});
+
+test("an arrival whose step changes before the effects' code comes shows its title, and no decode plays", async ({
+  page,
+}) => {
+  const decoded = await watchDecode(page);
+  await mockConsole(page);
+  await page.goto(apps[0].url);
+  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(loginCode, async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto(signInPage);
+  await expect(page.locator(".lg-title .ch[style*=transparent]").first()).toBeAttached();
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
+  release();
+  await expect(stageCanvas(page)).toBeAttached();
+  await pause(page);
+  expect((await decoded()).drawn).toBe(false);
 });

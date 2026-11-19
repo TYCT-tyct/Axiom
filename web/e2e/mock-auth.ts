@@ -9,6 +9,8 @@ type Schemas = components["schemas"];
 export const knownEmail = "user@example.com";
 export const knownPassword = "correct horse battery";
 export const mfaEmail = "mfa@example.com";
+// two-step verification with a passkey and no authenticator app
+export const passkeyEmail = "passkey@example.com";
 export const limitedEmail = "limited@example.com";
 
 export const userId = (n: number) => `user_${String(n).repeat(26)}` as Schemas["UserId"];
@@ -77,11 +79,14 @@ export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
   if (body.email === limitedEmail) {
     return fail(429, "rate_limited", { "Retry-After": "30" });
   }
-  if (body.password !== state.user.password || ![knownEmail, mfaEmail, state.user.email].includes(body.email)) {
+  if (
+    body.password !== state.user.password ||
+    ![knownEmail, mfaEmail, passkeyEmail, state.user.email].includes(body.email)
+  ) {
     return fail(401, "invalid_credentials");
   }
-  state.mfaEnabled = body.email === mfaEmail;
-  state.totpEnabled = state.mfaEnabled;
+  state.mfaEnabled = body.email === mfaEmail || body.email === passkeyEmail;
+  state.totpEnabled = body.email === mfaEmail;
   state.level = state.mfaEnabled ? "pending_mfa" : "password";
   state.codeTries = 0;
   return { status: 200, json: grant(state, state.mfaEnabled ? "mfa_required" : "signed_in") } as const;

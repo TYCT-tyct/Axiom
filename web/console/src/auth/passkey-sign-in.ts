@@ -10,15 +10,16 @@ const routes = {
 } as const;
 
 // usePasskey is a passkey request of the page (attempt.ts). Until the assertion is sent, the signal ends the challenge
-// and closes the browser's prompt; the finish, which may set a cookie, is not cancelled, and the session it starts is
-// the one the page then shows.
+// and closes the browser's prompt; the finish, which may set a cookie, is committed first, so it can no longer be
+// cancelled, and the session it starts is the one the page then shows.
 export function usePasskey(kind: keyof typeof routes) {
   const start = useStartSession();
-  return async (signal: AbortSignal) => {
+  return async (signal: AbortSignal, commit: () => void) => {
     const { begin, finish } = routes[kind];
     const challenge = await unwrap(consoleApi.POST(begin, { body: {}, signal }));
     const credential = await signInWithPasskey(challenge.public_key, signal);
     signal.throwIfAborted();
+    commit();
     const grant = await unwrap(
       consoleApi.POST(finish, { params: { query: { flow_id: challenge.flow_id } }, body: credential }),
     );

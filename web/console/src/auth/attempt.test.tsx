@@ -28,7 +28,7 @@ function deferred() {
     resolve: () => {},
     reject: () => {},
   };
-  const work = (signal: AbortSignal) =>
+  const work = (signal: AbortSignal, _commit: () => void) =>
     new Promise<void>((resolve, reject) => Object.assign(out, { signal, resolve, reject }));
   return { work, out };
 }
@@ -66,9 +66,49 @@ it("drops the outcome of a cancelled request and frees the page at once", async 
 
 it("offers no cancel for a request that may set the session's cookie", async () => {
   await mount();
-  await act(async () => held.run("password", deferred().work));
+  const request = deferred();
+  await act(async () => held.run("password", request.work));
   expect(held.kind).toBe("password");
   expect(held.cancel).toBeNull();
+  await act(async () => request.out.resolve());
+});
+
+it("takes the cancel back once the request commits, one taken before included", async () => {
+  await mount();
+  let commit = () => {};
+  const out = { resolve: () => {} };
+  await act(async () =>
+    held.run(
+      "passkey",
+      (_, committed) => {
+        commit = committed;
+        return new Promise<void>((resolve) => (out.resolve = resolve));
+      },
+      { cancellable: true },
+    ),
+  );
+  const taken = held.cancel;
+  await act(async () => commit());
+  expect(held.cancel).toBeNull();
+  await act(async () => taken?.());
+  expect(held.kind).toBe("passkey");
+  await act(async () => out.resolve());
+  expect(held).toMatchObject({ kind: null, done: "passkey" });
+});
+
+it("holds a page that mounts while another's committed request is out, and frees it when it settles", async () => {
+  await mount();
+  const request = deferred();
+  await act(async () => held.run("password", request.work));
+  // the page goes, and another mounts (back, then forward again)
+  unmount();
+  await mount();
+  expect(held.kind).toBe("password");
+  const second = deferred();
+  await act(async () => held.run("password", second.work));
+  expect(second.out.signal).toBeUndefined();
+  await act(async () => request.out.resolve());
+  expect(held.kind).toBeNull();
 });
 
 it("ends what is out when the page goes", async () => {

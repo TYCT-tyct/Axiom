@@ -14,10 +14,11 @@ placeholder?: string | number;
 value?: string | number;
 name?: string | number;
 describedBy?: string | number;
+invalid?: boolean;
 onInput?: DOMAttributes<Element>["onInput"];
 input?: RefCallback<Element>; };  text: { label: string; }; };
 export default function LoginEmail({ values: v = {}, text }: Props) {
 return <><label className={("lg-label") + " " + styles.scope} htmlFor={String(v.id ?? "")}>{text.label}</label>
-<div className={("lg-field " + String(v.fieldCls ?? "")) + " " + styles.scope}><input id={String(v.id ?? "")} data-act={"id"} type={String(v.type ?? "")} inputMode={"email"} autoComplete={String(v.autoComplete ?? "")} placeholder={String(v.placeholder ?? "")} defaultValue={String(v.value ?? "")} name={String(v.name ?? "")} spellCheck={"false"} aria-describedby={String(v.describedBy ?? "")} onInput={v.onInput} ref={v.input} className={styles.scope} /></div></>;
+<div className={("lg-field " + String(v.fieldCls ?? "")) + " " + styles.scope}><input id={String(v.id ?? "")} data-act={"id"} type={String(v.type ?? "")} inputMode={"email"} autoComplete={String(v.autoComplete ?? "")} placeholder={String(v.placeholder ?? "")} defaultValue={String(v.value ?? "")} name={String(v.name ?? "")} spellCheck={"false"} aria-describedby={String(v.describedBy ?? "")} aria-invalid={v.invalid} onInput={v.onInput} ref={v.input} className={styles.scope} /></div></>;
 }
 /* jscpd:ignore-end */

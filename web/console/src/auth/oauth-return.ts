@@ -2,8 +2,8 @@ import { safeNext } from "@axiom/app";
 
 // Where a visitor who signs in through a provider was going. The provider's callback sends the browser to the console's
 // root, or back to the sign-in page when it failed (cmd/axiom CompleteOAuth), neither of which can carry it, so this tab
-// keeps it across the round trip, and the first of the two pages to open takes it (router.tsx): the root goes on to it,
-// the sign-in page puts it back in its address.
+// keeps it across the round trip; the document the provider sends back takes it (router.tsx), and a cancelled start
+// forgets it.
 const key = "axiom:oauth-next";
 
 // A round trip through a provider takes minutes; a page kept longer belongs to a trip the visitor left.

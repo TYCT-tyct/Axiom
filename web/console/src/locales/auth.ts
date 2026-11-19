@@ -19,11 +19,10 @@ export const zh = {
   },
   mfa: {
     usePasskey: "使用通行密钥",
-    over: "这次登录已经失效，需要重新输入密码。",
-    again: "重新登录",
+    missing: "请填写验证码或恢复码。",
   },
   // The Login board's pitch beside the form: its first words, the italic key, and the rest.
-  pitch: { lead: "一个", tail: "接入所有模型", lede: "按实际服务的端点计费。" },
+  pitch: { lead: "一个", tail: "接入可用模型", lede: "按实际服务的端点计费。" },
   register: {
     title: "注册",
     description: "可以用邀请码注册；本站开放注册时，也可以直接用邮箱注册。",
@@ -69,10 +68,9 @@ export const en: Messages<typeof zh> = {
   },
   mfa: {
     usePasskey: "Use a passkey",
-    over: "This sign-in has ended. Enter your password again.",
-    again: "Sign in again",
+    missing: "Enter a code or a recovery code.",
   },
-  pitch: { lead: "One ", tail: " for every model", lede: "You pay for the endpoint that served you." },
+  pitch: { lead: "One ", tail: " for the models you can use", lede: "You pay for the endpoint that served you." },
   register: {
     title: "Register",
     description: "Register with an invite code, or with your email where the site is open.",

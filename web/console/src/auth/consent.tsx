@@ -1,22 +1,22 @@
 import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
-import { Gate, useErrors, useSession } from "@axiom/app";
+import { useErrors, useSession } from "@axiom/app";
 import LoginConsent from "@axiom/boards/Login/regions/LoginConsent";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useAttempt } from "./attempt";
-import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, useLegalConsent } from "./legal";
-import { LoginFrame } from "./login-frame";
-import { FormProblem, NoteAction, primaryLook, SignOutNote, wrapAnywhere } from "./login-parts";
+import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, legalView, useLegalConsent } from "./legal";
+import { LoginFrame, useStage } from "./login-frame";
+import { FormProblem, LoginGate, NoteAction, primaryLook, SignOutNote, wrapAnywhere } from "./login-parts";
 
 // A member whose accepted versions are behind the site's current ones lands here, outside the shell: every shell page
 // would be refused with consent_required until this succeeds.
 export default function Consent() {
   return (
-    <Gate stage="consent">
+    <LoginGate stage="consent">
       <ConsentStep />
-    </Gate>
+    </LoginGate>
   );
 }
 
@@ -42,6 +42,7 @@ function ConsentStep() {
   const legal = useLegalConsent();
   const accept = useAccept(legal);
   const attempt = useAttempt();
+  const stage = useStage();
   const missing = legal.query.isSuccess && legal.documents.length === 0;
   const ready = canSubmitWithLegal(legal) && !missing;
   // waiting for the box to be ticked, or for the server: both disable the button, only the second is busy
@@ -54,6 +55,7 @@ function ConsentStep() {
       subStyle={wrapAnywhere}
       step="consent"
       attempt={attempt}
+      stage={stage}
       shape="start"
       onSubmit={(event) => {
         event.preventDefault();
@@ -77,23 +79,24 @@ function ConsentStep() {
 function Documents({ legal }: { legal: LegalConsentState }) {
   const { t } = useTranslation();
   const { t: common } = useTranslation("common");
-  if (legal.query.isPending) {
+  const view = legalView(legal);
+  if (view === "loading") {
     return (
       <LoginNote t={String}>
         <span role="status">{t("legal.loading")}</span>
       </LoginNote>
     );
   }
-  if (legal.query.isError) {
-    const forbidden = legal.query.error instanceof ApiError && legal.query.error.status === 403;
+  if (view === "forbidden") return <FormProblem message={common("state.forbiddenTitle")} />;
+  if (view === "failed") {
     return (
       <>
-        <FormProblem message={forbidden ? common("state.forbiddenTitle") : t("legal.error")} />
-        {forbidden ? null : <NoteAction label={t("legal.retry")} onPress={legal.reload} />}
+        <FormProblem message={t("legal.error")} />
+        <NoteAction label={t("legal.retry")} onPress={legal.reload} />
       </>
     );
   }
-  if (legal.documents.length === 0) return null;
+  if (view === "none") return null;
   return (
     <>
       <LegalDocuments documents={legal.documents} />

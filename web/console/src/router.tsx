@@ -11,7 +11,23 @@ import {
 import { takeOAuthNext } from "./auth/oauth-return";
 import { Layout } from "./layout";
 
-const root = createRootRoute({ component: Outlet });
+// A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
+// where the visitor was going (auth/oauth-return.ts). That return is a document of its own: its first page takes what
+// was kept, and any other first page drops it, so a later visit to the root is not sent anywhere. A preload is no visit.
+let landing = true;
+const root = createRootRoute({
+  component: Outlet,
+  beforeLoad: ({ preload, location }) => {
+    if (preload || !landing) return;
+    landing = false;
+    const next = takeOAuthNext();
+    const search = location.search as { oauth?: unknown; next?: unknown };
+    if (next && location.pathname === "/") throw redirect({ href: next, replace: true });
+    if (next && location.pathname === "/sign-in" && search.oauth === "failed" && !search.next) {
+      throw redirect({ to: "/sign-in", search: { ...search, next, invite: undefined }, replace: true });
+    }
+  },
+});
 
 // The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
 // in, and a registration link can carry the invite code.
@@ -22,10 +38,6 @@ const guestSearch = (search: Record<string, unknown>) => ({
 
 const app = createRoute({ getParentRoute: () => root, id: "app", component: Layout });
 
-// A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
-// where the visitor was going; the first to open takes it (auth/oauth-return.ts). Not on a preload, which is no visit.
-const oauthReturn = (preload: boolean) => (preload ? undefined : takeOAuthNext());
-
 // Every page is its own chunk, loaded when the user is about to open it; the first screen loads the page of the address
 // it opens (scripts/budget.ts counts it).
 const routeTree = root.addChildren([
@@ -33,10 +45,6 @@ const routeTree = root.addChildren([
     getParentRoute: () => root,
     path: "/sign-in",
     validateSearch: guestSearch,
-    beforeLoad: ({ preload, search }) => {
-      const next = oauthReturn(preload);
-      if (next && !search.next) throw redirect({ to: "/sign-in", search: { ...search, next }, replace: true });
-    },
     component: lazyRouteComponent(() => import("./auth/sign-in")),
   }),
   createRoute({
@@ -66,10 +74,6 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/",
-      beforeLoad: ({ preload }) => {
-        const next = oauthReturn(preload);
-        if (next) throw redirect({ href: next, replace: true });
-      },
       component: lazyRouteComponent(() => import("./pages/overview")),
     }),
     createRoute({

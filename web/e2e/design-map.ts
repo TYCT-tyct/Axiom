@@ -50,7 +50,8 @@ const loginBoards = {
 };
 
 // The sign-in page asks what the product asks, in the board's parts: its title and lede, the pitch's billing line
-// (product.md: billed by the endpoint that served, without the board's promise that every route is tested), and the way
+// (product.md: billed by the endpoint that served, without the board's promise that every route is tested) and its
+// promise (the models the account can use), and the way
 // to register in a note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
 // does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
 // take out what the page has no counterpart for, so the comparison measures the parts and their layout.
@@ -71,7 +72,12 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
     lg.style.setProperty("--bw", "1px");
   }, edge);
   const auth = language === "en" ? consoleAuthEn : consoleAuthZh;
-  const words = { title: (language === "en" ? uiEn : uiZh).auth.signIn.title, lede: auth.pitch.lede, ...auth.signIn };
+  const words = {
+    title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
+    lede: auth.pitch.lede,
+    tail: auth.pitch.tail,
+    ...auth.signIn,
+  };
   await board.evaluate((words) => {
     const step = document.querySelector(".lg-step") as HTMLElement;
     // the words in their own inline boxes, as the page sets them, so only the glyphs are excused, not where lines sit
@@ -79,6 +85,9 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
     (step.querySelector(".lg-title") as HTMLElement).textContent = words.title;
     (step.querySelector(".lg-sub") as HTMLElement).replaceChildren(inline(words.description));
     (document.querySelector(".lg-pitch .s") as HTMLElement).replaceChildren(inline(words.lede));
+    // the pitch's promise as the product makes it (the models the account can use, not every model)
+    const pitch = document.querySelector(".lg-pitch .h") as HTMLElement;
+    (pitch.lastChild as Text).textContent = words.tail;
     for (const part of step.querySelectorAll(".lg-consent, .lg-or, .lg-stack")) part.remove();
     const note = document.createElement("p");
     note.className = "lg-note";
