@@ -6,18 +6,18 @@
 
 | 场景 | 执行 |
 |---|---|
-| PR | `static`、按路径选择的 `web` 和 `boards`，选中 `web` 时还跑两个 e2e 分片和 `journey`，在进列车前发现页面问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
-| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；Go 测试每个 PR 只在列车跑一次，失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
+| PR | `static`、按路径选择的 `web` 和 `boards`，非轻量改动跑四片 Go 测试，选中 `web` 时还跑四个 e2e 分片和 `journey`，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
+| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
 | `main` | 每次推送选择全部作业；同一提交、同一树已有成功列车构建时，复用其中实际通过的作业，其他作业照跑；无证据则全量 |
 | 轻量 PR / 列车 | 按受管的 `[lanes] light` 排除 `[lanes] code`，包括纯 Markdown；`static` 跑 `just md-checks scope`（含脚本测试），列车再跑 `secrets` |
 
 非轻量作业：
 
 - `static`：`check-ci` 中的静态部分、迁移版本与 `api-compat`；列车和 main 加 docs/secrets。
-- `go-test`：两个分片各跑 `just test i/2`（按 `go list` 顺序隔一取一，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
+- `go-test`：四个分片各跑 `just test i/4`（按 `go list` 顺序轮流分配，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 不跑；列车按页面、API、构建工具、Go 服务与测试配置输入选择，main 总是选择；成功列车在同一提交上已实测则在 main 摘要报告来源与成功结果，列车未测时 main 照跑；相同构建与相同比较基线通过后也可命中内容缓存。目标与实际门禁见[前端](../frontend.md#实测)。
-- `e2e`：两个按耗时分配的分片（`scripts/ci/playwright.py e2e i/2`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
+- `e2e`：四个按耗时分配的分片（`scripts/ci/playwright.py e2e i/4`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
 - `boards`：四个按耗时分配的分片，各两个 worker，独立运行 `playwright.boards.config.ts`，不启动产品 Go 服务。PR 与列车按画板包、转换脚本、证明及设计工具、Playwright 配置、锁文件、固定字体数据、CI 脚本和 setup action 的路径选择；main 总是选择；路径比较失败也跑。每片按单板内容和选中的测试集合复用通过结果，只有未命中的比较进入 Playwright；整个选中集合通过才记通过标记。失败保留截图、diff 和 trace，不反复序列化大型整板 DOM；单例上限三分钟，分片上限 30 分钟。
 - `journey`：浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
 - `bench`：列车用 base 的 `tools/benchgate` 比分配，门禁或其模块依赖变化时再用当前版本比，两次都须过；main 用 `bench-once` 带竞态每项一次。基准不混进 `test`；非轻量改动仅纯 Markdown 或纯 `web/` 可跳过基准。

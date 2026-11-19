@@ -269,11 +269,11 @@ class BuildChecks(unittest.TestCase):
                 self.assertEqual(values["vitals"], expected)
                 self.assertEqual(values["light"], "true" if md == "0" else "false")
 
-    def test_go_tests_run_in_trains_and_main_not_on_pull_requests(self):
+    def test_go_tests_run_on_pull_requests_trains_and_main_unless_light(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
             for docs in (False, True):
                 with self.subTest(event=event, docs=docs):
-                    self.assertEqual(enabled("go-test", event, docs=docs), not docs and event != "pull_request")
+                    self.assertEqual(enabled("go-test", event, docs=docs), not docs)
 
     def test_journey_runs_on_frontend_pull_requests_trains_and_main(self):
         cases = (
@@ -314,8 +314,8 @@ class BuildChecks(unittest.TestCase):
     def test_matrix_and_command_keep_index_and_count(self):
         matrix = re.search(r"shard: \$\{\{ (.+) \}\}", job("e2e")).group(1)
         count = re.search(r"E2E_SHARD_COUNT: \$\{\{ (.+) \}\}", job("e2e")).group(1)
-        self.assertEqual(expression(matrix), [1, 2])
-        self.assertEqual(expression(count), 2)
+        self.assertEqual(expression(matrix), [1, 2, 3, 4])
+        self.assertEqual(expression(count), 4)
         self.assertEqual(expression(matrix, stress=True), [1])
         self.assertEqual(expression(count, stress=True), 1)
         self.assertIn("E2E_SHARD_INDEX: ${{ matrix.shard }}", job("e2e"))
@@ -421,7 +421,7 @@ class TrainReuse(unittest.TestCase):
                 self.assertEqual(find(runs=[{**run, field: value}]), [])
         self.assertEqual(find(tree="other-tree"), [])
         self.assertEqual(find(job_list=[j for j in jobs if j["name"] != "build"]), [])
-        partial = [dict(j, conclusion="skipped") if j["name"] in ("vitals", "e2e (2/2)") else j for j in jobs]
+        partial = [dict(j, conclusion="skipped") if j["name"] in ("vitals", "e2e (2/4)") else j for j in jobs]
         self.assertEqual(set(find(job_list=partial)), set(train_result.JOBS) - {"vitals", "e2e"})
 
     def test_lookup_errors_fall_back_to_the_full_build(self):
