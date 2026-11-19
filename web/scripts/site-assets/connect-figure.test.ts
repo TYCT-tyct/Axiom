@@ -21,3 +21,7 @@ it("takes the figure out of what is read", () => {
   expect(start).toContain('aria-hidden="true"');
   expect(start).not.toMatch(/role="img"|aria-label=/);
 });
+
+it("says the board's script changed shape when the figure's line is gone", () => {
+  expect(() => cut("const K = (() => {\nconst PAGE_CSS = 1;")).toThrow("changed shape");
+});

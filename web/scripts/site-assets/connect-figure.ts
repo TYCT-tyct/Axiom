@@ -22,10 +22,10 @@ const named = / role="img" aria-label="[^"]*"/;
 export function cut(logic: string) {
   const lines = logic.split("\n");
   const at = lines.findIndex((line) => line.startsWith("const FIG = "));
-  const figure = JSON.parse((lines[at] as string).slice("const FIG = ".length).replace(/;\s*$/, ""));
   const start = lines.findIndex((line) => line.startsWith("const K = (() => {"));
   const end = lines.findIndex((line) => line.startsWith("const PAGE_CSS"));
   if (at < 0 || start < 0 || end < start) throw new Error("the Site board's script has changed shape");
+  const figure = JSON.parse((lines[at] as string).slice("const FIG = ".length).replace(/;\s*$/, ""));
   const { svg, ...numbers } = figure as { svg: string };
   if (!named.test(svg)) throw new Error("the figure is no longer named where it starts");
   const clean = svg.replaceAll(hidden, "").replace(named, ' aria-hidden="true"');
