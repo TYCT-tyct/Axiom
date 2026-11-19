@@ -1,7 +1,7 @@
 import { onMotion, reducedMotion } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
-import { type RefObject, useEffect, useState } from "react";
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { sections } from "./words";
 
 export type Scroll = { solid: boolean; sec: number; depth: number; bottom: boolean };
@@ -123,6 +123,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
 function clickActions(
   page: ReturnType<typeof scrolling>,
   setMenu: (open: boolean) => void,
+  back: RefObject<HTMLElement | null>,
 ): [string, (control: HTMLElement, e: MouseEvent) => void][] {
   return [
     [
@@ -144,6 +145,9 @@ function clickActions(
     [
       ".sml",
       (control) => {
+        // the menu closes onto the section chosen, where the keyboard goes on from
+        back.current =
+          control.closest(".tr")?.querySelector<HTMLElement>(`.under [data-place="${control.dataset.sec}"]`) ?? null;
         setMenu(false);
         page.toSection(Number(control.dataset.sec));
       },
@@ -160,6 +164,42 @@ const islandEvents = [
   ["focusout", false],
 ] as const;
 
+// The menu sheet (narrow layout) to the keyboard: closed, it is out of the way (inert), as it is out of sight; opened,
+// the focus goes into it, Escape closes it, and closed the focus comes back to what opened it, or to the section
+// chosen in it.
+function useMenuSheet(
+  root: RefObject<HTMLElement | null>,
+  menu: boolean,
+  setMenu: (open: boolean) => void,
+  back: RefObject<HTMLElement | null>,
+) {
+  const opened = useRef(false);
+  useLayoutEffect(() => {
+    const frame = root.current;
+    const sheet = frame?.querySelector<HTMLElement>(".sheet");
+    if (!frame || !sheet) return;
+    sheet.inert = !menu;
+    if (menu) {
+      opened.current = true;
+      sheet.querySelector<HTMLElement>(".shx")?.focus();
+      return;
+    }
+    if (!opened.current) return;
+    opened.current = false;
+    const to = back.current ?? frame.querySelector<HTMLElement>(".bar .menu");
+    back.current = null;
+    if (to && !to.matches("button, a")) to.tabIndex = -1;
+    to?.focus({ preventScroll: true });
+  }, [root, menu, back]);
+  useEffect(() => {
+    const frame = root.current;
+    if (!frame || !menu) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setMenu(false);
+    frame.addEventListener("keydown", onKey);
+    return () => frame.removeEventListener("keydown", onKey);
+  }, [root, menu, setMenu]);
+}
+
 // The reader taking over: a wheel, a touch, a press or a key anywhere on the frame. A press that starts a glide (the tour,
 // the island's mark, a section of the menu) comes after it, so it starts afresh.
 const takeOver = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
@@ -171,6 +211,8 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
   const [scroll, setScroll] = useState(atTop);
   const [island, setIsland] = useState(false);
   const [menu, setMenu] = useState(false);
+  const back = useRef<HTMLElement | null>(null);
+  useMenuSheet(root, menu, setMenu, back);
   useEffect(() => {
     const frame = root.current;
     const scroller = frame?.querySelector<HTMLElement>(".hs");
@@ -178,7 +220,7 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     const page = scrolling(scroller, frame.querySelector(".ho > .depth"), (next) =>
       setScroll((prev) => (same(prev, next) ? prev : next)),
     );
-    const clicks = clickActions(page, setMenu);
+    const clicks = clickActions(page, setMenu, back);
     const onClick = (e: MouseEvent) => {
       const control = e.target instanceof Element ? e.target.closest<HTMLElement>("a, button") : null;
       const action = control && frame.contains(control) && clicks.find(([selector]) => control.matches(selector));

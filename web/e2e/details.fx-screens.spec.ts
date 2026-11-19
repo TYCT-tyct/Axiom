@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { usualState } from "./console-data.ts";
-import { open, scrollTo, shown } from "./fx-helpers.ts";
+import { open, place, scrollTo, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // What the home screens say and do in a single tab, held to what the product guarantees: the questions' promises about
@@ -102,4 +102,21 @@ test("a screen built again shows the time its list came, not the time it was bui
   await scrollTo(page, 2);
   await shown(page, 2);
   await expect.poll(time).toBe(came);
+});
+
+test("the closed menu is out of the keyboard's way, and the focus goes in and comes back", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await open(page);
+  const sheet = page.locator(".sheet");
+  await expect(sheet).toHaveJSProperty("inert", true);
+  await page.locator(".bar .menu").click();
+  await expect(sheet).toHaveJSProperty("inert", false);
+  await expect(page.locator(".sheet .shx")).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveJSProperty("inert", true);
+  await expect(page.locator(".bar .menu")).toBeFocused();
+  await page.locator(".bar .menu").click();
+  await page.locator(".sml[data-sec='5']").click();
+  await expect(sheet).toHaveJSProperty("inert", true);
+  await expect(place(page, 5)).toBeFocused();
 });
