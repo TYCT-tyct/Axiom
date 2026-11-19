@@ -11,3 +11,14 @@ export function collectErrors(page: Page) {
   page.on("pageerror", (error) => errors.push(error.message));
   return errors;
 }
+
+// Some private modes, and blocked site data, make even reading the storage throw.
+export function blockStorage(page: Page, storage: "localStorage" | "sessionStorage") {
+  return page.addInitScript((name) => {
+    Object.defineProperty(window, name, {
+      get: () => {
+        throw new DOMException("The site's data is blocked", "SecurityError");
+      },
+    });
+  }, storage);
+}

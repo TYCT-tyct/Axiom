@@ -174,16 +174,24 @@ adminDeployed="$(curl -fsS "http://127.0.0.1:$admin/api/admin/v1/version" | jq -
 [ "$(curl -s "http://127.0.0.1:$admin/api/admin/v1/users" | jq -r .error.code)" = not_found ] || { echo "::error::the admin listener does not answer the admin's API as the contract says"; exit 1; }
 
 # The pages: the website and the console on the public port; the admin on its own port, and none of its files on the
-# public one. The admin's own script is asked for, so the embedded files, their caching and their compression are what
+# public one. A script of each app is asked for, so the embedded files, their caching and their compression are what
 # is checked.
 for path in / /console/ /console/keys; do
   headers="$(curl -fsS -D - -o /dev/null -H 'Accept: text/html' "http://127.0.0.1:$public$path" | tr -d '\r')"
   grep -qi '^cache-control: no-store$' <<< "$headers" || { echo "::error::the public listener does not serve $path uncached"; exit 1; }
 done
+# One hashed script of each app: cached for a year and compressed. Each entry page names its own, found the way the
+# browser finds it.
+site_script="$(curl -fsS -H 'Accept: text/html' "http://127.0.0.1:$public/" | grep -o '/assets/index-[^"]*\.js' | head -1)"
+[ -n "$site_script" ] || { echo "::error::the public listener serves no website page"; exit 1; }
+console_script="$(curl -fsS -H 'Accept: text/html' "http://127.0.0.1:$public/console/" | grep -o '/console/assets/index-[^"]*\.js' | head -1)"
+[ -n "$console_script" ] || { echo "::error::the public listener serves no console page"; exit 1; }
 admin_script="$(curl -fsS "http://127.0.0.1:$admin/" | grep -o '/assets/index-[^"]*\.js' | head -1)"
 [ -n "$admin_script" ] || { echo "::error::the admin listener serves no admin page"; exit 1; }
-headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "http://127.0.0.1:$admin$admin_script" | tr -d '\r')"
-grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::the admin script is not served cached and compressed"; exit 1; }
+for url in "http://127.0.0.1:$public$site_script" "http://127.0.0.1:$public$console_script" "http://127.0.0.1:$admin$admin_script"; do
+  headers="$(curl -fsS -D - -o /dev/null -H 'Accept-Encoding: br' "$url" | tr -d '\r')"
+  grep -qi '^cache-control: public, max-age=31536000, immutable$' <<< "$headers" && grep -qi '^content-encoding: br$' <<< "$headers" || { echo "::error::$url is not served cached and compressed"; exit 1; }
+done
 [ "$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:$public$admin_script")" = 404 ] || { echo "::error::the public listener serves the admin's files"; exit 1; }
 
 # A named zone must work in the scratch image, which has no host zoneinfo. Provision an empty account through the
