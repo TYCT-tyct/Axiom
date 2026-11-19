@@ -81,7 +81,6 @@ function Unread({ brand, unread }: { brand?: Brand; unread: UnreadSession }) {
     <AuthFrame title={t("auth.mfa.title")} description={t("auth.mfa.unread")} brand={brand}>
       <form
         noValidate
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           if (!reread.isPending) reread.mutate(unread.csrf);
