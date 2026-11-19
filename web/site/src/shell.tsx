@@ -1,18 +1,23 @@
 import { consoleApi, type Registration, registrationOf, type Schemas, unwrap } from "@axiom/api";
-import { Button, Logo, PreferenceSwitches } from "@axiom/ui";
+import { Button, Logo, PreferenceSwitches, useBrandStyle } from "@axiom/ui";
 import { type ReactNode, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 // The console lives on the same listener under /console/ (console/vite.config.ts).
 const consoleHref = "/console/";
 
-export type Brand = Pick<Schemas["Site"], "logo_url" | "api_base_url"> & { name?: string; registration: Registration };
+export type Brand = Pick<Schemas["Site"], "logo_url" | "api_base_url" | "brand_color"> & {
+  name?: string;
+  registration: Registration;
+};
 
 // The site's name, logo, API address and how it takes new users, from the same public call the console's sign-in page
-// uses. A host the API does not know, or a failed request, leaves the default mark and name: the page is still the
-// product's.
+// uses; its brand colour is put on the document's root (useBrandStyle, as the console's shells do), so every part of the
+// page takes it. A host the API does not know, or a failed request, leaves the default mark, name and colours: the page
+// is still the product's.
 export function useSiteBrand(): Brand | undefined {
   const [brand, setBrand] = useState<Brand>();
+  useBrandStyle(brand?.brand_color);
   useEffect(() => {
     const call = new AbortController();
     unwrap(consoleApi.GET("/api/console/v1/site", { signal: call.signal }))
@@ -23,6 +28,7 @@ export function useSiteBrand(): Brand | undefined {
             logo_url: site.logo_url,
             api_base_url: site.api_base_url,
             registration: registrationOf(site),
+            brand_color: site.brand_color,
           });
         }
       })

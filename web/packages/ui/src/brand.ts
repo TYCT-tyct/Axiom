@@ -39,7 +39,7 @@ const dark: Scheme = {
 };
 
 const text = 4.5;
-// WCAG 1.4.11: the edge of a control against its surroundings.
+// WCAG 1.4.11: the edge of a control against its surroundings, and a fill that carries meaning.
 const edge = 3;
 
 function luminance([r, g, b]: Rgb) {
@@ -61,21 +61,26 @@ const hex = (c: Rgb) => `#${c.map((v) => v.toString(16).padStart(2, "0")).join("
 const rgba = (c: Rgb, alpha: number) => `rgb(${c.join(" ")} / ${alpha})`;
 const inkOn = (c: Rgb) => (contrast(c, black) >= contrast(c, white) ? black : white);
 
-// The brand colour, moved toward the scheme's extreme in 2% steps until it reads on every surface; the extreme itself
-// does (21:1 and 18:1), so the walk ends.
-function accentFor(brand: Rgb, scheme: Scheme) {
+// The brand colour, moved toward the scheme's extreme in 2% steps until it stands out from every surface by ratio; the
+// extreme itself does (21:1 and 18:1), so the walk ends.
+function accentFor(brand: Rgb, scheme: Scheme, ratio: number) {
   for (let t = 0; t < 1; t += 0.02) {
     const c = mix(brand, scheme.extreme, t);
-    if (scheme.surfaces.every((s) => contrast(c, s) >= text)) {
+    if (scheme.surfaces.every((s) => contrast(c, s) >= ratio)) {
       return c;
     }
   }
   return scheme.extreme;
 }
 
+// The tokens.css accent pair, which the board-drawn pages (the home page's screens among them) read, beside the older
+// names: --accentT for text and --accentSolid for fills and dots; tokens.css mixes the wash and the soft tint from the
+// solid.
 function tokensFor(brand: Rgb, scheme: Scheme) {
-  const accent = accentFor(brand, scheme);
+  const accent = accentFor(brand, scheme, text);
   return {
+    "--accentT": hex(accent),
+    "--accentSolid": hex(accentFor(brand, scheme, edge)),
     "--accent": hex(accent),
     "--accent-ink": hex(inkOn(accent)),
     "--accent-soft": rgba(accent, scheme.softAlpha),

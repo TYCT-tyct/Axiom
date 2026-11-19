@@ -19,6 +19,8 @@ function schemes(color: string) {
     (style[name]?.match(/^light-dark\((.*)\)$/)?.[1] ?? "").split(", ")[i] ?? "";
   return [0, 1].map((i) => ({
     accent: pick("--accent", i),
+    text: pick("--accentT", i),
+    solid: pick("--accentSolid", i),
     btn: pick("--btn", i),
     ink: pick("--btn-ink", i),
     line: pick("--btn-line", i),
@@ -34,6 +36,8 @@ describe("brandStyle", () => {
     schemes(color).forEach((s, i) => {
       for (const surfaceColor of surfaces[i] as Rgb[]) {
         expect(contrast(rgb(s.accent), surfaceColor)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(rgb(s.text), surfaceColor)).toBeGreaterThanOrEqual(4.5);
+        expect(contrast(rgb(s.solid), surfaceColor)).toBeGreaterThanOrEqual(3);
       }
       expect(contrast(rgb(s.ink), rgb(s.btn))).toBeGreaterThanOrEqual(4.5);
       if ((surfaces[i] as Rgb[]).some((surface) => contrast(rgb(s.btn), surface) < 3)) {

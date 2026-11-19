@@ -1,4 +1,5 @@
 import { expect, type Page, test } from "@playwright/test";
+import { brandStyle } from "../packages/ui/src/brand.ts";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { delivered, loop, open, pause, place, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
@@ -248,6 +249,42 @@ test("the page asks for the site once, and the footer carries the site's own nam
   await expect(page.locator(".hfm6 .ft")).toContainText("MiSans");
   expect(asked).toBe(1);
 });
+
+// The site's brand colour is put on the page once and the screens take it: the accent the questions write the address
+// in (--accentT) and the lamp of the connect machine (--accentSolid in light, --accentT in dark), as brandStyle makes
+// them for the scheme.
+const purple = "#7c3aed";
+const brandPair = (name: string) =>
+  (brandStyle(purple)?.[name] ?? "").match(/^light-dark\((.*), (.*)\)$/)?.slice(1) ?? [];
+const rgbOf = (hex = "") => `rgb(${[1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)).join(", ")})`;
+for (const [scheme, at] of [
+  ["light", 0],
+  ["dark", 1],
+] as const) {
+  test(`the site's brand colour reaches the screens below, ${scheme}`, async ({ page }) => {
+    await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockConsole(page, "usual", {
+      site: {
+        name: "Axiom",
+        currency: "USD",
+        key_prefix: "sk-ax-v1-",
+        api_base_url: "https://api.example.com",
+        registration: "invite",
+        brand_color: purple,
+      },
+    });
+    await page.goto(apps[0].url);
+    await pageHeading(page);
+    await scrollTo(page, 1);
+    await shown(page, 1);
+    const lamp = scheme === "light" ? brandPair("--accentSolid")[at] : brandPair("--accentT")[at];
+    await expect(page.locator(".hfm1 .fig .lamp.on .iso-fill").first()).toHaveCSS("fill", rgbOf(lamp));
+    await scrollTo(page, 5);
+    await shown(page, 5);
+    await expect(page.locator(".hfm5 .ac").first()).toHaveCSS("color", rgbOf(brandPair("--accentT")[at]));
+  });
+}
 
 // The ways in follow how the site takes new users (getSite's registration, as its register page reads it): the words
 // offer what the site does, and a site that takes nobody new leads to signing in and offers no way to register.
