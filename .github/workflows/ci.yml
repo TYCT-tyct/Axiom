@@ -145,6 +145,24 @@ jobs:
           if [ "${{ github.event_name }}" = pull_request ]; then vitals=false; fi
           printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\nboards=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" "$boards" >> "$GITHUB_OUTPUT"
 
+  # A main push can reuse all its train jobs. Seed the default branch even then: an archive saved to a train or PR
+  # ref cannot be restored by its successor. Cache warming is independent of the required build.
+  download-cache:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch) && !inputs.gate_stress
+    runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
+    timeout-minutes: 12
+    continue-on-error: true
+    steps:
+      - if: runner.environment == 'github-hosted'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: runner.environment == 'github-hosted'
+        uses: ./.github/actions/setup
+        with:
+          images: tests web
+          warm-only: "true"
+
   # The checks of `just check-ci` that need neither a Go test run nor the frontend. A train or main also runs what
   # `just check` adds over `check-ci` (`docs`, `secrets`): the check-*.yml workflows do not run for the commits a train merges, and
   # two PRs whose docs pass alone can break a link together.
@@ -163,8 +181,9 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           node: ${{ needs.changes.outputs.light != 'true' }}
+          images: ${{ needs.changes.outputs.light != 'true' && 'tests' || '' }}
       - if: needs.changes.outputs.light != 'true'
-        run: node --test scripts/ci/font-download.test.mjs
+        run: node --test scripts/ci/{font-download,cache-images}.test.mjs
       # Each known-flaky test names an open issue; once the issue closes the entry must go (CONTRIBUTING.md「合并队列」)
       - run: python3 scripts/check_flaky.py
         env:
@@ -194,8 +213,14 @@ jobs:
           name="axiom-migration-proof-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           trap 'docker rm -f "$name" >/dev/null' EXIT
           docker run -d --name "$name" -e POSTGRES_HOST_AUTH_METHOD=trust postgres:18.6-alpine
-          for attempt in $(seq 1 60); do
-            if docker exec "$name" pg_isready -h 127.0.0.1 -U postgres; then break; fi
+          # A TCP query bypasses PostgreSQL's socket-only initialization server and proves the database can serve.
+          deadline=$((SECONDS + 60))
+          until docker exec -e PGCONNECT_TIMEOUT=2 "$name" psql -h 127.0.0.1 -U postgres -d postgres -XtAc 'SELECT 1' 2>/dev/null; do
+            if (( SECONDS >= deadline )); then
+              docker logs "$name"
+              echo "Migration database did not answer SELECT 1" >&2
+              exit 1
+            fi
             sleep 1
           done
           python3 scripts/compare_migrations.py --container "$name"
@@ -232,6 +257,8 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
+        with:
+          images: tests
       - run: just test ${{ matrix.shard }}/4
       - name: Clean test containers after tests
         if: always()
@@ -248,6 +275,8 @@ jobs:
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+        with:
+          images: web
       - name: Run web checks in their network namespace
         run: bash scripts/ci/web-container.sh just web-checks
       - if: always()
@@ -267,6 +296,8 @@ jobs:
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+        with:
+          images: web
       - name: Prepare runner evidence
         if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
@@ -314,6 +345,8 @@ jobs:
         with:
           fetch-depth: 0 # the frontend's version stamp comes from this tree's history
       - uses: ./.github/actions/setup
+        with:
+          images: web
       - name: Prepare runner evidence
         if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
@@ -376,6 +409,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup
+        with:
+          images: web
       - name: Prepare runner evidence
         if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
@@ -420,6 +455,8 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
+        with:
+          images: tests web
       - name: Prepare runner evidence
         if: runner.environment == 'self-hosted'
         run: python3 scripts/ci/reports.py prepare
@@ -474,6 +511,8 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
+        with:
+          images: tests
       - if: env.BASE == ''
         run: just bench-once
       - if: env.BASE != ''

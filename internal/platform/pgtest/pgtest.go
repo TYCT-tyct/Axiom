@@ -24,8 +24,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
 
 	"axiom/internal/platform/containertest"
 	"axiom/internal/platform/pg"
@@ -269,7 +271,9 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 	}
 	container, err := containertest.Start(ctx, func() (*postgres.PostgresContainer, error) {
 		return postgres.Run(ctx, "postgres:18.6-alpine",
-			postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.BasicWaitStrategies(),
+			postgres.WithUsername("postgres"), postgres.WithPassword("postgres"), postgres.WithDatabase("postgres"),
+			// A query on the published port reaches the final server and proves the database prepare uses is ready.
+			testcontainers.WithWaitStrategy(wait.ForSQL("5432/tcp", "pgx", clusterURL)),
 			testcontainers.WithHostConfigModifier(func(host *container.HostConfig) { host.ShmSize = clusterShmSize }),
 			testcontainers.WithCmdArgs("-c", "fsync=off", "-c", "synchronous_commit=off", "-c", "full_page_writes=off",
 				"-c", "max_connections=1000", "-c", "min_wal_size=32MB", "-c", "max_wal_size=128MB"),
@@ -288,6 +292,13 @@ func StartCluster(ctx context.Context) (string, func(context.Context) error, err
 	return connection, terminate, nil
 }
 
+func clusterURL(host string, port network.Port) string {
+	if host == "localhost" {
+		host = "127.0.0.1" // "localhost" makes pgx try ::1 first, which Docker Desktop's forwarder answers slowly under load
+	}
+	return "postgres://postgres:postgres@" + net.JoinHostPort(host, port.Port()) + "/postgres?sslmode=disable"
+}
+
 // prepare creates the roles and axiom_template in the container's cluster and returns its URL.
 func prepare(ctx context.Context, container *postgres.PostgresContainer) (string, error) {
 	host, err := container.Host(ctx)
@@ -298,10 +309,7 @@ func prepare(ctx context.Context, container *postgres.PostgresContainer) (string
 	if err != nil {
 		return "", err
 	}
-	if host == "localhost" {
-		host = "127.0.0.1" // "localhost" makes pgx try ::1 first, which Docker Desktop's forwarder answers slowly under load
-	}
-	connection := "postgres://postgres:postgres@" + net.JoinHostPort(host, port.Port()) + "/postgres?sslmode=disable"
+	connection := clusterURL(host, port)
 	if cluster, err = url.Parse(connection); err != nil {
 		return "", err
 	}

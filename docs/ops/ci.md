@@ -51,7 +51,11 @@
 
 setup 按仓库版本安装 Go、Node、pnpm、just，托管环境通过 Actions 缓存工具和依赖。Playwright 镜像自带 Chromium、系统库和字体。只有宿主的 `axiom-ci.slice` 正在运行时才传父 cgroup 并核验其配额；每个容器仍用独立网络命名空间，CPU 上限取 runner 可用核数与 8 的较小值。
 
-源字体挂入容器。托管作业按 `sources.json` 中的字体名和 SHA-256 还原独立的 Actions 缓存，自管作业读共享卷。下载断线或超时后用 HTTP Range 从已收到的字节续传，分别等 1 秒、2 秒，最多尝试三次。完整文件每次读取都校验 SHA-256。托管作业首次校验完就上传缓存，供该分支随后启动的作业使用。
+源字体挂入容器。托管作业按 `sources.json` 中的字体名和 SHA-256 还原 Actions 缓存，自管作业读共享卷。源文件下载失败等一秒重试一次，并用 HTTP Range 从已收到的字节续传。完整文件每次读取都校验 SHA-256。画板和 Python 字体工具共用相同的源文件名，CI 直接使用已提交的字体子集。
+
+Go 缓存只归档模块目录，按根模块和工具模块的 `go.mod`、`go.sum` 查找，变更时可用同平台上次缓存补齐。测试服务和 Playwright 镜像各用一份归档，按平台和镜像引用查找；命中就载入 Docker，缺失时拉取，失败重试一次。Playwright 拉取固定 digest，用含该 digest 的本地标签启动，以适配只恢复标签的 Docker 镜像存储。
+
+成功下载后立即存回，避免后续测试失败丢掉缓存。PR 和列车的归档受 ref 隔离；`download-cache` 在默认分支复用列车结果时仍填充可供两者读取的归档。冷启动时并行作业可能同时下载，缓存淘汰也会再次触发下载。验收在同一 ref 的两次运行中比较缓存键、`Source font Actions cache hit`、`Pulling` 和 `Loaded cached`。
 
 持久 runner 继续只读写本地内容缓存。托管 runner 用官方 `@actions/cache` 客户端（setup 固定版本，避免自写缓存服务协议），在 `web_cache.py` 原键生成和成功判定之外增加存取；构建、e2e、vitals 和单板标记分别使用其原内容键，无前缀回退，归档路径相对缓存目录。故障回到实跑，失败不写通过标记；冷缓存与缓存淘汰会增加耗时。浏览器证据按实际 `runner.environment` 选择持久目录或失败 artifact，和变量是否填写无关。
 
@@ -83,6 +87,8 @@ runner 保留 Go 构建、模块缓存与 `AXIOM_CACHE_DIR`（默认同一 runne
 runner `.env` 设置 `AXIOM_TEST_CGROUP_PARENT=axiom-ci.slice`。`containertest.WithHostPolicy` 对 PostgreSQL（含 withcluster）、Valkey、diff 的 new-api 设置父 cgroup；空值保留开发机默认。CI diff 经 host-gateway 直连监听所有 IPv4 的宿主测试上游，Axiom 仍走回环；开发机保留端口隧道，避免 CI 使用无法定制 cgroup 的 SSHD sidecar。
 
 Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时设 `TESTCONTAINERS_RYUK_DISABLED=true`，其他作业和开发机保留 Ryuk。作业以 `GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT-GITHUB_JOB` 设置 `AXIOM_TEST_JOB`，所有测试服务标 `axiom.ci.job`，经 Untracked 读取、不污染测试缓存。
+
+共享 PostgreSQL 在发布端口执行 `SELECT 1`，迁移比较也在 TCP 上查目标库，可以避开只监听 socket 的初始化进程。Valkey 等端口可达后用测试账号认证并验证 `PONG`，确认 ACL 生效。SeaweedFS 等 S3 端口与 master 选出 leader，再通过 shell 建桶。
 
 `clean-test-containers.sh` 在测试前与结束（always）删本作业容器，并清理同标签键且创建至少 40 分钟的遗留容器；不碰无标签容器，正常共享服务由 withcluster 删除，强杀由后续作业兜底，不增加测试重试或启动期限。
 
