@@ -109,6 +109,26 @@ test("without the site's API address the card says so and the copy button is dis
   await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("aria-label", /无法复制/);
 });
 
+// Pointing at the address line of the configuration lights the machine's one input, the plug: the script marks it .hl
+// at run time, and the rule that draws it lit is the board's, kept for the inserted figure. (The key's line marks the key
+// the same way; in the lock the key is drawn lit already.)
+test("pointing at the address line lights the machine's plug", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
+  // Cursor's lines: the address, then the key
+  await page.locator(".hfm1 .tab").nth(2).click();
+  const edge = page.locator('.hfm1 .fig [data-m="plug"] .iso-edge').first();
+  const stroke = () => edge.evaluate((el) => getComputedStyle(el).stroke);
+  const unlit = await stroke();
+  await page.locator(".hfm1 pre .ln").nth(0).hover();
+  await expect(page.locator('.hfm1 .fig [data-m="plug"]')).toHaveClass(/\bhl\b/);
+  await expect.poll(stroke).not.toBe(unlit);
+});
+
 test("at 820 the page is laid out for a tablet as the board's script lays it out", async ({ page }) => {
   await page.setViewportSize({ width: 820, height: 1180 });
   await open(page);

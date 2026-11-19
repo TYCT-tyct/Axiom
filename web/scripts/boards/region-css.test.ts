@@ -32,3 +32,13 @@ it("keeps rules that need a declared run-time state", () => {
   expect(out).not.toContain(".off");
   expect(regionCSS(states, elements('<div class="card"></div>'))).not.toContain(".card.on");
 });
+
+// A state a script sets on inserted markup (the connect screen puts .hl on the key it lights) keeps the inserted rules
+// that need it once declared, and only then.
+it("keeps rules for inserted markup that need a declared run-time state", () => {
+  const lit = ".ov .hl .iso-edge{stroke:cyan}\n.ov .legend .iso-edge{stroke:red}";
+  const card = elements('<div class="card"></div>');
+  expect(regionCSS(lit, card, ["iso-"], ["hl"])).toContain(":global(.ov .hl .iso-edge):where(.scope *){stroke:cyan}");
+  expect(regionCSS(lit, card, ["iso-"], ["hl"])).not.toContain("legend");
+  expect(regionCSS(lit, card, ["iso-"])).not.toContain(".hl");
+});

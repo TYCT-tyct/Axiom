@@ -186,8 +186,8 @@
 :global(.hfm1 .cx .ax-badge use):where(.scope *){stroke-width:.8px}
 :global(.hfm1 .cx .ax-badge *):where(.scope *){vector-effect:non-scaling-stroke}
 :global(.hfm1 .cx .ax-word):where(.scope *){fill:var(--anatomy-hi);font-family:'Axiom Sans',sans-serif;font-weight:600;letter-spacing:.14em}
-:global(.hfm1 .cx .pin.on .iso-edge):where(.scope *){stroke:var(--anatomy-lit)}
-:global(.hfm1 .cx .pin.on .iso-top):where(.scope *){fill:var(--anatomy-lit-top)}
+:global(.hfm1 .cx .pin.on .iso-edge):where(.scope *),:global(.hfm1 .cx .hl .iso-edge):where(.scope *){stroke:var(--anatomy-lit)}
+:global(.hfm1 .cx .pin.on .iso-top):where(.scope *),:global(.hfm1 .cx .hl .iso-top):where(.scope *){fill:var(--anatomy-lit-top)}
 :global(.hfm1 .cx .pin.on .iso-shade):where(.scope *){fill:var(--anatomy-lit-shade)}
 :global(.hfm1 .cx .band.on .iso-edge):where(.scope *){stroke:var(--anatomy-lit)}
 :global(.hfm1 .cx .band.on .iso-top):where(.scope *),:global(.hfm1 .cx .band.on .iso-shade):where(.scope *),:global(.hfm1 .cx .band.on .iso-fill):where(.scope *){fill:var(--anatomy-lit-top)}

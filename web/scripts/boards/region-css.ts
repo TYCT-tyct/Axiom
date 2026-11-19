@@ -76,9 +76,9 @@ function scoped(selector: string, inside = false) {
 }
 
 // insertedBy tells a selector that names one of the classes run-time markup carries (by prefix), and no class that is
-// neither that nor in the region: a rule for a part of the board the region does not have, whatever the engine inserts,
-// is not kept.
-const insertedBy = (prefixes: readonly string[], elements: Set<Element>) => {
+// none of that, in the region, or a declared run-time state (the .hl a script puts on an inserted part): a rule for a
+// part of the board the region does not have, whatever the engine inserts, is not kept.
+const insertedBy = (prefixes: readonly string[], elements: Set<Element>, states: readonly string[]) => {
   const present = new Set<string>();
   for (const element of elements)
     for (let ancestor: Element | null = element; ancestor; ancestor = ancestor.parentElement)
@@ -86,7 +86,11 @@ const insertedBy = (prefixes: readonly string[], elements: Set<Element>) => {
   const carried = (name: string) => prefixes.some((prefix) => name.startsWith(prefix));
   return (selector: string) => {
     const named = requiredClasses(selector);
-    return prefixes.length > 0 && named.some(carried) && named.every((name) => present.has(name) || carried(name));
+    return (
+      prefixes.length > 0 &&
+      named.some(carried) &&
+      named.every((name) => present.has(name) || carried(name) || states.includes(name))
+    );
   };
 };
 
@@ -170,7 +174,11 @@ export function regionCSS(
   insertedPrefixes: readonly string[] = [],
   states: readonly string[] = [],
 ): string {
-  const selected = selectBlocks(cssBlocks(css), matcher(elements, states), insertedBy(insertedPrefixes, elements));
+  const selected = selectBlocks(
+    cssBlocks(css),
+    matcher(elements, states),
+    insertedBy(insertedPrefixes, elements, states),
+  );
   const withoutFrames = selected.replace(/@keyframes[\s\S]*?\}\s*\}/g, "");
   return cssBlocks(selected)
     .filter(({ selector }) => {
