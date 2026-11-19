@@ -76,11 +76,17 @@ function PendingPayment({
   return (
     <>
       {order.checkout ? (
-        <Text tone="muted">{t("topup.waiting")}</Text>
+        <Text tone="muted" prose>
+          {t("topup.waiting")}
+        </Text>
       ) : (
         <Stack gap={4}>
-          <Text tone="muted">{t("topup.unconfirmed")}</Text>
-          <Text tone="faint">{t("topup.unconfirmedBody")}</Text>
+          <Text tone="muted" prose>
+            {t("topup.unconfirmed")}
+          </Text>
+          <Text tone="faint" prose>
+            {t("topup.unconfirmedBody")}
+          </Text>
         </Stack>
       )}
       {order.checkout ? <Checkout checkout={order.checkout} /> : null}

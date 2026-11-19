@@ -6,7 +6,7 @@ import s from "./text.module.css";
 // Text is a run of words in one of the design's text styles, so a page names a style instead of writing one: its tone
 // (default --t1, muted --t2, faint --t3, or a state's text colour), its size (14px body or 12px small), medium weight
 // for a sub-heading, tabular figures for numbers, and the element it is (a paragraph, a span, or an h3 under a card's
-// title), with an optional icon before the words. breaks keeps the line breaks a text came with. Long values wrap anywhere rather than widen the page; lines cuts a
+// title), with an optional icon before the words. breaks keeps the line breaks a text came with; prose limits the line to a readable measure. Long values wrap anywhere rather than widen the page; lines cuts a
 // long text to two lines with an ellipsis, the whole of it still in the DOM for a screen reader and in title for hover.
 export function Text({
   as: Element = "p",
@@ -16,6 +16,7 @@ export function Text({
   numeric = false,
   nowrap = false,
   breaks = false,
+  prose = false,
   lines,
   title,
   icon,
@@ -28,6 +29,7 @@ export function Text({
   numeric?: boolean;
   nowrap?: boolean;
   breaks?: boolean;
+  prose?: boolean;
   lines?: 2;
   title?: string;
   icon?: IconName;
@@ -43,6 +45,7 @@ export function Text({
         numeric && s.numeric,
         nowrap && s.nowrap,
         breaks && s.breaks,
+        prose && s.prose,
         lines && s.lines2,
         icon && s.withIcon,
       )}

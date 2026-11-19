@@ -20,3 +20,10 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+/* The unit under a price: the 11.5px on a 16px line the table had before the type scale. */
+.per {
+  font-size: 11.5px;
+  line-height: 16px;
+  color: var(--t3);
+}

@@ -76,10 +76,10 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 16px;
-  padding-block: 24px;
+  padding-block: 25px 24px;
   box-shadow: inset 0 var(--bw) 0 var(--line);
   font-size: var(--fs14);
-  line-height: var(--lh14);
+  line-height: 20px;
   color: var(--t3);
 }
 

@@ -114,9 +114,7 @@ export function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; 
       <Text as="span" nowrap>
         {priceText(format, rate, pricing.currency)}
       </Text>
-      <Text as="div" size="sm" tone="faint">
-        {perText(t, rate)}
-      </Text>
+      <div className={s.per}>{perText(t, rate)}</div>
     </>
   );
 }
@@ -164,9 +162,7 @@ export function RateTable({
             <Td>{label(t, "item", rate.item)}</Td>
             <Td align="end">
               {priceText(format, rate, currency)}
-              <Text as="div" size="sm" tone="faint">
-                {perText(t, rate)}
-              </Text>
+              <div className={s.per}>{perText(t, rate)}</div>
             </Td>
           </tr>
         ))}
@@ -202,11 +198,7 @@ export function SearchEnginePrices({
           <tr key={engine.name}>
             <Td>
               {engine.name}
-              {engine.default ? (
-                <Text as="div" size="sm" tone="faint">
-                  {t("publicModels.defaultEngine")}
-                </Text>
-              ) : null}
+              {engine.default ? <div className={s.per}>{t("publicModels.defaultEngine")}</div> : null}
             </Td>
             <Td align="end">
               {engine.price_per_search === "0"

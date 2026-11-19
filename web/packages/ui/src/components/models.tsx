@@ -159,14 +159,12 @@ export function ModelCatalog({ models, note, count }: { models: PublicModel[]; n
     <>
       {count ? (
         <div className={s.count}>
-          <Text tone="faint">{count}</Text>
+          <p className={s.countText}>{count}</p>
         </div>
       ) : null}
       <Stack>
         {models.length > 0 && !showPrices ? (
-          <div className={s.prose}>
-            <Text tone="muted">{t("publicModels.pricesNotPublic")}</Text>
-          </div>
+          <p className={classes(s.note, s.muted)}>{t("publicModels.pricesNotPublic")}</p>
         ) : null}
         <Table label={t("publicModels.title")}>
           <thead>
@@ -197,11 +195,7 @@ export function ModelCatalog({ models, note, count }: { models: PublicModel[]; n
             ))}
           </tbody>
         </Table>
-        {note && showPrices ? (
-          <div className={s.prose}>
-            <Text tone="faint">{note}</Text>
-          </div>
-        ) : null}
+        {note && showPrices ? <p className={s.note}>{note}</p> : null}
       </Stack>
     </>
   );
