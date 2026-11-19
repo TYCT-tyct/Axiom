@@ -4,8 +4,6 @@ import type zh from "./Bed.zh.ts";
 export default {
   "m4ba35a8f55": "Models change, ",
   "m46ff80e47d": "integration stays the same",
-  "m96a055f345": "Sign up for a key, change two lines of configuration, and keep using the tools you use now.",
-  "mcaf724c6bd": "Sign up and get an API key",
   "mc98e118e0a": "Model",
   "m4606318793": "changes",
   "mf3b3924597": "Integration",
@@ -14,13 +12,15 @@ export default {
   "m5ad00154b5": " models",
   "mc226e9802b": "Code changed ",
   "m05198195b9": " lines",
-  "m4ab0ec9fb8": "One key for every model.",
   "maea82737cc": "Product",
   "m0f4371a7a9": "Pricing",
   "m9f6fee1aba": "Language",
   "m72726d8818": "中文",
   "m86a63f23a0": "Appearance",
   "maa0819dfc4": "Light",
-  "ma6b75d0680": "Dark"
+  "ma6b75d0680": "Dark",
+  "m96a055f345": "",
+  "mcaf724c6bd": "",
+  "m4ab0ec9fb8": ""
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

@@ -23,6 +23,8 @@ test("the machine is fetched after the screen's code, once, and the card carries
   expect(asked.indexOf("connect")).toBeLessThan(asked.indexOf("machine"));
   expect(asked.filter((name) => name === "machine")).toHaveLength(1);
   await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
+  // the heading's comma is the language's, which the page hands the region
+  await expect(page.locator(".hfm1 h2")).toContainText("改一个地址，");
   await expect(page.locator(".hfm1 pre")).toContainText("https://api.example.com");
   await expect(page.locator(".hfm1")).not.toContainText("api.axiom.example");
   // a tool's tab changes the configuration
@@ -160,12 +162,47 @@ test("the page asks for the site once, and the footer carries the site's own nam
     await scrollTo(page, sec);
     await shown(page, sec);
   }
+  // the words that name the service name the site
+  await expect(page.locator(".hfm1 .intro")).toContainText("Acme Relay");
+  await expect(page.locator(".hfm5 .ans").first()).toContainText("Acme Relay");
   // the whole brand is the site's: the board's own "Axiom" beside it would be read and shown as a second name
   await expect(page.locator(".hfm6 .ft .brand")).toHaveAccessibleName("Acme Relay");
   await expect(page.locator(".hfm6 .ft .brand")).toHaveText("Acme Relay");
   await expect(page.locator(".hfm6 .ft")).toContainText("MiSans");
   expect(asked).toBe(1);
 });
+
+// The ways in follow how the site takes new users (getSite's registration, as its register page reads it): the words
+// offer what the site does, and a site that takes nobody new leads to signing in and offers no way to register.
+const joins = [
+  { registration: "open", join: "注册，获取API key", href: "/console/register", a7: "注册不要钱。" },
+  { registration: "invite", join: "凭邀请码注册，获取API key", href: "/console/register", a7: "凭邀请码" },
+  { registration: "closed", join: "登录，获取API key", href: "/console/sign-in", a7: "暂不开放注册" },
+] as const;
+for (const { registration, join, href, a7 } of joins) {
+  test(`a site whose registration is ${registration} offers that way in`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockConsole(page, "usual", {
+      site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration, email_verification: true },
+    });
+    await page.goto(apps[0].url);
+    await pageHeading(page);
+    const offered = registration !== "closed";
+    await expect(page.locator(".bar .btn.primary")).toBeVisible({ visible: offered });
+    await expect(page.locator(".hs > main .cta .primary")).toBeVisible({ visible: offered });
+    for (const sec of await sections(page)) {
+      await scrollTo(page, sec);
+      await shown(page, sec);
+    }
+    await expect(page.locator(".hfm1 .kc").first()).toHaveAttribute("href", href);
+    await expect(page.locator(".hfm6 .cta .btn.primary")).toHaveText(join);
+    await expect(page.locator(".hfm6 .cta .btn.primary")).toHaveAttribute("href", href);
+    await expect(page.locator(".hfm5 .ans").last()).toContainText(a7);
+    // the billing line of the last answer's picture is not by token: not every endpoint bills so
+    await expect(page.locator(".hfm5 .w7")).not.toContainText("token");
+  });
+}
 
 // The tour and the menu's list of sections (the last screen's card): the tour glides through the screens, the list goes
 // to one, and under reduced motion there is no tour to offer.
@@ -264,7 +301,7 @@ test("the footer keeps the font's credit, names no page the site lacks, and its 
   await footer.locator("[data-pick=en]").click();
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(footer.locator("[data-pick=en]")).toHaveAttribute("aria-pressed", "true");
-  await expect(footer).toContainText("One key for every model.");
+  await expect(footer).toContainText("One key for every model it may use.");
   await footer.locator("[data-pick=dark]").click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await expect(footer.locator("[data-pick=dark]")).toHaveAttribute("aria-pressed", "true");

@@ -9,7 +9,7 @@ import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
 import { start } from "./bed-script";
 import { Brand } from "./brand";
-import { links } from "./links";
+import { joinHref, links } from "./links";
 import { useScheme } from "./scheme";
 import { screenVars, useBoardWords, useScript } from "./script";
 import { useSite } from "./site-context";
@@ -38,6 +38,8 @@ export function BedScreen({ wide }: { wide: boolean }) {
   );
   useEffect(() => script?.retheme(), [script, scheme]);
   const { brand, name } = useSite();
+  // until the site has answered, the board's own way in (links.ts joinHref)
+  const join = brand?.registration ?? "open";
   const on = (yes: boolean) => (yes ? "on" : "");
   const v = {
     ...values,
@@ -61,7 +63,10 @@ export function BedScreen({ wide }: { wide: boolean }) {
       text={{
         credit: t("footer"),
         apiV1: v1,
-        signUpHref: links.signUp,
+        lede: t(`script.bed.lede.${join}`),
+        join: t(`script.bed.join.${join}`),
+        tagline: t("script.bed.tagline"),
+        signUpHref: joinHref(brand?.registration),
         homeHref: links.home,
         modelsHref: links.models,
         pricingHref: links.pricing,

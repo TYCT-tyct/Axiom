@@ -63,6 +63,16 @@ function useTabletLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
   }, [root, wide]);
 }
 
+// A site that takes nobody new offers no way to register: the header's, the island's, the menu's and the first
+// screen's go (the screens below lead to signing in instead, links.ts joinHref). Their words are the switches' engine's,
+// which writes "register" into them whatever the page says, so they are taken out rather than reworded.
+function useNoRegistration(root: RefObject<HTMLElement | null>, closed: boolean) {
+  useLayoutEffect(() => {
+    for (const way of root.current?.querySelectorAll<HTMLElement>(`a[href="${links.signUp}"]:not(.under *)`) ?? [])
+      way.style.display = closed ? "none" : "";
+  }, [root, closed]);
+}
+
 const tourClass = (solid: boolean) => (solid || reducedMotion() ? "gone" : "");
 
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
@@ -110,6 +120,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     root.current?.querySelector(".tour")?.toggleAttribute("inert", tourGone);
   }, [root, tourGone]);
 
+  useNoRegistration(root, brand?.registration === "closed");
   const board = (key: BoardKey) => t(`board.${key}`);
   const values = {
     modeCls: scheme,

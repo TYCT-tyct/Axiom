@@ -51,9 +51,6 @@ const inserted = [
 
 const english: Record<string, string> = {
   m15e09730c0: "Change one address",
-  mc1259c84e3: "and every model works",
-  m95aa50a5d2:
-    "Point your tool\u2019s API address at Axiom and enter your key. Your commands, code and workflows stay as they are.",
   me2c2f3d5e7: "Choose a tool",
   mda83883e17: "Other tools",
   m89e8fb3a55: "Get a key",
@@ -67,8 +64,10 @@ const connect = (board: string): Region => ({
   omit: [".hfm1 .frame > canvas", ".hfm1 .loupe", ".hfm1 .intro .more"],
   // the key's place in each line of the configuration is the way to sign up
   attributes: { signUpHref: { selector: ".hfm1 .kc", attribute: "href" } },
-  // the comma after the first phrase is the language's: the Chinese keeps the board's kern, the English writes its own
-  text: { comma: ".hfm1 h2 .kern" },
+  // the comma after the first phrase is the language's: the Chinese keeps the board's kern, the English writes its own;
+  // the heading's promise and the lede are the page's words, which name the site and hold for a key that may use only
+  // some models (site/src/locales, script.connect)
+  text: { comma: ".hfm1 h2 .kern", every: ".hfm1 h2 > .ph:last-child", lede: ".hfm1 .intro p" },
   elements: entrance("hfm1", "m1_in"),
   classes,
   inserted,

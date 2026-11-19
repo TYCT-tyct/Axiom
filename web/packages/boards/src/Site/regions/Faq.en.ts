@@ -38,7 +38,6 @@ export default {
   "m690c02e414": "Trial credit",
   "mf127804b92": "None",
   "m55d7debcab": "Billing method",
-  "m2fe69c47c2": "Per token used",
   "m5ad3e46da2": "",
   "m0a6b58d599": "",
   "m580f9d34c3": "",
@@ -46,6 +45,7 @@ export default {
   "m59549165d5": "",
   "m9799ce84e2": "",
   "m475efcf60a": "",
-  "ma60cdd302f": ""
+  "ma60cdd302f": "",
+  "m2fe69c47c2": ""
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

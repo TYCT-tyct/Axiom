@@ -46,18 +46,48 @@ export default {
       copyUnavailable: "无法复制：本站 API 地址暂不可用",
       copyFailed: "复制失败，请手动选择配置",
       copied: "已复制",
+      // the heading's comma (the board's kern), its promise, which holds for a key that may use only some models, and the
+      // lede, which names the site
+      comma: "，",
+      every: "Key允许的模型都能用",
+      lede: "把工具的接口地址换成{{site}}的，填入key。命令、代码和工作流都不用改。",
     },
+    // Each answer holds for every site's settings: what is billed (docs/domains/billing.md「计费项」「预留与结算」),
+    // when a call moves to another endpoint (docs/domains/routing.md, provider.allow_fallbacks), which models a key
+    // reaches (docs/domains/accounts.md「API key」) and how the site takes new users (getSite's registration).
     faq: {
-      a0: "一个Key能调所有模型，不用每家各开账号、各自充值。同一个模型背后有多个端点，Axiom按价格和健康度挑一个，失败了换下一个。账单只有一份。",
+      a0: "一个Key就能调用多家厂商的模型（能调哪些，由这把Key的设置决定），不用每家各开账号、各自充值。同一个模型背后可以有多个端点，{{site}}默认按价格和健康度挑一个；允许回退时，一个失败了就换下一个可用的。账单只有一份。",
       a1: "不是模型厂商自己提供的端点，通常更便宜。要限制来源，在控制台建一个路由预设（比如只走官方来源），再把它绑到这把Key上；只改默认预设不会改已有的Key。",
       a2: "Claude Code、Codex、Cursor和OpenAI SDK都能用，改地址和Key，再从这把Key的模型列表里选模型。其他兼容OpenAI或Anthropic接口的工具也一样。",
-      a3: "按token计费，每个端点价格不同，按实际服务这次请求的那个端点算。价格公开的站点，模型页会列出各端点的价格；不公开的站点，登录后才看得到。",
-      a4: "Axiom会换一个端点重试。换端点之前失败的尝试不向你收费；最后一次的结果按它的结局计费：内容已经交到你手里的，按实际用量收；已经执行的按次项目（比如搜索）照收。控制台的调用记录里能看到每次尝试。",
-      a5: "端点价格会跟着上游调整。价格可见的时候，以模型页上当前显示的为准。",
+      a3: "按实际服务这次请求的那个端点收费。每个端点有自己的计费项和单价：对话一般按输入、输出token，图片按张，联网搜索这类工具按次。价格公开的站点，模型页会列出各端点的价格；不公开的站点，登录后才看得到。",
+      a4: "允许回退、还有可用的端点时，{{site}}会换一个端点重试；内容开始交给你之后就不再换。换端点之前失败的尝试不向你收费；最后一次按它的结局计费：内容已经交到你手里的，按实际用量收；已经执行的按次项目（比如搜索）照收。控制台的调用记录里能看到每次尝试。",
+      a5: "端点价格会跟着上游调整。每个请求按它发出时锁定的价格结算，之后的调价不影响已经发出的请求；价格可见的站点，模型页显示的是当前价格。",
       a6: "在控制台删掉这个Key，再新建一个。平时给每个Key设好额度上限和IP白名单，就算泄露，损失也有限。",
-      a7: "注册不要钱。目前没有试用额度，按用量扣费，用多少扣多少。",
+      // by how the site takes new users
+      a7: {
+        open: "注册不要钱。目前没有试用额度，按用量扣费，用多少扣多少。",
+        invite: "注册不要钱，不过本站要凭邀请码注册。目前没有试用额度，按用量扣费，用多少扣多少。",
+        closed: "本站暂不开放注册，已有账户直接登录。没有试用额度，按用量扣费，用多少扣多少。",
+      },
+      // the last picture's billing line: not every endpoint bills by the token
+      billing: "按用量",
       // after the answers whose picture shows figures: they are the board's illustration, not the site's
       sample: "图中的价格、金额和 Key 是示例数据。",
+    },
+    // The sea bed's way in and the line before it, by how the site takes new users (getSite's registration): a site that
+    // takes nobody new is entered by signing in. The brand's line holds for a key that may use only some models.
+    bed: {
+      tagline: "一个Key，接入它能用的所有模型。",
+      join: {
+        open: "注册，获取API key",
+        invite: "凭邀请码注册，获取API key",
+        closed: "登录，获取API key",
+      },
+      lede: {
+        open: "注册就能拿到Key，改两行配置，接着用你现在的工具。",
+        invite: "凭邀请码注册就能拿到Key，改两行配置，接着用你现在的工具。",
+        closed: "登录控制台建一把Key，改两行配置，接着用你现在的工具。",
+      },
     },
     models: {
       routes_one: "{{count}} 条线路",

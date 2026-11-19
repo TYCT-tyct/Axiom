@@ -48,6 +48,13 @@ const siteBoards = {
   390: { file: "SitePhone.dc.html", height: 844 },
 };
 
+// What the page writes in its own words, by scene (packages/boards/manifest/site-screens-b.ts and -c.ts, the regions' text).
+const pageWords: Record<string, string[]> = {
+  "site connect": [".hfm1 h2 > .ph:last-child", ".hfm1 .intro p"],
+  "site faq": [".hfm5 .ans", ".hfm5 .w7 .kv:last-child > .t1"],
+  "site bed": [".hfm6 .el > .lede", ".hfm6 .cta .btn.primary", ".hfm6 .ft .fb > p"],
+};
+
 // A screen of the home page below the first: both sides are scrolled until the screen's section is at the top of the
 // scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
 // its class). The board's words are Chinese only, so these scenes are compared in Chinese.
@@ -80,11 +87,12 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
       .evaluate((el) => el.style.setProperty("text-rendering", "geometricPrecision", "important"));
     await side.evaluate(() => document.fonts.ready.then(() => {}));
   }
-  // The answers are the page's words, which say what the product does today (docs/product.md, docs/domains/billing.md): the
+  // The page's own words where the board's would not hold for every site (the PR's list of sentences against the docs:
+  // the answers, the billing line, the connect heading's promise and lede, the sea bed's way in and its lines): the
   // board's get the page's text, so the layout under them is compared.
-  if (scene === "site faq") {
-    const said = await page.locator(".hfm5 .ans").allTextContents();
-    await board.locator(".hfm5 .ans").evaluateAll((els, texts) => {
+  for (const selector of pageWords[scene] ?? []) {
+    const said = await page.locator(selector).allTextContents();
+    await board.locator(selector).evaluateAll((els, texts) => {
       els.forEach((el, i) => {
         if (texts[i] !== undefined) el.textContent = texts[i];
       });

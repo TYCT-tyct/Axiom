@@ -3,6 +3,8 @@
 import type { Props } from "./Connect.tsx";
 import type en from "./Connect.en.ts";
 export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {comma: "，",
+every: t("mc1259c84e3"),
+lede: t("m95aa50a5d2"),
 signUpHref0: "#",
 signUpHref1: "#",
 signUpHref2: "#",

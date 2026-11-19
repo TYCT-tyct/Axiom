@@ -11,5 +11,6 @@ ans5: t("m9799ce84e2"),
 ans6: t("m475efcf60a"),
 ans7: t("ma60cdd302f"),
 apiRoot: "https://api.axiom.example",
-apiV1: "https://api.axiom.example/v1"},  });
+apiV1: "https://api.axiom.example/v1",
+billing: t("m2fe69c47c2")},  });
 /* jscpd:ignore-end */

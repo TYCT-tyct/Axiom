@@ -7,9 +7,10 @@ import narrowZh from "@axiom/boards/SitePhone/regions/Connect.zh";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
 import { start } from "./connect-script";
-import { links } from "./links";
+import { joinHref } from "./links";
 import { useScheme } from "./scheme";
 import { screenVars, useBoardWords, useScript } from "./script";
+import { useSite } from "./site-context";
 
 // The machine's palette (the board's --anatomy-*) on the page's tokens, in the two schemes; its halo's opacity is a
 // number, which follows the scheme here.
@@ -46,6 +47,19 @@ const vars = (scheme: "light" | "dark") =>
 const zh = { ...wideZh, ...narrowZh };
 const en = { ...wideEn, ...narrowEn };
 
+// The key's place in each of the card's nine lines leads to getting a key.
+const keyLinks = (href: string) => ({
+  signUpHref0: href,
+  signUpHref1: href,
+  signUpHref2: href,
+  signUpHref3: href,
+  signUpHref4: href,
+  signUpHref5: href,
+  signUpHref6: href,
+  signUpHref7: href,
+  signUpHref8: href,
+});
+
 // The connect screen (Site.dc.html M1): a tool's configuration with the site's address in it, and the machine that
 // plugs into it and sends a call to a vendor, as the board draws them. onWhale is called when the card names a DeepSeek
 // model, the whale's chance meeting.
@@ -53,11 +67,18 @@ export function ConnectScreen({ wide, onWhale }: { wide: boolean; onWhale: () =>
   const { t } = useTranslation();
   const scheme = useScheme();
   const { known, root, v1 } = useApiAddress();
+  const { brand, name } = useSite();
   const word = useBoardWords(zh, en);
   const { setStage, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide, onWhale),
     { word: (w) => t(`script.connect.${w}`), root, v1, known },
   );
+  const text: Props["text"] = {
+    comma: t("script.connect.comma"),
+    every: t("script.connect.every"),
+    lede: t("script.connect.lede", { site: name }),
+    ...keyLinks(joinHref(brand?.registration)),
+  };
   const Region = wide ? Wide : Narrow;
   return (
     <Region
@@ -65,7 +86,7 @@ export function ConnectScreen({ wide, onWhale }: { wide: boolean; onWhale: () =>
       values={
         { ...values, m1_vars: vars(scheme), m1_setStage: setStage, m1_in: entered ? "in" : "" } as Props["values"]
       }
-      text={Object.fromEntries(Array.from({ length: 9 }, (_, i) => [`signUpHref${i}`, links.signUp])) as Props["text"]}
+      text={text}
     />
   );
 }

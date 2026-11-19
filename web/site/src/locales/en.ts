@@ -43,18 +43,42 @@ export default {
       copyUnavailable: "Cannot copy: this site’s API address is unavailable",
       copyFailed: "Copy failed; select the configuration by hand",
       copied: "Copied",
+      comma: ",",
+      every: "and your models work",
+      lede: "Point your tool’s API address at {{site}} and enter your key. Your commands, code and workflows stay as they are.",
     },
     faq: {
-      a0: "One key calls every model, with no separate account or top-up for each vendor. Behind one model there are several endpoints: Axiom picks one by price and health and moves to the next when one fails. There is one bill.",
+      a0: "One key calls models from many vendors (which ones is up to the key’s settings), with no separate account or top-up for each. Behind one model there can be several endpoints: {{site}} picks one by price and health by default, and when fallbacks are allowed it moves to the next available one when one fails. There is one bill.",
       a1: "An endpoint the model’s maker does not run itself, usually cheaper. To limit the sources, create a routing preset in the console (for example official sources only) and bind it to the key; changing the default preset does not change a key that already exists.",
       a2: "Claude Code, Codex, Cursor and the OpenAI SDK all work: change the address and the key, then pick a model from the key’s model list. So does any other tool that speaks the OpenAI or Anthropic API.",
-      a3: "Billing is per token. Each endpoint has its own price, and you pay the price of the endpoint that served the request. Where the site publishes prices, the models page lists each endpoint’s; where it does not, they are visible after you sign in.",
-      a4: "Axiom retries on another endpoint. Attempts that failed before the switch are not charged to you; the last attempt is charged by how it ended: content already delivered to you is charged by actual usage, and per-use items that already ran (a search, say) are charged. The console’s call log shows every attempt.",
-      a5: "Endpoint prices follow the upstream. When prices are visible, the models page’s current price is the one that counts.",
+      a3: "You pay by the endpoint that served the request. Each endpoint has its own billable items and unit prices: chat is usually per input and output token, images per image, web search and other tools per use. Where the site publishes prices, the models page lists each endpoint’s; where it does not, they are visible after you sign in.",
+      a4: "When fallbacks are allowed and another endpoint is available, {{site}} retries on it; once content has started reaching you it does not switch. Attempts that failed before a switch are not charged to you; the last attempt is charged by how it ended: content already delivered to you is charged by actual usage, and per-use items that already ran (a search, say) are charged. The console’s call log shows every attempt.",
+      a5: "Endpoint prices follow the upstream. Each request is settled at the price locked in when it was sent, so a later change does not touch a request already sent; where prices are visible, the models page shows the current ones.",
       a6: "Delete the key in the console and create a new one. Set a spending limit and an IP allowlist on every key in advance, and a leak can only cost so much.",
-      a7: "Signing up is free. There is no trial credit for now: you pay by usage, only for what you use.",
-      // after the answers whose picture shows figures: they are the board's illustration, not the site's
+      a7: {
+        open: "Signing up is free. There is no trial credit for now: you pay by usage, only for what you use.",
+        invite:
+          "Signing up is free, though this site takes new accounts by invite code. There is no trial credit for now: you pay by usage, only for what you use.",
+        closed:
+          "This site is not taking new accounts for now; existing accounts sign in. There is no trial credit: you pay by usage, only for what you use.",
+      },
+      billing: "By usage",
       sample: "The prices, amounts and keys in the picture are sample data.",
+    },
+    bed: {
+      tagline: "One key for every model it may use.",
+      join: {
+        open: "Sign up and get an API key",
+        invite: "Sign up with an invite code",
+        closed: "Sign in and get an API key",
+      },
+      lede: {
+        open: "Sign up for a key, change two lines of configuration, and keep using the tools you use now.",
+        invite:
+          "Sign up with an invite code for a key, change two lines of configuration, and keep using the tools you use now.",
+        closed:
+          "Sign in to create a key in the console, change two lines of configuration, and keep using the tools you use now.",
+      },
     },
     models: {
       routes_one: "{{count}} route",

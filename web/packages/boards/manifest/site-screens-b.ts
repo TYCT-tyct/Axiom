@@ -62,13 +62,10 @@ const faqEnglish: Record<string, string> = {
   m690c02e414: "Trial credit",
   mf127804b92: "None",
   m55d7debcab: "Billing method",
-  m2fe69c47c2: "Per token used",
 };
 const bedEnglish: Record<string, string> = {
   m4ba35a8f55: "Models change, ",
   m46ff80e47d: "integration stays the same",
-  m96a055f345: "Sign up for a key, change two lines of configuration, and keep using the tools you use now.",
-  mcaf724c6bd: "Sign up and get an API key",
   mc98e118e0a: "Model",
   m4606318793: "changes",
   mf3b3924597: "Integration",
@@ -77,7 +74,6 @@ const bedEnglish: Record<string, string> = {
   m5ad00154b5: " models",
   mc226e9802b: "Code changed ",
   m05198195b9: " lines",
-  m4ab0ec9fb8: "One key for every model.",
   maea82737cc: "Product",
   m0f4371a7a9: "Pricing",
   m9f6fee1aba: "Language",
@@ -110,12 +106,14 @@ const faq = (board: string): Region => {
         ? [".hfm5 .qs > .q:nth-child(10)", ".hfm5 .card > .pane:nth-child(9)", ".hfm5 .patch > .pad:nth-child(9)"]
         : [".hfm5 .qs > .fq:nth-child(9)"]),
     ],
-    // the address the reader's tools are set to is the site's own
-    // the answers are the page's words: they say what the product does today (script.faq)
+    // the address the reader's tools are set to is the site's own; the answers are the page's words, which say what
+    // the product does today (script.faq), and so is the last picture's billing line, as not every endpoint bills by
+    // the token (docs/domains/billing.md「计费项」)
     text: {
       ans: ".hfm5 .ans",
       apiRoot: ".hfm5 .w2 .cl:nth-child(2) > .ac",
       apiV1: ".hfm5 .w2 .cl:nth-child(3) > .ac",
+      billing: ".hfm5 .w7 .kv:last-child > .t1",
     },
     elements: entrance("hfm5", "m5_in"),
     classes: faqClasses,
@@ -140,7 +138,15 @@ const bed = (board: string): Region => ({
   ],
   // the site's own name and logo take the brand's place, all of it: the board's mark and its bare "Axiom" text
   slots: { brand: ".hfm6 .ft .brand" },
-  text: { credit: ".hfm6 .legal > span:first-child", apiV1: ".hfm6 .pr2 .pv" },
+  // the way in and the line before it say how this site takes new users, and the brand's line holds for a key that may
+  // use only some models: the page's words (site/src/locales, script.bed)
+  text: {
+    credit: ".hfm6 .legal > span:first-child",
+    apiV1: ".hfm6 .pr2 .pv",
+    lede: ".hfm6 .el > .lede",
+    join: ".hfm6 .cta .btn.primary",
+    tagline: ".hfm6 .ft .fb > p",
+  },
   attributes: {
     signUpHref: { selector: ".hfm6 .cta .btn.primary", attribute: "href" },
     homeHref: { selector: ".hfm6 .ft .brand", attribute: "href" },
