@@ -20,8 +20,13 @@ const site = {
 
 // The promises are written out here, not taken from the page's messages: what settlement guarantees and no more.
 const promises = {
-  zh: { estimated: "整笔都是估算", paused: "暂停新的调用", over: "略超上限", not: "封住总损失" },
-  en: { estimated: "estimated whole", paused: "takes no new calls", over: "slightly past", not: "cap the total loss" },
+  zh: { estimated: "整笔都是估算", paused: "暂停新的调用", over: "累计花费超过上限", not: ["封住总损失", "略超"] },
+  en: {
+    estimated: "estimated whole",
+    paused: "takes no new calls",
+    over: "total spend past it",
+    not: ["cap the total loss", "slightly"],
+  },
 } as const;
 for (const language of ["zh", "en"] as const)
   test(`the questions promise only what settlement guarantees, ${language}`, async ({ page }) => {
@@ -36,7 +41,7 @@ for (const language of ["zh", "en"] as const)
     await expect(answer(3)).toContainText(said.estimated);
     await expect(answer(5)).toContainText(said.paused);
     await expect(answer(6)).toContainText(said.over);
-    await expect(answer(6)).not.toContainText(said.not);
+    for (const promise of said.not) await expect(answer(6)).not.toContainText(promise);
   });
 
 test("on a phone a configuration copied by hand is the command's own characters", async ({ page }) => {
