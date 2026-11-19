@@ -1,0 +1,44 @@
+/* A secret or a snippet the user copies: fixed-width text on a tinted ground, outlined with a decorative hairline. */
+.root {
+  display: block;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--r8);
+  background: var(--hover);
+  box-shadow: 0 0 0 var(--bw) var(--line2);
+  font-family: var(--family-mono);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t1);
+  word-break: break-all;
+  user-select: all;
+}
+
+.sm {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+}
+
+/* A snippet is read and selected in part, and breaks at words where it can. */
+.pre {
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: anywhere;
+  user-select: auto;
+}
+
+.list {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 4px 16px;
+  list-style: none;
+}
+
+@media (min-width: 420px) {
+  .list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

@@ -1,6 +1,7 @@
 import { ApiError, consoleApi, unwrap } from "@axiom/api";
 import { accountKey } from "@axiom/app";
 import ModelsCard from "@axiom/boards/AxApp/regions/ModelsCard";
+import { Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -40,9 +41,11 @@ export function Announcements() {
         {query.isSuccess && items === undefined && <p>{t("announcements.unavailable")}</p>}
         {items?.length === 0 && <p>{t("announcements.empty")}</p>}
         {items?.map((item, index) => (
-          <article key={item.id ?? index} className="whitespace-pre-wrap [overflow-wrap:anywhere]">
+          <article key={item.id ?? index}>
             <h2>{item.title ?? t("announcements.unavailable")}</h2>
-            <p>{item.body ?? t("announcements.unavailable")}</p>
+            <Text breaks tone="muted">
+              {item.body ?? t("announcements.unavailable")}
+            </Text>
           </article>
         ))}
       </details>

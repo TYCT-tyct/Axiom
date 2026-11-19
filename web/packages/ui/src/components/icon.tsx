@@ -1,4 +1,6 @@
 import type { ReactNode, SVGProps } from "react";
+import { classes } from "../classes";
+import s from "./icon.module.css";
 
 // The design's own line icons: a 16 × 16 grid, 1.5 stroke, round caps, drawn in the current text colour. An icon never
 // carries meaning alone: text sits beside it, or the control that holds it has an aria-label.
@@ -96,9 +98,16 @@ const icons = {
 
 export type IconName = keyof typeof icons;
 
-export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {
+// spin turns the icon round while what it stands for is under way (a refresh that has been asked for).
+export function Icon({
+  name,
+  spin = false,
+  className,
+  ...props
+}: { name: IconName; spin?: boolean } & SVGProps<SVGSVGElement>) {
   return (
     <svg
+      className={classes(spin && s.spin, className)}
       viewBox="0 0 16 16"
       width="16"
       height="16"

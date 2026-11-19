@@ -3,10 +3,21 @@ import { accountKey, can, LoadMore, useErrors, useSession } from "@axiom/app";
 import Keys from "@axiom/boards/AxApp/regions/Keys";
 import KeysEN from "@axiom/boards/AxApp/regions/Keys.en";
 import KeysZH from "@axiom/boards/AxApp/regions/Keys.zh";
-import { Button, DataState, EmptyState, FormError, Icon, Note, Notice, useFormat, usePageTitle } from "@axiom/ui";
+import {
+  Button,
+  DataState,
+  EmptyState,
+  FormError,
+  Icon,
+  Note,
+  Notice,
+  PageFrame,
+  useFormat,
+  usePageTitle,
+} from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { type MouseEvent, type ReactNode, useMemo, useState } from "react";
+import { type MouseEvent, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { pressBoardButton } from "../board-interaction";
 import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
@@ -77,7 +88,7 @@ export default function KeysPage() {
   const switched = toggled ? list.find((key) => key.id === toggled.id) : undefined;
   const notice = switched && switched.disabled !== toggled?.was ? switched : undefined;
   return (
-    <Frame>
+    <PageFrame>
       {notice && toggled ? (
         <ToggleNotice apiKey={notice} name={toggled.name} was={toggled.was} onDone={() => setToggled(null)} />
       ) : null}
@@ -92,7 +103,7 @@ export default function KeysPage() {
         setDialog={setDialog}
       />
       <Dialogs dialog={dialog} setDialog={setDialog} close={close} filters={filters} onSaved={saved} />
-    </Frame>
+    </PageFrame>
   );
 }
 
@@ -152,12 +163,6 @@ function Content({
       <LoadMore list={keys} />
     </>
   );
-}
-
-// The shell gives the page its whole width; the board's page sits in a column of its own, which the page brings until
-// the shell does. The padding is the board's page padding at each width.
-function Frame({ children }: { children: ReactNode }) {
-  return <div className="mx-auto w-full max-w-[1180px] px-4 py-3.5 sm:px-10 sm:py-[30px]">{children}</div>;
 }
 
 // Actions are the page's own, beside the board's title: the list has no filters of its own (L8), and an account that

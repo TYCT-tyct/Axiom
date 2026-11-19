@@ -51,6 +51,10 @@
   overflow-wrap: normal;
 }
 
+.breaks {
+  white-space: pre-wrap;
+}
+
 .lines2 {
   display: -webkit-box;
   overflow: hidden;

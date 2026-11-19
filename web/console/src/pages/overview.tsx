@@ -4,7 +4,7 @@ import DesktopZH from "@axiom/boards/AxApp/regions/Overview.zh";
 import PhoneOverview from "@axiom/boards/AxAppPhone/regions/Overview";
 import PhoneEN from "@axiom/boards/AxAppPhone/regions/Overview.en";
 import PhoneZH from "@axiom/boards/AxAppPhone/regions/Overview.zh";
-import { DataState, useFormat, usePageTitle } from "@axiom/ui";
+import { DataState, Disclosure, PageFrame, useFormat, usePageTitle } from "@axiom/ui";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { useEffect, useState } from "react";
@@ -35,20 +35,18 @@ export default function Overview() {
     go_logs: () => void navigate({ to: "/calls", search: { status: "error" } }),
   };
   return (
-    <div className="board ax ov @container/ov">
-      <div className="v8 pg-ov px-4 py-3.5 sm:px-10 sm:py-[30px]">
-        <Failures data={data} />
-        {copy === "failed" ? <CopyFailure apiBase={data.apiBase} t={t} /> : null}
-        {wide ? (
-          <DesktopOverview t={desktopT} values={values} text={data.text} rows={data.rows} />
-        ) : (
-          <PhoneOverview t={phoneT} values={values} text={data.text} rows={data.rows} />
-        )}
-        <DailySpend rows={data.dayTable} month={format.monthLabel(data.period.month)} t={t} />
-        <ErrorLinks list={data.errorList} t={t} />
-        <Announcements />
-      </div>
-    </div>
+    <PageFrame board>
+      <Failures data={data} />
+      {copy === "failed" ? <CopyFailure apiBase={data.apiBase} t={t} /> : null}
+      {wide ? (
+        <DesktopOverview t={desktopT} values={values} text={data.text} rows={data.rows} />
+      ) : (
+        <PhoneOverview t={phoneT} values={values} text={data.text} rows={data.rows} />
+      )}
+      <DailySpend rows={data.dayTable} month={format.monthLabel(data.period.month)} t={t} />
+      <ErrorLinks list={data.errorList} t={t} />
+      <Announcements />
+    </PageFrame>
   );
 }
 
@@ -102,8 +100,7 @@ function DailySpend({ rows, month, t }: { rows: BoardData["dayTable"]; month: st
     return null;
   }
   return (
-    <details>
-      <summary className="min-h-6 mb-8">{t("overview.dailySpend")}</summary>
+    <Disclosure summary={t("overview.dailySpend")}>
       <p>{month}</p>
       <dl>
         {rows.map((row) => (
@@ -113,7 +110,7 @@ function DailySpend({ rows, month, t }: { rows: BoardData["dayTable"]; month: st
           </div>
         ))}
       </dl>
-    </details>
+    </Disclosure>
   );
 }
 
@@ -124,8 +121,7 @@ function ErrorLinks({ list, t }: { list: BoardData["errorList"]; t: TFunction })
     return null;
   }
   return (
-    <details>
-      <summary className="min-h-6 mb-8">{t("overview.errorDetails")}</summary>
+    <Disclosure summary={t("overview.errorDetails")}>
       <ul>
         {list.map((error) => (
           <li key={error.id}>
@@ -135,7 +131,7 @@ function ErrorLinks({ list, t }: { list: BoardData["errorList"]; t: TFunction })
           </li>
         ))}
       </ul>
-    </details>
+    </Disclosure>
   );
 }
 

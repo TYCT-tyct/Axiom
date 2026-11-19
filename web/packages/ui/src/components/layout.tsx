@@ -4,9 +4,10 @@ import s from "./layout.module.css";
 
 type Gap = 4 | 8 | 12 | 16 | 24 | 32;
 
-// Stack puts blocks one under another, gap pixels apart.
-export function Stack({ gap = 16, children }: { gap?: Gap; children: ReactNode }) {
-  return <div className={classes(s.stack, s[`g${gap}`])}>{children}</div>;
+// Stack puts blocks one under another, gap pixels apart. rule sets the stack apart from what is above it with a
+// hairline and the room below it, as a part of a dialog that goes on under the one before.
+export function Stack({ gap = 16, rule = false, children }: { gap?: Gap; rule?: boolean; children: ReactNode }) {
+  return <div className={classes(s.stack, s[`g${gap}`], rule && s.rule)}>{children}</div>;
 }
 
 // Cluster puts small things in a row that wraps (tags, buttons), spread to both ends or packed to the end if asked.

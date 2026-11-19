@@ -9,7 +9,7 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
-import { Button, Cluster, Dialog, FormError, Icon, TextField, useFormat } from "@axiom/ui";
+import { Button, Cluster, Dialog, FormError, Grid, Note, Stack, Text, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -91,9 +91,7 @@ function SaveError({ error, stale }: { error: unknown; stale: Stale }) {
   return (
     <FormError>
       <p>{errors.message(error)}</p>
-      {detail ? (
-        <p className="text-label">{t("routingPresets.form.rulesRefused", { detail: detail.message })}</p>
-      ) : null}
+      {detail ? <p>{t("routingPresets.form.rulesRefused", { detail: detail.message })}</p> : null}
       {isStale(error) ? <StaleNote stale={stale} /> : null}
     </FormError>
   );
@@ -133,11 +131,22 @@ function useEditorChoices() {
   return { currency, classes };
 }
 
+// usePresetSave saves the dialog's preset and closes it once the list has been read again; a refusal for a stale
+// revision reads the preset afresh.
+function usePresetSave(edit: PresetEdit, stale: Stale, onClose: () => void) {
+  const refresh = useRefreshPresets();
+  return useMutation({
+    mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
+    onSuccess: () => refresh().then(onClose),
+    onMutate: stale.reset,
+    onError: (error) => isStale(error) && stale.read(),
+  });
+}
+
 // PresetDialog makes a preset, makes one from a copy of another's rules, or changes one of the account's. An edit is
 // fixed to the revision it opened with: a change made elsewhere meanwhile is refused, not overwritten.
 export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () => void }) {
   const { t } = useTranslation();
-  const refresh = useRefreshPresets();
   const stale = useStaleRefresh();
   const choices = useEditorChoices();
   const source = edit.kind === "create" ? undefined : edit.preset;
@@ -147,12 +156,7 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
   const [invalid, setInvalid] = useState<Invalid | null>(null);
   const [missing, setMissing] = useState<Missing>(null);
   const unmatched = useRulesCheck(draft, checkRules, []);
-  const mutation = useMutation({
-    mutationFn: (body: Parameters<typeof save>[1]) => save(edit, body),
-    onSuccess: () => refresh().then(onClose),
-    onMutate: stale.reset,
-    onError: (error) => isStale(error) && stale.read(),
-  });
+  const mutation = usePresetSave(edit, stale, onClose);
   const submit = (form: HTMLFormElement) => {
     const written = rulesOf(draft);
     const blank: Missing = edit.kind !== "edit" && !slugPattern.test(slug) ? "slug" : name.trim() ? null : "name";
@@ -168,29 +172,34 @@ export function PresetDialog({ edit, onClose }: { edit: PresetEdit; onClose: () 
     <Dialog title={t(`routingPresets.${edit.kind}Title`)} onClose={onClose}>
       <form
         noValidate
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           submit(event.currentTarget);
         }}
       >
-        <SaveError error={mutation.error} stale={stale} />
-        {edit.kind === "copy" ? <p className="text-label text-t3">{t("routingPresets.form.copyNote")}</p> : null}
-        <Names
-          edit={edit}
-          slug={slug}
-          name={name}
-          missing={missing}
-          error={mutation.error}
-          onSlug={setSlug}
-          onName={setName}
-        />
-        <RulesEditor draft={draft} invalid={invalid ?? unmatched} {...choices} onChange={setDraft} />
-        <Actions
-          pending={mutation.isPending}
-          submit={edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
-          onCancel={onClose}
-        />
+        <Stack>
+          <SaveError error={mutation.error} stale={stale} />
+          {edit.kind === "copy" ? (
+            <Text size="sm" tone="faint">
+              {t("routingPresets.form.copyNote")}
+            </Text>
+          ) : null}
+          <Names
+            edit={edit}
+            slug={slug}
+            name={name}
+            missing={missing}
+            error={mutation.error}
+            onSlug={setSlug}
+            onName={setName}
+          />
+          <RulesEditor draft={draft} invalid={invalid ?? unmatched} {...choices} onChange={setDraft} />
+          <Actions
+            pending={mutation.isPending}
+            submit={edit.kind === "edit" ? t("routingPresets.form.save") : t("routingPresets.form.create")}
+            onCancel={onClose}
+          />
+        </Stack>
       </form>
     </Dialog>
   );
@@ -216,7 +225,7 @@ function Names({
   const { t } = useTranslation();
   const errors = useErrors();
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <Grid columns={2}>
       <TextField
         label={t("routingPresets.form.name")}
         value={name}
@@ -237,7 +246,7 @@ function Names({
           onChange={(event) => onSlug(event.currentTarget.value)}
         />
       )}
-    </div>
+    </Grid>
   );
 }
 
@@ -270,12 +279,7 @@ export function DisablePresetDialog({ preset, onClose }: { preset: Preset; onClo
       title={t("routingPresets.disable.title")}
       body={
         <>
-          {isDefault ? (
-            <p className="flex gap-2 rounded-btn bg-warn-soft px-3 py-2 text-warn">
-              <Icon name="alert" className="mt-0.5 shrink-0" />
-              {t("routingPresets.disable.isDefault")}
-            </p>
-          ) : null}
+          {isDefault ? <Note title={t("routingPresets.disable.isDefault")} /> : null}
           {/* A node that does not count the keys gives no number, and then none is said. */}
           {preset.keys === undefined ? null : (
             <p>
