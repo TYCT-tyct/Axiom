@@ -41,7 +41,7 @@ export default {
       copy: "Copy configuration",
       modelList: "# model: a name from the key’s model list (GET /v1/models)",
       copyUnavailable: "Cannot copy: this site’s API address is unavailable",
-      copyFailed: "Copy failed; select the configuration by hand",
+      copyFailed: "Copy failed; select it by hand",
       copied: "Copied",
       comma: ",",
       every: "and your models work",

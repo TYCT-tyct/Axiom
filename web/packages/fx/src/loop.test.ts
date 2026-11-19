@@ -145,6 +145,21 @@ it("schedules nothing under reduced motion, and stops when it is turned on", asy
   expect(state().pending).toBe(false);
 });
 
+it("tells a script each change of the setting, as it happens, until it stops listening", async () => {
+  const { onMotion } = await loop();
+  const heard: boolean[] = [];
+  const stop = onMotion((allowed) => heard.push(allowed));
+  const change = (to: boolean) => {
+    reduce = to;
+    for (const listener of [...motionListeners]) listener();
+  };
+  change(true);
+  change(false);
+  stop();
+  change(true);
+  expect(heard).toEqual([false, true]);
+});
+
 it("lets go of everything when the last owner leaves, and the counter starts again from 0", async () => {
   const { own } = await loop();
   const [a, b] = [document.createElement("div"), document.createElement("div")];

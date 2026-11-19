@@ -26,6 +26,22 @@ export function firstSeen(element: Element, threshold: number) {
   return { promise, cancel: () => observer?.disconnect() };
 }
 
+// turns numbers the interactions of one kind (a copy, a tool picked, a question patched to): start returns whether that
+// interaction is still the latest, so what it left in flight (a clipboard's answer, a frame step, a timer) does nothing
+// once another has started, or end has been called for the screen or the setting it ran under.
+export function turns() {
+  let latest = 0;
+  return {
+    start: () => {
+      const own = ++latest;
+      return () => own === latest;
+    },
+    end: () => {
+      latest++;
+    },
+  };
+}
+
 // The palette the board's script gives each screen (themeOf's vars), as the tokens it stands for; extra are the
 // screen's own state colours.
 export const screenVars = (...extra: string[]) =>

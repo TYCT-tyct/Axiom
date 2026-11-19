@@ -1,9 +1,11 @@
-import { reducedMotion, timeline } from "@axiom/fx";
-import type { Script } from "./script";
+import { onMotion, reducedMotion, timeline } from "@axiom/fx";
+import { type Script, turns } from "./script";
 
 // The questions' script (Site.dc.html M5): one question is open, and in the wide layout a cable patches from its port to
 // the card, with a pulse down it; the first answer's diagram sends its request to one vendor after another. In the
-// narrow layout the questions are an accordion, where a second press closes the open one.
+// narrow layout the questions are an accordion, where a second press closes the open one. A patch is the choice's that
+// started it: a newer choice, the screen ending, or reduced motion being asked for (which puts the cable on the open
+// question at once) ends it; the setting is read at each choice, never kept from the screen's start.
 const questions = 8;
 const ROW = 48;
 // the cable's route: from a port at PX, through the bend at XM, to the card's socket at (SX, SY)
@@ -30,15 +32,15 @@ export const resting = { m5_pillY: 0, m5_trD: trace(ROW / 2), m5_ringX: PX, m5_r
 const indices = Array.from({ length: questions }, (_, i) => i);
 
 class FaqRun implements Script<object> {
-  private readonly clock;
-  private readonly still = reducedMotion();
+  // the clock of the motion setting in force: a new one when the reader changes it
+  private clock;
   private open = 0;
   private vendor = 0;
   // where the cable is: the row it is patched to, in pixels
   private cy = ROW / 2;
-  // each patch carries a number, so a newer one stops the older
-  private patch = 0;
+  private readonly patching = turns();
   private readonly pick = indices.map((i) => () => this.choose(i));
+  private readonly stopMotion = onMotion((allowed) => this.motion(allowed));
 
   constructor(
     private readonly stage: HTMLElement,
@@ -47,7 +49,19 @@ class FaqRun implements Script<object> {
   ) {
     this.clock = timeline(stage);
     // under reduced motion nothing advances by itself
-    if (!this.still) this.cycle();
+    if (!reducedMotion()) this.cycle();
+  }
+
+  // The reader changed the motion setting: the cable stands on the open question with its pulse off, on a clock of
+  // the new setting, which the loop runs only while motion is allowed; with motion allowed again the first answer's
+  // diagram moves on again.
+  private motion(allowed: boolean) {
+    this.clock.end();
+    this.clock = timeline(this.stage);
+    this.patching.end();
+    this.stage.querySelector(".patch .pu")?.setAttribute("stroke-dashoffset", "16");
+    if (!this.narrow) this.moveTo(Math.max(0, this.open) * ROW + ROW / 2);
+    if (allowed) this.cycle();
   }
 
   // the first answer's diagram: the request goes out to one vendor after another while that answer is open
@@ -72,21 +86,21 @@ class FaqRun implements Script<object> {
   private repatch(i: number) {
     const to = i * ROW + ROW / 2;
     const from = this.cy;
-    const own = ++this.patch;
-    if (this.still) {
+    const mine = this.patching.start();
+    if (reducedMotion()) {
       this.moveTo(to);
       return;
     }
     const t0 = this.clock.now();
     this.clock.each((now) => {
-      if (own !== this.patch) return false;
+      if (!mine()) return false;
       const p = Math.min(1, (now - t0) / 250);
       this.moveTo(from + (to - from) * easeOut(p));
       return p < 1;
     });
     const pulse = this.stage.querySelector(".patch .pu");
     this.clock.each((now) => {
-      if (own !== this.patch) return false;
+      if (!mine()) return false;
       const p = Math.max(0, Math.min(1, (now - t0 - 120) / 480));
       pulse?.setAttribute("stroke-dashoffset", String(16 - 116 * easeInOut(p)));
       return p < 1;
@@ -115,7 +129,8 @@ class FaqRun implements Script<object> {
   }
 
   destroy() {
-    this.patch++;
+    this.stopMotion();
+    this.patching.end();
     this.clock.end();
   }
 }

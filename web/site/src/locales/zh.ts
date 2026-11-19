@@ -44,7 +44,8 @@ export default {
       copy: "复制配置",
       modelList: "# model 填这把key的模型列表（GET /v1/models）里的名字",
       copyUnavailable: "无法复制：本站 API 地址暂不可用",
-      copyFailed: "复制失败，请手动选择配置",
+      // shown where the file's name is, so it is short
+      copyFailed: "复制失败，请手动选择",
       copied: "已复制",
       // the heading's comma (the board's kern), its promise, which holds for a key that may use only some models, and the
       // lede, which names the site

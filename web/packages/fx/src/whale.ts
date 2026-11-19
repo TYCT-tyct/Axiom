@@ -10,6 +10,7 @@ import type { OceanEngine } from "./sea";
 
 type Egg = {
   t0: number;
+  cv: HTMLCanvasElement;
   done: () => void;
   summon: (anchor: Element | null, force: boolean) => boolean;
   destroy: () => void;
@@ -24,6 +25,7 @@ declare global {
 export type Whale = {
   // summon starts a visit that heads for anchor (an element it passes by) and reports whether one began.
   summon: (anchor: Element | null) => boolean;
+  // destroy ends the visit wherever it is: the canvas is cleared and what the visit lit or thinned is put back.
   destroy: () => void;
 };
 
@@ -54,5 +56,19 @@ export function startWhale(root: HTMLElement, engine: OceanEngine, { dark, phone
     done();
     onDone();
   };
-  return { summon: (anchor) => egg.summon(anchor, true), destroy: () => egg.destroy() };
+  return {
+    summon: (anchor) => egg.summon(anchor, true),
+    // The egg's own destroy only stops its frames and the timer that would put its sweep's light out: what is on the
+    // canvas, and the light and the thinned glass of a visit cut short, would stay.
+    destroy: () => {
+      egg.destroy();
+      done();
+      const canvas = egg.cv.getContext("2d");
+      canvas?.setTransform(1, 0, 0, 1, 0, 0);
+      canvas?.clearRect(0, 0, egg.cv.width, egg.cv.height);
+      for (const lit of root.querySelectorAll(".wh-lit")) lit.classList.remove("wh-lit");
+      for (const lit of root.querySelectorAll(".ho .mr.lit, .ho .mr .mn.lit, .ho .lens.lit"))
+        lit.classList.remove("lit");
+    },
+  };
 }

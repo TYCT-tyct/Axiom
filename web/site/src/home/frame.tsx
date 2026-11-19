@@ -1,6 +1,6 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { reducedMotion, useEffectModule } from "@axiom/fx";
+import { onMotion, reducedMotion, useEffectModule } from "@axiom/fx";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useSiteBrand } from "../shell";
@@ -73,7 +73,17 @@ function useNoRegistration(root: RefObject<HTMLElement | null>, closed: boolean)
   }, [root, closed]);
 }
 
-const tourClass = (solid: boolean) => (solid || reducedMotion() ? "gone" : "");
+// The tour's button is offered at the top while motion is allowed, the setting followed as the reader changes it (the
+// tour does not play under reduced motion); a button that is not offered is not in the keyboard's way either.
+function useTour(root: RefObject<HTMLElement | null>, solid: boolean) {
+  const [still, setStill] = useState(reducedMotion);
+  useEffect(() => onMotion((allowed) => setStill(!allowed)), []);
+  const gone = solid || still;
+  useLayoutEffect(() => {
+    root.current?.querySelector(".tour")?.toggleAttribute("inert", gone);
+  }, [root, gone]);
+  return gone ? "gone" : "";
+}
 
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
@@ -114,11 +124,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     sea.current?.engine.setLight(scheme === "light");
   }, [language, scheme, themeLabel, sea]);
 
-  // a button that is not offered is not in the keyboard's way either
-  const tourGone = tourClass(scroll.solid) === "gone";
-  useLayoutEffect(() => {
-    root.current?.querySelector(".tour")?.toggleAttribute("inert", tourGone);
-  }, [root, tourGone]);
+  const tourCls = useTour(root, scroll.solid);
 
   useNoRegistration(root, brand?.registration === "closed");
   const board = (key: BoardKey) => t(`board.${key}`);
@@ -132,8 +138,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     depthTxt: depthText(scroll.depth),
     sheetCls: menu ? "on" : "",
     sheetHide: !menu,
-    // the tour does not play under reduced motion, so its button is not offered
-    tourCls: tourClass(scroll.solid),
+    tourCls,
     ...Object.fromEntries(sections.map((_, i) => [`t${i}`, i === scroll.sec ? "on" : ""])),
   };
   const text = frameText((key) => opened(`board.${key}`), opened("language"), name);

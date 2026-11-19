@@ -1,4 +1,4 @@
-import { reducedMotion } from "@axiom/fx";
+import { onMotion, reducedMotion } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import type { Whale } from "@axiom/fx/whale";
 import { type RefObject, useCallback, useEffect, useRef } from "react";
@@ -24,16 +24,19 @@ function typing(then: () => void) {
   };
 }
 
-// Asking for reduced motion while the whale swims takes it down; the returned function stops listening.
-function takeDownOnReducedMotion(visit: RefObject<Whale | null>) {
-  const motion = matchMedia("(prefers-reduced-motion: reduce)");
-  const onChange = () => {
-    if (!motion.matches) return;
-    visit.current?.destroy();
-    visit.current = null;
+// The calls on purpose: the word typed anywhere, or the first screen's strip pressed; the returned function stops
+// listening.
+function calls(frame: HTMLElement, call: () => void) {
+  const onKey = typing(call);
+  const onClick = (e: MouseEvent) => {
+    if (e.target instanceof Element && e.target.closest(".hs > .main .fam [data-egg=deepseek]")) call();
   };
-  motion.addEventListener("change", onChange);
-  return () => motion.removeEventListener("change", onChange);
+  document.addEventListener("keydown", onKey);
+  frame.addEventListener("click", onClick);
+  return () => {
+    document.removeEventListener("keydown", onKey);
+    frame.removeEventListener("click", onClick);
+  };
 }
 
 type Options = { engine: Sea["engine"]; narrow: boolean; dark: boolean };
@@ -97,20 +100,18 @@ export function useWhale(
     const frame = root.current;
     if (!frame) return;
     live.current = true;
-    const onKey = typing(() => summon(true));
-    const onClick = (e: MouseEvent) => {
-      if (e.target instanceof Element && e.target.closest(".hs > .main .fam [data-egg=deepseek]")) summon(true);
+    const takeDown = () => {
+      visit.current?.destroy();
+      visit.current = null;
     };
-    const stopMotion = takeDownOnReducedMotion(visit);
-    document.addEventListener("keydown", onKey);
-    frame.addEventListener("click", onClick);
+    const stopCalls = calls(frame, () => summon(true));
+    // asking for reduced motion while the whale swims takes it down, its canvas cleared
+    const stopMotion = onMotion((allowed) => allowed || takeDown());
     return () => {
       live.current = false;
       stopMotion();
-      document.removeEventListener("keydown", onKey);
-      frame.removeEventListener("click", onClick);
-      visit.current?.destroy();
-      visit.current = null;
+      stopCalls();
+      takeDown();
     };
   }, [root, summon]);
 

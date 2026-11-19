@@ -97,6 +97,83 @@ test("a clipboard that refuses is not reported as copied, and without an API add
   await page.locator(".hfm1 .cpy").click();
   await expect(page.locator(".hfm1 .cpy")).toHaveAttribute("aria-label", /复制失败/);
   await expect(page.locator(".hfm1 .cpy")).not.toHaveAttribute("data-state", "done");
+  // said on the card too, where the file's name is, not only to a screen reader
+  await expect(page.locator(".hfm1 .fl")).toHaveText(/复制失败/);
+  await expect(page.locator(".hfm1 .fl")).toBeVisible();
+});
+
+// A copy's word belongs to the copy and the tool it copied: picking another tool before the clipboard answers, or after,
+// leaves no word about it on the new tool. The clipboard answers when the case says, and the page's clock stands still,
+// so a word that is not taken away would stay.
+test("a copy's word belongs to the tool it copied", async ({ page }) => {
+  await page.addInitScript(() => {
+    const held: (() => void)[] = [];
+    (window as unknown as { answerCopy: () => void }).answerCopy = () => held.shift()?.();
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: () => new Promise<void>((done) => held.push(done)) },
+    });
+  });
+  const answer = () => page.evaluate(() => (window as unknown as { answerCopy: () => void }).answerCopy());
+  const copy = page.locator(".hfm1 .cpy");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  await page.clock.install();
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+
+  // the clipboard answers after another tool is picked
+  await copy.click();
+  await page.locator(".hfm1 .tab").nth(1).click();
+  await answer();
+  await page.waitForTimeout(300);
+  await expect(copy).not.toHaveAttribute("data-state", "done");
+
+  // the clipboard answers first, and then another tool is picked
+  await copy.click();
+  await answer();
+  await expect(copy).toHaveAttribute("data-state", "done");
+  await page.locator(".hfm1 .tab").nth(2).click();
+  await expect(copy).not.toHaveAttribute("data-state", "done");
+  await expect(copy).toHaveAttribute("aria-label", "复制配置");
+});
+
+// Reduced motion asked for while the screens move: what was moving settles in its final state, and what the reader does
+// next happens at once, as it does when the page opened under the setting.
+test("asking for reduced motion midway settles the machine, and a tool picked next is written at once", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
+  await expect.poll(() => display(page), { timeout: 30_000 }).not.toBe("AXIOM");
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => display(page)).toBe("AXIOM");
+  await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
+  await expect(page.locator(".hfm1 .fig .pin.on, .hfm1 .fig .mod.on")).toHaveCount(0);
+  // the new tool's lines are written whole: nothing tumbling, nothing still to come
+  await page.locator(".hfm1 .tab").nth(2).click();
+  await expect(page.locator(".hfm1 pre")).toContainText("https://api.example.com");
+  await expect
+    .poll(() =>
+      page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join("")),
+    )
+    .toBe("");
+});
+
+test("asking for reduced motion midway puts the cable on the question chosen next at once", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.locator(".hfm5 .qs .q").nth(3).hover();
+  await expect(page.locator(".hfm5 .qs .q.on")).toContainText("04");
+  await expect(page.locator(".hfm5 .patch .ring")).toHaveAttribute("cy", String(3 * 48 + 24));
 });
 
 test("without the site's API address the card says so and the copy button is disabled", async ({ page }) => {
@@ -219,6 +296,41 @@ test("the tour glides down the page, and the menu's list of sections goes to one
     .poll(() => place(page, 5).evaluate((el) => Math.abs(el.getBoundingClientRect().top)), { timeout: 15_000 })
     .toBeLessThan(40);
 });
+
+// The tour is the page moving the reader: the reader taking over, the page hidden, or reduced motion asked for ends it
+// where it is. The tour's own steps are on the page's clock, which stands still until the case runs it on; the glides
+// themselves are the browser's.
+const tourEnds: [string, (page: Page) => Promise<unknown>][] = [
+  ["the island's mark takes the reader back to the top", (page) => page.locator(".isl .im").click()],
+  [
+    "the reader scrolls",
+    async (page) => {
+      await page.mouse.move(720, 450);
+      await page.mouse.wheel(0, -40);
+    },
+  ],
+  ["the tab is hidden", (page) => setHidden(page, true)],
+  ["reduced motion is asked for", (page) => page.emulateMedia({ reducedMotion: "reduce" })],
+];
+for (const [how, end] of tourEnds) {
+  test(`the tour stops when ${how}`, async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await open(page);
+    await page.clock.install();
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+    const top = () => page.locator(".hs").evaluate((el) => el.scrollTop);
+    await page.locator(".tour").click();
+    await expect.poll(top).toBeGreaterThan(100);
+    await end(page);
+    // where the page comes to rest after the reader's own move
+    await page.waitForTimeout(1500);
+    const rested = await top();
+    // two of the tour's steps, were it still going
+    await page.clock.runFor(7000);
+    await page.waitForTimeout(1500);
+    expect(Math.abs((await top()) - rested)).toBeLessThan(2);
+  });
+}
 
 test("under reduced motion the tour is not offered", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -358,6 +470,19 @@ test("pressing deepseek in the first screen's strip calls the whale", async ({ p
   await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
   await expect.poll(() => asked).toHaveLength(1);
   await expect.poll(() => painted(page)).toBe(true);
+});
+
+test("asking for reduced motion while the whale swims takes it off the page, its canvas and its light", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  await page.keyboard.type("deepseek");
+  await expect.poll(() => painted(page)).toBe(true);
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await expect.poll(() => painted(page)).toBe(false);
+  await expect(page.locator(".tr .wh-lit, .tr .wh-under, .tr .wh-visiting, .tr .lit")).toHaveCount(0);
 });
 
 test("under reduced motion the whale is never called", async ({ page }) => {

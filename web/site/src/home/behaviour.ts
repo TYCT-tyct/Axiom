@@ -1,4 +1,4 @@
-import { reducedMotion } from "@axiom/fx";
+import { onMotion, reducedMotion } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useState } from "react";
@@ -41,7 +41,9 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
 // section (native smooth scrolling, not the board's eased frames; a jump under reduced motion), and the tour, which
-// glides through the sections a few seconds apart and back to the top.
+// glides through the sections a few seconds apart and back to the top. The page moving the reader on its own (the tour's
+// next glide, a glide to a section followed while the screens above it grow) is the press's that started it: a glide
+// to the top or to a section, and stop, end it.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
 const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
@@ -77,7 +79,10 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
       if (depth) depth.style.opacity = dim.toFixed(3);
       show(scroll);
     },
-    toTop: () => glide(0),
+    toTop: () => {
+      window.clearTimeout(timer);
+      glide(0);
+    },
     toSection: (sec: number) => section(sec, 0),
     tour: () => {
       if (reducedMotion()) return;
@@ -129,8 +134,13 @@ const islandEvents = [
   ["focusout", false],
 ] as const;
 
+// The reader taking over: a wheel, a touch, a press or a key anywhere on the frame. A press that starts a glide (the tour,
+// the island's mark, a section of the menu) comes after it, so it starts afresh.
+const takeOver = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+
 // useFrameBehaviour runs the board's own behaviours on the frame root points at: the header and the island while
-// scrolling, the island opening under the pointer or the keyboard (wide layout) and the menu sheet.
+// scrolling, the island opening under the pointer or the keyboard (wide layout) and the menu sheet. The page stops
+// moving the reader once the reader takes over, the page is hidden or reduced motion is asked for.
 export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boolean) {
   const [scroll, setScroll] = useState(atTop);
   const [island, setIsland] = useState(false);
@@ -160,10 +170,17 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     for (const element of [scroller, ...places(scroller)]) resized.observe(element);
     scroller.addEventListener("scroll", page.onScroll, { passive: true });
     frame.addEventListener("click", onClick);
+    for (const type of takeOver) frame.addEventListener(type, page.stop, { capture: true, passive: true });
+    const onHidden = () => document.hidden && page.stop();
+    document.addEventListener("visibilitychange", onHidden);
+    const stopMotion = onMotion((allowed) => allowed || page.stop());
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);
     return () => {
       resized.disconnect();
       page.stop();
+      stopMotion();
+      document.removeEventListener("visibilitychange", onHidden);
+      for (const type of takeOver) frame.removeEventListener(type, page.stop, { capture: true });
       scroller.removeEventListener("scroll", page.onScroll);
       frame.removeEventListener("click", onClick);
       for (const [type, listener] of hovers) isl?.removeEventListener(type, listener);
