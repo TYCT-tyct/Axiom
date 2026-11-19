@@ -134,12 +134,15 @@ test("a way on that cannot tell who is signed in offers to ask again, not to sig
   await expect(page.getByText("没能确认")).toHaveCount(0);
 });
 
-// What a reset's failure leaves: no answer, or a gateway's page without the contract's error, may have gone through;
-// the contract's own 503 did not, and is said on the form, which stays.
+// What a reset's failure leaves: no answer and any 5xx may have gone through (the server's 500 can follow a commit
+// whose reply was lost, its 503 for a request out of time says to look first); a limit did not, and is said on the
+// form, which stays.
 for (const [name, answer, unknown] of [
   ["no answer", null, true],
   ["a gateway's 502 without the contract's error", { status: 502, body: "Bad Gateway" }, true],
-  ["the contract's 503", { status: 503, json: { error: { code: "unavailable", message: "unavailable" } } }, false],
+  ["the server's 500", { status: 500, json: { error: { code: "internal", message: "internal" } } }, true],
+  ["the contract's 503", { status: 503, json: { error: { code: "unavailable", message: "unavailable" } } }, true],
+  ["a limit's 429", { status: 429, json: { error: { code: "rate_limited", message: "rate_limited" } } }, false],
 ] as const) {
   test(`a reset met with ${name} ${unknown ? "offers the new password as well as a new link" : "stays on the form"}`, async ({
     page,
@@ -158,7 +161,7 @@ for (const [name, answer, unknown] of [
     }
     await expect(page.getByRole("alert")).toBeVisible();
     await expect(heading(page, "设置新密码")).toBeVisible();
-    // the service is down, not the password: the field is not marked
+    // the limit is not the password's: the field is not marked
     await expect(page.getByLabel("新密码", { exact: true })).not.toHaveAttribute("aria-invalid", "true");
   });
 }
@@ -245,39 +248,48 @@ test("an address the server does not take is said at the field, until the field 
   await expect(field).not.toHaveAttribute("aria-invalid", "true");
 });
 
-test("a limit keeps the request's button disabled for as long as the answer says, and then its words go", async ({
-  page,
-}) => {
-  // no sea running, so moving the clock thirty seconds on does not draw thirty seconds of frames
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await mockConsole(page);
-  await page.clock.install();
-  await page.route("**/api/console/v1/auth/password-reset", (route) =>
-    route.fulfill({
-      status: 429,
-      headers: { "Retry-After": "30" },
-      json: { error: { code: "rate_limited", message: "rate_limited" } },
-    }),
-  );
-  await page.goto("/console/reset-password");
-  await expect(heading(page, "找回密码")).toBeVisible();
-  await page.getByLabel("邮箱").fill(knownEmail);
-  const submit = page.getByRole("button", { name: "发送重设邮件" });
-  await submit.click();
-  await expect(page.getByRole("alert")).toHaveText(/30 秒/);
-  await expect(submit).toBeDisabled();
-  // the limit is the form's to say, not the address's
-  await expect(page.getByLabel("邮箱")).not.toHaveAttribute("aria-invalid", "true");
-  // editing the address does not lift the wait: the limit is not about what was typed
-  await page.getByLabel("邮箱").fill(`x${knownEmail}`);
-  await expect(page.getByRole("alert")).toHaveText(/30 秒/);
-  await page.clock.runFor(29_000);
-  await expect(submit).toBeDisabled();
-  await expect(page.getByRole("alert")).toHaveText(/30 秒/);
-  await page.clock.runFor(2_000);
-  await expect(submit).toBeEnabled();
-  await expect(page.getByRole("alert")).toHaveCount(0);
-});
+// Signed in, the visitor can sign out during the wait: that request is the page's too, and the limit outlasts it.
+for (const signedIn of [false, true]) {
+  test(`a limit keeps the request's button disabled for as long as the answer says, and then its words go${signedIn ? ", through a sign-out" : ""}`, async ({
+    page,
+  }) => {
+    // no sea running, so moving the clock thirty seconds on does not draw thirty seconds of frames
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    const state = await mockConsole(page);
+    if (signedIn) signedInAs(state);
+    await page.clock.install();
+    await page.route("**/api/console/v1/auth/password-reset", (route) =>
+      route.fulfill({
+        status: 429,
+        headers: { "Retry-After": "30" },
+        json: { error: { code: "rate_limited", message: "rate_limited" } },
+      }),
+    );
+    await page.goto("/console/reset-password");
+    await expect(heading(page, "找回密码")).toBeVisible();
+    await page.getByLabel("邮箱").fill(knownEmail);
+    const submit = page.getByRole("button", { name: "发送重设邮件" });
+    await submit.click();
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+    await expect(submit).toBeDisabled();
+    // the limit is the form's to say, not the address's
+    await expect(page.getByLabel("邮箱")).not.toHaveAttribute("aria-invalid", "true");
+    if (signedIn) {
+      await page.getByRole("button", { name: "退出这个账户" }).click();
+      await expect(page.getByRole("link", { name: "返回登录" })).toBeVisible();
+      await expect(submit).toBeDisabled();
+    }
+    // editing the address does not lift the wait: the limit is not about what was typed
+    await page.getByLabel("邮箱").fill(`x${knownEmail}`);
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+    await page.clock.runFor(29_000);
+    await expect(submit).toBeDisabled();
+    await expect(page.getByRole("alert")).toHaveText(/30 秒/);
+    await page.clock.runFor(2_000);
+    await expect(submit).toBeEnabled();
+    await expect(page.getByRole("alert")).toHaveCount(0);
+  });
+}
 
 test("a link whose page fails to load leaves no token in the address, and says to open the link again", async ({
   page,

@@ -38,16 +38,22 @@ function useMailLanguage() {
 }
 
 // useCooldown is the wait a limit's 429 asks for (Retry-After): sending sooner is refused the same way, so the step's
-// submit waits until then, and then the refusal is over and its words go with it.
-function useCooldown(error: unknown) {
-  const limit = error instanceof ApiError && error.status === 429 ? error : null;
+// submit waits until then, and then the refusal is over and its words go with it. The wait is the limit's own, kept
+// here: another request on the page (a sign-out) clears the attempt's failure but not the server's limit. shown is the
+// failure the step still says: the latest one, or while the wait lasts, the limit's.
+function useCooldown(failed: unknown) {
+  const fresh = failed instanceof ApiError && failed.status === 429 ? failed : null;
+  const [limit, setLimit] = useState<ApiError | null>(null);
   const [over, setOver] = useState<ApiError | null>(null);
+  if (fresh && fresh !== limit) setLimit(fresh);
   useEffect(() => {
     if (!limit) return;
     const timer = window.setTimeout(() => setOver(limit), (limit.retryAfter ?? 60) * 1000);
     return () => window.clearTimeout(timer);
   }, [limit]);
-  return { waiting: limit !== null && over !== limit, over: limit !== null && over === limit };
+  const waiting = limit !== null && over !== limit;
+  const shown = fresh ? (waiting ? fresh : null) : (failed ?? (waiting ? limit : null));
+  return { waiting, shown };
 }
 
 // An address the server does not take: the contract's guard names the field (400), and the server's own check answers
@@ -124,7 +130,7 @@ function useRequestForm(stage: Stage, attempt: Attempt, onSent: () => void) {
   const cooling = useCooldown(failed);
   const blocked = attempt.kind !== null || cooling.waiting;
   const refused = badEmail(failed);
-  const failure = refused ? t("auth.signIn.badEmail") : failed && !cooling.over ? errors.message(failed) : "";
+  const failure = refused ? t("auth.signIn.badEmail") : cooling.shown ? errors.message(cooling.shown) : "";
   const send = (address: string) =>
     unwrapEmpty(consoleApi.POST("/api/console/v1/auth/password-reset", { body: { email: address, language } })).then(
       onSent,
@@ -212,13 +218,13 @@ function NewPassword({ token }: { token: string }) {
 }
 
 // What a failed reset leaves to the way on. The server's one answer for a link that is wrong, expired, spent or
-// superseded is a 422 unprocessable; a reset whose answer never came (no response, or a gateway's page without the
-// contract's error) may have gone through. Either way the form has nothing more to do. Any other refusal is the form's
-// to say: the password's length, a limit, the service.
+// superseded is a 422 unprocessable. A reset whose answer never came, or any 5xx, may have gone through: the server's
+// own 500 can follow a commit whose reply was lost, and its 503 for a request out of time says to look before trying
+// again. Either way the form has nothing more to do. Any other refusal is the form's to say: the length, a limit.
 function afterFailure(error: unknown): After | null {
   if (!(error instanceof ApiError)) return "unknown";
   if (error.status === 422 && error.code === "unprocessable") return "invalid";
-  return error.status === 0 || (error.status >= 500 && error.code === undefined) ? "unknown" : null;
+  return error.status === 0 || error.status >= 500 ? "unknown" : null;
 }
 
 // A password outside 12 to 256 characters: the contract's guard names the field (400), the server's own check, which
@@ -246,7 +252,8 @@ function NewPasswordForm({
   const cooling = useCooldown(failed);
   const blocked = attempt.kind !== null || cooling.waiting;
   const tooLong = badLength(failed);
-  const failure = !failed || cooling.over ? "" : tooLong ? t("auth.reset.length") : errors.message(failed);
+  const shown = cooling.shown;
+  const failure = !shown ? "" : badLength(shown) ? t("auth.reset.length") : errors.message(shown);
   const problem = missing ? t("auth.signIn.missingPassword") : failure;
   const reset = (secret: string) =>
     unwrapEmpty(
