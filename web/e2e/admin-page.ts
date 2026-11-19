@@ -1,12 +1,18 @@
 import type { Page } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
+import type { AdminState } from "./admin-data.ts";
 import { signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
 // The steps every admin page spec shares: a signed-in session against the mock, a dialog, and the change form it holds.
 
-export async function open(page: Page, path: string, data: "usual" | "empty" | "worst" = "usual") {
-  const state = await mockAdmin(page, data);
+export async function open(
+  page: Page,
+  path: string,
+  data: "usual" | "empty" | "worst" = "usual",
+  over: Partial<AdminState> = {},
+) {
+  const state = await mockAdmin(page, data, over);
   signedInAs(state, "mfa");
   await page.goto(path);
   return state;

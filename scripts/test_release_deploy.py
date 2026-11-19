@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -13,7 +14,8 @@ ROOT = Path(__file__).parents[1]
 
 @unittest.skipUnless(BASH, "Bash is unavailable")
 class ReuseRelease(unittest.TestCase):
-    def run_deploy(self, image, actual_image=None, verify_status=0, attest_status=0, up_replaces_database=False):
+    def run_deploy(self, image, actual_image=None, verify_status=0, attest_status=0, up_replaces_database=False,
+                   uncached=""):
         stubs = r'''
 python3() { echo fixture; }
 just() { [ "$1" != axiom-version ] || echo 'axiom fixture'; }
@@ -96,7 +98,10 @@ curl() {
       echo '{"data":[],"next_cursor":null}' ;;
     *'/api/console/v1/site'|*'/api/admin/v1/users') echo '{"error":{"code":"not_found"}}' ;;
     *'-w '*'/assets/'*) echo 404 ;;
+    *'-H Accept-Encoding: br'*"${UNCACHED:-no script is named like this}"*) printf 'cache-control: no-store\n' ;;
     *'-H Accept-Encoding: br'*) printf 'cache-control: public, max-age=31536000, immutable\ncontent-encoding: br\n' ;;
+    '-fsS -H Accept: text/html '*'/console/') echo '<script src="/console/assets/index-fixture.js"></script>' ;;
+    '-fsS -H Accept: text/html '*) echo '<script src="/assets/index-fixture.js"></script>' ;;
     *'-H Accept: text/html'*) printf 'cache-control: no-store\n' ;;
     *) echo '<script src="/assets/index-fixture.js"></script>' ;;
   esac
@@ -108,7 +113,8 @@ curl() {
             (root / "deploy/postgres/roles.sh").touch()
             log = root / "docker.log"
             env = {**os.environ, "CALLS": str(log), "CI_DEPLOY_VERSION": "axiom fixture", "AXIOM_TEST_CGROUP_PARENT": "",
-                   "COSIGN_VERIFY_STATUS": str(verify_status), "COSIGN_ATTEST_STATUS": str(attest_status)}
+                   "COSIGN_VERIFY_STATUS": str(verify_status), "COSIGN_ATTEST_STATUS": str(attest_status),
+                   "UNCACHED": uncached}
             for name in ("GITHUB_ACTIONS", "GITHUB_REPOSITORY", "GITHUB_REF", "RELEASE_SIGNING_IDENTITY",
                          "CI_DEPLOY_RELEASE"):
                 env.pop(name, None)
@@ -184,6 +190,14 @@ curl() {
         result, _ = self.run_deploy(None, up_replaces_database=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("replaced the database under a running node", result.stdout)
+
+    def test_a_script_of_any_app_served_uncached_fails_the_check(self):
+        for app, where in (("website", "127.0.0.1:12345/assets/"), ("console", "/console/assets/"),
+                           ("admin", "127.0.0.1:12346/assets/")):
+            with self.subTest(app=app):
+                result, _ = self.run_deploy(None, uncached=where)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertRegex(result.stdout, re.escape(where) + r"index-fixture\.js is not served cached and compressed")
 
     def test_a_container_running_a_different_reference_is_rejected(self):
         result, _ = self.run_deploy("local/axiom@sha256:" + "a" * 64, actual_image="axiom:stale")
