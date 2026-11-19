@@ -204,7 +204,9 @@ test("each screen below the first loads as it nears the view, and plays only whi
   // every screen's code comes once the reader has been down to it, each chunk once
   await scrollTo(page, last);
   await shown(page, last);
-  await expect.poll(async () => new Set(asked).size).toBe(delivered.length);
+  // each screen's chunk is asked for exactly once
+  const names = ["connect", "models", "steps", "trust", "faq", "bed"];
+  await expect.poll(() => names.map((name) => asked.filter((one) => one === name).length)).toEqual(names.map(() => 1));
 
   // past every screen nothing is in view to play
   await page.evaluate(() => {

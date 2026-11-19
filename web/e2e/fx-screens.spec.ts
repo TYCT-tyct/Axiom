@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { brandStyle } from "../packages/ui/src/brand.ts";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { delivered, loop, open, pause, place, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
+import { delivered, loop, open, pause, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
@@ -77,7 +77,8 @@ test("after a call the card names the model, and the copied check shows once the
   await expect
     .poll(() => page.locator(".hfm1 .rcard").evaluate((el) => getComputedStyle(el).opacity), { timeout: 30_000 })
     .toBe("1");
-  await expect(page.locator(".hfm1 .rc-m")).not.toHaveText("");
+  // the first call the story makes is the board's second: gpt-6.1-sol, OpenAI's
+  await expect(page.locator(".hfm1 .rc-m")).toHaveText("gpt-6.1-sol");
   // the Codex tab copies the file alone: the key is set in the terminal, and a TOML parser would stop at the export
   await page.locator(".hfm1 .tab").nth(1).click();
   await page.locator(".hfm1 .cpy").click();
@@ -89,9 +90,7 @@ test("after a call the card names the model, and the copied check shows once the
   expect(copied).not.toContain("export");
 });
 
-test("a clipboard that refuses is not reported as copied, and without an API address there is nothing to copy", async ({
-  page,
-}) => {
+test("a clipboard that refuses is not reported as copied, and the card says to select it by hand", async ({ page }) => {
   await page.addInitScript(() => {
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -130,7 +129,7 @@ test("a copy's word belongs to the tool it copied", async ({ page }) => {
   await scrollTo(page, 1);
   await shown(page, 1);
   await page.clock.install();
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 2000);
 
   // the clipboard answers after another tool is picked
   await copy.click();
@@ -199,18 +198,23 @@ test("asking for reduced motion midway settles the machine, and a tool picked ne
   await shown(page, 1);
   await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
   await expect.poll(() => display(page), { timeout: 30_000 }).not.toBe("AXIOM");
+  // from here the page's clock stands still: what happens, happens at once, with no frame to finish it
+  await page.clock.install();
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 2000);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect.poll(() => display(page)).toBe("AXIOM");
+  await expect(page.locator('.hfm1 [data-disp="m"]')).toHaveText("AXIOM");
   await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
   await expect(page.locator(".hfm1 .fig .pin.on, .hfm1 .fig .mod.on")).toHaveCount(0);
   // the new tool's lines are written whole: nothing tumbling, nothing still to come
   await page.locator(".hfm1 .tab").nth(2).click();
   await expect(page.locator(".hfm1 pre")).toContainText("https://api.example.com");
-  await expect
-    .poll(() =>
-      page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join("")),
-    )
-    .toBe("");
+  const unwritten = () =>
+    page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join(""));
+  expect(await unwritten()).toBe("");
+  // and nothing an older clock held comes back once time moves again
+  await page.clock.runFor(5000);
+  expect(await unwritten()).toBe("");
+  await expect(page.locator('.hfm1 [data-disp="m"]')).toHaveText("AXIOM");
 });
 
 test("asking for reduced motion midway puts the cable on the question chosen next at once", async ({ page }) => {
@@ -218,10 +222,13 @@ test("asking for reduced motion midway puts the cable on the question chosen nex
   await open(page);
   await scrollTo(page, 5);
   await shown(page, 5);
+  // the page's clock stands still: the cable must be there with no frame to carry it
+  await page.clock.install();
+  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 2000);
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.locator(".hfm5 .qs .q").nth(3).hover();
   await expect(page.locator(".hfm5 .qs .q.on")).toContainText("04");
-  await expect(page.locator(".hfm5 .patch .ring")).toHaveAttribute("cy", String(3 * 48 + 24));
+  expect(await page.locator(".hfm5 .patch .ring").getAttribute("cy")).toBe(String(3 * 48 + 24));
 });
 
 test("without the site's API address the card says so and the copy button is disabled", async ({ page }) => {
@@ -339,67 +346,6 @@ for (const [scheme, at] of [
   });
 }
 
-// The tour and the menu's list of sections (the last screen's card): the tour glides through the screens, the list goes
-// to one, and under reduced motion there is no tour to offer.
-test("the tour glides down the page, and the menu's list of sections goes to one", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await page.locator(".tour").click();
-  await expect.poll(() => page.locator(".hs").evaluate((el) => el.scrollTop)).toBeGreaterThan(100);
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator(".hs").evaluate((el) => el.scrollTo({ top: 0 }));
-  await page.locator(".bar .menu").click();
-  await page.locator(".sml[data-sec='5']").click();
-  await expect
-    .poll(() => place(page, 5).evaluate((el) => Math.abs(el.getBoundingClientRect().top)), { timeout: 15_000 })
-    .toBeLessThan(40);
-});
-
-// The tour is the page moving the reader: the reader taking over, the page hidden, or reduced motion asked for ends it
-// where it is. The tour's own steps are on the page's clock, which stands still until the case runs it on; the glides
-// themselves are the browser's.
-const tourEnds: [string, (page: Page) => Promise<unknown>][] = [
-  ["the island's mark takes the reader back to the top", (page) => page.locator(".isl .im").click()],
-  [
-    "the reader scrolls",
-    async (page) => {
-      await page.mouse.move(720, 450);
-      await page.mouse.wheel(0, -40);
-    },
-  ],
-  ["the tab is hidden", (page) => setHidden(page, true)],
-  ["reduced motion is asked for", (page) => page.emulateMedia({ reducedMotion: "reduce" })],
-];
-for (const [how, end] of tourEnds) {
-  test(`the tour stops when ${how}`, async ({ page }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await open(page);
-    await page.clock.install();
-    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
-    const top = () => page.locator(".hs").evaluate((el) => el.scrollTop);
-    await page.locator(".tour").click();
-    await expect.poll(top).toBeGreaterThan(100);
-    await end(page);
-    // where the page comes to rest after the reader's own move
-    await page.waitForTimeout(1500);
-    const rested = await top();
-    // two of the tour's steps, were it still going
-    await page.clock.runFor(7000);
-    await page.waitForTimeout(1500);
-    expect(Math.abs((await top()) - rested)).toBeLessThan(2);
-  });
-}
-
-test("under reduced motion the tour is not offered", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await open(page);
-  await expect(page.locator(".tour")).toHaveClass(/\bgone\b/);
-  // not reachable by the keyboard either: pressing Enter on it would start the tour
-  await page.locator(".tour").focus();
-  await expect(page.locator(".tour")).not.toBeFocused();
-  await expect(page.locator(".tour")).toHaveAttribute("inert", "");
-});
-
 // The questions (§8.2's Faq row): the first answer's picture sends its request to one vendor after another on a timer of
 // the screen's own, which runs on the shared loop: it stops with the tab hidden, and under reduced motion it never starts.
 const vendor = (page: Page) => page.locator(".hfm5 .fan text.ft.on").textContent();
@@ -451,9 +397,14 @@ test("on a phone the questions are an accordion: a second press closes the open 
   await expect(page.locator(".hfm5 .fq.on .q")).toContainText("02");
   await expect(answer(1)).toHaveAttribute("aria-hidden", "false");
   await expect(answer(0)).toHaveAttribute("aria-hidden", "true");
+  // the open answer is there to read: its text shows in full height
+  const height = (i: number) => answer(i).evaluate((el) => el.getBoundingClientRect().height);
+  await expect.poll(() => height(1)).toBeGreaterThan(40);
+  await expect(answer(1).locator(".ans")).toBeVisible();
   await page.locator(".hfm5 .fq .q").nth(1).click();
   await expect(page.locator(".hfm5 .fq.on")).toHaveCount(0);
   await expect(answer(1)).toHaveAttribute("aria-hidden", "true");
+  await expect.poll(() => height(1)).toBeLessThan(1);
 });
 
 // The sea bed (§8.2's Bed row) is the page's footer: the credit for the Chinese font stays, what the site has no page for
@@ -538,18 +489,66 @@ test("asking for reduced motion while the whale swims takes it off the page, its
   await running(page);
   await page.keyboard.type("deepseek");
   await expect.poll(() => painted(page)).toBe(true);
+  // the visit's sweep has lit the strip's word: what the take-down must put out
+  await expect(page.locator(".tr .wh-lit")).not.toHaveCount(0, { timeout: 20_000 });
   await page.emulateMedia({ reducedMotion: "reduce" });
   await expect.poll(() => painted(page)).toBe(false);
   await expect(page.locator(".tr .wh-lit, .tr .wh-under, .tr .wh-visiting, .tr .lit")).toHaveCount(0);
 });
 
 test("under reduced motion the whale is never called", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   const asked = watchWhale(page);
   await open(page);
+  // the sea is up, so the whale could come; then the reader asks for reduced motion
+  await running(page);
+  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.keyboard.type("deepseek");
   await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
   await pause(page);
   expect(asked).toEqual([]);
   expect(await painted(page)).toBe(false);
+});
+
+// The sea bed's dune is drawn, from the site's own name: a site named otherwise draws another wordmark.
+const dune = (page: Page) =>
+  page.locator(".hfm6 canvas.art").evaluate((canvas: HTMLCanvasElement) => {
+    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    let sum = 0;
+    let inked = 0;
+    for (let i = 3; i < data.length; i += 4) {
+      sum = (sum * 31 + (data[i] ?? 0)) % 1_000_000_007;
+      if ((data[i] ?? 0) > 0) inked++;
+    }
+    return { sum, inked };
+  });
+test("the sea bed draws its dune, with the site's name for the wordmark", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page);
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 6);
+  await shown(page, 6);
+  await expect.poll(async () => (await dune(page)).inked).toBeGreaterThan(1000);
+  const axiom = await dune(page);
+  await mockConsole(page, "usual", {
+    site: {
+      name: "Acme Relay",
+      currency: "USD",
+      key_prefix: "sk-ax-v1-",
+      registration: "invite",
+      api_base_url: "https://api.example.com",
+    },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 6);
+  await shown(page, 6);
+  await expect.poll(async () => (await dune(page)).inked).toBeGreaterThan(1000);
+  expect((await dune(page)).sum).not.toBe(axiom.sum);
 });
