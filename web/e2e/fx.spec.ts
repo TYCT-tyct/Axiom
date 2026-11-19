@@ -2,7 +2,19 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
-import { loop, open, pause, place, running, screenChunk, scrollTo, sections, setHidden, shown } from "./fx-helpers.ts";
+import {
+  delivered,
+  loop,
+  open,
+  pause,
+  place,
+  running,
+  screenChunk,
+  scrollTo,
+  sections,
+  setHidden,
+  shown,
+} from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The website's first-screen effects on the shared frame loop (port design §8.2, docs/frontend.md「动效运行时」): the sea
@@ -163,18 +175,20 @@ test("each screen below the first loads as it nears the view, and plays only whi
   });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
+  // every screen has its place, in order, before any code has come
+  expect(await sections(page)).toEqual(delivered);
   // the models screen lies within a view's height of the first, and the trust screen well below that does not; the
   // steps screen starts exactly a view's height below the first screen's end, at the edge of that margin
   await expect.poll(() => asked).toContain("models");
   expect(asked).not.toContain("trust");
   // the last screen is far below
-  await expect(place(page, (await sections(page)).at(-1) as number).locator(".hfm")).toHaveCount(0);
+  await expect(place(page, delivered.at(-1) as number).locator(".hfm")).toHaveCount(0);
   await expect(page.locator(".hfm2 .mr .mn").first()).toHaveText("gpt-5");
 
   await scrollTo(page, 3);
   // the models and steps chunks are both asked for at the top, in either order: which ones came is what counts
   await expect.poll(() => asked).toEqual(expect.arrayContaining(["models", "steps", "trust"]));
-  const last = (await sections(page)).at(-1) as number;
+  const last = delivered.at(-1) as number;
   await shown(page, 3);
   await running(page);
   await setHidden(page, true);
@@ -190,7 +204,7 @@ test("each screen below the first loads as it nears the view, and plays only whi
   // every screen's code comes once the reader has been down to it, each chunk once
   await scrollTo(page, last);
   await shown(page, last);
-  await expect.poll(async () => new Set(asked).size).toBe((await sections(page)).length);
+  await expect.poll(async () => new Set(asked).size).toBe(delivered.length);
 
   // past every screen nothing is in view to play
   await page.evaluate(() => {
@@ -210,7 +224,7 @@ test("under reduced motion the screens below show their end at once and do not t
   await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  for (const sec of await sections(page)) {
+  for (const sec of delivered) {
     await scrollTo(page, sec);
     await shown(page, sec);
   }

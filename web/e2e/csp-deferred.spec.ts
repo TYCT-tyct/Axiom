@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
+import { delivered, sections } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The content security policy after everything a page loads late (port design §8.4): apps.spec.ts stops at the first
@@ -22,13 +23,11 @@ async function watch(page: Page) {
   });
 }
 
-// Scrolls the home page's scroller to each screen in turn, letting each one's code arrive and its script draw. The
-// screens are the places the page makes (data-place), so a screen added to the page is walked without an edit here.
+// Scrolls the home page's scroller to each screen in turn, letting each one's code arrive and its script draw: the
+// screens the page delivers, each of which must have its place (data-place).
 async function throughScreens(page: Page) {
-  const secs = await page
-    .locator(".under [data-place]")
-    .evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.place)));
-  for (const sec of secs) {
+  expect(await sections(page)).toEqual(delivered);
+  for (const sec of delivered) {
     const place = page.locator(`.under [data-place="${sec}"]`);
     await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
     // seen, and faded in (the board's .hfm.in)

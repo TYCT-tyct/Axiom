@@ -12,7 +12,7 @@ export const WhaleContext = createContext<() => void>(() => {});
 
 // The screens below the first, in the board's order (Site.template.html's sections, data-sec 1 to 6). Each one's code
 // loads when its place nears the view.
-const slots: { sec: number; load?: () => Promise<Screen> }[] = [
+const slots: { sec: number; load: () => Promise<Screen> }[] = [
   { sec: 1, load: () => import("./connect-screen").then((m) => m.ConnectScreen) },
   { sec: 2, load: () => import("./models-screen").then((m) => m.ModelsScreen) },
   { sec: 3, load: () => import("./steps-screen").then((m) => m.StepsScreen) },
@@ -25,7 +25,9 @@ const slots: { sec: number; load?: () => Promise<Screen> }[] = [
 export function Screens({ wide }: { wide: boolean }) {
   return (
     <Under t={() => ""}>
-      {slots.map(({ sec, load }) => (load ? <Slot key={sec} sec={sec} load={load} wide={wide} /> : null))}
+      {slots.map(({ sec, load }) => (
+        <Slot key={sec} sec={sec} load={load} wide={wide} />
+      ))}
     </Under>
   );
 }

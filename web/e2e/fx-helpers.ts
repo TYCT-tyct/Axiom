@@ -32,9 +32,11 @@ export async function open(page: Page) {
 export const running = (page: Page) => expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(0);
 // The screens below the first (§8.2's rows for the screens): each one's code comes as its place nears the view, and its
 // script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The places
-// (data-place) are there before the code, so the cases scroll to them, and a screen added to the page is a place more
-// here, not an edit. The usual mock data lists gpt-5 first.
+// (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
 export const screenChunk = /\/assets\/([a-z]+)-screen-[\w-]+\.js$/;
+// The screens below the first that the page delivers, in order (Site.template.html's sections 1 to 6), written down here
+// rather than read from the page, so a screen that goes missing fails the cases that walk them.
+export const delivered = [1, 2, 3, 4, 5, 6];
 export const place = (page: Page, sec: number) => page.locator(`.under [data-place="${sec}"]`);
 export const sections = (page: Page) =>
   page.locator(".under [data-place]").evaluateAll((els) => els.map((el) => Number((el as HTMLElement).dataset.place)));

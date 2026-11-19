@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { loop, open, pause, place, running, screenChunk, scrollTo, sections, setHidden, shown } from "./fx-helpers.ts";
+import { delivered, loop, open, pause, place, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
@@ -158,7 +158,7 @@ test("the page asks for the site once, and the footer carries the site's own nam
   });
   await page.goto(apps[0].url);
   await pageHeading(page);
-  for (const sec of await sections(page)) {
+  for (const sec of delivered) {
     await scrollTo(page, sec);
     await shown(page, sec);
   }
@@ -191,7 +191,7 @@ for (const { registration, join, href, a7 } of joins) {
     const offered = registration !== "closed";
     await expect(page.locator(".bar .btn.primary")).toBeVisible({ visible: offered });
     await expect(page.locator(".hs > main .cta .primary")).toBeVisible({ visible: offered });
-    for (const sec of await sections(page)) {
+    for (const sec of delivered) {
       await scrollTo(page, sec);
       await shown(page, sec);
     }
@@ -294,7 +294,7 @@ test("the footer keeps the font's credit, names no page the site lacks, and its 
   await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
-  const last = (await sections(page)).at(-1) as number;
+  const last = delivered.at(-1) as number;
   await scrollTo(page, last);
   await shown(page, last);
   const footer = page.locator(".hfm6 .ft");
@@ -342,7 +342,7 @@ test("the whale's code comes when deepseek is typed, not before, and the whale s
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await running(page);
-  await scrollTo(page, (await sections(page)).at(-1) as number);
+  await scrollTo(page, delivered.at(-1) as number);
   await page.keyboard.type("deeps");
   expect(asked).toEqual([]);
   await page.keyboard.type("eek");
