@@ -7,7 +7,7 @@
 import { colour } from "./colour";
 import { hash } from "./hash";
 import { own, reducedMotion } from "./loop";
-import { buildSea, type OceanEngine, type Sea, stillSea } from "./ocean";
+import { buildSea, type OceanEngine, type Sea } from "./ocean";
 
 export type Shape = "start" | "code" | "key" | "enter";
 // What the page tells the stage: how much of an address is typed and whether it looks whole, how many digits of a
@@ -475,53 +475,81 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
   const canvas = frame.querySelector<HTMLCanvasElement>("canvas.sea");
   const seaBox = frame.querySelector<HTMLElement>(".lg-sea");
   if (!canvas || !seaBox) throw new Error("startLogin: the frame has no .lg-sea with a canvas.sea");
-  const still = reducedMotion();
-  const opts = seaOptions(frame, canvas, light);
-  const engine = buildSea(canvas, roster, opts, still);
+  const engine = buildSea(canvas, roster, seaOptions(frame, canvas, light), reducedMotion());
   const stage = new Stage(frame, seaBox, engine);
-  stage.first(shape, performance.now(), arrived && !still);
+  stage.first(shape, performance.now(), arrived && !reducedMotion());
   let stopDecode = () => {};
-  let sea: Sea;
-  let release = () => {};
-  if (still) {
-    sea = stillSea(engine);
-    const redraw = () => stage.draw(performance.now());
-    const resized = new ResizeObserver(redraw);
-    resized.observe(seaBox);
-    release = () => resized.disconnect();
-    redraw();
-  } else {
-    sea = { engine, destroy: () => engine.destroy() };
-    release = own(canvas, (dt, at) => {
-      engine.tick(dt);
-      stage.draw(at);
-    });
-  }
-  const redrawStill = () => still && stage.draw(performance.now());
+  const motion = follow(engine, stage, canvas, seaBox, () => stopDecode());
+  const redrawStill = () => motion.still() && motion.redraw();
   return {
-    sea,
+    sea: { engine, destroy: () => engine.destroy() },
     show: (next) => {
       stage.to(next, performance.now());
-      if (still) stage.settle();
+      if (motion.still()) stage.settle();
       redrawStill();
     },
     hear: (heard) => {
       stage.hear(heard, performance.now());
       redrawStill();
     },
-    setLight: (light) => {
-      sea.engine.setLight(light);
+    setLight: (on) => {
+      engine.setLight(on);
       stage.recolour();
       redrawStill();
     },
     decode: (title, decodeCanvas) => {
-      if (!still) stopDecode = decode(title, decodeCanvas);
+      if (!motion.still()) stopDecode = decode(title, decodeCanvas);
     },
     destroy: () => {
       stopDecode();
-      release();
+      motion.destroy();
       stage.destroy();
-      sea.destroy();
+      engine.destroy();
+    },
+  };
+}
+
+// follow drives the sea and the stage as the visitor's motion preference says, and follows it when it changes: on the
+// shared loop while motion is allowed; under reduced motion as one still frame of where everything is going, drawn
+// again whenever something changes (and a decode still playing ends, onStill).
+function follow(
+  engine: OceanEngine,
+  stage: Stage,
+  canvas: HTMLCanvasElement,
+  seaBox: HTMLElement,
+  onStill: () => void,
+) {
+  const query = matchMedia("(prefers-reduced-motion: reduce)");
+  let release = () => {};
+  const redraw = () => {
+    engine.still();
+    stage.draw(performance.now());
+  };
+  const resized = new ResizeObserver(() => query.matches && redraw());
+  resized.observe(seaBox);
+  const apply = () => {
+    release();
+    release = () => {};
+    if (!query.matches) {
+      release = own(canvas, (dt, at) => {
+        engine.tick(dt);
+        stage.draw(at);
+      });
+      return;
+    }
+    onStill();
+    stage.settle();
+    redraw();
+  };
+  apply();
+  query.addEventListener("change", apply);
+  return {
+    still: () => query.matches,
+    redraw,
+    destroy: () => {
+      query.removeEventListener("change", apply);
+      resized.disconnect();
+      release();
     },
   };
 }
