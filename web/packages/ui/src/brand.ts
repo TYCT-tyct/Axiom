@@ -6,15 +6,16 @@ import { useEffect } from "react";
 // colour, not a contrast ratio.
 
 type Rgb = readonly [number, number, number];
-// wash is how much of the solid accent tokens.css mixes (in oklab) into --n1 for --accentWash, the background accent
-// text sits on in tags, avatars and key chips; n1 is that step of each neutral scale, sand's then slate's.
+// washes are how much of the solid accent the pages mix (in oklab) into --n1 for the tints accent text sits on: tokens.css's
+// --accentWash (tags, avatars, key chips) and, in light, the website's key chip under the pointer (16%, the connect
+// screen's --chipHover); n1 is that step of each neutral scale, sand's then slate's.
 type Scheme = {
   surfaces: readonly Rgb[];
   extreme: Rgb;
   line: string;
   softAlpha: number;
   lineAlpha: number;
-  wash: number;
+  washes: readonly number[];
   n1: readonly Rgb[];
 };
 
@@ -35,7 +36,7 @@ export const light: Scheme = {
   line: "#21201c",
   softAlpha: 0.09,
   lineAlpha: 0.4,
-  wash: 0.12,
+  washes: [0.12, 0.16],
   n1: [
     [253, 253, 252],
     [252, 252, 253],
@@ -51,7 +52,7 @@ export const dark: Scheme = {
   line: "#eeeeec",
   softAlpha: 0.13,
   lineAlpha: 0.42,
-  wash: 0.21,
+  washes: [0.21],
   n1: [
     [17, 17, 16],
     [17, 17, 19],
@@ -124,8 +125,9 @@ function accentFor(brand: Rgb, scheme: Scheme, ratio: number, surfaces = scheme.
   return scheme.extreme;
 }
 
-// The washes tokens.css makes from a solid accent for each neutral scale: the backgrounds of accent text too.
-export const washesOf = (solid: Rgb, scheme: Scheme) => scheme.n1.map((n1) => mixOklab(solid, n1, scheme.wash));
+// The tints the pages make from a solid accent for each neutral scale: the backgrounds of accent text too.
+export const washesOf = (solid: Rgb, scheme: Scheme) =>
+  scheme.washes.flatMap((share) => scheme.n1.map((n1) => mixOklab(solid, n1, share)));
 
 // The tokens.css accent pair, which the board-drawn pages (the home page's screens among them) read, beside the older
 // names: --accentT for text and --accentSolid for fills and dots; tokens.css mixes the wash and the soft tint from the

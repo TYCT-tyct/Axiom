@@ -25,7 +25,9 @@ const vars = (scheme: "light" | "dark") =>
     "--dispInk: #4ccce6",
     "--dispDim: #2b8aa0",
     "--chipBg: var(--accentWash)",
-    "--chipHover: color-mix(in oklab, var(--accentSolid) 18%, var(--n1))",
+    // the key chip under the pointer: the board's 18% tint, 16% in light, where 18% puts the accent text under 4.5:1
+    // (packages/ui brand.ts checks the text on it)
+    "--chipHover: light-dark(color-mix(in oklab, var(--accentSolid) 16%, var(--n1)), color-mix(in oklab, var(--accentSolid) 18%, var(--n1)))",
     "--anatomy-paper: light-dark(var(--n1), var(--n2))",
     "--anatomy-face: light-dark(var(--n1), var(--n3))",
     "--anatomy-top: light-dark(var(--n1), var(--n5))",

@@ -111,6 +111,21 @@ const ratio = (element: Locator, edge = false) =>
     return (a + 0.05) / (b + 0.05);
   }, edge);
 
+// the site's own colours, no brand set: the key chip under the pointer, in light, where the tint is strongest
+test("the default key chip stays readable under the pointer", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", { site });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 1);
+  await shown(page, 1);
+  const chip = page.locator(".hfm1 .kc.on").first();
+  await chip.hover();
+  await page.waitForTimeout(300);
+  expect(await ratio(chip)).toBeGreaterThanOrEqual(4.5);
+});
+
 for (const scheme of ["light", "dark"] as const)
   test(`a grey brand keeps the key chip readable on its wash, and the footer's choice keeps its edge, ${scheme}`, async ({
     page,
@@ -122,7 +137,12 @@ for (const scheme of ["light", "dark"] as const)
     await pageHeading(page);
     await scrollTo(page, 1);
     await shown(page, 1);
-    expect(await ratio(page.locator(".hfm1 .kc.on").first())).toBeGreaterThanOrEqual(4.5);
+    const chip = page.locator(".hfm1 .kc.on").first();
+    expect(await ratio(chip)).toBeGreaterThanOrEqual(4.5);
+    // under the pointer too, on the tint the chip takes then
+    await chip.hover();
+    await page.waitForTimeout(300);
+    expect(await ratio(chip)).toBeGreaterThanOrEqual(4.5);
     await scrollTo(page, 6);
     await shown(page, 6);
     expect(await ratio(page.locator(".hfm6 .sg.on").first(), true)).toBeGreaterThanOrEqual(3);
