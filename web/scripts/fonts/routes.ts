@@ -25,8 +25,25 @@ function resolveImport(from: string, specifier: string) {
   }
   const [, name = "", sub = ""] = /^(@[^/]+\/[^/]+)(\/.*)?$/.exec(specifier) ?? [];
   const pkg = workspacePackages.get(name);
-  const target = pkg?.exports[`.${sub}`];
-  return pkg && target && /\.tsx?$/.test(target) ? join(pkg.dir, target) : undefined;
+  const target = pkg && (pkg.exports[`.${sub}`] ?? patternTarget(pkg.exports, `.${sub}`));
+  const path = pkg && target && /\.tsx?$/.test(target) ? join(pkg.dir, target) : undefined;
+  return path && isFile(path) ? path : undefined;
+}
+
+// patternTarget resolves a subpath through the package's "*" exports as Node does: the pattern with the longest prefix
+// that matches, its "*" replaced by what the subpath has there ("./Login/regions/*" for a board's regions).
+function patternTarget(exports: Record<string, string>, key: string) {
+  const matches = Object.entries(exports)
+    .map(([pattern, target]) => ({ pattern, target, star: pattern.indexOf("*") }))
+    .filter(({ pattern, star }) => {
+      const after = pattern.slice(star + 1);
+      return (
+        star >= 0 && key.startsWith(pattern.slice(0, star)) && key.endsWith(after) && key.length >= pattern.length - 1
+      );
+    })
+    .sort((a, b) => b.star - a.star);
+  const best = matches[0];
+  return best?.target.replace("*", key.slice(best.star, key.length - (best.pattern.length - best.star - 1)));
 }
 
 // A module's string literals, and what it takes from others: an import names the exports it uses ("*" for all of them,

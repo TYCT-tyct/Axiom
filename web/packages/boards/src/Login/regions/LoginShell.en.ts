@@ -3,9 +3,9 @@
 import type zh from "./LoginShell.zh.ts";
 export default {
   "md9aebc95f7": "中文EN",
-  "m0d0cee5072": "Every route is tested. You pay for the route that served you.",
   "m9f6fee1aba": "Language",
   "me1dbc1c99f": "One ",
-  "m127a0875a8": " for every model"
+  "m127a0875a8": " for every model",
+  "m0d0cee5072": "Every route is tested. You pay for the route that served you."
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

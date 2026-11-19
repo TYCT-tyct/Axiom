@@ -1,8 +1,7 @@
 import { consoleApi, unwrap } from "@axiom/api";
 import { useStartSession } from "@axiom/app";
-import { useState } from "react";
 import { signInWithPasskey } from "../webauthn";
-import { useLive } from "./login-parts";
+import type { Attempt } from "./attempt";
 
 // A passkey completes a sign-in from the guest page, or finishes a password sign-in that is waiting for its second
 // factor: the same assertion under the endpoints that bind the ceremony to the pending session.
@@ -11,31 +10,24 @@ const routes = {
   mfa: { begin: "/api/console/v1/auth/passkeys/mfa/begin", finish: "/api/console/v1/auth/passkeys/mfa/finish" },
 } as const;
 
-export function usePasskeySignIn(kind: keyof typeof routes) {
+// usePasskey runs a passkey attempt (attempt.ts). The challenge and the browser's prompt end with the attempt; the
+// assertion is sent only while the attempt is still the page's, and once it is sent the session it may have started
+// is adopted whatever became of the page, since the server may already have set its cookie.
+export function usePasskey(kind: keyof typeof routes) {
   const start = useStartSession();
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<unknown>(null);
-  const live = useLive();
-  async function run() {
-    setPending(true);
-    setFailure(null);
+  return async (attempt: Attempt) => {
     try {
       const { begin, finish } = routes[kind];
-      const challenge = await unwrap(consoleApi.POST(begin, { body: {} }));
-      const credential = await signInWithPasskey(challenge.public_key);
+      const challenge = await unwrap(consoleApi.POST(begin, { body: {}, signal: attempt.signal }));
+      const credential = await signInWithPasskey(challenge.public_key, attempt.signal);
+      if (!attempt.live()) return;
       const grant = await unwrap(
-        consoleApi.POST(finish, {
-          params: { query: { flow_id: challenge.flow_id } },
-          body: credential,
-        }),
+        consoleApi.POST(finish, { params: { query: { flow_id: challenge.flow_id } }, body: credential }),
       );
-      // an assertion finished for a page the visitor has left signs nothing in on the page they went to
-      if (live.current) await start(grant.csrf_token);
+      await start(grant.csrf_token);
+      attempt.done();
     } catch (error) {
-      setFailure(error);
-    } finally {
-      setPending(false);
+      attempt.fail(error);
     }
-  }
-  return { start: run, pending, failure };
+  };
 }

@@ -10,10 +10,12 @@ export type Props = { t: (key: keyof typeof zh) => string; values?: { modeCls?: 
 lang?: string | number;
 vars?: string | number;
 seaCanvas?: RefCallback<Element>;
+brandStyle?: string | number;
 noKern?: boolean; };  text: { pitch0: string;
 pitch1: string;
+lede: string;
 home: string; }; brand?: import("react").ReactNode; languages?: import("react").ReactNode; };
 export default function LoginShell({ t, values: v = {}, text, children, brand, languages }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("lg " + String(v.modeCls ?? "")) + " " + styles.scope} lang={String(v.lang ?? "")} style={boardStyle(String(v.vars ?? ""))}><div className={("lg-sea") + " " + styles.scope}><canvas className={("sea") + " " + styles.scope} aria-hidden={"true"} ref={v.seaCanvas} /><a href={text.home} className={("brand") + " " + styles.scope}>{brand}</a><div className={("lg-pitch") + " " + styles.scope}><p className={("h lens") + " " + styles.scope}>{text.pitch0}<span className={("k") + " " + styles.scope}>{"key"}</span>{!v.noKern && (<span className={("kern") + " " + styles.scope}>{"，"}</span>)}{text.pitch1}</p><p className={("s lens") + " " + styles.scope}>{t("m0d0cee5072")}</p></div></div><nav className={("lg-top") + " " + styles.scope} aria-label={t("m9f6fee1aba")}>{languages}</nav><main className={("lg-side") + " " + styles.scope} id={"main"} tabIndex={Number("-1")}><div className={("lg-form") + " " + styles.scope}>{children}</div></main></div></>;
+return <><div className={("lg " + String(v.modeCls ?? "")) + " " + styles.scope} lang={String(v.lang ?? "")} style={boardStyle(String(v.vars ?? ""))}><div className={("lg-sea") + " " + styles.scope}><canvas className={("sea") + " " + styles.scope} aria-hidden={"true"} ref={v.seaCanvas} /><a href={text.home} className={("brand") + " " + styles.scope} style={boardStyle(String(v.brandStyle ?? ""))}>{brand}</a><div className={("lg-pitch") + " " + styles.scope}><p className={("h lens") + " " + styles.scope}>{text.pitch0}<span className={("k") + " " + styles.scope}>{"key"}</span>{!v.noKern && (<span className={("kern") + " " + styles.scope}>{"，"}</span>)}{text.pitch1}</p><p className={("s lens") + " " + styles.scope}>{text.lede}</p></div></div><nav className={("lg-top") + " " + styles.scope} aria-label={t("m9f6fee1aba")}>{languages}</nav><main className={("lg-side") + " " + styles.scope} id={"main"} tabIndex={Number("-1")}><div className={("lg-form") + " " + styles.scope}>{children}</div></main></div></>;
 }
 /* jscpd:ignore-end */

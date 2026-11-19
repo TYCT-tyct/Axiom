@@ -108,7 +108,8 @@ export async function registerPasskey(options: unknown): Promise<Record<string, 
 }
 
 // signInWithPasskey runs a discoverable assertion; mediation "conditional" lets the browser offer the passkey inside
-// an email field, which the sign-in page does not use, so the explicit choice is the one this asks for.
-export async function signInWithPasskey(options: unknown): Promise<Record<string, unknown>> {
-  return asserted(await navigator.credentials.get({ publicKey: requestOptions(options) }));
+// an email field, which the sign-in page does not use, so the explicit choice is the one this asks for. signal closes
+// the browser's prompt when the attempt it belongs to ends.
+export async function signInWithPasskey(options: unknown, signal?: AbortSignal): Promise<Record<string, unknown>> {
+  return asserted(await navigator.credentials.get({ publicKey: requestOptions(options), signal }));
 }

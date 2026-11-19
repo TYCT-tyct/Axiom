@@ -7,7 +7,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { canSubmitWithLegal, type LegalConsentState, LegalDocuments, useLegalConsent } from "./legal";
 import { LoginFrame } from "./login-frame";
-import { FormProblem, NoteAction, OtherAccount, WithEmail } from "./login-parts";
+import { FormProblem, NoteAction, OtherAccount, primaryLook, wrapAnywhere } from "./login-parts";
 
 // A member whose accepted versions are behind the site's current ones lands here, outside the shell: every shell page
 // would be refused with consent_required until this succeeds.
@@ -40,11 +40,15 @@ function ConsentStep() {
   const legal = useLegalConsent();
   const accept = useAccept(legal);
   const missing = legal.query.isSuccess && legal.documents.length === 0;
+  // waiting for the box to be ticked, or for the server: both disable the button, only the second is busy
+  const blocked = accept.isPending || !canSubmitWithLegal(legal) || missing;
   return (
     <LoginFrame
       title={t("legal.title")}
-      sub={<WithEmail sentence={(email) => t("legal.description", { email })} email={session.user.email} />}
+      sub={t("legal.description", { email: session.user.email })}
+      subStyle={wrapAnywhere}
       step="consent"
+      busy={accept.isPending}
       shape="start"
       onSubmit={(event) => {
         event.preventDefault();
@@ -58,7 +62,7 @@ function ConsentStep() {
       <LoginPrimary
         t={String}
         label={<span>{t("legal.acceptSubmit")}</span>}
-        values={{ disabled: accept.isPending || !canSubmitWithLegal(legal) || missing }}
+        values={{ disabled: blocked, style: primaryLook(blocked) }}
       />
       <OtherAccount />
     </LoginFrame>

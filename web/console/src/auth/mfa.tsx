@@ -10,12 +10,14 @@ import { useQuery } from "@tanstack/react-query";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
+import { type Attempts, useAttempts } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, NoteAction, OtherAccount } from "./login-parts";
-import { usePasskeySignIn } from "./passkey-sign-in";
+import { FormProblem, NoteAction, OtherAccount, primaryLook } from "./login-parts";
+import { usePasskey } from "./passkey-sign-in";
 
 // The second step of a password sign-in: a code from the authenticator app or a recovery code, in one field (the
-// server tells them apart), or the user's passkey where the site has passkeys.
+// server tells them apart), or the user's passkey where the site has passkeys. Both answer the same pending sign-in,
+// so they are attempts of one page (attempt.ts): while one is out the other waits.
 export default function Mfa() {
   return (
     <Gate stage="pending">
@@ -24,43 +26,99 @@ export default function Mfa() {
   );
 }
 
+// A 401 unauthenticated says the pending sign-in itself is over (its attempts are spent, or it expired): no code or
+// passkey can finish it any more, even a right one. A wrong code is a 401 too, but invalid_code: the step stays.
+const isOver = (error: unknown) =>
+  error instanceof ApiError && error.status === 401 && error.code === "unauthenticated";
+
 function MfaStep() {
   const { t } = useTranslation();
-  const errors = useErrors();
   const stage = useStage();
-  const passkeys = useQuery(siteQuery).data?.passkeys ?? false;
+  const attempts = useAttempts();
   const verify = useVerifyMfa();
-  const passkey = usePasskeySignIn("mfa");
   const code = useRef<HTMLInputElement | null>(null);
-  const problem = verify.isError ? errors.message(verify.error) : "";
+  const over = isOver(attempts.failure?.error);
+  const submit = () => {
+    const value = (code.current?.value ?? "").trim();
+    const attempt = value && !over ? attempts.begin("code") : null;
+    if (!attempt) return;
+    verify.mutate(
+      { code: value },
+      {
+        onSuccess: attempt.done,
+        onError: (error) => {
+          attempt.fail(error);
+          stage.hear({ type: "bad" });
+        },
+      },
+    );
+  };
   return (
     <LoginFrame
       title={t("auth.mfa.title", { ns: "common" })}
-      sub={t("auth.mfa.description", { ns: "common" })}
-      step="mfa"
-      shape={passkey.pending ? "key" : verify.isSuccess ? "enter" : "code"}
+      sub={over ? t("auth.mfa.over") : t("auth.mfa.description", { ns: "common" })}
+      step={over ? "over" : "mfa"}
+      busy={attempts.kind !== null}
+      shape={attempts.kind === "passkey" ? "key" : verify.isSuccess ? "enter" : "code"}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
-        const value = (code.current?.value ?? "").trim();
-        if (value && !verify.isPending) {
-          verify.mutate({ code: value }, { onError: () => stage.hear({ type: "bad" }) });
-        }
+        submit();
       }}
     >
+      {over ? <SignInAgain /> : <SecondFactor attempts={attempts} stage={stage} code={code} />}
+    </LoginFrame>
+  );
+}
+
+// Once the pending sign-in is over the step offers only to start again: it signs the pending session out, and the gate
+// takes the visitor to sign in, keeping where they were going; a sign-out that fails says so and can be tried again.
+function SignInAgain() {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const signOut = useSignOut();
+  return (
+    <>
+      <NoteAction label={t("auth.mfa.again")} onPress={() => !signOut.isPending && signOut.mutate()} />
+      <FormProblem
+        message={signOut.error ? t("signOutFailed", { ns: "common", reason: errors.message(signOut.error) }) : ""}
+      />
+    </>
+  );
+}
+
+function SecondFactor({
+  attempts,
+  stage,
+  code,
+}: {
+  attempts: Attempts;
+  stage: Stage;
+  code: { current: HTMLInputElement | null };
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const passkeys = useQuery(siteQuery).data?.passkeys ?? false;
+  const failed = attempts.failure;
+  const problem = failed?.kind === "code" ? errors.message(failed.error) : "";
+  return (
+    <>
       <CodeField problem={problem} code={code} stage={stage} />
       <FormProblem id="mfa-problem" message={problem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.mfa.submit", { ns: "common" })}</span>}
-        values={{ disabled: verify.isPending }}
+        values={{
+          disabled: attempts.kind !== null,
+          style: primaryLook(attempts.kind !== null),
+        }}
       />
       <LoginNote t={String}>
         <span id="mfa-hint">{t("auth.mfa.hint", { ns: "common" })}</span>
       </LoginNote>
-      {passkeys ? <PasskeyWay passkey={passkey} /> : null}
+      {passkeys ? <PasskeyWay attempts={attempts} /> : null}
       <OtherAccount />
-    </LoginFrame>
+    </>
   );
 }
 
@@ -98,28 +156,30 @@ function CodeField({
   );
 }
 
-// The passkey as the second step. A 401 means the pending sign-in is over (its attempts are spent, or it expired):
-// the same button would be refused again, so the step says so and offers to start the sign-in again, which keeps
-// where the visitor was going. Any other failure, a cancelled prompt among them, leaves the button to try again.
-function PasskeyWay({ passkey }: { passkey: ReturnType<typeof usePasskeySignIn> }) {
+// The passkey as the second step; a failure other than the end of the sign-in (a cancelled prompt among them) leaves
+// the button to try again.
+function PasskeyWay({ attempts }: { attempts: Attempts }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const signOut = useSignOut();
-  const over = passkey.failure instanceof ApiError && passkey.failure.status === 401;
+  const passkey = usePasskey("mfa");
+  const failed = attempts.failure;
   return (
     <>
       <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
-      {over ? null : (
-        <LoginStack t={String}>
-          <LoginButton
-            t={String}
-            label={<span>{t("auth.mfa.usePasskey")}</span>}
-            values={{ disabled: passkey.pending, onPress: () => void passkey.start() }}
-          />
-        </LoginStack>
-      )}
-      <FormProblem message={over ? t("auth.mfa.over") : passkey.failure ? errors.message(passkey.failure) : ""} />
-      {over ? <NoteAction label={t("auth.mfa.again")} onPress={() => !signOut.isPending && signOut.mutate()} /> : null}
+      <LoginStack t={String}>
+        <LoginButton
+          t={String}
+          label={<span>{t("auth.mfa.usePasskey")}</span>}
+          values={{
+            disabled: attempts.kind !== null,
+            onPress: () => {
+              const attempt = attempts.begin("passkey");
+              if (attempt) void passkey(attempt);
+            },
+          }}
+        />
+      </LoginStack>
+      <FormProblem message={failed?.kind === "passkey" ? errors.message(failed.error) : ""} />
     </>
   );
 }

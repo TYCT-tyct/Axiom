@@ -9,13 +9,14 @@ import LoginOr from "@axiom/boards/Login/regions/LoginOr";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import LoginStack from "@axiom/boards/Login/regions/LoginStack";
 import { useQuery } from "@tanstack/react-query";
-import { useSearch } from "@tanstack/react-router";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { Link, useSearch } from "@tanstack/react-router";
+import { type AnchorHTMLAttributes, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
+import { type Attempt, type Attempts, useAttempts } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, NoteAction, RouteLink, useLive, WithEmail, withNext } from "./login-parts";
-import { usePasskeySignIn } from "./passkey-sign-in";
+import { FormProblem, NoteAction, primaryLook, wrapAnywhere } from "./login-parts";
+import { usePasskey } from "./passkey-sign-in";
 
 export default function SignIn() {
   const site = useQuery(siteQuery);
@@ -58,15 +59,11 @@ function SignInSteps() {
   return (
     <LoginFrame
       title={emailStep ? t("auth.signIn.title", { ns: "common" }) : t("auth.signIn.passwordTitle")}
-      sub={
-        emailStep ? (
-          t("auth.signIn.description")
-        ) : (
-          <WithEmail sentence={(email) => t("auth.signIn.as", { email })} email={flow.email.trim()} />
-        )
-      }
+      sub={emailStep ? t("auth.signIn.description") : t("auth.signIn.as", { email: flow.email.trim() })}
+      subStyle={emailStep ? undefined : wrapAnywhere}
       step={flow.step}
       shape={flow.signIn.isSuccess ? "enter" : "start"}
+      busy={flow.attempts.kind !== null}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
@@ -74,7 +71,7 @@ function SignInSteps() {
       }}
     >
       {emailStep ? (
-        <EmailStep email={flow.email} problem={flow.problem} methods={flow.methods} onInput={flow.typeEmail} />
+        <EmailStep email={flow.email} problem={flow.problem} attempts={flow.attempts} onInput={flow.typeEmail} />
       ) : (
         <PasswordStep flow={flow} />
       )}
@@ -84,12 +81,14 @@ function SignInSteps() {
 
 type Flow = ReturnType<typeof useSignInFlow>;
 
-// useSignInFlow holds the two steps' state: the address typed, which step is asked, and the one sign-in request. A
-// refusal that names the email takes the visitor back to the email with what is wrong with it.
+// useSignInFlow holds the two steps' state: the address typed, which step is asked, and the page's attempts
+// (attempt.ts), the password among them. A refusal that names the email takes the visitor back to the email, where the
+// refused address stays until it is edited.
 function useSignInFlow(stage: Stage) {
   const { t } = useTranslation();
   const errors = useErrors();
   const signIn = useSignIn();
+  const attempts = useAttempts();
   const [step, setStep] = useState<"email" | "password">("email");
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState(false);
@@ -97,7 +96,6 @@ function useSignInFlow(stage: Stage) {
   useEffect(() => {
     if (step === "password") password.current?.focus();
   }, [step]);
-  const methods = useMethodAttempts();
   const badEmail = aboutEmail(signIn.error);
   useEffect(() => {
     if (badEmail) setStep("email");
@@ -106,14 +104,22 @@ function useSignInFlow(stage: Stage) {
     const address = email.trim();
     setMissing(step === "email" ? !address : !password.current?.value);
     if (step === "email") {
-      // the address the server refused stays here until it is edited; another way in that is out keeps the step
-      if (address && !badEmail && !methods.busy) setStep("password");
+      if (address && !badEmail && !attempts.kind) setStep("password");
       return;
     }
     const secret = password.current?.value ?? "";
-    if (secret && !signIn.isPending) {
-      signIn.mutate({ email: address, password: secret }, { onError: () => stage.hear({ type: "bad" }) });
-    }
+    const attempt = secret ? attempts.begin("password") : null;
+    if (!attempt) return;
+    signIn.mutate(
+      { email: address, password: secret },
+      {
+        onSuccess: attempt.done,
+        onError: (error) => {
+          attempt.fail(error);
+          stage.hear({ type: "bad" });
+        },
+      },
+    );
   };
   const missingText = t(step === "email" ? "auth.signIn.missingEmail" : "auth.signIn.missingPassword");
   const failure = badEmail ? t("auth.signIn.badEmail") : signIn.isError ? errors.message(signIn.error) : "";
@@ -121,7 +127,7 @@ function useSignInFlow(stage: Stage) {
     step,
     email,
     signIn,
-    methods,
+    attempts,
     password,
     submit,
     problem: missing ? missingText : failure,
@@ -144,15 +150,16 @@ function useSignInFlow(stage: Stage) {
 function EmailStep({
   email,
   problem,
-  methods,
+  attempts,
   onInput,
 }: {
   email: string;
   problem: string;
-  methods: Attempts;
+  attempts: Attempts;
   onInput: (value: string) => void;
 }) {
   const { t } = useTranslation();
+  const busy = attempts.kind !== null;
   return (
     <>
       <LoginEmail
@@ -171,18 +178,22 @@ function EmailStep({
         }}
       />
       <FormProblem id="sign-in-problem" message={problem} />
-      <LoginPrimary t={String} label={<span>{t("auth.signIn.next")}</span>} values={{ disabled: methods.busy }} />
-      <Methods methods={methods} />
+      <LoginPrimary
+        t={String}
+        label={<span>{t("auth.signIn.next")}</span>}
+        values={{ disabled: busy, style: primaryLook(busy) }}
+      />
+      <Methods attempts={attempts} />
       <Register />
     </>
   );
 }
 
 // The second step: the password, which stays in its field until it is sent, never in the page's state. While the
-// sign-in is out the ways off this step are not offered: the answer, when it comes, signs in the address it was for.
+// sign-in is out the way back to the email is not offered: the answer, when it comes, signs in the address it was for.
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
-  const pending = flow.signIn.isPending;
+  const pending = flow.attempts.kind === "password";
   return (
     <>
       {/* the address the password belongs to, for the browser's password manager */}
@@ -197,7 +208,7 @@ function PasswordStep({ flow }: { flow: Flow }) {
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
-        values={{ disabled: pending }}
+        values={{ disabled: pending, style: primaryLook(pending) }}
       />
       {pending ? null : <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />}
     </>
@@ -235,18 +246,28 @@ function PasswordField({
   );
 }
 
-// Methods are the ways in besides the password, beside the first step. A provider is a browser round trip; a passkey
-// is a WebAuthn assertion the server checks against the public key it stored. The failure shown is the latest
-// attempt's: a new attempt replaces what an earlier one, or the provider's return, said. One attempt is out at a time:
-// while it is, every other way in on this step waits, so its answer cannot carry off a flow begun since.
-function Methods({ methods }: { methods: Attempts }) {
+// Methods are the ways in besides the password, beside the first step: a provider is a browser round trip, a passkey a
+// WebAuthn assertion the server checks against the public key it stored. Each is one of the page's attempts, so while
+// one is out every way in waits, and the failure shown is the latest attempt's, replacing an earlier one and the
+// provider's return (?oauth=failed).
+function Methods({ attempts }: { attempts: Attempts }) {
   const { t } = useTranslation();
+  const errors = useErrors();
   const site = useQuery(siteQuery);
+  const search = useSearch({ strict: false });
+  const passkey = usePasskey("signIn");
   const providers = site.data?.oauth_providers ?? [];
   const passkeys = site.data?.passkeys ?? false;
-  if (!passkeys && providers.length === 0) {
-    return <FormProblem message={methods.failure} />;
-  }
+  const busy = attempts.kind !== null;
+  const returned = search.oauth === "failed" && !attempts.failure && !busy;
+  const failure =
+    attempts.failure && attempts.failure.kind !== "password" ? errors.message(attempts.failure.error) : "";
+  const message = returned ? t("auth.signIn.oauthFailed") : failure;
+  if (!passkeys && providers.length === 0) return <FormProblem message={message} />;
+  const run = (kind: string, go: (attempt: Attempt) => Promise<void>) => () => {
+    const attempt = attempts.begin(kind);
+    if (attempt) void go(attempt);
+  };
   return (
     <>
       <LoginOr t={String} text={{ label: t("auth.signIn.or") }} />
@@ -256,84 +277,56 @@ function Methods({ methods }: { methods: Attempts }) {
             key={provider}
             t={String}
             label={<span>{t(`auth.signIn.providers.${provider}`)}</span>}
-            values={{ disabled: methods.busy, onPress: () => methods.startOAuth(provider) }}
+            values={{ disabled: busy, onPress: run("oauth", (attempt) => startOAuth(attempt, provider)) }}
           />
         ))}
         {passkeys ? (
           <LoginButton
             t={String}
             label={<span>{t("auth.signIn.passkey")}</span>}
-            values={{ disabled: methods.busy, onPress: methods.startPasskey }}
+            values={{ disabled: busy, onPress: run("passkey", passkey) }}
           />
         ) : null}
       </LoginStack>
-      <FormProblem message={methods.failure} />
+      <FormProblem message={message} />
     </>
   );
 }
 
-type Attempts = ReturnType<typeof useMethodAttempts>;
+// How long a page that sent the browser to a provider waits for it to go before the attempt is over: a page still here
+// was stopped (the browser's stop button) or failed to go, and its other ways in are offered again.
+const stalled = 3000;
 
-function useMethodAttempts() {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const search = useSearch({ strict: false });
-  const oauth = useOAuthStart();
-  const passkey = usePasskeySignIn("signIn");
-  const [latest, setLatest] = useState<"returned" | "oauth" | "passkey" | null>(
-    search.oauth === "failed" ? "returned" : null,
-  );
-  const failed = latest === "oauth" ? oauth.failure : latest === "passkey" ? passkey.failure : null;
-  return {
-    oauth,
-    passkey,
-    busy: oauth.pending || passkey.pending,
-    failure: latest === "returned" ? t("auth.signIn.oauthFailed") : failed ? errors.message(failed) : "",
-    startOAuth: (provider: Schemas["OAuthProvider"]) => {
-      setLatest("oauth");
-      void oauth.start(provider);
-    },
-    startPasskey: () => {
-      setLatest("passkey");
-      void passkey.start();
-    },
-  };
+// startOAuth asks for the provider's address and sends the browser there. The attempt ends when the page is still here
+// after `stalled`, or comes back from the back-forward cache (attempt.ts).
+async function startOAuth(attempt: Attempt, provider: Schemas["OAuthProvider"]) {
+  try {
+    const { authorize_url } = await unwrap(
+      consoleApi.POST("/api/console/v1/auth/oauth/start", { body: { provider }, signal: attempt.signal }),
+    );
+    if (!attempt.live()) return;
+    window.location.assign(authorize_url);
+    window.setTimeout(attempt.done, stalled);
+  } catch (error) {
+    attempt.fail(error);
+  }
 }
 
 // Register offers the registration page, keeping where the visitor was going.
 function Register() {
   const { t } = useTranslation();
   const next = useSearch({ strict: false }).next;
+  const RegisterLink = useMemo(
+    () =>
+      ({ href: _, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
+        <Link to="/register" search={{ next, invite: undefined }} {...props} />
+      ),
+    [next],
+  );
   return (
     <LoginNote t={String}>
-      {t("auth.signIn.noAccount")}{" "}
-      <LoginLink
-        t={String}
-        link={RouteLink}
-        label={t("auth.signIn.register")}
-        values={{ to: withNext("/register", next) }}
-      />
+      <span>{t("auth.signIn.noAccount")}</span>{" "}
+      <LoginLink t={String} link={RegisterLink} label={t("auth.signIn.register")} values={{ to: "/register" }} />
     </LoginNote>
   );
-}
-
-function useOAuthStart() {
-  const [pending, setPending] = useState(false);
-  const [failure, setFailure] = useState<unknown>(null);
-  const live = useLive();
-  async function start(provider: Schemas["OAuthProvider"]) {
-    setPending(true);
-    setFailure(null);
-    try {
-      const { authorize_url } = await unwrap(
-        consoleApi.POST("/api/console/v1/auth/oauth/start", { body: { provider } }),
-      );
-      // an answer for a page the visitor has left takes them nowhere
-      if (live.current) window.location.assign(authorize_url);
-    } catch (error) {
-      setFailure(error);
-      setPending(false);
-    }
-  }
-  return { start, pending, failure };
 }

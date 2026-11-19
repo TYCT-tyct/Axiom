@@ -1,3 +1,4 @@
+import LoginBrandName from "@axiom/boards/Login/regions/LoginBrandName";
 import LoginChar from "@axiom/boards/Login/regions/LoginChar";
 import LoginDecode from "@axiom/boards/Login/regions/LoginDecode";
 import LoginLanguage from "@axiom/boards/Login/regions/LoginLanguage";
@@ -77,15 +78,24 @@ export function useStage(): Stage {
   );
 }
 
+// A site's name can be 100 characters: the brand keeps clear of the language switch, which on a phone sits over the sea
+// beside it, and the name ends in an ellipsis inside the room left (the board draws only short names).
+const brandStyle = "right: 128px";
+const brandNameStyle = "min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap";
+
 // The Login board's names for the two languages, as its switch shows them.
 const languageLabels = { zh: "中文", en: "EN" } as const;
 
 type FrameProps = {
   title: string;
   sub?: ReactNode;
+  // the sub's own style, for a sentence that holds an address (wrapAnywhere)
+  subStyle?: string;
   // which question the form asks: the form is kept while its words change language, and starts afresh for another
   step: string;
   shape: Shape;
+  // the step is waiting for the server (aria-busy), as against waiting for the visitor
+  busy?: boolean;
   stage?: Stage;
   onSubmit: (event: FormEvent<HTMLFormElement>) => void;
   children: ReactNode;
@@ -94,7 +104,7 @@ type FrameProps = {
 // LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
 // question on the other, in a form that submits through onSubmit. The sea, the stage that forms shapes on it and the
 // title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
-export function LoginFrame({ title, sub, step, shape, stage, onSubmit, children }: FrameProps) {
+export function LoginFrame({ title, sub, subStyle, step, shape, busy, stage, onSubmit, children }: FrameProps) {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
   const prefs = usePreferences();
@@ -113,20 +123,25 @@ export function LoginFrame({ title, sub, step, shape, stage, onSubmit, children 
         noKern: english,
         vars: boardVars,
         seaCanvas: engine.seaCanvas,
+        brandStyle,
       }}
-      text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), home: "/" }}
+      text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), lede: t("auth.pitch.lede"), home: "/" }}
       brand={
         <>
           <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
-          <span>{name}</span>
+          <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle }} />
         </>
       }
       languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
     >
-      <form noValidate onSubmit={onSubmit}>
+      <form noValidate onSubmit={onSubmit} aria-busy={busy}>
         <LoginStep key={step} t={String} values={{ stepCls: "in", shape }}>
           <FrameTitle title={title} titleRef={titleRef} />
-          {sub ? <LoginSub t={String}>{sub}</LoginSub> : null}
+          {sub ? (
+            <LoginSub t={String} values={{ style: subStyle ?? "" }}>
+              <span>{sub}</span>
+            </LoginSub>
+          ) : null}
           {children}
         </LoginStep>
       </form>

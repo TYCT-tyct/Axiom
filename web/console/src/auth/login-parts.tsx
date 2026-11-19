@@ -2,8 +2,7 @@ import { useErrors, useSignOut } from "@axiom/app";
 import LoginAction from "@axiom/boards/Login/regions/LoginAction";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
-import { Link } from "@tanstack/react-router";
-import { type AnchorHTMLAttributes, Fragment, type KeyboardEvent, type ReactNode, useEffect, useRef } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { pressKey } from "../board";
 
@@ -33,17 +32,6 @@ export function NoteAction({ label, onPress }: { label: string; onPress: () => v
   );
 }
 
-// The router's link where the board draws a note's <a>: a sign-in page of this app, and the way back from it.
-export function RouteLink({ href = "/", ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const [to, query = ""] = href.split("?");
-  const next = new URLSearchParams(query).get("next") ?? undefined;
-  // `to` is known only at run time; every sign-in page it names takes the same search (router.tsx guestSearch)
-  return <Link to={to} search={{ next, invite: undefined } as never} {...props} />;
-}
-
-// withNext is a sign-in page's address with the way back the visitor came with.
-export const withNext = (to: string, next?: string) => (next ? `${to}?next=${encodeURIComponent(next)}` : to);
-
 // OtherAccount ends a session that stopped halfway (a pending second step, terms not yet accepted), to start again as
 // someone else; a sign-out that fails says the visitor is still signed in.
 export function OtherAccount() {
@@ -58,33 +46,13 @@ export function OtherAccount() {
   );
 }
 
-// WithEmail puts an address into a sentence where it may break anywhere: an address can be one unbroken run of 64
-// letters, which would otherwise widen a phone's form. The break points are <wbr>, which copying leaves out.
-const slot = "\u0000";
-export function WithEmail({ sentence, email }: { sentence: (email: string) => string; email: string }) {
-  const [before = "", after = ""] = sentence(slot).split(slot);
-  return (
-    <>
-      {before}
-      {[...email].map((char, i) => (
-        <Fragment key={`${i}${char}`}>
-          {char}
-          <wbr />
-        </Fragment>
-      ))}
-      {after}
-    </>
-  );
-}
+// An address can be one unbroken run of 64 letters: a sentence that shows one may break it anywhere, or it would widen
+// a phone's form. Set on the board's own element through its style.
+export const wrapAnywhere = "overflow-wrap: anywhere";
 
-// useLive says whether the component that started something is still on screen when its answer comes.
-export function useLive() {
-  const live = useRef(true);
-  useEffect(() => {
-    live.current = true;
-    return () => {
-      live.current = false;
-    };
-  }, []);
-  return live;
-}
+// The primary button as the board draws a disabled one: the board's own rule for it loses to the primary button's fill,
+// so a button that waits (for a box to be ticked, for the server) would look ready to press.
+export const primaryLook = (disabled: boolean) =>
+  disabled
+    ? "cursor: default; color: var(--text2); background: var(--field); box-shadow: inset 0 0 0 var(--bw) var(--lineStrong)"
+    : "";

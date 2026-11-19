@@ -1,7 +1,7 @@
 // The characters each font face must cover on each page, computed from the translation files: the pipeline subsets the
 // fonts to them (build.py runs this file and reads its output), and coverage.test.ts checks the committed fonts still
 // cover them. One definition, so the two cannot disagree on what a page shows.
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -9,12 +9,23 @@ import { names, routeLiterals } from "./routes.ts";
 
 const web = join(import.meta.dirname, "..", "..");
 
-// Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n).
+// A board's generated region text (packages/boards): each region's zh and en files, whose keys the region's markup
+// names as t("m…") literals, so a route takes the board words it draws as it takes its translation keys.
+const regionFiles = (board: string) => {
+  const dir = join("packages/boards/src", board, "regions");
+  return readdirSync(join(web, dir))
+    .filter((file) => /\.(zh|en)\.ts$/.test(file))
+    .sort()
+    .map((file) => join(dir, file));
+};
+// Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n), and the boards'
+// region text a page draws (login: the console's sign-in pages, which wear the Login board).
 const namespaces: Record<string, string[]> = {
   common: ["packages/ui/src/locales/zh.ts", "packages/ui/src/locales/en.ts"],
   site: ["site/src/locales/zh.ts", "site/src/locales/en.ts"],
   console: ["console/src/locales/zh.ts", "console/src/locales/en.ts"],
   admin: ["admin/src/locales/zh/index.ts", "admin/src/locales/en/index.ts"],
+  login: regionFiles("Login"),
 };
 
 // A page names, per namespace, the message keys it can show: "" is every key, "hero" is hero and everything under it.

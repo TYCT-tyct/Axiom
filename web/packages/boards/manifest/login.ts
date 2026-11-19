@@ -80,12 +80,13 @@ export default [
     omit: [".lg-foot"],
     children: ".lg-form",
     slots: { brand: ".lg-sea .brand", languages: ".lg-top" },
-    text: { pitch: ".lg-pitch .h" },
+    text: { pitch: ".lg-pitch .h", lede: ".lg-pitch .s" },
     attributes: { home: { selector: ".lg-sea .brand", attribute: "href" } },
     elements: {
       // the site's brand reaches the focus ring and the accent (port design R10: not the primary button)
       ".lg": { set: { class: `lg ${h("modeCls")}`, lang: h("lang"), style: h("vars") } },
       "canvas.sea": { set: { ref: h("seaCanvas") } },
+      ".lg-sea .brand": { set: { style: h("brandStyle") } },
       ".lg-pitch .kern": { unless: "noKern" },
       ".lg-side": { set: { id: "main", tabindex: "-1" } },
     },
@@ -100,6 +101,11 @@ export default [
   }),
   // The board's mark beside the site's name, where the site has no logo of its own.
   { board: "Login", name: "LoginMark", roots: [".lg-sea .brand > svg"] },
+  // The site's name beside its mark, which a long name must not run under the language switch with.
+  part("LoginBrandName", ".lg-sea .brand > span", start, {
+    text: { name: ".lg-sea .brand > span" },
+    elements: { ".lg-sea .brand > span": { set: { style: h("style") } } },
+  }),
   // The language switch: the page's own language, marked current, and the other one.
   part("LoginLanguage", ".lg-top a:first-child", start, {
     text: { label: ".lg-top a:first-child" },
@@ -120,7 +126,7 @@ export default [
     elements: { ".lg-title": { set: { ref: h("title") } } },
   }),
   part("LoginChar", ".lg-title .ch:first-child", start, { text: { char: ".lg-title .ch:first-child" } }),
-  part("LoginSub", ".lg-sub", start, { children: ".lg-sub" }),
+  part("LoginSub", ".lg-sub", start, { children: ".lg-sub", elements: { ".lg-sub": { set: { style: h("style") } } } }),
   field("LoginEmail", "email"),
   field("LoginField", "text"),
   part("LoginError", ".lg-err", emailError, {
@@ -129,7 +135,11 @@ export default [
   }),
   part("LoginPrimary", ".lg-btn.primary", start, {
     slots: { label: ".lg-btn.primary" },
-    elements: { ".lg-btn.primary": { set: { type: "submit", disabled: h("disabled") } } },
+    elements: {
+      ".lg-btn.primary": {
+        set: { type: "submit", disabled: h("disabled"), style: h("style") },
+      },
+    },
   }),
   part("LoginOr", ".lg-or", start, { text: { label: ".lg-or > span" } }),
   part("LoginStack", ".lg-stack", start, { children: ".lg-stack" }),
