@@ -95,7 +95,7 @@ const signInRulings: Ruling[] = [
   }),
   signIn({
     basis: "§5: a few characters of the cut body face differ from the board's source face (not yet explained)",
-    ...both(".lg-sub > span, .lg-note > span, .lg-note > a, .lg-pitch .s > span"),
+    ...both(".lg-sub > span, .lg-note > span, .lg-note > a, .lg-pitch .s > span, .lg-label"),
     glyphs: true,
   }),
   signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
