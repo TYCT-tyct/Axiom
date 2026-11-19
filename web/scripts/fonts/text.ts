@@ -5,7 +5,7 @@ import { globSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { names, routeLiterals } from "./routes.ts";
+import { moduleLiterals, names, routeLiterals } from "./routes.ts";
 
 const web = join(import.meta.dirname, "..", "..");
 
@@ -31,7 +31,14 @@ type FaceText = { chars: string } | { script: Script; keys?: Selection };
 type Script = "latin" | "han";
 // A face's pages name pages, or "<app>/*" for each page of an app the manifest's routes name (routePages).
 type Face = { family: string; weight: string; style?: string; pages: string[]; text: FaceText };
-export type Manifest = { pages: Record<string, Selection>; routes?: Record<string, string>; faces: Face[] };
+// entries names pages whose keys are read from the code they run, as a routed page's are (a module and what it imports),
+// rather than listed: the selection pages gives them names their namespaces only.
+export type Manifest = {
+  pages: Record<string, Selection>;
+  routes?: Record<string, string>;
+  entries?: Record<string, string>;
+  faces: Face[];
+};
 
 const manifestPath = join(import.meta.dirname, "sources.json");
 
@@ -118,19 +125,22 @@ async function selectedText(selection: Selection) {
   return text;
 }
 
+// The keys code can show, in each namespace, from the literals and modules it runs: a page shows the words of the
+// regions it runs whole, since its code names no key of them.
+async function selectionOf({ literals, files }: { literals: Set<string>; files: Set<string> }, namespaces: string[]) {
+  const selection: Selection = {};
+  for (const namespace of namespaces) {
+    selection[namespace] = namespace.endsWith("-regions")
+      ? await regionKeys(namespace, files)
+      : (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
+  }
+  return selection;
+}
+
 // routePages returns an app's pages ("console/pages/keys") and the keys each can show, in each of its namespaces.
 async function routePages(app: string, entry: string, namespaces: string[]) {
   const pages = new Map<string, Selection>();
-  for (const [page, { literals, files }] of routeLiterals(app, entry)) {
-    const selection: Selection = {};
-    for (const namespace of namespaces) {
-      // a page shows the words of the regions it runs (its own and the shell's) whole; the code names no key of them
-      selection[namespace] = namespace.endsWith("-regions")
-        ? await regionKeys(namespace, files)
-        : (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
-    }
-    pages.set(page, selection);
-  }
+  for (const [page, ran] of routeLiterals(app, entry)) pages.set(page, await selectionOf(ran, namespaces));
   return pages;
 }
 
@@ -145,6 +155,11 @@ async function pageSelections(manifest: Manifest) {
     for (const [page, routed] of await routePages(app, entry, Object.keys(selection))) {
       pages.set(page, routed);
     }
+  }
+  for (const [page, file] of Object.entries(manifest.entries ?? {})) {
+    const selection = manifest.pages[page];
+    if (!selection) throw new Error(`${manifestPath}: entries names ${page}, which pages does not define`);
+    pages.set(page, await selectionOf(moduleLiterals(file), Object.keys(selection)));
   }
   return pages;
 }

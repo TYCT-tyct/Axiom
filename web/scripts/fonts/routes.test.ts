@@ -60,3 +60,25 @@ describe("region words", () => {
     expect(words.some((c) => !texts?.["console/auth/sign-in"]?.includes(c))).toBe(true);
   });
 });
+
+describe("the website's pages", () => {
+  // The models page is its own document: its words are the ones its code runs, not the home page's questions; the
+  // first screen's words are a page of their own, the slice the shared entry page preloads.
+  it("give the models page its own words and the first screen only its own", async () => {
+    const manifest = readManifest();
+    const face = manifest.faces.find((one) => one.family === "Axiom CJK");
+    const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });
+    const { default: zh } = await import("../../site/src/locales/zh.ts");
+    const faq = [
+      ...new Set(
+        Object.values(zh.script.faq)
+          .flatMap((v) => (typeof v === "string" ? [v] : Object.values(v)))
+          .join(""),
+      ),
+    ];
+    const han = (c: string) => /\p{Script=Han}/u.test(c);
+    expect(faq.filter(han).some((c) => !texts?.["site/models"]?.includes(c))).toBe(true);
+    expect(faq.filter(han).some((c) => !texts?.["site/first"]?.includes(c))).toBe(true);
+    expect([...zh.signIn].every((c) => texts?.["site/first"]?.includes(c))).toBe(true);
+  });
+});

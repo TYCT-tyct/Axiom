@@ -157,6 +157,13 @@ export function routeLiterals(app: string, entry: string) {
   return pages;
 }
 
+// moduleLiterals returns the modules a page module runs, now and later, and the string literals in them: a page that is
+// its own document (the website's models page) and not a route of an app's shell.
+export function moduleLiterals(file: string) {
+  const files = run(join(web, file), ["*"], { lazy: true, seen: new Set(), ran: new Set() });
+  return { literals: new Set(literalsOf(files)), files };
+}
+
 // names tells whether code naming these literals can show a key: a literal that is the key (or its plural forms' base),
 // or that the key sits under when the literal has a dot ("settings.mail", which code completes as `${prefix}.save`) or
 // is a template literal's fixed start ("codes."). A bare word is the key itself only: queries are named ["balance"],
