@@ -159,8 +159,14 @@ func TestTwoStepVerification(t *testing.T) {
 	t.Parallel()
 	f := newConsoleFixture(t)
 	old := f.owner()
+	if got := f.totpEnabled(old); got == nil || *got {
+		t.Errorf("totp_enabled before TOTP is set up: %v, want false", got)
+	}
 	secret, verified, codes := f.totpSetup(old)
 	expect(t, "the session from before the change", f.do(http.MethodGet, "/session", "", as(old)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
+	if got := f.totpEnabled(verified); got == nil || !*got {
+		t.Errorf("totp_enabled once TOTP is set up: %v, want true", got)
+	}
 
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`)
 	var grant consoleapi.SessionGrant
@@ -176,6 +182,11 @@ func TestTwoStepVerification(t *testing.T) {
 	}
 	expect(t, "a pending session listing keys", f.do(http.MethodGet, "/keys", "", as(pending)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
 	expect(t, "a wrong code", f.do(http.MethodPost, "/auth/mfa", `{"code":"abcd-abcd-abcd-abcd"}`, as(pending)), http.StatusUnauthorized, consoleapi.ErrorCodeInvalidCode)
+	spent := f.sessionOf(f.do(http.MethodPost, "/auth/sign-in", `{"email":"`+ownerEmail+`","password":"`+ownerPassword+`"}`))
+	for range 5 {
+		f.do(http.MethodPost, "/auth/mfa", `{"code":"abcd-abcd-abcd-abcd"}`, as(spent))
+	}
+	expect(t, "a right code once the challenge is spent", f.do(http.MethodPost, "/auth/mfa", `{"code":"`+codes[1]+`"}`, as(spent)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)
 
 	rec = f.do(http.MethodPost, "/auth/mfa", `{"code":"`+codes[0]+`"}`, as(pending))
 	expect(t, "a recovery code", rec, http.StatusOK, "")
@@ -188,6 +199,14 @@ func TestTwoStepVerification(t *testing.T) {
 	expect(t, "regenerating recovery codes", rec, http.StatusOK, "")
 	expect(t, "the session that asked, replaced", f.do(http.MethodGet, "/session", "", as(passed)), http.StatusUnauthorized, "")
 	expect(t, "the session from the confirmation, replaced", f.do(http.MethodGet, "/session", "", as(verified)), http.StatusUnauthorized, "")
+}
+
+// totpEnabled is the totp_enabled the session's JSON carries, nil when the field is left out.
+func (f consoleFixture) totpEnabled(s session) *bool {
+	f.t.Helper()
+	var info consoleapi.Session
+	decode(f.t, f.do(http.MethodGet, "/session", "", as(s)), &info)
+	return info.TotpEnabled
 }
 
 // TestTwoStepVerificationStaysOn: once it is on, confirming another secret is a 409, as the contract says, and changes

@@ -36,7 +36,7 @@ func TestAdminSignInSetsTheCookie(t *testing.T) {
 	}
 	s := f.sessionOf(rec)
 	got := f.readSession(s)
-	if got.Level != "password" || got.MfaEnabled || got.CsrfToken != s.csrf || !got.ExpiresAt.After(time.Now()) ||
+	if got.Level != "password" || got.MfaEnabled || got.TotpEnabled == nil || *got.TotpEnabled || got.CsrfToken != s.csrf || !got.ExpiresAt.After(time.Now()) ||
 		!strings.HasPrefix(got.User.Id, "user_") || !strings.HasPrefix(got.Account, "acct_") || got.User.Email != ownerEmail {
 		t.Errorf("the password session: %+v", got)
 	}
@@ -60,8 +60,8 @@ func TestAdminSessionPermissions(t *testing.T) {
 		"users.manage", "users.view", "workspaces.manage",
 	}
 	got := f.readSession(f.verified(ownerEmail))
-	if diff := cmp.Diff(wantAll, got.Permissions); got.Level != "mfa" || !got.MfaEnabled || diff != "" {
-		t.Errorf("the verified session: level %q, mfa %v, permissions (-want +got):\n%s", got.Level, got.MfaEnabled, diff)
+	if diff := cmp.Diff(wantAll, got.Permissions); got.Level != "mfa" || !got.MfaEnabled || got.TotpEnabled == nil || !*got.TotpEnabled || diff != "" {
+		t.Errorf("the verified session: level %q, mfa %v, totp %v, permissions (-want +got):\n%s", got.Level, got.MfaEnabled, got.TotpEnabled, diff)
 	}
 }
 
