@@ -18,12 +18,13 @@
   background: var(--hover);
 }
 
+/* The cell is 176px (256px from 640px) wide with its padding, as the page had it. */
 .name {
-  max-width: 11rem;
+  max-width: 8.5rem;
 }
 
 .author {
-  max-width: 10rem;
+  max-width: 8rem;
 }
 
 .truncate {
@@ -108,7 +109,7 @@
   }
 
   .name {
-    max-width: 16rem;
+    max-width: 13.5rem;
   }
 
   .inlinePrice {

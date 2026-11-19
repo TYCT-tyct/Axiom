@@ -138,7 +138,8 @@ export function RateTable({
     <Table label={title}>
       {basis?.length ? (
         <caption className={s.caption}>
-          {t("publicModels.tierBasis")} {basis.map((item) => label(t, "item", item)).join(" + ")}
+          <span>{t("publicModels.tierBasis")}</span>{" "}
+          <span>{basis.map((item) => label(t, "item", item)).join(" + ")}</span>
         </caption>
       ) : null}
       <thead>
