@@ -71,6 +71,9 @@ const field = (name: string, inputMode: string): Region =>
       },
     },
     classes: { fieldCls: ["bad"] },
+    // a field under another (registering with an invite) stands as the board's other parts of a step do below a field
+    // (.lg-consent, .lg-note): 16px apart
+    css: { ".lg-field ~ .lg-label": "margin-top:16px" },
   });
 const note = ".lg-row > .lg-note:last-child";
 

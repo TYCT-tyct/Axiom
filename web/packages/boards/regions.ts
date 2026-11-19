@@ -48,4 +48,7 @@ export type Region = {
   // Classes and attributes a script or an engine sets at run time (on, wh-lit, data-tab): the board's rules that need
   // them are kept although the cut markup does not carry them yet.
   states?: string[];
+  // Rules the product needs that the drawing leaves out, by selector, in the board's own terms (a field under another:
+  // the board never stacks two); each is tied to the region as the board's rules are.
+  css?: Record<string, string>;
 };

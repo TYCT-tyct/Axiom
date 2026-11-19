@@ -234,6 +234,24 @@ test.describe("verifying an open registration's address", () => {
     await expect(heading(page, "邮箱已验证")).toBeVisible();
   });
 
+  test("a password left empty after a refusal is said at the field alone", async ({ page }) => {
+    await mockConsole(page);
+    await page.route(
+      "**/api/console/v1/auth/verify-email",
+      (route) =>
+        route.fulfill({ status: 403, json: { error: { code: "origin_rejected", message: "origin_rejected" } } }),
+      { times: 1 },
+    );
+    await openLink(page, goodVerifyToken);
+    await choosePassword(page);
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await choosePassword(page, "");
+    await expect(page.getByRole("alert")).toHaveCount(1);
+    await expect(page.getByRole("alert")).toHaveText("请填写密码。");
+    await choosePassword(page);
+    await expect(heading(page, "邮箱已验证")).toBeVisible();
+  });
+
   test("a page opened without a token says to open the mail's link again", async ({ page }) => {
     await mockConsole(page);
     await page.goto("/console/verify-email");

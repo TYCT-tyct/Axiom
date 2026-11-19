@@ -102,7 +102,8 @@ export function useEmailStep(stage: Stage, attempt: Attempt, kind: string, refus
 
 // usePasswordStep is a step that sets the password a mailed link asks for (a reset, a verification): the field, what is
 // wrong with it (none typed, outside 12 to 256 characters: cleared when it is edited) or with the request (the form's to
-// say; a limit's wait stays), and the password to send, which stays in its field until then.
+// say; a limit's wait stays), and the password to send, which stays in its field until then. A failure is said once:
+// the field's line, when it has one, stands for the step's.
 export function usePasswordStep(
   attempt: Attempt,
   kind: string,
@@ -116,18 +117,19 @@ export function usePasswordStep(
   const failed = attempt.failure?.kind === kind ? attempt.failure.error : null;
   const cooling = useCooldown(failed);
   const outside = badLength(failed, pointer);
+  const said = missing ? t("auth.signIn.missingPassword") : outside ? length : "";
   return {
     blocked: attempt.kind !== null || cooling.waiting,
     field: {
       input,
-      problem: missing ? t("auth.signIn.missingPassword") : outside ? length : "",
+      problem: said,
       invalid: missing || outside,
       onInput: () => {
         setMissing(false);
         if (outside) attempt.dismiss();
       },
     },
-    problem: cooling.shown && !outside ? errors.message(cooling.shown) : "",
+    problem: cooling.shown && !said ? errors.message(cooling.shown) : "",
     take: () => {
       const secret = input.current?.value ?? "";
       setMissing(!secret);
