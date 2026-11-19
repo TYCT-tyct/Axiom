@@ -127,6 +127,7 @@
 :global(.hfm2 .mx .rr.down .dot):where(.scope){background:var(--bad)}
 :global(.hfm2 .mx .rr.chosen .dot):where(.scope){box-shadow:0 0 0 3px var(--pickRing)}
 :global(.hfm2 .mx .pf):where(.scope){display:flex;justify-content:space-between;padding-top:12px;font-size:12px;line-height:18px;color:var(--text2)}
+:global(.hfm2 .d .hl):where(.scope){grid-column:1 / span 7;display:flex;flex-direction:column;gap:16px}
 :global(.hfm2 .d .lst):where(.scope){grid-column:1 / span 5}
 :global(.hfm2 .d .pnl):where(.scope){grid-column:6 / span 7;--cols:64px 64px 72px 1fr 48px 168px 8px}
 @media (min-width:1600px){

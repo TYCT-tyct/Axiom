@@ -21,32 +21,31 @@ const classes: Record<string, string[]> = {
     ]),
   ),
 };
-// The classes of the machine's parts and of what the script draws into it.
+// The classes of the machine's parts (home/connect-figure.svg) and of what the script draws into it: the shaft and the
+// wiper the kit redraws, and the pulses' trail dots (.t).
 const inserted = [
-  "iso-svg",
-  "iso-solid",
-  "iso-fill",
-  "iso-shade",
-  "iso-top",
-  "iso-line",
-  "iso-edge",
-  "iso-crease",
-  "iso-bevel",
-  "iso-halo",
-  "iso-dots",
-  "iso-face-text",
-  "mod",
+  ...["svg", "solid", "fill", "shade", "top", "line", "edge", "crease", "bevel", "halo", "dots", "face-text"].map(
+    (part) => `iso-${part}`,
+  ),
+  ...["", "-ring", "-shine", "-shade", "-edge", "-body"].map((part) => `tb${part}`),
+  "fig-a",
+  "disp-v",
+  "disp-m",
+  "disp-glass",
+  "ax-word",
+  "ax-badge",
   "pin",
-  "band",
-  "lamp",
+  "mod",
   "mlamp",
+  "lamp",
+  "lvl",
   "dname",
   "vname",
-  "lvl",
-  "tb",
-  "disp-",
-  "ax-",
+  "band",
   "pulse",
+  "glow",
+  "core",
+  "t",
 ];
 
 const english: Record<string, string> = {
@@ -70,7 +69,7 @@ const connect = (board: string): Region => ({
   text: { comma: ".hfm1 h2 .kern", every: ".hfm1 h2 > .ph:last-child", lede: ".hfm1 .intro p" },
   elements: entrance("hfm1", "m1_in"),
   classes,
-  inserted,
+  inserted: { into: ".hfm1 .fig", classes: inserted },
   states: runTime,
   english,
 });

@@ -127,6 +127,7 @@
 :global(.hfm2 .mx .rr.down .dot):where(.scope){background:var(--bad)}
 :global(.hfm2 .mx .rr.chosen .dot):where(.scope){box-shadow:0 0 0 3px var(--pickRing)}
 :global(.hfm2 .mx .pf):where(.scope){display:flex;justify-content:space-between;padding-top:12px;font-size:12px;line-height:18px;color:var(--text2)}
+:global(.hfm2 .m .hl):where(.scope){display:flex;flex-direction:column;gap:12px}
 :global(.hfm2 .m .flt):where(.scope){overflow-x:auto;scrollbar-width:none}
 :global(.hfm2 .m .mr:nth-child(n+6)):where(.scope){display:none}
 :global(.hfm2 .m .pnl):where(.scope){margin-top:24px;padding:16px;--cols:44px 56px 62px 1fr 8px}
