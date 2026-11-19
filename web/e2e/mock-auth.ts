@@ -79,6 +79,11 @@ export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
   if (body.email === limitedEmail) {
     return fail(429, "rate_limited", { "Retry-After": "30" });
   }
+  // an account a registration made signs in as itself
+  if (state.registered?.get(body.email) === body.password) {
+    state.user.email = body.email;
+    state.user.password = body.password;
+  }
   if (
     body.password !== state.user.password ||
     ![knownEmail, mfaEmail, passkeyEmail, state.user.email].includes(body.email)

@@ -91,8 +91,7 @@ const passwordFits = (password: string) => [...password].length >= 12 && [...pas
 
 // Registration as the site takes it (internal/accounts register.go): closed refuses; open answers every well-formed
 // address alike with a 202 and mails a link (verifyLinks) to it; by invitation, the guard counts the password's
-// characters, then the code, the documents and the address decide, and the account is made for the mocked user to sign
-// in with.
+// characters, then the code, the documents and the address decide, and the account is made (registered) to sign in with.
 function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">) {
   if (state.site.registration === "closed") return fail(403, "registration_closed");
   const refused = addressRefusal(body.email);
@@ -100,7 +99,7 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   const email = body.email.trim().toLowerCase();
   if (state.site.registration === "open") {
     for (const [token, owner] of state.verifyLinks) if (owner === email) state.verifyLinks.delete(token);
-    state.verifyLinks.set(String(state.log.length).padStart(40, "v"), email);
+    state.verifyLinks.set(String(state.log.length).padStart(43, "v"), email);
     return { status: 202, json: { status: "verification_sent" } } as const;
   }
   return registerInvite(state, { ...body, email });
@@ -112,31 +111,31 @@ function registerInvite(state: MockState, body: Schemas["RegisterRequest"]) {
   if (state.legal.length > 0 && !acceptsCurrent(state.legal, body.consent ?? [])) {
     return fail(403, "consent_required");
   }
-  if (body.email === knownEmail) return fail(409, "email_taken");
-  state.user.email = body.email;
-  state.user.password = body.password;
-  state.legalAccepted = state.legal.length > 0;
+  if (taken(state, body.email)) return fail(409, "email_taken");
+  state.registered?.set(body.email, body.password);
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
 }
 
+// An address an account has: the mocked user's, or one a registration made.
+const taken = (state: MockState, email: string) => email === knownEmail || (state.registered?.has(email) ?? false);
+
 // An open registration's link, as the server takes it (internal/accounts registration.go): the guard counts the
-// password's characters; a link works once and only while no account has the address; the documents on screen must be
-// the current ones. The account is made for the mocked user to sign in with.
+// password's characters; a link is its 43-character token and works once; an address registered while it was pending
+// spends it (409, then 422 for the same link); the documents on screen must be the current ones. The account is made
+// (registered), whoever the browser is signed in as.
 function verifyEmail({ body, state }: Ctx<"/api/console/v1/auth/verify-email", "post">) {
   if (!passwordFits(body.password)) return breaks("/password");
   const email = state.verifyLinks.get(body.token);
   if (email === undefined) return fail(422, "invalid_verification");
-  if (email === knownEmail) return fail(409, "email_taken");
+  if (taken(state, email)) {
+    state.verifyLinks.delete(body.token);
+    return fail(409, "email_taken");
+  }
   if (state.legal.length > 0 && !acceptsCurrent(state.legal, body.consent ?? [])) {
     return fail(403, "consent_required");
   }
   state.verifyLinks.delete(body.token);
-  // the mocked user is the one this browser signs in as: the new account becomes it only in a browser signed out
-  if (state.level === "none") {
-    state.user.email = email;
-    state.user.password = body.password;
-    state.legalAccepted = state.legal.length > 0;
-  }
+  state.registered?.set(email, body.password);
   return { status: 204 as const, json: undefined };
 }
 
@@ -414,7 +413,11 @@ const handlers: Handler<MockState>[] = [
   route("get", `${base}/version`, none, ({ state }) => ok({ version: state.version })),
   route("get", `${base}/site`, none, ({ state }) => ok(state.site)),
   route("get", `${base}/legal`, none, ({ state }) => ok({ documents: state.legal })),
-  route("post", `${base}/auth/sign-in`, none, signIn),
+  // an account a registration made accepted the documents as it was made
+  route("post", `${base}/auth/sign-in`, none, (ctx) => {
+    if (ctx.state.registered?.get(ctx.body.email) === ctx.body.password) ctx.state.legalAccepted = true;
+    return signIn(ctx);
+  }),
   route("post", `${base}/auth/mfa`, { level: "pending_mfa" }, verifyMfa),
   route("post", `${base}/auth/register`, none, register),
   route("post", `${base}/auth/verify-email`, none, verifyEmail),

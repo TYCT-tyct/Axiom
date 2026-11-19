@@ -60,6 +60,8 @@ const field = (name: string, inputMode: string): Region =>
           type: h("type"),
           inputmode: inputMode,
           autocomplete: h("autoComplete"),
+          // a phone keyboard's capital would change what is typed: an invite code is matched exactly
+          autocapitalize: "none",
           placeholder: h("placeholder"),
           value: h("value"),
           spellcheck: "false",

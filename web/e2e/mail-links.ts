@@ -9,8 +9,8 @@ export const otherResetToken = "b".repeat(43);
 export const otherEmail = "someone.else@example.com";
 
 // Verification links of open registration: one for an address nobody has, and one for the mocked user's.
-export const goodVerifyToken = "c".repeat(40);
-export const takenVerifyToken = "d".repeat(40);
+export const goodVerifyToken = "c".repeat(43);
+export const takenVerifyToken = "d".repeat(43);
 export const newEmail = "new.person@example.com";
 
 export const mailedLinks = () => ({

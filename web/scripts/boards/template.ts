@@ -20,6 +20,7 @@ const names: Record<string, string> = {
   readonly: "readOnly",
   maxlength: "maxLength",
   autocomplete: "autoComplete",
+  autocapitalize: "autoCapitalize",
   autofocus: "autoFocus",
   inputmode: "inputMode",
   spellcheck: "spellCheck",
