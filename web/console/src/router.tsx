@@ -9,6 +9,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { takeOAuthNext } from "./auth/oauth-return";
+import { dropResetLink, keepResetLink } from "./auth/reset-link";
 import { Layout } from "./layout";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
@@ -68,6 +69,13 @@ const routeTree = root.addChildren([
     getParentRoute: () => root,
     path: "/reset-password",
     validateSearch: guestSearch,
+    // the link's token leaves the address before the page's code loads, and is kept for it (auth/reset-link.ts)
+    beforeLoad: ({ location, preload }) => {
+      if (preload || !location.hash) return;
+      keepResetLink(location.hash);
+      throw redirect({ to: "/reset-password", search: location.search as never, replace: true });
+    },
+    onLeave: dropResetLink,
     component: lazyRouteComponent(() => import("./auth/reset-password")),
   }),
   createRoute({

@@ -36,9 +36,13 @@ test("the password step leads to the reset page and back, keeping where the visi
   await page.getByRole("button", { name: "继续", exact: true }).click();
   await page.getByRole("link", { name: "忘记密码？" }).click();
   await expect(heading(page, "找回密码")).toBeVisible();
+  // the address the account uses now, which is the one the server looks up
+  await expect(page.getByText("账户现在使用的邮箱")).toBeVisible();
   await page.getByLabel("邮箱").fill(knownEmail);
   await page.getByRole("button", { name: "发送重设邮件" }).click();
-  await expect(heading(page, "查收邮件")).toBeVisible();
+  // the answer takes the focus the submit had; it says what the server does, not that mail is sure to come
+  await expect(heading(page, "查收邮件")).toBeFocused();
+  await expect(page.getByText("如果有可用的账户使用这个邮箱，它会收到")).toBeVisible();
   expect(state.log.filter((line) => line === "POST /auth/password-reset")).toHaveLength(1);
   // one step back is the form, with the address, to send again
   await page.getByRole("button", { name: "重新发送或换个邮箱" }).click();
@@ -62,7 +66,7 @@ test("a link sets the new password once, which then signs in; the same link is t
   await openLink(page, goodResetToken);
   expect(new URL(page.url()).hash).toBe("");
   await setNewPassword(page);
-  await expect(heading(page, "密码已重设")).toBeVisible();
+  await expect(heading(page, "密码已重设")).toBeFocused();
   await page.getByRole("link", { name: "去登录" }).click();
   await expect(heading(page, "登录")).toBeVisible();
   await signIn(page, knownEmail, newPassword);
@@ -219,4 +223,47 @@ test("a limit keeps the request's button disabled for as long as the answer says
   await page.clock.runFor(2_000);
   await expect(submit).toBeEnabled();
   await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("a link whose page fails to load leaves no token in the address", async ({ page }) => {
+  await mockConsole(page);
+  await page.route("**/reset-password-*.js", (route) => route.abort());
+  await page.goto(`/console/reset-password#token=${goodResetToken}`);
+  await expect(heading(page, "页面没能加载")).toBeVisible();
+  expect(page.url()).not.toContain(goodResetToken);
+  expect(await page.evaluate(() => location.hash)).toBe("");
+});
+
+test("a sign-in waiting for its second step is named as that, and can be finished or ended", async ({ page }) => {
+  const state = await mockConsole(page);
+  state.level = "pending_mfa";
+  state.csrf = "csrf-0";
+  await openLink(page, "never-mailed");
+  await setNewPassword(page);
+  await expect(heading(page, "链接不能用了")).toBeVisible();
+  await expect(page.getByText(`以 ${knownEmail} 进行的登录还在等两步验证`)).toBeVisible();
+  await expect(page.getByText("仍以")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "用新密码登录" })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "继续那次登录" })).toHaveAttribute("href", "/console/mfa");
+  await page.getByRole("button", { name: "结束那次登录" }).click();
+  await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
+  expect(state.level).toBe("none");
+});
+
+test("the reset page neither takes nor shows the recovery codes of the session it finds", async ({ page }) => {
+  const state = await mockConsole(page);
+  signedInAs(state);
+  let takes = 0;
+  await page.route("**/api/console/v1/auth/recovery-codes/take", (route) => {
+    takes += 1;
+    return route.fulfill({ json: { recovery_codes: ["abcd-efgh-ijkl-0001"] } });
+  });
+  await openLink(page, otherResetToken);
+  await setNewPassword(page);
+  await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
+  // the sign-out is sent after the session read, so a take for that session would have gone before it
+  await page.getByRole("button", { name: "退出这个账户" }).click();
+  await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
+  expect(takes).toBe(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
 });

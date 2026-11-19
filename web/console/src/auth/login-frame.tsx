@@ -123,9 +123,9 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   const form = useRef<HTMLFormElement | null>(null);
   const cancel = useRef<HTMLDivElement | null>(null);
   useLock(form, cancel, attempt.kind !== null);
-  useFocusOnStep(form, step);
-  useReloadWhenRestored();
   const titleRef = useRef<HTMLElement | null>(null);
+  useFocusOnStep(form, step, titleRef, attempt);
+  useReloadWhenRestored();
   const engine = useLoginEngine({
     stage,
     shape,
@@ -202,8 +202,14 @@ function useLock(form: RefObject<HTMLFormElement | null>, cancel: RefObject<HTML
 }
 
 // Another step (the password, back to the address, a sign-in that is over) takes the focus to its first control, so
-// a keyboard or a screen reader is where the question is; the first step keeps the page's own.
-function useFocusOnStep(form: RefObject<HTMLFormElement | null>, step: string) {
+// a keyboard or a screen reader is where the question is; the first step keeps the page's own, unless it is a request's
+// answer (useFocusAnswer).
+function useFocusOnStep(
+  form: RefObject<HTMLFormElement | null>,
+  step: string,
+  title: RefObject<HTMLElement | null>,
+  attempt: Attempt,
+) {
   const first = useRef(true);
   useEffect(() => {
     if (first.current) {
@@ -212,6 +218,24 @@ function useFocusOnStep(form: RefObject<HTMLFormElement | null>, step: string) {
     }
     firstControl(form.current)?.focus();
   }, [form, step]);
+  useFocusAnswer(title, attempt);
+}
+
+// A frame that mounts while the page's request is out, or once it has its answer, took the place of the frame that
+// sent it (a reset's answer), and with it the focus the submit had. Once the page is free (useLock gives the focus back
+// first, to a control of the old frame that is gone), the focus goes to the frame's title, so a keyboard or a screen
+// reader is where the answer is; once only, so a later request in the same frame keeps its own.
+function useFocusAnswer(title: RefObject<HTMLElement | null>, attempt: Attempt) {
+  const [answer] = useState(attempt.kind !== null || attempt.done !== null || attempt.failure !== null);
+  const free = attempt.kind === null;
+  const given = useRef(false);
+  useEffect(() => {
+    const heading = title.current;
+    if (!answer || !free || given.current || !heading) return;
+    given.current = true;
+    heading.tabIndex = -1;
+    heading.focus();
+  }, [title, answer, free]);
 }
 
 const firstControl = (form: HTMLFormElement | null) =>

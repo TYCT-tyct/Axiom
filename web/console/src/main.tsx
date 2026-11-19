@@ -12,7 +12,7 @@ startApp(
   "console",
   { zh, en },
   <AppProviders api={consoleAuth} requiresMfa={false} requiresConsent>
-    <PendingCodesProvider>
+    <PendingCodesProvider router={router}>
       <RouterProvider router={router} />
     </PendingCodesProvider>
   </AppProviders>,

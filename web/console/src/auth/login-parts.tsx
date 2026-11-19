@@ -122,7 +122,7 @@ export function RouteNote({ to, label, lead, next }: { to: RouteTo; label: strin
 }
 
 // The sign-in pages a note leads to, which all take where the visitor was going (router.tsx guestSearch).
-type RouteTo = "/sign-in" | "/register" | "/reset-password";
+type RouteTo = "/sign-in" | "/register" | "/reset-password" | "/mfa";
 
 // An address can be one unbroken run of 64 letters: a sentence that shows one may break it anywhere, or it would widen
 // a phone's form. Set on the board's own element through its style.

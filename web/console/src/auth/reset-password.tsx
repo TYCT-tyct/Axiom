@@ -4,7 +4,7 @@ import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useSearch } from "@tanstack/react-router";
-import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
+import { type RefObject, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
@@ -19,38 +19,20 @@ import {
   useLoginFace,
   wrapAnywhere,
 } from "./login-parts";
+import { dropResetLink, onResetLink, resetLink } from "./reset-link";
 
-// The reset email links here with its single-use token in the fragment, which the browser does not send to the server
-// (docs/frontend-api.md「注册与找回密码」). The page keeps the token in memory, takes it out of the address at once (so
-// it is not left in the history or copied with the link), and sends it only to resetPassword. Without a token the page
-// asks for the email instead. A reset ends the sessions of its account and does not sign in. The page has no gate: a
-// link works in a browser signed in as anyone, and the way on finds out as whom (Onward).
+// The reset email links here with its single-use token, which the route has already taken out of the address and kept
+// (reset-link.ts); the page sends it only to resetPassword. Without a token the page asks for the email instead. A
+// reset ends the sessions of its account and does not sign in. The page has no gate: a link works in a browser signed
+// in as anyone, and the way on finds out as whom (Onward). Each new link starts its form afresh.
 export default function ResetPassword() {
   useLoginFace();
-  const [link, again] = useLinkToken();
-  return link.token ? <NewPassword key={link.n} token={link.token} onAgain={again} /> : <RequestReset key={link.n} />;
-}
-
-const readToken = () => new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
-const clearFragment = () => {
-  if (window.location.hash) history.replaceState(history.state, "", window.location.pathname + window.location.search);
-};
-
-// useLinkToken is the link's token: read when the page opens, and again when a link is opened in this same tab, which
-// changes only the fragment and so does not load the page anew. Each new token starts its form afresh (n).
-function useLinkToken() {
-  const [link, setLink] = useState(() => ({ token: readToken(), n: 0 }));
-  useEffect(() => {
-    clearFragment();
-    const onHash = () => {
-      const token = readToken();
-      clearFragment();
-      if (token) setLink((previous) => ({ token, n: previous.n + 1 }));
-    };
-    window.addEventListener("hashchange", onHash);
-    return () => window.removeEventListener("hashchange", onHash);
-  }, []);
-  return [link, () => setLink((previous) => ({ token: "", n: previous.n + 1 }))] as const;
+  const link = useSyncExternalStore(onResetLink, resetLink);
+  return link.token ? (
+    <NewPassword key={link.n} token={link.token} onAgain={dropResetLink} />
+  ) : (
+    <RequestReset key={link.n} />
+  );
 }
 
 const useNext = () => useSearch({ strict: false }).next;
@@ -331,8 +313,8 @@ const afterWords = {
 // The way on after a reset: to sign in with the new password, and, for a link that did not work, to ask for a new one.
 // A reset ends the sessions of the account it was for, not of another one this browser may be signed in as, and the
 // sign-in page would open that one's console. So the way to sign in is offered only once the browser is known to be
-// signed out (useBrowserSession); signed in, the step says as whom and offers to sign out first; a read that fails is
-// offered again. Not knowing is never signed out.
+// signed out (useBrowserSession); otherwise the step says what the browser holds, truthfully, and what fits it (WaysOn).
+// Not knowing is never signed out.
 function Onward({
   after,
   attempt,
@@ -345,13 +327,13 @@ function Onward({
   onAgain: () => void;
 }) {
   const { t, i18n } = useTranslation();
-  const next = useNext();
   const browser = useBrowserSession();
   const words = afterWords[after];
   const said = {
     reading: "",
     failed: t("auth.reset.unsure"),
     in: t("auth.reset.signedIn", { email: browser.email }),
+    pending: t("auth.reset.pending", { email: browser.email }),
     out: "",
   }[browser.state];
   const sentences = [t(words.sub), said].filter(Boolean);
@@ -366,11 +348,34 @@ function Onward({
       stage={stage}
       onSubmit={(event) => event.preventDefault()}
     >
-      {browser.state === "out" ? <RouteNote to="/sign-in" label={t(words.signIn)} next={next} /> : null}
-      {browser.state === "in" ? <SignOutNote label={t("auth.reset.signOut")} attempt={attempt} /> : null}
-      {browser.state === "failed" ? <NoteAction label={t("auth.reset.check")} onPress={browser.check} /> : null}
+      <WaysOn browser={browser} signIn={t(words.signIn)} attempt={attempt} />
       {after === "done" ? null : <NoteAction label={t("auth.reset.again")} onPress={onAgain} />}
     </LoginFrame>
+  );
+}
+
+// The ways on from what the browser holds: signed out, to sign in; signed in, to sign out first; a sign-in waiting for
+// its second step, to finish it or end it; unread, to read again.
+function WaysOn({
+  browser,
+  signIn,
+  attempt,
+}: {
+  browser: ReturnType<typeof useBrowserSession>;
+  signIn: string;
+  attempt: Attempt;
+}) {
+  const { t } = useTranslation();
+  const next = useNext();
+  if (browser.state === "out") return <RouteNote to="/sign-in" label={signIn} next={next} />;
+  if (browser.state === "in") return <SignOutNote label={t("auth.reset.signOut")} attempt={attempt} />;
+  if (browser.state === "failed") return <NoteAction label={t("auth.reset.check")} onPress={browser.check} />;
+  if (browser.state === "reading") return null;
+  return (
+    <>
+      <RouteNote to="/mfa" label={t("auth.reset.goOn")} next={next} />
+      <SignOutNote label={t("auth.reset.endPending")} attempt={attempt} />
+    </>
   );
 }
 
@@ -391,6 +396,7 @@ function useBrowserSession() {
     );
   }, [read]);
   useEffect(check, [check]);
-  const state = known === "read" ? (session ? "in" : "out") : known;
+  const held = !session ? "out" : session.level === "pending_mfa" ? "pending" : "in";
+  const state = known === "read" ? held : known;
   return { state, email: session?.user.email ?? "", check } as const;
 }

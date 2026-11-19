@@ -25,11 +25,11 @@ export const zh = {
   reset: {
     forgot: "忘记密码？",
     title: "找回密码",
-    description: "输入注册时用的邮箱，我们会发一封重设密码的邮件。",
+    description: "填写账户现在使用的邮箱，重设密码的链接会发到那里。",
     submit: "发送重设邮件",
     back: "返回登录",
     sentTitle: "查收邮件",
-    sent: "如果这个邮箱注册过，邮件会在几分钟内送到。链接 30 分钟内有效，再申请一次就只有新邮件里的能用；没收到请稍后再试。",
+    sent: "如果有可用的账户使用这个邮箱，它会收到一封重设密码的邮件。链接从申请起 30 分钟内有效，再申请一次就只有新邮件里的能用；没收到可以稍后再试。",
     resend: "重新发送或换个邮箱",
     newTitle: "设置新密码",
     newDescription:
@@ -45,6 +45,9 @@ export const zh = {
     unknown: "没收到服务器的答复，新密码可能已经生效。先试着用它登录，不行再重新申请。",
     signedIn: "这个浏览器仍以 {{email}} 登录，要用新密码登录，先退出它。",
     signOut: "退出这个账户",
+    pending: "这个浏览器上有一次以 {{email}} 进行的登录还在等两步验证，要用新密码登录，先结束它。",
+    goOn: "继续那次登录",
+    endPending: "结束那次登录",
     unsure: "没能确认这个浏览器现在有没有登录着别的账户。",
     check: "再确认一次",
     signIn: "去登录",
@@ -104,11 +107,11 @@ export const en: Messages<typeof zh> = {
   reset: {
     forgot: "Forgot your password?",
     title: "Reset your password",
-    description: "Enter the email you registered with and we’ll send you a link to reset your password.",
+    description: "Enter the email your account uses now. The link to reset your password is sent there.",
     submit: "Send reset email",
     back: "Back to sign in",
     sentTitle: "Check your email",
-    sent: "If that address has an account, the email arrives within a few minutes. Its link works for 30 minutes, and asking again leaves only the newest email’s link working. If nothing arrives, try again later.",
+    sent: "If an active account uses that address, it gets an email with a link to reset the password. The link works for 30 minutes from the request, and asking again leaves only the newest email’s link working. If nothing arrives, try again later.",
     resend: "Send again, or use another email",
     newTitle: "Choose a new password",
     newDescription:
@@ -126,6 +129,10 @@ export const en: Messages<typeof zh> = {
       "The server didn’t answer, so the new password may already be set. Try signing in with it, and ask for a new link if that fails.",
     signedIn: "This browser is still signed in as {{email}}. Sign out of it first to sign in with the new password.",
     signOut: "Sign out of that account",
+    pending:
+      "A sign-in as {{email}} in this browser is waiting for its second step. End it first to sign in with the new password.",
+    goOn: "Finish that sign-in",
+    endPending: "End that sign-in",
     unsure: "We couldn’t tell whether this browser is signed in to another account.",
     check: "Check again",
     signIn: "Sign in",
