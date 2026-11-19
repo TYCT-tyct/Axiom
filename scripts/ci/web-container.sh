@@ -67,7 +67,7 @@ docker create --name "$name" \
   --env ACTIONS_RUNTIME_TOKEN --env ACTIONS_CACHE_SERVICE_V2 \
   --env npm_config_store_dir="$(dirname "$pnpm_store")" \
   "${shared[@]}" \
-  "$WEB_IMAGE" bash -e -c '
+  "${AXIOM_CACHED_WEB_IMAGE:-$WEB_IMAGE}" bash -e -c '
     mkdir -p "$HOME"
     git config --global --add safe.directory "$PWD"
     cat /proc/self/cgroup

@@ -42,3 +42,14 @@ test("resumes a disconnected font and reuses its verified cache", async (t) => {
   assert.deepEqual(await restored.sourceFont(name), body);
   assert.deepEqual(requests, [undefined, `bytes=${prefix}-`]);
 });
+
+test("retries a failed font download only once", async (t) => {
+  const cache = await mkdtemp(join(tmpdir(), "axiom-font-failure-"));
+  t.after(() => rm(cache, { recursive: true, force: true }));
+  process.env.XDG_CACHE_HOME = cache;
+  const fetch = t.mock.method(globalThis, "fetch", async () => new Response(null, { status: 503 }));
+  const name = "failed-download";
+  sources[name] = { url: "https://example.invalid/font", sha256: "unused" };
+  await assert.rejects(sourceFont(name), /font download failed: failed-download/);
+  assert.equal(fetch.mock.callCount(), 2);
+});

@@ -1,0 +1,40 @@
+name: Docker image cache
+description: Restore the image group before the job starts its containers.
+inputs:
+  group:
+    description: tests or web
+    required: true
+  warm-only:
+    description: skip loading an archive that is already stored
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: images
+      shell: bash
+      run: bash scripts/ci/cache-images.sh key "$IMAGE_GROUP"
+      env:
+        IMAGE_GROUP: ${{ inputs.group }}
+    - id: restore
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ${{ steps.images.outputs.archive }}
+        key: docker-images-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.images.outputs.key }}
+        lookup-only: ${{ inputs.warm-only }}
+    - if: inputs.warm-only != 'true' || steps.restore.outputs.cache-hit != 'true'
+      id: prepare
+      name: Load cached images or pull missing images
+      shell: bash
+      run: bash scripts/ci/cache-images.sh prepare "$IMAGE_GROUP"
+      env:
+        IMAGE_GROUP: ${{ inputs.group }}
+    - if: steps.restore.outputs.cache-hit != 'true' && steps.prepare.outputs.archive-ready == 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        path: ${{ steps.images.outputs.archive }}
+        key: ${{ steps.restore.outputs.cache-primary-key }}
+    - if: always()
+      shell: bash
+      run: rm -f -- "$IMAGE_ARCHIVE"
+      env:
+        IMAGE_ARCHIVE: ${{ steps.images.outputs.archive }}

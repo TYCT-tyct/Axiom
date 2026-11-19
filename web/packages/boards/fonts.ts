@@ -56,7 +56,7 @@ async function loadFont(name: string): Promise<Buffer> {
 }
 
 async function downloadFont(name: string, url: string): Promise<Buffer> {
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   const chunks: Uint8Array[] = [];
   let received = 0;
   for (let attempt = 1; ; attempt++) {
@@ -64,14 +64,11 @@ async function downloadFont(name: string, url: string): Promise<Buffer> {
       await readFontResponse(url, received, chunks);
       return Buffer.concat(chunks);
     } catch (error) {
-      if (
-        attempt === maxAttempts ||
-        !(error instanceof TypeError || (error instanceof DOMException && error.name === "TimeoutError"))
-      ) {
+      if (attempt === maxAttempts) {
         throw new Error(`font download failed: ${name}`, { cause: error });
       }
       received = chunks.reduce((total, chunk) => total + chunk.byteLength, 0);
-      const waitMs = 1000 * 2 ** (attempt - 1);
+      const waitMs = 1000;
       console.warn(
         `font download interrupted: ${name} after ${received} bytes (attempt ${attempt}/${maxAttempts}, retry in ${waitMs} ms): ${error}`,
       );
