@@ -420,6 +420,12 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "site bed",
+    basis:
+      "docs/frontend.md「对比度令牌」: the chosen language and appearance carry a 3:1 control edge, where the board's hairline is 1.3:1",
+    ...both(".hfm6 .seg .sg.on"),
+  },
+  {
+    scene: "site bed",
     basis: "the address is the site's own API address, not the board's example",
     ...both(".hfm6 .pr2 .pv"),
   },

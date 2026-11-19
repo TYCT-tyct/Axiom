@@ -1,5 +1,5 @@
 import { onMotion, reducedMotion, timeline } from "@axiom/fx";
-import { type Script, turns } from "./script";
+import { type Script, tabKey, tabStop, turns } from "./script";
 
 // The questions' script (Site.dc.html M5): one question is open, and in the wide layout a cable patches from its port to
 // the card, with a pulse down it; the first answer's diagram sends its request to one vendor after another. In the
@@ -40,6 +40,11 @@ class FaqRun implements Script<object> {
   private cy = ROW / 2;
   private readonly patching = turns();
   private readonly pick = indices.map((i) => () => this.choose(i));
+  private readonly tabKey = tabKey(
+    questions,
+    () => Math.max(0, this.open),
+    (i) => this.choose(i),
+  );
   private readonly stopMotion = onMotion((allowed) => this.motion(allowed));
 
   constructor(
@@ -118,6 +123,8 @@ class FaqRun implements Script<object> {
       ...Object.fromEntries(indices.map((i) => [`m5_t${i}`, this.pick[i]])),
       ...Object.fromEntries(indices.map((i) => [`m5_o${i}`, open === i ? "on" : ""])),
       ...Object.fromEntries(indices.map((i) => [`m5_x${i}`, open === i])),
+      ...Object.fromEntries(indices.map((i) => [`m5_ti${i}`, tabStop(i, Math.max(0, open))])),
+      m5_tabKey: this.tabKey,
       // a closed answer of the accordion is out of what is read, by the same state as the button's aria-expanded
       ...Object.fromEntries(indices.map((i) => [`m5_h${i}`, open !== i])),
       ...Object.fromEntries(Array.from({ length: vendors }, (_, i) => [`m5_v${i}`, this.vendor === i ? "on" : ""])),

@@ -1,0 +1,25 @@
+/* At 360px the phone's words and the site's data must not be cut, as the frame clips what overflows: the closing
+   headline's phrases may break, and the address breaks anywhere in a column allowed to shrink. The board's elements are
+   named by attribute, which a module leaves as written, and each rule outranks the board's one it amends. */
+.bed [class~="m"] [class~="end"] h2 > span[class~="ph"] {
+  white-space: normal;
+}
+
+.bed [class~="d"] div[class~="pr"] {
+  grid-template-columns: 48px minmax(0, 1fr) auto;
+}
+
+.bed [class~="m"] div[class~="pr"] {
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+}
+
+.bed div[class~="pr"] [class~="pv"] {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+/* The chosen language and appearance are marked by an edge a control needs, 3:1 against what is around it
+   (docs/frontend.md「对比度令牌」), where the board's hairline is about 1.3:1. */
+.bed [class~="seg"] span[class~="sg"][class~="on"] {
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
+}

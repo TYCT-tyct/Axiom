@@ -71,6 +71,23 @@ const connect = (board: string): Region => ({
     ...entrance("hfm1", "m1_in"),
     // what the copy button copies for the tool shown, said on hover too
     ".hfm1 .cpy": { set: { title: "{{m1_copyLabel}}" } },
+    // the tools are tabs to the keyboard as the ARIA pattern has them: one stop for the row, the arrows move along it,
+    // and the card is the panel they control
+    ".hfm1 .tabs": { set: { onkeydown: "{{m1_tabKey}}" } },
+    ...Object.fromEntries(
+      range(5).map((i) => [
+        `.hfm1 .tabs > .tab:nth-child(${i + 1})`,
+        { set: { id: `connect-tab-${i}`, tabindex: `{{m1_ti${i}}}`, "aria-controls": "connect-card" } },
+      ]),
+    ),
+    ".hfm1 .code": { set: { id: "connect-card", role: "tabpanel", "aria-labelledby": "{{m1_card}}" } },
+    // the key's place in a line still being written is out of the keyboard's way and out of what is read
+    ...Object.fromEntries(
+      range(lines).map((i) => [
+        `.hfm1 pre > .ln:nth-child(${i + 1}) .kc`,
+        { set: { tabindex: `{{m1_l${i}Kt}}`, "aria-hidden": `{{m1_l${i}Kh}}` } },
+      ]),
+    ),
   },
   classes,
   inserted: { into: ".hfm1 .fig", classes: inserted },

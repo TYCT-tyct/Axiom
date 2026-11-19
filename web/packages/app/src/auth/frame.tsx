@@ -43,7 +43,7 @@ export function AuthFrame({
       >
         <div className="space-y-1.5">
           <h1 className="text-xl tracking-[-0.01em] text-t1">{title}</h1>
-          {description ? <p className="text-ui text-t3">{description}</p> : null}
+          {description ? <p className="text-ui text-t3 [overflow-wrap:anywhere]">{description}</p> : null}
         </div>
         {children}
         {footer ? <p className="text-ui text-t3">{footer}</p> : null}

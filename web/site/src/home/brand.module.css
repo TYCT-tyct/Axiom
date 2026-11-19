@@ -5,3 +5,9 @@
   height: 20px;
   object-fit: contain;
 }
+
+/* A site's name of any length: it shrinks with its row and breaks anywhere rather than push the page wider. */
+.name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

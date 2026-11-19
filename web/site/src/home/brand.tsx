@@ -15,7 +15,7 @@ export function Brand({ logoUrl, name }: { logoUrl?: string; name?: string }) {
       ) : (
         <Mark t={() => ""} />
       )}
-      {name !== undefined && <span>{name}</span>}
+      {name !== undefined && <span className={styles.name}>{name}</span>}
     </>
   );
 }

@@ -122,9 +122,25 @@ const faq = (board: string): Region => {
       // without the site's address the picture shows no command, only that it is unavailable
       ".hfm5 .w2 .cl:nth-child(2)": { unless: "m5_noApi" },
       ".hfm5 .w2 .cl:nth-child(3)": { unless: "m5_noApi" },
-      // in the accordion a closed answer is clipped, not gone: the expanded state takes it out of what is read too
+      // in the accordion a closed answer is clipped, not gone: the expanded state takes it out of what is read too; in
+      // the wide layout the questions are tabs to the keyboard as the ARIA pattern has them, one stop for the row, the
+      // arrows moving along it, each controlling its pane
       ...(wide
-        ? {}
+        ? {
+            ".hfm5 .qs": { set: { onkeydown: "{{m5_tabKey}}" } },
+            ...Object.fromEntries(
+              range(questions).flatMap((i) => [
+                [
+                  `.hfm5 .qs > .q:nth-child(${i + 2})`,
+                  { set: { id: `faq-tab-${i}`, tabindex: `{{m5_ti${i}}}`, "aria-controls": `faq-pane-${i}` } },
+                ],
+                [
+                  `.hfm5 .card > .pane:nth-child(${i + 1})`,
+                  { set: { id: `faq-pane-${i}`, "aria-labelledby": `faq-tab-${i}` } },
+                ],
+              ]),
+            ),
+          }
         : Object.fromEntries(
             range(questions).map((i) => [
               `.hfm5 .qs > .fq:nth-child(${i + 1}) > .fqa`,

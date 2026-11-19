@@ -14,7 +14,7 @@ import {
   tools,
 } from "./connect-tools";
 import { Wire } from "./connect-wire";
-import { firstSeen, type Script, turns } from "./script";
+import { firstSeen, type Script, tabKey, tabStop, turns } from "./script";
 
 // The connect screen's script (Site.dc.html M1): the tool's configuration is decoded in; the machine plugs into the one
 // input, a call runs down the cable, the shaft climbs to its vendor's level, the wiper turns to the model's contact, and
@@ -97,6 +97,11 @@ class ConnectRun implements Script<Texts> {
   private readonly resize: ResizeObserver;
   private readonly stopMotion: () => void;
   private readonly picks = tools.map((_, i) => () => this.pick(i));
+  private readonly tabKey = tabKey(
+    tools.length,
+    () => this.state.tool,
+    (i) => this.pick(i),
+  );
   private readonly hovers = Array.from({ length: rows }, (_, i) => () => this.hover(i));
 
   constructor(
@@ -481,11 +486,14 @@ class ConnectRun implements Script<Texts> {
           [`m1_tab${i}`, i === tool ? "on" : ""],
           [`m1_sel${i}`, i === tool],
           [`m1_pick${i}`, this.picks[i]],
+          [`m1_ti${i}`, tabStop(i, tool)],
         ]),
       ),
       ...Object.fromEntries(this.hovers.map((hover, i) => [`m1_lh${i}`, hover])),
       m1_lhoff: this.leave,
       m1_fig: "A",
+      m1_tabKey: this.tabKey,
+      m1_card: `connect-tab-${tool}`,
       m1_noteCls: "n-card",
       m1_file: copied === "failed" ? word("copyFailed") : textOf(current.file, texts),
       m1_copy: this.copy,

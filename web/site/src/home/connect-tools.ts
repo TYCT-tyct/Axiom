@@ -193,14 +193,20 @@ function lineHoles(i: number, line: Line, texts: Texts, decode: Decode, seen: nu
     complete &&= done.complete;
     offset += done.length;
   }
-  holes[`${p}K`] = line.runs.some((run) => run[0] === "k") ? (complete ? "on" : "wait") : "";
-  return holes;
+  const kept = line.runs.some((run) => run[0] === "k") ? (complete ? "on" : "wait") : "";
+  return {
+    ...holes,
+    [`${p}K`]: kept,
+    // the key's place while its line is still being written is invisible: out of the keyboard's way and of what is read
+    [`${p}Kt`]: kept === "wait" ? -1 : 0,
+    [`${p}Kh`]: kept === "wait",
+  };
 }
 
 // Every hole of the card's lines for a tool: the rows the tool has, and the rest of the nine drawn empty.
 export function cardHoles(index: number, texts: Texts, decode: Decode, pulse: boolean, rows: number) {
   const tool = tools[index] as Tool;
-  const holes: Record<string, string> = {};
+  const holes: Record<string, string | number | boolean> = {};
   // how many characters of what is added come before each line, for the decode that runs through them all
   let seen = 0;
   const lines = linesOf(tool, texts.known);

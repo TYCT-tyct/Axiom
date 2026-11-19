@@ -7,6 +7,7 @@ import narrowZh from "@axiom/boards/SitePhone/regions/Bed.zh";
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
+import styles from "./bed-screen.module.css";
 import { start } from "./bed-script";
 import { Brand } from "./brand";
 import { joinHref, links, pricesHref } from "./links";
@@ -64,23 +65,26 @@ export function BedScreen({ wide }: { wide: boolean }) {
     m6_moonP: scheme === "dark",
   };
   const Region = wide ? Wide : Narrow;
+  // the board's footer, amended where its narrow layout would cut the site's words (bed-screen.module.css)
   return (
-    <Region
-      t={word}
-      values={v as Props["values"]}
-      text={{
-        credit: t("footer"),
-        apiV1: v1,
-        lede: t(`script.bed.lede.${way}`),
-        join: t(`script.bed.join.${way}`),
-        tagline: t("script.bed.tagline"),
-        signUpHref: joinHref(join),
-        homeHref: links.home,
-        modelsHref: links.models,
-        pricingHref: pricesHref(prices),
-      }}
-      // the footer's brand is the site's own, as the header's is (brand.tsx)
-      brand={<Brand logoUrl={brand?.logo_url} name={name} />}
-    />
+    <div className={styles.bed}>
+      <Region
+        t={word}
+        values={v as Props["values"]}
+        text={{
+          credit: t("footer"),
+          apiV1: v1,
+          lede: t(`script.bed.lede.${way}`),
+          join: t(`script.bed.join.${way}`),
+          tagline: t("script.bed.tagline"),
+          signUpHref: joinHref(join),
+          homeHref: links.home,
+          modelsHref: links.models,
+          pricingHref: pricesHref(prices),
+        }}
+        // the footer's brand is the site's own, as the header's is (brand.tsx)
+        brand={<Brand logoUrl={brand?.logo_url} name={name} />}
+      />
+    </div>
   );
 }
