@@ -215,12 +215,13 @@ test("motion turned off after the page opened leaves the stage still, in its end
   await pageHeading(page);
   await running(page);
   await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect.poll(async () => (await loop(page)).pending).toBe(false);
-  const frames = (await loop(page)).frames;
-  // drawn at once, not on a frame: the loop has stopped
+  // the loop hears the change on its own query before the stage hears it on the page's and lets go of it: the stage is
+  // still once nothing owns the loop
+  await expect.poll(async () => (await loop(page)).owners).toBe(0);
+  // drawn at once, not on a frame: nothing takes the loop again
   await page.getByLabel("邮箱").fill(knownEmail);
   await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
-  expect((await loop(page)).frames).toBe(frames);
+  expect(await loop(page)).toMatchObject({ owners: 0, frames: 0, pending: false });
 });
 
 test("the stage takes the site's brand colour when the site's settings come after it was drawn", async ({ page }) => {
