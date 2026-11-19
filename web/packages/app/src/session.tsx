@@ -259,8 +259,10 @@ export const pendingOver = (error: unknown) =>
 
 // A pending sign-in that is over is signed out by its step (useEndPending), so the cookie holds no session and a
 // reload lands on the sign-in page, never on a step that cannot be finished; that page says why the visitor is back
-// (useSignInEnded). It signs out only the pending session the step was for (its sessionBinding), read again first:
-// a cookie that already holds another session (the step passed, or the person signed in again elsewhere) is kept.
+// (useSignInEnded). It reads the session again first and signs out only the pending session the step was for (its
+// sessionBinding): a cookie that holds no session any more (it expired) has nothing to sign out, and still ended; one
+// that holds another session (the step passed, or the person signed in again elsewhere) is kept, and nothing ended.
+// A read or a sign-out that fails is thrown, for the step to say and offer again: the sign-in is still over.
 let ended = false;
 
 export function useEndPending() {
@@ -268,14 +270,20 @@ export function useEndPending() {
   const { api } = useAuth();
   const signOut = useSignOut();
   return async (pending: string) => {
-    await queryClient.cancelQueries({ queryKey: sessionKey });
-    const now = await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
-    if (sessionBinding(now) !== pending) return;
+    // set before the read: a read that finds no session moves the gate to the sign-in page at once
     ended = true;
     try {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      const now = await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+      if (now === null) return;
+      if (sessionBinding(now) !== pending) {
+        ended = false;
+        return;
+      }
       await signOut.mutateAsync();
     } catch (error) {
-      ended = false;
+      // a sign-out refused for want of a session ends it on the page all the same (providers.tsx)
+      if (!pendingOver(error)) ended = false;
       throw error;
     }
   };

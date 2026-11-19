@@ -1,5 +1,5 @@
 import { FormError, SubmitButton, TextField } from "@axiom/ui";
-import { useMutation } from "@tanstack/react-query";
+import { type UseMutationResult, useMutation } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
 import { readForm } from "../forms";
@@ -31,7 +31,9 @@ function MfaForm({ brand }: { brand?: Brand }) {
   const verify = useVerifyMfa();
   const endPending = useEndPending();
   const pending = sessionBinding(useSession());
+  const end = useMutation({ mutationFn: () => endPending(pending) });
   if (verify.error instanceof UnreadSession) return <Unread brand={brand} unread={verify.error} />;
+  if (pendingOver(verify.error)) return <Ended brand={brand} end={end} />;
   return (
     <AuthFrame
       title={t("auth.mfa.title")}
@@ -46,10 +48,7 @@ function MfaForm({ brand }: { brand?: Brand }) {
           event.preventDefault();
           const code = (readForm(event.currentTarget).code ?? "").trim();
           if (code && !verify.isPending) {
-            verify.mutate(
-              { code },
-              { onError: (error) => pendingOver(error) && void endPending(pending).catch(() => {}) },
-            );
+            verify.mutate({ code }, { onError: (error) => pendingOver(error) && end.mutate() });
           }
         }}
       >
@@ -89,6 +88,29 @@ function Unread({ brand, unread }: { brand?: Brand; unread: UnreadSession }) {
         <FormError>{errors.message(failed)}</FormError>
         <SubmitButton pending={reread.isPending} wide>
           {t("state.retry")}
+        </SubmitButton>
+      </form>
+    </AuthFrame>
+  );
+}
+
+// A pending sign-in that is over: the code is not asked for any more. Its end (useEndPending) is under way, or failed,
+// which is said with the way to try it again.
+function Ended({ brand, end }: { brand?: Brand; end: UseMutationResult<void, Error, void> }) {
+  const { t } = useTranslation("common");
+  const errors = useErrors();
+  return (
+    <AuthFrame title={t("auth.mfa.title")} description={t("auth.mfa.over")} brand={brand}>
+      <form
+        noValidate
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!end.isPending) end.mutate();
+        }}
+      >
+        {end.isError ? <FormError>{t("signOutFailed", { reason: errors.message(end.error) })}</FormError> : null}
+        <SubmitButton pending={end.isPending} wide>
+          {t("auth.mfa.again")}
         </SubmitButton>
       </form>
     </AuthFrame>

@@ -98,6 +98,49 @@ test.describe("signing in", () => {
     ]);
   });
 
+  test("a pending sign-in that expired while its step was open ends on the sign-in page, which says why", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    await page.goto("/");
+    await signIn(page, mfaEmail);
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    // the pending session runs out on the server: the code and the session read are refused alike (401)
+    state.level = "none";
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(h1(page, "登录")).toBeVisible();
+    await expect(page.getByText("上一次登录已经失效，请重新登录。")).toBeVisible();
+    expect(state.log.filter((line) => line === "POST /auth/sign-out")).toEqual([]);
+  });
+
+  test("a spent challenge whose sign-out fails says so, with no code to send, and the sign-out can be tried again", async ({
+    page,
+  }) => {
+    await mockAdmin(page);
+    // the first sign-out fails; the one tried again goes through
+    let failing = true;
+    await page.route("**/api/admin/v1/auth/sign-out", async (route) => {
+      if (!failing) return route.fallback();
+      failing = false;
+      return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } });
+    });
+    await page.goto("/");
+    await signIn(page, mfaEmail);
+    for (let i = 0; i < 5; i++) {
+      await page.getByLabel("验证码或恢复码").fill("000000");
+      await page.getByRole("button", { name: "验证" }).click();
+      await expect(page.getByRole("alert")).toHaveText(/验证码不对/);
+    }
+    await page.getByLabel("验证码或恢复码").fill("123456");
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page.getByText("这次登录已经失效，请重新登录。")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("你仍在登录状态");
+    await expect(page.getByLabel("验证码或恢复码")).toHaveCount(0);
+    await page.getByRole("button", { name: "重新登录" }).click();
+    await expect(h1(page, "登录")).toBeVisible();
+    await expect(page.getByText("上一次登录已经失效，请重新登录。")).toBeVisible();
+  });
+
   test("a rate limit says how long to wait", async ({ page }) => {
     await mockAdmin(page);
     await page.goto("/sign-in");

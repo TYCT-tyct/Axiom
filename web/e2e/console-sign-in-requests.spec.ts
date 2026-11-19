@@ -369,4 +369,48 @@ test.describe("one request at a time", () => {
       "POST /auth/mfa",
     ]);
   });
+
+  test("a pending sign-in that expired while its step was open ends on the sign-in page, which says why", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    await page.goto("/console/");
+    await signIn(page, mfaEmail);
+    await page.getByLabel("验证码或恢复码").fill(state.user.mfaCode);
+    // the pending session runs out on the server: the code and the session read are refused alike (401)
+    state.level = "none";
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    await expect(page.getByText("上一次登录已经失效，请重新登录。")).toBeVisible();
+    expect(state.log.filter((line) => line === "POST /auth/sign-out")).toEqual([]);
+  });
+
+  test("a spent challenge whose sign-out fails says so, with no code to send, and the sign-out can be tried again", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    // the first sign-out fails; the one tried again goes through
+    let failing = true;
+    await page.route("**/api/console/v1/auth/sign-out", async (route) => {
+      if (!failing) return route.fallback();
+      failing = false;
+      return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } });
+    });
+    await page.goto("/console/");
+    await signIn(page, mfaEmail);
+    const code = page.getByLabel("验证码或恢复码");
+    for (let i = 0; i < 5; i++) {
+      await code.fill("000000");
+      await page.getByRole("button", { name: "验证" }).click();
+      await expect(page.getByRole("alert")).toBeVisible();
+    }
+    await code.fill(state.user.mfaCode);
+    await page.getByRole("button", { name: "验证" }).click();
+    await expect(page.getByText("这次登录已经失效，请重新登录。")).toBeVisible();
+    await expect(page.getByRole("alert")).toContainText("你仍在登录状态");
+    await expect(code).toHaveCount(0);
+    await page.getByRole("button", { name: "重新登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    await expect(page.getByText("上一次登录已经失效，请重新登录。")).toBeVisible();
+  });
 });
