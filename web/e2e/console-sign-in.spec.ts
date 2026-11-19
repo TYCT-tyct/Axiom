@@ -239,7 +239,10 @@ test.describe("the sign-in page's parts", () => {
     state.site = { ...state.site, name: `${"W".repeat(60)} ${"W".repeat(39)}` };
     const brand = page.locator(".lg-sea .brand");
     const name = brand.locator("span").last();
-    const cut = () => name.evaluate((element) => element.scrollHeight > element.clientHeight + 1);
+    const cut = () =>
+      name.evaluate(
+        (element) => element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1,
+      );
     await page.goto("/console/sign-in");
     await expect(brand).toContainText("WWW");
     expect(await cut()).toBe(false);
