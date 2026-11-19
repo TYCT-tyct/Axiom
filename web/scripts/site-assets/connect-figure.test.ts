@@ -14,3 +14,10 @@ it("keeps the committed figure and kit current with the board (run `pnpm --dir w
 it("leaves no style attribute in the figure, which the page's content security policy would block", () => {
   expect(outputs["connect-figure.svg"]).not.toContain("style=");
 });
+
+// The board names the drawing in Chinese only; it is decoration, which the screen's words carry, so it is not read.
+it("takes the figure out of what is read", () => {
+  const start = outputs["connect-figure.svg"]?.slice(0, 200) ?? "";
+  expect(start).toContain('aria-hidden="true"');
+  expect(start).not.toMatch(/role="img"|aria-label=/);
+});
