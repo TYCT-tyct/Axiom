@@ -202,18 +202,18 @@ jobs:
 
   # The Go tests only. `just test` depends on `web-embed`, the frontend the program embeds, so this job installs pnpm and
   # Node like the web job; the build is cached by content on the host (scripts/web_cache.py), as it was in the one job.
-  # A pull request does not run it: the train runs it once for the batch, and finds the PR that broke it (2026-10-28,
-  # owner: 「能优化则优化吧。甚至跳过」 — every PR's tests ran twice, once alone and once in its train).
+  # A pull request runs it too (#865): when only the train ran it, a failure surfaced after review and cost a train and a
+  # handback (four ejections on 2026-11-19). Four shards keep it near the length of its slowest package.
   go-test:
-    name: go-test (${{ matrix.shard }}/2)
+    name: go-test (${{ matrix.shard }}/4)
     needs: changes
-    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
-      fail-fast: false # the other shard's log still names its own failures for the train's flaky check
+      fail-fast: false # the other shards' logs still name their own failures for the train's flaky check
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     # GITHUB_JOB is the same for both shards: the container label needs the shard, or one shard's cleanup removes the
     # other's live containers
     env:
@@ -232,7 +232,7 @@ jobs:
       - name: Clean test containers before tests
         run: bash scripts/ci/clean-test-containers.sh
       - uses: ./.github/actions/setup
-      - run: just test ${{ matrix.shard }}/2
+      - run: just test ${{ matrix.shard }}/4
       - name: Clean test containers after tests
         if: always()
         run: bash scripts/ci/clean-test-containers.sh
@@ -291,7 +291,7 @@ jobs:
 
   # Each shard keeps the same eight-core container and four-worker rule (#297/#363). Like go-test, not on a pull request unless its frontend inputs changed, so a broken page fails before its train.
   e2e:
-    name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 2 }})
+    name: e2e (${{ matrix.shard }}/${{ inputs.gate_stress && 1 || 4 }})
     needs: changes
     # a shard takes about 11 minutes; without a limit a hung one held the merge train for an hour (GitHub's default is 6 h)
     timeout-minutes: 30
@@ -302,10 +302,10 @@ jobs:
     strategy:
       fail-fast: false # finish the other shard and keep its evidence when one fails
       matrix:
-        shard: ${{ fromJSON(inputs.gate_stress && '[1]' || '[1,2]') }}
+        shard: ${{ fromJSON(inputs.gate_stress && '[1]' || '[1,2,3,4]') }}
     env:
       E2E_SHARD_INDEX: ${{ matrix.shard }}
-      E2E_SHARD_COUNT: ${{ inputs.gate_stress && 1 || 2 }}
+      E2E_SHARD_COUNT: ${{ inputs.gate_stress && 1 || 4 }}
       E2E_FLAKY_RETRY: ${{ inputs.base != '' && startsWith(github.ref, 'refs/heads/train/') && !inputs.gate_stress }}
       GATE_STRESS: ${{ inputs.gate_stress || false }}
     runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
