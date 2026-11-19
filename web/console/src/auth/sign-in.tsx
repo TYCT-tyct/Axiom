@@ -1,22 +1,29 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { consoleAuth } from "@axiom/api/auth";
 import { useErrors, useSignInEnded, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
 import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
-import LoginLink from "@axiom/boards/Login/regions/LoginLink";
-import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import LoginOr from "@axiom/boards/Login/regions/LoginOr";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import LoginStack from "@axiom/boards/Login/regions/LoginStack";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { type AnchorHTMLAttributes, type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { type RefObject, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
-import { FormProblem, LoginGate, NoteAction, primaryLook, wrapAnywhere } from "./login-parts";
+import {
+  FormProblem,
+  fieldRefused,
+  hearAddress,
+  LoginGate,
+  NoteAction,
+  primaryLook,
+  RouteNote,
+  wrapAnywhere,
+} from "./login-parts";
 import { keepOAuthNext } from "./oauth-return";
 import { usePasskey } from "./passkey-sign-in";
 
@@ -48,12 +55,8 @@ function loginOriginOf(site: Schemas["Site"] | undefined) {
   return (site.oauth_providers?.length ?? 0) > 0 || site.passkeys ? origin.replace(/\/$/, "") : undefined;
 }
 
-// Shown to the stage as an address that looks whole; the server decides what an address is.
-const looksLikeEmail = (value: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
-
-// An answer that names the email as what is wrong (the contract's 400 with its pointer) belongs to the first step.
-const aboutEmail = (error: unknown) =>
-  error instanceof ApiError && error.fields.some(({ pointer }) => pointer === "/email");
+// An answer that names the email as what is wrong belongs to the first step.
+const aboutEmail = (error: unknown) => fieldRefused(error, "/email");
 
 // SignInSteps asks for the email, then the password, and sends both in one signIn: the two steps are only how the
 // page asks (port design §9). The server's answer moves the visitor on through the gate: to the second factor, to
@@ -166,7 +169,7 @@ function useAddress(stage: Stage, attempt: Attempt, refused: boolean, typed: () 
     setEmail(value);
     typed();
     if (refused) attempt.dismiss();
-    stage.hear({ type: "email", len: value.trim().length, ok: looksLikeEmail(value.trim()) });
+    hearAddress(stage, value);
   };
   return { email, emailInput, typeEmail };
 }
@@ -232,9 +235,11 @@ function EmailStep({ flow }: { flow: Flow }) {
   );
 }
 
-// The second step: the password, which stays in its field until it is sent, never in the page's state.
+// The second step: the password, which stays in its field until it is sent, never in the page's state, and the way to
+// reset a forgotten one.
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
+  const next = useSearch({ strict: false }).next;
   const busy = flow.attempt.kind !== null || !flow.ready;
   return (
     <>
@@ -252,6 +257,7 @@ function PasswordStep({ flow }: { flow: Flow }) {
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
+      <RouteNote to="/reset-password" label={t("auth.reset.forgot")} next={next} />
       <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
     </>
   );
@@ -358,17 +364,5 @@ async function startOAuth(provider: Schemas["OAuthProvider"], next: string | und
 function Register() {
   const { t } = useTranslation();
   const next = useSearch({ strict: false }).next;
-  const RegisterLink = useMemo(
-    () =>
-      ({ href: _, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
-        <Link to="/register" search={{ next, invite: undefined }} {...props} />
-      ),
-    [next],
-  );
-  return (
-    <LoginNote t={String}>
-      <span>{t("auth.signIn.noAccount")}</span>{" "}
-      <LoginLink t={String} link={RegisterLink} label={t("auth.signIn.register")} values={{ to: "/register" }} />
-    </LoginNote>
-  );
+  return <RouteNote to="/register" lead={t("auth.signIn.noAccount")} label={t("auth.signIn.register")} next={next} />;
 }

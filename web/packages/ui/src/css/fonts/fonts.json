@@ -1,5 +1,5 @@
 {
-  "inputs": "d2546bda1da75e42bda10a10b64b8166bf1ae9b9699068c51da440b395ad4d05",
+  "inputs": "285eab54235c6e91daac7ce3153e2c0decdf717fc5a1bf6d252446e33c7f8f39",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -38,14 +38,26 @@
     {
       "family": "AX Serif Latin",
       "weight": "400",
-      "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "style": "italic",
       "script": "latin",
       "absent": "",
       "files": [
         {
           "file": "ax-serif-latin-400-italic.woff2",
-          "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+          "pages": [
+            "site/home",
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent",
+            "console/auth/reset-password"
+          ],
           "bytes": 3828,
           "sha256": "2aa082382462cec29a64ca5b4958701b965052d1ec6a0ca17a6d3c133a32bfaf",
           "chars": "EKYekrvy"
@@ -61,46 +73,55 @@
         "site/first",
         "console/auth/sign-in",
         "console/auth/mfa",
-        "console/auth/consent"
+        "console/auth/consent",
+        "console/auth/reset-password"
       ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "axiom-cjk-400.84314706.woff2",
-          "pages": ["console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
-          "bytes": 13380,
-          "sha256": "f32351e39b2ad91c89811b0ca249bb2a98aa68100c668b1dafd656293f0919a6",
-          "chars": "《》串二人今任何侧做像兑冲减刻功助区印受右吧启员均域处备太套安密层展属带帮废弱形志态恢意扫护描插操政效料暖栏概款浏消温灰状真知私突立策箱繁继续维览评该负责资跳达述邮钥长阅隐需青静颜"
+          "file": "axiom-cjk-400.47831c6b.woff2",
+          "pages": ["console/auth/sign-in", "console/auth/mfa", "console/auth/consent", "console/auth/reset-password"],
+          "bytes": 13520,
+          "sha256": "f2b415be4262d9feb5530cdbfd334f1d199c155f6a375f9bc6da201712c37a47",
+          "chars": "《》串二人今任何侧做像兑冲减刻功助区印受右吧启员均域处备太套安密层展属带帮废弱形志忘态恢意扫护描插操政效料暖栏概款浏消温灰状真知私突立策箱繁继续维览评该负责资跳达述邮钥长阅隐需青静颜"
         },
         {
           "file": "axiom-cjk-400.2a493759.woff2",
           "pages": ["site/home"],
-          "bytes": 14488,
-          "sha256": "40e3d74b1f004ba18ad2e18e752d4c31e7a3c41371f41678e8d038ef53ff6a78",
-          "chars": "「」且么之云交亿什从令估例假健元免兼决几凭则创办参又变向吗含周响固国官审家少尽局屏己幅度康影待怎总想感扣拒拿挑损掉敏架样核楚止比泄涨清源照率白着种笔类累终绝编缺考耗背般花规让话说谁身较辑进送途遇那钱锁错间露高："
+          "bytes": 13652,
+          "sha256": "b81a540480008e06480e06c63a099cac49b5ee4ab8b7bed7621924d16b39a7f1",
+          "chars": "「」且么之云交亿什从令估例假健元免兼决凭创办参又向吗含周响固国官审家少尽局屏己幅度康影待怎总想感扣拒拿挑损掉敏架样核楚止比泄涨清源率白种笔类累终绝编缺考耗背般花规让话说谁身较辑进途遇那钱锁错间露高"
         },
         {
-          "file": "axiom-cjk-400.03dbe54b.woff2",
-          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+          "file": "axiom-cjk-400.48a38218.woff2",
+          "pages": [
+            "site/home",
+            "site/models",
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent",
+            "console/auth/reset-password"
+          ],
           "bytes": 33476,
           "sha256": "b92c18e12a98398d8f152d3aabe35ebda5889c5c9e1798d9409b9a41335a60f7",
           "chars": "、万下不两为也了事于些仅仍他付代以们件份优会但位低余作你使供便保值停允充先全公其具内再写准出分列刚删别制刷力加化匹匿厂原及发口另只可台号各合同名后否命和品哪售商器回因图在地址基填复多大天失好如字存它完定宜容对小尝就工已布平年并应建式引张弹当径得快性情成我或户手打执找把报持指据排控推提擎支收改放数整断新方无日旧时明是显暂更最月期未本权来构析果查标校档检次正求没法流游点片版现理用由百目直相看码础确秒称移稍稳站端符第等筛算管精级组经绑结给络缓网置联能行表被要解认记许设证试详误请读调败账走起超转载输过近返还连退通速邀部都配里重量金链附限除音项预频额验默（）；？"
         },
         {
-          "file": "axiom-cjk-400.bd9bd167.woff2",
+          "file": "axiom-cjk-400.5d225ada.woff2",
           "pages": [
             "site/home",
             "site/models",
             "site/first",
             "console/auth/sign-in",
             "console/auth/mfa",
-            "console/auth/consent"
+            "console/auth/consent",
+            "console/auth/reset-password"
           ],
-          "bytes": 11320,
-          "sha256": "749ec246438bc3b9f3eb718892f818bad936d1116041d17cbf4733cd4bf459e3",
-          "chars": "。一三上与个中主产价体入关册切到前务动单取型外始实导常底开录所择按换接搜文有服条格模步每注浅测海深演生登的示简系索线统自航色获菜见观言计语费跟路这选闭问际随面页题首，",
+          "bytes": 12712,
+          "sha256": "19b5ec60061f64c14f08a45f5fc6e4b73d40b6928c0f713d0ba48b977c21ac1f",
+          "chars": "。一三上与个中主产价体入关册几切则到前务动单去取变型外始实导封常底开录所才择按换接搜文有服条格模步每注浅测海深演照生申登的着示答简系索线统自航色获菜见观言计语费跟路这送选钟闭问际随面页题首，：",
           "preload": ["site/first"]
         }
       ]
@@ -370,34 +391,62 @@
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "ax-serif-600.03dbe54b.woff2",
-          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
-          "bytes": 19632,
-          "sha256": "092082e7eeb408bff6e93b29ae40bdf7a90d3908f05f795c62187598ece612f5",
-          "chars": "。一三上不与两个事产从件价会允先入册几到前务变可同后地址型实密常录所把按接改新更有服条格楚模款止步求注清点生用登的码端第线背能见计许证说请费路输这都问际题验，"
+          "file": "ax-serif-600.48a38218.woff2",
+          "pages": [
+            "site/home",
+            "site/models",
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent",
+            "console/auth/reset-password"
+          ],
+          "bytes": 22888,
+          "sha256": "acd5fc0ef1bec90c3172a16c2880f59fa506c9b0272b029f01607c105b3ad235",
+          "chars": "。一三上不与两个了事产从件价会允先入册几到前务变可同后否回地址型定实密已常录所找把按接收改新是更有服条查格楚模款止步求注清点生用登的码确端第线置背能见计许设证说请费路输这邮都重链问际题验，"
         }
       ]
     },
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent",
+        "console/auth/reset-password"
+      ],
       "style": "normal",
       "script": "latin",
       "absent": "",
       "files": [
         {
           "file": "ax-serif-600.woff2",
-          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
-          "bytes": 12920,
-          "sha256": "d09a631c71ca96ac17911e6dafe58e06dd1b8286bd0e5ae478417a3e7b4d7825",
-          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+          "pages": [
+            "site/home",
+            "site/models",
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent",
+            "console/auth/reset-password"
+          ],
+          "bytes": 13160,
+          "sha256": "3f1553383ee7e15e077e2eaf16bd770a9707616284874240a4a8e4ec4327afa0",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~’"
         }
       ]
     }

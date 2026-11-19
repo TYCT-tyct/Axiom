@@ -50,13 +50,32 @@ const loginBoards = {
   390: { file: "LoginPhone.dc.html", height: 844, engines: ["ocean-orig", "login-ui"] },
 };
 
-// The sign-in page asks what the product asks, in the board's parts: its title and lede, the pitch's billing line
-// (product.md: billed by the endpoint that served, without the board's promise that every route is tested) and its
-// promise (the models the account can use), and the way
-// to register in a note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
-// does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
-// take out what the page has no counterpart for, so the comparison measures the parts and their layout.
-async function prepareSignInComparison(board: Page, page: Page, language: "zh" | "en") {
+// A sign-in page's email step asks what the product asks, in the board's parts: its title and lede, the pitch's billing
+// line (product.md: billed by the endpoint that served, without the board's promise that every route is tested) and its
+// promise (the models the account can use), and its way on in a note, where the board's email step has the
+// sign-up-on-the-way copy, the terms' box and the providers the mocked site does not offer (rulings.ts lists the parts
+// of the board's flow left out). The sign-in page's way on is to register; the reset page's, the request for a reset
+// link, is back to sign in. Put the page's words in the reference and take out what the page has no counterpart for,
+// so the comparison measures the parts and their layout.
+type EmailStepWords = { title: string; description: string; submit: string; lead?: string; link: string };
+
+const signInWords = (language: "zh" | "en"): EmailStepWords => {
+  const auth = language === "en" ? consoleAuthEn : consoleAuthZh;
+  return {
+    title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
+    description: auth.signIn.description,
+    submit: auth.signIn.next,
+    lead: auth.signIn.noAccount,
+    link: auth.signIn.register,
+  };
+};
+
+const resetWords = (language: "zh" | "en"): EmailStepWords => {
+  const { reset } = language === "en" ? consoleAuthEn : consoleAuthZh;
+  return { title: reset.title, description: reset.description, submit: reset.submit, link: reset.back };
+};
+
+async function prepareEmailStep(board: Page, page: Page, language: "zh" | "en", own: EmailStepWords) {
   // The page edges its controls in the console's control edge (docs/frontend.md「对比度令牌」), where the board draws a
   // lighter line: the reference takes the page's resolved colour, so the controls' place and fill stay compared.
   const edge = await page.evaluate(() => {
@@ -72,13 +91,8 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
     for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
     lg.style.setProperty("--bw", "1px");
   }, edge);
-  const auth = language === "en" ? consoleAuthEn : consoleAuthZh;
-  const words = {
-    title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
-    lede: auth.pitch.lede,
-    tail: auth.pitch.tail,
-    ...auth.signIn,
-  };
+  const { pitch } = language === "en" ? consoleAuthEn : consoleAuthZh;
+  const words = { ...own, lede: pitch.lede, tail: pitch.tail };
   await board.evaluate((words) => {
     const step = document.querySelector(".lg-step") as HTMLElement;
     // the words in their own inline boxes, as the page sets them, so only the glyphs are excused, not where lines sit
@@ -90,12 +104,14 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
     const pitch = document.querySelector(".lg-pitch .h") as HTMLElement;
     (pitch.lastChild as Text).textContent = words.tail;
     for (const part of step.querySelectorAll(".lg-consent, .lg-or, .lg-stack")) part.remove();
+    (step.querySelector(".lg-btn.primary") as HTMLElement).textContent = words.submit;
     const note = document.createElement("p");
     note.className = "lg-note";
     const link = document.createElement("a");
     link.href = "#";
-    link.textContent = words.register;
-    note.append(inline(words.noAccount), " ", link);
+    link.textContent = words.link;
+    if (words.lead) note.append(inline(words.lead), " ");
+    note.append(link);
     step.append(note);
     // the page sets a button's label in a span of its own, which the rulings excuse instead of the whole button
     for (const button of document.querySelectorAll(".lg-btn")) {
@@ -409,7 +425,17 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/sign-in"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
-    prepareComparison: prepareSignInComparison,
+    prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, signInWords(language)),
+  },
+  {
+    // the request for a reset link: the board draws no reset, and its email step is the same parts
+    name: "console reset-password",
+    suite: consoleSuite,
+    scene: "reset-password",
+    fonts: ["console", "console/auth/reset-password"],
+    boards: loginBoards,
+    schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, resetWords(language)),
   },
   {
     name: "site home",

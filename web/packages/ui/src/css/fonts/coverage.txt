@@ -25,19 +25,23 @@ admin/pages/suppliers        Axiom CJK Admin 400 normal: 405 chars in 3 files, 6
 admin/pages/users            Axiom CJK Admin 400 normal: 319 chars in 1 files, 46256 bytes
 console                      Axiom Mono 400 normal: 106 chars in 1 files, 16436 bytes
 console                      Axiom Sans 400 600 normal: 106 chars in 1 files, 20196 bytes
-console/auth/consent         AX Serif 600 normal: 79 chars in 1 files, 19632 bytes
-console/auth/consent         AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
+console/auth/consent         AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+console/auth/consent         AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
 console/auth/consent         AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
-console/auth/consent         Axiom CJK 400 normal: 436 chars in 3 files, 58176 bytes
-console/auth/mfa             AX Serif 600 normal: 79 chars in 1 files, 19632 bytes
-console/auth/mfa             AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
+console/auth/consent         Axiom CJK 400 normal: 436 chars in 3 files, 59708 bytes
+console/auth/mfa             AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+console/auth/mfa             AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
 console/auth/mfa             AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
-console/auth/mfa             Axiom CJK 400 normal: 419 chars in 3 files, 58176 bytes
+console/auth/mfa             Axiom CJK 400 normal: 419 chars in 3 files, 59708 bytes
 console/auth/register        Axiom CJK Console 400 normal: 440 chars in 1 files, 66444 bytes
-console/auth/sign-in         AX Serif 600 normal: 79 chars in 1 files, 19632 bytes
-console/auth/sign-in         AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
+console/auth/reset-password  AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+console/auth/reset-password  AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
+console/auth/reset-password  AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
+console/auth/reset-password  Axiom CJK 400 normal: 435 chars in 3 files, 59708 bytes
+console/auth/sign-in         AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+console/auth/sign-in         AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
 console/auth/sign-in         AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
-console/auth/sign-in         Axiom CJK 400 normal: 423 chars in 3 files, 58176 bytes
+console/auth/sign-in         Axiom CJK 400 normal: 424 chars in 3 files, 59708 bytes
 console/auth/verify-email    Axiom CJK Console 400 normal: 437 chars in 1 files, 66444 bytes
 console/pages/balance        Axiom CJK Console 400 normal: 509 chars in 3 files, 78916 bytes
 console/pages/call           Axiom CJK Console 400 normal: 481 chars in 2 files, 71556 bytes
@@ -57,15 +61,15 @@ console/pages/settings       Axiom CJK Console 400 normal: 475 chars in 3 files,
 console/pages/statement      Axiom CJK Console 400 normal: 467 chars in 2 files, 73092 bytes
 console/pages/usage          Axiom CJK Console 400 normal: 470 chars in 2 files, 71556 bytes
 console/pages/workspaces     Axiom CJK Console 400 normal: 451 chars in 1 files, 66444 bytes
-site/first                   Axiom CJK 400 normal: 83 chars in 1 files, 11320 bytes
-site/home                    AX Serif 600 normal: 79 chars in 1 files, 19632 bytes
-site/home                    AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
+site/first                   Axiom CJK 400 normal: 83 chars in 1 files, 12712 bytes
+site/home                    AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+site/home                    AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
 site/home                    AX Serif Latin 400 italic: 8 chars in 1 files, 3828 bytes
-site/home                    Axiom CJK 400 normal: 413 chars in 3 files, 59284 bytes
+site/home                    Axiom CJK 400 normal: 413 chars in 3 files, 59840 bytes
 site/home                    Axiom Mono 400 normal: 102 chars in 1 files, 16436 bytes
 site/home                    Axiom Sans 400 600 normal: 102 chars in 1 files, 20196 bytes
-site/models                  AX Serif 600 normal: 79 chars in 1 files, 19632 bytes
-site/models                  AX Serif 600 normal: 95 chars in 1 files, 12920 bytes
-site/models                  Axiom CJK 400 normal: 271 chars in 2 files, 44796 bytes
+site/models                  AX Serif 600 normal: 94 chars in 1 files, 22888 bytes
+site/models                  AX Serif 600 normal: 96 chars in 1 files, 13160 bytes
+site/models                  Axiom CJK 400 normal: 271 chars in 2 files, 46188 bytes
 site/models                  Axiom Mono 400 normal: 98 chars in 1 files, 16436 bytes
 site/models                  Axiom Sans 400 600 normal: 98 chars in 1 files, 20196 bytes

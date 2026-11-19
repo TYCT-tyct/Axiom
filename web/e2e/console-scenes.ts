@@ -44,6 +44,8 @@ const scenes: Scene[] = [
       await page.getByLabel(/^(密码|Password)$/).waitFor();
     },
   },
+  // the request for a reset link, which the password step leads to
+  { name: "reset-password", signedIn: false, open: (page) => goto(page, "reset-password") },
   // a member whose accepted terms are behind the site's current ones
   { name: "consent", signedIn: true, open: (page) => goto(page, "consent") },
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },
