@@ -28,16 +28,18 @@ export function usePendingCodes(): PendingCodes | null {
 // (the server cleared them when it answered), so a page left while the request is out must not drop it; the store reuses
 // the request for the session, which also covers StrictMode running the effect twice. A result is shown only while the
 // session that asked is still the current one, and is dropped when that session ends; once with the dialog, the store
-// keeps only the mark that it was taken. The reset page has no gate (auth/reset-password.tsx): the session it reads may
-// be another person's than the visitor's, so while it is open no take runs and no codes are on screen, an open dialog
-// included (useHideRecoveryCodes); an answer that lands then is shown once another page is.
+// keeps only the mark that it was taken. The pages a mailed link opens have no gate (auth/reset-password.tsx,
+// auth/verify-email.tsx): the session they read may be another person's than the visitor's, so while one is open no take
+// runs and no codes are on screen, an open dialog included (useHideRecoveryCodes); an answer that lands then is shown
+// once another page is.
 export function PendingCodesProvider({ router, children }: { router: typeof consoleRouter; children: ReactNode }) {
   const client = useQueryClient();
   const show = useShowRecoveryCodes();
   const binding = sessionBinding(useCachedSession());
   const away = useRouterState({
     router,
-    select: (state) => state.matches.some(({ routeId }) => routeId === "/reset-password"),
+    select: (state) =>
+      state.matches.some(({ routeId }) => routeId === "/reset-password" || routeId === "/verify-email"),
   });
   useHideRecoveryCodes(away);
   const [failure, setFailure] = useState<unknown>(null);

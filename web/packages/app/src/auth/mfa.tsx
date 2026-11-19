@@ -1,4 +1,4 @@
-import { FormError, SubmitButton, TextField } from "@axiom/ui";
+import { FormError, Stack, SubmitButton, TextField } from "@axiom/ui";
 import { type UseMutationResult, useMutation } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
@@ -43,7 +43,6 @@ function MfaForm({ brand }: { brand?: Brand }) {
     >
       <form
         noValidate
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           const code = (readForm(event.currentTarget).code ?? "").trim();
@@ -52,18 +51,20 @@ function MfaForm({ brand }: { brand?: Brand }) {
           }
         }}
       >
-        {verify.isError ? <FormError>{errors.message(verify.error)}</FormError> : null}
-        <TextField
-          label={t("auth.mfa.code")}
-          hint={t("auth.mfa.hint")}
-          name="code"
-          autoComplete="one-time-code"
-          autoCapitalize="none"
-          spellCheck={false}
-        />
-        <SubmitButton pending={verify.isPending} wide>
-          {t("auth.mfa.submit")}
-        </SubmitButton>
+        <Stack gap={16}>
+          {verify.isError ? <FormError>{errors.message(verify.error)}</FormError> : null}
+          <TextField
+            label={t("auth.mfa.code")}
+            hint={t("auth.mfa.hint")}
+            name="code"
+            autoComplete="one-time-code"
+            autoCapitalize="none"
+            spellCheck={false}
+          />
+          <SubmitButton pending={verify.isPending} wide>
+            {t("auth.mfa.submit")}
+          </SubmitButton>
+        </Stack>
       </form>
     </AuthFrame>
   );

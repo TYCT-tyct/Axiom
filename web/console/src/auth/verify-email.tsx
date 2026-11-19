@@ -1,110 +1,148 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { AuthFrame, readForm, useErrors } from "@axiom/app";
-import { FormError, SubmitButton, TextField } from "@axiom/ui";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
+import { useState, useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
-import { siteQuery } from "../queries";
-import { canSubmitWithLegal, LegalConsent, type LegalConsentState, useLegalConsent } from "./legal";
+import { type Attempt, useAttempt } from "./attempt";
+import { canSubmitWithLegal, LegalConsent, useLegalConsent } from "./legal";
+import { LoginFrame, type Stage, useStage } from "./login-frame";
+import { fieldRefused, RouteNote, useLoginFace } from "./login-parts";
+import { mailLink, onMailLink } from "./mail-link";
+import { PasswordStepBody, unanswered, usePasswordStep } from "./request-state";
+import { AfterStep, AnswerStep } from "./way-on";
 
-// The verification link carries its single-use token in the fragment, which the browser does not send to the server.
-// The password is chosen here, after the address is proved, so a caller cannot set it before the mailbox owner clicks.
-function Verified() {
+// An open registration's mail links here with its single-use token, which the route has already taken out of the
+// address and kept (mail-link.ts); the page sends it only to verifyEmail, with the password the mailbox owner chooses
+// here and the legal documents they accept. Verifying makes the account and does not sign in. The page has no gate: a
+// link works in a browser signed in as anyone, and the way on to sign in finds out as whom (way-on.tsx).
+export default function VerifyEmail() {
+  useLoginFace();
+  const link = useSyncExternalStore(onMailLink, mailLink);
+  return link.token ? <Verify key={link.n} token={link.token} /> : <Missing />;
+}
+
+// What a verification led to: the account is made, the link did not work, the address was registered meanwhile, its
+// domain is no longer taken, or the answer never came (it may have been made).
+type After = "done" | "invalid" | "taken" | "domain" | "unknown";
+
+// What a failed verification leaves to the way on, as nothing on the form can change it: the server's one answer for an
+// unknown, expired or used link is invalid_verification, and its guard's for a token that is not one (cut short when
+// copied) a 400 naming /token; an address registered in the meantime is email_taken, and one whose domain the site
+// stopped taking since the mail email_domain_not_allowed; an answer that never came may have gone through. Any other
+// refusal is the form's to say: the password's length, a limit, the documents.
+const afterCodes: Record<string, After> = {
+  invalid_verification: "invalid",
+  email_taken: "taken",
+  email_domain_not_allowed: "domain",
+};
+function afterFailure(error: unknown): After | null {
+  if (unanswered(error)) return "unknown";
+  if (fieldRefused(error, "/token")) return "invalid";
+  return (error instanceof ApiError && afterCodes[error.code ?? ""]) || null;
+}
+
+function Missing() {
   const { t } = useTranslation();
+  const stage = useStage();
+  const attempt = useAttempt();
   return (
-    <div className="space-y-4">
-      <p className="text-t2">{t("auth.verify.done")}</p>
-      <Link to="/sign-in" className="text-accent underline underline-offset-4">
-        {t("auth.verify.signIn")}
-      </Link>
-    </div>
+    <AnswerStep
+      title={t("auth.verify.title")}
+      sub={t("auth.verify.missing")}
+      step="missing"
+      shape="start"
+      signIn={t("auth.verify.signIn")}
+      attempt={attempt}
+      stage={stage}
+    >
+      <RouteNote to="/register" label={t("auth.verify.again")} />
+    </AnswerStep>
   );
 }
 
-function useVerifyEmail(legal: LegalConsentState) {
-  return useMutation({
-    mutationFn: (body: Schemas["VerifyEmailRequest"]) =>
-      unwrap(consoleApi.POST("/api/console/v1/auth/verify-email", { body })),
-    onError: (error) => {
-      if (error instanceof ApiError && error.code === "consent_required") {
-        legal.reload();
-      }
-    },
-  });
+function Verify({ token }: { token: string }) {
+  const stage = useStage();
+  const attempt = useAttempt();
+  const [after, setAfter] = useState<After | null>(null);
+  if (after) return <Verified after={after} attempt={attempt} stage={stage} />;
+  return <VerifyForm token={token} attempt={attempt} stage={stage} onAfter={setAfter} />;
 }
 
+const verifyEmail = (body: Schemas["VerifyEmailRequest"]) =>
+  unwrapEmpty(consoleApi.POST("/api/console/v1/auth/verify-email", { body }));
+
+// The password and the documents to accept. Not cancellable once sent: the account it makes is made.
 function VerifyForm({
   token,
-  legal,
-  verify,
+  attempt,
+  stage,
+  onAfter,
 }: {
   token: string;
-  legal: LegalConsentState;
-  verify: ReturnType<typeof useVerifyEmail>;
+  attempt: Attempt;
+  stage: Stage;
+  onAfter: (after: After) => void;
 }) {
   const { t } = useTranslation();
-  const errors = useErrors();
+  const legal = useLegalConsent();
+  const step = usePasswordStep(attempt, "verify", "/password", t("auth.register.length"));
   return (
-    <form
-      noValidate
-      className="space-y-4"
+    <LoginFrame
+      title={t("auth.verify.title")}
+      sub={t("auth.verify.description")}
+      step="verify"
+      shape="start"
+      attempt={attempt}
+      stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
-        const { password = "" } = readForm(event.currentTarget);
-        if (!verify.isPending && canSubmitWithLegal(legal)) {
-          verify.mutate({ token, password, consent: legal.versions });
-        }
+        const secret = step.take();
+        if (!secret || step.blocked || !canSubmitWithLegal(legal)) return;
+        const body = { token, password: secret, consent: legal.versions };
+        attempt.run("verify", () => verifyEmail(body).then(() => onAfter("done")), {
+          onFail: (error) => {
+            const next = afterFailure(error);
+            if (next) return onAfter(next);
+            stage.hear({ type: "bad" });
+            if (error instanceof ApiError && error.code === "consent_required") legal.reload();
+          },
+        });
       }}
     >
-      {verify.error ? <FormError>{errors.message(verify.error)}</FormError> : null}
-      <TextField
+      <PasswordStepBody
+        id="verify-password"
         label={t("auth.password", { ns: "common" })}
-        hint={t("auth.register.passwordHint")}
-        name="password"
-        type="password"
-        autoComplete="new-password"
-        error={errors.field(verify.error, "password")}
-      />
-      <LegalConsent consent={legal} />
-      <SubmitButton pending={verify.isPending} disabled={!canSubmitWithLegal(legal)} wide>
-        {t("auth.verify.submit")}
-      </SubmitButton>
-      {verify.error ? (
-        <Link to="/register" className="inline-block text-accent underline underline-offset-4">
-          {t("auth.verify.again")}
-        </Link>
-      ) : null}
-    </form>
+        step={{ ...step, blocked: step.blocked || !canSubmitWithLegal(legal) }}
+        submit={t("auth.verify.submit")}
+      >
+        <LegalConsent consent={legal} />
+      </PasswordStepBody>
+    </LoginFrame>
   );
 }
 
-export default function VerifyEmail() {
-  const { t } = useTranslation();
-  const site = useQuery(siteQuery);
-  const legal = useLegalConsent();
-  const [token] = useState(() => new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "");
-  const verify = useVerifyEmail(legal);
-  useEffect(() => {
-    if (verify.isSuccess) {
-      history.replaceState(null, "", window.location.pathname);
-    }
-  }, [verify.isSuccess]);
+const afterWords = {
+  done: { title: "auth.verify.doneTitle", sub: "auth.verify.done" },
+  invalid: { title: "auth.verify.invalidTitle", sub: "auth.verify.invalid" },
+  taken: { title: "auth.verify.takenTitle", sub: "auth.verify.taken" },
+  domain: { title: "auth.verify.domainTitle", sub: "auth.verify.domain" },
+  unknown: { title: "auth.verify.unknownTitle", sub: "auth.verify.unknown" },
+} as const;
 
+// The way on after a verification: to sign in, and, for a link that did not work, an address the site no longer takes or
+// an answer that never came, to register again.
+function Verified({ after, attempt, stage }: { after: After; attempt: Attempt; stage: Stage }) {
+  const { t } = useTranslation();
+  const words = afterWords[after];
+  const again = after === "invalid" || after === "domain" || after === "unknown";
   return (
-    <AuthFrame brand={site.data} wide title={t("auth.verify.title")} description={t("auth.verify.description")}>
-      {token === "" ? (
-        <FormError>{t("auth.verify.missing")}</FormError>
-      ) : verify.isSuccess ? (
-        <Verified />
-      ) : (
-        <VerifyForm token={token} legal={legal} verify={verify} />
-      )}
-      {token === "" ? (
-        <Link to="/register" className="mt-4 inline-block text-accent underline underline-offset-4">
-          {t("auth.verify.again")}
-        </Link>
-      ) : null}
-    </AuthFrame>
+    <AfterStep
+      after={after}
+      title={t(words.title)}
+      sub={t(words.sub)}
+      signIn={t("auth.verify.signIn")}
+      attempt={attempt}
+      stage={stage}
+    >
+      {again ? <RouteNote to="/register" label={t("auth.verify.again")} /> : null}
+    </AfterStep>
   );
 }

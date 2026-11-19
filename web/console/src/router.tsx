@@ -6,11 +6,12 @@ import {
   createRouter,
   lazyRouteComponent,
   Outlet,
+  type ParsedLocation,
   redirect,
 } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { dropMailLink, keepMailLink } from "./auth/mail-link";
 import { takeOAuthNext } from "./auth/oauth-return";
-import { dropResetLink, keepResetLink } from "./auth/reset-link";
 import { Layout } from "./layout";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
@@ -31,12 +32,24 @@ const root = createRootRoute({
   },
 });
 
-// The reset page that did not load. The link's token was only in memory (auth/reset-link.ts), which a reload clears
-// (the router reloads once by itself when a page's code fails to load), so the way back from a link is the email's.
-function ResetFailed() {
+// A page a mailed link opens that did not load. The link's token was only in memory (auth/mail-link.ts), which a reload
+// clears (the router reloads once by itself when a page's code fails to load), so the way back is the email's link.
+function MailLinkFailed() {
   const { t } = useTranslation();
-  return <PageFailedState body={t("auth.reset.loadFailed")} />;
+  return <PageFailedState body={t("auth.linkFailed")} />;
 }
+
+// The options of a route a mailed link opens: its token leaves the address before the page's code loads, and is kept
+// for the page until it is left (auth/mail-link.ts).
+const mailLinkRoute = (to: "/reset-password" | "/verify-email") => ({
+  beforeLoad: ({ location, preload }: { location: ParsedLocation; preload: boolean }) => {
+    if (preload || !location.hash) return;
+    keepMailLink(location.hash);
+    throw redirect({ to, search: location.search as never, replace: true });
+  },
+  onLeave: dropMailLink,
+  errorComponent: MailLinkFailed,
+});
 
 // The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
 // in, and a registration link can carry the invite code.
@@ -71,20 +84,15 @@ const routeTree = root.addChildren([
   createRoute({
     getParentRoute: () => root,
     path: "/verify-email",
+    validateSearch: guestSearch,
+    ...mailLinkRoute("/verify-email"),
     component: lazyRouteComponent(() => import("./auth/verify-email")),
   }),
   createRoute({
     getParentRoute: () => root,
     path: "/reset-password",
     validateSearch: guestSearch,
-    // the link's token leaves the address before the page's code loads, and is kept for it (auth/reset-link.ts)
-    beforeLoad: ({ location, preload }) => {
-      if (preload || !location.hash) return;
-      keepResetLink(location.hash);
-      throw redirect({ to: "/reset-password", search: location.search as never, replace: true });
-    },
-    onLeave: dropResetLink,
-    errorComponent: ResetFailed,
+    ...mailLinkRoute("/reset-password"),
     component: lazyRouteComponent(() => import("./auth/reset-password")),
   }),
   createRoute({

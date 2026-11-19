@@ -1,5 +1,5 @@
 {
-  "inputs": "285eab54235c6e91daac7ce3153e2c0decdf717fc5a1bf6d252446e33c7f8f39",
+  "inputs": "d5bb2088a37677c16f5b30450a3cd8a0415cd452418a20484fa7b92218de2045",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -43,7 +43,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "style": "italic",
       "script": "latin",
@@ -56,7 +58,9 @@
             "console/auth/sign-in",
             "console/auth/mfa",
             "console/auth/consent",
-            "console/auth/reset-password"
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
           "bytes": 3828,
           "sha256": "2aa082382462cec29a64ca5b4958701b965052d1ec6a0ca17a6d3c133a32bfaf",
@@ -74,42 +78,53 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "axiom-cjk-400.47831c6b.woff2",
-          "pages": ["console/auth/sign-in", "console/auth/mfa", "console/auth/consent", "console/auth/reset-password"],
-          "bytes": 14300,
-          "sha256": "54bb15aea669c7e1a0fe21d64d4904f584a63110cd001f74d88d7fb04ffb921b",
-          "chars": "《》串二人今任何侧做像兑冲减刻功助区印去受右吧启员均域处备太套安密封层展属带帮废弱形志忘态恢意才扫护描插操政效料暖束某栏概款浏消温灰状申真知私突立答策箱繁继续维者览评该负责资跳达述邮钟钥长阅隐需青静颜"
+          "file": "axiom-cjk-400.d387273d.woff2",
+          "pages": [
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent",
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
+          ],
+          "bytes": 12936,
+          "sha256": "c2b0d99fb6519e9cd64e603209a8cf3b61c8d14871b07bca8640a3fde6d0457f",
+          "chars": "《》串二人今任何侧做像兑冲刻功助区印去受吧启员圾均垃域处备太安密封展带帮废弱形志忘态恢意才扫护描插操政效料束某栏概款浏消牌状申知私突立答策箱繁继续维者览评该负责资跳达述邮钥长阅隐需"
         },
         {
           "file": "axiom-cjk-400.2a493759.woff2",
           "pages": ["site/home"],
-          "bytes": 13364,
-          "sha256": "6238ceca86c2318e06fbd22d9f334477cf3d885c8dc8f9b538408ff9d1495131",
-          "chars": "「」且么之云交亿什令估例假健元免兼决几凭创办参又向吗含周响固国官审家少尽局屏己幅度康影待怎总想感扣拒拿挑损掉敏架样核楚止比泄涨清源率白种笔类累终绝编缺考耗背般花规让话说谁身较辑途遇钱锁错间露高"
+          "bytes": 13124,
+          "sha256": "6f4fd987f01585916e056a5e58ff84e4f53d464e4df9ad11c0f249b552496376",
+          "chars": "「」且么之云交亿什估例假健元免兼决几凭办参又向吗含周响固国官审家少尽局屏己幅度康影待怎总想感扣拒拿挑损掉敏架样核楚止比泄涨清源率白种笔类累终给绝编缺考耗背般花规让说谁身较辑途遇钱锁错间露高"
         },
         {
-          "file": "axiom-cjk-400.48a38218.woff2",
+          "file": "axiom-cjk-400.05a8c801.woff2",
           "pages": [
             "site/home",
             "site/models",
             "console/auth/sign-in",
             "console/auth/mfa",
             "console/auth/consent",
-            "console/auth/reset-password"
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
-          "bytes": 34496,
-          "sha256": "7feef69ce0799201fc0cfbad3be5fc2f48695245e80a0a31238a035ba1b30768",
-          "chars": "、万下不两为也了事于些仅仍从他付代以们件份优会但位低余作你使供便保值停允充先全公其具内再写准出分列则刚删别制刷力加化匹匿厂原及发变口另只可台号各合同名后否命和品哪售商器回因图在地址基填复多大天失好如字存它完定宜容对小尝就工已布平年并应建式引张弹当径得快性情成我或户手打执找把报持指据排控推提擎支收改放数整断新方无日旧时明是显暂更最月期未本权来构析果查标校档检次正求没法流游点照片版现理用由百目直相看着码础确秒称移稍稳站端符第等筛算管精级组经绑结给络缓网置联能行表被要解认记许设证试详误请读调败账走起超转载输过近返还进连退送通速邀那部都配里重量金链附限除音项预频额验默（）：；？"
+          "bytes": 34828,
+          "sha256": "322d27aea955da88d6680ac593851ef49d66a4b3083cdc64294f59517ae0265a",
+          "chars": "、万下不两为也了事于些仅仍从他付代令以们件份优会但位低余作你使供便保值停允充先全公其具内再写准出分列则刚创删别制刷力加化匹匿厂原及发变口另只可台号各合同名后否命和品哪售商器回因图在地址基填复多大天失好如字存它完定宜容对小尝就工已布平年并应建式引张弹当径得快性情成我或户手打执找把报持指据排控推提擎支收改放数整断新方无日旧时明是显暂更最月期未本权来构析果查标校档检次正求没法流游点照片版现理用由百目直相看着码础确秒称移稍稳站端符第等筛算管精级组经绑结络缓网置联能行表被要解认记许设证试话详误请读调败账走起超转载输过近返还进连退送通速邀那部都配里重量金钟链附限除音项预频额验默（）：；？"
         },
         {
-          "file": "axiom-cjk-400.5d225ada.woff2",
+          "file": "axiom-cjk-400.a095159d.woff2",
           "pages": [
             "site/home",
             "site/models",
@@ -117,7 +132,9 @@
             "console/auth/sign-in",
             "console/auth/mfa",
             "console/auth/consent",
-            "console/auth/reset-password"
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
           "bytes": 11320,
           "sha256": "749ec246438bc3b9f3eb718892f818bad936d1116041d17cbf4733cd4bf459e3",
@@ -147,16 +164,14 @@
         "console/pages/settings",
         "console/pages/statement",
         "console/pages/usage",
-        "console/pages/workspaces",
-        "console/auth/register",
-        "console/auth/verify-email"
+        "console/pages/workspaces"
       ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "axiom-cjk-console-400.107b10ce.woff2",
+          "file": "axiom-cjk-console-400.2e12871f.woff2",
           "pages": [
             "console/pages/balance",
             "console/pages/call",
@@ -175,55 +190,51 @@
             "console/pages/settings",
             "console/pages/statement",
             "console/pages/usage",
-            "console/pages/workspaces",
-            "console/auth/register",
-            "console/auth/verify-email"
+            "console/pages/workspaces"
           ],
-          "bytes": 66628,
-          "sha256": "18dda837a6eadea4cb23c50725052781800e5eb9fa3cd566ab4b4a5b093ced80",
-          "chars": "、。一万三上下不与两个中串为主么之也了事二于五些产人什仅今仍从他付代令以们件价任份优会但位低何余作你使例供侧便保信修候值做停允充先免兑入全公共关其具内册再写冲决况净准减出分切划列则刚创删别到制刷刻前剩力功加务动助包化匹区匿升单印即厂原参及发取受变口另只可台右号各合同名后向否吧含启告员周命和品响哪售商器四回因团图在地圾址均垃型域基填增处备复外多大天太失头套好如始子字存它安完官定宜实客容密对导小少尚尝就层展属工己已币布带帮常平年并序应底废度建开式引张弱弹当录影径待得必志快态性总恢息情意成我或户所手才打扣执扫找把护报拆拒择括持指按换据掉排接控推描提插搜摘操擎支收改放政效数整文料断新方无日旧早时明昨是显暂暖更最月有服期未本机权束条来构析林果查标栏校格框档检概模次款止正此步段母每比求汇没法注活流浅测浏消深添清温游源灰点然照片版牌状率现理生用由申留登白百的目直相看真知短码础确示私种秒称移稍稳空突立站端符第等策筛算管箱类精系索累繁级线组细经绑结给络绝统继续维缓编网置翻者耗联能自至致航色节花行衡表被要见观规视览角解言计认记许设证评识试话询该详语误请读调负责败账费资走起超跃跟路跳转载较辑输达过近返还这进远连述退送选通速邀那邮部都配里重量金钥钱链错键长闭问间阅队附限除随隐需青静面音页项顺须预频题颜额首验默（），：；？"
+          "bytes": 65948,
+          "sha256": "1eebc92fba74d754ad1220490c2f94f1ea62e4c206ffcfab67b26eb4bcc29a19",
+          "chars": "、。「」一万三上下不与两个中串为主么之也了事二于五些产人什仅今仍从他付代以们件价任份优会位低何余作你使例供依侧便保信修候值做停允充先免兑入全公共关其具内册再写冲决冻准减出分切划列则刚创删别到制刷刻前剩力功加务动助包化匹区匿升单印即厂原参及发取受变口另只可台右号各合同名后向否吧含启告员周命和品响哪售商器四回因团固图在地址均型域基填增处备复外多大天太失头套好如始子字存它安完定宜实客容密对导封小少尚尝就尾展属工己已币布带帮常平年并序应底废度建开式引张弱弹当录影径待得微必志快态性总恢息情意成我或户所手才打扣执扫批找把护报拆拒择括持指按换据掉排接控推描提插搜摘操擎支收改放政效数整文料断新方无日旧早时明昨是显暂更最月有服期未本权束条来构析林果查标栏校格框档检概模次款止正此步段母每比水求汇没法注活流浅测浏消深添清渠温游源点然照片版状现理生用由申留登白百的目直相看知短码础确示票私种秒称移稍稳空突窗立站端笔符第等策筛算管箱类精系索繁级线组细终经绑结给络绝统续维缓编网置者耗联能自至致航色节花行表被要见观规览角解言计订认记许设证评识试话询该详语误请读调负责败账费资赠走起超跃跟路跳转载辑输达过近返还这进远连退送选途通速道邀那邮部都配里重量金钥钮钱链错键长闭问间阅队附限除随隐需面音页项顺须预频题额餐首验默（），：；？"
         },
         {
-          "file": "axiom-cjk-console-400.683cef7d.woff2",
-          "pages": [
-            "console/pages/balance",
-            "console/pages/calls",
-            "console/pages/orders",
-            "console/pages/receipt",
-            "console/pages/redeem",
-            "console/pages/settings",
-            "console/pages/statement"
-          ],
-          "bytes": 6648,
-          "sha256": "54e8778a9cd09821bc9fca93078d8e829493ca012b7d234e506e777ff6319181",
-          "chars": "「」九买交依冻去司固宝审将尾幂微批核桐水永渠独王珂票税窗笔答终订谁财购赠途道钮际陈雨餐"
-        },
-        {
-          "file": "axiom-cjk-console-400.5ac07460.woff2",
+          "file": "axiom-cjk-console-400.f2d6e135.woff2",
           "pages": [
             "console/pages/balance",
             "console/pages/notifications",
-            "console/pages/provider-keys",
+            "console/pages/orders",
             "console/pages/security",
             "console/pages/settings"
           ],
-          "bytes": 5824,
-          "sha256": "0a85884522c3fdf849e193b8256c052b5dd7dab5b2e53a20db305c3c07772a3b",
-          "chars": "体偏像击吗够封州异抹故替杭枚某样海焦电界疑简纹脑英菜访诉货足醒销阈障非"
+          "bytes": 8440,
+          "sha256": "88e7394526fd3fa8ed14e3b696d6eb5d7abef1f0a54060c8be1fc2e068c76d85",
+          "chars": "九买交但体偏像击去司吗够宝审将州幂异故替杭枚样核桐永海焦独王珂电界疑税答简纹脑英菜访诉谁财货购足醒销阈际陈障雨非"
         },
         {
-          "file": "axiom-cjk-console-400.b4ecedbf.woff2",
-          "pages": ["console/pages/call", "console/pages/calls", "console/pages/usage"],
-          "bytes": 5112,
-          "sha256": "d55e9aa5de38b4d3e2324f6c7998b6d52c0a70db9536c3436cddd37e3fab0fd9",
-          "chars": "　义估六判十占历史围家屉左归忽怎慢截扩抽晚柱气滤物略省程缩舍范补车释齐"
+          "file": "axiom-cjk-console-400.8f1ddc4d.woff2",
+          "pages": [
+            "console/pages/call",
+            "console/pages/calls",
+            "console/pages/overview",
+            "console/pages/routing-presets",
+            "console/pages/usage"
+          ],
+          "bytes": 6084,
+          "sha256": "370ce157e906c61a2fceeb5f3281230554256757fe35c41807bf9dfd5216cd93",
+          "chars": "　义估六况判十占历史围官家屉左归忽怎慢截扩抽晚机柱气滤物率略省程缩舍范衡补车较释齐"
         },
         {
-          "file": "axiom-cjk-console-400.027b022f.woff2",
-          "pages": ["console/pages/keys", "console/pages/request-presets", "console/pages/routing-presets"],
-          "bytes": 5444,
-          "sha256": "6f278817e6ae7f5eb1cdf37fdb8889a61e50e9944c0c9f29710e0196f51097ed",
-          "chars": "严伪八几副勾句吐吞善境妥延形挑横沿润环着纲练绩缀营落让训质边运迟适钟靠高"
+          "file": "axiom-cjk-console-400.a5965126.woff2",
+          "pages": ["console/pages/keys", "console/pages/provider-keys", "console/pages/request-presets"],
+          "bytes": 2904,
+          "sha256": "723a6197bef27fa8908b23817b5aca3ac6e8ec54ba5e7e29b5e4ceab1630ed29",
+          "chars": "八句善境妥形抹某横润环纲缀边钟"
+        },
+        {
+          "file": "axiom-cjk-console-400.4b50da85.woff2",
+          "pages": ["console/pages/models", "console/pages/routing-presets", "console/pages/statement"],
+          "bytes": 5628,
+          "sha256": "01e97dea86d1653ea5352981d942dee2f4599e3d749c084a6711d21c0f4dc32d",
+          "chars": "严伪净几副勾吐吞层延挑暖沿灰真着累练继绩翻营落视让训质运迟适青静靠颜高"
         }
       ]
     },
@@ -397,25 +408,29 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "ax-serif-600.48a38218.woff2",
+          "file": "ax-serif-600.05a8c801.woff2",
           "pages": [
             "site/home",
             "site/models",
             "console/auth/sign-in",
             "console/auth/mfa",
             "console/auth/consent",
-            "console/auth/reset-password"
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
-          "bytes": 22888,
-          "sha256": "acd5fc0ef1bec90c3172a16c2880f59fa506c9b0272b029f01607c105b3ad235",
-          "chars": "。一三上不与两个了事产从件价会允先入册几到前务变可同后否回地址型定实密已常录所找把按接收改新是更有服条查格楚模款止步求注清点生用登的码确端第线置背能见计许设证说请费路输这邮都重链问际题验，"
+          "bytes": 24980,
+          "sha256": "2d7d83f7dc34b36351a646c7c63a811850efa18331d461d5f4e41dbf43287cbe",
+          "chars": "。一三上不与两个了事产从件价会允先入册几创到前务变可同后否回地址型完定实密已常建录成户所找把按接收改新是更有服条查格楚模款止步求注清点生用登的码确端第箱线经置背能见计许设证说请账费路输过这邮都重链问际题验，"
         }
       ]
     },
@@ -428,7 +443,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "style": "normal",
       "script": "latin",
@@ -442,7 +459,9 @@
             "console/auth/sign-in",
             "console/auth/mfa",
             "console/auth/consent",
-            "console/auth/reset-password"
+            "console/auth/reset-password",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
           "bytes": 13160,
           "sha256": "3f1553383ee7e15e077e2eaf16bd770a9707616284874240a4a8e4ec4327afa0",

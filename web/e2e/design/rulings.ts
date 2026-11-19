@@ -83,8 +83,8 @@ const accountShell = (scene: string): Ruling[] =>
 // The console's sign-in page against the Login board's email step (#747 S3, port design §9), with the page's words in
 // the reference (design-map.ts). The sea is animated on both sides, and the stage that forms the step's shape on it is
 // the transition's on the board (trans.js), so both canvases are the fx tests'.
-// The reset page's request for a link is the same parts, and is excused the same.
-const loginScenes = ["console sign-in", "console reset-password"];
+// The reset page's request for a link and open registration are the same parts, and are excused the same.
+const loginScenes = ["console sign-in", "console reset-password", "console register"];
 const signIn = (ruling: Omit<Ruling, "scene">): Ruling[] => loginScenes.map((scene) => ({ scene, ...ruling }));
 const signInRulings: Ruling[] = [
   // The sign-in pages draw their Chinese in the faces the board names, cut from their messages and the board's region

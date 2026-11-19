@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
 import { demoDocuments, type Schemas } from "./console-data.ts";
+import { goodVerifyToken } from "./mail-links.ts";
 import type { MockData } from "./mock.ts";
 import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
@@ -56,6 +57,14 @@ const scenes: Scene[] = [
   // a member whose accepted terms are behind the site's current ones
   { name: "consent", signedIn: true, open: (page) => goto(page, "consent") },
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },
+  // a site open for registration, which mails a link to the address
+  { name: "register-open", signedIn: false, open: (page) => goto(page, "register") },
+  // the link's page: the password, once it knows the browser is signed out
+  {
+    name: "verify-email",
+    signedIn: false,
+    open: (page) => goto(page, `verify-email#token=${goodVerifyToken}`),
+  },
   { name: "overview", signedIn: true, open: (page) => goto(page, "") },
   { name: "balance", signedIn: true, open: (page) => goto(page, "balance") },
   { name: "statement", signedIn: true, open: (page) => goto(page, "statement") },
@@ -207,6 +216,9 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
   if (scene.name === "usage" && data !== "empty") {
     const demoAnchor = Date.UTC(2026, 9, 24, 2, 0, 0);
     state.calls = [...spreadUsageCalls(state.calls, demoAnchor), ...spreadUsageCalls(state.calls, Date.now())];
+  }
+  if (scene.name === "register-open") {
+    state.site = { ...state.site, registration: "open", email_verification: true };
   }
   if (scene.name === "consent") {
     state.legal = demoDocuments();

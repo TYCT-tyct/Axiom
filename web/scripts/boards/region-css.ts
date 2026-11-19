@@ -74,7 +74,7 @@ function potential(selector: string, states: readonly string[], keepNot = false)
 // scoped ties a rule to the region: its subject carries the region's scope class, or, for markup an engine inserts at
 // run time (an SVG fetched and parsed into place), whose nodes carry no scope class of their own, sits inside an
 // element that does. :where contributes no specificity; original classes also allow ancestors from another region.
-function scoped(selector: string, inside = false) {
+export function scoped(selector: string, inside = false) {
   const at = selector.indexOf("::");
   const subject = at < 0 ? selector : selector.slice(0, at);
   const pseudo = at < 0 ? "" : selector.slice(at);

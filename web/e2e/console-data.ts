@@ -7,8 +7,9 @@ import {
 } from "./console-account-mock.ts";
 import { type BillMockState, emptyBillState, usualBillState, worstBillDaily } from "./console-bill-data.ts";
 import { buildMockCall } from "./console-calls-data.ts";
+import { mailedLinks } from "./mail-links.ts";
 import type { AuthState } from "./mock.ts";
-import { authState, knownEmail } from "./mock-auth.ts";
+import { authState } from "./mock-auth.ts";
 
 // The data the mocked console API starts from, written as the contract's own types, so a field the contract changes
 // stops this file compiling. Three sets: a usual account, an empty one, and the worst realistic one (the longest values
@@ -34,6 +35,8 @@ export type MockState = AuthState &
     usageBackfillComplete?: boolean;
     // the reset links the server has mailed and not yet spent, by token: the address each is for
     resetLinks: Map<string, string>;
+    // the verification links an open registration has mailed and not yet spent, by token: the address each is for
+    verifyLinks: Map<string, string>;
   };
 
 const allPermissions = ["api_keys.view", "api_keys.manage", "balance.view", "balance.top_up", "calls.view"];
@@ -70,11 +73,6 @@ export const demoDocuments = (): Schemas["LegalDocument"][] => [
 ];
 
 export const goodInvite = "INVITE-OK";
-
-// The reset links the mocked server starts with: one for the mocked user, and one for another person.
-export const goodResetToken = "a".repeat(43);
-export const otherResetToken = "b".repeat(43);
-export const otherEmail = "someone.else@example.com";
 
 const usd = (units: string): Schemas["Money"] => ({ amount: `${units}000000000`, currency: "USD" });
 const nano = (amount: string): Schemas["Money"] => ({ amount, currency: "USD" });
@@ -341,10 +339,7 @@ function usualPresets(): Pick<MockState, "presets" | "routingDefault"> {
 export function usualState(): MockState {
   return {
     ...authState(allPermissions),
-    resetLinks: new Map([
-      [goodResetToken, knownEmail],
-      [otherResetToken, otherEmail],
-    ]),
+    ...mailedLinks(),
     site: {
       name: "Axiom",
       currency: "USD",

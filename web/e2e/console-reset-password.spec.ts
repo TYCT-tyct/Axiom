@@ -1,6 +1,7 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { goodResetToken, type MockState, otherResetToken } from "./console-data.ts";
+import type { MockState } from "./console-data.ts";
+import { goodResetToken, otherResetToken } from "./mail-links.ts";
 import { knownEmail } from "./mock-auth.ts";
 import { hold, signIn } from "./sign-in.ts";
 
@@ -233,6 +234,24 @@ for (const [name, password, weak] of [
     await expect(heading(page, "密码已重设")).toBeVisible();
   });
 }
+
+// a failure is said once: a refusal the form says, then a password left empty, which is the field's alone to say
+test("a new password left empty after a refusal is said at the field alone", async ({ page }) => {
+  await mockConsole(page);
+  await page.route(
+    "**/api/console/v1/auth/password-reset/complete",
+    (route) => route.fulfill({ status: 403, json: { error: { code: "origin_rejected", message: "origin_rejected" } } }),
+    { times: 1 },
+  );
+  await openLink(page, goodResetToken);
+  await setNewPassword(page);
+  await expect(page.getByRole("alert")).toHaveCount(1);
+  await setNewPassword(page, "");
+  await expect(page.getByRole("alert")).toHaveCount(1);
+  await expect(page.getByRole("alert")).toHaveText("请填写密码。");
+  await setNewPassword(page);
+  await expect(heading(page, "密码已重设")).toBeVisible();
+});
 
 test("an address the server does not take is said at the field, until the field is edited", async ({ page }) => {
   await mockConsole(page);

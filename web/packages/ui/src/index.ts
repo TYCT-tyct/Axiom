@@ -3,6 +3,7 @@
 export { useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
+export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
 export { BoardDialog } from "./components/board-dialog";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
@@ -13,6 +14,7 @@ export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
 export { Dialog } from "./components/dialog";
 export { Disclosure } from "./components/disclosure";
+export { DocumentText, type TextBlock } from "./components/document-text";
 export { Facts } from "./components/facts";
 export { Field, Select, TextArea } from "./components/field";
 export { Fieldset } from "./components/fieldset";
