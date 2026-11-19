@@ -1,6 +1,7 @@
 import { expect, type Page, type Route, test } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { goodResetToken, type MockState, otherResetToken } from "./console-data.ts";
+import type { MockState } from "./console-data.ts";
+import { goodResetToken, otherResetToken } from "./mail-links.ts";
 import { knownEmail } from "./mock-auth.ts";
 import { hold, signIn } from "./sign-in.ts";
 

@@ -54,7 +54,8 @@ const loginBoards = {
 // line (product.md: billed by the endpoint that served, without the board's promise that every route is tested) and its
 // promise (the models the account can use), and its way on in a note, where the board's email step has the
 // sign-up-on-the-way copy, the terms' box and the providers the mocked site does not offer (rulings.ts lists the parts
-// of the board's flow left out). The sign-in page's way on is to register; the reset page's, the request for a reset
+// of the board's flow left out). The sign-in page's way on is to register; open registration's, to sign in; the reset
+// page's, the request for a reset
 // link, is back to sign in. Put the page's words in the reference and take out what the page has no counterpart for,
 // so the comparison measures the parts and their layout.
 type EmailStepWords = { title: string; description: string; submit: string; lead?: string; link: string };
@@ -67,6 +68,17 @@ const signInWords = (language: "zh" | "en"): EmailStepWords => {
     submit: auth.signIn.next,
     lead: auth.signIn.noAccount,
     link: auth.signIn.register,
+  };
+};
+
+const registerWords = (language: "zh" | "en"): EmailStepWords => {
+  const { register } = language === "en" ? consoleAuthEn : consoleAuthZh;
+  return {
+    title: register.title,
+    description: register.openDescription,
+    submit: register.submitOpen,
+    lead: register.haveAccount,
+    link: register.signIn,
   };
 };
 
@@ -436,6 +448,16 @@ export const designScenes: DesignScene[] = [
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, resetWords(language)),
+  },
+  {
+    // open registration: the board draws no registration, and its email step is the same parts
+    name: "console register",
+    suite: consoleSuite,
+    scene: "register-open",
+    fonts: ["console", "console/auth/register"],
+    boards: loginBoards,
+    schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, registerWords(language)),
   },
   {
     name: "site home",

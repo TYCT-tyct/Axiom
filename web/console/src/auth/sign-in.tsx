@@ -2,13 +2,12 @@ import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { consoleAuth } from "@axiom/api/auth";
 import { useErrors, useSignInEnded, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
-import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginOr from "@axiom/boards/Login/regions/LoginOr";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import LoginStack from "@axiom/boards/Login/regions/LoginStack";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { type RefObject, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { siteQuery } from "../queries";
 import { type Attempt, useAttempt } from "./attempt";
@@ -18,6 +17,7 @@ import {
   FormProblem,
   fieldRefused,
   hearAddress,
+  InputField,
   LoginGate,
   NoteAction,
   primaryLook,
@@ -238,13 +238,18 @@ function PasswordStep({ flow }: { flow: Flow }) {
     <>
       {/* the address the password belongs to, for the browser's password manager */}
       <input type="email" name="email" autoComplete="username" value={flow.email} readOnly hidden />
-      <PasswordField
+      <InputField
+        id="sign-in-password"
+        problemId="sign-in-problem"
         label={t("auth.password", { ns: "common" })}
-        problem={flow.problem}
+        name="password"
+        type="password"
+        autoComplete="current-password"
         input={flow.password}
+        problem={flow.problem}
+        invalid={flow.problem !== ""}
         onInput={flow.typePassword}
       />
-      <FormProblem id="sign-in-problem" message={flow.problem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
@@ -253,38 +258,6 @@ function PasswordStep({ flow }: { flow: Flow }) {
       <RouteNote to="/reset-password" label={t("auth.reset.forgot")} next={next} />
       <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
     </>
-  );
-}
-
-function PasswordField({
-  label,
-  problem,
-  input,
-  onInput,
-}: {
-  label: string;
-  problem: string;
-  input: RefObject<HTMLInputElement | null>;
-  onInput: () => void;
-}) {
-  return (
-    <LoginField
-      t={String}
-      text={{ label }}
-      values={{
-        id: "sign-in-password",
-        name: "password",
-        type: "password",
-        autoComplete: "current-password",
-        fieldCls: problem ? "bad" : "",
-        describedBy: problem ? "sign-in-problem" : "",
-        invalid: problem ? true : undefined,
-        input: (element) => {
-          input.current = element as HTMLInputElement | null;
-        },
-        onInput,
-      }}
-    />
   );
 }
 

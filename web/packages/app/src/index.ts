@@ -1,6 +1,5 @@
 export { type Attempt, failed, opened, refused, type Sendable } from "./attempt";
 export { EnrollPage } from "./auth/enroll";
-export { AuthFrame } from "./auth/frame";
 export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
 export { useErrors } from "./errors";
@@ -35,7 +34,6 @@ export {
   useReadSession,
   useSession,
   useSessionBound,
-  useSignIn,
   useSignInEnded,
   useSignOut,
   useStartSession,

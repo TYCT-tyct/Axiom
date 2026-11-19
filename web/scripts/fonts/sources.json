@@ -92,7 +92,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "text": {
         "chars": "keyvrKEY"
@@ -113,7 +115,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "text": {
         "script": "han"
@@ -128,7 +132,7 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["console/pages/*", "console/auth/register", "console/auth/verify-email"],
+      "pages": ["console/pages/*"],
       "text": {
         "script": "han"
       }
@@ -157,7 +161,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "text": {
         "script": "han",
@@ -186,7 +192,16 @@
             "auth.reset.newTitle",
             "auth.reset.doneTitle",
             "auth.reset.invalidTitle",
-            "auth.reset.unknownTitle"
+            "auth.reset.unknownTitle",
+            "auth.register.title",
+            "auth.register.sentTitle",
+            "auth.register.madeTitle",
+            "auth.register.unknownTitle",
+            "auth.verify.title",
+            "auth.verify.doneTitle",
+            "auth.verify.invalidTitle",
+            "auth.verify.takenTitle",
+            "auth.verify.unknownTitle"
           ]
         }
       }
@@ -201,7 +216,9 @@
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
-        "console/auth/reset-password"
+        "console/auth/reset-password",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "text": {
         "script": "latin",
@@ -230,7 +247,16 @@
             "auth.reset.newTitle",
             "auth.reset.doneTitle",
             "auth.reset.invalidTitle",
-            "auth.reset.unknownTitle"
+            "auth.reset.unknownTitle",
+            "auth.register.title",
+            "auth.register.sentTitle",
+            "auth.register.madeTitle",
+            "auth.register.unknownTitle",
+            "auth.verify.title",
+            "auth.verify.doneTitle",
+            "auth.verify.invalidTitle",
+            "auth.verify.takenTitle",
+            "auth.verify.unknownTitle"
           ]
         }
       }

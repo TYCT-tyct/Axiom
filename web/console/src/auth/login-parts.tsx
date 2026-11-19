@@ -3,6 +3,7 @@ import { Gate, sessionBinding, useCachedSession, useEndPending, useErrors, useSi
 import LoginAction from "@axiom/boards/Login/regions/LoginAction";
 import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
+import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
 import { Link } from "@tanstack/react-router";
@@ -96,6 +97,59 @@ export function EmailField({
             input.current = element as HTMLInputElement | null;
           },
           onInput: (event) => onInput((event.currentTarget as HTMLInputElement).value),
+        }}
+      />
+      <FormProblem id={problemId} message={problem} />
+    </>
+  );
+}
+
+// InputField is a step's other field (a password, an invite code) with its error line under it (problemId), which the
+// field points at; invalid marks the field, as for EmailField. A password stays in its field until it is sent, never in
+// the page's state: value is only where the field starts (an invite code the link carries).
+export function InputField({
+  id,
+  problemId,
+  label,
+  name,
+  type,
+  autoComplete,
+  value,
+  input,
+  problem,
+  invalid,
+  onInput,
+}: {
+  id: string;
+  problemId: string;
+  label: string;
+  name: string;
+  type: "password" | "text";
+  autoComplete: "current-password" | "new-password" | "off";
+  value?: string;
+  input: RefObject<HTMLInputElement | null>;
+  problem: string;
+  invalid: boolean;
+  onInput: () => void;
+}) {
+  return (
+    <>
+      <LoginField
+        t={String}
+        text={{ label }}
+        values={{
+          id,
+          name,
+          type,
+          autoComplete,
+          value,
+          fieldCls: invalid ? "bad" : "",
+          describedBy: problem ? problemId : "",
+          invalid: invalid || undefined,
+          input: (element) => {
+            input.current = element as HTMLInputElement | null;
+          },
+          onInput,
         }}
       />
       <FormProblem id={problemId} message={problem} />

@@ -1,0 +1,67 @@
+/* A sign-in page without a board: the brand and the switches on top, one narrow column in the middle. */
+.root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 16px;
+}
+
+.logo {
+  min-width: 0;
+}
+
+.switches {
+  display: flex;
+  gap: 8px;
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 24px;
+  width: 100%;
+  max-width: 24rem;
+  margin: 0 auto;
+  padding: 0 16px 96px;
+  outline: none;
+}
+
+.head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.title {
+  margin: 0;
+  font-size: 20px;
+  line-height: 28px;
+  letter-spacing: -0.01em;
+  font-weight: 400;
+  color: var(--t1);
+}
+
+.description,
+.footer {
+  margin: 0;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t3);
+  overflow-wrap: anywhere;
+}
+
+@media (min-width: 640px) {
+  .top {
+    padding: 16px 24px;
+  }
+}

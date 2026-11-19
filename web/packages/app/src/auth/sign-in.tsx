@@ -1,4 +1,4 @@
-import { FormError, SubmitButton, TextField } from "@axiom/ui";
+import { FormError, Stack, SubmitButton, TextField } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "../errors";
@@ -25,7 +25,6 @@ function SignInForm({ description, brand }: { description: string; brand?: Brand
     <AuthFrame title={t("auth.signIn.title")} description={ended ? t("auth.signIn.ended") : description} brand={brand}>
       <form
         noValidate
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           const { email = "", password = "" } = readForm(event.currentTarget);
@@ -35,14 +34,16 @@ function SignInForm({ description, brand }: { description: string; brand?: Brand
           }
         }}
       >
-        {signIn.isError || missing ? (
-          <FormError>{missing ? t("auth.missing") : errors.message(signIn.error)}</FormError>
-        ) : null}
-        <TextField label={t("auth.email")} name="email" autoComplete="username" inputMode="email" />
-        <TextField label={t("auth.password")} name="password" type="password" autoComplete="current-password" />
-        <SubmitButton pending={signIn.isPending} wide>
-          {t("auth.signIn.submit")}
-        </SubmitButton>
+        <Stack gap={16}>
+          {signIn.isError || missing ? (
+            <FormError>{missing ? t("auth.missing") : errors.message(signIn.error)}</FormError>
+          ) : null}
+          <TextField label={t("auth.email")} name="email" autoComplete="username" inputMode="email" />
+          <TextField label={t("auth.password")} name="password" type="password" autoComplete="current-password" />
+          <SubmitButton pending={signIn.isPending} wide>
+            {t("auth.signIn.submit")}
+          </SubmitButton>
+        </Stack>
       </form>
     </AuthFrame>
   );
