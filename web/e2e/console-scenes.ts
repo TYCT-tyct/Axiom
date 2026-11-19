@@ -44,8 +44,15 @@ const scenes: Scene[] = [
       await page.getByLabel(/^(密码|Password)$/).waitFor();
     },
   },
-  // the request for a reset link, which the password step leads to
-  { name: "reset-password", signedIn: false, open: (page) => goto(page, "reset-password") },
+  // the request for a reset link, which the password step leads to, once it knows the browser is signed out
+  {
+    name: "reset-password",
+    signedIn: false,
+    open: async (page) => {
+      await goto(page, "reset-password");
+      await page.getByRole("link", { name: /^(返回登录|Back to sign in)$/ }).waitFor();
+    },
+  },
   // a member whose accepted terms are behind the site's current ones
   { name: "consent", signedIn: true, open: (page) => goto(page, "consent") },
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },

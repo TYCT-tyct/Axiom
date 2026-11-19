@@ -28,11 +28,7 @@ import { dropResetLink, onResetLink, resetLink } from "./reset-link";
 export default function ResetPassword() {
   useLoginFace();
   const link = useSyncExternalStore(onResetLink, resetLink);
-  return link.token ? (
-    <NewPassword key={link.n} token={link.token} onAgain={dropResetLink} />
-  ) : (
-    <RequestReset key={link.n} />
-  );
+  return link.token ? <NewPassword key={link.n} token={link.token} /> : <RequestReset key={link.n} />;
 }
 
 // The language the mail is written in: the page's.
@@ -61,94 +57,144 @@ const badEmail = (error: unknown) =>
   (error instanceof ApiError && error.status === 422 && error.code === "unprocessable");
 
 // The email step, and once its request is accepted, the step that says to check the mail. The server answers every
-// address alike, so the page cannot say more than that.
+// address alike, so the page cannot say more than that. Both steps' way back to sign in is the one the browser's session
+// decides (WayOn), read when the page opens.
 function RequestReset() {
   const { t } = useTranslation();
-  const errors = useErrors();
   const stage = useStage();
   const attempt = useAttempt();
-  const language = useMailLanguage();
-  const next = useSearch({ strict: false }).next;
-  const input = useRef<HTMLInputElement | null>(null);
-  const [email, setEmail] = useState("");
-  const [missing, setMissing] = useState(false);
+  const browser = useBrowserSession();
+  const said = useSaid(browser);
   const [sent, setSent] = useState(false);
-  const failed = attempt.failure?.kind === "request" ? attempt.failure.error : null;
-  const cooling = useCooldown(failed);
-  const blocked = attempt.kind !== null || cooling.waiting;
-  if (sent) return <Sent attempt={attempt} stage={stage} next={next} onAgain={() => setSent(false)} />;
-  const refused = badEmail(failed);
-  const failure = refused ? t("auth.signIn.badEmail") : failed && !cooling.over ? errors.message(failed) : "";
-  const send = (address: string) => () =>
-    unwrapEmpty(consoleApi.POST("/api/console/v1/auth/password-reset", { body: { email: address, language } })).then(
-      () => setSent(true),
+  const form = useRequestForm(stage, attempt, () => setSent(true));
+  const editAgain = useFocusAgain(form.input);
+  if (sent) {
+    return (
+      <Sent
+        attempt={attempt}
+        stage={stage}
+        browser={browser}
+        said={said}
+        onAgain={() => editAgain(() => setSent(false))}
+      />
     );
+  }
   return (
     <LoginFrame
       title={t("auth.reset.title")}
-      sub={t("auth.reset.description")}
+      sub={said(t("auth.reset.description"))}
+      subStyle={wrapAnywhere}
       step="request"
       shape="start"
       attempt={attempt}
       stage={stage}
       onSubmit={(event) => {
         event.preventDefault();
-        // the address the field holds, which a password manager may have written without a word to the page
-        const typed = input.current?.value ?? email;
-        const address = typed.trim();
-        setEmail(typed);
-        setMissing(!address);
-        if (address && !blocked) attempt.run("request", send(address), { onFail: () => stage.hear({ type: "bad" }) });
+        form.submit();
       }}
     >
       <EmailField
         id="reset-email"
         problemId="reset-problem"
-        email={email}
-        input={input}
-        problem={missing ? t("auth.signIn.missingEmail") : failure}
-        onInput={(value) => {
-          setEmail(value);
-          setMissing(false);
-          if (refused) attempt.dismiss();
-          hearAddress(stage, value);
-        }}
+        email={form.email}
+        input={form.input}
+        problem={form.problem}
+        invalid={form.invalid}
+        onInput={form.type}
       />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.reset.submit")}</span>}
-        values={{ disabled: blocked, style: primaryLook(blocked) }}
+        values={{ disabled: form.blocked, style: primaryLook(form.blocked) }}
       />
-      <RouteNote to="/sign-in" label={t("auth.reset.back")} next={next} />
+      <WayOn browser={browser} signIn={t("auth.reset.back")} attempt={attempt} />
     </LoginFrame>
   );
+}
+
+// useRequestForm is the email step's state: the address, what is wrong with it or with the request, and the request.
+function useRequestForm(stage: Stage, attempt: Attempt, onSent: () => void) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const language = useMailLanguage();
+  const input = useRef<HTMLInputElement | null>(null);
+  const [email, setEmail] = useState("");
+  const [missing, setMissing] = useState(false);
+  const failed = attempt.failure?.kind === "request" ? attempt.failure.error : null;
+  const cooling = useCooldown(failed);
+  const blocked = attempt.kind !== null || cooling.waiting;
+  const refused = badEmail(failed);
+  const failure = refused ? t("auth.signIn.badEmail") : failed && !cooling.over ? errors.message(failed) : "";
+  const send = (address: string) =>
+    unwrapEmpty(consoleApi.POST("/api/console/v1/auth/password-reset", { body: { email: address, language } })).then(
+      onSent,
+    );
+  return {
+    input,
+    email,
+    blocked,
+    problem: missing ? t("auth.signIn.missingEmail") : failure,
+    invalid: missing || refused,
+    submit: () => {
+      // the address the field holds, which a password manager may have written without a word to the page
+      const typed = input.current?.value ?? email;
+      const address = typed.trim();
+      setEmail(typed);
+      setMissing(!address);
+      if (address && !blocked)
+        attempt.run("request", () => send(address), { onFail: () => stage.hear({ type: "bad" }) });
+    },
+    type: (value: string) => {
+      setEmail(value);
+      setMissing(false);
+      if (refused) attempt.dismiss();
+      hearAddress(stage, value);
+    },
+  };
+}
+
+// useFocusAgain is the way back to a form whose step had left it: the step goes (leave), and once the form is on
+// screen again its field takes the focus, so the address kept there can be edited at once.
+function useFocusAgain(input: RefObject<HTMLInputElement | null>) {
+  const [back, setBack] = useState(0);
+  useEffect(() => {
+    if (back > 0) input.current?.focus();
+  }, [input, back]);
+  return (leave: () => void) => {
+    leave();
+    setBack((n) => n + 1);
+  };
 }
 
 // The request is accepted: the mail may come. The form is one step back, with the address, to send again or to another.
 function Sent({
   attempt,
   stage,
-  next,
+  browser,
+  said,
   onAgain,
 }: {
   attempt: Attempt;
   stage: Stage;
-  next?: string;
+  browser: BrowserSession;
+  said: Said;
   onAgain: () => void;
 }) {
   const { t } = useTranslation();
   return (
     <LoginFrame
       title={t("auth.reset.sentTitle")}
-      sub={t("auth.reset.sent")}
+      sub={said(t("auth.reset.sent"))}
+      subStyle={wrapAnywhere}
       step="sent"
       shape="enter"
       attempt={attempt}
       stage={stage}
+      answer
       onSubmit={(event) => event.preventDefault()}
     >
       <NoteAction label={t("auth.reset.resend")} onPress={onAgain} />
-      <RouteNote to="/sign-in" label={t("auth.reset.back")} next={next} />
+      <WayOn browser={browser} signIn={t("auth.reset.back")} attempt={attempt} />
     </LoginFrame>
   );
 }
@@ -157,11 +203,11 @@ type After = "done" | "invalid" | "unknown";
 
 // The link's step: the new password, and once the reset is over, the way on. The page's requests (attempt.ts) are the
 // reset and, on the way on, a sign-out.
-function NewPassword({ token, onAgain }: { token: string; onAgain: () => void }) {
+function NewPassword({ token }: { token: string }) {
   const stage = useStage();
   const attempt = useAttempt();
   const [after, setAfter] = useState<After | null>(null);
-  if (after) return <Onward after={after} attempt={attempt} stage={stage} onAgain={onAgain} />;
+  if (after) return <Onward after={after} attempt={attempt} stage={stage} />;
   return <NewPasswordForm token={token} attempt={attempt} stage={stage} onAfter={setAfter} />;
 }
 
@@ -199,9 +245,10 @@ function NewPasswordForm({
   const failed = attempt.failure?.kind === "reset" ? attempt.failure.error : null;
   const cooling = useCooldown(failed);
   const blocked = attempt.kind !== null || cooling.waiting;
-  const failure = !failed || cooling.over ? "" : badLength(failed) ? t("auth.reset.length") : errors.message(failed);
+  const tooLong = badLength(failed);
+  const failure = !failed || cooling.over ? "" : tooLong ? t("auth.reset.length") : errors.message(failed);
   const problem = missing ? t("auth.signIn.missingPassword") : failure;
-  const reset = (secret: string) => () =>
+  const reset = (secret: string) =>
     unwrapEmpty(
       consoleApi.POST("/api/console/v1/auth/password-reset/complete", {
         body: { token, new_password: secret, language },
@@ -221,7 +268,7 @@ function NewPasswordForm({
         setMissing(!secret);
         if (!secret || blocked) return;
         // not cancellable: a reset sent may end this browser's session
-        attempt.run("reset", reset(secret), {
+        attempt.run("reset", () => reset(secret), {
           onFail: (error) => {
             const next = afterFailure(error);
             if (next) onAfter(next);
@@ -232,11 +279,12 @@ function NewPasswordForm({
     >
       <NewPasswordField
         problem={problem}
+        invalid={missing || tooLong}
         input={password}
         onInput={() => {
           setMissing(false);
           // the password's refusal is about what was typed; a limit's wait is not, and stays
-          if (badLength(failed)) attempt.dismiss();
+          if (tooLong) attempt.dismiss();
         }}
       />
       <FormProblem id="reset-problem" message={problem} />
@@ -251,10 +299,12 @@ function NewPasswordForm({
 
 function NewPasswordField({
   problem,
+  invalid,
   input,
   onInput,
 }: {
   problem: string;
+  invalid: boolean;
   input: RefObject<HTMLInputElement | null>;
   onInput: () => void;
 }) {
@@ -268,9 +318,9 @@ function NewPasswordField({
         name: "password",
         type: "password",
         autoComplete: "new-password",
-        fieldCls: problem ? "bad" : "",
+        fieldCls: invalid ? "bad" : "",
         describedBy: problem ? "reset-problem" : "",
-        invalid: problem ? true : undefined,
+        invalid: invalid || undefined,
         input: (element) => {
           input.current = element as HTMLInputElement | null;
         },
@@ -287,60 +337,35 @@ const afterWords = {
 } as const;
 
 // The way on after a reset: to sign in with the new password, and, for a link that did not work, to ask for a new one.
-// A reset ends the sessions of the account it was for, not of another one this browser may be signed in as, and the
-// sign-in page would open that one's console. So the way to sign in is offered only once the browser is known to be
-// signed out (useBrowserSession); otherwise the step says what the browser holds, truthfully, and what fits it (WaysOn).
-// Not knowing is never signed out.
-function Onward({
-  after,
-  attempt,
-  stage,
-  onAgain,
-}: {
-  after: After;
-  attempt: Attempt;
-  stage: Stage;
-  onAgain: () => void;
-}) {
-  const { t, i18n } = useTranslation();
+function Onward({ after, attempt, stage }: { after: After; attempt: Attempt; stage: Stage }) {
+  const { t } = useTranslation();
   const browser = useBrowserSession();
+  const said = useSaid(browser);
   const words = afterWords[after];
-  const said = {
-    reading: "",
-    failed: t("auth.reset.unsure"),
-    in: t("auth.reset.signedIn", { email: browser.email }),
-    pending: t("auth.reset.pending", { email: browser.email }),
-    out: "",
-  }[browser.state];
-  const sentences = [t(words.sub), said].filter(Boolean);
   return (
     <LoginFrame
       title={t(words.title)}
-      sub={sentences.join((i18n.resolvedLanguage ?? i18n.language).startsWith("en") ? " " : "")}
+      sub={said(t(words.sub))}
       subStyle={wrapAnywhere}
       step={after}
       shape={after === "done" ? "enter" : "start"}
       attempt={attempt}
       stage={stage}
+      answer
       onSubmit={(event) => event.preventDefault()}
     >
-      <WaysOn browser={browser} signIn={t(words.signIn)} attempt={attempt} />
-      {after === "done" ? null : <NoteAction label={t("auth.reset.again")} onPress={onAgain} />}
+      <WayOn browser={browser} signIn={t(words.signIn)} attempt={attempt} />
+      {after === "done" ? null : <NoteAction label={t("auth.reset.again")} onPress={dropResetLink} />}
     </LoginFrame>
   );
 }
 
-// The ways on from what the browser holds: signed out, to sign in; signed in, to sign out first; a sign-in waiting for
-// its second step, to finish it or end it; unread, to read again.
-function WaysOn({
-  browser,
-  signIn,
-  attempt,
-}: {
-  browser: ReturnType<typeof useBrowserSession>;
-  signIn: string;
-  attempt: Attempt;
-}) {
+// Every way from this page to sign in. A reset ends the sessions of the account it was for, not of another one this
+// browser may be signed in as, and the sign-in page opens the console of whoever is signed in. So the way to sign in is
+// offered only once the browser is known to be signed out (useBrowserSession); otherwise the step says what the browser
+// holds, truthfully (useSaid), and offers what fits it: signed in, to sign out first; a sign-in waiting for its second
+// step, to finish it or end it; unread, to read again. Not knowing is never signed out.
+function WayOn({ browser, signIn, attempt }: { browser: BrowserSession; signIn: string; attempt: Attempt }) {
   const { t } = useTranslation();
   const next = useSearch({ strict: false }).next;
   if (browser.state === "out") return <RouteNote to="/sign-in" label={signIn} next={next} />;
@@ -355,7 +380,25 @@ function WaysOn({
   );
 }
 
-// useBrowserSession is who this browser is signed in as, read afresh when the way on opens: the same read a sign-in
+type BrowserSession = ReturnType<typeof useBrowserSession>;
+type Said = ReturnType<typeof useSaid>;
+
+// useSaid puts what the browser holds after a step's own sentence, in the step's line under its title, announced as it
+// changes: that a read is out, whom the browser is signed in as, or that it could not be told.
+function useSaid(browser: BrowserSession) {
+  const { t, i18n } = useTranslation();
+  const said = {
+    reading: t("auth.reset.checking"),
+    failed: t("auth.reset.unsure"),
+    in: t("auth.reset.signedIn", { email: browser.email }),
+    pending: t("auth.reset.pending", { email: browser.email }),
+    out: "",
+  }[browser.state];
+  const gap = (i18n.resolvedLanguage ?? i18n.language).startsWith("en") ? " " : "";
+  return (own: string) => <span role="status">{[own, said].filter(Boolean).join(gap)}</span>;
+}
+
+// useBrowserSession is who this browser is signed in as, read afresh when the step opens: the same read a sign-in
 // confirms its session with (useReadSession), after which the cache follows the session (a sign-out here empties it).
 // Only the latest read decides.
 function useBrowserSession() {

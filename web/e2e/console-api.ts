@@ -94,15 +94,18 @@ function register({ body, state }: Ctx<"/api/console/v1/auth/register", "post">)
   return { status: 201, json: { user_id: `user_${"1".repeat(26)}` as Schemas["UserId"] } } as const;
 }
 
-// A reset request as the server takes it: an address it does not take is a 422 with no field named (ErrBadEmail);
-// any other gets the same empty 202, and a registered one a new link, which leaves the address's earlier one spent
-// (internal/accounts password_change.go, password_recovery.go).
+// A reset request as the server takes it: the contract's guard refuses an address outside 3 to 254 characters (400);
+// the server refuses one that is not a plain address of printable ASCII with a 422 that names no field (emailAllowed,
+// ErrBadEmail); any other gets the same empty 202, and a registered one a new 43-character link, which leaves the
+// address's earlier one spent (internal/accounts password_change.go, password_recovery.go).
 function requestReset({ body, state }: Ctx<"/api/console/v1/auth/password-reset", "post">) {
-  if (body.email.length < 3) return breaks("/email");
+  const characters = [...body.email].length;
+  if (characters < 3 || characters > 254) return breaks("/email");
   const email = body.email.trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+$/.test(email)) return fail(422, "unprocessable");
+  if (!/^[\x21-\x3f\x41-\x7e]+@[\x21-\x3f\x41-\x7e]+$/.test(email)) return fail(422, "unprocessable");
   for (const [token, owner] of state.resetLinks) if (owner === email) state.resetLinks.delete(token);
-  if ([state.user.email, otherEmail].includes(email)) state.resetLinks.set(`mailed-${state.log.length}`, email);
+  const token = String(state.log.length).padStart(43, "m");
+  if ([state.user.email, otherEmail].includes(email)) state.resetLinks.set(token, email);
   return { status: 202 as const, json: undefined };
 }
 
@@ -112,7 +115,8 @@ function requestReset({ body, state }: Ctx<"/api/console/v1/auth/password-reset"
 function completeReset({ body, state }: Ctx<"/api/console/v1/auth/password-reset/complete", "post">) {
   const characters = [...body.new_password].length;
   if (characters < 12 || characters > 256) return breaks("/new_password");
-  const owner = state.resetLinks.get(body.token);
+  // the server takes only a 43-byte token for a link it issued
+  const owner = body.token.length === 43 ? state.resetLinks.get(body.token) : undefined;
   if (owner === undefined) return fail(422, "unprocessable");
   state.resetLinks.delete(body.token);
   if (owner === state.user.email) {

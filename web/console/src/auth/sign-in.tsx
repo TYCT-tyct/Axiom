@@ -150,6 +150,8 @@ function useSignInFlow(stage: Stage, ready: boolean) {
     emailInput,
     submit,
     problem: missing ? missingText : failure,
+    // the address is what is wrong: none typed on its step, or refused
+    emailInvalid: step === "email" && (missing || refused),
     typeEmail,
     typePassword: () => setMissing(false),
     back: () => {
@@ -212,6 +214,7 @@ function EmailStep({ flow }: { flow: Flow }) {
         email={email}
         input={flow.emailInput}
         problem={problem}
+        invalid={flow.emailInvalid}
         onInput={flow.typeEmail}
       />
       <LoginPrimary

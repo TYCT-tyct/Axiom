@@ -210,8 +210,9 @@ export function DataState<T>({
   return children(query.data);
 }
 
-// PageFailedState replaces a page that could not render or load; reloading fetches the current build.
-export function PageFailedState() {
+// PageFailedState replaces a page that could not render or load; reloading fetches the current build. A page whose way
+// back is not a reload says its own (body).
+export function PageFailedState({ body }: { body?: string }) {
   const { t } = useTranslation("common");
   return (
     <StateFrame
@@ -225,7 +226,7 @@ export function PageFailedState() {
         </ActionButton>
       }
     >
-      <p role="alert">{t("state.pageFailedBody")}</p>
+      <p role="alert">{body ?? t("state.pageFailedBody")}</p>
     </StateFrame>
   );
 }

@@ -44,10 +44,11 @@ test("the password step leads to the reset page and back, keeping where the visi
   await expect(heading(page, "查收邮件")).toBeFocused();
   await expect(page.getByText("如果有可用的账户使用这个邮箱，它会收到")).toBeVisible();
   expect(state.log.filter((line) => line === "POST /auth/password-reset")).toHaveLength(1);
-  // one step back is the form, with the address, to send again
+  // one step back is the form, with the address, to send again: the address takes the focus, to be edited at once
   await page.getByRole("button", { name: "重新发送或换个邮箱" }).click();
   await expect(heading(page, "找回密码")).toBeVisible();
   await expect(page.getByLabel("邮箱")).toHaveValue(knownEmail);
+  await expect(page.getByLabel("邮箱")).toBeFocused();
   await page.getByRole("link", { name: "返回登录" }).click();
   await expect(heading(page, "登录")).toBeVisible();
   await signIn(page);
@@ -57,10 +58,13 @@ test("the password step leads to the reset page and back, keeping where the visi
 
 test("a link sets the new password once, which then signs in; the same link is then refused", async ({ page }) => {
   const state = await mockConsole(page);
-  // where the link's token goes: only into the body of the reset itself
+  // where the link's token goes: only into the body of the reset itself, never an address or a header
   const carried: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes(goodResetToken)) carried.push(`url ${request.url()}`);
+    if (Object.values(request.headers()).some((value) => value.includes(goodResetToken))) {
+      carried.push(`header ${new URL(request.url()).pathname}`);
+    }
     if (request.postData()?.includes(goodResetToken)) carried.push(`body ${new URL(request.url()).pathname}`);
   });
   await openLink(page, goodResetToken);
@@ -130,15 +134,34 @@ test("a way on that cannot tell who is signed in offers to ask again, not to sig
   await expect(page.getByText("没能确认")).toHaveCount(0);
 });
 
-test("a reset whose answer never came offers the new password as well as a new link", async ({ page }) => {
-  await mockConsole(page);
-  await page.route("**/api/console/v1/auth/password-reset/complete", (route) => route.abort());
-  await openLink(page, goodResetToken);
-  await setNewPassword(page);
-  await expect(heading(page, "不确定是否已重设")).toBeVisible();
-  await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "重新申请" })).toBeVisible();
-});
+// What a reset's failure leaves: no answer, or a gateway's page without the contract's error, may have gone through;
+// the contract's own 503 did not, and is said on the form, which stays.
+for (const [name, answer, unknown] of [
+  ["no answer", null, true],
+  ["a gateway's 502 without the contract's error", { status: 502, body: "Bad Gateway" }, true],
+  ["the contract's 503", { status: 503, json: { error: { code: "unavailable", message: "unavailable" } } }, false],
+] as const) {
+  test(`a reset met with ${name} ${unknown ? "offers the new password as well as a new link" : "stays on the form"}`, async ({
+    page,
+  }) => {
+    await mockConsole(page);
+    await page.route("**/api/console/v1/auth/password-reset/complete", (route) =>
+      answer ? route.fulfill(answer) : route.abort(),
+    );
+    await openLink(page, goodResetToken);
+    await setNewPassword(page);
+    if (unknown) {
+      await expect(heading(page, "不确定是否已重设")).toBeVisible();
+      await expect(page.getByRole("link", { name: "用新密码登录" })).toBeVisible();
+      await expect(page.getByRole("button", { name: "重新申请" })).toBeVisible();
+      return;
+    }
+    await expect(page.getByRole("alert")).toBeVisible();
+    await expect(heading(page, "设置新密码")).toBeVisible();
+    // the service is down, not the password: the field is not marked
+    await expect(page.getByLabel("新密码", { exact: true })).not.toHaveAttribute("aria-invalid", "true");
+  });
+}
 
 test("a link opened in the same tab is taken, and starts its own form", async ({ page }) => {
   await mockConsole(page);
@@ -181,15 +204,20 @@ test("asking for a link again leaves only the newest one working", async ({ page
   await expect(heading(page, "密码已重设")).toBeVisible();
 });
 
-// one character either side of the contract's 12 to 256, counted in characters: 11 emoji are 11, not 22 UTF-16 units
-for (const [name, password] of [
-  ["11 characters", "😀".repeat(11)],
-  ["257 characters", "w".repeat(257)],
+// one character either side of the contract's 12 to 256, counted in characters (11 emoji are 11, not 22 UTF-16 units),
+// as the contract's guard refuses them (400 naming the field); and the server's own check (422 weak_password)
+for (const [name, password, weak] of [
+  ["11 characters", "😀".repeat(11), false],
+  ["257 characters", "w".repeat(257), false],
+  ["the server's weak_password", newPassword, true],
 ] as const) {
-  test(`a new password of ${name} is told the range, which goes once it is edited, and the link still works`, async ({
+  test(`a new password refused for ${name} is told the range, which goes once it is edited, and the link still works`, async ({
     page,
   }) => {
     await mockConsole(page);
+    const weakOnce = (route: Route) =>
+      route.fulfill({ status: 422, json: { error: { code: "weak_password", message: "weak_password" } } });
+    if (weak) await page.route("**/api/console/v1/auth/password-reset/complete", weakOnce, { times: 1 });
     await openLink(page, goodResetToken);
     await setNewPassword(page, password);
     await expect(page.getByRole("alert")).toHaveText("新密码要 12 到 256 个字符。");
@@ -238,6 +266,8 @@ test("a limit keeps the request's button disabled for as long as the answer says
   await submit.click();
   await expect(page.getByRole("alert")).toHaveText(/30 秒/);
   await expect(submit).toBeDisabled();
+  // the limit is the form's to say, not the address's
+  await expect(page.getByLabel("邮箱")).not.toHaveAttribute("aria-invalid", "true");
   // editing the address does not lift the wait: the limit is not about what was typed
   await page.getByLabel("邮箱").fill(`x${knownEmail}`);
   await expect(page.getByRole("alert")).toHaveText(/30 秒/);
@@ -249,13 +279,22 @@ test("a limit keeps the request's button disabled for as long as the answer says
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
 
-test("a link whose page fails to load leaves no token in the address", async ({ page }) => {
+test("a link whose page fails to load leaves no token in the address, and says to open the link again", async ({
+  page,
+}) => {
   await mockConsole(page);
-  await page.route("**/reset-password-*.js", (route) => route.abort());
+  const failing = (route: Route) => route.abort();
+  await page.route("**/reset-password-*.js", failing);
   await page.goto(`/console/reset-password#token=${goodResetToken}`);
   await expect(heading(page, "页面没能加载")).toBeVisible();
   expect(page.url()).not.toContain(goodResetToken);
   expect(await page.evaluate(() => location.hash)).toBe("");
+  // a reload would not bring the token back: the way back is the email's link, which still works
+  await expect(page.getByRole("alert")).toHaveText(/回到邮件重新打开那个链接/);
+  await page.unroute("**/reset-password-*.js", failing);
+  await openLink(page, goodResetToken);
+  await setNewPassword(page);
+  await expect(heading(page, "密码已重设")).toBeVisible();
 });
 
 test("a sign-in waiting for its second step is named as that, and can be finished or ended", async ({ page }) => {
@@ -306,25 +345,25 @@ async function codesWaiting(page: Page, held?: Promise<void>) {
   return () => takes;
 }
 
-// From the reset page back to sign in, which sends a browser that is still signed in to its console.
-async function intoConsoleFromReset(page: Page) {
-  await page.goto("/console/reset-password");
+// The reset page opened in the same document as the console, as a link the router follows would open it.
+async function toResetPage(page: Page) {
+  await page.evaluate(() => {
+    history.pushState(null, "", "/console/reset-password");
+    dispatchEvent(new PopStateEvent("popstate"));
+  });
   await expect(heading(page, "找回密码")).toBeVisible();
-  await page.getByRole("link", { name: "返回登录" }).click();
-  await expect(heading(page, "概览")).toBeVisible();
 }
 
 test("an open codes dialog is off the reset page, and back once the page is left", async ({ page }) => {
   const state = await mockConsole(page);
   signedInAs(state);
   await codesWaiting(page);
-  await intoConsoleFromReset(page);
+  await page.goto("/console/");
   await expect(page.getByRole("dialog")).toContainText(aCode);
-  await page.goBack();
-  await expect(heading(page, "找回密码")).toBeVisible();
+  await toResetPage(page);
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await expect(page.getByText(aCode)).toHaveCount(0);
-  await page.goForward();
+  await page.goBack();
   await expect(heading(page, "概览")).toBeVisible();
   await expect(page.getByRole("dialog")).toContainText(aCode);
 });
@@ -336,22 +375,64 @@ test("codes that come while the reset page is open are shown once after it, and 
   signedInAs(state);
   const { held, release } = hold();
   const takes = await codesWaiting(page, held);
-  await intoConsoleFromReset(page);
-  await page.goBack();
-  await expect(heading(page, "找回密码")).toBeVisible();
+  const asked = page.waitForRequest("**/api/console/v1/auth/recovery-codes/take");
+  await page.goto("/console/");
+  await asked;
+  await toResetPage(page);
   const answered = page.waitForResponse("**/api/console/v1/auth/recovery-codes/take");
   release();
   await answered;
   await expect(page.getByRole("dialog")).toHaveCount(0);
-  await page.goForward();
+  await page.goBack();
   await expect(page.getByRole("dialog")).toContainText(aCode);
   await page.getByRole("button", { name: "我已保存" }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   // in and out of the reset page in the same document: the codes kept are gone, and not asked for again
+  await toResetPage(page);
   await page.goBack();
-  await expect(heading(page, "找回密码")).toBeVisible();
-  await page.goForward();
   await expect(heading(page, "概览")).toBeVisible();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   expect(takes()).toBe(1);
+});
+
+// The way back to sign in from the request and its answer is the one the session decides: a browser still signed in
+// shows neither its console nor its codes until the visitor chooses.
+test("a browser still signed in is named on the request and its answer, before any way to sign in", async ({
+  page,
+}) => {
+  const state = await mockConsole(page);
+  signedInAs(state);
+  const takes = await codesWaiting(page);
+  await page.goto("/console/reset-password");
+  await expect(heading(page, "找回密码")).toBeVisible();
+  await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
+  await expect(page.getByRole("link", { name: "返回登录" })).toHaveCount(0);
+  await page.getByLabel("邮箱").fill("someone.else@example.com");
+  await page.getByRole("button", { name: "发送重设邮件" }).click();
+  await expect(heading(page, "查收邮件")).toBeVisible();
+  await expect(page.getByText(`仍以 ${knownEmail} 登录`)).toBeVisible();
+  await expect(page.getByRole("link", { name: "返回登录" })).toHaveCount(0);
+  await expect(heading(page, "概览")).toHaveCount(0);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  expect(takes()).toBe(0);
+  await page.getByRole("button", { name: "退出这个账户" }).click();
+  await page.getByRole("link", { name: "返回登录" }).click();
+  await expect(heading(page, "登录")).toBeVisible();
+  expect(state.level).toBe("none");
+});
+
+test("while the session is read the step says so, and offers no way on until it is known", async ({ page }) => {
+  await mockConsole(page);
+  const { held, release } = hold();
+  await page.route("**/api/console/v1/session", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto("/console/reset-password");
+  await expect(heading(page, "找回密码")).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "正在确认登录状态" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "返回登录" })).toHaveCount(0);
+  release();
+  await expect(page.getByRole("link", { name: "返回登录" })).toBeVisible();
+  await expect(page.getByText("正在确认登录状态")).toHaveCount(0);
 });

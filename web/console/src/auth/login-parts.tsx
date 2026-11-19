@@ -55,14 +55,17 @@ export const hearAddress = (stage: Stage, value: string) =>
 export const fieldRefused = (error: unknown, pointer: string) =>
   error instanceof ApiError && error.fields.some((field) => field.pointer === pointer);
 
-// EmailField is an email step's address with its error line under it (problemId), which the field points at. input is
-// the field itself, which a password manager may write without a word to the page.
+// EmailField is an email step's address with the step's error line under it (problemId), which the field points at.
+// invalid marks the field itself, only when what it holds is the problem (none typed, or refused): a limit or a server
+// that is down is the form's to say, not the address's. input is the field itself, which a password manager may write
+// without a word to the page.
 export function EmailField({
   id,
   problemId,
   email,
   input,
   problem,
+  invalid,
   onInput,
 }: {
   id: string;
@@ -70,6 +73,7 @@ export function EmailField({
   email: string;
   input: RefObject<HTMLInputElement | null>;
   problem: string;
+  invalid: boolean;
   onInput: (value: string) => void;
 }) {
   const { t } = useTranslation("common");
@@ -85,9 +89,9 @@ export function EmailField({
           autoComplete: "username",
           placeholder: "name@company.com",
           value: email,
-          fieldCls: problem ? "bad" : "",
+          fieldCls: invalid ? "bad" : "",
           describedBy: problem ? problemId : "",
-          invalid: problem ? true : undefined,
+          invalid: invalid || undefined,
           input: (element) => {
             input.current = element as HTMLInputElement | null;
           },
