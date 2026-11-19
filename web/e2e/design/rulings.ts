@@ -10,7 +10,10 @@ export type Region =
   | { canvas: string }
   | { x: number; y: number; width: number; height: number };
 
-export type Ruling = { scene: string; basis: string; board?: Region; page?: Region };
+// glyphs: the ruling excuses only what is drawn inside its boxes, not where they are. Each side's boxes are blanked on
+// both shots, so a box that moved would be blanked at both places and pass; with glyphs the page's boxes must also sit
+// where the board's do, one for one.
+export type Ruling = { scene: string; basis: string; board?: Region; page?: Region; glyphs?: true };
 
 const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 
@@ -70,18 +73,18 @@ const accountShell = (scene: string): Ruling[] =>
 // the transition's on the board (trans.js), so both canvases are the fx tests'.
 const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
 const signInRulings: Ruling[] = [
-  // The sign-in pages draw their Chinese in the faces the board names, cut from their messages: the title and the
-  // label match the board's. The lede is the generated region's, which the font corpus does not read yet; the buttons'
-  // Chinese at 500 is drawn at 400 (§5.4), so only their labels' boxes are excused, not their fill, border or place;
-  // the language links have neither fill nor border at rest; and a few body characters still differ from the board's
-  // source rendering.
+  // The sign-in pages draw their Chinese in the faces the board names, cut from their messages and the board's region
+  // text: the title and the label match the board's. Only glyphs are excused, each in its own inline box, so a line or
+  // a control that moves, or a button that loses its fill or border, still fails.
   signIn({
-    basis: "§5/§5.4: the lede's characters are not in the font corpus yet; Chinese at 500 is drawn at 400",
-    ...both(".lg-pitch .s, .lg-btn > span, .lg-top a"),
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    ...both(".lg-btn > span, .lg-top a"),
+    glyphs: true,
   }),
   signIn({
     basis: "§5: a few characters of the cut body face differ from the board's source face (not yet explained)",
-    ...both(".lg-sub, .lg-note"),
+    ...both(".lg-sub > span, .lg-note > span, .lg-note > a, .lg-pitch .s > span"),
+    glyphs: true,
   }),
   signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
   signIn({

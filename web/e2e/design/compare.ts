@@ -42,6 +42,19 @@ async function rects(page: Page, region: Region | undefined, basis: string, side
   return boxes;
 }
 
+// How far an excused box may sit from the board's: the sides lay out the same text in the same face, so only rounding
+// moves a box.
+const placeTolerance = 1;
+
+// moved names the boxes of a glyphs ruling that are not where the board's are: a different count, or a box whose
+// corner or size is off by more than the tolerance.
+function moved(ruling: Ruling, board: Rect[], page: Rect[]): string | undefined {
+  const off = (a: Rect, b: Rect) =>
+    (["x", "y", "width", "height"] as const).some((side) => Math.abs(a[side] - b[side]) > placeTolerance);
+  if (board.length === page.length && page.every((box, i) => !off(board[i] as Rect, box))) return undefined;
+  return `ruling "${ruling.basis}" excuses glyphs only, but its boxes moved: board ${JSON.stringify(board)}, page ${JSON.stringify(page)}`;
+}
+
 // Rectangle rulings cover everything in their boxes; canvas rulings change only the backing pixels under other DOM.
 // Restore both after capture so subsequent interaction tests still exercise the original page.
 export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] = []) {
@@ -130,9 +143,15 @@ async function diffLocations(page: Page, diff: string) {
 // caller decides after recording it.
 export async function compare(board: Page, page: Page, scene: Ruling[], key: string, info: TestInfo) {
   const blanks: Rect[] = [];
+  const misplaced: string[] = [];
   for (const ruling of scene) {
-    blanks.push(...(await rects(board, ruling.board, ruling.basis, "board")));
-    blanks.push(...(await rects(page, ruling.page, ruling.basis, "page")));
+    const sides = [
+      await rects(board, ruling.board, ruling.basis, "board"),
+      await rects(page, ruling.page, ruling.basis, "page"),
+    ] as const;
+    blanks.push(...sides[0], ...sides[1]);
+    const away = ruling.glyphs && moved(ruling, ...sides);
+    if (away) misplaced.push(away);
   }
   const canvases = (side: "board" | "page") =>
     scene.flatMap((ruling) => {
@@ -141,7 +160,9 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     });
   const reference = await shot(board, blanks, canvases("board"));
   const actual = await shot(page, blanks, canvases("page"));
-  return compareShots(reference, actual, key, info, scene, page);
+  const result = await compareShots(reference, actual, key, info, scene, page);
+  if (misplaced.length) result.error = [result.error, ...misplaced].filter(Boolean).join("\n");
+  return result;
 }
 
 export async function comparePart(board: Locator, page: Locator, key: string, info: TestInfo) {

@@ -265,4 +265,20 @@ class Component extends DCLogic {
     await board.close();
     await page.close();
   });
+
+  test("a ruling of glyphs only still fails a box that moved", async ({ browser }, info) => {
+    const board = await openFixture(browser, info);
+    const page = await openFixture(browser, info);
+    await page.page.locator(".icon").evaluate((icon: HTMLElement) => {
+      icon.style.marginLeft = "20px";
+    });
+    const icon = { selector: ".icon" };
+    const ruling = { scene: "", basis: "test", board: icon, page: icon };
+    // blanked at both places, the moved box passes a plain ruling: that is what glyphs is for
+    expect((await compare(board.page, page.page, [ruling], "tool-moved", info)).error).toBeUndefined();
+    const glyphs = await compare(board.page, page.page, [{ ...ruling, glyphs: true }], "tool-moved-glyphs", info);
+    expect(glyphs.error).toContain("its boxes moved");
+    await board.close();
+    await page.close();
+  });
 });

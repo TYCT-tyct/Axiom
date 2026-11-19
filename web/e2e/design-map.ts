@@ -49,8 +49,9 @@ const loginBoards = {
   390: { file: "LoginPhone.dc.html", height: 844, engines: ["ocean-orig", "login-ui"] },
 };
 
-// The sign-in page asks what the product asks, in the board's parts: its title and lede, and the way to register in a
-// note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
+// The sign-in page asks what the product asks, in the board's parts: its title and lede, the pitch's billing line
+// (product.md: billed by the endpoint that served, without the board's promise that every route is tested), and the way
+// to register in a note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
 // does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
 // take out what the page has no counterpart for, so the comparison measures the parts and their layout.
 async function prepareSignInComparison(board: Page, page: Page, language: "zh" | "en") {
@@ -69,21 +70,22 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
     for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
     lg.style.setProperty("--bw", "1px");
   }, edge);
-  const words = {
-    title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
-    ...(language === "en" ? consoleAuthEn : consoleAuthZh).signIn,
-  };
+  const auth = language === "en" ? consoleAuthEn : consoleAuthZh;
+  const words = { title: (language === "en" ? uiEn : uiZh).auth.signIn.title, lede: auth.pitch.lede, ...auth.signIn };
   await board.evaluate((words) => {
     const step = document.querySelector(".lg-step") as HTMLElement;
+    // the words in their own inline boxes, as the page sets them, so only the glyphs are excused, not where lines sit
+    const inline = (text: string) => Object.assign(document.createElement("span"), { textContent: text });
     (step.querySelector(".lg-title") as HTMLElement).textContent = words.title;
-    (step.querySelector(".lg-sub") as HTMLElement).textContent = words.description;
+    (step.querySelector(".lg-sub") as HTMLElement).replaceChildren(inline(words.description));
+    (document.querySelector(".lg-pitch .s") as HTMLElement).replaceChildren(inline(words.lede));
     for (const part of step.querySelectorAll(".lg-consent, .lg-or, .lg-stack")) part.remove();
     const note = document.createElement("p");
     note.className = "lg-note";
     const link = document.createElement("a");
     link.href = "#";
     link.textContent = words.register;
-    note.append(`${words.noAccount} `, link);
+    note.append(inline(words.noAccount), " ", link);
     step.append(note);
     // the page sets a button's label in a span of its own, which the rulings excuse instead of the whole button
     for (const button of document.querySelectorAll(".lg-btn")) {
@@ -92,6 +94,12 @@ async function prepareSignInComparison(board: Page, page: Page, language: "zh" |
       button.append(label);
     }
   }, words);
+  // the page's lede is the region's bare text: set in an inline box too, with the same words, so both sides excuse
+  // only its glyphs
+  await page.evaluate(() => {
+    const lede = document.querySelector(".lg-pitch .s") as HTMLElement;
+    lede.replaceChildren(Object.assign(document.createElement("span"), { textContent: lede.textContent }));
+  });
 }
 
 // The website's home boards come one per width; the scheme is the system's, a prop.
