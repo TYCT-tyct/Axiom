@@ -94,7 +94,7 @@ export default {
   },
   security: {
     setup: {
-      title: "开启两步验证",
+      title: "设置验证器 App",
       scan: "用验证器 App 扫描二维码。",
       qr: "两步验证的二维码",
       manual: "无法扫描时，手动输入这串密钥",

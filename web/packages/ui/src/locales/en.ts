@@ -94,7 +94,7 @@ export default {
   },
   security: {
     setup: {
-      title: "Turn on two-step verification",
+      title: "Set up an authenticator app",
       scan: "Scan the QR code with your authenticator app.",
       qr: "QR code for two-step verification",
       manual: "If you can’t scan, enter this key by hand",

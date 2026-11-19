@@ -35,7 +35,7 @@ test.describe("security factor states and recovery code replacement", () => {
     await expect(page.getByRole("button", { name: "重新生成恢复码" })).toHaveCount(0);
 
     await page.getByRole("button", { name: "设置验证器 App" }).click();
-    const setup = page.getByRole("dialog", { name: "开启两步验证" });
+    const setup = page.getByRole("dialog", { name: "设置验证器 App" });
     await setup.getByLabel("密码").fill(knownPassword);
     await setup.getByLabel("验证器里的 6 位验证码").fill("123456");
     await setup.getByRole("button", { name: "开启", exact: true }).click();

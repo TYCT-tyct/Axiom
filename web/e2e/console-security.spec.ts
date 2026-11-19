@@ -40,7 +40,7 @@ test.describe("two-step verification settings", () => {
     await expect(page.getByText("未设置", { exact: true })).toBeVisible();
     await page.getByRole("button", { name: "设置验证器 App" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "开启两步验证" });
+    const dialog = page.getByRole("dialog", { name: "设置验证器 App" });
     await expect(dialog.getByRole("img", { name: "两步验证的二维码" })).toBeVisible();
     await expect(dialog.getByText("JBSWY3DPEHPK3PXP")).toBeVisible();
     await dialog.getByLabel("密码").fill(knownPassword);
@@ -89,7 +89,7 @@ test.describe("two-step verification settings", () => {
     });
 
     await page.getByRole("button", { name: "设置验证器 App" }).click();
-    const dialog = page.getByRole("dialog", { name: "开启两步验证" });
+    const dialog = page.getByRole("dialog", { name: "设置验证器 App" });
     await dialog.getByLabel("密码").fill(knownPassword);
     await dialog.getByLabel("验证器里的 6 位验证码").fill("123456");
     // From here on the session is asked for again, and the query keeps its retries on the page's clock, which
@@ -118,7 +118,7 @@ test.describe("two-step verification settings", () => {
         signedInAs(state);
         await page.goto("/console/security");
         await page.getByRole("button", { name: "设置验证器 App" }).click();
-        const dialog = page.getByRole("dialog", { name: "开启两步验证" });
+        const dialog = page.getByRole("dialog", { name: "设置验证器 App" });
         await dialog.getByLabel("密码").fill(knownPassword);
         return {
           dialog,
