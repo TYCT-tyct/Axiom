@@ -53,3 +53,15 @@ export const shown = (page: Page, sec: number) =>
         .evaluate((el) => getComputedStyle(el).opacity),
     )
     .toBe("1");
+
+// Pauses the clock a moment ahead of the page's, which runs on meanwhile: a busy machine may pass that moment before
+// the pause lands, and Playwright refuses to move the clock back, so aim again.
+export async function pauseAhead(page: Page, ahead: number) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await page.clock.pauseAt(await page.evaluate((ms) => Date.now() + ms, ahead));
+    } catch (error) {
+      if (tries === 4) throw error;
+    }
+  }
+}
