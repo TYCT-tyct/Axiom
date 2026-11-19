@@ -118,7 +118,7 @@ Go 承载调用与管理功能，TypeScript 承载页面，SQL 定义持久化�
 | 遥测 | OpenTelemetry + slog；Prometheus 经探针抓取，配置收集器后可用 OTLP/HTTP；稳定标签组合测量零分配 | 统一 API，基准守住稳态成本，标签与采样见 [platform](../internal/platform/README.md#遥测) |
 | 配置 / 组装 | 环境变量转类型并启动校验，业务配置入库；入口手写构造函数 | 无隐式加载、依赖可见 |
 | 契约 | OpenAPI 3.0.3，固定版本的 oapi-codegen、openapi-typescript、openapi-fetch | 先契约后生成，防止前后端漂移 |
-| 前端 | React 19、严格 TypeScript、Vite、TanStack Router/Query、i18next；shadcn/ui 与 Tailwind 迁移至 CSS Modules 中，删除依赖待定 | 三应用共享设计系统和模型价格组件，详见[前端](frontend.md) |
+| 前端 | React 19、严格 TypeScript、Vite、TanStack Router/Query、i18next；样式是 `@axiom/ui` 里的 CSS Modules，不用 Tailwind 和 shadcn/ui | 三应用共享设计系统和模型价格组件，详见[前端](frontend.md) |
 | 前端交付 | 构建嵌入 Go；官网当前客户端渲染，公开模型页服务端写入数据待实现；`AXIOM_WEB_ASSETS_DIR` 补其他构建的哈希资源，入口页仍用本构建 | 单文件交付，普通用户拿不到管理应用，代价是改前端也须重启节点 |
 | 测试 | `go test -race`、testcontainers 真实 PG/Valkey、协议回放、解析模糊测试、计费性质测试；Vitest + Playwright | 检查行为和不变量；数据库测试用 pgtest 新库，非输入的集群连接串经 `containertest.Untracked` 读取以保持有效缓存 |
 | 工具 / 部署 | golangci-lint、deadcode、govulncheck、gitleaks、Biome；just 跨平台；静态二进制、非 root 最小容器、Compose | 保持工具链和起步部署简单；CI、缓存、runner 与容器细节见 [CI](ops/ci.md) |
