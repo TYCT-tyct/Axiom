@@ -189,3 +189,104 @@ test("motion turned off after the page opened leaves the stage still, in its end
   await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
   expect((await loop(page)).frames).toBe(frames);
 });
+
+test("the stage takes the site's brand colour when the site's settings come after it was drawn", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const state = await mockConsole(page);
+  state.site = { ...state.site, brand_color: "#ff0000" };
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route("**/api/console/v1/site", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await expect.poll(() => ringPixels(page, "#10738c")).toBeGreaterThan(0);
+  release();
+  // drawn again at once in the console's accent as the brand makes it, though nothing moves under reduced motion
+  await expect.poll(() => ringPixels(page, "var(--accent)")).toBeGreaterThan(0);
+  expect(await ringPixels(page, "#10738c")).toBe(0);
+});
+
+// The stage's pixels, to tell two still frames apart.
+const stagePixels = (page: Page) =>
+  stageCanvas(page).evaluate((element) => {
+    const canvas = element as HTMLCanvasElement;
+    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) sum = (sum * 31 + (data[i] ?? 0)) % 2_147_483_647;
+    return sum;
+  });
+
+test("under reduced motion the stage answers what is typed, and only that: no drift between frames, no lasting red", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  const email = page.getByLabel("邮箱");
+  await email.fill(knownEmail);
+  await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
+  const whole = await stagePixels(page);
+  await email.fill("user@");
+  await pause(page);
+  await email.fill(knownEmail);
+  await expect.poll(() => stagePixels(page)).toBe(whole);
+  // a refusal is a moment, which a still page does not draw
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill("wrong password");
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await expect(page.getByRole("alert")).toBeVisible();
+  expect(await ringPixels(page, "var(--err)")).toBe(0);
+});
+
+test("an arrival's decode ends with the title it plays over: a new step's title is not drawn over", async ({
+  page,
+}) => {
+  await mockConsole(page);
+  await page.goto(apps[0].url);
+  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+  // the engine's code is held once asked for, so the clock can be stopped before the decode's first frame
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  let asked!: () => void;
+  const requested = new Promise<void>((resolve) => (asked = resolve));
+  await page.route(loginCode, async (route) => {
+    asked();
+    await held;
+    await route.fallback();
+  });
+  await page.clock.install();
+  await page.goto(signInPage);
+  await requested;
+  // stopped before the title's veil (1.5 s) lifts, so the engine still finds it waiting for its decode
+  await page.clock.pauseAt(await page.evaluate(() => Date.now() + 20));
+  release();
+  await expect(stageCanvas(page)).toBeAttached();
+  const decodeCanvas = page.locator("canvas.lg-dc");
+  const drawn = () =>
+    decodeCanvas.evaluate((element) => {
+      const canvas = element as HTMLCanvasElement;
+      const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
+      return data.some((value, i) => i % 4 === 3 && value > 0);
+    });
+  await page.clock.runFor(100);
+  await expect.poll(drawn).toBe(true);
+  await page.getByLabel("邮箱").fill(knownEmail);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await expect(page.getByRole("heading", { level: 1, name: "输入密码" })).toBeVisible();
+  expect(await drawn()).toBe(false);
+});

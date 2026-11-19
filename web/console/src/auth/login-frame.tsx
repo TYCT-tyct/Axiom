@@ -44,12 +44,13 @@ function claimArrival() {
 const veilFor = 1500;
 
 // The console's tokens on the board's own controls. The focus ring and the accent the stage and the decode draw in
-// follow the console's accent, which brandStyle derives from the site's colour (the primary button stays neutral,
-// R10). The controls' edges are the console's control edge, solid 1px, which holds 3:1 against what is around them
-// (docs/frontend.md「对比度令牌」); the board's own edge is lighter, and only half a pixel on a dense screen.
+// follow the console's accent, --accent, which brandStyle (@axiom/ui brand.ts) sets from the site's colour (the primary
+// button stays neutral, R10). The controls' edges are the console's control edge, solid 1px, which holds 3:1 against
+// what is around them (docs/frontend.md「对比度令牌」); the board's own edge is lighter, and only half a pixel on a
+// dense screen.
 const boardVars = [
-  "--focus: var(--accentT)",
-  "--ring: var(--accentT)",
+  "--focus: var(--accent)",
+  "--ring: var(--accent)",
   "--lineStrong1x: var(--ctl-line)",
   "--lineStrong2x: var(--ctl-line)",
   "--bw: 1px",
@@ -115,7 +116,15 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   useLock(attempt?.kind != null);
   useReloadWhenRestored();
   const titleRef = useRef<HTMLElement | null>(null);
-  const engine = useLoginEngine({ stage, shape, dark: prefs.dark, titleRef });
+  const engine = useLoginEngine({
+    stage,
+    shape,
+    dark: prefs.dark,
+    brand: site.data?.brand_color,
+    titleRef,
+    title,
+    step,
+  });
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
   return (
@@ -189,18 +198,25 @@ function useReloadWhenRestored() {
   }, []);
 }
 
-// useLoginEngine runs the sea, the stage and an arrival's decode on the frame once their code has loaded, keeps them
-// on the step's shape and the scheme, and hands the running engine to the page's stage.
+// useLoginEngine runs the sea, the stage and an arrival's decode on the frame once their code has loaded, and keeps
+// them on the step's shape and the page's colours (the scheme, the site's brand). The decode ends when the title it
+// plays over changes (another step, another language). It hands the running engine to the page's stage.
 function useLoginEngine({
   stage,
   shape,
   dark,
+  brand,
   titleRef,
+  title,
+  step,
 }: {
   stage?: Stage;
   shape: Shape;
   dark: boolean;
+  brand: string | undefined;
   titleRef: RefObject<HTMLElement | null>;
+  title: string;
+  step: string;
 }) {
   const own = useStage();
   const handle = stage ?? own;
@@ -227,7 +243,9 @@ function useLoginEngine({
     [handle],
   );
   useEffect(() => login.current?.show(shape), [login, shape]);
-  useEffect(() => login.current?.setLight(!dark), [login, dark]);
+  // brand is a dependency only: useBrandStyle, an effect before this one, has put its colours on the page
+  useEffect(() => login.current?.recolour(!dark), [login, dark, brand]);
+  useEffect(() => () => login.current?.endDecode(), [login, title, step]);
   return {
     seaCanvas: (canvas: Element | null) => {
       root.current = canvas?.closest<HTMLElement>(".lg") ?? null;

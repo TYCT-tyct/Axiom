@@ -7,7 +7,7 @@
 import { colour } from "./colour";
 import { hash } from "./hash";
 import { own, reducedMotion } from "./loop";
-import { buildSea, type OceanEngine, type Sea } from "./ocean";
+import { buildSea, type OceanEngine } from "./ocean";
 
 export type Shape = "start" | "code" | "key" | "enter";
 // What the page tells the stage: how much of an address is typed and whether it looks whole, how many digits of a
@@ -94,6 +94,9 @@ class Stage {
   private inkAt = 0;
   private mid = 0;
   private half = 1;
+  // still is reduced motion's: a frame is where everything is going, at no moment in particular (draw), and a refusal's
+  // shake and red and a digit's flicker, which are moments, are not drawn
+  still = false;
 
   constructor(
     private readonly lg: HTMLElement,
@@ -182,8 +185,8 @@ class Stage {
     if (heard.type === "email") this.heard = { ...this.heard, len: heard.len, ok: heard.ok };
     else if (heard.type === "digit") {
       this.heard.n = heard.n;
-      this.pulse = now;
-    } else this.bad = now;
+      if (!this.still) this.pulse = now;
+    } else if (!this.still) this.bad = now;
   }
 
   // The cell size of the sea under it: twice the sea's on a wide desk, at most 7px on a phone's short sea.
@@ -242,7 +245,10 @@ class Stage {
     return this.ink;
   }
 
-  draw(now: number) {
+  // draw paints the frame at now; a still frame is painted at one fixed moment, so the loose tiles' drift, the placed ones'
+  // bob and the glyphs cut in them are the same whatever is typed (every tile has settled: settle).
+  draw(at: number) {
+    const now = this.still ? 0 : at;
     const g = this.size();
     if (!g.W || !g.H || !this.shape) return;
     const x = this.context;
@@ -443,13 +449,14 @@ const roster = [
 ];
 
 export type Login = {
-  readonly sea: Sea;
   show: (shape: Shape) => void;
   hear: (heard: Heard) => void;
-  // setLight turns the sea and the stage to the light or the dark page
-  setLight: (light: boolean) => void;
+  // recolour takes the page's colours again (the scheme, light or dark, or the site's brand) and draws in them
+  recolour: (light: boolean) => void;
   // decode plays the title's decode once, for an arrival; the page passes its title and the form's decode canvas.
   decode: (title: HTMLElement, canvas: HTMLCanvasElement) => void;
+  // endDecode ends a decode still playing, its title shown and its canvas cleared: the title has changed under it
+  endDecode: () => void;
   destroy: () => void;
 };
 
@@ -482,7 +489,6 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
   const motion = follow(engine, stage, canvas, seaBox, () => stopDecode());
   const redrawStill = () => motion.still() && motion.redraw();
   return {
-    sea: { engine, destroy: () => engine.destroy() },
     show: (next) => {
       stage.to(next, performance.now());
       if (motion.still()) stage.settle();
@@ -492,14 +498,15 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
       stage.hear(heard, performance.now());
       redrawStill();
     },
-    setLight: (on) => {
-      engine.setLight(on);
+    recolour: (light) => {
+      engine.setLight(light);
       stage.recolour();
       redrawStill();
     },
     decode: (title, decodeCanvas) => {
       if (!motion.still()) stopDecode = decode(title, decodeCanvas);
     },
+    endDecode: () => stopDecode(),
     destroy: () => {
       stopDecode();
       motion.destroy();
@@ -530,6 +537,7 @@ function follow(
   const apply = () => {
     release();
     release = () => {};
+    stage.still = query.matches;
     if (!query.matches) {
       release = own(canvas, (dt, at) => {
         engine.tick(dt);

@@ -171,20 +171,25 @@ test.describe("the sign-in steps", () => {
 
   test("the site's brand colour is the focus ring of the sign-in fields", async ({ page }) => {
     const state = await mockConsole(page);
-    state.site = { ...state.site, brand_color: "#335ddf" };
-    await page.goto("/console/sign-in");
-    await page.getByLabel("邮箱").focus();
-    const { ring, accent } = await page.evaluate(() => {
-      const field = document.querySelector(".lg-field") as HTMLElement;
-      const probe = document.createElement("i");
-      probe.style.color = "var(--accentT)";
-      field.append(probe);
-      const accent = getComputedStyle(probe).color;
-      probe.remove();
-      return { ring: getComputedStyle(field).outlineColor, accent };
-    });
-    expect(ring).toBe(accent);
-    expect(ring).not.toBe("rgb(7, 151, 185)");
+    const rings: string[] = [];
+    for (const brand of ["#ff0000", "#335ddf"]) {
+      state.site = { ...state.site, brand_color: brand };
+      await page.goto("/console/sign-in");
+      await page.getByLabel("邮箱").focus();
+      const { ring, accent } = await page.evaluate(() => {
+        const field = document.querySelector(".lg-field") as HTMLElement;
+        const probe = document.createElement("i");
+        probe.style.color = "var(--accent)";
+        field.append(probe);
+        const accent = getComputedStyle(probe).color;
+        probe.remove();
+        return { ring: getComputedStyle(field).outlineColor, accent };
+      });
+      // the console's accent as brandStyle derives it from this site's colour
+      expect(ring).toBe(accent);
+      rings.push(ring);
+    }
+    expect(rings[0]).not.toBe(rings[1]);
   });
 });
 
