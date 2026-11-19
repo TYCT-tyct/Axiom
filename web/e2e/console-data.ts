@@ -340,6 +340,7 @@ export function usualState(): MockState {
   return {
     ...authState(allPermissions),
     ...mailedLinks(),
+    registered: new Map(),
     site: {
       name: "Axiom",
       currency: "USD",

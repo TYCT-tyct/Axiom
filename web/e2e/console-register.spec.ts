@@ -47,15 +47,17 @@ test.describe("open registration", () => {
   test("mails a link to the address, and goes back to send again with the address kept", async ({ page }) => {
     const state = await mockConsole(page);
     openSite(state);
+    // an address no link is out for yet, so the link found is this request's
+    const fresh = "fresh.person@example.com";
     await page.goto("/console/register");
     await expect(heading(page, "注册")).toBeVisible();
-    await page.getByLabel("邮箱").fill(newEmail);
+    await page.getByLabel("邮箱").fill(fresh);
     await page.getByRole("button", { name: "发送验证链接" }).click();
     await expect(heading(page, "查收验证邮件")).toBeFocused();
-    expect([...state.verifyLinks.values()]).toContain(newEmail);
+    expect([...state.verifyLinks].filter(([, owner]) => owner === fresh).map(([token]) => token.length)).toEqual([43]);
     await page.getByRole("button", { name: "重新发送或换个邮箱" }).click();
     await expect(heading(page, "注册")).toBeVisible();
-    await expect(page.getByLabel("邮箱")).toHaveValue(newEmail);
+    await expect(page.getByLabel("邮箱")).toHaveValue(fresh);
     await expect(page.getByLabel("邮箱")).toBeFocused();
   });
 
@@ -222,7 +224,11 @@ test.describe("registration with an invite code", () => {
       );
       await page.goto(`/console/register?invite=${goodInvite}`);
       await expect(heading(page, "注册")).toBeVisible();
-      await page.getByLabel("邮箱").fill("new@example.com");
+      await expect(page.getByLabel("邀请码")).toHaveAttribute("autocapitalize", "none");
+      // written the way a password manager may, without a word to the page: the address sent is kept all the same
+      await page.getByLabel("邮箱").evaluate((field: HTMLInputElement) => {
+        field.value = "new@example.com";
+      });
       await page.getByLabel("密码", { exact: true }).fill(password);
       await page.getByRole("button", { name: "注册", exact: true }).click();
       await expect(heading(page, "不确定是否已注册")).toBeVisible();
@@ -270,17 +276,21 @@ test.describe("verifying an open registration's address", () => {
     await expect(heading(page, "链接不能用了")).toBeVisible();
     await expect(page.getByText(`仍以 ${newEmail} 登录`)).toBeVisible();
     await expect(page.getByRole("link", { name: "去登录" })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "重新注册" })).toHaveCount(0);
     await page.getByRole("button", { name: "退出这个账户" }).click();
     await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
     await expect(page.getByRole("link", { name: "重新注册" })).toBeVisible();
   });
 
-  test("an address registered meanwhile says to sign in", async ({ page }) => {
+  test("an address registered meanwhile says to sign in, and spends the link", async ({ page }) => {
     await mockConsole(page);
     await openLink(page, takenVerifyToken);
     await choosePassword(page);
     await expect(heading(page, "这个邮箱已经注册过")).toBeVisible();
     await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
+    await openLink(page, takenVerifyToken);
+    await choosePassword(page);
+    await expect(heading(page, "链接不能用了")).toBeVisible();
   });
 
   for (const [name, answer] of [
@@ -387,5 +397,10 @@ test.describe("verifying an open registration's address", () => {
     await expect(page.getByRole("link", { name: "去登录" })).toBeVisible();
     expect(takes).toBe(0);
     await expect(page.getByRole("dialog")).toHaveCount(0);
+    // the account made is the new address's, apart from the session the browser held
+    await page.getByRole("link", { name: "去登录" }).click();
+    await expect(heading(page, "登录")).toBeVisible();
+    await signIn(page, newEmail, password);
+    await expect(heading(page, "概览")).toBeVisible();
   });
 });

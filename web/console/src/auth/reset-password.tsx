@@ -1,11 +1,11 @@
 import { ApiError, consoleApi, unwrapEmpty } from "@axiom/api";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
 import { EmailField, FormProblem, NoteAction, primaryLook, useLoginFace, wrapAnywhere } from "./login-parts";
-import { dropMailLink, mailLink, onMailLink } from "./mail-link";
+import { dropMailLink, useMailLink } from "./mail-link";
 import {
   badEmail,
   PasswordStepBody,
@@ -23,7 +23,7 @@ import { AfterStep, AnswerStep, useBrowserSession, useSaid, WayOn } from "./way-
 // in as anyone, and the way on finds out as whom (Onward). Each new link starts its form afresh.
 export default function ResetPassword() {
   useLoginFace();
-  const link = useSyncExternalStore(onMailLink, mailLink);
+  const link = useMailLink("/reset-password");
   return link.token ? <NewPassword key={link.n} token={link.token} /> : <RequestReset key={link.n} />;
 }
 
@@ -198,7 +198,9 @@ function Onward({ after, attempt, stage }: { after: After; attempt: Attempt; sta
       attempt={attempt}
       stage={stage}
     >
-      {after === "done" ? null : <NoteAction label={t("auth.reset.again")} onPress={dropMailLink} />}
+      {after === "done" ? null : (
+        <NoteAction label={t("auth.reset.again")} onPress={() => dropMailLink("/reset-password")} />
+      )}
     </AfterStep>
   );
 }

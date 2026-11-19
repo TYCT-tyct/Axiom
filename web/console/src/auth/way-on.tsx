@@ -11,11 +11,28 @@ import { NoteAction, RouteNote, SignOutNote, wrapAnywhere } from "./login-parts"
 // is signed in as, and the sign-in page opens the console of whoever is signed in. So the way to sign in is offered
 // only once the browser is known to be signed out (useBrowserSession); otherwise the step says what the browser holds,
 // truthfully (useSaid), and offers what fits it: signed in, to sign out first; a sign-in waiting for its second step,
-// to finish it or end it; unread, to read again. Not knowing is never signed out.
-export function WayOn({ browser, signIn, attempt }: { browser: BrowserSession; signIn: string; attempt: Attempt }) {
+// to finish it or end it; unread, to read again. Not knowing is never signed out. guest are the step's other ways that
+// only a browser signed out has (register again: the register page sends a signed-in browser on).
+export function WayOn({
+  browser,
+  signIn,
+  attempt,
+  guest,
+}: {
+  browser: BrowserSession;
+  signIn: string;
+  attempt: Attempt;
+  guest?: ReactNode;
+}) {
   const { t } = useTranslation();
   const next = useSearch({ strict: false }).next;
-  if (browser.state === "out") return <RouteNote to="/sign-in" label={signIn} next={next} />;
+  if (browser.state === "out")
+    return (
+      <>
+        <RouteNote to="/sign-in" label={signIn} next={next} />
+        {guest}
+      </>
+    );
   if (browser.state === "in") return <SignOutNote label={t("auth.way.signOut")} attempt={attempt} />;
   if (browser.state === "failed") return <NoteAction label={t("auth.way.check")} onPress={browser.check} />;
   if (browser.state === "reading") return null;
@@ -28,8 +45,8 @@ export function WayOn({ browser, signIn, attempt }: { browser: BrowserSession; s
 }
 
 // AnswerStep is a request's answer that leads on to sign in (the mail is on its way, the password is reset, the address
-// is verified): its title takes the focus, its line says what the browser holds, and its way to sign in is WayOn's.
-// children are the step's other ways (ask again, register again).
+// is verified): its title takes the focus, its line says what the browser holds, and its way to sign in is WayOn's, with
+// guest. children are the step's other ways, whoever the browser holds (ask again, send again).
 type AnswerProps = {
   title: string;
   sub: string;
@@ -38,10 +55,11 @@ type AnswerProps = {
   signIn: string;
   attempt: Attempt;
   stage: Stage;
+  guest?: ReactNode;
   children?: ReactNode;
 };
 
-export function AnswerStep({ title, sub, step, shape, signIn, attempt, stage, children }: AnswerProps) {
+export function AnswerStep({ title, sub, step, shape, signIn, attempt, stage, guest, children }: AnswerProps) {
   const browser = useBrowserSession();
   const said = useSaid(browser);
   return (
@@ -56,7 +74,7 @@ export function AnswerStep({ title, sub, step, shape, signIn, attempt, stage, ch
       answer
       onSubmit={(event) => event.preventDefault()}
     >
-      <WayOn browser={browser} signIn={signIn} attempt={attempt} />
+      <WayOn browser={browser} signIn={signIn} attempt={attempt} guest={guest} />
       {children}
     </LoginFrame>
   );

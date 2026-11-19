@@ -10,7 +10,7 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { dropMailLink, keepMailLink } from "./auth/mail-link";
+import { dropMailLink, keepMailLink, type MailRoute } from "./auth/mail-link";
 import { takeOAuthNext } from "./auth/oauth-return";
 import { Layout } from "./layout";
 
@@ -41,13 +41,13 @@ function MailLinkFailed() {
 
 // The options of a route a mailed link opens: its token leaves the address before the page's code loads, and is kept
 // for the page until it is left (auth/mail-link.ts).
-const mailLinkRoute = (to: "/reset-password" | "/verify-email") => ({
+const mailLinkRoute = (to: MailRoute) => ({
   beforeLoad: ({ location, preload }: { location: ParsedLocation; preload: boolean }) => {
     if (preload || !location.hash) return;
-    keepMailLink(location.hash);
+    keepMailLink(to, location.hash);
     throw redirect({ to, search: location.search as never, replace: true });
   },
-  onLeave: dropMailLink,
+  onLeave: () => dropMailLink(to),
   errorComponent: MailLinkFailed,
 });
 

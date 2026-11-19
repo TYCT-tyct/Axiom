@@ -39,6 +39,8 @@ export type AuthState = {
   stored: Map<string, Stored>;
   // how many of the next replies are lost on the way after the server did what was asked: the connection breaks
   dropReplies: number;
+  // the accounts a registration made, by email: their passwords, apart from the session (user) the browser holds
+  registered?: Map<string, string>;
 };
 
 type Method = "get" | "post" | "put" | "delete";

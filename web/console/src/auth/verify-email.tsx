@@ -1,11 +1,11 @@
 import { ApiError, consoleApi, type Schemas, unwrapEmpty } from "@axiom/api";
-import { useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { canSubmitWithLegal, LegalConsent, useLegalConsent } from "./legal";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
 import { fieldRefused, RouteNote, useLoginFace } from "./login-parts";
-import { mailLink, onMailLink } from "./mail-link";
+import { useMailLink } from "./mail-link";
 import { PasswordStepBody, unanswered, usePasswordStep } from "./request-state";
 import { AfterStep, AnswerStep } from "./way-on";
 
@@ -15,7 +15,7 @@ import { AfterStep, AnswerStep } from "./way-on";
 // link works in a browser signed in as anyone, and the way on to sign in finds out as whom (way-on.tsx).
 export default function VerifyEmail() {
   useLoginFace();
-  const link = useSyncExternalStore(onMailLink, mailLink);
+  const link = useMailLink("/verify-email");
   return link.token ? <Verify key={link.n} token={link.token} /> : <Missing />;
 }
 
@@ -52,9 +52,8 @@ function Missing() {
       signIn={t("auth.verify.signIn")}
       attempt={attempt}
       stage={stage}
-    >
-      <RouteNote to="/register" label={t("auth.verify.again")} />
-    </AnswerStep>
+      guest={<RouteNote to="/register" label={t("auth.verify.again")} />}
+    />
   );
 }
 
@@ -128,7 +127,7 @@ const afterWords = {
 } as const;
 
 // The way on after a verification: to sign in, and, for a link that did not work, an address the site no longer takes or
-// an answer that never came, to register again.
+// an answer that never came, to register again; both only once the browser is known to be signed out (WayOn).
 function Verified({ after, attempt, stage }: { after: After; attempt: Attempt; stage: Stage }) {
   const { t } = useTranslation();
   const words = afterWords[after];
@@ -141,8 +140,7 @@ function Verified({ after, attempt, stage }: { after: After; attempt: Attempt; s
       signIn={t("auth.verify.signIn")}
       attempt={attempt}
       stage={stage}
-    >
-      {again ? <RouteNote to="/register" label={t("auth.verify.again")} /> : null}
-    </AfterStep>
+      guest={again ? <RouteNote to="/register" label={t("auth.verify.again")} /> : null}
+    />
   );
 }

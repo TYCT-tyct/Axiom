@@ -275,12 +275,12 @@ function useInviteForm(
 }
 
 // useInviteFields holds the invite form's three fields: what each says (none typed, or the refusal about it, in the
-// page's words where they say more), cleared when that field is edited and only for it, and what they hold when the
-// form is sent.
+// page's words where they say more), cleared when that field is edited and only for it (edited: since the failure they
+// were refused by), and what they hold when the form is sent; the address read then is kept for the form's way back, as
+// a password manager may have written it without a word to the page.
 function useInviteFields(stage: Stage, failed: unknown) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const startInvite = useSearch({ strict: false }).invite ?? "";
   const refs = {
     invite: useRef<HTMLInputElement | null>(null),
     email: useRef<HTMLInputElement | null>(null),
@@ -288,7 +288,6 @@ function useInviteFields(stage: Stage, failed: unknown) {
   };
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState({ invite: false, email: false, password: false });
-  // the fields edited since the failure they were refused by
   const [edited, setEdited] = useState<{ of: unknown; names: string[] }>({ of: null, names: [] });
   const done = edited.of === failed ? edited.names : [];
   const refusedAt = {
@@ -318,7 +317,7 @@ function useInviteFields(stage: Stage, failed: unknown) {
   });
   const typeEmail = field("email").type;
   return {
-    invite: { ...field("invite"), start: startInvite },
+    invite: { ...field("invite"), start: useSearch({ strict: false }).invite ?? "" },
     email: {
       ...field("email"),
       value: email,
@@ -334,6 +333,7 @@ function useInviteFields(stage: Stage, failed: unknown) {
     // what the fields hold when the form is sent, or null when one is empty, which it then says
     read: () => {
       const invite = (refs.invite.current?.value ?? "").trim();
+      setEmail(refs.email.current?.value ?? email);
       const address = (refs.email.current?.value ?? email).trim();
       const password = refs.password.current?.value ?? "";
       setMissing({ invite: !invite, email: !address, password: !password });
