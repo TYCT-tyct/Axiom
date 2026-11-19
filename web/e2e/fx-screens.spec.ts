@@ -160,7 +160,9 @@ test("the page asks for the site once, and the footer carries the site's own nam
     await scrollTo(page, sec);
     await shown(page, sec);
   }
-  await expect(page.locator(".hfm6 .ft .brand")).toContainText("Acme Relay");
+  // the whole brand is the site's: the board's own "Axiom" beside it would be read and shown as a second name
+  await expect(page.locator(".hfm6 .ft .brand")).toHaveAccessibleName("Acme Relay");
+  await expect(page.locator(".hfm6 .ft .brand")).toHaveText("Acme Relay");
   await expect(page.locator(".hfm6 .ft")).toContainText("MiSans");
   expect(asked).toBe(1);
 });

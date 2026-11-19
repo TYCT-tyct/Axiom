@@ -7,5 +7,5 @@ apiV1: "https://api.axiom.example/v1",
 signUpHref: "#",
 homeHref: "#",
 modelsHref: "#",
-pricingHref: "#"},  });
+pricingHref: "#"}, brand: "Axiom", });
 /* jscpd:ignore-end */

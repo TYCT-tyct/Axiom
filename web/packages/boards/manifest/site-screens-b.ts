@@ -137,9 +137,9 @@ const bed = (board: string): Region => ({
     ".hfm6 .fcols > nav.fc:nth-of-type(n + 2)",
     ".hfm6 .fcols > nav.fc > a:nth-of-type(3)",
     ".hfm6 .legal > span:nth-child(n + 2)",
-    // the site's own name and logo take the brand's place (the page fills it, as it does the header's)
-    ".hfm6 .ft .brand > *",
   ],
+  // the site's own name and logo take the brand's place, all of it: the board's mark and its bare "Axiom" text
+  slots: { brand: ".hfm6 .ft .brand" },
   text: { credit: ".hfm6 .legal > span:first-child", apiV1: ".hfm6 .pr2 .pv" },
   attributes: {
     signUpHref: { selector: ".hfm6 .cta .btn.primary", attribute: "href" },
