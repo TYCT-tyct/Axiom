@@ -1,0 +1,51 @@
+/* Radio options on a track: the chosen one sits on a raised ground, and the group's name is for screen readers. */
+.root {
+  display: inline-flex;
+  gap: 2px;
+  min-width: 0;
+  margin: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--hover);
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--r6);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t3);
+  cursor: pointer;
+  transition: color 150ms;
+}
+
+.option:hover {
+  color: var(--t1);
+}
+
+.option:has(:checked) {
+  background: var(--n5);
+  color: var(--t1);
+}
+
+.option:has(:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}

@@ -1,0 +1,124 @@
+/* The models page's own geometry: the filter row, a model's row and its details under it. The breakpoints are the
+   table columns' (table.module.css): 640, 768, 1024px. */
+.filters {
+  display: grid;
+  gap: 16px;
+}
+
+.count {
+  padding: 8px 16px;
+  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
+}
+
+.prose {
+  max-width: 65ch;
+}
+
+.row:hover {
+  background: var(--hover);
+}
+
+.name {
+  max-width: 11rem;
+}
+
+.author {
+  max-width: 10rem;
+}
+
+.truncate {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.id {
+  margin: 2px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+}
+
+.inlinePrice {
+  margin-top: 4px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-variant-numeric: tabular-nums;
+}
+
+.abilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 16rem;
+}
+
+.detailsCell {
+  background: var(--hover);
+  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
+}
+
+.details {
+  width: 0;
+  min-width: 100%;
+  padding-bottom: 4px;
+}
+
+.pad {
+  padding: 12px 16px;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px 24px;
+  margin: 0;
+  padding: 16px 16px 0;
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+}
+
+.term {
+  color: var(--t3);
+}
+
+.def {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.num {
+  font-variant-numeric: tabular-nums;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+@media (min-width: 640px) {
+  .filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .name {
+    max-width: 16rem;
+  }
+
+  .inlinePrice {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .filters {
+    grid-template-columns: repeat(3, minmax(0, 1fr)) auto;
+    align-items: end;
+  }
+}

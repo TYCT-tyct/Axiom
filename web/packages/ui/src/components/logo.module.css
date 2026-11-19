@@ -1,0 +1,30 @@
+/* The mark and the site's name, at the 15px the headers set them. */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--t1);
+}
+
+.image {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5.5px;
+  object-fit: contain;
+}
+
+.mark {
+  flex: none;
+}
+
+.name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

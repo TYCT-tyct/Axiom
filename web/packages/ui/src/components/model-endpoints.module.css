@@ -1,0 +1,104 @@
+/* The endpoint table under a model: what each group serves, with the attributes whose columns the width has dropped.
+   Each fallback goes where its column appears: context at 768px, max output at 1024px, abilities at 1536px. */
+.name {
+  max-width: 14rem;
+}
+
+.codename {
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--family-mono);
+  color: var(--t1);
+}
+
+.mono {
+  font-family: var(--family-mono);
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.abilities {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 16rem;
+}
+
+.attributes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 4px 0 0;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+  font-variant-numeric: tabular-nums;
+}
+
+.fallback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 4px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+}
+
+.prices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+  margin-top: 4px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-variant-numeric: tabular-nums;
+}
+
+.free {
+  max-width: none;
+}
+
+.summary {
+  padding: 0 0 8px;
+  cursor: pointer;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t3);
+}
+
+.engines {
+  margin-top: 8px;
+}
+
+@media (min-width: 640px) {
+  .prices {
+    display: none;
+  }
+}
+
+@media (min-width: 768px) {
+  .contextFallback {
+    display: none;
+  }
+}
+
+@media (min-width: 1024px) {
+  .outputFallback {
+    display: none;
+  }
+}
+
+@media (min-width: 1536px) {
+  .fallback {
+    display: none;
+  }
+}

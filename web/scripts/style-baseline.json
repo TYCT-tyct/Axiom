@@ -1,5 +1,10 @@
 {
-  "migrated": [],
+  "migrated": [
+    "console/src/pages/workspaces.tsx",
+    "packages/ui/src/components/",
+    "site/src/models.tsx",
+    "site/src/shell.tsx"
+  ],
   "counts": {
     "class-name": {
       "console/src/announcements.tsx": 1,
@@ -14,7 +19,6 @@
       "console/src/pages/keys.tsx": 1,
       "console/src/pages/overview.tsx": 4,
       "console/src/pages/provider-keys.tsx": 12,
-      "console/src/pages/workspaces.tsx": 6,
       "console/src/preset-dialogs.tsx": 6,
       "console/src/provider-key-dialog.tsx": 2,
       "console/src/workspace-dialogs.tsx": 11,
@@ -23,16 +27,7 @@
       "packages/app/src/auth/sign-in.tsx": 1,
       "packages/app/src/presets/summary.tsx": 2,
       "packages/app/src/qr.tsx": 2,
-      "packages/app/src/totp-dialogs.tsx": 16,
-      "packages/ui/src/components/copy-button.tsx": 1,
-      "packages/ui/src/components/logo.tsx": 4,
-      "packages/ui/src/components/model-endpoints.tsx": 32,
-      "packages/ui/src/components/model-pricing.tsx": 16,
-      "packages/ui/src/components/models.tsx": 42,
-      "packages/ui/src/components/preferences.tsx": 1,
-      "packages/ui/src/components/segmented.tsx": 5,
-      "site/src/models.tsx": 2,
-      "site/src/shell.tsx": 10
+      "packages/app/src/totp-dialogs.tsx": 16
     },
     "css-import": {
       "admin/src/main.tsx": 1,
