@@ -62,7 +62,7 @@ describe("the committed fonts", () => {
     const at = manifest.faces.findIndex(
       (face) => face.family === "AX Serif" && "script" in face.text && face.text.script === "han",
     );
-    const serif = (texts[at] ?? {})["site/home"] ?? "";
+    const serif = texts[at]?.["site/home"] ?? "";
     expect([..."会变接入不变"].filter((c) => !serif.includes(c))).toEqual([]);
   });
 

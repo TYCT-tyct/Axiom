@@ -58,19 +58,35 @@ const messages = (namespace: string) => {
   return cached;
 };
 
-async function load(namespace: string) {
+function filesOf(namespace: string) {
   const files = namespaces[namespace];
   if (!files) {
     throw new Error(`${manifestPath}: no namespace ${namespace}; known: ${Object.keys(namespaces).join(", ")}`);
   }
+  return files.flatMap((pattern) => (pattern.includes("*") ? globSync(pattern, { cwd: web }).sort() : [pattern]));
+}
+
+const messagesIn = async (file: string): Promise<[string, string][]> => [
+  ...flatten((await import(pathToFileURL(join(web, file)).href)).default, "", new Map()),
+];
+
+async function load(namespace: string) {
   const out: [string, string][] = [];
-  for (const file of files.flatMap((pattern) =>
-    pattern.includes("*") ? globSync(pattern, { cwd: web }).sort() : [pattern],
-  )) {
-    const { default: tree } = await import(pathToFileURL(join(web, file)).href);
-    out.push(...flatten(tree, "", new Map()));
-  }
+  for (const file of filesOf(namespace)) out.push(...(await messagesIn(file)));
   return out;
+}
+
+// A region is its component and its words (packages/boards/src/<Board>/regions/<Name>.tsx, .zh.ts, .en.ts): a page that
+// runs any of them can show the region's words, in either language.
+const regionOf = (file: string) => file.replace(/\.(?:zh\.ts|en\.ts|tsx)$/, "");
+
+// regionKeys returns the keys of a regions namespace that the regions among files hold.
+async function regionKeys(namespace: string, files: Set<string>) {
+  const regions = new Set([...files].map(regionOf));
+  const keys: string[] = [];
+  for (const file of filesOf(namespace).filter((one) => regions.has(regionOf(join(web, one)))))
+    keys.push(...(await messagesIn(file)).map(([key]) => key));
+  return keys;
 }
 
 // selected tells whether a key is one of the prefixes or under one; a plural form (keys_one) counts as its base key,
@@ -105,12 +121,12 @@ async function selectedText(selection: Selection) {
 // routePages returns an app's pages ("console/pages/keys") and the keys each can show, in each of its namespaces.
 async function routePages(app: string, entry: string, namespaces: string[]) {
   const pages = new Map<string, Selection>();
-  for (const [page, literals] of routeLiterals(app, entry)) {
+  for (const [page, { literals, files }] of routeLiterals(app, entry)) {
     const selection: Selection = {};
     for (const namespace of namespaces) {
-      // a page shows its board's region words whole ("" is every key); the code names no key of them
+      // a page shows the words of the regions it runs (its own and the shell's) whole; the code names no key of them
       selection[namespace] = namespace.endsWith("-regions")
-        ? [""]
+        ? await regionKeys(namespace, files)
         : (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
     }
     pages.set(page, selection);

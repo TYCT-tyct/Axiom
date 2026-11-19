@@ -19,18 +19,18 @@ describe("routeLiterals", () => {
   const pages = routeLiterals("console", "console/src/main.tsx");
 
   it("gives each lazily loaded page the keys its own code names, and not another page's", () => {
-    expect(pages.get("console/pages/redeem")?.has("redeem.title")).toBe(true);
-    expect(pages.get("console/auth/sign-in")?.has("redeem.title")).toBe(false);
+    expect(pages.get("console/pages/redeem")?.literals.has("redeem.title")).toBe(true);
+    expect(pages.get("console/auth/sign-in")?.literals.has("redeem.title")).toBe(false);
   });
 
   it("follows a package's index only to the exports a page imports", () => {
     // The rules editor is exported from @axiom/app, which the shell imports for other names.
-    expect(pages.get("console/pages/routing-presets")?.has("presetRules.sort")).toBe(true);
-    expect(pages.get("console/auth/sign-in")?.has("presetRules.sort")).toBe(false);
+    expect(pages.get("console/pages/routing-presets")?.literals.has("presetRules.sort")).toBe(true);
+    expect(pages.get("console/auth/sign-in")?.literals.has("presetRules.sort")).toBe(false);
   });
 
   it("gives every page the shell's keys", () => {
-    for (const literals of pages.values()) {
+    for (const { literals } of pages.values()) {
       expect(literals.has("shell.path")).toBe(true);
     }
   });
@@ -44,5 +44,19 @@ describe("faceTexts", () => {
     const face = manifest.faces.find((one) => one.family === "Axiom CJK Admin");
     const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });
     expect(texts?.["admin/pages/redeem-codes"]).toContain("唯");
+  });
+});
+
+describe("region words", () => {
+  // The console's pages are cut from board regions, whose words are not in the app's messages: a page gets the words of
+  // the regions it runs (its own and the shell's), and not every region's.
+  it("go to the pages that run their region, and not to others", async () => {
+    const manifest = readManifest();
+    const face = manifest.faces.find((one) => one.family === "Axiom CJK Console");
+    const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });
+    const { default: keys } = await import("../../packages/boards/src/AxApp/regions/Keys.zh.ts");
+    const words = [...new Set(Object.values(keys).join(""))].filter((c) => /\p{Script=Han}/u.test(c));
+    expect(words.filter((c) => !texts?.["console/pages/keys"]?.includes(c))).toEqual([]);
+    expect(words.some((c) => !texts?.["console/auth/sign-in"]?.includes(c))).toBe(true);
   });
 });
