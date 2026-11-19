@@ -7,6 +7,7 @@
 import { colour } from "./colour";
 import { hash } from "./hash";
 import { own, reducedMotion } from "./loop";
+import { mono } from "./mono";
 import { buildSea, type OceanEngine } from "./ocean";
 
 export type Shape = "start" | "code" | "key" | "enter";
@@ -94,6 +95,7 @@ class Stage {
   private inkAt = 0;
   private mid = 0;
   private half = 1;
+  private readonly mono = mono();
   // still is reduced motion's: a frame is where everything is going, at no moment in particular (draw), and a refusal's
   // shake and red and a digit's flicker, which are moments, are not drawn
   still = false;
@@ -150,6 +152,9 @@ class Stage {
     for (const tile of this.tiles) tile.t0 = -1e9;
     this.shapeAt = -1e9;
     this.alpha = 1;
+    // a refusal's red and a digit's flicker are moments: one heard before motion went still is over
+    this.bad = -1e9;
+    this.pulse = -1e9;
   }
 
   // to sends every tile to a cell of the shape, or to a place to drift; where that is on screen is worked out each
@@ -275,7 +280,7 @@ class Stage {
       x.fillStyle = k.bg;
       x.fillRect(o.x - g.cw + Math.round(shake), o.y - g.ch, (S.w + 2) * g.cw + 1, (S.h + 2) * g.ch + 1);
     }
-    x.font = `600 ${Math.round(g.ch * 0.62)}px "Geist Mono","Axiom Mono",ui-monospace,monospace`;
+    x.font = `600 ${Math.round(g.ch * 0.62)}px ${this.mono}`;
     x.textAlign = "center";
     x.textBaseline = "middle";
     const frame: Frame = { now, g, o, k, shake, badT, tick };
@@ -397,6 +402,7 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     dim: colour(box, "var(--text2)"),
     fs: Number.parseFloat(getComputedStyle(chars[0] as HTMLElement).fontSize) || 40,
   };
+  const family = mono();
   const at = (i: number) => 80 + i * 60;
   const end = at(cells.length - 1);
   const last = cells[cells.length - 1] as TitleCell;
@@ -415,7 +421,7 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     x.clearRect(0, 0, W, H);
     x.textAlign = "center";
     x.textBaseline = "middle";
-    x.font = `500 ${Math.round(ink.fs * 0.62)}px "Axiom Mono", ui-monospace, monospace`;
+    x.font = `500 ${Math.round(ink.fs * 0.62)}px ${family}`;
     cells.forEach((c, i) => {
       const d = at(i) - ms;
       if (d <= 0) (chars[i] as HTMLElement).style.removeProperty("color");
@@ -464,7 +470,7 @@ export type Login = {
 function seaOptions(frame: HTMLElement, canvas: HTMLCanvasElement, light: boolean) {
   const side = Math.min(frame.clientWidth || innerWidth, frame.clientHeight || innerHeight);
   return {
-    font: '"Geist Mono", ui-monospace, Menlo, monospace',
+    font: mono(),
     light,
     whale: null,
     bgLight: "#030302",
