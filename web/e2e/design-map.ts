@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
+import { en as consoleAuthEn, zh as consoleAuthZh } from "../console/src/locales/auth.ts";
 import consoleEn from "../console/src/locales/en.ts";
 import consoleZh from "../console/src/locales/zh.ts";
 import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
@@ -23,7 +24,7 @@ export type DesignScene = {
   suite: Suite;
   scene: string;
   // The page of fonts.json the build's page belongs to: the faces it must have loaded.
-  fonts: string;
+  fonts: string | string[];
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
   languages?: ("zh" | "en")[];
@@ -40,6 +41,76 @@ const consoleBoards = (page: string) => ({
   1440: { file: "AxApp.dc.html", height: 900, actions: [["go", page]] as [string, string][] },
   390: { file: "AxAppPhone.dc.html", height: 844, actions: [["go", page]] as [string, string][] },
 });
+
+// The console's sign-in pages come from the Login boards: one per form factor, the scheme a prop (mode). The form is
+// drawn by login-ui.js, so the reference runs it, and the sea's engine, whose opaque canvas covers the sea's edge as the
+// page's does; both seas are blanked (rulings.ts).
+const loginBoards = {
+  1440: { file: "Login.dc.html", height: 900, engines: ["ocean-orig", "login-ui"] },
+  390: { file: "LoginPhone.dc.html", height: 844, engines: ["ocean-orig", "login-ui"] },
+};
+
+// The sign-in page asks what the product asks, in the board's parts: its title and lede, the pitch's billing line
+// (product.md: billed by the endpoint that served, without the board's promise that every route is tested) and its
+// promise (the models the account can use), and the way
+// to register in a note, where the board's email step has the sign-up-on-the-way copy, the terms' box and the providers the mocked site
+// does not offer (rulings.ts lists the parts of the board's flow left out). Put the page's words in the reference and
+// take out what the page has no counterpart for, so the comparison measures the parts and their layout.
+async function prepareSignInComparison(board: Page, page: Page, language: "zh" | "en") {
+  // The page edges its controls in the console's control edge (docs/frontend.md「对比度令牌」), where the board draws a
+  // lighter line: the reference takes the page's resolved colour, so the controls' place and fill stay compared.
+  const edge = await page.evaluate(() => {
+    const probe = document.createElement("i");
+    probe.style.color = "var(--ctl-line)";
+    (document.querySelector(".lg") as HTMLElement).append(probe);
+    const resolved = getComputedStyle(probe).color;
+    probe.remove();
+    return resolved;
+  });
+  await board.evaluate((edge) => {
+    const lg = document.querySelector(".lg") as HTMLElement;
+    for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
+    lg.style.setProperty("--bw", "1px");
+  }, edge);
+  const auth = language === "en" ? consoleAuthEn : consoleAuthZh;
+  const words = {
+    title: (language === "en" ? uiEn : uiZh).auth.signIn.title,
+    lede: auth.pitch.lede,
+    tail: auth.pitch.tail,
+    ...auth.signIn,
+  };
+  await board.evaluate((words) => {
+    const step = document.querySelector(".lg-step") as HTMLElement;
+    // the words in their own inline boxes, as the page sets them, so only the glyphs are excused, not where lines sit
+    const inline = (text: string) => Object.assign(document.createElement("span"), { textContent: text });
+    (step.querySelector(".lg-title") as HTMLElement).textContent = words.title;
+    (step.querySelector(".lg-sub") as HTMLElement).replaceChildren(inline(words.description));
+    (document.querySelector(".lg-pitch .s") as HTMLElement).replaceChildren(inline(words.lede));
+    // the pitch's promise as the product makes it (the models the account can use, not every model)
+    const pitch = document.querySelector(".lg-pitch .h") as HTMLElement;
+    (pitch.lastChild as Text).textContent = words.tail;
+    for (const part of step.querySelectorAll(".lg-consent, .lg-or, .lg-stack")) part.remove();
+    const note = document.createElement("p");
+    note.className = "lg-note";
+    const link = document.createElement("a");
+    link.href = "#";
+    link.textContent = words.register;
+    note.append(inline(words.noAccount), " ", link);
+    step.append(note);
+    // the page sets a button's label in a span of its own, which the rulings excuse instead of the whole button
+    for (const button of document.querySelectorAll(".lg-btn")) {
+      const label = document.createElement("span");
+      label.append(...button.childNodes);
+      button.append(label);
+    }
+  }, words);
+  // the page's lede is the region's bare text: set in an inline box too, with the same words, so both sides excuse
+  // only its glyphs
+  await page.evaluate(() => {
+    const lede = document.querySelector(".lg-pitch .s") as HTMLElement;
+    lede.replaceChildren(Object.assign(document.createElement("span"), { textContent: lede.textContent }));
+  });
+}
 
 // The website's home boards come one per width; the scheme is the system's, a prop.
 const siteBoards = {
@@ -329,6 +400,16 @@ export const designScenes: DesignScene[] = [
     fonts: "console",
     boards: consoleBoards("notify"),
     schemes: consoleSchemes,
+  },
+  {
+    name: "console sign-in",
+    suite: consoleSuite,
+    scene: "sign-in",
+    // the console's Latin faces, and the sign-in route's own: the Chinese and the serif the Login board names
+    fonts: ["console", "console/auth/sign-in"],
+    boards: loginBoards,
+    schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    prepareComparison: prepareSignInComparison,
   },
   {
     name: "site home",

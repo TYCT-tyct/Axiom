@@ -87,7 +87,7 @@
       "source": "instrument-serif-italic",
       "weight": "400",
       "style": "italic",
-      "pages": ["site/home"],
+      "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "text": {
         "chars": "keyvrKEY"
       }
@@ -100,7 +100,14 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["site/home", "site/models", "site/first"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "site/first",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent"
+      ],
       "text": {
         "script": "han"
       },
@@ -114,7 +121,7 @@
         "wght": 330
       },
       "split": true,
-      "pages": ["console/*"],
+      "pages": ["console/pages/*", "console/auth/register", "console/auth/verify-email"],
       "text": {
         "script": "han"
       }
@@ -137,11 +144,11 @@
       "source": "cjk-serif",
       "weight": "600",
       "split": true,
-      "pages": ["site/home", "site/models"],
+      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "text": {
         "script": "han",
         "keys": {
-          "common": ["publicModels.title"],
+          "common": ["publicModels.title", "auth.signIn.title", "auth.mfa.title"],
           "site": ["board.m2e2a3b1e5d", "script.connect.comma", "script.connect.every"],
           "site-regions": [
             "m78d48a1986",
@@ -155,7 +162,8 @@
             "m4ba35a8f55",
             "m46ff80e47d",
             "m15e09730c0"
-          ]
+          ],
+          "console": ["auth.pitch", "auth.signIn.passwordTitle", "legal.title"]
         }
       }
     },
@@ -163,11 +171,11 @@
       "family": "AX Serif",
       "source": "cjk-serif",
       "weight": "600",
-      "pages": ["site/home", "site/models"],
+      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "text": {
         "script": "latin",
         "keys": {
-          "common": ["publicModels.title"],
+          "common": ["publicModels.title", "auth.signIn.title", "auth.mfa.title"],
           "site": ["board.m2e2a3b1e5d", "script.connect.comma", "script.connect.every"],
           "site-regions": [
             "m78d48a1986",
@@ -181,7 +189,8 @@
             "m4ba35a8f55",
             "m46ff80e47d",
             "m15e09730c0"
-          ]
+          ],
+          "console": ["auth.pitch", "auth.signIn.passwordTitle", "legal.title"]
         }
       }
     }

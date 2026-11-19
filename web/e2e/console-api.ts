@@ -416,6 +416,9 @@ export async function mockConsole(page: Page, data: MockData = "usual", over: Pa
   return mockApi(page, base, handlers, state);
 }
 
+// mockConsoleTab answers another tab of the same browser from the same state: one server, one cookie for both.
+export const mockConsoleTab = (page: Page, state: MockState) => mockApi(page, base, handlers, state);
+
 export { signedInAs } from "./mock-auth.ts";
 
 // The server answering the same call, once, with a failure.

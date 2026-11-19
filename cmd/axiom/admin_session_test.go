@@ -30,15 +30,21 @@ func TestAdminSignInSetsTheCookie(t *testing.T) {
 	f := newAdminFixture(t)
 	rec := f.do(http.MethodPost, "/auth/sign-in", `{"email":"Owner@Example.com","password":"`+ownerPassword+`"}`)
 	expectAdmin(t, "sign-in", rec, http.StatusOK, "")
+	expectSessionCookie(t, rec)
+	s := f.sessionOf(rec)
+	got := f.readSession(s)
+	if got.Level != "password" || got.MfaEnabled || got.TotpEnabled == nil || *got.TotpEnabled || got.CsrfToken != s.csrf || !got.ExpiresAt.After(time.Now()) ||
+		!strings.HasPrefix(got.User.Id, "user_") || !strings.HasPrefix(got.Account, "acct_") || got.User.Email != ownerEmail {
+		t.Errorf("the password session: %+v", got)
+	}
+}
+
+// expectSessionCookie checks the one cookie a sign-in sets: the session, which a page cannot read and only HTTPS carries.
+func expectSessionCookie(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
 	cookies := rec.Result().Cookies()
 	if len(cookies) != 1 || !cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].Name != "__Host-axiom_session" {
 		t.Fatalf("the session cookie: %+v", cookies)
-	}
-	s := f.sessionOf(rec)
-	got := f.readSession(s)
-	if got.Level != "password" || got.MfaEnabled || got.CsrfToken != s.csrf || !got.ExpiresAt.After(time.Now()) ||
-		!strings.HasPrefix(got.User.Id, "user_") || !strings.HasPrefix(got.Account, "acct_") || got.User.Email != ownerEmail {
-		t.Errorf("the password session: %+v", got)
 	}
 }
 
@@ -60,8 +66,8 @@ func TestAdminSessionPermissions(t *testing.T) {
 		"users.manage", "users.view", "workspaces.manage",
 	}
 	got := f.readSession(f.verified(ownerEmail))
-	if diff := cmp.Diff(wantAll, got.Permissions); got.Level != "mfa" || !got.MfaEnabled || diff != "" {
-		t.Errorf("the verified session: level %q, mfa %v, permissions (-want +got):\n%s", got.Level, got.MfaEnabled, diff)
+	if diff := cmp.Diff(wantAll, got.Permissions); got.Level != "mfa" || !got.MfaEnabled || got.TotpEnabled == nil || !*got.TotpEnabled || diff != "" {
+		t.Errorf("the verified session: level %q, mfa %v, totp %v, permissions (-want +got):\n%s", got.Level, got.MfaEnabled, got.TotpEnabled, diff)
 	}
 }
 

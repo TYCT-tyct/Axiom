@@ -1,4 +1,4 @@
-import { onMotion, reducedMotion } from "@axiom/fx";
+import { markArrival, onMotion, reducedMotion } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -288,6 +288,9 @@ function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
     // from here the press is done: a press after a stopped navigation starts a departure of its own at once
     leaving = undefined;
     const held = shown;
+    // the arrival is the sign-in page's: registration has no arrival of its own, and a marker left by it would play
+    // the decode on a later, direct visit to sign-in
+    if (new URL(href).pathname.endsWith("/sign-in")) markArrival();
     window.location.assign(href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, departSpan);

@@ -66,7 +66,7 @@ async function readyPage(page: Page, design: DesignScene, staged: Stage, languag
   await design.suite.prepare(page, scene);
   await scene.open(page);
   await page.waitForLoadState("networkidle");
-  await fontsLoaded(page, pageFonts(design.fonts));
+  await fontsLoaded(page, [design.fonts].flat().flatMap(pageFonts));
   await settle(page, staged.time);
 }
 

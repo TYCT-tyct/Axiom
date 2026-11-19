@@ -16,7 +16,7 @@ function captures(regions: readonly Region[]) {
       file: `${region.board}.dc.html`,
       props: render.props,
       actions: render.actions,
-      engines: [],
+      engines: render.engines ?? [],
       preloadFonts: false,
     };
     const viewport = render.viewport ?? { width: 1440, height: 900 };

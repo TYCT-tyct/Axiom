@@ -233,3 +233,23 @@ func TestPasskeyProofAllowsTOTP(t *testing.T) {
 		t.Fatalf("TOTP after the passkey ceremony: %v (codes %d)", err, len(codes))
 	}
 }
+
+// TestSessionInfoTellsTOTPFromAPasskey: a console user whose only second factor is a passkey has two-step verification
+// but no authenticator app, so the security page can offer TOTP instead of guessing from the aggregate flag.
+func TestSessionInfoTellsTOTPFromAPasskey(t *testing.T) {
+	t.Parallel()
+	x, s := passkeySite(t)
+	storePasskey(t, x)
+	if err := s.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// the passkey makes the password sign-in a pending one, which GetSession admits through AuthenticateAny
+	pending := x.signIn(t, console)
+	p, err := x.s.AuthenticateAny(t.Context(), x.request(t, console, "https://"+console, pending), client)
+	if err != nil || !p.Pending() {
+		t.Fatalf("a passkey user's password sign-in through AuthenticateAny: %v, %v", p, err)
+	}
+	if info := x.sessionInfoOf(t, p); !info.MFAEnabled || info.TOTP || info.Passkeys != 1 {
+		t.Errorf("a passkey-only user's session: MFAEnabled %v, TOTP %v, Passkeys %d", info.MFAEnabled, info.TOTP, info.Passkeys)
+	}
+}

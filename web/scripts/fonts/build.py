@@ -216,6 +216,8 @@ def main():
             file = f"{name}.{digest}.woff2" if face.get("split") else f"{name}.woff2"
             subset(path, face.get("axes"), chars, OUT / file)
             data = (OUT / file).read_bytes()
+            # the pages whose first screen preloads it, not just whether: a slice can serve another app's pages too
+            preload = sorted(set(pages) & set(face.get("preload", [])))
             files.append(
                 {
                     "file": file,
@@ -224,7 +226,7 @@ def main():
                     "sha256": hashlib.sha256(data).hexdigest(),
                     "chars": chars,
                 }
-                | ({"preload": True} if set(pages) & set(face.get("preload", [])) else {})
+                | ({"preload": preload} if preload else {})
             )
             css.append(font_face(face, file, chars))
         script = face["text"].get("script", "latin")

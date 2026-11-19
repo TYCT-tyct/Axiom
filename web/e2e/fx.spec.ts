@@ -7,6 +7,7 @@ import {
   loop,
   open,
   pause,
+  pauseAhead,
   place,
   running,
   screenChunk,
@@ -14,6 +15,7 @@ import {
   sections,
   setHidden,
   shown,
+  siteSignIn,
 } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
@@ -306,7 +308,7 @@ test("without the site's API address the steps say so rather than show an empty 
 // where the sign-in panel will be, and half a second after the press the browser goes to the button's page, whatever
 // became of the picture on the way.
 const depart = /\/assets\/depart-[\w-]+\.js$/;
-const signIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
+const signIn = siteSignIn;
 // the first screen's way on: the steps screen below has one of the same name
 const signUp = (page: Page) => page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" });
 const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
@@ -345,7 +347,7 @@ test("pressing sign in plays the departure, loaded on the press, and goes half a
   expect(loaded).toEqual([]);
   // time stands still from before the press: only runFor moves it, so the deadline is measured from the press alone
   await page.clock.install();
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 100);
+  await pauseAhead(page, 100);
   const asked = watchDeparture(page);
   await signIn(page).click();
   await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
@@ -380,6 +382,8 @@ test("a press goes though the departure's code never comes", async ({ page }) =>
   await signUp(page).click();
   await expect(page).toHaveURL(/\/console\/register$/);
   expect(unhandled).toEqual([]);
+  // registration is not an arrival: it leaves no marker for a later sign-in to decode on
+  expect(await page.evaluate(() => sessionStorage.getItem("axiom:arrival"))).toBeNull();
 });
 
 test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {

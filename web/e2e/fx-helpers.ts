@@ -3,8 +3,8 @@ import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { pageHeading } from "./page-heading.ts";
 
-// What the website's effect cases share (fx.spec.ts, fx-screens.spec.ts): the loop's counter, a hidden tab, the page opened
-// as the first screen is drawn, and the screens' places.
+// What the effect cases share (fx.spec.ts, fx-screens.spec.ts, fx-sign-in.spec.ts): the loop's counter, a hidden tab,
+// the page opened as the first screen is drawn, its header's way to the sign-in pages, and the screens' places.
 
 type LoopState = { frames: number; owners: number; listening: boolean; pending: boolean };
 export const loop = (page: Page) =>
@@ -30,6 +30,8 @@ export async function open(page: Page) {
 }
 
 export const running = (page: Page) => expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(0);
+
+export const siteSignIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
 // The screens below the first (§8.2's rows for the screens): each one's code comes as its place nears the view, and its
 // script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The places
 // (data-place) are there before the code, so the cases scroll to them. The usual mock data lists gpt-5 first.
@@ -51,3 +53,15 @@ export const shown = (page: Page, sec: number) =>
         .evaluate((el) => getComputedStyle(el).opacity),
     )
     .toBe("1");
+
+// Pauses the clock a moment ahead of the page's, which runs on meanwhile: a busy machine may pass that moment before
+// the pause lands, and Playwright refuses to move the clock back, so aim again.
+export async function pauseAhead(page: Page, ahead: number) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await page.clock.pauseAt(await page.evaluate((ms) => Date.now() + ms, ahead));
+    } catch (error) {
+      if (tries === 4) throw error;
+    }
+  }
+}

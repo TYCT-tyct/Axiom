@@ -193,12 +193,15 @@ function endSession(queryClient: QueryClient) {
 }
 
 // useStartSession adopts the CSRF token of a new session and loads it, returning what it loaded so a page that has just
-// shown something from the change (recovery codes) can use the new session's token.
+// shown something from the change (recovery codes) can use the new session's token. A read of the session still out
+// was sent with the cookie from before, and the cache would hand it back for this one: it is cancelled first, so what
+// the pages see is the session the cookie now holds.
 export function useStartSession() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return async (csrfToken: string) => {
     setCsrfToken(csrfToken);
+    await queryClient.cancelQueries({ queryKey: sessionKey });
     return await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
   };
 }
@@ -214,21 +217,97 @@ export function useSignIn() {
   });
 }
 
+// A second step answers a 401 for its own pending sign-in being over, which the step ends itself (useEndPending): the
+// cache's rule that a 401 ends the session on the page (providers.tsx) would leave the cookie naming it.
 export function useVerifyMfa() {
   const { api } = useAuth();
-  const start = useStartSession();
+  const adopt = useAdoptGrant();
   return useMutation({
-    mutationFn: api.verifyMfa,
-    onSuccess: (grant) => start(grant.csrf_token),
+    mutationFn: async (body: Schemas["MfaRequest"]) => adopt((await api.verifyMfa(body)).csrf_token),
+    meta: { pendingStep: true },
   });
 }
 
+// UnreadSession is a second step that passed, whose new session could not then be read: the cookie is already the
+// new session, so the step is over and is not offered again (a second code would be refused for want of a pending
+// session, and that refusal would sign the new session out); only the read is tried again (useAdoptGrant).
+export class UnreadSession extends Error {
+  constructor(
+    readonly csrf: string,
+    readonly reason: unknown,
+  ) {
+    super("the session the second step started could not be read");
+  }
+}
+
+// useAdoptGrant starts the session a second step's grant names, and answers a failed read as UnreadSession.
+export function useAdoptGrant() {
+  const start = useStartSession();
+  return async (csrf: string) => {
+    try {
+      return await start(csrf);
+    } catch (reason) {
+      throw new UnreadSession(csrf, reason);
+    }
+  };
+}
+
+// pendingOver reports a second step's answer that the pending sign-in itself is over: its attempts are spent, or it
+// expired. No code or passkey can finish it any more, even a right one; a wrong code is invalid_code instead.
+export const pendingOver = (error: unknown) =>
+  error instanceof ApiError && error.status === 401 && error.code === "unauthenticated";
+
+// A pending sign-in that is over is signed out by its step (useEndPending), so the cookie holds no session and a
+// reload lands on the sign-in page, never on a step that cannot be finished; that page says why the visitor is back
+// (useSignInEnded). It reads the session again first and signs out only the pending session the step was for (its
+// sessionBinding): a cookie that holds no session any more (it expired) has nothing to sign out, and still ended; one
+// that holds another session (the step passed, or the person signed in again elsewhere) is kept, and nothing ended.
+// A read or a sign-out that fails is thrown, for the step to say and offer again: the sign-in is still over.
+let ended = false;
+
+export function useEndPending() {
+  const queryClient = useQueryClient();
+  const { api } = useAuth();
+  const signOut = useSignOut();
+  return async (pending: string) => {
+    // set before the read: a read that finds no session moves the gate to the sign-in page at once
+    ended = true;
+    try {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      const now = await queryClient.fetchQuery({ ...sessionQuery(api), staleTime: 0 });
+      if (now === null) return;
+      if (sessionBinding(now) !== pending) {
+        ended = false;
+        return;
+      }
+      await signOut.mutateAsync();
+    } catch (error) {
+      // a sign-out refused for want of a session ends it on the page all the same (providers.tsx)
+      if (!pendingOver(error)) ended = false;
+      throw error;
+    }
+  };
+}
+
+export function useSignInEnded() {
+  const [shown] = useState(() => ended);
+  useEffect(() => {
+    ended = false;
+  }, []);
+  return shown;
+}
+
+// A sign-out's answer expired the cookie, so the browser has no session: a read of it still out from before must not
+// bring the old one back.
 export function useSignOut() {
   const queryClient = useQueryClient();
   const { api } = useAuth();
   return useMutation({
     mutationFn: api.signOut,
-    onSuccess: () => endSession(queryClient),
+    onSuccess: async () => {
+      await queryClient.cancelQueries({ queryKey: sessionKey });
+      endSession(queryClient);
+    },
   });
 }
 

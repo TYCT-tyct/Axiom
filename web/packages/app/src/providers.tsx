@@ -77,6 +77,7 @@ export function createQueryClient() {
         startedIn.set(mutation, sessionBinding(currentSession(queryClient)));
       },
       onError: (error, _variables, _context, mutation) => {
+        if (mutation.meta?.pendingStep) return;
         endUnauthenticated(queryClient, error, startedIn.get(mutation) ?? "");
       },
     }),

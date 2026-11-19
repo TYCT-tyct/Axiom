@@ -3,12 +3,9 @@
   "counts": {
     "class-name": {
       "console/src/announcements.tsx": 1,
-      "console/src/auth/consent.tsx": 1,
       "console/src/auth/legal-markdown.tsx": 5,
       "console/src/auth/legal.tsx": 3,
-      "console/src/auth/passkey-mfa.tsx": 2,
       "console/src/auth/register.tsx": 9,
-      "console/src/auth/sign-in.tsx": 3,
       "console/src/auth/verify-email.tsx": 6,
       "console/src/confirm-dialog.tsx": 3,
       "console/src/key-dialogs.tsx": 18,

@@ -1,5 +1,5 @@
 import type { components } from "../packages/api/src/console.gen.ts";
-import { type AuthState, fail } from "./mock.ts";
+import { type AuthState, breaks, fail } from "./mock.ts";
 
 // The answers to the Session tag, which both surfaces offer under their own path with the same shapes. A person signs in
 // as a user chosen by the email typed: a plain one, one with two-step verification, and one that is rate limited.
@@ -9,6 +9,8 @@ type Schemas = components["schemas"];
 export const knownEmail = "user@example.com";
 export const knownPassword = "correct horse battery";
 export const mfaEmail = "mfa@example.com";
+// two-step verification with a passkey and no authenticator app
+export const passkeyEmail = "passkey@example.com";
 export const limitedEmail = "limited@example.com";
 
 export const userId = (n: number) => `user_${String(n).repeat(26)}` as Schemas["UserId"];
@@ -51,6 +53,7 @@ export const session = (
     account: accountId(state.account),
     level: state.level === "none" ? "password" : state.level,
     mfa_enabled: totp || (state.passkeys?.length ?? 0) > 0,
+    ...(state.legacySession ? {} : { totp_enabled: totp }),
     csrf_token: state.csrf,
     expires_at: "2026-10-15T00:00:00Z",
     permissions: state.permissions,
@@ -72,21 +75,31 @@ type WithState<B> = { body: B; state: AuthState };
 // Sign-in is decided by the email: a known user, one with two-step verification (which waits for its second step), one
 // that is rate limited; any other email, or a wrong password, is refused alike.
 export function signIn({ body, state }: WithState<Schemas["SignInRequest"]>) {
+  if (body.email.length < 3) return breaks("/email");
   if (body.email === limitedEmail) {
     return fail(429, "rate_limited", { "Retry-After": "30" });
   }
-  if (body.password !== state.user.password || ![knownEmail, mfaEmail, state.user.email].includes(body.email)) {
+  if (
+    body.password !== state.user.password ||
+    ![knownEmail, mfaEmail, passkeyEmail, state.user.email].includes(body.email)
+  ) {
     return fail(401, "invalid_credentials");
   }
-  state.mfaEnabled = body.email === mfaEmail;
-  state.totpEnabled = state.mfaEnabled;
+  state.mfaEnabled = body.email === mfaEmail || body.email === passkeyEmail;
+  state.totpEnabled = body.email === mfaEmail;
   state.level = state.mfaEnabled ? "pending_mfa" : "password";
+  state.codeTries = 0;
   return { status: 200, json: grant(state, state.mfaEnabled ? "mfa_required" : "signed_in") } as const;
 }
 
+// A pending session takes five wrong codes; after them it is over, and even a right code is refused as unauthenticated.
 export function verifyMfa({ body, state }: WithState<Schemas["MfaRequest"]>) {
   const code = body.code.toLowerCase();
+  if ((state.codeTries ?? 0) >= 5) {
+    return fail(401, "unauthenticated");
+  }
   if (code !== state.user.mfaCode && code !== state.user.recoveryCode) {
+    state.codeTries = (state.codeTries ?? 0) + 1;
     return fail(401, "invalid_code");
   }
   state.level = "mfa";

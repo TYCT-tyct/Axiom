@@ -20,7 +20,7 @@ const isFile = (path: string) => existsSync(path) && statSync(path).isFile();
 
 // exported finds what a package exports at a subpath as Node does: the exact entry, or else the pattern ("./x/*.zh")
 // with the longest part before its "*", then the longest key, whose two parts the subpath starts and ends with.
-function exported(exports: Record<string, string>, key: string) {
+export function exported(exports: Record<string, string>, key: string) {
   if (exports[key]) return exports[key];
   const fits = Object.entries(exports)
     .map(([pattern, target]) => ({ pattern, target, star: pattern.indexOf("*") }))

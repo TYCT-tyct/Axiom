@@ -1,9 +1,33 @@
 import { safeNext } from "@axiom/app";
 import { focusHeading, modelAbilities, NotFoundState, routerDefaults } from "@axiom/ui";
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+  Outlet,
+  redirect,
+} from "@tanstack/react-router";
+import { takeOAuthNext } from "./auth/oauth-return";
 import { Layout } from "./layout";
 
-const root = createRootRoute({ component: Outlet });
+// A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
+// where the visitor was going (auth/oauth-return.ts). That return is a document of its own: its first page takes what
+// was kept, and any other first page drops it, so a later visit to the root is not sent anywhere. A preload is no visit.
+let landing = true;
+const root = createRootRoute({
+  component: Outlet,
+  beforeLoad: ({ preload, location }) => {
+    if (preload || !landing) return;
+    landing = false;
+    const next = takeOAuthNext();
+    const search = location.search as { oauth?: unknown; next?: unknown };
+    if (next && location.pathname === "/") throw redirect({ href: next, replace: true });
+    if (next && location.pathname === "/sign-in" && search.oauth === "failed" && !search.next) {
+      throw redirect({ to: "/sign-in", search: { ...search, next, invite: undefined }, replace: true });
+    }
+  },
+});
 
 // The sign-in pages sit outside the shell. They remember where the visitor was going, to take them back after signing
 // in, and a registration link can carry the invite code.

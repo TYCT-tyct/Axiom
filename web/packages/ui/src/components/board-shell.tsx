@@ -63,15 +63,16 @@ export function useKeptPage(page: ReactNode) {
 }
 
 // BoardMark is the site's logo in a board's mark, in a 20px box whatever its size (docs/frontend.md「主题与自由度」);
-// without one, or when it does not load, the initial of the site's name, as the boards draw Axiom's A.
-export function BoardMark({ name, logoUrl }: { name?: string; logoUrl?: string }) {
+// without one, or when it does not load, the initial of the site's name, as the boards draw Axiom's A, or the board's
+// own mark where it draws one (fallback).
+export function BoardMark({ name, logoUrl, fallback }: { name?: string; logoUrl?: string; fallback?: ReactNode }) {
   const { t } = useTranslation("common");
   // The URL that failed, not a boolean: a new logo at a new URL is tried, not hidden behind the old failure.
   const [failed, setFailed] = useState<string | null>(null);
   return logoUrl && failed !== logoUrl ? (
     <img src={logoUrl} alt="" width="20" height="20" onError={() => setFailed(logoUrl)} className={styles.logo} />
   ) : (
-    (name ?? t("brand")).slice(0, 1).toUpperCase()
+    (fallback ?? (name ?? t("brand")).slice(0, 1).toUpperCase())
   );
 }
 

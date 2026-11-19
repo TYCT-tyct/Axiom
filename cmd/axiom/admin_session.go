@@ -54,6 +54,7 @@ func (c adminAPI) GetSession(ctx context.Context, _ adminapi.GetSessionRequestOb
 	var session adminapi.Session // field by field: the console's contract has a type of its own for the same schema
 	session.Account, session.CsrfToken, session.ExpiresAt = info.Account.TypeID(), info.CSRFToken, info.ExpiresAt
 	session.Level, session.MfaEnabled, session.Permissions = adminapi.SessionLevel(info.Level), info.MFAEnabled, info.Permissions
+	session.TotpEnabled = &info.TOTP
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
 	return adminapi.GetSession200JSONResponse(session), nil
 }

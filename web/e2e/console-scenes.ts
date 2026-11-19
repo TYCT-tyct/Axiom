@@ -1,6 +1,6 @@
 import type { Page } from "@playwright/test";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import type { Schemas } from "./console-data.ts";
+import { demoDocuments, type Schemas } from "./console-data.ts";
 import type { MockData } from "./mock.ts";
 import { knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
@@ -32,6 +32,20 @@ const dialogScene = (name: string, path: string, open: (page: Page) => Promise<v
 
 const scenes: Scene[] = [
   { name: "sign-in", signedIn: false, open: (page) => goto(page, "sign-in") },
+  {
+    // the sign-in page's second step, the password, after the email
+    name: "sign-in-password",
+    signedIn: false,
+    open: async (page) => {
+      await goto(page, "sign-in");
+      // the longest unbroken address the contract allows a local part, which the step's sentence must wrap
+      await page.getByLabel(/^(邮箱|Email)$/).fill(`${"w".repeat(64)}@example.com`);
+      await page.getByRole("button", { name: /^(继续|Continue)$/ }).click();
+      await page.getByLabel(/^(密码|Password)$/).waitFor();
+    },
+  },
+  // a member whose accepted terms are behind the site's current ones
+  { name: "consent", signedIn: true, open: (page) => goto(page, "consent") },
   { name: "register", signedIn: false, open: (page) => goto(page, "register?invite=INVITE-OK") },
   { name: "overview", signedIn: true, open: (page) => goto(page, "") },
   { name: "balance", signedIn: true, open: (page) => goto(page, "balance") },
@@ -144,10 +158,10 @@ const scenes: Scene[] = [
       .click(),
   ),
   dialogScene("totp-setup", "security", (page) =>
-    page.getByRole("button", { name: /^(开启两步验证|Turn on two-step verification)$/ }).click(),
+    page.getByRole("button", { name: /^(设置验证器 App|Set up an authenticator app)$/ }).click(),
   ),
   dialogScene("recovery-codes", "security", async (page) => {
-    await page.getByRole("button", { name: /^(开启两步验证|Turn on two-step verification)$/ }).click();
+    await page.getByRole("button", { name: /^(设置验证器 App|Set up an authenticator app)$/ }).click();
     const dialog = page.getByRole("dialog");
     await dialog.locator("input[name=password]").fill(knownPassword);
     await dialog.locator("input[name=code]").fill("123456");
@@ -184,6 +198,9 @@ async function prepare(page: Page, scene: Scene, data: MockData = "usual") {
   if (scene.name === "usage" && data !== "empty") {
     const demoAnchor = Date.UTC(2026, 9, 24, 2, 0, 0);
     state.calls = [...spreadUsageCalls(state.calls, demoAnchor), ...spreadUsageCalls(state.calls, Date.now())];
+  }
+  if (scene.name === "consent") {
+    state.legal = demoDocuments();
   }
   if (scene.name === "mfa") {
     state.level = "pending_mfa";

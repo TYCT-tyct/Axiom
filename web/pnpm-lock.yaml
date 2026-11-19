@@ -105,6 +105,9 @@ importers:
       '@axiom/boards':
         specifier: workspace:*
         version: link:../packages/boards
+      '@axiom/fx':
+        specifier: workspace:*
+        version: link:../packages/fx
       '@axiom/ui':
         specifier: workspace:*
         version: link:../packages/ui

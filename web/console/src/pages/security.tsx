@@ -40,7 +40,11 @@ export default function Security() {
   const english = useEnglish();
   const session = useSession();
   const passkeys = useQuery(passkeysQuery);
-  const status = totpStatus(session.mfa_enabled, passkeys.isSuccess ? passkeys.data.passkeys.length : undefined);
+  const status = totpStatus(
+    session.totp_enabled,
+    session.mfa_enabled,
+    passkeys.isSuccess ? passkeys.data.passkeys.length : undefined,
+  );
   const beginEnable = useBeginTotp();
   const beginReplace = useBeginTotp();
   const [passwordOpen, setPasswordOpen] = useState(false);

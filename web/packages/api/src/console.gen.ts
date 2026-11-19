@@ -606,7 +606,7 @@ export interface paths {
         put?: never;
         /**
          * Pass two-step verification
-         * @description Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same challenge give one session.
+         * @description Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending session, 10 an hour per user), and a recovery code works once. Once a pending session's attempts are used up, even a right code is a 401 `unauthenticated`: the person signs in again. Two requests with codes for the same challenge give one session.
          *
          *     Limits: the per-IP bucket of `signIn`.
          */
@@ -2357,8 +2357,10 @@ export interface components {
             };
             account: components["schemas"]["AccountId"];
             level: components["schemas"]["SessionLevel"];
-            /** @description Whether the user has a TOTP factor. */
+            /** @description Whether the user has a second factor this surface accepts: on the console a TOTP factor or a passkey, on the admin a TOTP factor. */
             mfa_enabled: boolean;
+            /** @description Whether the user has a TOTP factor. Absent from a server older than this field; a page then reads mfa_enabled as before. */
+            totp_enabled?: boolean;
             csrf_token: string;
             /**
              * Format: date-time

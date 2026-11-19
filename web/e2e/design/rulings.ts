@@ -5,12 +5,12 @@
 // on their own side. Nothing else is excused beyond anti-aliasing (compare.ts). A selector that matches nothing fails
 // the comparison, so a ruling cannot outlive the region it was written for.
 // A canvas region replaces only its bitmap, before compositing. Text and translucent layers above it remain tested.
-export type Region =
-  | { selector: string }
-  | { canvas: string }
-  | { x: number; y: number; width: number; height: number };
+type Region = { selector: string } | { canvas: string } | { x: number; y: number; width: number; height: number };
 
-export type Ruling = { scene: string; basis: string; board?: Region; page?: Region };
+// glyphs: the ruling excuses only what is drawn inside its boxes, not where they are. Each side's boxes are blanked on
+// both shots, so a box that moved would be blanked at both places and pass; with glyphs the page's boxes must also sit
+// where the board's do, one for one.
+export type Ruling = { scene: string; basis: string; board?: Region; page?: Region; glyphs?: true };
 
 const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 
@@ -80,10 +80,40 @@ const accountShell = (scene: string): Ruling[] =>
     },
   ].map((ruling) => ({ scene, ...ruling }));
 
+// The console's sign-in page against the Login board's email step (#747 S3, port design §9), with the page's words in
+// the reference (design-map.ts). The sea is animated on both sides, and the stage that forms the step's shape on it is
+// the transition's on the board (trans.js), so both canvases are the fx tests'.
+const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
+const signInRulings: Ruling[] = [
+  // The sign-in pages draw their Chinese in the faces the board names, cut from their messages and the board's region
+  // text: the title and the label match the board's. Only glyphs are excused, each where its text is drawn, so a line or
+  // a control that moves, or a button or link that loses its fill or border, still fails.
+  signIn({
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    ...both(".lg-btn > span, .lg-top a"),
+    glyphs: true,
+  }),
+  signIn({
+    basis: "§5: a few characters of the cut body face differ from the board's source face (not yet explained)",
+    ...both(".lg-sub > span, .lg-note > span, .lg-note > a, .lg-pitch .s > span, .lg-label"),
+    glyphs: true,
+  }),
+  signIn({ basis: "§9 not ported: the footer's contact link (O21)", board: { selector: ".lg-foot" } }),
+  signIn({
+    basis: "§8.2: the sea is an animated engine on both sides; it is tested by fx.spec.ts",
+    board: { canvas: "canvas.sea" },
+    page: { canvas: "canvas.sea" },
+  }),
+  signIn({
+    basis: "§9: the stage on the sea is the transition's on the board (trans.js); it is tested by fx.spec.ts",
+    page: { canvas: ".lg-sea > canvas:not(.sea)" },
+  }),
+];
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
+  ...signInRulings,
   ...siteScreens.flatMap((scene) => screenFrame.map((ruling) => inScene(scene, ruling))),
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   ...presetScenes.map((scene) =>

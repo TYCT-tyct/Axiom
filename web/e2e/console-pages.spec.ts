@@ -1,43 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { goodInvite, type Schemas } from "./console-data.ts";
+import { demoDocuments, goodInvite } from "./console-data.ts";
 import { knownEmail } from "./mock-auth.ts";
 
 // The console's pages against the mocked API (console-api.ts): the main flows of M1, each as a user would walk it.
 
 test.use({ timezoneId: "Asia/Shanghai" });
-
-const demoDocuments = (): Schemas["LegalDocument"][] => [
-  {
-    kind: "terms",
-    locale: "zh",
-    version: 3,
-    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 服务条款（示例）\n\n## 服务说明\n\n这是服务条款的演示文本。",
-    published_at: "2026-11-04T00:00:00Z",
-  },
-  {
-    kind: "privacy",
-    locale: "zh",
-    version: 2,
-    body: "【示例文本（demo），不构成法律意见，正式上线前须由负责人和律师审定替换】\n\n# Axiom 隐私政策（示例）\n\n## 引言与适用范围\n\n这是隐私政策的演示文本。",
-    published_at: "2026-11-04T00:00:00Z",
-  },
-  {
-    kind: "terms",
-    locale: "en",
-    version: 1,
-    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Terms of Service (Demo)\n\n## The Service\n\nThis is demo terms text.",
-    published_at: "2026-11-04T00:00:00Z",
-  },
-  {
-    kind: "privacy",
-    locale: "en",
-    version: 1,
-    body: "Demo text, not legal advice; replace before launch.\n\n# Axiom Privacy Policy (Demo)\n\n## Introduction and Scope\n\nThis is demo privacy text.",
-    published_at: "2026-11-04T00:00:00Z",
-  },
-];
 
 const main = (page: Page) => page.getByRole("main");
 

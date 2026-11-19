@@ -4,6 +4,7 @@
 // its own here: trans.js plays both pages in one document, and the sign-in page is the console's. The geometry and
 // the easing are the engine's; its clock runs faster, so the stream lands in about half a second. Under reduced motion
 // the website does not load it: the link goes at once (R7).
+import { colour } from "./colour";
 import { hash } from "./hash";
 import { own } from "./loop";
 import type { OceanEngine } from "./sea";
@@ -41,16 +42,6 @@ function panel(W: number, H: number) {
   if (W < 768) return { x: 0, y: 208, w: W, h: Math.max(1, H - 208) };
   const w = Math.max(440, W * 0.44);
   return { x: W - w, y: 0, w, h: H };
-}
-
-// colour resolves a CSS colour (a token, light-dark()) to what the canvas can take.
-function colour(root: HTMLElement, value: string) {
-  const probe = document.createElement("i");
-  probe.style.color = value;
-  root.append(probe);
-  const resolved = getComputedStyle(probe).color;
-  probe.remove();
-  return resolved;
 }
 
 type Box = { x: number; y: number; w: number; h: number };

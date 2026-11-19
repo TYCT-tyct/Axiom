@@ -3,7 +3,7 @@ import ModelsCard from "@axiom/boards/AxApp/regions/ModelsCard";
 import { SectionHeader } from "@axiom/boards/ds";
 import { CheckField, FormError } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { legalQuery } from "../queries";
 import { LegalMarkdown } from "./legal-markdown";
@@ -88,22 +88,30 @@ export function useLegalConsent(): LegalConsentState {
   };
 }
 
+// What a form that accepts the documents shows of them: the read under way, refused (403, no retry) or failed (with a
+// retry), none to accept, or the documents and the box. Both forms (registration, the consent page) show these.
+export function legalView(consent: LegalConsentState) {
+  const { query } = consent;
+  if (query.isPending) return "loading";
+  if (query.isError) return query.error instanceof ApiError && query.error.status === 403 ? "forbidden" : "failed";
+  return consent.documents.length === 0 ? "none" : "documents";
+}
+
 // LegalConsent shows the documents and the one checkbox that accepts them. A site with no documents shows nothing and
 // needs no acceptance; a failed read blocks the form rather than letting it submit into consent_required.
 export function LegalConsent({ consent }: { consent: LegalConsentState }) {
   const { t } = useTranslation();
   const { t: common } = useTranslation("common");
-  if (consent.query.isPending) {
+  const view = legalView(consent);
+  if (view === "loading") {
     return (
       <p role="status" className="text-label text-t4">
         {t("legal.loading")}
       </p>
     );
   }
-  if (consent.query.isError) {
-    if (consent.query.error instanceof ApiError && consent.query.error.status === 403) {
-      return <FormError>{common("state.forbiddenTitle")}</FormError>;
-    }
+  if (view === "forbidden") return <FormError>{common("state.forbiddenTitle")}</FormError>;
+  if (view === "failed") {
     return (
       <FormError>
         {t("legal.error")}{" "}
@@ -113,12 +121,30 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
       </FormError>
     );
   }
-  if (consent.documents.length === 0) {
-    return null;
-  }
+  if (view === "none") return null;
+  return (
+    <LegalDocuments documents={consent.documents}>
+      <CheckField
+        label={t("legal.accept")}
+        checked={consent.accepted}
+        onChange={(event) => consent.setAccepted(event.currentTarget.checked)}
+      />
+    </LegalDocuments>
+  );
+}
+
+// LegalDocuments shows each document with its version, as the form that accepts them sends it; children follow them.
+export function LegalDocuments({
+  documents,
+  children,
+}: {
+  documents: Schemas["LegalDocument"][];
+  children?: ReactNode;
+}) {
+  const { t } = useTranslation();
   return (
     <div className="board ax ov">
-      {consent.documents.map((document) => {
+      {documents.map((document) => {
         const title = t(`legal.${document.kind}`);
         return (
           <ModelsCard t={String} key={`${document.kind}:${documentLocale(document)}`}>
@@ -127,11 +153,7 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
           </ModelsCard>
         );
       })}
-      <CheckField
-        label={t("legal.accept")}
-        checked={consent.accepted}
-        onChange={(event) => consent.setAccepted(event.currentTarget.checked)}
-      />
+      {children}
     </div>
   );
 }

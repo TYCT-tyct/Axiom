@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { routeLiterals } from "./routes.ts";
 import { faceTexts, readManifest } from "./text.ts";
 
 // The committed fonts still match the translation files and sources.json: a character the copy gained since the fonts
@@ -54,6 +55,22 @@ describe("the committed fonts", () => {
       }),
     );
     expect(missing).toEqual([]);
+  });
+
+  // A routed page that no Chinese body face names is cut for by none and checked by nothing above: its text falls back.
+  // A face cut only for some messages (a title's display face, text.keys) does not set the page's body text.
+  it("give every routed page a Chinese body face", () => {
+    const covered = new Set(
+      manifest.faces.flatMap((face, i) =>
+        "script" in face.text && face.text.script === "han" && !("keys" in face.text)
+          ? Object.keys(texts[i] ?? {})
+          : [],
+      ),
+    );
+    const routed = Object.entries(manifest.routes ?? {}).flatMap(([app, entry]) =>
+      [...routeLiterals(app, entry)].map(([page]) => page),
+    );
+    expect(routed.filter((page) => !covered.has(page))).toEqual([]);
   });
 
   // The screens' words come from the generated regions, not the apps' message files: a heading there (the sea bed's

@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { blankCanvases } from "./canvas.ts";
 import { pauseFrames, resumeFrames } from "./frames.ts";
-import type { Region, Ruling } from "./rulings.ts";
+import type { Ruling } from "./rulings.ts";
 import { freeze, repaint } from "./stage.ts";
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -27,19 +27,39 @@ export type Comparison = {
   error?: string;
 };
 
-async function rects(page: Page, region: Region | undefined, basis: string, side: string): Promise<Rect[]> {
+// rects are a region's boxes on one side. A ruling of glyphs covers only the extent of the text in each element, not
+// the element's padding, fill or border, which still compare.
+async function rects(page: Page, ruling: Ruling, side: "board" | "page"): Promise<Rect[]> {
+  const region = ruling[side];
   if (!region || "canvas" in region) return [];
   if (!("selector" in region)) return [region];
-  const boxes = await page.locator(region.selector).evaluateAll((elements) =>
-    elements.map((element) => {
-      const { x, y, width, height } = element.getBoundingClientRect();
-      return { x, y, width, height };
-    }),
+  const boxes = await page.locator(region.selector).evaluateAll(
+    (elements, text) =>
+      elements.map((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const { x, y, width, height } = (text ? range : element).getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    ruling.glyphs === true,
   );
   if (!boxes.length) {
-    throw new Error(`ruling "${basis}": ${region.selector} matches nothing on the ${side}`);
+    throw new Error(`ruling "${ruling.basis}": ${region.selector} matches nothing on the ${side}`);
   }
   return boxes;
+}
+
+// How far an excused box may sit from the board's: the sides lay out the same text in the same face, so only rounding
+// moves a box.
+const placeTolerance = 1;
+
+// moved names the boxes of a glyphs ruling that are not where the board's are: a different count, or a box whose
+// corner or size is off by more than the tolerance.
+function moved(ruling: Ruling, board: Rect[], page: Rect[]): string | undefined {
+  const off = (a: Rect, b: Rect) =>
+    (["x", "y", "width", "height"] as const).some((side) => Math.abs(a[side] - b[side]) > placeTolerance);
+  if (board.length === page.length && page.every((box, i) => !off(board[i] as Rect, box))) return undefined;
+  return `ruling "${ruling.basis}" excuses glyphs only, but its boxes moved: board ${JSON.stringify(board)}, page ${JSON.stringify(page)}`;
 }
 
 // Rectangle rulings cover everything in their boxes; canvas rulings change only the backing pixels under other DOM.
@@ -130,9 +150,12 @@ async function diffLocations(page: Page, diff: string) {
 // caller decides after recording it.
 export async function compare(board: Page, page: Page, scene: Ruling[], key: string, info: TestInfo) {
   const blanks: Rect[] = [];
+  const misplaced: string[] = [];
   for (const ruling of scene) {
-    blanks.push(...(await rects(board, ruling.board, ruling.basis, "board")));
-    blanks.push(...(await rects(page, ruling.page, ruling.basis, "page")));
+    const sides = [await rects(board, ruling, "board"), await rects(page, ruling, "page")] as const;
+    blanks.push(...sides[0], ...sides[1]);
+    const away = ruling.glyphs && moved(ruling, ...sides);
+    if (away) misplaced.push(away);
   }
   const canvases = (side: "board" | "page") =>
     scene.flatMap((ruling) => {
@@ -141,7 +164,9 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
     });
   const reference = await shot(board, blanks, canvases("board"));
   const actual = await shot(page, blanks, canvases("page"));
-  return compareShots(reference, actual, key, info, scene, page);
+  const result = await compareShots(reference, actual, key, info, scene, page);
+  if (misplaced.length) result.error = [result.error, ...misplaced].filter(Boolean).join("\n");
+  return result;
 }
 
 export async function comparePart(board: Locator, page: Locator, key: string, info: TestInfo) {

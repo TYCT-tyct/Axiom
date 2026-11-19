@@ -1225,7 +1225,8 @@ paths:
       description: >-
         Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and
         issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending
-        session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same
+        session, 10 an hour per user), and a recovery code works once. Once a pending session's attempts are used up,
+        even a right code is a 401 `unauthenticated`: the person signs in again. Two requests with codes for the same
         challenge give one session.
 
 
@@ -4187,7 +4188,12 @@ components:
             invite_code: {type: string, description: "The user's own invite code, which a new user registers with."}
         account: {$ref: "#/components/schemas/AccountId"}
         level: {$ref: "#/components/schemas/SessionLevel"}
-        mfa_enabled: {type: boolean, description: "Whether the user has a TOTP factor."}
+        mfa_enabled: {type: boolean, description: "Whether the user has a second factor this surface accepts: on the console a TOTP factor or a passkey, on the admin a TOTP factor."}
+        totp_enabled:
+          type: boolean
+          description: >-
+            Whether the user has a TOTP factor. Absent from a server older than this field; a page then reads
+            mfa_enabled as before.
         csrf_token: {type: string}
         expires_at: {type: string, format: date-time, description: "When the session ends if it is not used again; the idle timeout moves it."}
         permissions:

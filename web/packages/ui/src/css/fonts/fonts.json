@@ -1,5 +1,5 @@
 {
-  "inputs": "e8507647769b1e165dc9dec51a788848f7122f6cf5b82cfc620c7ec3a62ebdbf",
+  "inputs": "d2546bda1da75e42bda10a10b64b8166bf1ae9b9699068c51da440b395ad4d05",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -38,14 +38,14 @@
     {
       "family": "AX Serif Latin",
       "weight": "400",
-      "pages": ["site/home"],
+      "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "style": "italic",
       "script": "latin",
       "absent": "",
       "files": [
         {
           "file": "ax-serif-latin-400-italic.woff2",
-          "pages": ["site/home"],
+          "pages": ["site/home", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
           "bytes": 3828,
           "sha256": "2aa082382462cec29a64ca5b4958701b965052d1ec6a0ca17a6d3c133a32bfaf",
           "chars": "EKYekrvy"
@@ -55,39 +55,53 @@
     {
       "family": "Axiom CJK",
       "weight": "400",
-      "pages": ["site/home", "site/models", "site/first"],
+      "pages": [
+        "site/home",
+        "site/models",
+        "site/first",
+        "console/auth/sign-in",
+        "console/auth/mfa",
+        "console/auth/consent"
+      ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
+          "file": "axiom-cjk-400.84314706.woff2",
+          "pages": ["console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+          "bytes": 13380,
+          "sha256": "f32351e39b2ad91c89811b0ca249bb2a98aa68100c668b1dafd656293f0919a6",
+          "chars": "《》串二人今任何侧做像兑冲减刻功助区印受右吧启员均域处备太套安密层展属带帮废弱形志态恢意扫护描插操政效料暖栏概款浏消温灰状真知私突立策箱繁继续维览评该负责资跳达述邮钥长阅隐需青静颜"
+        },
+        {
           "file": "axiom-cjk-400.2a493759.woff2",
           "pages": ["site/home"],
-          "bytes": 22216,
-          "sha256": "4a6c483867fccc4bb724321a2d5e58a23a33581b627730c5faa49db6072a575d",
-          "chars": "「」且两么之事云交亿什仍从令们会估但低余作例保值假停健允元充免兼决几凭则创别办参又变另只合向吗含周命和品响固国地址填复多天好官审家少尝就尽局屏己幅平并度康建影待得怎总想感我手打扣报拒拿挑损掉控改放敏方无日期来架校样核楚止比泄法涨清源照率现白着种笔第算管类累终绑给绝编缺考耗背般花规让记许话说谁调身较辑近返进退送途通遇邀那都金钱锁错间露高：？"
+          "bytes": 14488,
+          "sha256": "40e3d74b1f004ba18ad2e18e752d4c31e7a3c41371f41678e8d038ef53ff6a78",
+          "chars": "「」且么之云交亿什从令估例假健元免兼决几凭则创办参又变向吗含周响固国官审家少尽局屏己幅度康影待怎总想感扣拒拿挑损掉敏架样核楚止比泄涨清源照率白着种笔类累终绝编缺考耗背般花规让话说谁身较辑进送途遇那钱锁错间露高："
         },
         {
-          "file": "axiom-cjk-400.98219cac.woff2",
-          "pages": ["site/home", "site/models"],
-          "bytes": 18880,
-          "sha256": "f944804ed62887c69e37d7a41775618228bf9b6094c3cf051374a06940b3d95b",
-          "chars": "、万下不为也了于些他代以件份位你使供便先全公其具内再写准出分列刚删制刷加匿厂发口可台号各同名后否哪商回图在大失如字存它完定宜容对工已应式张当快性情成或户执把持据提支收数整断新旧时是显暂更最月本查标次正求没流游点片版用由百目直看码确称站端等筛组经结网置联能行表要认设试详误请败账走起超转输过还连部配里重量限除项预额默（）；"
+          "file": "axiom-cjk-400.03dbe54b.woff2",
+          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+          "bytes": 33476,
+          "sha256": "b92c18e12a98398d8f152d3aabe35ebda5889c5c9e1798d9409b9a41335a60f7",
+          "chars": "、万下不两为也了事于些仅仍他付代以们件份优会但位低余作你使供便保值停允充先全公其具内再写准出分列刚删别制刷力加化匹匿厂原及发口另只可台号各合同名后否命和品哪售商器回因图在地址基填复多大天失好如字存它完定宜容对小尝就工已布平年并应建式引张弹当径得快性情成我或户手打执找把报持指据排控推提擎支收改放数整断新方无日旧时明是显暂更最月期未本权来构析果查标校档检次正求没法流游点片版现理用由百目直相看码础确秒称移稍稳站端符第等筛算管精级组经绑结给络缓网置联能行表被要解认记许设证试详误请读调败账走起超转载输过近返还连退通速邀部都配里重量金链附限除音项预频额验默（）；？"
         },
         {
-          "file": "axiom-cjk-400.2afbcb70.woff2",
-          "pages": ["site/home", "site/models", "site/first"],
+          "file": "axiom-cjk-400.bd9bd167.woff2",
+          "pages": [
+            "site/home",
+            "site/models",
+            "site/first",
+            "console/auth/sign-in",
+            "console/auth/mfa",
+            "console/auth/consent"
+          ],
           "bytes": 11320,
           "sha256": "749ec246438bc3b9f3eb718892f818bad936d1116041d17cbf4733cd4bf459e3",
           "chars": "。一三上与个中主产价体入关册切到前务动单取型外始实导常底开录所择按换接搜文有服条格模步每注浅测海深演生登的示简系索线统自航色获菜见观言计语费跟路这选闭问际随面页题首，",
-          "preload": true
-        },
-        {
-          "file": "axiom-cjk-400.153871d7.woff2",
-          "pages": ["site/models"],
-          "bytes": 8248,
-          "sha256": "24efdd6398ad10b0f503c66e148781eb4a30abf0eaf92c1c887a8cb2fe715490",
-          "chars": "仅付优力化匹原及售器因基小布年引弹径找指排推擎明未权构析果档检理相础秒移稍稳符精级络缓被解证读载速链附音频验"
+          "preload": ["site/first"]
         }
       ]
     },
@@ -95,11 +109,6 @@
       "family": "Axiom CJK Console",
       "weight": "400",
       "pages": [
-        "console/auth/consent",
-        "console/auth/mfa",
-        "console/auth/register",
-        "console/auth/sign-in",
-        "console/auth/verify-email",
         "console/pages/balance",
         "console/pages/call",
         "console/pages/calls",
@@ -117,20 +126,17 @@
         "console/pages/settings",
         "console/pages/statement",
         "console/pages/usage",
-        "console/pages/workspaces"
+        "console/pages/workspaces",
+        "console/auth/register",
+        "console/auth/verify-email"
       ],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "axiom-cjk-console-400.9fcc11e2.woff2",
+          "file": "axiom-cjk-console-400.107b10ce.woff2",
           "pages": [
-            "console/auth/consent",
-            "console/auth/mfa",
-            "console/auth/register",
-            "console/auth/sign-in",
-            "console/auth/verify-email",
             "console/pages/balance",
             "console/pages/call",
             "console/pages/calls",
@@ -148,85 +154,55 @@
             "console/pages/settings",
             "console/pages/statement",
             "console/pages/usage",
-            "console/pages/workspaces"
+            "console/pages/workspaces",
+            "console/auth/register",
+            "console/auth/verify-email"
           ],
-          "bytes": 59052,
-          "sha256": "fa800d622f15805d7f7aa8b333eded7479dfc988df28aa16d1fe9a4c489c3df8",
-          "chars": "、。一万三上下不与两个中串为主么之也了事二于些产人什仅今仍他付代令以们件价任份优会位低何余作你使例供侧便保修候值做停允充先兑入全公共关其具内册再写冲决准减出分切列则刚创删别到制刷刻前剩力功加务动助包化匹区匿单印即厂原及发取受变口另只可台右号各合同名后向否吧含启告员周命和品哪售商器回因图在均型域基填处备复外多大天太失头套好如始字存它安完定宜实容密对导小少尚尝就层展属工己已币布带帮常平年并序应废度建开式引张弱弹当录径得必志快态性总恢情意成我或户所手才打扣执扫找把护报拒择持指按换据排接控推描提插搜摘操擎支收改放政效数整文料断新方无日旧时明是显暂暖更最月有服期未本权条来构析果查标栏校格档检概模次款正步母每比求没法注流浅测浏消深温游源灰点照片版牌状现理生用由申留登百的目直相看真知码础确示私秒称移稍稳空突立站端符第等策筛算管箱精系索繁级线组经绑结给络绝统继续维缓编网置者联能自航色节花行表被要见观规览解言计认记许设证评试话该详语误请读调负责败账费资走起超跟路跳转载较辑输达过近返还这连述退送选通速邀邮部都配里重量金钥钱链长闭问间阅附限除随隐需青静面音页项顺须预频题颜额首验默（），：；？"
+          "bytes": 66444,
+          "sha256": "a28341d81088ade93bf71fba4b37a22339ee2dbb6e7b6c9b5a4cb9302486c500",
+          "chars": "、。一万三上下不与两个中串为主么之也了事二于五些产人什仅今仍从他付代令以们件价任份优会但位低何余作你使例供侧便保信修候值做停允充先免兑入全公共关其具内册再写冲决况净准减出分切划列则刚创删别到制刷刻前剩力功加务动助包化匹区匿升单印即厂原参及发取受变口另只可台右号各合同名后向否吧含启告员周命和品响哪售商器四回因团图在地圾址均垃型域基填增处备复外多大天太失头套好如始子字存它安完官定宜实客容密对导小少尚尝就层展属工己已币布带帮常平年并序应底废度建开式引张弱弹当录影径待得必志快态性总恢息情意成我或户所手才打扣执扫找把护报拆拒择括持指按换据掉排接控推描提插搜摘操擎支收改放政效数整文料断新方无日旧早时明昨是显暂暖更最月有服期未本机权束条来构析林果查标栏校格框档检概模次款止正此步段母每比求汇没法注活流浅测浏消深添清温游源灰点然照片版牌状率现理生用由申留登白百的目直相看真知短码础确示私种秒称移稍稳空突立站端符第等策筛算管箱类精系索累繁级线组细经绑结给络绝统继续维缓编网置翻者耗联能自至致航色节花行衡表被要见观规视览角解言计认记许设证评识试话询该详语误请读调负责败账费资走起超跃跟路跳转载较辑输达过近返还这进远连述退送选通速邀邮部都配里重量金钥钱链错键长闭问间阅队附限除随隐需青静面音页项顺须预频题颜额首验默（），：；？"
         },
         {
-          "file": "axiom-cjk-console-400.32ae9ad3.woff2",
-          "pages": ["console/auth/mfa", "console/pages/keys", "console/pages/usage"],
-          "bytes": 3292,
-          "sha256": "4c90cc2889f5ff07466a816f44e9cd978a546a7ceca65d2a612b1d5f3015f2cc",
-          "chars": "占历史善境妥左形扩晚柱物环省缀补车那钟齐"
-        },
-        {
-          "file": "axiom-cjk-console-400.2f532abc.woff2",
-          "pages": ["console/auth/register", "console/pages/balance", "console/pages/orders"],
-          "bytes": 4084,
-          "sha256": "a8e6c76cdacebda8a0cbdbd5a08b83ecef6bf9ae8b1b59e42adf533dcb7d2c1a",
-          "chars": "九买交但去司圾垃宝审将幂核桐永独王珂税答谁财购际陈雨"
-        },
-        {
-          "file": "axiom-cjk-console-400.75eb4252.woff2",
+          "file": "axiom-cjk-console-400.683cef7d.woff2",
           "pages": [
             "console/pages/balance",
-            "console/pages/call",
             "console/pages/calls",
-            "console/pages/keys",
-            "console/pages/notifications",
             "console/pages/orders",
-            "console/pages/overview",
-            "console/pages/provider-keys",
             "console/pages/receipt",
             "console/pages/redeem",
-            "console/pages/routing-presets",
-            "console/pages/security",
             "console/pages/settings",
-            "console/pages/statement",
-            "console/pages/usage"
+            "console/pages/statement"
           ],
-          "bytes": 10316,
-          "sha256": "6d0d3c1a9674e2dcbaaa002417d7336708cf8e191d06f2e6c75fa9c1d89e8e2e",
-          "chars": "「」从依信偏像免况冻升团固地址增够客封尾州底影待微息批掉早束杭林样框此段水汇活海添渠然率票窗笔细终耗至致角订询货赠足跃远途道钮销错键队餐"
+          "bytes": 6648,
+          "sha256": "54e8778a9cd09821bc9fca93078d8e829493ca012b7d234e506e777ff6319181",
+          "chars": "「」九买交依冻去司固宝审将尾幂微批核桐水永渠独王珂票税窗笔答终订谁财购赠途道钮际陈雨餐"
         },
         {
-          "file": "axiom-cjk-console-400.c90687ea.woff2",
+          "file": "axiom-cjk-console-400.5ac07460.woff2",
           "pages": [
-            "console/pages/call",
-            "console/pages/calls",
-            "console/pages/keys",
-            "console/pages/provider-keys",
-            "console/pages/request-presets",
-            "console/pages/routing-presets",
-            "console/pages/settings",
-            "console/pages/statement",
-            "console/pages/usage",
-            "console/pages/workspaces"
-          ],
-          "bytes": 4648,
-          "sha256": "66e585dfce1974fb79fea7b914f9e7f26102469ce8587a27d0f54687c5933c35",
-          "chars": "义五六净划参响四围子官抹拆括昨机某止清白短种类累缩翻范衡视识进"
-        },
-        {
-          "file": "axiom-cjk-console-400.723c2566.woff2",
-          "pages": ["console/pages/call", "console/pages/calls", "console/pages/routing-presets"],
-          "bytes": 5952,
-          "sha256": "f3466a01991296d7669261a5c065df6c481e9d93cac2841f262a600ab2510638",
-          "chars": "　严伪估几判副勾十吐吞家屉延归忽怎慢截抽挑气沿滤略着程练绩舍营落让训质运迟适释靠高"
-        },
-        {
-          "file": "axiom-cjk-console-400.8eb6d738.woff2",
-          "pages": [
+            "console/pages/balance",
             "console/pages/notifications",
-            "console/pages/request-presets",
+            "console/pages/provider-keys",
             "console/pages/security",
             "console/pages/settings"
           ],
-          "bytes": 4684,
-          "sha256": "8309c9be917a788824b679433931f3372ef7dbf6e7a888fc1b049ded38942b09",
-          "chars": "体八击句吗异故替枚横润焦电界疑简纲纹脑英菜访诉边醒阈障非"
+          "bytes": 5824,
+          "sha256": "0a85884522c3fdf849e193b8256c052b5dd7dab5b2e53a20db305c3c07772a3b",
+          "chars": "体偏像击吗够封州异抹故替杭枚某样海焦电界疑简纹脑英菜访诉货足醒销阈障非"
+        },
+        {
+          "file": "axiom-cjk-console-400.b4ecedbf.woff2",
+          "pages": ["console/pages/call", "console/pages/calls", "console/pages/usage"],
+          "bytes": 5112,
+          "sha256": "d55e9aa5de38b4d3e2324f6c7998b6d52c0a70db9536c3436cddd37e3fab0fd9",
+          "chars": "　义估六判十占历史围家屉左归忽怎慢截扩抽晚柱气滤物略省程缩舍范补车释齐"
+        },
+        {
+          "file": "axiom-cjk-console-400.027b022f.woff2",
+          "pages": ["console/pages/keys", "console/pages/request-presets", "console/pages/routing-presets"],
+          "bytes": 5584,
+          "sha256": "3f12ac7b6366fdbbeadf2e43496179a9dd1cf4ac7eb1974238941a93b20c53dd",
+          "chars": "严伪八几副勾句吐吞善境妥延形挑横沿润环着纲练绩缀营落让训质边运迟适那钟靠高"
         }
       ]
     },
@@ -289,9 +265,9 @@
             "admin/pages/suppliers",
             "admin/pages/users"
           ],
-          "bytes": 46208,
-          "sha256": "ba7a1b1eabea64c99428c396541e7e5f89bc2c1bb55a95db8c9503928be142fc",
-          "chars": "、。一三上下不与两个中串为主么之也了予事二于些交人什仍从他以们件价任份会位低何余作你使例供便保修值做停允充先兑入全关其内册再写冲准出分列刚删别到制刷刻前功加务动包匹单印即原及发取受变口另只可台号合同名后吧含启员和商器回因围在块型域填处备复外多大太失头如始字存它完定审容宽密对导射小尝就展已币布常平年并应废度建开弱当录形待得志态恢意成我或户手打执扫批找把择持按换授接控描提操支收改放政效数文断新方无日旧时明映是显暂更最月有服期未本权条来板果架查校格检模次款正步每比毫求没法注浏消清源满点照版状率现理生用由登的目直看知码确示私种秒称移稍突立站端符第等策筛算管箱类精系繁级细经绑结给络统维网置者耗联能自航节范营行被要见览解计订认记许设证试该误请读调象负责败账资走起超跟路跳载输达过运近还这连退选通邀邮部都配里重量金钥链长闭问间阅附限除随隐需面页项预频题额首验默（），：；"
+          "bytes": 46256,
+          "sha256": "55b5300da397148c67e53f6e4944dd9766b2674933824e9c9548d6a0f1159b92",
+          "chars": "、。一三上下不与两个中串为主么之也了予事二于些交人什仍从他以们件价任份会但位低何余作你使例供便保修值做停允充先兑入全关其内册再写冲准出分列刚删别到制刷刻前功加务动包匹单印即原及发取受变口另只可台号合同名后吧含启员和商器回因围在块型域填处备复外多大太失头如始字存它完定审容宽密对导射小尝就展已币布常平年并应废度建开弱当录形待得志态恢意成我或户手打执扫批找把择持按换授接控描提操支收改放政效数文断新方无日旧时明映是显暂更最月有服期未本权条来板果架查校格检模次款正步每比毫求没法注浏消清源满点照版状率现理生用由登的目直看知码确示私种秒称移稍突立站端符第等策筛算管箱类精系繁级细经绑结给络统维网置者耗联能自航节范营行被要见览解计订认记许设证试该误请读调象负责败账资走起超跟路跳载输达过运近还这连退选通邀邮部都配里重量金钥链长闭问间阅附限除随隐需面页项预频题额首验默（），：；"
         },
         {
           "file": "axiom-cjk-admin-400.ffc51c58.woff2",
@@ -340,9 +316,9 @@
             "admin/pages/supplier",
             "admin/pages/suppliers"
           ],
-          "bytes": 17968,
-          "sha256": "459934bf9e096add7f719cb564f0716bd645f72a16a708295b2c260e4ac151a3",
-          "chars": "且丢付代令优伪但依信元公凭创判办勾区卖厂去参各否告响哪固图地址基声好官实客少尚尾层属工己带弃弄式弹归影必快性息所才扣报拒据掉排推搜整早析某标样核框档止此段母水汇沿流测添游然片留百盖真稿空答索线组绝续缓编群考至致花草落表覆规视议识诉话说费足身较边进送适速那钱销锁错际零靠音须高"
+          "bytes": 17912,
+          "sha256": "cd3970f192030b8b2edc8fc4e7d67971220a316ac9dc5c4d3d258b70712e2d3c",
+          "chars": "且丢付代令优伪依信元公凭创判办勾区卖厂去参各否告响哪固图地址基声好官实客少尚尾层属工己带弃弄式弹归影必快性息所才扣报拒据掉排推搜整早析某标样核框档止此段母水汇沿流测添游然片留百盖真稿空答索线组绝续缓编群考至致花草落表覆规视议识诉话说费足身较边进送适速那钱销锁错际零靠音须高"
         },
         {
           "file": "axiom-cjk-admin-400.54aa2a3a.woff2",
@@ -394,31 +370,31 @@
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home", "site/models"],
+      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "style": "normal",
       "script": "han",
       "absent": "",
       "files": [
         {
-          "file": "ax-serif-600.98219cac.woff2",
-          "pages": ["site/home", "site/models"],
-          "bytes": 13588,
-          "sha256": "87bb623f2f78eb9e61196a6d3c170c90d77583e0fc019bd958d6937c11a0db5d",
-          "chars": "一三上不与个事产从件价会允先入册几到前变同后地址型常所把接改有条格楚模止步求注清生用的第线背能见许说请路这都问题，"
+          "file": "ax-serif-600.03dbe54b.woff2",
+          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
+          "bytes": 19632,
+          "sha256": "092082e7eeb408bff6e93b29ae40bdf7a90d3908f05f795c62187598ece612f5",
+          "chars": "。一三上不与两个事产从件价会允先入册几到前务变可同后地址型实密常录所把按接改新更有服条格楚模款止步求注清点生用登的码端第线背能见计许证说请费路输这都问际题验，"
         }
       ]
     },
     {
       "family": "AX Serif",
       "weight": "600",
-      "pages": ["site/home", "site/models"],
+      "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
       "style": "normal",
       "script": "latin",
       "absent": "",
       "files": [
         {
           "file": "ax-serif-600.woff2",
-          "pages": ["site/home", "site/models"],
+          "pages": ["site/home", "site/models", "console/auth/sign-in", "console/auth/mfa", "console/auth/consent"],
           "bytes": 12920,
           "sha256": "d09a631c71ca96ac17911e6dafe58e06dd1b8286bd0e5ae478417a3e7b4d7825",
           "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"

@@ -27,6 +27,10 @@ export type AuthState = {
   user: { email: string; password: string; inviteCode: string; mfaCode: string; recoveryCode: string };
   mfaEnabled: boolean;
   totpEnabled?: boolean;
+  // the wrong codes the pending session has taken; at five even a right one ends it (the server's attempt budget)
+  codeTries?: number;
+  // the session as a server older than totp_enabled answers it, without the field
+  legacySession?: boolean;
   permissions: string[];
   version: string;
   // every request the page made, as "METHOD /path", for tests that count them
@@ -95,6 +99,18 @@ export const fail = <C extends number>(status: C, code: ErrorCode, extra?: Recor
   status,
   json: { error: { code, message: code } } satisfies Schemas["Error"],
   headers: extra,
+});
+
+// What the contract's guard answers before any handler runs: a 400 naming the member the request breaks.
+export const breaks = (pointer: string) => ({
+  status: 400 as const,
+  json: {
+    error: {
+      code: "invalid_request",
+      message: "the request breaks the contract",
+      fields: [{ pointer, message: "invalid" }],
+    },
+  } satisfies Schemas["Error"],
 });
 
 export const ok = <J>(json: J) => ({ status: 200 as const, json });

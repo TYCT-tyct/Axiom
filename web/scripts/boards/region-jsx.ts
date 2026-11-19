@@ -60,7 +60,17 @@ export function emitter(region: Region) {
 
 const booleans = ["disabled", "checked", "selected", "multiple", "readOnly", "required", "autoFocus", "hidden"];
 // ARIA states a page sets from its own state, which React types as booleans.
-const ariaStates = ["aria-expanded", "aria-pressed", "aria-checked", "aria-selected", "aria-disabled", "aria-hidden"];
+// An undefined one is left out: aria-current="false" would still match [aria-current], as a style may select it.
+const ariaStates = [
+  "aria-expanded",
+  "aria-pressed",
+  "aria-checked",
+  "aria-selected",
+  "aria-disabled",
+  "aria-hidden",
+  "aria-current",
+  "aria-invalid",
+];
 // The props whose value React wants other than as the attribute's text.
 const typed: Record<string, (expr: string) => string> = {
   className: (expr) => `className={(${expr}) + " " + styles.scope}`,

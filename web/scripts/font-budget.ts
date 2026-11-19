@@ -7,17 +7,21 @@
 
 const kB = 1000;
 
-export type FontFile = { file: string; pages: string[]; bytes: number; preload?: boolean };
+export type FontFile = { file: string; pages: string[]; bytes: number; preload?: string[] };
 export type FontManifest = { faces: { family: string; weight: string; script: "latin" | "han"; files: FontFile[] }[] };
 
 const budgets = { latin: 60 * kB, han: 100 * kB };
 const scriptNames = { latin: "Latin", han: "Chinese" } as const;
 
 // pageFiles returns the files of one script a page can load, each once, by name: every file of each face whose files
-// name the page.
+// name the page, or the app the page is of ("console" for "console/auth/sign-in"), whose faces every page of it is
+// set in besides its own.
 function pageFiles(manifest: FontManifest, page: string, script: "latin" | "han") {
   const files = new Map<string, FontFile>();
-  for (const face of manifest.faces.filter((f) => f.script === script && f.files.some((x) => x.pages.includes(page)))) {
+  const names = [page, page.split("/")[0]];
+  const loads = (face: FontManifest["faces"][number]) =>
+    face.script === script && face.files.some((x) => x.pages.some((name) => names.includes(name)));
+  for (const face of manifest.faces.filter(loads)) {
     for (const file of face.files) {
       files.set(file.file, file);
     }

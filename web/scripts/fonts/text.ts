@@ -16,7 +16,8 @@ const regions = (...boards: string[]) =>
   boards.flatMap((board) => ["zh", "en"].map((language) => `packages/boards/src/${board}/regions/*.${language}.ts`));
 const namespaces: Record<string, string[]> = {
   "site-regions": regions("Site", "SitePhone", "SiteTablet", "SiteTabletWide"),
-  "console-regions": regions("AxApp", "AxAppPhone", "AxAppDark", "AxAppPhoneDark", "AxAppTablet", "AxDS"),
+  // the console's pages and its sign-in pages, which wear the Login board
+  "console-regions": regions("AxApp", "AxAppPhone", "AxAppDark", "AxAppPhoneDark", "AxAppTablet", "AxDS", "Login"),
   common: ["packages/ui/src/locales/zh.ts", "packages/ui/src/locales/en.ts"],
   site: ["site/src/locales/zh.ts", "site/src/locales/en.ts"],
   console: ["console/src/locales/zh.ts", "console/src/locales/en.ts"],

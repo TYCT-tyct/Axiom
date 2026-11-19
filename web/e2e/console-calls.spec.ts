@@ -310,7 +310,7 @@ test.describe("calls", () => {
 
     state.level = "none";
     await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange", { bubbles: true })));
-    await expect(page.getByRole("button", { name: "登录" }).first()).toBeVisible();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
     state.account = 2;
     state.user.email = "user-b@example.com";
     signedInAs(state);

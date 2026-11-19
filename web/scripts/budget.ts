@@ -143,7 +143,9 @@ if (import.meta.main) {
     const preloads = [...readFileSync(join(dist, "index.html"), "utf8").matchAll(/<link\b[^>]*\brel="preload"[^>]*>/g)]
       .filter(([tag]) => /\bas="font"/.test(tag))
       .map(([tag]) => /\bhref="([^"]+)"/.exec(tag)?.[1]?.slice(base.length) ?? "");
-    const marked = fonts.faces.flatMap((face) => face.files).filter((file) => file.preload && ofApp(file));
+    const marked = fonts.faces
+      .flatMap((face) => face.files)
+      .filter((file) => file.preload?.some((page) => page.split("/")[0] === app));
     for (const href of preloads.filter((href) => !marked.some((file) => href.startsWith(`assets/${stem(file)}`)))) {
       failures.push(`${app}: the entry page preloads ${href}, which fonts.json does not mark for preloading`);
     }

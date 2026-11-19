@@ -21,11 +21,11 @@ import (
 )
 
 var (
-	// ErrBadCode is a TOTP or recovery code refused, or a pending session out of attempts.
+	// ErrBadCode is a TOTP or recovery code refused.
 	ErrBadCode = errors.New("accounts: wrong code")
-	// ErrMFAExhausted is a pending passkey sign-in that has spent the attempts its session allows. Waiting does not
-	// restore them; the person must sign in again.
-	ErrMFAExhausted = errors.New("accounts: passkey sign-in attempts are used up, sign in again")
+	// ErrMFAExhausted is a pending sign-in that has spent the attempts its session allows, by codes or passkeys. Waiting
+	// does not restore them, and no code is checked any more: the person must sign in again.
+	ErrMFAExhausted = errors.New("accounts: the pending sign-in's attempts are used up, sign in again")
 	// ErrBadSecret is a TOTP secret that is not 20 bytes of base32.
 	ErrBadSecret = errors.New("accounts: not a TOTP secret")
 	// ErrTOTPOn is turning on two-step verification for a user who has it; ReplaceTOTP is how it is replaced instead.
@@ -114,14 +114,15 @@ func (s *Service) lockPending(ctx context.Context, tx pg.Tx, user uuid.UUID, tok
 }
 
 // lockPendingAttempt is lockPending with the per-challenge attempt budget: a path that spends an attempt on a failure
-// refuses once the budget is used up.
+// refuses once the budget is used up, as the end of the sign-in rather than a wrong code, since not even a right one
+// would pass.
 func (s *Service) lockPendingAttempt(ctx context.Context, tx pg.Tx, user uuid.UUID, tokenHash []byte, attempts int) (PendingSessionRow, LockUserRow, error) {
 	pending, locked, err := s.lockPending(ctx, tx, user, tokenHash)
 	if err != nil {
 		return PendingSessionRow{}, LockUserRow{}, err
 	}
 	if int(pending.MfaAttempts) >= attempts {
-		return PendingSessionRow{}, LockUserRow{}, ErrBadCode
+		return PendingSessionRow{}, LockUserRow{}, ErrMFAExhausted
 	}
 	return pending, locked, nil
 }

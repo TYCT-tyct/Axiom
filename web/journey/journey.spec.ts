@@ -25,7 +25,8 @@ test("register, sign in, key, top-up, call, and see the call and its charge", as
   await page.getByRole("button", { name: "账号设置" }).click();
   await page.getByRole("button", { name: "退出登录" }).click();
   await page.getByLabel("邮箱").fill(email);
-  await page.getByLabel("密码").fill(password);
+  await page.getByRole("button", { name: "继续", exact: true }).click();
+  await page.getByLabel("密码", { exact: true }).fill(password);
   const signedIn = page.waitForResponse((r) => r.url().endsWith("/auth/sign-in") && r.request().method() === "POST");
   await page.getByRole("button", { name: "登录", exact: true }).click();
   const { csrf_token: csrf } = await (await signedIn).json();
