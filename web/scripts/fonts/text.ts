@@ -1,31 +1,27 @@
 // The characters each font face must cover on each page, computed from the translation files: the pipeline subsets the
 // fonts to them (build.py runs this file and reads its output), and coverage.test.ts checks the committed fonts still
 // cover them. One definition, so the two cannot disagree on what a page shows.
-import { readdirSync, readFileSync } from "node:fs";
+import { globSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { names, routeLiterals } from "./routes.ts";
+import { moduleLiterals, names, routeLiterals } from "./routes.ts";
 
 const web = join(import.meta.dirname, "..", "..");
 
-// A board's generated region text (packages/boards): each region's zh and en files, whose keys the region's markup
-// names as t("m…") literals, so a route takes the board words it draws as it takes its translation keys.
-const regionFiles = (board: string) => {
-  const dir = join("packages/boards/src", board, "regions");
-  return readdirSync(join(web, dir))
-    .filter((file) => /\.(zh|en)\.ts$/.test(file))
-    .sort()
-    .map((file) => join(dir, file));
-};
-// Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n), and the boards'
-// region text a page draws (login: the console's sign-in pages, which wear the Login board).
+// Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n).
+// The screens' words are not in the apps' message files: they come with the generated regions of the boards the pages
+// are cut from (packages/boards/src/<Board>/regions/*.zh.ts and .en.ts, by hash keys), which a page shows whole.
+const regions = (...boards: string[]) =>
+  boards.flatMap((board) => ["zh", "en"].map((language) => `packages/boards/src/${board}/regions/*.${language}.ts`));
 const namespaces: Record<string, string[]> = {
+  "site-regions": regions("Site", "SitePhone", "SiteTablet", "SiteTabletWide"),
+  // the console's pages and its sign-in pages, which wear the Login board
+  "console-regions": regions("AxApp", "AxAppPhone", "AxAppDark", "AxAppPhoneDark", "AxAppTablet", "AxDS", "Login"),
   common: ["packages/ui/src/locales/zh.ts", "packages/ui/src/locales/en.ts"],
   site: ["site/src/locales/zh.ts", "site/src/locales/en.ts"],
   console: ["console/src/locales/zh.ts", "console/src/locales/en.ts"],
   admin: ["admin/src/locales/zh/index.ts", "admin/src/locales/en/index.ts"],
-  login: regionFiles("Login"),
 };
 
 // A page names, per namespace, the message keys it can show: "" is every key, "hero" is hero and everything under it.
@@ -36,7 +32,14 @@ type FaceText = { chars: string } | { script: Script; keys?: Selection };
 type Script = "latin" | "han";
 // A face's pages name pages, or "<app>/*" for each page of an app the manifest's routes name (routePages).
 type Face = { family: string; weight: string; style?: string; pages: string[]; text: FaceText };
-export type Manifest = { pages: Record<string, Selection>; routes?: Record<string, string>; faces: Face[] };
+// entries names pages whose keys are read from the code they run, as a routed page's are (a module and what it imports),
+// rather than listed: the selection pages gives them names their namespaces only.
+export type Manifest = {
+  pages: Record<string, Selection>;
+  routes?: Record<string, string>;
+  entries?: Record<string, string>;
+  faces: Face[];
+};
 
 const manifestPath = join(import.meta.dirname, "sources.json");
 
@@ -63,17 +66,35 @@ const messages = (namespace: string) => {
   return cached;
 };
 
-async function load(namespace: string) {
+function filesOf(namespace: string) {
   const files = namespaces[namespace];
   if (!files) {
     throw new Error(`${manifestPath}: no namespace ${namespace}; known: ${Object.keys(namespaces).join(", ")}`);
   }
+  return files.flatMap((pattern) => (pattern.includes("*") ? globSync(pattern, { cwd: web }).sort() : [pattern]));
+}
+
+const messagesIn = async (file: string): Promise<[string, string][]> => [
+  ...flatten((await import(pathToFileURL(join(web, file)).href)).default, "", new Map()),
+];
+
+async function load(namespace: string) {
   const out: [string, string][] = [];
-  for (const file of files) {
-    const { default: tree } = await import(pathToFileURL(join(web, file)).href);
-    out.push(...flatten(tree, "", new Map()));
-  }
+  for (const file of filesOf(namespace)) out.push(...(await messagesIn(file)));
   return out;
+}
+
+// A region is its component and its words (packages/boards/src/<Board>/regions/<Name>.tsx, .zh.ts, .en.ts): a page that
+// runs any of them can show the region's words, in either language.
+const regionOf = (file: string) => file.replace(/\.(?:zh\.ts|en\.ts|tsx)$/, "");
+
+// regionKeys returns the keys of a regions namespace that the regions among files hold.
+async function regionKeys(namespace: string, files: Set<string>) {
+  const regions = new Set([...files].map(regionOf));
+  const keys: string[] = [];
+  for (const file of filesOf(namespace).filter((one) => regions.has(regionOf(join(web, one)))))
+    keys.push(...(await messagesIn(file)).map(([key]) => key));
+  return keys;
 }
 
 // selected tells whether a key is one of the prefixes or under one; a plural form (keys_one) counts as its base key,
@@ -105,16 +126,22 @@ async function selectedText(selection: Selection) {
   return text;
 }
 
+// The keys code can show, in each namespace, from the literals and modules it runs: a page shows the words of the
+// regions it runs whole, since its code names no key of them.
+async function selectionOf({ literals, files }: { literals: Set<string>; files: Set<string> }, namespaces: string[]) {
+  const selection: Selection = {};
+  for (const namespace of namespaces) {
+    selection[namespace] = namespace.endsWith("-regions")
+      ? await regionKeys(namespace, files)
+      : (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
+  }
+  return selection;
+}
+
 // routePages returns an app's pages ("console/pages/keys") and the keys each can show, in each of its namespaces.
 async function routePages(app: string, entry: string, namespaces: string[]) {
   const pages = new Map<string, Selection>();
-  for (const [page, literals] of routeLiterals(app, entry)) {
-    const selection: Selection = {};
-    for (const namespace of namespaces) {
-      selection[namespace] = (await messages(namespace)).map(([key]) => key).filter((key) => names(literals, key));
-    }
-    pages.set(page, selection);
-  }
+  for (const [page, ran] of routeLiterals(app, entry)) pages.set(page, await selectionOf(ran, namespaces));
   return pages;
 }
 
@@ -129,6 +156,11 @@ async function pageSelections(manifest: Manifest) {
     for (const [page, routed] of await routePages(app, entry, Object.keys(selection))) {
       pages.set(page, routed);
     }
+  }
+  for (const [page, file] of Object.entries(manifest.entries ?? {})) {
+    const selection = manifest.pages[page];
+    if (!selection) throw new Error(`${manifestPath}: entries names ${page}, which pages does not define`);
+    pages.set(page, await selectionOf(moduleLiterals(file), Object.keys(selection)));
   }
   return pages;
 }

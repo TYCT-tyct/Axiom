@@ -22,6 +22,14 @@ const siteEnglish: Record<string, string> = {
   mcaf724c6bd: "Sign up and get an API key",
   m2e2a3b1e5d: "One key for every model",
   m0d0cee5072: "Every route is tested. You pay for the route that served you.",
+  m854975fac5: "On this page",
+  m6ebdfb798f: "Surface",
+  mf3b3924597: "Connect",
+  m446d270979: "Models and routes",
+  mc7765bcffd: "Three steps",
+  m97d3aaa40b: "Before production",
+  m45a6d115fd: "FAQ",
+  m8c0f8088c6: "Seabed",
 };
 const menuLinks = (anchors: string) =>
   Object.fromEntries(
@@ -30,15 +38,9 @@ const menuLinks = (anchors: string) =>
       { selector: `${anchors}:nth-child(${i + 1})`, attribute: "href" },
     ]),
   );
-// What has nowhere to go yet: the docs page comes with S4, the screens below the first (the menu sheet's sections and
-// the tour through them) with S2. They are cut out until then; the links that remain close up in the board's order.
-const notYet = [
-  ".bar .nav.mid a:nth-child(3)",
-  ".isl .ixi a:nth-child(3)",
-  ".sheet .shl a:nth-child(3)",
-  ".sheet .shs",
-  ".tr .tour",
-];
+// What has nowhere to go yet: the docs page comes with S4 (#816). It is cut out until then; the links that remain close
+// up in the board's order.
+const notYet = [".bar .nav.mid a:nth-child(3)", ".isl .ixi a:nth-child(3)", ".sheet .shl a:nth-child(3)"];
 // The site's own logo and name go in the brand's places (docs/frontend.md「主题与自由度」): the page fills them, with the
 // board's mark (the Mark region) when the site has no logo or it fails to load.
 const brand = [".bar .brand > *", ".sheet .brand > *", ".isl .im > *"];
@@ -50,16 +52,7 @@ const siteRegions: Region[] = [
       name: "Shell",
       roots: [".tr.site"],
       // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
-      omit: [
-        ".tr > .cw",
-        ".tr > .wh",
-        ".tr > .lg",
-        ".tr > .fly",
-        ".tr > canvas.ui",
-        ...notYet,
-        ...brand,
-        ...otherLanguages,
-      ],
+      omit: [".tr > .cw", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...brand, ...otherLanguages],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
@@ -85,6 +78,7 @@ const siteRegions: Region[] = [
         barCls: ["away"],
         islCls: ["on", "hide", "open"],
         sheetCls: ["on"],
+        tourCls: ["gone"],
       },
       english: siteEnglish,
     }),

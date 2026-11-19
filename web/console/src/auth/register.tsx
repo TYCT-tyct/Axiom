@@ -1,4 +1,4 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
+import { ApiError, consoleApi, registrationOf, type Schemas, unwrap } from "@axiom/api";
 import { AuthFrame, Gate, readForm, useErrors, useSignIn } from "@axiom/app";
 import { DataState, FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -38,10 +38,11 @@ function RegisterPage() {
     >
       <DataState query={site} compact>
         {(data) => {
-          if (data.registration === "open" && data.email_verification) {
+          const registration = registrationOf(data);
+          if (registration === "open") {
             return <OpenRegisterForm site={data} />;
           }
-          if (data.registration === "invite") {
+          if (registration === "invite") {
             return <InviteRegisterForm />;
           }
           return <p className="text-t3">{t("auth.register.closed")}</p>;

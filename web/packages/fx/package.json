@@ -7,7 +7,8 @@
     "./sea": "./src/sea.ts",
     "./prefs": "./src/prefs.ts",
     "./depart": "./src/depart.ts",
-    "./login": "./src/login.ts"
+    "./login": "./src/login.ts",
+    "./whale": "./src/whale.ts"
   },
   "scripts": {
     "typecheck": "tsc"

@@ -23,7 +23,18 @@ let pending = 0;
 let last = 0;
 let frames = 0;
 
-export const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+const reduce = "(prefers-reduced-motion: reduce)";
+export const reducedMotion = () => matchMedia(reduce).matches;
+
+// onMotion calls then with whether motion is allowed each time the reader changes the setting while the page runs, and
+// returns a function that stops listening. Work a script set moving belongs to the setting it started under: asked to
+// reduce motion, it settles in its final state at once rather than freeze midway, as the loop's owners would.
+export function onMotion(then: (allowed: boolean) => void): () => void {
+  const query = matchMedia(reduce);
+  const changed = () => then(!query.matches);
+  query.addEventListener("change", changed);
+  return () => query.removeEventListener("change", changed);
+}
 
 const running = () =>
   !document.hidden && !motion?.matches && [...owners].some((owner) => seen.get(owner.element) === true);
@@ -59,7 +70,7 @@ function start() {
     }
     changed();
   });
-  motion = matchMedia("(prefers-reduced-motion: reduce)");
+  motion = matchMedia(reduce);
   motion.addEventListener("change", changed);
   document.addEventListener("visibilitychange", changed);
 }

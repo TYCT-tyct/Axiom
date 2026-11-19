@@ -74,6 +74,25 @@ test.describe("accepting updated documents", () => {
     await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
   });
 
+  // At 360 a long address in the page's words breaks rather than push the page wider than the screen.
+  test("a long email in the consent page's words stays inside a phone's width", async ({ page }) => {
+    await page.setViewportSize({ width: 360, height: 780 });
+    const state = await mockConsole(page);
+    state.legal = demoDocuments();
+    state.user.email = "averyveryveryverylonglocalpartwithnoplacetobreakatallreally@exampledomainthatisalsolong.com";
+    signedInAs(state);
+    await page.goto("/console/keys");
+    const words = page.getByText(state.user.email, { exact: false });
+    await expect(words).toBeVisible();
+    // the text's own lines, which can run past the paragraph's box
+    const right = await words.evaluate((el) => {
+      const text = document.createRange();
+      text.selectNodeContents(el);
+      return Math.max(...[...text.getClientRects()].map((r) => r.right));
+    });
+    expect(right).toBeLessThanOrEqual(360);
+  });
+
   test("a member can leave the consent page for another account without accepting", async ({ page }) => {
     const state = await mockConsole(page);
     state.legal = demoDocuments();

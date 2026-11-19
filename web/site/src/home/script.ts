@@ -1,5 +1,5 @@
 import { reducedMotion } from "@axiom/fx";
-import { type RefCallback, useCallback, useEffect, useRef, useState } from "react";
+import { type KeyboardEvent as KeyPress, type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 // A screen's script, as the board writes each screen below the first (its Component): it keeps the screen's state and
@@ -25,6 +25,45 @@ export function firstSeen(element: Element, threshold: number) {
   });
   return { promise, cancel: () => observer?.disconnect() };
 }
+
+// turns numbers the interactions of one kind (a copy, a tool picked, a question patched to): start returns whether that
+// interaction is still the latest, so what it left in flight (a clipboard's answer, a frame step, a timer) does nothing
+// once another has started, or end has been called for the screen or the setting it ran under.
+export function turns() {
+  let latest = 0;
+  return {
+    start: () => {
+      const own = ++latest;
+      return () => own === latest;
+    },
+    end: () => {
+      latest++;
+    },
+  };
+}
+
+// tabKey moves the choice along a row of tabs from the keyboard (the ARIA tabs pattern): the arrows to the next or the
+// previous, round the row, Home and End to its ends; the chosen tab takes the focus, as the row has one stop, the chosen.
+export function tabKey(count: number, current: () => number, choose: (i: number) => void) {
+  return (e: KeyPress<Element>) => {
+    const now = current();
+    const to = {
+      ArrowRight: now + 1,
+      ArrowDown: now + 1,
+      ArrowLeft: now - 1,
+      ArrowUp: now - 1,
+      Home: 0,
+      End: count - 1,
+    }[e.key];
+    if (to === undefined) return;
+    e.preventDefault();
+    const i = (to + count) % count;
+    choose(i);
+    e.currentTarget.querySelectorAll<HTMLElement>('[role="tab"]')[i]?.focus();
+  };
+}
+// the roving stop: only the chosen tab is in the keyboard's order
+export const tabStop = (i: number, chosen: number) => (i === chosen ? 0 : -1);
 
 // The palette the board's script gives each screen (themeOf's vars), as the tokens it stands for; extra are the
 // screen's own state colours.

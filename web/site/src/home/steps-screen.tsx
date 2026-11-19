@@ -6,9 +6,9 @@ import narrowEn from "@axiom/boards/SitePhone/regions/Steps.en";
 import narrowZh from "@axiom/boards/SitePhone/regions/Steps.zh";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { useSiteBrand } from "../shell";
 import { links } from "./links";
 import { screenVars, useBoardWords, useScript } from "./script";
+import { useSite } from "./site-context";
 import { start } from "./steps-script";
 
 const vars = screenVars(
@@ -29,7 +29,7 @@ export function StepsScreen({ wide }: { wide: boolean }) {
   const { t } = useTranslation();
   const word = useBoardWords(zh, en, { mac86e0f670: ` ${t("script.steps.sample")}` });
   // the base_url the reader is shown is the site's API address, which arrives after the script starts
-  const api = useSiteBrand()?.api_base_url;
+  const api = useSite().brand?.api_base_url;
   const url = useRef("");
   url.current = api ? `${api.replace(/\/+$/, "")}/v1` : "";
   const { setStage, values, entered } = useScript(

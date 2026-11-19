@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { loop, open, pause, running, setHidden, siteSignIn as signIn } from "./fx-loop.ts";
+import { loop, open, pause, running, setHidden, siteSignIn as signIn } from "./fx-helpers.ts";
 import { knownEmail, knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 

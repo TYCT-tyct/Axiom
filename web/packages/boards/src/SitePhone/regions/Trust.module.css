@@ -138,6 +138,10 @@
 :global(.under .hfm > .board):where(.scope){width:100% !important}
 :global(.under .lede.lens):where(.scope){--lv:var(--veilStrong)}
 :global(.tr.m .under .hfm4 .sec):where(.scope){padding-left:var(--tm);padding-right:var(--tm)}
+:global(.ho[data-tab] .hfm4 .m .card):where(.scope){display:grid;grid-template-columns:minmax(0,1fr) minmax(0,350px);grid-template-rows:1fr auto auto 1fr;column-gap:40px}
+:global(.ho[data-tab] .hfm4 .m .card > .vis):where(.scope){grid-row:1 / -1;grid-column:2}
+:global(.ho[data-tab] .hfm4 .m .card > h3):where(.scope){grid-row:2;grid-column:1;margin-top:0}
+:global(.ho[data-tab] .hfm4 .m .card > p):where(.scope){grid-row:3;grid-column:1}
 @media (min-width:1600px){
 }
 @media (max-height:640px) and (min-width:768px){
@@ -152,4 +156,6 @@
 :global(.under .serif):where(.scope){font-family:'AX Serif','Axiom CJK',serif!important;font-weight:600!important;letter-spacing:-.01em!important}
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
+:global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
+:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
 /* jscpd:ignore-end */

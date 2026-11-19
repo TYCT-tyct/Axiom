@@ -13,6 +13,8 @@ export type OceanEngine = {
   still(): void;
   setLight(light: boolean): void;
   destroy(): void;
+  // the engine's sharks: the whale's ghost joins them, so the fish steer around it
+  world?: { sharks: object[] };
 };
 
 declare global {

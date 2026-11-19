@@ -139,3 +139,11 @@ export async function unwrapEmptyChange(call: Promise<Settled<unknown>>) {
 export function isTransient(error: unknown) {
   return error instanceof ApiError && (error.status === 0 || error.status >= 500);
 }
+
+export type Registration = Schemas["Site"]["registration"];
+
+// registrationOf is how the site takes new users, as its register page offers it: open registration verifies the
+// address by mail, so a node that does not say it does (the previous release) takes nobody new on its own, as a closed
+// site does.
+export const registrationOf = (site: Pick<Schemas["Site"], "registration" | "email_verification">): Registration =>
+  site.registration === "open" && !site.email_verification ? "closed" : site.registration;

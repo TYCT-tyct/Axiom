@@ -17,11 +17,12 @@ check: docs check-static test secrets web
 # build and reports what to record (see the quality-ratchet recipe).
 check-static mode="pr": modules adapters-removable artifacts scope api doc-names doc-size tidy generated (quality-ratchet mode) lint deadcode vuln
 
-# Regenerate code from its contracts (api/*.yaml) and its queries (sqlc.yaml)
+# Regenerate code from its contracts (api/*.yaml), its queries (sqlc.yaml) and the design assets the site cuts (site-assets)
 generate: web-install
     go generate ./...
     {{ tool }} sqlc generate
     {{ web }} --filter @axiom/api generate
+    {{ web }} site-assets
 
 generate_command := quote(just_executable()) + " --justfile " + quote(justfile()) + " generate"
 

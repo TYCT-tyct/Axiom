@@ -5,7 +5,7 @@ import styles from "./brand.module.css";
 
 // The site's logo and name where the board draws Axiom's (docs/frontend.md「主题与自由度」): the board's mark when the
 // site has no logo or its logo fails to load, as Logo does in the console. Without a name (the island) only the mark.
-function Brand({ logoUrl, name }: { logoUrl?: string; name?: string }) {
+export function Brand({ logoUrl, name }: { logoUrl?: string; name?: string }) {
   // The URL that failed, not a boolean: a new logo at a new URL is tried, not hidden behind the old failure.
   const [failed, setFailed] = useState<string | null>(null);
   return (
@@ -15,7 +15,7 @@ function Brand({ logoUrl, name }: { logoUrl?: string; name?: string }) {
       ) : (
         <Mark t={() => ""} />
       )}
-      {name !== undefined && <span>{name}</span>}
+      {name !== undefined && <span className={styles.name}>{name}</span>}
     </>
   );
 }

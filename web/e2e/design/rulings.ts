@@ -49,6 +49,21 @@ const shell: Ruling[] = [
   ...frame,
 ].map((ruling) => inScene("console shell", ruling));
 
+// The frame the home page's screens below the first are seen in: the page's header has given way to the island, which the
+// board, its engines off, does not do, the sea is the page's own, and the buttons' Chinese is drawn at 400 (§5.4).
+const screenFrame: Omit<Ruling, "scene">[] = [
+  {
+    basis: "the header gives way to the island on the page once scrolled; the board's engines are off",
+    ...both(".bar, .isl"),
+  },
+  { basis: "§8.2: engines are off on the board; the sea is tested by fx.spec.ts", page: { canvas: "canvas.sea" } },
+  {
+    basis: "the tour button is the board's script's, which the harness leaves out; fx.spec.ts tests the tour",
+    ...both(".tour"),
+  },
+  { basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl", ...both(".ho .btn") },
+];
+const siteScreens = ["site connect", "site faq", "site bed"];
 const accountShell = (scene: string): Ruling[] =>
   [
     { basis: "O1: no team spaces", board: { selector: spaceSwitch } },
@@ -99,6 +114,7 @@ const signInRulings: Ruling[] = [
 export const rulings: Ruling[] = [
   ...shell,
   ...signInRulings,
+  ...siteScreens.flatMap((scene) => screenFrame.map((ruling) => inScene(scene, ruling))),
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   ...presetScenes.map((scene) =>
     inScene(scene, {
@@ -356,15 +372,99 @@ export const rulings: Ruling[] = [
     board: { selector: ".ho .btn" },
     page: { selector: ".ho .btn" },
   },
-  // Links and controls with nowhere to go yet are left out until their pages come: the docs page (S4) and the tour,
-  // which goes through every screen below the first and waits for the last of them (S2c). The rows they sat in close up.
+  // Links and controls with nowhere to go yet are left out until their pages come: the docs page. The rows they sat in
+  // close up.
   {
     scene: "site home",
-    basis: "S4: no docs page yet",
+    basis: "文档页尚无，#816",
     board: { selector: ".bar .nav.mid, .hs > .main .cta" },
     page: { selector: ".bar .nav.mid, .hs > main .cta" },
   },
-  { scene: "site home", basis: "S2c: the tour waits for every screen below the first", board: { selector: ".tour" } },
+  // The connect screen (S2c): the docs link is not there (#816), the address in each tool's configuration is the site's,
+  // and the machine is drawn by the page from its own SVG and moves on its own (fx.spec.ts).
+  {
+    scene: "site connect",
+    basis: "文档页尚无，#816",
+    board: { selector: ".hfm1 .intro .more" },
+  },
+  {
+    scene: "site connect",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm1 .adr"),
+  },
+  {
+    scene: "site connect",
+    basis: "the call the card names is the one the script is on at that moment (fx-screens.spec.ts reads it)",
+    ...both(".hfm1 .rcard .rc-m, .hfm1 .rcard .rc-p"),
+  },
+  {
+    scene: "site connect",
+    basis:
+      "§8.2: the board's machine is drawn by its script; the page's by the fetched figure, both moving on their own",
+    ...both(".hfm1 .fig, .hfm1 .wire > *"),
+  },
+  // The questions (S2b): the board's docs and ticket links, and its ninth question about invoices and contracts, which
+  // the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
+  {
+    scene: "site faq",
+    basis: "#816: no docs page, and the product has no tickets",
+    board: { selector: ".hfm5 .hd .links" },
+  },
+  {
+    scene: "site faq",
+    basis: "docs/frontend.md「不做」: invoices, contracts and bank transfer are not in the product",
+    board: { selector: ".hfm5 .qs > .q:nth-child(10), .hfm5 .qs > .fq:nth-child(9)" },
+  },
+  {
+    scene: "site faq",
+    basis:
+      "docs/product.md「售卖形式」: the site shows no source labels, has no official-only switch and no price-change time",
+    board: { selector: ".hfm5 .w1 .rt .tag, .hfm5 .w1 .rth > span:nth-child(2), .hfm5 .w1 .wf, .hfm5 .w5 .wf" },
+  },
+  {
+    scene: "site faq",
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    ...both(".hfm5 .qq"),
+  },
+  {
+    scene: "site faq",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm5 .w2 .ac"),
+  },
+  // The sea bed and the page's footer (S2b): what the site has no page for is left out (#816), with the board's demo ICP
+  // numbers; the legal line carries the credit for the Chinese font (docs/frontend.md「字体」); the address is the site's.
+  {
+    scene: "site bed",
+    basis: "#816: no docs page",
+    board: { selector: ".hfm6 .cta .btn.outline" },
+  },
+  {
+    scene: "site bed",
+    basis: "#816: no docs, API reference, changelog, status, tickets, contact, terms or privacy pages",
+    board: { selector: ".hfm6 .fcols nav.fc:nth-of-type(n + 2), .hfm6 .fc > a:nth-of-type(3)" },
+  },
+  {
+    scene: "site bed",
+    basis: "the legal line is the site's credit for MiSans; the board's demo ICP numbers are not the site's",
+    ...both(".hfm6 .legal"),
+  },
+  {
+    scene: "site bed",
+    basis:
+      "docs/frontend.md「对比度令牌」: the chosen language and appearance carry a 3:1 control edge, where the board's hairline is 1.3:1",
+    ...both(".hfm6 .seg .sg.on"),
+  },
+  {
+    scene: "site bed",
+    basis: "the address is the site's own API address, not the board's example",
+    ...both(".hfm6 .pr2 .pv"),
+  },
+  {
+    scene: "site bed",
+    basis: "§8.2: engines are off on the board; the dune is drawn by script and tested by fx.spec.ts",
+    board: { canvas: "canvas.art" },
+    page: { canvas: "canvas.art" },
+  },
   {
     scene: "site models",
     basis: "S4: compare the public title and lede with the board typography, without the demo sea or figures",
