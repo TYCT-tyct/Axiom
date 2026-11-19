@@ -283,7 +283,8 @@ func TestTwoStepVerification(t *testing.T) {
 }
 
 // TestCodesRunOutAndRenew: wrong codes count until a pending session has none left, after which even a right code is
-// refused; new recovery codes end the old ones.
+// refused as the end of the sign-in, not as a wrong code: the page offers to sign in again rather than another try. New
+// recovery codes end the old ones.
 func TestCodesRunOutAndRenew(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -294,8 +295,8 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 			t.Errorf("a wrong code: %v", err)
 		}
 	}
-	if _, err := x.verify(t, console, tries, codes[1]); !errors.Is(err, accounts.ErrBadCode) {
-		t.Errorf("a right code after five wrong ones: %v", err)
+	if _, err := x.verify(t, console, tries, codes[1]); !errors.Is(err, accounts.ErrMFAExhausted) || errors.Is(err, accounts.ErrBadCode) {
+		t.Errorf("a right code after five wrong ones: %v, want %v", err, accounts.ErrMFAExhausted)
 	}
 	x.clock.Advance(30 * time.Second)
 	p, err := x.principal(t, console, mfa)

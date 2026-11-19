@@ -1239,7 +1239,7 @@ export interface paths {
         put?: never;
         /**
          * Pass two-step verification
-         * @description Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending session, 10 an hour per user), and a recovery code works once. Two requests with codes for the same challenge give one session.
+         * @description Takes the pending session of `signIn` and a TOTP or recovery code. A right code ends the pending session and issues a new `mfa` session (new cookie, new CSRF token); a wrong one only counts an attempt (5 per pending session, 10 an hour per user), and a recovery code works once. Once a pending session's attempts are used up, even a right code is a 401 `unauthenticated`: the person signs in again. Two requests with codes for the same challenge give one session.
          *
          *     Limits: the per-IP bucket of `signIn`.
          */
