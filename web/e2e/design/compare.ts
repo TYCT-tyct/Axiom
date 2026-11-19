@@ -3,7 +3,7 @@ import { dirname, join } from "node:path";
 import { expect, type Locator, type Page, type TestInfo } from "@playwright/test";
 import { blankCanvases } from "./canvas.ts";
 import { pauseFrames, resumeFrames } from "./frames.ts";
-import type { Region, Ruling } from "./rulings.ts";
+import type { Ruling } from "./rulings.ts";
 import { freeze, repaint } from "./stage.ts";
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -27,17 +27,24 @@ export type Comparison = {
   error?: string;
 };
 
-async function rects(page: Page, region: Region | undefined, basis: string, side: string): Promise<Rect[]> {
+// rects are a region's boxes on one side. A ruling of glyphs covers only the extent of the text in each element, not
+// the element's padding, fill or border, which still compare.
+async function rects(page: Page, ruling: Ruling, side: "board" | "page"): Promise<Rect[]> {
+  const region = ruling[side];
   if (!region || "canvas" in region) return [];
   if (!("selector" in region)) return [region];
-  const boxes = await page.locator(region.selector).evaluateAll((elements) =>
-    elements.map((element) => {
-      const { x, y, width, height } = element.getBoundingClientRect();
-      return { x, y, width, height };
-    }),
+  const boxes = await page.locator(region.selector).evaluateAll(
+    (elements, text) =>
+      elements.map((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const { x, y, width, height } = (text ? range : element).getBoundingClientRect();
+        return { x, y, width, height };
+      }),
+    ruling.glyphs === true,
   );
   if (!boxes.length) {
-    throw new Error(`ruling "${basis}": ${region.selector} matches nothing on the ${side}`);
+    throw new Error(`ruling "${ruling.basis}": ${region.selector} matches nothing on the ${side}`);
   }
   return boxes;
 }
@@ -145,10 +152,7 @@ export async function compare(board: Page, page: Page, scene: Ruling[], key: str
   const blanks: Rect[] = [];
   const misplaced: string[] = [];
   for (const ruling of scene) {
-    const sides = [
-      await rects(board, ruling.board, ruling.basis, "board"),
-      await rects(page, ruling.page, ruling.basis, "page"),
-    ] as const;
+    const sides = [await rects(board, ruling, "board"), await rects(page, ruling, "page")] as const;
     blanks.push(...sides[0], ...sides[1]);
     const away = ruling.glyphs && moved(ruling, ...sides);
     if (away) misplaced.push(away);

@@ -5,7 +5,7 @@
 // on their own side. Nothing else is excused beyond anti-aliasing (compare.ts). A selector that matches nothing fails
 // the comparison, so a ruling cannot outlive the region it was written for.
 // A canvas region replaces only its bitmap, before compositing. Text and translucent layers above it remain tested.
-export type Region =
+type Region =
   | { selector: string }
   | { canvas: string }
   | { x: number; y: number; width: number; height: number };
@@ -74,8 +74,8 @@ const accountShell = (scene: string): Ruling[] =>
 const signIn = (ruling: Omit<Ruling, "scene">): Ruling => ({ scene: "console sign-in", ...ruling });
 const signInRulings: Ruling[] = [
   // The sign-in pages draw their Chinese in the faces the board names, cut from their messages and the board's region
-  // text: the title and the label match the board's. Only glyphs are excused, each in its own inline box, so a line or
-  // a control that moves, or a button that loses its fill or border, still fails.
+  // text: the title and the label match the board's. Only glyphs are excused, each where its text is drawn, so a line or
+  // a control that moves, or a button or link that loses its fill or border, still fails.
   signIn({
     basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
     ...both(".lg-btn > span, .lg-top a"),
@@ -97,57 +97,11 @@ const signInRulings: Ruling[] = [
     page: { canvas: ".lg-sea > canvas:not(.sea)" },
   }),
 ];
-// The steps the product needs that the board does not draw are composed of its parts and shot, not compared; the parts
-// of the board's flow the product does not have are left out (§9). Neither has a board screen to compare with, so these
-// name the console's scenes and the board's own steps.
-const composed = "product.md 要求、画板未画：用画板部件组合（#747）";
-const loginRulings: Ruling[] = [
-  ...["console sign-in-password", "console mfa", "console consent"].map((scene) => ({
-    scene,
-    basis: composed,
-    page: { selector: ".lg-step" },
-  })),
-  {
-    scene: "Login 邮箱",
-    basis: "§9 not ported: the copy that a first sign-in creates the account; product.md: invite or open registration",
-    board: { selector: ".lg-title, .lg-sub" },
-  },
-  {
-    scene: "Login 邮箱",
-    basis: "product.md: the terms are accepted at registration and on the consent page, not at sign-in",
-    board: { selector: ".lg-consent" },
-  },
-  {
-    scene: "Login 邮箱",
-    basis: `${composed}: the way to the registration page, in the board's note`,
-    board: { selector: ".lg-note" },
-  },
-  {
-    scene: "Login 验证码",
-    basis: `${composed}: the authenticator's code and the recovery code share one field until the converter types the digit cells' maxlength and inputmode`,
-    board: { selector: ".lg-digits, .lg-row" },
-  },
-  { scene: "Login 验证码", basis: "§9 not ported: the 000000 demo code", board: { selector: ".lg-digits" } },
-  { scene: "Login 微信扫码", basis: "§9 not ported: WeChat sign-in (product: later)", board: { selector: ".lg-qr" } },
-  {
-    scene: "Login 邮箱 加手机号",
-    basis: "§9 not ported: phone sign-in (product: later)",
-    board: { selector: ".lg-seg, .lg-phone" },
-  },
-  {
-    scene: "Login 第一把 key",
-    basis:
-      "§9 not ported: the first key and the tools' setup on the sign-in page; the Keys page makes a new user's first key",
-    board: { selector: ".lg-key, .lg-code, .lg-seg.tools" },
-  },
-];
-
 // C7 (L1, L23) composes existing board regions; AxApp contains no models, announcements or legal screen to compare.
 // #816 G4 defers endpoint speed, quality score and source, so these fields appear in neither model list nor detail.
 export const rulings: Ruling[] = [
   ...shell,
   ...signInRulings,
-  ...loginRulings,
   ...pageScenes.flatMap((scene) => frame.map((ruling) => inScene(scene, ruling))),
   ...presetScenes.map((scene) =>
     inScene(scene, {
