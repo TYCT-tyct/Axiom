@@ -115,7 +115,18 @@ const faq = (board: string): Region => {
       apiV1: ".hfm5 .w2 .cl:nth-child(3) > .ac",
       billing: ".hfm5 .w7 .kv:last-child > .t1",
     },
-    elements: entrance("hfm5", "m5_in"),
+    elements: {
+      ...entrance("hfm5", "m5_in"),
+      // in the accordion a closed answer is clipped, not gone: the expanded state takes it out of what is read too
+      ...(wide
+        ? {}
+        : Object.fromEntries(
+            range(questions).map((i) => [
+              `.hfm5 .qs > .fq:nth-child(${i + 1}) > .fqa`,
+              { set: { "aria-hidden": `{{m5_h${i}}}` } },
+            ]),
+          )),
+    },
     classes: faqClasses,
     states: runTime,
     english: faqEnglish,

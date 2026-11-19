@@ -274,11 +274,16 @@ test("on a phone the questions are an accordion: a second press closes the open 
   await open(page);
   await scrollTo(page, 5);
   await shown(page, 5);
+  // a closed answer is clipped to nothing on screen, and out of what is read by the same state
+  const answer = (i: number) => page.locator(".hfm5 .fq").nth(i).locator(".fqa");
   await page.locator(".hfm5 .fq .q").nth(1).click();
   await expect(page.locator(".hfm5 .fq.on")).toHaveCount(1);
   await expect(page.locator(".hfm5 .fq.on .q")).toContainText("02");
+  await expect(answer(1)).toHaveAttribute("aria-hidden", "false");
+  await expect(answer(0)).toHaveAttribute("aria-hidden", "true");
   await page.locator(".hfm5 .fq .q").nth(1).click();
   await expect(page.locator(".hfm5 .fq.on")).toHaveCount(0);
+  await expect(answer(1)).toHaveAttribute("aria-hidden", "true");
 });
 
 // The sea bed (§8.2's Bed row) is the page's footer: the credit for the Chinese font stays, what the site has no page for

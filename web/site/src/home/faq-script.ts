@@ -104,6 +104,8 @@ class FaqRun implements Script<object> {
       ...Object.fromEntries(indices.map((i) => [`m5_t${i}`, this.pick[i]])),
       ...Object.fromEntries(indices.map((i) => [`m5_o${i}`, open === i ? "on" : ""])),
       ...Object.fromEntries(indices.map((i) => [`m5_x${i}`, open === i])),
+      // a closed answer of the accordion is out of what is read, by the same state as the button's aria-expanded
+      ...Object.fromEntries(indices.map((i) => [`m5_h${i}`, open !== i])),
       ...Object.fromEntries(Array.from({ length: vendors }, (_, i) => [`m5_v${i}`, this.vendor === i ? "on" : ""])),
       m5_pillY: Math.max(0, open) * ROW,
       m5_trD: trace(this.cy),
