@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { usualState } from "./console-data.ts";
@@ -119,4 +119,48 @@ test("the closed menu is out of the keyboard's way, and the focus goes in and co
   await page.locator(".sml[data-sec='5']").click();
   await expect(sheet).toHaveJSProperty("inert", true);
   await expect(place(page, 5)).toBeFocused();
+});
+
+const longApi = "https://api.a-rather-long-subdomain.example-relay-provider.com";
+for (const width of [360, 1440])
+  test(`the questions' picture of the tools shows a long address whole, at ${width}`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.setViewportSize({ width, height: 900 });
+    await mockConsole(page, "usual", { site: { ...site, api_base_url: longApi } });
+    await page.goto(apps[0].url);
+    await pageHeading(page);
+    await scrollTo(page, 5);
+    await shown(page, 5);
+    if (width < 700) await page.locator(".hfm5 .fq .q").nth(2).click();
+    else await page.locator(".hfm5 .qs .q").nth(2).hover();
+    const window = page.locator(".hfm5 .w2").filter({ visible: true }).first();
+    const frame = await window.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left, right: r.right };
+    });
+    for (const address of await window.locator(".ac").all()) {
+      const lines = await address.evaluate((el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return [...range.getClientRects()].map((r) => ({ left: r.left, right: r.right }));
+      });
+      for (const line of lines) {
+        expect(line.left).toBeGreaterThanOrEqual(frame.left - 0.5);
+        expect(line.right).toBeLessThanOrEqual(frame.right + 0.5);
+      }
+    }
+    await expect(window).toContainText(longApi.slice(-12));
+  });
+
+test("the first picture's request goes through the site, named as the site", async ({ page }: { page: Page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", { site: { ...site, name: "Acme Relay" } });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  const fan = page.locator(".hfm5 .w0 .fan");
+  await expect(fan).not.toContainText("Axiom");
+  await expect(fan).toContainText("Acme Rel…");
 });

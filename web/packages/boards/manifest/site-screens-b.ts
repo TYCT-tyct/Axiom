@@ -116,6 +116,8 @@ const faq = (board: string): Region => {
       signUp: ".hfm5 .w7 .kv:first-child > .t1",
       // what the tools' picture shows: the two addresses, not the whole configuration
       envNote: ".hfm5 .w2 .cl:first-child > .cm",
+      // the service the first picture's request goes through is the site
+      fanName: ".hfm5 .w0 .fan .ax + .ft",
     },
     elements: {
       ...entrance("hfm5", "m5_in"),

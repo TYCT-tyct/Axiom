@@ -1,0 +1,12 @@
+/* The tools' picture shows the site's own address, of any length, whole: a line wraps, the address onto its own line
+   and breaking anywhere in it, rather than be cut by the window. The board's elements are named by attribute, which a
+   module leaves as written, and each rule outranks the board's it amends. */
+.faq div[class~="w2"] div[class~="cl"] {
+  flex-wrap: wrap;
+  white-space: normal;
+}
+
+.faq div[class~="w2"] span[class~="ac"] {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

@@ -6,6 +6,7 @@ import narrowEn from "@axiom/boards/SitePhone/regions/Faq.en";
 import narrowZh from "@axiom/boards/SitePhone/regions/Faq.zh";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
+import styles from "./faq-screen.module.css";
 import { resting, start } from "./faq-script";
 import { useScheme } from "./scheme";
 import { screenVars, useBoardWords, useScript } from "./script";
@@ -24,6 +25,23 @@ const zh = { ...wideZh, ...narrowZh };
 const en = { ...wideEn, ...narrowEn };
 // The answers whose picture shows prices, bills or keys: the figures there are the board's illustration.
 const illustrated = [0, 1, 3, 4, 5, 6];
+
+// The site's name in the first picture's box, which holds about nine Latin letters, a CJK character counting as two: a
+// longer name keeps its start, enough to know it by, and ends in an ellipsis.
+const room = 9;
+const width = (ch: string) => (/[\u2e80-\uffff]/u.test(ch) ? 2 : 1);
+function fitted(name: string) {
+  const chars = [...name];
+  if (chars.reduce((sum, ch) => sum + width(ch), 0) <= room) return name;
+  let used = 1;
+  let kept = "";
+  for (const ch of chars) {
+    used += width(ch);
+    if (used > room) break;
+    kept += ch;
+  }
+  return `${kept.trimEnd()}…`;
+}
 
 // The questions people ask first (Site.dc.html M5), each with its small picture: the answers are the page's (script.faq),
 // true for this site's settings, and the addresses in the picture of the tools' settings are the site's.
@@ -66,23 +84,26 @@ export function FaqScreen({ wide }: { wide: boolean }) {
     billing: t("script.faq.billing"),
     signUp: t(`script.faq.signUp.${join}`),
     envNote: known ? t("script.faq.envNote") : t("script.noApi"),
+    fanName: fitted(name),
   };
   const Region = wide ? Wide : Narrow;
   return (
-    <Region
-      t={word}
-      values={
-        {
-          ...resting,
-          ...values,
-          m5_vars: vars(scheme),
-          // without an address the tools' picture shows no command, only that it is unavailable
-          m5_noApi: !known,
-          m5_setStage: setStage,
-          m5_in: entered ? "in" : "",
-        } as Props["values"]
-      }
-      text={text}
-    />
+    <div className={styles.faq}>
+      <Region
+        t={word}
+        values={
+          {
+            ...resting,
+            ...values,
+            m5_vars: vars(scheme),
+            // without an address the tools' picture shows no command, only that it is unavailable
+            m5_noApi: !known,
+            m5_setStage: setStage,
+            m5_in: entered ? "in" : "",
+          } as Props["values"]
+        }
+        text={text}
+      />
+    </div>
   );
 }

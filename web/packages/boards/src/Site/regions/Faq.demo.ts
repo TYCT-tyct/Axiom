@@ -14,5 +14,6 @@ apiRoot: "https://api.axiom.example",
 apiV1: "https://api.axiom.example/v1",
 billing: t("m2fe69c47c2"),
 signUp: t("m649a0fc723"),
-envNote: t("m157a297814")},  });
+envNote: t("m157a297814"),
+fanName: "Axiom"},  });
 /* jscpd:ignore-end */
