@@ -2,7 +2,6 @@ import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { consoleAuth } from "@axiom/api/auth";
 import { useErrors, useSignInEnded, useStartSession } from "@axiom/app";
 import LoginButton from "@axiom/boards/Login/regions/LoginButton";
-import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginOr from "@axiom/boards/Login/regions/LoginOr";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
@@ -15,6 +14,7 @@ import { siteQuery } from "../queries";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
 import {
+  EmailField,
   FormProblem,
   fieldRefused,
   hearAddress,
@@ -197,40 +197,30 @@ function useSignInAttempt() {
   };
   return { attempt, returned };
 }
-// The first step: the address, and the ways in that need none (providers, passkeys), and the way to register.
+// The first step: the address, and the ways in that need none (providers, passkeys), and the way to register, keeping
+// where the visitor was going.
 function EmailStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation();
+  const next = useSearch({ strict: false }).next;
   const { email, problem, attempt } = flow;
   const busy = attempt.kind !== null || !flow.ready;
   return (
     <>
-      <LoginEmail
-        t={String}
-        text={{ label: t("auth.email", { ns: "common" }) }}
-        values={{
-          id: "sign-in-email",
-          name: "email",
-          type: "email",
-          autoComplete: "username",
-          placeholder: "name@company.com",
-          value: email,
-          fieldCls: problem ? "bad" : "",
-          describedBy: problem ? "sign-in-problem" : "",
-          invalid: problem ? true : undefined,
-          input: (element) => {
-            flow.emailInput.current = element as HTMLInputElement | null;
-          },
-          onInput: (event) => flow.typeEmail((event.currentTarget as HTMLInputElement).value),
-        }}
+      <EmailField
+        id="sign-in-email"
+        problemId="sign-in-problem"
+        email={email}
+        input={flow.emailInput}
+        problem={problem}
+        onInput={flow.typeEmail}
       />
-      <FormProblem id="sign-in-problem" message={problem} />
       <LoginPrimary
         t={String}
         label={<span>{t("auth.signIn.next")}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
       <Methods attempt={attempt} returned={flow.returned} ready={flow.ready} />
-      <Register />
+      <RouteNote to="/register" lead={t("auth.signIn.noAccount")} label={t("auth.signIn.register")} next={next} />
     </>
   );
 }
@@ -358,11 +348,4 @@ async function startOAuth(provider: Schemas["OAuthProvider"], next: string | und
   );
   window.location.assign(authorize_url);
   await new Promise<never>(() => {});
-}
-
-// Register offers the registration page, keeping where the visitor was going.
-function Register() {
-  const { t } = useTranslation();
-  const next = useSearch({ strict: false }).next;
-  return <RouteNote to="/register" lead={t("auth.signIn.noAccount")} label={t("auth.signIn.register")} next={next} />;
 }

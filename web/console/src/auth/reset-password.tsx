@@ -1,6 +1,5 @@
 import { ApiError, consoleApi, unwrapEmpty } from "@axiom/api";
 import { useCachedSession, useErrors, useReadSession } from "@axiom/app";
-import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginPrimary from "@axiom/boards/Login/regions/LoginPrimary";
 import { useSearch } from "@tanstack/react-router";
@@ -9,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { type Attempt, useAttempt } from "./attempt";
 import { LoginFrame, type Stage, useStage } from "./login-frame";
 import {
+  EmailField,
   FormProblem,
   fieldRefused,
   hearAddress,
@@ -35,8 +35,6 @@ export default function ResetPassword() {
   );
 }
 
-const useNext = () => useSearch({ strict: false }).next;
-
 // The language the mail is written in: the page's.
 function useMailLanguage() {
   const { i18n } = useTranslation();
@@ -56,6 +54,12 @@ function useCooldown(error: unknown) {
   return { waiting: limit !== null && over !== limit, over: limit !== null && over === limit };
 }
 
+// An address the server does not take: the contract's guard names the field (400), and the server's own check answers
+// 422 unprocessable (cmd/axiom/console_errors.go, ErrBadEmail), the endpoint's only one.
+const badEmail = (error: unknown) =>
+  fieldRefused(error, "/email") ||
+  (error instanceof ApiError && error.status === 422 && error.code === "unprocessable");
+
 // The email step, and once its request is accepted, the step that says to check the mail. The server answers every
 // address alike, so the page cannot say more than that.
 function RequestReset() {
@@ -64,7 +68,7 @@ function RequestReset() {
   const stage = useStage();
   const attempt = useAttempt();
   const language = useMailLanguage();
-  const next = useNext();
+  const next = useSearch({ strict: false }).next;
   const input = useRef<HTMLInputElement | null>(null);
   const [email, setEmail] = useState("");
   const [missing, setMissing] = useState(false);
@@ -73,7 +77,7 @@ function RequestReset() {
   const cooling = useCooldown(failed);
   const blocked = attempt.kind !== null || cooling.waiting;
   if (sent) return <Sent attempt={attempt} stage={stage} next={next} onAgain={() => setSent(false)} />;
-  const refused = fieldRefused(failed, "/email");
+  const refused = badEmail(failed);
   const failure = refused ? t("auth.signIn.badEmail") : failed && !cooling.over ? errors.message(failed) : "";
   const send = (address: string) => () =>
     unwrapEmpty(consoleApi.POST("/api/console/v1/auth/password-reset", { body: { email: address, language } })).then(
@@ -97,7 +101,9 @@ function RequestReset() {
         if (address && !blocked) attempt.run("request", send(address), { onFail: () => stage.hear({ type: "bad" }) });
       }}
     >
-      <ResetEmail
+      <EmailField
+        id="reset-email"
+        problemId="reset-problem"
         email={email}
         input={input}
         problem={missing ? t("auth.signIn.missingEmail") : failure}
@@ -115,44 +121,6 @@ function RequestReset() {
       />
       <RouteNote to="/sign-in" label={t("auth.reset.back")} next={next} />
     </LoginFrame>
-  );
-}
-
-function ResetEmail({
-  email,
-  input,
-  problem,
-  onInput,
-}: {
-  email: string;
-  input: RefObject<HTMLInputElement | null>;
-  problem: string;
-  onInput: (value: string) => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <>
-      <LoginEmail
-        t={String}
-        text={{ label: t("auth.email", { ns: "common" }) }}
-        values={{
-          id: "reset-email",
-          name: "email",
-          type: "email",
-          autoComplete: "username",
-          placeholder: "name@company.com",
-          value: email,
-          fieldCls: problem ? "bad" : "",
-          describedBy: problem ? "reset-problem" : "",
-          invalid: problem ? true : undefined,
-          input: (element) => {
-            input.current = element as HTMLInputElement | null;
-          },
-          onInput: (event) => onInput((event.currentTarget as HTMLInputElement).value),
-        }}
-      />
-      <FormProblem id="reset-problem" message={problem} />
-    </>
   );
 }
 
@@ -262,7 +230,15 @@ function NewPasswordForm({
         });
       }}
     >
-      <NewPasswordField problem={problem} input={password} onInput={() => setMissing(false)} />
+      <NewPasswordField
+        problem={problem}
+        input={password}
+        onInput={() => {
+          setMissing(false);
+          // the password's refusal is about what was typed; a limit's wait is not, and stays
+          if (badLength(failed)) attempt.dismiss();
+        }}
+      />
       <FormProblem id="reset-problem" message={problem} />
       <LoginPrimary
         t={String}
@@ -366,7 +342,7 @@ function WaysOn({
   attempt: Attempt;
 }) {
   const { t } = useTranslation();
-  const next = useNext();
+  const next = useSearch({ strict: false }).next;
   if (browser.state === "out") return <RouteNote to="/sign-in" label={signIn} next={next} />;
   if (browser.state === "in") return <SignOutNote label={t("auth.reset.signOut")} attempt={attempt} />;
   if (browser.state === "failed") return <NoteAction label={t("auth.reset.check")} onPress={browser.check} />;

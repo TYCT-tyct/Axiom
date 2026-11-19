@@ -1,7 +1,7 @@
 import type { Schemas } from "@axiom/api";
 import { Button, CopyButton, Dialog, FormError, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { createContext, type ReactNode, use, useCallback, useEffect, useState } from "react";
+import { createContext, type ReactNode, use, useCallback, useEffect, useLayoutEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useErrors } from "./errors";
 import { readForm } from "./forms";
@@ -44,27 +44,43 @@ function RecoveryCodes({ change, onClose }: { change: Change; onClose: () => voi
 }
 
 const ShowCodes = createContext<((change: Change, identity: string) => void) | null>(null);
+const HideCodes = createContext<((hidden: boolean) => void) | null>(null);
 
 // RecoveryCodesHost shows the recovery codes of a changed factor above everything in it. The codes belong to the person
 // signed in: when the browser passes to another person (another tab signs out and someone else signs in), the dialog
 // closes and the codes leave memory, because this host outlives the pages. The session itself rotating is how these
 // codes were made, so the host follows the person, not the token. The caller names the person it asked for the change
 // as, captured before the request went out: this host must not read the session when the answer lands, because by then
-// another tab may have signed someone else in.
+// another tab may have signed someone else in. While a page holds them hidden (useHideRecoveryCodes), the codes stay
+// here, off screen, and come back when it goes, if the person is still the one who asked.
 export function RecoveryCodesHost({ children }: { children: ReactNode }) {
   const identity = identityOf(useCachedSession());
   const [shown, setShown] = useState<{ change: Change; identity: string } | null>(null);
+  const [hidden, setHidden] = useState(false);
   useEffect(() => {
     setShown((held) => (held && held.identity !== identity ? null : held));
   }, [identity]);
   const show = useCallback((change: Change, asked: string) => setShown({ change, identity: asked }), []);
-  const visible = shown && shown.identity === identity ? shown.change : null;
+  const visible = !hidden && shown && shown.identity === identity ? shown.change : null;
   return (
     <ShowCodes value={show}>
-      {children}
+      <HideCodes value={setHidden}>{children}</HideCodes>
       {visible ? <RecoveryCodes change={visible} onClose={() => setShown(null)} /> : null}
     </ShowCodes>
   );
+}
+
+// useHideRecoveryCodes keeps the codes off screen while hidden holds: a page that may be open to another person than the
+// one signed in (the console's reset page) holds them. A layout effect, so they are gone before that page is painted.
+export function useHideRecoveryCodes(hidden: boolean) {
+  const hide = use(HideCodes);
+  if (!hide) {
+    throw new Error("useHideRecoveryCodes is used outside a RecoveryCodesHost");
+  }
+  useLayoutEffect(() => {
+    hide(hidden);
+    return () => hide(false);
+  }, [hide, hidden]);
 }
 
 function useShowCodes() {

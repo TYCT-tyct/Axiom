@@ -1,6 +1,7 @@
 import { ApiError } from "@axiom/api";
 import { Gate, sessionBinding, useCachedSession, useEndPending, useErrors, useSignOut } from "@axiom/app";
 import LoginAction from "@axiom/boards/Login/regions/LoginAction";
+import LoginEmail from "@axiom/boards/Login/regions/LoginEmail";
 import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
@@ -10,6 +11,7 @@ import {
   type ComponentProps,
   type KeyboardEvent,
   type ReactNode,
+  type RefObject,
   useLayoutEffect,
   useMemo,
 } from "react";
@@ -52,6 +54,50 @@ export const hearAddress = (stage: Stage, value: string) =>
 // pointer).
 export const fieldRefused = (error: unknown, pointer: string) =>
   error instanceof ApiError && error.fields.some((field) => field.pointer === pointer);
+
+// EmailField is an email step's address with its error line under it (problemId), which the field points at. input is
+// the field itself, which a password manager may write without a word to the page.
+export function EmailField({
+  id,
+  problemId,
+  email,
+  input,
+  problem,
+  onInput,
+}: {
+  id: string;
+  problemId: string;
+  email: string;
+  input: RefObject<HTMLInputElement | null>;
+  problem: string;
+  onInput: (value: string) => void;
+}) {
+  const { t } = useTranslation("common");
+  return (
+    <>
+      <LoginEmail
+        t={String}
+        text={{ label: t("auth.email") }}
+        values={{
+          id,
+          name: "email",
+          type: "email",
+          autoComplete: "username",
+          placeholder: "name@company.com",
+          value: email,
+          fieldCls: problem ? "bad" : "",
+          describedBy: problem ? problemId : "",
+          invalid: problem ? true : undefined,
+          input: (element) => {
+            input.current = element as HTMLInputElement | null;
+          },
+          onInput: (event) => onInput((event.currentTarget as HTMLInputElement).value),
+        }}
+      />
+      <FormProblem id={problemId} message={problem} />
+    </>
+  );
+}
 
 // FormProblem is a step's error line, announced as it appears; id lets the field it is about point at it.
 export function FormProblem({ id, message }: { id?: string; message: ReactNode }) {

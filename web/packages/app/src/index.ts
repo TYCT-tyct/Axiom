@@ -40,5 +40,11 @@ export {
   useSignOut,
   useStartSession,
 } from "./session";
-export { RecoveryDialog, TotpSetupDialog, useBeginTotp, useShowRecoveryCodes } from "./totp-dialogs";
+export {
+  RecoveryDialog,
+  TotpSetupDialog,
+  useBeginTotp,
+  useHideRecoveryCodes,
+  useShowRecoveryCodes,
+} from "./totp-dialogs";
 export { NewVersionNotice } from "./version";
