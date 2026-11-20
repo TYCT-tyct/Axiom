@@ -27,12 +27,12 @@
   width: var(--w);
 }
 
-.end {
+.table .end {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
-.shrink {
+.table .shrink {
   width: 0;
   white-space: nowrap;
 }
