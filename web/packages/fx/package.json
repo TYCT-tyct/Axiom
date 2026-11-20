@@ -8,7 +8,8 @@
     "./prefs": "./src/prefs.ts",
     "./depart": "./src/depart.ts",
     "./login": "./src/login.ts",
-    "./whale": "./src/whale.ts"
+    "./whale": "./src/whale.ts",
+    "./eggs": "./src/eggs.ts"
   },
   "scripts": {
     "typecheck": "tsc"

@@ -1,10 +1,12 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
 import { useEffectModule } from "@axiom/fx";
+import type { Sea } from "@axiom/fx/sea";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDeparture, useFrameBehaviour } from "./behaviour";
 import { BrandPlaces } from "./brand";
+import { Eggs } from "./eggs";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
@@ -99,9 +101,13 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const setCanvas = useCallback((canvas: Element | null) => {
     root.current = canvas?.closest<HTMLElement>(".tr") ?? null;
   }, []);
-  const sea = useEffectModule(root, loadSea, (module, frame) =>
-    module.startSea(frame, frame.querySelector(".hs > main") ?? frame, scheme === "light"),
-  );
+  // the sea, and once it is up the eggs that play on it
+  const [seaUp, setSeaUp] = useState<Sea | null>(null);
+  const sea = useEffectModule(root, loadSea, (module, frame) => {
+    const started = module.startSea(frame, frame.querySelector(".hs > main") ?? frame, scheme === "light");
+    setSeaUp(started);
+    return started;
+  });
   useSwitches(root, sea);
   useDeparture(root, sea);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
@@ -142,12 +148,13 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const Shell = wide ? Wide : Narrow;
   return (
     <>
-      <WhaleContext value={whale}>
+      <WhaleContext value={whale.meet}>
         <Shell t={board} values={values} text={text}>
           {children}
         </Shell>
       </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
+      <Eggs root={root} sea={seaUp} whale={whale.call} />
     </>
   );
 }

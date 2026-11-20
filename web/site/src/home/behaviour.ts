@@ -96,7 +96,8 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
     },
     onScroll: () => {
       const { dim, ...scroll } = scrolled(scroller, offsets);
-      if (depth) depth.style.opacity = dim.toFixed(3);
+      // the eggs' night keeps the sea at least this dark (data-floor, @axiom/fx/eggs)
+      if (depth) depth.style.opacity = Math.max(dim, Number(depth.dataset.floor ?? 0)).toFixed(3);
       show(scroll);
     },
     onScrollEnd: () => {
