@@ -8,7 +8,7 @@ import { Authors } from "../models/authors";
 import { modelStatus, modelStatuses } from "../models/catalog";
 import { DraftDialog } from "../models/draft-dialog";
 import { ModelState } from "../models/parts";
-import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text } from "../parts";
+import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text, useShownAfter } from "../parts";
 import { authorsQuery, type ModelFilters, modelsQuery } from "../queries";
 
 export default function Models() {
@@ -18,6 +18,7 @@ export default function Models() {
   const models = useInfiniteQuery(modelsQuery(filters));
   const rows = models.data?.pages.flatMap((page) => page.data) ?? [];
   const filtered = Object.values(filters).some(Boolean);
+  const listed = useShownAfter(models.isPending);
   return (
     <>
       <PageHead title={t("nav.models")} lede={t("models.description")} />
@@ -42,7 +43,7 @@ export default function Models() {
           </DataState>
           <LoadMore list={models} />
         </Card>
-        <Authors />
+        {listed ? <Authors /> : null}
       </PageBody>
     </>
   );

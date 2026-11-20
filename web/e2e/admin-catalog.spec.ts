@@ -309,6 +309,24 @@ test.describe("pricing", () => {
   });
 });
 
+test("a retry of the rules above keeps what the preview below holds", async ({ page }) => {
+  signedInAs(await mockAdmin(page), "mfa");
+  let down = true;
+  await page.route("**/api/admin/v1/pricing/rules", (route) =>
+    down
+      ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } })
+      : route.fallback(),
+  );
+  await page.goto("/pricing");
+  const account = page.getByLabel(words("pricing.preview.account"));
+  const held = `acct_${"1".repeat(26)}`;
+  await account.fill(held);
+  down = false;
+  await page.getByRole("button", { name: "重试" }).first().click();
+  await expect(page.getByRole("table", { name: words("pricing.rules.title") })).toBeVisible();
+  await expect(account).toHaveValue(held);
+});
+
 test("the admin works in English too: credit is added and the result is read in English", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
   const state = await mockAdmin(page);

@@ -4,12 +4,12 @@ import { ActionButton, Card, DataState, EmptyState, PageHead, Table, Td, Text, u
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Actions, Code, Head, PageBody, State } from "../parts";
+import { Actions, Code, Head, PageBody, State, useShownAfter } from "../parts";
 import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
 import { Publications } from "../pricing/publications";
 import { RuleDialog } from "../pricing/rule-dialog";
-import { rulesQuery } from "../queries";
+import { publicationsQuery, rulesQuery } from "../queries";
 
 type Rule = AdminSchemas["PricingRule"];
 
@@ -19,6 +19,9 @@ const newRule = "new";
 export default function Pricing() {
   const { t } = useTranslation();
   const rules = useQuery(rulesQuery);
+  const publications = useQuery(publicationsQuery);
+  const publicationsShown = useShownAfter(rules.isPending);
+  const previewShown = useShownAfter(rules.isPending || publications.isPending);
   const manage = can(useSession(), "pricing.manage");
   const [editing, setEditing] = useState<string | null>(null);
   const current = rules.data?.data.find((rule) => rule.id === editing);
@@ -42,8 +45,9 @@ export default function Pricing() {
             {(data) => <RulesTable rules={data.data} onEdit={manage ? (rule) => setEditing(rule.id) : undefined} />}
           </DataState>
         </Card>
-        <Publications />
-        <PreviewPanel />
+        {/* Both lists are asked for at once; each section below appears once the ones above it have answered. */}
+        {publicationsShown ? <Publications /> : null}
+        {previewShown ? <PreviewPanel /> : null}
       </PageBody>
       {editing ? <RuleDialog rule={current} onClose={() => setEditing(null)} /> : null}
     </>

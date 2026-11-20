@@ -29,15 +29,18 @@ import { words } from "./words.ts";
 // target is the budget of the document; ceiling is what fails the run. Where the pages do not meet a target yet, the
 // ceiling is the first measurement with room for a slower host (docs/frontend.md「实测」), so the gate stops a page from
 // getting worse while the gap is open; where they meet it, the two are the same.
-// A metric with no ceiling is reported and never fails: CLS moved between 0.05 and 0.8 on the same page between two
-// runs, and the late frames of the scroll between 0.45 (a developer's host) and 0.68 (CI's); INP is a latency that follows the
-// load of the shared host (it went over its ceiling on a busy train). A limit on them would only trip by chance.
+// A metric with no ceiling is reported and never fails: the late frames of the scroll moved between 0.45 (a developer's
+// host) and 0.68 (CI's), and INP is a latency that follows the load of the shared host (it went over its ceiling on a busy
+// train). A limit on them would only trip by chance. CLS does not follow the host: its large and varying values came
+// from pages whose sections each loaded on their own and pushed the ones below them down (admin pricing 0.28-0.30 on a
+// phone, models 0.12 on a desktop), which now appear in order (#747), so it is gated at its target.
 // Baseline observations on the built pages: desktop LCP 0.50-0.83 s, phone 2.24-4.10 s; the phone regression
 // ceiling leaves 1.5x room above that first CI maximum. Local INP ranged 96-920 ms (CI maximum 280 ms).
 // With the scroll origin corrected, calls had 36-38% late frames and 47-49 long tasks locally (68% late on CI);
 // users had 4.1-4.5% late frames and 10 long tasks. These are observations, not alternate budgets.
-// The remaining gaps are not fully diagnosed: phone LCP includes throttled resource round trips, models/statement
-// CLS follows content layout, dialog INP follows rendering, and the long-list tasks still need attribution.
+// The remaining gaps: phone LCP includes throttled resource round trips, and a page asks for its data only once the shell
+// has painted; about half of a dialog's INP is the whole-document style recalculation that showModal starts, whose cost
+// comes from the global stylesheet; the long-list tasks still need attribution.
 type Limit = { target: number; ceiling?: number };
 const budget = {
   lcpDesktop: { target: 1500, ceiling: 1500 },
@@ -46,7 +49,7 @@ const budget = {
   // scaled, with the same 1.5x room for a slower host as the console's.
   lcpSitePhone: { target: 2000, ceiling: 3100 },
   inp: { target: 100 },
-  cls: { target: 0.05 },
+  cls: { target: 0.05, ceiling: 0.05 },
   lateFrames: { target: 0.05 },
   longTasks: { target: 0 },
 } satisfies Record<string, Limit>;

@@ -1,11 +1,12 @@
-import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
-import { accountKey, can, useSession } from "@axiom/app";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
+import { can, useSession } from "@axiom/app";
 import { ActionButton, Card, CheckField, DataState, Mono, Stack, Table, Td, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "../change";
 import { Head, Json } from "../parts";
+import { publicationsQuery } from "../queries";
 import { publicationKey } from "./publication-key";
 
 type Publication = AdminSchemas["PricePublication"];
@@ -53,10 +54,7 @@ export function Publications() {
   const { t } = useTranslation();
   const manage = can(useSession(), "pricing.manage");
   const [editing, setEditing] = useState<string | null>(null);
-  const query = useQuery({
-    queryKey: [accountKey, "price-publications"],
-    queryFn: ({ signal }) => unwrap(adminApi.GET("/api/admin/v1/pricing/publications", { signal })),
-  });
+  const query = useQuery(publicationsQuery);
   const current = query.data?.data?.find((p) => publicationKey(p) === editing);
   return (
     <Card layout="flush" title={t("pricing.publish.title")}>

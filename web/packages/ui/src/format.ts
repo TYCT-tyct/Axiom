@@ -87,15 +87,17 @@ function dateTimes(locale: string, zone: { timeZone: string }, seconds: boolean)
 //
 // Building the Intl formats costs over a millisecond on a fast core, and a page calls useFormat in every row and every
 // time it shows: rebuilt per component, the 50 rows of the admin's calls list took 0.7 s to render after their data
-// arrived, and over 5 s on a starved CI runner. So each language and zone builds them once for the page's lifetime.
+// arrived, and over 5 s on a starved CI runner. So each language builds them once for the page's lifetime, the ones a
+// zone decides once per zone, and each only when it is first used: the first Intl format a page builds also loads the
+// engine's locale and zone data, about 100 ms of a phone's main thread at the budget's 4x CPU, which the console's shell
+// paid in its first render for a balance it showed as a placeholder, before the page could paint (#747).
 const built = new Map<string, ReturnType<typeof build>>();
 
 export function formatters(language: Language, timeZone?: string) {
-  const zone = timeZone ?? viewerZone();
-  const key = `${language} ${zone}`;
+  const key = `${language} ${timeZone ?? ""}`;
   let format = built.get(key);
   if (!format) {
-    format = build(language, zone);
+    format = build(language, timeZone);
     built.set(key, format);
   }
   return format;
@@ -116,44 +118,39 @@ function viewerZone() {
   return viewer;
 }
 
-// A chart's axis and tooltip name a day or an hour, not a full moment, so they carry no zone; a tooltip that needs one
-// uses dateTimeMinute. A change is a signed share: "+12.5%", "-3%", and a bare "0%" when nothing moved.
-function chartFormats(locale: string, zone: { timeZone: string }) {
-  const days = new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", ...zone });
-  const daysFull = new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", ...zone });
-  const hours = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...zone });
-  const shares = new Intl.NumberFormat(locale, {
-    style: "percent",
-    maximumFractionDigits: 1,
-    signDisplay: "exceptZero",
-  });
-  return {
-    percent: (ratio: number) => shares.format(ratio),
-    day: (value: Date) => days.format(value),
-    dayFull: (value: Date) => daysFull.format(value),
-    hour: (value: Date) => hours.format(value),
+// once builds a value the first time it is asked for.
+function once<T>(make: () => T): () => T {
+  let value: T | undefined;
+  return () => {
+    value ??= make();
+    return value;
   };
 }
 
-function build(language: Language, timeZone: string) {
-  const locale = locales[language];
+// The formats a zone decides. A chart's axis and tooltip name a day or an hour, not a full moment, so they carry no zone
+// name; a tooltip that needs one uses dateTimeMinute.
+function zonedFormats(locale: string, timeZone: string) {
   const zone = { timeZone };
-  const integers = new Intl.NumberFormat(locale);
-  // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
-  const decimals = new Intl.NumberFormat(locale, { maximumFractionDigits: 100 });
-  const times = dateTimes(locale, zone, true);
-  // The same moment to the minute, for a list where seconds are noise; the page keeps the exact time in a title.
-  const minutes = dateTimes(locale, zone, false);
   const zones = new Intl.DateTimeFormat(locale, { timeZoneName: "short", ...zone });
-  const months = monthFormats(locale);
+  return {
+    timeZone,
+    days: new Intl.DateTimeFormat(locale, { month: "short", day: "numeric", ...zone }),
+    daysFull: new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric", ...zone }),
+    hours: new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", hourCycle: "h23", ...zone }),
+    times: dateTimes(locale, zone, true),
+    // The same moment to the minute, for a list where seconds are noise; the page keeps the exact time in a title.
+    minutes: dateTimes(locale, zone, false),
+    zoneName: (value: Date) => zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value,
+  };
+}
+
+// The formats of amounts of money, each currency's built on its first amount.
+function moneyFormats(locale: string) {
   const currencies = new Map<string, Intl.NumberFormat>();
   // A payment's minor unit is the currency's, not always two digits (JPY, KWD), and is resolved once per currency.
   const payDigits = new Map<string, number>();
   const payFormats = new Map<string, Intl.NumberFormat>();
   return {
-    number: (value: number | bigint) => integers.format(value),
-    ...chartFormats(locale, zone),
-    decimal: (text: string) => decimals.format(text as `${number}`),
     // A price in the currency a payment method is paid in, in that currency's minor units (cents, fen, or none): the
     // payment contract's PayAmount, not the site's billionths. The fraction digits are the currency's own.
     pay: ({ amount, currency }: Money) => {
@@ -189,15 +186,54 @@ function build(language: Language, timeZone: string) {
       }
       return format.format(decimalOf(amount) as `${number}`);
     },
-    dateTime: (value: Date) =>
-      `${times.format(value)} ${zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value}`,
-    dateTimeMinute: (value: Date) =>
-      `${minutes.format(value)} ${zones.formatToParts(value).find((part) => part.type === "timeZoneName")?.value}`,
+  };
+}
+
+function build(language: Language, timeZone: string | undefined) {
+  const locale = locales[language];
+  const numbers = once(() => ({
+    integers: new Intl.NumberFormat(locale),
+    // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
+    decimals: new Intl.NumberFormat(locale, { maximumFractionDigits: 100 }),
+    // A change is a signed share: "+12.5%", "-3%", and a bare "0%" when nothing moved.
+    shares: new Intl.NumberFormat(locale, { style: "percent", maximumFractionDigits: 1, signDisplay: "exceptZero" }),
+  }));
+  const months = once(() => monthFormats(locale));
+  const zoned = new Map<string, ReturnType<typeof zonedFormats>>();
+  // The formats of the zone a time shows in now: the one given, or the viewer's.
+  const at = () => {
+    const zone = timeZone ?? viewerZone();
+    let formats = zoned.get(zone);
+    if (!formats) {
+      formats = zonedFormats(locale, zone);
+      zoned.set(zone, formats);
+    }
+    return formats;
+  };
+  return {
+    number: (value: number | bigint) => numbers().integers.format(value),
+    percent: (ratio: number) => numbers().shares.format(ratio),
+    day: (value: Date) => at().days.format(value),
+    dayFull: (value: Date) => at().daysFull.format(value),
+    hour: (value: Date) => at().hours.format(value),
+    decimal: (text: string) => numbers().decimals.format(text as `${number}`),
+    ...moneyFormats(locale),
+    dateTime: (value: Date) => {
+      const formats = at();
+      return `${formats.times.format(value)} ${formats.zoneName(value)}`;
+    },
+    dateTimeMinute: (value: Date) => {
+      const formats = at();
+      return `${formats.minutes.format(value)} ${formats.zoneName(value)}`;
+    },
     // The short name of the zone dateTime uses, for a sentence that says which zone the page's times are in.
-    zone: () => zones.formatToParts(new Date()).find((part) => part.type === "timeZoneName")?.value ?? zone.timeZone,
+    zone: () => {
+      const formats = at();
+      return formats.zoneName(new Date()) ?? formats.timeZone;
+    },
     // The month's name alone for a picker's options, and "YYYY-MM" as a month and year for a title.
-    monthName: months.monthName,
-    monthLabel: months.monthLabel,
+    monthName: (month: number) => months().monthName(month),
+    monthLabel: (month: string) => months().monthLabel(month),
   };
 }
 

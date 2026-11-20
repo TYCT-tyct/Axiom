@@ -156,3 +156,14 @@ export function NewButton({
     </>
   );
 }
+
+// Whether a section may appear: once what is above it has first had an answer, and from then on, so a retry or a new
+// filter above it never unmounts the section and loses what it holds. Sections that appeared before the answer came
+// were pushed down the screen when it grew (#747).
+export function useShownAfter(pending: boolean) {
+  const [shown, setShown] = useState(false);
+  if (!shown && !pending) {
+    setShown(true);
+  }
+  return shown;
+}

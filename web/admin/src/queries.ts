@@ -297,6 +297,11 @@ export const rulesQuery = queryOptions({
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/pricing/rules`, { signal })),
 });
 
+export const publicationsQuery = queryOptions({
+  queryKey: [accountKey, "price-publications"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/pricing/publications`, { signal })),
+});
+
 export const siteRegistrationQuery = (siteId: AdminSchemas["SiteId"]) =>
   queryOptions({
     queryKey: [accountKey, "site-registration", siteId],
