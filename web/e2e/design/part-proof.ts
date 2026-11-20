@@ -79,6 +79,7 @@ export async function renderPart(page: Page, original: Locator, region: Region) 
 // Runs in the generated demo's browser entry, where the generated imports and their CSS come from Vite.
 export const partProofScript = `
   window.paintPart = async ({ markup, field, active, sample, styled }) => {
+    await scene.sheet?.();
     const cut = async (part, extra = {}) => {
       const [Region, demo, zh] = await Promise.all([scene[part](), scene[part + "Data"](), scene[part + "ZH"]()]);
       const props = demo(key => zh[key]);

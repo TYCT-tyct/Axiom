@@ -1,4 +1,4 @@
-import { markArrival } from "@axiom/fx";
+import { markArrival, own } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -58,7 +58,55 @@ function applyDepth(depth: HTMLElement | null, dim: number) {
   depth.style.opacity = Math.max(dim, floor).toFixed(3);
 }
 
-function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
+const wheelDelta = (e: WheelEvent, view: number) => e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? view : 1);
+
+// Inertial wheel scrolling on the wide layout (Site.logic.html onWheel / ease): the wheel moves a target and the
+// shared frame loop eases scrollTop toward it, releasing its owner once settled or interrupted.
+function wheelScroller(scroller: HTMLElement) {
+  let target: number | null = null;
+  let pos = 0;
+  let applied: number | null = null;
+  let release: (() => void) | undefined;
+  const stop = () => {
+    target = null;
+    applied = null;
+    release?.();
+    release = undefined;
+  };
+  const step = (dt: number) => {
+    if (target === null) return stop();
+    if (applied !== null && Math.abs(scroller.scrollTop - applied) > 2) return stop();
+    const d = target - pos;
+    if (Math.abs(d) < 0.5) {
+      scroller.scrollTop = target;
+      return stop();
+    }
+    const k = dt > 0 ? 1 - 0.88 ** (dt * 60) : 0.12;
+    pos += d * k;
+    scroller.scrollTop = pos;
+    applied = scroller.scrollTop;
+  };
+  const onWheel = (e: WheelEvent) => {
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    if (e.ctrlKey || e.deltaY === 0 || max <= 0) return;
+    e.preventDefault();
+    const cur = scroller.scrollTop;
+    const next = Math.max(0, Math.min(max, (target ?? cur) + wheelDelta(e, scroller.clientHeight)));
+    if (target === null && Math.abs(next - cur) < 0.5) return;
+    if (target === null) pos = cur;
+    target = next;
+    applied = cur;
+    release ??= own(scroller, step);
+  };
+  return { onWheel, stop };
+}
+
+function scrolling(
+  scroller: HTMLElement,
+  depth: HTMLElement | null,
+  show: (scroll: Scroll) => void,
+  onGlide?: () => void,
+) {
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
   let timer = 0;
   // a glide the page started is under way (until the browser says the scroll has ended)
@@ -66,6 +114,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
   // the section a glide is taking the reader to, and where it was when the glide set out
   let following: { sec: number; top: number } | undefined;
   const glide = (top: number) => {
+    onGlide?.();
     gliding = true;
     scroller.scrollTo({ top, behavior: "smooth" });
   };
@@ -207,13 +256,13 @@ function useMenuSheet(
   }, [root, menu, setMenu]);
 }
 
-// The reader taking over: a wheel, a touch, a press or a key anywhere on the frame. A press that starts a glide (the tour,
-// the island's mark, a section of the menu) comes after it, so it starts afresh.
-const takeOver = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+// The reader taking over: a touch, a press or a key stops both glides and inertial wheel easing; a wheel stops a
+// programmatic glide without clearing the wheel's accumulated target. A press that starts a glide comes after it.
+const takeOver = ["touchstart", "pointerdown", "keydown"] as const;
 
 // useFrameBehaviour runs the board's own behaviours on the frame root points at: the header and the island while
-// scrolling, the island opening under the pointer or the keyboard (wide layout) and the menu sheet. The page stops
-// moving the reader once the reader takes over or the page is hidden.
+// scrolling, desktop inertial wheel easing, the island opening under the pointer or the keyboard (wide layout) and
+// the menu sheet. The page stops moving the reader once the reader takes over or the page is hidden.
 export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boolean) {
   const [scroll, setScroll] = useState(atTop);
   const [island, setIsland] = useState(false);
@@ -224,9 +273,17 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     const frame = root.current;
     const scroller = frame?.querySelector<HTMLElement>(".hs");
     if (!frame || !scroller) return;
-    const page = scrolling(scroller, frame.querySelector(".ho > .depth"), (next) =>
-      setScroll((prev) => (same(prev, next) ? prev : next)),
+    const wheel = wide ? wheelScroller(scroller) : null;
+    const page = scrolling(
+      scroller,
+      frame.querySelector(".ho > .depth"),
+      (next) => setScroll((prev) => (same(prev, next) ? prev : next)),
+      wheel?.stop,
     );
+    const stopAll = () => {
+      page.stop();
+      wheel?.stop();
+    };
     const clicks = clickActions(page, setMenu, back);
     const onClick = (e: MouseEvent) => {
       const control = e.target instanceof Element ? e.target.closest<HTMLElement>("a, button") : null;
@@ -245,16 +302,20 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     for (const element of [scroller, ...places(scroller)]) resized.observe(element);
     scroller.addEventListener("scroll", page.onScroll, { passive: true });
     scroller.addEventListener("scrollend", page.onScrollEnd);
+    if (wheel) scroller.addEventListener("wheel", wheel.onWheel, { passive: false });
     frame.addEventListener("click", onClick);
-    for (const type of takeOver) frame.addEventListener(type, page.stop, { capture: true, passive: true });
-    const onHidden = () => document.hidden && page.stop();
+    frame.addEventListener("wheel", page.stop, { capture: true, passive: true });
+    for (const type of takeOver) frame.addEventListener(type, stopAll, { capture: true, passive: true });
+    const onHidden = () => document.hidden && stopAll();
     document.addEventListener("visibilitychange", onHidden);
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);
     return () => {
       resized.disconnect();
-      page.stop();
+      stopAll();
       document.removeEventListener("visibilitychange", onHidden);
-      for (const type of takeOver) frame.removeEventListener(type, page.stop, { capture: true });
+      frame.removeEventListener("wheel", page.stop, { capture: true });
+      for (const type of takeOver) frame.removeEventListener(type, stopAll, { capture: true });
+      if (wheel) scroller.removeEventListener("wheel", wheel.onWheel);
       scroller.removeEventListener("scroll", page.onScroll);
       scroller.removeEventListener("scrollend", page.onScrollEnd);
       frame.removeEventListener("click", onClick);

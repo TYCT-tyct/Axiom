@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartError.zh.ts";
-import styles from "./PartError.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { hideDescription?: boolean;
@@ -17,6 +16,6 @@ description: string;
 primary: string;
 secondary: string; }; };
 export default function PartError({ values: v = {}, text }: Props) {
-return <><div className={("stb err") + " " + styles.scope} role={"alert"}><span className={("stbi") + " " + styles.scope}><svg viewBox={"0 0 20 20"} aria-hidden={"true"} className={styles.scope}><circle cx={"10"} cy={"10"} r={"6.75"} className={styles.scope} /><path d={"M10 6.75v4M10 13.25v.01"} className={styles.scope} /></svg></span><h2 className={styles.scope}>{text.title}</h2>{!v.hideDescription && (<p className={styles.scope}>{text.description}</p>)}{!v.hideActions && (<div className={("stba") + " " + styles.scope}>{!v.hidePrimary && (<button type={"button"} className={("btn pri") + " " + styles.scope} data-st={"retry"} onClick={v.primary} disabled={v.pending}><span className={styles.scope}>{text.primary}</span></button>)}{!v.hideSecondary && (<button type={"button"} className={("btn sec") + " " + styles.scope} data-st={"report"} onClick={v.secondary}><span className={styles.scope}>{text.secondary}</span></button>)}</div>)}</div></>;
+return <><div className={"stb err"} role={"alert"}><span className={"stbi"}><svg viewBox={"0 0 20 20"} aria-hidden={"true"}><circle cx={"10"} cy={"10"} r={"6.75"} /><path d={"M10 6.75v4M10 13.25v.01"} /></svg></span><h2>{text.title}</h2>{!v.hideDescription && (<p>{text.description}</p>)}{!v.hideActions && (<div className={"stba"}>{!v.hidePrimary && (<button type={"button"} className={"btn pri"} data-st={"retry"} onClick={v.primary} disabled={v.pending}><span>{text.primary}</span></button>)}{!v.hideSecondary && (<button type={"button"} className={"btn sec"} data-st={"report"} onClick={v.secondary}><span>{text.secondary}</span></button>)}</div>)}</div></>;
 }
 /* jscpd:ignore-end */

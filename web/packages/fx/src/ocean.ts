@@ -27,6 +27,7 @@ export type Sea = {
   // awake keeps the sea going while element is in view too, until the returned function is called (a moment of the
   // eggs plays wherever the reader is)
   awake: (element: Element) => () => void;
+  settle?: () => void;
   destroy: () => void;
 };
 

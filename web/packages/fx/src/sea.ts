@@ -9,7 +9,16 @@ import { buildSea, type OceanEngine, type Sea } from "./ocean";
 
 export type { OceanEngine, Sea } from "./ocean";
 
-type Entrance = { play(variant?: string): void; seek(ms: number): void; rise(): void; destroy(): void };
+type Slot = { el: HTMLElement; text: string; chars: string[]; out: string };
+type Entrance = {
+  play(variant?: string): void;
+  seek(ms: number): void;
+  finish(): void;
+  rise(): void;
+  destroy(): void;
+  chars: HTMLElement[];
+  slots: Slot[];
+};
 
 declare global {
   interface Window {
@@ -45,21 +54,30 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
     throw new Error("startSea: the root has no canvas.sea");
   }
   const engine = buildSea(canvas, roster, { ...options, light });
-  // The tide: the sea rises behind a crest of ~ and the sharks swim in. The words are on the page from its first
-  // frame, so they do not rise with it (port design R11); the logo plays it again, as on the board.
+  const scope = root.querySelector(".ho") ?? root;
+  // Each visit picks between tide and decode at random (hero-enter.js default pick); on tide the words stay in place
+  // from the first frame (port design R11), and clicking the logo replays in the current language.
   const entrance = new window.AxiomEnter(root, engine, {
-    scope: root.querySelector(".ho"),
-    pick: () => "tide",
+    scope,
     manual: true,
   });
   entrance.rise = () => {};
   let elapsed = 0;
   const play = entrance.play.bind(entrance);
   entrance.play = (variant) => {
+    if (root.dataset.enter === "done") {
+      entrance.chars = [...scope.querySelectorAll<HTMLElement>("h1 .ch")];
+      for (const slot of entrance.slots) {
+        const text = slot.el.textContent ?? "";
+        slot.text = text;
+        slot.chars = [...text];
+        slot.out = "";
+      }
+    }
     elapsed = 0;
     play(variant);
   };
-  entrance.play("tide");
+  entrance.play();
   // the frame of the owner and of whoever keeps the sea awake: on a frame both are given, the sea steps once
   let stepped = -1;
   const frame = (dt: number, now: number) => {
@@ -77,6 +95,9 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
   return {
     engine,
     awake: (element) => own(element, frame),
+    settle: () => {
+      if (root.dataset.enter !== "done") entrance.finish();
+    },
     destroy: () => {
       release();
       entrance.destroy();
