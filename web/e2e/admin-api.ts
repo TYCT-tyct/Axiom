@@ -6,6 +6,7 @@ import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { routingHandlers, startRouting } from "./admin-routing.ts";
+import { siteExtraHandlers, startSiteExtras } from "./admin-site-api.ts";
 import { supplyHandlers } from "./admin-supply.ts";
 import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
@@ -493,6 +494,7 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/audit`, reads("audit.view"), listAudit),
   route("get", `${base}/audit/{entry_id}`, reads("audit.view"), getAudit),
   route("post", `${base}/accounts/{account_id}/credit-grants`, changes("credits.grant"), grantCredit),
+  ...siteExtraHandlers,
   ...supplyHandlers,
   ...catalogHandlers,
   ...pricingHandlers,
@@ -507,5 +509,6 @@ export async function mockAdmin(page: Page, data: MockData = "usual", over: Part
   Object.assign(state, over);
   startRouting(state, data);
   startOperations(state, data);
+  startSiteExtras(state);
   return mockApi(page, base, handlers, state);
 }

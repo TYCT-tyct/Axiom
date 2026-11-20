@@ -166,6 +166,8 @@ export default {
     group: "Group",
     until: "Cooldown / expiry",
     concurrency: "Max concurrency",
+    rpm: "RPM ceiling",
+    rpmUnlimited: "No ceiling",
     cooldown: "Cooling until",
     state: {
       binding: "Waiting for its text",
@@ -179,6 +181,32 @@ export default {
     empty: {
       title: "No keys yet",
       body: "Axiom makes a key for each group it can call; they appear here as the sync works.",
+    },
+  },
+  credentialLimits: {
+    open: "Limits",
+    title: "Edit limits for {{key}}",
+    body: "Caps the calls this upstream key serves at once and the optional rolling-minute request ceiling for selecting it. The change goes to the audit log.",
+    concurrencyHint: "A whole number of at least 1. A new binding starts at 4.",
+    rpmHint: "A whole number from 1 to {{max}}; leave empty to remove the RPM ceiling.",
+    action: "Save limits",
+    invalidConcurrency: "Max concurrency must be a whole number of at least 1.",
+    invalidRpm: "Enter a whole number from 1 to {{max}}, or leave empty to remove the RPM ceiling.",
+    done: "Saved: max concurrency {{concurrency}}, RPM ceiling {{rpm}}.",
+    doneNoRpm: "Saved: max concurrency {{concurrency}}, no RPM ceiling.",
+  },
+  endpointEnabled: {
+    enable: {
+      action: "Enable",
+      title: "Enable endpoint {{name}} (group {{group}})",
+      body: "Puts this endpoint back into routing and resets its circuit breaker. The change goes to the audit log.",
+      done: "The endpoint is enabled.",
+    },
+    disable: {
+      action: "Disable",
+      title: "Disable endpoint {{name}} (group {{group}})",
+      body: "Takes this endpoint out of routing; calls already in flight finish normally. The change goes to the audit log.",
+      done: "The endpoint is disabled.",
     },
   },
   unbound: {

@@ -1,6 +1,6 @@
 // The redesign's primitives (#747) live beside the current components until every page has moved; the three whose
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
-export { useBrandStyle } from "./brand";
+export { brandPreview, useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
 export { Announcement } from "./components/announcement";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
@@ -8,6 +8,7 @@ export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
 export { BoardDialog } from "./components/board-dialog";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
+export { BrandSwatch } from "./components/brand-swatch";
 export { Card } from "./components/card";
 export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";

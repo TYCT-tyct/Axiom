@@ -19,6 +19,7 @@ import { ChangeDialog, type Problem } from "../change";
 import { useDuration } from "../durations";
 import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import { SiteLoginLimits } from "../login-limits";
 import { MailSettings } from "../mail-settings";
 import { modelPricesChangeUnconfirmed } from "../model-prices";
 import { Facts, PageBody, State } from "../parts";
@@ -29,8 +30,10 @@ import { SiteRegistration } from "../registration";
 import { SearchSettings } from "../search-settings";
 import { SegmentSettings } from "../segment-settings";
 import { SiteSignIn } from "../sign-in";
+import { SiteBrand } from "../site-brand";
 import { SiteInformation } from "../site-info";
 import { SiteLogo } from "../site-logo";
+import { SiteWorkspaceLimit } from "../workspace-limit";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -56,8 +59,11 @@ export default function SettingsPage() {
             <>
               <SiteInformation siteId={account.site_id} />
               <SiteLogo siteId={account.site_id} />
+              <SiteBrand siteId={account.site_id} />
               <SiteSettings siteId={account.site_id} />
               <SiteKeyLimits siteId={account.site_id} />
+              <SiteWorkspaceLimit siteId={account.site_id} />
+              <SiteLoginLimits siteId={account.site_id} />
               <SiteRegistration siteId={account.site_id} />
               <SiteSignIn siteId={account.site_id} />
               <MailSettings />
