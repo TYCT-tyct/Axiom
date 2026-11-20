@@ -59,7 +59,8 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
     elapsed = 0;
     play(variant);
   };
-  entrance.play("tide");
+  // Skip the cold tide entrance when the home page is settling back from sign-in (behaviour.ts marks data-enter="done").
+  if (root.dataset.enter !== "done") entrance.play("tide");
   const release = own(owner, (dt) => {
     if (root.dataset.enter !== "done") {
       elapsed += dt * 1000;

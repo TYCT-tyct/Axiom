@@ -1,4 +1,4 @@
-import { markArrival } from "@axiom/fx";
+import { markArrival, markOrigin, takeReturn } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -259,14 +259,23 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
 const loadDepart = () => import("@axiom/fx/depart");
 // The departure's length on the wall clock: the page goes this long after the press, whether or not its code has come.
 const departSpan = 500;
+const arriveSpan = 280;
 // A page still here this long after it started to go was stopped (the browser's stop button) or failed to go: the
 // picture of its departure comes off. A page that does go is gone long before.
 const stalled = 3000;
 
+type Flight = {
+  press: object;
+  href: string;
+  link: HTMLAnchorElement;
+  dir: 1 | -1;
+  timer: number;
+};
+
 // The press under way, until its page starts to go, and the picture of a departure on screen, held until the next
 // page replaces this one. Both are the module's, not a frame's: a change of layout midway starts the frame afresh
 // (home.tsx), which takes the picture with it but must not take the way there.
-let leaving: object | undefined;
+let leaving: Flight | undefined;
 let shown: { frame: HTMLElement; picture: Departure } | undefined;
 
 function clear() {
@@ -274,57 +283,129 @@ function clear() {
   shown = undefined;
 }
 
-function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
-  clear();
-  const press = {};
-  leaving = press;
-  const start = performance.now();
-  const href = link.href;
-  window.setTimeout(() => {
-    if (leaving !== press) return;
+function scheduleLeave(flight: Flight, delay: number) {
+  window.clearTimeout(flight.timer);
+  flight.timer = window.setTimeout(() => {
+    if (leaving !== flight) return;
     // from here the press is done: a press after a stopped navigation starts a departure of its own at once
     leaving = undefined;
     const held = shown;
+    const r = flight.link.getBoundingClientRect();
+    markOrigin({ x: r.x, y: r.y, w: r.width, h: r.height });
     // the arrival is the sign-in page's: registration has no arrival of its own, and a marker left by it would play
     // the decode on a later, direct visit to sign-in
-    if (new URL(href).pathname.endsWith("/sign-in")) markArrival();
-    window.location.assign(href);
+    if (new URL(flight.href).pathname.endsWith("/sign-in")) markArrival();
+    window.location.assign(flight.href);
     window.setTimeout(() => shown === held && clear(), stalled);
-  }, departSpan);
+  }, delay);
+}
+
+function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
+  clear();
+  const start = performance.now();
+  const flight: Flight = { press: {}, href: link.href, link, dir: 1, timer: 0 };
+  leaving = flight;
+  scheduleLeave(flight, departSpan);
   // code that comes after the page started to go, after the frame has gone, or after the page has come back, draws
   // nothing; code that never comes only costs the picture
   loadDepart().then(
     ({ depart }) => {
-      if (leaving !== press || !frame.isConnected || !link.isConnected) return;
+      if (leaving !== flight || !frame.isConnected || !link.isConnected) return;
       shown = { frame, picture: depart(frame, link, start, departSpan, sea?.engine) };
     },
     () => {},
   );
 }
 
+function reverseDeparture() {
+  const flight = leaving;
+  if (!flight) return;
+  window.clearTimeout(flight.timer);
+  const picture = shown?.picture;
+  if (flight.dir === 1) {
+    if (!picture) {
+      leaving = undefined;
+      return;
+    }
+    flight.dir = -1;
+    picture.reverse((end) => {
+      if (end === -1 && leaving === flight) {
+        leaving = undefined;
+        clear();
+      }
+    });
+    return;
+  }
+  if (!picture) return;
+  flight.dir = 1;
+  scheduleLeave(flight, Math.max(16, Math.round(picture.remaining())));
+  picture.reverse();
+}
+
+function settleReturn(frame: HTMLElement, sea: Sea | null) {
+  if (!takeReturn()) return;
+  frame.dataset.enter = "done";
+  const target = frame.querySelector<HTMLElement>(".bar a[data-go], a[data-go]");
+  if (!target) return;
+  const start = performance.now();
+  loadDepart().then(
+    ({ arriveHome }) => {
+      if (leaving || !frame.isConnected || !target.isConnected) return;
+      clear();
+      shown = { frame, picture: arriveHome(frame, target, start, arriveSpan, sea?.engine) };
+    },
+    () => {},
+  );
+}
+
+const plainClick = (e: MouseEvent) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
+
+function handleDepartClick(frame: HTMLElement, sea: Sea | null, e: MouseEvent) {
+  if (!plainClick(e)) return;
+  const target = e.target instanceof Element ? e.target : null;
+  if (!target || !frame.contains(target)) return;
+  const link = target.closest<HTMLAnchorElement>("a[data-go]");
+  if (link) {
+    e.preventDefault();
+    if (!leaving) leave(frame, link, sea);
+    else if (leaving.dir === -1) reverseDeparture();
+    return;
+  }
+  if (leaving?.dir === 1 && target.closest(".bar .brand, .isl .im")) {
+    e.preventDefault();
+    reverseDeparture();
+  }
+}
+
 // useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
-// pressed: signing in or up leaves the website through it, half a second after the press. Its code loads on the first
-// press. A press that asks for another tab or window goes as a link would.
+// pressed: signing in or up leaves the website through it, half a second after the press, and Esc or the brand mark
+// reverses it midway. When returning from a sign-in page (takeReturn), it settles the home page without replaying the
+// cold tide entrance.
 export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
-    const onClick = (e: MouseEvent) => {
-      const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[data-go]") : null;
-      if (!link || !frame.contains(link) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    settleReturn(frame, sea.current);
+    const onClick = (e: MouseEvent) => handleDepartClick(frame, sea.current, e);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || e.defaultPrevented || leaving?.dir !== 1) return;
       e.preventDefault();
-      if (!leaving) leave(frame, link, sea.current);
+      reverseDeparture();
     };
     // the browser's back button may bring this page back as it was left, mid-departure
     const onShow = (e: PageTransitionEvent) => {
       if (!e.persisted) return;
+      if (leaving) window.clearTimeout(leaving.timer);
       leaving = undefined;
       clear();
+      settleReturn(frame, sea.current);
     };
     frame.addEventListener("click", onClick);
+    window.addEventListener("keydown", onKey);
     window.addEventListener("pageshow", onShow);
     return () => {
       frame.removeEventListener("click", onClick);
+      window.removeEventListener("keydown", onKey);
       window.removeEventListener("pageshow", onShow);
       if (shown?.frame === frame) clear();
     };

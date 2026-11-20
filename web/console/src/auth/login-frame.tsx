@@ -28,6 +28,7 @@ import { loginPhoneWidth, useBoardMedia } from "../board-interaction";
 import { siteQuery } from "../queries";
 import type { Attempt } from "./attempt";
 import { NoteAction } from "./login-parts";
+import { useReturnHome } from "./return-home";
 
 const loadLogin = () => import("@axiom/fx/login");
 
@@ -127,7 +128,6 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
   useLock(form, cancel, attempt.kind !== null);
   const titleRef = useRef<HTMLElement | null>(null);
   useFocusOnStep(form, step, titleRef, answer === true && attempt.kind === null);
-  useReloadWhenRestored();
   const engine = useLoginEngine({
     stage,
     shape,
@@ -136,6 +136,7 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
     titleRef,
     title,
     step,
+    locked: attempt.kind !== null,
   });
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
@@ -262,6 +263,7 @@ function useLoginEngine({
   titleRef,
   title,
   step,
+  locked,
 }: {
   stage: Stage;
   shape: Shape;
@@ -270,11 +272,14 @@ function useLoginEngine({
   titleRef: RefObject<HTMLElement | null>;
   title: string;
   step: string;
+  locked: boolean;
 }) {
   const handle = stage;
   const [arrived] = useState(claimArrival);
   const veil = useArrivalVeil(titleRef, arrived);
   const root = useRef<HTMLElement | null>(null);
+  useReloadWhenRestored();
+  useReturnHome(root, locked);
   const decode = useRef<HTMLCanvasElement | null>(null);
   const latest = useRef({ shape, dark });
   latest.current = { shape, dark };
