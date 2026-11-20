@@ -398,3 +398,27 @@ test.describe("calls", () => {
     await expect(page.getByRole("heading", { name: "最近的报错" })).toBeVisible();
   });
 });
+
+// The time range is one row of equal segments; on a phone each option must still be on the screen to be tapped, in the
+// language whose words are the longest too.
+for (const language of ["zh", "en"] as const) {
+  test(`at 390px in ${language} every time range is on screen and can be picked`, async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const today = page.getByRole("button", { name: language === "en" ? "Today" : "今天", exact: true });
+    const options = main(page).locator(".qseg").filter({ has: today }).getByRole("button");
+    await expect(options).toHaveCount(6);
+    for (const option of await options.all()) {
+      const box = await option.boundingBox();
+      expect(box && box.x >= 16 && box.x + box.width <= 390 - 16, `${await option.textContent()} at ${box?.x}`).toBe(
+        true,
+      );
+    }
+    await options.last().focus();
+    await page.keyboard.press("Enter");
+    await expect(main(page).getByLabel(language === "en" ? "Start time" : "开始时间")).toBeVisible();
+  });
+}
