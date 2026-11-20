@@ -3,9 +3,13 @@ import type zh from "../zh";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
+import exchangeRates from "./exchange-rates";
 import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
+import discrepancies from "./payment-discrepancies";
+import platformGrants from "./platform-grants";
+import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import redeem from "./redeem";
 import routingPresets from "./routing-presets";
@@ -22,6 +26,7 @@ export const initial = {
     approvals: "Approvals",
     users: "Users",
     orders: "Orders",
+    discrepancies: "Payment discrepancies",
     redeemCodes: "Redeem codes",
     calls: "Calls",
     audit: "Audit log",
@@ -29,6 +34,7 @@ export const initial = {
     mappings: "Unmapped models",
     models: "Model catalog",
     pricing: "Pricing",
+    exchangeRates: "Exchange rates",
     settings: "Site settings",
     sourceClasses: "Source classes",
     routingPresets: "Routing presets",
@@ -159,7 +165,16 @@ export const initial = {
   pricing,
   redeem,
   approvals,
-} satisfies Messages<Omit<typeof zh, "settings" | "suppliers">>;
+} satisfies Messages<
+  Omit<typeof zh, "discrepancies" | "exchangeRates" | "platformGrants" | "pricePolicy" | "settings" | "suppliers">
+>;
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers }) satisfies Messages<typeof zh>;
+export default /* @__PURE__ */ Object.assign({}, initial, {
+  settings,
+  suppliers,
+  discrepancies,
+  exchangeRates,
+  platformGrants,
+  pricePolicy,
+}) satisfies Messages<typeof zh>;

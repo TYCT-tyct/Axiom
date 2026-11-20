@@ -7,7 +7,11 @@ import { useTranslation } from "react-i18next";
 import { AccountActions } from "../account-actions";
 import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import en from "../locales/en/platform-grants";
+import settings from "../locales/settings";
+import zh from "../locales/zh/platform-grants";
 import { Actions, Facts, NewButton, PageBody, State, Time } from "../parts";
+import { PlatformGrants } from "../platform-grants";
 import { accountQuery } from "../queries";
 
 type Account = AdminSchemas["AccountDetail"];
@@ -35,6 +39,7 @@ export default function AccountPage() {
             <Figures account={data} />
             <Details account={data} />
             <AccountKeyLimits account={data} />
+            <PlatformGrants owner={data.owner} />
           </PageBody>
         </>
       )}
@@ -152,4 +157,7 @@ function AccountKeyLimits({ account }: { account: Account }) {
   );
 }
 
-export { default as messages } from "../locales/settings";
+export const messages = {
+  zh: { ...settings.zh, platformGrants: zh },
+  en: { ...settings.en, platformGrants: en },
+};

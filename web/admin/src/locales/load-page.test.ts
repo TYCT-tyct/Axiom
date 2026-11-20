@@ -16,6 +16,14 @@ it("loads complete deferred copy before returning a page and preserves both lang
   const page = { default: () => null, messages: settings };
   const supplierPage = { default: () => null, messages: suppliers };
   expect(await loadTranslatedPage(Promise.resolve(page))).toBe(page);
+  for (const page of [
+    import("../pages/payment-discrepancies"),
+    import("../pages/exchange-rates"),
+    import("../pages/account"),
+    import("../pages/pricing"),
+  ]) {
+    await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
+  }
   expect(i18next.exists("suppliers.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(supplierPage))).toBe(supplierPage);
   expect(i18next.getResourceBundle("en", "admin")).toEqual(en);

@@ -1,5 +1,6 @@
 import type { AdminState, Schemas } from "./admin-data.ts";
 import { uuid } from "./admin-data.ts";
+import { pricePolicy } from "./admin-finance-api.ts";
 import { base, type Ctx, changes, reads, route, safe } from "./admin-route.ts";
 import { fail, type Handler, ok } from "./mock.ts";
 
@@ -113,6 +114,7 @@ function publications({ state }: Ctx<"/api/admin/v1/pricing/publications", "get"
     { kind: "account", id: state.accounts.keys().next().value },
   ];
   return ok({
+    policy: pricePolicy(state),
     data: state.models.slice(0, 3).map((model, index) => {
       const schedule = model.prices.find((p) => p.schedule)?.schedule;
       return {

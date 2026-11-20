@@ -12,6 +12,13 @@ export const nav = [
   { to: "/approvals", label: "nav.approvals", icon: "budget", permission: "operations.approve" },
   { to: "/users", label: "nav.users", icon: "mkeys", permission: "users.view" },
   { to: "/orders", label: "nav.orders", icon: "bill", permission: "sites.manage" },
+  {
+    section: "payments",
+    to: "/payment-discrepancies",
+    label: "nav.discrepancies",
+    icon: "bill",
+    permission: "sites.manage",
+  },
   { to: "/redeem-codes", label: "nav.redeemCodes", icon: "keys", permission: "sites.manage" },
   { to: "/calls", label: "nav.calls", icon: "logs", permission: "calls.search" },
   { to: "/audit", label: "nav.audit", icon: "observe", permission: "audit.view" },
@@ -21,5 +28,6 @@ export const nav = [
   { to: "/source-classes", label: "nav.sourceClasses", icon: "presets", permission: "sites.manage" },
   { to: "/routing-presets", label: "nav.routingPresets", icon: "presets", permission: "sites.manage" },
   { to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
+  { section: "pricing", to: "/exchange-rates", label: "nav.exchangeRates", icon: "bill", permission: "pricing.view" },
   { to: "/settings", label: "nav.settings", icon: "mkeys", permission: "sites.manage" },
-] as const satisfies readonly { to: string; label: string; icon: Icon; permission: string }[];
+] as const satisfies readonly { section?: string; to: string; label: string; icon: Icon; permission: string }[];

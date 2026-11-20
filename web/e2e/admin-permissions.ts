@@ -3,6 +3,7 @@
 export const allPermissions = [
   "users.view",
   "users.manage",
+  "platform_grants.manage",
   "credits.grant",
   "calls.search",
   "calls.inspect",
