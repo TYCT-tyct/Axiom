@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./PartFilterSelect.zh.ts";
-import styles from "./PartFilterSelect.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { openClass?: string | number;
@@ -16,6 +15,6 @@ listId?: string | number;
 filterLabel?: string | number;
 closed?: boolean; };  text: { label: string; }; };
 export default function PartFilterSelect({ values: v = {}, text, children }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("uschip " + String(v.openClass ?? "")) + " " + styles.scope} data-c={"m"} onKeyDown={v.keyDown} ref={v.select}><button type={"button"} className={(String(v.activeClass ?? "")) + " " + styles.scope} data-a={"chip"} data-i={"m"} onClick={v.toggle} aria-expanded={v.open} aria-controls={String(v.listId ?? "")} aria-label={String(v.filterLabel ?? "")}>{text.label}</button><div className={("uspop") + " " + styles.scope} id={String(v.listId ?? "")} hidden={v.closed}>{children}</div></div></>;
+return <><div className={"uschip " + String(v.openClass ?? "")} data-c={"m"} onKeyDown={v.keyDown} ref={v.select}><button type={"button"} className={String(v.activeClass ?? "")} data-a={"chip"} data-i={"m"} onClick={v.toggle} aria-expanded={v.open} aria-controls={String(v.listId ?? "")} aria-label={String(v.filterLabel ?? "")}>{text.label}</button><div className={"uspop"} id={String(v.listId ?? "")} hidden={v.closed}>{children}</div></div></>;
 }
 /* jscpd:ignore-end */

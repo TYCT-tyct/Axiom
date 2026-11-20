@@ -3,11 +3,10 @@
 
 
 import type zh from "./AdminFieldFrame.zh.ts";
-import styles from "./AdminFieldFrame.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   };
 export default function AdminFieldFrame({ children }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("nkf") + " " + styles.scope}>{children}</div></>;
+return <><div className={"nkf"}>{children}</div></>;
 }
 /* jscpd:ignore-end */

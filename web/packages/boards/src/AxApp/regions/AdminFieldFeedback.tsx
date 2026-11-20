@@ -3,13 +3,12 @@
 
 
 import type zh from "./AdminFieldFeedback.zh.ts";
-import styles from "./AdminFieldFeedback.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { feedbackClass?: string | number;
 feedbackId?: string | number;
 hideFeedback?: boolean; };  text: { feedback: string; }; };
 export default function AdminFieldFeedback({ values: v = {}, text }: Props) {
-return <>{!v.hideFeedback && (<div className={(String(v.feedbackClass ?? "")) + " " + styles.scope} id={String(v.feedbackId ?? "")}>{text.feedback}</div>)}</>;
+return <>{!v.hideFeedback && (<div className={String(v.feedbackClass ?? "")} id={String(v.feedbackId ?? "")}>{text.feedback}</div>)}</>;
 }
 /* jscpd:ignore-end */

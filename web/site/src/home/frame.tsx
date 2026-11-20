@@ -48,14 +48,18 @@ const frameText = (word: (key: BoardKey) => string, language: string, name: stri
   sheetSignUpHref: links.signUp,
 });
 
-// From 700 wide the narrow layout is laid out for a tablet: the board's script marks its .ho data-tab (the steps and
-// the trust screens take their side-by-side form, the connect screen drops its cable).
-function useTabletLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
+// The frame's width for the stylesheet (--fw), and from 700 wide on the narrow layout the tablet attribute (data-tab:
+// the steps and trust screens take their side-by-side form, the connect screen drops its cable) (Site.logic.html fw).
+function useFrameLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
   useEffect(() => {
     const frame = root.current;
-    const ho = frame?.querySelector(".ho");
-    if (!frame || !ho || wide) return;
-    const mark = () => ho.toggleAttribute("data-tab", frame.clientWidth >= 700);
+    const ho = frame?.querySelector<HTMLElement>(".ho");
+    if (!frame || !ho) return;
+    const mark = () => {
+      const width = frame.clientWidth;
+      if (width > 0) ho.style.setProperty("--fw", `${width}px`);
+      if (!wide) ho.toggleAttribute("data-tab", width >= 700);
+    };
     mark();
     const resized = new ResizeObserver(mark);
     resized.observe(frame);
@@ -108,7 +112,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
   const floor = useClawd(root, sea, { narrow: !wide, dark: scheme === "dark" });
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
-  useTabletLayout(root, wide);
+  useFrameLayout(root, wide);
   const { brand, name, join } = useSite();
 
   // What the switches' engine sets, until it is loaded: it starts from them, and keeps them the same itself.

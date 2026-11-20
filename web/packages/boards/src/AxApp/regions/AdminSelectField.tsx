@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./AdminSelectField.zh.ts";
-import styles from "./AdminSelectField.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { id?: string | number;
@@ -19,6 +18,6 @@ feedbackId?: string | number;
 hideFeedback?: boolean; };  text: { label: string;
 feedback: string; }; options?: import("react").ReactNode; };
 export default function AdminSelectField({ values: v = {}, text, options }: Props) {
-return <><div className={("nkf") + " " + styles.scope}><label htmlFor={String(v.id ?? "")} className={styles.scope}>{text.label}</label><select id={String(v.id ?? "")} className={("nkin " + String(v.invalidClass ?? "")) + " " + styles.scope} defaultValue={String(v.initial ?? "")} autoComplete={"off"} spellCheck={"false"} name={String(v.name ?? "")} aria-describedby={String(v.describedBy ?? "")} disabled={v.disabled} ref={v.control} onInput={v.input}>{options}</select>{!v.hideFeedback && (<div className={(String(v.feedbackClass ?? "")) + " " + styles.scope} id={String(v.feedbackId ?? "")}>{text.feedback}</div>)}</div></>;
+return <><div className={"nkf"}><label htmlFor={String(v.id ?? "")}>{text.label}</label><select id={String(v.id ?? "")} className={"nkin " + String(v.invalidClass ?? "")} defaultValue={String(v.initial ?? "")} autoComplete={"off"} spellCheck={"false"} name={String(v.name ?? "")} aria-describedby={String(v.describedBy ?? "")} disabled={v.disabled} ref={v.control} onInput={v.input}>{options}</select>{!v.hideFeedback && (<div className={String(v.feedbackClass ?? "")} id={String(v.feedbackId ?? "")}>{text.feedback}</div>)}</div></>;
 }
 /* jscpd:ignore-end */
