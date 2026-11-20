@@ -425,9 +425,9 @@ export function useBoardData(t: TFunction) {
   const models = useQuery(callAggregateQuery(windows.month, "model"));
   // Only the chart's split by model and the spend's comparison wait on these, in parallel with the rest.
   const byModel = useQuery(usageStatisticsQuery({ ...windows.month, granularity: "day", group_by: "model" }));
-  const compared = Boolean(windows.comparison);
-  const month = useQuery(usageStatisticsQuery({ ...windows.comparison?.month, granularity: "week" }, compared));
-  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.comparison?.lastMonth, granularity: "week" }, compared));
+  // the same query as byModel unless last month is the shorter and cuts this month's side
+  const month = useQuery(usageStatisticsQuery({ ...windows.comparison.month, granularity: "day", group_by: "model" }));
+  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.comparison.lastMonth, granularity: "week" }));
   const balance = useQuery(balanceQuery);
   const site = useQuery(siteQuery);
   const currency = balance.data?.balance.currency ?? site.data?.currency;
@@ -441,6 +441,7 @@ export function useBoardData(t: TFunction) {
   const chart = spendChart(
     daily,
     { byModel: answer(byModel), month: answer(month), lastMonth: answer(lastMonth) },
+    answer(balance)?.spent_this_month,
     currency,
     ranked,
     period.days,

@@ -50,15 +50,15 @@ describe("the month the overview covers", () => {
     expect(monthWindow(new Date("2026-10-24T10:00:00+08:00")).days).toBe(31);
   });
 
-  // The chart's month runs to the end of the current hour; the comparison takes only the hours that have ended and
-  // that both months have, equally long on both sides.
+  // The chart's month and both sides of the comparison run to the end of the current hour, the same number of hours
+  // from each month's start, cut to last month's length when it is the shorter.
   it.each([
     {
       now: "2026-10-24T02:30:00Z",
       month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T03:00:00.000Z" },
       comparison: {
-        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T02:00:00.000Z" },
-        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-24T02:00:00.000Z" },
+        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T03:00:00.000Z" },
+        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-24T03:00:00.000Z" },
       },
       lastMonthNumber: 9,
     },
@@ -73,28 +73,26 @@ describe("the month the overview covers", () => {
       lastMonthNumber: 2,
     },
     {
-      // exactly on the hour, the hour just ended counts
+      // exactly on the hour, the hour that has just begun is counted on both sides
       now: "2026-10-01T01:00:00Z",
       month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T02:00:00.000Z" },
       comparison: {
-        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T01:00:00.000Z" },
-        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-01T01:00:00.000Z" },
+        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T02:00:00.000Z" },
+        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-01T02:00:00.000Z" },
       },
       lastMonthNumber: 9,
     },
     {
-      // the month's first hour: no hour has ended
-      now: "2026-10-01T00:01:00Z",
-      month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T01:00:00.000Z" },
-      lastMonthNumber: 9,
-    },
-    {
-      // exactly at the month's start: still none
+      // the month's first hour: one hour on each side
       now: "2026-01-01T00:00:00Z",
       month: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-01T01:00:00.000Z" },
+      comparison: {
+        month: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-01T01:00:00.000Z" },
+        lastMonth: { since: "2025-12-01T00:00:00.000Z", until: "2025-12-01T01:00:00.000Z" },
+      },
       lastMonthNumber: 12,
     },
-  ])("compares only ended hours both months have at $now", ({ now, ...want }) => {
+  ])("puts both months on the same span of whole hours at $now", ({ now, ...want }) => {
     expect(statisticsWindows(monthWindow(new Date(now)))).toEqual(want);
   });
 });
@@ -221,10 +219,8 @@ describe("the figures", () => {
       ["b", 1],
     ]);
     const daily = new Map([[1, 900n]]);
-    const split = chartStacks(daily, statistics(true), "USD", order);
-    expect(split.split).toBe(true);
     // two models on one day: two segments at the same x
-    const rows = barRows(split.stacks, 31);
+    const rows = barRows(chartStacks(daily, statistics(true), "USD", order), 31);
     expect(rows.map((row) => [row.f0, row.f5])).toEqual([
       ["6.5", "fill: var(--c0);"],
       ["6.5", "fill: var(--c4);"],
@@ -236,26 +232,49 @@ describe("the figures", () => {
       [statistics(true), new Map([...daily, [2, 5n]])], // a day the rollups do not have
       [undefined, daily], // no split, or it failed
     ] as const) {
-      const single = chartStacks(days, stats, "USD", order);
-      expect(single.split).toBe(false);
-      expect(single.stacks?.get(1)).toEqual(days === daily ? total : [{ amount: days.get(1), fill: "var(--c0)" }]);
+      expect(chartStacks(days, stats, "USD", order)?.get(1)).toEqual(
+        days === daily ? total : [{ amount: days.get(1), fill: "var(--c0)" }],
+      );
     }
-    expect(chartStacks(undefined, statistics(true), "USD", order).stacks).toBeUndefined();
+    expect(chartStacks(undefined, statistics(true), "USD", order)).toBeUndefined();
   });
 
-  it("compares the month's spend with last month's same span only while the rollups agree with the calls", () => {
+  it("compares the month's spend with last month's same span only while it is the card's figure", () => {
     const statistics = (amount?: string, backfill = true): Schemas["UsageStatistics"] => ({
       backfill_complete: backfill,
       buckets: [],
       totals: amount ? [{ spend: { amount, currency: "USD" } }, { spend: { amount: "1", currency: "EUR" } }] : [],
     });
-    expect(spendChange(statistics("1230"), statistics("1000"), "USD", true)).toBe("+23%");
-    expect(spendChange(statistics("950"), statistics("1000"), "USD", true)).toBe("−5.0%");
-    expect(spendChange(statistics(), statistics("1000"), "USD", true)).toBe("−100%");
-    expect(spendChange(statistics("1230"), statistics("1000"), "USD", false)).toBeUndefined();
-    expect(spendChange(undefined, statistics("1000"), "USD", true)).toBeUndefined();
-    expect(spendChange(statistics("1230"), statistics(), "USD", true)).toBeUndefined();
-    expect(spendChange(statistics("1230"), statistics("1000", false), "USD", true)).toBeUndefined();
+    const card = (amount: string) => money(amount);
+    expect(spendChange(statistics("1230"), statistics("1000"), card("1230"))).toBe("+23%");
+    expect(spendChange(statistics("950"), statistics("1000"), card("950"))).toBe("−5.0%");
+    // the rollups have not caught up with a call the card already counts
+    expect(spendChange(statistics("1000"), statistics("1000"), card("1230"))).toBeUndefined();
+    expect(spendChange(statistics(), statistics("1000"), card("10"))).toBeUndefined();
+    // the card in another currency than the side compared
+    expect(spendChange(statistics("1230"), statistics("1000"), { amount: "1230", currency: "EUR" })).toBeUndefined();
+    expect(spendChange(undefined, statistics("1000"), card("1230"))).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics(), card("1230"))).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics("1000", false), card("1230"))).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics("1000"), undefined)).toBeUndefined();
+  });
+
+  // The review's case: at UTC Oct 2 10:30 the month's only spend is 10 at 10:15 and last month's only spend is 10 on
+  // Sep 1. Both sides run to 11:00 on their second day and hold the 10, which is the card's figure: no −100%.
+  it("counts a spend of the current hour on both sides, as the card does", () => {
+    const { comparison } = statisticsWindows(monthWindow(new Date("2026-10-02T10:30:00Z")));
+    const inside = (at: string, window: { since: string; until: string }) =>
+      Date.parse(window.since) <= Date.parse(at) && Date.parse(at) < Date.parse(window.until);
+    const side = (at: string, window: { since: string; until: string }): Schemas["UsageStatistics"] => ({
+      backfill_complete: true,
+      buckets: [],
+      totals: inside(at, window) ? [{ spend: { amount: "10000000000", currency: "USD" } }] : [],
+    });
+    const now = side("2026-10-02T10:15:00Z", comparison.month);
+    const before = side("2026-09-01T10:15:00Z", comparison.lastMonth);
+    expect(spendChange(now, before, money("10000000000"))).toBe("+0.0%");
+    // the same hour, while the rollups have not taken in the 10 the card already shows
+    expect(spendChange({ ...now, totals: [] }, before, money("10000000000"))).toBeUndefined();
   });
 
   it("labels the chart with its dates, or with the card's sentence when it has none", () => {

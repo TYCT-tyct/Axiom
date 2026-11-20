@@ -16,27 +16,25 @@ const iso = (ms: number) => new Date(ms).toISOString();
 
 // statisticsWindows are the windows the overview asks for, in the whole UTC hours the rollups take. The month runs to
 // the end of the current hour, for the calls' totals and the chart alike, so both count every call so far and a refetch
-// within the hour covers the newest. The comparison takes only hours that have ended and that both months have: the
-// month's ended hours, cut to the length of last month when that is shorter, and the same length from the start of last
-// month. In the month's first hour no hour has ended, and there is no comparison.
+// within the hour covers the newest. The comparison puts both months on that same span: this month to the end of the
+// current hour, and as many hours from the start of last month, both cut to last month's length when it is the
+// shorter. The card's month spend counts every call so far, so this month's side can equal it (spendChange).
 export function statisticsWindows(period: MonthWindow): {
   month: Window;
-  comparison?: { month: Window; lastMonth: Window };
+  comparison: { month: Window; lastMonth: Window };
   lastMonthNumber: number;
 } {
   const sinceMs = Date.parse(period.since);
-  const endedMs = Math.floor(Date.parse(period.until) / HOUR_MS) * HOUR_MS;
+  const untilMs = (Math.floor(Date.parse(period.until) / HOUR_MS) + 1) * HOUR_MS;
   const start = new Date(sinceMs);
   const lastStart = Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - 1, 1);
-  const span = Math.min(endedMs - sinceMs, sinceMs - lastStart);
+  const span = Math.min(untilMs - sinceMs, sinceMs - lastStart);
   return {
-    month: { since: period.since, until: iso(endedMs + HOUR_MS) },
-    ...(span > 0 && {
-      comparison: {
-        month: { since: period.since, until: iso(sinceMs + span) },
-        lastMonth: { since: iso(lastStart), until: iso(lastStart + span) },
-      },
-    }),
+    month: { since: period.since, until: iso(untilMs) },
+    comparison: {
+      month: { since: period.since, until: iso(sinceMs + span) },
+      lastMonth: { since: iso(lastStart), until: iso(lastStart + span) },
+    },
     lastMonthNumber: new Date(lastStart).getUTCMonth() + 1,
   };
 }
@@ -126,36 +124,35 @@ export function chartStacks(
   statistics: Statistics | undefined,
   currency: string | undefined,
   order: ReadonlyMap<string, number>,
-): { stacks: Map<number, Segment[]> | undefined; split: boolean } {
-  const single = { stacks: dayStacks(daily), split: false };
+): Map<number, Segment[]> | undefined {
   if (!daily || !statistics || !currency || statistics.backfill_complete === false) {
-    return single;
+    return dayStacks(daily);
   }
   const split = modelStacks(statistics.buckets ?? [], currency, order);
   const sum = (day: number) => (split.get(day) ?? []).reduce((total, segment) => total + segment.amount, 0n);
   const agree = [...new Set([...daily.keys(), ...split.keys()])].every((day) => sum(day) === (daily.get(day) ?? 0n));
-  return agree ? { stacks: split, split: true } : single;
+  return agree ? split : dayStacks(daily);
 }
 
-// spendChange compares the month's spend with last month's over the hours both have (statisticsWindows), both sides
-// from the rollups, so they are counted alike. It is given only while the rollups agree with the calls (split, from
-// chartStacks), so the sentence under the month's spend never contradicts it; not while either side is missing or its
-// history is still backfilling; and not when last month spent nothing, where a percentage has no meaning.
+// spendChange compares the month's spend with last month's over the same span (statisticsWindows), both sides from the
+// rollups, so they are counted alike. It is given only when this month's side is the card's figure (spent, what calls
+// settled this month): the rollups lag the calls and a month longer than the last is cut, and a change measured on
+// another amount than the one it stands under would contradict it. Not while either side is missing or its history is
+// still backfilling, and not when last month spent nothing, where a percentage has no meaning.
 export function spendChange(
   month: Statistics | undefined,
   lastMonth: Statistics | undefined,
-  currency: string | undefined,
-  split: boolean,
+  spent: Schemas["Money"] | undefined,
 ): string | undefined {
-  if (!split || !month || !lastMonth || !currency) {
+  if (!month || !lastMonth || !spent) {
     return undefined;
   }
   if (month.backfill_complete === false || lastMonth.backfill_complete === false) {
     return undefined;
   }
-  const now = toUsageTotals(month.totals, currency, true);
-  const before = toUsageTotals(lastMonth.totals, currency, true);
-  if (!now || !before || before.spendNano === 0n) {
+  const now = toUsageTotals(month.totals, spent.currency, true);
+  const before = toUsageTotals(lastMonth.totals, spent.currency, true);
+  if (!now || !before || now.spendNano !== BigInt(spent.amount) || before.spendNano === 0n) {
     return undefined;
   }
   return formatBigDeltaPercent(now.spendNano, before.spendNano, "");
@@ -187,16 +184,16 @@ export function chartOf(daily: Map<number, bigint> | undefined, note: string, wi
   };
 }
 
-// spendChart draws the chart from one dataset (chartStacks) and gives the comparison only while that dataset is the
-// rollups' split, which proves they have caught up with the calls.
+// spendChart draws the chart from one dataset (chartStacks) and gives the comparison under the card's spend.
 export function spendChart(
   daily: Map<number, bigint> | undefined,
   statistics: { byModel?: Statistics; month?: Statistics; lastMonth?: Statistics },
+  spent: Schemas["Money"] | undefined,
   currency: string | undefined,
   ranked: Schemas["CallAggregate"][] | undefined,
   days: number,
 ) {
   const order = new Map((ranked ?? []).map((row, index) => [row.bucket ?? "", index]));
-  const { stacks, split } = chartStacks(daily, statistics.byModel, currency, order);
-  return { bars: barRows(stacks, days), change: spendChange(statistics.month, statistics.lastMonth, currency, split) };
+  const stacks = chartStacks(daily, statistics.byModel, currency, order);
+  return { bars: barRows(stacks, days), change: spendChange(statistics.month, statistics.lastMonth, spent) };
 }

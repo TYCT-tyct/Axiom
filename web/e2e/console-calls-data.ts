@@ -157,14 +157,21 @@ export function buildMockCall(
   };
 }
 
-// lastMonth copies calls a month earlier with each charge cut so that their month spends `percent` less than these
-// calls do: the overview's comparison with the same days of last month then reads +percent%.
-export function lastMonth(calls: Schemas["Call"][], percent: number): Schemas["Call"][] {
-  return calls.map((call) => {
+// withLastMonth gives an account whose calls are this month's the same calls a month earlier, each charge cut so that
+// last month spends `percent` less, and a month spend on its balance that is what these calls settled: the overview's
+// comparison with the same days of last month then reads +percent%.
+export function withLastMonth(state: { calls: Schemas["Call"][]; balance: Schemas["Balance"] }, percent: number) {
+  const spent = state.calls.reduce((sum, call) => sum + BigInt(call.price.amount), 0n);
+  const earlier = state.calls.map((call) => {
     const at = new Date(call.at);
     at.setUTCMonth(at.getUTCMonth() - 1);
     const amount = ((BigInt(call.price.amount) * 100n) / BigInt(100 + percent)).toString();
     const id = call.id.replace(/^0{8}/, "11111111") as Schemas["CallId"];
     return { ...call, id, at: at.toISOString(), price: { ...call.price, amount } };
   });
+  state.calls = [...state.calls, ...earlier];
+  state.balance = {
+    ...state.balance,
+    spent_this_month: { ...state.balance.spent_this_month, amount: spent.toString() },
+  };
 }

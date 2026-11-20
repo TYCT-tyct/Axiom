@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
-import { lastMonth } from "./console-calls-data.ts";
+import { withLastMonth } from "./console-calls-data.ts";
 import { demoDocuments, goodInvite } from "./console-data.ts";
 import { knownEmail } from "./mock-auth.ts";
 import { advanceUntil } from "./page-clock.ts";
@@ -383,7 +383,7 @@ const segmentsByDay = (page: Page) =>
 test.describe("overview", () => {
   test("compares the month's spend with the same days of last month and splits each day by model", async ({ page }) => {
     const state = await mockConsole(page);
-    state.calls = [...state.calls, ...lastMonth(state.calls, 23)];
+    withLastMonth(state, 23);
     signedInAs(state);
     await page.clock.install({ time: new Date("2026-10-24T10:00:00+08:00") });
     await page.goto("/console/");
@@ -396,7 +396,7 @@ test.describe("overview", () => {
     page,
   }) => {
     const state = await mockConsole(page);
-    state.calls = [...state.calls, ...lastMonth(state.calls, 23)];
+    withLastMonth(state, 23);
     signedInAs(state);
     await page.clock.install({ time: new Date("2026-10-24T10:00:00+08:00") });
     await page.goto("/console/");
