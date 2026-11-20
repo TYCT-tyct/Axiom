@@ -22,7 +22,7 @@ declare global {
   }
 }
 
-export type Sea = { readonly engine: OceanEngine; destroy: () => void };
+export type Sea = { readonly engine: OceanEngine; settle?: () => void; destroy: () => void };
 
 // buildSea makes an engine whose frames come from the shared loop: the engine's own scheduling (hold, its observer)
 // must never start one, so it is built held and its scheduler is replaced.
