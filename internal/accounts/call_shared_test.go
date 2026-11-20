@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"axiom/internal/accounts"
@@ -47,37 +48,54 @@ func TestMissesShareOneLookup(t *testing.T) {
 // waiting on it stops at its own deadline, while the others still get the answer.
 func TestEachWaiterKeepsItsDeadline(t *testing.T) {
 	t.Parallel()
-	_, database, s, key := callSetup(t)
-	joins := observeLookupJoins(s)
-	admin, release := lockTable(t, database, "accounts.api_keys")
-	authenticate := func(ctx context.Context) chan error {
-		result := make(chan error, 1)
-		go func() {
-			_, err := s.AuthenticateKey(ctx, accounts.SiteID(s1), key)
-			result <- err
-		}()
-		return result
-	}
-	first, leave := context.WithCancel(t.Context())
-	started := authenticate(first)
-	awaitJoins(t, joins, 1)
-	awaitLookup(t, admin)
-	patient := authenticate(t.Context())
-	hurried := deadlineContext{expire: make(chan struct{})}
-	impatient := authenticate(hurried)
-	awaitJoins(t, joins, 2)
-	leave()
-	close(hurried.expire)
-	if err := <-started; !errors.Is(err, context.Canceled) {
-		t.Errorf("the request that left: %v", err)
-	}
-	if err := <-impatient; !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("the request whose deadline passed: %v", err)
-	}
-	release()
-	if err := <-patient; err != nil {
-		t.Errorf("the request still waiting: %v", err)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		finish := make(chan struct{})
+		answer := errors.New("shared lookup finished")
+		// Pause before database I/O so the waiters and the shared lookup use the same controlled clock.
+		s, err := accounts.NewService(nil, accounts.Config{
+			Hashes: hashKeys(t, 1),
+			LookupSlot: func(ctx context.Context) (func(), error) {
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-finish:
+					return nil, answer
+				}
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := accounts.NewKeyText("sk-test-")
+		authenticate := func(ctx context.Context) <-chan error {
+			result := make(chan error, 1)
+			go func() {
+				_, err := s.AuthenticateKey(ctx, accounts.SiteID(s1), key)
+				result <- err
+			}()
+			return result
+		}
+
+		first, leave := context.WithCancel(t.Context())
+		started := authenticate(first)
+		synctest.Wait()
+		patient := authenticate(t.Context())
+		hurried, cancel := context.WithTimeout(t.Context(), accounts.LookupTimeout/2)
+		defer cancel()
+		impatient := authenticate(hurried)
+		synctest.Wait()
+		leave()
+		if err := <-started; !errors.Is(err, context.Canceled) {
+			t.Errorf("the request that left: %v", err)
+		}
+		if err := <-impatient; !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("the request whose deadline passed: %v", err)
+		}
+		close(finish)
+		if err := <-patient; !errors.Is(err, answer) {
+			t.Errorf("the request still waiting: %v, want %v", err, answer)
+		}
+	})
 }
 
 // TestALookupKeepsItsCallersDeadline: the shared lookup has the deadline of the request that started it, and
@@ -120,26 +138,6 @@ func TestALookupKeepsItsCallersDeadline(t *testing.T) {
 		t.Errorf("a caller without one: the lookup's deadline is %v (set %v), want %v after its start", deadline, set, accounts.LookupTimeout)
 	}
 }
-
-// deadlineContext passes its deadline when expire is closed, so a test controls the moment instead of waiting on a
-// clock. AuthenticateKey reads only Done and Err; the other methods keep the interface's contract.
-type deadlineContext struct {
-	expire chan struct{}
-}
-
-func (deadlineContext) Deadline() (time.Time, bool) { return time.Time{}, false }
-func (c deadlineContext) Done() <-chan struct{}     { return c.expire }
-
-func (c deadlineContext) Err() error {
-	select {
-	case <-c.expire:
-		return context.DeadlineExceeded
-	default:
-		return nil
-	}
-}
-
-func (deadlineContext) Value(any) any { return nil }
 
 // observeLookupJoins makes each request that joins the shared key lookup signal on the returned channel.
 func observeLookupJoins(s *accounts.Service) <-chan struct{} {
