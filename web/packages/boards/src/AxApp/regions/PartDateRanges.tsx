@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 import { boardStyle } from "../../dom.ts";
 import type zh from "./PartDateRanges.zh.ts";
-import styles from "./PartDateRanges.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { selection?: string | number;
@@ -28,6 +27,6 @@ range2: string;
 range3: string;
 range4: string; }; };
 export default function PartDateRanges({ values: v = {}, text }: Props) {
-return <><div className={("qseg") + " " + styles.scope} data-s={"r"} style={boardStyle(String(v.selection ?? ""))} role={"group"} aria-label={String(v.label ?? "")}><i className={styles.scope} /><button type={"button"} className={(String(v.active0 ?? "")) + " " + styles.scope} data-a={"r"} data-i={"0"} onClick={v.choose0} aria-pressed={v.pressed0}>{text.range0}</button><button type={"button"} className={(String(v.active1 ?? "")) + " " + styles.scope} data-a={"r"} data-i={"1"} onClick={v.choose1} aria-pressed={v.pressed1}>{text.range1}</button><button type={"button"} className={(String(v.active2 ?? "")) + " " + styles.scope} data-a={"r"} data-i={"2"} onClick={v.choose2} aria-pressed={v.pressed2}>{text.range2}</button><button type={"button"} className={(String(v.active3 ?? "")) + " " + styles.scope} data-a={"r"} data-i={"3"} onClick={v.choose3} aria-pressed={v.pressed3}>{text.range3}</button><button type={"button"} className={(String(v.active4 ?? "")) + " " + styles.scope} data-a={"r"} data-i={"4"} onClick={v.choose4} aria-pressed={v.pressed4}>{text.range4}</button></div></>;
+return <><div className={"qseg"} data-s={"r"} style={boardStyle(String(v.selection ?? ""))} role={"group"} aria-label={String(v.label ?? "")}><i /><button type={"button"} className={String(v.active0 ?? "")} data-a={"r"} data-i={"0"} onClick={v.choose0} aria-pressed={v.pressed0}>{text.range0}</button><button type={"button"} className={String(v.active1 ?? "")} data-a={"r"} data-i={"1"} onClick={v.choose1} aria-pressed={v.pressed1}>{text.range1}</button><button type={"button"} className={String(v.active2 ?? "")} data-a={"r"} data-i={"2"} onClick={v.choose2} aria-pressed={v.pressed2}>{text.range2}</button><button type={"button"} className={String(v.active3 ?? "")} data-a={"r"} data-i={"3"} onClick={v.choose3} aria-pressed={v.pressed3}>{text.range3}</button><button type={"button"} className={String(v.active4 ?? "")} data-a={"r"} data-i={"4"} onClick={v.choose4} aria-pressed={v.pressed4}>{text.range4}</button></div></>;
 }
 /* jscpd:ignore-end */

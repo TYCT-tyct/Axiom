@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./RequestPresetsState.zh.ts";
-import styles from "./RequestPresetsState.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { tone?: string | number;
@@ -13,6 +12,6 @@ noAction?: boolean; };  text: { title: string;
 detail: string;
 action: string; }; };
 export default function RequestPresetsState({ values: v = {}, text }: Props) {
-return <><div className={("stb " + String(v.tone ?? "")) + " " + styles.scope} role={String(v.stateRole ?? "")}><span className={("stbi") + " " + styles.scope}><svg viewBox={"0 0 20 20"} aria-hidden={"true"} className={styles.scope}><circle cx={"10"} cy={"10"} r={"6.75"} className={styles.scope} /><path d={"M10 6.75v4M10 13.25v.01"} className={styles.scope} /></svg></span><h2 className={styles.scope}>{text.title}</h2><p className={styles.scope}>{text.detail}</p>{!v.noAction && (<div className={("stba") + " " + styles.scope}><button type={"button"} className={("btn pri") + " " + styles.scope} data-st={"retry"} onClick={v.retry}><span className={styles.scope}>{text.action}</span></button></div>)}</div></>;
+return <><div className={"stb " + String(v.tone ?? "")} role={String(v.stateRole ?? "")}><span className={"stbi"}><svg viewBox={"0 0 20 20"} aria-hidden={"true"}><circle cx={"10"} cy={"10"} r={"6.75"} /><path d={"M10 6.75v4M10 13.25v.01"} /></svg></span><h2>{text.title}</h2><p>{text.detail}</p>{!v.noAction && (<div className={"stba"}><button type={"button"} className={"btn pri"} data-st={"retry"} onClick={v.retry}><span>{text.action}</span></button></div>)}</div></>;
 }
 /* jscpd:ignore-end */

@@ -3,11 +3,10 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartFilterClear.zh.ts";
-import styles from "./PartFilterClear.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { clear?: DOMAttributes<Element>["onClick"]; };  text: { label: string; }; };
 export default function PartFilterClear({ values: v = {}, text }: Props) {
-return <><button type={"button"} className={("usclr") + " " + styles.scope} data-a={"clrm"} onClick={v.clear}>{text.label}</button></>;
+return <><button type={"button"} className={"usclr"} data-a={"clrm"} onClick={v.clear}>{text.label}</button></>;
 }
 /* jscpd:ignore-end */
