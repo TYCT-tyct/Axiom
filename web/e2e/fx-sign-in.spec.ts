@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { loop, open, pause, pauseAhead, running, setHidden, siteSignIn as signIn } from "./fx-helpers.ts";
+import { expectMoving, loop, open, pause, pauseAhead, running, setHidden, siteSignIn as signIn } from "./fx-helpers.ts";
 import { knownEmail, knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 
@@ -86,18 +86,21 @@ test("the sign-in page's sea and stage rest while the tab is hidden, and leave n
 });
 
 // Every animation plays whatever the system's motion setting (docs/frontend.md「动画」): reduced motion asked for changes
-// nothing on the sign-in pages.
-test("under reduced motion an arrival's sign-in page still moves and decodes its title", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const decoded = await watchDecode(page);
-  await mockConsole(page);
-  await page.goto(apps[0].url);
-  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
-  await page.goto(signInPage);
-  await expect(stageCanvas(page)).toBeAttached();
-  await running(page);
-  await expect.poll(decoded).toEqual({ hidden: true, drawn: true });
-});
+// nothing on the sign-in pages, so the sea and the stage draw changing pictures and an arrival's title decodes.
+for (const reducedMotion of ["no-preference", "reduce"] as const)
+  test(`an arrival's sign-in page moves and decodes its title (${reducedMotion})`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion });
+    const decoded = await watchDecode(page);
+    await mockConsole(page);
+    await page.goto(apps[0].url);
+    await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+    await page.goto(signInPage);
+    await expect(stageCanvas(page)).toBeAttached();
+    await running(page);
+    await expect.poll(decoded).toEqual({ hidden: true, drawn: true });
+    await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
+    await expectMoving(page, page.locator(".lg-sea > canvas.sea:not(.cover)"), stageCanvas(page));
+  });
 
 test("a sign-in page whose effects fail to load still signs in, with no unhandled error", async ({ page }) => {
   const unhandled: string[] = [];
