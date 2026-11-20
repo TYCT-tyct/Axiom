@@ -1,8 +1,8 @@
 import type { Schemas } from "@axiom/api";
 import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
+import { barRows, dayStacks, modelStacks, spendChange, statisticsWindows } from "./overview-chart";
 import {
-  barRows,
   chartLabels,
   dailyRows,
   dailyTotals,
@@ -21,6 +21,7 @@ const format = {
   number: (value: number | bigint) => String(value),
   hour: () => "08:23",
   monthLabel: (month: string) => month,
+  monthName: (month: number) => `M${month}`,
   dateTime: () => "full time",
 };
 const money = (amount: string): Money => ({ amount, currency: "USD" });
@@ -39,6 +40,30 @@ describe("the month the overview covers", () => {
       days: 28,
     });
     expect(monthWindow(new Date("2026-10-24T10:00:00+08:00")).days).toBe(31);
+  });
+
+  it.each([
+    {
+      now: "2026-10-24T02:30:00Z",
+      month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T03:00:00.000Z" },
+      lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-24T03:00:00.000Z" },
+      lastMonthNumber: 9,
+    },
+    {
+      // a whole hour is still inside the window, and last month's span stops at its own end
+      now: "2026-03-31T05:00:00Z",
+      month: { since: "2026-03-01T00:00:00.000Z", until: "2026-03-31T06:00:00.000Z" },
+      lastMonth: { since: "2026-02-01T00:00:00.000Z", until: "2026-03-01T00:00:00.000Z" },
+      lastMonthNumber: 2,
+    },
+    {
+      now: "2026-01-01T00:10:00Z",
+      month: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-01T01:00:00.000Z" },
+      lastMonth: { since: "2025-12-01T00:00:00.000Z", until: "2025-12-01T01:00:00.000Z" },
+      lastMonthNumber: 12,
+    },
+  ])("asks the rollups for whole hours and the same span of last month at $now", ({ now, ...want }) => {
+    expect(statisticsWindows(monthWindow(new Date(now)))).toEqual(want);
   });
 });
 
@@ -97,17 +122,67 @@ describe("the figures", () => {
     expect(splitMoney("-US$9,223")).toEqual(["-US$9,223", ""]);
   });
 
-  it("draws each day's bar in its slot against the month's largest day", () => {
+  it("draws each day's bar in its slot against the month's largest day, as the board does", () => {
     const rows = barRows(
-      new Map([
-        [1, 10n],
-        [2, 5n],
-      ]),
+      dayStacks(
+        new Map([
+          [1, 10n],
+          [2, 5n],
+          [3, 0n],
+        ]),
+      ),
       31,
     );
     expect(rows).toHaveLength(2);
-    expect(rows[0]).toMatchObject({ key: "1", f0: "6.5", f3: "190.0" });
-    expect(rows[1]).toMatchObject({ key: "2", f0: "38.7", f3: "95.0" });
+    expect(rows[0]).toMatchObject({ key: "1-0", f0: "6.5", f1: "24.8", f3: "164.0", f5: "fill: var(--c0);" });
+    expect(rows[1]).toMatchObject({ key: "2-0", f0: "38.7", f1: "107.4", f3: "81.4" });
+    expect(barRows(dayStacks(new Map([[1, 0n]])), 31)).toEqual([]);
+  });
+
+  it("stacks a day's models from the bottom in the model card's order and colours, a gap apart", () => {
+    const bucket = (at: string, group: string, amount: string): Schemas["UsageBucket"] => ({
+      at,
+      group,
+      metrics: { spend: { amount, currency: "USD" }, requests: "1" },
+    });
+    const stacks = modelStacks(
+      [
+        bucket("2026-10-01T00:00:00Z", "b", "300"),
+        bucket("2026-10-01T00:00:00Z", "a", "600"),
+        bucket("2026-10-01T00:00:00Z", "unranked", "100"),
+        bucket("2026-10-02T00:00:00Z", "a", "1"),
+        { at: "2026-10-02T00:00:00Z", group: "a", metrics: { spend: { amount: "999", currency: "EUR" } } },
+      ],
+      "USD",
+      ["a", "gone", "b"],
+    );
+    expect(stacks.get(1)).toEqual([
+      { amount: 600n, fill: "var(--c0)" },
+      { amount: 300n, fill: "var(--c1)" },
+      { amount: 100n, fill: "var(--c3)" },
+    ]);
+    const rows = barRows(stacks, 31);
+    expect(rows.map((row) => [row.f1, row.f3])).toEqual([
+      ["90.9", "97.9"],
+      ["41.3", "48.4"],
+      ["24.8", "15.3"],
+      // a day too small to clear the gap still shows
+      ["189.8", "1.0"],
+    ]);
+  });
+
+  it("compares the month's spend with last month's same span, and gives no change without a basis", () => {
+    const statistics = (amount?: string, backfill = true): Schemas["UsageStatistics"] => ({
+      backfill_complete: backfill,
+      buckets: [],
+      totals: amount ? [{ spend: { amount, currency: "USD" } }, { spend: { amount: "1", currency: "EUR" } }] : [],
+    });
+    expect(spendChange(statistics("1230"), statistics("1000"), "USD")).toBe("+23%");
+    expect(spendChange(statistics("950"), statistics("1000"), "USD")).toBe("−5.0%");
+    expect(spendChange(undefined, statistics("1000"), "USD")).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics(), "USD")).toBeUndefined();
+    expect(spendChange(statistics(), statistics("1000"), "USD")).toBe("−100%");
+    expect(spendChange(statistics("1230"), statistics("1000", false), "USD")).toBeUndefined();
   });
 
   it("labels the chart with its dates, or with the card's sentence when it has none", () => {

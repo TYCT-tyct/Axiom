@@ -156,3 +156,15 @@ export function buildMockCall(
     ...over,
   };
 }
+
+// lastMonth copies calls a month earlier with each charge cut so that their month spends `percent` less than these
+// calls do: the overview's comparison with the same days of last month then reads +percent%.
+export function lastMonth(calls: Schemas["Call"][], percent: number): Schemas["Call"][] {
+  return calls.map((call) => {
+    const at = new Date(call.at);
+    at.setUTCMonth(at.getUTCMonth() - 1);
+    const amount = ((BigInt(call.price.amount) * 100n) / BigInt(100 + percent)).toString();
+    const id = call.id.replace(/^0{8}/, "11111111") as Schemas["CallId"];
+    return { ...call, id, at: at.toISOString(), price: { ...call.price, amount } };
+  });
+}

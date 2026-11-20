@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { collectErrors } from "./collect-errors.ts";
 import { mockConsole, signedInAs } from "./console-api.ts";
+import { lastMonth } from "./console-calls-data.ts";
 import { demoDocuments, goodInvite } from "./console-data.ts";
 import { knownEmail } from "./mock-auth.ts";
 
@@ -362,6 +363,21 @@ test.describe("balance", () => {
     await expect(page.getByRole("heading", { level: 1, name: "账单与充值" })).toBeVisible();
     await expect(page.getByText("US$12.00", { exact: true })).toBeVisible();
     await expect(page.getByText("US$0.25", { exact: true })).toBeVisible();
+  });
+});
+
+test.describe("overview", () => {
+  test("compares the month's spend with the same days of last month and splits each day by model", async ({ page }) => {
+    const state = await mockConsole(page);
+    state.calls = [...state.calls, ...lastMonth(state.calls, 23)];
+    signedInAs(state);
+    await page.clock.install({ time: new Date("2026-10-24T10:00:00+08:00") });
+    await page.goto("/console/");
+    await expect(main(page).getByText("比 9 月同期 +23%")).toBeVisible();
+    const fills = await main(page)
+      .locator(".qch2 svg rect")
+      .evaluateAll((rects) => new Set(rects.map((rect) => (rect as SVGElement).style.fill)).size);
+    expect(fills).toBeGreaterThan(1);
   });
 });
 

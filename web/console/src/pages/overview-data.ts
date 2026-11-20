@@ -4,7 +4,15 @@ import { useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
-import { balanceQuery, callAggregateQuery, keysQuery, recentErrorsQuery, siteQuery } from "../queries";
+import {
+  balanceQuery,
+  callAggregateQuery,
+  keysQuery,
+  recentErrorsQuery,
+  siteQuery,
+  usageStatisticsQuery,
+} from "../queries";
+import { barRows, barStacks, spendChange, statisticsWindows } from "./overview-chart";
 import { seriesColor } from "./usage-model";
 
 // Everything the overview shows that is not a piece of markup: the month the figures cover, the board's rows and texts
@@ -48,14 +56,15 @@ function useMonthWindow() {
   return { period, advance };
 }
 
+
+
 type DesktopProps = Parameters<typeof DesktopOverview>[0];
-type BarRow = DesktopProps["rows"]["bars0"][number];
 type ModelRow = DesktopProps["rows"]["models0"][number];
 type RequestRow = DesktopProps["rows"]["requests0"][number];
 type Aggregate = Schemas["CallAggregate"];
 type ApiKey = Schemas["Key"];
 type Call = Schemas["Call"];
-type Format = Pick<ReturnType<typeof useFormat>, "money" | "number" | "hour" | "monthLabel" | "dateTime">;
+type Format = Pick<ReturnType<typeof useFormat>, "money" | "number" | "hour" | "monthLabel" | "monthName" | "dateTime">;
 type Totals = { calls: bigint; amount: bigint };
 type KeysState = "pending" | "error" | "ok";
 
@@ -112,33 +121,6 @@ export function splitMoney(text: string): [string, string] {
   return point < 0 ? [text, ""] : [text.slice(0, point), text.slice(point)];
 }
 
-export function barRows(daily: Map<number, bigint> | undefined, days: number): BarRow[] {
-  if (!daily?.size) {
-    return [];
-  }
-  const max = [...daily.values()].reduce((a, b) => (b > a ? b : a), 0n);
-  if (max === 0n) {
-    return [];
-  }
-  const slot = 1000 / days;
-  const width = slot * 0.6;
-  return [...daily.entries()]
-    .sort(([a], [b]) => a - b)
-    .map(([day, amount]) => {
-      const height = (Number(amount) / Number(max)) * 190;
-      return {
-        key: String(day),
-        kind: "0" as const,
-        f0: (slot * (day - 1) + (slot - width) / 2).toFixed(1),
-        f1: (190 - height).toFixed(1),
-        f2: width.toFixed(1),
-        f3: height.toFixed(1),
-        f4: "2",
-        f5: "fill: var(--c0);",
-      };
-    });
-}
-
 export function chartLabels(days: number, month: number, note: string): { text: string; left: string }[] {
   const marks = [1, 8, 15, 22, days];
   if (note) {
@@ -147,12 +129,27 @@ export function chartLabels(days: number, month: number, note: string): { text: 
   return marks.map((day) => ({ text: `${month}/${day}`, left: `left: ${(((day - 0.5) / days) * 100).toFixed(2)}%;` }));
 }
 
-function spendOf(balance: Schemas["Balance"] | undefined, format: Format, month: string) {
+// spendOf writes the month's spend, and under it its change from the same span of last month, or the month's name when
+// there is no change to give.
+function spendOf(
+  balance: Schemas["Balance"] | undefined,
+  format: Format,
+  t: TFunction,
+  month: string,
+  change: { value: string | undefined; lastMonth: number },
+) {
   if (!balance) {
     return { spendWhole: "—", spendFraction: "", spendNote: "" };
   }
   const [whole, fraction] = splitMoney(format.money(balance.spent_this_month));
-  return { spendWhole: whole, spendFraction: fraction, spendNote: format.monthLabel(month) };
+  const note = change.value
+    ? t("overview.spendChange", {
+        change: change.value,
+        month: change.lastMonth,
+        monthName: format.monthName(change.lastMonth),
+      })
+    : format.monthLabel(month);
+  return { spendWhole: whole, spendFraction: fraction, spendNote: note };
 }
 
 function requestsOf(totals: Totals | undefined, currency: string | undefined, format: Format, t: TFunction) {
@@ -205,6 +202,23 @@ function chartOf(daily: Map<number, bigint> | undefined, note: string, window: M
   };
 }
 
+// rankedModels orders the month's models with calls by spend, then by calls: the model card's order, and the colours
+// the chart gives the models.
+function rankedModels(rows: Aggregate[] | undefined, currency: string | undefined): Aggregate[] {
+  return (rows ?? [])
+    .filter((row) => row.price?.currency === currency && BigInt(row.calls ?? "0") > 0n)
+    .sort((a, b) => {
+      const amountA = BigInt(a.price?.amount ?? "0");
+      const amountB = BigInt(b.price?.amount ?? "0");
+      if (amountA !== amountB) {
+        return amountB > amountA ? 1 : -1;
+      }
+      const callsA = BigInt(a.calls ?? "0");
+      const callsB = BigInt(b.calls ?? "0");
+      return callsB > callsA ? 1 : callsB < callsA ? -1 : 0;
+    });
+}
+
 // modelRowsOf keeps the models with calls even when their calls cost nothing: a free or failed call is still a call, and
 // the card shows its zero spend rather than saying the month is empty.
 export function modelRowsOf(
@@ -220,18 +234,7 @@ export function modelRowsOf(
   if (!rows || !currency) {
     return [];
   }
-  const called = rows
-    .filter((row) => row.price?.currency === currency && BigInt(row.calls ?? "0") > 0n)
-    .sort((a, b) => {
-      const amountA = BigInt(a.price?.amount ?? "0");
-      const amountB = BigInt(b.price?.amount ?? "0");
-      if (amountA !== amountB) {
-        return amountB > amountA ? 1 : -1;
-      }
-      const callsA = BigInt(a.calls ?? "0");
-      const callsB = BigInt(b.calls ?? "0");
-      return callsB > callsA ? 1 : callsB < callsA ? -1 : 0;
-    });
+  const called = rankedModels(rows, currency);
   if (called.length === 0) {
     return [placeholderModel(t("overview.chartEmpty"))];
   }
@@ -427,10 +430,14 @@ function aggregateFailure(
 export function useBoardData(t: TFunction) {
   const format = useFormat();
   const { period, advance } = useMonthWindow();
+  const windows = statisticsWindows(period);
   const keys = useInfiniteQuery(keysQuery());
   const errors = useQuery(recentErrorsQuery);
   const days = useQuery(callAggregateQuery({ since: period.since, until: period.until }, "day"));
   const models = useQuery(callAggregateQuery({ since: period.since, until: period.until }, "model"));
+  // Only the chart's split by model and the spend's comparison wait on these, in parallel with the rest.
+  const byModel = useQuery(usageStatisticsQuery({ ...windows.month, granularity: "day", group_by: "model" }));
+  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.lastMonth, granularity: "week" }));
   const balance = useQuery(balanceQuery);
   const site = useQuery(siteQuery);
   const currency = balance.data?.balance.currency ?? site.data?.currency;
@@ -450,7 +457,10 @@ export function useBoardData(t: TFunction) {
     errors,
     aggregate: aggregateFailure(days, models, advance),
     text: {
-      ...spendOf(balance.data, format, period.month),
+      ...spendOf(balance.data, format, t, period.month, {
+        value: spendChange(byModel.data, lastMonth.data, currency),
+        lastMonth: windows.lastMonthNumber,
+      }),
       ...requestsOf(totals, currency, format, t),
       ...balanceOf(balance.data, format, t),
       ...keysOf(keyList, keyState, keys.hasNextPage, format, t),
@@ -459,7 +469,15 @@ export function useBoardData(t: TFunction) {
     rows: {
       models0: modelRowsOf(models.data?.data, currency, modelNote, format, t),
       requests0: requestRowsOf(errorCalls, errorNote, new Map(keyList.map((key) => [key.id, key.name])), format, t),
-      bars0: barRows(daily, period.days),
+      bars0: barRows(
+        barStacks(
+          byModel.data,
+          daily,
+          currency,
+          rankedModels(models.data?.data, currency).map((row) => row.bucket ?? ""),
+        ),
+        period.days,
+      ),
     },
     dayTable: dayTableOf(dailyRows(days.data?.data, currency), period, currency, format),
     errorList: errorListOf(errorCalls, format, t),
