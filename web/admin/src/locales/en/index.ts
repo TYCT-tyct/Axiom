@@ -5,6 +5,7 @@ import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import operations from "./operations";
 import orders from "./orders";
 import pricing from "./pricing";
 import redeem from "./redeem";
@@ -20,6 +21,8 @@ export const initial = {
   nav: {
     overview: "Overview",
     approvals: "Approvals",
+    operationsCredentials: "Operations credentials",
+    operationsLimits: "Money & execution limits",
     users: "Users",
     orders: "Orders",
     redeemCodes: "Redeem codes",
@@ -159,7 +162,9 @@ export const initial = {
   pricing,
   redeem,
   approvals,
-} satisfies Messages<Omit<typeof zh, "settings" | "suppliers">>;
+} satisfies Messages<Omit<typeof zh, "operations" | "settings" | "suppliers">>;
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers }) satisfies Messages<typeof zh>;
+export default /* @__PURE__ */ Object.assign({}, initial, { operations, settings, suppliers }) satisfies Messages<
+  typeof zh
+>;

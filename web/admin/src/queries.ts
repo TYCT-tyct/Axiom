@@ -572,3 +572,31 @@ export const approvalQuery = (id: string) =>
       ) as AdminSchemas["OperationsApproval"],
     refetchInterval: ({ state }) => whileDecidable(state.data ? [state.data] : []),
   });
+
+export const operationsCredentialsQuery = infiniteQueryOptions({
+  queryKey: [accountKey, "operations-credentials"],
+  queryFn: ({ pageParam, signal }) =>
+    unwrap(
+      adminApi.GET(`${base}/operations/credentials`, {
+        params: { query: { cursor: pageParam, limit: pageSize } },
+        signal,
+      }),
+    ),
+  initialPageParam: firstPage,
+  getNextPageParam: (page) => page.next_cursor,
+});
+
+export const operationsCapPoliciesQuery = queryOptions({
+  queryKey: [accountKey, "operations-cap-policies"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/cap-policies`, { signal })),
+});
+
+export const operationsAgentLimitsQuery = queryOptions({
+  queryKey: [accountKey, "operations-agent-limits"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/agent-limits`, { signal })),
+});
+
+export const operationsPriceEnvelopesQuery = queryOptions({
+  queryKey: [accountKey, "operations-price-envelopes"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/price-envelopes`, { signal })),
+});

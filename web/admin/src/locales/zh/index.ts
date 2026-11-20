@@ -3,6 +3,7 @@ import audit from "./audit";
 import calls from "./calls";
 import mappings from "./mappings";
 import models from "./models";
+import operations from "./operations";
 import orders from "./orders";
 import pricing from "./pricing";
 import redeem from "./redeem";
@@ -19,6 +20,8 @@ export const initial = {
   nav: {
     overview: "运营看板",
     approvals: "运营审批",
+    operationsCredentials: "运营凭证",
+    operationsLimits: "资金与执行上限",
     users: "用户",
     orders: "订单与退款",
     redeemCodes: "兑换码",
@@ -156,4 +159,4 @@ export const initial = {
 };
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers });
+export default /* @__PURE__ */ Object.assign({}, initial, { operations, settings, suppliers });

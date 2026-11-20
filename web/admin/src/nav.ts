@@ -10,6 +10,8 @@ type Icon = (typeof tabIcons)[number] | (typeof sheetIcons)[number];
 export const nav = [
   { to: "/", label: "nav.overview", icon: "ov", permission: "sites.manage" },
   { to: "/approvals", label: "nav.approvals", icon: "budget", permission: "operations.approve" },
+  { to: "/operations-credentials", label: "nav.operationsCredentials", icon: "mkeys", permission: "operations.manage" },
+  { to: "/operations-limits", label: "nav.operationsLimits", icon: "budget", permission: "operations.manage" },
   { to: "/users", label: "nav.users", icon: "mkeys", permission: "users.view" },
   { to: "/orders", label: "nav.orders", icon: "bill", permission: "sites.manage" },
   { to: "/redeem-codes", label: "nav.redeemCodes", icon: "keys", permission: "sites.manage" },
