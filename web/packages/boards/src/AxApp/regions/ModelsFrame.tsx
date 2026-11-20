@@ -3,11 +3,10 @@
 
 
 import type zh from "./ModelsFrame.zh.ts";
-import styles from "./ModelsFrame.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   };
 export default function ModelsFrame({ children }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("pin wide qpages") + " " + styles.scope}>{children}</div></>;
+return <><div className={"pin wide qpages"}>{children}</div></>;
 }
 /* jscpd:ignore-end */

@@ -3,11 +3,10 @@
 
 
 import type zh from "./AdminCodeViewport.zh.ts";
-import styles from "./AdminCodeViewport.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   };
 export default function AdminCodeViewport({ children }: Props & { children?: import("react").ReactNode }) {
-return <><section className={("lgd") + " " + styles.scope} tabIndex={Number("-1")}>{children}</section></>;
+return <><section className={"lgd"} tabIndex={Number("-1")}>{children}</section></>;
 }
 /* jscpd:ignore-end */

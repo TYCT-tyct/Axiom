@@ -3,12 +3,11 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartLoadMore.zh.ts";
-import styles from "./PartLoadMore.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { load?: DOMAttributes<Element>["onClick"];
 pending?: boolean; };  text: { label: string; }; };
 export default function PartLoadMore({ values: v = {}, text }: Props) {
-return <><div className={("lgmore") + " " + styles.scope} aria-live={"polite"}><button type={"button"} className={("btn sec sm") + " " + styles.scope} data-a={"lmore"} onClick={v.load} disabled={v.pending}>{text.label}</button></div></>;
+return <><div className={"lgmore"} aria-live={"polite"}><button type={"button"} className={"btn sec sm"} data-a={"lmore"} onClick={v.load} disabled={v.pending}>{text.label}</button></div></>;
 }
 /* jscpd:ignore-end */

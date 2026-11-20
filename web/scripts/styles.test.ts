@@ -30,6 +30,15 @@ describe("app code", () => {
     expect(run(page('<Card layout="flush" style={{ "--i": 2 }} />'))).toEqual([]);
   });
 
+  it("allows the generated AxApp stylesheet only in the console and admin shells", () => {
+    const sheet = 'import "@axiom/boards/AxApp/regions.css";\nexport const L = () => <div />;\n';
+    expect(run({ "console/src/layout.tsx": sheet, "admin/src/layout.tsx": sheet })).toEqual([]);
+    expect(run({ "console/src/pages/a.tsx": sheet }).join("\n")).toContain("console/src/pages/a.tsx:1: css-import");
+    expect(run({ "console/src/layout.tsx": 'import "./extra.css";\n' }).join("\n")).toContain(
+      "console/src/layout.tsx:1: css-import",
+    );
+  });
+
   it("keeps a baselined use and refuses one more", () => {
     const baseline: Baseline = { migrated: [], counts: { "class-name": { "console/src/pages/a.tsx": 1 } } };
     expect(run(page('<Card className="p-4" />'), baseline)).toEqual([]);

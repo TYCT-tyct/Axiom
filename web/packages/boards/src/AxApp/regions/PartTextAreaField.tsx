@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./PartTextAreaField.zh.ts";
-import styles from "./PartTextAreaField.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { id?: string | number;
@@ -20,6 +19,6 @@ descriptionId?: string | number;
 hideMessage?: boolean; };  text: { label: string;
 message: string; }; };
 export default function PartTextAreaField({ values: v = {}, text }: Props) {
-return <><div className={("nkf") + " " + styles.scope}><div className={("nkrow") + " " + styles.scope}><label className={("nkl") + " " + styles.scope} htmlFor={String(v.id ?? "")}>{text.label}</label></div><textarea className={("nkin " + String(v.invalidClass ?? "")) + " " + styles.scope} placeholder={String(v.placeholder ?? "")} spellCheck={"false"} id={String(v.id ?? "")} name={String(v.name ?? "")} defaultValue={String(v.initial ?? "")} autoComplete={String(v.autocomplete ?? "")} aria-describedby={String(v.describedBy ?? "")} ref={v.control} onInput={v.input} />{!v.hideMessage && (<div className={(String(v.messageClass ?? "")) + " " + styles.scope} id={String(v.descriptionId ?? "")}>{text.message}</div>)}</div></>;
+return <><div className={"nkf"}><div className={"nkrow"}><label className={"nkl"} htmlFor={String(v.id ?? "")}>{text.label}</label></div><textarea className={"nkin " + String(v.invalidClass ?? "")} placeholder={String(v.placeholder ?? "")} spellCheck={"false"} id={String(v.id ?? "")} name={String(v.name ?? "")} defaultValue={String(v.initial ?? "")} autoComplete={String(v.autocomplete ?? "")} aria-describedby={String(v.describedBy ?? "")} ref={v.control} onInput={v.input} />{!v.hideMessage && (<div className={String(v.messageClass ?? "")} id={String(v.descriptionId ?? "")}>{text.message}</div>)}</div></>;
 }
 /* jscpd:ignore-end */

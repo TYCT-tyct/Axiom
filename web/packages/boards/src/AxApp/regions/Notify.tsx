@@ -3,7 +3,6 @@
 import { Fragment, type DOMAttributes } from "react";
 import { boardStyle } from "../../dom.ts";
 import type zh from "./Notify.zh.ts";
-import styles from "./Notify.module.css";
 
 type Notifications0Item = { key: string; kind: "0"; f0: string; f1: string; f2: string; f3: "button" | "submit" | "reset"; f4: string; f5: string; f6: "button" | "submit" | "reset"; f7: string; f8: string; };
 export type Props = { t: (key: keyof typeof zh) => string; values?: { rowStyle?: string | number;
@@ -13,6 +12,6 @@ singleChannel?: boolean;
 pageStyle?: string | number;
 hideHead?: boolean; }; rows: { notifications0: readonly Notifications0Item[]; };  };
 export default function Notify({ t, values: v = {}, rows }: Props) {
-return <><section className={("qpg p-notify ") + " " + styles.scope} style={boardStyle(String(v.pageStyle ?? ""))}>{!v.hideHead && (<div className={("qph") + " " + styles.scope}><div className={("qpht") + " " + styles.scope}><div className={("qptl") + " " + styles.scope}><h1 className={styles.scope}>{t("m4b6ded8a7f")}</h1></div><p className={styles.scope}>{t("m512b281f73")}</p></div><div className={("qpa") + " " + styles.scope} /></div>)}<section className={("qcard rows") + " " + styles.scope}><div className={("qnt hd") + " " + styles.scope} style={boardStyle(String(v.rowStyle ?? ""))}><span className={styles.scope} /><span className={styles.scope}>{t("m3d708e8e8b")}</span>{!v.singleChannel && (<span className={styles.scope}>{t("m36e623b19e")}</span>)}</div>{rows.notifications0.map(item => <Fragment key={item.key}>{<div className={(item.f0) + " " + styles.scope} style={boardStyle(String(v.rowStyle ?? ""))}><div className={styles.scope}><b className={styles.scope}>{item.f1}</b><span className={styles.scope}>{item.f2}</span></div><button type={item.f3} className={(item.f4) + " " + styles.scope} aria-label={item.f5} onClick={v.onToggle} disabled={v.toggleDisabled}><i className={styles.scope} /></button>{!v.singleChannel && (<button type={item.f6} className={(item.f7) + " " + styles.scope} aria-label={item.f8}><i className={styles.scope} /></button>)}</div>}</Fragment>)}</section></section></>;
+return <><section className={"qpg p-notify "} style={boardStyle(String(v.pageStyle ?? ""))}>{!v.hideHead && (<div className={"qph"}><div className={"qpht"}><div className={"qptl"}><h1>{t("m4b6ded8a7f")}</h1></div><p>{t("m512b281f73")}</p></div><div className={"qpa"} /></div>)}<section className={"qcard rows"}><div className={"qnt hd"} style={boardStyle(String(v.rowStyle ?? ""))}><span /><span>{t("m3d708e8e8b")}</span>{!v.singleChannel && (<span>{t("m36e623b19e")}</span>)}</div>{rows.notifications0.map(item => <Fragment key={item.key}>{<div className={item.f0} style={boardStyle(String(v.rowStyle ?? ""))}><div><b>{item.f1}</b><span>{item.f2}</span></div><button type={item.f3} className={item.f4} aria-label={item.f5} onClick={v.onToggle} disabled={v.toggleDisabled}><i /></button>{!v.singleChannel && (<button type={item.f6} className={item.f7} aria-label={item.f8}><i /></button>)}</div>}</Fragment>)}</section></section></>;
 }
 /* jscpd:ignore-end */

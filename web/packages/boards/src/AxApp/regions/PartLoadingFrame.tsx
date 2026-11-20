@@ -3,11 +3,10 @@
 
 import { boardStyle } from "../../dom.ts";
 import type zh from "./PartLoadingFrame.zh.ts";
-import styles from "./PartLoadingFrame.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { frameStyle?: string | number; };   };
 export default function PartLoadingFrame({ values: v = {}, children }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("pg-ov pstL") + " " + styles.scope} style={boardStyle(String(v.frameStyle ?? ""))}><section className={("qpg p-ov") + " " + styles.scope} data-part={"loading"}>{children}</section></div></>;
+return <><div className={"pg-ov pstL"} style={boardStyle(String(v.frameStyle ?? ""))}><section className={"qpg p-ov"} data-part={"loading"}>{children}</section></div></>;
 }
 /* jscpd:ignore-end */
