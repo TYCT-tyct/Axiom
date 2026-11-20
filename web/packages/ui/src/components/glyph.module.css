@@ -20,18 +20,14 @@
 
 .icon g > *,
 .icon [data-p] {
+  transform-box: fill-box;
+  transform-origin: center;
   transition: transform var(--dur) var(--easeB);
 }
 
 .o,
 .f {
   transition: opacity var(--dur) var(--ease);
-}
-
-.icon g > *,
-.icon [data-p] {
-  transform-box: fill-box;
-  transform-origin: center;
 }
 
 .f {
@@ -209,8 +205,5 @@
 .route .o [data-p~="a1"] {
   stroke-dasharray: 3 2.2;
   stroke-dashoffset: calc(var(--icon-go) * -10.4);
-}
-
-.route .o [data-p~="a1"] {
   transition: stroke-dashoffset 900ms linear;
 }

@@ -14,6 +14,7 @@
   line-height: var(--lh14);
   color: var(--t1);
   cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
 }
 
 .item:hover,
@@ -41,10 +42,6 @@
 .danger,
 .danger .icon {
   color: var(--badT);
-}
-
-.item {
-  transition: background-color var(--dur) var(--ease);
 }
 
 @media (max-width: 767px) {

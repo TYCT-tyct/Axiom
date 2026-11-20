@@ -430,8 +430,20 @@ test("pressing deepseek in the first screen's strip calls the whale", async ({ p
   await expect.poll(() => painted(page)).toBe(true);
 });
 
-// The sea bed's dune is drawn, from the site's own name: a site named otherwise draws another wordmark.
-const dune = (page: Page) =>
+// The sea bed's dune is drawn, from the site's own name: its wordmark mask is made by drawing the name on an offscreen
+// canvas (never in the document), so the test records what that canvas is asked to draw.
+const watchWordmark = (page: Page) =>
+  page.addInitScript(() => {
+    const drawn: string[] = [];
+    (window as unknown as { offscreenText: string[] }).offscreenText = drawn;
+    const fillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function (this: CanvasRenderingContext2D, text: string, ...rest) {
+      if (!this.canvas.isConnected) drawn.push(text);
+      return fillText.call(this, text, ...rest);
+    } as typeof fillText;
+  });
+const wordmarks = (page: Page) => page.evaluate(() => (window as unknown as { offscreenText: string[] }).offscreenText);
+const inked = (page: Page) =>
   page.locator(".hfm6 canvas.art").evaluate((canvas: HTMLCanvasElement) => {
     const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
       0,
@@ -439,36 +451,30 @@ const dune = (page: Page) =>
       canvas.width,
       canvas.height,
     );
-    let sum = 0;
-    let inked = 0;
-    for (let i = 3; i < data.length; i += 4) {
-      sum = (sum * 31 + (data[i] ?? 0)) % 1_000_000_007;
-      if ((data[i] ?? 0) > 0) inked++;
-    }
-    return { sum, inked };
+    return data.filter((value, i) => i % 4 === 3 && value > 0).length;
   });
-test("the sea bed draws its dune, with the site's name for the wordmark", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await mockConsole(page);
-  await page.goto(apps[0].url);
-  await pageHeading(page);
-  await scrollTo(page, 6);
-  await shown(page, 6);
-  await expect.poll(async () => (await dune(page)).inked).toBeGreaterThan(1000);
-  const axiom = await dune(page);
-  await mockConsole(page, "usual", {
-    site: {
+for (const [name, site] of [
+  ["Axiom", undefined],
+  [
+    "Acme Relay",
+    {
       name: "Acme Relay",
       currency: "USD",
       key_prefix: "sk-ax-v1-",
       registration: "invite",
       api_base_url: "https://api.example.com",
     },
+  ],
+] as const)
+  test(`the sea bed draws its dune, with the site's name for the wordmark (${name})`, async ({ page }) => {
+    await watchWordmark(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockConsole(page, "usual", site && { site });
+    await page.goto(apps[0].url);
+    await pageHeading(page);
+    await scrollTo(page, 6);
+    await shown(page, 6);
+    await expect.poll(() => inked(page)).toBeGreaterThan(1000);
+    await expect.poll(() => wordmarks(page)).toContain(name);
+    expect(await wordmarks(page)).not.toContain(name === "Axiom" ? "Acme Relay" : "Axiom");
   });
-  await page.goto(apps[0].url);
-  await pageHeading(page);
-  await scrollTo(page, 6);
-  await shown(page, 6);
-  await expect.poll(async () => (await dune(page)).inked).toBeGreaterThan(1000);
-  expect((await dune(page)).sum).not.toBe(axiom.sum);
-});
