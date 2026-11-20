@@ -1,13 +1,21 @@
 import type { Schemas } from "@axiom/api";
 import type { TFunction } from "i18next";
 import { describe, expect, it } from "vitest";
-import { barRows, dayStacks, modelStacks, spendChange, statisticsWindows } from "./overview-chart";
 import {
+  barRows,
   chartLabels,
+  chartStacks,
+  dayStacks,
+  modelStacks,
+  spendChange,
+  statisticsWindows,
+} from "./overview-chart";
+import {
   dailyRows,
   dailyTotals,
   modelRowsOf,
   monthWindow,
+  rankedModels,
   requestRowsOf,
   splitMoney,
   sumTotals,
@@ -42,27 +50,51 @@ describe("the month the overview covers", () => {
     expect(monthWindow(new Date("2026-10-24T10:00:00+08:00")).days).toBe(31);
   });
 
+  // The chart's month runs to the end of the current hour; the comparison takes only the hours that have ended and
+  // that both months have, equally long on both sides.
   it.each([
     {
       now: "2026-10-24T02:30:00Z",
       month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T03:00:00.000Z" },
-      lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-24T03:00:00.000Z" },
+      comparison: {
+        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-24T02:00:00.000Z" },
+        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-24T02:00:00.000Z" },
+      },
       lastMonthNumber: 9,
     },
     {
-      // a whole hour is still inside the window, and last month's span stops at its own end
+      // last month is the shorter: both sides are its 672 hours
       now: "2026-03-31T05:00:00Z",
       month: { since: "2026-03-01T00:00:00.000Z", until: "2026-03-31T06:00:00.000Z" },
-      lastMonth: { since: "2026-02-01T00:00:00.000Z", until: "2026-03-01T00:00:00.000Z" },
+      comparison: {
+        month: { since: "2026-03-01T00:00:00.000Z", until: "2026-03-29T00:00:00.000Z" },
+        lastMonth: { since: "2026-02-01T00:00:00.000Z", until: "2026-03-01T00:00:00.000Z" },
+      },
       lastMonthNumber: 2,
     },
     {
-      now: "2026-01-01T00:10:00Z",
+      // exactly on the hour, the hour just ended counts
+      now: "2026-10-01T01:00:00Z",
+      month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T02:00:00.000Z" },
+      comparison: {
+        month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T01:00:00.000Z" },
+        lastMonth: { since: "2026-09-01T00:00:00.000Z", until: "2026-09-01T01:00:00.000Z" },
+      },
+      lastMonthNumber: 9,
+    },
+    {
+      // the month's first hour: no hour has ended
+      now: "2026-10-01T00:01:00Z",
+      month: { since: "2026-10-01T00:00:00.000Z", until: "2026-10-01T01:00:00.000Z" },
+      lastMonthNumber: 9,
+    },
+    {
+      // exactly at the month's start: still none
+      now: "2026-01-01T00:00:00Z",
       month: { since: "2026-01-01T00:00:00.000Z", until: "2026-01-01T01:00:00.000Z" },
-      lastMonth: { since: "2025-12-01T00:00:00.000Z", until: "2025-12-01T01:00:00.000Z" },
       lastMonthNumber: 12,
     },
-  ])("asks the rollups for whole hours and the same span of last month at $now", ({ now, ...want }) => {
+  ])("compares only ended hours both months have at $now", ({ now, ...want }) => {
     expect(statisticsWindows(monthWindow(new Date(now)))).toEqual(want);
   });
 });
@@ -90,7 +122,7 @@ describe("the figures", () => {
   it("keeps a day and a model whose calls cost nothing", () => {
     const rows = [aggregate("2026-10-01", "5", "0")];
     expect(dailyRows(rows, "USD")).toEqual([{ day: 1, calls: 5n, amount: 0n }]);
-    const models = modelRowsOf(rows, "USD", "", format, t);
+    const models = modelRowsOf(rankedModels(rows, "USD"), "USD", "", format, t);
     expect(models).toHaveLength(1);
     expect(models[0]).toMatchObject({ f3: "2026-10-01", f5: "0%", f7: "$0" });
   });
@@ -154,7 +186,11 @@ describe("the figures", () => {
         { at: "2026-10-02T00:00:00Z", group: "a", metrics: { spend: { amount: "999", currency: "EUR" } } },
       ],
       "USD",
-      ["a", "gone", "b"],
+      new Map([
+        ["a", 0],
+        ["gone", 1],
+        ["b", 2],
+      ]),
     );
     expect(stacks.get(1)).toEqual([
       { amount: 600n, fill: "var(--c0)" },
@@ -171,18 +207,55 @@ describe("the figures", () => {
     ]);
   });
 
-  it("compares the month's spend with last month's same span, and gives no change without a basis", () => {
+  it("draws the split by model only while it accounts for each day's total, and one total bar otherwise", () => {
+    const statistics = (backfill: boolean): Schemas["UsageStatistics"] => ({
+      backfill_complete: backfill,
+      buckets: [
+        { at: "2026-10-01T00:00:00Z", group: "a", metrics: { spend: { amount: "600", currency: "USD" } } },
+        { at: "2026-10-01T00:00:00Z", group: "b", metrics: { spend: { amount: "300", currency: "USD" } } },
+      ],
+      totals: [],
+    });
+    const order = new Map([
+      ["a", 0],
+      ["b", 1],
+    ]);
+    const daily = new Map([[1, 900n]]);
+    const split = chartStacks(daily, statistics(true), "USD", order);
+    expect(split.split).toBe(true);
+    // two models on one day: two segments at the same x
+    const rows = barRows(split.stacks, 31);
+    expect(rows.map((row) => [row.f0, row.f5])).toEqual([
+      ["6.5", "fill: var(--c0);"],
+      ["6.5", "fill: var(--c4);"],
+    ]);
+    const total = [{ amount: 900n, fill: "var(--c0)" }];
+    for (const [stats, days] of [
+      [statistics(false), daily], // history still backfilling
+      [statistics(true), new Map([[1, 1000n]])], // a call the rollups have not taken in yet
+      [statistics(true), new Map([...daily, [2, 5n]])], // a day the rollups do not have
+      [undefined, daily], // no split, or it failed
+    ] as const) {
+      const single = chartStacks(days, stats, "USD", order);
+      expect(single.split).toBe(false);
+      expect(single.stacks?.get(1)).toEqual(days === daily ? total : [{ amount: days.get(1), fill: "var(--c0)" }]);
+    }
+    expect(chartStacks(undefined, statistics(true), "USD", order).stacks).toBeUndefined();
+  });
+
+  it("compares the month's spend with last month's same span only while the rollups agree with the calls", () => {
     const statistics = (amount?: string, backfill = true): Schemas["UsageStatistics"] => ({
       backfill_complete: backfill,
       buckets: [],
       totals: amount ? [{ spend: { amount, currency: "USD" } }, { spend: { amount: "1", currency: "EUR" } }] : [],
     });
-    expect(spendChange(statistics("1230"), statistics("1000"), "USD")).toBe("+23%");
-    expect(spendChange(statistics("950"), statistics("1000"), "USD")).toBe("−5.0%");
-    expect(spendChange(undefined, statistics("1000"), "USD")).toBeUndefined();
-    expect(spendChange(statistics("1230"), statistics(), "USD")).toBeUndefined();
-    expect(spendChange(statistics(), statistics("1000"), "USD")).toBe("−100%");
-    expect(spendChange(statistics("1230"), statistics("1000", false), "USD")).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics("1000"), "USD", true)).toBe("+23%");
+    expect(spendChange(statistics("950"), statistics("1000"), "USD", true)).toBe("−5.0%");
+    expect(spendChange(statistics(), statistics("1000"), "USD", true)).toBe("−100%");
+    expect(spendChange(statistics("1230"), statistics("1000"), "USD", false)).toBeUndefined();
+    expect(spendChange(undefined, statistics("1000"), "USD", true)).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics(), "USD", true)).toBeUndefined();
+    expect(spendChange(statistics("1230"), statistics("1000", false), "USD", true)).toBeUndefined();
   });
 
   it("labels the chart with its dates, or with the card's sentence when it has none", () => {

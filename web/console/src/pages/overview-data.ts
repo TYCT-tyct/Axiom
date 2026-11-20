@@ -12,7 +12,7 @@ import {
   siteQuery,
   usageStatisticsQuery,
 } from "../queries";
-import { barRows, barStacks, spendChange, statisticsWindows } from "./overview-chart";
+import { chartOf, spendChart, statisticsWindows } from "./overview-chart";
 import { seriesColor } from "./usage-model";
 
 // Everything the overview shows that is not a piece of markup: the month the figures cover, the board's rows and texts
@@ -132,14 +132,6 @@ export function splitMoney(text: string): [string, string] {
   return point < 0 ? [text, ""] : [text.slice(0, point), text.slice(point)];
 }
 
-export function chartLabels(days: number, month: number, note: string): { text: string; left: string }[] {
-  const marks = [1, 8, 15, 22, days];
-  if (note) {
-    return [{ text: note, left: "left: 1.61%;" }, ...marks.slice(1).map(() => ({ text: "", left: "" }))];
-  }
-  return marks.map((day) => ({ text: `${month}/${day}`, left: `left: ${(((day - 0.5) / days) * 100).toFixed(2)}%;` }));
-}
-
 // spendOf writes the month's spend, and under it its change from the same span of last month, or the month's name when
 // there is no change to give.
 function spendOf(
@@ -195,27 +187,9 @@ function keysOf(keys: ApiKey[], state: KeysState, more: boolean, format: Format,
   };
 }
 
-function chartOf(daily: Map<number, bigint> | undefined, note: string, window: MonthWindow) {
-  const hasSpend = daily !== undefined && [...daily.values()].some((amount) => amount > 0n);
-  const labels = chartLabels(window.days, window.monthNumber, hasSpend ? "" : note);
-  const at = (index: number) => labels[index] ?? { text: "", left: "" };
-  return {
-    chartDate0: at(0).text,
-    chartDateLeft0: at(0).left,
-    chartDate1: at(1).text,
-    chartDateLeft1: at(1).left,
-    chartDate2: at(2).text,
-    chartDateLeft2: at(2).left,
-    chartDate3: at(3).text,
-    chartDateLeft3: at(3).left,
-    chartDate4: at(4).text,
-    chartDateLeft4: at(4).left,
-  };
-}
-
 // rankedModels orders the month's models with calls by spend, then by calls: the model card's order, and the colours
 // the chart gives the models.
-function rankedModels(rows: Aggregate[] | undefined, currency: string | undefined): Aggregate[] {
+export function rankedModels(rows: Aggregate[] | undefined, currency: string | undefined): Aggregate[] {
   return (rows ?? [])
     .filter((row) => row.price?.currency === currency && BigInt(row.calls ?? "0") > 0n)
     .sort((a, b) => {
@@ -233,7 +207,7 @@ function rankedModels(rows: Aggregate[] | undefined, currency: string | undefine
 // modelRowsOf keeps the models with calls even when their calls cost nothing: a free or failed call is still a call, and
 // the card shows its zero spend rather than saying the month is empty.
 export function modelRowsOf(
-  rows: Aggregate[] | undefined,
+  called: Aggregate[] | undefined,
   currency: string | undefined,
   note: string,
   format: Format,
@@ -242,10 +216,9 @@ export function modelRowsOf(
   if (note) {
     return [placeholderModel(note)];
   }
-  if (!rows || !currency) {
+  if (!called || !currency) {
     return [];
   }
-  const called = rankedModels(rows, currency);
   if (called.length === 0) {
     return [placeholderModel(t("overview.chartEmpty"))];
   }
@@ -438,6 +411,9 @@ function aggregateFailure(
   };
 }
 
+// answer is what a query's last fetch gave: a failed refetch keeps its old data, which is no longer the account's.
+const answer = <T>(query: { isSuccess: boolean; data?: T }) => (query.isSuccess ? query.data : undefined);
+
 export function useBoardData(t: TFunction) {
   const format = useFormat();
   const { period, advance } = useMonthWindow();
@@ -445,19 +421,30 @@ export function useBoardData(t: TFunction) {
   const windows = statisticsWindows(period);
   const keys = useInfiniteQuery(keysQuery());
   const errors = useQuery(recentErrorsQuery);
-  const days = useQuery(callAggregateQuery({ since: period.since, until: period.until }, "day"));
-  const models = useQuery(callAggregateQuery({ since: period.since, until: period.until }, "model"));
+  const days = useQuery(callAggregateQuery(windows.month, "day"));
+  const models = useQuery(callAggregateQuery(windows.month, "model"));
   // Only the chart's split by model and the spend's comparison wait on these, in parallel with the rest.
   const byModel = useQuery(usageStatisticsQuery({ ...windows.month, granularity: "day", group_by: "model" }));
-  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.lastMonth, granularity: "week" }));
+  const compared = Boolean(windows.comparison);
+  const month = useQuery(usageStatisticsQuery({ ...windows.comparison?.month, granularity: "week" }, compared));
+  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.comparison?.lastMonth, granularity: "week" }, compared));
   const balance = useQuery(balanceQuery);
   const site = useQuery(siteQuery);
   const currency = balance.data?.balance.currency ?? site.data?.currency;
   const keyList = keys.data?.pages[0]?.data ?? [];
   const keyState = keyStateOf(keys);
-  const totals = sumTotals(days.data?.data, currency);
-  const modelTotals = sumTotals(models.data?.data, currency);
-  const daily = dailyTotals(days.data?.data, currency);
+  const dayRowsData = answer(days)?.data;
+  const totals = sumTotals(dayRowsData, currency);
+  const modelTotals = sumTotals(answer(models)?.data, currency);
+  const daily = dailyTotals(dayRowsData, currency);
+  const ranked = answer(models) && rankedModels(answer(models)?.data, currency);
+  const chart = spendChart(
+    daily,
+    { byModel: answer(byModel), month: answer(month), lastMonth: answer(lastMonth) },
+    currency,
+    ranked,
+    period.days,
+  );
   const { dayNote, modelNote, errorNote } = notesOf(t, days, models, errors, totals, modelTotals?.calls ?? 0n);
   const errorCalls = errorCallsOf(errors.data);
   return {
@@ -469,29 +456,18 @@ export function useBoardData(t: TFunction) {
     errors,
     aggregate: aggregateFailure(days, models, advance),
     text: {
-      ...spendOf(balance.data, format, t, period.month, {
-        value: spendChange(byModel.data, lastMonth.data, currency),
-        lastMonth: windows.lastMonthNumber,
-      }),
+      ...spendOf(balance.data, format, t, period.month, { value: chart.change, lastMonth: windows.lastMonthNumber }),
       ...requestsOf(totals, currency, format, t),
       ...balanceOf(balance.data, format, t),
       ...keysOf(keyList, keyState, keys.hasNextPage, format, t),
       ...chartOf(daily, dayNote, period),
     },
     rows: {
-      models0: modelRowsOf(models.data?.data, currency, modelNote, format, t),
+      models0: modelRowsOf(ranked, currency, modelNote, format, t),
       requests0: requestRowsOf(errorCalls, errorNote, new Map(keyList.map((key) => [key.id, key.name])), format, t),
-      bars0: barRows(
-        barStacks(
-          byModel.data,
-          daily,
-          currency,
-          rankedModels(models.data?.data, currency).map((row) => row.bucket ?? ""),
-        ),
-        period.days,
-      ),
+      bars0: chart.bars,
     },
-    dayTable: dayTableOf(dailyRows(days.data?.data, currency), period, currency, format),
+    dayTable: dayTableOf(dailyRows(dayRowsData, currency), period, currency, format),
     errorList: errorListOf(errorCalls, format, t),
   };
 }

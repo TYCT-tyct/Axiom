@@ -4,6 +4,7 @@ import { mockConsole, signedInAs } from "./console-api.ts";
 import { lastMonth } from "./console-calls-data.ts";
 import { demoDocuments, goodInvite } from "./console-data.ts";
 import { knownEmail } from "./mock-auth.ts";
+import { advanceUntil } from "./page-clock.ts";
 
 // The console's pages against the mocked API (console-api.ts): the main flows of M1, each as a user would walk it.
 
@@ -366,6 +367,19 @@ test.describe("balance", () => {
   });
 });
 
+// segmentsByDay reads the overview's daily chart: each day's bar and how many colours it is stacked in.
+const segmentsByDay = (page: Page) =>
+  main(page)
+    .locator(".qch2 svg rect")
+    .evaluateAll((rects) => {
+      const days = new Map<string, Set<string>>();
+      for (const rect of rects as SVGRectElement[]) {
+        const x = rect.getAttribute("x") ?? "";
+        days.set(x, (days.get(x) ?? new Set()).add(rect.style.fill));
+      }
+      return [...days].map(([x, fills]) => ({ x, fills: fills.size }));
+    });
+
 test.describe("overview", () => {
   test("compares the month's spend with the same days of last month and splits each day by model", async ({ page }) => {
     const state = await mockConsole(page);
@@ -374,10 +388,32 @@ test.describe("overview", () => {
     await page.clock.install({ time: new Date("2026-10-24T10:00:00+08:00") });
     await page.goto("/console/");
     await expect(main(page).getByText("比 9 月同期 +23%")).toBeVisible();
-    const fills = await main(page)
-      .locator(".qch2 svg rect")
-      .evaluateAll((rects) => new Set(rects.map((rect) => (rect as SVGElement).style.fill)).size);
-    expect(fills).toBeGreaterThan(1);
+    // the day the account called four models on is one bar in their colours
+    await expect.poll(async () => Math.max(...(await segmentsByDay(page)).map((day) => day.fills))).toBeGreaterThan(1);
+  });
+
+  test("a failed refresh of the rollups leaves the chart in one colour and the spend without a comparison", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    state.calls = [...state.calls, ...lastMonth(state.calls, 23)];
+    signedInAs(state);
+    await page.clock.install({ time: new Date("2026-10-24T10:00:00+08:00") });
+    await page.goto("/console/");
+    const note = main(page).locator(".qkpis .qkpi:first-child > em");
+    await expect(note).toHaveText("比 9 月同期 +23%");
+    await page.route("**/api/console/v1/usage/statistics*", (route) =>
+      route.fulfill({ status: 500, json: { error: { code: "internal", message: "internal" } } }),
+    );
+    // The same window, refetched once the answers are stale: the old answers are kept beside the failure.
+    await page.clock.fastForward(60_000);
+    await page.evaluate(() => window.dispatchEvent(new Event("visibilitychange")));
+    await advanceUntil(page, async () => {
+      await expect(note).toHaveText("2026年10月", { timeout: 100 });
+    });
+    const days = await segmentsByDay(page);
+    expect(days.length).toBeGreaterThan(0);
+    expect(days.every((day) => day.fills === 1)).toBe(true);
   });
 
   test("an error's time turns into its date at local midnight, with nothing fetched again", async ({ page }) => {
