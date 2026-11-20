@@ -17,7 +17,7 @@ import {
 } from "@axiom/ui";
 import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
-import { type MouseEvent, useMemo, useState } from "react";
+import { type MouseEvent, type Ref, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { pressBoardButton } from "../board-interaction";
 import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
@@ -62,7 +62,10 @@ export default function KeysPage() {
   const keys = useInfiniteQuery(keysQuery(filters));
   const pages = keys.data?.pages ?? [];
   const list = useMemo(() => pages.flatMap((page) => page.data), [pages]);
-  const [dialog, setDialog] = useState<Dialog | null>(null);
+  // The open dialog is the Dialogs' own state: opening one renders the dialog alone, not the page and its list again,
+  // which at the budget's 4x CPU was a good part of the click's work before the dialog showed (#747).
+  const dialogs = useRef<DialogsHandle>(null);
+  const setDialog = useCallback((dialog: Dialog | null) => dialogs.current?.show(dialog), []);
   const [toggled, setToggled] = useState<Toggled | null>(null);
   usePageTitle(t("nav.keys"));
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
@@ -72,7 +75,6 @@ export default function KeysPage() {
     () => list.map((key) => keyRow(key, { format, t, language: i18n.language, now, today: today(now) })),
     [list, format, t, i18n.language, now],
   );
-  const close = () => setDialog(null);
   // A save that flipped the switch offers that switch back; any other save of the same key drops the offer, because the
   // list may not have caught it and what the list holds is not what the key now is.
   const saved = (key: Key, before: Key) =>
@@ -102,7 +104,7 @@ export default function KeysPage() {
         boardT={boardT}
         setDialog={setDialog}
       />
-      <Dialogs dialog={dialog} setDialog={setDialog} close={close} filters={filters} onSaved={saved} />
+      <Dialogs ref={dialogs} filters={filters} onSaved={saved} />
     </PageFrame>
   );
 }
@@ -276,21 +278,23 @@ function FiltersUnavailable({ manage, onCreate }: { manage: boolean; onCreate: (
   );
 }
 
+type DialogsHandle = { show: (dialog: Dialog | null) => void };
+
 // Dialogs holds the page's modals: the filters, the key that was just made and its one-time text, a key's settings, and
 // the confirmation that deletes it.
+
 function Dialogs({
-  dialog,
-  setDialog,
-  close,
+  ref,
   filters,
   onSaved,
 }: {
-  dialog: Dialog | null;
-  setDialog: (dialog: Dialog | null) => void;
-  close: () => void;
+  ref: Ref<DialogsHandle>;
   filters: KeyFilters;
   onSaved: (key: Key, before: Key) => void;
 }) {
+  const [dialog, setDialog] = useState<Dialog | null>(null);
+  useImperativeHandle(ref, () => ({ show: setDialog }), []);
+  const close = () => setDialog(null);
   if (dialog?.kind === "create") {
     return (
       <CreateKeyDialog
