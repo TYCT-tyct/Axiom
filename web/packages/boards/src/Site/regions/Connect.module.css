@@ -7,7 +7,7 @@
 :global(.ho .kern:not(.under *)):where(.scope){margin-right:-.42em}
 :global(.ho .ph:not(.under *)):where(.scope){display:inline-block;white-space:nowrap}
 :global(.ho .lens:not(.under *)):where(.scope){position:relative;z-index:0}
-:global(.ho .lens:not(.under *)):where(.scope)::before{content:'';position:absolute;inset:-16px -32px;z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--veil);
+:global(.ho .lens:not(.under *)):where(.scope)::before{content:'';position:absolute;inset:-16px -32px;z-index:-1;pointer-events:none;backdrop-filter:blur(8px);background:var(--veil);
   -webkit-mask-image:linear-gradient(to right,transparent,#000 24px,#000 calc(100% - 24px),transparent),linear-gradient(to bottom,transparent,#000 24px,#000 calc(100% - 24px),transparent);-webkit-mask-composite:source-in;
   mask-image:linear-gradient(to right,transparent,#000 24px,#000 calc(100% - 24px),transparent),linear-gradient(to bottom,transparent,#000 24px,#000 calc(100% - 24px),transparent);mask-composite:intersect}
 @media (max-width:767px){
@@ -70,7 +70,7 @@
 :global(.under .board a:focus-visible):where(.scope),:global(.under .board button:focus-visible):where(.scope){outline:2px solid var(--focus);outline-offset:2px}
 :global(.under .frame):where(.scope){position:relative;overflow:hidden;isolation:isolate;background:var(--bg)}
 :global(.under .lens):where(.scope){position:relative;z-index:0;--li:-16px -32px;--lf:24px;--lv:var(--veil)}
-:global(.under .lens):where(.scope)::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--lv);
+:global(.under .lens):where(.scope)::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);background:var(--lv);
   -webkit-mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);-webkit-mask-composite:source-in;
   mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);mask-composite:intersect}
 :global(.under .code):where(.scope){grid-column:7 / span 6;border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--hair)}
@@ -93,7 +93,7 @@
 :global(.hfm1 .board a:focus-visible):where(.scope),:global(.hfm1 .board button:focus-visible):where(.scope){outline:2px solid var(--focus);outline-offset:2px}
 :global(.hfm1 .frame):where(.scope){position:relative;overflow:hidden;isolation:isolate;background:var(--bg)}
 :global(.hfm1 .lens):where(.scope){position:relative;z-index:0;--li:-16px -32px;--lf:24px;--lv:var(--veil)}
-:global(.hfm1 .lens):where(.scope)::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--lv);
+:global(.hfm1 .lens):where(.scope)::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);background:var(--lv);
   -webkit-mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);-webkit-mask-composite:source-in;
   mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);mask-composite:intersect}
 :global(.hfm1 .code):where(.scope){grid-column:7 / span 6;border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--hair)}
@@ -287,5 +287,5 @@
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
 :global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
-:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+:global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);}
 /* jscpd:ignore-end */
