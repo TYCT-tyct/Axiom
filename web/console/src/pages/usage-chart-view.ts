@@ -318,9 +318,10 @@ function buildHoverTip(params: {
   return { hoverTip, tipStyle: `left: ${Math.round(leftX)}px;` };
 }
 
-function buildXLabels(slots: readonly BucketSlot[], granularity: UsageGranularity, format: Formatters) {
+function buildXLabels(slots: readonly BucketSlot[], granularity: UsageGranularity, width: number, format: Formatters) {
   const multiDay = slots.length > 24;
-  return xTickIndices(slots.length, granularity).map((idx): UsageProps["rows"]["xLabels0"][number] => ({
+  const maxIntervals = Math.max(2, Math.min(5, Math.floor(width / 90)));
+  return xTickIndices(slots.length, granularity, maxIntervals).map((idx): UsageProps["rows"]["xLabels0"][number] => ({
     key: `x-${idx}`,
     kind: "0",
     f0: `left: ${(((idx + 0.5) / slots.length) * 100).toFixed(2)}%;`,
@@ -414,7 +415,7 @@ export function buildChartView(p: ChartViewParams) {
     gridLines0,
     bars0,
     yLabels0,
-    xLabels0: buildXLabels(p.slots, p.granularity, p.format),
+    xLabels0: buildXLabels(p.slots, p.granularity, width, p.format),
     hoverTip: tip.hoverTip,
     tipStyle: tip.tipStyle,
   };
