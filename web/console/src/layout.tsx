@@ -166,7 +166,7 @@ function usePageValues() {
   const email = session.user.email;
   return {
     level: `lv${level} pg-${page ?? "none"}`,
-    // Ported board pages (like usage) keep the shell's own board padding and width; unported pages supply Tailwind padding.
+    // Ported board pages (like usage) keep the shell's own board padding and width; other pages bring their own padding from their modules.
     pagesStyle: page === "usage" ? "" : "padding: 0; max-width: none",
     ...Object.fromEntries(
       keys.flatMap((key) => {
