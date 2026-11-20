@@ -143,6 +143,14 @@ function run(file: string, names: string[], walk: Walk) {
 
 const literalsOf = (files: Iterable<string>) => [...files].flatMap((file) => parse(file).literals);
 
+// fileText is the text of a module's string literals: a generated region writes some of its words straight into its
+// markup ({"sk-ax-7f3c••••"}), where no message file holds them. Control characters (a newline in a template) draw no
+// glyph.
+export const fileText = (file: string) =>
+  parse(file)
+    .literals.join("")
+    .replace(/\p{Cc}/gu, "");
+
 // routeLiterals returns an app's pages ("console/pages/keys") with the modules each runs and the string literals in
 // them, the shell's included.
 export function routeLiterals(app: string, entry: string) {

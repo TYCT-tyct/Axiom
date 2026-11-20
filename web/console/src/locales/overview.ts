@@ -20,6 +20,7 @@ export const zh = {
   chartFailed: "每日花费加载失败",
   modelsFailed: "按模型的使用情况加载失败",
   callsFailed: "最近的报错加载失败",
+  spendChange: "比 {{month}} 月同期 {{change}}",
 };
 
 export const en: Messages<typeof zh> = {
@@ -40,4 +41,5 @@ export const en: Messages<typeof zh> = {
   chartFailed: "Daily spend failed to load",
   modelsFailed: "Spending by model failed to load",
   callsFailed: "Recent errors failed to load",
+  spendChange: "{{change}} vs. same period in {{monthName}}",
 };

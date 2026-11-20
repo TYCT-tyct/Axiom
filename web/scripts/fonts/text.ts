@@ -5,15 +5,18 @@ import { globSync, readFileSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
-import { moduleLiterals, names, routeLiterals } from "./routes.ts";
+import { fileText, moduleLiterals, names, routeLiterals } from "./routes.ts";
 
 const web = join(import.meta.dirname, "..", "..");
 
 // Each namespace's message files, Chinese then English, as the apps load them (i18n.ts startI18n).
 // The screens' words are not in the apps' message files: they come with the generated regions of the boards the pages
-// are cut from (packages/boards/src/<Board>/regions/*.zh.ts and .en.ts, by hash keys), which a page shows whole.
+// are cut from (packages/boards/src/<Board>/regions/*.zh.ts and .en.ts, by hash keys), which a page shows whole, and
+// with the few the region's component writes in its own markup (*.tsx), which messagesIn reads as one message.
 const regions = (...boards: string[]) =>
-  boards.flatMap((board) => ["zh", "en"].map((language) => `packages/boards/src/${board}/regions/*.${language}.ts`));
+  boards.flatMap((board) =>
+    ["zh.ts", "en.ts", "tsx"].map((suffix) => `packages/boards/src/${board}/regions/*.${suffix}`),
+  );
 const namespaces: Record<string, string[]> = {
   "site-regions": regions("Site", "SitePhone", "SiteTablet", "SiteTabletWide"),
   // the console's pages and its sign-in pages, which wear the Login board
@@ -74,9 +77,11 @@ function filesOf(namespace: string) {
   return files.flatMap((pattern) => (pattern.includes("*") ? globSync(pattern, { cwd: web }).sort() : [pattern]));
 }
 
-const messagesIn = async (file: string): Promise<[string, string][]> => [
-  ...flatten((await import(pathToFileURL(join(web, file)).href)).default, "", new Map()),
-];
+// messagesIn reads a message file's keys, or a region's component as one message under its own path.
+const messagesIn = async (file: string): Promise<[string, string][]> =>
+  file.endsWith(".tsx")
+    ? [[file, fileText(join(web, file))]]
+    : [...flatten((await import(pathToFileURL(join(web, file)).href)).default, "", new Map())];
 
 async function load(namespace: string) {
   const out: [string, string][] = [];

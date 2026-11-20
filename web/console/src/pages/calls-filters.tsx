@@ -8,6 +8,7 @@ import segZh from "@axiom/boards/AxApp/regions/LogsSeg.zh";
 import { Link } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { useEffect, useState } from "react";
+import { phoneWidth, useBoardMedia } from "../board-interaction";
 import type { CallFilters } from "../queries";
 import {
   dateRangeForPreset,
@@ -47,23 +48,30 @@ function segItems(labels: readonly string[], activeIndex: number): SegItem[] {
   }));
 }
 
+// SegControl is one row of equal options, or with rows two, for more options than a phone's width holds in one: the
+// columns, and the column and row of the active option, are what the region's thumb is placed by.
 function SegControl({
   labels,
   activeIndex,
   ariaLabel,
+  rows = 1,
   onPick,
 }: {
   labels: readonly string[];
   activeIndex: number;
   ariaLabel: string;
+  rows?: 1 | 2;
   onPick: (index: number) => void;
 }) {
+  const columns = Math.ceil(labels.length / rows);
+  const active = Math.max(0, activeIndex);
   return (
     <LogsSeg
       t={(k) => segZh[k]}
       values={{
         ariaLabel,
-        segStyle: `--n: ${labels.length}; --i: ${Math.max(0, activeIndex)}; ${segWrapStyle}`,
+        rows,
+        segStyle: `--n: ${columns}; --i: ${active % columns}; --r: ${Math.floor(active / columns)}; ${segWrapStyle}`,
         onClick: (event) => {
           const idx = segClickIndex(event);
           if (idx >= 0) onPick(idx);
@@ -256,11 +264,14 @@ function FilterSegRow(p: FilterSourceProps & { customPicked: boolean; onPickPres
   const detected = resolveRangePreset(p.filters.since, p.filters.until, p.preset);
   const activePreset = p.customPicked ? "custom" : detected;
   const rangeIdx = Math.max(0, rangePresets.indexOf(activePreset));
+  // Six ranges do not fit a phone's width in one row in either language, even in the board's short words.
+  const phone = useBoardMedia(phoneWidth);
   return (
     <div>
       <SegControl
         ariaLabel={p.t("callsBoard.range.custom")}
         activeIndex={rangeIdx}
+        rows={phone ? 2 : 1}
         labels={rangePresets.map((r) => p.t(`callsBoard.range.${r}`))}
         onPick={(i) => {
           const picked = rangePresets[i];

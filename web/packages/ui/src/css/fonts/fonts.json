@@ -1,5 +1,5 @@
 {
-  "inputs": "d5bb2088a37677c16f5b30450a3cd8a0415cd452418a20484fa7b92218de2045",
+  "inputs": "35ac1916c018aa195808f5dbc04cdd4d45fe021a9ace2a9a8c7de67ecf12adfe",
   "faces": [
     {
       "family": "Axiom Sans",
@@ -7,14 +7,14 @@
       "pages": ["console", "admin", "site/home", "site/models"],
       "style": "normal",
       "script": "latin",
-      "absent": "",
+      "absent": "⌘",
       "files": [
         {
           "file": "axiom-sans-400-600.woff2",
           "pages": ["console", "admin", "site/home", "site/models"],
-          "bytes": 20204,
-          "sha256": "4929f863157f07b6b95ce7e5d8124b2a670d51628c77434f1b1c5e1997a8cbfa",
-          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~¥©·×÷–—’“”…↑→−"
+          "bytes": 20136,
+          "sha256": "28754caed407ba52fed0060e76c6b52c24dd274e23b98298064586353c5bb84d",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~¥©·×÷–—’“”•…↑→−"
         }
       ]
     },
@@ -29,9 +29,9 @@
         {
           "file": "axiom-mono-400.woff2",
           "pages": ["console", "admin", "site/home", "site/models"],
-          "bytes": 16540,
-          "sha256": "fd6da2d12b33564506e0805bec400bab9a2bdaccdb2d832d3f86c556a18d664d",
-          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~¥©·×÷–—’“”…↑→−"
+          "bytes": 16700,
+          "sha256": "c018f42f658ff8a0a3981e91232f9494ed53796000bba372d978863c963a0525",
+          "chars": " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~¥©·×÷–—’“”•…↑→−⌘"
         }
       ]
     },

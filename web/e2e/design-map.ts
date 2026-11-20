@@ -9,6 +9,8 @@ import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
 import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
 import uiEn from "../packages/ui/src/locales/en.ts";
 import uiZh from "../packages/ui/src/locales/zh.ts";
+import { withLastMonth } from "./console-calls-data.ts";
+import type { MockState } from "./console-data.ts";
 import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
 import type { Suite } from "./scene.ts";
@@ -419,6 +421,13 @@ function inYuan(value: unknown) {
   }
 }
 
+// The overview board compares the month's spend with the same days of last month (「比 9 月同期 +23%」): the scene's
+// account spent as much last month, less the board's 23%.
+function lastMonthIn(state: unknown) {
+  withLastMonth(state as MockState, 23);
+  inYuan(state);
+}
+
 // The console's pages, each in both languages: [name, the e2e scene, the board's page]. The English scene is the
 // Chinese board put into English (above) against the page in English, with the Chinese scene's rulings.
 const chineseOnly = new Set(["overview", "usage", "bill", "notifications"]);
@@ -452,7 +461,7 @@ const consolePages: DesignScene[] = [
       // both sides in grayscale, as the page's layers and the board's do not get the same subpixel text (the phone's
       // mark); Chinese also unhinted and in the console's faces, as the request presets' scene is
       textRasterization: language === "zh" ? ("unhinted" as const) : ("grayscale" as const),
-      account: inYuan,
+      account: name === "overview" ? lastMonthIn : inYuan,
       prepareComparison: language === "en" ? prepareConsoleEnglish : consoleFaces,
     })),
 );
