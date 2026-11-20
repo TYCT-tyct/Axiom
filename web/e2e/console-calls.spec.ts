@@ -399,8 +399,8 @@ test.describe("calls", () => {
   });
 });
 
-// The time range is one row of equal segments; on a phone each option must still be on the screen to be tapped, in the
-// language whose words are the longest too.
+// The time range is one row of equal segments, two rows on a phone, where each option must still be on the screen to be
+// tapped and reached from the keyboard, in the language whose words are the longest too.
 for (const language of ["zh", "en"] as const) {
   test(`at 390px in ${language} every time range is on screen and can be picked`, async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -417,7 +417,18 @@ for (const language of ["zh", "en"] as const) {
         true,
       );
     }
-    await options.last().focus();
+    // Tab reaches each range in turn and Enter applies it: the five ranges to the address, Custom to its fields.
+    await options.first().focus();
+    for (const [index, preset] of ["all", "today", "d7", "d30", "month"].entries()) {
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(
+        preset === "all" ? /\/calls(?!.*since=)/ : new RegExp(`preset=${preset}&|preset=${preset}$`),
+      );
+      await expect(options.nth(index)).toHaveClass(/(^|\s)on(\s|$)/);
+      await expect(options.nth(index)).toBeFocused();
+      await page.keyboard.press("Tab");
+    }
+    await expect(options.last()).toBeFocused();
     await page.keyboard.press("Enter");
     await expect(main(page).getByLabel(language === "en" ? "Start time" : "开始时间")).toBeVisible();
   });

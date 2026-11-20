@@ -358,4 +358,20 @@ test.describe("usage", () => {
     await expect(usdExport).toBeEnabled();
     expect(errors).toEqual([]);
   });
+
+  // The page draws three switches where the board draws one: on the 820px card they go below the title, which stays
+  // on one line.
+  test("at 820px the chart's title stays on one line, with its switches below it", async ({ page }) => {
+    await page.setViewportSize({ width: 820, height: 1180 });
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto(rangeUrl("2026-10-10T00:00:00Z", "2026-10-15T00:00:00Z", "&granularity=day"));
+    const title = page.locator(".usc > .qch h2");
+    await expect(title).toHaveText("每天的花费");
+    const switches = page.locator(".usc > .qch > .usct:nth-child(2)");
+    const [heading, controls] = await Promise.all([title.boundingBox(), switches.boundingBox()]);
+    const lineHeight = await title.evaluate((h2) => Number.parseFloat(getComputedStyle(h2).lineHeight));
+    expect(heading?.height).toBeLessThanOrEqual(lineHeight);
+    expect(controls && heading && controls.y >= heading.y + heading.height).toBe(true);
+  });
 });
