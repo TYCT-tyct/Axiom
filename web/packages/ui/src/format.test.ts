@@ -100,6 +100,23 @@ it("builds the formats once, however many rows use them", () => {
   }
 });
 
+// The first Intl format a page builds also loads the engine's locale and zone data, about 100 ms of a phone's main thread
+// at 4x CPU: a render that writes nothing, such as the shell's before the balance arrives, must not pay it (#747).
+it("builds no format until one is used", () => {
+  const dates = vi.spyOn(Intl, "DateTimeFormat");
+  const numbers = vi.spyOn(Intl, "NumberFormat");
+  try {
+    const format = formatters("en", "Asia/Kolkata");
+    expect(dates).not.toHaveBeenCalled();
+    expect(numbers).not.toHaveBeenCalled();
+    expect(format.money({ amount: "1500000000", currency: "USD" })).toBe("$1.50");
+    expect(dates).not.toHaveBeenCalled();
+  } finally {
+    dates.mockRestore();
+    numbers.mockRestore();
+  }
+});
+
 // The cache must not keep the viewer in the zone the page opened in: after the system's zone changes, a time shows in
 // the new one, even between zones that print the same offset and name today but keep different summer times.
 it("follows the viewer's zone when the system's changes", async () => {
