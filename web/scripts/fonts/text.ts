@@ -14,7 +14,9 @@ const web = join(import.meta.dirname, "..", "..");
 // are cut from (packages/boards/src/<Board>/regions/*.zh.ts and .en.ts, by hash keys), which a page shows whole, and
 // with the few the region's component writes in its own markup (*.tsx), which messagesIn reads as one message.
 const regions = (...boards: string[]) =>
-  boards.flatMap((board) => ["zh.ts", "en.ts", "tsx"].map((suffix) => `packages/boards/src/${board}/regions/*.${suffix}`));
+  boards.flatMap((board) =>
+    ["zh.ts", "en.ts", "tsx"].map((suffix) => `packages/boards/src/${board}/regions/*.${suffix}`),
+  );
 const namespaces: Record<string, string[]> = {
   "site-regions": regions("Site", "SitePhone", "SiteTablet", "SiteTabletWide"),
   // the console's pages and its sign-in pages, which wear the Login board
