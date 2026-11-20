@@ -3,6 +3,7 @@ import { mockAdmin } from "./admin-api.ts";
 import { uuid } from "./admin-data.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
+import { freeze } from "./design/stage.ts";
 import { knownEmail, knownPassword, limitedEmail, mfaEmail, signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
 
@@ -204,9 +205,43 @@ test.describe("permissions", () => {
       zhText("nav.pricing"),
       zhText("nav.subscriptionPlans"),
     ]);
+    await expect(nav.getByRole("group")).toHaveCount(2);
+    await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
+    const pricingGroup = nav.getByRole("group", { name: "定价与套餐" });
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.pricing") })).toHaveAttribute("href", "/pricing");
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
+      "href",
+      "/subscription-plans",
+    );
+    if (process.env.AXIOM_ADMIN_SHOTS) {
+      await freeze(page);
+      await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/nav-desktop.png` });
+    }
     // viewing is not managing: no creating buttons
     await expect(page.getByRole("button", { name: words("models.draft.open") })).toHaveCount(0);
     await expect(page.getByRole("button", { name: words("models.authors.add") })).toHaveCount(0);
+  });
+
+  test("the phone keeps its tabs and groups the remaining links in More", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const state = await mockAdmin(page);
+    state.permissions = ["calls.search", "catalog.view", "pricing.view"];
+    signedInAs(state, "mfa");
+    await page.goto("/models");
+    const tabs = page.getByRole("navigation", { name: "主导航" });
+    await expect(tabs.getByRole("link")).toHaveText([zhText("nav.calls")]);
+    const more = tabs.getByRole("button", { name: zhText("nav.more") });
+    await more.click();
+    await expect(page.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
+    const pricing = page.getByRole("group", { name: "定价与套餐" }).getByRole("link", { name: zhText("nav.pricing") });
+    await expect(pricing).toBeVisible();
+    if (process.env.AXIOM_ADMIN_SHOTS) {
+      await freeze(page);
+      await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/nav-phone.png` });
+    }
+    await pricing.click();
+    await expect(h1(page, zhText("nav.pricing"))).toBeVisible();
+    await expect(more).toHaveAttribute("aria-expanded", "false");
   });
 
   test("a session with no permission is told so, and a page it may not see says so", async ({ page }) => {
