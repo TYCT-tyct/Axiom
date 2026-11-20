@@ -246,7 +246,7 @@ describe("region generation", () => {
   );
 
   it.each(["AxApp", "AxAppPhone"])(
-    "builds only %s shell and overview, reports brotli bytes, and excludes demo logic and other page CSS",
+    "builds only %s shell and overview, reports brotli bytes, and excludes demo logic and per-region CSS",
     async (board) => {
       const result = await buildRegions(board);
       const output = (Array.isArray(result) ? result[0] : result) as {
@@ -262,22 +262,25 @@ describe("region generation", () => {
       const css = output.output.filter((file) => file.fileName.endsWith(".css"));
       const modules = js.flatMap((file) => Object.keys(file.modules ?? {})).join("\n");
       expect(modules).not.toMatch(/Board\.tsx|logic\.ts|runtime\.tsx|\.demo\.ts|\/engines\//);
+      expect(css).toEqual([]);
       const jsBytes = js.reduce((sum, file) => sum + brotliCompressSync(file.code as string).byteLength, 0);
-      const cssBytes = css.reduce((sum, file) => sum + brotliCompressSync(file.source as string).byteLength, 0);
-      console.log(`${board} Shell + Overview brotli: JS ${jsBytes} bytes; CSS ${cssBytes} bytes (React external)`);
-      for (const file of output.output)
-        console.log(
-          `${board}/${file.fileName}: ${brotliCompressSync(file.code ?? (file.source as string)).byteLength} brotli bytes`,
-        );
-      expect(jsBytes + cssBytes).toBeLessThan(50_000);
-      const overviewCSS = readFileSync(join(packageRoot, `src/${board}/regions/Overview.module.css`), "utf8");
-      expect(overviewCSS).not.toMatch(/\.p-(usage|logs|keys|bill|profile)\b|\.uscal\b|\.qkeyt\b|\.lgr\b/);
-      const count = (css: string): number =>
-        cssBlocks(css).reduce((sum, rule) => sum + (rule.selector.startsWith("@") ? count(rule.body) : 1), 0);
-      const overviewCount = count(overviewCSS);
+      const sheet = readFileSync(join(packageRoot, "src/AxApp/regions.css"), "utf8");
+      const cssBytes = brotliCompressSync(sheet).byteLength;
+      console.log(
+        `${board} Shell + Overview brotli: JS ${jsBytes} bytes; shared CSS ${cssBytes} bytes (React external)`,
+      );
+      expect(jsBytes).toBeLessThan(50_000);
+      const count = (text: string): number =>
+        cssBlocks(text).reduce((sum, rule) => sum + (rule.selector.startsWith("@") ? count(rule.body) : 1), 0);
+      const sheetCount = count(sheet);
       const fullCount = count(readFileSync(join(packageRoot, `src/${board}/board.css`), "utf8"));
-      console.log(`Overview CSS rules: ${overviewCount}/${fullCount}`);
-      expect(overviewCount).toBeLessThan(fullCount / 3);
+      console.log(`Shared AxApp CSS rules: ${sheetCount}/${fullCount}`);
+      expect(sheetCount).toBeLessThan(fullCount);
+      if (board === "AxAppPhone") {
+        expect(readFileSync(join(packageRoot, "src/AxAppPhone/regions/Overview.tsx"), "utf8")).toContain(
+          'export { default, type Props } from "../../AxApp/regions/Overview.tsx";',
+        );
+      }
     },
     30_000,
   );

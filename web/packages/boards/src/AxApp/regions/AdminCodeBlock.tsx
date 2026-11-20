@@ -3,11 +3,10 @@
 
 
 import type zh from "./AdminCodeBlock.zh.ts";
-import styles from "./AdminCodeBlock.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { label?: string | number; };   };
 export default function AdminCodeBlock({ values: v = {}, children }: Props & { children?: import("react").ReactNode }) {
-return <><pre className={("qcode2 one") + " " + styles.scope} role={"region"} aria-label={String(v.label ?? "")} tabIndex={Number("0")}>{children}</pre></>;
+return <><pre className={"qcode2 one"} role={"region"} aria-label={String(v.label ?? "")} tabIndex={Number("0")}>{children}</pre></>;
 }
 /* jscpd:ignore-end */

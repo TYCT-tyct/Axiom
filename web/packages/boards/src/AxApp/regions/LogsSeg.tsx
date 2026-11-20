@@ -3,7 +3,6 @@
 import { Fragment, type DOMAttributes } from "react";
 import { boardStyle } from "../../dom.ts";
 import type zh from "./LogsSeg.zh.ts";
-import styles from "./LogsSeg.module.css";
 
 type Items0Item = { key: string; kind: "0"; f0: "button" | "submit" | "reset"; f1: string; f2: string; };
 export type Props = { t: (key: keyof typeof zh) => string; values?: { sf_p_zdr_0?: DOMAttributes<Element>["onClick"];
@@ -12,6 +11,6 @@ ariaLabel?: string | number;
 rows?: string | number;
 onClick?: DOMAttributes<Element>["onClick"]; }; rows: { items0: readonly Items0Item[]; };  };
 export default function LogsSeg({ values: v = {}, rows }: Props) {
-return <><div className={("qseg ") + " " + styles.scope} style={boardStyle(String(v.segStyle ?? ""))} aria-label={String(v.ariaLabel ?? "")} data-rows={String(v.rows ?? "")} onClick={v.onClick}><i className={styles.scope} />{rows.items0.map(item => <Fragment key={item.key}>{<button type={item.f0} className={(item.f1) + " " + styles.scope} onClick={v.sf_p_zdr_0}>{item.f2}</button>}</Fragment>)}</div></>;
+return <><div className={"qseg "} style={boardStyle(String(v.segStyle ?? ""))} aria-label={String(v.ariaLabel ?? "")} data-rows={String(v.rows ?? "")} onClick={v.onClick}><i />{rows.items0.map(item => <Fragment key={item.key}>{<button type={item.f0} className={item.f1} onClick={v.sf_p_zdr_0}>{item.f2}</button>}</Fragment>)}</div></>;
 }
 /* jscpd:ignore-end */

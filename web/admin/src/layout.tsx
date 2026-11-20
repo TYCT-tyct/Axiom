@@ -1,3 +1,4 @@
+import "@axiom/boards/AxApp/regions.css";
 import { can, Gate, NewVersionNotice, SignOutError, useSession, useSignOut } from "@axiom/app";
 import WideNav from "@axiom/boards/AxApp/regions/AdminNav";
 import Wide from "@axiom/boards/AxApp/regions/AdminShell";

@@ -51,7 +51,7 @@ ${partProofScript}
 } else {
 await import("../src/demo-fonts.css");
 const [Source, Shell, Slice, shellData, data, shellZH, zh] = await Promise.all([
-  scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"]()
+  scene.logic(), scene.Shell(), scene[name](), scene.ShellData(), scene[name + "Data"](), scene.ShellZH(), scene[name + "ZH"](), scene.sheet?.()
 ]);
 class Model extends Source { setState(patch) { Object.assign(this.state, patch); } }
 const model = new Model({theme: query.get("theme") === "dark" ? "深色" : "浅色"});
@@ -271,7 +271,7 @@ for (const region of regions) {
         // A module's load event precedes its awaited font loads and first React render.
         await page.locator("#root[data-proof-ready]").waitFor({ state: "attached" });
         expect(await page.locator(selector).count(), selector).toBe(1);
-        if (!render.fragment) await moveFrameOverlays(page);
+        await moveFrameOverlays(page);
         const reference = await openBoard(
           browser,
           {

@@ -3,7 +3,6 @@
 
 
 import type zh from "./RequestPresetInput.zh.ts";
-import styles from "./RequestPresetInput.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { id?: string | number;
@@ -12,6 +11,6 @@ name?: string | number;
 readOnly?: boolean;
 busy?: boolean; };  text: { label: string; }; };
 export default function RequestPresetInput({ values: v = {}, text }: Props) {
-return <><div className={("nkf") + " " + styles.scope}><label className={("nkl") + " " + styles.scope} htmlFor={String(v.id ?? "")}>{text.label}</label><div className={("ppinw") + " " + styles.scope}><input id={String(v.id ?? "")} data-f={"name"} className={("ppmono") + " " + styles.scope} type={"text"} defaultValue={String(v.initial ?? "")} placeholder={""} autoComplete={"off"} spellCheck={"false"} name={String(v.name ?? "")} readOnly={v.readOnly} disabled={v.busy} /></div></div></>;
+return <><div className={"nkf"}><label className={"nkl"} htmlFor={String(v.id ?? "")}>{text.label}</label><div className={"ppinw"}><input id={String(v.id ?? "")} data-f={"name"} className={"ppmono"} type={"text"} defaultValue={String(v.initial ?? "")} placeholder={""} autoComplete={"off"} spellCheck={"false"} name={String(v.name ?? "")} readOnly={v.readOnly} disabled={v.busy} /></div></div></>;
 }
 /* jscpd:ignore-end */
