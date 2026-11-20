@@ -24,7 +24,7 @@ test.describe("billing suite", () => {
     });
 
     await page.goto("/console/balance");
-    await page.getByRole("button", { name: "充 US$25.00" }).click();
+    await page.getByRole("button", { name: "US$25", exact: true }).click();
     await expect(page.getByText("US$37.00")).toBeVisible();
     await expect(page.getByText("¥73.73（含手续费 ¥0.73）")).toBeVisible();
 

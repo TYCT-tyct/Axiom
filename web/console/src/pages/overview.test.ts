@@ -70,7 +70,7 @@ describe("the figures", () => {
     expect(models[0]).toMatchObject({ f3: "2026-10-01", f5: "0%", f7: "$0" });
   });
 
-  it("writes an error's date, reason and full time where a narrow row can still read them", () => {
+  it("writes an error's reason where a narrow row can still read it, and its time or date in the board's column", () => {
     const at = new Date(2026, 9, 24, 8, 23);
     const call = {
       id: "call-1",
@@ -80,14 +80,16 @@ describe("the figures", () => {
       error_kind: "upstream_timeout",
       price: money("0"),
     } as Call;
-    const [row] = requestRowsOf([call], "", new Map(), format, t);
+    const [row] = requestRowsOf([call], "", new Map(), format, t, new Date(2026, 9, 24, 23, 59));
     expect(row).toMatchObject({
-      f2: "10/24 08:23",
+      f2: "08:23",
       f7: "upstream_timeout · deepseek/x",
       f9: "—",
       f10: "",
-      f11: "upstream_timeout",
+      f11: "calls.failed",
     });
+    const [older] = requestRowsOf([call], "", new Map(), format, t, new Date(2026, 9, 25, 0, 1));
+    expect(older).toMatchObject({ f2: "10/24" });
   });
 
   it("splits the currency and integer digits from the fraction the board sets smaller", () => {

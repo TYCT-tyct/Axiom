@@ -38,6 +38,8 @@ export type UsageViewLabels = {
   unknownGroup: string;
   unitByGranularity: Record<UsageGranularity, string>;
   metricLabels: Record<UsageMetricKey, string>;
+  // the metric as the chart's title names it after the unit
+  metricTitles: Record<UsageMetricKey, string>;
   groupByLabels: Record<UsageGroupBy, string>;
   groupColLabels: Record<UsageGroupBy, string>;
   granularityLabels: Record<UsageGranularity, string>;
@@ -400,7 +402,7 @@ export function buildChartView(p: ChartViewParams) {
           shown.map((g) => g.totals),
           p.currency,
         );
-  const title = `${p.labels.unitByGranularity[p.granularity]}${p.labels.metricLabels[p.metric]}`;
+  const title = `${p.labels.unitByGranularity[p.granularity]}${p.labels.metricTitles[p.metric]}`;
   return {
     chartTitle: title,
     chartViewBox: `0 0 ${width} 200`,

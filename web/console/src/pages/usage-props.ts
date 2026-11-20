@@ -41,6 +41,7 @@ export function getUsageLabels(language: UsageLanguage): UsageViewLabels & {
     unknownGroup: txt("unknownGroup"),
     unitByGranularity: { hour: txt("unitHour"), day: txt("unitDay"), week: txt("unitWeek") },
     metricLabels: { spend: txt("spend"), requests: txt("requests"), tokens: txt("tokens") },
+    metricTitles: { spend: txt("titleSpend"), requests: txt("titleRequests"), tokens: txt("titleTokens") },
     groupByLabels: { model: txt("byModel"), key: txt("byKey"), workspace: txt("byWorkspace") },
     groupColLabels: { model: txt("colModel"), key: txt("colKey"), workspace: txt("colWorkspace") },
     granularityLabels: { hour: txt("granHour"), day: txt("granDay"), week: txt("granWeek") },

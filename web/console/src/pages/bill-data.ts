@@ -70,9 +70,11 @@ export function quickAmountsForCurrency(currency: string): readonly string[] {
   return HIGH_DENOM_CURRENCIES.has(currency.toUpperCase()) ? ["100", "200", "500", "1000"] : ["10", "25", "50", "100"];
 }
 
-/** Formats a quick preset amount with integer billionth math via the caller's formatter. */
+/** Formats a quick preset amount with integer billionth math via the caller's formatter, in whole units as the board
+ * writes the presets (¥100, not ¥100.00): a preset is a whole number of units, so its fraction is always zero. */
 export function formatQuickAmount(units: string, currency: string, formatMoney: (value: Money) => string): string {
-  return formatMoney({ amount: (BigInt(units.trim()) * BILLION).toString(), currency });
+  const parts = splitMoneyParts(formatMoney({ amount: (BigInt(units.trim()) * BILLION).toString(), currency }));
+  return `${parts.currency}${parts.whole}${parts.cents.replace(/^[.,]0+/u, "")}`;
 }
 
 /** Detects local IANA time zone with UTC fallback for calendar-day statement queries. */

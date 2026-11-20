@@ -45,6 +45,7 @@ const labels: UsageViewLabels = {
   unknownGroup: "Unassigned",
   unitByGranularity: { hour: "Hourly ", day: "Daily ", week: "Weekly " },
   metricLabels: { spend: "spend", requests: "requests", tokens: "tokens" },
+  metricTitles: { spend: "spend", requests: "requests", tokens: "tokens" },
   groupByLabels: { model: "By model", key: "By key", workspace: "By workspace" },
   groupColLabels: { model: "Model", key: "Key", workspace: "Workspace" },
   granularityLabels: { hour: "Hourly", day: "Daily", week: "Weekly" },
