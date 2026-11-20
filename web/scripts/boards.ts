@@ -17,6 +17,12 @@ const header = `${marker}\n// @ts-nocheck -- mechanically preserved design JavaS
 // page and keep their checks.
 const reducedMotion = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(?:[^{}]|\{[^{}]*\})*\}\n?/g;
 
+// Workaround for https://github.com/TYCT-tyct/Axiom/issues/882: lightningcss 1.33.0 drops `backdrop-filter` when a
+// hand-written `-webkit-backdrop-filter` follows it in the same rule, so every glass blur would be missing in Chrome and
+// Firefox. The designer's prefixed copies stay out; lightningcss adds the prefix for the browser targets. Delete this
+// (and its test) once the project builds with a lightningcss release that fixes parcel-bundler/lightningcss#1327.
+const webkitBackdrop = /-webkit-backdrop-filter\s*:[^;}]*;?/g;
+
 function parts(html: string) {
   const helmet = html.match(/<helmet>([\s\S]*?)<\/helmet>/)?.[1];
   const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1];
@@ -27,7 +33,8 @@ function parts(html: string) {
     .map((m) => m[1])
     .join("\n")
     .replace(/@font-face\s*\{[^}]*\}/g, "")
-    .replace(reducedMotion, "");
+    .replace(reducedMotion, "")
+    .replace(webkitBackdrop, "");
   return { css, markup, logic, props };
 }
 
