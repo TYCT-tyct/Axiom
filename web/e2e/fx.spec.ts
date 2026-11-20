@@ -317,8 +317,13 @@ for (const reducedMotion of motionSettings) {
     await pauseAhead(page, 100);
     const asked = watchDeparture(page);
     await signIn(page).click();
-    await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
+    const picture = page.locator(".tr > canvas[aria-hidden]:last-child");
+    await expect(picture).toBeAttached();
     expect(loaded).toHaveLength(1);
+    // The picture draws on the loop, which starts it when the browser reports the canvas in view, in real time and
+    // not on the page's clock; the clock must not move before that, or its frames pass with nothing drawn and the
+    // button stays as it was. The loop's observer was made first, so it has been told by the time this one is.
+    await picture.evaluate((el) => new Promise<void>((seen) => new IntersectionObserver(() => seen()).observe(el)));
     await page.clock.runFor(150);
     await expect(signIn(page)).toBeHidden();
     await page.clock.runFor(340);
