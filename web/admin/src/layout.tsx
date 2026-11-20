@@ -9,7 +9,7 @@ import Phone from "@axiom/boards/AxAppPhone/regions/AdminShell";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/AdminShell.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/AdminShell.zh";
 import PhoneTab from "@axiom/boards/AxAppPhone/regions/AdminTab";
-import { BoardMark, BoardShell, useKeptPage, usePreferences } from "@axiom/ui";
+import { BoardMark, BoardShell, NavGroup, Stack, useKeptPage, usePreferences } from "@axiom/ui";
 import { Link, Outlet, useLocation, useMatchRoute } from "@tanstack/react-router";
 import {
   type AnchorHTMLAttributes,
@@ -23,7 +23,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useAdminBrand } from "./brand";
-import { nav, sheetIcons, tabIcons } from "./nav";
+import { nav, sections, sheetIcons, tabIcons } from "./nav";
 
 // The admin wears the console's shell (packages/boards/manifest/admin-shell.ts) until it has a design of its own: the
 // AxApp board's bar and sidebar on wide windows and the AxAppPhone board's bar and tabs on phones, with the admin's
@@ -231,6 +231,52 @@ function PhoneTabs({ tabs, more, menus }: { tabs: Page[]; more: Page[]; menus: R
   );
 }
 
+// The sidebar scrolls independently from the page. Keep its current link in view when lists reach past the fold.
+function revealCurrentNav() {
+  const link = document.querySelector('[data-shell="app"] nav [aria-current="page"]');
+  const scroller = link?.closest("nav")?.parentElement;
+  if (!link || !scroller) return;
+  const entry = link.getBoundingClientRect();
+  const pane = scroller.getBoundingClientRect();
+  if (entry.top < pane.top) scroller.scrollTop += entry.top - pane.top;
+  else if (entry.bottom > pane.bottom) scroller.scrollTop += entry.bottom - pane.bottom;
+}
+
+function NavigationGroups({
+  pages,
+  phone = false,
+  showLabel = true,
+}: {
+  pages: Page[];
+  phone?: boolean;
+  showLabel?: boolean;
+}) {
+  const { t } = useTranslation();
+  const Item = phone ? PhoneMore : WideNav;
+  const current = pages.find((p) => p.current)?.to;
+  useEffect(() => {
+    if (!phone && showLabel && current) revealCurrentNav();
+  }, [phone, showLabel, current]);
+  return sections.map((section) => {
+    const links = pages.filter((p) => p.section === section);
+    if (!links.length) return null;
+    const label = t(`navSections.${section}`);
+    return (
+      <NavGroup key={section} label={label} showLabel={showLabel} tiles={phone}>
+        {links.map((p) => (
+          <Item
+            key={p.to}
+            t={String}
+            values={entry(p, "on", phone ? sheetIcons : wideIcons)}
+            link={RouterLink}
+            label={p.label}
+          />
+        ))}
+      </NavGroup>
+    );
+  });
+}
+
 function AdminShell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
   const { t, i18n } = useTranslation();
   const { page, slot } = useKeptPage(children);
@@ -270,9 +316,7 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           link={RouterLink}
           mark={mark}
           tabs={<PhoneTabs tabs={tabs} more={more} menus={menus} />}
-          more={more.map((p) => (
-            <PhoneMore key={p.to} t={String} values={entry(p, "on", sheetIcons)} link={RouterLink} label={p.label} />
-          ))}
+          more={<NavigationGroups pages={more} phone />}
         >
           {slot}
         </Phone>
@@ -283,9 +327,11 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           text={text}
           link={RouterLink}
           mark={mark}
-          nav={pages.map((p) => (
-            <WideNav key={p.to} t={String} values={entry(p, "on", wideIcons)} link={RouterLink} label={p.label} />
-          ))}
+          nav={
+            <Stack gap={4}>
+              <NavigationGroups pages={pages} showLabel={values.sidebarOpen} />
+            </Stack>
+          }
         >
           {slot}
         </Wide>
