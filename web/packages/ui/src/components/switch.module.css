@@ -11,6 +11,7 @@
   background: var(--line2);
   box-shadow: inset 0 0 0 1px var(--ctl-line);
   cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
 }
 
 .root::before {
@@ -31,6 +32,7 @@
   height: 18px;
   border-radius: 50%;
   background: var(--cardBg);
+  transition: transform var(--dur) var(--easeB);
 }
 
 .root[aria-checked="true"] {
@@ -51,12 +53,4 @@
 .root:disabled {
   opacity: 0.55;
   cursor: not-allowed;
-}
-
-.root {
-  transition: background-color var(--dur) var(--ease);
-}
-
-.knob {
-  transition: transform var(--dur) var(--easeB);
 }
