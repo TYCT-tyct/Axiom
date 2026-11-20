@@ -4,6 +4,7 @@ import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
 import {
   delivered,
+  expectMoving,
   loop,
   open,
   pause,
@@ -294,45 +295,63 @@ function watchDeparture(page: Page) {
   return asked;
 }
 
-test("pressing sign in plays the departure, loaded on the press, and goes half a second later", async ({ page }) => {
-  const violations = await watchEveryPolicy(page);
-  const loaded: string[] = [];
-  page.on("request", (request) => {
-    if (depart.test(request.url())) loaded.push(request.url());
-  });
-  await open(page);
-  await running(page);
-  expect(loaded).toEqual([]);
-  // time stands still from before the press: only runFor moves it, so the deadline is measured from the press alone
-  await page.clock.install();
-  await pauseAhead(page, 100);
-  const asked = watchDeparture(page);
-  await signIn(page).click();
-  await expect(page.locator(".tr > canvas[aria-hidden]:last-child")).toBeAttached();
-  expect(loaded).toHaveLength(1);
-  await page.clock.runFor(150);
-  await expect(signIn(page)).toBeHidden();
-  await page.clock.runFor(340);
-  expect(asked).toEqual([]);
-  await page.clock.runFor(20);
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
-  expect(violations).toEqual([]);
-});
+// Every animation plays whatever the system's motion setting (docs/frontend.md「动画」): the same cases run with reduced
+// motion asked for and not, and must not differ.
+const motionSettings = ["no-preference", "reduce"] as const;
 
-// Every animation plays whatever the system's motion setting (docs/frontend.md「动画」): reduced motion asked for changes
-// nothing, so the sea moves, the tour is offered and a press on sign-in plays the departure.
-test("under reduced motion the sea moves, the tour is offered and sign-in plays the departure", async ({ page }) => {
+for (const reducedMotion of motionSettings) {
+  test(`pressing sign in plays the departure, loaded on the press, and goes half a second later (${reducedMotion})`, async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion });
+    const violations = await watchEveryPolicy(page);
+    const loaded: string[] = [];
+    page.on("request", (request) => {
+      if (depart.test(request.url())) loaded.push(request.url());
+    });
+    await open(page);
+    await running(page);
+    expect(loaded).toEqual([]);
+    // time stands still from before the press: only runFor moves it, so the deadline is measured from the press alone
+    await page.clock.install();
+    await pauseAhead(page, 100);
+    const asked = watchDeparture(page);
+    await signIn(page).click();
+    const picture = page.locator(".tr > canvas[aria-hidden]:last-child");
+    await expect(picture).toBeAttached();
+    expect(loaded).toHaveLength(1);
+    // The picture draws on the loop, which starts it when the browser reports the canvas in view, in real time and
+    // not on the page's clock; the clock must not move before that, or its frames pass with nothing drawn and the
+    // button stays as it was. The loop's observer was made first, so it has been told by the time this one is.
+    await picture.evaluate((el) => new Promise<void>((seen) => new IntersectionObserver(() => seen()).observe(el)));
+    await page.clock.runFor(150);
+    await expect(signIn(page)).toBeHidden();
+    await page.clock.runFor(340);
+    expect(asked).toEqual([]);
+    await page.clock.runFor(20);
+    await expect(page).toHaveURL(/\/console\/sign-in$/);
+    expect(violations).toEqual([]);
+  });
+
+  // The sea's pictures at two moments a second apart differ once its entrance is over: a sea whose callback runs but
+  // draws nothing new would still count frames.
+  test(`the sea draws a changing picture after its entrance (${reducedMotion})`, async ({ page }) => {
+    await page.emulateMedia({ reducedMotion });
+    await open(page);
+    await running(page);
+    await expect.poll(() => entrance(page)).toBe("done");
+    await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+  });
+}
+
+// Reduced motion asked for changes nothing: the tour is offered.
+test("under reduced motion the tour is offered", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open(page);
-  await running(page);
   const tour = page.locator(".tour");
   await expect(tour).toBeVisible();
   await expect(tour).not.toHaveClass(/\bgone\b/);
   await expect(tour).not.toHaveAttribute("inert");
-  const asked = page.waitForRequest(depart);
-  await signIn(page).click();
-  await asked;
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
 });
 
 test("a press goes though the departure's code never comes", async ({ page }) => {

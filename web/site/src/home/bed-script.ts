@@ -274,7 +274,7 @@ class BedRun implements Script<object> {
   private readonly layout;
   private bed: Bed | undefined;
   private palette: Palette | undefined;
-  private release = () => {};
+  private readonly release: () => void;
   private readonly resize: ResizeObserver;
   private last = 0;
   private swapped = 0;
@@ -291,16 +291,13 @@ class BedRun implements Script<object> {
     // the glyphs are laid out by the canvas's own width, which a resize changes
     this.resize = new ResizeObserver(() => this.build());
     this.resize.observe(art);
+    // owned once: a resize or a new name redraws the same canvas, which stays on the loop
+    this.release = own(art, (_, now) => this.frame(now));
     this.place(0, false);
     // the pointer stirs the dune, the dune moves on the loop and the reel rolls
     this.stage.addEventListener("pointermove", this.move);
     this.stage.addEventListener("pointerdown", this.press);
     this.roll();
-  }
-  private attach() {
-    const art = this.art();
-    this.release();
-    this.release = this.bed ? own(art, (_, now) => this.frame(now)) : () => {};
   }
 
   // the wordmark is the site's name, drawn again when it changes
@@ -362,7 +359,6 @@ class BedRun implements Script<object> {
       glyph,
     };
     if (this.bed.letters.length < 5) (art as HTMLCanvasElement & { __fx?: Hooks }).__fx?.reset?.();
-    this.attach();
     this.retheme();
   }
 
