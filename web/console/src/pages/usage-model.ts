@@ -438,20 +438,17 @@ export function formatBigDeltaPercent(curr: bigint, prev: bigint | null, newLabe
   return `${sign}${whole}%`;
 }
 
-export function xTickIndices(count: number, granularity: UsageGranularity): number[] {
+export function xTickIndices(count: number, granularity: UsageGranularity, maxIntervals = 5): number[] {
   if (count <= 0) return [];
   if (count === 1) return [0];
+  const intervals = Math.max(1, maxIntervals);
+  const step =
+    granularity === "hour"
+      ? Math.max(6, count <= 24 ? Math.ceil((count - 1) / intervals) : Math.round(count / intervals))
+      : Math.max(1, Math.round(count / intervals));
   const ticks: number[] = [];
-  if (granularity === "hour") {
-    const step = count <= 24 ? 6 : Math.max(6, Math.round(count / 5));
-    for (let i = 0; i < count; i += step) ticks.push(i);
-  } else {
-    const step = Math.max(1, Math.round(count / 5));
-    for (let i = 0; i < count; i += step) ticks.push(i);
-    if (count - 1 - (ticks.at(-1) ?? 0) >= step * 0.6) ticks.push(count - 1);
-    return ticks;
-  }
-  if ((ticks.at(-1) ?? -1) !== count - 1) ticks.push(count - 1);
+  for (let i = 0; i < count; i += step) ticks.push(i);
+  if (count - 1 - (ticks.at(-1) ?? 0) >= step * 0.6) ticks.push(count - 1);
   return ticks;
 }
 

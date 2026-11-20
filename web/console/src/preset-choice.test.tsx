@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import type { Schemas } from "@axiom/api";
-import { accountKey } from "@axiom/app";
+import { accountKey, systemPreset } from "@axiom/app";
 import { act, type ReactNode } from "react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { KeyForm, type KeyValues } from "./key-form";
@@ -327,4 +327,24 @@ it.each([
   }
   expect(names).toEqual(["Preset 1", "Preset 2", "routingPresets.key.hidden"]);
   expect(notes).toEqual([...moved]);
+});
+
+it("localizes the system preset name in key details instead of showing raw Allow all", async () => {
+  api.keys = [
+    {
+      ...callKey("sys"),
+      preset_id: systemPreset,
+      preset: { id: systemPreset, name: "Allow all", scope: "platform", version: 1 },
+    },
+  ];
+  const { container } = await render(<Keys />);
+  await settle();
+  const row = container.querySelector("tbody tr") as HTMLTableRowElement;
+  await act(async () => {
+    row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+  });
+  await settle();
+  const text = container.querySelector("dialog")?.textContent ?? "";
+  expect(text).toContain("routingPresets.key.system");
+  expect(text).not.toContain("Allow all");
 });

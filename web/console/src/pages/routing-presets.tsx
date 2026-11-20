@@ -6,7 +6,7 @@ import wideZh from "@axiom/boards/AxApp/regions/Route.zh";
 import Phone from "@axiom/boards/AxAppPhone/regions/Route";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/Route.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/Route.zh";
-import { Button, Icon, useFormat, usePageTitle } from "@axiom/ui";
+import { Button, Icon, PageFrame, useFormat, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { type SyntheticEvent, useEffect, useState } from "react";
@@ -65,16 +65,16 @@ export default function RoutingPresets() {
     create: <CreatePreset manage={manage} permitted={permitted} onOpen={() => setOpen("create")} />,
   };
   return (
-    <>
-      <ListStates query={presets} view={view} ns="routingPresets" />
-      <EmptyNote presets={presets.data?.data} permitted={permitted} />
+    <PageFrame>
       {wide ? (
         <Wide t={(key) => (english ? wideEn : wideZh)[key]} {...props} />
       ) : (
         <Phone t={(key) => (english ? phoneEn : phoneZh)[key]} {...props} />
       )}
+      <ListStates query={presets} view={view} ns="routingPresets" />
+      <EmptyNote presets={presets.data?.data} permitted={permitted} />
       {permitted ? <Opened open={open} onClose={() => setOpen(null)} /> : null}
-    </>
+    </PageFrame>
   );
 }
 
