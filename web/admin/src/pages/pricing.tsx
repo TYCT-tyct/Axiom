@@ -1,7 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
 import { ActionButton, Card, DataState, EmptyState, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { usePrefetchQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Actions, Code, Head, PageBody, State, useShownAfter } from "../parts";
@@ -9,7 +9,7 @@ import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
 import { Publications } from "../pricing/publications";
 import { RuleDialog } from "../pricing/rule-dialog";
-import { publicationsQuery, rulesQuery } from "../queries";
+import { listedModelsQuery, publicationsQuery, rulesQuery, tiersQuery } from "../queries";
 
 type Rule = AdminSchemas["PricingRule"];
 
@@ -20,6 +20,9 @@ export default function Pricing() {
   const { t } = useTranslation();
   const rules = useQuery(rulesQuery);
   const publications = useQuery(publicationsQuery);
+  // The preview appears last but its lists are asked for with the others, so it does not wait a round of its own.
+  usePrefetchQuery(listedModelsQuery);
+  usePrefetchQuery(tiersQuery());
   const publicationsShown = useShownAfter(rules.isPending);
   const previewShown = useShownAfter(rules.isPending || publications.isPending);
   const manage = can(useSession(), "pricing.manage");
