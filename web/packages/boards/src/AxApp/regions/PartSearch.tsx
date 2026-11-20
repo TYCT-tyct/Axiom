@@ -3,13 +3,12 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartSearch.zh.ts";
-import styles from "./PartSearch.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { initial?: string | number;
 label?: string | number;
 input?: DOMAttributes<Element>["onInput"]; };  text: { placeholder: string; }; };
 export default function PartSearch({ values: v = {}, text }: Props) {
-return <><label className={("lgq") + " " + styles.scope}><svg viewBox={"0 0 20 20"} aria-hidden={"true"} className={styles.scope}><circle cx={"8.75"} cy={"8.75"} r={"5"} className={styles.scope} /><path d={"m12.5 12.5 4 4"} className={styles.scope} /></svg><input className={("lgqi") + " " + styles.scope} type={"search"} placeholder={text.placeholder} defaultValue={String(v.initial ?? "")} aria-label={String(v.label ?? "")} onInput={v.input} /></label></>;
+return <><label className={"lgq"}><svg viewBox={"0 0 20 20"} aria-hidden={"true"}><circle cx={"8.75"} cy={"8.75"} r={"5"} /><path d={"m12.5 12.5 4 4"} /></svg><input className={"lgqi"} type={"search"} placeholder={text.placeholder} defaultValue={String(v.initial ?? "")} aria-label={String(v.label ?? "")} onInput={v.input} /></label></>;
 }
 /* jscpd:ignore-end */

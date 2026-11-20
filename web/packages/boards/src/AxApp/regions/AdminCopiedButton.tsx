@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./AdminCopiedButton.zh.ts";
-import styles from "./AdminCopiedButton.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { tone?: string | number;
@@ -11,6 +10,6 @@ copy?: DOMAttributes<Element>["onClick"];
 busy?: boolean;
 button?: RefCallback<Element>; };   label?: import("react").ReactNode; };
 export default function AdminCopiedButton({ values: v = {}, label }: Props) {
-return <><button type={"button"} className={("btn " + String(v.tone ?? "") + " sm") + " " + styles.scope} data-a={"copy"} onClick={v.copy} disabled={v.busy} ref={v.button}>{label}</button></>;
+return <><button type={"button"} className={"btn " + String(v.tone ?? "") + " sm"} data-a={"copy"} onClick={v.copy} disabled={v.busy} ref={v.button}>{label}</button></>;
 }
 /* jscpd:ignore-end */

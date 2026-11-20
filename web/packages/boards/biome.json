@@ -6,6 +6,7 @@
       "!src/**/Board.tsx",
       "!src/**/logic.ts",
       "!src/**/board.css",
+      "!src/**/regions.css",
       "!src/**/regions",
       "!src/engines",
       "!inputs",

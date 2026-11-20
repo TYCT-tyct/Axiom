@@ -3,11 +3,10 @@
 
 
 import type zh from "./PartLoading.zh.ts";
-import styles from "./PartLoading.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { label?: string | number; };   };
 export default function PartLoading({ values: v = {}, children }: Props & { children?: import("react").ReactNode }) {
-return <><section className={("qcard ovmc") + " " + styles.scope} role={"status"} aria-label={String(v.label ?? "")} aria-busy={"true"}>{children}</section></>;
+return <><section className={"qcard ovmc"} role={"status"} aria-label={String(v.label ?? "")} aria-busy={"true"}>{children}</section></>;
 }
 /* jscpd:ignore-end */
