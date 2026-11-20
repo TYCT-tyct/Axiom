@@ -1,8 +1,6 @@
-/* The board's .qtw and .qtbl: rows 52px with a hairline between them, headers 40px in --t3, 16px cell padding and
-   24px at the ends; a value too long for its column wraps instead of overflowing. */
+/* Column layout and wrapping supplements on top of the board's .qtw/.qtbl (AxApp/regions.css). */
 .box {
   min-width: 0;
-  overflow-x: auto;
 }
 
 .box:focus-visible {
@@ -11,12 +9,14 @@
 }
 
 .table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: var(--fs14);
   line-height: var(--lh14);
-  text-align: left;
   color: var(--t1);
+}
+
+.table td {
+  padding-block: 8px;
+  vertical-align: middle;
+  white-space: normal;
 }
 
 .fixed {
@@ -27,39 +27,7 @@
   width: var(--w);
 }
 
-.table th {
-  height: 40px;
-  padding: 0 16px;
-  font-size: var(--fs12);
-  font-weight: 400;
-  color: var(--t3);
-  white-space: nowrap;
-  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
-}
-
-.table td {
-  height: 52px;
-  padding: 8px 16px;
-  vertical-align: middle;
-  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
-}
-
-.table tbody tr:last-child td {
-  box-shadow: none;
-}
-
-.table th:first-child,
-.table td:first-child {
-  padding-left: 24px;
-}
-
-.table th:last-child,
-.table td:last-child {
-  padding-right: 24px;
-}
-
 .end {
-  text-align: right;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -81,26 +49,8 @@
   overflow-wrap: anywhere;
 }
 
-.muted {
-  color: var(--t2);
-}
-
 .mono {
-  font-family: var(--family-mono);
-  font-size: var(--fs12);
   overflow-wrap: anywhere;
-}
-
-@media (max-width: 767px) {
-  .table th:first-child,
-  .table td:first-child {
-    padding-left: 16px;
-  }
-
-  .table th:last-child,
-  .table td:last-child {
-    padding-right: 16px;
-  }
 }
 
 /* A column that appears from a width on (Th and Td's from): 640, 768, 1024, 1280 and 1536px. */

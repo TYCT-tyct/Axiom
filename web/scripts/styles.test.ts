@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { board } from "../packages/ui/src/board-classes.ts";
 import { type Baseline, baselinePath, check, tree } from "./styles.ts";
 
 const tokens = readFileSync(join(import.meta.dirname, "../packages/ui/src/css/tokens.css"), "utf8");
@@ -206,4 +207,21 @@ it("exempts marked generated boards, but not hand-written or unrelated files", (
   expect(check({ "packages/boards/src/Login/board.css": marker + css }, baseline)).toEqual([]);
   expect(check({ "packages/boards/src/manual.css": css }, baseline).length).toBeGreaterThan(0);
   expect(check({ "packages/ui/src/board.css": marker + css }, baseline).length).toBeGreaterThan(0);
+});
+
+it("allows board-classes inside packages/ui/src/components but not in app code", () => {
+  expect(
+    run({
+      "packages/ui/src/components/avatar.tsx":
+        'import { board } from "../board-classes"; export const A = () => <span className={board.qav} />;',
+      "console/src/page.tsx":
+        'import { board } from "../board-classes"; export const P = () => <span className={board.qav} />;',
+    }),
+  ).toEqual([expect.stringContaining("console/src/page.tsx:1: class-name:")]);
+});
+
+it("keeps every class listed in packages/ui/src/board-classes.ts in AxApp/regions.css", () => {
+  const css = readFileSync(join(import.meta.dirname, "../packages/boards/src/AxApp/regions.css"), "utf8");
+  const missing = Object.values(board).filter((name) => !new RegExp(`\\.${name}(?![\\w-])`).test(css));
+  expect(missing).toEqual([]);
 });

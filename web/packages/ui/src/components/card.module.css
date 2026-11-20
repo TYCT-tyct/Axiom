@@ -1,56 +1,7 @@
-/* The board's .qcard and its head .qch: a raised block with a 0.5px outline (decorative, --cardSh). Padded holds free
-   content; flush holds a table edge to edge; rows holds setting rows; danger outlines a destructive section. */
+/* Layout supplements for Card on top of the board's .qcard and .qch (AxApp/regions.css). Stack/Grid own spacing. */
 .root {
   min-width: 0;
-  padding: 20px 24px;
-  border-radius: var(--r12);
-  background: var(--cardBg);
-  box-shadow: var(--cardSh);
-}
-
-.flush {
-  padding: 4px 0;
-}
-
-.rows {
-  padding: 4px 24px;
-}
-
-.danger {
-  box-shadow: 0 0 0 var(--bw) color-mix(in srgb, var(--bad) 25%, transparent);
-}
-
-.head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  margin-bottom: 12px;
-}
-
-.flush > .head {
-  padding: 16px 24px 0;
-  margin-bottom: 8px;
-}
-
-.rows > .head {
-  padding-top: 16px;
   margin-bottom: 0;
-}
-
-.title {
-  margin: 0;
-  font-size: var(--fs16);
-  line-height: var(--lh16);
-  font-weight: 500;
-  color: var(--t1);
-}
-
-.lede {
-  margin: 2px 0 0;
-  font-size: var(--fs12);
-  line-height: var(--lh12);
-  color: var(--t2);
 }
 
 .actions {
@@ -58,27 +9,4 @@
   flex: none;
   align-items: center;
   gap: 8px;
-}
-
-@media (max-width: 767px) {
-  .root {
-    padding: 16px;
-  }
-
-  .flush {
-    padding: 4px 0;
-  }
-
-  .rows {
-    padding: 4px 16px;
-  }
-
-  .head {
-    flex-wrap: wrap;
-    row-gap: 10px;
-  }
-
-  .flush > .head {
-    padding: 16px 16px 0;
-  }
 }

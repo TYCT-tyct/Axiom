@@ -1,27 +1,7 @@
-/* The board's .qseg: options on a track with a sliding thumb under the chosen one (--i of --n). The thumb is edged in
-   --ctl-line and the chosen words are --sel-ind, since the thumb's fill alone differs from the track by under 3:1
-   (docs/frontend.md「对比度令牌」). */
-.root {
-  position: relative;
-  display: inline-grid;
-  grid-auto-columns: 1fr;
-  grid-auto-flow: column;
-  padding: 2px;
-  border-radius: var(--r8);
-  background: var(--hover);
-}
-
+/* Contrast (3:1 --ctl-line thumb edge, --sel-ind selected label per docs/frontend.md「对比度令牌」) and radio-group
+   label styles on top of the board's .qseg and .qseg > i (AxApp/regions.css). */
 .thumb {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / var(--n));
-  border-radius: var(--r6);
-  background: var(--cardBg);
   box-shadow: 0 0 0 1px var(--ctl-line);
-  transform: translateX(calc(var(--i) * 100%));
-  transition: transform var(--dur) var(--easeB);
 }
 
 .option {

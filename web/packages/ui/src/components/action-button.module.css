@@ -1,32 +1,13 @@
-/* The board's .btn (AxApp.dc.html): primary is the neutral darkest step, not the brand colour (docs/frontend.md「主题与
-   自由度」); secondary sits on the panel with its outline; ghost and danger are text until hovered. */
+/* Layout and native-state supplements on top of the board's .btn (AxApp/regions.css). */
 .root {
-  all: unset;
   box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
   justify-content: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 14px;
-  border-radius: var(--r8);
-  font-size: var(--fs14);
-  line-height: var(--lh14);
   white-space: nowrap;
-  cursor: pointer;
   user-select: none;
-  transition:
-    background-color var(--dur) var(--ease),
-    color var(--dur) var(--ease),
-    transform var(--dur) var(--ease);
 }
 
 .root:hover {
   --icon-hover: 1;
-}
-
-.root:active {
-  transform: scale(0.97);
 }
 
 .root:focus-visible {
@@ -38,45 +19,6 @@
   opacity: 0.4;
   cursor: default;
   pointer-events: none;
-}
-
-.sm {
-  height: 32px;
-  padding: 0 12px;
-  font-size: var(--fs12);
-  line-height: var(--lh12);
-}
-
-.pri {
-  background: var(--priBg);
-  color: var(--priFg);
-}
-
-.pri:hover {
-  background: var(--priHover);
-}
-
-.sec {
-  background: var(--panel);
-  color: var(--t1);
-  box-shadow: var(--sh1);
-}
-
-.sec:hover {
-  background: var(--raised);
-}
-
-.gho {
-  color: var(--t2);
-}
-
-.gho:hover {
-  background: var(--hover);
-  color: var(--t1);
-}
-
-.dan {
-  color: var(--badT);
 }
 
 .dan:hover {
