@@ -60,15 +60,19 @@ async function stopClock(page: Page) {
   await page.clock.runFor(1000);
 }
 
-// How far the solid's middle travels back and forth across 12 samples 35 ms apart: a shake (420 ms, three cycles)
-// oscillates several pixels each half-cycle, far more than the quiet sway.
+// How much the solid's middle oscillates across 12 samples 35 ms apart, as the summed second differences: the solid's
+// own turning drifts its middle smoothly, which they cancel, while a shake (420 ms, three cycles, a quarter cycle per
+// sample) reverses direction at every other sample. Summed first differences counted the drift too: a train measured
+// 60 px of quiet drift against 52.5 px with the shake (train 44822730292).
 async function sway(page: Page) {
   const middles: number[] = [];
   for (let i = 0; i < 12; i++) {
     await page.clock.runFor(35);
     middles.push((await solid(page)).cx);
   }
-  return middles.slice(1).reduce((total, x, i) => total + Math.abs(x - (middles[i] ?? x)), 0);
+  return middles
+    .slice(2)
+    .reduce((total, x, i) => total + Math.abs(x - 2 * (middles[i + 1] ?? x) + (middles[i] ?? x)), 0);
 }
 
 test("the sea's sharks form the step's solid, which keeps turning, and the old stage does not draw", async ({
