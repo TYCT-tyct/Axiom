@@ -1,4 +1,4 @@
-import { markArrival, onMotion, reducedMotion } from "@axiom/fx";
+import { markArrival } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -40,7 +40,7 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 }
 
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
-// section (native smooth scrolling, not the board's eased frames; a jump under reduced motion), and the tour, which
+// section (native smooth scrolling, not the board's eased frames), and the tour, which
 // glides through the sections a few seconds apart and back to the top. The page moving the reader on its own (the tour's
 // next glide, a glide to a section followed while the screens above it grow, a glide under way) is the press's that
 // started it: a glide to the top or to a section, and stop, end it; stop also halts a glide where it is.
@@ -59,7 +59,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
   let following: { sec: number; top: number } | undefined;
   const glide = (top: number) => {
     gliding = true;
-    scroller.scrollTo({ top, behavior: reducedMotion() ? "auto" : "smooth" });
+    scroller.scrollTo({ top, behavior: "smooth" });
   };
   const topOf = (sec: number) => offsets.find((offset) => offset.sec === sec)?.top ?? 0;
   // The screens above a section grow as their code arrives (a place is a view's height until then), which moves the
@@ -111,7 +111,6 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
       section(sec);
     },
     tour: () => {
-      if (reducedMotion()) return;
       stop();
       tour(scroller.scrollTop > 10 ? 0 : 1);
     },
@@ -206,7 +205,7 @@ const takeOver = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
 
 // useFrameBehaviour runs the board's own behaviours on the frame root points at: the header and the island while
 // scrolling, the island opening under the pointer or the keyboard (wide layout) and the menu sheet. The page stops
-// moving the reader once the reader takes over, the page is hidden or reduced motion is asked for.
+// moving the reader once the reader takes over or the page is hidden.
 export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boolean) {
   const [scroll, setScroll] = useState(atTop);
   const [island, setIsland] = useState(false);
@@ -242,12 +241,10 @@ export function useFrameBehaviour(root: RefObject<HTMLElement | null>, wide: boo
     for (const type of takeOver) frame.addEventListener(type, page.stop, { capture: true, passive: true });
     const onHidden = () => document.hidden && page.stop();
     document.addEventListener("visibilitychange", onHidden);
-    const stopMotion = onMotion((allowed) => allowed || page.stop());
     for (const [type, listener] of hovers) isl?.addEventListener(type, listener);
     return () => {
       resized.disconnect();
       page.stop();
-      stopMotion();
       document.removeEventListener("visibilitychange", onHidden);
       for (const type of takeOver) frame.removeEventListener(type, page.stop, { capture: true });
       scroller.removeEventListener("scroll", page.onScroll);
@@ -307,7 +304,7 @@ function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
 
 // useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
 // pressed: signing in or up leaves the website through it, half a second after the press. Its code loads on the first
-// press. Under reduced motion, and for a press that asks for another tab or window, the link goes as a link would.
+// press. A press that asks for another tab or window goes as a link would.
 export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
   useEffect(() => {
     const frame = root.current;
@@ -315,7 +312,6 @@ export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject
     const onClick = (e: MouseEvent) => {
       const link = e.target instanceof Element ? e.target.closest<HTMLAnchorElement>("a[data-go]") : null;
       if (!link || !frame.contains(link) || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      if (reducedMotion()) return;
       e.preventDefault();
       if (!leaving) leave(frame, link, sea.current);
     };

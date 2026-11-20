@@ -51,7 +51,6 @@ beforeEach(() => {
   vi.stubGlobal("cancelAnimationFrame", () => {});
   vi.stubGlobal("requestIdleCallback", (callback: IdleRequestCallback) => idle.push(callback));
   vi.stubGlobal("cancelIdleCallback", () => {});
-  vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
   near = undefined;
   vi.stubGlobal(
     "IntersectionObserver",

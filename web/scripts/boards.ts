@@ -12,6 +12,11 @@ export const packageRoot = resolve(import.meta.dirname, "../packages/boards");
 const inputRoot = join(packageRoot, "inputs");
 const header = `${marker}\n// @ts-nocheck -- mechanically preserved design JavaScript; the public props are typed.\n/* jscpd:ignore-start */\n`;
 
+// Every animation plays whatever the reader's system setting (docs/frontend.md「动画」), so the designer's
+// reduced-motion rules, one level of rules deep, stay out of the stylesheets. The boards' own scripts reach no product
+// page and keep their checks.
+const reducedMotion = /@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{(?:[^{}]|\{[^{}]*\})*\}\n?/g;
+
 function parts(html: string) {
   const helmet = html.match(/<helmet>([\s\S]*?)<\/helmet>/)?.[1];
   const markup = html.match(/<\/helmet>([\s\S]*?)<\/x-dc>/)?.[1];
@@ -21,7 +26,8 @@ function parts(html: string) {
   const css = [...helmet.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)]
     .map((m) => m[1])
     .join("\n")
-    .replace(/@font-face\s*\{[^}]*\}/g, "");
+    .replace(/@font-face\s*\{[^}]*\}/g, "")
+    .replace(reducedMotion, "");
   return { css, markup, logic, props };
 }
 

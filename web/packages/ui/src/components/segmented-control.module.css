@@ -68,12 +68,10 @@
   white-space: nowrap;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .thumb {
-    transition: transform var(--dur) var(--easeB);
-  }
+.thumb {
+  transition: transform var(--dur) var(--easeB);
+}
 
-  .option {
-    transition: color var(--dur) var(--ease);
-  }
+.option {
+  transition: color var(--dur) var(--ease);
 }

@@ -1,5 +1,5 @@
 /* The board's .pw and .pm: a panel under its trigger, on the popover surface with its shadow, aligned to the trigger's
-   start or end. It enters with a short fade and lift, and appears at once under reduced motion. */
+   start or end. It enters with a short fade and lift. */
 .root {
   position: relative;
   display: inline-flex;
@@ -26,10 +26,8 @@
   transform-origin: top right;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .panel {
-    animation: enter var(--dur) var(--ease);
-  }
+.panel {
+  animation: enter var(--dur) var(--ease);
 }
 
 @keyframes enter {

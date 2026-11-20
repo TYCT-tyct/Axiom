@@ -53,12 +53,10 @@
   cursor: not-allowed;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .root {
-    transition: background-color var(--dur) var(--ease);
-  }
+.root {
+  transition: background-color var(--dur) var(--ease);
+}
 
-  .knob {
-    transition: transform var(--dur) var(--easeB);
-  }
+.knob {
+  transition: transform var(--dur) var(--easeB);
 }

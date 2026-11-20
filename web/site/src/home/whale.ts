@@ -1,4 +1,3 @@
-import { onMotion, reducedMotion } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import type { Whale } from "@axiom/fx/whale";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
@@ -42,14 +41,9 @@ function calls(frame: HTMLElement, call: () => void) {
   };
 }
 
-// What ends a call or a visit: changing the motion setting drops a call whose code is on its way, and asking for reduced
-// motion takes a visit down, its canvas cleared; the page going out of view drops the call, and the page put away
-// takes the visit down too, as does the end (the returned function).
+// What ends a call or a visit: the page going out of view drops a call whose code is on its way, and the page put away
+// takes the visit down too, its canvas cleared, as does the end (the returned function).
 function drops(calling: ReturnType<typeof turns>, takeDown: () => void) {
-  const stopMotion = onMotion((allowed) => {
-    calling.end();
-    if (!allowed) takeDown();
-  });
   const onHide = () => document.visibilityState === "hidden" && calling.end();
   const onLeave = () => {
     calling.end();
@@ -59,7 +53,6 @@ function drops(calling: ReturnType<typeof turns>, takeDown: () => void) {
   window.addEventListener("pagehide", onLeave);
   return () => {
     calling.end();
-    stopMotion();
     document.removeEventListener("visibilitychange", onHide);
     window.removeEventListener("pagehide", onLeave);
   };
@@ -68,9 +61,8 @@ function drops(calling: ReturnType<typeof turns>, takeDown: () => void) {
 // useWhale returns what calls the whale of the easter egg (packages/fx whale), which is loaded the first time it is
 // called: typing deepseek anywhere on the page, or pressing the word in the first screen's strip, calls it on
 // purpose; the returned function, for the screens, is a chance meeting. The whale swims on the running sea and is
-// taken down when it has left. It never comes under reduced motion, or before there is a sea to swim in. A call whose
-// code is still on its way is the call's: changing the motion setting, the page going out of view or away, or the
-// frame ending drops it; a visit under way takes the theme as it changes.
+// taken down when it has left. It never comes before there is a sea to swim in. A call whose code is still on its way
+// is the call's: the page going out of view or away, or the frame ending drops it; a visit under way takes the theme as it changes.
 export function useWhale(
   root: RefObject<HTMLElement | null>,
   sea: RefObject<Sea | null>,
@@ -87,8 +79,8 @@ export function useWhale(
   const play = useCallback(
     async (frame: HTMLElement, engine: Sea["engine"], mine: () => boolean) => {
       const { startWhale } = await loadWhale();
-      // the reader may have asked for reduced motion, or left, while the code was on its way
-      if (!mine() || reducedMotion()) return;
+      // the reader may have left while the code was on its way
+      if (!mine()) return;
       const { narrow, dark } = latest.current;
       const end = (done: Whale) => {
         done.destroy();
@@ -110,7 +102,7 @@ export function useWhale(
     (force: boolean) => {
       const frame = root.current;
       const engine = sea.current?.engine;
-      if (!frame || !engine || reducedMotion() || visit.current || loading.current) return;
+      if (!frame || !engine || visit.current || loading.current) return;
       if (!force && (met.current || performance.now() < settle)) return;
       loading.current = true;
       // a module that fails to load leaves the page as it is drawn: the whale is only decoration

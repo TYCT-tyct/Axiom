@@ -7,5 +7,4 @@
 :global(.ax .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace;font-size:12px}
 :global(.ax .num):where(.scope){text-align:right;font-variant-numeric:tabular-nums}
 :global(.ax.mred *):where(.scope),:global(.ax.mred *):where(.scope)::before,:global(.ax.mred *):where(.scope)::after{animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}
-@media (prefers-reduced-motion: reduce){:global(.ax *):where(.scope){animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}}
 /* jscpd:ignore-end */

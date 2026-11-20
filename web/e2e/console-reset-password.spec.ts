@@ -272,8 +272,8 @@ for (const signedIn of [false, true]) {
   test(`a limit keeps the request's button disabled for as long as the answer says, and then its words go${signedIn ? ", through a sign-out" : ""}`, async ({
     page,
   }) => {
-    // no sea running, so moving the clock thirty seconds on does not draw thirty seconds of frames
-    await page.emulateMedia({ reducedMotion: "reduce" });
+    // the sea's code is not served, so moving the clock thirty seconds on does not draw thirty seconds of frames
+    await page.route(/\/assets\/login-[\w-]{8}\.js$/, (route) => route.abort());
     const state = await mockConsole(page);
     if (signedIn) signedInAs(state);
     await page.clock.install();

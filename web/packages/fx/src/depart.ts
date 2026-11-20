@@ -2,8 +2,7 @@
 // which stream to where the sign-in page's form panel will be and start filling it, and then the browser goes to the
 // button's page. It is the departure of trans.js's tiles style (STYLES.tiles start and frame), which cannot run on
 // its own here: trans.js plays both pages in one document, and the sign-in page is the console's. The geometry and
-// the easing are the engine's; its clock runs faster, so the stream lands in about half a second. Under reduced motion
-// the website does not load it: the link goes at once (R7).
+// the easing are the engine's; its clock runs faster, so the stream lands in about half a second.
 import { colour } from "./colour";
 import { hash } from "./hash";
 import { own } from "./loop";

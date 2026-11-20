@@ -178,7 +178,7 @@ export const glyphNames = Object.keys(icons) as GlyphName[];
 
 // Glyph is the icon of the new components, at 16 (beside text in a button, menu or note) or 20 pixels (navigation);
 // selected fills it. The hover motion plays when the icon, or a control that sets --icon-hover on hover, is under the
-// pointer, and never under reduced motion. Icon keeps the current pages' set until they move (#747): the admin's
+// pointer. Icon keeps the current pages' set until they move (#747): the admin's
 // first screen has no room for both (docs/frontend.md「前端性能指标」).
 export function Glyph({ name, size = 16, selected = false }: { name: GlyphName; size?: 16 | 20; selected?: boolean }) {
   return (

@@ -1,12 +1,11 @@
 // The console's sign-in pages' engines (#747, port design §9): the Login board's sea, the stage on it (login-ui.js's
 // Stage: loose tiles in the sea's own cells gather into the thing the step is about and answer what is typed), and the
 // title's decode. They run on the shared loop (loop.ts): nothing moves while the tab is hidden or the sea is out of
-// view, and under reduced motion each is one still frame in its final state. The gathering from the panel's edge and
-// the decode play only for a visitor who arrived through the website's departure (arrival.ts); a direct visit opens
-// on the formed shape and a resolved title.
+// view. The gathering from the panel's edge and the decode play only for a visitor who arrived through the website's
+// departure (arrival.ts); a direct visit opens on the formed shape and a resolved title.
 import { colour } from "./colour";
 import { hash } from "./hash";
-import { own, reducedMotion } from "./loop";
+import { own } from "./loop";
 import { mono } from "./mono";
 import { buildSea, type OceanEngine } from "./ocean";
 
@@ -96,9 +95,6 @@ class Stage {
   private mid = 0;
   private half = 1;
   private readonly mono = mono();
-  // still is reduced motion's: a frame is where everything is going, at no moment in particular (draw), and a refusal's
-  // shake and red and a digit's flicker, which are moments, are not drawn
-  still = false;
 
   constructor(
     private readonly lg: HTMLElement,
@@ -146,15 +142,11 @@ class Stage {
     if (!arrived) this.settle();
   }
 
-  // settle puts every tile where it is going at once: a direct visit's first shape, and every shape under reduced
-  // motion.
-  settle() {
+  // settle puts every tile where it is going at once: a direct visit's first shape.
+  private settle() {
     for (const tile of this.tiles) tile.t0 = -1e9;
     this.shapeAt = -1e9;
     this.alpha = 1;
-    // a refusal's red and a digit's flicker are moments: one heard before motion went still is over
-    this.bad = -1e9;
-    this.pulse = -1e9;
   }
 
   // to sends every tile to a cell of the shape, or to a place to drift; where that is on screen is worked out each
@@ -190,8 +182,8 @@ class Stage {
     if (heard.type === "email") this.heard = { ...this.heard, len: heard.len, ok: heard.ok };
     else if (heard.type === "digit") {
       this.heard.n = heard.n;
-      if (!this.still) this.pulse = now;
-    } else if (!this.still) this.bad = now;
+      this.pulse = now;
+    } else this.bad = now;
   }
 
   // The cell size of the sea under it: twice the sea's on a wide desk, at most 7px on a phone's short sea.
@@ -250,10 +242,8 @@ class Stage {
     return this.ink;
   }
 
-  // draw paints the frame at now; a still frame is painted at one fixed moment, so the loose tiles' drift, the placed ones'
-  // bob and the glyphs cut in them are the same whatever is typed (every tile has settled: settle).
-  draw(at: number) {
-    const now = this.still ? 0 : at;
+  // draw paints the frame at now.
+  draw(now: number) {
     const g = this.size();
     if (!g.W || !g.H || !this.shape) return;
     const x = this.context;
@@ -488,82 +478,30 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape, arr
   const canvas = frame.querySelector<HTMLCanvasElement>("canvas.sea");
   const seaBox = frame.querySelector<HTMLElement>(".lg-sea");
   if (!canvas || !seaBox) throw new Error("startLogin: the frame has no .lg-sea with a canvas.sea");
-  const engine = buildSea(canvas, roster, seaOptions(frame, canvas, light), reducedMotion());
+  const engine = buildSea(canvas, roster, seaOptions(frame, canvas, light));
   const stage = new Stage(frame, seaBox, engine);
-  stage.first(shape, performance.now(), arrived && !reducedMotion());
+  stage.first(shape, performance.now(), arrived);
   let stopDecode = () => {};
-  const motion = follow(engine, stage, canvas, seaBox, () => stopDecode());
-  const redrawStill = () => motion.still() && motion.redraw();
+  const release = own(canvas, (dt, at) => {
+    engine.tick(dt);
+    stage.draw(at);
+  });
   return {
-    show: (next) => {
-      stage.to(next, performance.now());
-      if (motion.still()) stage.settle();
-      redrawStill();
-    },
-    hear: (heard) => {
-      stage.hear(heard, performance.now());
-      redrawStill();
-    },
+    show: (next) => stage.to(next, performance.now()),
+    hear: (heard) => stage.hear(heard, performance.now()),
     recolour: (light) => {
       engine.setLight(light);
       stage.recolour();
-      redrawStill();
     },
     decode: (title, decodeCanvas) => {
-      if (!motion.still()) stopDecode = decode(title, decodeCanvas);
+      stopDecode = decode(title, decodeCanvas);
     },
     endDecode: () => stopDecode(),
     destroy: () => {
       stopDecode();
-      motion.destroy();
+      release();
       stage.destroy();
       engine.destroy();
-    },
-  };
-}
-
-// follow drives the sea and the stage as the visitor's motion preference says, and follows it when it changes: on the
-// shared loop while motion is allowed; under reduced motion as one still frame of where everything is going, drawn
-// again whenever something changes (and a decode still playing ends, onStill).
-function follow(
-  engine: OceanEngine,
-  stage: Stage,
-  canvas: HTMLCanvasElement,
-  seaBox: HTMLElement,
-  onStill: () => void,
-) {
-  const query = matchMedia("(prefers-reduced-motion: reduce)");
-  let release = () => {};
-  const redraw = () => {
-    engine.still();
-    stage.draw(performance.now());
-  };
-  const resized = new ResizeObserver(() => query.matches && redraw());
-  resized.observe(seaBox);
-  const apply = () => {
-    release();
-    release = () => {};
-    stage.still = query.matches;
-    if (!query.matches) {
-      release = own(canvas, (dt, at) => {
-        engine.tick(dt);
-        stage.draw(at);
-      });
-      return;
-    }
-    onStill();
-    stage.settle();
-    redraw();
-  };
-  apply();
-  query.addEventListener("change", apply);
-  return {
-    still: () => query.matches,
-    redraw,
-    destroy: () => {
-      query.removeEventListener("change", apply);
-      resized.disconnect();
-      release();
     },
   };
 }

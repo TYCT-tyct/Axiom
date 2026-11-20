@@ -1,6 +1,6 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { onMotion, reducedMotion, useEffectModule } from "@axiom/fx";
+import { useEffectModule } from "@axiom/fx";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDeparture, useFrameBehaviour } from "./behaviour";
@@ -74,12 +74,9 @@ function useRegistration(root: RefObject<HTMLElement | null>, join: Join) {
   }, [root, closed]);
 }
 
-// The tour's button is offered at the top while motion is allowed, the setting followed as the reader changes it (the
-// tour does not play under reduced motion); a button that is not offered is not in the keyboard's way either.
-function useTour(root: RefObject<HTMLElement | null>, solid: boolean) {
-  const [still, setStill] = useState(reducedMotion);
-  useEffect(() => onMotion((allowed) => setStill(!allowed)), []);
-  const gone = solid || still;
+// The tour's button is offered at the top, until the header turns solid; a button that is not offered is not in the
+// keyboard's way either.
+function useTour(root: RefObject<HTMLElement | null>, gone: boolean) {
   useLayoutEffect(() => {
     root.current?.querySelector(".tour")?.toggleAttribute("inert", gone);
   }, [root, gone]);

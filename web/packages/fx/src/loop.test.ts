@@ -1,14 +1,12 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
-// The browser parts the loop reads, driven by hand: frames run when the test says, the viewport intersects what the
-// test says, and motion is reduced when the test says.
+// The browser parts the loop reads, driven by hand: frames run when the test says and the viewport intersects what the
+// test says. matchMedia is not stubbed, and jsdom has none: the loop never reads the reduced-motion setting.
 let queued = new Map<number, FrameRequestCallback>();
 let next = 1;
 let now = 0;
 let observed: { callback: IntersectionObserverCallback; targets: Set<Element> } | undefined;
-let reduce = false;
-const motionListeners = new Set<() => void>();
 let hidden = false;
 
 function runFrame(ms = 16) {
@@ -31,7 +29,6 @@ beforeEach(() => {
   vi.resetModules();
   queued = new Map();
   observed = undefined;
-  reduce = false;
   hidden = false;
   Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
@@ -56,19 +53,11 @@ beforeEach(() => {
       }
     },
   );
-  vi.stubGlobal("matchMedia", () => ({
-    get matches() {
-      return reduce;
-    },
-    addEventListener: (_: string, listener: () => void) => motionListeners.add(listener),
-    removeEventListener: (_: string, listener: () => void) => motionListeners.delete(listener),
-  }));
 });
 
 afterEach(() => {
   for (const leave of owned.splice(0)) leave();
   vi.unstubAllGlobals();
-  motionListeners.clear();
 });
 
 // Each test loads the loop afresh; what it leaves owned is let go after it, so its listeners do not reach the next one.
@@ -124,42 +113,6 @@ it("runs an owner's frames only while its element is in view and the page is vis
   expect(frames.at(-1)).toBe(0);
 });
 
-it("schedules nothing under reduced motion, and stops when it is turned on", async () => {
-  reduce = true;
-  const { own } = await loop();
-  const element = document.createElement("div");
-  const frame = vi.fn();
-  own(element, frame);
-  expect(observed).toBeUndefined();
-  expect(state()).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
-
-  reduce = false;
-  own(element, frame);
-  intersect(element, true);
-  runFrame();
-  expect(frame).toHaveBeenCalledTimes(1);
-  reduce = true;
-  for (const listener of motionListeners) listener();
-  runFrame();
-  expect(frame).toHaveBeenCalledTimes(1);
-  expect(state().pending).toBe(false);
-});
-
-it("tells a script each change of the setting, as it happens, until it stops listening", async () => {
-  const { onMotion } = await loop();
-  const heard: boolean[] = [];
-  const stop = onMotion((allowed) => heard.push(allowed));
-  const change = (to: boolean) => {
-    reduce = to;
-    for (const listener of [...motionListeners]) listener();
-  };
-  change(true);
-  change(false);
-  stop();
-  change(true);
-  expect(heard).toEqual([false, true]);
-});
-
 it("lets go of everything when the last owner leaves, and the counter starts again from 0", async () => {
   const { own } = await loop();
   const [a, b] = [document.createElement("div"), document.createElement("div")];
@@ -178,7 +131,6 @@ it("lets go of everything when the last owner leaves, and the counter starts aga
   leaveB();
   leaveB();
   expect(state()).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
-  expect(motionListeners.size).toBe(0);
   expect(queued.size).toBe(0);
   setHidden(false);
   expect(queued.size).toBe(0);

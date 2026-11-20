@@ -139,9 +139,3 @@
 .panel::backdrop {
   background: var(--scrim);
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .panel {
-    animation: none;
-  }
-}

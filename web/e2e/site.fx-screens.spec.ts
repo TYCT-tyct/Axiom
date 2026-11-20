@@ -45,7 +45,6 @@ for (const [registration, { href, ...words }] of Object.entries(joins))
         page,
       }) => {
         const said = words[language];
-        await page.emulateMedia({ reducedMotion: "reduce" });
         await page.addInitScript((lang) => localStorage.setItem("axiom.language", lang), language);
         await page.setViewportSize({ width, height: 900 });
         await mockConsole(page, "usual", {
@@ -125,7 +124,6 @@ for (const kept of [false, true])
   test(`the footer's prices lead to ${kept ? "the console" : "the models page"} when the site ${kept ? "keeps" : "publishes"} them`, async ({
     page,
   }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.setViewportSize({ width: 1440, height: 900 });
     // listPublicModels with every pricing left out, as for a site that keeps its prices for its users
     const models = usualState().models.map(({ pricing: _, ...model }) => ({

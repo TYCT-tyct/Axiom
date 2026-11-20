@@ -1,7 +1,7 @@
 import { expect, type Locator, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { open, scrollTo, shown } from "./fx-helpers.ts";
+import { open, pauseAhead, scrollTo, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The home screens to the keyboard, to assistive technology and at the narrowest width: the tabs' keys, what is out of
@@ -19,7 +19,6 @@ const site = {
 test("the connect screen's tools are tabs: one stop, the arrows move along, the card is their panel", async ({
   page,
 }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 1);
@@ -43,7 +42,6 @@ test("the connect screen's tools are tabs: one stop, the arrows move along, the 
 test("the questions are tabs on a wide screen: the arrows choose, and each answer is its question's panel", async ({
   page,
 }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 5);
@@ -113,11 +111,15 @@ const ratio = (element: Locator, edge = false) =>
 
 // the site's own colours, no brand set: the key chip under the pointer, in light, where the tint is strongest
 test("the default key chip stays readable under the pointer", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
+  await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockConsole(page, "usual", { site });
   await page.goto(apps[0].url);
   await pageHeading(page);
+  // the page's clock stands still before the screen is seen, so the card stays written whole: its chips are not
+  // decoded in under the measure
+  await page.clock.install();
+  await pauseAhead(page, 1000);
   await scrollTo(page, 1);
   await shown(page, 1);
   const chip = page.locator(".hfm1 .kc.on").first();
@@ -130,11 +132,15 @@ for (const scheme of ["light", "dark"] as const)
   test(`a grey brand keeps the key chip readable on its wash, and the footer's choice keeps its edge, ${scheme}`, async ({
     page,
   }) => {
-    await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+    await page.emulateMedia({ colorScheme: scheme });
     await page.setViewportSize({ width: 390, height: 844 });
     await mockConsole(page, "usual", { site: { ...site, brand_color: "#888888" } });
     await page.goto(apps[0].url);
     await pageHeading(page);
+    // the page's clock stands still before the screen is seen, so the card stays written whole: its chips are not
+    // decoded in under the measure
+    await page.clock.install();
+    await pauseAhead(page, 1000);
     await scrollTo(page, 1);
     await shown(page, 1);
     const chip = page.locator(".hfm1 .kc.on").first();
@@ -151,7 +157,6 @@ for (const scheme of ["light", "dark"] as const)
 // At 360 the words and the site's own data break rather than be cut by the frame: every line of them stays inside the
 // view, a long site name and a long API address included.
 test("at 360 the sea bed's words and the site's long name and address stay inside the view", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
   await page.setViewportSize({ width: 360, height: 780 });
   await mockConsole(page, "usual", {

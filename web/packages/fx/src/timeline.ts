@@ -2,8 +2,7 @@ import { own } from "./loop";
 
 // A screen's script on the shared frame loop: the boards write their scripts as sleeps and per-frame steps, and a
 // timeline gives them a clock of the screen's own. Its time runs only on the loop's frames, so a script stands still
-// while its element is out of view or the page hidden, and under reduced motion it never moves at all: the screen stays
-// in the state it was drawn in.
+// while its element is out of view or the page hidden.
 //
 // Invariants: time only moves forward, by the loop's frame steps; once end is called, every pending and later sleep
 // resolves false, no step runs again, and the element is no longer the loop's.

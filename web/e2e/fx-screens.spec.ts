@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { brandStyle } from "../packages/ui/src/brand.ts";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { delivered, loop, open, pause, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
+import { delivered, open, pause, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
@@ -169,7 +169,6 @@ test("a copy's word belongs to the tool it copied", async ({ page }) => {
 // Each tool's card is a configuration as its target takes it: Codex's file keeps the key's terminal line a comment, so
 // the card is a valid file, and its button copies the file; without an address there is no command at all.
 test("each tool's card holds what its target takes, and says what its button copies", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 1);
@@ -181,54 +180,13 @@ test("each tool's card holds what its target takes, and says what its button cop
     await expect(copy).toHaveAttribute("aria-label", label);
   }
   await page.locator(".hfm1 .tab").nth(1).click();
+  // the picked tool's lines are decoded in: read them once nothing is left tumbling or still to come
+  const unwritten = () =>
+    page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join(""));
+  await expect.poll(unwritten).toBe("");
   const lines = await page.locator(".hfm1 pre .ln").allTextContents();
   // every line of the Codex card that is not TOML is a comment
   expect(lines.filter((line) => /export/.test(line))).toEqual([expect.stringMatching(/#\s*export AXIOM_API_KEY=/)]);
-});
-
-// Reduced motion asked for while the screens move: what was moving settles in its final state, and what the reader does
-// next happens at once, as it does when the page opened under the setting.
-test("asking for reduced motion midway settles the machine, and a tool picked next is written at once", async ({
-  page,
-}) => {
-  test.setTimeout(90_000);
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await scrollTo(page, 1);
-  await shown(page, 1);
-  await expect(page.locator(".hfm1 .fig svg")).toHaveCount(1);
-  await expect.poll(() => display(page), { timeout: 30_000 }).not.toBe("AXIOM");
-  // from here the page's clock stands still: what happens, happens at once, with no frame to finish it
-  await page.clock.install();
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 2000);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect(page.locator('.hfm1 [data-disp="m"]')).toHaveText("AXIOM");
-  await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
-  await expect(page.locator(".hfm1 .fig .pin.on, .hfm1 .fig .mod.on")).toHaveCount(0);
-  // the new tool's lines are written whole: nothing tumbling, nothing still to come
-  await page.locator(".hfm1 .tab").nth(2).click();
-  await expect(page.locator(".hfm1 pre")).toContainText("https://api.example.com");
-  const unwritten = () =>
-    page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join(""));
-  expect(await unwritten()).toBe("");
-  // and nothing an older clock held comes back once time moves again
-  await page.clock.runFor(5000);
-  expect(await unwritten()).toBe("");
-  await expect(page.locator('.hfm1 [data-disp="m"]')).toHaveText("AXIOM");
-});
-
-test("asking for reduced motion midway puts the cable on the question chosen next at once", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await scrollTo(page, 5);
-  await shown(page, 5);
-  // the page's clock stands still: the cable must be there with no frame to carry it
-  await page.clock.install();
-  await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 2000);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.locator(".hfm5 .qs .q").nth(3).hover();
-  await expect(page.locator(".hfm5 .qs .q.on")).toContainText("04");
-  expect(await page.locator(".hfm5 .patch .ring").getAttribute("cy")).toBe(String(3 * 48 + 24));
 });
 
 test("without the site's API address the card says so and the copy button is disabled", async ({ page }) => {
@@ -253,7 +211,6 @@ test("without the site's API address the card says so and the copy button is dis
 // at run time, and the rule that draws it lit is the board's, kept for the inserted figure. (The key's line marks the key
 // the same way; in the lock the key is drawn lit already.)
 test("pointing at the address line lights the machine's plug", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 1);
@@ -322,7 +279,7 @@ for (const [scheme, at] of [
   ["dark", 1],
 ] as const) {
   test(`the site's brand colour reaches the screens below, ${scheme}`, async ({ page }) => {
-    await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+    await page.emulateMedia({ colorScheme: scheme });
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockConsole(page, "usual", {
       site: {
@@ -347,7 +304,7 @@ for (const [scheme, at] of [
 }
 
 // The questions (§8.2's Faq row): the first answer's picture sends its request to one vendor after another on a timer of
-// the screen's own, which runs on the shared loop: it stops with the tab hidden, and under reduced motion it never starts.
+// the screen's own, which runs on the shared loop: it stops with the tab hidden.
 const vendor = (page: Page) => page.locator(".hfm5 .fan text.ft.on").textContent();
 
 test("the first answer's picture moves on while it is seen, and stops while the tab is hidden", async ({ page }) => {
@@ -367,22 +324,14 @@ test("the first answer's picture moves on while it is seen, and stops while the 
   await expect.poll(() => vendor(page)).not.toBe(held);
 });
 
-test("a question is chosen by pointing at it, the cable follows it, and under reduced motion nothing moves on its own", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
+test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 5);
   await shown(page, 5);
-  const first = await vendor(page);
   await page.locator(".hfm5 .qs .q").nth(2).hover();
   await expect(page.locator(".hfm5 .qs .q.on")).toContainText("03");
   await expect(page.locator(".hfm5 .patch .ring")).toHaveAttribute("cy", String(2 * 48 + 24));
-  await page.locator(".hfm5 .qs .q").first().hover();
-  await expect.poll(() => vendor(page)).toBe(first);
-  await pause(page);
-  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
 });
 
 test("on a phone the questions are an accordion: a second press closes the open one", async ({ page }) => {
@@ -412,7 +361,7 @@ test("on a phone the questions are an accordion: a second press closes the open 
 test("the footer keeps the font's credit, names no page the site lacks, and its switches change the page", async ({
   page,
 }) => {
-  await page.emulateMedia({ reducedMotion: "reduce", colorScheme: "light" });
+  await page.emulateMedia({ colorScheme: "light" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   const last = delivered.at(-1) as number;
@@ -437,7 +386,7 @@ test("the footer keeps the font's credit, names no page the site lacks, and its 
 });
 
 // The whale (§8.2's whale row): its code is not asked for until the egg is called, by typing deepseek anywhere or by
-// pressing the word in the first screen's strip, and under reduced motion it is never asked for.
+// pressing the word in the first screen's strip.
 const whale = /\/assets\/whale-[\w-]+\.js$/;
 const watchWhale = (page: Page) => {
   const asked: string[] = [];
@@ -481,34 +430,6 @@ test("pressing deepseek in the first screen's strip calls the whale", async ({ p
   await expect.poll(() => painted(page)).toBe(true);
 });
 
-test("asking for reduced motion while the whale swims takes it off the page, its canvas and its light", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await running(page);
-  await page.keyboard.type("deepseek");
-  await expect.poll(() => painted(page)).toBe(true);
-  // the visit's sweep has lit the strip's word: what the take-down must put out
-  await expect(page.locator(".tr .wh-lit")).not.toHaveCount(0, { timeout: 20_000 });
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await expect.poll(() => painted(page)).toBe(false);
-  await expect(page.locator(".tr .wh-lit, .tr .wh-under, .tr .wh-visiting, .tr .lit")).toHaveCount(0);
-});
-
-test("under reduced motion the whale is never called", async ({ page }) => {
-  const asked = watchWhale(page);
-  await open(page);
-  // the sea is up, so the whale could come; then the reader asks for reduced motion
-  await running(page);
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.keyboard.type("deepseek");
-  await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
-  await pause(page);
-  expect(asked).toEqual([]);
-  expect(await painted(page)).toBe(false);
-});
-
 // The sea bed's dune is drawn, from the site's own name: a site named otherwise draws another wordmark.
 const dune = (page: Page) =>
   page.locator(".hfm6 canvas.art").evaluate((canvas: HTMLCanvasElement) => {
@@ -527,7 +448,6 @@ const dune = (page: Page) =>
     return { sum, inked };
   });
 test("the sea bed draws its dune, with the site's name for the wordmark", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockConsole(page);
   await page.goto(apps[0].url);

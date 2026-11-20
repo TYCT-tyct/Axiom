@@ -281,7 +281,6 @@
 :global(.hfm1 .iso-dots circle[data-pulse]):where(.scope *){animation:iso-pulse 1600ms steps(1,end) infinite;animation-delay:var(--pulse-at,0ms)}
 @media (max-width:560px){
 }
-@media (prefers-reduced-motion:reduce){:global(.hfm1 .iso-line[data-flow]):where(.scope *),:global(.hfm1 .iso-dots circle[data-pulse]):where(.scope *){animation:none}}
 :global(.under .hfm > .board):where(.scope){width:100% !important}
 :global(.tr.m .under .hfm1 > .board):where(.scope){width:calc(var(--fw,390px) - 2 * var(--tm) + 40px) !important;margin-inline:auto}
 :global(.ho[data-tab] .hfm1 .m .wire):where(.scope){display:none}

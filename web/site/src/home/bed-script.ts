@@ -1,10 +1,9 @@
-import { onMotion, own, reducedMotion, timeline } from "@axiom/fx";
+import { own, timeline } from "@axiom/fx";
 import type { Script } from "./script";
 
 // The sea bed's script (Site.dc.html M6): a dune of glyphs with the wordmark half buried in it, stirred by the pointer,
 // and under the page's closing words a reel of models that rolls up one every few seconds. The dune is drawn on the
-// shared frame loop, which rests it while the screen is out of view or the page hidden; under reduced motion it is one
-// still frame and the reel does not roll.
+// shared frame loop, which rests it while the screen is out of view or the page hidden.
 const models = 8;
 // the glyph cell (and the glyph size) of the drawing: the narrow layout draws it smaller
 const WIDE = { height: 280, cell: 10, glyph: 8 };
@@ -200,13 +199,9 @@ function cell(bed: Bed, layers: Layers, column: Column, r: number) {
 }
 
 class BedRun implements Script<object> {
-  // the clock of the motion setting in force: a new one when the reader changes it
-  private clock;
-  // whether the dune moves and answers the pointer: motion allowed, read when the setting changes
-  private moving = false;
+  private readonly clock;
   // the wordmark: the site's name
   private name = "Axiom";
-  private readonly stopMotion: () => void;
   private readonly layout;
   private bed: Bed | undefined;
   private palette: Palette | undefined;
@@ -228,38 +223,15 @@ class BedRun implements Script<object> {
     this.resize = new ResizeObserver(() => this.build());
     this.resize.observe(art);
     this.place(0, false);
-    if (!reducedMotion()) this.go();
-    this.stopMotion = onMotion((allowed) => (allowed ? this.go() : this.stand()));
-  }
-
-  // motion allowed: the pointer stirs the dune, the dune moves on the loop and the reel rolls
-  private go() {
-    if (this.moving || this.dead) return;
-    this.moving = true;
+    // the pointer stirs the dune, the dune moves on the loop and the reel rolls
     this.stage.addEventListener("pointermove", this.move);
     this.stage.addEventListener("pointerdown", this.press);
-    this.clock.end();
-    this.clock = timeline(this.stage);
     this.roll();
-    this.attach();
-  }
-  // reduced motion: the still frame, at once, and nothing that would move it
-  private stand() {
-    this.moving = false;
-    this.stage.removeEventListener("pointermove", this.move);
-    this.stage.removeEventListener("pointerdown", this.press);
-    this.clock.end();
-    this.clock = timeline(this.stage);
-    this.release();
-    this.release = () => {};
-    this.place(0, false);
-    this.changed();
-    this.draw(0);
   }
   private attach() {
     const art = this.art();
     this.release();
-    this.release = this.moving && this.bed ? own(art, (_, now) => this.frame(now)) : () => {};
+    this.release = this.bed ? own(art, (_, now) => this.frame(now)) : () => {};
   }
 
   // the wordmark is the site's name, drawn again when it changes
@@ -290,7 +262,7 @@ class BedRun implements Script<object> {
       accent: resolve("--accent"),
     };
     probe.remove();
-    this.draw(this.moving ? performance.now() / 1000 : 0);
+    this.draw(performance.now() / 1000);
   }
 
   private build() {
@@ -425,7 +397,6 @@ class BedRun implements Script<object> {
 
   destroy() {
     this.dead = true;
-    this.stopMotion();
     this.release();
     this.resize.disconnect();
     this.stage.removeEventListener("pointermove", this.move);

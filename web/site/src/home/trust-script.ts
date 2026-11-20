@@ -1,4 +1,4 @@
-import { reducedMotion, timeline } from "@axiom/fx";
+import { timeline } from "@axiom/fx";
 import type zh from "../locales/zh";
 import { firstSeen, type Script } from "./script";
 
@@ -129,7 +129,6 @@ export function start(stage: HTMLElement, changed: () => void): Script<Input> {
 
   const seen = firstSeen(stage, 0.3);
   seen.promise.then(() => {
-    if (reducedMotion()) return;
     flips();
     ledger();
     ceiling();

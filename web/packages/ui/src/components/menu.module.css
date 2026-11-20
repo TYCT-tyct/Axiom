@@ -43,10 +43,8 @@
   color: var(--badT);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .item {
-    transition: background-color var(--dur) var(--ease);
-  }
+.item {
+  transition: background-color var(--dur) var(--ease);
 }
 
 @media (max-width: 767px) {

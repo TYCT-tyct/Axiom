@@ -2,7 +2,7 @@
 // @axiom/boards generates them, loaded the first time the egg is called (typing deepseek, the first screen's
 // deepseek, a deepseek model met further down). They run unedited on the sea's engine: the whale draws on the frame's
 // canvas.wh and hands its body to the sea as a ghost the fish and sharks steer around. The caller decides when a visit
-// may happen (never under reduced motion, a chance meeting once per page load); this module plays one and is torn down
+// may happen (a chance meeting once per page load); this module plays one and is torn down
 // when it ends.
 import "@axiom/boards/engines/whale.js";
 import "@axiom/boards/engines/whale-egg.js";

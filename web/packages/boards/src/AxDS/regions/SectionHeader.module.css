@@ -8,5 +8,4 @@
 :global(.ax .bh):where(.scope){margin-bottom:20px}
 :global(.ax .bh p):where(.scope){margin-top:4px;font-size:12px;line-height:18px;max-width:560px}
 :global(.ax.mred *):where(.scope),:global(.ax.mred *):where(.scope)::before,:global(.ax.mred *):where(.scope)::after{animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}
-@media (prefers-reduced-motion: reduce){:global(.ax *):where(.scope){animation:none!important;transition-duration:1ms!important;transition-delay:0ms!important}}
 /* jscpd:ignore-end */
