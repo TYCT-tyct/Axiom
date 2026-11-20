@@ -146,7 +146,6 @@
 :global(.hfm5 .fx .on .late2):where(.scope){animation:fxIn 250ms ease-out 850ms both}
 :global(.hfm5 .fx .pane.on .ans):where(.scope){animation:fxIn 250ms ease-out 200ms both}
 :global(.hfm5 .fx .pane.on .win):where(.scope){animation:fxIn 250ms ease-out 280ms both}
-@media (prefers-reduced-motion: reduce){:global(.hfm5 .fx .late):where(.scope),:global(.hfm5 .fx .late2):where(.scope),:global(.hfm5 .fx .ans):where(.scope),:global(.hfm5 .fx .win):where(.scope){animation:none !important}}
 :global(.hfm5 .d .sec):where(.scope){padding:120px 120px 0}
 :global(.hfm5 .d h2):where(.scope){font-size:48px;line-height:56px}
 :global(.hfm5 .d .bd):where(.scope){position:relative;display:grid;grid-template-columns:486px 588px;column-gap:126px;margin-top:56px}

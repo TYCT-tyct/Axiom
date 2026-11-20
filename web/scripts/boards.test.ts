@@ -7,13 +7,15 @@ import { readBoard } from "../packages/boards/source.ts";
 import { csp, exportComponent } from "./boards/csp.ts";
 import { checkGenerated, convert, generate, generatedBoard, marker, packageRoot } from "./boards.ts";
 
-const sample = `<x-dc><helmet><style>@font-face{font-family:x;src:url(x)}.test { color: red; }</style></helmet><div class="test {{ cls }}" ref="{{ root }}" style="width: {{ width }}px; {{ vars }}"><svg viewBox="0 0 10 10"><path stroke-width="2" /></svg><button onClick="{{ click }}">{{ text }}</button><input value="demo" /></div></x-dc><script data-dc-script data-props='{"mode":{"options":["light","dark"],"default":"light"}}'>class Component extends DCLogic { renderVals() { return {}; } }</script>`;
+const sample = `<x-dc><helmet><style>@font-face{font-family:x;src:url(x)}.test { color: red; }@media (prefers-reduced-motion: reduce){.test{animation:none}}</style></helmet><div class="test {{ cls }}" ref="{{ root }}" style="width: {{ width }}px; {{ vars }}"><svg viewBox="0 0 10 10"><path stroke-width="2" /></svg><button onClick="{{ click }}">{{ text }}</button><input value="demo" /></div></x-dc><script data-dc-script data-props='{"mode":{"options":["light","dark"],"default":"light"}}'>class Component extends DCLogic { renderVals() { return {}; } }</script>`;
 
 describe("board conversion", () => {
   it("preserves CSS and logic, types defaults, and converts holes, SVG, handlers and styles", () => {
     const files = convert(sample, "Test");
     expect(files["Test/board.css"]).toContain(".test { color: red; }");
     expect(files["Test/board.css"]).not.toContain("@font-face");
+    // every animation plays whatever the system setting: the design's reduced-motion rules are dropped
+    expect(files["Test/board.css"]).not.toContain("prefers-reduced-motion");
     expect(files["Test/logic.ts"]).toContain("renderVals() { return {}; }");
     const jsx = files["Test/Board.tsx"];
     for (const expected of [

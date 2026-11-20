@@ -1039,7 +1039,6 @@ body{margin:0}
 .hfm1 .iso-swatch-crease{stroke:var(--anatomy-lo)!important}
 @media (max-width:560px){.hfm1 .iso-plate{padding:48px 12px 70px}
 .hfm1 .iso-plate-corner[data-corner="hint"]{bottom:18px}}
-@media (prefers-reduced-motion:reduce){.hfm1 .iso-line[data-flow],.hfm1 .iso-dots circle[data-pulse]{animation:none}}
 .hfm2{margin:0}
 .hfm2 a{color:inherit;text-decoration:none}
 .hfm2 .board{font-family:'Axiom Sans','Axiom CJK','PingFang SC',sans-serif;text-autospace:normal;line-break:strict;-webkit-font-smoothing:antialiased;background:var(--bg);color:var(--text1);
@@ -1787,7 +1786,6 @@ body{margin:0}
 .hfm5 .fx .on .late2{animation:fxIn 250ms ease-out 850ms both}
 .hfm5 .fx .pane.on .ans{animation:fxIn 250ms ease-out 200ms both}
 .hfm5 .fx .pane.on .win{animation:fxIn 250ms ease-out 280ms both}
-@media (prefers-reduced-motion: reduce){.hfm5 .fx .late,.hfm5 .fx .late2,.hfm5 .fx .ans,.hfm5 .fx .win{animation:none !important}}
 .hfm5 .d .sec{padding:120px 120px 0}
 .hfm5 .d h2{font-size:48px;line-height:56px}
 .hfm5 .d .bd{position:relative;display:grid;grid-template-columns:486px 588px;column-gap:126px;margin-top:56px}

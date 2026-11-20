@@ -140,7 +140,6 @@
 @keyframes fxFade{from{opacity:0}to{opacity:1}}
 :global(.hfm5 .fx .on .late):where(.scope){animation:fxFade 250ms ease-out 500ms both}
 :global(.hfm5 .fx .on .late2):where(.scope){animation:fxIn 250ms ease-out 850ms both}
-@media (prefers-reduced-motion: reduce){:global(.hfm5 .fx .late):where(.scope),:global(.hfm5 .fx .late2):where(.scope),:global(.hfm5 .fx .ans):where(.scope),:global(.hfm5 .fx .win):where(.scope){animation:none !important}}
 :global(.hfm5 .m .sec):where(.scope){display:flex;flex-direction:column}
 :global(.hfm5 .m .fq):where(.scope){position:relative;border-radius:0;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--hair);transition:margin 250ms ease-out,background-color 250ms ease-out,box-shadow 250ms ease-out}
 :global(.hfm5 .m .fq.on):where(.scope){border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:none}
