@@ -19,7 +19,8 @@ export type Shape = "start" | "code" | "key" | "enter";
 export type Heard = { type: "email"; len: number; ok: boolean } | { type: "digit"; n: number } | { type: "bad" };
 
 // login-ui.js Morph's own members that the glue uses; the rest are its own.
-type Morph = { hear(detail: object): void; destroy(): void };
+type MorphTheme = { t1: string; ring: string; dark: boolean };
+type Morph = { hear(detail: object): void; theme: (now: number) => MorphTheme; destroy(): void };
 declare global {
   interface Window {
     AxiomLoginMorph: new (root: HTMLElement, lg: HTMLElement, engine: OceanEngine, transition?: object) => Morph;
@@ -37,6 +38,20 @@ const glyph = (i: number, t: number) => GLYPHS[Math.floor(hash(i, t) * GLYPHS.le
 function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, shape: Shape) {
   sea.dataset.state = "login";
   const morph = new window.AxiomLoginMorph(sea, frame, engine);
+  // Morph.theme reads getComputedStyle(--ring) straight into canvas fillStyle, which rejects the runtime
+  // light-dark(...) values brandStyle writes onto :root; resolve the tokens through CSSOM instead.
+  let ink: MorphTheme | undefined;
+  let inkAt = -1e9;
+  morph.theme = (now: number) => {
+    if (ink && now >= inkAt && now - inkAt < 500) return ink;
+    inkAt = now;
+    ink = {
+      t1: colour(frame, "var(--text1)"),
+      ring: colour(frame, "var(--ring)"),
+      dark: frame.classList.contains("dark"),
+    };
+    return ink;
+  };
   const canvas = sea.querySelector<HTMLCanvasElement>(":scope > canvas.lg-stg");
   if (canvas) {
     const place = {
@@ -59,6 +74,9 @@ function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, s
       if (heard.type === "email") held.ok = heard.ok;
       if (heard.type === "digit") held.n = heard.n;
       morph.hear(heard);
+    },
+    recolour: () => {
+      ink = undefined;
     },
     destroy: () => {
       morph.destroy();
@@ -208,8 +226,11 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape): Lo
   return {
     show: morph.show,
     hear: morph.hear,
-    // the solid reads the page's colours itself, at most half a second old (Morph's theme)
-    recolour: (light) => engine.setLight(light),
+    // recolour updates the sea and clears the solid's cached resolved tokens so scheme and brand changes take effect on the next frame
+    recolour: (light) => {
+      engine.setLight(light);
+      morph.recolour();
+    },
     decode: (title, decodeCanvas) => {
       stopDecode = decode(title, decodeCanvas);
     },
