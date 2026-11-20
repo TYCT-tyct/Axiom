@@ -3,13 +3,12 @@ import { LoadMore } from "@axiom/app";
 import { ActionButton, Card, DataState, EmptyState, Field, Icon, PageHead, Table, Td } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
-import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Authors } from "../models/authors";
 import { modelStatus, modelStatuses } from "../models/catalog";
 import { DraftDialog } from "../models/draft-dialog";
 import { ModelState } from "../models/parts";
-import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text } from "../parts";
+import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text, useShownAfter } from "../parts";
 import { authorsQuery, type ModelFilters, modelsQuery } from "../queries";
 
 export default function Models() {
@@ -19,12 +18,7 @@ export default function Models() {
   const models = useInfiniteQuery(modelsQuery(filters));
   const rows = models.data?.pages.flatMap((page) => page.data) ?? [];
   const filtered = Object.values(filters).some(Boolean);
-  // The vendors appear once the models above them first have an answer: a list that grew when its answer came pushed
-  // them down the screen (#747). They stay while a new filter's list loads, keeping what they hold.
-  const [listed, setListed] = useState(false);
-  if (!listed && !models.isPending) {
-    setListed(true);
-  }
+  const listed = useShownAfter(models.isPending);
   return (
     <>
       <PageHead title={t("nav.models")} lede={t("models.description")} />
