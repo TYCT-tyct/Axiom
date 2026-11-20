@@ -5,7 +5,7 @@ import { loop, open, pause, pauseAhead, running, setHidden, siteSignIn as signIn
 import { knownEmail, knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 
-// The console's sign-in pages (port design §9): the sea and the stage on it, loaded after the first content, and the
+// The console's sign-in pages (port design §9): the sea and the solid on it, loaded after the first content, and the
 // title's decode, which plays once for a visitor the website's departure brought (its one-shot marker) and never for a
 // direct visit.
 // the engine's own chunk, not the frame's (login-frame-*.js)
@@ -118,10 +118,14 @@ test("a sign-in page whose effects fail to load still signs in, with no unhandle
   expect(unhandled).toEqual([]);
 });
 
-// How many of the stage's pixels are in the ring colour, which only its lit tiles are drawn in: none while the address is
-// empty, some once a whole one has been heard. The frames change with the time (the glyphs flicker, the loose tiles
-// drift), so the lit tiles are what a test can count on. colour names the ring's light or dark value; without it, the
-// page's own.
+// How many of the solid's pixels are in the ring colour, which only its accent part is drawn in once lit: none while the
+// address is empty, some once a whole one has been heard (the envelope's seal and letter). The solid turns with the
+// time, so the lit part is what a test can count on; it is drawn at 0.72 to full opacity. colour names the ring's light
+// or dark value; without it, the page's own.
+// The sharks are called in and taken in before the solid is whole: up to 3.4 s for the far ones to give up, and a second
+// to be taken in.
+const formed = { timeout: 15_000 };
+
 async function ringPixels(page: Page, colour?: string) {
   return stageCanvas(page).evaluate((element, colour) => {
     const canvas = element as HTMLCanvasElement;
@@ -138,24 +142,25 @@ async function ringPixels(page: Page, colour?: string) {
     );
     let count = 0;
     for (let i = 0; i < data.length; i += 4) {
-      if (data[i + 3] === 255 && [0, 1, 2].every((c) => Math.abs((data[i + c] ?? 0) - (ring[c] ?? 0)) <= 2)) count++;
+      if ((data[i + 3] ?? 0) >= 180 && [0, 1, 2].every((c) => Math.abs((data[i + c] ?? 0) - (ring[c] ?? 0)) <= 2))
+        count++;
     }
     return count;
   }, colour);
 }
 
-test("what is typed reaches the stage: a whole address lights the envelope", async ({ page }) => {
+test("what is typed reaches the solid: a whole address lights the envelope", async ({ page }) => {
   await mockConsole(page);
   await page.goto(signInPage);
   await expect(stageCanvas(page)).toBeAttached();
   expect(await ringPixels(page)).toBe(0);
   await page.getByLabel("邮箱").fill(knownEmail);
-  await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
+  await expect.poll(() => ringPixels(page), formed).toBeGreaterThan(0);
 });
 
-test("what was typed before the stage's code came is what the stage starts from", async ({ page }) => {
+test("what was typed before the solid's code came is what the solid starts from", async ({ page }) => {
   await mockConsole(page);
-  // the stage's code is held until the address is typed
+  // the solid's code is held until the address is typed
   let release!: () => void;
   const held = new Promise<void>((resolve) => (release = resolve));
   await page.route(loginCode, async (route) => {
@@ -166,10 +171,10 @@ test("what was typed before the stage's code came is what the stage starts from"
   await page.getByLabel("邮箱").fill(knownEmail);
   release();
   await expect(stageCanvas(page)).toBeAttached();
-  await expect.poll(() => ringPixels(page)).toBeGreaterThan(0);
+  await expect.poll(() => ringPixels(page), formed).toBeGreaterThan(0);
 });
 
-test("the stage's tiles take the new scheme's colours when it changes", async ({ page }) => {
+test("the solid takes the new scheme's colours when it changes", async ({ page }) => {
   await page.emulateMedia({ colorScheme: "light" });
   await mockConsole(page);
   await page.goto(signInPage);
@@ -178,13 +183,13 @@ test("the stage's tiles take the new scheme's colours when it changes", async ({
   // the accent's light and dark values (tokens.css --accentT)
   const light = "#10738c";
   const dark = "#4ccce6";
-  await expect.poll(() => ringPixels(page, light)).toBeGreaterThan(0);
+  await expect.poll(() => ringPixels(page, light), formed).toBeGreaterThan(0);
   await page.emulateMedia({ colorScheme: "dark" });
   await expect.poll(() => ringPixels(page, dark)).toBeGreaterThan(0);
   expect(await ringPixels(page, light)).toBe(0);
 });
 
-test("the stage takes the site's brand colour when the site's settings come after it was drawn", async ({ page }) => {
+test("the solid takes the site's brand colour when the site's settings come after it was drawn", async ({ page }) => {
   const state = await mockConsole(page);
   state.site = { ...state.site, brand_color: "#ff0000" };
   let release!: () => void;
@@ -196,7 +201,7 @@ test("the stage takes the site's brand colour when the site's settings come afte
   await page.goto(signInPage);
   await expect(stageCanvas(page)).toBeAttached();
   await page.getByLabel("邮箱").fill(knownEmail);
-  await expect.poll(() => ringPixels(page, "#10738c")).toBeGreaterThan(0);
+  await expect.poll(() => ringPixels(page, "#10738c"), formed).toBeGreaterThan(0);
   release();
   // drawn again in the console's accent as the brand makes it
   await expect.poll(() => ringPixels(page, "var(--accentT)")).toBeGreaterThan(0);
