@@ -180,6 +180,7 @@ type Hooks = {
   fast: boolean;
   pre: (ctx: CanvasRenderingContext2D, info: object) => void;
   post: (ctx: CanvasRenderingContext2D, info: object) => void;
+  reset?: () => void;
 };
 
 // One column of the dune at a moment: where its sand stands, and what the surge and the sweep are doing to it; whether
@@ -360,6 +361,7 @@ class BedRun implements Script<object> {
       cell,
       glyph,
     };
+    if (this.bed.letters.length < 5) (art as HTMLCanvasElement & { __fx?: Hooks }).__fx?.reset?.();
     this.attach();
     this.retheme();
   }

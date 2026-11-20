@@ -1,5 +1,9 @@
 import { expect, type Page, test } from "@playwright/test";
-import { open, pauseAhead, running, scrollTo, shown } from "./fx-helpers.ts";
+import { apps } from "./apps.ts";
+import { collectErrors } from "./collect-errors.ts";
+import { mockConsole } from "./console-api.ts";
+import { loop, open, pauseAhead, running, scrollTo, shown } from "./fx-helpers.ts";
+import { pageHeading } from "./page-heading.ts";
 
 // Clawd (docs/frontend.md「Clawd（彩蛋）」): its code comes after the first content, as the sea's does; "claude" typed or
 // pressed in the first screen's strip brings the jellyfish and its team down the right edge, and at the sea floor they
@@ -74,3 +78,60 @@ for (const { name, width, height } of [
     expect(await onTheEdge(page)).toBe(false);
   });
 }
+
+test("white-label site 'Acme Relay' completes a floor ripple with no error and the loop keeps running", async ({
+  page,
+}) => {
+  const errors = collectErrors(page);
+  const asked = watchClawd(page);
+  await page.clock.install();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mockConsole(page, "usual", {
+    site: {
+      name: "Acme Relay",
+      currency: "USD",
+      key_prefix: "sk-ax-v1-",
+      registration: "invite",
+      api_base_url: "https://api.example.com",
+    },
+  });
+  await page.goto(apps[0].url);
+  await pageHeading(page);
+  await running(page);
+  await expect.poll(() => asked).toHaveLength(1);
+  await scrollTo(page, 6);
+  await shown(page, 6);
+  await page.locator(".hfm6 canvas.art").evaluate((art) => art.scrollIntoView({ block: "center" }));
+  await pauseAhead(page, 300);
+  await page.keyboard.type("claude");
+  let sawMorph = false;
+  for (let step = 0; step < 32; step++) {
+    await page.clock.runFor(300);
+    if ((await turned(page)) > 0) sawMorph = true;
+  }
+  expect(sawMorph).toBe(true);
+  const before = (await loop(page)).frames;
+  await page.clock.runFor(400);
+  expect((await loop(page)).frames).toBeGreaterThan(before);
+  expect(errors).toEqual([]);
+});
+
+test("highlighted Claude term and model name use the 4.5:1 darker terracotta in light theme", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  const term = page.locator(".hs > .main .fam [data-egg=claude]");
+  await term.evaluate((el) => el.classList.add("cw-lit"));
+  await expect.poll(() => term.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(168, 74, 45)");
+
+  await scrollTo(page, 2);
+  await shown(page, 2);
+  const name = page.locator(".hfm2 .mx .mn").first();
+  await name.evaluate((el) => el.classList.add("cw-lit"));
+  await expect.poll(() => name.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(168, 74, 45)");
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect.poll(() => term.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(217, 119, 87)");
+  await expect.poll(() => name.evaluate((el) => getComputedStyle(el).color)).toBe("rgb(217, 119, 87)");
+});

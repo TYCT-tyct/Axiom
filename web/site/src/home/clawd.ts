@@ -1,6 +1,7 @@
 import { useEffectModule } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import { createContext, type RefObject, useCallback, useEffect, useRef } from "react";
+import { typedWord } from "./script";
 
 const loadClawd = () => import("@axiom/fx/clawd");
 
@@ -32,17 +33,11 @@ export function useClawd(
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
-    let typed = "";
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (!(e.target instanceof Node) || frame.contains(e.target)) return;
-      if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
-      typed = (typed + e.key.toLowerCase()).slice(-password.length);
-      if (typed === password) {
-        typed = "";
-        clawd.current?.call();
-      }
-    };
+    const onKey = typedWord(
+      password,
+      () => clawd.current?.call(),
+      (target) => !(target instanceof Node) || frame.contains(target),
+    );
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [root, clawd]);

@@ -9,15 +9,54 @@ import { own } from "./loop";
 import type { OceanEngine } from "./ocean";
 import { water } from "./water";
 
+type BedInfo = {
+  cols: number;
+  rows: number;
+  ox: number;
+  CW: number;
+  CH: number;
+  t: number;
+  mask: Float32Array;
+  colL: Int16Array;
+  letters: { a: number; b: number }[];
+  topAt: (x: number, t: number) => number;
+};
+
+type Actor = { q: unknown[]; cur: unknown; y: number; rev: number; busy: boolean; away: boolean };
+
+type CastFx = {
+  skip: Set<number>;
+  dotDy: number;
+  fast: boolean;
+  reset?: () => void;
+};
+
 type Cast = {
+  dead?: boolean;
+  H: number;
   raf: number;
   art: HTMLCanvasElement | null;
-  fx: object;
+  fx: CastFx;
   F: { st: string } | null;
   pend: object | null;
   drew: boolean;
+  bed: {
+    acts: Actor[];
+    morphs: Record<string, unknown>;
+    timers: { at: number; fn: () => void }[];
+    info: BedInfo | null;
+    ripple: number;
+  };
   frame(dt: number): void;
+  artRect(): { top: number; left: number; w: number; h: number } | null;
+  floorInView(): boolean;
+  whaleOut(): boolean;
+  home(actor: Actor): number;
   drop(anchor: Element | null): boolean;
+  morph(li: number, life: number): void;
+  ripple(): void;
+  peek(li: number, color: boolean): void;
+  hop(): void;
   call(): boolean;
   busy(): boolean;
   destroy(): void;
@@ -68,6 +107,209 @@ const eggOf = (root: HTMLElement) => ({
   active: () => !!water.whale?.active(),
 });
 
+// hasTiles checks the exact condition clawd-cast's morph uses to collect source tiles for letter li. White-label site
+// names such as "Acme Relay" have a space at index 4 with no tiles; morphing it would put undefined into parts[].s.
+function hasTiles(info: BedInfo, li: number) {
+  for (let c = 0; c < info.cols; c++) {
+    if (info.colL[c] !== li) continue;
+    const x = info.ox + (c + 0.5) * info.CW;
+    const top = info.topAt(x, info.t);
+    for (let r = 0; r < info.rows; r++) {
+      const y = (r + 0.5) * info.CH;
+      if (y >= top) break;
+      if ((info.mask[r * info.cols + c] ?? 0) > 0.3) return true;
+    }
+  }
+  return false;
+}
+
+const hasAnyTiles = (info: BedInfo) => [0, 1, 2, 3, 4].some((li) => hasTiles(info, li));
+
+function artOutOfView(cast: Cast) {
+  const rect = cast.artRect();
+  return !rect?.h || rect.top > cast.H || rect.top + rect.h < 0;
+}
+
+function floorReady(cast: Cast) {
+  const info = cast.bed.info;
+  return Boolean(cast.art?.isConnected && info && info.letters.length >= 5 && !artOutOfView(cast));
+}
+
+function hasFloorWork(cast: Cast) {
+  const b = cast.bed;
+  return Boolean(b.timers.length || Object.keys(b.morphs).length || b.ripple > performance.now() || cast.fx.skip.size);
+}
+
+// settleFloor clears queued or in-flight wordmark actions when the floor leaves the viewport or stops running, so
+// paused dune draws never leave busy() true and hold the whale's turn forever.
+function settleFloor(cast: Cast) {
+  const b = cast.bed;
+  b.timers = [];
+  b.morphs = {};
+  b.ripple = 0;
+  cast.fx.skip.clear();
+  cast.fx.dotDy = 0;
+  cast.fx.fast = false;
+  for (const a of b.acts) {
+    a.q = [];
+    a.cur = null;
+    if (b.info) a.y = cast.home(a);
+    a.rev = 0;
+    a.busy = false;
+    a.away = true;
+  }
+}
+
+type Pending = { at: number; floor: boolean; run: () => void };
+const waitLimit = 15_000;
+type Gate = (floor: boolean, run: () => void) => boolean;
+
+function wrapFloorActions(cast: Cast, runOrWait: Gate) {
+  const origMorph = cast.morph.bind(cast);
+  cast.morph = (li, life) => {
+    const info = cast.bed.info;
+    if (!floorReady(cast) || !info || !hasTiles(info, li)) return;
+    runOrWait(true, () => {
+      const cur = cast.bed.info;
+      if (floorReady(cast) && cur && hasTiles(cur, li)) origMorph(li, life);
+    });
+  };
+  const origRipple = cast.ripple.bind(cast);
+  cast.ripple = () => {
+    const info = cast.bed.info;
+    if (!floorReady(cast) || !info || !hasAnyTiles(info)) return;
+    runOrWait(true, () => {
+      const cur = cast.bed.info;
+      if (floorReady(cast) && cur && hasAnyTiles(cur)) origRipple();
+    });
+  };
+  const origPeek = cast.peek.bind(cast);
+  cast.peek = (li, color) => {
+    if (!cast.whaleOut() && floorReady(cast)) origPeek(li, color);
+  };
+  const origHop = cast.hop.bind(cast);
+  cast.hop = () => {
+    if (!cast.whaleOut() && floorReady(cast)) origHop();
+  };
+}
+
+function wrapDropAction(cast: Cast, runOrWait: Gate, ride: () => void) {
+  const origDrop = cast.drop.bind(cast);
+  cast.drop = (anchor) => {
+    if (cast.F && cast.F.st !== "gone") {
+      const joined = origDrop(anchor);
+      ride();
+      return joined;
+    }
+    let dropped = false;
+    runOrWait(false, () => {
+      if (cast.floorInView()) {
+        cast.ripple();
+        dropped = true;
+      } else {
+        dropped = origDrop(anchor);
+      }
+    });
+    return dropped;
+  };
+}
+
+// guardCast puts one shared whaleOut() exclusion and floor-readiness check in front of every Clawd entry point (the
+// strip, typing "claude", clicking a floor letter, and dive landings) without editing the generated engine file.
+function guardCast(cast: Cast, ride: () => void) {
+  let pending: Pending | null = null;
+  const clearExpired = () => {
+    if (pending && performance.now() - pending.at >= waitLimit) pending = null;
+  };
+  const settle = () => {
+    settleFloor(cast);
+    if (pending?.floor) pending = null;
+  };
+  const runOrWait: Gate = (floor, run) => {
+    if (cast.dead) return false;
+    if (cast.whaleOut()) {
+      pending = { at: performance.now(), floor, run };
+      ride();
+      return false;
+    }
+    run();
+    ride();
+    return true;
+  };
+  cast.fx.reset = () => {
+    settle();
+    cast.bed.info = null;
+    ride();
+  };
+  wrapFloorActions(cast, runOrWait);
+  wrapDropAction(cast, runOrWait, ride);
+  const origBusy = cast.busy.bind(cast);
+  cast.busy = () => {
+    clearExpired();
+    if ((hasFloorWork(cast) || pending?.floor) && !floorReady(cast)) settle();
+    return Boolean(pending || origBusy());
+  };
+  return {
+    waiting: () => Boolean(pending),
+    settle,
+    clearPending: () => {
+      pending = null;
+    },
+    flush: () => {
+      clearExpired();
+      if ((hasFloorWork(cast) || pending?.floor) && !floorReady(cast)) settle();
+      if (pending && !cast.whaleOut()) {
+        const next = pending;
+        pending = null;
+        next.run();
+      }
+    },
+  };
+}
+
+type Guard = ReturnType<typeof guardCast>;
+
+function bindFloor(cast: Cast, guard: Guard, tick: (dt: number, now: number) => void, ride: () => void) {
+  let bed = () => {};
+  let watchBed: IntersectionObserver | undefined;
+  let boundArt: HTMLCanvasElement | null = null;
+  const set = (art: HTMLCanvasElement | null) => {
+    if (art && art === boundArt) return;
+    bed();
+    bed = () => {};
+    watchBed?.disconnect();
+    watchBed = undefined;
+    const held = cast.art as (HTMLCanvasElement & { __fx?: CastFx }) | null;
+    if (held && held.__fx === cast.fx) delete held.__fx;
+    if (held !== art) {
+      guard.settle();
+      cast.bed.info = null;
+    }
+    cast.art = art;
+    boundArt = art;
+    if (!art) {
+      ride();
+      return;
+    }
+    (art as HTMLCanvasElement & { __fx?: CastFx }).__fx = cast.fx;
+    bed = own(art, tick);
+    watchBed = new IntersectionObserver((entries) => {
+      if (entries.some((entry) => !entry.isIntersecting)) {
+        guard.settle();
+        ride();
+      }
+    });
+    watchBed.observe(art);
+  };
+  return {
+    set,
+    stop: () => {
+      bed();
+      watchBed?.disconnect();
+    },
+  };
+}
+
 // startClawd builds the cast on root, the frame the board's markup draws (.tr: its canvas.cw, canvas.wh, .hs and .ho).
 export function startClawd(root: HTMLElement, { engine, dark, phone }: ClawdOptions): Clawd {
   const options = { dark, phone, scope: root.querySelector(".ho"), egg: eggOf(root) };
@@ -76,52 +318,37 @@ export function startClawd(root: HTMLElement, { engine, dark, phone }: ClawdOpti
   cancelAnimationFrame(cast.raf);
   water.clawd = cast;
 
-  // The cast's frames come from whichever of its places is in view: the first screen (the strip's words wink there),
-  // the sea floor, and, while the team is out, waiting for the whale or its layer still to be cleared, the layer
-  // itself, which spans the frame. Two of them in view at once still make one frame.
   let last = -1;
   let team: (() => void) | null = null;
+  const layer = root.querySelector(":scope > canvas.cw") ?? root;
   const tick = (dt: number, now: number) => {
     if (now === last) return;
     last = now;
+    guard.flush();
     cast.frame(Math.min(0.05, dt));
     ride();
   };
-  const layer = root.querySelector(":scope > canvas.cw") ?? root;
   const ride = () => {
-    const out = !!(cast.pend || cast.drew || (cast.F && cast.F.st !== "gone"));
+    const out = Boolean(guard.waiting() || cast.pend || cast.drew || (cast.F && cast.F.st !== "gone"));
     if (out && !team) team = own(layer, tick);
     else if (!out && team) {
       team();
       team = null;
     }
   };
-  // every way the team sets out goes through drop (the strip's word, the word typed, the wait for the whale)
-  const drop = cast.drop.bind(cast);
-  cast.drop = (anchor) => {
-    const dropped = drop(anchor);
-    ride();
-    return dropped;
-  };
+  const guard = guardCast(cast, ride);
   const hero = own(root.querySelector(".hs > main") ?? root, tick);
-  let bed = () => {};
-  const floor = (art: HTMLCanvasElement | null) => {
-    bed();
-    bed = () => {};
-    const held = cast.art as (HTMLCanvasElement & { __fx?: object }) | null;
-    if (held && held.__fx === cast.fx) delete held.__fx;
-    cast.art = art;
-    if (!art) return;
-    (art as HTMLCanvasElement & { __fx?: object }).__fx = cast.fx;
-    bed = own(art, tick);
-  };
-  floor(root.querySelector<HTMLCanvasElement>("canvas.art"));
+  const floor = bindFloor(cast, guard, tick, ride);
+  const initial = root.querySelector<HTMLCanvasElement>("canvas.art");
+  if (initial) floor.set(initial);
   return {
     call: () => cast.call(),
-    floor,
+    floor: floor.set,
     destroy: () => {
+      guard.clearPending();
+      guard.settle();
       hero();
-      bed();
+      floor.stop();
       team?.();
       cast.destroy();
       if (water.clawd === cast) water.clawd = null;

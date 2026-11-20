@@ -143,4 +143,5 @@
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
 :global(.tr .lens.wh-under):where(.scope){--lv:color-mix(in srgb,var(--bg) 18%,transparent)}
 :global(.tr .lens.wh-under):where(.scope)::before{backdrop-filter:blur(2px);}
+:global(.hfm2 .mx .mn.cw-lit):where(.scope){color:var(--clawdT)}
 /* jscpd:ignore-end */

@@ -88,4 +88,5 @@
 :global(.ho .main .fam:not(.under *) > span.cw-lit):where(.scope){color:#d97757}
 :global(.ho .main .fam:not(.under *) > span.wh-lit):where(.scope){color:var(--accent)}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}
+:global(.ho .main .fam:not(.under *) > span.cw-lit):where(.scope){color:var(--clawdT)}
 /* jscpd:ignore-end */

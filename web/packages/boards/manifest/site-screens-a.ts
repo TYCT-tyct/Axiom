@@ -158,6 +158,8 @@ const screens = (board: string): Region[] => [
     text: { unit: ".pf > span:first-child" },
     attributes: { moreHref: { selector: ".more", attribute: "href" } },
     classes: modelClasses,
+    // Clawd's lit model name uses the contrast-checked token (4.5:1 on normal and selected rows in light and dark)
+    css: { ".hfm2 .mx .mn.cw-lit": "color:var(--clawdT)" },
     english: modelsEnglish,
   },
   {

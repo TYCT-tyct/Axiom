@@ -91,6 +91,8 @@ const siteRegions: Region[] = [
     children: "h1 > [data-i18n]",
     // the strip's two names light when the whale or Clawd answers them (whale-egg.js, clawd-cast.js)
     states: ["wh-lit", "cw-lit"],
+    // Clawd's lit term uses the contrast-checked token (4.5:1 in light, board's #d97757 in dark)
+    css: { ".ho .main .fam:not(.under *) > span.cw-lit": "color:var(--clawdT)" },
     text: {
       lede: ".lede > span",
       signUp: ".cta .primary > span",
