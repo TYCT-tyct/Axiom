@@ -22,7 +22,13 @@ declare global {
   }
 }
 
-export type Sea = { readonly engine: OceanEngine; destroy: () => void };
+export type Sea = {
+  readonly engine: OceanEngine;
+  // awake keeps the sea going while element is in view too, until the returned function is called (a moment of the
+  // eggs plays wherever the reader is)
+  awake: (element: Element) => () => void;
+  destroy: () => void;
+};
 
 // buildSea makes an engine whose frames come from the shared loop: the engine's own scheduling (hold, its observer)
 // must never start one, so it is built held and its scheduler is replaced.
