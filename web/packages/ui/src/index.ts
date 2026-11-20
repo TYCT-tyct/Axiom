@@ -2,8 +2,8 @@
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
 export { useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
-export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { Announcement } from "./components/announcement";
+export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
 export { BoardDialog } from "./components/board-dialog";
