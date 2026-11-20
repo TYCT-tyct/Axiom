@@ -3,11 +3,10 @@
 
 
 import type zh from "./AdminCodeToken.zh.ts";
-import styles from "./AdminCodeToken.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };  text: { token: string; }; };
 export default function AdminCodeToken({ text }: Props) {
-return <><span className={("c2") + " " + styles.scope}>{text.token}</span></>;
+return <><span className={"c2"}>{text.token}</span></>;
 }
 /* jscpd:ignore-end */

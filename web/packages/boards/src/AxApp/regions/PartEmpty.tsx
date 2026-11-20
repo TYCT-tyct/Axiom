@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartEmpty.zh.ts";
-import styles from "./PartEmpty.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { hideDescription?: boolean;
@@ -14,6 +13,6 @@ hideActions?: boolean; };  text: { title: string;
 description: string;
 primary: string; }; };
 export default function PartEmpty({ values: v = {}, text }: Props) {
-return <><div className={("stb empty") + " " + styles.scope} role={"status"}><span className={("stbi") + " " + styles.scope}><svg className={("ic ic-overview ") + " " + styles.scope} viewBox={"0 0 20 20"} aria-hidden={"true"}><g className={("o") + " " + styles.scope}><rect className={("a1") + " " + styles.scope} x={"3"} y={"3"} width={"6"} height={"8"} rx={"2"} /><rect className={("a2") + " " + styles.scope} x={"11"} y={"3"} width={"6"} height={"5"} rx={"2"} /><rect className={("a3 sig") + " " + styles.scope} x={"11"} y={"10"} width={"6"} height={"7"} rx={"2"} /><rect className={("a4") + " " + styles.scope} x={"3"} y={"13"} width={"6"} height={"4"} rx={"2"} /></g><g className={("f") + " " + styles.scope}><rect className={("a1") + " " + styles.scope} x={"3"} y={"3"} width={"6"} height={"8"} rx={"2"} /><rect className={("a2") + " " + styles.scope} x={"11"} y={"3"} width={"6"} height={"5"} rx={"2"} /><rect className={("a3 sig") + " " + styles.scope} x={"11"} y={"10"} width={"6"} height={"7"} rx={"2"} /><rect className={("a4") + " " + styles.scope} x={"3"} y={"13"} width={"6"} height={"4"} rx={"2"} /></g></svg></span><h2 className={styles.scope}>{text.title}</h2>{!v.hideDescription && (<p className={styles.scope}>{text.description}</p>)}{!v.hideActions && (<div className={("stba") + " " + styles.scope}>{!v.hidePrimary && (<button type={"button"} className={("btn pri") + " " + styles.scope} data-st={"nkx"} onClick={v.primary} disabled={v.pending}><span className={styles.scope}>{text.primary}</span></button>)}</div>)}</div></>;
+return <><div className={"stb empty"} role={"status"}><span className={"stbi"}><svg className={"ic ic-overview "} viewBox={"0 0 20 20"} aria-hidden={"true"}><g className={"o"}><rect className={"a1"} x={"3"} y={"3"} width={"6"} height={"8"} rx={"2"} /><rect className={"a2"} x={"11"} y={"3"} width={"6"} height={"5"} rx={"2"} /><rect className={"a3 sig"} x={"11"} y={"10"} width={"6"} height={"7"} rx={"2"} /><rect className={"a4"} x={"3"} y={"13"} width={"6"} height={"4"} rx={"2"} /></g><g className={"f"}><rect className={"a1"} x={"3"} y={"3"} width={"6"} height={"8"} rx={"2"} /><rect className={"a2"} x={"11"} y={"3"} width={"6"} height={"5"} rx={"2"} /><rect className={"a3 sig"} x={"11"} y={"10"} width={"6"} height={"7"} rx={"2"} /><rect className={"a4"} x={"3"} y={"13"} width={"6"} height={"4"} rx={"2"} /></g></svg></span><h2>{text.title}</h2>{!v.hideDescription && (<p>{text.description}</p>)}{!v.hideActions && (<div className={"stba"}>{!v.hidePrimary && (<button type={"button"} className={"btn pri"} data-st={"nkx"} onClick={v.primary} disabled={v.pending}><span>{text.primary}</span></button>)}</div>)}</div></>;
 }
 /* jscpd:ignore-end */

@@ -51,5 +51,6 @@ export default ["AxApp", "AxAppPhone"].map(
       ".qses .btn": { set: { onclick: "{{onSessionRevoke}}", disabled: "{{sessionRevokeDisabled}}" } },
     },
     english,
+    css: { ".ov .qses .btn.pri span": "color:inherit" },
   }),
 );

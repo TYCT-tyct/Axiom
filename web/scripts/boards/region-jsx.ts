@@ -4,7 +4,7 @@ import { events, property } from "./template.ts";
 
 export type Emitter = ReturnType<typeof emitter>;
 
-export function emitter(region: Region) {
+export function emitter(region: Region, scoped = true) {
   const locale: Record<string, string> = {};
   const values = new Map<string, string>();
   const texts = new Map<string, string>();
@@ -43,6 +43,7 @@ export function emitter(region: Region) {
   };
   return {
     region,
+    scoped,
     locale,
     values,
     texts,
@@ -72,8 +73,8 @@ const ariaStates = [
   "aria-invalid",
 ];
 // The props whose value React wants other than as the attribute's text.
-const typed: Record<string, (expr: string) => string> = {
-  className: (expr) => `className={(${expr}) + " " + styles.scope}`,
+const typed: Record<string, (expr: string, state: Emitter) => string> = {
+  className: (expr, state) => (state.scoped ? `className={(${expr}) + " " + styles.scope}` : `className={${expr}}`),
   tabIndex: (expr) => `tabIndex={Number(${expr})}`,
   value: (expr) => `defaultValue={${expr}}`,
 };
@@ -97,7 +98,15 @@ function attribute(name: string, raw: string, state: Emitter, replacement?: stri
     return `${prop}={${hole ? state.value(hole, "boolean") : "true"}}`;
   if (name === "style") return `style={${style(raw, state, replacement)}}`;
   const expr = replacement ?? state.expression(raw);
-  return typed[prop]?.(expr) ?? `${prop}={${expr}}`;
+  return typed[prop]?.(expr, state) ?? `${prop}={${expr}}`;
+}
+
+function elementAttrs(el: Element, state: Emitter, fields?: Map<Node | Attr, string>): string {
+  const attrs = [...el.attributes].map((a) =>
+    attribute(a.name, a.value, state, fields?.get(a) ?? state.attributes.get(a)),
+  );
+  if (state.scoped && !el.hasAttribute("class")) attrs.push("className={styles.scope}");
+  return attrs.length ? ` ${attrs.join(" ")}` : "";
 }
 
 export function jsx(node: Node, state: Emitter, fields?: Map<Node | Attr, string>): string {
@@ -108,13 +117,10 @@ export function jsx(node: Node, state: Emitter, fields?: Map<Node | Attr, string
   if (node.nodeType !== 1) return "";
   const el = node as Element;
   if (["script", "sc-for"].includes(el.localName)) throw new Error(`unsupported region element ${el.localName}`);
-  const attrs = [...el.attributes].map((a) =>
-    attribute(a.name, a.value, state, fields?.get(a) ?? state.attributes.get(a)),
-  );
-  if (!el.hasAttribute("class")) attrs.push("className={styles.scope}");
-  const children = [...el.childNodes].map((child) => jsx(child, state, fields)).join("");
   const tag = state.links.has(el) ? "Link" : el.localName;
-  const out = children ? `<${tag} ${attrs.join(" ")}>${children}</${tag}>` : `<${tag} ${attrs.join(" ")} />`;
+  const open = `<${tag}${elementAttrs(el, state, fields)}`;
+  const children = [...el.childNodes].map((child) => jsx(child, state, fields)).join("");
+  const out = children ? `${open}>${children}</${tag}>` : `${open} />`;
   const hole = state.unless.get(el);
   return hole ? `{!${state.value(hole, "boolean")} && (${out})}` : out;
 }

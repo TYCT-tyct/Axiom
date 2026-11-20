@@ -48,6 +48,9 @@ const globalCss = new Set([
   "packages/ui/src/css/fonts.css",
   "packages/ui/src/css/base.css",
 ]);
+// The AxApp-family board stylesheet is generated once and imported where the console and admin shells mount.
+const isBoardSheetImport = (path: string, from: string) =>
+  from === "@axiom/boards/AxApp/regions.css" && (path === "console/src/layout.tsx" || path === "admin/src/layout.tsx");
 const tokensPath = "packages/ui/src/css/tokens.css";
 
 const lineOf = (text: string, pos: number) => text.slice(0, pos).split("\n").length;
@@ -58,21 +61,17 @@ const htmlSinks = new Set(["innerHTML", "outerHTML", "insertAdjacentHTML", "cssT
 
 // A className a component computes from its own module: any expression whose only strings are keys into the module.
 function fromModule(node: ts.Node, module: string | undefined): boolean {
-  if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) {
-    return false;
-  }
+  if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) return false;
   // A comparison (size === "sm") chooses a class; its string is a value, not a class name.
   if (
     ts.isBinaryExpression(node) &&
     [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(
       node.operatorToken.kind,
     )
-  ) {
+  )
     return true;
-  }
-  if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === module) {
+  if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === module)
     return true;
-  }
   let ok = true;
   ts.forEachChild(node, (child) => {
     ok &&= fromModule(child, module);
@@ -83,15 +82,9 @@ function fromModule(node: ts.Node, module: string | undefined): boolean {
 // A style object that sets only custom properties (--name), which a stylesheet reads, or none; anything else is inline
 // style.
 function customOnly(node: ts.Expression): boolean {
-  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)) {
-    return customOnly(node.expression);
-  }
-  if (ts.isConditionalExpression(node)) {
-    return customOnly(node.whenTrue) && customOnly(node.whenFalse);
-  }
-  if (ts.isIdentifier(node)) {
-    return node.text === "undefined";
-  }
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)) return customOnly(node.expression);
+  if (ts.isConditionalExpression(node)) return customOnly(node.whenTrue) && customOnly(node.whenFalse);
+  if (ts.isIdentifier(node)) return node.text === "undefined";
   return (
     ts.isObjectLiteralExpression(node) &&
     node.properties.every(
@@ -116,7 +109,7 @@ function scriptFindings(path: string, text: string): Finding[] {
       if (from === sibling && node.importClause?.name) {
         module = node.importClause.name.text;
       }
-      if (isApp(path) && /\.css(\?.*)?$/.test(from)) {
+      if (isApp(path) && /\.css(\?.*)?$/.test(from) && !isBoardSheetImport(path, from)) {
         add("css-import", node, `app code imports CSS (${from}); a page composes components instead`);
       }
     }

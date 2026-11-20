@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./PartNoPermission.zh.ts";
-import styles from "./PartNoPermission.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { hideDescription?: boolean;
@@ -17,6 +16,6 @@ description: string;
 primary: string;
 secondary: string; }; };
 export default function PartNoPermission({ values: v = {}, text }: Props) {
-return <><div className={("stb deny") + " " + styles.scope} role={"status"}><span className={("stbi") + " " + styles.scope}><svg viewBox={"0 0 20 20"} aria-hidden={"true"} className={styles.scope}><path d={"M5.5 9h9a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1z"} className={styles.scope} /><path d={"M7 9V6.75a3 3 0 0 1 6 0V9"} className={styles.scope} /></svg></span><h2 className={styles.scope}>{text.title}</h2>{!v.hideDescription && (<p className={styles.scope}>{text.description}</p>)}{!v.hideActions && (<div className={("stba") + " " + styles.scope}>{!v.hidePrimary && (<button type={"button"} className={("btn pri") + " " + styles.scope} data-st={"ask"} onClick={v.primary} disabled={v.pending}><span className={styles.scope}>{text.primary}</span></button>)}{!v.hideSecondary && (<button type={"button"} className={("btn sec") + " " + styles.scope} data-st={"go:home"} onClick={v.secondary}><span className={styles.scope}>{text.secondary}</span></button>)}</div>)}</div></>;
+return <><div className={"stb deny"} role={"status"}><span className={"stbi"}><svg viewBox={"0 0 20 20"} aria-hidden={"true"}><path d={"M5.5 9h9a1 1 0 0 1 1 1v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V10a1 1 0 0 1 1-1z"} /><path d={"M7 9V6.75a3 3 0 0 1 6 0V9"} /></svg></span><h2>{text.title}</h2>{!v.hideDescription && (<p>{text.description}</p>)}{!v.hideActions && (<div className={"stba"}>{!v.hidePrimary && (<button type={"button"} className={"btn pri"} data-st={"ask"} onClick={v.primary} disabled={v.pending}><span>{text.primary}</span></button>)}{!v.hideSecondary && (<button type={"button"} className={"btn sec"} data-st={"go:home"} onClick={v.secondary}><span>{text.secondary}</span></button>)}</div>)}</div></>;
 }
 /* jscpd:ignore-end */
