@@ -3,6 +3,7 @@ export { EnrollPage } from "./auth/enroll";
 export { MfaPage } from "./auth/mfa";
 export { SignInPage } from "./auth/sign-in";
 export { useErrors } from "./errors";
+export { preloadFirstPage } from "./first-page";
 export { readForm, toInstant, toLocalInput } from "./forms";
 export { LoadMore, SignOutError, Stat } from "./parts";
 export { useRulesCheck } from "./presets/check";
