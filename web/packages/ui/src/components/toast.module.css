@@ -1,0 +1,21 @@
+/* Fixed viewport placement, countdown duration, and focus ring on top of the board's .fxt (AxApp/regions.css). */
+.host {
+  display: contents;
+}
+
+.root {
+  position: fixed;
+}
+
+.bar {
+  animation-duration: var(--ms);
+}
+
+.root:focus-within .bar {
+  animation-play-state: paused;
+}
+
+.action:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
