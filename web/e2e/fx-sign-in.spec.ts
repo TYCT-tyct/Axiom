@@ -1,7 +1,16 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { expectMoving, loop, open, pause, pauseAhead, running, setHidden, siteSignIn as signIn } from "./fx-helpers.ts";
+import {
+  expectMovingNow,
+  loop,
+  open,
+  pause,
+  pauseAhead,
+  running,
+  setHidden,
+  siteSignIn as signIn,
+} from "./fx-helpers.ts";
 import { knownEmail, knownPassword } from "./mock-auth.ts";
 import { pageHeading } from "./page-heading.ts";
 
@@ -12,6 +21,9 @@ import { pageHeading } from "./page-heading.ts";
 const loginCode = /\/assets\/login-[\w-]{8}\.js$/;
 const signInPage = `${apps[0].url.replace(/\/$/, "")}/console/sign-in`;
 const stageCanvas = (page: Page) => page.locator(".lg-sea > canvas:not(.sea)");
+// The sharks are called in and taken in before the solid is whole: up to 3.4 s for the far ones to give up, and a second
+// to be taken in.
+const formed = { timeout: 15_000 };
 
 // Whether the decode played: the title's characters hidden for it, and its canvas drawn on (a hidden title alone could
 // be the veil, lifted by its timer), recorded from the document's first script.
@@ -92,6 +104,7 @@ for (const reducedMotion of ["no-preference", "reduce"] as const)
     await page.emulateMedia({ reducedMotion });
     const decoded = await watchDecode(page);
     await mockConsole(page);
+    await page.clock.install();
     await page.goto(apps[0].url);
     await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
     await page.goto(signInPage);
@@ -99,7 +112,20 @@ for (const reducedMotion of ["no-preference", "reduce"] as const)
     await running(page);
     await expect.poll(decoded).toEqual({ hidden: true, drawn: true });
     await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
-    await expectMoving(page, page.locator(".lg-sea > canvas.sea:not(.cover)"), stageCanvas(page));
+    // Morph calls the sea's sharks in before drawing the solid; wait until it has drawn opaque tiles before freezing.
+    await expect
+      .poll(
+        () =>
+          stageCanvas(page).evaluate((el) => {
+            const c = el as HTMLCanvasElement;
+            if (!c.width || !c.height) return false;
+            const { data } = (c.getContext("2d") as CanvasRenderingContext2D).getImageData(0, 0, c.width, c.height);
+            return data.some((v, i) => i % 4 === 3 && v >= 160);
+          }),
+        formed,
+      )
+      .toBe(true);
+    await expectMovingNow(page, page.locator(".lg-sea > canvas.sea:not(.cover)"), stageCanvas(page));
   });
 
 test("a sign-in page whose effects fail to load still signs in, with no unhandled error", async ({ page }) => {
@@ -125,10 +151,6 @@ test("a sign-in page whose effects fail to load still signs in, with no unhandle
 // address is empty, some once a whole one has been heard (the envelope's seal and letter). The solid turns with the
 // time, so the lit part is what a test can count on; it is drawn at 0.72 to full opacity. colour names the ring's light
 // or dark value; without it, the page's own.
-// The sharks are called in and taken in before the solid is whole: up to 3.4 s for the far ones to give up, and a second
-// to be taken in.
-const formed = { timeout: 15_000 };
-
 async function ringPixels(page: Page, colour?: string) {
   return stageCanvas(page).evaluate((element, colour) => {
     const canvas = element as HTMLCanvasElement;
