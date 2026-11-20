@@ -288,4 +288,6 @@
 
 
 }
+:global(.ov .qseg[data-rows="2"]):where(.scope){display:grid;grid-auto-flow:row;grid-template-columns:repeat(var(--n),1fr)}
+:global(.ov .qseg[data-rows="2"] > i):where(.scope){bottom:auto;height:calc((100% - 4px) / 2);transform:translate(calc(var(--i) * 100%),calc(var(--r) * 100%))}
 /* jscpd:ignore-end */

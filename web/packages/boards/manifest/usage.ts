@@ -144,6 +144,9 @@ const usageFields: Omit<Region, "board" | "name" | "roots" | "page" | "omit" | "
     _stRow: ["on", "dim"],
   },
   english: usageEnglish,
+  // The page draws three switches where the board draws one: on a narrow card they go below the title, which would
+  // otherwise be squeezed onto two lines.
+  css: { ".ov .usc > .qch": "flex-wrap:wrap;row-gap:10px" },
 };
 
 function makeUsageRegion(board: string): Region {

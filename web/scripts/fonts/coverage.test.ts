@@ -83,6 +83,19 @@ describe("the committed fonts", () => {
     expect([..."会变接入不变"].filter((c) => !serif.includes(c))).toEqual([]);
   });
 
+  // A region writes a few words straight into its markup (the FAQ screen's sample key, "sk-ax-7f3c••••"), in no message
+  // file. Read from the region's source and the cut fonts, not from faceTexts, so a collector that stops reading
+  // regions' markup fails here even after the fonts are cut again with it.
+  it("cut the words a region writes in its markup into the faces that draw them", () => {
+    const faq = readFileSync(join(import.meta.dirname, "../../packages/boards/src/Site/regions/Faq.tsx"), "utf8");
+    expect(faq).toContain("sk-ax-7f3c••••");
+    for (const family of ["Axiom Sans", "Axiom Mono"]) {
+      const face = built.faces[manifest.faces.findIndex((one) => one.family === family)];
+      const chars = (face?.files ?? []).filter((f) => f.pages.includes("site/home")).map((f) => f.chars);
+      expect(chars.join(""), family).toContain("•");
+    }
+  });
+
   it(`are the files fonts.json describes (${rerun})`, () => {
     for (const file of built.faces.flatMap((face) => face.files)) {
       expect(sha256(readFileSync(join(dir, file.file))), file.file).toBe(file.sha256);

@@ -18,6 +18,8 @@ import { CallsFilterBar } from "./calls-filters";
 const t = ((key: string) => key) as TFunction;
 
 setUpPages();
+// the filter bar asks whether the page is a phone's width, which lays the time ranges out in two rows
+vi.stubGlobal("matchMedia", () => ({ matches: false, addEventListener() {}, removeEventListener() {} }));
 
 it("keeps the call list, close and retry controls in a failed detail drawer without a second overview", async () => {
   const getCall = vi.fn<() => Promise<Schemas["Call"]>>().mockRejectedValue(new ApiError(500, null));
