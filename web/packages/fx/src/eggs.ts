@@ -63,18 +63,40 @@ function loops(trail: Point[]): { x: number; y: number } | null {
   return Math.abs(turn) > Math.PI * 3.4 && radius > 24 && radius < 220 ? { x, y } : null;
 }
 
-// openness is how far a point (in the viewport) is from the page's content: 0 at it, 1 from 80 px out (respond.js)
+// openness is how far a point (in the viewport) is from the page's content: 0 at it, 1 from 80 px out (respond.js
+// quiet); a small block ([data-avoid=s]) is padded 14 px, the rest 10
 function openness(ho: HTMLElement, x: number, y: number) {
   let d = Number.POSITIVE_INFINITY;
   for (const el of ho.querySelectorAll(content)) {
     const r = el.getBoundingClientRect();
     if (!r.width) continue;
+    const pad = el.matches("[data-avoid=s]") ? 14 : 10;
     d = Math.min(
       d,
-      Math.hypot(Math.max(r.left - 10 - x, 0, x - r.right - 10), Math.max(r.top - 10 - y, 0, y - r.bottom - 10)),
+      Math.hypot(Math.max(r.left - pad - x, 0, x - r.right - pad), Math.max(r.top - pad - y, 0, y - r.bottom - pad)),
     );
   }
   return Math.min(1, Math.max(0, (d - 8) / 72));
+}
+
+// eased is the pointer's strength easing toward where it should be, as respond.js eases it every frame
+// (k += (target - k) * (1 - e^(-10 dt))): read at any time, it is where those frames would have taken it
+function eased() {
+  let k = 0;
+  let target = 0;
+  let at = 0;
+  const now = (t: number) => {
+    k = target + (k - target) * Math.exp(-Math.max(0, t - at) / 100);
+    at = t;
+    return k;
+  };
+  return {
+    now,
+    aim: (t: number, value: number) => {
+      now(t);
+      target = value;
+    },
+  };
 }
 
 // keep is the sea kept going, and the moments' layer drawn, for as long as the latest moment asks
@@ -108,15 +130,43 @@ function keeper(ho: HTMLElement, sea: Sea, draw: (dt: number) => void, busy: () 
   };
 }
 
-function scrollers(frame: HTMLElement) {
+// the reader taking over the page: what ends a scroll the page started (behaviour.ts takeOver)
+const takeOver = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+// eggs.js surface: cubic in and out
+const inOut = (t: number) => (t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2);
+
+function scrollers(frame: HTMLElement, ho: HTMLElement) {
   const scroller = frame.querySelector<HTMLElement>(".hs") ?? frame;
+  let rising: (() => void) | undefined;
+  const stop = () => rising?.();
   return {
     deep: () => {
       const max = scroller.scrollHeight - scroller.clientHeight;
       return max > 0 ? scroller.scrollTop / max : 0;
     },
-    dive: () => scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" }),
-    rise: () => scroller.scrollTo({ top: 0, behavior: "smooth" }),
+    dive: () => {
+      stop();
+      scroller.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    },
+    // the way back up, as the design glides it: 1.6 s to the top on the shared loop, until the reader takes over
+    rise: () => {
+      stop();
+      const from = scroller.scrollTop;
+      let t = 0;
+      const release = own(ho, (dt) => {
+        t = Math.min(1, t + dt / 1.6);
+        scroller.scrollTop = from * (1 - inOut(t));
+        if (t >= 1) end();
+      });
+      const end = () => {
+        release();
+        for (const kind of takeOver) frame.removeEventListener(kind, end);
+        rising = undefined;
+      };
+      for (const kind of takeOver) frame.addEventListener(kind, end, { passive: true });
+      rising = end;
+    },
+    stop,
   };
 }
 
@@ -290,7 +340,7 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
   const ho = frame.querySelector<HTMLElement>(".ho") ?? frame;
   const depth = ho.querySelector<HTMLElement>(".depth");
   const owner = frame.querySelector(".hs > main") ?? ho;
-  const page = scrollers(frame);
+  const page = scrollers(frame, ho);
   const canvas = layerCanvas(frame, options.glow);
   const water = tend(engine);
   const layer = glyphs(canvas, ho);
@@ -309,7 +359,7 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
     const now = performance.now();
     if (new Date().getMinutes() === 59) moments.auto("tide", play.tide);
     const p = pointer.state;
-    if (p.active && p.k > 0.85 && now - p.rest > 4000) moments.earn("visit", () => play.visit(p.x, p.y));
+    if (p.active && pointer.k() > 0.85 && now - p.rest > 4000) moments.earn("visit", () => play.visit(p.x, p.y));
     if (floor.rested(now)) moments.earn("floor", () => options.floor(true));
     moments.tick();
   };
@@ -328,12 +378,16 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
     surface: () => {
       page.rise();
       options.floor(false);
-      floor.reset();
-      moments.again("floor");
+      // offered again once it has faded (250 ms)
+      later(250, () => {
+        floor.reset();
+        moments.again("floor");
+      });
     },
     destroy: () => {
       window.clearInterval(timer);
       clear();
+      page.stop();
       pointer.stop();
       stopControls();
       window.axiomEggs = undefined;
@@ -350,7 +404,8 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
 // watchPointer follows the pointer over the sea (not touch): where it is, how far from the content (k), since when it
 // has rested within 24 px, and the loops it draws on open water, which it hands to whirl.
 function watchPointer(ho: HTMLElement, engine: Engine, whirl: (at: { x: number; y: number }) => void) {
-  const state = { x: 0, y: 0, active: false, k: 0, rest: 0 };
+  const state = { x: 0, y: 0, active: false, rest: 0 };
+  const strength = eased();
   let still = { x: 0, y: 0 };
   let trail: Point[] = [];
   const onMove = (e: PointerEvent) => {
@@ -360,12 +415,12 @@ function watchPointer(ho: HTMLElement, engine: Engine, whirl: (at: { x: number; 
     state.x = x;
     state.y = y;
     state.active = inside;
-    state.k = e.target instanceof Element && e.target.closest(quiet) ? 0 : openness(ho, e.clientX, e.clientY);
+    strength.aim(now, e.target instanceof Element && e.target.closest(quiet) ? 0 : openness(ho, e.clientX, e.clientY));
     if (Math.hypot(x - still.x, y - still.y) > 24) {
       still = { x, y };
       state.rest = now;
     }
-    if (!state.active || state.k < 0.8) {
+    if (!state.active || strength.now(now) < 0.8) {
       trail = [];
       return;
     }
@@ -383,6 +438,8 @@ function watchPointer(ho: HTMLElement, engine: Engine, whirl: (at: { x: number; 
   ho.addEventListener("pointerleave", onLeave);
   return {
     state,
+    // k is how open the water under the pointer is now (0 at the content, 1 well away from it)
+    k: () => strength.now(performance.now()),
     stop: () => {
       ho.removeEventListener("pointermove", onMove);
       ho.removeEventListener("pointerleave", onLeave);

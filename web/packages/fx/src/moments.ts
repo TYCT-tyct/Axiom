@@ -1,13 +1,14 @@
 // The moments of the sea's easter eggs (eggs.ts) that the product's sea (ocean-orig.js) does not have: food, a
 // whirlpool, fish drawn as 0 and 1, the tide line, the milestone's ring and the deep's glow. They are ported from the
 // design's ocean-react.js, moments.js and dive.js onto the sea's own world and renderer, which run unedited.
-import { colour } from "./colour";
 import { hash } from "./hash";
 import { mono } from "./mono";
 
 type Fish = { x: number; y: number; vx: number; vy: number; alive: boolean; millDir: number };
 type Shark = {
   nodes: Float32Array;
+  length: number;
+  orbitDir: number;
   hidden?: boolean;
   ghost?: boolean;
   lure?: { x: number; y: number; w: number } | null;
@@ -31,6 +32,7 @@ type Renderer = {
   energy: Float32Array;
   stamp: (field: Float32Array, x: number, y: number, radius: number, amount: number) => void;
   drawFish: () => void;
+  depositWake: (world: World) => void;
 };
 // what the eggs use of the engine beyond what the page's types say (ocean-orig.js World, Renderer, Engine)
 export type Engine = {
@@ -52,6 +54,7 @@ export function tend({ world, renderer }: Engine) {
   const food: { x: number; y: number; t: number }[] = [];
   let swirl = { x: 0, y: 0, until: 0 };
   let binary = false;
+  let visit: { shark: Shark; x: number; y: number } | null = null;
   const stepFish = world.stepFish;
   world.stepFish = (dt) => {
     const swirling = world.time < swirl.until;
@@ -62,22 +65,17 @@ export function tend({ world, renderer }: Engine) {
     world.pointer.active = pointer;
     while (food[0] && world.time - food[0].t > 2.6) food.shift();
     if (food.length || swirling) pulls(world, food, swirling ? swirl : null, dt);
-    if (swirling) renderer.stamp(renderer.energy, swirl.x, swirl.y, 1, 0.08);
+    // the world steps its sharks after its fish: the visitor's heading is set for this step
+    if (visit) visit.shark.lure = circling(visit.shark, visit);
+  };
+  // ocean-react.js's pointer wake, which the whirlpool sets to 0.25 (respond.js override): a light trail at its centre
+  const depositWake = renderer.depositWake;
+  renderer.depositWake = (w) => {
+    depositWake.call(renderer, w);
+    if (world.time < swirl.until) renderer.stamp(renderer.energy, swirl.x, swirl.y, 1, 0.08 * 0.25);
   };
   const drawFish = renderer.drawFish;
-  renderer.drawFish = () => {
-    if (!binary) return drawFish.call(renderer);
-    const { ctx, cw, ch, cols, fishBuckets, fishStyles } = renderer;
-    fishBuckets.forEach((bucket, b) => {
-      ctx.fillStyle = fishStyles[b] ?? "";
-      for (const i of bucket)
-        ctx.fillText(
-          (Math.imul(i, 2654435761) >>> 0) % 3 ? "0" : "1",
-          (i % cols) * cw + cw / 2,
-          ((i / cols) | 0) * ch + ch / 2 + 1,
-        );
-    });
-  };
+  renderer.drawFish = () => (binary ? binaryFish(renderer) : drawFish.call(renderer));
   return {
     feed: (x: number, y: number) => {
       food.push({ x, y, t: world.time });
@@ -93,16 +91,49 @@ export function tend({ world, renderer }: Engine) {
     lure: (x: number, y: number) => {
       const near = (s: Shark) => Math.hypot((s.nodes[0] ?? 0) - x, (s.nodes[1] ?? 0) - y);
       const shark = world.sharks.filter((s) => !s.hidden && !s.ghost).sort((a, b) => near(a) - near(b))[0];
-      if (shark) shark.lure = { x, y, w: 2.4 };
+      if (shark) visit = { shark, x, y };
       return () => {
-        if (shark) shark.lure = null;
+        if (!shark) return;
+        shark.lure = null;
+        if (visit?.shark === shark) visit = null;
       };
     },
     restore: () => {
       world.stepFish = stepFish;
       renderer.drawFish = drawFish;
+      renderer.depositWake = depositWake;
+      if (visit) visit.shark.lure = null;
     },
   };
+}
+
+// ocean-react.js's fish drawn as 0 and 1 (its renderer's binary): each fish's glyph by its cell, a third of them 1
+function binaryFish({ ctx, cw, ch, cols, fishBuckets, fishStyles }: Renderer) {
+  fishBuckets.forEach((bucket, b) => {
+    ctx.fillStyle = fishStyles[b] ?? "";
+    for (const i of bucket)
+      ctx.fillText(
+        (Math.imul(i, 2654435761) >>> 0) % 3 ? "0" : "1",
+        (i % cols) * cw + cw / 2,
+        ((i / cols) | 0) * ch + ch / 2 + 1,
+      );
+  });
+}
+
+// circling is ocean-react.js's lure as the sea's own lure takes it (a point the shark steers to, with a weight): the
+// shark is drawn to a ring 0.6 of its length round the point, and swims round it in its own direction
+function circling(shark: Shark, at: { x: number; y: number }) {
+  const hx = shark.nodes[0] ?? 0;
+  const hy = shark.nodes[1] ?? 0;
+  const tx = at.x - hx;
+  const ty = at.y - hy;
+  const d = Math.hypot(tx, ty) || 1;
+  const ring = shark.length * 0.6;
+  const k = clamp((d - ring) / ring, -1, 1.5);
+  const sx = (tx / d) * k * 2.4 - (ty / d) * 1.3 * shark.orbitDir;
+  const sy = (ty / d) * k * 2.4 + (tx / d) * 1.3 * shark.orbitDir;
+  const w = Math.hypot(sx, sy) || 1e-3;
+  return { x: hx + (sx / w) * 100, y: hy + (sy / w) * 100, w };
 }
 
 // pulls draws the living fish to the food and round the whirlpool, if there is one
@@ -197,13 +228,13 @@ function ring({ W, H, cw }: Grid, glyph: Pen, t: number) {
 }
 
 // glyphs is the light layer over the sea for what the engine does not draw (moments.js, dive.js): the tide line, the
-// milestone's ring and, at night, the faint points of the deep. It draws in the page's text colour on its own canvas.
+// milestone's ring and, at night, the faint points of the deep. It draws on its own canvas in the design's glyph
+// colour, inverted on the light sea as the sea's own canvas is (Site's `.tr.light > .sea { filter: invert(1) }`).
 export function glyphs(canvas: HTMLCanvasElement, ho: HTMLElement) {
   const g = canvas.getContext("2d") as CanvasRenderingContext2D;
   let grid = measure(canvas);
   let time = 0;
   let bio = 0;
-  let ink = { scheme: "", value: "" };
   const effects: Effect[] = [];
   const resized = new ResizeObserver(() => {
     grid = measure(canvas);
@@ -213,15 +244,14 @@ export function glyphs(canvas: HTMLCanvasElement, ho: HTMLElement) {
     g.globalAlpha = clamp(alpha, 0, 1);
     g.fillText(text, x, y);
   };
-  // the glyphs' font and colour, the page's text colour in the scheme shown
+  // the glyphs' font and colour: moments.js and dive.js draw in 238,240,243
   const pen = () => {
     const scheme = ho.classList.contains("light") ? "light" : "dark";
-    if (ink.scheme !== scheme) ink = { scheme, value: colour(ho, "var(--text1)") };
     g.setTransform(canvas.width / (grid.W || 1), 0, 0, canvas.height / (grid.H || 1), 0, 0);
     g.font = `600 ${Math.round(grid.ch * 0.74)}px ${mono()}`;
     g.textAlign = "center";
     g.textBaseline = "middle";
-    g.fillStyle = ink.value;
+    g.fillStyle = scheme === "light" ? "rgb(17,15,12)" : "rgb(238,240,243)";
   };
   const glow = () => {
     for (const p of grid.points) {
