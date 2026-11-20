@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./AdminPrimaryButton.zh.ts";
-import styles from "./AdminPrimaryButton.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { disabledClass?: string | number;
@@ -11,6 +10,6 @@ disabled?: boolean;
 button?: RefCallback<Element>;
 press?: DOMAttributes<Element>["onClick"]; };   label?: import("react").ReactNode; };
 export default function AdminPrimaryButton({ values: v = {}, label }: Props) {
-return <><button type={"button"} className={("btn pri " + String(v.disabledClass ?? "")) + " " + styles.scope} data-a={"ok"} disabled={v.disabled} ref={v.button} onClick={v.press}>{label}</button></>;
+return <><button type={"button"} className={"btn pri " + String(v.disabledClass ?? "")} data-a={"ok"} disabled={v.disabled} ref={v.button} onClick={v.press}>{label}</button></>;
 }
 /* jscpd:ignore-end */

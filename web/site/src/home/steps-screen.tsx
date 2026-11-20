@@ -7,7 +7,7 @@ import narrowZh from "@axiom/boards/SitePhone/regions/Steps.zh";
 import { useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { links } from "./links";
-import { screenVars, useBoardWords, useScript } from "./script";
+import { screenVars, useBoardWords, useFitFrame, useScript } from "./script";
 import { useSite } from "./site-context";
 import { start } from "./steps-script";
 
@@ -32,10 +32,11 @@ export function StepsScreen({ wide }: { wide: boolean }) {
   const api = useSite().brand?.api_base_url;
   const url = useRef("");
   url.current = api ? `${api.replace(/\/+$/, "")}/v1` : "";
-  const { setStage, values, entered } = useScript(
+  const { setStage, stage, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, () => url.current),
     { t: (w) => t(`script.steps.${w}`) },
   );
+  useFitFrame(stage, !wide);
   const Region = wide ? Wide : Narrow;
   return (
     <Region

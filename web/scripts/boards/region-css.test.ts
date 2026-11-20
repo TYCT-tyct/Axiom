@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { regionCSS } from "./region-css.ts";
+import { collectMatched, regionCSS, sharedRegionCSS, uniqueSelectors } from "./region-css.ts";
 import { JSDOM } from "./template.ts";
 
 // The cut markup of a region: the elements the converter keeps rules for.
@@ -102,5 +102,33 @@ describe("run-time states", () => {
 
   it("drops a state rule for a part the region does not have", () => {
     expect(regionCSS(".ov .other.on{opacity:1}", elements('<div class="card"></div>'), undefined, ["on"])).toBe("");
+  });
+});
+
+describe("shared board stylesheet", () => {
+  it("emits the union of matched rules once in board order with overrides and used keyframes", () => {
+    const css = [
+      ".ax .first{color:red}",
+      ".ov .unused{color:black}",
+      ".ov .second{animation:spin 1s}",
+      ".ov .first{color:blue}",
+      "@container ov (max-width: 600px){.ov .first{padding:8px}.ov .unused{padding:0}}",
+      "@keyframes spin{to{transform:rotate(1turn)}}",
+      "@keyframes dead{to{opacity:0}}",
+    ].join("\n");
+    const candidates = uniqueSelectors(css);
+    const kept = new Set<string>();
+    const dom = new JSDOM('<div class="board ax ov"><div class="first"></div><div class="second"></div></div>').window;
+    collectMatched(candidates, kept, new Set([dom.document.querySelector(".second") as Element]));
+    collectMatched(candidates, kept, new Set([dom.document.querySelector(".first") as Element]));
+    const out = sharedRegionCSS(css, kept, [[".ov .first", "margin:0"]]);
+    expect(out).toMatch(/^@layer base, board;\n@layer board \{/);
+    expect(out.indexOf("color:red")).toBeLessThan(out.indexOf("animation:spin"));
+    expect(out.indexOf("animation:spin")).toBeLessThan(out.indexOf("color:blue"));
+    expect(out.indexOf("color:blue")).toBeLessThan(out.indexOf("margin:0"));
+    expect(out).toContain(".ax .first:where(.board.ax.ov, .board.ax.ov *){color:red}");
+    expect(out).toContain(".ov .first{color:blue}");
+    expect(out).toContain("@keyframes spin");
+    expect(out).not.toMatch(/unused|dead/);
   });
 });

@@ -3,11 +3,10 @@
 
 
 import type zh from "./PartListEnd.zh.ts";
-import styles from "./PartListEnd.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   label?: import("react").ReactNode; };
 export default function PartListEnd({ label }: Props) {
-return <><div className={("lgend") + " " + styles.scope} role={"status"}>{label}</div></>;
+return <><div className={"lgend"} role={"status"}>{label}</div></>;
 }
 /* jscpd:ignore-end */

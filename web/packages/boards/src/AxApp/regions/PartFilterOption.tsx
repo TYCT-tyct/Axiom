@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 import { boardStyle } from "../../dom.ts";
 import type zh from "./PartFilterOption.zh.ts";
-import styles from "./PartFilterOption.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { selectedClass?: string | number;
@@ -11,6 +10,6 @@ choose?: DOMAttributes<Element>["onClick"];
 selected?: boolean;
 color?: string | number; };  text: { label: string; }; };
 export default function PartFilterOption({ values: v = {}, text }: Props) {
-return <><button type={"button"} className={(String(v.selectedClass ?? "")) + " " + styles.scope} data-a={"pickm"} data-i={"0"} onClick={v.choose} aria-pressed={v.selected}><i style={boardStyle(String(v.color ?? ""))} className={styles.scope} />{text.label}<s className={styles.scope} /></button></>;
+return <><button type={"button"} className={String(v.selectedClass ?? "")} data-a={"pickm"} data-i={"0"} onClick={v.choose} aria-pressed={v.selected}><i style={boardStyle(String(v.color ?? ""))} />{text.label}<s /></button></>;
 }
 /* jscpd:ignore-end */

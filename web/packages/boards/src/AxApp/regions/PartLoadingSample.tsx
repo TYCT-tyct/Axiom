@@ -3,7 +3,6 @@
 
 import { boardStyle } from "../../dom.ts";
 import type zh from "./PartLoadingSample.zh.ts";
-import styles from "./PartLoadingSample.module.css";
 const inline0 = boardStyle("background: var(--c0);");
 const inline1 = boardStyle("--p: 55.0%; --c: var(--c0);");
 const inline2 = boardStyle("background: var(--c4);");
@@ -15,7 +14,7 @@ const inline7 = boardStyle("--p: 10.0%; --c: var(--c3);");
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   };
 export default function PartLoadingSample({ t }: Props) {
-return <><div className={("qch") + " " + styles.scope}><div className={styles.scope}><h2 className={styles.scope}>{t("m19e7c0223e")}</h2></div><button type={"button"} className={("qlnk") + " " + styles.scope} data-pg={"usage"}>{t("m5073e9f5ed")}</button></div>
-<div className={("ovms") + " " + styles.scope}><div className={("ovmr") + " " + styles.scope}><i style={inline0} className={styles.scope} /><span className={("ovmn") + " " + styles.scope}>{"claude-sonnet-5.5"}</span><span className={("pc num") + " " + styles.scope}>{"55%"}</span><b className={("num") + " " + styles.scope}>{"¥102.46"}</b><s style={inline1} className={styles.scope} /></div><div className={("ovmr") + " " + styles.scope}><i style={inline2} className={styles.scope} /><span className={("ovmn") + " " + styles.scope}>{"kimi-k3"}</span><span className={("pc num") + " " + styles.scope}>{"20%"}</span><b className={("num") + " " + styles.scope}>{"¥37.26"}</b><s style={inline3} className={styles.scope} /></div><div className={("ovmr") + " " + styles.scope}><i style={inline4} className={styles.scope} /><span className={("ovmn") + " " + styles.scope}>{"gpt-6.1-sol"}</span><span className={("pc num") + " " + styles.scope}>{"15%"}</span><b className={("num") + " " + styles.scope}>{"¥27.95"}</b><s style={inline5} className={styles.scope} /></div><div className={("ovmr") + " " + styles.scope}><i style={inline6} className={styles.scope} /><span className={("ovmn") + " " + styles.scope}>{"gemini-4-argon"}</span><span className={("pc num") + " " + styles.scope}>{"10%"}</span><b className={("num") + " " + styles.scope}>{"¥18.63"}</b><s style={inline7} className={styles.scope} /></div></div></>;
+return <><div className={"qch"}><div><h2>{t("m19e7c0223e")}</h2></div><button type={"button"} className={"qlnk"} data-pg={"usage"}>{t("m5073e9f5ed")}</button></div>
+<div className={"ovms"}><div className={"ovmr"}><i style={inline0} /><span className={"ovmn"}>{"claude-sonnet-5.5"}</span><span className={"pc num"}>{"55%"}</span><b className={"num"}>{"¥102.46"}</b><s style={inline1} /></div><div className={"ovmr"}><i style={inline2} /><span className={"ovmn"}>{"kimi-k3"}</span><span className={"pc num"}>{"20%"}</span><b className={"num"}>{"¥37.26"}</b><s style={inline3} /></div><div className={"ovmr"}><i style={inline4} /><span className={"ovmn"}>{"gpt-6.1-sol"}</span><span className={"pc num"}>{"15%"}</span><b className={"num"}>{"¥27.95"}</b><s style={inline5} /></div><div className={"ovmr"}><i style={inline6} /><span className={"ovmn"}>{"gemini-4-argon"}</span><span className={"pc num"}>{"10%"}</span><b className={"num"}>{"¥18.63"}</b><s style={inline7} /></div></div></>;
 }
 /* jscpd:ignore-end */

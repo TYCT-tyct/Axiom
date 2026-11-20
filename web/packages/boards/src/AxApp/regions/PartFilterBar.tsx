@@ -3,11 +3,10 @@
 
 
 import type zh from "./PartFilterBar.zh.ts";
-import styles from "./PartFilterBar.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { label?: string | number; };   };
 export default function PartFilterBar({ values: v = {}, children }: Props & { children?: import("react").ReactNode }) {
-return <><div className={("usf") + " " + styles.scope} role={"search"} aria-label={String(v.label ?? "")}>{children}</div></>;
+return <><div className={"usf"} role={"search"} aria-label={String(v.label ?? "")}>{children}</div></>;
 }
 /* jscpd:ignore-end */

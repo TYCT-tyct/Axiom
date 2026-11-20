@@ -244,6 +244,81 @@ function selectBlocks(
     .join("\n");
 }
 
+// scopedSheet scopes a plain-CSS rule to the AxApp board container using :where() so specificity and cascade stay
+// identical to the original board stylesheet; selectors already anchored under .ov need no extra wrapper.
+function scopedSheet(selector: string, scope = ".board.ax.ov") {
+  if (/^\.ov(?![\w-])/.test(selector)) return selector;
+  const at = selector.indexOf("::");
+  const subject = at < 0 ? selector : selector.slice(0, at);
+  const pseudo = at < 0 ? "" : selector.slice(at);
+  return `${subject}:where(${scope}, ${scope} *)${pseudo}`;
+}
+
+// uniqueSelectors collects every selector string in a stylesheet once, so many regions can mark matches in one pass.
+export function uniqueSelectors(css: string): string[] {
+  const found = new Set<string>();
+  const walk = (blocks: CSSBlock[]) => {
+    for (const { selector, body } of blocks) {
+      if (selector.startsWith("@keyframes")) continue;
+      if (selector.startsWith("@")) walk(cssBlocks(body));
+      else for (const one of selectors(selector)) found.add(one);
+    }
+  };
+  walk(cssBlocks(css));
+  return [...found];
+}
+
+// collectMatched marks every selector in `candidates` that this region's cut markup or inserted markup can match.
+export function collectMatched(
+  candidates: readonly string[],
+  kept: Set<string>,
+  elements: Set<Element>,
+  inserted?: Region["inserted"],
+  states: readonly string[] = [],
+) {
+  const matches = matcher(elements, states);
+  const isInserted = insertedBy(inserted, elements, states);
+  for (const one of candidates) {
+    if (!kept.has(one) && (matches(one) || isInserted(one))) kept.add(one);
+  }
+}
+
+function selectSheetBlocks(blocks: CSSBlock[], matches: (selector: string) => boolean, scope: string): string {
+  return blocks
+    .map(({ selector, body }) => {
+      if (selector.startsWith("@keyframes")) return `${selector}{${body}}`;
+      if (selector.startsWith("@")) {
+        const inner = selectSheetBlocks(cssBlocks(body), matches, scope);
+        return inner ? `${selector}{${inner}}` : "";
+      }
+      const kept = selectors(selector)
+        .filter(matches)
+        .map((one) => scopedSheet(one, scope));
+      return kept.length ? `${kept.join(",")}{${body}}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+// sharedRegionCSS emits one stylesheet for a board family: the union of every selector its regions keep, in the
+// board's original order, plus deduplicated manifest overrides, in `@layer board` above `@layer base`.
+export function sharedRegionCSS(
+  css: string,
+  kept: ReadonlySet<string>,
+  added: readonly [string, string][] = [],
+  scope = ".board.ax.ov",
+): string {
+  const selected = selectSheetBlocks(cssBlocks(css), (one) => kept.has(one), scope);
+  const overrides = added.map(([selector, body]) => `${scopedSheet(selector, scope)}{${body}}`);
+  const withoutFrames = `${selected.replace(/@keyframes[\s\S]*?\}\s*\}/g, "")}\n${overrides.join("\n")}`;
+  const blocks = cssBlocks(selected).filter(({ selector }) => {
+    const name = selector.match(/^@keyframes\s+(\S+)/)?.[1];
+    return !name || new RegExp(`\\b${name}\\b`).test(withoutFrames);
+  });
+  const body = [...blocks.map(({ selector, body }) => `${selector}{${body}}`), ...overrides].join("\n");
+  return `@layer base, board;\n@layer board {\n${body}\n}`;
+}
+
 // regionCSS is the board's rules that can match the region: those its cut markup matches, those that can match the
 // markup an engine puts into its insertion point at run time (`inserted`), and those that only the run-time `states`
 // (classes and attributes a script sets) keep from matching.

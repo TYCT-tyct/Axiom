@@ -3,13 +3,12 @@
 import { type DOMAttributes } from "react";
 import { boardStyle } from "../../dom.ts";
 import type zh from "./LogsBtn.zh.ts";
-import styles from "./LogsBtn.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { onClick?: DOMAttributes<Element>["onClick"];
 disabled?: boolean;
 btnStyle?: string | number; };  text: { label: string; }; };
 export default function LogsBtn({ values: v = {}, text }: Props) {
-return <><button type={"button"} className={("btn sec sm") + " " + styles.scope} onClick={v.onClick} disabled={v.disabled} style={boardStyle(String(v.btnStyle ?? ""))}>{text.label}</button></>;
+return <><button type={"button"} className={"btn sec sm"} onClick={v.onClick} disabled={v.disabled} style={boardStyle(String(v.btnStyle ?? ""))}>{text.label}</button></>;
 }
 /* jscpd:ignore-end */
