@@ -79,7 +79,13 @@ function SignInSteps({ ready }: { ready: boolean }) {
       }
       subStyle={emailStep ? undefined : wrapAnywhere}
       step={flow.step}
-      shape={flow.attempt.done === "password" ? "enter" : "start"}
+      shape={
+        flow.attempt.done === "password" || flow.attempt.done === "passkey"
+          ? "enter"
+          : flow.attempt.kind === "passkey" || !emailStep
+            ? "key"
+            : "start"
+      }
       attempt={flow.attempt}
       stage={stage}
       onSubmit={(event) => {
