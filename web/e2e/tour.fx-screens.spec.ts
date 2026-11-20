@@ -66,12 +66,13 @@ for (const [how, end] of tourEnds) {
     // early in the first glide, while it is still under way
     await expect.poll(() => scrolled(page), { intervals: [20] }).toBeGreaterThan(20);
     await end(page);
-    // the glide under way stops where it is: at once, apart from the reader's own move (a wheel's few pixels), or, for
-    // the island's mark, at the top it glides to
+    // the glide under way stops where it is: at once, apart from the reader's own move (whose inertial wheel easing
+    // finishes on the page's clock), or, for the island's mark, at the top it glides to
     const ended = await scrolled(page);
     if (how.startsWith("the island")) await expect.poll(() => scrolled(page)).toBeLessThan(2);
     else {
       await page.waitForTimeout(700);
+      await page.clock.runFor(1000);
       expect(Math.abs((await scrolled(page)) - ended)).toBeLessThan(60);
     }
     const rested = await scrolled(page);
