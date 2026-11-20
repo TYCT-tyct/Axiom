@@ -407,17 +407,29 @@ const painted = (page: Page) =>
     return data.some((value, i) => i % 4 === 3 && value > 0);
   });
 
+// The whale's first pixels come after about 1.3 s of its own time, and its step is capped at 0.05 s, so a machine
+// drawing under 20 frames a second stretches that past any wall-clock wait. The page's clock drives it instead, as
+// fx-environments.spec.ts does: the case no longer depends on how busy the machine is.
+async function whaleShows(page: Page) {
+  for (let seen = 0; !(await painted(page).catch(() => false)); seen += 100) {
+    expect(seen, "the whale drew within 5 s of the page's time").toBeLessThan(5000);
+    await page.clock.runFor(100);
+    await page.waitForTimeout(20);
+  }
+}
+
 test("the whale's code comes when deepseek is typed, not before, and the whale swims on the sea", async ({ page }) => {
   const asked = watchWhale(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await running(page);
   await scrollTo(page, delivered.at(-1) as number);
+  await page.clock.install();
   await page.keyboard.type("deeps");
   expect(asked).toEqual([]);
   await page.keyboard.type("eek");
   await expect.poll(() => asked).toHaveLength(1);
-  await expect.poll(() => painted(page)).toBe(true);
+  await whaleShows(page);
 });
 
 test("pressing deepseek in the first screen's strip calls the whale", async ({ page }) => {
@@ -425,9 +437,10 @@ test("pressing deepseek in the first screen's strip calls the whale", async ({ p
   await open(page);
   await running(page);
   expect(asked).toEqual([]);
+  await page.clock.install();
   await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
   await expect.poll(() => asked).toHaveLength(1);
-  await expect.poll(() => painted(page)).toBe(true);
+  await whaleShows(page);
 });
 
 // The sea bed's dune is drawn, from the site's own name: its wordmark mask is made by drawing the name on an offscreen
