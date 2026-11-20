@@ -82,15 +82,16 @@ function GrantDialog({ owner, change, onClose }: { owner: Owner; change: Change;
         </Text>
       }
       read={() => revoked}
-      send={(revoked, { key, reason }) =>
-        unwrapEmptyChange(
+      send={async (revoked, { key, reason }) => {
+        const result = await unwrapEmptyChange(
           adminApi.PUT("/api/admin/v1/users/{user_id}/platform-grants/{role}", {
             params: { path: { user_id: owner.id, role }, header: { "Idempotency-Key": key } },
             body: { revoked, reason },
           }),
-        )
-      }
-      done={() => <p>{t(revoked ? "platformGrants.revoked" : "platformGrants.active")}</p>}
+        );
+        return { ...result, data: revoked };
+      }}
+      done={(revoked) => <p>{t(revoked ? "platformGrants.revoked" : "platformGrants.active")}</p>}
       onClose={onClose}
     />
   );

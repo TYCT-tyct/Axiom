@@ -4,7 +4,7 @@ import { close, dialog, done, open, send } from "./admin-page.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
 import { freeze } from "./design/stage.ts";
-import { words } from "./words.ts";
+import { words, zhText } from "./words.ts";
 
 test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
@@ -105,17 +105,27 @@ test("an authorised admin can revoke and restore an existing platform grant", as
     await freeze(page);
     await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/platform-grants-phone.png` });
   }
+  state.dropReplies = 1;
   await send(page, "end the support assignment");
-  await expect(done(page)).toBeVisible();
+  await expect(dialog(page).getByRole("alert")).toContainText(zhText("change.unknown"));
   await close(page);
   await expect(support.getByText(words("platformGrants.revoked"))).toBeVisible();
+
+  await support.getByRole("button", { name: words("platformGrants.restore") }).click();
+  await dialog(page)
+    .getByRole("button", { name: words("change.resend") })
+    .click();
+  await expect(dialog(page).getByText(words("change.replayed"))).toBeVisible();
+  await expect(dialog(page).getByText(words("platformGrants.revoked"), { exact: true })).toBeVisible();
+  await close(page);
+  expect(state.stored.size).toBe(1);
 
   await support.getByRole("button", { name: words("platformGrants.restore") }).click();
   await send(page, "resume the support assignment");
   await expect(done(page)).toBeVisible();
   await close(page);
   await expect(support.getByText(words("platformGrants.active"))).toBeVisible();
-  expect(state.log.filter((entry) => entry.startsWith("PUT /users/"))).toHaveLength(2);
+  expect(state.stored.size).toBe(2);
 
   state.permissions = ["users.view"];
   state.log.length = 0;
