@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
 import { en as consoleAuthEn, zh as consoleAuthZh } from "../console/src/locales/auth.ts";
 import consoleEn from "../console/src/locales/en.ts";
@@ -11,7 +11,6 @@ import uiEn from "../packages/ui/src/locales/en.ts";
 import uiZh from "../packages/ui/src/locales/zh.ts";
 import { consoleSuite, requestPresetPrompts } from "./console-scenes.ts";
 import type { BoardScene } from "./design/board.ts";
-import { rulings } from "./design/rulings.ts";
 import type { Suite } from "./scene.ts";
 import { siteSuite } from "./site-scenes.ts";
 
@@ -28,6 +27,10 @@ export type DesignScene = {
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
   languages?: ("zh" | "en")[];
+  // The scene whose rulings apply, when this one is another language of it (rulings.ts names scenes, not languages).
+  rulingsOf?: string;
+  // What the scene's mocked API state is changed to, before the page opens, so it holds the board's demo terms.
+  account?: (state: unknown) => void;
   prepareComparison?: (board: Page, page: Page, language: "zh" | "en") => Promise<void>;
   textRasterization?: "grayscale" | "unhinted";
 };
@@ -37,8 +40,16 @@ export const demoTime = new Date("2026-10-24T10:00:00+08:00");
 
 // The console boards come in one Component per form factor; theme is a prop, and the personal space is the default.
 const consoleSchemes = { light: { theme: "浅色" }, dark: { theme: "深色" } };
+// The tablet board is the wide board's markup with its sidebar folded; it opens in the team space, so it asks for the
+// personal one the other widths open in.
 const consoleBoards = (page: string) => ({
   1440: { file: "AxApp.dc.html", height: 900, actions: [["go", page]] as [string, string][] },
+  820: {
+    file: "AxAppTablet.dc.html",
+    height: 1180,
+    props: { space: "个人" },
+    actions: [["go", page]] as [string, string][],
+  },
   390: { file: "AxAppPhone.dc.html", height: 844, actions: [["go", page]] as [string, string][] },
 });
 
@@ -103,13 +114,24 @@ async function prepareEmailStep(board: Page, page: Page, language: "zh" | "en", 
     for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
     lg.style.setProperty("--bw", "1px");
   }, edge);
+  // The page's base typography balances headings and keeps a paragraph's last line from standing alone, as the request
+  // presets' scene gives the board too: the words are the page's, so they break where the page breaks them.
+  await board.addStyleTag({
+    content: ".lg :is(h1,h2){text-wrap:balance;word-break:keep-all;overflow-wrap:anywhere}.lg p{text-wrap:pretty}",
+  });
+  if (language === "en") {
+    await translateBoard(board, loginTranslations);
+    // the board's pitch kerns a Chinese comma after "key"; the English pitch has none
+    await board.evaluate(() => document.querySelector(".lg-pitch .kern")?.remove());
+  }
   const { pitch } = language === "en" ? consoleAuthEn : consoleAuthZh;
   const words = { ...own, lede: pitch.lede, tail: pitch.tail };
   await board.evaluate((words) => {
     const step = document.querySelector(".lg-step") as HTMLElement;
     // the words in their own inline boxes, as the page sets them, so only the glyphs are excused, not where lines sit
     const inline = (text: string) => Object.assign(document.createElement("span"), { textContent: text });
-    (step.querySelector(".lg-title") as HTMLElement).textContent = words.title;
+    // the title a character to a box, as the page sets it for its decode, so each glyph sits where the page's does
+    (step.querySelector(".lg-title") as HTMLElement).replaceChildren(...[...words.title].map(inline));
     (step.querySelector(".lg-sub") as HTMLElement).replaceChildren(inline(words.description));
     (document.querySelector(".lg-pitch .s") as HTMLElement).replaceChildren(inline(words.lede));
     // the pitch's promise as the product makes it (the models the account can use, not every model)
@@ -140,7 +162,8 @@ async function prepareEmailStep(board: Page, page: Page, language: "zh" | "en", 
   });
 }
 
-// The website's home boards come one per width; the scheme is the system's, a prop.
+// The website's home boards come one per width; the scheme is the system's, a prop. They are compared in Chinese only:
+// the boards' script composes the headings character by character, which no map of the regions' text puts into English.
 const siteBoards = {
   1440: { file: "Site.dc.html", height: 900 },
   820: { file: "SiteTablet.dc.html", height: 1180 },
@@ -163,12 +186,6 @@ const pageWords: Record<string, string[]> = {
 // scroller, the page's code having come and the screen faded in (the board's own IO, which the harness leaves out, adds
 // its class). The board's words are Chinese only, so these scenes are compared in Chinese.
 const screenAt = (sec: number, scene: string) => async (board: Page, page: Page) => {
-  // what the page leaves out (the rulings with only a board side) is out of the board's layout too, so what follows
-  // it lines up; the ruling still names it
-  const omitted = rulings
-    .filter((ruling) => ruling.scene === scene && ruling.board && !ruling.page && "selector" in ruling.board)
-    .map((ruling) => (ruling.board as { selector: string }).selector);
-  await board.addStyleTag({ content: `${omitted.join(",")}{display:none !important}` });
   // the board's own script sets the frame's width for its stylesheet and marks the tablet layout (--fw, data-tab); the
   // harness leaves the script's engines out, so the shot does what the script does
   await board.locator(".tr.site").evaluate((root) => {
@@ -183,6 +200,10 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
   const place = page.locator(`.under [data-place="${sec}"]`);
   await place.evaluate((el) => el.scrollIntoView({ block: "start" }));
   await expect.poll(() => place.locator(".hfm").evaluate((el) => getComputedStyle(el).opacity)).toBe("1");
+  // the board shows only this screen, the others not having come in; the page's neighbours that have are put back
+  await page.locator(`.under [data-place]:not([data-place="${sec}"]) .hfm`).evaluateAll((els) => {
+    for (const el of els) (el as HTMLElement).style.setProperty("opacity", "0");
+  });
   // the deployed MiSans body face is instanced at 330, the board's is the source variable font: compare the outlines, without
   // variable-font hinting moving single strokes (as the models page's scene does)
   for (const side of [board, page]) {
@@ -204,11 +225,16 @@ const screenAt = (sec: number, scene: string) => async (board: Page, page: Page)
   }
   // The connect card's Claude Code tab has one line more than the board's: the key guide's discovery setting, which puts the
   // site's models in the client (packages/ui key-guide.ts). The card sits centred in its frame, so a line more moves it;
-  // the line is hidden on the page for the comparison, as the board's omissions are on its side.
+  // the line is hidden on the page for the comparison, as the board's omissions are on its side, and the lines after it
+  // are numbered as the board's are.
   if (scene === "site connect")
-    await page
-      .locator(".hfm1 .ln", { hasText: "GATEWAY_MODEL_DISCOVERY" })
-      .evaluate((el) => el.style.setProperty("display", "none"));
+    await page.locator(".hfm1 .ln", { hasText: "GATEWAY_MODEL_DISCOVERY" }).evaluate((line) => {
+      line.style.setProperty("display", "none");
+      for (let next = line.nextElementSibling; next; next = next.nextElementSibling) {
+        const number = next.querySelector(".no");
+        if (number?.textContent) number.textContent = String(Number(number.textContent) - 1);
+      }
+    });
   // the section's own top is where the two are lined up: what lies above it (the places' gaps) is not the screen's
   const top = (side: Page) => side.locator(`.hfm${sec} .sec`).evaluate((el) => el.getBoundingClientRect().top);
   const shift = (await top(page)) - (await top(board));
@@ -218,11 +244,25 @@ type Face = { family: string; weight: string; axes?: { wght?: number | number[] 
 const { faces }: { faces: Face[] } = JSON.parse(
   readFileSync(new URL("../scripts/fonts/sources.json", import.meta.url), "utf8"),
 );
-const referenceFonts = [
-  ["Axiom Sans", "Axiom Sans"],
-  ["Axiom Mono", "Axiom Mono"],
-  ["Axiom CJK", "Axiom CJK Console"],
-].map(([boardFamily, shippedFamily]) => [boardFamily, faces.find(({ family }) => family === shippedFamily)] as const);
+// The faces an app ships for the board's families: the console and the website differ only in their cut of MiSans.
+const productFaces = (cjk: string) =>
+  Object.fromEntries(
+    [
+      ["Axiom Sans", "Axiom Sans"],
+      ["Axiom Mono", "Axiom Mono"],
+      ["Axiom CJK", cjk],
+    ].map(([boardFamily, shippedFamily]) => [boardFamily, faces.find(({ family }) => family === shippedFamily)]),
+  );
+const consoleFonts = productFaces("Axiom CJK Console");
+
+// The board draws in the app's faces at their pinned weight axes (useProductFontWeights): its source MiSans would draw
+// the Regular at wght 400, where the shipped face is instanced at 330 (docs/frontend.md「字体」).
+const inFaces = (fonts: ReturnType<typeof productFaces>) => async (board: Page) => {
+  await board.evaluate(useProductFontWeights, fonts);
+  await board.evaluate(() => document.fonts.ready.then(() => {}));
+};
+const consoleFaces = inFaces(consoleFonts);
+const siteFaces = inFaces(productFaces("Axiom CJK"));
 
 const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
   name: language === "en" ? "console request-presets en" : "console request-presets",
@@ -259,7 +299,7 @@ const presetScenes: DesignScene[] = (["zh", "en"] as const).map((language) => ({
         if (translation !== undefined) node.textContent = translation;
       }
     }, localized);
-    await board.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
+    await board.evaluate(useProductFontWeights, consoleFonts);
     // The console's base typography balances headings and avoids orphaned words.
     await board.addStyleTag({
       content:
@@ -334,6 +374,89 @@ async function prepareModelsComparison(board: Page, page: Page, language: "zh" |
   expect(await frame(page)).toEqual(await frame(board));
 }
 
+// Every board region's text in both languages, by the Chinese: the English reference of a page is its Chinese board with
+// each text the regions carry replaced by its translation (packages/boards, generated with the regions).
+async function regionTranslations(board: string) {
+  const dir = new URL(`../packages/boards/src/${board}/regions/`, import.meta.url);
+  const translations: Record<string, string> = {};
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".zh.ts"))) {
+    const zh = (await import(new URL(file, dir).href)).default as Record<string, string>;
+    const en = (await import(new URL(file.replace(".zh.ts", ".en.ts"), dir).href)).default as Record<string, string>;
+    for (const key of Object.keys(en)) if (zh[key] !== undefined) translations[zh[key]] = en[key] as string;
+  }
+  return translations;
+}
+const consoleTranslations = await regionTranslations("AxApp");
+const loginTranslations = await regionTranslations("Login");
+
+const translateBoard = (board: Page, strings: Record<string, string>) =>
+  board.evaluate((strings) => {
+    document.documentElement.lang = "en-US";
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const translation = strings[node.textContent ?? ""];
+      if (translation !== undefined) node.textContent = translation;
+    }
+  }, strings);
+
+async function prepareConsoleEnglish(board: Page) {
+  await translateBoard(board, consoleTranslations);
+  await board.evaluate(useProductFontWeights, consoleFonts);
+  await board.evaluate(() => document.fonts.ready.then(() => {}));
+}
+
+// The console boards' demo account is billed in yuan: the scene's account is put in yuan, its amounts unchanged, so the
+// page formats its money, and picks its quick top-up amounts, as it does for such an account.
+function inYuan(value: unknown) {
+  if (Array.isArray(value)) {
+    for (const item of value) inYuan(item);
+  } else if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    for (const [key, item] of Object.entries(record)) {
+      if (key === "currency" && item === "USD") record[key] = "CNY";
+      else inYuan(item);
+    }
+  }
+}
+
+// The console's pages, each in both languages: [name, the e2e scene, the board's page]. The English scene is the
+// Chinese board put into English (above) against the page in English, with the Chinese scene's rulings.
+const chineseOnly = new Set(["overview", "usage", "bill", "notifications"]);
+const consolePages: DesignScene[] = [
+  ["overview", "overview", "ov"],
+  ["usage", "usage", "usage"],
+  ["route", "routing-presets", "route"],
+  ["byok", "provider-keys", "byok"],
+  ["keys", "keys", "keys"],
+  ["bill", "balance", "bill"],
+  ["calls", "calls", "logs"],
+  ["settings", "settings", "profile"],
+  ["security", "security", "security"],
+  ["notifications", "notifications", "notify"],
+].flatMap(([name, scene, page]) =>
+  (["zh", "en"] as const)
+    // Chinese only where the English page cannot match a translated board: the notification rows, the overview's and the
+    // usage page's labels and comparisons are the page's own English copy, which wraps otherwise than the board's
+    // translation; the bill's English writes yuan as CN¥ and its tabs push the description onto two lines. Their English
+    // is gate.spec.ts's and a person's to check.
+    .filter((language) => !(chineseOnly.has(name as string) && language === "en"))
+    .map((language) => ({
+      name: language === "en" ? `console ${name} en` : `console ${name}`,
+      rulingsOf: `console ${name}`,
+      suite: consoleSuite,
+      scene: scene as string,
+      fonts: "console",
+      boards: consoleBoards(page as string),
+      schemes: consoleSchemes,
+      languages: [language],
+      // both sides in grayscale, as the page's layers and the board's do not get the same subpixel text (the phone's
+      // mark); Chinese also unhinted and in the console's faces, as the request presets' scene is
+      textRasterization: language === "zh" ? ("unhinted" as const) : ("grayscale" as const),
+      account: inYuan,
+      prepareComparison: language === "en" ? prepareConsoleEnglish : consoleFaces,
+    })),
+);
+
 export const designScenes: DesignScene[] = [
   // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet
   // board, the wide board's markup with its sidebar folded.
@@ -342,93 +465,11 @@ export const designScenes: DesignScene[] = [
     suite: consoleSuite,
     scene: "overview",
     fonts: "console",
-    boards: {
-      ...consoleBoards("ov"),
-      820: { file: "AxAppTablet.dc.html", height: 1180, actions: [["go", "ov"]] },
-    },
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console overview",
-    suite: consoleSuite,
-    scene: "overview",
-    fonts: "console",
     boards: consoleBoards("ov"),
     schemes: consoleSchemes,
   },
-  {
-    name: "console usage",
-    suite: consoleSuite,
-    scene: "usage",
-    fonts: "console",
-    boards: consoleBoards("usage"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console route",
-    suite: consoleSuite,
-    scene: "routing-presets",
-    fonts: "console",
-    boards: consoleBoards("route"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console byok",
-    suite: consoleSuite,
-    scene: "provider-keys",
-    fonts: "console",
-    boards: consoleBoards("byok"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console keys",
-    suite: consoleSuite,
-    scene: "keys",
-    fonts: "console",
-    boards: consoleBoards("keys"),
-    schemes: consoleSchemes,
-  },
+  ...consolePages,
   ...presetScenes,
-  {
-    name: "console bill",
-    suite: consoleSuite,
-    scene: "balance",
-    fonts: "console",
-    boards: consoleBoards("bill"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console calls",
-    suite: consoleSuite,
-    scene: "calls",
-    fonts: "console",
-    boards: consoleBoards("logs"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console settings",
-    suite: consoleSuite,
-    scene: "settings",
-    fonts: "console",
-    boards: consoleBoards("profile"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console security",
-    suite: consoleSuite,
-    scene: "security",
-    fonts: "console",
-    boards: consoleBoards("security"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console notifications",
-    suite: consoleSuite,
-    scene: "notifications",
-    fonts: "console",
-    boards: consoleBoards("notify"),
-    schemes: consoleSchemes,
-  },
   {
     name: "console sign-in",
     suite: consoleSuite,
@@ -437,6 +478,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/sign-in"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, signInWords(language)),
   },
   {
@@ -447,6 +489,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/reset-password"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, resetWords(language)),
   },
   {
@@ -457,6 +500,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/register"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, registerWords(language)),
   },
   {
@@ -466,6 +510,10 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
+    // as the console's Chinese pages: grayscale on both sides, as the page's layers and the board's get different
+    // subpixel text, and unhinted, so the cut MiSans and the board's source face draw the same strokes
+    textRasterization: "unhinted",
+    prepareComparison: siteFaces,
   },
   ...[
     { name: "site connect", sec: 1 },
@@ -478,7 +526,11 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
-    prepareComparison: screenAt(sec, name),
+    textRasterization: "unhinted" as const,
+    prepareComparison: async (board: Page, page: Page) => {
+      await siteFaces(board);
+      await screenAt(sec, name)(board, page);
+    },
   })),
   {
     name: "site models",

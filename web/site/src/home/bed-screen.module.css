@@ -1,3 +1,9 @@
+/* The board's document leaves the line height at the browser's normal, where the page's base sets 1.5: the screen
+   starts from the board's, so text without a height of its own (the footer's brand) sits where the board puts it. */
+.bed {
+  line-height: normal;
+}
+
 /* At 360px the phone's words and the site's data must not be cut, as the frame clips what overflows: the closing
    headline's phrases may break, and the address breaks anywhere in a column allowed to shrink. The board's elements are
    named by attribute, which a module leaves as written, and each rule outranks the board's one it amends. */

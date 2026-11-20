@@ -118,7 +118,7 @@ describe("billing integer-billionth math and currency formatting", () => {
     expect(jpyPayEn).toBe("¥1,000");
 
     const quickUsd = await formatInLanguage("en", (f) => formatQuickAmount("25", "USD", f.money));
-    expect(quickUsd).toBe("$25.00");
+    expect(quickUsd).toBe("$25");
     expect(quickAmountsForCurrency("USD")).toEqual(["10", "25", "50", "100"]);
     expect(quickAmountsForCurrency("CNY")).toEqual(["100", "200", "500", "1000"]);
     expect(currencyInputPrefix("CNY")).toBe("¥");

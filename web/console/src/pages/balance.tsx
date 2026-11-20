@@ -155,7 +155,8 @@ function BalanceBoardContent({
     kind: "0" as const,
     f0: "button" as const,
     f1: units,
-    f2: t("statement.bill.quickAmount", { amount: formatQuickAmount(units, currency, format.money) }),
+    // the amount alone, as the board writes it: the buttons sit under the top-up button they shortcut
+    f2: formatQuickAmount(units, currency, format.money),
   }));
   const cols0 = [
     { key: "source", kind: "0" as const, f0: "", f1: t("balance.col.source") },

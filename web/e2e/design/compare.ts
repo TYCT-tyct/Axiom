@@ -39,7 +39,10 @@ async function rects(page: Page, ruling: Ruling, side: "board" | "page"): Promis
         const range = document.createRange();
         range.selectNodeContents(element);
         const { x, y, width, height } = (text ? range : element).getBoundingClientRect();
-        return { x, y, width, height };
+        // An SVG shape's box is its geometry: the stroke reaches half its width beyond it.
+        const reach =
+          element instanceof SVGGraphicsElement ? Number.parseFloat(getComputedStyle(element).strokeWidth) / 2 || 0 : 0;
+        return { x: x - reach, y: y - reach, width: width + 2 * reach, height: height + 2 * reach };
       }),
     ruling.glyphs === true,
   );
@@ -70,14 +73,18 @@ export async function shot(page: Page, blanks: Rect[] = [], canvases: string[] =
       for (const rect of blanks) {
         const cover = document.createElement("div");
         cover.dataset.designBlank = "";
+        // Out to whole pixels: a cover with a fractional edge blends into the pixel it half covers, and that pixel then
+        // differs with whatever each side draws under it.
+        const left = Math.floor(rect.x);
+        const top = Math.floor(rect.y);
         // One CSSOM property at a time: the page's policy refuses style attributes and cssText.
         Object.assign(cover.style, {
           position: "fixed",
           zIndex: "2147483647",
-          left: `${rect.x}px`,
-          top: `${rect.y}px`,
-          width: `${rect.width}px`,
-          height: `${rect.height}px`,
+          left: `${left}px`,
+          top: `${top}px`,
+          width: `${Math.ceil(rect.x + rect.width) - left}px`,
+          height: `${Math.ceil(rect.y + rect.height) - top}px`,
           background: colour,
         });
         document.body.append(cover);

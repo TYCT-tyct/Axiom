@@ -15,7 +15,6 @@ export const zh = {
   },
   frozenLabel: "退款冻结",
   frozenNote: "申请退款后先冻结的额度；等待审核期间仍计入余额，但不可消费。",
-  quickAmount: "充 {{amount}}",
   batchOrderLink: "查看订单",
   topUpModal: {
     title: "充值",
@@ -98,7 +97,6 @@ export const en: Messages<typeof zh> = {
   },
   frozenLabel: "Refund hold",
   frozenNote: "Held for pending refunds. Included in total balance while under review, not spendable.",
-  quickAmount: "Add {{amount}}",
   batchOrderLink: "View order",
   topUpModal: {
     title: "Top up",

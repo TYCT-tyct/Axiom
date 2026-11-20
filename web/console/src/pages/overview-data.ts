@@ -5,6 +5,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
 import { balanceQuery, callAggregateQuery, keysQuery, recentErrorsQuery, siteQuery } from "../queries";
+import { seriesColor } from "./usage-model";
 
 // Everything the overview shows that is not a piece of markup: the month the figures cover, the board's rows and texts
 // from the APIs, and the small sentences a card uses when its own query gave nothing.
@@ -242,14 +243,14 @@ export function modelRowsOf(
       key: row.bucket ?? "",
       kind: "0" as const,
       f0: "ovmr",
-      f1: `background: var(--c${index % 5});`,
+      f1: `background: ${seriesColor(index)};`,
       f2: "ovmn",
       f3: row.bucket ?? "",
       f4: "pc num",
       f5: `${format.number(Math.round(share))}%`,
       f6: "num",
       f7: format.money({ amount, currency }),
-      f8: `--p: ${share.toFixed(1)}%; --c: var(--c${index % 5});`,
+      f8: `--p: ${share.toFixed(1)}%; --c: ${seriesColor(index)};`,
     };
   });
 }
@@ -270,14 +271,17 @@ function placeholderModel(note: string): ModelRow {
   };
 }
 
-// requestRowsOf writes the reason into the model cell as well: the slice hides the status column below 1100px, and the
-// reason is the one thing a narrow reader must still see.
+// requestRowsOf writes the reason into the model cell: the slice hides the status column below 1100px, and the reason
+// is the one thing a narrow reader must still see. The time and status columns are the board's narrow ones (64px and
+// 76px), so they hold the time of an error today or the date of an older one, and the word for a failed call; the full
+// time and reason are in the error list below the slice.
 export function requestRowsOf(
   errors: Call[] | undefined,
   note: string,
   keys: Map<string, string>,
   format: Format,
   t: TFunction,
+  now = new Date(),
 ): RequestRow[] {
   if (note) {
     return [placeholderRequest(note)];
@@ -285,12 +289,13 @@ export function requestRowsOf(
   return (errors ?? []).map((call) => {
     const at = new Date(call.at);
     const reason = call.error_kind || t("calls.failed");
+    const today = at.toDateString() === now.toDateString();
     return {
       key: call.id,
       kind: "0" as const,
       f0: "qrq",
       f1: "num mut",
-      f2: `${at.getMonth() + 1}/${at.getDate()} ${format.hour(at)}`,
+      f2: today ? format.hour(at) : `${at.getMonth() + 1}/${at.getDate()}`,
       f3: "qmn",
       f4: "qmd",
       f5: "background: var(--bad);",
@@ -299,7 +304,7 @@ export function requestRowsOf(
       f8: "mono mut",
       f9: keys.get(call.key_id) ?? "—",
       f10: "",
-      f11: reason,
+      f11: t("calls.failed"),
       f12: "num r",
       f13: format.money(call.price),
     };

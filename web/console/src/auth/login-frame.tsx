@@ -353,7 +353,8 @@ function FrameTitle({ title, titleRef }: { title: string; titleRef: RefObject<HT
       }}
     >
       {[...title].map((char, i) => (
-        <LoginChar key={`${i}${char}`} t={String} text={{ char: char === " " ? " " : char }} />
+        // a space stays a space, so a title too long for one line breaks between its words
+        <LoginChar key={`${i}${char}`} t={String} text={{ char }} />
       ))}
     </LoginTitle>
   );

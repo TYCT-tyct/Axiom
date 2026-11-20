@@ -36,6 +36,10 @@
   --line: var(--n6);
   --line2: var(--n7);
   --line3: var(--n8);
+  /* The boards' sheets set --line on .board from a variable per pixel density, which the board's own script fills in;
+     the slices bring those sheets along, so the density variables are the line token here. */
+  --line1x: var(--n6);
+  --line2x: var(--n6);
 
   /* text: titles and values, body, meta */
   --t1: var(--n12);
