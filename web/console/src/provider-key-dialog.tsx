@@ -1,6 +1,6 @@
 import { consoleApi, type Schemas, unwrap } from "@axiom/api";
 import { accountKey, readForm, useErrors } from "@axiom/app";
-import { Button, CheckField, Dialog, FormError, SelectField, SubmitButton, TextField } from "@axiom/ui";
+import { Button, CheckField, Cluster, Dialog, FormError, SelectField, Stack, SubmitButton, TextField } from "@axiom/ui";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,7 +23,6 @@ export function AddProviderKeyDialog({ onClose }: { onClose: () => void }) {
   return (
     <Dialog title={t("providerKeys.add")} onClose={onClose}>
       <form
-        className="space-y-4"
         onSubmit={(event) => {
           event.preventDefault();
           const values = readForm(event.currentTarget);
@@ -37,27 +36,29 @@ export function AddProviderKeyDialog({ onClose }: { onClose: () => void }) {
           create.mutate({ name, key, provider: "openai", fallback: values.fallback === "on" });
         }}
       >
-        {create.isError ? <FormError>{errors.message(create.error)}</FormError> : null}
-        {error ? <FormError>{error}</FormError> : null}
-        <TextField label={t("providerKeys.name")} name="name" required maxLength={200} autoFocus />
-        <SelectField label={t("providerKeys.provider")} name="provider" defaultValue="openai">
-          <option value="openai">{t("providerKeys.openai")}</option>
-        </SelectField>
-        <TextField
-          label={t("providerKeys.key")}
-          name="key"
-          type="password"
-          required
-          autoComplete="off"
-          hint={t("providerKeys.keyHint")}
-        />
-        <CheckField name="fallback" label={t("providerKeys.fallback")} defaultChecked />
-        <div className="flex justify-end gap-2">
-          <Button type="button" size="md" onClick={onClose}>
-            {t("cancel", { ns: "common" })}
-          </Button>
-          <SubmitButton pending={create.isPending}>{t("providerKeys.save")}</SubmitButton>
-        </div>
+        <Stack>
+          {create.isError ? <FormError>{errors.message(create.error)}</FormError> : null}
+          {error ? <FormError>{error}</FormError> : null}
+          <TextField label={t("providerKeys.name")} name="name" required maxLength={200} autoFocus />
+          <SelectField label={t("providerKeys.provider")} name="provider" defaultValue="openai">
+            <option value="openai">{t("providerKeys.openai")}</option>
+          </SelectField>
+          <TextField
+            label={t("providerKeys.key")}
+            name="key"
+            type="password"
+            required
+            autoComplete="off"
+            hint={t("providerKeys.keyHint")}
+          />
+          <CheckField name="fallback" label={t("providerKeys.fallback")} defaultChecked />
+          <Cluster justify="end">
+            <Button type="button" size="md" onClick={onClose}>
+              {t("cancel", { ns: "common" })}
+            </Button>
+            <SubmitButton pending={create.isPending}>{t("providerKeys.save")}</SubmitButton>
+          </Cluster>
+        </Stack>
       </form>
     </Dialog>
   );

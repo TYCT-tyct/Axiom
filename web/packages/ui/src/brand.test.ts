@@ -46,7 +46,7 @@ function onWashes(text: string, solid: string, scheme: number) {
 }
 
 describe("brandStyle", () => {
-  // --bg, --s1 and --s2 (css/legacy.css), light then dark; the rendered pages are checked against the real ones by
+  // the page, card and hover surfaces (--page, --cardBg and --hover in css/tokens.css), light then dark; the rendered pages are checked against the real ones by
   // e2e/gate.spec.ts. A button sits on any of them: the page, a panel, a dialog.
   const surfaces = [["#f9f9f8", "#fdfdfc", "#f1f0ef"].map(rgb), ["#111110", "#191918", "#222221"].map(rgb)];
 

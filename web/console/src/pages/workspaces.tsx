@@ -1,6 +1,20 @@
 import { ApiError, type Schemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { Badge, Button, DataState, EmptyState, Icon, PageHeader, Panel, Table, Td, Th } from "@axiom/ui";
+import {
+  Badge,
+  Button,
+  Cluster,
+  DataState,
+  EmptyState,
+  Icon,
+  PageBody,
+  PageHeader,
+  Panel,
+  Table,
+  Td,
+  Text,
+  Th,
+} from "@axiom/ui";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,7 +37,7 @@ export default function Workspaces() {
   return (
     <>
       <PageHeader title={t("workspaces.title")} description={t("workspaces.description")} />
-      <div className="space-y-4 p-4 sm:p-6">
+      <PageBody>
         {manage && view && !unavailable ? (
           <Button variant="primary" size="md" onClick={() => setDialog({ kind: "create" })}>
             <Icon name="plus" />
@@ -49,7 +63,7 @@ export default function Workspaces() {
             </DataState>
           )}
         </Panel>
-      </div>
+      </PageBody>
       {dialog?.kind === "create" ? <CreateWorkspaceDialog onClose={close} /> : null}
       {dialog?.kind === "edit" ? <EditWorkspaceDialog workspace={dialog.workspace} onClose={close} /> : null}
       {dialog?.kind === "budget" ? <BudgetDialog workspace={dialog.workspace} manage={manage} onClose={close} /> : null}
@@ -75,14 +89,14 @@ function WorkspaceTable({
         <tr>
           <Th>{t("workspaces.col.name")}</Th>
           <Th>{t("workspaces.col.status")}</Th>
-          <Th className="w-0" />
+          <Th shrink />
         </tr>
       </thead>
       <tbody>
         {workspaces.map((workspace) => (
           <tr key={workspace.id}>
-            <Td className="w-full max-w-0">
-              <p className="text-t1 wrap-anywhere">{workspace.name}</p>
+            <Td main>
+              <Text>{workspace.name}</Text>
               {workspace.is_default ? <Badge>{t("workspaces.default")}</Badge> : null}
             </Td>
             <Td>
@@ -90,7 +104,7 @@ function WorkspaceTable({
                 {workspace.disabled ? t("keys.disabled") : t("keys.enabled")}
               </Badge>
             </Td>
-            <Td className="whitespace-nowrap">
+            <Td shrink>
               <Actions workspace={workspace} manage={manage} onEdit={onEdit} onBudget={onBudget} />
             </Td>
           </tr>
@@ -114,7 +128,7 @@ function Actions({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="flex flex-wrap justify-end gap-2">
+    <Cluster justify="end">
       <Button size="sm" asChild>
         <Link
           to="/keys"
@@ -148,6 +162,6 @@ function Actions({
           <Icon name="pencil" />
         </Button>
       ) : null}
-    </div>
+    </Cluster>
   );
 }

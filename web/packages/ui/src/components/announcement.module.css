@@ -1,0 +1,6 @@
+/* Administrators write announcements as plain text: their line breaks are part of them, and a long word must not
+   widen the page. */
+.root {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

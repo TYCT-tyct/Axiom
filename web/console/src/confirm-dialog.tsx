@@ -1,5 +1,5 @@
 import { useErrors } from "@axiom/app";
-import { Button, Dialog, FormError, SubmitButton } from "@axiom/ui";
+import { Button, Cluster, Dialog, FormError, Stack, SubmitButton, Text } from "@axiom/ui";
 import type { UseMutationResult } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -25,11 +25,13 @@ export function ConfirmDialog({
   const errors = useErrors();
   return (
     <Dialog title={title} onClose={onClose}>
-      <div className="space-y-4">
+      <Stack>
         {action.isError ? <FormError>{errors.message(action.error)}</FormError> : null}
         {detail}
-        <div className="space-y-2 text-t2 [overflow-wrap:anywhere]">{body}</div>
-        <div className="flex justify-end gap-2">
+        <Text as="div" tone="muted">
+          <Stack gap={8}>{body}</Stack>
+        </Text>
+        <Cluster justify="end">
           <Button size="md" onClick={onClose}>
             {t("cancel", { ns: "common" })}
           </Button>
@@ -43,8 +45,8 @@ export function ConfirmDialog({
           >
             {confirm}
           </SubmitButton>
-        </div>
-      </div>
+        </Cluster>
+      </Stack>
     </Dialog>
   );
 }

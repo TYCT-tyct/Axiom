@@ -1,3 +1,4 @@
+import { QrMatrix } from "@axiom/ui";
 import qrcode from "qrcode-generator";
 import { useMemo } from "react";
 
@@ -21,14 +22,5 @@ export function QrCode({ value, label }: { value: string; label: string }) {
     }
     return { size: count + 2 * quietZone, path: squares };
   }, [value]);
-  return (
-    <svg
-      viewBox={`0 0 ${size} ${size}`}
-      role="img"
-      aria-label={label}
-      className="size-48 shrink-0 rounded-btn bg-paper"
-    >
-      <path d={path} className="fill-ink" shapeRendering="crispEdges" />
-    </svg>
-  );
+  return <QrMatrix size={size} path={path} label={label} />;
 }

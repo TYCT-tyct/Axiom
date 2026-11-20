@@ -1,9 +1,12 @@
 import { useTranslation } from "react-i18next";
+import { classes } from "../classes";
 import { useFormat } from "../format";
-import { label, PriceHeads, PricingPrice, RateTable, SearchEnginePrices } from "./model-pricing";
+import s from "./model-endpoints.module.css";
+import { label, ModelSection, PriceHeads, PricingPrice, RateTable, SearchEnginePrices } from "./model-pricing";
 import type { PublicEndpoint, PublicModel } from "./models";
 import { Table, Td, Th } from "./table";
 import { Tag as Badge } from "./tag";
+import { Text } from "./text";
 
 // EndpointSection lists every group that serves the model under the codename routing accepts. Each row carries the
 // attributes that have no column at this width, its own base prices and a full schedule, so a reader can see that the
@@ -12,26 +15,24 @@ import { Tag as Badge } from "./tag";
 export function EndpointSection({ model, showPrices }: { model: PublicModel; showPrices: boolean }) {
   const { t } = useTranslation("common");
   if (model.endpoints === undefined) {
-    return (
-      <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.endpointsUnavailable")}</p>
-    );
+    return <ModelSection note={t("publicModels.endpointsUnavailable")} />;
   }
   if (model.endpoints.length === 0) {
-    return <p className="mt-4 border-t border-b1 px-4 pt-4 text-ui text-t3">{t("publicModels.noEndpoints")}</p>;
+    return <ModelSection note={t("publicModels.noEndpoints")} />;
   }
   return (
-    <div className="mt-4 border-t border-b1">
-      <div className="px-4 pt-4">
-        <h3 className="text-ui text-t1">{t("publicModels.endpoints")}</h3>
-        <p className="mt-1 text-label text-t3">{t("publicModels.endpointsNote")}</p>
-      </div>
+    <ModelSection title={t("publicModels.endpoints")} note={t("publicModels.endpointsNote")}>
       <Table label={t("publicModels.endpoints")}>
         <thead>
           <tr>
             <Th>{t("publicModels.endpoint")}</Th>
-            <Th className="hidden text-right md:table-cell">{t("publicModels.context")}</Th>
-            <Th className="hidden text-right lg:table-cell">{t("publicModels.maxOutput")}</Th>
-            <Th className="hidden 2xl:table-cell">{t("publicModels.ability")}</Th>
+            <Th align="end" from="md">
+              {t("publicModels.context")}
+            </Th>
+            <Th align="end" from="lg">
+              {t("publicModels.maxOutput")}
+            </Th>
+            <Th from="2xl">{t("publicModels.ability")}</Th>
             <PriceHeads show={showPrices} />
           </tr>
         </thead>
@@ -41,7 +42,7 @@ export function EndpointSection({ model, showPrices }: { model: PublicModel; sho
           ))}
         </tbody>
       </Table>
-    </div>
+    </ModelSection>
   );
 }
 
@@ -59,21 +60,21 @@ function EndpointRow({
     <>
       <tr>
         <EndpointIdentity endpoint={endpoint} showPrices={showPrices} />
-        <Td className="hidden text-right whitespace-nowrap tabular-nums md:table-cell">
+        <Td align="end" from="md">
           {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
         </Td>
-        <Td className="hidden text-right whitespace-nowrap tabular-nums lg:table-cell">
+        <Td align="end" from="lg">
           {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
         </Td>
-        <Td className="hidden 2xl:table-cell">
+        <Td from="2xl">
           <EndpointAbilities endpoint={endpoint} />
         </Td>
         {showPrices ? (
           <>
-            <Td className="hidden text-right tabular-nums sm:table-cell">
+            <Td align="end" from="sm">
               <PricingPrice pricing={endpoint.pricing} item="input" />
             </Td>
-            <Td className="hidden text-right tabular-nums sm:table-cell">
+            <Td align="end" from="sm">
               <PricingPrice pricing={endpoint.pricing} item="output" />
             </Td>
           </>
@@ -88,51 +89,57 @@ function EndpointIdentity({ endpoint, showPrices }: { endpoint: PublicEndpoint; 
   const { t } = useTranslation("common");
   const format = useFormat();
   return (
-    <Td className="max-w-56">
-      <p className="truncate font-mono text-t1" title={endpoint.name}>
-        {endpoint.name}
-      </p>
-      <span className="mt-1 flex flex-wrap gap-1">
-        <Badge tone={endpoint.verified ? "ok" : "neutral"} icon={endpoint.verified ? "check" : undefined}>
-          {t(endpoint.verified ? "publicModels.verified" : "publicModels.unverified")}
-        </Badge>
-        {endpoint.quantization ? (
-          <Badge>
-            <span>{t("publicModels.quantization")}</span>
-            <span className="font-mono">{endpoint.quantization}</span>
+    <Td>
+      <div className={s.name}>
+        <p className={s.codename} title={endpoint.name}>
+          {endpoint.name}
+        </p>
+        <span className={s.tags}>
+          <Badge tone={endpoint.verified ? "ok" : "neutral"} icon={endpoint.verified ? "check" : undefined}>
+            {t(endpoint.verified ? "publicModels.verified" : "publicModels.unverified")}
           </Badge>
-        ) : null}
-      </span>
-      {/* Each fallback disappears at the width where its column appears: context at md, max output at lg, abilities at
+          {endpoint.quantization ? (
+            <Badge>
+              <span>{t("publicModels.quantization")}</span>
+              <span className={s.mono}>{endpoint.quantization}</span>
+            </Badge>
+          ) : null}
+        </span>
+        {/* Each fallback disappears at the width where its column appears: context at md, max output at lg, abilities at
           2xl. Streaming has no column, so it stays here at every width. */}
-      <p className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-label text-t3 tabular-nums">
-        <span className="md:hidden">
-          {t("publicModels.context")} {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
-        </span>
-        <span className="lg:hidden">
-          {t("publicModels.maxOutput")} {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
-        </span>
-        <span>
-          {t("publicModels.streams")}{" "}
-          {endpoint.streams === undefined ? "—" : t(endpoint.streams ? "publicModels.yes" : "publicModels.no")}
-        </span>
-      </p>
-      <div className="mt-1 flex flex-wrap items-center gap-1 text-label text-t3 2xl:hidden">
-        <span>{t("publicModels.ability")}</span>
-        <EndpointAbilities endpoint={endpoint} fallback />
-      </div>
-      {showPrices ? (
-        <div className="mt-1 grid grid-cols-2 gap-x-3 text-label tabular-nums sm:hidden">
-          <span>
-            <span className="text-t3">{t("publicModels.item.input")} </span>
-            <PricingPrice pricing={endpoint.pricing} item="input" />
+        <p className={s.attributes}>
+          <span className={s.contextFallback}>
+            {t("publicModels.context")} {endpoint.context_length ? format.number(endpoint.context_length) : "—"}
+          </span>
+          <span className={s.outputFallback}>
+            {t("publicModels.maxOutput")} {endpoint.max_output ? format.number(endpoint.max_output) : "—"}
           </span>
           <span>
-            <span className="text-t3">{t("publicModels.item.output")} </span>
-            <PricingPrice pricing={endpoint.pricing} item="output" />
+            {t("publicModels.streams")}{" "}
+            {endpoint.streams === undefined ? "—" : t(endpoint.streams ? "publicModels.yes" : "publicModels.no")}
           </span>
+        </p>
+        <div className={s.fallback}>
+          <span>{t("publicModels.ability")}</span>
+          <EndpointAbilities endpoint={endpoint} fallback />
         </div>
-      ) : null}
+        {showPrices ? (
+          <div className={s.prices}>
+            <span>
+              <Text as="span" size="sm" tone="faint">
+                {t("publicModels.item.input")}{" "}
+              </Text>
+              <PricingPrice pricing={endpoint.pricing} item="input" />
+            </span>
+            <span>
+              <Text as="span" size="sm" tone="faint">
+                {t("publicModels.item.output")}{" "}
+              </Text>
+              <PricingPrice pricing={endpoint.pricing} item="output" />
+            </span>
+          </div>
+        ) : null}
+      </div>
     </Td>
   );
 }
@@ -144,7 +151,7 @@ function EndpointAbilities({ endpoint, fallback = false }: { endpoint: PublicEnd
     return "—";
   }
   return (
-    <span className={fallback ? "flex flex-wrap gap-1" : "flex max-w-64 flex-wrap gap-1"}>
+    <span className={classes(s.abilities, fallback && s.free)}>
       {abilities.map((ability) => (
         <Badge key={ability}>{label(t, "abilityNames", ability)}</Badge>
       ))}
@@ -159,13 +166,15 @@ function EndpointPriceDetails({ model, endpoint }: { model: PublicModel; endpoin
   const engines = pricing?.search_engines ?? [];
   return (
     <tr>
-      <Td colSpan={6} className="p-0">
-        <details className="px-3 pb-3 sm:px-4">
-          <summary className="cursor-pointer py-2 text-label text-t3">
-            {t("publicModels.endpointPriceDetails")} <span className="font-mono">{endpoint.name}</span>
+      <Td colSpan={6}>
+        <details>
+          <summary className={s.summary}>
+            {t("publicModels.endpointPriceDetails")} <span className={s.mono}>{endpoint.name}</span>
           </summary>
           {!pricing || (rates.length === 0 && engines.length === 0) ? (
-            <p className="py-2 text-label text-t3">{t("publicModels.priceUnavailable")}</p>
+            <Text size="sm" tone="faint">
+              {t("publicModels.priceUnavailable")}
+            </Text>
           ) : (
             <>
               {rates.length > 0 ? (
@@ -177,7 +186,7 @@ function EndpointPriceDetails({ model, endpoint }: { model: PublicModel; endpoin
                 />
               ) : null}
               {engines.length > 0 ? (
-                <div className="mt-2">
+                <div className={s.engines}>
                   <SearchEnginePrices
                     title={`${model.name} ${endpoint.name} ${t("publicModels.searchEngines")}`}
                     currency={pricing.currency}

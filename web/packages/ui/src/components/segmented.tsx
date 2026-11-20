@@ -1,6 +1,6 @@
 import { useId } from "react";
-import { cn } from "../cn";
 import { Icon, type IconName } from "./icon";
+import s from "./segmented.module.css";
 
 export type SegmentedOption<T extends string> = { value: T; label: string; icon?: IconName };
 
@@ -11,34 +11,28 @@ export function Segmented<T extends string>({
   value,
   options,
   onChange,
-  className,
 }: {
   label: string;
   value: T;
   options: SegmentedOption<T>[];
   onChange: (value: T) => void;
-  className?: string;
 }) {
   const name = useId();
   return (
-    <fieldset className={cn("inline-flex gap-0.5 rounded-[calc(var(--r-sm)+3px)] bg-s2 p-[3px]", className)}>
-      <legend className="sr-only">{label}</legend>
+    <fieldset className={s.root}>
+      <legend className={s.hidden}>{label}</legend>
       {options.map((option) => (
-        <label
-          key={option.value}
-          title={option.icon ? option.label : undefined}
-          className="flex h-6.5 min-w-6.5 cursor-pointer items-center justify-center gap-1.5 rounded-sm px-2 text-ui text-t3 transition-colors duration-150 hover:text-t1 has-checked:bg-s4 has-checked:text-t1 has-focus-visible:outline-2 has-focus-visible:outline-accent has-focus-visible:outline-offset-2"
-        >
+        <label key={option.value} title={option.icon ? option.label : undefined} className={s.option}>
           <input
             type="radio"
             name={name}
             value={option.value}
             checked={option.value === value}
             onChange={() => onChange(option.value)}
-            className="sr-only"
+            className={s.hidden}
           />
           {option.icon ? <Icon name={option.icon} /> : null}
-          <span className={option.icon ? "sr-only" : undefined}>{option.label}</span>
+          <span className={option.icon ? s.hidden : undefined}>{option.label}</span>
         </label>
       ))}
     </fieldset>

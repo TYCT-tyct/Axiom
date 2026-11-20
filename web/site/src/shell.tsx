@@ -1,10 +1,6 @@
 import { consoleApi, isTransient, type Registration, registrationOf, type Schemas, unwrap } from "@axiom/api";
-import { Button, Logo, PreferenceSwitches, useBrandStyle } from "@axiom/ui";
-import { type ReactNode, useEffect, useState } from "react";
-import { useTranslation } from "react-i18next";
-
-// The console lives on the same listener under /console/ (console/vite.config.ts).
-const consoleHref = "/console/";
+import { useBrandStyle } from "@axiom/ui";
+import { useEffect, useState } from "react";
 
 export type Brand = Pick<Schemas["Site"], "logo_url" | "api_base_url" | "brand_color"> & {
   name?: string;
@@ -75,43 +71,4 @@ export function useSiteState(): SiteState {
     };
   }, []);
   return state;
-}
-
-// SiteShell is the website's frame: the site's mark, the public pages and the way into the console. The pages are
-// plain links, not a client router, because the website has only a few pages and each opens as its own document.
-export function SiteShell({ children, mainClassName = "" }: { children: ReactNode; mainClassName?: string }) {
-  const { t } = useTranslation();
-  const site = useSiteState();
-  const brand = site.status === "ready" ? site.brand : undefined;
-  const name = brand?.name ?? t("brand", { ns: "common" });
-  return (
-    <div className="flex min-h-dvh flex-col">
-      <header className="mx-auto flex h-16 w-full max-w-[1248px] items-center gap-4 px-4 sm:px-6">
-        <a href="/" className="min-w-0 shrink" aria-label={t("home", { site: name })}>
-          <Logo name={name} logoUrl={brand?.logo_url} />
-        </a>
-        <nav aria-label={t("navigation")} className="flex shrink-0 items-center gap-1">
-          <a
-            href="/models"
-            className="rounded-xs px-2 py-1 text-ui text-t2 underline-offset-4 hover:text-t1 hover:underline"
-          >
-            {t("models")}
-          </a>
-        </nav>
-        <PreferenceSwitches className="ml-auto hidden gap-2 sm:flex" />
-        <div className="ml-auto shrink-0 sm:ml-0">
-          <Button asChild size="sm">
-            <a href={consoleHref}>{t("signIn")}</a>
-          </Button>
-        </div>
-      </header>
-      <main className={`mx-auto flex w-full max-w-[1248px] flex-1 flex-col px-4 sm:px-6 ${mainClassName}`}>
-        {children}
-      </main>
-      <footer className="mx-auto flex w-full max-w-[1248px] flex-wrap items-center gap-4 border-t border-b1 px-4 py-6 text-ui text-t4 sm:px-6">
-        {t("footer")}
-        <PreferenceSwitches className="ml-auto flex gap-2 sm:hidden" />
-      </footer>
-    </div>
-  );
 }

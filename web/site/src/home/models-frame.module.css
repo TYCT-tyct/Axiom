@@ -1,3 +1,113 @@
+/* The website's frame for the pages that are not a board: a 1248px column with the header's bar above and the footer
+   below. Padding is 16px, 24px from 640px. */
+.shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+.header,
+.main,
+.footer {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1248px;
+  margin: 0 auto;
+  padding-inline: 16px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 64px;
+}
+
+.home {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.nav {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+
+.link {
+  padding: 4px 8px;
+  border-radius: var(--r4);
+  font-size: var(--fs14);
+  line-height: var(--lh14);
+  color: var(--t2);
+  text-underline-offset: 4px;
+  text-decoration: none;
+}
+
+.link:hover {
+  color: var(--t1);
+  text-decoration: underline;
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.switches {
+  display: none;
+  margin-left: auto;
+}
+
+.enter {
+  flex: none;
+  margin-left: auto;
+}
+
+.main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 16px;
+  padding-block: 25px 24px;
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+  font-size: var(--fs14);
+  line-height: 20px;
+  color: var(--t3);
+}
+
+.footSwitches {
+  margin-left: auto;
+}
+
+@media (min-width: 640px) {
+  .header,
+  .main,
+  .footer {
+    padding-inline: 24px;
+  }
+
+  .switches {
+    display: block;
+  }
+
+  .enter {
+    margin-left: 0;
+  }
+
+  .footSwitches {
+    display: none;
+  }
+}
+
+/* The models page's own main: its room above and below, and the board's text colours. */
 .main {
   padding-block: 16px 40px;
   --text1: var(--t1);

@@ -1,0 +1,12 @@
+/* A code a phone scans: dark on white whatever the theme (--ink and --paper), 12rem square. */
+.root {
+  flex: none;
+  width: 12rem;
+  height: 12rem;
+  border-radius: var(--r8);
+  background: var(--paper);
+}
+
+.modules {
+  fill: var(--ink);
+}

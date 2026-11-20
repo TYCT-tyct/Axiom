@@ -2,6 +2,7 @@
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
 export { useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
+export { Announcement } from "./components/announcement";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
@@ -10,6 +11,7 @@ export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from
 export { Card } from "./components/card";
 export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
+export { CodeBlock } from "./components/code-block";
 export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
 export { Dialog } from "./components/dialog";
@@ -43,11 +45,13 @@ export { Mono } from "./components/mono";
 export { Note } from "./components/note";
 export { Notice } from "./components/notice";
 export { PageBody } from "./components/page-body";
+export { PageFrame } from "./components/page-frame";
 export { PageHead } from "./components/page-head";
 export { usePageTitle } from "./components/page-title";
 export { Panel } from "./components/panel";
 export { Popover } from "./components/popover";
 export { PreferenceSwitches } from "./components/preferences";
+export { QrMatrix } from "./components/qr-matrix";
 export { ScrollArea } from "./components/scroll-area";
 export { SegmentedControl } from "./components/segmented-control";
 export { SettingRow } from "./components/setting-row";

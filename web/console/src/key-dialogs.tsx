@@ -1,6 +1,6 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey } from "@axiom/app";
-import { Button, CopyButton, Dialog, FormError, keyGuide } from "@axiom/ui";
+import { Button, Cluster, CodeBlock, CopyButton, Dialog, FormError, keyGuide, Stack, Text } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
@@ -75,18 +75,24 @@ export function DeleteKeyDialog({ apiKey, onClose }: { apiKey: Key; onClose: () 
 function Snippet({ name, text, hint }: { name: string; text: string; hint?: string }) {
   const { t } = useTranslation();
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-label text-t2">{name}</p>
+    <Stack gap={8}>
+      <Cluster justify="between">
+        <Text size="sm" tone="muted">
+          {name}
+        </Text>
         <CopyButton text={text} label={t("keys.guide.copy", { name })} />
-      </div>
+      </Cluster>
       {/* Wrapped, not scrolled sideways: a scroll region needs its own tab stop, and a focusable `pre` is what the
           accessibility rules forbid. */}
-      <pre className="rounded-btn border border-b2 bg-s2 p-3 font-mono text-label whitespace-pre-wrap break-words text-t1">
+      <CodeBlock as="pre" size="sm">
         {text}
-      </pre>
-      {hint ? <p className="text-label text-t3">{hint}</p> : null}
-    </div>
+      </CodeBlock>
+      {hint ? (
+        <Text size="sm" tone="faint">
+          {hint}
+        </Text>
+      ) : null}
+    </Stack>
   );
 }
 
@@ -98,17 +104,25 @@ function Guide({ apiBase, secret }: { apiBase: string; secret: string }) {
     return null;
   }
   return (
-    <section className="space-y-3 border-t border-b1 pt-4">
-      <h3 className="text-ui font-medium text-t1">{t("keys.guide.title")}</h3>
-      <div className="space-y-3">
-        <p className="text-label text-t3">{t("keys.guide.protocols")}</p>
+    <Stack gap={12} rule>
+      <Text as="h3" medium>
+        {t("keys.guide.title")}
+      </Text>
+      <Stack gap={12}>
+        <Text size="sm" tone="faint">
+          {t("keys.guide.protocols")}
+        </Text>
         {guide.protocols.map((entry) => (
           <Snippet key={entry.id} name={t(`keys.guide.protocol.${entry.id}`)} text={entry.text} />
         ))}
-        <p className="text-label text-t3">{t("keys.guide.model")}</p>
-      </div>
-      <div className="space-y-3">
-        <p className="text-label text-t3">{t("keys.guide.clients")}</p>
+        <Text size="sm" tone="faint">
+          {t("keys.guide.model")}
+        </Text>
+      </Stack>
+      <Stack gap={12}>
+        <Text size="sm" tone="faint">
+          {t("keys.guide.clients")}
+        </Text>
         {guide.clients.map((entry) => (
           <Snippet
             key={entry.id}
@@ -117,8 +131,8 @@ function Guide({ apiBase, secret }: { apiBase: string; secret: string }) {
             hint={t(`keys.guide.hint.${entry.id}`)}
           />
         ))}
-      </div>
-    </section>
+      </Stack>
+    </Stack>
   );
 }
 
@@ -149,31 +163,27 @@ export function SecretDialog({
   const site = useQuery(siteQuery);
   return (
     <Dialog title={t("keys.secret.title")} onClose={onClose} dismissible={false}>
-      <div className="space-y-4">
-        <p className="text-t2">{t("keys.secret.body", { name: created.key.name })}</p>
+      <Stack>
+        <Text tone="muted">{t("keys.secret.body", { name: created.key.name })}</Text>
         <Moved apiKey={created.key} asked={asked} />
-        <code className="block rounded-btn border border-b2 bg-s2 p-3 font-mono text-ui break-all text-t1 select-all">
-          {created.secret}
-        </code>
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-3">
-            <CopyButton text={created.secret} />
-          </div>
+        <CodeBlock>{created.secret}</CodeBlock>
+        <Cluster justify="between">
+          <CopyButton text={created.secret} />
           <Button variant="primary" size="md" onClick={onClose}>
             {t("keys.secret.done")}
           </Button>
-        </div>
+        </Cluster>
         {site.isError ? (
-          <div className="space-y-2">
+          <Stack gap={8}>
             <FormError>{t("keys.guide.loadFailed")}</FormError>
             <Button disabled={site.isFetching} onClick={() => site.refetch()}>
               {t("state.retry", { ns: "common" })}
             </Button>
-          </div>
+          </Stack>
         ) : (
           <Guide apiBase={site.data?.api_base_url ?? ""} secret={created.secret} />
         )}
-      </div>
+      </Stack>
     </Dialog>
   );
 }

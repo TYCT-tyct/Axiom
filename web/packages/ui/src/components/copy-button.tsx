@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { classes } from "../classes";
 import { Button } from "./action-button";
 import s from "./copy-button.module.css";
 import { Icon } from "./icon";
@@ -26,7 +27,7 @@ function CompactCopyButton({
     <>
       <button
         type="button"
-        className={failed ? `${s.compact} ${s.failed}` : s.compact}
+        className={classes(s.compact, failed && s.failed)}
         aria-label={label}
         title={label}
         onClick={onCopy}

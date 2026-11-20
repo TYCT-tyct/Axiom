@@ -1,4 +1,5 @@
 import type { Schemas } from "@axiom/api";
+import { Text as Paragraph } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { type Sort, sorts } from "./rules";
@@ -41,9 +42,11 @@ export function RulesSummary({ summary }: { summary: Schemas["RoutingRulesSummar
   const { t } = useTranslation("common");
   return (
     <>
-      <p className="[overflow-wrap:anywhere] text-t2">{summaryParts(t, summary).join(" · ")}</p>
+      <Paragraph tone="muted">{summaryParts(t, summary).join(" · ")}</Paragraph>
       {summary && summary.overrides > 0 ? (
-        <p className="text-label text-t4">{t("presetRules.summary.overrides", { count: summary.overrides })}</p>
+        <Paragraph size="sm" tone="faint">
+          {t("presetRules.summary.overrides", { count: summary.overrides })}
+        </Paragraph>
       ) : null}
     </>
   );

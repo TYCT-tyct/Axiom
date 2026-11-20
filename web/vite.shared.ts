@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin, type UserConfig } from "vite";
 
@@ -133,7 +132,7 @@ export function appConfig({
   return defineConfig({
     base,
     publicDir: false,
-    plugins: [react(), tailwindcss(), themeScript(), fontPreload()],
+    plugins: [react(), themeScript(), fontPreload()],
     define: {
       // The version of the program this build ships in, exactly as `axiom version` prints it; `just web-build` sets it.
       // Empty when an app is built or served on its own, which turns the new-version prompt off.

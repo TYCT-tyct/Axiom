@@ -189,7 +189,7 @@ it.each([
 ])("says what disabling meets: $name", async ({ n, keys, said }) => {
   const disabling: Schemas["RoutingPreset"] = { ...preset(n), scope: "account", rules: {}, keys };
   await render(<DisablePresetDialog preset={disabling} onClose={() => {}} />);
-  const lines = [...document.querySelectorAll("dialog p")].map((p) => p.textContent);
+  const lines = [...document.querySelectorAll("dialog p, dialog strong")].map((p) => p.textContent);
   expect(lines).toEqual([...said, "body"].map((key) => `routingPresets.disable.${key}`));
   expect(document.querySelector<HTMLButtonElement>("dialog button[type=submit]")?.disabled).toBe(false);
 });

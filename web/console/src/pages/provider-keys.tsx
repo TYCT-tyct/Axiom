@@ -6,7 +6,19 @@ import wideZh from "@axiom/boards/AxApp/regions/Byok.zh";
 import Phone from "@axiom/boards/AxAppPhone/regions/Byok";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/Byok.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/Byok.zh";
-import { Button, Dialog, FormError, Icon, SubmitButton, useFormat, usePageTitle } from "@axiom/ui";
+import {
+  Button,
+  Cluster,
+  Dialog,
+  FormError,
+  Icon,
+  SettingRow,
+  Stack,
+  SubmitButton,
+  Text,
+  useFormat,
+  usePageTitle,
+} from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { type ReactNode, type SyntheticEvent, useEffect, useState } from "react";
@@ -193,38 +205,30 @@ function KeyDialog({
   const [tested, setTested] = useState<string>();
   return (
     <Dialog title={providerKey.name} onClose={onClose}>
-      <div className="space-y-4">
-        <dl className="space-y-1 text-label">
-          <div className="flex gap-2">
-            <dt>{t("providerKeys.provider")}</dt>
-            <dd>{providerKey.provider}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt>{t("providerKeys.status")}</dt>
-            <dd>
-              {providerKey.rejected
-                ? t("providerKeys.rejected")
-                : providerKey.enabled
-                  ? t("keys.enabled")
-                  : t("keys.disabled")}
-            </dd>
-          </div>
-          <div className="flex gap-2">
-            <dt>{t("providerKeys.fallback")}</dt>
-            <dd>{providerKey.fallback ? t("providerKeys.fallbackOn") : t("providerKeys.noFallback")}</dd>
-          </div>
-          <div className="flex gap-2">
-            <dt>{t("providerKeys.added")}</dt>
-            <dd>{format.dateTime(new Date(providerKey.created_at))}</dd>
-          </div>
-        </dl>
+      <Stack>
+        <div>
+          <SettingRow title={t("providerKeys.provider")}>{providerKey.provider}</SettingRow>
+          <SettingRow title={t("providerKeys.status")}>
+            {providerKey.rejected
+              ? t("providerKeys.rejected")
+              : providerKey.enabled
+                ? t("keys.enabled")
+                : t("keys.disabled")}
+          </SettingRow>
+          <SettingRow title={t("providerKeys.fallback")}>
+            {providerKey.fallback ? t("providerKeys.fallbackOn") : t("providerKeys.noFallback")}
+          </SettingRow>
+          <SettingRow title={t("providerKeys.added")}>{format.dateTime(new Date(providerKey.created_at))}</SettingRow>
+        </div>
         {tested ? <p role="status">{tested}</p> : null}
         {manage ? (
           <KeyActions providerKey={providerKey} onTested={setTested} onClose={onClose} />
         ) : (
-          <p className="text-label text-t3">{t("providerKeys.readOnly")}</p>
+          <Text size="sm" tone="faint">
+            {t("providerKeys.readOnly")}
+          </Text>
         )}
-      </div>
+      </Stack>
     </Dialog>
   );
 }
@@ -278,8 +282,8 @@ function KeyActions({
   });
   const failure = test.error ?? toggle.error;
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap gap-2">
+    <Stack gap={12}>
+      <Cluster>
         <Button size="sm" onClick={() => test.mutate()} disabled={test.isPending}>
           {test.isPending ? t("providerKeys.testing") : t("providerKeys.test.action")}
         </Button>
@@ -289,12 +293,12 @@ function KeyActions({
         <Button size="sm" variant="danger" onClick={() => setConfirming(true)}>
           {t("providerKeys.remove")}
         </Button>
-      </div>
+      </Cluster>
       {failure ? <FormError>{errors.message(failure)}</FormError> : null}
       {confirming ? (
         <Removal providerKey={providerKey} onCancel={() => setConfirming(false)} onClose={onClose} />
       ) : null}
-    </div>
+    </Stack>
   );
 }
 
@@ -324,17 +328,17 @@ function Removal({
     },
   });
   return (
-    <div className="space-y-2">
-      <p className="text-t2 [overflow-wrap:anywhere]">{t("providerKeys.removeBody", { name: providerKey.name })}</p>
+    <Stack gap={8}>
+      <Text tone="muted">{t("providerKeys.removeBody", { name: providerKey.name })}</Text>
       {remove.isError ? <FormError>{errors.message(remove.error)}</FormError> : null}
-      <div className="flex justify-end gap-2">
+      <Cluster justify="end">
         <Button size="md" onClick={onCancel}>
           {t("cancel", { ns: "common" })}
         </Button>
         <SubmitButton pending={remove.isPending} variant="danger" onClick={() => remove.mutate()}>
           {t("providerKeys.confirmRemove")}
         </SubmitButton>
-      </div>
-    </div>
+      </Cluster>
+    </Stack>
   );
 }

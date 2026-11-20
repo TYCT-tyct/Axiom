@@ -102,3 +102,34 @@
     padding-right: 16px;
   }
 }
+
+/* A column that appears from a width on (Th and Td's from): 640, 768, 1024, 1280 and 1536px. */
+@media (max-width: 639px) {
+  .fromsm {
+    display: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .frommd {
+    display: none;
+  }
+}
+
+@media (max-width: 1023px) {
+  .fromlg {
+    display: none;
+  }
+}
+
+@media (max-width: 1279px) {
+  .fromxl {
+    display: none;
+  }
+}
+
+@media (max-width: 1535px) {
+  .from2xl {
+    display: none;
+  }
+}

@@ -43,11 +43,24 @@ export function Table({
 // The ways a column lays out its cells: end-aligned figures, a column that takes only what its content needs, the
 // column that names the row, which takes the room left and wraps rather than pushing the others off, and the row's
 // buttons (actions), which stay at the box's right edge while the table scrolls under them, so they are never off
-// screen. className is the utility classes pages wrote before the redesign; it goes when the last page drops it (#747).
-type Column = { align?: "end"; shrink?: boolean; main?: boolean; actions?: boolean; className?: string };
+// screen. A column given `from` is dropped below that width (sm 640px, md 768px, lg 1024px, xl 1280px, 2xl 1536px),
+// for a table with more columns than a narrow screen has room for.
+type Column = {
+  align?: "end";
+  shrink?: boolean;
+  main?: boolean;
+  actions?: boolean;
+  from?: "sm" | "md" | "lg" | "xl" | "2xl";
+};
 
-const column = ({ align, shrink, main, actions, className }: Column) =>
-  classes(align === "end" && s.end, (shrink || actions) && s.shrink, main && s.main, actions && s.actions, className);
+const column = ({ align, shrink, main, actions, from }: Column) =>
+  classes(
+    align === "end" && s.end,
+    (shrink || actions) && s.shrink,
+    main && s.main,
+    actions && s.actions,
+    from && s[`from${from}`],
+  );
 
 // A header keeps its own line: a narrow numeric column would otherwise break a two-character label one character per
 // line, which reads as two columns.

@@ -3,12 +3,16 @@ import { accountKey, readForm, useErrors } from "@axiom/app";
 import {
   Button,
   CheckField,
+  Cluster,
   DataState,
   Dialog,
   FormError,
+  Grid,
   moneyInput,
   parseMoney,
+  Stack,
   SubmitButton,
+  Text,
   TextField,
   useFormat,
 } from "@axiom/ui";
@@ -30,12 +34,12 @@ function useRefreshWorkspaces() {
 export function Actions({ pending, submit, onCancel }: { pending: boolean; submit: string; onCancel: () => void }) {
   const { t } = useTranslation();
   return (
-    <div className="flex justify-end gap-2 pt-2">
+    <Cluster justify="end">
       <Button size="md" onClick={onCancel}>
         {t("cancel", { ns: "common" })}
       </Button>
       <SubmitButton pending={pending}>{submit}</SubmitButton>
-    </div>
+    </Cluster>
   );
 }
 
@@ -60,7 +64,6 @@ function WorkspaceForm({
   return (
     <form
       noValidate
-      className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
         const values = readForm(event.currentTarget);
@@ -71,29 +74,35 @@ function WorkspaceForm({
         }
       }}
     >
-      {error ? <FormError>{errors.message(error)}</FormError> : null}
-      <TextField
-        label={t("workspaces.form.name")}
-        name="name"
-        maxLength={100}
-        defaultValue={workspace?.name}
-        autoComplete="off"
-        error={missing ? t("workspaces.form.nameMissing") : errors.field(error, "name")}
-      />
-      {workspace?.is_default ? <p className="text-label text-t3">{t("workspaces.form.defaultHint")}</p> : null}
-      {workspace && !workspace.is_default ? (
-        <CheckField
-          label={t("workspaces.form.disable")}
-          hint={t("workspaces.form.disableHint")}
-          name="disabled"
-          defaultChecked={workspace.disabled}
+      <Stack>
+        {error ? <FormError>{errors.message(error)}</FormError> : null}
+        <TextField
+          label={t("workspaces.form.name")}
+          name="name"
+          maxLength={100}
+          defaultValue={workspace?.name}
+          autoComplete="off"
+          error={missing ? t("workspaces.form.nameMissing") : errors.field(error, "name")}
         />
-      ) : null}
-      <Actions
-        pending={pending}
-        submit={workspace ? t("workspaces.form.save") : t("workspaces.form.create")}
-        onCancel={onCancel}
-      />
+        {workspace?.is_default ? (
+          <Text size="sm" tone="faint">
+            {t("workspaces.form.defaultHint")}
+          </Text>
+        ) : null}
+        {workspace && !workspace.is_default ? (
+          <CheckField
+            label={t("workspaces.form.disable")}
+            hint={t("workspaces.form.disableHint")}
+            name="disabled"
+            defaultChecked={workspace.disabled}
+          />
+        ) : null}
+        <Actions
+          pending={pending}
+          submit={workspace ? t("workspaces.form.save") : t("workspaces.form.create")}
+          onCancel={onCancel}
+        />
+      </Stack>
     </form>
   );
 }
@@ -166,14 +175,14 @@ export function BudgetDialog({
   return (
     <Dialog title={t("workspaces.budgetNamed", { name: workspace.name })} onClose={onClose}>
       {unavailable ? (
-        <p className="text-t2">{t("workspaces.budget.unavailable")}</p>
+        <Text tone="muted">{t("workspaces.budget.unavailable")}</Text>
       ) : (
         <DataState query={budget}>
           {(data) => (
-            <div className="space-y-4">
+            <Stack>
               <Usage budget={data} />
               {manage ? <BudgetForm workspace={workspace} budget={data} onDone={onClose} /> : null}
-            </div>
+            </Stack>
           )}
         </DataState>
       )}
@@ -185,7 +194,7 @@ function Usage({ budget }: { budget: Schemas["WorkspaceBudget"] }) {
   const { t } = useTranslation();
   const format = useFormat();
   if (!budget.limit) {
-    return <p className="text-t2">{t("workspaces.budget.none")}</p>;
+    return <Text tone="muted">{t("workspaces.budget.none")}</Text>;
   }
   const money = (value: Schemas["Money"] | undefined) => (value ? format.money(value) : "—");
   const lines = [
@@ -196,14 +205,16 @@ function Usage({ budget }: { budget: Schemas["WorkspaceBudget"] }) {
       : t("workspaces.budget.never"),
   ];
   return (
-    <div className="space-y-1 tabular-nums">
+    <Stack gap={4}>
       {lines.map((line) => (
-        <p key={line} className="text-t1">
+        <Text key={line} numeric>
           {line}
-        </p>
+        </Text>
       ))}
-      <p className="text-label text-t3">{t("workspaces.budget.usedHint")}</p>
-    </div>
+      <Text size="sm" tone="faint">
+        {t("workspaces.budget.usedHint")}
+      </Text>
+    </Stack>
   );
 }
 
@@ -252,7 +263,6 @@ function BudgetForm({
   return (
     <form
       noValidate
-      className="space-y-4 border-t border-b1 pt-4"
       onSubmit={(event) => {
         event.preventDefault();
         const body = readBudget(event.currentTarget, currency.unit);
@@ -262,9 +272,11 @@ function BudgetForm({
         }
       }}
     >
-      {save.error ? <FormError>{errors.message(save.error)}</FormError> : null}
-      <BudgetFields budget={budget} error={save.error} invalid={invalid} {...currency} />
-      <Actions pending={save.isPending} submit={t("workspaces.budget.save")} onCancel={onDone} />
+      <Stack rule>
+        {save.error ? <FormError>{errors.message(save.error)}</FormError> : null}
+        <BudgetFields budget={budget} error={save.error} invalid={invalid} {...currency} />
+        <Actions pending={save.isPending} submit={t("workspaces.budget.save")} onCancel={onDone} />
+      </Stack>
     </form>
   );
 }
@@ -286,7 +298,7 @@ function BudgetFields({
   const errors = useErrors();
   const waiting = unavailable ? t("keys.form.limitCurrencyFailed") : t("keys.form.limitCurrencyLoading");
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <Grid columns={2}>
       <TextField
         label={t("workspaces.budget.limit", { currency: unit ?? "" })}
         hint={unit ? t("workspaces.budget.limitHint") : waiting}
@@ -298,6 +310,6 @@ function BudgetFields({
         error={invalid ? t("workspaces.budget.limitInvalid") : errors.field(error, "limit")}
       />
       <ResetField value={budget.limit_reset} />
-    </div>
+    </Grid>
   );
 }

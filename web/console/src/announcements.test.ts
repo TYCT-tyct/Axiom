@@ -27,7 +27,7 @@ describe("site announcement entry", () => {
     expect(html).toContain(title);
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
-    expect(html).toContain("[overflow-wrap:anywhere]");
+    expect(html).toMatch(/<article class="[^"]*root[^"]*"><h2>(维护🛠)+<\/h2><p[^>]*>&lt;script&gt;/);
   });
 
   it.each([

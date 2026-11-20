@@ -1,6 +1,6 @@
 import type { Schemas } from "@axiom/api";
 import { QrCode } from "@axiom/app";
-import { Badge, Button, CopyButton, Icon, useFormat } from "@axiom/ui";
+import { Badge, Button, Cluster, CodeBlock, CopyButton, Icon, Stack, Text, TextLink, useFormat } from "@axiom/ui";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 
@@ -24,14 +24,14 @@ export function OrderStatus({
   const format = useFormat();
   return (
     <>
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <Cluster gap={12}>
         <Badge tone={tone(order.state)} icon={order.state === "paid" ? "check" : "refresh"}>
           {t(`orders.state.${order.state}`)}
         </Badge>
-        <span className="text-ui text-t2">
+        <Text as="span" tone="muted">
           {t("topup.summary", { credits: format.money(order.credits), total: format.pay(order.total) })}
-        </span>
-      </div>
+        </Text>
+      </Cluster>
       {order.state === "pending" ? (
         <PendingPayment
           order={order}
@@ -76,24 +76,32 @@ function PendingPayment({
   return (
     <>
       {order.checkout ? (
-        <p className="max-w-prose text-ui text-t2">{t("topup.waiting")}</p>
+        <Text tone="muted" prose>
+          {t("topup.waiting")}
+        </Text>
       ) : (
-        <div className="max-w-prose space-y-1">
-          <p className="text-ui text-t2">{t("topup.unconfirmed")}</p>
-          <p className="text-ui text-t3">{t("topup.unconfirmedBody")}</p>
-        </div>
+        <Stack gap={4}>
+          <Text tone="muted" prose>
+            {t("topup.unconfirmed")}
+          </Text>
+          <Text tone="faint" prose>
+            {t("topup.unconfirmedBody")}
+          </Text>
+        </Stack>
       )}
       {order.checkout ? <Checkout checkout={order.checkout} /> : null}
-      <div className="flex flex-wrap gap-2">
+      <Cluster>
         <Button variant="secondary" size="md" disabled={verifying} onClick={onVerify}>
-          <Icon name="refresh" className={verifying ? "animate-spin" : undefined} />
+          <Icon name="refresh" spin={verifying} />
           {t("topup.verify")}
         </Button>
         <Button variant="ghost" size="md" disabled={cancelling} onClick={onCancel}>
           {t("topup.cancel")}
         </Button>
-      </div>
-      <p className="text-label text-t3">{t("topup.expires", { at: format.dateTime(new Date(order.expires_at)) })}</p>
+      </Cluster>
+      <Text size="sm" tone="faint">
+        {t("topup.expires", { at: format.dateTime(new Date(order.expires_at)) })}
+      </Text>
     </>
   );
 }
@@ -103,7 +111,7 @@ function PendingPayment({
 export function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
   const { t } = useTranslation();
   return (
-    <div className="space-y-3">
+    <Stack gap={12}>
       {checkout.pay_url ? (
         <>
           <Button asChild variant="primary" size="md">
@@ -112,32 +120,34 @@ export function Checkout({ checkout }: { checkout: Schemas["Checkout"] }) {
               {t("topup.payNow")}
             </a>
           </Button>
-          <p className="text-ui text-t3">{t("topup.returnHint")}</p>
+          <Text tone="faint">{t("topup.returnHint")}</Text>
         </>
       ) : null}
       {checkout.qr_code ? (
-        <div className="space-y-2">
+        <Stack gap={8}>
           <QrCode value={checkout.qr_code} label={t("topup.qr")} />
-          <CodeBlock title={t("topup.qr")} hint={t("topup.qrHint")} code={checkout.qr_code} />
-        </div>
+          <Copyable title={t("topup.qr")} hint={t("topup.qrHint")} code={checkout.qr_code} />
+        </Stack>
       ) : null}
       {checkout.client_secret ? (
-        <CodeBlock title={t("topup.secret")} hint={t("topup.secretHint")} code={checkout.client_secret} />
+        <Copyable title={t("topup.secret")} hint={t("topup.secretHint")} code={checkout.client_secret} />
       ) : null}
-    </div>
+    </Stack>
   );
 }
 
-function CodeBlock({ title, hint, code }: { title: string; hint: string; code: string }) {
+function Copyable({ title, hint, code }: { title: string; hint: string; code: string }) {
   return (
-    <div className="space-y-2">
-      <p className="text-ui text-t2">{title}</p>
-      <div className="flex flex-wrap items-start gap-2">
-        <code className="max-w-full rounded-btn bg-s2 px-3 py-2 font-mono text-label break-all text-t1">{code}</code>
+    <Stack gap={8}>
+      <Text tone="muted">{title}</Text>
+      <Cluster>
+        <CodeBlock size="sm">{code}</CodeBlock>
         <CopyButton text={code} />
-      </div>
-      <p className="text-label text-t3">{hint}</p>
-    </div>
+      </Cluster>
+      <Text size="sm" tone="faint">
+        {hint}
+      </Text>
+    </Stack>
   );
 }
 
@@ -147,18 +157,18 @@ function OrderOutcome({ order, onRestart }: { order: Schemas["Order"]; onRestart
   return (
     <>
       {order.state === "paid" ? (
-        <p className="text-ui text-t2">
+        <Text tone="muted">
           {t("topup.paidBody", { credits: format.money(order.credits) })}{" "}
-          <Link to="/statement" className="text-accent underline-offset-4 hover:underline">
-            {t("topup.seeStatement")}
-          </Link>
-        </p>
+          <TextLink>
+            <Link to="/statement">{t("topup.seeStatement")}</Link>
+          </TextLink>
+        </Text>
       ) : null}
-      {order.state === "review" ? <p className="text-ui text-t2">{t("topup.reviewBody")}</p> : null}
+      {order.state === "review" ? <Text tone="muted">{t("topup.reviewBody")}</Text> : null}
       {order.state !== "paid" && order.state !== "review" ? (
-        <p className="text-ui text-t2">{t("topup.closedBody", { state: t(`orders.state.${order.state}`) })}</p>
+        <Text tone="muted">{t("topup.closedBody", { state: t(`orders.state.${order.state}`) })}</Text>
       ) : null}
-      <div className="flex flex-wrap gap-2">
+      <Cluster>
         <Button variant="secondary" size="md" onClick={onRestart}>
           <Icon name="plus" />
           {t("topup.new")}
@@ -166,7 +176,7 @@ function OrderOutcome({ order, onRestart }: { order: Schemas["Order"]; onRestart
         <Button asChild variant="ghost" size="md">
           <Link to="/orders">{t("topup.orders")}</Link>
         </Button>
-      </div>
+      </Cluster>
     </>
   );
 }

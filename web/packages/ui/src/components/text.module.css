@@ -51,6 +51,15 @@
   overflow-wrap: normal;
 }
 
+/* 65 characters of the 13px text the pages had before the type scale (65 x 9px). */
+.prose {
+  max-width: 585px;
+}
+
+.breaks {
+  white-space: pre-wrap;
+}
+
 .lines2 {
   display: -webkit-box;
   overflow: hidden;

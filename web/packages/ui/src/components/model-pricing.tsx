@@ -1,7 +1,11 @@
 import type { TFunction } from "i18next";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { parseMoney, useFormat } from "../format";
+import { Stack } from "./layout";
+import s from "./model-pricing.module.css";
 import { Table, Td, Th } from "./table";
+import { Text } from "./text";
 
 type PublicModelRate = {
   service_tier: string;
@@ -60,9 +64,37 @@ export function PriceHeads({ show }: { show: boolean }) {
   }
   return (
     <>
-      <Th className="hidden text-right sm:table-cell">{t("publicModels.item.input")}</Th>
-      <Th className="hidden text-right sm:table-cell">{t("publicModels.item.output")}</Th>
+      <Th align="end" from="sm">
+        {t("publicModels.item.input")}
+      </Th>
+      <Th align="end" from="sm">
+        {t("publicModels.item.output")}
+      </Th>
     </>
+  );
+}
+
+// ModelSection is a part of a model's details under a rule: a title with its note, then the tables it holds. With no
+// title the note stands alone, as a line saying why the part is empty.
+export function ModelSection({ title, note, children }: { title?: string; note?: string; children?: ReactNode }) {
+  return (
+    <div className={s.section}>
+      <div className={s.head}>
+        <Stack gap={4}>
+          {title ? (
+            <Text as="h3" medium>
+              {title}
+            </Text>
+          ) : null}
+          {note ? (
+            <Text size={title ? "sm" : "md"} tone="faint">
+              {note}
+            </Text>
+          ) : null}
+        </Stack>
+      </div>
+      {children}
+    </div>
   );
 }
 
@@ -71,12 +103,18 @@ export function PricingPrice({ pricing, item }: { pricing?: PublicModelPricing; 
   const format = useFormat();
   const rate = pricing?.rates?.find((candidate) => candidate.item === item && candidate.headline);
   if (!pricing || !rate) {
-    return <span className="text-t3">{t("publicModels.priceUnavailable")}</span>;
+    return (
+      <Text as="span" tone="faint">
+        {t("publicModels.priceUnavailable")}
+      </Text>
+    );
   }
   return (
     <>
-      <span className="whitespace-nowrap">{priceText(format, rate, pricing.currency)}</span>
-      <span className="block text-label text-t3">{perText(t, rate)}</span>
+      <Text as="span" nowrap>
+        {priceText(format, rate, pricing.currency)}
+      </Text>
+      <div className={s.per}>{perText(t, rate)}</div>
     </>
   );
 }
@@ -97,9 +135,9 @@ export function RateTable({
   return (
     <Table label={title}>
       {basis?.length ? (
-        <caption className="px-4 py-2 text-left text-label text-t3">
-          <span>{t("publicModels.tierBasis")}</span>
-          <span className="ml-1">{basis.map((item) => label(t, "item", item)).join(" + ")}</span>
+        <caption className={s.caption}>
+          <span>{t("publicModels.tierBasis")}</span>{" "}
+          <span>{basis.map((item) => label(t, "item", item)).join(" + ")}</span>
         </caption>
       ) : null}
       <thead>
@@ -107,22 +145,24 @@ export function RateTable({
           <Th>{t("publicModels.service")}</Th>
           <Th>{t("publicModels.band")}</Th>
           <Th>{t("publicModels.itemName")}</Th>
-          <Th className="text-right">{t("publicModels.price")}</Th>
+          <Th align="end">{t("publicModels.price")}</Th>
         </tr>
       </thead>
       <tbody>
         {rates.map((rate, i) => (
           <tr key={`${rate.service_tier}:${rate.above ?? "base"}:${rate.item}:${i}`}>
             <Td>{label(t, "serviceTier", rate.service_tier)}</Td>
-            <Td className="whitespace-nowrap tabular-nums">
-              {rate.above === undefined
-                ? t("publicModels.base")
-                : t("publicModels.above", { tokens: format.number(rate.above) })}
+            <Td>
+              <span className={s.num}>
+                {rate.above === undefined
+                  ? t("publicModels.base")
+                  : t("publicModels.above", { tokens: format.number(rate.above) })}
+              </span>
             </Td>
             <Td>{label(t, "item", rate.item)}</Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
+            <Td align="end">
               {priceText(format, rate, currency)}
-              <span className="block text-label text-t3">{perText(t, rate)}</span>
+              <div className={s.per}>{perText(t, rate)}</div>
             </Td>
           </tr>
         ))}
@@ -149,8 +189,8 @@ export function SearchEnginePrices({
       <thead>
         <tr>
           <Th>{t("publicModels.engine")}</Th>
-          <Th className="text-right">{t("publicModels.perSearch")}</Th>
-          <Th className="text-right">{t("publicModels.perResult")}</Th>
+          <Th align="end">{t("publicModels.perSearch")}</Th>
+          <Th align="end">{t("publicModels.perResult")}</Th>
         </tr>
       </thead>
       <tbody>
@@ -158,16 +198,14 @@ export function SearchEnginePrices({
           <tr key={engine.name}>
             <Td>
               {engine.name}
-              {engine.default ? (
-                <span className="block text-label text-t3">{t("publicModels.defaultEngine")}</span>
-              ) : null}
+              {engine.default ? <div className={s.per}>{t("publicModels.defaultEngine")}</div> : null}
             </Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
+            <Td align="end">
               {engine.price_per_search === "0"
                 ? t("publicModels.modelWebSearchRate")
                 : `${format.decimal(engine.price_per_search)} ${currency}`}
             </Td>
-            <Td className="text-right whitespace-nowrap tabular-nums">
+            <Td align="end">
               {format.decimal(engine.price_per_extra_result)} {currency}
             </Td>
           </tr>

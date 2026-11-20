@@ -3,11 +3,15 @@ import { readForm, systemPreset, useErrors } from "@axiom/app";
 import {
   Button,
   CheckField,
+  Cluster,
   FormError,
+  Grid,
   moneyInput,
   parseMoney,
   SelectField,
+  Stack,
   SubmitButton,
+  Text,
   TextAreaField,
   TextField,
 } from "@axiom/ui";
@@ -112,7 +116,7 @@ function Limit({
   const waiting = unavailable ? t("keys.form.limitCurrencyFailed") : t("keys.form.limitCurrencyLoading");
   const usual = apiKey ? t("keys.form.limitHintEdit") : t("keys.form.limitHintCreate");
   return (
-    <div className="grid gap-4 sm:grid-cols-2">
+    <Grid columns={2}>
       <TextField
         label={t("keys.form.limit", { currency: unit ?? "" })}
         hint={unit ? usual : waiting}
@@ -124,7 +128,7 @@ function Limit({
         error={invalid === "limit" ? t("keys.form.limitInvalid") : errors.field(error, "spend_limit")}
       />
       <ResetField value={apiKey?.limit_reset} />
-    </div>
+    </Grid>
   );
 }
 
@@ -143,7 +147,9 @@ function Restrictions({ apiKey, error }: Section) {
         error={errors.field(error, "models")}
       />
       {apiKey?.retired_models?.length ? (
-        <p className="text-label text-warn">{t("keys.retiredModels", { models: apiKey.retired_models.join(", ") })}</p>
+        <Text size="sm" tone="warn">
+          {t("keys.retiredModels", { models: apiKey.retired_models.join(", ") })}
+        </Text>
       ) : null}
       <TextAreaField
         label={t("keys.form.ips")}
@@ -179,7 +185,11 @@ function PresetField({ apiKey, error, scope }: Section & { scope: string | undef
     return null;
   }
   if (!presets.data) {
-    return presets.isError ? <p className="text-label text-t3">{t("routingPresets.key.unavailable")}</p> : null;
+    return presets.isError ? (
+      <Text size="sm" tone="faint">
+        {t("routingPresets.key.unavailable")}
+      </Text>
+    ) : null;
   }
   const list = presets.data.data;
   const named = (id: string | undefined) => list.find((preset) => preset.id === id)?.name;
@@ -287,7 +297,6 @@ export function KeyForm({
   return (
     <form
       noValidate
-      className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault();
         const values = readValues(event.currentTarget, currency.unit);
@@ -297,41 +306,43 @@ export function KeyForm({
         }
       }}
     >
-      {error ? <FormError>{errors.message(error)}</FormError> : null}
-      <TextField
-        label={t("keys.form.name")}
-        name="name"
-        maxLength={100}
-        defaultValue={apiKey?.name}
-        autoComplete="off"
-        error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
-      />
-      {apiKey ? null : <WorkspaceField choice={choice} />}
-      <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
-      <PresetField key={presetScope} apiKey={apiKey} error={error} scope={presetScope} />
-      <Restrictions apiKey={apiKey} error={error} />
-      {apiKey ? (
-        <CheckField
-          label={t("keys.form.disable")}
-          hint={t("keys.form.disableHint")}
-          name="disabled"
-          defaultChecked={apiKey.disabled}
-        />
-      ) : (
+      <Stack>
+        {error ? <FormError>{errors.message(error)}</FormError> : null}
         <TextField
-          label={t("keys.form.expires")}
-          hint={t("keys.form.expiresHint")}
-          name="expires_at"
-          type="datetime-local"
-          error={errors.field(error, "expires_at")}
+          label={t("keys.form.name")}
+          name="name"
+          maxLength={100}
+          defaultValue={apiKey?.name}
+          autoComplete="off"
+          error={invalid === "name" ? t("keys.form.nameMissing") : errors.field(error, "name")}
         />
-      )}
-      <div className="flex justify-end gap-2 pt-2">
-        <Button size="md" onClick={onCancel}>
-          {t("cancel", { ns: "common" })}
-        </Button>
-        <SubmitButton pending={pending}>{apiKey ? t("keys.form.save") : t("keys.form.create")}</SubmitButton>
-      </div>
+        {apiKey ? null : <WorkspaceField choice={choice} />}
+        <Limit apiKey={apiKey} error={error} invalid={invalid} {...currency} />
+        <PresetField key={presetScope} apiKey={apiKey} error={error} scope={presetScope} />
+        <Restrictions apiKey={apiKey} error={error} />
+        {apiKey ? (
+          <CheckField
+            label={t("keys.form.disable")}
+            hint={t("keys.form.disableHint")}
+            name="disabled"
+            defaultChecked={apiKey.disabled}
+          />
+        ) : (
+          <TextField
+            label={t("keys.form.expires")}
+            hint={t("keys.form.expiresHint")}
+            name="expires_at"
+            type="datetime-local"
+            error={errors.field(error, "expires_at")}
+          />
+        )}
+        <Cluster justify="end">
+          <Button size="md" onClick={onCancel}>
+            {t("cancel", { ns: "common" })}
+          </Button>
+          <SubmitButton pending={pending}>{apiKey ? t("keys.form.save") : t("keys.form.create")}</SubmitButton>
+        </Cluster>
+      </Stack>
     </form>
   );
 }

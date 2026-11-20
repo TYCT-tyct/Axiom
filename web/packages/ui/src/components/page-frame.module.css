@@ -1,0 +1,28 @@
+/* The page's own column and padding at each width, until the shell gives them: the board's page padding is 14px 16px on
+   a phone and 30px 40px from 640px. The console's overview is drawn by a board slice whose rules scope themselves with
+   its frame's classes, which the frame composes from the board's global sheet. */
+.page {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 14px 16px;
+}
+
+.column {
+  max-width: 1180px;
+  margin: 0 auto;
+}
+
+.board {
+  composes: board ax ov from global;
+  container: ov / inline-size;
+}
+
+.inner {
+  composes: v8 pg-ov from global;
+}
+
+@media (min-width: 640px) {
+  .page {
+    padding: 30px 40px;
+  }
+}

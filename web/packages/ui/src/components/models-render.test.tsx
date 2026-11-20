@@ -104,8 +104,8 @@ it("shows the headline rate and display amount the server names", () => {
     ],
   };
   const html = render([{ ...model, pricing: named, endpoints: [] }]);
-  expect(html).toMatch(/\$7\.00<\/span><span[^>]*>per 1M tokens/);
-  expect(html).not.toMatch(/\$3\.00<\/span><span[^>]*>per 1M tokens/);
+  expect(html).toMatch(/\$7\.00<\/span><div[^>]*>per 1M tokens/);
+  expect(html).not.toMatch(/\$3\.00<\/span><div[^>]*>per 1M tokens/);
 });
 
 // An older node names no headline and no display amount: the list says the price is unavailable rather than choosing

@@ -19,8 +19,5 @@
     }
   },
   "assist": { "actions": { "source": { "organizeImports": "on" } } },
-  "markdown": { "formatter": { "enabled": false } },
-  "css": {
-    "parser": { "tailwindDirectives": true }
-  }
+  "markdown": { "formatter": { "enabled": false } }
 }

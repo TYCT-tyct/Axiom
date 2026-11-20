@@ -112,21 +112,24 @@ function ModelResults({ query, onRetry, onReset }: { query: Query; onRetry: () =
           query={{ ...query, refetch: onRetry }}
           isEmpty={(data) => data.data.length === 0}
           empty={
-            <EmptyState title={t("publicModels.emptyTitle")}>
+            <EmptyState
+              title={t("publicModels.emptyTitle")}
+              action={
+                <Button type="button" onClick={onReset}>
+                  {t("publicModels.reset")}
+                </Button>
+              }
+            >
               {t("publicModels.emptyBody")}
-              <button type="button" className="text-accent underline-offset-4 hover:underline" onClick={onReset}>
-                {t("publicModels.reset")}
-              </button>
             </EmptyState>
           }
         >
           {(data) => (
-            <>
-              <p className="border-b border-b1 px-4 py-2 text-ui text-t3">
-                {t("publicModels.count", { count: data.data.length })}
-              </p>
-              <ModelCatalog models={data.data} note={t("publicModels.note")} />
-            </>
+            <ModelCatalog
+              models={data.data}
+              count={t("publicModels.count", { count: data.data.length })}
+              note={t("publicModels.note")}
+            />
           )}
         </DataState>
       )}

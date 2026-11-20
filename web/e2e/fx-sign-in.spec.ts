@@ -240,7 +240,7 @@ test("the stage takes the site's brand colour when the site's settings come afte
   await expect.poll(() => ringPixels(page, "#10738c")).toBeGreaterThan(0);
   release();
   // drawn again at once in the console's accent as the brand makes it, though nothing moves under reduced motion
-  await expect.poll(() => ringPixels(page, "var(--accent)")).toBeGreaterThan(0);
+  await expect.poll(() => ringPixels(page, "var(--accentT)")).toBeGreaterThan(0);
   expect(await ringPixels(page, "#10738c")).toBe(0);
 });
 
