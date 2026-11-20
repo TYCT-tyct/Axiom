@@ -7,7 +7,7 @@ import type { Region } from "../regions.ts";
 // on are the board's stand-ins (its screens below share the first screen's sea) and are left out.
 // What the screens' scripts and the engines set at run time, whose rules the regions keep: the current row, the lit
 // deepseek rows, the glass the whale passes behind, the tablet layout the frame marks.
-export const runTime = ["on", "hl", "hot", "lit", "wh-lit", "wh-under", "data-tab", "data-state"];
+export const runTime = ["on", "hl", "hot", "lit", "wh-lit", "cw-lit", "wh-under", "data-tab", "data-state"];
 const range = (n: number) => Array.from({ length: n }, (_, i) => i);
 
 // The states the scripts write into each class hole, so the region keeps the rules that select them.

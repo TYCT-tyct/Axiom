@@ -4,12 +4,13 @@ import wideZh from "@axiom/boards/Site/regions/Bed.zh";
 import Narrow from "@axiom/boards/SitePhone/regions/Bed";
 import narrowEn from "@axiom/boards/SitePhone/regions/Bed.en";
 import narrowZh from "@axiom/boards/SitePhone/regions/Bed.zh";
-import { useEffect } from "react";
+import { useContext, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useApiAddress } from "./api-address";
 import styles from "./bed-screen.module.css";
 import { start } from "./bed-script";
 import { Brand } from "./brand";
+import { FloorContext } from "./clawd";
 import { joinHref, links, pricesHref } from "./links";
 import { usePrices } from "./public-models";
 import { useScheme } from "./scheme";
@@ -47,6 +48,13 @@ export function BedScreen({ wide }: { wide: boolean }) {
     return () => cancelAnimationFrame(frame);
   }, [script, scheme, brand?.brand_color]);
   useEffect(() => script?.rename(name), [script, name]);
+  // Clawd lives behind the dune's letters
+  const floor = useContext(FloorContext);
+  useEffect(() => {
+    if (!script) return;
+    floor(script.art());
+    return () => floor(null);
+  }, [script, floor]);
   // a site that takes nobody new, or has not said yet, is entered by signing in
   const way = join === "open" || join === "invite" ? join : "signIn";
   const on = (yes: boolean) => (yes ? "on" : "");

@@ -146,6 +146,7 @@
 }
 :global(.under .mono):where(.scope){font-family:'Axiom Mono','Axiom CJK',monospace}
 :global(.hfm2 .mx .mn):where(.scope){transition:color 400ms ease-out}
+:global(.hfm2 .mx .mn.cw-lit):where(.scope){color:#d97757}
 :global(.hfm2 .mx .mn):where(.scope){transition:color 250ms ease-out}
 :global(.hfm2 .mx .mr.lit .mn):where(.scope),:global(.hfm2 .mx .mn.lit):where(.scope){color:var(--accent)}
 :global(.tr .lens):where(.scope)::before{transition:background-color 600ms ease-out,backdrop-filter 600ms ease-out,-webkit-backdrop-filter 600ms ease-out}

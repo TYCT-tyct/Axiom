@@ -163,5 +163,7 @@
 :global(.site.m .tour):where(.scope){left:12px;bottom:12px}
 :global(.tr > canvas.wh:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
 :global(.tr[data-enter=wait] > canvas.wh:not(.under *)):where(.scope){visibility:hidden}
+:global(.tr > canvas.cw:not(.under *)):where(.scope){position:absolute;inset:0;z-index:0;width:100%;height:100%;display:block;pointer-events:none}
+:global(.tr[data-enter=wait] > canvas.cw:not(.under *)):where(.scope){visibility:hidden}
 :global(.tr:focus):where(.scope){outline:none}
 /* jscpd:ignore-end */
