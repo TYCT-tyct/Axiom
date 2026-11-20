@@ -387,8 +387,22 @@ function staticWidgetRegions(board: string): Region[] {
       roots: [".p-sec .qcard.rows > .qrow:nth-child(2) .qseg"],
       repeats: { items: ".qseg > button" },
       elements: {
-        ".qseg": { set: { style: "{{segStyle}}", "aria-label": "{{ariaLabel}}", onclick: "{{onClick}}" } },
+        ".qseg": {
+          set: {
+            style: "{{segStyle}}",
+            "aria-label": "{{ariaLabel}}",
+            "data-rows": "{{rows}}",
+            onclick: "{{onClick}}",
+          },
+        },
         ".qseg > button": { set: { class: "on" } },
+      },
+      // More options than a phone's width holds in one row (the calls page's six time ranges) go in two rows of equal
+      // columns: --n is then the columns, --i the column and --r the row of the option the thumb sits under.
+      css: {
+        '.ov .qseg[data-rows="2"]': "display:grid;grid-auto-flow:row;grid-template-columns:repeat(var(--n),1fr)",
+        '.ov .qseg[data-rows="2"] > i':
+          "bottom:auto;height:calc((100% - 4px) / 2);transform:translate(calc(var(--i) * 100%),calc(var(--r) * 100%))",
       },
       english,
     },

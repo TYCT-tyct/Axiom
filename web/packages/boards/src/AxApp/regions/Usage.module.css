@@ -449,4 +449,5 @@
 :global(.ov .tmv table :is(th,td):last-child):where(.scope){padding-right:24px}
 :global(.ov .tmv table td:nth-child(4):not([colspan])):where(.scope){padding-right:24px}
 :global(.ov .tmv table th:nth-child(4)):where(.scope){padding-right:24px}}
+:global(.ov .usc > .qch):where(.scope){flex-wrap:wrap;row-gap:10px}
 /* jscpd:ignore-end */

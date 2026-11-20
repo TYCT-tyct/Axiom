@@ -351,6 +351,11 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "console overview",
+    basis: "G1: the daily bars are the account's spend by model, not the board's demo month",
+    ...both(".qch2 svg rect"),
+  },
+  {
+    scene: "console overview",
     basis: "G1: the request count, average and model shares are the account's, not the board's demo figures",
     ...both(".qkpis .qkpi:nth-child(2) > b, .qkpis .qkpi:nth-child(2) > em, .qkpis .qkpi:first-child > b, .ovms"),
   },
