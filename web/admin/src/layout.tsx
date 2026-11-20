@@ -8,7 +8,7 @@ import Phone from "@axiom/boards/AxAppPhone/regions/AdminShell";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/AdminShell.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/AdminShell.zh";
 import PhoneTab from "@axiom/boards/AxAppPhone/regions/AdminTab";
-import { BoardMark, BoardShell, useKeptPage, usePreferences } from "@axiom/ui";
+import { BoardMark, BoardShell, NavGroup, Stack, useKeptPage, usePreferences } from "@axiom/ui";
 import { Link, Outlet, useLocation, useMatchRoute } from "@tanstack/react-router";
 import {
   type AnchorHTMLAttributes,
@@ -230,19 +230,38 @@ function PhoneTabs({ tabs, more, menus }: { tabs: Page[]; more: Page[]; menus: R
   );
 }
 
-function NavigationGroups({ pages, phone = false }: { pages: Page[]; phone?: boolean }) {
+// The sidebar scrolls independently from the page. Keep its current link in view when lists reach past the fold.
+function revealCurrentNav() {
+  const link = document.querySelector('[data-shell="app"] nav [aria-current="page"]');
+  const scroller = link?.closest("nav")?.parentElement;
+  if (!link || !scroller) return;
+  const entry = link.getBoundingClientRect();
+  const pane = scroller.getBoundingClientRect();
+  if (entry.top < pane.top) scroller.scrollTop += entry.top - pane.top;
+  else if (entry.bottom > pane.bottom) scroller.scrollTop += entry.bottom - pane.bottom;
+}
+
+function NavigationGroups({
+  pages,
+  phone = false,
+  showLabel = true,
+}: {
+  pages: Page[];
+  phone?: boolean;
+  showLabel?: boolean;
+}) {
   const { t } = useTranslation();
   const Item = phone ? PhoneMore : WideNav;
+  const current = pages.find((p) => p.current)?.to;
+  useEffect(() => {
+    if (!phone && showLabel && current) revealCurrentNav();
+  }, [phone, showLabel, current]);
   return sections.map((section) => {
     const links = pages.filter((p) => p.section === section);
     if (!links.length) return null;
     const label = t(`navSections.${section}`);
     return (
-      // biome-ignore lint/a11y/useSemanticElements: A navigation group has links and no form controls.
-      <div key={section} className="admin-nav-section" role="group" aria-label={label}>
-        <div className="admin-nav-label" aria-hidden="true">
-          {label}
-        </div>
+      <NavGroup key={section} label={label} showLabel={showLabel} tiles={phone}>
         {links.map((p) => (
           <Item
             key={p.to}
@@ -252,7 +271,7 @@ function NavigationGroups({ pages, phone = false }: { pages: Page[]; phone?: boo
             label={p.label}
           />
         ))}
-      </div>
+      </NavGroup>
     );
   });
 }
@@ -307,7 +326,11 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           text={text}
           link={RouterLink}
           mark={mark}
-          nav={<NavigationGroups pages={pages} />}
+          nav={
+            <Stack gap={4}>
+              <NavigationGroups pages={pages} showLabel={values.sidebarOpen} />
+            </Stack>
+          }
         >
           {slot}
         </Wide>
