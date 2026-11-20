@@ -48,7 +48,7 @@ for (const suite of suites) {
       for (const scheme of ["light", "dark"] as const) {
         for (const language of ["zh", "en"] as const) {
           test(`${name} ${width} ${scheme} ${language}`, async ({ page }) => {
-            await page.emulateMedia({ colorScheme: scheme, });
+            await page.emulateMedia({ colorScheme: scheme });
             await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
             await suite.prepare(page, scene, "usual");
             await page.setViewportSize({ width, height: 900 });
@@ -62,7 +62,7 @@ for (const suite of suites) {
     // The same screen with the worst realistic data: the longest names the contract allows, the biggest amounts, a debt.
     for (const width of [360, 1280] as const) {
       test(`worst ${name} ${width}`, async ({ page }) => {
-        await page.emulateMedia({ colorScheme: "dark", });
+        await page.emulateMedia({ colorScheme: "dark" });
         await suite.prepare(page, scene, "worst");
         await page.setViewportSize({ width, height: 900 });
         await scene.open(page);
@@ -80,7 +80,7 @@ for (const suite of suites) {
     for (const scheme of ["light", "dark"] as const) {
       for (const scene of suite.scenes.filter((s) => suite.brands.includes(s.name))) {
         test(`brand ${brand} ${suite.app}-${scene.name} ${scheme}`, async ({ page }) => {
-          await page.emulateMedia({ colorScheme: scheme, });
+          await page.emulateMedia({ colorScheme: scheme });
           await suite.prepare(page, scene);
           await page.setViewportSize({ width: 1280, height: 800 });
           await scene.open(page);

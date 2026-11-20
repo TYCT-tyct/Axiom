@@ -22,8 +22,7 @@ let pending = 0;
 let last = 0;
 let frames = 0;
 
-const running = () =>
-  !document.hidden && [...owners].some((owner) => seen.get(owner.element) === true);
+const running = () => !document.hidden && [...owners].some((owner) => seen.get(owner.element) === true);
 
 function tick(now: number) {
   pending = 0;
