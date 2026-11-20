@@ -16,7 +16,7 @@ body{margin:0}
 .eg .cw{position:absolute;inset:0;width:100%;height:100%;display:block;pointer-events:none;z-index:1;font-family:'Geist Mono',ui-monospace,Menlo,monospace}
 .eg .mono{font-family:'Axiom Mono','Axiom CJK',ui-monospace,monospace;font-weight:400}
 .eg .lens{position:relative;z-index:0;--li:-16px -32px;--lf:24px;--lv:var(--veil)}
-.eg .lens::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);background:var(--lv);-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);mask-composite:intersect}
+.eg .lens::before{content:'';position:absolute;inset:var(--li);z-index:-1;pointer-events:none;backdrop-filter:blur(8px);background:var(--lv);-webkit-mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);-webkit-mask-composite:source-in;mask-image:linear-gradient(to right,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent),linear-gradient(to bottom,transparent,#000 var(--lf),#000 calc(100% - var(--lf)),transparent);mask-composite:intersect}
 .eg .sec{position:absolute;inset:0;z-index:2;display:flex;flex-direction:column}
 .eg h2{margin:0;color:var(--text1)}
 .eg .lede{margin:0;font-size:16px;line-height:26px;color:var(--text2)}
