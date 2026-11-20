@@ -5,7 +5,7 @@ import { adminUrl, apps } from "./apps.ts";
 import { type BoardScene, openBoard } from "./design/board.ts";
 import { type Comparison, compare, shot } from "./design/compare.ts";
 import { fontsLoaded, pageFonts } from "./design/fonts.ts";
-import { rulings } from "./design/rulings.ts";
+import { type Ruling, rulings } from "./design/rulings.ts";
 import { type Stage, settle, stage } from "./design/stage.ts";
 import { type DesignScene, demoTime, designScenes } from "./design-map.ts";
 
@@ -63,11 +63,21 @@ async function readyPage(page: Page, design: DesignScene, staged: Stage, languag
   await page.emulateMedia({ colorScheme: staged.colorScheme });
   if (language) await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
   await stage(page, staged);
-  await design.suite.prepare(page, scene);
+  const state = await design.suite.prepare(page, scene);
+  design.account?.(state);
   await scene.open(page);
   await page.waitForLoadState("networkidle");
   await fontsLoaded(page, [design.fonts].flat().flatMap(pageFonts));
   await settle(page, staged.time);
+}
+
+// What the page leaves out and closes up after is taken out of the board's layout too, so what follows lines up; the
+// ruling still names the region (rulings.ts, omitted).
+async function omit(board: Page, used: Ruling[]) {
+  const selectors = used.flatMap((ruling) =>
+    ruling.omitted && ruling.board && "selector" in ruling.board ? [ruling.board.selector] : [],
+  );
+  if (selectors.length) await board.addStyleTag({ content: `${selectors.join(",")}{display:none !important}` });
 }
 
 // record adds a comparison to summary.json. The tests of this file run one after another in one worker, and a failed
@@ -113,8 +123,9 @@ for (const design of designScenes) {
           );
           try {
             await readyPage(page, design, staged, language);
-            await design.prepareComparison?.(opened.page, page, language ?? "zh");
             const used = rulings.filter((ruling) => ruling.scene === (design.rulingsOf ?? design.name));
+            await omit(opened.page, used);
+            await design.prepareComparison?.(opened.page, page, language ?? "zh");
             const comparison = await compare(opened.page, page, used, key, info);
             record(key, { ...comparison, blocked: opened.blocked });
             expect(comparison.error, `see ${comparison.diff ?? comparison.page}`).toBeUndefined();

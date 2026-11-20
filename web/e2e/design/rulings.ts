@@ -10,7 +10,9 @@ type Region = { selector: string } | { canvas: string } | { x: number; y: number
 // glyphs: the ruling excuses only what is drawn inside its boxes, not where they are. Each side's boxes are blanked on
 // both shots, so a box that moved would be blanked at both places and pass; with glyphs the page's boxes must also sit
 // where the board's do, one for one.
-export type Ruling = { scene: string; basis: string; board?: Region; page?: Region; glyphs?: true };
+// omitted: the page leaves the board's region out and what follows closes up, so the comparison takes the region out of
+// the board's layout too (design.spec.ts) and compares what follows where the page puts it. Only for a board selector.
+export type Ruling = { scene: string; basis: string; board?: Region; page?: Region; glyphs?: true; omitted?: true };
 
 const spaceSwitch = ".gbar .qbc > .pw:first-child, .gbar > .qbcp";
 
@@ -203,16 +205,30 @@ export const rulings: Ruling[] = [
     scene: "console bill",
     basis: "#816 O23: run-out forecast has no basis on the backend",
     board: { selector: ".p-bill > .sxP > .qcard.hero .qhl > p, .p-bill > .sxP > .qcard.hero .qrun" },
+    omitted: true,
   },
   {
     scene: "console bill",
     basis: "#816 O19, O20: auto top-up and invoices & bank transfer are not built",
     board: { selector: ".p-bill > .sxP > .qcard.rows" },
+    omitted: true,
   },
   {
     scene: "console bill",
     basis: "L15: the account balance and batch rows replace the board's demo figures and statement rows",
     ...both(".p-bill .qcard.hero .qhl > b.qbig.xl, .p-bill .qcard.flush .qtbl tbody td"),
+  },
+  {
+    scene: "console bill",
+    basis:
+      "docs/frontend.md「页面清单」钱: the balance tab lists the account's credit batches where the board lists the statement, which has its own tab",
+    ...both(".p-bill .qcard.flush .qch h2, .p-bill .qcard.flush .qtbl thead"),
+  },
+  {
+    scene: "console bill",
+    basis:
+      "docs/frontend.md「页面清单」钱: the figure is the available balance (less reserved and frozen), and is named so",
+    ...both(".p-bill .qcard.hero .qhl > span"),
   },
   {
     scene: "console bill",
@@ -230,6 +246,7 @@ export const rulings: Ruling[] = [
     scene: "console usage",
     basis: "#816 O23: month-end forecast and budget have no basis",
     board: { selector: ".usfc" },
+    omitted: true,
   },
   {
     scene: "console usage",
@@ -243,9 +260,10 @@ export const rulings: Ruling[] = [
   },
   {
     scene: "console usage",
-    basis: "G1: live API comparison text, KPI values, series bars, table rows and movers replace board demo numbers",
+    basis:
+      "G1: live API comparison text, KPI values, series bars, table rows and movers replace board demo numbers; the table's columns are as wide as its rows make them",
     ...both(
-      ".uscmp, .usm b, .usm em, .usch svg rect, .usch .usgl, .usch .usyl > span, .usch .usxl > span, .ust tbody, .ust tfoot, .ustk .usbar, .ustk .usrw > span:nth-of-type(2), .ustk .usrw em, .ustk p, .usd .usrw",
+      ".uscmp, .usm b, .usm em, .usch svg rect, .usch .usgl, .usch .usyl > span, .usch .usxl > span, .ust thead, .ust tbody, .ust tfoot, .ustk .usbar, .ustk .usrw > span:nth-of-type(2), .ustk .usrw em, .ustk p, .usd .usrw",
     ),
   },
   { scene: "console calls", basis: "#816: no live mode on calls", board: { selector: ".p-logs .lglive" } },
@@ -312,16 +330,34 @@ export const rulings: Ruling[] = [
     scene: "console overview",
     basis: "#816 O23: the live state bar needs hourly counts and attempts the API does not aggregate",
     board: { selector: ".qlivec" },
+    omitted: true,
   },
   {
     scene: "console overview",
     basis: "#816 O23: the year heatmap needs more than 31 days, which the API does not aggregate",
     board: { selector: ".qyr" },
+    omitted: true,
   },
   {
     scene: "console overview",
     basis: "#816 O23: month-end and run-out forecasts have no basis",
-    board: { selector: ".qleg, .qch2 .fut" },
+    board: { selector: ".qch2 .fut" },
+  },
+  {
+    scene: "console overview",
+    basis: "#816 O23: the chart's legend names the month-end forecast, which has no basis",
+    board: { selector: ".qleg" },
+    omitted: true,
+  },
+  {
+    scene: "console overview",
+    basis: "G1: the request count, average and model shares are the account's, not the board's demo figures",
+    ...both(".qkpis .qkpi:nth-child(2) > b, .qkpis .qkpi:nth-child(2) > em, .qkpis .qkpi:first-child > b, .ovms"),
+  },
+  {
+    scene: "console overview",
+    basis: "docs/frontend.md「页面清单」概览: the recent list is the account's last five errors, not its last requests",
+    ...both(".qg2b .qch h2, .qg2b .qrq:not(.qrqh)"),
   },
   {
     scene: "console overview",
@@ -389,8 +425,13 @@ export const rulings: Ruling[] = [
   {
     scene: "site home",
     basis: "文档页尚无，#816",
-    board: { selector: ".bar .nav.mid, .hs > .main .cta" },
-    page: { selector: ".bar .nav.mid, .hs > main .cta" },
+    ...both(".bar .nav.mid"),
+  },
+  {
+    scene: "site home",
+    basis: "文档页尚无，#816",
+    board: { selector: ".hs > .main .cta .btn.outline" },
+    omitted: true,
   },
   // The connect screen (S2c): the docs link is not there (#816), the address in each tool's configuration is the site's,
   // and the machine is drawn by the page from its own SVG and moves on its own (fx.spec.ts).
@@ -398,6 +439,7 @@ export const rulings: Ruling[] = [
     scene: "site connect",
     basis: "文档页尚无，#816",
     board: { selector: ".hfm1 .intro .more" },
+    omitted: true,
   },
   {
     scene: "site connect",
@@ -421,17 +463,20 @@ export const rulings: Ruling[] = [
     scene: "site faq",
     basis: "#816: no docs page, and the product has no tickets",
     board: { selector: ".hfm5 .hd .links" },
+    omitted: true,
   },
   {
     scene: "site faq",
     basis: "docs/frontend.md「不做」: invoices, contracts and bank transfer are not in the product",
     board: { selector: ".hfm5 .qs > .q:nth-child(10), .hfm5 .qs > .fq:nth-child(9)" },
+    omitted: true,
   },
   {
     scene: "site faq",
     basis:
       "docs/product.md「售卖形式」: the site shows no source labels, has no official-only switch and no price-change time",
     board: { selector: ".hfm5 .w1 .rt .tag, .hfm5 .w1 .rth > span:nth-child(2), .hfm5 .w1 .wf, .hfm5 .w5 .wf" },
+    omitted: true,
   },
   {
     scene: "site faq",
@@ -449,11 +494,13 @@ export const rulings: Ruling[] = [
     scene: "site bed",
     basis: "#816: no docs page",
     board: { selector: ".hfm6 .cta .btn.outline" },
+    omitted: true,
   },
   {
     scene: "site bed",
     basis: "#816: no docs, API reference, changelog, status, tickets, contact, terms or privacy pages",
     board: { selector: ".hfm6 .fcols nav.fc:nth-of-type(n + 2), .hfm6 .fc > a:nth-of-type(3)" },
+    omitted: true,
   },
   {
     scene: "site bed",
