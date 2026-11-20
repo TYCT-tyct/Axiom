@@ -56,7 +56,18 @@ function useMonthWindow() {
   return { period, advance };
 }
 
-
+// useLocalMidnight renders the page again at each local midnight, so a time shown as today's becomes its date when the
+// day ends while the page stays open. Nothing is fetched: the rows are the same, only the day they are read against
+// moves. The timer re-arms from the moment it fired, so one that fires early waits out the rest of the day.
+function useLocalMidnight() {
+  const [tick, setTick] = useState(() => new Date());
+  useEffect(() => {
+    const midnight = new Date(tick);
+    midnight.setHours(24, 0, 0, 0);
+    const timer = setTimeout(() => setTick(new Date()), midnight.getTime() - Date.now());
+    return () => clearTimeout(timer);
+  }, [tick]);
+}
 
 type DesktopProps = Parameters<typeof DesktopOverview>[0];
 type ModelRow = DesktopProps["rows"]["models0"][number];
@@ -430,6 +441,7 @@ function aggregateFailure(
 export function useBoardData(t: TFunction) {
   const format = useFormat();
   const { period, advance } = useMonthWindow();
+  useLocalMidnight();
   const windows = statisticsWindows(period);
   const keys = useInfiniteQuery(keysQuery());
   const errors = useQuery(recentErrorsQuery);

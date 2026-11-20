@@ -379,6 +379,24 @@ test.describe("overview", () => {
       .evaluateAll((rects) => new Set(rects.map((rect) => (rect as SVGElement).style.fill)).size);
     expect(fills).toBeGreaterThan(1);
   });
+
+  test("an error's time turns into its date at local midnight, with nothing fetched again", async ({ page }) => {
+    const state = await mockConsole(page);
+    const failed = state.calls.find((call) => call.error_kind);
+    if (!failed) throw new Error("the usual account has no failed call");
+    state.calls = [{ ...failed, at: "2026-10-24T15:50:00Z" }];
+    signedInAs(state);
+    await page.clock.install({ time: new Date("2026-10-24T23:58:00+08:00") });
+    await page.goto("/console/");
+    const row = main(page).locator(".qrq:not(.qrqh)").first();
+    await expect(row).toContainText("23:50");
+    const requests: string[] = [];
+    page.on("request", (request) => requests.push(request.url()));
+    await page.clock.runFor(3 * 60_000);
+    await expect(row).toContainText("10/24");
+    await expect(row).not.toContainText("23:50");
+    expect(requests.filter((url) => url.includes("/api/"))).toEqual([]);
+  });
 });
 
 test("the site's brand colour is applied to the page", async ({ page }) => {
