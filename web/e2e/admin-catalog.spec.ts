@@ -309,6 +309,27 @@ test.describe("pricing", () => {
   });
 });
 
+test("the preview's lists are asked for with the page's, not after the lists above answer", async ({ page }) => {
+  signedInAs(await mockAdmin(page), "mfa");
+  let release = () => {};
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  await page.route("**/api/admin/v1/pricing/publications", async (route) => {
+    await held;
+    await route.fallback();
+  });
+  const asked = Promise.all([
+    page.waitForRequest((request) => /\/api\/admin\/v1\/models\?.*status=listed/.test(request.url())),
+    page.waitForRequest((request) => new URL(request.url()).pathname === "/api/admin/v1/tiers"),
+  ]);
+  await page.goto("/pricing");
+  await asked;
+  await expect(page.getByLabel(words("pricing.preview.account"))).toHaveCount(0);
+  release();
+  await expect(page.getByLabel(words("pricing.preview.account"))).toBeVisible();
+});
+
 test("a retry of the rules above keeps what the preview below holds", async ({ page }) => {
   signedInAs(await mockAdmin(page), "mfa");
   let down = true;
