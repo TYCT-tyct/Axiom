@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
 
+import { exported, names, routeLiterals } from "./routes.ts";
+import { faceTexts, readManifest } from "./text.ts";
+
 // faceTexts traces a whole app's imports and messages: seconds of work that grow with the code, not a wait on anything.
 // A shared CI machine under load took longer than vitest's 5 s default for each of these (train 44817932330-1).
 const tracing = { timeout: 60_000 };
-import { exported, names, routeLiterals } from "./routes.ts";
-import { faceTexts, readManifest } from "./text.ts";
 
 describe("names", () => {
   it.each([
