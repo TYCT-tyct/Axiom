@@ -9,7 +9,7 @@ import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
 import { Publications } from "../pricing/publications";
 import { RuleDialog } from "../pricing/rule-dialog";
-import { rulesQuery } from "../queries";
+import { publicationsQuery, rulesQuery } from "../queries";
 
 type Rule = AdminSchemas["PricingRule"];
 
@@ -19,6 +19,7 @@ const newRule = "new";
 export default function Pricing() {
   const { t } = useTranslation();
   const rules = useQuery(rulesQuery);
+  const publications = useQuery(publicationsQuery);
   const manage = can(useSession(), "pricing.manage");
   const [editing, setEditing] = useState<string | null>(null);
   const current = rules.data?.data.find((rule) => rule.id === editing);
@@ -42,8 +43,10 @@ export default function Pricing() {
             {(data) => <RulesTable rules={data.data} onEdit={manage ? (rule) => setEditing(rule.id) : undefined} />}
           </DataState>
         </Card>
-        <Publications />
-        <PreviewPanel />
+        {/* Each section appears once the one above it has its answer: one that grew when its answer came pushed the
+            sections below it down the screen (#747). Both lists are asked for at once. */}
+        {rules.isPending ? null : <Publications />}
+        {rules.isPending || publications.isPending ? null : <PreviewPanel />}
       </PageBody>
       {editing ? <RuleDialog rule={current} onClose={() => setEditing(null)} /> : null}
     </>
