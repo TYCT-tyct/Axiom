@@ -18,16 +18,13 @@
   box-shadow: var(--shPop);
   color: var(--t1);
   transform-origin: top left;
+  animation: enter var(--dur) var(--ease);
 }
 
 .end {
   right: 0;
   left: auto;
   transform-origin: top right;
-}
-
-.panel {
-  animation: enter var(--dur) var(--ease);
 }
 
 @keyframes enter {
