@@ -22,10 +22,26 @@ import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { SiteLoginLimits } from "../login-limits";
 import { MailSettings } from "../mail-settings";
 import { modelPricesChangeUnconfirmed } from "../model-prices";
-import { Facts, PageBody, State } from "../parts";
+import { Facts, PageBody, State, useShownAfter } from "../parts";
 import { PaymentsSettings } from "../payments-settings";
 import { ProbeSettings } from "../probe-settings";
-import { accountQuery, siteKeyLimitsQuery, siteSettingsQuery } from "../queries";
+import {
+  accountQuery,
+  fileParserSettingsQuery,
+  mailSettingsQuery,
+  probeSettingsQuery,
+  searchSettingsQuery,
+  segmentSettingsQuery,
+  siteBrandQuery,
+  siteKeyLimitsQuery,
+  siteLoginLimitsQuery,
+  siteLogoQuery,
+  siteRegistrationQuery,
+  siteSettingsQuery,
+  siteSignInQuery,
+  siteWorkspaceLimitQuery,
+  systemSettingsQuery,
+} from "../queries";
 import { SiteRegistration } from "../registration";
 import { SearchSettings } from "../search-settings";
 import { SegmentSettings } from "../segment-settings";
@@ -55,29 +71,58 @@ export default function SettingsPage() {
       <PageHead title={t("nav.settings")} lede={t("settings.description")} />
       <PageBody>
         <DataState query={owner}>
-          {(account) => (
-            <>
-              <SiteInformation siteId={account.site_id} />
-              <SiteLogo siteId={account.site_id} />
-              <SiteBrand siteId={account.site_id} />
-              <SiteSettings siteId={account.site_id} />
-              <SiteKeyLimits siteId={account.site_id} />
-              <SiteWorkspaceLimit siteId={account.site_id} />
-              <SiteLoginLimits siteId={account.site_id} />
-              <SiteRegistration siteId={account.site_id} />
-              <SiteSignIn siteId={account.site_id} />
-              <MailSettings />
-              <SearchSettings />
-              <FileParserSettings />
-              <SegmentSettings />
-              <ProbeSettings />
-              <PaymentsSettings siteId={account.site_id} currency={account.balance.balance.currency} />
-            </>
-          )}
+          {(account) => <Sections siteId={account.site_id} currency={account.balance.balance.currency} />}
         </DataState>
       </PageBody>
     </>
   );
+}
+
+// Every section asks for its settings at once, and each appears once all the sections above it have first answered:
+// a section drawn before then was pushed down the screen when an answer above it grew taller than its skeleton (#747).
+function Sections({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; currency: string }) {
+  const answered = [
+    useQuery(systemSettingsQuery(siteId)),
+    useQuery(siteLogoQuery(siteId)),
+    useQuery(siteBrandQuery(siteId)),
+    useQuery(siteSettingsQuery(siteId)),
+    useQuery(siteKeyLimitsQuery(siteId)),
+    useQuery(siteWorkspaceLimitQuery(siteId)),
+    useQuery(siteLoginLimitsQuery(siteId)),
+    useQuery(siteRegistrationQuery(siteId)),
+    useQuery(siteSignInQuery(siteId)),
+    useQuery(mailSettingsQuery),
+    useQuery(searchSettingsQuery),
+    useQuery(fileParserSettingsQuery),
+    useQuery(segmentSettingsQuery),
+    useQuery(probeSettingsQuery),
+  ].map((query) => !query.isPending);
+  const sections = [
+    <SiteInformation key="info" siteId={siteId} />,
+    <SiteLogo key="logo" siteId={siteId} />,
+    <SiteBrand key="brand" siteId={siteId} />,
+    <SiteSettings key="settings" siteId={siteId} />,
+    <SiteKeyLimits key="key-limits" siteId={siteId} />,
+    <SiteWorkspaceLimit key="workspace-limit" siteId={siteId} />,
+    <SiteLoginLimits key="login-limits" siteId={siteId} />,
+    <SiteRegistration key="registration" siteId={siteId} />,
+    <SiteSignIn key="sign-in" siteId={siteId} />,
+    <MailSettings key="mail" />,
+    <SearchSettings key="search" />,
+    <FileParserSettings key="file-parser" />,
+    <SegmentSettings key="segments" />,
+    <ProbeSettings key="probes" />,
+    <PaymentsSettings key="payments" siteId={siteId} currency={currency} />,
+  ];
+  return sections.map((section, index) => (
+    <ShownAfter key={section.key} pending={!answered.slice(0, index).every(Boolean)}>
+      {section}
+    </ShownAfter>
+  ));
+}
+
+function ShownAfter({ pending, children }: { pending: boolean; children: ReactNode }) {
+  return useShownAfter(pending) ? children : null;
 }
 
 function SiteSettings({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
