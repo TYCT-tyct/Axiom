@@ -140,14 +140,18 @@ func (h *Hold) watch(ctx context.Context, every time.Duration) {
 	}
 }
 
-// Release lets the name go: it stops the checks and closes the connection, which frees the name at the server. It may be
-// called again, and does nothing then.
+// Release stops the checks, releases the name on its session and closes the connection. A second call does nothing.
 func (h *Hold) Release(ctx context.Context) error {
 	var err error
 	h.stopOnce.Do(func() {
 		close(h.stop)
 		<-h.done
-		err = h.conn.Close(ctx)
+		if h.conn.IsClosed() {
+			return
+		}
+		// Closing the client socket can return before the server releases the lock.
+		_, err = h.conn.Exec(ctx, `SELECT pg_advisory_unlock($1)`, pgx.QueryExecModeExec, holdKey(h.name))
+		err = errors.Join(err, h.conn.Close(ctx))
 	})
 	return err
 }
