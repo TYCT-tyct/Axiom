@@ -381,6 +381,22 @@ func TestDrainStagesThenIngests(t *testing.T) {
 	}
 }
 
+func TestReleaseLetsNextDrainHoldSameSupplier(t *testing.T) {
+	w := worker(open(t))
+	id := uuid.NewV4()
+	held, err := w.hold(t.Context(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.release(t.Context(), held, id)
+
+	next, err := w.hold(t.Context(), id)
+	if err != nil {
+		t.Fatalf("hold immediately after release: %v", err)
+	}
+	w.release(t.Context(), next, id)
+}
+
 // errorQueue fails every drain with one error.
 type errorQueue struct {
 	queueManager
