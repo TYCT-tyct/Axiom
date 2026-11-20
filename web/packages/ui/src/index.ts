@@ -43,6 +43,7 @@ export {
   type PublicModel,
 } from "./components/models";
 export { Mono } from "./components/mono";
+export { NavGroup } from "./components/nav-group";
 export { Note } from "./components/note";
 export { Notice } from "./components/notice";
 export { PageBody } from "./components/page-body";
