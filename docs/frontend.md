@@ -235,6 +235,7 @@ WCAG 2.2 的非文字组件对比至少 3:1，文字至少 4.5:1；`tokens.test.
 - 代码在 `web/`，是一个 pnpm 工作区；结构、命令和必须遵守的规则见 [web/README.md](../web/README.md)。
 - 页面只通过 HTTP 接口取数据；要用别的前端替换它，或对接某个约定（会话、CSRF、错误、分页、幂等、金额），读[前端接口指南](frontend-api.md)。
 - 官网在公网监听的 `/`，控制台在 `/console/`，管理后台只在管理监听上。
+- 管理后台沿用控制台外壳，侧栏按管理任务分组。分组只显示会话有权限打开的现有页面，空组隐藏。手机保留底部标签，其余分组在「更多」中。
 - 控制台和管理后台构建时写入同一棵代码树构建出的程序的版本号（`axiom version` 输出的整行），之后定时和切回标签页时向 `GET /api/console/v1/version`（后台是 `/api/admin/v1/version`）询问正在运行的版本，不同就提示刷新。
 - 内容安全策略只在 `web/vite.shared.ts` 定义一次。构建产物嵌入 Go 程序时（`just web-embed`），这个字符串一并写进嵌入的文件，Go 服务原样发送，不另写一份；缓存、压缩和回退的规则见[平台的「前端文件」](../internal/platform/README.md#前端文件)。
 - 西文和数字用自己托管的 Instrument Sans，等宽用 JetBrains Mono，中文字体和分片见[字体](#字体)；字体族名只写在 `fonts.css`。

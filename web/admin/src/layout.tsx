@@ -22,7 +22,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import { useAdminBrand } from "./brand";
-import { nav, sheetIcons, tabIcons } from "./nav";
+import { nav, sections, sheetIcons, tabIcons } from "./nav";
 
 // The admin wears the console's shell (packages/boards/manifest/admin-shell.ts) until it has a design of its own: the
 // AxApp board's bar and sidebar on wide windows and the AxAppPhone board's bar and tabs on phones, with the admin's
@@ -230,6 +230,33 @@ function PhoneTabs({ tabs, more, menus }: { tabs: Page[]; more: Page[]; menus: R
   );
 }
 
+function NavigationGroups({ pages, phone = false }: { pages: Page[]; phone?: boolean }) {
+  const { t } = useTranslation();
+  const Item = phone ? PhoneMore : WideNav;
+  return sections.map((section) => {
+    const links = pages.filter((p) => p.section === section);
+    if (!links.length) return null;
+    const label = t(`navSections.${section}`);
+    return (
+      // biome-ignore lint/a11y/useSemanticElements: A navigation group has links and no form controls.
+      <div key={section} className="admin-nav-section" role="group" aria-label={label}>
+        <div className="admin-nav-label" aria-hidden="true">
+          {label}
+        </div>
+        {links.map((p) => (
+          <Item
+            key={p.to}
+            t={String}
+            values={entry(p, "on", phone ? sheetIcons : wideIcons)}
+            link={RouterLink}
+            label={p.label}
+          />
+        ))}
+      </div>
+    );
+  });
+}
+
 function AdminShell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
   const { t, i18n } = useTranslation();
   const { page, slot } = useKeptPage(children);
@@ -269,9 +296,7 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           link={RouterLink}
           mark={mark}
           tabs={<PhoneTabs tabs={tabs} more={more} menus={menus} />}
-          more={more.map((p) => (
-            <PhoneMore key={p.to} t={String} values={entry(p, "on", sheetIcons)} link={RouterLink} label={p.label} />
-          ))}
+          more={<NavigationGroups pages={more} phone />}
         >
           {slot}
         </Phone>
@@ -282,9 +307,7 @@ function AdminShell({ signOut, children }: { signOut: () => void; children: Reac
           text={text}
           link={RouterLink}
           mark={mark}
-          nav={pages.map((p) => (
-            <WideNav key={p.to} t={String} values={entry(p, "on", wideIcons)} link={RouterLink} label={p.label} />
-          ))}
+          nav={<NavigationGroups pages={pages} />}
         >
           {slot}
         </Wide>
