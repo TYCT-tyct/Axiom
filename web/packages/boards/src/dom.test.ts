@@ -98,3 +98,16 @@ it("preserves table and SVG structure, text and styles without assigning style a
   boardCSS(el.style, "height:2px");
   expect(el.style.width).toBe("");
 });
+
+it("parses each style text once and shares the frozen result", () => {
+  const parse = vi.spyOn(CSSStyleSheet.prototype, "insertRule");
+  try {
+    const first = boardStyle("--once: 1; width: 3px");
+    expect(boardStyle("--once: 1; width: 3px")).toBe(first);
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(first).toEqual({ "--once": "1", width: "3px" });
+    expect(Object.isFrozen(first)).toBe(true);
+  } finally {
+    parse.mockRestore();
+  }
+});

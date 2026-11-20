@@ -8,7 +8,25 @@ function declarations(text: string): CSSStyleDeclaration {
 }
 const keys = (style: CSSStyleDeclaration) => Array.from({ length: style.length }, (_, i) => style[i] as string);
 
+// A board's regions call boardStyle on every render, about fifteen times for the console's shell and more for a page's
+// rows, and each call builds a style sheet to parse its text: a profile of the calls page's phone load at the budget's
+// 4x CPU put about 100 ms of the main thread in these calls (#747). The same text always reads the same, so each is parsed once; the texts are the
+// drawing's and the few values the pages put in them, and the bound only stops a page that varied them freely from
+// keeping every one. The objects are shared between elements, so they are frozen.
+const parsed = new Map<string, CSSProperties>();
+const parsedLimit = 1000;
+
 export function boardStyle(text: string): CSSProperties {
+  let properties = parsed.get(text);
+  if (!properties) {
+    if (parsed.size >= parsedLimit) parsed.clear();
+    properties = Object.freeze(readStyle(text));
+    parsed.set(text, properties);
+  }
+  return properties;
+}
+
+function readStyle(text: string): CSSProperties {
   const style = declarations(text);
   const properties: Record<string, string> = {};
   for (const name of declarationNames(text)) {
