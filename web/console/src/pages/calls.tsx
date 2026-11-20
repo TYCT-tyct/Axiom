@@ -14,7 +14,7 @@ import {
 } from "@tanstack/react-query";
 import { useLocation, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
-import { useEffect, useMemo } from "react";
+import { useDeferredValue, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { filtersUnsupported } from "../calls";
 import {
@@ -122,6 +122,7 @@ type CallsListBodyProps = {
   locale: string;
   phone: boolean;
   calls: UseInfiniteQueryResult<InfiniteData<Schemas["CallList"]>, Error>;
+  listShown: boolean;
   callRows: Schemas["Call"][];
   selectedId?: string;
   selectedQuery: UseQueryResult<Schemas["Call"], Error>;
@@ -169,12 +170,12 @@ function CallsListTable(p: CallsListBodyProps) {
 }
 
 function CallsListBody(p: CallsListBodyProps) {
-  if (p.calls.isPending || p.calls.isError) {
+  if (p.calls.isPending || p.calls.isError || !p.listShown) {
     return (
       <CallsQueryState
         t={p.t}
         error={p.calls.error}
-        isPending={p.calls.isPending}
+        isPending={!p.calls.isError}
         onRetry={() => void p.calls.refetch()}
       />
     );
@@ -211,10 +212,15 @@ function useCallsPageQueries(
   const workspaces = useQuery({ ...workspacesQuery, enabled: canKeys });
   const exported = useCallsExport(filters);
   const callRows = useMemo(() => calls.data?.pages.flatMap((p) => p.data) ?? [], [calls.data]);
+  // The summary above the list is the page's largest text, and it and the rows come with the same answers: drawn in one
+  // render, the summary waited for the 50 rows, about 370 ms of a phone's main thread at the budget's 4x CPU (#747). So
+  // the rows follow in a render of their own, which React runs after the summary is drawn; until then the list says
+  // it is loading, as it did while the answer was out.
+  const listShown = useDeferredValue(calls.isSuccess);
   const keyList = useMemo(() => keys.data?.pages.flatMap((p) => p.data) ?? [], [keys.data]);
   const keyNames = useMemo(() => new Map(keyList.map((k) => [k.id, k.name || k.id])), [keyList]);
   useEffect(() => {
-    const ready = sessionsTab ? sessions.isSuccess : calls.isSuccess;
+    const ready = sessionsTab ? sessions.isSuccess : listShown;
     if (!ready) return;
     const saved = takeCallsScroll(restoreId, identity, searchStr);
     if (saved === null || saved <= 0) return;
@@ -236,7 +242,7 @@ function useCallsPageQueries(
       clearTimeout(timer);
       unsub();
     };
-  }, [calls.isSuccess, sessions.isSuccess, sessionsTab, restoreId, identity, searchStr, router]);
+  }, [listShown, sessions.isSuccess, sessionsTab, restoreId, identity, searchStr, router]);
   return {
     filters,
     group_by,
@@ -245,6 +251,7 @@ function useCallsPageQueries(
     sessionsTab,
     selectedId,
     calls,
+    listShown,
     sessions,
     report,
     selectedQuery,
@@ -311,6 +318,7 @@ function CallsResults({
           locale={locale}
           phone={phone}
           calls={q.calls}
+          listShown={q.listShown}
           callRows={q.callRows}
           selectedId={q.selectedId}
           selectedQuery={q.selectedQuery}
