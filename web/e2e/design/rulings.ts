@@ -42,6 +42,7 @@ const pageScenes = [
   "console usage",
   "console route",
   "console byok",
+  "console calls",
   ...presetScenes,
 ];
 const shell: Ruling[] = [
@@ -77,6 +78,11 @@ const accountShell = (scene: string): Ruling[] =>
     {
       basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
       ...both(".gbar .qbct, .qph h1"),
+    },
+    {
+      basis:
+        "appearance and language are a card of the settings page (frontend.md), not a fourth entry of the folded rail",
+      board: { selector: "[data-pg=prefs]" },
     },
   ].map((ruling) => ({ scene, ...ruling }));
 
@@ -242,8 +248,12 @@ export const rulings: Ruling[] = [
       ".uscmp, .usm b, .usm em, .usch svg rect, .usch .usgl, .usch .usyl > span, .usch .usxl > span, .ust tbody, .ust tfoot, .ustk .usbar, .ustk .usrw > span:nth-of-type(2), .ustk .usrw em, .ustk p, .usd .usrw",
     ),
   },
-  { scene: "console calls", basis: "O1: no team spaces", board: { selector: spaceSwitch } },
   { scene: "console calls", basis: "#816: no live mode on calls", board: { selector: ".p-logs .lglive" } },
+  {
+    scene: "console calls",
+    basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl",
+    ...both(".qph h1"),
+  },
   {
     scene: "console calls",
     basis: "#816 O24: no slow-than-5s quick filter",

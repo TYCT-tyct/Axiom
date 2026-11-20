@@ -106,11 +106,15 @@ for (const design of designScenes) {
         const key = name.replaceAll(" ", "-");
         scenario(name, async ({ browser, page }, info) => {
           const staged = view(Number(width), board.height, scheme);
-          const opened = await readyBoard(browser, { ...board, props: design.schemes[scheme] }, staged);
+          const opened = await readyBoard(
+            browser,
+            { ...board, props: { ...board.props, ...design.schemes[scheme] } },
+            staged,
+          );
           try {
             await readyPage(page, design, staged, language);
             await design.prepareComparison?.(opened.page, page, language ?? "zh");
-            const used = rulings.filter((ruling) => ruling.scene === design.name);
+            const used = rulings.filter((ruling) => ruling.scene === (design.rulingsOf ?? design.name));
             const comparison = await compare(opened.page, page, used, key, info);
             record(key, { ...comparison, blocked: opened.blocked });
             expect(comparison.error, `see ${comparison.diff ?? comparison.page}`).toBeUndefined();

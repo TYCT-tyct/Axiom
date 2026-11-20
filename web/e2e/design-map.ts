@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
 import { en as consoleAuthEn, zh as consoleAuthZh } from "../console/src/locales/auth.ts";
 import consoleEn from "../console/src/locales/en.ts";
@@ -28,6 +28,8 @@ export type DesignScene = {
   boards: Record<number, BoardScene & { height: number }>;
   schemes: Record<"light" | "dark", Record<string, string>>;
   languages?: ("zh" | "en")[];
+  // The scene whose rulings apply, when this one is another language of it (rulings.ts names scenes, not languages).
+  rulingsOf?: string;
   prepareComparison?: (board: Page, page: Page, language: "zh" | "en") => Promise<void>;
   textRasterization?: "grayscale" | "unhinted";
 };
@@ -37,8 +39,16 @@ export const demoTime = new Date("2026-10-24T10:00:00+08:00");
 
 // The console boards come in one Component per form factor; theme is a prop, and the personal space is the default.
 const consoleSchemes = { light: { theme: "浅色" }, dark: { theme: "深色" } };
+// The tablet board is the wide board's markup with its sidebar folded; it opens in the team space, so it asks for the
+// personal one the other widths open in.
 const consoleBoards = (page: string) => ({
   1440: { file: "AxApp.dc.html", height: 900, actions: [["go", page]] as [string, string][] },
+  820: {
+    file: "AxAppTablet.dc.html",
+    height: 1180,
+    props: { space: "个人" },
+    actions: [["go", page]] as [string, string][],
+  },
   390: { file: "AxAppPhone.dc.html", height: 844, actions: [["go", page]] as [string, string][] },
 });
 
@@ -103,6 +113,11 @@ async function prepareEmailStep(board: Page, page: Page, language: "zh" | "en", 
     for (const name of ["--lineStrong1x", "--lineStrong2x"]) lg.style.setProperty(name, edge);
     lg.style.setProperty("--bw", "1px");
   }, edge);
+  if (language === "en") {
+    await translateBoard(board, loginTranslations);
+    // the board's pitch kerns a Chinese comma after "key"; the English pitch has none
+    await board.evaluate(() => document.querySelector(".lg-pitch .kern")?.remove());
+  }
   const { pitch } = language === "en" ? consoleAuthEn : consoleAuthZh;
   const words = { ...own, lede: pitch.lede, tail: pitch.tail };
   await board.evaluate((words) => {
@@ -334,6 +349,74 @@ async function prepareModelsComparison(board: Page, page: Page, language: "zh" |
   expect(await frame(page)).toEqual(await frame(board));
 }
 
+// Every board region's text in both languages, by the Chinese: the English reference of a page is its Chinese board with
+// each text the regions carry replaced by its translation (packages/boards, generated with the regions).
+async function regionTranslations(board: string) {
+  const dir = new URL(`../packages/boards/src/${board}/regions/`, import.meta.url);
+  const translations: Record<string, string> = {};
+  for (const file of readdirSync(dir).filter((name) => name.endsWith(".zh.ts"))) {
+    const zh = (await import(new URL(file, dir).href)).default as Record<string, string>;
+    const en = (await import(new URL(file.replace(".zh.ts", ".en.ts"), dir).href)).default as Record<string, string>;
+    for (const key of Object.keys(en)) if (zh[key] !== undefined) translations[zh[key]] = en[key] as string;
+  }
+  return translations;
+}
+const consoleTranslations = await regionTranslations("AxApp");
+const loginTranslations = await regionTranslations("Login");
+const siteTranslations = await regionTranslations("Site");
+
+const translateBoard = (board: Page, strings: Record<string, string>) =>
+  board.evaluate((strings) => {
+    document.documentElement.lang = "en-US";
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      const translation = strings[node.textContent ?? ""];
+      if (translation !== undefined) node.textContent = translation;
+    }
+  }, strings);
+
+async function prepareConsoleEnglish(board: Page) {
+  await translateBoard(board, consoleTranslations);
+  await board.evaluate(useProductFontWeights, Object.fromEntries(referenceFonts));
+  await board.evaluate(() => document.fonts.ready.then(() => {}));
+}
+
+// The console's pages, each in both languages: [name, the e2e scene, the board's page]. The English scene is the
+// Chinese board put into English (above) against the page in English, with the Chinese scene's rulings.
+const consolePages: DesignScene[] = [
+  ["overview", "overview", "ov"],
+  ["usage", "usage", "usage"],
+  ["route", "routing-presets", "route"],
+  ["byok", "provider-keys", "byok"],
+  ["keys", "keys", "keys"],
+  ["bill", "balance", "bill"],
+  ["calls", "calls", "logs"],
+  ["settings", "settings", "profile"],
+  ["security", "security", "security"],
+  ["notifications", "notifications", "notify"],
+].flatMap(([name, scene, page]) =>
+  (["zh", "en"] as const).map((language) => ({
+    name: language === "en" ? `console ${name} en` : `console ${name}`,
+    rulingsOf: `console ${name}`,
+    suite: consoleSuite,
+    scene: scene as string,
+    fonts: "console",
+    boards: consoleBoards(page as string),
+    schemes: consoleSchemes,
+    languages: [language],
+    ...(language === "en" && { textRasterization: "grayscale" as const, prepareComparison: prepareConsoleEnglish }),
+  })),
+);
+
+// The home boards are Chinese: in English each text the Site regions carry is put into English first, then the screen's
+// own preparation runs.
+const prepareSiteEnglish =
+  (then?: DesignScene["prepareComparison"]): DesignScene["prepareComparison"] =>
+  async (board, page, language) => {
+    if (language === "en") await translateBoard(board, siteTranslations);
+    await then?.(board, page, language);
+  };
+
 export const designScenes: DesignScene[] = [
   // The shell on its own: the page inside it is ruled out here and compared in the page's scene. 820px is the tablet
   // board, the wide board's markup with its sidebar folded.
@@ -342,93 +425,11 @@ export const designScenes: DesignScene[] = [
     suite: consoleSuite,
     scene: "overview",
     fonts: "console",
-    boards: {
-      ...consoleBoards("ov"),
-      820: { file: "AxAppTablet.dc.html", height: 1180, actions: [["go", "ov"]] },
-    },
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console overview",
-    suite: consoleSuite,
-    scene: "overview",
-    fonts: "console",
     boards: consoleBoards("ov"),
     schemes: consoleSchemes,
   },
-  {
-    name: "console usage",
-    suite: consoleSuite,
-    scene: "usage",
-    fonts: "console",
-    boards: consoleBoards("usage"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console route",
-    suite: consoleSuite,
-    scene: "routing-presets",
-    fonts: "console",
-    boards: consoleBoards("route"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console byok",
-    suite: consoleSuite,
-    scene: "provider-keys",
-    fonts: "console",
-    boards: consoleBoards("byok"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console keys",
-    suite: consoleSuite,
-    scene: "keys",
-    fonts: "console",
-    boards: consoleBoards("keys"),
-    schemes: consoleSchemes,
-  },
+  ...consolePages,
   ...presetScenes,
-  {
-    name: "console bill",
-    suite: consoleSuite,
-    scene: "balance",
-    fonts: "console",
-    boards: consoleBoards("bill"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console calls",
-    suite: consoleSuite,
-    scene: "calls",
-    fonts: "console",
-    boards: consoleBoards("logs"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console settings",
-    suite: consoleSuite,
-    scene: "settings",
-    fonts: "console",
-    boards: consoleBoards("profile"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console security",
-    suite: consoleSuite,
-    scene: "security",
-    fonts: "console",
-    boards: consoleBoards("security"),
-    schemes: consoleSchemes,
-  },
-  {
-    name: "console notifications",
-    suite: consoleSuite,
-    scene: "notifications",
-    fonts: "console",
-    boards: consoleBoards("notify"),
-    schemes: consoleSchemes,
-  },
   {
     name: "console sign-in",
     suite: consoleSuite,
@@ -437,6 +438,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/sign-in"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, signInWords(language)),
   },
   {
@@ -447,6 +449,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/reset-password"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, resetWords(language)),
   },
   {
@@ -457,6 +460,7 @@ export const designScenes: DesignScene[] = [
     fonts: ["console", "console/auth/register"],
     boards: loginBoards,
     schemes: { light: { mode: "浅色" }, dark: { mode: "深色" } },
+    languages: ["zh", "en"],
     prepareComparison: (board, page, language) => prepareEmailStep(board, page, language, registerWords(language)),
   },
   {
@@ -466,6 +470,8 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
+    languages: ["zh", "en"],
+    prepareComparison: prepareSiteEnglish(),
   },
   ...[
     { name: "site connect", sec: 1 },
@@ -478,7 +484,8 @@ export const designScenes: DesignScene[] = [
     fonts: "site/home",
     boards: siteBoards,
     schemes: { light: { system: "浅色" }, dark: { system: "深色" } },
-    prepareComparison: screenAt(sec, name),
+    languages: ["zh", "en"] as ("zh" | "en")[],
+    prepareComparison: prepareSiteEnglish(screenAt(sec, name)),
   })),
   {
     name: "site models",
