@@ -38,9 +38,10 @@ import { words } from "./words.ts";
 // ceiling leaves 1.5x room above that first CI maximum. Local INP ranged 96-920 ms (CI maximum 280 ms).
 // With the scroll origin corrected, calls had 36-38% late frames and 47-49 long tasks locally (68% late on CI);
 // users had 4.1-4.5% late frames and 10 long tasks. These are observations, not alternate budgets.
-// The remaining gaps: phone LCP includes throttled resource round trips, and a page asks for its data only once the shell
-// has painted; about half of a dialog's INP is the whole-document style recalculation that showModal starts, whose cost
-// comes from the global stylesheet; the long-list tasks still need attribution.
+// The remaining gaps (docs/frontend.md「实测」): a phone load is its first-screen code over the slow network, about 1.6 s,
+// and then the main thread at 4x CPU, which runs the app, the shell and the page's renders back to back, so asking for
+// the data earlier does not draw the page earlier; about half of a dialog's INP is the whole-document style
+// recalculation that showModal starts; the long-list tasks still need attribution.
 type Limit = { target: number; ceiling?: number };
 const budget = {
   lcpDesktop: { target: 1500, ceiling: 1500 },
@@ -122,13 +123,23 @@ const library = readFileSync(
   join(dirname(createRequire(import.meta.url).resolve("web-vitals")), "web-vitals.iife.js"),
   "utf8",
 );
+// It also keeps when the page last drew a larger element, and which element that was, for the load to wait for the page
+// to stop drawing (vitals) and the report to name what was measured.
 const collector = `${library};
 window.__vitals = {};
+window.__drawn = 0;
 for (const [name, on] of [["LCP", webVitals.onLCP], ["CLS", webVitals.onCLS], ["INP", webVitals.onINP]]) {
   on((metric) => { window.__vitals[name] = metric.value; }, { reportAllChanges: true, durationThreshold: 16 });
-}`;
+}
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) {
+    window.__drawn = performance.now();
+    const element = entry.element;
+    window.__vitals.element = element ? element.localName + " " + (element.textContent || "").trim().slice(0, 24) : "removed";
+  }
+}).observe({ type: "largest-contentful-paint", buffered: true });`;
 
-type Vitals = { LCP?: number; CLS?: number; INP?: number };
+type Vitals = { LCP?: number; CLS?: number; INP?: number; element?: string };
 
 async function measuredPage(browser: Browser, profile: Profile, device: Parameters<Browser["newContext"]>[0]) {
   const context = await browser.newContext({ ...device, locale: "zh-CN", timezoneId: "Asia/Shanghai" });
@@ -149,10 +160,22 @@ async function measuredPage(browser: Browser, profile: Profile, device: Paramete
 const frames = (page: Page) =>
   page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
 
-// The metrics once the page has settled: the network is quiet and two frames have been drawn since.
+// The metrics once the page has settled: the network is quiet, and the page has drawn no larger element for a second
+// since then. At 4x CPU the page still renders what its last answers brought after the network went quiet: two frames
+// after it, the calls page's LCP was its export note, while its summary, the larger element, was drawn some 600 ms
+// later, so the gate read 4.0 s where the page took 4.8 s on a developer's host (#747). An LCP read later only adds the
+// candidates drawn since, so waiting cannot make it wrong.
 async function vitals(page: Page): Promise<Vitals> {
   await page.waitForLoadState("networkidle");
-  await frames(page);
+  await page.evaluate(() => {
+    const drawn = window as unknown as { __drawn: number };
+    drawn.__drawn = Math.max(drawn.__drawn, performance.now());
+  });
+  await page.waitForFunction(
+    () => performance.now() - (window as unknown as { __drawn: number }).__drawn >= 1000,
+    undefined,
+    { polling: 100 },
+  );
   return page.evaluate(() => (window as unknown as { __vitals: Vitals }).__vitals);
 }
 
@@ -186,9 +209,12 @@ async function busyLoad(
   try {
     await suite.prepare(page, scene);
     const session = await page.context().newCDPSession(page);
+    // The trace ends where it always did, the network quiet and two frames drawn: the CPU gate and its backstop were
+    // calibrated on that window, and the wait for the LCP is the test's own polling, not the page's work.
     const { busyMs } = await traced(session, async () => {
       await scene.open(page);
-      await vitals(page);
+      await page.waitForLoadState("networkidle");
+      await frames(page);
     });
     return busyMs;
   } finally {
@@ -256,7 +282,7 @@ async function measurePage(
   lcp: Limit,
 ) {
   const label = `${suite.app} ${scene.name} ${name}`;
-  const pairs: { base: number; page: number; cls: number }[] = [];
+  const pairs: { base: number; page: number; cls: number; element?: string }[] = [];
   for (let i = 0; i < 3; i++) {
     const before = await load(browser, profile, device, reference.suite, reference.scene);
     const page = await load(browser, profile, device, suite, scene);
@@ -268,13 +294,14 @@ async function measurePage(
         page: page.LCP ?? Number.POSITIVE_INFINITY,
       }),
       cls: page.CLS ?? 0,
+      element: page.element,
     });
   }
   record(
     `LCP ${label}`,
     scaledLcp(pairs, reference.lcp),
     lcp,
-    `raw ${median(pairs.map((pair) => pair.page)).toFixed(0)} ms, ${reference.scene.name} ${median(pairs.map((pair) => pair.base)).toFixed(0)} of ${reference.lcp} ms`,
+    `raw ${median(pairs.map((pair) => pair.page)).toFixed(0)} ms, ${reference.scene.name} ${median(pairs.map((pair) => pair.base)).toFixed(0)} of ${reference.lcp} ms, element ${[...new Set(pairs.map((pair) => pair.element))].join(" / ")}`,
   );
   record(`CLS ${label}`, Math.max(...pairs.map((pair) => pair.cls)), budget.cls);
 }
@@ -337,7 +364,7 @@ async function measureOverview(
     `LCP ${label}`,
     median(throttled.map((load) => load.LCP ?? Number.POSITIVE_INFINITY)),
     { target: lcp.target },
-    "reported only",
+    `reported only, element ${[...new Set(throttled.map((load) => load.element))].join(" / ")}`,
   );
   record(`CLS ${label}`, Math.max(...throttled.map((load) => load.CLS ?? 0)), budget.cls);
 }
