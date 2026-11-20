@@ -99,7 +99,7 @@ export function EmptyState({
 const ForbiddenHintContext = createContext<string | undefined>(undefined);
 export const ForbiddenHint = ForbiddenHintContext.Provider;
 
-function ForbiddenState(placement: Placement) {
+export function ForbiddenState(placement: Placement = {}) {
   const { t } = useTranslation("common");
   const hint = useContext(ForbiddenHintContext);
   return (
