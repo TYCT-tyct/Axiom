@@ -50,6 +50,14 @@ const measured = (scroller: HTMLElement): Offset[] => [
   { sec: 0, top: 0 },
   ...places(scroller).map((s) => ({ sec: Number(s.dataset.place), top: s.offsetTop })),
 ];
+// applyDepth updates .depth opacity from scroll depth and (dark theme only) the eggs' night floor.
+function applyDepth(depth: HTMLElement | null, dim: number) {
+  if (!depth) return;
+  depth.dataset.dim = dim.toFixed(3);
+  const floor = depth.closest(".ho.dark") ? Number(depth.dataset.floor ?? 0) : 0;
+  depth.style.opacity = Math.max(dim, floor).toFixed(3);
+}
+
 function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scroll: Scroll) => void) {
   let offsets: Offset[] = [{ sec: 0, top: 0 }];
   let timer = 0;
@@ -96,8 +104,7 @@ function scrolling(scroller: HTMLElement, depth: HTMLElement | null, show: (scro
     },
     onScroll: () => {
       const { dim, ...scroll } = scrolled(scroller, offsets);
-      // the eggs' night keeps the sea at least this dark (data-floor, @axiom/fx/eggs)
-      if (depth) depth.style.opacity = Math.max(dim, Number(depth.dataset.floor ?? 0)).toFixed(3);
+      applyDepth(depth, dim);
       show(scroll);
     },
     onScrollEnd: () => {

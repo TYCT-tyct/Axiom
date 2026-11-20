@@ -65,14 +65,17 @@ async function type(line: string) {
   await press("Enter");
 }
 
-it("opens with the focus in its input, runs what is typed, recalls it, and Escape closes it back to where the focus was", async () => {
-  await act(async () =>
+const mount = () =>
+  act(async () =>
     root.render(
       <I18nextProvider i18n={i18next}>
         <SeaEggs frame={host} sea={{} as Sea} whale={() => {}} />
       </I18nextProvider>,
     ),
   );
+
+it("opens with the focus in its input, runs what is typed, recalls it, and Escape closes it back to where the focus was", async () => {
+  await mount();
   expect(dialog()?.hidden).toBe(true);
   expect(window.axiom).toBeDefined();
   before.focus();
@@ -102,13 +105,7 @@ it("opens with the focus in its input, runs what is typed, recalls it, and Escap
 });
 
 it("keeps its last ten lines", async () => {
-  await act(async () =>
-    root.render(
-      <I18nextProvider i18n={i18next}>
-        <SeaEggs frame={host} sea={{} as Sea} whale={() => {}} />
-      </I18nextProvider>,
-    ),
-  );
+  await mount();
   await act(async () => started.options?.terminal.show());
   // opened from nowhere in particular, closing gives the focus back to the page, so the page's keys work again
   await press("Escape");

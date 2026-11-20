@@ -140,6 +140,7 @@ function scrollers(frame: HTMLElement, ho: HTMLElement) {
   let rising: (() => void) | undefined;
   const stop = () => rising?.();
   return {
+    scroller,
     deep: () => {
       const max = scroller.scrollHeight - scroller.clientHeight;
       return max > 0 ? scroller.scrollTop / max : 0;
@@ -248,12 +249,40 @@ type Parts = {
   later: (ms: number, then: () => void) => void;
   // the night's glow drawn while the sea plays, until the returned function is called
   glow: () => () => void;
-  depth: HTMLElement | null;
+  nightDim: () => void;
 };
 
-// states colours the visit by the visitor's clock: the night's glow and darker sea, 1024's binary fish; it returns
-// what ends the glow
-function states({ layer, water, later, glow, depth }: Parts) {
+// nightDepth keeps the dark sea at least 0.12 dim at night (eggs.js baseDim); the light theme's .depth is a white
+// veil, so night dimming applies only while .ho is dark and follows theme switches.
+function nightDepth(ho: HTMLElement, depth: HTMLElement | null) {
+  let active = false;
+  const sync = () => {
+    if (!depth) return;
+    const floor = active && ho.classList.contains("dark") ? 0.12 : 0;
+    if (floor) depth.dataset.floor = String(floor);
+    else delete depth.dataset.floor;
+    const dim = Number(depth.dataset.dim ?? 0);
+    depth.style.opacity = Math.max(dim, floor).toFixed(3);
+  };
+  const observed = depth ? new MutationObserver(() => active && sync()) : undefined;
+  observed?.observe(ho, { attributes: true, attributeFilter: ["class"] });
+  return {
+    enable: () => {
+      active = true;
+      sync();
+    },
+    destroy: () => {
+      observed?.disconnect();
+      if (!active) return;
+      active = false;
+      sync();
+    },
+  };
+}
+
+// states colours the visit by the visitor's clock: the night's glow and darker sea (dark theme only), 1024's binary
+// fish; it returns what ends the glow
+function states({ layer, water, later, glow, nightDim }: Parts) {
   const at = new Date();
   const hour = at.getHours();
   if (at.getMonth() === 9 && at.getDate() === 24) {
@@ -262,16 +291,12 @@ function states({ layer, water, later, glow, depth }: Parts) {
   }
   if (hour < 22 && hour >= 6) return undefined;
   layer.night(0.55);
-  if (depth) {
-    // the sea is never lighter than this tonight (behaviour.ts reads the floor as the page scrolls)
-    depth.dataset.floor = "0.12";
-    depth.style.opacity = String(Math.max(Number(depth.style.opacity) || 0, 0.12));
-  }
+  nightDim();
   return glow();
 }
 
 // plays are the moments on the sea, each keeping it going for as long as it plays
-function plays(engine: Engine, { layer, water, later }: Omit<Parts, "glow" | "depth">, keep: (ms: number) => void) {
+function plays(engine: Engine, { layer, water, later }: Omit<Parts, "glow" | "nightDim">, keep: (ms: number) => void) {
   // food in the world's own coordinates, kept off the edges
   const feedAt = (x: number, y: number) => {
     const { width, height } = engine.world;
@@ -319,18 +344,48 @@ function layerCanvas(frame: HTMLElement, className: string) {
   return canvas;
 }
 
-// resting says whether the reader has rested on the sea floor (the last 1.5% of the page) for 3 s
-function resting(deep: () => number) {
+// floorWatch offers "back to the surface" after 3 s on the sea floor (the last 1.5% of the page), and hides it
+// whenever the reader leaves the floor by any means (wheel, scrollbar, keyboard or surface()).
+function floorWatch(
+  scroller: HTMLElement,
+  deep: () => number,
+  moments: ReturnType<typeof director>,
+  later: (ms: number, then: () => void) => void,
+  onFloor: (shown: boolean) => void,
+) {
   let since = 0;
-  return {
-    rested: (now: number) => {
-      if (deep() <= 0.985) since = 0;
-      else if (!since) since = now;
-      return since > 0 && now - since > 3000;
-    },
-    reset: () => {
+  let shown = false;
+  const hide = () => {
+    if (!shown) return;
+    shown = false;
+    onFloor(false);
+    // offered again once it has faded (250 ms)
+    later(250, () => {
       since = 0;
+      moments.again("floor");
+    });
+  };
+  const onScroll = () => {
+    if (deep() <= 0.985) hide();
+  };
+  scroller.addEventListener("scroll", onScroll, { passive: true });
+  return {
+    check: (now: number) => {
+      if (deep() <= 0.985) {
+        since = 0;
+        hide();
+        return;
+      }
+      if (!since) since = now;
+      if (now - since > 3000) {
+        moments.earn("floor", () => {
+          shown = true;
+          onFloor(true);
+        });
+      }
     },
+    hide,
+    stop: () => scroller.removeEventListener("scroll", onScroll),
   };
 }
 
@@ -338,7 +393,7 @@ function resting(deep: () => number) {
 export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): Eggs {
   const engine = sea.engine as unknown as Engine;
   const ho = frame.querySelector<HTMLElement>(".ho") ?? frame;
-  const depth = ho.querySelector<HTMLElement>(".depth");
+  const night = nightDepth(ho, ho.querySelector<HTMLElement>(".depth"));
   const owner = frame.querySelector(".hs > main") ?? ho;
   const page = scrollers(frame, ho);
   const canvas = layerCanvas(frame, options.glow);
@@ -347,20 +402,20 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
   const run = keeper(ho, sea, layer.draw, layer.busy);
   const { later, clear } = timeouts();
   let glow: (() => void) | undefined;
-  const parts = { layer, water, later, depth, glow: () => own(owner, run.frame) };
+  const parts = { layer, water, later, nightDim: night.enable, glow: () => own(owner, run.frame) };
   const moments = director({ now: () => performance.now(), hidden: () => document.hidden }, () => {
     glow = states(parts);
   });
   const play = plays(engine, { layer, water, later }, run.keep);
   const pointer = watchPointer(ho, engine, (at) => moments.earn("whirl", () => play.whirl(at.x, at.y)));
-  const floor = resting(page.deep);
+  const floor = floorWatch(page.scroller, page.deep, moments, later, options.floor);
   const tick = () => {
     if (document.hidden) return;
     const now = performance.now();
     if (new Date().getMinutes() === 59) moments.auto("tide", play.tide);
     const p = pointer.state;
     if (p.active && pointer.k() > 0.85 && now - p.rest > 4000) moments.earn("visit", () => play.visit(p.x, p.y));
-    if (floor.rested(now)) moments.earn("floor", () => options.floor(true));
+    floor.check(now);
     moments.tick();
   };
   const timer = window.setInterval(tick, 250);
@@ -377,16 +432,12 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
     dive: page.dive,
     surface: () => {
       page.rise();
-      options.floor(false);
-      // offered again once it has faded (250 ms)
-      later(250, () => {
-        floor.reset();
-        moments.again("floor");
-      });
+      floor.hide();
     },
     destroy: () => {
       window.clearInterval(timer);
       clear();
+      floor.stop();
       page.stop();
       pointer.stop();
       stopControls();
@@ -396,7 +447,7 @@ export function startEggs(frame: HTMLElement, sea: Sea, options: EggsOptions): E
       water.restore();
       layer.destroy();
       canvas.remove();
-      if (depth) delete depth.dataset.floor;
+      night.destroy();
     },
   };
 }

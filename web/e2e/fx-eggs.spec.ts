@@ -79,3 +79,45 @@ test("the hourly tide waits out the first ten seconds and comes once a visit", a
   expect(await page.evaluate(() => new Date().getMinutes())).toBe(59);
   expect(await eggs(page)).toEqual({ ran: ["tide"], earned: [], queued: [] });
 });
+
+test("night dimming leaves the light theme clear and dims only the dark sea", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "light" });
+  await page.clock.install({ time: new Date("2026-11-20T23:00:00+08:00") });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  await expect.poll(() => eggs(page)).not.toBeNull();
+  await page.clock.fastForward(11_000);
+  await page.clock.runFor(500);
+  const depth = page.locator(".ho > .depth");
+  await expect.poll(async () => Number(await depth.evaluate((el) => getComputedStyle(el).opacity))).toBe(0);
+
+  await page.emulateMedia({ colorScheme: "dark" });
+  await expect
+    .poll(async () => Number(await depth.evaluate((el) => getComputedStyle(el).opacity)))
+    .toBeCloseTo(0.12, 2);
+  await page.emulateMedia({ colorScheme: "light" });
+  await expect.poll(async () => Number(await depth.evaluate((el) => getComputedStyle(el).opacity))).toBe(0);
+});
+
+test("the sea-floor return button disappears when scrolling back to the surface with the wheel", async ({ page }) => {
+  await page.clock.install({ time: new Date("2026-11-20T10:00:00+08:00") });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  await expect.poll(() => eggs(page)).not.toBeNull();
+
+  const floorBtn = page.getByRole("button", { name: "↑ 回到海面" });
+  await expect(floorBtn).toBeHidden();
+  await page.evaluate(() => {
+    const hs = document.querySelector<HTMLElement>(".hs");
+    if (hs) hs.scrollTop = hs.scrollHeight;
+  });
+  await page.clock.fastForward(3500);
+  await expect(floorBtn).toBeVisible();
+
+  await page.mouse.move(720, 450);
+  await page.mouse.wheel(0, -1200);
+  await page.clock.runFor(400);
+  await expect(floorBtn).toBeHidden();
+});
