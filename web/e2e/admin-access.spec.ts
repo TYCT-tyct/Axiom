@@ -199,7 +199,11 @@ test.describe("permissions", () => {
     await page.goto("/");
     await expect(h1(page, zhText("nav.models"))).toBeVisible();
     const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.getByRole("link")).toHaveText([zhText("nav.models"), zhText("nav.pricing")]);
+    await expect(nav.getByRole("link")).toHaveText([
+      zhText("nav.models"),
+      zhText("nav.pricing"),
+      zhText("nav.subscriptionPlans"),
+    ]);
     // viewing is not managing: no creating buttons
     await expect(page.getByRole("button", { name: words("models.draft.open") })).toHaveCount(0);
     await expect(page.getByRole("button", { name: words("models.authors.add") })).toHaveCount(0);

@@ -134,6 +134,13 @@ const routeTree = root.addChildren([
     shellPage("/source-classes", () => import("./pages/source-classes")),
     shellPage("/routing-presets", () => loadTranslatedPage(import("./pages/routing-presets"))),
     shellPage("/pricing", () => import("./pages/pricing")),
+    shellPage(
+      "/subscription-plans",
+      () => loadTranslatedPage(import("./pages/subscription-plans")),
+      (search) => ({
+        include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
+      }),
+    ),
     shellPage("/settings", () => loadTranslatedPage(import("./pages/settings"))),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),

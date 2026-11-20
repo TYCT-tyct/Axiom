@@ -9,6 +9,7 @@ import redeem from "./redeem";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
+import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
 import users from "./users";
 
@@ -28,6 +29,7 @@ export const initial = {
     mappings: "待映射模型",
     models: "模型目录",
     pricing: "定价",
+    subscriptionPlans: "订阅套餐",
     settings: "站点设置",
     sourceClasses: "来源类别",
     routingPresets: "路由预设",
@@ -156,4 +158,4 @@ export const initial = {
 };
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers });
+export default /* @__PURE__ */ Object.assign({}, initial, { settings, subscriptions, suppliers });

@@ -1,28 +1,29 @@
 admin                        Axiom Mono 400 normal: 106 chars in 1 files, 16540 bytes
 admin                        Axiom Sans 400 600 normal: 106 chars in 1 files, 20176 bytes; not in the font: ⌘
-admin/auth/enroll            Axiom CJK Admin 400 normal: 312 chars in 2 files, 49644 bytes
-admin/auth/mfa               Axiom CJK Admin 400 normal: 312 chars in 2 files, 49644 bytes
-admin/auth/sign-in           Axiom CJK Admin 400 normal: 310 chars in 2 files, 49644 bytes
-admin/pages/account          Axiom CJK Admin 400 normal: 437 chars in 3 files, 70976 bytes
-admin/pages/approval         Axiom CJK Admin 400 normal: 500 chars in 5 files, 81268 bytes
-admin/pages/approvals        Axiom CJK Admin 400 normal: 364 chars in 3 files, 57144 bytes
-admin/pages/audit            Axiom CJK Admin 400 normal: 322 chars in 2 files, 50336 bytes
-admin/pages/audit-entry      Axiom CJK Admin 400 normal: 317 chars in 3 files, 59276 bytes
-admin/pages/call             Axiom CJK Admin 400 normal: 327 chars in 2 files, 58660 bytes
-admin/pages/calls            Axiom CJK Admin 400 normal: 355 chars in 2 files, 64168 bytes
-admin/pages/home             Axiom CJK Admin 400 normal: 415 chars in 4 files, 75056 bytes
-admin/pages/mappings         Axiom CJK Admin 400 normal: 388 chars in 3 files, 67556 bytes
-admin/pages/model            Axiom CJK Admin 400 normal: 439 chars in 3 files, 70380 bytes
-admin/pages/models           Axiom CJK Admin 400 normal: 405 chars in 2 files, 64168 bytes
-admin/pages/orders           Axiom CJK Admin 400 normal: 409 chars in 3 files, 70976 bytes
-admin/pages/pricing          Axiom CJK Admin 400 normal: 454 chars in 4 files, 74460 bytes
-admin/pages/redeem-codes     Axiom CJK Admin 400 normal: 380 chars in 3 files, 70380 bytes
-admin/pages/routing-presets  Axiom CJK Admin 400 normal: 455 chars in 5 files, 86864 bytes
-admin/pages/settings         Axiom CJK Admin 400 normal: 525 chars in 5 files, 87460 bytes
-admin/pages/source-classes   Axiom CJK Admin 400 normal: 418 chars in 4 files, 82784 bytes
-admin/pages/supplier         Axiom CJK Admin 400 normal: 485 chars in 5 files, 77848 bytes
-admin/pages/suppliers        Axiom CJK Admin 400 normal: 405 chars in 3 files, 68248 bytes
-admin/pages/users            Axiom CJK Admin 400 normal: 319 chars in 1 files, 46256 bytes
+admin/auth/enroll            Axiom CJK Admin 400 normal: 314 chars in 1 files, 47940 bytes
+admin/auth/mfa               Axiom CJK Admin 400 normal: 314 chars in 1 files, 47940 bytes
+admin/auth/sign-in           Axiom CJK Admin 400 normal: 312 chars in 1 files, 47940 bytes
+admin/pages/account          Axiom CJK Admin 400 normal: 461 chars in 5 files, 83508 bytes
+admin/pages/approval         Axiom CJK Admin 400 normal: 502 chars in 4 files, 77812 bytes
+admin/pages/approvals        Axiom CJK Admin 400 normal: 366 chars in 3 files, 60528 bytes
+admin/pages/audit            Axiom CJK Admin 400 normal: 324 chars in 1 files, 47940 bytes
+admin/pages/audit-entry      Axiom CJK Admin 400 normal: 319 chars in 2 files, 53516 bytes
+admin/pages/call             Axiom CJK Admin 400 normal: 329 chars in 1 files, 47940 bytes
+admin/pages/calls            Axiom CJK Admin 400 normal: 357 chars in 2 files, 65224 bytes
+admin/pages/home             Axiom CJK Admin 400 normal: 417 chars in 4 files, 77932 bytes
+admin/pages/mappings         Axiom CJK Admin 400 normal: 390 chars in 4 files, 75616 bytes
+admin/pages/model            Axiom CJK Admin 400 normal: 441 chars in 3 files, 70800 bytes
+admin/pages/models           Axiom CJK Admin 400 normal: 407 chars in 3 files, 70800 bytes
+admin/pages/orders           Axiom CJK Admin 400 normal: 411 chars in 3 files, 72236 bytes
+admin/pages/pricing          Axiom CJK Admin 400 normal: 456 chars in 5 files, 82628 bytes
+admin/pages/redeem-codes     Axiom CJK Admin 400 normal: 382 chars in 3 files, 70040 bytes
+admin/pages/routing-presets  Axiom CJK Admin 400 normal: 457 chars in 4 files, 76496 bytes
+admin/pages/settings         Axiom CJK Admin 400 normal: 525 chars in 5 files, 86560 bytes
+admin/pages/source-classes   Axiom CJK Admin 400 normal: 420 chars in 4 files, 79548 bytes
+admin/pages/subscription-plans Axiom CJK Admin 400 normal: 383 chars in 3 files, 72236 bytes
+admin/pages/supplier         Axiom CJK Admin 400 normal: 487 chars in 4 files, 77052 bytes
+admin/pages/suppliers        Axiom CJK Admin 400 normal: 407 chars in 3 files, 72236 bytes
+admin/pages/users            Axiom CJK Admin 400 normal: 321 chars in 1 files, 47940 bytes
 console                      Axiom Mono 400 normal: 107 chars in 1 files, 16540 bytes
 console                      Axiom Sans 400 600 normal: 106 chars in 1 files, 20176 bytes; not in the font: ⌘
 console/auth/consent         AX Serif 600 normal: 103 chars in 1 files, 24980 bytes

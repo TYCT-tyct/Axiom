@@ -11,6 +11,7 @@ import redeem from "./redeem";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
+import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
 import users from "./users";
 
@@ -29,6 +30,7 @@ export const initial = {
     mappings: "Unmapped models",
     models: "Model catalog",
     pricing: "Pricing",
+    subscriptionPlans: "Subscription plans",
     settings: "Site settings",
     sourceClasses: "Source classes",
     routingPresets: "Routing presets",
@@ -159,7 +161,9 @@ export const initial = {
   pricing,
   redeem,
   approvals,
-} satisfies Messages<Omit<typeof zh, "settings" | "suppliers">>;
+} satisfies Messages<Omit<typeof zh, "settings" | "subscriptions" | "suppliers">>;
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers }) satisfies Messages<typeof zh>;
+export default /* @__PURE__ */ Object.assign({}, initial, { settings, subscriptions, suppliers }) satisfies Messages<
+  typeof zh
+>;

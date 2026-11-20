@@ -21,5 +21,6 @@ export const nav = [
   { to: "/source-classes", label: "nav.sourceClasses", icon: "presets", permission: "sites.manage" },
   { to: "/routing-presets", label: "nav.routingPresets", icon: "presets", permission: "sites.manage" },
   { to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
+  { to: "/subscription-plans", label: "nav.subscriptionPlans", icon: "bill", permission: "pricing.view" },
   { to: "/settings", label: "nav.settings", icon: "mkeys", permission: "sites.manage" },
 ] as const satisfies readonly { to: string; label: string; icon: Icon; permission: string }[];
