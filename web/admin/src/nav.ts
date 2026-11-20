@@ -22,4 +22,16 @@ export const nav = [
   { to: "/routing-presets", label: "nav.routingPresets", icon: "presets", permission: "sites.manage" },
   { to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
   { to: "/settings", label: "nav.settings", icon: "mkeys", permission: "sites.manage" },
-] as const satisfies readonly { to: string; label: string; icon: Icon; permission: string }[];
+  { section: "alerts", to: "/alert-events", label: "nav.alertEvents", icon: "observe", permission: "sites.manage" },
+  {
+    section: "alerts",
+    to: "/alert-configuration",
+    label: "nav.alertConfig",
+    icon: "budget",
+    permission: "sites.manage",
+  },
+  { section: "site", to: "/legal-documents", label: "nav.legalDocs", icon: "plugins", permission: "sites.manage" },
+  { section: "site", to: "/announcements", label: "nav.announcements", icon: "observe", permission: "sites.manage" },
+  { section: "platform", to: "/retention", label: "nav.retention", icon: "observe", permission: "sites.manage" },
+  { section: "platform", to: "/rate-limits", label: "nav.rateLimits", icon: "budget", permission: "sites.manage" },
+] as const satisfies readonly { section?: string; to: string; label: string; icon: Icon; permission: string }[];
