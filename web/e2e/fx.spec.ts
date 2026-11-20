@@ -99,28 +99,6 @@ test("the sea rests while the tab is hidden or the first screen is out of view, 
   await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(away);
 });
 
-test("under reduced motion nothing runs: the sea is one still frame and the entrance is at its end", async ({
-  page,
-}) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  const asked = page.waitForRequest(sea);
-  await open(page);
-  await asked;
-  await expect.poll(() => entrance(page)).toBe("done");
-  const canvas = page.locator("canvas.sea").first();
-  const drawn = () => canvas.evaluate((c: HTMLCanvasElement) => c.toDataURL());
-  await expect.poll(async () => (await drawn()).length).toBeGreaterThan(10_000);
-  const first = await drawn();
-  await page.evaluate(() => new Promise((done) => setTimeout(done, 500)));
-  expect(await drawn()).toBe(first);
-  expect(await loop(page)).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
-  expect(await page.evaluate(() => document.getAnimations().length)).toBe(0);
-  // the other theme switches at once, and the still sea is drawn again in it
-  await page.getByRole("button", { name: /切换到/ }).click();
-  await expect.poll(drawn).not.toBe(first);
-  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
-});
-
 test("a sea that fails to load leaves the page working, with no unhandled error", async ({ page }) => {
   const errors = collectErrors(page);
   await page.route(sea, (route) => route.fulfill({ status: 404, body: "" }));
@@ -224,26 +202,7 @@ test("each screen below the first loads as it nears the view, and plays only whi
   expect((await loop(page)).frames).toBe(away);
 });
 
-test("under reduced motion the screens below show their end at once and do not turn", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  for (const sec of delivered) {
-    await scrollTo(page, sec);
-    await shown(page, sec);
-  }
-  // the connect screen's machine stands wired: the lamp is on and the key is in
-  await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
-  // the three steps are done: the first request has come back
-  await expect(page.locator(".hfm3 .c200.ok")).toHaveText("200");
-  await expect(page.locator(".hfm2 .mr.on .mn")).toHaveText("gpt-5");
-  // no script owns anything on the loop, so the list cannot move on to the next model
-  await pause(page);
-  expect(await loop(page)).toMatchObject({ frames: 0, owners: 0 });
-});
-
 test("a model and a step are chosen from the keyboard", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 2);
@@ -291,7 +250,6 @@ test("a screen whose code fails to arrive says so, and retrying reloads the page
 });
 
 test("without the site's API address the steps say so rather than show an empty one saved", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockConsole(page, "usual", {
     site: { name: "Axiom", currency: "USD", key_prefix: "sk-ax-v1-", registration: "invite" },
@@ -361,17 +319,20 @@ test("pressing sign in plays the departure, loaded on the press, and goes half a
   expect(violations).toEqual([]);
 });
 
-test("under reduced motion the sign-up button goes at once, without the departure's code", async ({ page }) => {
+// Every animation plays whatever the system's motion setting (docs/frontend.md「动画」): reduced motion asked for changes
+// nothing, so the sea moves, the tour is offered and a press on sign-in plays the departure.
+test("under reduced motion the sea moves, the tour is offered and sign-in plays the departure", async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
-  const loaded: string[] = [];
-  page.on("request", (request) => {
-    if (depart.test(request.url())) loaded.push(request.url());
-  });
-  await hang(page, depart);
   await open(page);
-  await signUp(page).click();
-  await expect(page).toHaveURL(/\/console\/register$/);
-  expect(loaded).toEqual([]);
+  await running(page);
+  const tour = page.locator(".tour");
+  await expect(tour).toBeVisible();
+  await expect(tour).not.toHaveClass(/\bgone\b/);
+  await expect(tour).not.toHaveAttribute("inert");
+  const asked = page.waitForRequest(depart);
+  await signIn(page).click();
+  await asked;
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
 });
 
 test("a press goes though the departure's code never comes", async ({ page }) => {

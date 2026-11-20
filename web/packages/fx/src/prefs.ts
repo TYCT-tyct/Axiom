@@ -1,10 +1,8 @@
 // The language and theme switches of the website's header (#747, port design §8.2): the board's own prefs.js as
 // @axiom/boards generates it, loaded the first time either switch is used. It runs unedited on the board's markup: it
 // opens and filters the language panel, writes the chosen language's words with the sonar decode, and dives into
-// the other theme. Under reduced motion both switches are made at once, without either effect (R7): the engine takes
-// an animate flag on each, and this module clears it, also for a switch under way when the setting changes.
+// the other theme.
 import "@axiom/boards/engines/prefs.js";
-import { onMotion, reducedMotion } from "./loop";
 import type { OceanEngine } from "./sea";
 
 export type Prefs = {
@@ -17,19 +15,9 @@ export type Prefs = {
   destroy(): void;
 };
 
-type Engine = Prefs & {
-  applyLang(code: string, animate: boolean): void;
-  applyTheme(to: string, animate: boolean): void;
-  // what the engine runs: the language's decode under way (wave), ended at once by settle; the theme's dive (dv)
-  wave: unknown;
-  dv: unknown;
-  settle(): void;
-  effective(): string;
-};
-
 declare global {
   interface Window {
-    AxiomPrefs: new (root: HTMLElement, engine: object, options: object) => Engine;
+    AxiomPrefs: new (root: HTMLElement, engine: object, options: object) => Prefs;
   }
 }
 
@@ -49,24 +37,8 @@ export function startPrefs(root: HTMLElement, sea: OceanEngine | undefined, opti
   if (!canvas) {
     throw new Error("startPrefs: the root has no canvas.sea");
   }
-  const engine = new window.AxiomPrefs(root, sea ?? { canvas, setLight: () => {}, renderer: {}, vs: 1 }, {
+  return new window.AxiomPrefs(root, sea ?? { canvas, setLight: () => {}, renderer: {}, vs: 1 }, {
     ...options,
     themed: ":scope > .ho",
   });
-  const lang = engine.applyLang.bind(engine);
-  const theme = engine.applyTheme.bind(engine);
-  engine.applyLang = (code, animate) => lang(code, animate && !reducedMotion());
-  engine.applyTheme = (to, animate) => theme(to, animate && !reducedMotion());
-  // reduced motion asked for mid-switch: the decode and the dive end at once, in the choice they were heading to
-  const stopMotion = onMotion((allowed) => {
-    if (allowed) return;
-    if (engine.wave) engine.settle();
-    if (engine.dv) engine.applyTheme(engine.effective(), false);
-  });
-  const destroy = engine.destroy.bind(engine);
-  engine.destroy = () => {
-    stopMotion();
-    destroy();
-  };
-  return engine;
 }

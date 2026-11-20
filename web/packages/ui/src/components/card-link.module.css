@@ -20,9 +20,3 @@
 .root:hover > section {
   box-shadow: 0 0 0 var(--bw) var(--n8);
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .root > section {
-    transition: none;
-  }
-}

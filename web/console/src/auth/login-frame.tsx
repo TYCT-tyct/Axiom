@@ -9,7 +9,7 @@ import ShellZH from "@axiom/boards/Login/regions/LoginShell.zh";
 import LoginStep from "@axiom/boards/Login/regions/LoginStep";
 import LoginSub from "@axiom/boards/Login/regions/LoginSub";
 import LoginTitle from "@axiom/boards/Login/regions/LoginTitle";
-import { reducedMotion, takeArrival, useEffectModule } from "@axiom/fx";
+import { takeArrival, useEffectModule } from "@axiom/fx";
 import type { Heard, Login, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
@@ -317,24 +317,21 @@ function useLoginEngine({
 
 // An arrival's title is hidden from its first frame until the decode resolves it, or for veilFor if the decode's code
 // is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back. The veil lifts at once
-// when motion is turned off, or when its title goes (lift): a decode that comes later does not play then.
+// when its title goes (lift): a decode that comes later does not play then.
 function useArrivalVeil(titleRef: RefObject<HTMLElement | null>, arrived: boolean) {
   const on = useRef(false);
   const end = useRef(() => {});
   useLayoutEffect(() => {
     const chars = titleRef.current?.querySelectorAll<HTMLElement>(".ch") ?? [];
-    if (!arrived || reducedMotion()) return;
+    if (!arrived) return;
     for (const c of chars) c.style.color = "transparent";
     on.current = true;
-    const motion = matchMedia("(prefers-reduced-motion: reduce)");
     const lift = () => {
       on.current = false;
       window.clearTimeout(timer);
-      motion.removeEventListener("change", lift);
       for (const c of chars) c.style.removeProperty("color");
     };
     const timer = window.setTimeout(lift, veilFor);
-    motion.addEventListener("change", lift);
     end.current = lift;
     return lift;
   }, [arrived, titleRef]);

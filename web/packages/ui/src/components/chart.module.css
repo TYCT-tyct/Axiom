@@ -237,11 +237,3 @@
     left: clamp(75px, calc(var(--x) * 1%), calc(100% - 75px));
   }
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .bar,
-  .line,
-  .tip {
-    animation: none;
-  }
-}

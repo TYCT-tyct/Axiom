@@ -4,8 +4,8 @@ import { delivered, open, place, setHidden } from "./fx-helpers.ts";
 // The tour (the connect screen's card, the last of the screens' cards) and the menu's list of sections: the page moving
 // the reader, and what ends it. The rest of the screens' cases are fx-screens.spec.ts.
 
-// The tour and the menu's list of sections (the last screen's card): the tour glides through the screens, the list goes
-// to one, and under reduced motion there is no tour to offer.
+// The tour and the menu's list of sections (the last screen's card): the tour glides through the screens, and the list
+// goes to one.
 const scrolled = (page: Page) => page.locator(".hs").evaluate((el) => el.scrollTop);
 // where a glide to a screen's place ends: its top, or as far as the scroller goes
 const placeTop = (page: Page, sec: number) =>
@@ -43,8 +43,7 @@ test("the menu's list of sections goes to one", async ({ page }) => {
     .toBeLessThan(40);
 });
 
-// The tour is the page moving the reader: the reader taking over, the page hidden, or reduced motion asked for ends it
-// where it is. The tour's own steps are on the page's clock, which stands still until the case runs it on; the glides
+// The tour is the page moving the reader: the reader taking over or the page hidden ends it where it is. The tour's own steps are on the page's clock, which stands still until the case runs it on; the glides
 // themselves are the browser's.
 const tourEnds: [string, (page: Page) => Promise<unknown>][] = [
   ["the island's mark takes the reader back to the top", (page) => page.locator(".isl .im").click()],
@@ -56,7 +55,6 @@ const tourEnds: [string, (page: Page) => Promise<unknown>][] = [
     },
   ],
   ["the tab is hidden", (page) => setHidden(page, true)],
-  ["reduced motion is asked for", (page) => page.emulateMedia({ reducedMotion: "reduce" })],
 ];
 for (const [how, end] of tourEnds) {
   test(`the tour stops when ${how}`, async ({ page }) => {
@@ -83,13 +81,3 @@ for (const [how, end] of tourEnds) {
     expect(Math.abs((await scrolled(page)) - rested)).toBeLessThan(2);
   });
 }
-
-test("under reduced motion the tour is not offered", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await open(page);
-  await expect(page.locator(".tour")).toHaveClass(/\bgone\b/);
-  // not reachable by the keyboard either: pressing Enter on it would start the tour
-  await page.locator(".tour").focus();
-  await expect(page.locator(".tour")).not.toBeFocused();
-  await expect(page.locator(".tour")).toHaveAttribute("inert", "");
-});

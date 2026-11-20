@@ -1,4 +1,3 @@
-import { reducedMotion } from "@axiom/fx";
 import { type KeyboardEvent as KeyPress, type RefCallback, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
@@ -109,8 +108,8 @@ export function useScript<S extends Script<never>>(
     if (!stage) return;
     const running = latest.current(stage, () => setVersion((n) => n + 1));
     setScript(running);
-    // the screen fades in the first time an eighth of it is seen (the board's .hfm.in), at once under reduced motion
-    const seen = firstSeen(stage, reducedMotion() ? 0 : 0.12);
+    // the screen fades in the first time an eighth of it is seen (the board's .hfm.in)
+    const seen = firstSeen(stage, 0.12);
     seen.promise.then(() => setEntered(true));
     stage.addEventListener("keydown", press);
     return () => {

@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { readFileSync } from "node:fs";
 import { createInstance } from "i18next";
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -321,7 +320,7 @@ it("shows an exact amount as the server gave it, in the tooltip, the announcemen
   expect(host.textContent).toContain(exact);
 });
 
-it("draws a single line point as a dot and plays no entrance animation under reduced motion", () => {
+it("draws a single line point as a dot", () => {
   render(
     <LineChart
       label="u"
@@ -333,9 +332,6 @@ it("draws a single line point as a dot and plays no entrance animation under red
     />,
   );
   expect(host.querySelector("path")?.getAttribute("d")).toMatch(/h0$/);
-  const css = readFileSync(`${import.meta.dirname}/chart.module.css`, "utf8");
-  const reduced = css.slice(css.indexOf("prefers-reduced-motion"));
-  expect(reduced).toMatch(/\.bar,[^}]*\.line,[^}]*\.tip\s*{\s*animation: none/);
 });
 
 // --- Metric ---------------------------------------------------------------------------------------------------------

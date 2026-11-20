@@ -1,10 +1,9 @@
 /* Glyph: the board's icon layers and hover motions (AxIcons.dc.html, "icon layers" and "hover micro-actions").
-   Every motion is a function of --icon-go, 0 at rest and 1 on hover. It becomes 1 only under
-   prefers-reduced-motion: no-preference, from the icon's own hover or from --icon-hover, which a control sets on its
-   root while hovered: the board starts the motion when the whole button or menu item is under the pointer, and a
-   module may not select another component's root. Under reduced motion --icon-go stays 0 and nothing moves. */
+   Every motion is a function of --icon-go, 0 at rest and 1 on hover. It becomes 1 from the icon's own hover or from
+   --icon-hover, which a control sets on its root while hovered: the board starts the motion when the whole button or
+   menu item is under the pointer, and a module may not select another component's root. */
 .icon {
-  --icon-go: 0;
+  --icon-go: var(--icon-hover, 0);
   flex: none;
   overflow: visible;
   fill: none;
@@ -15,24 +14,18 @@
   vertical-align: middle;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .icon {
-    --icon-go: var(--icon-hover, 0);
-  }
+.icon:hover {
+  --icon-go: 1;
+}
 
-  .icon:hover {
-    --icon-go: 1;
-  }
+.icon g > *,
+.icon [data-p] {
+  transition: transform var(--dur) var(--easeB);
+}
 
-  .icon g > *,
-  .icon [data-p] {
-    transition: transform var(--dur) var(--easeB);
-  }
-
-  .o,
-  .f {
-    transition: opacity var(--dur) var(--ease);
-  }
+.o,
+.f {
+  transition: opacity var(--dur) var(--ease);
 }
 
 .icon g > *,
@@ -218,8 +211,6 @@
   stroke-dashoffset: calc(var(--icon-go) * -10.4);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  .route .o [data-p~="a1"] {
-    transition: stroke-dashoffset 900ms linear;
-  }
+.route .o [data-p~="a1"] {
+  transition: stroke-dashoffset 900ms linear;
 }

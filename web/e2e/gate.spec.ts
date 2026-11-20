@@ -1,6 +1,7 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
 import { applyBrand, brands } from "./brand.ts";
+import { freeze } from "./design/stage.ts";
 import { siteSuite } from "./site-scenes.ts";
 import { suites } from "./suites.ts";
 
@@ -32,7 +33,7 @@ const axe = (page: Page) =>
 test.describe.configure({ mode: "parallel" });
 
 async function setup(page: Page, scheme: (typeof schemes)[number], language: (typeof languages)[number]) {
-  await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+  await page.emulateMedia({ colorScheme: scheme });
   await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
 }
 
@@ -46,6 +47,8 @@ for (const suite of suites) {
           await suite.prepare(page, scene);
           await page.setViewportSize({ width: 1280, height: 800 });
           await scene.open(page);
+          // every animation plays, so the page is checked as it ends up, not mid-fade
+          await freeze(page);
           const result = await axe(page).analyze();
           expect(
             result.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(" | ")}`),
@@ -63,6 +66,7 @@ for (const suite of suites) {
             await page.setViewportSize({ width: 1280, height: 800 });
             await scene.open(page);
             await applyBrand(page, color);
+            await freeze(page);
             const result = await axe(page).withRules(["color-contrast"]).analyze();
             expect(result.violations.map((v) => v.nodes.map((n) => n.target.join(" ")).join(" | "))).toEqual([]);
           });
@@ -76,6 +80,7 @@ for (const suite of suites) {
         await suite.prepare(page, scene, "worst");
         await page.setViewportSize({ width, height: 900 });
         await scene.open(page);
+        await freeze(page);
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         expect(overflow).toBeLessThanOrEqual(0);
         // A table too wide for its box scrolls inside it, so a control in a middle column may wait off screen until the

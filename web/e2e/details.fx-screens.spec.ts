@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { usualState } from "./console-data.ts";
-import { open, place, scrollTo, shown } from "./fx-helpers.ts";
+import { open, pauseAhead, place, scrollTo, setHidden, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // What the home screens say and do in a single tab, held to what the product guarantees: the questions' promises about
@@ -31,7 +31,6 @@ const promises = {
 for (const language of ["zh", "en"] as const)
   test(`the questions promise only what settlement guarantees, ${language}`, async ({ page }) => {
     const said = promises[language];
-    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.addInitScript((lang) => localStorage.setItem("axiom.language", lang), language);
     await page.setViewportSize({ width: 1440, height: 900 });
     await open(page);
@@ -45,9 +44,11 @@ for (const language of ["zh", "en"] as const)
   });
 
 test("on a phone a configuration copied by hand is the command's own characters", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 390, height: 844 });
   await open(page);
+  // the page's clock stands still before the screen is seen, so its card stays written whole rather than decoding in
+  await page.clock.install();
+  await pauseAhead(page, 1000);
   await scrollTo(page, 1);
   await shown(page, 1);
   // biome-ignore lint/performance/useDomNodeTextContent: a selection takes the text as laid out, which innerText is; textContent also has the key's hidden link
@@ -64,7 +65,6 @@ const kept = () =>
     endpoints: model.endpoints?.map(({ pricing: __, ...endpoint }) => endpoint),
   }));
 test("a retry from the models screen reaches the footer's prices", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockConsole(page, "usual", { site, models: kept() });
   let down = true;
@@ -87,7 +87,6 @@ test("a retry from the models screen reaches the footer's prices", async ({ page
 
 test("a screen built again shows the time its list came, not the time it was built", async ({ page }) => {
   await page.clock.install({ time: new Date("2026-11-19T10:00:00Z") });
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 2);
@@ -100,7 +99,10 @@ test("a screen built again shows the time its list came, not the time it was bui
       .textContent();
   await expect.poll(time).toMatch(/\d\d:\d\d/);
   const came = await time();
+  // hidden meanwhile, so the frame loop does not step through every frame of the quarter hour
+  await setHidden(page, true);
   await page.clock.runFor(15 * 60_000);
+  await setHidden(page, false);
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator(".bar .menu")).toBeVisible();
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -129,7 +131,6 @@ test("the closed menu is out of the keyboard's way, and the focus goes in and co
 const longApi = "https://api.a-rather-long-subdomain.example-relay-provider.com";
 for (const width of [360, 1440])
   test(`the questions' picture of the tools shows a long address whole, at ${width}`, async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: "reduce" });
     await page.setViewportSize({ width, height: 900 });
     await mockConsole(page, "usual", { site: { ...site, api_base_url: longApi } });
     await page.goto(apps[0].url);
@@ -158,7 +159,6 @@ for (const width of [360, 1440])
   });
 
 test("the first picture's request goes through the site, named as the site", async ({ page }: { page: Page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
   await page.setViewportSize({ width: 1440, height: 900 });
   await mockConsole(page, "usual", { site: { ...site, name: "Acme Relay" } });
   await page.goto(apps[0].url);

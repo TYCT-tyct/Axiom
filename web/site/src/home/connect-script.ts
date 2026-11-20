@@ -1,4 +1,4 @@
-import { onMotion, reducedMotion, timeline } from "@axiom/fx";
+import { timeline } from "@axiom/fx";
 import figureUrl from "./connect-figure.svg?url";
 import { along, at, figure, Machine, type Point, points, trailAt } from "./connect-machine";
 import {
@@ -19,13 +19,11 @@ import { firstSeen, type Script, tabKey, tabStop, turns } from "./script";
 // The connect screen's script (Site.dc.html M1): the tool's configuration is decoded in; the machine plugs into the one
 // input, a call runs down the cable, the shaft climbs to its vendor's level, the wiper turns to the model's contact, and
 // the vendor's module lights. The machine is an SVG fetched as the screen nears the view and put in place; its
-// story rests while the screen is out of view or the tab hidden, and under reduced motion it stands in its wired
-// state, with the key in and the lamp on.
+// story rests while the screen is out of view or the tab hidden.
 //
 // What an interaction sets going is that interaction's: a copy's answer and its word, a tool's decode, card height and
-// replug. A newer one of the same kind, a tool picked (which also ends the copy's word, about the tool before), the
-// screen ending, and reduced motion being asked for (which settles everything in its final state) each end it. The
-// setting is read when each thing starts, never kept from the screen's start.
+// replug. A newer one of the same kind, a tool picked (which also ends the copy's word, about the tool before) and the
+// screen ending each end it.
 
 const CALLS: [number, number, string][] = [
   [0, 0, "claude-opus-5.5"],
@@ -74,8 +72,7 @@ const copyState = (known: boolean, copied: "" | "done" | "failed", copies: Tool[
 let fetched: string | undefined;
 
 class ConnectRun implements Script<Texts> {
-  // the clock of the motion setting in force: a new one when the reader changes it
-  private clock;
+  private readonly clock;
   private readonly seen;
   private readonly state: State = { tool: 0, ct: null, copied: "", pulse: false, call: null, rct: null };
   private machine: Machine | undefined;
@@ -84,8 +81,6 @@ class ConnectRun implements Script<Texts> {
   private current = 0;
   private name = "Axiom";
   private dead = false;
-  // the story has started (once): it goes on under a new clock when motion is allowed again
-  private told = false;
   private copyTimer = 0;
   private readonly copying = turns();
   private readonly picking = turns();
@@ -95,7 +90,6 @@ class ConnectRun implements Script<Texts> {
   // the figure's fetch, stopped with the screen
   private readonly fetching = new AbortController();
   private readonly resize: ResizeObserver;
-  private readonly stopMotion: () => void;
   private readonly picks = tools.map((_, i) => () => this.pick(i));
   private readonly tabKey = tabKey(
     tools.length,
@@ -114,7 +108,6 @@ class ConnectRun implements Script<Texts> {
     this.seen = firstSeen(stage, 0.3);
     this.resize = new ResizeObserver(() => this.place());
     this.resize.observe(stage);
-    this.stopMotion = onMotion((allowed) => this.motion(allowed));
     document.addEventListener("visibilitychange", this.hidden);
     window.addEventListener("pagehide", this.hidden);
     this.fetchMachine();
@@ -145,8 +138,7 @@ class ConnectRun implements Script<Texts> {
         this.machine = new Machine(fig, asset);
         this.wire = new Wire(this.stage, fig, this.narrow);
         this.place();
-        if (reducedMotion()) this.wired();
-        else this.seen.promise.then(() => this.intro());
+        this.seen.promise.then(() => this.intro());
       })
       // the card works without the picture: the machine is only the illustration
       .catch(() => {});
@@ -171,31 +163,9 @@ class ConnectRun implements Script<Texts> {
     return CALLS[this.current % CALLS.length] as [number, number, string];
   }
 
-  // The reader changed the motion setting: what was moving stops in its final state (the machine wired and at rest, the
-  // card decoded at its height, the plug in), on a clock of the new setting, which the loop runs only while motion is
-  // allowed; with motion allowed again the story goes on from there.
-  private motion(allowed: boolean) {
-    this.clock.end();
-    this.clock = timeline(this.stage);
-    this.picking.end();
-    this.resizing?.finish();
-    this.stage.querySelector<SVGElement>(".cpulse")?.style.setProperty("opacity", "0");
-    if (this.machine) {
-      this.machine.rest();
-      this.wired();
-    }
-    if (this.wire) this.wire.plug = 0;
-    this.place();
-    this.set({ ct: null, pulse: false, rct: null });
-    if (!allowed || !this.machine) return;
-    if (this.told) this.loop();
-    else this.seen.promise.then(() => this.intro());
-  }
-
   // ---------------------------------------------------------------- motion helpers
   // tween runs step over ms of the clock in force, and says whether it got to the end: false once that clock has ended
-  // (the screen has ended, or the motion setting changed), when whatever awaits it stops too, so nothing it would do next
-  // lands on a later clock.
+  // (the screen has ended), when whatever awaits it stops too, so nothing it would do next lands on a later clock.
   private tween(ms: number, step: (p: number) => void) {
     const clock = this.clock;
     return new Promise<boolean>((done) => {
@@ -239,8 +209,6 @@ class ConnectRun implements Script<Texts> {
   // ---------------------------------------------------------------- the story
   private async intro() {
     // the key goes in and turns; the pilot lamp comes on; then the lines you add are written
-    if (this.told) return;
-    this.told = true;
     this.place();
     if (!(await this.clock.sleep(500))) return;
     this.wired();
@@ -255,8 +223,8 @@ class ConnectRun implements Script<Texts> {
       if (!(await this.callA(this.call())) || !(await this.clock.sleep(520))) return;
     }
   }
-  // a call, start to end: every wait says whether the clock it started on is still the one in force, and the call stops
-  // at the first that is not (the motion setting changed, or the screen ended)
+  // a call, start to end: every wait says whether the clock it started on is still running, and the call stops at the
+  // first that is not (the screen ended)
   private async callA([vendor, contact, name]: [number, number, string]) {
     const m = this.machine;
     const w = this.wire;
@@ -365,10 +333,6 @@ class ConnectRun implements Script<Texts> {
   // the lines the tool adds are written in; a newer decode (another tool picked) takes over from an older one
   private decode() {
     const mine = this.decoding.start();
-    if (reducedMotion()) {
-      this.set({ ct: null });
-      return;
-    }
     const t0 = this.clock.now();
     this.set({ ct: 0 });
     this.clock.each((now) => {
@@ -401,18 +365,17 @@ class ConnectRun implements Script<Texts> {
     // the copy's word was about the tool before
     this.copying.end();
     window.clearTimeout(this.copyTimer);
-    const still = reducedMotion();
     const card = this.stage.querySelector<HTMLElement>(".code");
     // the height the card shows now, mid-way through an earlier pick's easing, which a new one starts from
     const before = card?.offsetHeight ?? 0;
     this.resizing?.cancel();
-    this.set({ tool: i, ct: still ? null : 0, copied: "" });
-    if (!still) this.replug(mine);
+    this.set({ tool: i, ct: 0, copied: "" });
+    this.replug(mine);
     // once the card is drawn for the new tool, its height eases to the new one and the cable follows
     const after = () => {
       if (!mine()) return;
       const now = card?.offsetHeight ?? 0;
-      if (card && !still && Math.abs(now - before) > 1) {
+      if (card && Math.abs(now - before) > 1) {
         this.resizing = card.animate([{ height: `${before}px` }, { height: `${now}px` }], {
           duration: 250,
           easing: "ease-out",
@@ -422,12 +385,10 @@ class ConnectRun implements Script<Texts> {
       this.decode();
       this.wire?.draw(this.state.tool);
     };
-    if (still) setTimeout(after, 0);
-    else
-      this.clock.each(() => {
-        after();
-        return false;
-      });
+    this.clock.each(() => {
+      after();
+      return false;
+    });
   }
   // pointing at the address line lights the one input; pointing at the key line lights the key
   private hover(i: number) {
@@ -506,7 +467,6 @@ class ConnectRun implements Script<Texts> {
     this.dead = true;
     this.seen.cancel();
     this.resize.disconnect();
-    this.stopMotion();
     this.fetching.abort();
     this.copying.end();
     this.picking.end();

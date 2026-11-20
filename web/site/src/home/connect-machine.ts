@@ -155,16 +155,6 @@ export class Machine {
     if (mid) redraw(mid, midSvg(z));
     if (top) redraw(top, topSvg(z));
   }
-  // rest puts the machine at the end of a call: the shaft down, the wiper home, the plug and the armature in, nothing
-  // lit and no light on its way
-  rest() {
-    this.setWiper(figure.geo.HOME_A);
-    this.setLift(0);
-    this.move("plug", [0, 0]);
-    this.move("arm", [0, 0]);
-    for (const lit of [...this.pins.values(), ...this.mods, ...this.dnames]) lit.classList.remove("on");
-    for (const pulse of this.pulses) pulse.style.opacity = "0";
-  }
   text(m: string, v: string) {
     if (this.display.m) this.display.m.textContent = m;
     if (this.display.v) this.display.v.textContent = v;

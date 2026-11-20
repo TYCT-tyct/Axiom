@@ -219,20 +219,6 @@
   body:has(dialog[open]) {
     overflow: hidden;
   }
-
-  /* Motion ends at once on its final frame. */
-  @media (prefers-reduced-motion: reduce) {
-    *,
-    *::before,
-    *::after {
-      /* biome-ignore-start lint/complexity/noImportantStyles: an important declaration is what outranks a component's own animation */
-      animation-duration: 1ms !important;
-      animation-iteration-count: 1 !important;
-      transition-duration: 1ms !important;
-      scroll-behavior: auto !important;
-      /* biome-ignore-end lint/complexity/noImportantStyles: see above */
-    }
-  }
 }
 
 /* Paper is light: a receipt printed from the dark scheme would be pale text on white. The selector carries the theme

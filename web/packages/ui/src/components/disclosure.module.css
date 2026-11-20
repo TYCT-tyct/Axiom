@@ -38,9 +38,3 @@
 .body {
   padding-top: 12px;
 }
-
-@media (prefers-reduced-motion: reduce) {
-  .chevron {
-    transition: none;
-  }
-}

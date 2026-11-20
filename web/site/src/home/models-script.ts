@@ -1,5 +1,5 @@
 import type { Schemas } from "@axiom/api";
-import { hash, reducedMotion, timeline } from "@axiom/fx";
+import { hash, timeline } from "@axiom/fx";
 import { parseMoney } from "@axiom/ui";
 import type zh from "../locales/zh";
 import { bridge, leadOf, measurer } from "./models-leads";
@@ -262,7 +262,6 @@ type Part = "list" | "panel" | "routes" | "leads" | "pick";
 // each render. Its handlers are made once, so the region's props keep their identity from one frame to the next.
 class ModelsRun implements ModelsScript {
   private readonly clock;
-  private readonly still = reducedMotion();
   private readonly seen;
   private readonly resized = new ResizeObserver(() => this.place(false));
   private state: State = {
@@ -347,7 +346,7 @@ class ModelsRun implements ModelsScript {
   private readonly refetch = () => ask();
 
   private begin() {
-    if (this.dead || this.still || this.all().length === 0) return;
+    if (this.dead || this.all().length === 0) return;
     this.tween("st", 700);
     this.tween("mt", 420);
     this.glide = true;
@@ -355,7 +354,6 @@ class ModelsRun implements ModelsScript {
     this.rotate();
   }
   private tween(key: "st" | "mt", ms: number) {
-    if (this.still) return;
     const t0 = this.clock.now();
     this.clock.each((now) => {
       const t = now - t0;
@@ -451,7 +449,7 @@ class ModelsRun implements ModelsScript {
     if (!lead) return;
     const from = this.leadY ?? lead.to;
     this.leadY = lead.to;
-    if (move && !this.still) {
+    if (move) {
       this.light(lead.lit);
       this.slide(lead.draw, from, lead.to);
     } else lead.draw(lead.to);

@@ -1,4 +1,4 @@
-import { reducedMotion, timeline } from "@axiom/fx";
+import { timeline } from "@axiom/fx";
 import type zh from "../locales/zh";
 import { firstSeen, type Script } from "./script";
 
@@ -34,7 +34,7 @@ const KEY = "sk-ax-7f3c9a1e5b02";
 const KEY_MASK = "sk-ax-7f3c••••••••";
 const GL = "@%#*+=-:SXt8";
 const glyph = () => GL[Math.floor(Math.random() * GL.length)] as string;
-// the finished picture: what the screen shows at rest, before it is seen and under reduced motion
+// the finished picture: what the screen shows at rest, before it is seen
 const DONE: State = {
   step: 4,
   tl: 1,
@@ -101,14 +101,11 @@ const stepClass = (playing: number, step: number) => (playing === step ? "on" : 
 // wait, which reads the number (live).
 class StepsRun implements Script<Input> {
   private readonly clock;
-  private readonly still = reducedMotion();
   private readonly seen;
   private readonly state: State;
   private run = 0;
   private dead = false;
-  private readonly go = [0, 1, 2].map((i) => () => {
-    if (!this.still) this.play(i);
-  });
+  private readonly go = [0, 1, 2].map((i) => () => this.play(i));
   private readonly steps = [this.makeKey, this.editConfig, this.firstRequest];
 
   // url is where the reader's base_url goes: the site's API address
@@ -121,7 +118,7 @@ class StepsRun implements Script<Input> {
     this.clock = timeline(stage);
     this.seen = firstSeen(stage, 0.35);
     this.seen.promise.then(() => {
-      if (!this.still && this.run === 0) this.play(0);
+      if (this.run === 0) this.play(0);
     });
   }
 

@@ -1,11 +1,10 @@
-import { onMotion, reducedMotion, timeline } from "@axiom/fx";
+import { timeline } from "@axiom/fx";
 import { type Script, tabKey, tabStop, turns } from "./script";
 
 // The questions' script (Site.dc.html M5): one question is open, and in the wide layout a cable patches from its port to
 // the card, with a pulse down it; the first answer's diagram sends its request to one vendor after another. In the
 // narrow layout the questions are an accordion, where a second press closes the open one. A patch is the choice's that
-// started it: a newer choice, the screen ending, or reduced motion being asked for (which puts the cable on the open
-// question at once) ends it; the setting is read at each choice, never kept from the screen's start.
+// started it: a newer choice or the screen ending ends it.
 const questions = 8;
 const ROW = 48;
 // the cable's route: from a port at PX, through the bend at XM, to the card's socket at (SX, SY)
@@ -32,8 +31,7 @@ export const resting = { m5_pillY: 0, m5_trD: trace(ROW / 2), m5_ringX: PX, m5_r
 const indices = Array.from({ length: questions }, (_, i) => i);
 
 class FaqRun implements Script<object> {
-  // the clock of the motion setting in force: a new one when the reader changes it
-  private clock;
+  private readonly clock;
   private open = 0;
   private vendor = 0;
   // where the cable is: the row it is patched to, in pixels
@@ -45,7 +43,6 @@ class FaqRun implements Script<object> {
     () => Math.max(0, this.open),
     (i) => this.choose(i),
   );
-  private readonly stopMotion = onMotion((allowed) => this.motion(allowed));
 
   constructor(
     private readonly stage: HTMLElement,
@@ -53,20 +50,7 @@ class FaqRun implements Script<object> {
     private readonly narrow: boolean,
   ) {
     this.clock = timeline(stage);
-    // under reduced motion nothing advances by itself
-    if (!reducedMotion()) this.cycle();
-  }
-
-  // The reader changed the motion setting: the cable stands on the open question with its pulse off, on a clock of
-  // the new setting, which the loop runs only while motion is allowed; with motion allowed again the first answer's
-  // diagram moves on again.
-  private motion(allowed: boolean) {
-    this.clock.end();
-    this.clock = timeline(this.stage);
-    this.patching.end();
-    this.stage.querySelector(".patch .pu")?.setAttribute("stroke-dashoffset", "16");
-    if (!this.narrow) this.moveTo(Math.max(0, this.open) * ROW + ROW / 2);
-    if (allowed) this.cycle();
+    this.cycle();
   }
 
   // the first answer's diagram: the request goes out to one vendor after another while that answer is open
@@ -92,10 +76,6 @@ class FaqRun implements Script<object> {
     const to = i * ROW + ROW / 2;
     const from = this.cy;
     const mine = this.patching.start();
-    if (reducedMotion()) {
-      this.moveTo(to);
-      return;
-    }
     const t0 = this.clock.now();
     this.clock.each((now) => {
       if (!mine()) return false;
@@ -136,7 +116,6 @@ class FaqRun implements Script<object> {
   }
 
   destroy() {
-    this.stopMotion();
     this.patching.end();
     this.clock.end();
   }
