@@ -31,7 +31,7 @@ export default function Overview() {
   const values = {
     copyBase,
     nkx: () => void navigate({ to: "/keys" }),
-    go_usage: () => void navigate({ to: "/calls" }),
+    go_usage: () => void navigate({ to: "/usage" }),
     go_logs: () => void navigate({ to: "/calls", search: { status: "error" } }),
   };
   return (

@@ -1,4 +1,5 @@
 import type { KeyboardEvent, ReactNode } from "react";
+import { board } from "../board-classes";
 import { classes } from "../classes";
 import { Glyph, type GlyphName } from "./glyph";
 import s from "./menu.module.css";
@@ -13,7 +14,6 @@ type MenuItem = {
   checked?: boolean;
 };
 
-// Where each key moves the focus among the n items from the current one, wrapping at both ends.
 const moves: Record<string, (at: number, n: number) => number> = {
   ArrowDown: (at, n) => (at + 1) % n,
   ArrowUp: (at, n) => (at - 1 + n) % n,
@@ -32,8 +32,9 @@ function move(event: KeyboardEvent<HTMLDivElement>) {
   items[step(at, items.length)]?.focus();
 }
 
-// Menu is a menu button (WAI-ARIA APG): the trigger opens a list of actions with the first one focused; arrow keys,
-// Home and End move among them; Enter or Space acts and closes it; Esc closes it and gives focus back to the trigger.
+// Menu is a menu button (WAI-ARIA APG) rendered with the board's .pmi rows (AxApp/regions.css): the trigger opens a
+// list of actions with the first one focused; arrow keys, Home and End move among them; Enter or Space acts and closes
+// it; Esc closes it and gives focus back to the trigger.
 export function Menu({
   label,
   align,
@@ -56,7 +57,7 @@ export function Menu({
             role={item.checked === undefined ? "menuitem" : "menuitemradio"}
             aria-checked={item.checked}
             tabIndex={-1}
-            className={classes(s.item, item.danger && s.danger)}
+            className={classes(board.pmi, s.item, item.danger && s.danger)}
             onClick={() => {
               close();
               item.onSelect();
@@ -69,7 +70,7 @@ export function Menu({
             ) : null}
             {item.label}
             {item.checked ? (
-              <span className={s.check}>
+              <span className={classes(board.ck, s.check)}>
                 <Glyph name="check" />
               </span>
             ) : null}

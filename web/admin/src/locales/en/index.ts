@@ -1,13 +1,19 @@
 import type { Messages } from "@axiom/ui";
 import type zh from "../zh";
+import alertConfig from "./alert-configuration";
+import alertEvents from "./alert-events";
+import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
+import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
+import rateLimits from "./rate-limits";
 import redeem from "./redeem";
+import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
@@ -32,6 +38,12 @@ export const initial = {
     settings: "Site settings",
     sourceClasses: "Source classes",
     routingPresets: "Routing presets",
+    alertEvents: "Alert events",
+    alertConfig: "Alert rules and channels",
+    announcements: "Announcements",
+    legalDocs: "Legal documents",
+    retention: "Log retention",
+    rateLimits: "Rate limits",
     more: "More",
   },
   navSections: {
@@ -175,7 +187,28 @@ export const initial = {
   pricing,
   redeem,
   approvals,
-} satisfies Messages<Omit<typeof zh, "settings" | "suppliers">>;
+} satisfies Messages<
+  Omit<
+    typeof zh,
+    | "settings"
+    | "suppliers"
+    | "alertConfig"
+    | "alertEvents"
+    | "announcements"
+    | "legalDocs"
+    | "rateLimits"
+    | "logRetention"
+  >
+>;
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers }) satisfies Messages<typeof zh>;
+export default /* @__PURE__ */ Object.assign({}, initial, {
+  settings,
+  suppliers,
+  alertConfig,
+  alertEvents,
+  announcements,
+  legalDocs,
+  rateLimits,
+  logRetention,
+}) satisfies Messages<typeof zh>;

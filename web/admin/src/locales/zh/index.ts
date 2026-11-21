@@ -1,11 +1,17 @@
+import alertConfig from "./alert-configuration";
+import alertEvents from "./alert-events";
+import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
+import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
 import pricing from "./pricing";
+import rateLimits from "./rate-limits";
 import redeem from "./redeem";
+import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
@@ -31,6 +37,12 @@ export const initial = {
     settings: "站点设置",
     sourceClasses: "来源类别",
     routingPresets: "路由预设",
+    alertEvents: "告警事件",
+    alertConfig: "告警规则与渠道",
+    announcements: "公告",
+    legalDocs: "法律文档",
+    retention: "记录保留",
+    rateLimits: "请求限流",
     more: "更多",
   },
   navSections: {
@@ -172,4 +184,13 @@ export const initial = {
 };
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, { settings, suppliers });
+export default /* @__PURE__ */ Object.assign({}, initial, {
+  settings,
+  suppliers,
+  alertConfig,
+  alertEvents,
+  announcements,
+  legalDocs,
+  rateLimits,
+  logRetention,
+});

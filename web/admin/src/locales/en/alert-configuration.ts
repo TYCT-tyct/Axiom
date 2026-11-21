@@ -1,0 +1,26 @@
+export default {
+  description: "Configure alert rules, spend detection, and notification channels.",
+  unavailable: "No alert configuration available",
+  rules: "Alert rules",
+  channels: "Notification channels",
+  channel: "Channel",
+  destination: "Destination",
+  spend: "Spend detection",
+  noRules: "No alert rules",
+  noChannels: "No notification channels",
+  noSpend: "No spend detection settings",
+  edit: "Edit alert configuration",
+  save: "Save alert configuration",
+  editIntro:
+    "Enter rules and channels as JSON arrays and spend detection as a JSON object. Leave spend detection blank to keep its current settings.",
+  invalid: "Check the rules and channels JSON arrays and the spend detection JSON object.",
+  saved: "Alert configuration saved.",
+  testChannel: "Send test",
+  queued: "The test is queued. Check Alert events for the delivery receipt.",
+  rotate: "Set signing secret",
+  rotateIntro:
+    "The previous secret stays valid for one hour after rotation. Coordinate the new secret with the receiver.",
+  secret: "New signing secret",
+  invalidSecret: "Enter a secret of 32 to 512 bytes.",
+  rotated: "Signing secret saved.",
+};

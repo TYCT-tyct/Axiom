@@ -192,3 +192,12 @@ it("shows a node's refusal instead of the keys it read before", async () => {
   await settle();
   expect(container.textContent).not.toContain("Key 1");
 });
+
+it("renders the page heading before the empty state inside the page frame", async () => {
+  api.keys = [];
+  const { container } = await render(<ProviderKeys />);
+  const headings = [...container.querySelectorAll("h1, h2")].map((node) => node.textContent);
+  expect(container.firstElementChild?.className).toContain("page");
+  expect(headings.indexOf("nav.providerKeys")).toBe(0);
+  expect(headings.indexOf("providerKeys.empty.title")).toBeGreaterThan(0);
+});

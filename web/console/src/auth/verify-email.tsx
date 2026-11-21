@@ -88,7 +88,7 @@ function VerifyForm({
       title={t("auth.verify.title")}
       sub={t("auth.verify.description")}
       step="verify"
-      shape="start"
+      shape="key"
       attempt={attempt}
       stage={stage}
       onSubmit={(event) => {
