@@ -127,7 +127,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   // the sea, and once it is up the eggs that play on it
   const [seaUp, setSeaUp] = useState<Sea | null>(null);
   const sea = useEffectModule(root, loadSea, (module, frame) => {
-    const started = module.startSea(frame, frame.querySelector(".hs > main") ?? frame, scheme === "light");
+    const started = module.startSea(frame, frame.querySelector(".hs") ?? frame, scheme === "light");
     setSeaUp(started);
     return started;
   });
