@@ -57,7 +57,11 @@ function ConsentStep() {
       shape="start"
       onSubmit={(event) => {
         event.preventDefault();
-        if (ready) attempt.run("accept", () => accept.mutateAsync({ consent: legal.versions ?? [] }));
+        if (ready) {
+          attempt.run("accept", () => accept.mutateAsync({ consent: legal.versions ?? [] }), {
+            onFail: () => stage.hear({ type: "bad" }),
+          });
+        }
       }}
     >
       <LegalConsent consent={legal} />

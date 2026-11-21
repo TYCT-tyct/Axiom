@@ -7,9 +7,10 @@ import {
   DataState,
   EmptyState,
   Icon,
-  PageBody,
+  PageFrame,
   PageHeader,
   Panel,
+  Stack,
   Table,
   Td,
   Text,
@@ -35,14 +36,16 @@ export default function Workspaces() {
   // A node before workspaces answers 404 to the list; that is not a missing page but a feature not there yet.
   const unavailable = query.error instanceof ApiError && query.error.status === 404;
   return (
-    <>
-      <PageHeader title={t("workspaces.title")} description={t("workspaces.description")} />
-      <PageBody>
+    <PageFrame>
+      <Stack>
+        <PageHeader title={t("workspaces.title")} description={t("workspaces.description")} />
         {manage && view && !unavailable ? (
-          <Button variant="primary" size="md" onClick={() => setDialog({ kind: "create" })}>
-            <Icon name="plus" />
-            {t("workspaces.create")}
-          </Button>
+          <Cluster>
+            <Button variant="primary" size="md" onClick={() => setDialog({ kind: "create" })}>
+              <Icon name="plus" />
+              {t("workspaces.create")}
+            </Button>
+          </Cluster>
         ) : null}
         <Panel>
           {/* Without api_keys.view the list is never asked for, so it would wait forever: say why instead. */}
@@ -63,11 +66,11 @@ export default function Workspaces() {
             </DataState>
           )}
         </Panel>
-      </PageBody>
+      </Stack>
       {dialog?.kind === "create" ? <CreateWorkspaceDialog onClose={close} /> : null}
       {dialog?.kind === "edit" ? <EditWorkspaceDialog workspace={dialog.workspace} onClose={close} /> : null}
       {dialog?.kind === "budget" ? <BudgetDialog workspace={dialog.workspace} manage={manage} onClose={close} /> : null}
-    </>
+    </PageFrame>
   );
 }
 
@@ -89,7 +92,7 @@ function WorkspaceTable({
         <tr>
           <Th>{t("workspaces.col.name")}</Th>
           <Th>{t("workspaces.col.status")}</Th>
-          <Th shrink />
+          <Th align="end" />
         </tr>
       </thead>
       <tbody>
@@ -104,7 +107,7 @@ function WorkspaceTable({
                 {workspace.disabled ? t("keys.disabled") : t("keys.enabled")}
               </Badge>
             </Td>
-            <Td shrink>
+            <Td align="end">
               <Actions workspace={workspace} manage={manage} onEdit={onEdit} onBudget={onBudget} />
             </Td>
           </tr>

@@ -24,10 +24,12 @@ import {
   SegmentedControl,
   Select,
   SettingRow,
+  SidePanel,
   Stack,
   Switch,
   Tag,
   TextArea,
+  Toast,
   useUrlParams,
   useUrlSelection,
 } from "./index";
@@ -324,7 +326,39 @@ export const demos: Record<string, () => ReactNode> = {
       </Popover>
     </Cluster>
   ),
+  "side-panel": () => <SidePanelDemo />,
+  toast: () => <ToastDemo />,
 };
+
+function SidePanelDemo() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <ActionButton onClick={() => setOpen(true)}>{text.card}</ActionButton>
+      {open ? (
+        <SidePanel title={text.card} subtitle={text.cardLede} saveState="saved" onClose={() => setOpen(false)}>
+          <Field label={text.name} defaultValue="writer-prod" />
+        </SidePanel>
+      ) : null}
+    </>
+  );
+}
+
+function ToastDemo() {
+  const [shown, setShown] = useState(false);
+  return (
+    <>
+      <ActionButton onClick={() => setShown(true)}>{text.create}</ActionButton>
+      {shown ? (
+        <Toast
+          message={text.noteTitle}
+          action={{ label: text.cancel, onClick: () => {} }}
+          onDismiss={() => setShown(false)}
+        />
+      ) : null}
+    </>
+  );
+}
 
 export function ComponentDemo() {
   return (

@@ -60,6 +60,7 @@ export default {
     skipToContent: "跳到正文",
   },
   dialog: { close: "关闭" },
+  sidePanel: { done: "完成", liveHint: "改动立刻生效", saved: "已保存", saveFailed: "没保存成功" },
   filters: { clear: "清除筛选" },
   chart: { time: "时间" },
   month: { month: "月份", year: "年份" },
