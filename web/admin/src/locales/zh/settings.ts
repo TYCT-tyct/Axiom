@@ -1,4 +1,9 @@
+import { brand, loginLimits, workspaceLimit } from "./settings-site";
+
 export default {
+  brand,
+  workspaceLimit,
+  loginLimits,
   description: "站点给用户的会话和 key 的设置。没填的项用代码里的默认值，所以这里只记录站点有意改动的。",
   title: "会话与 key",
   own: "站点设定",

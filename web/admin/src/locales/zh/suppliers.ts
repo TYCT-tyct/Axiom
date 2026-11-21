@@ -162,6 +162,8 @@ export default {
     group: "分组",
     until: "冷却 / 过期",
     concurrency: "最大并发",
+    rpm: "每分钟上限",
+    rpmUnlimited: "不限",
     cooldown: "冷却至",
     state: {
       binding: "等待读取内容",
@@ -173,6 +175,32 @@ export default {
       erased: "已清除",
     },
     empty: { title: "还没有 key", body: "Axiom 会为每个能调用的分组建 key，同步推进后会出现在这里。" },
+  },
+  credentialLimits: {
+    open: "限制",
+    title: "设置凭证限制：{{key}}",
+    body: "限制这把上游 key 同时在途的请求数，以及共享上游账号在滑动 1 分钟窗口内允许选择它的请求数。修改会记进审计日志。",
+    concurrencyHint: "至少 1 的整数。新绑定的 key 默认为 4。",
+    rpmHint: "1 到 {{max}} 的整数；留空表示不加每分钟上限。",
+    action: "保存限制",
+    invalidConcurrency: "最大并发必须是至少为 1 的整数。",
+    invalidRpm: "每分钟上限要填 1 到 {{max}} 之间的整数，或留空清除上限。",
+    done: "已保存：最大并发 {{concurrency}}，每分钟上限 {{rpm}}。",
+    doneNoRpm: "已保存：最大并发 {{concurrency}}，不设每分钟上限。",
+  },
+  endpointEnabled: {
+    enable: {
+      action: "启用",
+      title: "启用端点 {{name}}（分组 {{group}}）",
+      body: "启用后该端点重新参与路由，并重置它的健康熔断状态。修改会记进审计日志。",
+      done: "端点已启用。",
+    },
+    disable: {
+      action: "停用",
+      title: "停用端点 {{name}}（分组 {{group}}）",
+      body: "停用后该端点不再参与路由，但不会影响正在进行的调用。修改会记进审计日志。",
+      done: "端点已停用。",
+    },
   },
   unbound: {
     title: "未使用的 key",

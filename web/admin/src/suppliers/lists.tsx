@@ -113,12 +113,13 @@ const credentialTones = {
 export function Credentials({
   credentials,
   groups,
+  onOpen,
 }: {
   credentials: AdminSchemas["SupplierCredential"][];
   groups: AdminSchemas["SupplierGroup"][];
+  onOpen: OnOpen;
 }) {
   const { t } = useTranslation();
-  const format = useFormat();
   if (credentials.length === 0) {
     return <Empty what="credentials" />;
   }
@@ -131,36 +132,71 @@ export function Credentials({
           t("suppliers.col.status"),
           t("suppliers.credentials.until"),
           [t("suppliers.credentials.concurrency"), { align: "end" }],
+          [t("suppliers.credentials.rpm"), { align: "end" }],
         ]}
+        action={onOpen !== undefined}
       />
       <tbody>
-        {credentials.map((credential) => {
-          return (
-            <tr key={credential.id}>
-              <Td main>
-                <Code>{credential.upstream_key_ref}</Code>
-              </Td>
-              <Td>{groupName(groups, credential.group_id)}</Td>
-              <Td>
-                <State tone={credentialTones[credential.status]}>
-                  {t(`suppliers.credentials.state.${credential.status}`)}
-                </State>
-              </Td>
-              <Td>
-                {credential.cooldown_until ? (
-                  <>
-                    {t("suppliers.credentials.cooldown")} <Time at={credential.cooldown_until} />
-                  </>
-                ) : (
-                  <Time at={credential.expires_at} />
-                )}
-              </Td>
-              <Td align="end">{format.number(credential.max_concurrency)}</Td>
-            </tr>
-          );
-        })}
+        {credentials.map((credential) => (
+          <CredentialRow
+            key={credential.id}
+            credential={credential}
+            group={groupName(groups, credential.group_id)}
+            onOpen={onOpen}
+          />
+        ))}
       </tbody>
     </Table>
+  );
+}
+
+function CredentialRow({
+  credential,
+  group,
+  onOpen,
+}: {
+  credential: AdminSchemas["SupplierCredential"];
+  group: string;
+  onOpen: OnOpen;
+}) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <tr>
+      <Td main>
+        <Code>{credential.upstream_key_ref}</Code>
+      </Td>
+      <Td>{group}</Td>
+      <Td>
+        <State tone={credentialTones[credential.status]}>{t(`suppliers.credentials.state.${credential.status}`)}</State>
+      </Td>
+      <Td>
+        {credential.cooldown_until ? (
+          <>
+            {t("suppliers.credentials.cooldown")} <Time at={credential.cooldown_until} />
+          </>
+        ) : (
+          <Time at={credential.expires_at} />
+        )}
+      </Td>
+      <Td align="end">{format.number(credential.max_concurrency)}</Td>
+      <Td align="end">
+        {credential.requests_per_minute === undefined
+          ? t("suppliers.credentials.rpmUnlimited")
+          : format.number(credential.requests_per_minute)}
+      </Td>
+      {onOpen ? (
+        <Td actions>
+          <ActionButton
+            size="sm"
+            aria-label={t("suppliers.credentialLimits.title", { key: credential.upstream_key_ref })}
+            onClick={() => onOpen({ kind: "credentialLimits", credential })}
+          >
+            {t("suppliers.credentialLimits.open")}
+          </ActionButton>
+        </Td>
+      ) : null}
+    </tr>
   );
 }
 
@@ -295,6 +331,20 @@ function EndpointRow({
                 {t("suppliers.test.open")}
               </ActionButton>
             ) : null}
+            <ActionButton
+              size="sm"
+              aria-label={t(
+                endpoint.enabled ? "suppliers.endpointEnabled.disable.title" : "suppliers.endpointEnabled.enable.title",
+                { name: endpoint.upstream_name, group },
+              )}
+              onClick={() => onOpen({ kind: "endpointEnabled", endpoint, group })}
+            >
+              {t(
+                endpoint.enabled
+                  ? "suppliers.endpointEnabled.disable.action"
+                  : "suppliers.endpointEnabled.enable.action",
+              )}
+            </ActionButton>
             <ActionButton
               size="sm"
               aria-label={t("suppliers.quantization.title", { name: endpoint.upstream_name })}

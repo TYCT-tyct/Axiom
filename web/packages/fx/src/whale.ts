@@ -7,10 +7,15 @@
 import "@axiom/boards/engines/whale.js";
 import "@axiom/boards/engines/whale-egg.js";
 import type { OceanEngine } from "./sea";
+import { water } from "./water";
 
 type Egg = {
   t0: number;
   cv: HTMLCanvasElement;
+  // a call made while the water is Clawd's, which the egg answers once it is free
+  pend: object | null;
+  wh: { active(): boolean };
+  active: () => boolean;
   done: () => void;
   summon: (anchor: Element | null, force: boolean) => boolean;
   setTheme: (dark: boolean) => void;
@@ -24,7 +29,8 @@ declare global {
 }
 
 export type Whale = {
-  // summon starts a visit that heads for anchor (an element it passes by) and reports whether one began.
+  // summon starts a visit that heads for anchor (an element it passes by) and reports whether one began, or will begin
+  // as soon as Clawd has left the water.
   summon: (anchor: Element | null) => boolean;
   // setTheme recolours the whale for the page's scheme, mid-visit too.
   setTheme: (dark: boolean) => void;
@@ -50,7 +56,9 @@ export function startWhale(root: HTMLElement, engine: OceanEngine, { dark, phone
     scope: root.querySelector(".ho"),
     rowSummon: false,
     fam: ".hs > .main .fam",
+    blocked: () => !!water.clawd?.busy(),
   });
+  water.whale = egg;
   // the egg is built on the first call, but its clock is the page's (a chance meeting waits for the page to be a few
   // seconds old, and the caller checks that against the same clock)
   egg.t0 = 0;
@@ -59,14 +67,25 @@ export function startWhale(root: HTMLElement, engine: OceanEngine, { dark, phone
     done();
     onDone();
   };
+  let wait = 0;
   return {
-    summon: (anchor) => egg.summon(anchor, true),
+    summon: (anchor) => {
+      if (egg.summon(anchor, true)) return true;
+      if (!egg.pend) return false;
+      // the egg gives up a call it could not answer within 15 s, without a word: the visit ends there
+      wait = window.setTimeout(() => egg.wh.active() || egg.done(), 15_000);
+      return true;
+    },
     setTheme: (dark) => egg.setTheme(dark),
     // The egg's own destroy only stops its frames and the timer that would put its sweep's light out: what is on the
     // canvas, and the light and the thinned glass of a visit cut short, would stay.
     destroy: () => {
+      window.clearTimeout(wait);
+      if (water.whale === egg) water.whale = null;
       egg.destroy();
       done();
+      // Clawd cuts the canvas off along the sea floor while the whale passes behind it
+      egg.cv.style.clipPath = "";
       const canvas = egg.cv.getContext("2d");
       canvas?.setTransform(1, 0, 0, 1, 0, 0);
       canvas?.clearRect(0, 0, egg.cv.width, egg.cv.height);

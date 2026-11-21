@@ -194,3 +194,42 @@ it("tells a step still waiting when its timeline ends, and a step added after th
   clock.each(() => true, late);
   expect(late).toHaveBeenCalledTimes(1);
 });
+
+it("isolates a throwing owner so other owners keep running and the error logs once", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { own } = await loop();
+  const a = document.createElement("div");
+  const b = document.createElement("div");
+  const good: number[] = [];
+  let badRuns = 0;
+  const leaveBad = own(a, () => {
+    badRuns++;
+    throw new Error("boom");
+  });
+  own(b, (dt) => good.push(dt));
+  intersect(a, true);
+  intersect(b, true);
+
+  runFrame();
+  runFrame();
+  expect(badRuns).toBe(1);
+  expect(error).toHaveBeenCalledTimes(1);
+  expect(good).toEqual([0, 0.016]);
+  expect(state()).toMatchObject({ owners: 1, pending: true });
+  expect(() => leaveBad()).not.toThrow();
+  error.mockRestore();
+});
+
+it("stops cleanly when the only owner throws", async () => {
+  const error = vi.spyOn(console, "error").mockImplementation(() => {});
+  const { own } = await loop();
+  const a = document.createElement("div");
+  own(a, () => {
+    throw new Error("solo boom");
+  });
+  intersect(a, true);
+  runFrame();
+  expect(error).toHaveBeenCalledTimes(1);
+  expect(state()).toEqual({ frames: 0, owners: 0, listening: false, pending: false });
+  error.mockRestore();
+});

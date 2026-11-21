@@ -24,6 +24,21 @@ let frames = 0;
 
 const running = () => !document.hidden && [...owners].some((owner) => seen.get(owner.element) === true);
 
+function remove(owner: Owner) {
+  if (!owners.delete(owner)) {
+    return;
+  }
+  if (![...owners].some((other) => other.element === owner.element)) {
+    observer?.unobserve(owner.element);
+    seen.delete(owner.element);
+  }
+  if (owners.size === 0) {
+    stop();
+  } else {
+    changed();
+  }
+}
+
 function tick(now: number) {
   pending = 0;
   const dt = last ? Math.min(maxStep, (now - last) / 1000) : 0;
@@ -31,7 +46,13 @@ function tick(now: number) {
   for (const owner of [...owners]) {
     if (seen.get(owner.element) && owners.has(owner)) {
       frames++;
-      owner.frame(dt, now);
+      try {
+        owner.frame(dt, now);
+      } catch (error) {
+        // Isolate a failing effect so it logs once, drops cleanly, and never stops the other effects on the shared loop.
+        console.error("fx frame owner failed", error);
+        remove(owner);
+      }
     }
   }
   changed();
@@ -79,20 +100,7 @@ export function own(element: Element, frame: Frame): () => void {
     seen.set(element, false);
     observer?.observe(element);
   }
-  return () => {
-    if (!owners.delete(owner)) {
-      return;
-    }
-    if (![...owners].some((other) => other.element === element)) {
-      observer?.unobserve(element);
-      seen.delete(element);
-    }
-    if (owners.size === 0) {
-      stop();
-    } else {
-      changed();
-    }
-  };
+  return () => remove(owner);
 }
 
 // What the end-to-end tests read (e2e/fx.spec.ts): the callbacks run since the loop last started, how many owners it

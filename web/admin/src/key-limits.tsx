@@ -11,23 +11,30 @@ type View = AdminSchemas["KeyLimitsView"];
 
 // The limits on the call keys of an account, each with the bounds the contract states. A limit left empty is not set,
 // and the level above applies: the default in code for a site, the site's for an account.
-const limits = [{ name: "max_keys" }, { name: "creations_per_hour" }] as const;
 const min = 1;
 const max = 10_000;
+const limits = [
+  { name: "max_keys", min, max },
+  { name: "creations_per_hour", min, max },
+] as const;
 
-// The limits as typed: a limit left empty is left out, and one that is not a whole number in the bounds is a problem.
-function readKeyLimits(values: Record<string, string>, problem: string): Limits | Problem {
-  const read: Limits = {};
-  for (const { name } of limits) {
-    const typed = (values[name] ?? "").trim();
+// readBoundedInts parses optional whole-number limits against their contract bounds; an empty field is omitted.
+export function readBoundedInts<K extends string>(
+  values: Record<string, string>,
+  specs: readonly { name: K; min: number; max: number }[],
+  problem: string,
+): Partial<Record<K, number>> | Problem {
+  const read: Partial<Record<K, number>> = {};
+  for (const spec of specs) {
+    const typed = (values[spec.name] ?? "").trim();
     if (typed === "") {
       continue;
     }
     const count = Number(typed);
-    if (!/^\d+$/.test(typed) || count < min || count > max) {
+    if (!/^\d+$/.test(typed) || count < spec.min || count > spec.max) {
       return { problem };
     }
-    read[name] = count;
+    read[spec.name] = count;
   }
   return read;
 }
@@ -132,7 +139,7 @@ function KeyLimitsDialog({
           ))}
         </>
       )}
-      read={(values) => readKeyLimits(values, problem)}
+      read={(values) => readBoundedInts(values, limits, problem)}
       send={send}
       done={() => <p>{t("settings.keyLimits.saved")}</p>}
       onClose={onClose}

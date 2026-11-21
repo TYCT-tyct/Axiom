@@ -172,6 +172,27 @@ export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
   });
 
+export const siteWorkspaceLimitQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-workspace-limit", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/workspace-limit`, { params: { path: { site_id: id } }, signal })),
+  });
+
+export const siteLoginLimitsQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-login-limits", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/login-limits`, { params: { path: { site_id: id } }, signal })),
+  });
+
+export const siteBrandQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-brand", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/brand`, { params: { path: { site_id: id } }, signal })),
+  });
+
 // The targets of one UTC calendar month. A change replaces them whole and invalidates every account query, so the
 // dashboard's prorated figures refresh with the editor's view.
 export const targetsQuery = (month: string) =>
