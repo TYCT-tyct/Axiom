@@ -36,6 +36,12 @@ export function afterFirstContent(go: () => void) {
   };
 }
 
+// atOnce calls go now; it is afterFirstContent's shape, for an effect that does not wait.
+function atOnce(go: () => void) {
+  go();
+  return () => {};
+}
+
 // nearView calls go once element comes within a view's height of being seen in the box that scrolls it, and returns a
 // function that cancels it. The box is the nearest scrolling ancestor: an observer on the viewport would see the element
 // only once it is in view, because the box clips it until then.
@@ -58,19 +64,23 @@ export function nearView(element: HTMLElement | null, go: () => void) {
 
 // useEffectModule loads an effect's code after the first content, at idle, and starts it on the element ref points at;
 // it ends the effect when the component unmounts. A module that fails to load leaves the page as it is: the effect is
-// decoration, and the page works without it. The handle, once started, is in the returned ref.
+// decoration, and the page works without it. The handle, once started, is in the returned ref. An eager effect is
+// part of what the page waits to show (a sign-in page an arrival shows whole), so its code is asked for at once.
 export function useEffectModule<M, R extends Running>(
   ref: RefObject<HTMLElement | null>,
   load: () => Promise<M>,
   start: (module: M, element: HTMLElement) => R,
+  eager = false,
 ): RefObject<R | null> {
   const running = useRef<R | null>(null);
   // The latest functions, read when the module arrives: a re-render does not reload it.
   const latest = useRef({ load, start });
   latest.current = { load, start };
+  const now = useRef(eager);
   useEffect(() => {
     let live = true;
-    const cancel = afterFirstContent(() => {
+    const when = now.current ? atOnce : afterFirstContent;
+    const cancel = when(() => {
       latest.current
         .load()
         .then((module) => {

@@ -70,7 +70,8 @@ const login = createRoute({
   pendingComponent: blank,
   component: lazyRouteComponent(() => import("./auth/login-frame"), "LoginLayout"),
 });
-const signInPage = { getParentRoute: () => login, pendingComponent: blank };
+// a page gone to from another keeps that one's question on show while its code comes, up to a second
+const signInPage = { getParentRoute: () => login, pendingComponent: blank, pendingMs: 1000 };
 
 // Every page is its own chunk, loaded when the user is about to open it; the first screen loads the page of the address
 // it opens (scripts/budget.ts counts it).

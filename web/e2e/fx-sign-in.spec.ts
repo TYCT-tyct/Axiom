@@ -48,7 +48,7 @@ async function watchDecode(page: Page) {
   return () => page.evaluate(() => (window as unknown as { decode: { hidden: boolean; drawn: boolean } }).decode);
 }
 
-test("arriving through the departure decodes the title once, after the first content; a direct visit does not", async ({
+test("arriving through the departure decodes the title once, its code asked for at once; a direct visit does not", async ({
   page,
 }) => {
   const decoded = await watchDecode(page);
@@ -65,14 +65,37 @@ test("arriving through the departure decodes the title once, after the first con
   await expect(stageCanvas(page)).toBeAttached();
   await expect(page.locator(".lg-title .ch[style*=transparent]")).toHaveCount(0);
   expect(await decoded()).toEqual({ hidden: true, drawn: true });
-  expect(asked).toEqual([true]);
-  // the marker was taken: the same page again is a direct visit
+  expect(asked).toHaveLength(1);
+  // the marker was taken: the same page again is a direct visit, whose effects wait for its first content
   expect(await page.evaluate(() => sessionStorage.getItem("axiom:arrival"))).toBeNull();
   await page.reload();
   await pageHeading(page);
   await running(page);
   await pause(page);
   expect(await decoded()).toEqual({ hidden: false, drawn: false });
+  expect(asked).toEqual([asked[0], true]);
+});
+
+// An arrival shows the frame whole: its parts wait unseen for the sea's code, then come in together, not one by one.
+test("an arrival's sign-in page comes in whole once the sea's code has come", async ({ page }) => {
+  await mockConsole(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(loginCode, async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto(apps[0].url);
+  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+  // the page's clock stands still: what shows the frame is the code coming, not the wait's limit
+  await page.clock.install();
+  await page.goto(signInPage);
+  const parts = page.locator(".lg > .lg-sea, .lg > .lg-top, .lg > .lg-side");
+  await expect(parts).toHaveCount(3);
+  for (const part of await parts.all()) await expect(part).toHaveCSS("opacity", "0");
+  release();
+  await expect(stageCanvas(page)).toBeAttached();
+  for (const part of await parts.all()) await expect(part).toHaveCSS("opacity", "1");
 });
 
 test("the sign-in page's sea and stage rest while the tab is hidden, and leave nothing behind once signed in", async ({

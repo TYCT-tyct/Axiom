@@ -99,6 +99,22 @@ test("until the site answers the page offers only signing in, and it asks again 
   await expect(page.locator(".bar .btn.primary")).toBeVisible();
 });
 
+// The tab keeps the site's last answer a while: the home page come back to (from the sign-in pages, a reload) is drawn
+// with the site's way in from its first frame, while the page asks again.
+test("the home page come back to in the tab shows the site's way in from its first frame", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await expect(page.locator(".bar .btn.primary")).toBeVisible();
+  let asked = 0;
+  await page.route(/\/api\/console\/v1\/site(\?|$)/, () => {
+    asked++;
+  });
+  await page.reload();
+  await pageHeading(page);
+  await expect(page.locator(".bar .btn.primary")).toBeVisible();
+  await expect.poll(() => asked).toBe(1);
+});
+
 // The site's settings are asked for once, above the layout: crossing the layout's breakpoint keeps them, and a page the
 // browser brings back from its cache asks afresh.
 test("a change of layout keeps the site's answer, and a page brought back asks again", async ({ page }) => {

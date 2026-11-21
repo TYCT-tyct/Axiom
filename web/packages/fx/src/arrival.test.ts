@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { markArrival, markOrigin, markReturn, takeArrival, takeOrigin, takeReturn } from "./arrival";
+import { markArrival, markOrigin, markReturn, peekReturn, takeArrival, takeOrigin, takeReturn } from "./arrival";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -19,6 +19,14 @@ it.each([
   expect(takeArrival()).toBe(false);
   // nothing but the time it was set is kept
   expect(sessionStorage.length).toBe(0);
+});
+
+it("a return can be seen without being taken, until it is taken", () => {
+  markReturn();
+  expect(peekReturn()).toBe(true);
+  expect(peekReturn()).toBe(true);
+  expect(takeReturn()).toBe(true);
+  expect(peekReturn()).toBe(false);
 });
 
 it("no marker is no arrival", () => {
