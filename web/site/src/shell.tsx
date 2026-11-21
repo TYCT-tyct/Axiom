@@ -13,6 +13,28 @@ export type SiteState = { status: "pending" } | { status: "failed" } | { status:
 // A failed call is asked again after a growing wait, up to this, and at once when the browser is back online.
 const retryCap = 30_000;
 
+// The site's last answer in this tab, kept so the home page come back to (from the sign-in pages, a reload) is drawn
+// with its ways in from the first frame, not with them coming in a moment later and moving the page. It stands for an
+// answer for this long, and the page asks again all the same.
+const keptKey = "axiom:site";
+const keptFor = 10 * 60_000;
+function keep(site: Schemas["Site"]) {
+  try {
+    sessionStorage.setItem(keptKey, JSON.stringify({ at: Date.now(), site }));
+  } catch {
+    // storage refused: the next page waits for its own answer
+  }
+}
+function kept(): SiteState {
+  try {
+    const { at, site } = JSON.parse(sessionStorage.getItem(keptKey) ?? "null") ?? {};
+    if (typeof at === "number" && Date.now() - at < keptFor && site) return { status: "ready", brand: brandOf(site) };
+  } catch {
+    // storage refused, or not ours to read: as if nothing was kept
+  }
+  return { status: "pending" };
+}
+
 const brandOf = (site: Schemas["Site"]): Brand => ({
   name: site.name || undefined,
   logo_url: site.logo_url,
@@ -22,12 +44,13 @@ const brandOf = (site: Schemas["Site"]): Brand => ({
 });
 
 // useSiteState asks for the site's name, logo, API address and how it takes new users, from the same public call the
-// console's sign-in page uses, once for the page: what promises depend on the answer waits for it, a call that failed
-// on the network or the server is asked again, and a page the browser brings back from its cache asks afresh, since the settings may have changed while
-// it was away. The site's brand colour is put on the document's root (useBrandStyle, as the console's shells do), so
-// every part of the page takes it. A host the API does not know leaves the default mark, name and colours.
+// console's sign-in page uses, once for the page: what promises depend on the answer waits for it (or the tab's kept
+// answer), a call that failed on the network or the server is asked again, and a page the browser brings back from its
+// cache asks afresh, since the settings may have changed while it was away. The site's brand colour is put on the
+// document's root (useBrandStyle, as the console's shells do), so every part of the page takes it. A host the API does
+// not know leaves the default mark, name and colours.
 export function useSiteState(): SiteState {
-  const [state, setState] = useState<SiteState>({ status: "pending" });
+  const [state, setState] = useState<SiteState>(kept);
   useBrandStyle(state.status === "ready" ? state.brand.brand_color : undefined);
   useEffect(() => {
     let call = new AbortController();
@@ -42,6 +65,7 @@ export function useSiteState(): SiteState {
         (site) => {
           if (mine.signal.aborted) return;
           failures = 0;
+          keep(site);
           setState({ status: "ready", brand: brandOf(site) });
         },
         (error: unknown) => {

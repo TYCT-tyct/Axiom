@@ -143,7 +143,9 @@ export function LoginLayout() {
   useBrandStyle(site.data?.brand_color);
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [standing, stand] = useState<Standing | null>(null);
-  const engine = useLoginEngine(standing, prefs.dark, site.data?.brand_color);
+  const [arrived] = useState(claimArrival);
+  const engine = useLoginEngine(standing, prefs.dark, site.data?.brand_color, arrived);
+  useArrivalReveal(engine.root, arrived, engine.started && !site.isPending && standing !== null);
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
   const phone = useBoardMedia(loginPhoneWidth);
@@ -292,40 +294,37 @@ function useReloadWhenRestored() {
 // useLoginEngine runs the sea, the solid and an arrival's decode on the frame once their code has loaded, and keeps
 // them on the page's shape and colours (the scheme, the site's brand). The decode ends when the title it plays over
 // changes (another step, another page, another language). It hands the running engine to the stage of the page on show.
-function useLoginEngine(standing: Standing | null, dark: boolean, brand: string | undefined) {
-  const [arrived] = useState(claimArrival);
+function useLoginEngine(standing: Standing | null, dark: boolean, brand: string | undefined, arrived: boolean) {
   const veil = useArrivalVeil(standing?.titleRef, arrived);
+  const [started, setStarted] = useState(false);
   const root = useRef<HTMLElement | null>(null);
   useReloadWhenRestored();
   useReturnHome(root, standing?.locked ?? false);
   const decode = useRef<HTMLCanvasElement | null>(null);
   const latest = useRef({ standing, dark });
   latest.current = { standing, dark };
-  const login = useEffectModule(root, loadLogin, (module, frame) => {
-    const { standing: now, dark: night } = latest.current;
-    const running = module.startLogin(frame, !night, now?.shape ?? "start");
-    const title = now?.titleRef.current;
-    if (veil.on.current && title && decode.current) {
-      veil.on.current = false;
-      running.decode(title, decode.current);
-    }
-    if (now) {
-      for (const heard of now.stage.said.current.values()) running.hear(heard);
-      now.stage.running.current = running;
-    }
-    return running;
-  });
-  // the page on show hears the engine, and an engine already running hears what its forms said before they were shown
-  const stage = standing?.stage;
-  useEffect(() => {
-    const running = login.current;
-    if (!stage) return;
-    if (running) for (const heard of stage.said.current.values()) running.hear(heard);
-    stage.running.current = running;
-    return () => {
-      stage.running.current = null;
-    };
-  }, [login, stage]);
+  const login = useEffectModule(
+    root,
+    loadLogin,
+    (module, frame) => {
+      const { standing: now, dark: night } = latest.current;
+      const running = module.startLogin(frame, !night, now?.shape ?? "start");
+      const title = now?.titleRef.current;
+      if (veil.on.current && title && decode.current) {
+        veil.on.current = false;
+        running.decode(title, decode.current);
+      }
+      if (now) {
+        for (const heard of now.stage.said.current.values()) running.hear(heard);
+        now.stage.running.current = running;
+      }
+      setStarted(true);
+      return running;
+    },
+    // an arrival waits for the sea to show the frame whole (useArrivalReveal), so its code is asked for at once
+    arrived,
+  );
+  useStageOnShow(login, standing?.stage);
   const shape = standing?.shape;
   useEffect(() => {
     if (shape) login.current?.show(shape);
@@ -344,6 +343,8 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
     };
   }, [login, veil, title, step]);
   return {
+    root,
+    started,
     seaCanvas: (canvas: Element | null) => {
       root.current = canvas?.closest<HTMLElement>(".lg") ?? null;
     },
@@ -351,6 +352,61 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
       decode.current = element as HTMLCanvasElement | null;
     },
   };
+}
+
+// The page on show tells the running engine what its forms hear, and an engine already running hears what they said
+// before they were shown (another page gone to in the frame).
+function useStageOnShow(login: RefObject<Login | null>, stage: Stage | undefined) {
+  useEffect(() => {
+    const running = login.current;
+    if (!stage) return;
+    if (running) for (const heard of stage.said.current.values()) running.hear(heard);
+    stage.running.current = running;
+    return () => {
+      stage.running.current = null;
+    };
+  }, [login, stage]);
+}
+
+// An arrival from the website shows the frame whole: the sea, the language switch and the side with the brand, the
+// pitch and the question wait unseen for the sea's code, the site's settings and the page's question, at most
+// revealFor, and then come in together. The window goes from the page's ground, where the departure left it, to the
+// page, rather than through its parts one by one (an empty frame, the form, its button's colour, the sea).
+const revealFor = 1500;
+const revealIn = 240;
+function useArrivalReveal(root: RefObject<HTMLElement | null>, arrived: boolean, ready: boolean) {
+  const show = useRef(() => {});
+  useLayoutEffect(() => {
+    const frame = root.current;
+    if (!arrived || !frame) return;
+    const parts = [...frame.children].filter((part) => part instanceof HTMLElement);
+    for (const part of parts) part.style.opacity = "0";
+    let shown = false;
+    let settled = 0;
+    const lift = () => {
+      if (shown) return;
+      shown = true;
+      window.clearTimeout(timer);
+      for (const part of parts) {
+        part.style.transition = `opacity ${revealIn}ms ease-out`;
+        part.style.removeProperty("opacity");
+      }
+      // the parts' own opacity is the return's to fade (departLogin), at its own pace
+      settled = window.setTimeout(() => {
+        for (const part of parts) part.style.removeProperty("transition");
+      }, revealIn);
+    };
+    const timer = window.setTimeout(lift, revealFor);
+    show.current = lift;
+    return () => {
+      lift();
+      window.clearTimeout(settled);
+      for (const part of parts) part.style.removeProperty("transition");
+    };
+  }, [arrived, root]);
+  useEffect(() => {
+    if (ready) show.current();
+  }, [ready]);
 }
 
 // An arrival's title (the first page's) is hidden from its first frame until the decode resolves it, or for veilFor if

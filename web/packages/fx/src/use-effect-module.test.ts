@@ -128,6 +128,22 @@ it("can load when the browser painted its first content before the effect mounte
   act(() => root.unmount());
 });
 
+it("asks for an eager effect's code at once, before any paint", async () => {
+  const load = vi.fn(async () => effect);
+  const host = document.body.appendChild(document.createElement("div"));
+  const root = createRoot(host);
+  function Eager() {
+    const ref = useRef<HTMLDivElement>(null);
+    useEffectModule(ref, load, (module, element) => module.start(element), true);
+    return createElement("div", { ref });
+  }
+  await act(async () => root.render(createElement(Eager)));
+  expect(load).toHaveBeenCalledOnce();
+  expect(window.axiomFx?.state.owners).toBe(1);
+  act(() => root.unmount());
+  expect(window.axiomFx?.state.owners).toBe(0);
+});
+
 it("starts nothing when the page is left before the module arrives, and survives a module that fails", async () => {
   let arrive: (module: typeof effect) => void = () => {};
   const load = vi.fn(() => new Promise<typeof effect>((resolve) => (arrive = resolve)));
