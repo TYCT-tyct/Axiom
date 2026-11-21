@@ -1,4 +1,9 @@
+import { brand, loginLimits, workspaceLimit } from "./settings-site";
+
 export default {
+  brand,
+  workspaceLimit,
+  loginLimits,
   description:
     "What the site sets for the sessions and keys its users get. A setting left empty is the default in code, so only what the site chooses differently is recorded here.",
   title: "Sessions and keys",

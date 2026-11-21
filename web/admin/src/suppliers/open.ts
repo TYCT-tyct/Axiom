@@ -5,5 +5,7 @@ export type Open =
   | { kind: "pause" | "resume" | "remove" | "login" | "unit" }
   | { kind: "group"; group: AdminSchemas["SupplierGroup"] }
   | { kind: "bind"; key: AdminSchemas["UpstreamKey"] }
+  | { kind: "credentialLimits"; credential: AdminSchemas["SupplierCredential"] }
   | { kind: "test"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
+  | { kind: "endpointEnabled"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
   | { kind: "quantization"; endpoint: AdminSchemas["SupplierEndpoint"] };
