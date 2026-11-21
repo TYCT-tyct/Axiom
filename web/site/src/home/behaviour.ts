@@ -1,4 +1,4 @@
-import { markArrival, markOrigin, own, takeReturn } from "@axiom/fx";
+import { afterFirstContent, markArrival, markOrigin, own, takeReturn } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -40,10 +40,9 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 }
 
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
-// section (native smooth scrolling, not the board's eased frames), and the tour, which
-// glides through the sections a few seconds apart and back to the top. The page moving the reader on its own (the tour's
-// next glide, a glide to a section followed while the screens above it grow, a glide under way) is the press's that
-// started it: a glide to the top or to a section, and stop, end it; stop also halts a glide where it is.
+// section (native smooth scrolling, not the board's eased frames). The page moving the reader on its own (a glide to a
+// section followed while the screens above it grow, a glide under way) is the press's that started it: a glide to the
+// top or to a section, and stop, end it; stop also halts a glide where it is.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
 const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
 const measured = (scroller: HTMLElement): Offset[] => [
@@ -128,12 +127,6 @@ function scrolling(
     glide(following.top);
     timer = window.setTimeout(stop, 6000);
   };
-  // the tour goes on from the section the reader is in the top of, or from the first when at the surface
-  const tour = (i: number) => {
-    const top = offsets[i]?.top;
-    timer = window.setTimeout(() => (top === undefined ? glide(0) : tour(i + 1)), top === undefined ? 3000 : 3200);
-    if (top !== undefined) glide(top);
-  };
   // ends what the page set going: the next step, the following, and a glide under way, which stops where it is
   const stop = () => {
     window.clearTimeout(timer);
@@ -166,10 +159,6 @@ function scrolling(
     toSection: (sec: number) => {
       stop();
       section(sec);
-    },
-    tour: () => {
-      stop();
-      tour(scroller.scrollTop > 10 ? 0 : 1);
     },
     stop,
   };
@@ -208,7 +197,6 @@ function clickActions(
         page.toSection(Number(control.dataset.sec));
       },
     ],
-    [".tour", () => page.tour()],
     ["[data-go]", () => setMenu(false)],
   ];
 }
@@ -361,9 +349,8 @@ function scheduleLeave(flight: Flight, delay: number) {
     const held = shown;
     const r = flight.link.getBoundingClientRect();
     markOrigin({ x: r.x, y: r.y, w: r.width, h: r.height });
-    // the arrival is the sign-in page's: registration has no arrival of its own, and a marker left by it would play
-    // the decode on a later, direct visit to sign-in
-    if (new URL(flight.href).pathname.endsWith("/sign-in")) markArrival();
+    // the page gone to, signing in or registering, takes the marker and plays its arrival
+    markArrival();
     window.location.assign(flight.href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, delay);
@@ -448,13 +435,15 @@ function handleDepartClick(frame: HTMLElement, sea: Sea | null, e: MouseEvent) {
 
 // useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
 // pressed: signing in or up leaves the website through it, half a second after the press, and Esc or the brand mark
-// reverses it midway. When returning from a sign-in page (takeReturn), it settles the home page without replaying the
-// cold tide entrance.
+// reverses it midway. Its code is fetched once the first screen is drawn, so a press breaks the button on the next
+// frame rather than after a round trip, and the picture fills the half second. When returning from a sign-in page
+// (takeReturn), it settles the home page without replaying the cold tide entrance.
 export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
     settleReturn(frame, sea.current);
+    const cancelLoad = afterFirstContent(() => void loadDepart().catch(() => {}));
     const onClick = (e: MouseEvent) => handleDepartClick(frame, sea.current, e);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || leaving?.dir !== 1) return;
@@ -473,6 +462,7 @@ export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject
     window.addEventListener("keydown", onKey);
     window.addEventListener("pageshow", onShow);
     return () => {
+      cancelLoad();
       frame.removeEventListener("click", onClick);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pageshow", onShow);

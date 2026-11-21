@@ -16,7 +16,7 @@
   position: absolute;
   left: 32px;
   bottom: 32px;
-  /* open, it covers the tour's button in the same corner (12) */
+  /* open, it is above the frame's own layers (12 and under) */
   z-index: 13;
   box-sizing: border-box;
   width: 520px;

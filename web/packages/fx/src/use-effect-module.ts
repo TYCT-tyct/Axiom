@@ -5,7 +5,7 @@ export type Running = { destroy: () => void };
 
 // A rendering opportunity can pass before the browser reports a contentful paint. Wait for the paint entry before
 // scheduling idle work, using a frame callback where Paint Timing is unavailable.
-function afterFirstContent(go: () => void) {
+export function afterFirstContent(go: () => void) {
   let cancelIdle: (() => void) | undefined;
   const schedule = () => {
     if (typeof requestIdleCallback === "function") {
