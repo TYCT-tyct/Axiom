@@ -443,6 +443,23 @@ function Replace({ path, stashToken }: { path: string; stashToken?: string | nul
 
 const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll", consent: "/consent" } as const;
 
+export function redirectPath(
+  stage: Stage,
+  page: Stage,
+  here: string,
+  next?: string,
+): { path: string; token: string | null } {
+  const { token: fromToken, cleanHref: cleanFrom } = stripEmailChangeToken(here);
+  const nextParts = page !== "member" && next ? stripEmailChangeToken(next) : undefined;
+  const token = fromToken ?? nextParts?.token ?? null;
+  if (stage === "member") {
+    return { path: nextParts?.cleanHref ?? "/", token: null };
+  }
+  const targetNext = page === "member" ? cleanFrom : nextParts?.cleanHref;
+  const path = targetNext ? `${guestPages[stage]}?next=${encodeURIComponent(targetNext)}` : guestPages[stage];
+  return { path, token };
+}
+
 // A visitor in the wrong stage goes to the page of the stage they are in, remembering where they were going; a member
 // who arrived on a guest page goes on to where they were going. Where they were going is the page the gate turned them
 // away from, taken once: until the router has shown its first page, `here` is the address it is moving to, which this
@@ -450,16 +467,9 @@ const guestPages = { guest: "/sign-in", pending: "/mfa", enroll: "/enroll", cons
 function Redirect({ stage, page, here }: { stage: Stage; page: Stage; here: string }) {
   // Only a sign-in flow page validates its `next` (guestSearch); a protected page's is part of its own address.
   const inherited = useSearch({ strict: false }).next;
-  const next = page === "member" ? undefined : inherited;
   const [from] = useState(here);
-  const { token: fromToken, cleanHref: cleanFrom } = stripEmailChangeToken(from);
-  const nextParts = next ? stripEmailChangeToken(next) : undefined;
-  const token = fromToken ?? nextParts?.token ?? null;
-  const targetNext = nextParts?.cleanHref ?? cleanFrom;
-  if (stage === "member") {
-    return <Replace path={nextParts?.cleanHref ?? "/"} />;
-  }
-  return <Replace path={`${guestPages[stage]}?next=${encodeURIComponent(targetNext)}`} stashToken={token} />;
+  const { path, token } = redirectPath(stage, page, from, inherited);
+  return <Replace path={path} stashToken={token} />;
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member

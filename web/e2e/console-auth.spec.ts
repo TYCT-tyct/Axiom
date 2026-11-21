@@ -257,4 +257,15 @@ test.describe("two-step verification at sign-in", () => {
     await page.getByRole("button", { name: "换一个账户登录" }).click();
     await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
   });
+
+  test("stepping from sign-in to mfa and switching accounts keeps ?next= free of guest pages", async ({ page }) => {
+    await mockConsole(page);
+    await page.goto("/console/sign-in");
+    await signIn(page, mfaEmail);
+    await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toBeVisible();
+    expect(new URL(page.url()).search).toBe("");
+    await page.getByRole("button", { name: "换一个账户登录" }).click();
+    await expect(page.getByRole("heading", { level: 1, name: "登录" })).toBeVisible();
+    expect(new URL(page.url()).search).toBe("");
+  });
 });

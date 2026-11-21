@@ -5,6 +5,7 @@ import {
   consumeEmailChangeToken,
   holdsIdentity,
   holdsSession,
+  redirectPath,
   type Session,
   safeNext,
   sessionBinding,
@@ -140,4 +141,22 @@ it("strips email-change-token fragments before building next URLs and preserves 
   stashEmailChangeToken("secret-3");
   expect(consumeEmailChangeToken()).toBe("secret-3");
   expect(consumeEmailChangeToken()).toBeNull();
+});
+
+it("keeps guest-to-guest redirects free of nested ?next= while preserving protected destinations", () => {
+  expect(redirectPath("pending", "guest", "/sign-in")).toEqual({ path: "/mfa", token: null });
+  expect(redirectPath("guest", "pending", "/mfa")).toEqual({ path: "/sign-in", token: null });
+  expect(redirectPath("pending", "guest", "/sign-in?next=%2Fkeys", "/keys")).toEqual({
+    path: "/mfa?next=%2Fkeys",
+    token: null,
+  });
+  expect(redirectPath("guest", "pending", "/mfa?next=%2Fkeys", "/keys")).toEqual({
+    path: "/sign-in?next=%2Fkeys",
+    token: null,
+  });
+  expect(redirectPath("guest", "member", "/settings#email-change-token=secret-4")).toEqual({
+    path: "/sign-in?next=%2Fsettings",
+    token: "secret-4",
+  });
+  expect(redirectPath("member", "guest", "/sign-in", "/keys")).toEqual({ path: "/keys", token: null });
 });

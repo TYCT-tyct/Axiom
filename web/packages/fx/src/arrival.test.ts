@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from "vitest";
-import { markArrival, takeArrival } from "./arrival";
+import { markArrival, markOrigin, markReturn, takeArrival, takeOrigin, takeReturn } from "./arrival";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -23,6 +23,26 @@ it.each([
 
 it("no marker is no arrival", () => {
   expect(takeArrival()).toBe(false);
+  expect(takeReturn()).toBe(false);
+  expect(takeOrigin()).toBeNull();
+});
+
+it("origin rect and return markers are one-shot and expire after ten seconds", () => {
+  vi.useFakeTimers({ now: 2_000_000 });
+  const rect = { x: 100, y: 20, w: 80, h: 36 };
+  markOrigin(rect);
+  markReturn();
+  expect(takeOrigin()).toEqual(rect);
+  expect(takeOrigin()).toBeNull();
+  expect(takeReturn()).toBe(true);
+  expect(takeReturn()).toBe(false);
+  expect(sessionStorage.length).toBe(0);
+
+  markOrigin(rect);
+  markReturn();
+  vi.setSystemTime(2_010_000);
+  expect(takeOrigin()).toBeNull();
+  expect(takeReturn()).toBe(false);
 });
 
 it("storage that refuses leaves the page a direct visit", () => {
@@ -33,5 +53,9 @@ it("storage that refuses leaves the page a direct visit", () => {
     throw new DOMException("denied", "SecurityError");
   });
   expect(() => markArrival()).not.toThrow();
+  expect(() => markOrigin({ x: 0, y: 0, w: 10, h: 10 })).not.toThrow();
+  expect(() => markReturn()).not.toThrow();
   expect(takeArrival()).toBe(false);
+  expect(takeOrigin()).toBeNull();
+  expect(takeReturn()).toBe(false);
 });
