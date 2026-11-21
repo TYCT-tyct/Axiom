@@ -76,6 +76,27 @@ test("arriving through the departure decodes the title once, its code asked for 
   expect(asked).toEqual([asked[0], true]);
 });
 
+// An arrival asks for the engine at once, so it may run before the page's question is in the frame: the title still
+// decodes once it comes.
+test("an arrival whose engine runs before its question comes still decodes the title", async ({ page }) => {
+  const decoded = await watchDecode(page);
+  await mockConsole(page);
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  await page.route(/\/assets\/sign-in-[\w-]{8}\.js$/, async (route) => {
+    await held;
+    await route.fallback();
+  });
+  await page.goto(apps[0].url);
+  await page.evaluate(() => sessionStorage.setItem("axiom:arrival", String(Date.now())));
+  await page.goto(signInPage);
+  // the engine runs (the solid's canvas is Morph's) while the page's code is still held
+  await expect(stageCanvas(page)).toBeAttached();
+  await expect(page.locator(".lg-title")).toHaveCount(0);
+  release();
+  await expect.poll(decoded).toEqual({ hidden: true, drawn: true });
+});
+
 // An arrival shows the frame whole: its parts wait unseen for the sea's code, then come in together, not one by one.
 test("an arrival's sign-in page comes in whole once the sea's code has come", async ({ page }) => {
   await mockConsole(page);

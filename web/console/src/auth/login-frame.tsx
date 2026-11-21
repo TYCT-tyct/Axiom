@@ -312,11 +312,6 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
     (module, frame) => {
       const { standing: now, dark: night } = latest.current;
       const running = module.startLogin(frame, !night, now?.shape ?? "start");
-      const title = now?.titleRef.current;
-      if (veil.on.current && title && decode.current) {
-        veil.on.current = false;
-        running.decode(title, decode.current);
-      }
       if (now) {
         for (const heard of now.stage.said.current.values()) running.hear(heard);
         now.stage.running.current = running;
@@ -328,6 +323,16 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
     arrived,
   );
   useStageOnShow(login, standing?.stage);
+  // an arrival's decode plays once the engine runs and the first page's title is there, whichever comes last: an
+  // arrival asks for the engine at once, so it may run before the page's question is in the frame
+  const titleRef = standing?.titleRef;
+  useEffect(() => {
+    const running = login.current;
+    const title = titleRef?.current;
+    if (!started || !running || !title || !decode.current || !veil.on.current) return;
+    veil.on.current = false;
+    running.decode(title, decode.current);
+  }, [started, titleRef, login, veil]);
   const shape = standing?.shape;
   useEffect(() => {
     if (shape) login.current?.show(shape);
