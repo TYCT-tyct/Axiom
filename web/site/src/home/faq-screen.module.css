@@ -10,3 +10,27 @@
   min-width: 0;
   overflow-wrap: anywhere;
 }
+
+/* The answers are the page's, longer than the board's four lines: the card is as tall as its longest answer over the
+   picture, never cutting the picture off, and keeps that height whichever question is open, the answers stacked in one
+   cell. An answer keeps below it the room it has above. */
+.faq div[class~="d"] div[class~="card"] {
+  display: grid;
+  height: auto;
+  min-height: 433px;
+}
+
+.faq div[class~="d"] div[class~="pane"] {
+  display: flex;
+  position: relative;
+  grid-area: 1 / 1;
+  visibility: hidden;
+}
+
+.faq div[class~="d"] div[class~="pane"][class~="on"] {
+  visibility: visible;
+}
+
+.faq div[class~="d"] div[class~="pane"] > p[class~="ans"] {
+  padding-bottom: 28px;
+}

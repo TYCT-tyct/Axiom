@@ -346,6 +346,30 @@ for (const [name, viewport] of [
     for (const height of heights) expect(height).toBeLessThan(32);
   });
 
+test("every answer ends above its picture, and the picture is whole inside the card", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await scrollTo(page, 5);
+  await shown(page, 5);
+  const questions = page.locator(".hfm5 .qs .q");
+  for (let i = 0; i < 8; i++) {
+    await questions.nth(i).hover();
+    const box = await page.locator(".hfm5 .pane.on").evaluate((pane) => {
+      const at = (selector: string) => (pane.querySelector(selector) ?? pane).getBoundingClientRect();
+      // the answer's last line, not its box, which ends at the picture
+      const lines = document.createRange();
+      lines.selectNodeContents(pane.querySelector(".ans") ?? pane);
+      return {
+        text: lines.getBoundingClientRect().bottom,
+        stage: at(".stage"),
+        card: (pane.closest(".card") ?? pane).getBoundingClientRect(),
+      };
+    });
+    expect(box.text, `answer ${i + 1}`).toBeLessThanOrEqual(box.stage.top - 16);
+    expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
+  }
+});
+
 test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
