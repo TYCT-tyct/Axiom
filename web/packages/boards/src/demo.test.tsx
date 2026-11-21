@@ -16,10 +16,6 @@ vi.mock("./Login/Board.tsx", () => {
   demo.loaded.push("Login");
   return { default: () => <div data-board="Login" ref={() => demo.mounted()} /> };
 });
-vi.mock("./ClawdEgg/Board.tsx", () => {
-  demo.loaded.push("ClawdEgg");
-  return { default: () => <div data-board="ClawdEgg" /> };
-});
 vi.mock("./AxApp/Board.tsx", () => {
   demo.loaded.push("AxApp");
   return { default: () => <div data-board="AxApp" /> };

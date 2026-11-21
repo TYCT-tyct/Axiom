@@ -91,16 +91,16 @@ describe("board conversion", () => {
     try {
       cpSync(join(packageRoot, "inputs"), join(root, "inputs"), { recursive: true });
       cpSync(join(packageRoot, "src"), join(root, "src"), { recursive: true });
-      const input = join(root, "inputs/LoginDark.head.html");
+      const input = join(root, "inputs/Models.head.html");
       writeFileSync(
         input,
         readFileSync(input, "utf8").replace("</helmet>", "<style>.source-change{color:red}</style></helmet>"),
       );
       writeFileSync(join(root, "src/wrapper.tsx"), "export const wrapper = 1;");
-      expect(await checkGenerated(root, ["LoginDark"])).toEqual(["LoginDark/board.css"]);
-      await generate(root, ["LoginDark"]);
-      expect(await checkGenerated(root, ["LoginDark"])).toEqual([]);
-      expect(readFileSync(join(root, "src/LoginDark/board.css"), "utf8")).toContain(".source-change{color:red}");
+      expect(await checkGenerated(root, ["Models"])).toEqual(["Models/board.css"]);
+      await generate(root, ["Models"]);
+      expect(await checkGenerated(root, ["Models"])).toEqual([]);
+      expect(readFileSync(join(root, "src/Models/board.css"), "utf8")).toContain(".source-change{color:red}");
       expect(readFileSync(join(root, "src/wrapper.tsx"), "utf8")).toBe("export const wrapper = 1;");
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -108,7 +108,7 @@ describe("board conversion", () => {
   }, 10_000);
 
   it("only recognizes the marker inside the generated board tree", () => {
-    expect(generatedBoard("packages/boards/src/LoginDark/Board.tsx", `${marker}\n`)).toBe(true);
+    expect(generatedBoard("packages/boards/src/Login/Board.tsx", `${marker}\n`)).toBe(true);
     expect(generatedBoard("console/src/page.tsx", `${marker}\n`)).toBe(false);
     expect(generatedBoard("packages/boards/src/runtime.tsx", "export class Runtime {}")).toBe(false);
   });

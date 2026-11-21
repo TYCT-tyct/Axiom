@@ -102,7 +102,6 @@ host.dataset.proofReady = "";
 });
 const originalCases = [
   { name: "Login", engines: ["ocean-orig", "login-ui"], selector: ".lg-form .lg-step", prop: "mode" },
-  { name: "ClawdEgg", engines: ["ocean-orig", "clawd", "clawd-egg"], selector: ".eg .mr", prop: "mode" },
   { name: "AxApp", engines: [], selector: ".p-ov", prop: "theme" },
 ];
 const cases = [
@@ -141,7 +140,7 @@ async function extraInteractions(page: Page, name: string) {
     await page.locator(".gbar .gsr,.gbar .gsi").first().dispatchEvent("click");
     await expect(page.locator(".kpn")).toBeVisible();
   } else {
-    const selectors: Record<string, string> = { Models: ".tab", Faq: ".q", Steps: ".st", ConnectV6: ".tab" };
+    const selectors: Record<string, string> = { Models: ".tab" };
     const family = Object.keys(selectors).find((family) => name.startsWith(family));
     if (family)
       await page
@@ -191,11 +190,7 @@ async function loginInteractions(page: Page) {
 
 async function boardInteractions(page: Page, name: string) {
   if (name.startsWith("Login")) await loginInteractions(page);
-  else if (name === "ClawdEgg") {
-    await page.locator('.mr[data-i="1"]').dispatchEvent("pointerover", { bubbles: true });
-    await page.clock.runFor(12000);
-    await expect(page.locator('.mr[data-i="1"]')).toHaveClass(/on/);
-  } else if (name === "AxApp") {
+  else if (name === "AxApp") {
     await page.locator(".app2").dispatchEvent("mouseover", { bubbles: true });
     await page.keyboard.press("Control+k");
     await expect(page.locator(".kpn")).toBeVisible();
