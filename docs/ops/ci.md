@@ -14,7 +14,7 @@
 非轻量作业：
 
 - `static`：`check-ci` 中的静态部分、迁移版本与 `api-compat`；列车和 main 加 docs/secrets。
-- 分道（`scripts/ci_skips.py`，PR 与列车相同，main 无 base 全选）：Go 道在改到 `web/` 以外的非 Markdown 文件，或 Go 服务前端时读的 `web/vite.shared.ts`、`web/scripts/embed.ts`、`web/scripts/compress.ts` 时选中；e2e 道在 `web` 的输入、服务前端的 `internal/platform/webui/` 或 `scripts/ci/` 变化时选中。纯前端改动不跑 Go 测试，Go 测试读不到 `web/` 下的其他文件；其余 Go 改动不跑 e2e，e2e 对着契约模拟的接口，真实节点由 `journey` 覆盖。
+- 分道（`scripts/ci_skips.py`，PR 与列车相同，main 无 base 全选）：Go 道在改到 `web/` 以外的非 Markdown 文件，或 Go 服务前端时读的 `web/vite.shared.ts`、`web/scripts/embed.ts`、`web/scripts/compress.ts` 时选中；e2e 道在 `web` 的输入、服务前端的 `internal/platform/webui/`、`scripts/ci/` 或 e2e 读的 `internal/platform/idem/testdata/same-request.json` 变化时选中。纯前端改动不跑 Go 测试，Go 测试读不到 `web/` 下的其他文件；其余 Go 改动不跑 e2e，e2e 对着契约模拟的接口，真实节点由 `journey` 覆盖。
 - `go-test`：Go 道选中时跑，四个分片各跑 `just test i/4`（按 `go list` 顺序轮流分配，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 不跑；列车按页面、API、构建工具、Go 服务与测试配置输入选择，main 总是选择；成功列车在同一提交上已实测则在 main 摘要报告来源与成功结果，列车未测时 main 照跑；相同构建与相同比较基线通过后也可命中内容缓存。目标与实际门禁见[前端](../frontend.md#实测)。

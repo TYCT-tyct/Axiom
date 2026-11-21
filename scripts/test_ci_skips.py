@@ -122,7 +122,8 @@ class NeedsGo(unittest.TestCase):
 class NeedsE2E(unittest.TestCase):
     def test_frontend_and_its_serving_code_run_them(self):
         for paths in ([], ["web/site/src/a.ts"], ["api/admin.yaml"], ["internal/platform/webui/webui.go"],
-                      [".github/workflows/ci.yml"], ["justfile"], ["scripts/ci/playwright.py"]):
+                      [".github/workflows/ci.yml"], ["justfile"], ["scripts/ci/playwright.py"],
+                      ["internal/platform/idem/testdata/same-request.json"]):
             with self.subTest(paths=paths):
                 self.assertTrue(ci_skips.needs_e2e(paths))
 

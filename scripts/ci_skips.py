@@ -61,11 +61,17 @@ def needs_go(paths: list[str]) -> bool:
         not (path.lower().endswith(".md") or (path.startswith("web/") and path not in GO_READS_WEB)) for path in paths)
 
 
+# The files outside web/ the end-to-end tests read: the request pairs the admin's mock and the Go server must judge alike
+# (web/e2e/fingerprint.spec.ts, internal/platform/idem/same_request_test.go).
+E2E_READS_OUTSIDE_WEB = {"internal/platform/idem/testdata/same-request.json"}
+
+
 def needs_e2e(paths: list[str]) -> bool:
     """End-to-end tests drive the built pages against API mocks, served by the Go program's webui package: they can only
     change with the frontend and its build inputs (needs_web), with that serving code, or with the CI scripts that shard
     and run them. A change elsewhere in Go meets the same mocks, so the journey, which runs a real node, tests it."""
-    return needs_web(paths) or any(path.startswith(("internal/platform/webui/", "scripts/ci/")) for path in paths)
+    return needs_web(paths) or any(
+        path.startswith(("internal/platform/webui/", "scripts/ci/")) or path in E2E_READS_OUTSIDE_WEB for path in paths)
 
 
 def needs_vitals(paths: list[str]) -> bool:
