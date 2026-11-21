@@ -21,15 +21,15 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 | `POST /api/v1/responses` | OpenAI Responses 格式，无状态 | docs/api_reference/responses/overview | 有：比 OpenRouter 多保存会话状态（文档偏离项） | 有（compact）及 `/responses` | 有 | 无 |
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有| 有 | 有 | 无 |
 | Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
-| `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有 | 有（已注释掉） | 有 | Axiom 比 OpenRouter 多，非缺口 |
+| `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有 | 未启用（路由已注释掉） | 有 | Axiom 比 OpenRouter 多，非缺口 |
 | `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 有：按 OpenAI 旧接口原生提供，只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转 | 有 | 无 | 基线取 OpenAI 的旧接口；OpenRouter 的 `prompt`-on-chat 变体不采用（要改 Chat 的形状）；旧补全的 `logprobs`、`n`、`best_of` 没有 Chat 对应写法，所以不转格式（[决策](domains/gateway.md#决策与理由)） |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活，Chat 最后一块带 usage（`docs/domains/gateway.md`） | 有（ping，见差分规则） | 有 | 无 |
 | 流式取消（断开连接即停止上游） | 断开连接立即停止模型处理和计费 | docs/api_reference/streaming | 有：用 `context.Cause` 区分客户端断开 | 有（relay 取消） | 有（`gateway_handler_cancellation_test.go`） | 无 |
 | 响应头 `X-Generation-Id` | 所有端点都返回 | docs/api_reference/streaming | 有：同值也在 `X-Request-ID` | 无 | 无 | 无 |
 | WebSocket 升级 | 未提及 | — | 不适用：一律 400 | 有 | 有 `/live` | 非 OpenRouter 能力，不计缺口 |
-| `POST /api/v1/embeddings` | 向量化，`input` 支持字符串、字符串数组、token 数组、token 数组的数组和 `{content:[...]}` 多模态，回复 `data`/`usage` | docs/api_reference/embeddings；官方 OpenAPI `/embeddings` | 有：注册 `/v1/embeddings` 与 `/api/v1/embeddings`；原生格式、整份回复，请求改写 `model`/身份、删路由参数，回复保留 `data` 并写本站的 `model`、`usage.prompt_tokens`/`total_tokens`、`cost`、`is_byok:false`；`stream:true` 回 400 | 有 | 有 | 录制样本回放见 `internal/protocol/testdata/embeddings`、 |
+| `POST /api/v1/embeddings` | 向量化，`input` 支持字符串、字符串数组、token 数组、token 数组的数组和 `{content:[...]}` 多模态，回复 `data`/`usage` | docs/api_reference/embeddings；官方 OpenAPI `/embeddings` | 有：注册 `/v1/embeddings` 与 `/api/v1/embeddings`；原生格式、整份回复，请求改写 `model`/身份、删路由参数，回复保留 `data` 并写本站的 `model`、`usage.prompt_tokens`/`total_tokens`、`cost`、`is_byok:false`；`stream:true` 回 400 | 有 | 有 | 录制样本回放见 `internal/protocol/testdata/embeddings`、`internal/protocol/direct_test.go`、`internal/gateway/exec_direct_test.go` |
 | `GET /api/v1/embeddings/models` | 嵌入模型列表与属性 | 官方 OpenAPI `/embeddings/models` | 没有：目录的 `Serving` 还没有输出模态，嵌入模型没有输出价，默认不会进 `/api/v1/models`，也没有单独列表 | 无 | 无 | 留到目录补输出模态时做；调用按请求里的 `model` 走（`docs/domains/gateway.md` 待定问题） |
-| `POST /api/v1/rerank` | 重排：`query`、`documents`（字符串或 `{text,image}`）、`top_n`；回复 `id`/`model`/`results`/`usage{search_units,total_tokens}` | api/rerank/submit-a-rerank-request；官方 OpenAPI `/rerank` | 有：注册 `/v1/rerank` 与 `/api/v1/rerank`；原生格式、整份回复，回复保留 `results` 并写本站的 `id`、`model`、`usage.total_tokens`/`search_units`、`cost`、`is_byok:false`；`search_units` 按 `web_search` 售价计费；`stream:true` 回 400 | 有 | 无 | 录制样本回放见 `internal/protocol/testdata/rerank`、 |
+| `POST /api/v1/rerank` | 重排：`query`、`documents`（字符串或 `{text,image}`）、`top_n`；回复 `id`/`model`/`results`/`usage{search_units,total_tokens}` | api/rerank/submit-a-rerank-request；官方 OpenAPI `/rerank` | 有：注册 `/v1/rerank` 与 `/api/v1/rerank`；原生格式、整份回复，回复保留 `results` 并写本站的 `id`、`model`、`usage.total_tokens`/`search_units`、`cost`、`is_byok:false`；`search_units` 按 `web_search` 售价计费；`stream:true` 回 400 | 有 | 无 | 录制样本回放见 `internal/protocol/testdata/rerank`、`internal/protocol/direct_test.go`、`internal/gateway/exec_direct_test.go` |
 
 ## 2. 模型列表与模型端点
 
@@ -77,7 +77,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有（`MaxAttempts`） | 有（`RetryTimes`） | 有（failover） | 无 |
 | 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排；错误分参数不是 JSON、工具名不存在、参数不符合 schema 三类，按请求统计（2026-11-04 核实） | docs/guides/routing/auto-exacto | 部分：按真实流量的工具调用错误率排序，只在「均衡」「质量优先」策略下生效；错误率只统计参数不是 JSON 的一类（`quality` 的 `ToolErrorRate`） | 无 | 无 | 工具名、schema 两类未测，见 docs/domains/quality.md「待定问题」；吞吐和基准评分另由「最快」、产品成绩提供 |
-| 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 有：body session_id 优先于 x-session-id，再取缓存键与既有身份回退；，键含账户，头转发仍派生隔离 | 无 | 无 | 本站默认一小时、使用不续期；理由见 routing.md「会话粘性」；Embeddings/TTS 不在当前范围 |
+| 会话粘性（`session_id`、`x-session-id` 头、`prompt_cache_key`，≤256 字符，10 分钟） | 缓存命中靠粘到同一供应商 | docs/guides/best-practices/prompt-caching | 有：body session_id 优先于 x-session-id，再取缓存键与既有身份回退，键含账户，头转发仍派生隔离 | 无 | 无 | 本站默认一小时、使用不续期；理由见 routing.md「会话粘性」；Embeddings/TTS 不在当前范围 |
 | `models` 数组（备选模型，主模型失败/限流/审核时顺序尝试，按最终使用的模型计价） | 跨模型回退 | docs/guides/routing/model-fallbacks | 有：最多 8 个，逐个模型排端点；默认关闭跨模型，只有请求给出 `models` 才开 | 无 | 无 | 无 |
 | `route: "fallback"`（旧参数） | 老客户端会发 | spec `ChatRequest.route` | 部分：接受并丢弃 | 无 | 无 | 丢弃而不报错，对旧参数是对的 |
 | `service_tier`（priority/flex/ultrafast 等）与端点分级计价 | 控制成本/延迟，按实际层级计费 | docs/guides/features/service-tiers | 部分：识别并按层级定价；`:nitro/:floor` 只带来排序，没有它们说的层级准入（不写 `service_tier` 的请求本来可由 standard、priority 服务；flex 要客户端自己写） | 无 | 无 | 层级定义见 `docs/domains/catalog.md`；为 `:floor` 准入 flex 要决定是否改写上游的 `service_tier`，见 `docs/domains/gateway.md` 待定问题 |
@@ -178,7 +178,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| 插件机制：`plugins:[{id, enabled, …}]`，账户默认插件设置，`enabled:false` 关掉默认插件 | 请求/响应改写 | docs/guides/features/plugins | 请求级 id/选项校验已实现，未知项 400；没有账户默认设置 | 无 | 有（另一种概念，与此无关） | 本地支持修复与压缩，其余启用项显式拒绝；详见接入域 |
+| 插件机制：`plugins:[{id, enabled, …}]`，账户默认插件设置，`enabled:false` 关掉默认插件 | 请求/响应改写 | docs/guides/features/plugins | 请求级 id/选项校验已实现，未知项 400；没有账户默认设置 | 无 | 无对应机制 | 本地支持修复与压缩，其余启用项显式拒绝；详见接入域 |
 | `web` 插件（已弃用）：`engine`、`max_results`、`search_prompt`… | 联网搜索 | docs/guides/features/plugins/web-search | 部分：Chat 请求一次搜索，`engine` 写启用的后端名或 `native`，省略时模型有 `web_search` 能力且格式支持就走厂商原生，否则走默认后端；未配置时 400。`max_results`、`search_prompt`、`include_domains`、`exclude_domains` 只对后端搜索生效，原生路径由厂商执行、不看这些参数；`mode` 仍 400 | 无 | 无 | 只有 Chat；非流式回复补 `url_citation`，流式不补。官方已转向服务端工具；执行与多引擎见 `internal/websearch` |
 | `file-parser` 插件：`pdf.engine`(`native`/`mistral-ocr`/`cloudflare-ai`) | 文档解析 | [官方文档](https://openrouter.ai/docs/guides/features/plugins/file-parser) | 部分：冻结，行为与计费见[接入](domains/gateway.md#插件与提示词变换)；`pdf-text` 按弃用重定向到 `cloudflare-ai` | 无 | 无 | 两个 OCR 引擎落到本站一个后端；只解析顶层内联文件；流式不返回注解 |
 | 服务端工具 `{"type":"openrouter:web_search"}`，参数 `engine`(auto/native/exa/firecrawl/parallel/perplexity)、`max_results`、`max_uses`、`allowed_domains`… | 任何模型都能联网搜索 | docs/guides/features/server-tools/web-search | 没有：认出名字，准入前 400；`parameters` 不解析。即使配置了 `web` 插件的后端也拒绝；插件的 `engine:"native"` 只打开厂商自己的搜索一次，不是这个模型侧循环 | 无 | 无 | 厂商原生联网（Anthropic `web_search_*`、OpenAI `web_search`）有，并按次计费；见接入域「服务端工具」 |

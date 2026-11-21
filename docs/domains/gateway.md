@@ -44,7 +44,7 @@
 
 ### 模型发现接口：基线、投影与偏离
 
-基线是 OpenRouter 公开 OpenAPI；`testdata/openrouter-models/` 存官方样本作契约回放。
+基线是 OpenRouter 公开 OpenAPI；`testdata/openrouter-models/` 存官方 200 样本作契约回放，每个官方查询参数都有行为测试。
 
 - **同一次构建**：`/api/v1` 的列表、计数、端点、供应商投影与路由快照一起构建、一起发布，失败或迟到都不换，所以列表价就是收费价，一次响应的计数、本页和下一页链接一致。响应数据只读内存，鉴权仍走准入事务（实时查停用、过期、IP、模型权限）。
 - **过滤**：模型列表按 key 的路由预设过滤硬条件，价格取预设下最便宜的端点，预设不可用回 503 `preset_unavailable`；只列有公共端点（Owner 为零）和售价的模型，私有端点不进投影。端点列表不按 key 过滤。
@@ -53,11 +53,14 @@
 
 | 成员 | 值 |
 |---|---|
-| `id`、`canonical_slug`、`name`、`created` | 公开标准 ID `author/slug`（去掉内部版本后缀；解析不回本模型的不列）；去掉作者的名字；0 |
+| `id`、`canonical_slug` | 公开标准 ID `author/slug`（去掉内部版本后缀）；解析不回本模型的不列 |
+| `name`、`created` | 去掉作者的部分；0 |
+| `links.details` | 指向本 API 的 endpoints 路径 |
 | `pricing` | 账户当前等级的主站售价里，可服务且预设留下的最便宜端点；标准服务等级、第一档，精确十进制字符串（token 项美元/token，`web_search` 每次，`image`/`image_output` 每张）。没有的单位（`request`、`input_audio_cache`、`discount`、`overrides`、无按张价的图片项）省略；`image_token` 只给收图片的，`internal_reasoning` 只给会推理的 |
-| `context_length`、`top_provider`、`architecture` | 规格的上下文和输出上限；`is_moderated` false；text/image/file 输入、text 输出，无 `tokenizer`、`instruct_type` |
-| `supported_parameters`、`reasoning` | 按能力与方言推导；`mandatory` 和 effort 列表省略（有意偏离：未知不写 false） |
-| 其余 | `default_parameters`、`supported_voices`、`per_request_limits` 为 null；目录没有的数据省略 |
+| `context_length`、`top_provider` | 规格的上下文和输出上限；`is_moderated` false；`per_request_limits` null |
+| `architecture` | text/image/file 输入、text 输出；无 `tokenizer`、`instruct_type` |
+| `supported_parameters`、`reasoning` | 按能力与方言推导；手动思考预算给 `supports_max_tokens:true`；`mandatory` 和 effort 列表省略（有意偏离：未知不写 false） |
+| `default_parameters`、`supported_voices` | null；`description` 等目录没有的数据省略 |
 
 - **列表查询**：`offset`、`limit`、`q`、`context`、`min_price`/`max_price`、`min_output_price`/`max_output_price`（美元/百万 token）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`；`sort` 为 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`。无分页参数返回全量，只给 `offset` 时 `limit` 为 500。其余官方参数（`category`、`providers`、`zdr`、`use_rss` 等）按名字 400 并说明缺什么；非官方参数忽略；查询串解不开（`%ZZ`、`;`）回 400，免得丢掉的过滤变成全量。`links.next` 只在后面还有模型时给。
 - **单模型**返回 `{data: 模型对象}`，`id` 是标准 ID。**`/models/user`** 复用 key 的权限和同一列表，不假装按供应商偏好、隐私或护栏过滤。**`/models/count`** 是本 key 可见的公共模型数，`output_modalities` 同列表（默认 text，`all` 不限），非法值和重复参数 400。
@@ -65,9 +68,11 @@
 
 **网站和控制台的模型与价格**是同一次构建的另一份投影：`GET /api/console/v1/models` 匿名、按站点默认等级；`/models/account` 要登录、按账户等级。含已发布有价的公共模型（ID、名字、厂商、上下文、最大输出、流式、能力、`catalog.ScheduleView` 的逐项单价）和它的每个端点（代号、限制、能力、量化、是否验证、该受众的价；无价的端点不列），模型价取最便宜端点；单价带 `headline` 和 `display_amount`/`display_per`（[目录的「决策与理由」](catalog.md#决策与理由)）。不返回供应商、成本或价格来源；缺 `endpoints` 或价格时页面显示不可用，不当免费。
 
-**价格公开开关** `model_prices_public`（`accounts.site_settings`，NULL 为公开）：关闭时匿名 `/models` 省略模型和端点的 `pricing`，`/models/account` 照常；匿名答案不认会话，对所有访客相同；有列表无价时页面显示「价格仅对登录用户可见」。只有所有存活节点的心跳都声明 `supports_model_prices_public`（`platform.model_prices_public_readiness`）时关闭才生效，否则匿名照常带价、管理接口拒绝关闭，旧节点重新加入时回退为公开；管理页核对 PUT 的返回，字段缺席提示未保存。
+**价格公开开关** `model_prices_public`（`accounts.site_settings`，NULL 为公开）：关闭时匿名 `/models` 省略模型和端点的 `pricing`，`/models/account` 照常；匿名答案不认会话，对所有访客相同；有列表无价时页面显示「价格仅对登录用户可见」。只有所有存活节点的心跳都声明 `supports_model_prices_public`（`platform.model_prices_public_readiness`）时关闭才生效，否则匿名照常带价、管理接口拒绝关闭，旧节点重新加入时回退为公开；旧管理页省略字段时保留原值，新管理页核对 PUT 的返回、字段缺席提示未保存，且只在节点 `defaults` 带此字段时显示它。
 
 ### 转发规则
+
+依据 Claude Code 的网关兼容指南。
 
 - **请求头白名单**（`internal/gateway/headers.go`）：Messages 端点收 `anthropic-beta`（不筛值）、`anthropic-version`；Responses 端点收 `x-codex-turn-state`；Responses、Chat、旧版补全端点收会话头 `session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`，值换成派生值。其余（`Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`User-Agent`、归因头 `HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）不转发，归因头记入调用记录（[记录](observability.md#写入时记全)）。
 - **派生标识**：`prompt_cache_key`、会话头、`metadata.user_id` 换成用账户密钥派生的不透明值（[会话粘性](routing.md#会话粘性)）。`metadata.user_id` 写成 JSON 串 `{"device_id":"…","account_uuid":"","session_id":"…"}`，`device_id` 每账户固定，空白的写空串；`user`、`safety_identifier` 换成哈希。
@@ -98,16 +103,23 @@
 
 ### 响应缓存
 
-冻结：代码保留，不再投入。语义照 OpenRouter（成功回复命中时重放、换新 `id`、用量清零、免费），不同处：按**账户**隔离并按当前 key 复核；命中仍走准入与预留；不合并并发请求；只缓存三种生成格式的普通调用；平台默认关闭。
+照 OpenRouter 的语义（成功回复命中时重放、换新 `id`、用量清零、免费，TTL 默认 300 秒、1–86400），不同处：按**账户**隔离并按当前 key 复核；命中仍走准入与预留；不合并并发请求；只缓存三种生成格式的普通调用；平台默认关闭。
 
-- **开关**：平台 `AXIOM_RESPONSE_CACHE_CONTENT` 为 `off`（默认）时不建缓存；命名预设 `cache_enabled: false` 关闭且请求头打不开；请求头 `X-OpenRouter-Cache: false` 关闭；预设缺省时请求头为 `true` 才开；预设 `true` 打开。
-- **TTL**：请求头 `X-OpenRouter-Cache-TTL` 优先于预设 `cache_ttl_seconds`，都没有为 300 秒；头取开头的十进制数字，夹到 1–86400，不以数字开头则忽略。
-- **键**：账户 ID、客户端格式、是否流式、规范化正文的 SHA-256；条目存服务模型与端点，命中前按当前 key 的准入路由复核，不在路由里算 MISS。
+| 来源 | 值 | 结果 |
+|---|---|---|
+| 平台 `AXIOM_RESPONSE_CACHE_CONTENT` | `off`（默认） | 不建缓存 |
+| 命名预设 `cache_enabled` | `false` | 关闭，请求头打不开 |
+| 请求头 `X-OpenRouter-Cache` | `false` | 关闭 |
+| 命名预设缺省 | — | 请求头为 `true` 才开 |
+| 命名预设 `cache_enabled` | `true` | 打开 |
+
+- **TTL**：请求头 `X-OpenRouter-Cache-TTL` 优先于命名预设 `cache_ttl_seconds`，都没有为 300 秒。头取开头的十进制数字（`60abc` 为 60，`1.5` 为 1），夹到 1–86400，不以数字开头则忽略；命名预设的两个成员保存时校验，不并进上游请求。
+- **键**：账户 ID、客户端格式、是否流式、规范化正文（只删字符串外的空白）的 SHA-256；查询在账户 RLS 内。条目存服务模型与端点，命中前按当前 key 的准入路由复核，不在路由里算 MISS。
 - **不缓存**：直接格式、旧版补全、compact、`previous_response_id`、`web`/`file-parser`、`openrouter:web_search`、服务端原生工具、服务端压缩、文件引用。
-- **响应头**（开启且成功时，不发给上游）：`X-OpenRouter-Cache-Status`（`MISS`/`HIT`）、`X-OpenRouter-Cache-TTL`；HIT 另带 `X-OpenRouter-Cache-Age`、`X-OpenRouter-Cache-Source-Id`。`X-OpenRouter-Cache-Clear: true` 先删这个键再按 MISS。
-- **命中**在准入后、第一次尝试前：用存的上游原始字节按当前客户端格式重走 relay，调用 ID、`created`、`X-Generation-Id` 新生成；用量和费用为 0，预留全额释放，记录 `cache_hit=true`。并发相同请求各自 MISS、各自计费。
-- **写入**：只写上游 200、完整、结算成功的回复，交付后异步写，队列满就丢；命中不延长过期。条目最多 1 MiB，每账户最多 64 MiB 或 1024 条，超出删最旧。
-- **加密**：正文用 `secret.Keyring` 信封加密，AAD 绑表、行和用途，表按账户 RLS；受控导出单独写 `cache.jsonl` 和 `cache/<cache_id>`（[受控导出](observability.md#受控导出)）。
+- **响应头**（开启且成功时，不发给上游）：`X-OpenRouter-Cache-Status` 为 `MISS`/`HIT`；`X-OpenRouter-Cache-TTL` 是本次 TTL 或剩余秒数；HIT 另带 `X-OpenRouter-Cache-Age` 和 `X-OpenRouter-Cache-Source-Id`。`X-OpenRouter-Cache-Clear: true` 先删这个键再按 MISS，删除失败只记日志。
+- **命中**在准入后、第一次尝试前：用存的上游原始字节按当前客户端格式重走 relay，调用 ID、`created`、`X-Generation-Id` 新生成，`X-Codex-Turn-State` 用存的值；用量和费用为 0，预留全额释放，记录 `cache_hit=true`，不占供应商容量。并发相同请求各自 MISS、各自计费。
+- **写入**：只写上游 200、完整、结算成功的回复，交付后异步写，队列满就丢，失败只记日志；命中不延长过期。条目最多 1 MiB，每账户最多 64 MiB 或 1024 条，超出删最旧；每分钟清理过期。
+- **加密**：正文用 `secret.Keyring` 信封加密，AAD 绑 `gateway.response_cache` 的表、行和用途，表按账户 RLS；受控导出单独写 `cache.jsonl` 和 `cache/<cache_id>`（[受控导出](observability.md#受控导出)）。
 
 ### 错误
 
@@ -149,7 +161,7 @@
 OpenRouter 付费模型没有平台级速率上限；Axiom 对付费调用也施加后台配置的账户、等级、key 业务限流并保留节点保护（语义见[账户](accounts.md#业务速率限制)），调用与 `count_tokens` 分开计数，读 key 信息不计。
 
 - 只有请求速率的 429 带 `X-RateLimit-Limit`（触发的额度）、`X-RateLimit-Remaining`（0）、`X-RateLimit-Reset`（Unix **秒**的保守上界：预检时刻加两个窗口，向上取整）；`Retry-After` 为两个窗口、上限 60。容量和排队的 429 只给 `Retry-After`，成功不带限流头。
-- `GET /api/v1/key`：`rate_limit` 留 `requests`（含节点保护的最小正上限）/`interval`（默认 `1m0s`），另给 `account_requests`/`key_requests`。`budgets` 只列已设的 workspace/key_limit 预算，`effective_budget` 取第一个耗尽的（工作区优先）否则剩余最少的，无预算为 `[]`/null；金额是本站货币，remaining 扣已收和在途预留、不低于 0；`resets_at` 用数据库时钟给 UTC 边界，永久为 null；`guardrail_id`、`budget_id` 为 null，`include_byok` 为 false（BYOK 照常占额度，[计费](billing.md#定价)）。`limit`/`limit_remaining` 只描述 key。
+- `GET /api/v1/key`：`rate_limit` 留 `requests`（含节点保护的最小正上限）/`interval`（默认 `1m0s`），另给 `account_requests`/`key_requests`。`budgets` 只列已设的 workspace/key_limit 预算，`effective_budget` 取第一个耗尽的（工作区优先）否则剩余最少的，无预算为 `[]`/null；`*_usd` 是本站货币，`reserved_usd` 是在途预留，remaining 扣已收和预留、不低于 0；`reset_interval` 与 `resets_at`（数据库时钟）给 UTC 边界，永久为 null；`guardrail_id`、`budget_id` 为 null，`include_byok` 为 false（BYOK 照常占额度，[计费](billing.md#定价)）。`limit`/`limit_remaining` 只描述 key，与 key_limit 预算同一查询读出。
 
 ### 路由参数
 
@@ -180,25 +192,25 @@ OpenRouter 付费模型没有平台级速率上限；Axiom 对付费调用也施
 | 未知插件或 transform（即使关闭）、未支持的选项、非 Chat 启用 | 400，含 `not supported` |
 
 - **压缩口径**：用目录主模型的上下文和输出上限，在路由和预留之前；输入按 JSON 正文字节上界算，不按回退端点重压。
-- **`web`**（冻结）：一次请求只走一条路、只收一次费。`engine` 是启用的后端名或 `native`；省略时模型声明了 `web_search` 能力就走厂商原生，否则走默认后端；未知或停用的后端、不能原生却写 `native`、没有后端且不能原生，回 400（含 `not supported`）；`:online` 等于省略 `engine`。
-  - 原生：在转换后的正文里打开厂商开关（Chat `web_search_options:{}`，Responses `web_search` 工具，Messages `web_search_20250305` 工具，`max_uses` 取规格值、默认 1、最多 10），按上游实际结算，引用转成 Chat 的 `url_citation`。
-  - 后端：最后一条用户文本为查询（空或超 1024 字节 400），`max_results` 默认 5、最多 10；限时 15 秒，结果作为 system 消息插在第一条用户消息之前，按后端价收一次；注入 ≤40 KiB。内存预算不够 503，失败或超时 502，不调模型。
-  - 不搜两次：请求已声明厂商搜索工具或模型 `always_searches` 时插件丢弃、不收费。
-- **`file-parser`**（冻结）：`pdf.engine` 缺省 `native`，文件原样发给接受文档的端点；`mistral-ocr`、`cloudflare-ai`（`pdf-text` 同后者）走部署配置的 Docling 后端（[fileparse](../../internal/fileparse/README.md)），没配置回 400；不做“不支持原生就 OCR”的回退。
-  - 准入前把内联 base64 文件换成文本再路由、报价；单文件 20 MiB、最多 8 个、文本合计 2 MiB，超出 413；后端整步 60 秒；内存预算不够 503；解析前先做只读 key 检查和速率判断。
-  - 计费：`Config.FileParse` 打开时 `mistral-ocr` 按页计 `file_parse`（[计费](billing.md#预留与结算)），`cloudflare-ai` 免费，`native` 按输入 token；关闭时每个文件一次 `web_search`。
-  - 后端失败 502；非 base64、同时带 `file_data` 和 `file_id`、文件不在消息顶层却要求解析，回 400；只带 `file_id` 的原样保留，须用 `provider.only` 固定一个供应商。
-  - 非流式 Chat 在 `choices[].message.annotations` 返回 `{"type":"file","file":{"hash","name","content":[…]}}`，客户端带回注解和文件时用注解文本、不再解析不收费；流式不返回。
+- **`web`：一次请求只走一条路、只收一次费。** `engine` 是启用的后端名或 `native`；省略时模型声明了 `web_search` 能力就走厂商原生，否则走默认后端；未知或停用的后端、不能原生却写 `native`、没有后端且不能原生，都回 400（含 `not supported`）；管理员清空引擎列表后环境变量不会恢复搜索。`:online` 等于省略 `engine`。
+  - **原生**：在转换后的正文里打开开关（Chat `web_search_options:{}`，Responses `web_search` 工具，Messages `web_search_20250305` 工具，`max_uses` 取规格值、默认 1、最多 10），已有同名工具不重复加；Chat 预留按 1 次、按上游实际结算。引用转成 Chat 的 `url_citation`。
+  - **后端**：最后一条用户文本为查询（空或超 1024 字节 400），按注入上界重新路由；`max_results` 默认 5、最多 10，`include_domains`/`exclude_domains` 转成 `site:`/`-site:`，`search_prompt` ≤512 字节；限时 15 秒，结果编号列出作为 system 消息插在第一条用户消息之前，按后端价收一次。URL ≤8 KiB、标题 256 字节、摘要 1024 字节、响应 4 MiB，注入 ≤40 KiB。非流式 Chat 补 `url_citation`。内存预算不够 503，失败或超时 502，不调模型。
+  - **不搜两次**：请求已声明厂商搜索工具或模型 `always_searches` 时插件丢弃、不收费；自动搜索模型只回退到同样自动搜索的模型。
+- **`file-parser`**：`pdf.engine` 缺省 `native`，文件原样发给接受文档的端点；`mistral-ocr`、`cloudflare-ai`（`pdf-text` 同后者）走部署配置的 Docling 后端（[fileparse](../../internal/fileparse/README.md)），没配置回 400；不做“不支持原生就 OCR”的回退。
+  - 准入前把内联 base64 文件换成文本再路由、报价；单文件 20 MiB、最多 8 个、文本合计 2 MiB（同一文件在历史里出现几次计几次），超出 413；后端响应 8 MiB、整步 60 秒；内存预算不够 503。解析前先做只读 key 检查和速率判断。
+  - 计费：`Config.FileParse` 打开时 `mistral-ocr` 按页计 `file_parse`（价在模型价目表，页数口径见[计费](billing.md#预留与结算)），`cloudflare-ai` 免费，`native` 按输入 token；关闭时每个文件一次 `web_search`。
+  - 后端失败 502。非 base64、同时带 `file_data` 和 `file_id`、文件不在消息顶层却要求解析，回 400；只带 `file_id` 的原样保留，须用 `provider.only` 固定一个供应商。
+  - 非流式 Chat 在 `choices[].message.annotations` 返回 `{"type":"file","file":{"hash","name","content":[…]}}`（`hash` 是文件的 SHA-256），客户端带回注解和文件时用注解文本、不再解析不收费；任一 choice 装不下就整份不写，流式不返回。
 
 ### 服务端工具
 
-冻结。模型决定调用零到多次，网关执行后把结果送回继续采样。`openrouter:` 下 13 种只认 `openrouter:web_search`，其余准入前 400（含 `not supported`），`GET /api/v1/tools` 不提供。
+模型决定调用零到多次，网关执行后把结果送回继续采样。`openrouter:` 下 13 种只认 `openrouter:web_search`，其余准入前 400（含 `not supported`），`GET /api/v1/tools` 不提供。
 
 - **接入**：三种生成格式都认；工具对象准入前删掉，正文里加函数 `openrouter_web_search`，到上限不再声明。`n>1`、与 `web` 插件或厂商搜索、代码执行工具同时声明，回 400。`engine` 默认 `auto`、规则同 `web`：能原生就映射成厂商工具，不跑循环。
-- **参数**：`max_results` 1–25（默认 5）、`max_uses` 1–30（默认 30）、`max_total_results` 1–1000、`allowed_domains`/`excluded_domains` 各 ≤20；其他成员和超过 30 的 `max_tool_calls` 回 400。原生时次数折成厂商 `max_uses`，最多 10。
-- **循环**：读 `query`（≤1024 字节）搜索，保留 assistant 回合原样，按客户端格式追加结果再采样，直到不再调用或到上限：步数为 `max_uses` 与 `max_tool_calls` 的较小值，结果正文共 32 KiB、每次 8 KiB。到上限后追加说明、去掉函数声明和强制的 `tool_choice`，再采样一次。同一回合兼有服务端和客户端调用回 502。
-- **尝试**：每步各取凭证槽、配额和尝试序号；回退最多 3 次（`platform.MaxAttempts`），循环最多 30 步（`platform.MaxServerToolSteps`）。
-- **流式与期限**：每跳事件先留在网关（计入内存预算），确认不是工具调用才发给客户端；每步受调用期限、响应头等待、空闲超时、关停约束；搜索期间停掉空闲计时，每次搜索限时 15 秒；客户端断开取消采样；末跳没有内容按空回复 502。
+- **参数**：`max_results` 1–25（默认 5）、`max_uses` 1–30（默认 30）、`max_total_results` 1–1000、`allowed_domains`/`excluded_domains` 各 ≤20；`mode`、`search_context_size`、`max_characters`、`user_location`、`x_search`、`stop_server_tools_when` 和超过 30 的 `max_tool_calls` 回 400。原生时次数折成厂商 `max_uses`，最多 10。
+- **循环**：读 `query`（≤1024 字节；没有可用查询时不搜索，只把说明作为工具结果返回）去搜索，保留 assistant 回合原样，按客户端格式追加结果再采样，直到不再调用或到上限：步数为 `max_uses` 与 `max_tool_calls` 的较小值，结果正文共 32 KiB、每次 8 KiB。到上限后追加说明、去掉函数声明和强制的 `tool_choice`，再采样一次。同一回合兼有服务端和客户端调用回 502。`max_tool_calls` 发往 Chat/Messages 前删掉。
+- **每步一次尝试**：同一条目上依次发出，各取凭证槽、配额和尝试序号；回退最多 3 次（`platform.MaxAttempts`），循环最多 30 步（`platform.MaxServerToolSteps`），回退的序号在 1–3。
+- **流式与期限**：每跳事件先留在网关（计入内存预算），确认不是工具调用才发给客户端。每步受调用期限、响应头等待、空闲超时、关停约束；搜索期间停掉空闲计时，每次搜索限时 15 秒，期限到或关停后不发新搜索；客户端断开取消采样。末跳没有内容按空回复 502。
 - **计费**：每次成功搜索收一次 `web_search`；各次采样合起来按最后一次的结局套[免单规则](billing.md#免单规则)。预留：输入按 1 + 步数上限次采样，输出按 1 + 步数上限乘每次上限。中途失败、超时、空 200、流中断回 502，模型用量免单、搜索照收、不换端点。
 - **厂商自己的工具**：Responses 的 `web_search`、`code_interpreter`、`file_search` 原样转发给能执行的 Responses 端点，按调用项计费；`file_search` 要供应商账号拥有 `vector_store_ids`，转到 Chat 或 Messages 时拒绝。
 
@@ -257,7 +269,6 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 
 | 决策 | 理由 |
 |---|---|
-| 响应缓存按账户隔离、按当前 key 复核、存上游字节重放、命中仍走准入与预留、只缓存普通生成、默认关闭有上限并加密 | 换 key 仍命中而权限收窄后不重放；命中与正常回复同一条路径；绕开准入会让余额不足的账户过关；重放会漏收搜索、解析的费用；内容保存由平台统一决定，密文不能搬到别的行。 |
 | 同时提供 `/v1` 和 `/api/v1` | OpenRouter 的客户端只改地址就能接入。 |
 | 请求头白名单，`anthropic-beta` 不筛值 | 筛值会让新功能失效；客户端凭证和身份不能流向上游。 |
 | 标识换成派生值 | 删除让上游缓存失效，原样转发会串租户。 |
@@ -269,7 +280,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | 旧版客户端收回旧函数表示 | 统一降级会破坏现代客户端和并行调用。 |
 | 响应头白名单；转发前不发字节 | 上游头暴露货源；发了字节就不能换端点或改状态码。 |
 | 上游拒绝时给脱敏原话 | Claude Code 靠原话恢复；清洗在共用代码做一次。 |
-| `error.code` 是状态数字 | 产品要求与 OpenRouter 一致的错误码。批准见 #309。 |
+| `error.code` 是状态数字 | 产品要求与 OpenRouter 一致的错误码。批准：2026-10-28，#309。 |
 | 余额 402、预算 403，永久无端点 404、暂时 503、满载 429 | 与 OpenRouter 一致，客户端据此决定等、充值或放弃。 |
 | 计费类不回 401、避开禁用措辞 | new-api 会因此自动禁用渠道。 |
 | 结算写不进时照常结束并带 `billing_pending` | 不发未入账的费用，也不让客户端重发付两次。 |
@@ -281,22 +292,33 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | 价格用 `ScheduleView` | 折成每百万 token 会让按次和分档的价显示错。 |
 | 价格默认公开，等全部节点就绪才可关 | 与 OpenRouter 一致；有旧节点时会一半隐藏一半泄露。 |
 | 发现接口保留实时准入 | 缓存身份会放行已撤销的 key。 |
+| 缓存按账户隔离、按当前 key 复核 | 换 key 仍命中，权限收窄后不重放。 |
+| 缓存存上游字节、命中重放进 relay | 命中与正常回复同一条路径。 |
+| 缓存命中仍走准入与预留 | 绕开准入会让余额不足的账户过关。 |
+| 缓存平台默认关闭、有上限、信封加密 | 内容保存由平台统一决定；上限限住占用；密文不能搬到别的行。 |
+| 只缓存普通生成 | 其他路径有正文外的搜索、解析或历史，重放会漏收费。 |
 | 直接格式只走原生端点、整份读完 | 没有可靠的转换；整份校验让失败还能换端点。 |
 | rerank 的 `search_units` 计入 `web_search` | 同是一次服务端调用，不必改价目表。 |
-| 旧版补全按整批预留且计入 `suffix`，`max_tokens: 0` 是零输出，`echo` 不算生成，`logprobs` 分数组追加、结束时编码一次，`completions` 编号追加在末尾 | 上游按整批计费；只回显是合法回答；长流不退化成 O(n²)；已存的 `embeddings`、`rerank` 编号不变。 |
 | 旧版补全原生提供、一律流式、拒绝 `best_of > 1` | 转成 Chat 会丢 `n`、`echo`、`logprobs` 语义；网关要读完流才能结算。 |
+| 旧版补全按整批预留、不分段，计入 `suffix` | 上游按整批计费，少留由平台承担。 |
+| `max_tokens: 0` 是零输出，`echo` 不算生成 | 只回显是合法回答；算进生成会多收。 |
+| `logprobs` 分数组追加，结束时编码一次 | 不复制历史，长流不退化成 O(n²)。 |
+| `completions` 编号追加在末尾 | 已存的 `embeddings`、`rerank` 编号不变。 |
 | 推不出的格式由模型映射声明 | 按渠道类型猜会误标；直接改同步表会被覆盖。 |
-| compact 只换 `usage` | 每次调用都要返回用量和费用。批准见 #309。 |
+| compact 只换 `usage` | 每次调用都要返回用量和费用。批准：2026-10-28，#309。 |
 | `count_tokens` 本地估算 | 转发要占端点名额；文件按固定页数可能偏低，不承诺不超窗口。 |
-| `/credits`、`/key` 也收管理 key | 与 OpenRouter 一致，保留中转站常用的调用 key。批准见 #309。 |
+| `/credits`、`/key` 也收管理 key | 与 OpenRouter 一致，保留中转站常用的调用 key。批准：2026-10-28，#309。 |
 | 提供两种余额接口 | new-api 查 OpenAI 类渠道用旧版接口，OpenRouter 格式服务兼容工具。 |
 | 内容接口不给内容，`activity` 不给端点 | 产品不让人查看内容，货源不公开。 |
 | 扩展放 `axiom` 对象 | 不与 OpenRouter 的字段冲突。 |
 | 本地插件准入前压缩、聚合后修复 | 上游会静默忽略；路由、报价和转发用同一份正文。 |
-| 搜索：原生按目录能力判断，两条路径共用后端和价；后端用自托管 SearXNG 与付费 Firecrawl；后端价替换锁定的 `web_search` 单价（0 沿用模型价） | 厂商白名单会变、不出现两个价；SearXNG 可在大陆自建，Firecrawl 的“每次 + 每条结果”对上两个成本字段；预留与结算同一张表。 |
-| 文件解析：OCR 用自托管 Docling，默认 `native`，按页计费，解析前先查 key | 可自托管；不替客户端花没要求的钱；不能用的 key 不该触发最长 60 秒的 OCR。 |
+| 原生搜索按目录能力判断，两条搜索路径共用后端和价 | 厂商白名单会变；不出现两个价。 |
+| 后端用自托管 SearXNG 与付费 Firecrawl | 前者可在大陆自建，后者“每次 + 每条结果”的计价对上两个成本字段。 |
+| 后端价替换锁定的 `web_search` 单价，0 沿用模型价 | 预留与结算同一张表；0 让旧部署不变。 |
 | 循环的每次采样是一次尝试，输出预留按步数放大 | 每次采样是独立扣费；不放大罩不住每步的输出（I1）。 |
 | `openrouter:web_search` 不与厂商工具组合 | 循环会重复跑厂商工具而报价只算一次。 |
+| OCR 用自托管 Docling，默认 `native`，按页计费 | 可自托管；不替客户端花没要求的钱。 |
+| 解析前先查 key | 不能用的 key 不该触发最长 60 秒的 OCR。 |
 | 变体在网关里读；不能兑现的 400、未知的 404 | 变体是路由开关不是模型；让客户端区分暂不支持和不存在。 |
 | `:exacto` 只走验证过的端点 | 比 400 更接近意图，不假装有基准分。 |
 | 显式 `provider.sort` 压过变体 | 请求体字段比后缀具体。 |
@@ -307,11 +329,12 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 
 ## 待定问题
 
-- 限制现在是代码默认值，没有后台配置和按端点、按模型的超时（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）；默认值下空闲超时（180 秒）晚于 120 秒窗口，不会触发换端点。
-- 响应缓存没有按账户的保留设置，账户删除未实现（须纳入 `gateway.response_cache`）；此前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
+- 限制现在是代码默认值，后台配置和按端点、按模型调超时没有（[#731](https://github.com/TYCT-tyct/Axiom/issues/731)）；默认值下空闲超时（180 秒）晚于 120 秒窗口，不会触发换端点。
+- 响应缓存没有按账户的保留设置，账户删除流程未实现；实现时纳入 `gateway.response_cache`。此前 `AXIOM_RESPONSE_CACHE_CONTENT` 不应打开。
 - 402/403 附所需金额、`limit_source` 加 `pending`、按窗口结束给 `Retry-After`：等 billing 报出这些信息。
 - Chat 输出上限成员按模型名判断，规格有了对应键再改；按规格改写推理参数没有。
 - 供应商真名的可信映射、逐端点采样参数清单缺数据；`max_price.image` 的含义和非美元站点的换算未定。
 - `:floor` 准入 flex 层要不要改写上游 `service_tier`。
+- `-latest` 别名没有后台界面。
 - `/embeddings/models` 与嵌入模型进列表：要先给规格加输出模态。
 - Bedrock、Vertex 和 Gemini 原生格式以后再做。
