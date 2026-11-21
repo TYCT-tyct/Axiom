@@ -38,8 +38,9 @@
 
 }
 :global(.tr *:not(.under *)):where(.scope){box-sizing:border-box}
+:global(.tr .more:not(.under *)):where(.scope){position:relative;z-index:2;max-width:1200px;margin:0 auto;padding:120px var(--margin) 160px;display:flex;flex-direction:column;align-items:center;text-align:center}
 @media (max-width:767px){
-
+:global(.tr .more:not(.under *)):where(.scope){padding:80px var(--margin) 120px}
 
 }
 :global(.ho [data-t]:not(.under *)):where(.scope){transition:color 200ms ease-out,background-color 200ms ease-out}
@@ -107,6 +108,8 @@
 :global(.hfm1 .cx .sec):where(.scope){position:absolute;inset:0;z-index:1}
 :global(.hfm1 .cx .intro):where(.scope){display:flex;flex-direction:column;align-items:flex-start;gap:4px}
 :global(.hfm1 .cx .intro p):where(.scope){margin:0;font-size:16px;line-height:26px;color:var(--text2)}
+:global(.hfm1 .cx .more):where(.scope){display:inline-flex;align-items:center;gap:4px;color:var(--text1);text-decoration:none;transition:color 250ms ease-out}
+:global(.hfm1 .cx .more:hover):where(.scope){color:var(--accent)}
 :global(.hfm1 .cx .sr):where(.scope){position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
 :global(.hfm1 .cx .code):where(.scope){position:relative;border-radius:12px;overflow:hidden;background:var(--panel);box-shadow:inset 0 0 0 var(--bw) var(--hair)}
 :global(.hfm1 .cx .ch):where(.scope){display:flex;align-items:center;height:40px;padding:0 6px 0 16px;box-shadow:inset 0 calc(-1 * var(--bw)) 0 var(--hair)}

@@ -2,6 +2,7 @@
 /* jscpd:ignore-start */
 export default {
   "m15e09730c0": "改一个地址",
+  "md4aad3cf2b": "接入文档",
   "me2c2f3d5e7": "选择工具",
   "mda83883e17": "其他工具",
   "m89e8fb3a55": "获取key",

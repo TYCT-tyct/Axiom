@@ -18,6 +18,7 @@ export default {
   "m223b24b821": "线路",
   "mddab042697": "首字",
   "mc25db45edc": "扣费",
-  "mcaf724c6bd": "注册，获取API key"
+  "mcaf724c6bd": "注册，获取API key",
+  "md006830a9e": "查看文档"
 } as const;
 /* jscpd:ignore-end */

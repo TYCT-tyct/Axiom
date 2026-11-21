@@ -3,6 +3,7 @@
 import type zh from "./Connect.zh.ts";
 export default {
   "m15e09730c0": "Change one address",
+  "md4aad3cf2b": "Integration docs",
   "me2c2f3d5e7": "Choose a tool",
   "mda83883e17": "Other tools",
   "m89e8fb3a55": "Get a key",

@@ -49,6 +49,7 @@ const inserted = [
 ];
 
 const english: Record<string, string> = {
+  md4aad3cf2b: "Integration docs",
   m15e09730c0: "Change one address",
   me2c2f3d5e7: "Choose a tool",
   mda83883e17: "Other tools",
@@ -59,8 +60,8 @@ const connect = (board: string): Region => ({
   board,
   name: "Connect",
   roots: [".under > .hfm1"],
-  // the hidden canvas, the detail views (the board's other way of showing the pick), and the docs link (#816)
-  omit: [".hfm1 .frame > canvas", ".hfm1 .loupe", ".hfm1 .intro .more"],
+  // the hidden canvas and the detail views (the board's other way of showing the pick)
+  omit: [".hfm1 .frame > canvas", ".hfm1 .loupe"],
   // the key's place in each line of the configuration is the way to sign up
   attributes: { signUpHref: { selector: ".hfm1 .kc", attribute: "href" } },
   // the comma after the first phrase is the language's: the Chinese keeps the board's kern, the English writes its own;

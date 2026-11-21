@@ -4,6 +4,7 @@ export default {
   "m660c2c2cea": "三步，从注册到第一个请求",
   "mac86e0f670": "用你现在的SDK，只改两行配置。",
   "mcaf724c6bd": "注册，获取API key",
+  "md006830a9e": "查看文档",
   "m099fc1e8b6": "创建Key",
   "md44e9b3d3b": "名称",
   "m000f03156e": "可用模型",

@@ -21,6 +21,8 @@ const bedClasses: Record<string, string[]> = {
 };
 
 const faqEnglish: Record<string, string> = {
+  md4aad3cf2b: "Integration docs",
+  m31325070f8: "Submit a ticket",
   m45a6d115fd: "Frequently asked questions",
   md099384653: "How is this different from using the official API directly?",
   m809ecaafa7: "What is a \u201cthird-party route\u201d?",
@@ -62,6 +64,18 @@ const faqEnglish: Record<string, string> = {
   m55d7debcab: "Billing method",
 };
 const bedEnglish: Record<string, string> = {
+  md006830a9e: "Read the docs",
+  mb22223ee1f: "Status",
+  m38084d301e: "Developers",
+  m2687ccdbb1: "Docs",
+  m5b1c9c11b7: "API reference",
+  mde6811e73d: "Changelog",
+  md93373f813: "Support",
+  m31325070f8: "Submit a ticket",
+  mc044f887b3: "Contact us",
+  m41c7311f86: "Legal",
+  m9303687a9c: "Terms of service",
+  me464b41fd5: "Privacy policy",
   m4ba35a8f55: "Models change, ",
   m46ff80e47d: "integration stays the same",
   mc98e118e0a: "Model",
@@ -91,8 +105,6 @@ const faq = (board: string): Region => {
     roots: [".under > .hfm5"],
     omit: [
       ".hfm5 .frame > canvas",
-      // the docs page does not exist (#816) and the product has no tickets
-      ".hfm5 .hd > .links",
       // the source tags and the official-only switch of the second picture, and the last-change line of the sixth: the
       // site shows no source label, has no such switch, and no change time (docs/product.md「售卖形式」)
       ".hfm5 .w1 .rt .tag",
@@ -156,20 +168,15 @@ const faq = (board: string): Region => {
   };
 };
 
-// The board's own footer is the page's: the site's name and mark stay, the columns whose pages do not exist
-// (docs, API reference, changelog, status, tickets, contact, terms, privacy; no ICP numbers) are left out, and the
-// credit for the Chinese font stays in the legal line (docs/frontend.md「字体」).
+// The board's own footer is the page's: the site's name and mark stay, the links whose pages do not exist yet (docs, API
+// reference, changelog, status, tickets, contact, terms, privacy) stay as reserved entries (#816), the board's
+// placeholder ICP numbers are left out, and the credit for the Chinese font stays in the legal line
+// (docs/frontend.md「字体」).
 const bed = (board: string): Region => ({
   board,
   name: "Bed",
   roots: [".under > .hfm6"],
-  omit: [
-    ".hfm6 .frame > canvas[hidden]",
-    ".hfm6 .cta .btn.outline",
-    ".hfm6 .fcols > nav.fc:nth-of-type(n + 2)",
-    ".hfm6 .fcols > nav.fc > a:nth-of-type(3)",
-    ".hfm6 .legal > span:nth-child(n + 2)",
-  ],
+  omit: [".hfm6 .frame > canvas[hidden]", ".hfm6 .legal > span:nth-child(n + 2)"],
   // the site's own name and logo take the brand's place, all of it: the board's mark and its bare "Axiom" text
   slots: { brand: ".hfm6 .ft .brand" },
   // the way in and the line before it say how this site takes new users, and the brand's line holds for a key that may
@@ -184,8 +191,8 @@ const bed = (board: string): Region => ({
   attributes: {
     signUpHref: { selector: ".hfm6 .cta .btn.primary", attribute: "href" },
     homeHref: { selector: ".hfm6 .ft .brand", attribute: "href" },
-    modelsHref: { selector: ".hfm6 .fc > a:nth-of-type(1)", attribute: "href" },
-    pricingHref: { selector: ".hfm6 .fc > a:nth-of-type(2)", attribute: "href" },
+    modelsHref: { selector: ".hfm6 .fcols > nav.fc:nth-of-type(1) > a:nth-of-type(1)", attribute: "href" },
+    pricingHref: { selector: ".hfm6 .fcols > nav.fc:nth-of-type(1) > a:nth-of-type(2)", attribute: "href" },
   },
   elements: {
     ...entrance("hfm6", "m6_in"),
