@@ -3,11 +3,10 @@
 
 
 import type zh from "./ModelsCard.zh.ts";
-import styles from "./ModelsCard.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: {  };   };
 export default function ModelsCard({ children }: Props & { children?: import("react").ReactNode }) {
-return <><section className={("qcard") + " " + styles.scope}>{children}</section></>;
+return <><section className={"qcard"}>{children}</section></>;
 }
 /* jscpd:ignore-end */

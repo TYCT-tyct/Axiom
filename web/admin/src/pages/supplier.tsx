@@ -10,6 +10,8 @@ import { type SupplierView, supplierQuery } from "../queries";
 import { Checklist } from "../suppliers/checklist";
 import {
   BindKeyDialog,
+  CredentialLimitsDialog,
+  EndpointEnabledDialog,
   QuantizationDialog,
   RemoveDialog,
   ReplaceLoginDialog,
@@ -86,7 +88,7 @@ function Body({ detail }: { detail: Detail }) {
         <Groups groups={detail.groups} onOpen={act} />
       </Card>
       <Card layout="flush" title={t("suppliers.credentials.title")}>
-        <Credentials credentials={detail.credentials} groups={detail.groups} />
+        <Credentials credentials={detail.credentials} groups={detail.groups} onOpen={act} />
       </Card>
       <Card layout="flush" title={t("suppliers.endpoints.title")}>
         <Endpoints endpoints={detail.endpoints} groups={detail.groups} onOpen={act} />
@@ -147,8 +149,14 @@ function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null;
           onClose={onClose}
         />
       );
+    case "credentialLimits":
+      return <CredentialLimitsDialog supplier={supplier} credential={open.credential} onClose={onClose} />;
     case "test":
       return <EndpointTestDialog endpoint={open.endpoint} group={open.group} onClose={onClose} />;
+    case "endpointEnabled":
+      return (
+        <EndpointEnabledDialog supplier={supplier} endpoint={open.endpoint} group={open.group} onClose={onClose} />
+      );
     case "quantization":
       return <QuantizationDialog supplier={supplier} endpoint={open.endpoint} onClose={onClose} />;
     default:

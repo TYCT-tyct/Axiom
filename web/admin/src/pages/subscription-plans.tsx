@@ -20,8 +20,9 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useDuration } from "../durations";
 import { Actions, Head, PageBody, State, SubLine } from "../parts";
-import { accountQuery, subscriptionPlansQuery } from "../queries";
+import { accountQuery } from "../queries";
 import { SubscriptionPlanDialog } from "../subscription-plan-dialog";
+import { subscriptionPlansQuery } from "../subscription-queries";
 
 type Plan = AdminSchemas["SubscriptionPlan"];
 const newPlan = "new";

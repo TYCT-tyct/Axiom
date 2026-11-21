@@ -1,5 +1,5 @@
 import { type AdminSchemas, adminApi, unwrap, unwrapChange } from "@axiom/api";
-import { accountKey } from "@axiom/app";
+import { accountKey, useErrors } from "@axiom/app";
 import { DataState, Field, Select, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -338,6 +338,142 @@ export function BindKeyDialog({
         )
       }
       done={() => <p>{t("suppliers.bind.done")}</p>}
+      onClose={onClose}
+    />
+  );
+}
+
+// Turning an endpoint off removes it from routing; turning it back on also resets its circuit breaker.
+export function EndpointEnabledDialog({
+  supplier,
+  endpoint,
+  group,
+  onClose,
+}: {
+  supplier: Supplier;
+  endpoint: AdminSchemas["SupplierEndpoint"];
+  group: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const next = !endpoint.enabled;
+  const mode = next ? "enable" : "disable";
+  return (
+    <ChangeDialog
+      operation={`supplier-endpoint-enabled:${endpoint.id}:${mode}`}
+      title={t(`suppliers.endpointEnabled.${mode}.title`, { name: endpoint.upstream_name, group })}
+      intro={<p>{t(`suppliers.endpointEnabled.${mode}.body`)}</p>}
+      action={t(`suppliers.endpointEnabled.${mode}.action`)}
+      danger={!next}
+      read={() => next}
+      send={(enabled, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled", {
+            params: {
+              path: { supplier_id: supplier.id, endpoint_id: endpoint.id },
+              header: { "Idempotency-Key": key },
+            },
+            body: { enabled, reason },
+          }),
+        )
+      }
+      done={(changed) => (
+        <p>{t(changed.enabled ? "suppliers.endpointEnabled.enable.done" : "suppliers.endpointEnabled.disable.done")}</p>
+      )}
+      onClose={onClose}
+    />
+  );
+}
+
+const maxConcurrencyCap = 2_147_483_647;
+const maxRpmCap = 100_000;
+
+function readCredentialLimits(
+  values: Record<string, string>,
+  words: { concurrency: string; rpm: string },
+): { max_concurrency: number; requests_per_minute: number | null } | Problem {
+  const rawConcurrency = (values.max_concurrency ?? "").trim();
+  const concurrency = Number(rawConcurrency);
+  if (!/^\d+$/.test(rawConcurrency) || concurrency < 1 || concurrency > maxConcurrencyCap) {
+    return { problem: words.concurrency };
+  }
+  const rawRpm = (values.requests_per_minute ?? "").trim();
+  if (rawRpm === "") {
+    return { max_concurrency: concurrency, requests_per_minute: null };
+  }
+  const rpm = Number(rawRpm);
+  if (!/^\d+$/.test(rawRpm) || rpm < 1 || rpm > maxRpmCap) {
+    return { problem: words.rpm };
+  }
+  return { max_concurrency: concurrency, requests_per_minute: rpm };
+}
+
+// CredentialLimitsDialog adjusts the in-flight concurrency and optional rolling-minute RPM ceiling of a bound key.
+export function CredentialLimitsDialog({
+  supplier,
+  credential,
+  onClose,
+}: {
+  supplier: Supplier;
+  credential: AdminSchemas["SupplierCredential"];
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const words = {
+    concurrency: t("suppliers.credentialLimits.invalidConcurrency"),
+    rpm: t("suppliers.credentialLimits.invalidRpm", { max: maxRpmCap }),
+  };
+  return (
+    <ChangeDialog
+      operation={`supplier-credential-limits:${credential.id}`}
+      title={t("suppliers.credentialLimits.title", { key: credential.upstream_key_ref })}
+      intro={<p>{t("suppliers.credentialLimits.body")}</p>}
+      action={t("suppliers.credentialLimits.action")}
+      fields={(error) => (
+        <>
+          <Field
+            label={t("suppliers.credentials.concurrency")}
+            hint={t("suppliers.credentialLimits.concurrencyHint")}
+            name="max_concurrency"
+            inputMode="numeric"
+            autoComplete="off"
+            defaultValue={credential.max_concurrency}
+            error={errors.field(error, "max_concurrency")}
+          />
+          <Field
+            label={t("suppliers.credentials.rpm")}
+            hint={t("suppliers.credentialLimits.rpmHint", { max: maxRpmCap })}
+            name="requests_per_minute"
+            inputMode="numeric"
+            autoComplete="off"
+            defaultValue={credential.requests_per_minute ?? ""}
+            error={errors.field(error, "requests_per_minute")}
+          />
+        </>
+      )}
+      read={(values) => readCredentialLimits(values, words)}
+      send={(limits, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", {
+            params: {
+              path: { supplier_id: supplier.id, credential_id: credential.id },
+              header: { "Idempotency-Key": key },
+            },
+            body: { ...limits, reason },
+          }),
+        )
+      }
+      done={(changed) => (
+        <p>
+          {changed.requests_per_minute === undefined
+            ? t("suppliers.credentialLimits.doneNoRpm", { concurrency: changed.max_concurrency })
+            : t("suppliers.credentialLimits.done", {
+                concurrency: changed.max_concurrency,
+                rpm: changed.requests_per_minute,
+              })}
+        </p>
+      )}
       onClose={onClose}
     />
   );

@@ -3,7 +3,6 @@
 import { type DOMAttributes } from "react";
 
 import type zh from "./AdminCheckbox.zh.ts";
-import styles from "./AdminCheckbox.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { id?: string | number;
@@ -14,6 +13,6 @@ describedBy?: string | number;
 disabled?: boolean;
 toggle?: DOMAttributes<Element>["onClick"]; };  text: { label: string; }; };
 export default function AdminCheckbox({ values: v = {}, text }: Props) {
-return <><div className={("nkrow") + " " + styles.scope}><label className={("nkl") + " " + styles.scope} htmlFor={String(v.id ?? "")}>{text.label}</label><button type={"button"} className={("sw2 qsw " + String(v.checkedClass ?? "")) + " " + styles.scope} data-a={"ip"} aria-label={String(v.label ?? "")} role={"checkbox"} id={String(v.id ?? "")} aria-checked={v.checked} aria-describedby={String(v.describedBy ?? "")} disabled={v.disabled} onClick={v.toggle}><i className={styles.scope} /></button></div></>;
+return <><div className={"nkrow"}><label className={"nkl"} htmlFor={String(v.id ?? "")}>{text.label}</label><button type={"button"} className={"sw2 qsw " + String(v.checkedClass ?? "")} data-a={"ip"} aria-label={String(v.label ?? "")} role={"checkbox"} id={String(v.id ?? "")} aria-checked={v.checked} aria-describedby={String(v.describedBy ?? "")} disabled={v.disabled} onClick={v.toggle}><i /></button></div></>;
 }
 /* jscpd:ignore-end */

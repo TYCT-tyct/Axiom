@@ -65,6 +65,7 @@ export function useSwitches(root: RefObject<HTMLElement | null>, sea: RefObject<
     let loading: Promise<Prefs> | undefined;
     const start = () =>
       (loading ??= loadPrefs().then(({ startPrefs }) => {
+        sea.current?.settle?.();
         writeStored("ax-lang", i18next.language === "en" ? "en" : "zh-CN");
         writeStored("ax-theme", currentTheme());
         prefs = startPrefs(frame, sea.current?.engine, {
@@ -78,7 +79,9 @@ export function useSwitches(root: RefObject<HTMLElement | null>, sea: RefObject<
     const onClick = (e: MouseEvent) => {
       const press = pressOf(e);
       // once the engine is there it listens on the header's buttons itself; the footer's choices are the page's
-      if (!press || (prefs && !press.footer)) return;
+      if (!press) return;
+      sea.current?.settle?.();
+      if (prefs && !press.footer) return;
       e.preventDefault();
       start().then(
         (started) => hand(started, press),

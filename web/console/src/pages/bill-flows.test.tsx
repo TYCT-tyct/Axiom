@@ -295,6 +295,8 @@ describe("balance preview, missing balance/currency waiting, and orders/balance 
     await act(async () => resolveSite(await answer(200, { name: "Axiom", currency: "CNY" })));
     await settle();
     expect(container.textContent).toContain("CN¥10.00");
+    expect(container.textContent).toContain("settings.billing.hint");
+    expect(container.textContent).not.toContain("settings.description");
   });
 });
 

@@ -1,6 +1,6 @@
 // The redesign's primitives (#747) live beside the current components until every page has moved; the three whose
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
-export { useBrandStyle } from "./brand";
+export { brandPreview, useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
 export { Announcement } from "./components/announcement";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
@@ -8,13 +8,14 @@ export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
 export { BoardDialog } from "./components/board-dialog";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
+export { BrandSwatch } from "./components/brand-swatch";
 export { Card } from "./components/card";
 export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
 export { CodeBlock } from "./components/code-block";
 export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
-export { Dialog } from "./components/dialog";
+export { Dialog, SidePanel } from "./components/dialog";
 export { Disclosure } from "./components/disclosure";
 export { DocumentText, type TextBlock } from "./components/document-text";
 export { Facts } from "./components/facts";
@@ -57,13 +58,14 @@ export { ScrollArea } from "./components/scroll-area";
 export { SegmentedControl } from "./components/segmented-control";
 export { SettingRow } from "./components/setting-row";
 export { Stat } from "./components/stat";
-export { DataState, EmptyState, NotFoundState, PageFailedState } from "./components/states";
+export { DataState, EmptyState, ForbiddenState, NotFoundState, PageFailedState } from "./components/states";
 export { Switch } from "./components/switch";
 export { Table, Td, Th } from "./components/table";
 // Badge is the name pages were written with for a Tag (#747).
 export { Tag as Badge, Tag } from "./components/tag";
 export { Text } from "./components/text";
 export { TextLink } from "./components/text-link";
+export { Toast } from "./components/toast";
 export { moneyInput, parseMoney, useFormat } from "./format";
 export { type CommonMessages, chooseLanguage, type Messages } from "./i18n";
 export { type GuideClient, type GuideProtocol, keyGuide } from "./key-guide";

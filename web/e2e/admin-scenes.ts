@@ -137,6 +137,18 @@ const refused = (code: string) => (route: Route) =>
 const amount = (p: Page) => p.getByRole("dialog").getByLabel(words("users.credit.amount")).fill("2.5");
 const grant = (state: string, reply: Answer["reply"]) => ({ path: "/credit-grants", state, reply });
 
+const rateLimit: Scene = {
+  name: "rate-limits",
+  signedIn: true,
+  open: async (p) => {
+    await goto(p, "rate-limits");
+    await p.getByLabel(words("rateLimits.target")).selectOption("account");
+    await p.getByLabel(words("rateLimits.id")).fill(acct(1));
+    await press(p, "rateLimits.lookup");
+    await p.getByRole("heading", { name: words("rateLimits.allowance") }).waitFor();
+  },
+};
+
 const scenes: Scene[] = [
   view("sign-in", "sign-in", false),
   view("home", ""),
@@ -162,6 +174,12 @@ const scenes: Scene[] = [
   dialog("subscription-plan-new", "subscription-plans", "subscriptions.new"),
   dialog("subscription-plan-edit", "subscription-plans", "subscriptions.editNamed"),
   view("settings", "settings"),
+  view("alert-events", "alert-events"),
+  view("alert-configuration", "alert-configuration"),
+  view("announcements", "announcements"),
+  view("legal-documents", "legal-documents"),
+  view("retention", "retention"),
+  rateLimit,
   view("routing-presets", "routing-presets"),
   routingSwitch("routing-preset-create", false, "routingPresets.create"),
   routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),
@@ -187,6 +205,7 @@ const scenes: Scene[] = [
   dialog("account-subscription-grant", `accounts/${acct(1)}`, "subscriptions.account.grant"),
   dialog("account-subscription-refund", `accounts/${acct(1)}`, "subscriptions.account.refundRequest"),
   dialog("account-subscription-refund-approve", `accounts/${acct(1)}`, "subscriptions.account.refundApprove"),
+  dialog("account-workspace-limit", `accounts/${acct(1)}`, "settings.workspaceLimit.edit"),
   dialog("supplier-connect", "suppliers", "suppliers.connect.open"),
   connectDetails,
   dialog("supplier-unit", supplier(2), "suppliers.unit.open"),
@@ -195,6 +214,8 @@ const scenes: Scene[] = [
   dialog("supplier-pause", supplier(2), "suppliers.status.paused.action"),
   dialog("supplier-group", supplier(1), "suppliers.group.unselect.action"),
   dialog("supplier-bind", supplier(1), "suppliers.bind.action"),
+  dialog("supplier-credential-limits", supplier(1), "suppliers.credentialLimits.title"),
+  dialog("supplier-endpoint-disable", supplier(1), "suppliers.endpointEnabled.disable.title"),
   dialog("supplier-test", supplier(1), "suppliers.test.title"),
   testResult,
   dialog("mapping", "mappings", "mappings.map"),
@@ -209,6 +230,9 @@ const scenes: Scene[] = [
   dialog("rule-new", "pricing", "pricing.rule.new"),
   dialog("targets", "", "overview.targets.edit"),
   dialog("settings-edit", "settings", "settings.edit"),
+  dialog("site-brand", "settings", "settings.brand.edit"),
+  dialog("site-workspace-limit", "settings", "settings.workspaceLimit.edit"),
+  dialog("site-login-limits", "settings", "settings.loginLimits.edit"),
   unsettled(
     "change-unknown",
     `accounts/${acct(1)}`,

@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./PartSortableHeader.zh.ts";
-import styles from "./PartSortableHeader.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { selected?: string | number;
@@ -11,6 +10,6 @@ header?: RefCallback<Element>;
 sort?: DOMAttributes<Element>["onClick"];
 keyDown?: DOMAttributes<Element>["onKeyDown"]; };  text: { label: string; }; };
 export default function PartSortableHeader({ values: v = {}, text }: Props) {
-return <><th className={(String(v.selected ?? "")) + " " + styles.scope} data-a={"sort"} data-i={"0"} scope={"col"} ref={v.header} tabIndex={Number("0")} onClick={v.sort} onKeyDown={v.keyDown}>{text.label}</th></>;
+return <><th className={String(v.selected ?? "")} data-a={"sort"} data-i={"0"} scope={"col"} ref={v.header} tabIndex={Number("0")} onClick={v.sort} onKeyDown={v.keyDown}>{text.label}</th></>;
 }
 /* jscpd:ignore-end */

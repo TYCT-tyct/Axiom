@@ -10,7 +10,7 @@ import {
   RequestSubscriptionRefundDialog,
 } from "./account-subscription-dialogs";
 import { Head, State, SubLine } from "./parts";
-import { accountSubscriptionsQuery } from "./queries";
+import { accountSubscriptionsQuery } from "./subscription-queries";
 
 type Account = AdminSchemas["AccountDetail"];
 type Subscription = AdminSchemas["Subscription"];

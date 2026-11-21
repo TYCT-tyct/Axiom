@@ -5,6 +5,7 @@ type Values = Record<string, unknown>;
 type Logic = Component<Values, Values> & { renderVals(): Values; go(page: string): void };
 type Scene = {
   logic(): Promise<new (props: Values) => Logic>;
+  sheet?(): Promise<unknown>;
   Shell(): Promise<ComponentType<Values>>;
   Overview(): Promise<ComponentType<Values>>;
   ShellData(): Promise<(t: (key: string) => string) => Values>;
@@ -24,6 +25,7 @@ export async function regionDemo(board: string, theme: string) {
     scene.OverviewData(),
     scene.ShellZH(),
     scene.OverviewZH(),
+    scene.sheet?.(),
   ]);
   const shellProps = shellData((key) => shellZH[key] as string);
   const overviewProps = overviewData((key) => overviewZH[key] as string);

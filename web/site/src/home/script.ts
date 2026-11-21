@@ -1,4 +1,12 @@
-import { type KeyboardEvent as KeyPress, type RefCallback, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type KeyboardEvent as KeyPress,
+  type RefCallback,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 
 // A screen's script, as the board writes each screen below the first (its Component): it keeps the screen's state and
@@ -94,7 +102,13 @@ export const screenVars = (...extra: string[]) =>
 export function useScript<S extends Script<never>>(
   start: (stage: HTMLElement, changed: () => void) => S,
   input: NoInfer<Parameters<S["values"]>[0]>,
-): { setStage: RefCallback<Element>; script: S | null; values: Record<string, unknown> | undefined; entered: boolean } {
+): {
+  setStage: RefCallback<Element>;
+  stage: HTMLElement | null;
+  script: S | null;
+  values: Record<string, unknown> | undefined;
+  entered: boolean;
+} {
   const [stage, setStageElement] = useState<HTMLElement | null>(null);
   const [script, setScript] = useState<S | null>(null);
   const [, setVersion] = useState(0);
@@ -119,7 +133,43 @@ export function useScript<S extends Script<never>>(
       setScript(null);
     };
   }, [stage]);
-  return { setStage, script, values: script?.values(input), entered };
+  return { setStage, stage, script, values: script?.values(input), entered };
+}
+
+// On the narrow layout (phone and tablet), the steps and trust frames take the height their words need
+// (SitePhone.logic.html fw): measure the section at its natural height and size the frame to h + 96 px.
+export function useFitFrame(stage: HTMLElement | null, narrow: boolean) {
+  const { i18n } = useTranslation();
+  const language = i18n.language;
+  useLayoutEffect(() => {
+    if (!stage || !narrow) return;
+    let live = true;
+    const fit = () => {
+      if (!live) return;
+      const sec = stage.querySelector<HTMLElement>(":scope > .sec");
+      if (!sec) return;
+      sec.style.position = "relative";
+      sec.style.height = "auto";
+      const height = sec.offsetHeight;
+      sec.style.position = "";
+      sec.style.height = "";
+      if (height <= 200) return;
+      const next = `${Math.ceil(height + 96)}px`;
+      if (stage.style.height !== next) stage.style.height = next;
+    };
+    fit();
+    const resized = new ResizeObserver(fit);
+    resized.observe(stage);
+    const ho = stage.closest(".ho");
+    const tabbed = new MutationObserver(fit);
+    if (ho) tabbed.observe(ho, { attributes: true, attributeFilter: ["data-tab"] });
+    document.fonts?.ready.then(fit);
+    return () => {
+      live = false;
+      resized.disconnect();
+      tabbed.disconnect();
+    };
+  }, [stage, narrow, language]);
 }
 
 // A row the board makes clickable is a button or an option to the keyboard too (the regions' roles): Enter and Space
@@ -130,6 +180,21 @@ function press(e: KeyboardEvent) {
     e.preventDefault();
     control.click();
   }
+}
+
+// typedWord listens for a secret word typed anywhere (ignoring editable fields and whatever skip rejects).
+export function typedWord(word: string, then: () => void, skip?: (target: EventTarget | null) => boolean) {
+  let typed = "";
+  return (e: KeyboardEvent) => {
+    if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (skip?.(e.target)) return;
+    if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
+    typed = (typed + e.key.toLowerCase()).slice(-word.length);
+    if (typed === word) {
+      typed = "";
+      then();
+    }
+  };
 }
 
 // useBoardWords gives a screen its region's own words in the page's language: they come with the screen's code, not

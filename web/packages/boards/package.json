@@ -6,6 +6,7 @@
     "./Login": "./src/Login/Board.tsx",
     "./ClawdEgg": "./src/ClawdEgg/Board.tsx",
     "./AxApp": "./src/AxApp/Board.tsx",
+    "./AxApp/regions.css": "./src/AxApp/regions.css",
     "./*": "./src/*/Board.tsx",
     "./AxApp/regions/*": "./src/AxApp/regions/*.tsx",
     "./AxApp/regions/*.zh": "./src/AxApp/regions/*.zh.ts",

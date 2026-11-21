@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 
 import { ApiError, consoleApi, type Schemas } from "@axiom/api";
+import { systemPreset } from "@axiom/app";
 import { describe, expect, it, vi } from "vitest";
 import { filtersUnsupported, withoutFellBack } from "../calls";
+import { en as callsEn } from "../locales/calls-en";
 import { callSessionsQuery } from "../queries";
 import {
   callMoneyText,
@@ -23,7 +25,7 @@ import {
   summarizeAggregates,
   usageNumber,
 } from "./calls-data";
-import { buildChargeCells, buildDetailSteps, buildIdCells } from "./calls-detail-rows";
+import { buildChargeCells, buildDetailSteps, buildIdCells, buildSpeedMetrics } from "./calls-detail-rows";
 import { draftFromFilters, submitDraft } from "./calls-filter-fields";
 import { buildAggregateRows, buildCallListRows, buildSessionRows, buildSummaryItems } from "./calls-rows";
 import {
@@ -452,5 +454,23 @@ describe("calls filters and helpers", () => {
       f1: baseCall.id,
       f4: "callsBoard.detail.ids.callId",
     });
+  });
+
+  it("hides zero-valued extra usage metrics, labels the system preset, and keeps English client header concise", () => {
+    const call: Schemas["Call"] = {
+      ...baseCall,
+      usage: { input: 50, output: 10, audio_in: 0, web_search: 0, reasoning: 42 },
+      route: { preset: { id: systemPreset, version: 1 }, selected_endpoint: "maple" },
+    };
+    const metrics = buildSpeedMetrics(call, fmtBundle, identityT);
+    expect(metrics.map((m) => m.f0)).not.toContain("audio_in");
+    expect(metrics.map((m) => m.f0)).not.toContain("web_search");
+    expect(metrics).toContainEqual({ key: "sp-u-reasoning", kind: "0", f0: "reasoning", f1: "42" });
+
+    const steps = buildDetailSteps(call, fmtBundle, identityT);
+    const routeStep = steps.find((s) => s.key === "step-route-bill");
+    expect(routeStep?.kind === "1" ? routeStep.f9 : "").toContain("routingPresets.key.system");
+    expect(routeStep?.kind === "1" ? routeStep.f9 : "").not.toContain(systemPreset);
+    expect(callsEn.col.client).toBe("Client");
   });
 });

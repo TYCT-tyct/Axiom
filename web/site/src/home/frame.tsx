@@ -5,6 +5,7 @@ import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect
 import { useTranslation } from "react-i18next";
 import { useDeparture, useFrameBehaviour } from "./behaviour";
 import { BrandPlaces } from "./brand";
+import { FloorContext, useClawd } from "./clawd";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
@@ -47,14 +48,18 @@ const frameText = (word: (key: BoardKey) => string, language: string, name: stri
   sheetSignUpHref: links.signUp,
 });
 
-// From 700 wide the narrow layout is laid out for a tablet: the board's script marks its .ho data-tab (the steps and
-// the trust screens take their side-by-side form, the connect screen drops its cable).
-function useTabletLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
+// The frame's width for the stylesheet (--fw), and from 700 wide on the narrow layout the tablet attribute (data-tab:
+// the steps and trust screens take their side-by-side form, the connect screen drops its cable) (Site.logic.html fw).
+function useFrameLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
   useEffect(() => {
     const frame = root.current;
-    const ho = frame?.querySelector(".ho");
-    if (!frame || !ho || wide) return;
-    const mark = () => ho.toggleAttribute("data-tab", frame.clientWidth >= 700);
+    const ho = frame?.querySelector<HTMLElement>(".ho");
+    if (!frame || !ho) return;
+    const mark = () => {
+      const width = frame.clientWidth;
+      if (width > 0) ho.style.setProperty("--fw", `${width}px`);
+      if (!wide) ho.toggleAttribute("data-tab", width >= 700);
+    };
     mark();
     const resized = new ResizeObserver(mark);
     resized.observe(frame);
@@ -85,8 +90,8 @@ function useTour(root: RefObject<HTMLElement | null>, gone: boolean) {
 
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
-// its engines through packages/fx: the sea after the first content, the switches when first used (switches.ts), the
-// departure to the console's sign-in pages when a [data-go] link is first pressed (behaviour.ts).
+// its engines through packages/fx: the sea and Clawd (clawd.ts) after the first content, the switches when first used
+// (switches.ts), the departure to the console's sign-in pages when a [data-go] link is first pressed (behaviour.ts).
 //
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
 // language. So React writes those words once, in the language the page opened in, and never again: they are the
@@ -105,8 +110,9 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   useSwitches(root, sea);
   useDeparture(root, sea);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
+  const floor = useClawd(root, sea, { narrow: !wide, dark: scheme === "dark" });
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
-  useTabletLayout(root, wide);
+  useFrameLayout(root, wide);
   const { brand, name, join } = useSite();
 
   // What the switches' engine sets, until it is loaded: it starts from them, and keeps them the same itself.
@@ -143,9 +149,11 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   return (
     <>
       <WhaleContext value={whale}>
-        <Shell t={board} values={values} text={text}>
-          {children}
-        </Shell>
+        <FloorContext value={floor}>
+          <Shell t={board} values={values} text={text}>
+            {children}
+          </Shell>
+        </FloorContext>
       </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
     </>

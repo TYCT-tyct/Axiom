@@ -48,6 +48,10 @@ const globalCss = new Set([
   "packages/ui/src/css/fonts.css",
   "packages/ui/src/css/base.css",
 ]);
+// The AxApp-family board stylesheet is generated once and imported where the console and admin shells mount.
+const isUiComponent = (path: string) => path.startsWith("packages/ui/src/components/");
+const isBoardSheetImport = (path: string, from: string) =>
+  from === "@axiom/boards/AxApp/regions.css" && (path === "console/src/layout.tsx" || path === "admin/src/layout.tsx");
 const tokensPath = "packages/ui/src/css/tokens.css";
 
 const lineOf = (text: string, pos: number) => text.slice(0, pos).split("\n").length;
@@ -56,42 +60,33 @@ const lineOf = (text: string, pos: number) => text.slice(0, pos).split("\n").len
 
 const htmlSinks = new Set(["innerHTML", "outerHTML", "insertAdjacentHTML", "cssText", "dangerouslySetInnerHTML"]);
 
-// A className a component computes from its own module: any expression whose only strings are keys into the module.
-function fromModule(node: ts.Node, module: string | undefined): boolean {
-  if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) {
-    return false;
-  }
+// A className a component computes from its own module (or @axiom/ui's shared board-classes table): any expression whose
+// only strings are keys into those maps.
+function fromModule(node: ts.Node, modules: ReadonlySet<string>): boolean {
+  if (ts.isStringLiteralLike(node) || ts.isTemplateExpression(node)) return false;
   // A comparison (size === "sm") chooses a class; its string is a value, not a class name.
   if (
     ts.isBinaryExpression(node) &&
     [ts.SyntaxKind.EqualsEqualsEqualsToken, ts.SyntaxKind.ExclamationEqualsEqualsToken].includes(
       node.operatorToken.kind,
     )
-  ) {
+  )
     return true;
-  }
-  if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === module) {
+  if (ts.isElementAccessExpression(node) && ts.isIdentifier(node.expression) && modules.has(node.expression.text))
     return true;
-  }
   let ok = true;
   ts.forEachChild(node, (child) => {
-    ok &&= fromModule(child, module);
+    ok &&= fromModule(child, modules);
   });
-  return ok && module !== undefined;
+  return ok && modules.size > 0;
 }
 
 // A style object that sets only custom properties (--name), which a stylesheet reads, or none; anything else is inline
 // style.
 function customOnly(node: ts.Expression): boolean {
-  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)) {
-    return customOnly(node.expression);
-  }
-  if (ts.isConditionalExpression(node)) {
-    return customOnly(node.whenTrue) && customOnly(node.whenFalse);
-  }
-  if (ts.isIdentifier(node)) {
-    return node.text === "undefined";
-  }
+  if (ts.isParenthesizedExpression(node) || ts.isAsExpression(node)) return customOnly(node.expression);
+  if (ts.isConditionalExpression(node)) return customOnly(node.whenTrue) && customOnly(node.whenFalse);
+  if (ts.isIdentifier(node)) return node.text === "undefined";
   return (
     ts.isObjectLiteralExpression(node) &&
     node.properties.every(
@@ -100,27 +95,31 @@ function customOnly(node: ts.Expression): boolean {
   );
 }
 
+function importModules(node: ts.ImportDeclaration, path: string, sibling: string, modules: Set<string>) {
+  if (!ts.isStringLiteral(node.moduleSpecifier)) return undefined;
+  const from = node.moduleSpecifier.text;
+  if (from === sibling && node.importClause?.name) modules.add(node.importClause.name.text);
+  const named = isUiComponent(path) && from === "../board-classes" ? node.importClause?.namedBindings : undefined;
+  if (named && ts.isNamedImports(named)) for (const el of named.elements) modules.add(el.name.text);
+  return from;
+}
+
 function scriptFindings(path: string, text: string): Finding[] {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   const found: Finding[] = [];
   const add = (rule: Rule, node: ts.Node, message: string) =>
     found.push({ rule, path, line: lineOf(text, node.getStart(source)), message });
-  let module: string | undefined;
+  const modules = new Set<string>();
   const sibling = `./${path
     .split("/")
     .pop()
     ?.replace(/\.tsx$/, "")}.module.css`;
   const visit = (node: ts.Node) => {
-    if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)) {
-      const from = node.moduleSpecifier.text;
-      if (from === sibling && node.importClause?.name) {
-        module = node.importClause.name.text;
-      }
-      if (isApp(path) && /\.css(\?.*)?$/.test(from)) {
-        add("css-import", node, `app code imports CSS (${from}); a page composes components instead`);
-      }
+    const from = ts.isImportDeclaration(node) ? importModules(node, path, sibling, modules) : undefined;
+    if (from && isApp(path) && /\.css(\?.*)?$/.test(from) && !isBoardSheetImport(path, from)) {
+      add("css-import", node, `app code imports CSS (${from}); a page composes components instead`);
     }
-    jsxFindings(node, module, add);
+    jsxFindings(node, modules, add);
     htmlFindings(node, add);
     ts.forEachChild(node, visit);
   };
@@ -130,12 +129,10 @@ function scriptFindings(path: string, text: string): Finding[] {
 
 type Add = (rule: Rule, node: ts.Node, message: string) => void;
 
-function jsxFindings(node: ts.Node, module: string | undefined, add: Add) {
-  if (!ts.isJsxAttribute(node) || !ts.isIdentifier(node.name)) {
-    return;
-  }
+function jsxFindings(node: ts.Node, modules: ReadonlySet<string>, add: Add) {
+  if (!ts.isJsxAttribute(node) || !ts.isIdentifier(node.name)) return;
   const value = node.initializer && ts.isJsxExpression(node.initializer) ? node.initializer.expression : undefined;
-  if (node.name.text === "className" && !(value && fromModule(value, module))) {
+  if (node.name.text === "className" && !(value && fromModule(value, modules))) {
     add("class-name", node, "className outside a component's own CSS Module; use a component's typed props");
   }
   if (node.name.text === "style" && !(value && customOnly(value))) {

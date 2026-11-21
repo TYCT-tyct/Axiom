@@ -8,7 +8,7 @@ import { ChangeDialog, type Problem } from "./change";
 import { paymentCurrencies } from "./credit-read";
 import { useDuration } from "./durations";
 import { Time } from "./parts";
-import { subscriptionPlansQuery } from "./queries";
+import { subscriptionPlansQuery } from "./subscription-queries";
 
 type Account = AdminSchemas["AccountDetail"];
 type GrantInput = Omit<AdminSchemas["SubscriptionGrantInput"], "reason">;

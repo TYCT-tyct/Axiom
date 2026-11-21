@@ -151,7 +151,7 @@ function NewPasswordForm({
       title={t("auth.reset.newTitle")}
       sub={t("auth.reset.newDescription")}
       step="new"
-      shape="start"
+      shape="key"
       attempt={attempt}
       stage={stage}
       onSubmit={(event) => {

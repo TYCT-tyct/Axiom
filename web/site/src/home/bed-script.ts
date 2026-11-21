@@ -14,8 +14,9 @@ const SOLID = "SSXX%%88@#t";
 const CREST = "~~-=~-";
 const SURGE_W = 260;
 const EDGE = ":;ot.:";
-// a frame of the dune each 50 ms is enough for sand
+// a frame of the dune each 50 ms is enough for sand; Clawd moving in it asks for every frame
 const step = 50;
+const fastStep = 15;
 
 const hash3 = (a: number, b: number, c: number) => {
   let h = (a * 73856093) ^ (b * 19349663) ^ (c * 83492791);
@@ -36,7 +37,10 @@ const noise = (x: number, y: number) => {
 const smooth = (v: number) => v * v * (3 - 2 * v);
 
 type Palette = { ink: string; tile: string; sand: string; accent: string };
-type Bed = {
+// Where each letter of the wordmark runs (from a to b), which letter each column is in (-1 for none), the first row
+// under the i's dot, and the letters' baseline: what Clawd needs to live behind the letters.
+type Letters = { letters: { a: number; b: number }[]; colL: Int16Array; iGap: number; base: number };
+type Bed = Letters & {
   ctx: CanvasRenderingContext2D;
   width: number;
   height: number;
@@ -74,6 +78,7 @@ function wordmark(
   narrow: boolean,
 ) {
   const off = document.createElement("canvas");
+  const chars = [...name];
   off.width = width;
   off.height = height;
   const o = off.getContext("2d") as CanvasRenderingContext2D;
@@ -84,7 +89,8 @@ function wordmark(
   const tw = o.measureText(name).width;
   o.fillStyle = "#000";
   o.textBaseline = "alphabetic";
-  o.fillText(name, (width - tw) / 2, height * (narrow ? 0.08 : 0.16) + size * 0.72);
+  const base = height * (narrow ? 0.08 : 0.16) + size * 0.72;
+  o.fillText(name, (width - tw) / 2, base);
   const px = o.getImageData(0, 0, width, height).data;
   const offset = (width - cols * cell) / 2;
   const mask = new Float32Array(cols * rows);
@@ -103,7 +109,45 @@ function wordmark(
       mask[r * cols + c] = a / n;
     }
   }
-  return { mask, offset };
+  let b = (width - tw) / 2;
+  const letters = chars.map((_, i) => {
+    const a = b;
+    b = (width - tw) / 2 + o.measureText(chars.slice(0, i + 1).join("")).width;
+    return { a, b };
+  });
+  return { mask, offset, letters, ...places(letters, mask, cols, rows, offset, cell), base };
+}
+
+// Which letter each column is in, and the first row under the dot of the third letter (the i of Axiom): the rows above
+// it are the dot, which can hop.
+function places(
+  letters: Letters["letters"],
+  mask: Float32Array,
+  cols: number,
+  rows: number,
+  offset: number,
+  cell: number,
+) {
+  const colL = new Int16Array(cols).fill(-1);
+  for (let c = 0; c < cols; c++) {
+    const x = offset + (c + 0.5) * cell;
+    colL[c] = letters.findLastIndex((l) => x >= l.a && x < l.b);
+  }
+  let iCol = -1;
+  let iTop = rows;
+  for (let c = 0; c < cols; c++) {
+    if (colL[c] !== 2) continue;
+    const r = [...Array(rows).keys()].find((r) => (mask[r * cols + c] ?? 0) > 0.5);
+    if (r !== undefined && r < iTop) [iTop, iCol] = [r, c];
+  }
+  let iGap = -1;
+  for (let r = iTop; iCol >= 0 && r < rows; r++) {
+    if ((mask[r * cols + iCol] ?? 0) < 0.25) {
+      iGap = r;
+      break;
+    }
+  }
+  return { colL, iGap };
 }
 
 // What a frame draws, by colour (0 the ink, 1 the sand, 2 the accent) and opacity in tenths: the tiles under the glyphs
@@ -127,8 +171,31 @@ class Layers {
   }
 }
 
-// One column of the dune at a moment: where its sand stands, and what the surge and the sweep are doing to it.
-type Column = { c: number; x: number; t: number; top: number; damp: number; lift: number; sweep: number };
+// What Clawd (clawd-cast.js) puts on the dune's canvas (art.__fx) to live behind the wordmark: the letters it has
+// taken out (a letter turned into a Clawd is its own tiles), how far the i's dot is lifted, what it draws under the
+// dune and over it, and whether it is moving (the dune then draws at the full frame rate).
+type Hooks = {
+  skip: Set<number>;
+  dotDy: number;
+  fast: boolean;
+  pre: (ctx: CanvasRenderingContext2D, info: object) => void;
+  post: (ctx: CanvasRenderingContext2D, info: object) => void;
+  reset?: () => void;
+};
+
+// One column of the dune at a moment: where its sand stands, and what the surge and the sweep are doing to it; whether
+// its letter is taken out, and how far its dot is lifted.
+type Column = {
+  c: number;
+  x: number;
+  t: number;
+  top: number;
+  damp: number;
+  lift: number;
+  sweep: number;
+  hidden: boolean;
+  dy: number;
+};
 
 const pick = (chars: string, h: number) => chars[Math.floor(h * chars.length)];
 
@@ -164,18 +231,20 @@ function sand(bed: Bed, layers: Layers, column: Column, r: number, m: number) {
 
 // A cell in the water above the sand: the wordmark, tiles and glyphs like the sharks (the sweep lights it as it
 // passes), or now and then a speck of the sea.
-function water(layers: Layers, { c, x, t, top, sweep }: Column, r: number, y: number, m: number) {
-  if (m <= 0.08) {
+function water(bed: Bed, layers: Layers, { c, x, t, top, sweep, hidden, dy }: Column, r: number, m: number) {
+  const y = (r + 0.5) * bed.cell;
+  if (m <= 0.08 || hidden) {
     if (y > top - 48 && hash3(c, r, Math.floor(t * 0.6 + r)) > 0.975) layers.glyph(1, 0.3, ".", x, y);
     return;
   }
   const sd = x - sweep;
   const ping = sd < 0 && sd > -220 ? (1 + sd / 220) ** 2 : 0;
-  layers.tile(0, 0.26 + 0.52 * m, x, y);
-  if (ping > 0.02) layers.tile(2, 0.32 * ping * m, x, y);
+  const at = r < bed.iGap ? y + dy : y;
+  layers.tile(0, 0.26 + 0.52 * m, x, at);
+  if (ping > 0.02) layers.tile(2, 0.32 * ping * m, x, at);
   // the same alphabet the sharks are made of; each tile keeps its letter, a few swap now and then
   const h = hash3(c, r, Math.floor(t * 0.5 + hash3(c, r, 3) * 9));
-  layers.glyph(ping > 0.35 ? 2 : 0, 0.5 + 0.5 * m, pick(m > 0.55 ? SOLID : EDGE, h), x, y);
+  layers.glyph(ping > 0.35 ? 2 : 0, 0.5 + 0.5 * m, pick(m > 0.55 ? SOLID : EDGE, h), x, at);
 }
 
 function cell(bed: Bed, layers: Layers, column: Column, r: number) {
@@ -195,7 +264,7 @@ function cell(bed: Bed, layers: Layers, column: Column, r: number) {
   if (y >= top) return sand(bed, layers, column, r, m);
   // freshly uncovered: a damp trace fading back to clear water
   if (y >= damp && m <= 0.08) return layers.glyph(1, 0.08 + 0.2 * (1 - (top - y) / Math.max(1, top - damp)), ".", x, y);
-  water(layers, column, r, y, m);
+  water(bed, layers, column, r, m);
 }
 
 class BedRun implements Script<object> {
@@ -238,7 +307,8 @@ class BedRun implements Script<object> {
     this.build();
   }
 
-  private art() {
+  // the dune's canvas (the frame hands it to Clawd, clawd.ts)
+  art() {
     return this.stage.querySelector<HTMLCanvasElement>("canvas.art") as HTMLCanvasElement;
   }
 
@@ -275,25 +345,25 @@ class BedRun implements Script<object> {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     const cols = Math.floor(width / cell);
     const rows = Math.floor(height / cell);
-    const { mask, offset } = wordmark(this.name, width, height, cols, rows, cell, this.narrow);
+    const letters = wordmark(this.name, width, height, cols, rows, cell, this.narrow);
     this.bed = {
       ctx,
       width,
       height,
       cols,
       rows,
-      offset,
-      mask,
+      ...letters,
       energy: new Float32Array(cols * rows),
       wet: [],
       cell,
       glyph,
     };
+    if (this.bed.letters.length < 5) (art as HTMLCanvasElement & { __fx?: Hooks }).__fx?.reset?.();
     this.retheme();
   }
 
   private frame(now: number) {
-    if (now - this.last < step) return;
+    if (now - this.last < (this.hooks()?.fast ? fastStep : step)) return;
     this.last = now;
     this.draw(now / 1000);
   }
@@ -327,6 +397,7 @@ class BedRun implements Script<object> {
     const palette = this.palette;
     if (!bed || !palette) return;
     const layers = new Layers();
+    const hooks = this.hooks();
     const sweep = ((t % 9) / 9) * (bed.width + 900) - 300;
     for (let c = 0; c < bed.cols; c++) {
       const x = bed.offset + (c + 0.5) * bed.cell;
@@ -334,16 +405,52 @@ class BedRun implements Script<object> {
       // the backwash: where the sand stood a moment ago stays damp for a while
       const damp = Math.min((bed.wet[c] ?? top) + 0.9, top);
       bed.wet[c] = damp;
-      const column = { c, x, t, top, damp, lift: surgeAt(x, t, bed.width, bed.height), sweep };
+      const letter = bed.colL[c] ?? -1;
+      const lift = surgeAt(x, t, bed.width, bed.height);
+      const hidden = !!hooks?.skip.has(letter);
+      const column = { c, x, t, top, damp, lift, sweep, hidden, dy: letter === 2 ? (hooks?.dotDy ?? 0) : 0 };
       for (let r = 0; r < bed.rows; r++) cell(bed, layers, column, r);
     }
+    bed.ctx.clearRect(0, 0, bed.width, bed.height);
+    const info = hooks && this.info(bed, palette, t);
+    if (info) hooks?.pre(bed.ctx, info);
     this.paint(bed, palette, layers);
+    if (info) hooks?.post(bed.ctx, info);
   }
 
-  private paint({ ctx, width, height, cell, glyph }: Bed, palette: Palette, { tiles, glyphs }: Layers) {
+  // Clawd's hooks, while the wordmark has the five letters it lives behind (a site's own name may be shorter)
+  private hooks() {
+    const hooks = (this.art() as HTMLCanvasElement & { __fx?: Hooks }).__fx;
+    return this.bed && this.bed.letters.length >= 5 ? hooks : undefined;
+  }
+
+  // the dune as clawd-cast.js reads it, in the board's names (Site.dc.html drawBed)
+  private info(bed: Bed, palette: Palette, t: number) {
+    const { width, height, cell } = bed;
+    return {
+      W: width,
+      Hh: height,
+      t,
+      topAt: (x: number, at: number) => topAt(x, at, width, height),
+      cols: bed.cols,
+      rows: bed.rows,
+      ox: bed.offset,
+      CW: cell,
+      CH: cell,
+      GF: bed.glyph,
+      mask: bed.mask,
+      colL: bed.colL,
+      iGap: bed.iGap,
+      letters: bed.letters,
+      base: bed.base,
+      tile: palette.tile,
+      ink: palette.ink,
+    };
+  }
+
+  private paint({ ctx, cell, glyph }: Bed, palette: Palette, { tiles, glyphs }: Layers) {
     const colours = [palette.ink, palette.sand, palette.accent];
     const tileColours = [palette.tile, palette.sand, palette.accent];
-    ctx.clearRect(0, 0, width, height);
     const side = cell - 1;
     for (const [k, list] of tiles) {
       ctx.fillStyle = tileColours[Math.floor(k / 16)] as string;

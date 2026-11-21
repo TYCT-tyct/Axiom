@@ -3,7 +3,6 @@
 import { type DOMAttributes, type RefCallback } from "react";
 
 import type zh from "./PartTextField.zh.ts";
-import styles from "./PartTextField.module.css";
 
 
 export type Props = { t: (key: keyof typeof zh) => string; values?: { id?: string | number;
@@ -21,6 +20,6 @@ descriptionId?: string | number;
 hideMessage?: boolean; };  text: { label: string;
 message: string; }; };
 export default function PartTextField({ values: v = {}, text }: Props) {
-return <><div className={("nkf") + " " + styles.scope}><label htmlFor={String(v.id ?? "")} className={styles.scope}>{text.label}</label><input id={String(v.id ?? "")} className={("nkin " + String(v.invalidClass ?? "")) + " " + styles.scope} defaultValue={String(v.initial ?? "")} autoComplete={String(v.autocomplete ?? "")} spellCheck={"false"} name={String(v.name ?? "")} placeholder={String(v.placeholder ?? "")} aria-describedby={String(v.describedBy ?? "")} ref={v.control} onInput={v.input} type={String(v.inputType ?? "")} />{!v.hideMessage && (<div className={(String(v.messageClass ?? "")) + " " + styles.scope} id={String(v.descriptionId ?? "")}>{text.message}</div>)}</div></>;
+return <><div className={"nkf"}><label htmlFor={String(v.id ?? "")}>{text.label}</label><input id={String(v.id ?? "")} className={"nkin " + String(v.invalidClass ?? "")} defaultValue={String(v.initial ?? "")} autoComplete={String(v.autocomplete ?? "")} spellCheck={"false"} name={String(v.name ?? "")} placeholder={String(v.placeholder ?? "")} aria-describedby={String(v.describedBy ?? "")} ref={v.control} onInput={v.input} type={String(v.inputType ?? "")} />{!v.hideMessage && (<div className={String(v.messageClass ?? "")} id={String(v.descriptionId ?? "")}>{text.message}</div>)}</div></>;
 }
 /* jscpd:ignore-end */

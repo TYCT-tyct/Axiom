@@ -1,14 +1,15 @@
 import { Slot } from "radix-ui";
 import type { ComponentProps, ReactNode } from "react";
+import { board } from "../board-classes";
 import { classes } from "../classes";
 import s from "./action-button.module.css";
 import { Glyph, type GlyphName, glyphNames } from "./glyph";
 import { Icon, type IconName } from "./icon";
 
-// ActionButton is the design's button: primary (at most one per view), secondary, ghost and danger, at the default
-// 36px or small 32px height, with an optional icon before the words. A button with only an icon is square and carries
-// an aria-label. asChild lends the look to the one child, a router link that leads somewhere, as a button never does.
-// pending refuses a second press while a request is out, so a slow answer never ends in two charges.
+// ActionButton is the design's button (.btn pri/sec/gho/dan/sm from AxApp/regions.css): primary (at most one per
+// view), secondary, ghost and danger, at the default 36px or small 32px height, with an optional icon before the words.
+// A button with only an icon is square and carries an aria-label. asChild lends the look to the one child, a router
+// link that leads somewhere, as a button never does. pending refuses a second press while a request is out.
 export function ActionButton({
   variant = "sec",
   size = "md",
@@ -35,11 +36,15 @@ export function ActionButton({
   children?: ReactNode;
 } & Omit<ComponentProps<"button">, "className" | "style" | "type" | "children">) {
   const className = classes(
+    board.btn,
+    board[variant],
+    size === "sm" && board.sm,
     s.root,
-    s[variant],
+    variant === "dan" && s.dan,
     size === "sm" && s.sm,
     (square || !children) && s.square,
     pending && s.pending,
+    wide && s.wide,
   );
   if (asChild) {
     return <Slot.Root className={className}>{children}</Slot.Root>;
@@ -83,10 +88,15 @@ export function Button({
   asChild?: boolean;
   wide?: boolean;
 }) {
+  const mapped = variants[variant ?? "secondary"];
+  const small = size === "sm" || size === "icon";
   const look = classes(
+    board.btn,
+    board[mapped],
+    small && board.sm,
     s.root,
-    s[variants[variant ?? "secondary"]],
-    (size === "sm" || size === "icon") && s.sm,
+    mapped === "dan" && s.dan,
+    small && s.sm,
     size === "icon" && s.square,
     wide && s.wide,
   );

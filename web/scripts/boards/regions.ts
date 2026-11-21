@@ -1,8 +1,14 @@
 import type { Region } from "../../packages/boards/regions.ts";
-import { regionCSS, scoped } from "./region-css.ts";
+import { collectMatched, regionCSS, scoped } from "./region-css.ts";
 import { emitter, jsx } from "./region-jsx.ts";
 import { rows } from "./region-rows.ts";
 import { JSDOM } from "./template.ts";
+
+export type SheetCollector = {
+  selectors: readonly string[];
+  kept: Set<string>;
+  added: Map<string, [string, string]>;
+};
 
 const within = (roots: Element[], selector: string) =>
   roots.flatMap((root) => [...(root.matches(selector) ? [root] : []), ...root.querySelectorAll(selector)]);
@@ -85,6 +91,19 @@ const slots = (region: Region): Record<string, string> => ({
 });
 const slotProps = (names: string[]) => names.map((name) => `${name}?: import("react").ReactNode;`).join(" ");
 
+function propsType(region: Region, state: ReturnType<typeof emitter>, repeated: ReturnType<typeof rows>) {
+  const fields = [...state.values].map(([name, type]) => `${name}?: ${type};`).join("\n");
+  const rowFields = repeated.map((group) => `${group.name}: readonly ${group.typeName}[];`).join("\n");
+  const textFields = [...state.texts].map(([name]) => `${name}: string;`).join("\n");
+  const link = state.links.size
+    ? ' link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
+    : "";
+  return {
+    fields,
+    props: `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${repeated.length ? `rows: { ${rowFields} };` : ""} ${state.texts.size ? `text: { ${textFields} };` : ""}${link}${region.slots ? ` ${slotProps(Object.keys(region.slots))}` : ""}`,
+  };
+}
+
 function source(
   region: Region,
   body: string,
@@ -92,30 +111,24 @@ function source(
   repeated: ReturnType<typeof rows>,
   marker: string,
 ) {
-  const fields = [...state.values].map(([name, type]) => `${name}?: ${type};`).join("\n");
+  const { fields, props } = propsType(region, state, repeated);
   const rowTypes = repeated.map((group) => group.type).join("\n");
-  const rowFields = repeated.map((group) => `${group.name}: readonly ${group.typeName}[];`).join("\n");
-  const textFields = [...state.texts].map(([name]) => `${name}: string;`).join("\n");
-  const hasText = state.texts.size > 0;
   const hasRows = repeated.length > 0;
   const args = [
     body.includes("t(") ? "t" : "",
     fields ? "values: v = {}" : "",
     hasRows ? "rows" : "",
-    hasText ? "text" : "",
+    state.texts.size ? "text" : "",
     ...Object.keys(slots(region)),
     state.links.size ? 'link: Link = "a"' : "",
   ]
     .filter(Boolean)
     .join(", ");
-  const link = state.links.size
-    ? 'link?: import("react").ElementType<import("react").AnchorHTMLAttributes<HTMLAnchorElement>>;'
-    : "";
-  const props = `t: (key: keyof typeof zh) => string; values?: { ${fields} }; ${hasRows ? `rows: { ${rowFields} };` : ""} ${hasText ? `text: { ${textFields} };` : ""}${link && ` ${link}`}${region.slots ? ` ${slotProps(Object.keys(region.slots))}` : ""}`;
   const inline = [...state.inline]
     .map(([text, name]) => `const ${name} = boardStyle(${JSON.stringify(text)});`)
     .join("\n");
-  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body + inline, hasRows)}\nimport type zh from "./${region.name}.zh.ts";\nimport styles from "./${region.name}.module.css";\n${inline}\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
+  const cssImport = state.scoped ? `\nimport styles from "./${region.name}.module.css";` : "";
+  return `${marker}\n/* jscpd:ignore-start */\n${imports(fields, body + inline, hasRows)}\nimport type zh from "./${region.name}.zh.ts";${cssImport}\n${inline}\n${rowTypes}\nexport type Props = { ${props} };\nexport default function ${region.name}({ ${args} }: Props${region.children ? ' & { children?: import("react").ReactNode }' : ""}) {\nreturn <>${body}</>;\n}\n/* jscpd:ignore-end */\n`;
 }
 
 function locales(region: Region, state: ReturnType<typeof emitter>, marker: string) {
@@ -157,7 +170,40 @@ function expose(roots: Element[], state: ReturnType<typeof emitter>) {
 const added = (region: Region) =>
   Object.entries(region.css ?? {}).map(([selector, body]) => `${scoped(selector)}{${body}}`);
 
-export function convertRegion(markup: string, css: string, region: Region, marker: string): Record<string, string> {
+function collectCSS(
+  css: string,
+  elements: Set<Element>,
+  region: Region,
+  marker: string,
+  files: Record<string, string>,
+  sheet?: SheetCollector,
+) {
+  if (!sheet) {
+    files[`${region.name}.module.css`] =
+      `${marker}\n/* jscpd:ignore-start */\n${[regionCSS(css, elements, region.inserted, region.states), ...added(region)].join("\n")}\n/* jscpd:ignore-end */\n`;
+    return;
+  }
+  collectMatched(sheet.selectors, sheet.kept, elements, region.inserted, region.states);
+  for (const [selector, decl] of Object.entries(region.css ?? {}))
+    sheet.added.set(`${selector}\0${decl}`, [selector, decl]);
+}
+
+export function collectMarkup(markup: string, sheet: SheetCollector) {
+  const dom = new JSDOM(`<body>${markup}</body>`);
+  try {
+    collectMatched(sheet.selectors, sheet.kept, new Set(dom.window.document.body.querySelectorAll("*")));
+  } finally {
+    dom.window.close();
+  }
+}
+
+export function convertRegion(
+  markup: string,
+  css: string,
+  region: Region,
+  marker: string,
+  sheet?: SheetCollector,
+): Record<string, string> {
   const dom = new JSDOM(`<body>${markup}</body>`);
   const document = dom.window.document;
   try {
@@ -169,7 +215,7 @@ export function convertRegion(markup: string, css: string, region: Region, marke
       return { element, classes };
     });
     const roots = cut(document, region);
-    const state = emitter(region);
+    const state = emitter(region, !sheet);
     edit(roots, state);
     // A named slot's demo shows the drawing's own content, its text, so the demo still draws the board.
     const slotDemo = new Map<string, string>();
@@ -191,12 +237,12 @@ export function convertRegion(markup: string, css: string, region: Region, marke
     for (const { element, classes } of authoredClasses)
       element.setAttribute("class", `${element.getAttribute("class") ?? ""} ${classes}`);
     classStates(document, region, css);
-    const files = {
+    const files: Record<string, string> = {
       [`${region.name}.tsx`]: source(region, body, state, repeated, marker),
-      [`${region.name}.module.css`]: `${marker}\n/* jscpd:ignore-start */\n${[regionCSS(css, elements, region.inserted, region.states), ...added(region)].join("\n")}\n/* jscpd:ignore-end */\n`,
       [`${region.name}.demo.ts`]: `${marker}\n/* jscpd:ignore-start */\nimport type { Props } from "./${region.name}.tsx";\nimport type en from "./${region.name}.en.ts";\nexport const demo = (t: (key: keyof typeof en) => string): Props => ${demo};\n/* jscpd:ignore-end */\n`,
       ...locales(region, state, marker),
     };
+    collectCSS(css, elements, region, marker, files, sheet);
     return Object.fromEntries(Object.entries(files).map(([path, text]) => [`${region.board}/regions/${path}`, text]));
   } finally {
     dom.window.close();

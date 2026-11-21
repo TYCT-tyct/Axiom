@@ -1,0 +1,16 @@
+export default {
+  description: "发布有有效期的站点公告，或按编号撤下公告。这里仅显示本次后台会话中发布的公告。",
+  session: "本次会话发布的公告",
+  empty: "本次会话还没有发布公告",
+  title: "标题",
+  body: "正文",
+  starts: "开始时间",
+  ends: "结束时间",
+  publish: "发布公告",
+  withdraw: "撤下公告",
+  withdrawn: "已撤下",
+  withdrawById: "按编号撤下",
+  id: "公告编号",
+  invalidId: "请输入以 ann_ 开头的完整公告编号。",
+  invalid: "请填写标题、正文和有效期，结束时间需晚于开始时间。",
+};

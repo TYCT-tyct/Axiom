@@ -280,3 +280,17 @@ it("stops a workspace with a switch that turns it back on and offers no removal"
     /workspaces\.(delete|remove)/,
   );
 });
+
+it("frames the page header, avoids stretching the create action, and leaves row actions unshrunk", async () => {
+  api.workspaces = [workspace(1)];
+  const { container } = await render(<Workspaces />);
+  const heading = container.querySelector("h1");
+  const create = [...container.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("workspaces.create"),
+  );
+  expect(container.firstElementChild?.className).toContain("page");
+  expect(heading).not.toBeNull();
+  expect(create?.parentElement?.className).toContain("cluster");
+  const actionsCell = container.querySelector("tbody tr td:last-child");
+  expect(actionsCell?.className).not.toContain("shrink");
+});

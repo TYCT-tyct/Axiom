@@ -58,7 +58,7 @@ test.describe("subscription plans", () => {
     await edit.locator("input[name=price]").fill("35");
     await edit.getByLabel(words("change.reason")).fill("adjust monthly price after reload");
     await edit.locator("button[type=submit]").click();
-    await expect(edit.getByText(/Pro Monthly Updated/)).toBeVisible();
+    await expect(edit.getByText(/已保存套餐 Pro Monthly Updated/)).toBeVisible();
     await edit
       .getByRole("button", { name: zhText("change.close") })
       .last()
