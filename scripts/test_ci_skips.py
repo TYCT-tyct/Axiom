@@ -104,6 +104,36 @@ class NeedsWeb(unittest.TestCase):
         self.assertFalse(ci_skips.needs_web(["internal/billing/ledger.go", "docs/a.md", "scripts/ci_skips.py", "scripts/ci/bench-compare.sh"]))
 
 
+class NeedsGo(unittest.TestCase):
+    def test_go_and_what_go_reads_run_it(self):
+        for paths in ([], ["internal/billing/ledger.go"], ["go.mod"], ["api/console.yaml"], ["deploy/compose.yaml"],
+                      ["justfile"], [".github/workflows/ci.yml"], ["scripts/ci/runner-host.sh"],
+                      ["web/vite.shared.ts"], ["web/scripts/embed.ts"], ["web/site/src/a.ts", "cmd/axiom/main.go"]):
+            with self.subTest(paths=paths):
+                self.assertTrue(ci_skips.needs_go(paths))
+
+    def test_frontend_and_markdown_skip_it(self):
+        for paths in (["web/admin/src/nav.ts"], ["web/scripts/font-budget.ts", "docs/frontend.md"],
+                      ["web/packages/boards/src/AxApp/regions/Keys.tsx"], ["README.md"]):
+            with self.subTest(paths=paths):
+                self.assertFalse(ci_skips.needs_go(paths))
+
+
+class NeedsE2E(unittest.TestCase):
+    def test_frontend_and_its_serving_code_run_them(self):
+        for paths in ([], ["web/site/src/a.ts"], ["api/admin.yaml"], ["internal/platform/webui/webui.go"],
+                      [".github/workflows/ci.yml"], ["justfile"], ["scripts/ci/playwright.py"],
+                      ["internal/platform/idem/testdata/same-request.json"]):
+            with self.subTest(paths=paths):
+                self.assertTrue(ci_skips.needs_e2e(paths))
+
+    def test_other_go_skips_them(self):
+        for paths in (["internal/billing/ledger.go"], ["cmd/axiom/admin_users.go", "internal/accounts/keys.go"],
+                      ["docs/frontend.md"]):
+            with self.subTest(paths=paths):
+                self.assertFalse(ci_skips.needs_e2e(paths))
+
+
 class NeedsVitals(unittest.TestCase):
     def test_page_inputs_run_the_timings(self):
         for path in ("web/site/src/app.ts", "web/pnpm-lock.yaml", "web/theme.js", "web/playwright.vitals.config.ts",

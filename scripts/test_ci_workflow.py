@@ -37,16 +37,18 @@ def job(name):
     return re.search(rf"^  {name}:\n(.*?)(?=^  [\w-]+:|\Z)", WORKFLOW, re.M | re.S).group(1)
 
 
-def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, boards=False, web=True, reuse=()):
+def enabled(name, event, stress=False, draft=False, docs=False, vitals=True, light=False, boards=False, web=True, reuse=(),
+            go=True, e2e=True):
     folded = re.search(r"^    if: >-\n((?:      .+\n)+)", job(name), re.M)
     if folded:
         condition = " ".join(line.strip() for line in folded.group(1).splitlines())
     else:
         condition = re.search(r"^    if: (.+)$", job(name), re.M).group(1)
-    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, boards=boards, web=web, reuse=reuse)
+    return expression(condition, event, stress, draft, docs, vitals=vitals, light=light, boards=boards, web=web, reuse=reuse,
+                      go=go, e2e=e2e)
 
 
-def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, boards=False, web=True, reuse=()):
+def expression(condition, event="pull_request", stress=False, draft=False, docs=False, results=None, base="", vitals=True, light=False, release=False, boards=False, web=True, reuse=(), go=True, e2e=True):
     results = results or {}
     values = {
         "always()": True,
@@ -63,6 +65,8 @@ def expression(condition, event="pull_request", stress=False, draft=False, docs=
         "needs.changes.outputs.bench": "false" if light else "true",
         "needs.changes.outputs.vitals": "true" if vitals else "false",
         "needs.changes.outputs.boards": "true" if boards else "false",
+        "needs.changes.outputs.go": "false" if docs or light or not go else "true",
+        "needs.changes.outputs.e2e": "false" if docs or light or not e2e else "true",
     }
     for name, result in results.items():
         values["needs." + name + ".result"] = result
@@ -139,9 +143,11 @@ class BuildChecks(unittest.TestCase):
                         # a pull request whose frontend inputs changed runs the e2e too, so a broken page is caught
                         # before its train; the train and main run them again
                         self.assertEqual(enabled(name, event, docs=docs), not docs)
-        # a pull request without frontend changes leaves the e2e to its train
-        self.assertFalse(enabled("e2e", "pull_request", web=False))
-        self.assertTrue(enabled("e2e", "push", web=False))
+        # a pull request or a train that changes neither the frontend nor the Go code serving it skips the e2e (the
+        # e2e lane, scripts/ci_skips.py); main has no base, selects every lane and runs them
+        self.assertFalse(enabled("e2e", "pull_request", e2e=False))
+        self.assertFalse(enabled("e2e", "workflow_dispatch", e2e=False))
+        self.assertTrue(enabled("e2e", "push"))
 
     def test_vitals_run_on_main_and_by_page_inputs_on_trains(self):
         self.assertRegex(job("vitals"), r"(?m)^    needs: changes$")
@@ -269,15 +275,29 @@ class BuildChecks(unittest.TestCase):
                 self.assertEqual(values["vitals"], expected)
                 self.assertEqual(values["light"], "true" if md == "0" else "false")
 
-    def test_go_tests_run_on_pull_requests_trains_and_main_unless_light(self):
+    def test_go_tests_run_wherever_the_go_lane_is_selected(self):
         for event in ("pull_request", "push", "workflow_dispatch"):
             for docs in (False, True):
                 with self.subTest(event=event, docs=docs):
                     self.assertEqual(enabled("go-test", event, docs=docs), not docs)
+        # a web/-only pull request or train leaves the Go packages as main has them
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event, go=False):
+                self.assertFalse(enabled("go-test", event, go=False))
 
-    def test_journey_runs_on_frontend_pull_requests_trains_and_main(self):
+    def test_build_requires_go_tests_exactly_when_their_lane_is_selected(self):
+        check = re.search(r"- if: (needs.changes.outputs.light .+)\n        run: (test '\$\{\{ needs.go-test.result \}\}' = success)",
+                          job("build"))
+        self.assertIsNotNone(check)
+        for event in ("pull_request", "push", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertTrue(expression(check[1], event=event))
+                self.assertFalse(expression(check[1], event=event, go=False))
+                self.assertFalse(expression(check[1], event=event, docs=True))
+
+    def test_journey_runs_on_trains_and_main_only(self):
         cases = (
-            ("frontend PR", "pull_request", {"web": True}, True),
+            ("frontend PR", "pull_request", {"web": True}, False),
             ("backend-only PR", "pull_request", {"web": False}, False),
             ("docs-only PR", "pull_request", {"docs": True}, False),
             ("train", "workflow_dispatch", {"web": False}, True),
@@ -331,7 +351,8 @@ class BuildChecks(unittest.TestCase):
         for docs in (False, True):
             self.assertEqual(expression(check[1], event="workflow_dispatch", docs=docs), not docs)
             self.assertEqual(expression(check[1], event="pull_request", docs=docs), not docs)
-            self.assertFalse(expression(check[1], event="pull_request", docs=docs, web=False))
+            self.assertFalse(expression(check[1], event="pull_request", docs=docs, e2e=False))
+            self.assertFalse(expression(check[1], event="workflow_dispatch", docs=docs, e2e=False))
             for result in ("success", "failure", "cancelled", "skipped"):
                 with self.subTest(docs=docs, result=result):
                     command = check[2].replace("${{ needs.e2e.result }}", result)
