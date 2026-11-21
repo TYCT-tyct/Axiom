@@ -127,7 +127,10 @@ test("the solid melts across steps: envelope to key on sign-in, padlock to key o
   expect(key.w).toBeGreaterThan(key.h * 1.5);
 });
 
-test("a refused password shakes the solid", async ({ page }) => {
+// The shake is read from the solid's middle on a 7.5 px character grid while the solid turns, and on CI's runners the
+// quiet turning alone now reaches what the shake adds, so the case fails whatever the code does (#908). It comes back
+// when it asserts that the solid hears the refusal instead of reading pixels.
+test.fixme("a refused password shakes the solid", async ({ page }) => {
   await page.clock.install();
   await mockConsole(page);
   await page.goto(signInPage);

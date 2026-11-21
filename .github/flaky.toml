@@ -13,8 +13,3 @@
 # spec = "gate.spec.ts"
 # title = "admin › example"
 # issue = 830
-
-[[e2e]]
-spec = "fx-sign-in-solid.spec.ts"
-title = "a refused password shakes the solid"
-issue = 908
