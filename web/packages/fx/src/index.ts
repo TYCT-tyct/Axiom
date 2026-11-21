@@ -2,4 +2,4 @@ export { markArrival, markOrigin, markReturn, type OriginRect, takeArrival, take
 export { hash } from "./hash";
 export { own } from "./loop";
 export { timeline } from "./timeline";
-export { nearView, useEffectModule } from "./use-effect-module";
+export { afterFirstContent, nearView, useEffectModule } from "./use-effect-module";

@@ -57,10 +57,13 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
   const scope = root.querySelector(".ho") ?? root;
   // Each visit picks between tide and decode at random (hero-enter.js default pick); on tide the words stay in place
   // from the first frame (port design R11), and clicking the logo replays in the current language.
+  // the entrance marks the root as waiting when it is made, over a home page settling back from sign-in, which keeps its mark
+  const settled = root.dataset.enter === "done";
   const entrance = new window.AxiomEnter(root, engine, {
     scope,
     manual: true,
   });
+  if (settled) root.dataset.enter = "done";
   entrance.rise = () => {};
   let elapsed = 0;
   const play = entrance.play.bind(entrance);
