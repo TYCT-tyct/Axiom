@@ -10,7 +10,7 @@ import { colour } from "./colour";
 import { hash } from "./hash";
 import { own } from "./loop";
 import { mono } from "./mono";
-import { buildSea, type OceanEngine } from "./ocean";
+import { buildSea, type OceanEngine, pacedTick } from "./ocean";
 
 // The steps of login-ui.js's solids the product has (not wechat, connect).
 export type Shape = "start" | "code" | "key" | "enter";
@@ -222,7 +222,7 @@ export function startLogin(frame: HTMLElement, light: boolean, shape: Shape): Lo
   const morph = startMorph(frame, seaBox, engine, shape);
   let stopDecode = () => {};
   // the solid draws from the engine's raster (Morph's onRaster), so this one tick drives both
-  const release = own(canvas, (dt) => engine.tick(dt));
+  const release = own(canvas, pacedTick(engine));
   return {
     show: morph.show,
     hear: morph.hear,

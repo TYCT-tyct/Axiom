@@ -9,7 +9,8 @@ export type OceanEngine = {
   readonly renderer: { readonly cw: number; readonly ch: number };
   held: boolean;
   schedule(): void;
-  tick(dt: number): void;
+  // draw: false steps the water without drawing it; the next drawn frame takes the time it skipped
+  tick(dt: number, draw?: boolean): void;
   setLight(light: boolean): void;
   destroy(): void;
   // the engine's sharks: the whale's ghost joins them, so the fish steer around it
@@ -37,4 +38,30 @@ export function buildSea(canvas: HTMLCanvasElement, specs: object[], opts: objec
   const engine = new window.AxiomOceanOrig.Engine(canvas, specs, { ...opts, hold: true });
   engine.schedule = () => {};
   return engine;
+}
+
+// A drawing of the sea that costs more than this (ms; a slow machine, a big window) leaves too little of a 60 Hz frame
+// to the motion over it: a departure's tiles, the sign-in page's solid, the screens.
+const drawBudget = 6;
+
+// pacedTick is a frame of the sea: the water steps every frame, and is drawn every frame while a drawing costs little,
+// else every other frame, the skipped frame's time passed on to the drawn one (the engine's tick(dt, draw)). The sea is
+// drawn in cells whose marks change a few times a second, so every other frame does not read as slower, and a slow
+// machine keeps whole frames for what moves over it. The cost is measured as it goes, so a machine fast enough draws
+// every frame.
+export function pacedTick(engine: OceanEngine): (dt: number) => void {
+  let cost = 0;
+  let skipped = false;
+  return (dt) => {
+    if (cost > drawBudget && !skipped) {
+      skipped = true;
+      engine.tick(dt, false);
+      return;
+    }
+    skipped = false;
+    const start = performance.now();
+    engine.tick(dt);
+    const took = performance.now() - start;
+    cost = cost ? cost * 0.8 + took * 0.2 : took;
+  };
 }

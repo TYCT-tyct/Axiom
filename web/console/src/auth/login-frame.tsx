@@ -29,7 +29,7 @@ import {
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { loginPhoneWidth, useBoardMedia } from "../board-interaction";
-import { siteQuery } from "../queries";
+import { legalQuery, siteQuery } from "../queries";
 import type { Attempt } from "./attempt";
 import { NoteAction } from "./login-parts";
 import { useReturnHome } from "./return-home";
@@ -139,13 +139,16 @@ const RoomContext = createContext<Room | null>(null);
 export function LoginLayout() {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
+  // the terms a registration accepts, read with the frame: a page gone on to that asks for them (registering) has them
+  // already, its button ready from its first frame rather than grey until they come
+  const legal = useQuery(legalQuery);
   const prefs = usePreferences();
   useBrandStyle(site.data?.brand_color);
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [standing, stand] = useState<Standing | null>(null);
   const [arrived] = useState(claimArrival);
   const engine = useLoginEngine(standing, prefs.dark, site.data?.brand_color, arrived);
-  useArrivalReveal(engine.root, arrived, engine.started && !site.isPending && standing !== null);
+  useArrivalReveal(engine.root, arrived, engine.started && !site.isPending && !legal.isPending && standing !== null);
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
   const phone = useBoardMedia(loginPhoneWidth);
@@ -309,11 +312,6 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
     (module, frame) => {
       const { standing: now, dark: night } = latest.current;
       const running = module.startLogin(frame, !night, now?.shape ?? "start");
-      const title = now?.titleRef.current;
-      if (veil.on.current && title && decode.current) {
-        veil.on.current = false;
-        running.decode(title, decode.current);
-      }
       if (now) {
         for (const heard of now.stage.said.current.values()) running.hear(heard);
         now.stage.running.current = running;
@@ -325,6 +323,16 @@ function useLoginEngine(standing: Standing | null, dark: boolean, brand: string 
     arrived,
   );
   useStageOnShow(login, standing?.stage);
+  // an arrival's decode plays once the engine runs and the first page's title is there, whichever comes last: an
+  // arrival asks for the engine at once, so it may run before the page's question is in the frame
+  const titleRef = standing?.titleRef;
+  useEffect(() => {
+    const running = login.current;
+    const title = titleRef?.current;
+    if (!started || !running || !title || !decode.current || !veil.on.current) return;
+    veil.on.current = false;
+    running.decode(title, decode.current);
+  }, [started, titleRef, login, veil]);
   const shape = standing?.shape;
   useEffect(() => {
     if (shape) login.current?.show(shape);
@@ -369,9 +377,9 @@ function useStageOnShow(login: RefObject<Login | null>, stage: Stage | undefined
 }
 
 // An arrival from the website shows the frame whole: the sea, the language switch and the side with the brand, the
-// pitch and the question wait unseen for the sea's code, the site's settings and the page's question, at most
-// revealFor, and then come in together. The window goes from the page's ground, where the departure left it, to the
-// page, rather than through its parts one by one (an empty frame, the form, its button's colour, the sea).
+// pitch and the question wait unseen for the sea's code, the site's settings, the terms and the page's question, at
+// most revealFor, and then come in together. The window goes from the page's ground, where the departure left it, to
+// the page, rather than through its parts one by one (an empty frame, the form, its button's colour, the sea).
 const revealFor = 1500;
 const revealIn = 240;
 function useArrivalReveal(root: RefObject<HTMLElement | null>, arrived: boolean, ready: boolean) {
