@@ -39,6 +39,12 @@
   padding: 28px 32px;
 }
 
+/* Chinese sets its characters on a grid that seldom fills a line to the last pixel; justified, its lines end where the
+   margin does, as Chinese text is set. English keeps its ragged right. */
+.faq div[class~="d"] div[class~="pane"] > p[class~="ans"]:lang(zh) {
+  text-align: justify;
+}
+
 .faq div[class~="d"] div[class~="pane"] > div[class~="stage"] {
   margin-top: 0;
 }

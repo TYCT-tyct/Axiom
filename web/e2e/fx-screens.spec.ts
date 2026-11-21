@@ -359,6 +359,10 @@ for (const language of ["zh", "en"] as const)
       const questions = page.locator(".hfm5 .qs .q");
       for (let i = 0; i < 8; i++) {
         await questions.nth(i).hover();
+        // measured once the answer has risen into place
+        await page
+          .locator(".hfm5 .pane.on .ans")
+          .evaluate((answer) => Promise.all(answer.getAnimations().map((animation) => animation.finished)));
         const box = await page.locator(".hfm5 .pane.on").evaluate((pane) => {
           const answer = pane.querySelector(".ans") ?? pane;
           // the answer's lines, not its box, which spans the room
