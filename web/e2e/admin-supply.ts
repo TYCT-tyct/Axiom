@@ -165,6 +165,47 @@ function bindKey({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplier
   return { status: 201, json: credential } as const;
 }
 
+function setEndpointEnabled({
+  body,
+  params,
+  state,
+}: Ctx<"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled", "put">) {
+  const endpoint = find(state, params.supplier_id)?.endpoints.find((e) => e.id === params.endpoint_id);
+  if (!endpoint) {
+    return fail(404, "not_found");
+  }
+  endpoint.enabled = body.enabled;
+  return ok(endpoint);
+}
+
+function setCredentialLimits({
+  body,
+  params,
+  state,
+}: Ctx<"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", "put">) {
+  const credential = find(state, params.supplier_id)?.credentials.find((c) => c.id === params.credential_id);
+  if (!credential) {
+    return fail(404, "not_found");
+  }
+  if (!Number.isInteger(body.max_concurrency) || body.max_concurrency < 1) {
+    return fail(400, "invalid_request", { "/max_concurrency": "must be at least 1" });
+  }
+  if (
+    body.requests_per_minute !== undefined &&
+    body.requests_per_minute !== null &&
+    (!Number.isInteger(body.requests_per_minute) || body.requests_per_minute < 1 || body.requests_per_minute > 100_000)
+  ) {
+    return fail(400, "invalid_request", { "/requests_per_minute": "must be between 1 and 100000" });
+  }
+  credential.max_concurrency = body.max_concurrency;
+  if (body.requests_per_minute === undefined || body.requests_per_minute === null) {
+    delete credential.requests_per_minute;
+  } else {
+    credential.requests_per_minute = body.requests_per_minute;
+  }
+  return ok(credential);
+}
+
 type Finding = Pick<Schemas["EndpointTest"], "outcome" | "problem" | "upstream_status" | "first_token_ms">;
 const findings: Record<string, Finding> = {
   "broken-stream-model": {
@@ -252,6 +293,18 @@ export const supplyHandlers: Handler<AdminState>[] = [
   route("put", `${base}/suppliers/{supplier_id}/unit-value`, changes("suppliers.manage"), setUnitValue),
   route("put", `${base}/suppliers/{supplier_id}/groups/{group_id}`, changes("suppliers.manage"), selectGroup),
   route("post", `${base}/suppliers/{supplier_id}/credentials`, changes("suppliers.manage"), bindKey),
+  route(
+    "put",
+    `${base}/suppliers/{supplier_id}/credentials/{credential_id}/limits`,
+    changes("suppliers.manage"),
+    setCredentialLimits,
+  ),
+  route(
+    "put",
+    `${base}/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled`,
+    changes("suppliers.manage"),
+    setEndpointEnabled,
+  ),
   route("post", `${base}/suppliers/endpoint-tests`, changes("suppliers.manage"), testEndpoint),
   route("get", `${base}/pending-mappings`, reads("suppliers.view"), listPending),
   route("post", `${base}/suppliers/{supplier_id}/model-mappings`, changes("suppliers.manage"), mapModel),

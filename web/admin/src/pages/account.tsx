@@ -9,6 +9,7 @@ import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { Actions, Facts, NewButton, PageBody, State, Time } from "../parts";
 import { accountQuery } from "../queries";
+import { WorkspaceLimitCard, WorkspaceLimitUnavailable } from "../workspace-limit";
 
 type Account = AdminSchemas["AccountDetail"];
 
@@ -35,6 +36,7 @@ export default function AccountPage() {
             <Figures account={data} />
             <Details account={data} />
             <AccountKeyLimits account={data} />
+            <AccountWorkspaceLimit account={data} />
           </PageBody>
         </>
       )}
@@ -145,6 +147,31 @@ function AccountKeyLimits({ account }: { account: Account }) {
           adminApi.PUT("/api/admin/v1/accounts/{account_id}/key-limits", {
             params: { path: { account_id: account.id }, header: { "Idempotency-Key": key } },
             body: { limits, reason },
+          }),
+        )
+      }
+    />
+  );
+}
+
+// What the account is held to on its workspaces: its own limit over the site's.
+function AccountWorkspaceLimit({ account }: { account: Account }) {
+  const editable = can(useSession(), "sites.manage");
+  const view: AdminSchemas["WorkspaceLimitView"] | undefined = account.workspace_limit;
+  if (view === undefined) {
+    return <WorkspaceLimitUnavailable level="account" />;
+  }
+  return (
+    <WorkspaceLimitCard
+      operation={`workspace-limit:${account.id}`}
+      level="account"
+      view={view}
+      editable={editable}
+      send={(max_workspaces, { reason, key }) =>
+        unwrapChange(
+          adminApi.PUT("/api/admin/v1/accounts/{account_id}/workspace-limit", {
+            params: { path: { account_id: account.id }, header: { "Idempotency-Key": key } },
+            body: { ...(max_workspaces !== undefined ? { max_workspaces } : {}), reason },
           }),
         )
       }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { brandStyle, contrast, dark, light, washesOf } from "./brand";
+import { brandPreview, brandStyle, contrast, dark, light, washesOf } from "./brand";
 
 type Rgb = [number, number, number];
 const rgb = (hex: string) => [1, 3, 5].map((i) => Number.parseInt(hex.slice(i, i + 2), 16)) as Rgb;
@@ -71,5 +71,22 @@ describe("brandStyle", () => {
 
   it.each(["", "red", "#fff", "#12345", "#1234567", "#gggggg", "rgb(1 2 3)"])("refuses %j", (color) => {
     expect(brandStyle(color)).toBeUndefined();
+    expect(brandPreview(color)).toBeUndefined();
+  });
+
+  it("matches brandStyle tokens and reports WCAG-passing contrast ratios in brandPreview", () => {
+    for (const color of extremes) {
+      const preview = brandPreview(color);
+      expect(preview).toBeDefined();
+      const [l, d] = schemes(color);
+      expect(preview?.light.accentText).toBe(l?.text);
+      expect(preview?.light.accentSolid).toBe(l?.solid);
+      expect(preview?.dark.accentText).toBe(d?.text);
+      expect(preview?.dark.accentSolid).toBe(d?.solid);
+      expect(preview?.light.textContrast).toBeGreaterThanOrEqual(4.5);
+      expect(preview?.light.solidContrast).toBeGreaterThanOrEqual(3);
+      expect(preview?.dark.textContrast).toBeGreaterThanOrEqual(4.5);
+      expect(preview?.dark.solidContrast).toBeGreaterThanOrEqual(3);
+    }
   });
 });

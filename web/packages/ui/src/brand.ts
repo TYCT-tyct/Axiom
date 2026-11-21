@@ -169,14 +169,64 @@ export function useBrandStyle(color: string | undefined) {
   }, [color]);
 }
 
-// brandStyle is the custom properties to set on the root for a brand colour written #rrggbb, each as the light value
-// and the dark one the way tokens.css writes them; undefined for any other text.
-export function brandStyle(color: string): Record<string, string> | undefined {
+export type BrandSchemePreview = {
+  accentText: string;
+  accentSolid: string;
+  surface: string;
+  ink: string;
+  textContrast: number;
+  solidContrast: number;
+};
+
+export type BrandPreview = {
+  input: string;
+  light: BrandSchemePreview;
+  dark: BrandSchemePreview;
+};
+
+function parseHex(color: string): Rgb | undefined {
   const match = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
   if (!match) {
     return undefined;
   }
-  const brand = [match[1], match[2], match[3]].map((v) => Number.parseInt(v ?? "0", 16)) as unknown as Rgb;
+  return [match[1], match[2], match[3]].map((v) => Number.parseInt(v ?? "0", 16)) as unknown as Rgb;
+}
+
+function previewScheme(brand: Rgb, scheme: Scheme): BrandSchemePreview {
+  const solid = accentFor(brand, scheme, edge);
+  const surfaces = [...scheme.surfaces, ...washesOf(solid, scheme)];
+  const accent = accentFor(brand, scheme, text, surfaces);
+  return {
+    accentText: hex(accent),
+    accentSolid: hex(solid),
+    surface: hex(scheme.surfaces[0] ?? white),
+    ink: scheme.line,
+    textContrast: Math.min(...surfaces.map((s) => contrast(accent, s))),
+    solidContrast: Math.min(...scheme.surfaces.map((s) => contrast(solid, s))),
+  };
+}
+
+// brandPreview exposes the light and dark accents brandStyle derives from #rrggbb together with their weakest WCAG
+// contrast ratios, so the site brand editor can preview the generated palette before saving.
+export function brandPreview(color: string): BrandPreview | undefined {
+  const brand = parseHex(color);
+  if (!brand) {
+    return undefined;
+  }
+  return {
+    input: hex(brand),
+    light: previewScheme(brand, light),
+    dark: previewScheme(brand, dark),
+  };
+}
+
+// brandStyle is the custom properties to set on the root for a brand colour written #rrggbb, each as the light value
+// and the dark one the way tokens.css writes them; undefined for any other text.
+export function brandStyle(color: string): Record<string, string> | undefined {
+  const brand = parseHex(color);
+  if (!brand) {
+    return undefined;
+  }
   const [l, d] = [tokensFor(brand, light), tokensFor(brand, dark)];
   return Object.fromEntries(
     Object.entries(l).map(([name, value]) => [name, `light-dark(${value}, ${d[name as keyof typeof d]})`]),
