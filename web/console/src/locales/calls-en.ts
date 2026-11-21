@@ -103,7 +103,7 @@ export const en: Messages<typeof zh> = {
     status: "Status",
     model: "Model",
     key: "Key",
-    client: "Client / Attempts",
+    client: "Client",
     ttft: "TTFT",
     latency: "Latency",
     tokens: "Tokens in / out",

@@ -137,6 +137,18 @@ const refused = (code: string) => (route: Route) =>
 const amount = (p: Page) => p.getByRole("dialog").getByLabel(words("users.credit.amount")).fill("2.5");
 const grant = (state: string, reply: Answer["reply"]) => ({ path: "/credit-grants", state, reply });
 
+const rateLimit: Scene = {
+  name: "rate-limits",
+  signedIn: true,
+  open: async (p) => {
+    await goto(p, "rate-limits");
+    await p.getByLabel(words("rateLimits.target")).selectOption("account");
+    await p.getByLabel(words("rateLimits.id")).fill(acct(1));
+    await press(p, "rateLimits.lookup");
+    await p.getByRole("heading", { name: words("rateLimits.allowance") }).waitFor();
+  },
+};
+
 const scenes: Scene[] = [
   view("sign-in", "sign-in", false),
   view("home", ""),
@@ -165,6 +177,12 @@ const scenes: Scene[] = [
   pricingPreview,
   ...audienceScenes,
   view("settings", "settings"),
+  view("alert-events", "alert-events"),
+  view("alert-configuration", "alert-configuration"),
+  view("announcements", "announcements"),
+  view("legal-documents", "legal-documents"),
+  view("retention", "retention"),
+  rateLimit,
   view("routing-presets", "routing-presets"),
   routingSwitch("routing-preset-create", false, "routingPresets.create"),
   routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),

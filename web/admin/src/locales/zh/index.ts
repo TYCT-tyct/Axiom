@@ -1,7 +1,11 @@
+import alertConfig from "./alert-configuration";
+import alertEvents from "./alert-events";
+import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
+import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
 import orders from "./orders";
@@ -9,7 +13,9 @@ import discrepancies from "./payment-discrepancies";
 import platformGrants from "./platform-grants";
 import pricePolicy from "./price-policy";
 import pricing from "./pricing";
+import rateLimits from "./rate-limits";
 import redeem from "./redeem";
+import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
@@ -37,6 +43,12 @@ export const initial = {
     settings: "站点设置",
     sourceClasses: "来源类别",
     routingPresets: "路由预设",
+    alertEvents: "告警事件",
+    alertConfig: "告警规则与渠道",
+    announcements: "公告",
+    legalDocs: "法律文档",
+    retention: "记录保留",
+    rateLimits: "请求限流",
     more: "更多",
   },
   navSections: {
@@ -185,4 +197,10 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   exchangeRates,
   platformGrants,
   pricePolicy,
+  alertConfig,
+  alertEvents,
+  announcements,
+  legalDocs,
+  rateLimits,
+  logRetention,
 });

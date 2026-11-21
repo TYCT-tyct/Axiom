@@ -1,7 +1,9 @@
 import { type ReactNode, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
+import { board } from "../board-classes";
 import { useBrandStyle } from "../brand";
+import { classes } from "../classes";
 import { chooseLanguage, type Language, languageNames, languages, locales } from "../i18n";
 import { chooseTheme, currentTheme, subscribeTheme, themes } from "../preferences";
 import styles from "./board-shell.module.css";
@@ -28,7 +30,7 @@ export function BoardShell({
       <a href="#main" className={styles.skip}>
         {t("shell.skipToContent")}
       </a>
-      {banner && <div className={styles.banner}>{banner}</div>}
+      {banner && <div className={classes(board.board, board.ax, board.ov, styles.banner)}>{banner}</div>}
       <ForbiddenHint value={forbiddenHint}>{children}</ForbiddenHint>
     </div>
   );

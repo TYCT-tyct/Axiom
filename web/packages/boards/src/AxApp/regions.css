@@ -67,6 +67,8 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ax .btn.pri:hover:where(.board.ax.ov, .board.ax.ov *){background:var(--priHover)}
 .ax .btn.sec:where(.board.ax.ov, .board.ax.ov *){background:var(--panel);color:var(--t1);box-shadow:var(--sh1)}
 .ax .btn.sec:hover:where(.board.ax.ov, .board.ax.ov *){background:var(--raised)}
+.ax .btn.gho:where(.board.ax.ov, .board.ax.ov *){color:var(--t2)}
+.ax .btn.gho:hover:where(.board.ax.ov, .board.ax.ov *){background:var(--hover);color:var(--t1)}
 .ax .btn:focus-visible:where(.board.ax.ov, .board.ax.ov *),.ax .inp:focus-within:where(.board.ax.ov, .board.ax.ov *){box-shadow:0 0 0 2px var(--page),0 0 0 4px var(--focus)}
 .ax .inp:where(.board.ax.ov, .board.ax.ov *){display:flex;align-items:center;gap:10px;height:40px;max-width:420px;padding:0 8px 0 12px;margin-bottom:16px;border-radius:8px;background:var(--panel);box-shadow:var(--sh1);color:var(--t3);transition:box-shadow var(--dur) var(--ease)}
 .ax kbd:where(.board.ax.ov, .board.ax.ov *){display:inline-flex;align-items:center;height:22px;padding:0 6px;border-radius:6px;background:var(--hover);color:var(--t2)}
@@ -138,6 +140,7 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .pmi{display:flex;align-items:center;gap:10px;min-height:36px;padding:6px 10px;box-sizing:border-box;border-radius:8px;font-size:14px;cursor:pointer;transition:background-color var(--dur) var(--ease)}
 .ov .pmi:hover{background:var(--hover)}
 .ov .pmi .ic{width:16px;height:16px;color:var(--t2)}
+.ov .pmi .ck{margin-left:auto;color:var(--t1)}
 .ov .pmi.mut2{color:var(--t2)}
 .ov .pmt{display:flex;flex-direction:column;gap:2px;min-width:0}
 .ov .pmt b{font-weight:500;font-size:14px;line-height:20px}
@@ -223,6 +226,7 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .pin.qpages{max-width:1240px;padding:28px 40px 96px}
 .ov .qws{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:8px;background:var(--w);color:#fff;font-size:12px;font-weight:500}
 .ov .qws.sm{width:18px;height:18px;border-radius:4px;font-size:12px;transform:scale(0.9)}
+.ov .pmi .ck{opacity:0}
 .ov .pmi.on{background:var(--hover)}
 .ov .qph{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;margin-bottom:20px}
 .ov .qptl{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
@@ -267,6 +271,9 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .qpace i{display:block;height:100%;border-radius:3px;background:var(--t1)}
 .ov .qtag{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:6px;background:var(--hover);font-size:12px;color:var(--t2);white-space:nowrap}
 .ov .qtag.ok{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--t1)}
+.ov .qtag.retry,.ov .qtag.warn{background:color-mix(in srgb,var(--warn) 14%,transparent);color:var(--warnT)}
+.ov .qtag.fail{background:color-mix(in srgb,var(--bad) 12%,transparent);color:var(--badT)}
+.ov .qtag.beta{background:var(--accentWash);color:var(--accentT)}
 .ov .qlnk{all:unset;font-size:14px;color:var(--accentT);cursor:pointer}
 .ov .qlnk:hover{text-decoration:underline;text-underline-offset:3px}
 .ov .qin{display:inline-flex;align-items:center;height:36px;padding:0 12px;min-width:220px;box-sizing:border-box;border-radius:8px;box-shadow:inset 0 0 0 var(--bw) var(--line2);font-size:14px;color:var(--t1)}
@@ -309,6 +316,9 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .sw2.qsw.on{background:var(--t1)}
 .ov .sw2.qsw.on i{background:var(--page)}
 .ov .btn.dan{color:var(--badT)}
+.ov .qfl{display:flex;flex-direction:column;gap:8px;margin-bottom:18px}
+.ov .qfl b{font-size:14px;font-weight:500}
+.ov .qfl .qin{width:100%}
 .ov .qmore{left:8px;right:8px;max-height:70%;overflow-y:auto}
 .ov .qmg{display:grid;grid-template-columns:repeat(3,1fr);gap:4px;margin-bottom:6px}
 .ov .qmi{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 4px;border-radius:12px;font-size:12px;color:var(--t2);cursor:pointer}
@@ -370,6 +380,8 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .qteam.sm{width:22px;height:22px;border-radius:6px}
 .ov .v8 .qav{display:inline-flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;border-radius:50%;
   background:color-mix(in srgb,var(--p,var(--accentSolid)) 20%,var(--cardBg));color:color-mix(in srgb,var(--p,var(--accentSolid)) 50%,var(--t1));font-size:12px;font-weight:500;line-height:1}
+.ov .v8 .qav.sm{width:24px;height:24px}
+.ov .v8 .qav.md{width:34px;height:34px;font-size:14px}
 .ov .v8 .qav.lg{width:48px;height:48px;font-size:16px}
 .ov .qavs{display:inline-flex;align-items:center}
 .ov .qavs .qav{width:24px;height:24px;box-shadow:0 0 0 2px var(--cardBg)}
@@ -378,6 +390,7 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .qbig.xl{font-size:24px;line-height:52px;letter-spacing:-0.02em}
 .ov .qbig .cy{font-size:14px;font-weight:400;color:var(--t2);margin-right:0.1em}
 .ov .qkpi b .ct,.ov .qbig .ct{font-size:14px;font-weight:400;color:var(--t2)}
+.ov .qtag.own{background:var(--accentWash);color:var(--accentT)}
 .ov .g8{gap:6px;padding:0 16px 0 18px}
 .ov .g8 .glogo{padding-right:4px}
 .ov .spT .g8::after{content:'';position:absolute;left:0;right:0;top:0;height:2px;pointer-events:none;transform-origin:left;animation:qline 250ms var(--ease) both;
@@ -842,9 +855,11 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .qkn b{font-size:14px;font-weight:500}
 .ov .qkn .mono.mut{font-size:12px}
 .ov .nkscrim{position:absolute;inset:0;z-index:60;background:rgba(0,0,0,.24);animation:nkFade 250ms ease-out both}
+.ov .nkscrim.out{opacity:0;transition:opacity 250ms ease-out}
 @keyframes nkFade{from{opacity:0}}
 .ov .nkdlg{position:absolute;z-index:61;left:50%;top:50%;width:480px;max-width:calc(100% - 32px);max-height:calc(100% - 48px);display:flex;flex-direction:column;border-radius:16px;background:var(--pop);box-shadow:var(--shPop);transform:translate(-50%,-50%);animation:nkIn 250ms ease-out both;overflow:hidden}
 @keyframes nkIn{from{opacity:0;transform:translate(-50%,-48%) scale(.98)}}
+.ov .nkdlg.out{opacity:0;transform:translate(-50%,-48%) scale(.98);transition:opacity 250ms ease-out,transform 250ms ease-out}
 .ov .nkh{display:flex;align-items:flex-start;gap:12px;padding:20px 24px 4px}
 .ov .nkh > div{flex:1;min-width:0}
 .ov .nkh h2{font-size:16px;line-height:24px;font-weight:500}
@@ -875,12 +890,13 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .nkfoot .nkfl{margin-right:auto;font-size:12px;color:var(--t2)}
 @container ov (max-width: 600px){.ov .nkdlg{left:0;right:0;top:auto;bottom:0;width:auto;max-width:none;max-height:92%;border-radius:16px 16px 0 0;transform:none;animation:nkUp 250ms ease-out both}
 @keyframes nkUp{from{opacity:0;transform:translateY(32px)}}
+.ov .nkdlg.out{transform:translateY(32px)}
 .ov .nkh,.ov .nkb,.ov .nkfoot{padding-left:16px;padding-right:16px}
 .ov .nkfoot .btn{flex:1;justify-content:center}
 .ov .nkfoot .nkfl{display:none}}
 .ov .qcard.rows > .qch{padding-top:16px;margin-bottom:0}
 .ov .qcard.flush > .qch{padding:20px 24px 0;margin-bottom:8px}
-.ov .qcard.rows > .qch + .qses{box-shadow:none}
+.ov .qcard.rows > .qch + .qrow,.ov .qcard.rows > .qch + .qses{box-shadow:none}
 .ov .qcard.rows > .qch .btn{margin-top:-4px}
 .ov .ppmut{font-size:12px;color:var(--t3);white-space:nowrap}
 .ov tr td{transition:opacity 250ms ease-out}
@@ -914,12 +930,21 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .nkdlg textarea.pparea{height:88px;font-family:inherit;font-size:14px;line-height:22px}
 .ov .btn.dan2{color:var(--badT)}
 .ov .nkfoot .btn[disabled]{opacity:.6;pointer-events:none}
+.ov .nkdlg.side{left:auto;right:8px;top:8px;bottom:8px;width:440px;max-height:none;transform:none;animation:ppSide 250ms ease-out both}
+@keyframes ppSide{from{opacity:0;transform:translateX(24px)}}
+.ov .nkdlg.side.out{transform:translateX(24px)}
+.ov .nkdlg.side .nkb{flex:1}
+.ov .nkdlg.side .nkfoot .ppdel{margin-right:auto}
+.ov .ppsaved{font-size:12px;color:var(--t3);transition:color 250ms ease-out}
+.ov .ppsaved.on{color:var(--okT, var(--ok))}
 @container ov (max-width: 900px){.ov .p-presets .qg3{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @container ov (max-width: 600px){.ov .qrow:has(> .qrc > .ppmut:only-child),.ov .qrow:has(> .qrc > .sw2:only-child),.ov .qrow:has(> .qrc > .btn:only-child){flex-direction:row;align-items:center;gap:16px}
 .ov :is(.p-plugins,.p-presets) .qcode2.one{white-space:pre-wrap;overflow-wrap:anywhere}
 .ov .p-presets .qg3{grid-template-columns:minmax(0,1fr)}
 .ov .qhr{min-width:0}
-.ov input.qin{width:100%}}
+.ov input.qin{width:100%}
+.ov .nkdlg.side{left:0;right:0;top:auto;bottom:0;width:auto;max-height:92%;border-radius:16px 16px 0 0;animation:nkUp 250ms ease-out both}
+.ov .nkdlg.side .ppsaved{display:none}}
 .ov .tmk{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
 .ov .tmk span{font-size:12px;color:var(--t2)}
 .ov .tmk b{font-size:24px;line-height:32px;font-weight:500;font-variant-numeric:tabular-nums}
@@ -1004,6 +1029,10 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .stb p{margin-top:6px;font-size:14px;line-height:22px;color:var(--t2)}
 .ov .stb .stba{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:24px}
 .ov .stb .stba .btn[disabled]{pointer-events:none;opacity:.6}
+.ov .stb .stbid{display:inline-flex;align-items:center;gap:8px;margin-top:20px;font-size:12px;color:var(--t3)}
+.ov .stb .stbid code{font-family:'Axiom Mono','Axiom CJK',monospace}
+.ov .stb .stbid button{all:unset;color:var(--t2);cursor:pointer}
+.ov .stb .stbid button:hover{color:var(--t1)}
 .ov .pstL .qpg :is(.qcard,.tmk > button,.qwk,.qpre,.qdst){position:relative;pointer-events:none;overflow:hidden}
 .ov .pstL .qpg :is(.qcard,.tmk > button,.qwk,.qpre,.qdst) > *{visibility:hidden}
 .ov .pstL .qpg :is(.qcard,.tmk > button,.qwk,.qpre,.qdst)::before{content:'';position:absolute;left:20px;top:20px;width:min(34%,160px);height:12px;border-radius:6px;background:var(--sk);animation:stPulse 1.4s ease-in-out infinite alternate}
@@ -1067,9 +1096,24 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .pym.on .pyrd::after{transform:scale(1)}
 .ov .pyd .nkfoot .btn.pri{min-width:132px;justify-content:center;font-variant-numeric:tabular-nums}
 .ov .pyd .nkfoot .btn[disabled]{opacity:.45;pointer-events:none}
+@keyframes pyDraw{to{stroke-dashoffset:0}}
 @container ov (max-width: 900px){.ov .qhr.pyh{align-self:stretch}}
 @container ov (max-width: 600px){.ov .pyd{width:auto}
 .ov .pyamt{height:56px}}
+.ov .fxt{position:absolute;left:16px;right:16px;bottom:24px;z-index:90;display:flex;align-items:center;gap:10px;width:fit-content;max-width:520px;margin:0 auto;min-height:40px;padding:0 14px;box-sizing:border-box;border-radius:12px;background:var(--priBg);color:var(--priFg);font-size:14px;line-height:20px;box-shadow:var(--shPop);transform:translateY(8px);opacity:0;transition:transform 250ms ease-out,opacity 250ms ease-out}
+.ov .fxt.on{transform:none;opacity:1}
+.ov .fxt.out{transform:translateY(4px);opacity:0}
+.ov .fxt svg{width:16px;height:16px;flex:none;fill:none;stroke:currentColor;stroke-width:1.6px;stroke-linecap:round;stroke-linejoin:round}
+.ov .fxt.ok svg path{stroke-dasharray:20;stroke-dashoffset:20;animation:pyDraw 250ms ease-out 100ms forwards}
+.ov .fxt.bad svg{color:color-mix(in srgb,var(--bad) 55%,#fff)}
+.ov .fxt > span{padding:10px 0}
+.ov .fxt button{all:unset;flex:none;margin:0 -6px 0 6px;padding:0 10px;height:28px;border-radius:8px;font-size:14px;font-weight:500;color:var(--priFg);cursor:pointer;box-shadow:inset 0 0 0 var(--bw) color-mix(in srgb,var(--priFg) 34%,transparent);transition:background-color 250ms ease-out}
+.ov .fxt button:hover{background:color-mix(in srgb,var(--priFg) 14%,transparent)}
+.ov .fxt i{position:absolute;left:12px;right:12px;bottom:0;height:1.5px;border-radius:1px;background:color-mix(in srgb,var(--priFg) 40%,transparent);transform-origin:0 50%;animation:fxBar linear forwards}
+@keyframes fxBar{to{transform:scaleX(0)}}
+.ov .fxt:hover i{animation-play-state:paused}
+.ov .ppsaved.bad{color:var(--badT)}
+.ov .ppsaved button{all:unset;margin-left:6px;color:var(--t1);cursor:pointer;text-decoration:underline;text-underline-offset:2px}
 .ov .qpg{animation:none}
 .ov .qpg > *{animation:fxIn 250ms ease-out backwards}
 .ov .qpg > :nth-child(2){animation-delay:40ms}
@@ -1085,6 +1129,7 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .sw2:active i{width:22px}
 .ov .sw2.on:active i{transform:translateX(10px)}
 .ov .sw2 i{transition:transform 250ms ease-out,width 250ms ease-out}
+@container ov (max-width: 600px){.ov .fxt{bottom:76px}}
 .ov .qph{align-items:flex-start;min-height:32px}
 .ov .qph > .qpa{min-height:36px;margin:-2px 0}
 .ov .qcard.flush > .qch{padding:16px 24px 0;margin-bottom:8px}
@@ -1092,7 +1137,11 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .usc > .qch h2{line-height:24px}
 .ov .tmv .qtbl td{height:52px}
 .ov .tmk{grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+.ov .thD .nkscrim{background:rgba(0,0,0,.56)}
 .ov .thD :is(.nkdlg,.pptz,.uscal,.pm,.lgsheet){box-shadow:var(--shPop),0 0 0 var(--bw) color-mix(in srgb,var(--t1) 16%,transparent)}
+.ov .thD .fxt{background:var(--t1);color:var(--bg, #111)}
+.ov .thD .fxt button{color:inherit;box-shadow:inset 0 0 0 var(--bw) color-mix(in srgb,currentColor 34%,transparent)}
+.ov .thD .fxt i{background:color-mix(in srgb,currentColor 40%,transparent)}
 @container ov (min-width: 601px) and (max-width: 900px){.ov .lgh,.ov .lgr,.ov .lgw.open .lgh,.ov .lgw.open .lgr{grid-template-columns:64px 76px minmax(136px,1.4fr) minmax(0,1fr) 100px 68px}
 .ov .lgh > :nth-child(6),.ov .lgr > :nth-child(6),.ov .lgw.open .lgh > :nth-child(6),.ov .lgw.open .lgr > :nth-child(6){display:none}}
 @container ov (max-width: 900px){.ov .tmk{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -1106,7 +1155,8 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .usd .usrw{height:auto;min-height:44px;padding:6px 0}}
 .ov .nkscrim{z-index:70}
 .ov .nkdlg{z-index:71}
-@container ov (max-width: 600px){.ov .nkfoot{flex-wrap:wrap}}
+@container ov (max-width: 600px){.ov .nkfoot{flex-wrap:wrap}
+.ov .nkdlg ~ .fxt{bottom:auto;top:12px}}
 @container ov (min-width: 601px) and (max-width: 900px){.ov .qkeyt :is(th,td):nth-last-child(4),.ov .qkeyt :is(th,td):nth-last-child(3){display:none}
 .ov .qkeyt .qkm .qpace{width:64px}
 .ov .tmv table :is(th,td[class~=mut]):nth-child(5){display:none}
