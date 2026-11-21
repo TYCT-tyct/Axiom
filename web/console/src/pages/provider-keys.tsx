@@ -12,6 +12,7 @@ import {
   Dialog,
   FormError,
   Icon,
+  PageFrame,
   SettingRow,
   Stack,
   SubmitButton,
@@ -76,8 +77,7 @@ export default function ProviderKeys() {
     ) : undefined;
   const description = t("providerKeys.description");
   return (
-    <>
-      <ListStates query={keys} view={view} ns="providerKeys" />
+    <PageFrame>
       <Board
         wide={wide}
         english={english}
@@ -87,6 +87,7 @@ export default function ProviderKeys() {
         description={description}
         create={create}
       />
+      <ListStates query={keys} view={view} ns="providerKeys" />
       {permitted ? (
         <Opened
           open={open}
@@ -95,7 +96,7 @@ export default function ProviderKeys() {
           onClose={(id) => (id === "add" ? closeAdd() : closeKey(id))}
         />
       ) : null}
-    </>
+    </PageFrame>
   );
 }
 

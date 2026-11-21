@@ -151,11 +151,13 @@ const scenes: Scene[] = [
       .getByRole("dialog", { name: /^(修改 key|Edit key)$/ })
       .getByRole("button", { name: /^(删除|Delete) / })
       .click();
+    await page.getByRole("dialog", { name: /^(删除 key|Delete key)$/ }).waitFor();
   }),
   dialogScene("key-secret", "keys", async (page) => {
     await page.getByRole("button", { name: /^(创建 key|Create key)$/ }).click();
     await page.getByRole("dialog").locator("input[name=name]").fill("Deploy bot");
     await page.getByRole("dialog").locator("button[type=submit]").click();
+    await page.getByRole("dialog", { name: /^(复制你的 key|Copy your key)$/ }).waitFor();
   }),
   {
     name: "model-details",

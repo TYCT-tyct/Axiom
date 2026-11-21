@@ -266,7 +266,8 @@ export function usePresetName() {
     if (!preset) {
       return t("routingPresets.key.hidden");
     }
-    return preset.disabled ? t("routingPresets.key.disabledName", { name: preset.name }) : preset.name;
+    const name = preset.id === systemPreset ? t("routingPresets.key.system") : preset.name;
+    return preset.disabled ? t("routingPresets.key.disabledName", { name }) : name;
   };
 }
 

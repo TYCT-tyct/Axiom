@@ -188,6 +188,15 @@ function collectCSS(
     sheet.added.set(`${selector}\0${decl}`, [selector, decl]);
 }
 
+export function collectMarkup(markup: string, sheet: SheetCollector) {
+  const dom = new JSDOM(`<body>${markup}</body>`);
+  try {
+    collectMatched(sheet.selectors, sheet.kept, new Set(dom.window.document.body.querySelectorAll("*")));
+  } finally {
+    dom.window.close();
+  }
+}
+
 export function convertRegion(
   markup: string,
   css: string,

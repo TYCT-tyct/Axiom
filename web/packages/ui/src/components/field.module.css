@@ -1,11 +1,8 @@
-/* The board's .qfl and .qin: a label over the control, a hint or an error under it. The control is edged 1px in
-   --ctl-line, an invalid one in --badT, and the error is said in words. A control is 16px on a phone, below which iOS
-   zooms the page when it takes focus. A select has no arrow, as on the board. */
+/* 3:1 control edge (--ctl-line, docs/frontend.md「对比度令牌」), invalid edge, mobile 16px size, and checkbox/month/
+   form-error rules on top of the board's .qfl and .qin (AxApp/regions.css). */
 .root {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   min-width: 0;
+  margin-bottom: 0;
 }
 
 .label {
@@ -16,22 +13,20 @@
 }
 
 .control {
-  all: unset;
   display: block;
-  box-sizing: border-box;
+  min-width: 0;
   width: 100%;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: var(--r8);
   background: var(--cardBg);
   box-shadow: inset 0 0 0 1px var(--ctl-line);
-  font-size: var(--fs14);
   line-height: var(--lh14);
-  color: var(--t1);
 }
 
 .control::placeholder {
   color: var(--t3);
+}
+
+.control:focus {
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
 }
 
 .control:focus-visible {

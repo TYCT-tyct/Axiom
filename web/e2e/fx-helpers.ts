@@ -83,8 +83,9 @@ const canvasHash = (canvas: Locator) =>
 
 // Each canvas draws pictures that change with time: with the page's clock stopped, the picture at two moments a second
 // apart differs. Only runFor moves the clock, so the frames between are exactly the loop's, driven by the test.
-export async function expectMoving(page: Page, ...canvases: Locator[]) {
-  await page.clock.install();
+// Use expectMovingNow when the caller installed the fake clock before navigation (so performance.now() does not jump
+// behind timestamps cached at boot).
+export async function expectMovingNow(page: Page, ...canvases: Locator[]) {
   await pauseAhead(page, 100);
   await page.clock.runFor(500);
   const before = await Promise.all(canvases.map(canvasHash));
@@ -92,4 +93,9 @@ export async function expectMoving(page: Page, ...canvases: Locator[]) {
   const after = await Promise.all(canvases.map(canvasHash));
   for (const [i, hash] of after.entries())
     expect(hash, `canvas ${i} drew the same picture a second later`).not.toBe(before[i]);
+}
+
+export async function expectMoving(page: Page, ...canvases: Locator[]) {
+  await page.clock.install();
+  await expectMovingNow(page, ...canvases);
 }

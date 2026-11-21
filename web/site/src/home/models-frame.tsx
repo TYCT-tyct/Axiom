@@ -1,3 +1,4 @@
+import "@axiom/boards/AxApp/regions.css";
 import ModelsPage from "@axiom/boards/Models/regions/ModelsPage";
 import { Button, Logo, PreferenceSwitches } from "@axiom/ui";
 import type { ReactNode } from "react";

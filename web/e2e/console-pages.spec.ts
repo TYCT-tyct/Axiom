@@ -433,6 +433,15 @@ test.describe("overview", () => {
     await expect(row).not.toContainText("23:50");
     expect(requests.filter((url) => url.includes("/api/"))).toEqual([]);
   });
+
+  test("the see-usage link opens the usage page", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/");
+    await main(page).getByText("查看用量", { exact: true }).click();
+    await expect(page).toHaveURL(/\/console\/usage$/);
+    await expect(page.getByRole("heading", { level: 1, name: "用量" })).toBeVisible();
+  });
 });
 
 test("the site's brand colour is applied to the page", async ({ page }) => {

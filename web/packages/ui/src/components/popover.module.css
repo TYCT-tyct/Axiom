@@ -1,5 +1,4 @@
-/* The board's .pw and .pm: a panel under its trigger, on the popover surface with its shadow, aligned to the trigger's
-   start or end. It enters with a short fade and lift. */
+/* Anchored inline positioning and mount enter animation on top of the board's .pw/.pm/.pm.r (AxApp/regions.css). */
 .root {
   position: relative;
   display: inline-flex;
@@ -8,23 +7,16 @@
 .panel {
   position: absolute;
   top: calc(100% + 8px);
+  right: auto;
+  bottom: auto;
   left: 0;
-  z-index: 60;
-  box-sizing: border-box;
   min-width: 220px;
-  padding: 6px;
-  border-radius: var(--r12);
-  background: var(--pop);
-  box-shadow: var(--shPop);
-  color: var(--t1);
-  transform-origin: top left;
   animation: enter var(--dur) var(--ease);
 }
 
 .end {
   right: 0;
   left: auto;
-  transform-origin: top right;
 }
 
 @keyframes enter {

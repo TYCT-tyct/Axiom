@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { board } from "../board-classes";
 import { classes } from "../classes";
 import s from "./popover.module.css";
 
@@ -20,13 +21,10 @@ export type TriggerProps = {
   "aria-controls"?: string;
 };
 
-// What opens the panel first when it appears: a menu's first item, or a popover's first control.
 const focusable = '[role^="menuitem"], button:not(:disabled), [href], input:not(:disabled), select, textarea';
 
-// Popover opens a panel under its trigger, a button the caller renders with the props it is given. The panel takes
-// focus when it opens; Esc closes it and gives focus back to the trigger; a press outside or focus leaving it closes
-// it. role is menu for Menu, dialog (non-modal) for any other content, which close() can also shut; label names the
-// panel for a screen reader.
+// Popover opens a panel under its trigger (.pw/.pm/.pm.r/.pm.open from AxApp/regions.css). The panel takes focus when
+// it opens; Esc closes it and gives focus back to the trigger; a press outside or focus leaving it closes it.
 export function Popover({
   label,
   role = "dialog",
@@ -61,9 +59,8 @@ export function Popover({
     // biome-ignore lint/a11y/noStaticElementInteractions: the keys and focus are the trigger's and the panel's, caught here.
     <div
       ref={root}
-      className={s.root}
+      className={classes(board.pw, s.root)}
       onKeyDown={(event) => {
-        // Esc closes the panel only, not a dialog around it.
         if (open && event.key === "Escape") {
           event.preventDefault();
           event.stopPropagation();
@@ -92,7 +89,7 @@ export function Popover({
           id={`${id}-panel`}
           role={role}
           aria-label={label}
-          className={classes(s.panel, align === "end" && s.end)}
+          className={classes(board.pm, board.open, align === "end" && board.r, s.panel, align === "end" && s.end)}
           onKeyDown={onPanelKeyDown}
         >
           {children(close)}
@@ -102,7 +99,6 @@ export function Popover({
   );
 }
 
-// useOutsidePress closes an open panel when the pointer goes down anywhere outside it and its trigger.
 function useOutsidePress(open: boolean, root: RefObject<HTMLElement | null>, onOutside: () => void) {
   useEffect(() => {
     if (!open) {
