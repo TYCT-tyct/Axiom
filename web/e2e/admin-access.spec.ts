@@ -204,6 +204,7 @@ test.describe("permissions", () => {
       zhText("nav.models"),
       zhText("nav.pricing"),
       zhText("nav.exchangeRates"),
+      zhText("nav.subscriptionPlans"),
     ]);
     await expect(nav.getByRole("group")).toHaveCount(2);
     await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
@@ -212,6 +213,10 @@ test.describe("permissions", () => {
     await expect(pricingGroup.getByRole("link", { name: zhText("nav.exchangeRates") })).toHaveAttribute(
       "href",
       "/exchange-rates",
+    );
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
+      "href",
+      "/subscription-plans",
     );
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);

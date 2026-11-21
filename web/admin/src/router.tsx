@@ -143,6 +143,13 @@ const routeTree = root.addChildren([
       (search) => ({ state: search.state === "open" || search.state === "resolved" ? search.state : undefined }),
     ),
     shellPage("/payment-discrepancies/$discrepancyId", () => loadTranslatedPage(import("./pages/payment-discrepancy"))),
+    shellPage(
+      "/subscription-plans",
+      () => loadTranslatedPage(import("./pages/subscription-plans")),
+      (search) => ({
+        include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
+      }),
+    ),
     shellPage("/alert-events", () => loadTranslatedPage(import("./pages/alert-events"))),
     shellPage("/alert-configuration", () => loadTranslatedPage(import("./pages/alert-configuration"))),
     shellPage("/announcements", () => loadTranslatedPage(import("./pages/announcements"))),

@@ -22,6 +22,7 @@ import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
 import sourceClasses from "./source-classes";
+import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
 import users from "./users";
 
@@ -44,6 +45,7 @@ export const initial = {
     models: "Model catalog",
     pricing: "Pricing",
     exchangeRates: "Exchange rates",
+    subscriptionPlans: "Subscription plans",
     settings: "Site settings",
     sourceClasses: "Source classes",
     routingPresets: "Routing presets",
@@ -201,6 +203,7 @@ export const initial = {
     typeof zh,
     | "operations"
     | "settings"
+    | "subscriptions"
     | "suppliers"
     | "discrepancies"
     | "exchangeRates"
@@ -219,6 +222,7 @@ export const initial = {
 export default /* @__PURE__ */ Object.assign({}, initial, {
   operations,
   settings,
+  subscriptions,
   suppliers,
   discrepancies,
   exchangeRates,
