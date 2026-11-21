@@ -8,7 +8,6 @@ from pathlib import Path
 
 JOBS = {
     "static": ["static"],
-    "go-test": [f"go-test ({i}/4)" for i in range(1, 5)],
     "web": ["web"],
     "e2e": [f"e2e ({i}/4)" for i in range(1, 5)],
     "boards": [f"boards ({i}/4)" for i in range(1, 5)],

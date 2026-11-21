@@ -138,16 +138,15 @@ deadcode:
 # ./pkg` alone starts its own. The test build still compiles every benchmark; `bench-once` runs them under the race
 # detector, and bench-compare compares their allocations without it. At most four packages at once: eight, the default
 # on the 8-core host, raced with the shared cluster and starved the timing-sensitive database tests; four is the limit
-# the server proof used. -coverprofile adds coverage instrumentation to that same run and writes coverage.out for
-# quality-ratchet-coverage; the suite is not run twice. On the CI host the covered runs took 9-12m against 13m
-# uncovered, dominated by host load; reading the profile costs under a second. `shard="i/n"` runs every n-th package
-# from the i-th in `go list` order, each shard with its own cluster and four workers: CI runs two, bounded by the
-# longest package (payments, about 5m) instead of the sum (about 30m over four workers, 12m); the tools module runs
-# in the first.
-test shard="1/1": web-embed
-    go run ./internal/platform/pgtest/cmd/withcluster go test -race -p=4 -coverprofile=coverage.out \
+# the server proof used. `race=race` adds the race detector and coverage instrumentation (coverage.out, read by
+# quality-ratchet-coverage): main runs it on every landing, a pull request and a train run the suite plain, since the
+# detector multiplies the suite's time and a race it finds after landing is fixed first like any red main.
+# `shard="i/n"` runs every n-th package from the i-th in `go list` order, each shard with its own cluster and four
+# workers; the tools module runs in the first.
+test shard="1/1" race="": web-embed
+    go run ./internal/platform/pgtest/cmd/withcluster go test {{ if race == "race" { "-race -coverprofile=coverage.out" } else { "" } }} -p=4 \
         $(go list ./... | awk -v shard={{ quote(shard) }} 'BEGIN { split(shard, s, "/") } (NR - 1) % s[2] == s[1] - 1')
-    case {{ quote(shard) }} in 1/*) go test -C tools -race ./... ;; esac
+    case {{ quote(shard) }} in 1/*) go test -C tools {{ if race == "race" { "-race" } else { "" } }} ./... ;; esac
 
 # Focused remote verification for callback transactions and their mutation proofs (#309).
 payments-test:
