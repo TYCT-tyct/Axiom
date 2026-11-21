@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
 import { operationsHandlers, startOperations } from "./admin-operations.ts";
+import { opsControlHandlers, startOpsControl } from "./admin-ops-control-api.ts";
 import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { policyHandlers, startPolicies } from "./admin-policies-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
@@ -501,6 +502,7 @@ const handlers: Handler<AdminState>[] = [
   ...pricingHandlers,
   ...routingHandlers,
   ...operationsHandlers,
+  ...opsControlHandlers,
   ...policyHandlers,
 ];
 
@@ -511,6 +513,7 @@ export async function mockAdmin(page: Page, data: MockData = "usual", over: Part
   Object.assign(state, over);
   startRouting(state, data);
   startOperations(state, data);
+  startOpsControl(state, data);
   startSiteExtras(state);
   startPolicies(state, data);
   return mockApi(page, base, handlers, state);
