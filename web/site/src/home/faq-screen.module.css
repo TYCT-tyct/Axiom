@@ -18,8 +18,18 @@
    margin on its left and right, the free height split evenly above and below it. */
 .faq div[class~="d"] div[class~="card"] {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   height: auto;
   min-height: 433px;
+  container-type: inline-size;
+}
+
+/* The card narrows with the page, from the board's 588px down to some 430px where the wide layout starts; a picture,
+   440px wide, is drawn smaller there rather than cut off at the card's edge, keeping a margin on each side. */
+@container (max-width: 487px) {
+  .faq div[class~="d"] div[class~="stage"] > div[class~="win"] {
+    zoom: 0.9;
+  }
 }
 
 .faq div[class~="d"] div[class~="pane"] {

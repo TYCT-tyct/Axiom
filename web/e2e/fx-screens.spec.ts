@@ -348,7 +348,7 @@ for (const [name, viewport] of [
 
 for (const language of ["zh", "en"] as const)
   for (const width of [1440, 1280])
-    test(`every answer sits in the middle of the room above its picture, which is whole in the card, ${language} at ${width}`, async ({
+    test(`every answer sits in the middle of the room above its picture, which is whole inside the card, ${language} at ${width}`, async ({
       page,
     }) => {
       await page.addInitScript((lang) => localStorage.setItem("axiom.language", lang), language);
@@ -374,6 +374,7 @@ for (const language of ["zh", "en"] as const)
             text: { top, bottom },
             sides: [paddingLeft, paddingRight],
             stage: (pane.querySelector(".stage") ?? pane).getBoundingClientRect(),
+            win: (pane.querySelector(".win") ?? pane).getBoundingClientRect(),
             card: (pane.closest(".card") ?? pane).getBoundingClientRect(),
           };
         });
@@ -382,6 +383,8 @@ for (const language of ["zh", "en"] as const)
         expect(Math.abs(above - below), `answer ${i + 1}: ${above} above, ${below} below`).toBeLessThanOrEqual(1);
         expect(box.sides[0], `answer ${i + 1}`).toBe(box.sides[1]);
         expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
+        expect(box.win.left - box.card.left, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
+        expect(box.card.right - box.win.right, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
       }
       // the Chinese answers are written to the board's three lines, so the card keeps the board's height
       if (language === "zh" && width === 1440)
