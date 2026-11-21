@@ -1,4 +1,4 @@
-import { markArrival, markOrigin, own, takeReturn } from "@axiom/fx";
+import { afterFirstContent, markArrival, markOrigin, own, takeReturn } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -349,9 +349,8 @@ function scheduleLeave(flight: Flight, delay: number) {
     const held = shown;
     const r = flight.link.getBoundingClientRect();
     markOrigin({ x: r.x, y: r.y, w: r.width, h: r.height });
-    // the arrival is the sign-in page's: registration has no arrival of its own, and a marker left by it would play
-    // the decode on a later, direct visit to sign-in
-    if (new URL(flight.href).pathname.endsWith("/sign-in")) markArrival();
+    // the page gone to, signing in or registering, takes the marker and plays its arrival
+    markArrival();
     window.location.assign(flight.href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, delay);
@@ -436,13 +435,15 @@ function handleDepartClick(frame: HTMLElement, sea: Sea | null, e: MouseEvent) {
 
 // useDeparture plays the tiles departure (packages/fx depart) when a [data-go] link of the frame root points at is
 // pressed: signing in or up leaves the website through it, half a second after the press, and Esc or the brand mark
-// reverses it midway. When returning from a sign-in page (takeReturn), it settles the home page without replaying the
-// cold tide entrance.
+// reverses it midway. Its code is fetched once the first screen is drawn, so a press breaks the button on the next
+// frame rather than after a round trip, and the picture fills the half second. When returning from a sign-in page
+// (takeReturn), it settles the home page without replaying the cold tide entrance.
 export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
     settleReturn(frame, sea.current);
+    const cancelLoad = afterFirstContent(() => void loadDepart().catch(() => {}));
     const onClick = (e: MouseEvent) => handleDepartClick(frame, sea.current, e);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || leaving?.dir !== 1) return;
@@ -461,6 +462,7 @@ export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject
     window.addEventListener("keydown", onKey);
     window.addEventListener("pageshow", onShow);
     return () => {
+      cancelLoad();
       frame.removeEventListener("click", onClick);
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("pageshow", onShow);

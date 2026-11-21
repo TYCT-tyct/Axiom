@@ -1,6 +1,6 @@
 // Return transition from any console Login-board auth page (.lg) back to the website (/) via Escape, clicking the
 // Axiom mark (.lg .brand), or browser Back, reversible midway (port design §9, trans.js.txt STYLES.tiles reverse).
-import { markReturn, type OriginRect, takeOrigin } from "@axiom/fx";
+import { afterFirstContent, markReturn, type OriginRect, takeOrigin } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import { type RefObject, useEffect, useRef } from "react";
 
@@ -189,6 +189,8 @@ export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boole
   isLocked.current = locked;
   useEffect(() => {
     installSentinel();
+    // the return's code is fetched once the page is drawn, so the mark breaks the page on the next frame
+    return afterFirstContent(() => void loadDepart().catch(() => {}));
   }, []);
   useEffect(() => {
     const onClick = (e: MouseEvent) => handleClick(root.current, isLocked.current, e);
