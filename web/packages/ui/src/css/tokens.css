@@ -108,6 +108,8 @@
   --sh1: 0 0 0 var(--bw) var(--n6);
   --cardSh: 0 0 0 var(--bw) var(--n6);
   --shPop: 0 0 0 var(--bw) var(--n7), 0 8px 24px light-dark(rgb(0 0 0 / 0.1), rgb(0 0 0 / 0.4));
+  /* the website boards' float under a popover (MomentsLive's terminal) */
+  --floatSh: 0 12px 32px light-dark(rgb(0 0 0 / 0.08), rgb(0 0 0 / 0.5));
   /* behind a modal */
   --scrim: light-dark(rgb(0 0 0 / 0.24), rgb(0 0 0 / 0.56));
   /* a code a phone scans: dark on light whatever the theme */

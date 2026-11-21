@@ -79,7 +79,11 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
   };
   // Skip the cold entrance when the home page is settling back from sign-in (behaviour.ts marks data-enter="done").
   if (root.dataset.enter !== "done") entrance.play();
-  const release = own(owner, (dt) => {
+  // the frame of the owner and of whoever keeps the sea awake: on a frame both are given, the sea steps once
+  let stepped = -1;
+  const frame = (dt: number, now: number) => {
+    if (now === stepped) return;
+    stepped = now;
     if (root.dataset.enter !== "done") {
       elapsed += dt * 1000;
       entrance.seek(elapsed);
@@ -87,9 +91,11 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
     if (!engine.held) {
       engine.tick(dt);
     }
-  });
+  };
+  const release = own(owner, frame);
   return {
     engine,
+    awake: (element) => own(element, frame),
     settle: () => {
       if (root.dataset.enter !== "done") entrance.finish();
     },

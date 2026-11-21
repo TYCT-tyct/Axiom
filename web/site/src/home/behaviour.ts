@@ -50,6 +50,14 @@ const measured = (scroller: HTMLElement): Offset[] => [
   { sec: 0, top: 0 },
   ...places(scroller).map((s) => ({ sec: Number(s.dataset.place), top: s.offsetTop })),
 ];
+// applyDepth updates .depth opacity from scroll depth and (dark theme only) the eggs' night floor.
+function applyDepth(depth: HTMLElement | null, dim: number) {
+  if (!depth) return;
+  depth.dataset.dim = dim.toFixed(3);
+  const floor = depth.closest(".ho.dark") ? Number(depth.dataset.floor ?? 0) : 0;
+  depth.style.opacity = Math.max(dim, floor).toFixed(3);
+}
+
 const wheelDelta = (e: WheelEvent, view: number) => e.deltaY * (e.deltaMode === 1 ? 40 : e.deltaMode === 2 ? view : 1);
 
 // Inertial wheel scrolling on the wide layout (Site.logic.html onWheel / ease): the wheel moves a target and the
@@ -145,7 +153,7 @@ function scrolling(
     },
     onScroll: () => {
       const { dim, ...scroll } = scrolled(scroller, offsets);
-      if (depth) depth.style.opacity = dim.toFixed(3);
+      applyDepth(depth, dim);
       show(scroll);
     },
     onScrollEnd: () => {

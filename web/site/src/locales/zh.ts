@@ -158,5 +158,46 @@ export default {
       stopped: "额度用完，已停止调用",
     },
   },
+  // the sea's easter eggs (home/easter-eggs.tsx, home/terminal.ts): the sea-floor terminal opened with /, the way back up
+  // from the floor, and the greeting in the browser's console
+  eggs: {
+    terminal: "海底终端",
+    input: "输入命令",
+    hello: "海底终端，输入 help 看看能做什么，Esc 关闭",
+    help: {
+      ls: "列出模型和线路",
+      ping: "ping [模型]",
+      pingDoes: "测一次到本站的往返",
+      feed: "喂鱼",
+      dive: "潜到海底",
+      surface: "回到海面",
+      whoami: "你是谁",
+      clear: "清屏",
+      whale: "叫鲸来",
+    },
+    ls: {
+      more: "还有 {{count}} 个，完整列表见 /models",
+      none: "还没有上架的模型",
+      failed: "ls: 模型列表暂时取不到，稍后再试",
+    },
+    ping: {
+      missing: "ping: 没有叫 {{name}} 的模型，试试 ls",
+      listed: "{{model}}  已上架",
+      // the public API publishes no latency: what ping measures is this browser's round trip to the site
+      trip: "{{host}}  往返 {{ms}}ms  ok",
+      failed: "ping: {{host}} 这次没有回应",
+    },
+    feed: "鱼来了。",
+    dive: "下潜中 −1200m",
+    surface: "上浮中 −0m",
+    whale: "鲸来了。",
+    whoami: "一位好奇的开发者。",
+    // when the site takes anyone, before the sea bed tagline
+    minute: "注册只要一分钟：{{tagline}}",
+    sudo: "鲨鱼不听 sudo 的。",
+    unknown: "{{command}}: 没有这个命令，试试 help",
+    floor: "↑ 回到海面",
+    console: "axiom.dive()  潜到海底    axiom.feed()  喂鱼    按 / 打开海底终端",
+  },
   footer: "© Axiom · 本站中文使用了 MiSans 字体",
 };

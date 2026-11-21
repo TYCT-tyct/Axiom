@@ -9,7 +9,8 @@
     "./depart": "./src/depart.ts",
     "./login": "./src/login.ts",
     "./whale": "./src/whale.ts",
-    "./clawd": "./src/clawd.ts"
+    "./clawd": "./src/clawd.ts",
+    "./eggs": "./src/eggs.ts"
   },
   "scripts": {
     "typecheck": "tsc"

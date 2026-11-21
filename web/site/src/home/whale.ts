@@ -46,7 +46,7 @@ function drops(calling: ReturnType<typeof turns>, takeDown: () => void) {
 
 // useWhale returns what calls the whale of the easter egg (packages/fx whale), which is loaded the first time it is
 // called: typing deepseek anywhere on the page, or pressing the word in the first screen's strip, calls it on
-// purpose; the returned function, for the screens, is a chance meeting. The whale swims on the running sea and is
+// purpose; meet, for the screens, is a chance meeting, and call, for the sea-floor terminal, is a call on purpose. The whale swims on the running sea and is
 // taken down when it has left. It never comes before there is a sea to swim in. A call whose code is still on its way
 // is the call's: the page going out of view or away, or the frame ending drops it; a visit under way takes the theme as it changes.
 export function useWhale(
@@ -117,5 +117,5 @@ export function useWhale(
     };
   }, [root, summon, calling]);
 
-  return useCallback(() => summon(false), [summon]);
+  return { meet: useCallback(() => summon(false), [summon]), call: useCallback(() => summon(true), [summon]) };
 }
