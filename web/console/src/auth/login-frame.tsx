@@ -43,7 +43,7 @@ function claimArrival() {
 // How long an arrival's title waits, hidden, for the decode's code before it is shown as it is.
 const veilFor = 1500;
 
-// The console's tokens on the board's own controls. The focus ring and the accent the stage and the decode draw in
+// The console's tokens on the board's own controls. The focus ring and the accent the solid and the decode draw in
 // follow the console's accent, --accent, which brandStyle (@axiom/ui brand.ts) sets from the site's colour (the primary
 // button stays neutral, R10). The controls' edges are the console's control edge, solid 1px, which holds 3:1 against
 // what is around them (docs/frontend.md「对比度令牌」); the board's own edge is lighter, and only half a pixel on a
@@ -56,9 +56,9 @@ const boardVars = [
   "--bw: 1px",
 ].join("; ");
 
-// A page's handle on the stage over the sea: what it hears (the email's length, the digits typed, a refusal) reaches
-// the engine, and the latest of each lasting kind is kept, so an engine that loads after the visitor has typed starts
-// from what the form shows. The page makes it, so the forms it renders can tell it.
+// A page's handle on the solid over the sea: what it hears (whether the address looks whole, the digits typed, a
+// refusal) reaches the engine, and the latest of each lasting kind is kept, so an engine that loads after the visitor
+// has typed starts from what the form shows. The page makes it, so the forms it renders can tell it.
 export type Stage = {
   readonly hear: (heard: Heard) => void;
   readonly running: RefObject<Login | null>;
@@ -114,8 +114,8 @@ type Frame = {
 };
 
 // LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
-// question on the other, in a form that submits through onSubmit. The sea, the stage that forms shapes on it and the
-// title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
+// question on the other, in a form that submits through onSubmit. The sea, the solid its sharks form for the step and
+// the title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
 export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, answer, onSubmit, children }: Frame) {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
@@ -251,7 +251,7 @@ function useReloadWhenRestored() {
   }, []);
 }
 
-// useLoginEngine runs the sea, the stage and an arrival's decode on the frame once their code has loaded, and keeps
+// useLoginEngine runs the sea, the solid and an arrival's decode on the frame once their code has loaded, and keeps
 // them on the step's shape and the page's colours (the scheme, the site's brand). The decode ends when the title it
 // plays over changes (another step, another language). It hands the running engine to the page's stage.
 function useLoginEngine({
@@ -279,7 +279,7 @@ function useLoginEngine({
   const latest = useRef({ shape, dark });
   latest.current = { shape, dark };
   const login = useEffectModule(root, loadLogin, (module, frame) => {
-    const running = module.startLogin(frame, !latest.current.dark, latest.current.shape, arrived);
+    const running = module.startLogin(frame, !latest.current.dark, latest.current.shape);
     if (veil.on.current && titleRef.current && decode.current) {
       veil.on.current = false;
       running.decode(titleRef.current, decode.current);

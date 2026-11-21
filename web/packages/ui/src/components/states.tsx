@@ -1,5 +1,6 @@
 import { createContext, type ReactNode, useContext } from "react";
 import { useTranslation } from "react-i18next";
+import { board } from "../board-classes";
 import { classes } from "../classes";
 import { useFormat } from "../format";
 import { ActionButton } from "./action-button";
@@ -9,10 +10,8 @@ import s from "./states.module.css";
 import { TextLink } from "./text-link";
 
 // Every view of data has four states besides showing it: loading, empty, failed, and not allowed (docs/frontend.md).
-// DataState picks the right one from a query.
+// DataState picks the right one from a query; non-loading states render the board's .stb/.stbi/.stba/.stbid markup.
 
-// A failure that carries what the server said about it; the API client's errors have this shape. Status 0 means no
-// response arrived.
 type Failure = { status: number; requestId: string | null };
 
 function isFailure(error: unknown): error is Failure {
@@ -40,26 +39,23 @@ function StateFrame({
   usePageTitle(page ? title : undefined);
   const Heading = page ? "h1" : "h2";
   return (
-    <div className={classes(s.frame, compact && s.compact)}>
-      <span className={classes(s.mark, bad && s.bad)}>
-        <Icon name={icon} />
-      </span>
-      <Heading className={s.title}>{title}</Heading>
-      {children ? <div className={s.body}>{children}</div> : null}
-      {action}
+    <div className={classes(board.board, board.ax, board.ov, s.host)}>
+      <div className={classes(board.stb, bad && board.err, compact && s.compact)}>
+        <span className={board.stbi}>
+          <Icon name={icon} />
+        </span>
+        <Heading className={page ? s.pageTitle : undefined}>{title}</Heading>
+        {children ? <div className={s.body}>{children}</div> : null}
+        {action ? <div className={board.stba}>{action}</div> : null}
+      </div>
     </div>
   );
 }
 
-// Where a view stands in its page: compact inside a section, or the whole page (page), which then has the heading.
 type Placement = { compact?: boolean; page?: boolean };
 
 const skeletonWidths = ["w92", "w80", "w67", "w50"] as const;
 
-// Loading is a state of the page like any other: one that replaces the page area gives it a level-one heading, hidden
-// here because the bars already say the same thing to a reader who is looking, so a page waiting for its data is one a
-// reader and a check can still tell apart from a page that never rendered (#363). The heading sits outside the status
-// the bars speak in: it marks the page, it is not news.
 export function LoadingState({ page }: Placement = {}) {
   const { t } = useTranslation("common");
   const label = t("state.loading");
@@ -94,12 +90,10 @@ export function EmptyState({
   );
 }
 
-// What a person without the permission is told to do, in the words of the app they are in: who grants it differs by app,
-// so the app gives the sentence (AppShell) and the shared state only places it.
 const ForbiddenHintContext = createContext<string | undefined>(undefined);
 export const ForbiddenHint = ForbiddenHintContext.Provider;
 
-function ForbiddenState(placement: Placement) {
+export function ForbiddenState(placement: Placement = {}) {
   const { t } = useTranslation("common");
   const hint = useContext(ForbiddenHintContext);
   return (
@@ -110,7 +104,6 @@ function ForbiddenState(placement: Placement) {
   );
 }
 
-// The thing asked for is not there: asking again will not find it, so the way out is back home.
 function GoneState(placement: Placement) {
   const { t } = useTranslation("common");
   return (
@@ -157,13 +150,14 @@ function ErrorState({
       }
     >
       <p role="alert">{failure?.status === 0 ? t("state.networkError") : t("state.errorBody")}</p>
-      {failure?.requestId ? <p className={s.requestId}>{t("state.requestId", { id: failure.requestId })}</p> : null}
+      {failure?.requestId ? (
+        <p className={classes(board.stbid, s.requestId)}>{t("state.requestId", { id: failure.requestId })}</p>
+      ) : null}
       {at ? <p className={s.faint}>{t("state.failedAt", { time: format.dateTime(at) })}</p> : null}
     </StateFrame>
   );
 }
 
-// The parts of a TanStack Query result that DataState reads.
 type QueryLike<T> = {
   status: "pending" | "error" | "success";
   data: T | undefined;
@@ -210,8 +204,6 @@ export function DataState<T>({
   return children(query.data);
 }
 
-// PageFailedState replaces a page that could not render or load; reloading fetches the current build. A page whose way
-// back is not a reload says its own (body).
 export function PageFailedState({ body }: { body?: string }) {
   const { t } = useTranslation("common");
   return (
@@ -231,8 +223,6 @@ export function PageFailedState({ body }: { body?: string }) {
   );
 }
 
-// NotFoundState is shown for an address no page answers. Its link home is a plain link, so it needs no router and
-// serves every app; loading the app afresh also picks up a newer build, if the address came from one.
 export function NotFoundState() {
   const { t } = useTranslation("common");
   return (

@@ -22,6 +22,16 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(await loadTranslatedPage(Promise.resolve(supplierPage))).toBe(supplierPage);
   expect(i18next.exists("operations.credentials.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(opsPage))).toBe(opsPage);
+  for (const page of [
+    import("../pages/alert-events"),
+    import("../pages/alert-configuration"),
+    import("../pages/announcements"),
+    import("../pages/legal-documents"),
+    import("../pages/retention"),
+    import("../pages/rate-limits"),
+  ]) {
+    await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
+  }
   expect(i18next.getResourceBundle("en", "admin")).toEqual(en);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
   await i18next.changeLanguage("zh");

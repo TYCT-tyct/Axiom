@@ -14,6 +14,7 @@ export default {
     skipToContent: "Skip to content",
   },
   dialog: { close: "Close" },
+  sidePanel: { done: "Done", liveHint: "Changes apply right away", saved: "Saved", saveFailed: "Couldn’t save" },
   filters: { clear: "Clear filters" },
   chart: { time: "Time" },
   month: { month: "Month", year: "Year" },

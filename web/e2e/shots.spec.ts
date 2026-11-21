@@ -36,9 +36,10 @@ const widths = [360, 768, 1280, 2560] as const;
 
 async function shoot(page: Page, name: string, fullPage = true) {
   mkdirSync(directory as string, { recursive: true });
-  // every animation plays: shoot the screen as it ends up, not mid-way
+  // every animation plays: shoot the screen as it ends up, not mid-way. animations: "disabled" keeps fullPage's
+  // viewport capture from restarting entrance animations (such as .nkdlg / .lgd) after freeze() finished them.
   await freeze(page);
-  await page.screenshot({ path: join(directory as string, `${name}.png`), fullPage });
+  await page.screenshot({ path: join(directory as string, `${name}.png`), fullPage, animations: "disabled" });
 }
 
 for (const suite of suites) {
