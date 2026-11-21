@@ -348,16 +348,6 @@ for (const reducedMotion of motionSettings) {
   });
 }
 
-// Reduced motion asked for changes nothing: the tour is offered.
-test("under reduced motion the tour is offered", async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: "reduce" });
-  await open(page);
-  const tour = page.locator(".tour");
-  await expect(tour).toBeVisible();
-  await expect(tour).not.toHaveClass(/\bgone\b/);
-  await expect(tour).not.toHaveAttribute("inert");
-});
-
 test("a press goes though the departure's code never comes", async ({ page }) => {
   const unhandled: string[] = [];
   page.on("pageerror", (error) => unhandled.push(error.message));

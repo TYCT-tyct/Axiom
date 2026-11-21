@@ -2,7 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { brandStyle } from "../packages/ui/src/brand.ts";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { delivered, open, pause, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
+import { delivered, open, pause, place, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
@@ -370,6 +370,19 @@ test("every answer fits the board's card above its picture, and the picture is w
   }
   // the answers are written to the board's three lines, so the card keeps the board's height
   expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
+});
+
+// The menu's list of sections (the narrow layout's sheet) goes to the section chosen.
+test("the menu's list of sections goes to one", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.locator(".hs").evaluate((el) => el.scrollTo({ top: 0 }));
+  await page.locator(".bar .menu").click();
+  await page.locator(".sml[data-sec='5']").click();
+  await expect
+    .poll(() => place(page, 5).evaluate((el) => Math.abs(el.getBoundingClientRect().top)), { timeout: 15_000 })
+    .toBeLessThan(40);
 });
 
 test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {

@@ -2,7 +2,7 @@ import type { Region } from "../regions.ts";
 
 // The website's frame and first screen (#747 S1), in the wide layout (Site) and the narrow one (SitePhone, whose markup
 // and CSS the two tablet boards repeat byte for byte). The frame keeps the header, the theme toggle, the language
-// panel, the island and the tour: they sit beside the scroller the screens go in, and a region has one slot. The first
+// panel and the island: they sit beside the scroller the screens go in, and a region has one slot. The first
 // screen is the same in both layouts, so it is cut once.
 // The English of the frame's and the first screen's words, by locale key. Where prefs.js also writes a text (its COPY
 // and UI tables), this is its wording, so the page and the engine never disagree.
@@ -16,7 +16,6 @@ const siteEnglish: Record<string, string> = {
   m0f4371a7a9: "Pricing",
   m1e2df9c307: "Log in",
   mc4fb62202b: "Sign up",
-  m3272fe53c0: "Take the tour",
   mb90a8ac9c4: "Choose a language",
   m3fd47edce4: "Close",
   m4144869c18: "Search languages",
@@ -52,8 +51,9 @@ const siteRegions: Region[] = [
       board,
       name: "Shell",
       roots: [".tr.site"],
-      // the sign-in page and the transition are the console's (S3); the site has two languages
-      omit: [".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...brand, ...otherLanguages],
+      // the sign-in page and the transition are the console's (S3); the site has two languages; the board's tour is
+      // left out: the page does not move the reader on its own
+      omit: [".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ".tr .tour", ...brand, ...otherLanguages],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
@@ -79,7 +79,6 @@ const siteRegions: Region[] = [
         barCls: ["away"],
         islCls: ["on", "hide", "open"],
         sheetCls: ["on"],
-        tourCls: ["gone"],
       },
       english: siteEnglish,
     }),

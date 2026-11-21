@@ -20,7 +20,6 @@ export default {
   "m45a6d115fd": "FAQ",
   "m8c0f8088c6": "Seabed",
   "mcaf724c6bd": "Sign up and get an API key",
-  "m3272fe53c0": "Take the tour",
   "mb90a8ac9c4": "Choose a language",
   "m4144869c18": "Search languages",
   "m9937e365aa": "简体中文"

@@ -40,10 +40,9 @@ function scrolled(scroller: HTMLElement, offsets: Offset[]): Scroll & { dim: num
 }
 
 // scrolling is the frame's scroller: where its sections start, what scrolling it says, and gliding to the top or to a
-// section (native smooth scrolling, not the board's eased frames), and the tour, which
-// glides through the sections a few seconds apart and back to the top. The page moving the reader on its own (the tour's
-// next glide, a glide to a section followed while the screens above it grow, a glide under way) is the press's that
-// started it: a glide to the top or to a section, and stop, end it; stop also halts a glide where it is.
+// section (native smooth scrolling, not the board's eased frames). The page moving the reader on its own (a glide to a
+// section followed while the screens above it grow, a glide under way) is the press's that started it: a glide to the
+// top or to a section, and stop, end it; stop also halts a glide where it is.
 // The screens are measured by their places (screens.tsx), which are there before their code and carry their section.
 const places = (scroller: HTMLElement) => [...scroller.querySelectorAll<HTMLElement>(".under [data-place]")];
 const measured = (scroller: HTMLElement): Offset[] => [
@@ -128,12 +127,6 @@ function scrolling(
     glide(following.top);
     timer = window.setTimeout(stop, 6000);
   };
-  // the tour goes on from the section the reader is in the top of, or from the first when at the surface
-  const tour = (i: number) => {
-    const top = offsets[i]?.top;
-    timer = window.setTimeout(() => (top === undefined ? glide(0) : tour(i + 1)), top === undefined ? 3000 : 3200);
-    if (top !== undefined) glide(top);
-  };
   // ends what the page set going: the next step, the following, and a glide under way, which stops where it is
   const stop = () => {
     window.clearTimeout(timer);
@@ -166,10 +159,6 @@ function scrolling(
     toSection: (sec: number) => {
       stop();
       section(sec);
-    },
-    tour: () => {
-      stop();
-      tour(scroller.scrollTop > 10 ? 0 : 1);
     },
     stop,
   };
@@ -208,7 +197,6 @@ function clickActions(
         page.toSection(Number(control.dataset.sec));
       },
     ],
-    [".tour", () => page.tour()],
     ["[data-go]", () => setMenu(false)],
   ];
 }

@@ -81,15 +81,6 @@ function useRegistration(root: RefObject<HTMLElement | null>, join: Join) {
   }, [root, closed]);
 }
 
-// The tour's button is offered at the top, until the header turns solid; a button that is not offered is not in the
-// keyboard's way either.
-function useTour(root: RefObject<HTMLElement | null>, gone: boolean) {
-  useLayoutEffect(() => {
-    root.current?.querySelector(".tour")?.toggleAttribute("inert", gone);
-  }, [root, gone]);
-  return gone ? "gone" : "";
-}
-
 // What the switches' engine sets, until it is loaded: it starts from them, and keeps them the same itself.
 function useFrameAttrs(
   root: RefObject<HTMLElement | null>,
@@ -140,7 +131,6 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const { brand, name, join } = useSite();
   const language = i18n.language === "en" ? "en" : "zh-CN";
   useFrameAttrs(root, sea, language, scheme, scheme === "dark" ? t("theme.toLight") : t("theme.toDark"));
-  const tourCls = useTour(root, scroll.solid);
 
   useRegistration(root, join);
   const board = (key: BoardKey) => t(`board.${key}`);
@@ -154,7 +144,6 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     depthTxt: depthText(scroll.depth),
     sheetCls: menu ? "on" : "",
     sheetHide: !menu,
-    tourCls,
     ...Object.fromEntries(sections.map((_, i) => [`t${i}`, i === scroll.sec ? "on" : ""])),
   };
   const text = frameText((key) => opened(`board.${key}`), opened("language"), name);

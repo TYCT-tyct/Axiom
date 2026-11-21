@@ -61,7 +61,7 @@ const screenFrame: Omit<Ruling, "scene">[] = [
   },
   { basis: "§8.2: engines are off on the board; the sea is tested by fx.spec.ts", page: { canvas: "canvas.sea" } },
   {
-    basis: "the tour button is the board's script's, which the harness leaves out; fx.spec.ts tests the tour",
+    basis: "the board's tour button is left out of the page: the page does not move the reader on its own",
     ...both(".tour"),
   },
   { basis: "§5.4: Chinese at 500 is drawn at 400 until the coverage crawl", ...both(".ho .btn") },
