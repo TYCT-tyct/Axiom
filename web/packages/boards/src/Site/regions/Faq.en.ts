@@ -5,7 +5,7 @@ export default {
   "m45a6d115fd": "Frequently asked questions",
   "md4aad3cf2b": "Integration docs",
   "m31325070f8": "Submit a ticket",
-  "md099384653": "How is this different from using the official API directly?",
+  "md099384653": "How is this different from the official API?",
   "m809ecaafa7": "What is a “third-party route”?",
   "mf5debeb346": "Which tools and SDKs work?",
   "mfe455e5708": "How does billing work?",

@@ -169,3 +169,70 @@ test("the first picture's request goes through the site, named as the site", asy
   await expect(fan).not.toContainText("Axiom");
   await expect(fan).toContainText("Acme Rel…");
 });
+
+// The questions' card in either language and at the wide layout's widths: each answer in the middle of the room above
+// its picture, the picture whole, the cable plugged in where the picture begins, every question and key state one line.
+for (const language of ["zh", "en"] as const)
+  for (const width of [1440, 1280])
+    test(`every answer sits in the middle of the room above its picture, which is whole inside the card, ${language} at ${width}`, async ({
+      page,
+    }) => {
+      await page.addInitScript((lang) => localStorage.setItem("axiom.language", lang), language);
+      await page.setViewportSize({ width, height: 900 });
+      await open(page);
+      await scrollTo(page, 5);
+      await shown(page, 5);
+      const questions = page.locator(".hfm5 .qs .q");
+      for (let i = 0; i < 8; i++) {
+        await questions.nth(i).hover();
+        // measured once the answer has risen into place
+        await page
+          .locator(".hfm5 .pane.on .ans")
+          .evaluate((answer) => Promise.all(answer.getAnimations().map((animation) => animation.finished)));
+        const box = await page.locator(".hfm5 .pane.on").evaluate((pane) => {
+          const answer = pane.querySelector(".ans") ?? pane;
+          // the answer's lines, not its box, which spans the room
+          const lines = document.createRange();
+          lines.selectNodeContents(answer);
+          const { top, bottom } = lines.getBoundingClientRect();
+          const { paddingLeft, paddingRight } = getComputedStyle(answer);
+          return {
+            text: { top, bottom },
+            sides: [paddingLeft, paddingRight],
+            stage: (pane.querySelector(".stage") ?? pane).getBoundingClientRect(),
+            win: (pane.querySelector(".win") ?? pane).getBoundingClientRect(),
+            card: (pane.closest(".card") ?? pane).getBoundingClientRect(),
+          };
+        });
+        const [above, below] = [box.text.top - box.card.top, box.stage.top - box.text.bottom];
+        expect(below, `answer ${i + 1}`).toBeGreaterThanOrEqual(16);
+        expect(Math.abs(above - below), `answer ${i + 1}: ${above} above, ${below} below`).toBeLessThanOrEqual(1);
+        expect(box.sides[0], `answer ${i + 1}`).toBe(box.sides[1]);
+        expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
+        expect(box.win.left - box.card.left, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
+        expect(box.card.right - box.win.right, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
+      }
+      // the answers are written to the board's three lines, so on the board's width the card keeps the board's height
+      if (width === 1440)
+        expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
+      // the cable plugs into the card where the picture's room begins, however tall the answers made the card
+      const plug = await page.locator(".hfm5").evaluate((screen) => {
+        const at = (selector: string) => (screen.querySelector(selector) ?? screen).getBoundingClientRect();
+        const socket = at(".patch .sock");
+        return {
+          room: at(".card .stage").top - at(".patch").top,
+          socket: socket.top + socket.height / 2 - at(".patch").top,
+        };
+      });
+      expect(Math.abs(plug.socket - plug.room)).toBeLessThanOrEqual(1);
+      // every question is one line in the wide layout's rows, in either language
+      for (const height of await page
+        .locator(".hfm5 .qs .q .qq")
+        .evaluateAll((qs) => qs.map((q) => q.getBoundingClientRect().height)))
+        expect(height).toBeLessThan(36);
+      // the new key's state in the keys' picture is one line, in either language
+      await questions.nth(6).hover();
+      expect(
+        await page.locator(".hfm5 .w6 .ky.late .r").evaluate((state) => state.getBoundingClientRect().height),
+      ).toBeLessThan(24);
+    });
