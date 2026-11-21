@@ -16,4 +16,5 @@ export const allPermissions = [
   "pricing.manage",
   "sites.manage",
   "operations.approve",
+  "operations.manage",
 ];

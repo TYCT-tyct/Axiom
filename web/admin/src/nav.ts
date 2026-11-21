@@ -56,6 +56,20 @@ export const nav = [
   },
   { section: "payments", to: "/redeem-codes", label: "nav.redeemCodes", icon: "keys", permission: "sites.manage" },
   { section: "operations", to: "/approvals", label: "nav.approvals", icon: "budget", permission: "operations.approve" },
+  {
+    section: "operations",
+    to: "/operations-credentials",
+    label: "nav.operationsCredentials",
+    icon: "mkeys",
+    permission: "operations.manage",
+  },
+  {
+    section: "operations",
+    to: "/operations-limits",
+    label: "nav.operationsLimits",
+    icon: "budget",
+    permission: "operations.manage",
+  },
   { section: "alerts", to: "/alert-events", label: "nav.alertEvents", icon: "observe", permission: "sites.manage" },
   {
     section: "alerts",
