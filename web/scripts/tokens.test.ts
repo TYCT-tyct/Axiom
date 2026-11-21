@@ -59,6 +59,12 @@ describe.each(cases)("tokens.css, $scale $scheme", ({ neutral, dark }) => {
     }
   });
 
+  it("--clawdT reads on every surface including selected rows", () => {
+    for (const surface of [...surfaces, "--selected"]) {
+      expect(contrast(color("--clawdT"), color(surface)), `--clawdT on ${surface}`).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
   it.each([
     ["--okT", "--ok"],
     ["--warnT", "--warn"],
