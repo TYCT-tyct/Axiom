@@ -21,11 +21,15 @@ func TestMissesShareOneLookup(t *testing.T) {
 	_, database, s, key := callSetup(t)
 	joins := observeLookupJoins(s)
 	admin, release := lockTable(t, database, "accounts.api_keys")
+	// The requests carry their own deadline: without one the shared lookup gets accounts.LookupTimeout (1s), which a
+	// busy runner can spend before the twenty joins are counted, and the lookup then leaves the lock queue.
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
 	var wg sync.WaitGroup
 	results := make(chan error, 20)
 	for range 20 {
 		wg.Go(func() {
-			_, err := s.AuthenticateKey(t.Context(), accounts.SiteID(s1), key)
+			_, err := s.AuthenticateKey(ctx, accounts.SiteID(s1), key)
 			results <- err
 		})
 	}
