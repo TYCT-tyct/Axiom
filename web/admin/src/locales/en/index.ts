@@ -9,6 +9,7 @@ import calls from "./calls";
 import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
+import operations from "./operations";
 import orders from "./orders";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
@@ -26,6 +27,8 @@ export const initial = {
   nav: {
     overview: "Overview",
     approvals: "Approvals",
+    operationsCredentials: "Operations credentials",
+    operationsLimits: "Money & execution limits",
     users: "Users",
     orders: "Orders",
     redeemCodes: "Redeem codes",
@@ -190,6 +193,7 @@ export const initial = {
 } satisfies Messages<
   Omit<
     typeof zh,
+    | "operations"
     | "settings"
     | "suppliers"
     | "alertConfig"
@@ -203,6 +207,7 @@ export const initial = {
 
 // The complete catalog is for types and tooling; the app imports only initial.
 export default /* @__PURE__ */ Object.assign({}, initial, {
+  operations,
   settings,
   suppliers,
   alertConfig,
