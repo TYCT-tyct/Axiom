@@ -3,6 +3,8 @@
 import type zh from "./Faq.zh.ts";
 export default {
   "m45a6d115fd": "Frequently asked questions",
+  "md4aad3cf2b": "Integration docs",
+  "m31325070f8": "Submit a ticket",
   "md099384653": "How is this different from using the official API directly?",
   "m809ecaafa7": "What is a “third-party route”?",
   "mab79bd5670": "Model / claude-sonnet-5.5",

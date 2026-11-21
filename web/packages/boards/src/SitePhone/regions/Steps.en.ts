@@ -19,6 +19,7 @@ export default {
   "m223b24b821": "Route",
   "mddab042697": "First token",
   "mc25db45edc": "Charged",
-  "mcaf724c6bd": "Sign up and get an API key"
+  "mcaf724c6bd": "Sign up and get an API key",
+  "md006830a9e": "Read the docs"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

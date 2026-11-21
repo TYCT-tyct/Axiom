@@ -5,6 +5,7 @@ export default {
   "m660c2c2cea": "Three steps from sign-up to your first request",
   "mac86e0f670": "Keep the SDK you use now and change two lines of configuration.",
   "mcaf724c6bd": "Sign up and get an API key",
+  "md006830a9e": "Read the docs",
   "m099fc1e8b6": "Create key",
   "md44e9b3d3b": "Name",
   "m000f03156e": "Models",

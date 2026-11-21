@@ -3,6 +3,7 @@
 import type zh from "./Shell.zh.ts";
 export default {
   "m9bae680405": "Main navigation",
+  "m2687ccdbb1": "Docs",
   "m217cfe7db1": "Following system",
   "m4ce4cafdd0": "Menu",
   "mc4fb62202b": "Sign up",

@@ -66,6 +66,7 @@ const modelsEnglish: Record<string, string> = {
   m0b65c79cc5: "Updated ",
 };
 const stepsEnglish: Record<string, string> = {
+  md006830a9e: "Read the docs",
   m660c2c2cea: "Three steps from sign-up to your first request",
   mac86e0f670: "Keep the SDK you use now and change two lines of configuration.",
   mcaf724c6bd: "Sign up and get an API key",
@@ -166,8 +167,7 @@ const screens = (board: string): Region[] => [
     board,
     name: "Steps",
     roots: [".under > .hfm3"],
-    // the docs page comes with S4
-    omit: [".frame > canvas", ".cta .outline"],
+    omit: [".frame > canvas"],
     attributes: { signUpHref: { selector: ".cta .primary", attribute: "href" } },
     elements: { ...entrance("hfm3", "m3_in"), ".hfm3 div.st": pressable },
     classes: { ...stepClasses, m3_in: ["in"] },

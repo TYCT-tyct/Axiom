@@ -7,6 +7,8 @@
 :global(.ho .btn:not(.under *)):where(.scope){display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 20px;border-radius:8px;font-size:16px;line-height:26px;font-weight:500;white-space:nowrap;transition:background-color 250ms ease-out,box-shadow 250ms ease-out,opacity 250ms ease-out}
 :global(.ho .primary:not(.under *)):where(.scope){background:var(--text1);color:var(--bg)}
 :global(.ho .primary:hover:not(.under *)):where(.scope){opacity:.88}
+:global(.ho .outline:not(.under *)):where(.scope){color:var(--text1);box-shadow:inset 0 0 0 var(--bw) var(--line)}
+:global(.ho .outline:hover:not(.under *)):where(.scope){background:var(--hover);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong)}
 :global(.ho .ph:not(.under *)):where(.scope){display:inline-block;white-space:nowrap}
 :global(.ho .lede:not(.under *)):where(.scope){margin:var(--g1) 0 0;font-size:16px;line-height:26px;color:var(--text2)}
 :global(.ho .cta:not(.under *)):where(.scope){display:flex;gap:12px;margin-top:32px}
@@ -84,6 +86,9 @@
 :global(.under .primary):where(.scope){background:var(--text1);color:var(--bg)}
 :global(.under .primary:hover):where(.scope){opacity:.88}
 :global(.under .primary:active):where(.scope){opacity:.8}
+:global(.under .outline):where(.scope){color:var(--text1);box-shadow:inset 0 0 0 var(--bw) var(--line)}
+:global(.under .outline:hover):where(.scope){background:var(--hover);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong)}
+:global(.under .outline:active):where(.scope){background:var(--press)}
 :global(.under .lede):where(.scope){margin:var(--g1) 0 0;font-size:16px;line-height:26px;color:var(--text2)}
 :global(.under .cta):where(.scope){display:flex;gap:12px;margin-top:32px}
 @media (max-width:560px){
@@ -108,6 +113,9 @@
 :global(.hfm6 .primary):where(.scope){background:var(--text1);color:var(--bg)}
 :global(.hfm6 .primary:hover):where(.scope){opacity:.88}
 :global(.hfm6 .primary:active):where(.scope){opacity:.8}
+:global(.hfm6 .outline):where(.scope){color:var(--text1);box-shadow:inset 0 0 0 var(--bw) var(--line)}
+:global(.hfm6 .outline:hover):where(.scope){background:var(--hover);box-shadow:inset 0 0 0 var(--bw) var(--lineStrong)}
+:global(.hfm6 .outline:active):where(.scope){background:var(--press)}
 :global(.hfm6 .lede):where(.scope){margin:var(--g1) 0 0;font-size:16px;line-height:26px;color:var(--text2)}
 :global(.hfm6 .cta):where(.scope){display:flex;gap:12px;margin-top:32px}
 :global(.hfm6 .bx .serif):where(.scope){font-family:'AX Serif','Axiom CJK',serif;font-weight:600;letter-spacing:-.01em}
@@ -166,6 +174,7 @@
 :global(.hfm6 .m .art):where(.scope){height:160px}
 :global(.under .hfm > .board):where(.scope){width:100% !important}
 :global(.under .lede.lens):where(.scope){--lv:var(--veilStrong)}
+:global(.ho .btn.outline:not(:hover):not(:active)):where(.scope){background:var(--bg)}
 :global(.tr.m .under .hfm6 .sec):where(.scope){padding-left:var(--tm);padding-right:var(--tm)}
 @media (min-width:1600px){
 }

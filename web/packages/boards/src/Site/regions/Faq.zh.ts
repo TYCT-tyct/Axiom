@@ -2,6 +2,8 @@
 /* jscpd:ignore-start */
 export default {
   "m45a6d115fd": "常见问题",
+  "md4aad3cf2b": "接入文档",
+  "m31325070f8": "提交工单",
   "md099384653": "和直接用官方API比，有什么不同？",
   "m809ecaafa7": "「第三方线路」是什么？",
   "mf5debeb346": "支持哪些工具和SDK？",

@@ -69,9 +69,7 @@ test("the effects' code is not asked for before the first screen is drawn, and t
   expect(prefsAsked).toEqual([]);
 });
 
-test("the sea rests while the tab is hidden or the first screen is out of view, and goes on after", async ({
-  page,
-}) => {
+test("the sea rests only while the tab is hidden, and plays behind every screen", async ({ page }) => {
   await open(page);
   await running(page);
 
@@ -82,22 +80,14 @@ test("the sea rests while the tab is hidden or the first screen is out of view, 
   await setHidden(page, false);
   await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(hidden);
 
-  // far below the first screen, past every screen, nothing is in view to play
-  await page.evaluate(() => {
-    const scroller = document.querySelector(".hs") as HTMLElement;
-    const below = document.createElement("div");
-    below.style.height = "3000px";
-    scroller.append(below);
-    scroller.scrollTop = scroller.scrollHeight;
-  });
-  await expect.poll(async () => (await loop(page)).pending).toBe(false);
-  const away = (await loop(page)).frames;
-  await pause(page);
-  expect((await loop(page)).frames).toBe(away);
-  await page.evaluate(() => {
-    (document.querySelector(".hs") as HTMLElement).scrollTop = 0;
-  });
-  await expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(away);
+  // the sea is the whole page's background, as on the board: it goes on below the first screen and on the seabed
+  for (const at of [0.5, 1]) {
+    await page.evaluate((at) => {
+      const scroller = document.querySelector(".hs") as HTMLElement;
+      scroller.scrollTop = (scroller.scrollHeight - scroller.clientHeight) * at;
+    }, at);
+    await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+  }
 });
 
 test("a sea that fails to load leaves the page working, with no unhandled error", async ({ page }) => {
@@ -189,7 +179,7 @@ test("each screen below the first loads as it nears the view, and plays only whi
   const names = ["connect", "models", "steps", "trust", "faq", "bed"];
   await expect.poll(() => names.map((name) => asked.filter((one) => one === name).length)).toEqual(names.map(() => 1));
 
-  // past every screen nothing is in view to play
+  // past every screen only the sea, the whole page's background, plays: one callback a frame
   await page.evaluate(() => {
     const scroller = document.querySelector(".hs") as HTMLElement;
     const below = document.createElement("div");
@@ -197,11 +187,25 @@ test("each screen below the first loads as it nears the view, and plays only whi
     scroller.append(below);
     scroller.scrollTop = scroller.scrollHeight;
   });
-  await expect.poll(async () => (await loop(page)).pending).toBe(false);
-  const away = (await loop(page)).frames;
-  await pause(page);
-  expect((await loop(page)).frames).toBe(away);
+  await expect.poll(() => callbacksPerFrame(page)).toBe(1);
 });
+
+// callbacksPerFrame is how many owners' callbacks the loop runs in a frame, over 30 frames.
+const callbacksPerFrame = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const state = () => (window as unknown as { axiomFx: { state: { frames: number } } }).axiomFx.state.frames;
+        let left = 31;
+        let first = 0;
+        const step = () => {
+          if (left === 31) first = state();
+          if (--left > 0) requestAnimationFrame(step);
+          else resolve(Math.round((state() - first) / 30));
+        };
+        requestAnimationFrame(step);
+      }),
+  );
 
 test("a model and a step are chosen from the keyboard", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

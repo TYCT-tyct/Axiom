@@ -425,27 +425,7 @@ export const rulings: Ruling[] = [
     board: { selector: ".ho .btn" },
     page: { selector: ".ho .btn" },
   },
-  // Links and controls with nowhere to go yet are left out until their pages come: the docs page. The rows they sat in
-  // close up.
-  {
-    scene: "site home",
-    basis: "文档页尚无，#816",
-    ...both(".bar .nav.mid"),
-  },
-  {
-    scene: "site home",
-    basis: "文档页尚无，#816",
-    board: { selector: ".hs > .main .cta .btn.outline" },
-    omitted: true,
-  },
-  // The connect screen (S2c): the docs link is not there (#816), the address in each tool's configuration is the site's,
-  // and the machine is drawn by the page from its own SVG and moves on its own (fx.spec.ts).
-  {
-    scene: "site connect",
-    basis: "文档页尚无，#816",
-    board: { selector: ".hfm1 .intro .more" },
-    omitted: true,
-  },
+  // The connect screen (S2c): the address in each tool's configuration is the site's, and the machine is drawn by the page from its own SVG and moves on its own (fx.spec.ts).
   {
     scene: "site connect",
     basis: "the address is the site's own API address, not the board's example",
@@ -462,14 +442,7 @@ export const rulings: Ruling[] = [
       "§8.2: the board's machine is drawn by its script; the page's by the fetched figure, both moving on their own",
     ...both(".hfm1 .fig, .hfm1 .wire > *"),
   },
-  // The questions (S2b): the board's docs and ticket links, and its ninth question about invoices and contracts, which
-  // the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
-  {
-    scene: "site faq",
-    basis: "#816: no docs page, and the product has no tickets",
-    board: { selector: ".hfm5 .hd .links" },
-    omitted: true,
-  },
+  // The questions (S2b): the board's ninth question about invoices and contracts, which the product does not do (docs/frontend.md「不做」); the address in the tools' settings is the site's own.
   {
     scene: "site faq",
     basis: "docs/frontend.md「不做」: invoices, contracts and bank transfer are not in the product",
@@ -493,20 +466,7 @@ export const rulings: Ruling[] = [
     basis: "the address is the site's own API address, not the board's example",
     ...both(".hfm5 .w2 .ac"),
   },
-  // The sea bed and the page's footer (S2b): what the site has no page for is left out (#816), with the board's demo ICP
-  // numbers; the legal line carries the credit for the Chinese font (docs/frontend.md「字体」); the address is the site's.
-  {
-    scene: "site bed",
-    basis: "#816: no docs page",
-    board: { selector: ".hfm6 .cta .btn.outline" },
-    omitted: true,
-  },
-  {
-    scene: "site bed",
-    basis: "#816: no docs, API reference, changelog, status, tickets, contact, terms or privacy pages",
-    board: { selector: ".hfm6 .fcols nav.fc:nth-of-type(n + 2), .hfm6 .fc > a:nth-of-type(3)" },
-    omitted: true,
-  },
+  // The sea bed and the page's footer (S2b): the board's demo ICP numbers are left out; the legal line carries the credit for the Chinese font (docs/frontend.md「字体」); the address is the site's.
   {
     scene: "site bed",
     basis: "the legal line is the site's credit for MiSans; the board's demo ICP numbers are not the site's",

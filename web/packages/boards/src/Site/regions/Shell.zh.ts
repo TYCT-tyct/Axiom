@@ -2,6 +2,7 @@
 /* jscpd:ignore-start */
 export default {
   "m9bae680405": "主导航",
+  "m2687ccdbb1": "文档",
   "m217cfe7db1": "跟随系统",
   "m4ce4cafdd0": "菜单",
   "mc98e118e0a": "模型",
