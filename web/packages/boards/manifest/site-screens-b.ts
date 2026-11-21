@@ -55,7 +55,7 @@ const faqEnglish: Record<string, string> = {
   m9b2e0af217: "Route B input price, last 7 days",
   m1d55e968dd: "Updated today 10:20",
   m077a6d3771: "Deleted",
-  m86f27b2c78: "Just created",
+  m86f27b2c78: "Created",
   mcf8ebb7d17: "Limit \u00a5500/month",
   m061246bd31: "Account",
   mc4fb62202b: "Sign-up",
@@ -146,6 +146,10 @@ const faq = (board: string): Region => {
       ...(wide
         ? {
             ".hfm5 .qs": { set: { onkeydown: "{{m5_tabKey}}" } },
+            // the cable plugs into the card where the picture's room begins, which the page measures: an answer that
+            // runs longer than the board's makes the card taller
+            ".hfm5 .patch > .sock": { set: { cy: "{{m5_sockY}}" } },
+            ".hfm5 .patch > .sockc": { set: { cy: "{{m5_sockY}}" } },
             ...Object.fromEntries(
               range(questions).flatMap((i) => [
                 [

@@ -386,9 +386,24 @@ for (const language of ["zh", "en"] as const)
         expect(box.win.left - box.card.left, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
         expect(box.card.right - box.win.right, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
       }
-      // the Chinese answers are written to the board's three lines, so the card keeps the board's height
-      if (language === "zh" && width === 1440)
+      // the answers are written to the board's three lines, so on the board's width the card keeps the board's height
+      if (width === 1440)
         expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
+      // the cable plugs into the card where the picture's room begins, however tall the answers made the card
+      const plug = await page.locator(".hfm5").evaluate((screen) => {
+        const at = (selector: string) => (screen.querySelector(selector) ?? screen).getBoundingClientRect();
+        const socket = at(".patch .sock");
+        return {
+          room: at(".card .stage").top - at(".patch").top,
+          socket: socket.top + socket.height / 2 - at(".patch").top,
+        };
+      });
+      expect(Math.abs(plug.socket - plug.room)).toBeLessThanOrEqual(1);
+      // the new key's state in the keys' picture is one line, in either language
+      await questions.nth(6).hover();
+      expect(
+        await page.locator(".hfm5 .w6 .ky.late .r").evaluate((state) => state.getBoundingClientRect().height),
+      ).toBeLessThan(24);
     });
 
 // The menu's list of sections (the narrow layout's sheet) goes to the section chosen.

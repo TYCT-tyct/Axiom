@@ -31,7 +31,7 @@ export default {
   "mf850f24755": "Model / claude-sonnet-5.5 / Price",
   "m9b2e0af217": "Route B input price, last 7 days",
   "m077a6d3771": "Deleted",
-  "m86f27b2c78": "Just created",
+  "m86f27b2c78": "Created",
   "mcf8ebb7d17": "Limit ¥500/month",
   "m061246bd31": "Account",
   "mc4fb62202b": "Sign-up",

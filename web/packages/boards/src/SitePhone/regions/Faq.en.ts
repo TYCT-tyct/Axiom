@@ -30,7 +30,7 @@ export default {
   "m9b2e0af217": "Route B input price, last 7 days",
   "mb3e6985586": "What if my key leaks?",
   "m077a6d3771": "Deleted",
-  "m86f27b2c78": "Just created",
+  "m86f27b2c78": "Created",
   "mcf8ebb7d17": "Limit ¥500/month",
   "m6a3fc5442c": "Does signing up cost anything?",
   "m061246bd31": "Account",

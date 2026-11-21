@@ -7,7 +7,8 @@ import { type Script, tabKey, tabStop, turns } from "./script";
 // started it: a newer choice or the screen ending ends it.
 const questions = 8;
 const ROW = 48;
-// the cable's route: from a port at PX, through the bend at XM, to the card's socket at (SX, SY)
+// the cable's route: from a port at PX, through the bend at XM, to the card's socket at (SX, sy), on the card's edge
+// where the picture's room begins: the board's SY, or lower in a card an answer has made taller (FaqRun measures it)
 const PX = 502;
 const XM = 557;
 const SX = 612;
@@ -15,18 +16,18 @@ const SY = 145;
 const vendors = 4;
 
 // an orthogonal trace with rounded corners, from a question's port to the card's socket
-const trace = (y: number) => {
-  const dy = SY - y;
+const trace = (y: number, sy = SY) => {
+  const dy = sy - y;
   if (Math.abs(dy) < 1) return `M${PX + 4} ${y} H${SX - 4}`;
   const s = Math.sign(dy);
   const r = Math.min(10, Math.abs(dy) / 2);
-  return `M${PX + 4} ${y} H${XM - r} Q${XM} ${y} ${XM} ${y + s * r} V${SY - s * r} Q${XM} ${SY} ${XM + r} ${SY} H${SX - 4}`;
+  return `M${PX + 4} ${y} H${XM - r} Q${XM} ${y} ${XM} ${y + s * r} V${sy - s * r} Q${XM} ${sy} ${XM + r} ${sy} H${SX - 4}`;
 };
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
 const easeInOut = (p: number) => (p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2);
 
 // What the cable shows before the script has started: patched to the first question
-export const resting = { m5_pillY: 0, m5_trD: trace(ROW / 2), m5_ringX: PX, m5_ringY: ROW / 2 };
+export const resting = { m5_pillY: 0, m5_trD: trace(ROW / 2), m5_ringX: PX, m5_ringY: ROW / 2, m5_sockY: SY };
 
 const indices = Array.from({ length: questions }, (_, i) => i);
 
@@ -36,6 +37,9 @@ class FaqRun implements Script<object> {
   private vendor = 0;
   // where the cable is: the row it is patched to, in pixels
   private cy = ROW / 2;
+  // where it plugs into the card, in the cable's own pixels
+  private sy = SY;
+  private readonly sized?: ResizeObserver;
   private readonly patching = turns();
   private readonly pick = indices.map((i) => () => this.choose(i));
   private readonly tabKey = tabKey(
@@ -51,6 +55,22 @@ class FaqRun implements Script<object> {
   ) {
     this.clock = timeline(stage);
     this.cycle();
+    const card = stage.querySelector(".card");
+    if (!narrow && card) {
+      this.sized = new ResizeObserver(() => this.plug());
+      this.sized.observe(card);
+    }
+  }
+
+  // the socket goes where the picture's room begins, measured against the cable's drawing
+  private plug() {
+    const patch = this.stage.querySelector(".patch")?.getBoundingClientRect();
+    const room = this.stage.querySelector(".card .stage")?.getBoundingClientRect();
+    if (!patch || !room) return;
+    const sy = Math.round(room.top - patch.top);
+    if (sy === this.sy) return;
+    this.sy = sy;
+    this.changed();
   }
 
   // the first answer's diagram: the request goes out to one vendor after another while that answer is open
@@ -109,13 +129,15 @@ class FaqRun implements Script<object> {
       ...Object.fromEntries(indices.map((i) => [`m5_h${i}`, open !== i])),
       ...Object.fromEntries(Array.from({ length: vendors }, (_, i) => [`m5_v${i}`, this.vendor === i ? "on" : ""])),
       m5_pillY: Math.max(0, open) * ROW,
-      m5_trD: trace(this.cy),
+      m5_trD: trace(this.cy, this.sy),
       m5_ringX: PX,
       m5_ringY: this.cy,
+      m5_sockY: this.sy,
     };
   }
 
   destroy() {
+    this.sized?.disconnect();
     this.patching.end();
     this.clock.end();
   }

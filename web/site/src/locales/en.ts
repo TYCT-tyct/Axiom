@@ -53,13 +53,13 @@ export default {
       lede: "Point your tool’s API address at {{site}} and enter your key; the rest works as it did.",
     },
     faq: {
-      a0: "One key calls models from many vendors, with no separate account or top-up for each. A model can have several endpoints: {{site}} picks one by price and health, and moves to the next if one fails and fallbacks are allowed. One bill.",
-      a1: "An endpoint beyond the official APIs we connect to directly (cloud providers included), usually a relay’s group, and usually cheaper. To limit the sources, bind a routing preset (official only, say) to the key in the console.",
+      a0: "One key reaches many vendors’ models, with no account or top-up for each. {{site}} picks a model’s endpoint by price and health and, where fallbacks are allowed, moves on if it fails. One bill.",
+      a1: "An endpoint beyond the official APIs we connect to directly (cloud providers included): usually a relay’s group, and cheaper. To limit the sources, bind a routing preset (official only, say) to the key.",
       a2: "Claude Code, Codex, Cursor and the OpenAI SDK all work: set the address and the key, then pick a model from the key’s model list. So does any other tool that speaks the OpenAI or Anthropic API.",
-      a3: "You pay by the endpoint that served the request: chat per input and output token, images per image or per token, web search and other tools per use. Unreported usage is charged as estimated; a charge estimated whole is recalculated once it matches the supplier’s records.",
-      a4: "When an endpoint times out, is rate-limited or fails upstream, {{site}} retries on another if fallbacks are allowed. Attempts that failed before the switch are free; errors in the request itself come straight back. The call log shows every attempt.",
-      a5: "Prices follow the site’s pricing rules and can move with upstream cost or a reference price; for a rise past what the site allows, the model takes no new calls until the site confirms. Each request settles at the price locked when it was sent.",
-      a6: "Delete the key in the console and create a new one. Set a spending limit and an IP allowlist on every key: a limit stops new calls, but requests already sent can still take the total spend past it, so delete a leaked key quickly.",
+      a3: "You pay for the endpoint that served you, by token, image or use. Unreported usage is charged as estimated; a charge estimated whole is recalculated once the supplier’s records come in.",
+      a4: "If an endpoint times out, is rate-limited or fails, {{site}} retries on another where fallbacks are allowed; attempts that failed before the switch are free. Errors in your request come straight back.",
+      a5: "Prices follow the site’s pricing rules and may move with upstream cost; past the rise the site allows, the model takes no new calls until the site confirms. A request settles at the price locked when sent.",
+      a6: "Delete it in the console and create a new key. Give each key a spending limit and an IP allowlist: a limit stops new calls, but calls already sent can take the total spend past it, so act fast.",
       a7: {
         open: "Signing up is free. There is no trial credit for now: you pay by usage, only for what you use.",
         invite:
