@@ -169,8 +169,8 @@ export function LoginLayout() {
         }
         languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
       >
-        {/* the page's question goes here (LoginFrame); the box itself takes no part in the layout */}
-        <div ref={setSlot} style={{ display: "contents" }} />
+        {/* the page's question goes here (LoginFrame): a plain block, as the form panel lays out no child by name */}
+        <div ref={setSlot} />
         <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
       </LoginShell>
       <Outlet />
