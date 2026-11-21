@@ -1,7 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
+import { expectMoving, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // Home <-> sign-in tiles transitions (port design §9, trans.js.txt STYLES.tiles):
@@ -61,6 +61,20 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
   await pageHeading(page);
   await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
   expect(violations).toEqual([]);
+});
+
+// The home page come back to is settled, with no entrance to let its sea go: the sea moves all the same.
+test("the home page come back to from sign-in is settled and its sea moves", async ({ page }) => {
+  await open(page);
+  await running(page);
+  await siteSignIn(page).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await pageHeading(page);
+  await page.locator(".lg a.brand").click();
+  await expect(page).toHaveURL(new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
+  await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
+  await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+  await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
 });
 
 test("Escape returns to home unless typing in a non-empty input, and works under reduced motion", async ({ page }) => {

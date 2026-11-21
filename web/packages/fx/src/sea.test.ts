@@ -66,6 +66,8 @@ describe("startSea entrance selection", () => {
     for (const [, fn] of batch) fn(now);
   };
 
+  // the engine the last startSea built
+  let built: ReturnType<typeof makeEngine> | undefined;
   const makeEngine = () => {
     const engine = {
       canvas: document.createElement("canvas"),
@@ -121,7 +123,7 @@ describe("startSea entrance selection", () => {
     window.AxiomOceanOrig = {
       Engine: class {
         constructor() {
-          Object.assign(this, makeEngine());
+          built = Object.assign(this, makeEngine());
         }
       } as unknown as typeof window.AxiomOceanOrig.Engine,
     };
@@ -144,7 +146,7 @@ describe("startSea entrance selection", () => {
     sea.destroy();
   });
 
-  it("keeps a home page settling back from sign-in settled: no entrance plays", () => {
+  it("keeps a home page settling back from sign-in settled: no entrance plays, and the sea moves", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.9);
     const { root, owner, chars } = buildFrame();
     root.dataset.enter = "done";
@@ -153,6 +155,9 @@ describe("startSea entrance selection", () => {
     for (let t = 0; t <= 1800; t += 100) step(t);
     expect(root.dataset.enter).toBe("done");
     expect(chars[0]?.style.color).toBe("");
+    // with no entrance to let it go, the sea is let go at once: it moves from the first frame
+    expect(built?.held).toBe(false);
+    expect(built?.tick).toHaveBeenCalled();
     sea.destroy();
   });
 

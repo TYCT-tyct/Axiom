@@ -63,7 +63,11 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
     scope,
     manual: true,
   });
-  if (settled) root.dataset.enter = "done";
+  // the sea is made held for the entrance to let go of; a settled page has none, so it lets go itself
+  if (settled) {
+    root.dataset.enter = "done";
+    engine.held = false;
+  }
   entrance.rise = () => {};
   let elapsed = 0;
   const play = entrance.play.bind(entrance);
