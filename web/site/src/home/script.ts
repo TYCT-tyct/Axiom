@@ -182,6 +182,21 @@ function press(e: KeyboardEvent) {
   }
 }
 
+// typedWord listens for a secret word typed anywhere (ignoring editable fields and whatever skip rejects).
+export function typedWord(word: string, then: () => void, skip?: (target: EventTarget | null) => boolean) {
+  let typed = "";
+  return (e: KeyboardEvent) => {
+    if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (skip?.(e.target)) return;
+    if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
+    typed = (typed + e.key.toLowerCase()).slice(-word.length);
+    if (typed === word) {
+      typed = "";
+      then();
+    }
+  };
+}
+
 // useBoardWords gives a screen its region's own words in the page's language: they come with the screen's code, not
 // with the page's messages, which the first screen loads. after adds the page's words to some of them, as the sample
 // data notes that say what a demonstration is.

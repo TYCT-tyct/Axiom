@@ -14,7 +14,8 @@ async function onDisplay(browser: Browser, deviceScaleFactor: number, size = { w
 
 const canvases = (page: Page) =>
   page.evaluate(() =>
-    [...document.querySelectorAll<HTMLCanvasElement>(".tr > canvas")]
+    // The sea and the whale's own layers; other effects (the sea floor's) add canvases of their own beside them.
+    [...document.querySelectorAll<HTMLCanvasElement>(".tr > canvas.sea, .tr > canvas.wh")]
       .filter((c) => c.clientWidth > 0)
       .map((c) => ({
         name: c.classList.contains("sea") ? "sea" : "wh",

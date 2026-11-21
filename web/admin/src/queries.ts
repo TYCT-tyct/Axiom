@@ -172,6 +172,27 @@ export const siteKeyLimitsQuery = (id: AdminSchemas["SiteId"]) =>
       unwrap(adminApi.GET(`${base}/sites/{site_id}/key-limits`, { params: { path: { site_id: id } }, signal })),
   });
 
+export const siteWorkspaceLimitQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-workspace-limit", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/workspace-limit`, { params: { path: { site_id: id } }, signal })),
+  });
+
+export const siteLoginLimitsQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-login-limits", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/login-limits`, { params: { path: { site_id: id } }, signal })),
+  });
+
+export const siteBrandQuery = (id: AdminSchemas["SiteId"]) =>
+  queryOptions({
+    queryKey: [accountKey, "site-brand", id],
+    queryFn: ({ signal }) =>
+      unwrap(adminApi.GET(`${base}/sites/{site_id}/brand`, { params: { path: { site_id: id } }, signal })),
+  });
+
 // The targets of one UTC calendar month. A change replaces them whole and invalidates every account query, so the
 // dashboard's prorated figures refresh with the editor's view.
 export const targetsQuery = (month: string) =>
@@ -572,31 +593,3 @@ export const approvalQuery = (id: string) =>
       ) as AdminSchemas["OperationsApproval"],
     refetchInterval: ({ state }) => whileDecidable(state.data ? [state.data] : []),
   });
-
-export const operationsCredentialsQuery = infiniteQueryOptions({
-  queryKey: [accountKey, "operations-credentials"],
-  queryFn: ({ pageParam, signal }) =>
-    unwrap(
-      adminApi.GET(`${base}/operations/credentials`, {
-        params: { query: { cursor: pageParam, limit: pageSize } },
-        signal,
-      }),
-    ),
-  initialPageParam: firstPage,
-  getNextPageParam: (page) => page.next_cursor,
-});
-
-export const operationsCapPoliciesQuery = queryOptions({
-  queryKey: [accountKey, "operations-cap-policies"],
-  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/cap-policies`, { signal })),
-});
-
-export const operationsAgentLimitsQuery = queryOptions({
-  queryKey: [accountKey, "operations-agent-limits"],
-  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/agent-limits`, { signal })),
-});
-
-export const operationsPriceEnvelopesQuery = queryOptions({
-  queryKey: [accountKey, "operations-price-envelopes"],
-  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/operations/price-envelopes`, { signal })),
-});

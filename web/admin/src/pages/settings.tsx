@@ -19,6 +19,7 @@ import { ChangeDialog, type Problem } from "../change";
 import { useDuration } from "../durations";
 import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import { SiteLoginLimits } from "../login-limits";
 import { MailSettings } from "../mail-settings";
 import { modelPricesChangeUnconfirmed } from "../model-prices";
 import { Facts, PageBody, State, useShownAfter } from "../parts";
@@ -31,19 +32,24 @@ import {
   probeSettingsQuery,
   searchSettingsQuery,
   segmentSettingsQuery,
+  siteBrandQuery,
   siteKeyLimitsQuery,
+  siteLoginLimitsQuery,
   siteLogoQuery,
   siteRegistrationQuery,
   siteSettingsQuery,
   siteSignInQuery,
+  siteWorkspaceLimitQuery,
   systemSettingsQuery,
 } from "../queries";
 import { SiteRegistration } from "../registration";
 import { SearchSettings } from "../search-settings";
 import { SegmentSettings } from "../segment-settings";
 import { SiteSignIn } from "../sign-in";
+import { SiteBrand } from "../site-brand";
 import { SiteInformation } from "../site-info";
 import { SiteLogo } from "../site-logo";
+import { SiteWorkspaceLimit } from "../workspace-limit";
 
 type Settings = AdminSchemas["SiteSettings"];
 
@@ -78,8 +84,11 @@ function Sections({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; curren
   const answered = [
     useQuery(systemSettingsQuery(siteId)),
     useQuery(siteLogoQuery(siteId)),
+    useQuery(siteBrandQuery(siteId)),
     useQuery(siteSettingsQuery(siteId)),
     useQuery(siteKeyLimitsQuery(siteId)),
+    useQuery(siteWorkspaceLimitQuery(siteId)),
+    useQuery(siteLoginLimitsQuery(siteId)),
     useQuery(siteRegistrationQuery(siteId)),
     useQuery(siteSignInQuery(siteId)),
     useQuery(mailSettingsQuery),
@@ -91,8 +100,11 @@ function Sections({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; curren
   const sections = [
     <SiteInformation key="info" siteId={siteId} />,
     <SiteLogo key="logo" siteId={siteId} />,
+    <SiteBrand key="brand" siteId={siteId} />,
     <SiteSettings key="settings" siteId={siteId} />,
     <SiteKeyLimits key="key-limits" siteId={siteId} />,
+    <SiteWorkspaceLimit key="workspace-limit" siteId={siteId} />,
+    <SiteLoginLimits key="login-limits" siteId={siteId} />,
     <SiteRegistration key="registration" siteId={siteId} />,
     <SiteSignIn key="sign-in" siteId={siteId} />,
     <MailSettings key="mail" />,

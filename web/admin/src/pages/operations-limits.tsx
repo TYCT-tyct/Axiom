@@ -20,13 +20,13 @@ import { useTranslation } from "react-i18next";
 import { percentOf } from "../approval-parts";
 import { CapPolicyDialog, RepairCapDialog } from "../operations-cap-dialogs";
 import { AgentLimitsDialog, PriceEnvelopeDialog, StopAgentDialog } from "../operations-exec-dialogs";
-import { Facts, Head, PageBody, State, SubLine, Time, useShownAfter } from "../parts";
 import {
-  accountQuery,
   operationsAgentLimitsQuery,
   operationsCapPoliciesQuery,
   operationsPriceEnvelopesQuery,
-} from "../queries";
+} from "../operations-queries";
+import { Facts, Head, PageBody, State, SubLine, Time, useShownAfter } from "../parts";
+import { accountQuery } from "../queries";
 
 type CapPolicy = AdminSchemas["OperationsCapPolicy"];
 type Envelope = AdminSchemas["OperationsPriceEnvelopeSetting"];

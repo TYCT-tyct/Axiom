@@ -25,8 +25,8 @@ import {
   RevokeCredentialDialog,
   RotateCredentialDialog,
 } from "../operations-credential-dialogs";
+import { operationsCredentialsQuery } from "../operations-queries";
 import { Actions, Code, Head, PageBody, State, SubLine } from "../parts";
-import { operationsCredentialsQuery } from "../queries";
 
 type Credential = AdminSchemas["OperationsCredential"];
 type Open =

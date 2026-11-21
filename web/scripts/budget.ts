@@ -13,9 +13,11 @@ import { type FontFile, type FontManifest, fontBudget } from "./font-budget.ts";
 
 const kB = 1000;
 // firstPage names the lazily loaded page the entry address opens (its manifest key): the first screen loads it too.
-// deferred caps what the first screen loads later, all together (port design §8.3).
+// deferred caps what the first screen loads later, all together (port design §8.3). The site's is sized for every
+// effect the final home boards carry (sea, entrance, whale, Clawd, the sea's moments and terminal), which together
+// measured about 156 kB; the rest is headroom for the boards' remaining effects, not for unrelated code.
 const budgets: Record<string, { firstScreen: number; perPage?: number; firstPage?: string; deferred?: number }> = {
-  site: { firstScreen: 150 * kB, perPage: 50 * kB, deferred: 150 * kB },
+  site: { firstScreen: 150 * kB, perPage: 50 * kB, deferred: 170 * kB },
   console: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/overview.tsx" },
   admin: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/home.tsx" },
 };
