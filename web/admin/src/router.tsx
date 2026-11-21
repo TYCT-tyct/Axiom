@@ -53,6 +53,8 @@ const routeTree = root.addChildren([
       (search) => ({ state: approvalState(search.state) }),
     ),
     shellPage("/approvals/$approvalId", () => import("./pages/approval")),
+    shellPage("/operations-credentials", () => loadTranslatedPage(import("./pages/operations-credentials"))),
+    shellPage("/operations-limits", () => loadTranslatedPage(import("./pages/operations-limits"))),
     shellPage(
       "/users",
       () => import("./pages/users"),
@@ -134,6 +136,13 @@ const routeTree = root.addChildren([
     shellPage("/source-classes", () => import("./pages/source-classes")),
     shellPage("/routing-presets", () => loadTranslatedPage(import("./pages/routing-presets"))),
     shellPage("/pricing", () => import("./pages/pricing")),
+    shellPage(
+      "/subscription-plans",
+      () => loadTranslatedPage(import("./pages/subscription-plans")),
+      (search) => ({
+        include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
+      }),
+    ),
     shellPage("/alert-events", () => loadTranslatedPage(import("./pages/alert-events"))),
     shellPage("/alert-configuration", () => loadTranslatedPage(import("./pages/alert-configuration"))),
     shellPage("/announcements", () => loadTranslatedPage(import("./pages/announcements"))),

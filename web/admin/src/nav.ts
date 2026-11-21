@@ -32,6 +32,13 @@ export const nav = [
   { section: "catalog", to: "/models", label: "nav.models", icon: "plugins", permission: "catalog.view" },
   { section: "pricing", to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
   {
+    section: "pricing",
+    to: "/subscription-plans",
+    label: "nav.subscriptionPlans",
+    icon: "bill",
+    permission: "pricing.view",
+  },
+  {
     section: "routing",
     to: "/routing-presets",
     label: "nav.routingPresets",
@@ -48,6 +55,20 @@ export const nav = [
   { section: "payments", to: "/orders", label: "nav.orders", icon: "bill", permission: "sites.manage" },
   { section: "payments", to: "/redeem-codes", label: "nav.redeemCodes", icon: "keys", permission: "sites.manage" },
   { section: "operations", to: "/approvals", label: "nav.approvals", icon: "budget", permission: "operations.approve" },
+  {
+    section: "operations",
+    to: "/operations-credentials",
+    label: "nav.operationsCredentials",
+    icon: "mkeys",
+    permission: "operations.manage",
+  },
+  {
+    section: "operations",
+    to: "/operations-limits",
+    label: "nav.operationsLimits",
+    icon: "budget",
+    permission: "operations.manage",
+  },
   { section: "alerts", to: "/alert-events", label: "nav.alertEvents", icon: "observe", permission: "sites.manage" },
   {
     section: "alerts",
