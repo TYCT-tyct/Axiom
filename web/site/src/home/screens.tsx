@@ -61,7 +61,7 @@ function Slot({ sec, load, wide }: { sec: number; load: () => Promise<Screen>; w
   const retry = () => window.location.reload();
   const Loaded = loading.status === "success" ? loading.screen : null;
   return (
-    <div ref={place} data-place={sec}>
+    <div ref={place} data-place={sec} className={styles.screen}>
       {Loaded ? (
         <Loaded wide={wide} onWhale={onWhale} />
       ) : (
