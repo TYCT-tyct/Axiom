@@ -346,31 +346,50 @@ for (const [name, viewport] of [
     for (const height of heights) expect(height).toBeLessThan(32);
   });
 
-test("every answer fits the board's card above its picture, and the picture is whole inside it", async ({ page }) => {
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await open(page);
-  await scrollTo(page, 5);
-  await shown(page, 5);
-  const questions = page.locator(".hfm5 .qs .q");
-  for (let i = 0; i < 8; i++) {
-    await questions.nth(i).hover();
-    const box = await page.locator(".hfm5 .pane.on").evaluate((pane) => {
-      const at = (selector: string) => (pane.querySelector(selector) ?? pane).getBoundingClientRect();
-      // the answer's last line, not its box, which ends at the picture
-      const lines = document.createRange();
-      lines.selectNodeContents(pane.querySelector(".ans") ?? pane);
-      return {
-        text: lines.getBoundingClientRect().bottom,
-        stage: at(".stage"),
-        card: (pane.closest(".card") ?? pane).getBoundingClientRect(),
-      };
+for (const language of ["zh", "en"] as const)
+  for (const width of [1440, 1280])
+    test(`every answer sits in the middle of the room above its picture, which is whole inside the card, ${language} at ${width}`, async ({
+      page,
+    }) => {
+      await page.addInitScript((lang) => localStorage.setItem("axiom.language", lang), language);
+      await page.setViewportSize({ width, height: 900 });
+      await open(page);
+      await scrollTo(page, 5);
+      await shown(page, 5);
+      const questions = page.locator(".hfm5 .qs .q");
+      for (let i = 0; i < 8; i++) {
+        await questions.nth(i).hover();
+        // measured once the answer has risen into place
+        await page
+          .locator(".hfm5 .pane.on .ans")
+          .evaluate((answer) => Promise.all(answer.getAnimations().map((animation) => animation.finished)));
+        const box = await page.locator(".hfm5 .pane.on").evaluate((pane) => {
+          const answer = pane.querySelector(".ans") ?? pane;
+          // the answer's lines, not its box, which spans the room
+          const lines = document.createRange();
+          lines.selectNodeContents(answer);
+          const { top, bottom } = lines.getBoundingClientRect();
+          const { paddingLeft, paddingRight } = getComputedStyle(answer);
+          return {
+            text: { top, bottom },
+            sides: [paddingLeft, paddingRight],
+            stage: (pane.querySelector(".stage") ?? pane).getBoundingClientRect(),
+            win: (pane.querySelector(".win") ?? pane).getBoundingClientRect(),
+            card: (pane.closest(".card") ?? pane).getBoundingClientRect(),
+          };
+        });
+        const [above, below] = [box.text.top - box.card.top, box.stage.top - box.text.bottom];
+        expect(below, `answer ${i + 1}`).toBeGreaterThanOrEqual(16);
+        expect(Math.abs(above - below), `answer ${i + 1}: ${above} above, ${below} below`).toBeLessThanOrEqual(1);
+        expect(box.sides[0], `answer ${i + 1}`).toBe(box.sides[1]);
+        expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
+        expect(box.win.left - box.card.left, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
+        expect(box.card.right - box.win.right, `picture ${i + 1}`).toBeGreaterThanOrEqual(12);
+      }
+      // the Chinese answers are written to the board's three lines, so the card keeps the board's height
+      if (language === "zh" && width === 1440)
+        expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
     });
-    expect(box.text, `answer ${i + 1}`).toBeLessThanOrEqual(box.stage.top - 16);
-    expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
-  }
-  // the answers are written to the board's three lines, so the card keeps the board's height
-  expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
-});
 
 test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
