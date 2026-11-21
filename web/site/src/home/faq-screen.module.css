@@ -11,9 +11,10 @@
   overflow-wrap: anywhere;
 }
 
-/* The answers are the page's, longer than the board's four lines: the card is as tall as its longest answer over the
-   picture, never cutting the picture off, and keeps that height whichever question is open, the answers stacked in one
-   cell. An answer keeps below it the room it has above. */
+/* The answers are written to the board's three lines, which its 433px card holds over the picture; an answer that runs
+   longer (a long site name, a wordier language) makes the card taller rather than run into the picture or cut it off,
+   and the card keeps one height whichever question is open, the answers stacked in one cell. An answer keeps below it
+   the room it has above. */
 .faq div[class~="d"] div[class~="card"] {
   display: grid;
   height: auto;
@@ -33,4 +34,15 @@
 
 .faq div[class~="d"] div[class~="pane"] > p[class~="ans"] {
   padding-bottom: 28px;
+}
+
+/* The pictures whose prices, bills and keys are the board's illustration say so in their title bar, at its far end. */
+.faq div[class~="wh"][data-note]::after {
+  content: attr(data-note);
+  margin-left: auto;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: var(--hover);
+  font-size: 11px;
+  line-height: 18px;
 }

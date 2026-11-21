@@ -133,6 +133,10 @@ const faq = (board: string): Region => {
     },
     elements: {
       ...entrance("hfm5", "m5_in"),
+      // the pictures that show prices, bills or keys say so in their title bar, once, beside what they illustrate
+      ...Object.fromEntries(
+        ["w0", "w1", "w3", "w4", "w5", "w6"].map((w) => [`.hfm5 .${w} > .wh`, { set: { "data-note": "{{m5_note}}" } }]),
+      ),
       // without the site's address the picture shows no command, only that it is unavailable
       ".hfm5 .w2 .cl:nth-child(2)": { unless: "m5_noApi" },
       ".hfm5 .w2 .cl:nth-child(3)": { unless: "m5_noApi" },
