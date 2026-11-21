@@ -1,6 +1,6 @@
 // The per-page font budget (docs/frontend.md「前端性能指标」): the font files a page can load, each counted once, at
-// most 60 kB for Latin text and digits and 100 kB for Chinese, on the website as on each page of the console and the
-// admin. Which files a page can load is fonts.json, which the font pipeline (scripts/fonts/build.py) writes: a face's
+// most 60 kB for Latin text and digits everywhere, and for Chinese 100 kB on the website and each console page and
+// 120 kB on each admin page. Which files a page can load is fonts.json, which the font pipeline (scripts/fonts/build.py) writes: a face's
 // files carry the pages whose own text needs them, but a page can load every file of a face it is set in, since text
 // from the API (a workspace's name) can hold any character and unicode-range loads the file that has it. The budget is
 // that worst case; the line also says what the page's own text loads.
@@ -10,7 +10,10 @@ const kB = 1000;
 export type FontFile = { file: string; pages: string[]; bytes: number; preload?: string[] };
 export type FontManifest = { faces: { family: string; weight: string; script: "latin" | "han"; files: FontFile[] }[] };
 
-const budgets = { latin: 60 * kB, han: 100 * kB };
+// The admin is for the site's operators alone, on its own listener, so its pages may load more Chinese than the website
+// and the console, whose first screens are the users' (owner's decision, 2026-11-21, #747).
+const budgetOf = (page: string, script: "latin" | "han") =>
+  script === "latin" ? 60 * kB : page.split("/")[0] === "admin" ? 120 * kB : 100 * kB;
 const scriptNames = { latin: "Latin", han: "Chinese" } as const;
 
 // pageFiles returns the files of one script a page can load, each once, by name: every file of each face whose files
@@ -44,7 +47,7 @@ export function fontBudget(manifest: FontManifest) {
       }
       const total = sum(files.values());
       const own = sum([...files.values()].filter((file) => file.pages.includes(page)));
-      const budget = budgets[script];
+      const budget = budgetOf(page, script);
       const line = `${`${page}: ${scriptNames[script]} fonts`.padEnd(44)} ${(total / kB).toFixed(1).padStart(6)} kB of ${budget / kB} kB (its own text ${(own / kB).toFixed(1)} kB)`;
       lines.push(line);
       if (total > budget) {

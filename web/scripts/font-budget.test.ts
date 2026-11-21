@@ -16,6 +16,16 @@ describe("fontBudget", () => {
       failures: [],
     },
     {
+      name: "an admin page within its 120 kB of Chinese",
+      faces: [face("han", [["cjk", ["admin/pages/users"], 119_000]])],
+      failures: [],
+    },
+    {
+      name: "an admin page over 120 kB of Chinese",
+      faces: [face("han", [["cjk", ["admin/pages/users"], 120_001]])],
+      failures: ["admin/pages/users: Chinese fonts", "  cjk 120.0 kB"],
+    },
+    {
       name: "Latin over 60 kB, with each file listed",
       faces: [face("latin", [["sans", ["console"], 40_000]]), face("latin", [["mono", ["console"], 20_001]])],
       failures: ["console: Latin fonts", "  sans 40.0 kB", "  mono 20.0 kB"],
