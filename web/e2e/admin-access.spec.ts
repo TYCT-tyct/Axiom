@@ -200,10 +200,19 @@ test.describe("permissions", () => {
     await page.goto("/");
     await expect(h1(page, zhText("nav.models"))).toBeVisible();
     const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.getByRole("link")).toHaveText([zhText("nav.models"), zhText("nav.pricing")]);
+    await expect(nav.getByRole("link")).toHaveText([
+      zhText("nav.models"),
+      zhText("nav.pricing"),
+      zhText("nav.subscriptionPlans"),
+    ]);
     await expect(nav.getByRole("group")).toHaveCount(2);
     await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    await expect(nav.getByRole("group", { name: "定价与套餐" }).getByRole("link")).toHaveAttribute("href", "/pricing");
+    const pricingGroup = nav.getByRole("group", { name: "定价与套餐" });
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.pricing") })).toHaveAttribute("href", "/pricing");
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
+      "href",
+      "/subscription-plans",
+    );
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);
       await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/nav-desktop.png` });
@@ -224,7 +233,7 @@ test.describe("permissions", () => {
     const more = tabs.getByRole("button", { name: zhText("nav.more") });
     await more.click();
     await expect(page.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    const pricing = page.getByRole("group", { name: "定价与套餐" }).getByRole("link");
+    const pricing = page.getByRole("group", { name: "定价与套餐" }).getByRole("link", { name: zhText("nav.pricing") });
     await expect(pricing).toBeVisible();
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);

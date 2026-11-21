@@ -32,6 +32,13 @@ export const nav = [
   { section: "catalog", to: "/models", label: "nav.models", icon: "plugins", permission: "catalog.view" },
   { section: "pricing", to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
   {
+    section: "pricing",
+    to: "/subscription-plans",
+    label: "nav.subscriptionPlans",
+    icon: "bill",
+    permission: "pricing.view",
+  },
+  {
     section: "routing",
     to: "/routing-presets",
     label: "nav.routingPresets",
