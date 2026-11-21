@@ -9,6 +9,7 @@ import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { routingHandlers, startRouting } from "./admin-routing.ts";
 import { siteExtraHandlers, startSiteExtras } from "./admin-site-api.ts";
+import { startSubscriptions, subscriptionHandlers } from "./admin-subscriptions-api.ts";
 import { supplyHandlers } from "./admin-supply.ts";
 import { getTargets, putTargets, replaceTargets, targetComparison } from "./admin-targets-api.ts";
 import { fail, type Handler, type MockData, mockApi, ok, paged } from "./mock.ts";
@@ -500,6 +501,7 @@ const handlers: Handler<AdminState>[] = [
   ...supplyHandlers,
   ...catalogHandlers,
   ...pricingHandlers,
+  ...subscriptionHandlers,
   ...routingHandlers,
   ...operationsHandlers,
   ...opsControlHandlers,
@@ -513,6 +515,7 @@ export async function mockAdmin(page: Page, data: MockData = "usual", over: Part
   Object.assign(state, over);
   startRouting(state, data);
   startOperations(state, data);
+  startSubscriptions(state, data);
   startOpsControl(state, data);
   startSiteExtras(state);
   startPolicies(state, data);

@@ -5,8 +5,11 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { AccountActions } from "../account-actions";
+import { AccountSubscriptions } from "../account-subscriptions";
 import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import settingsMessages from "../locales/settings";
+import subscriptionMessages from "../locales/subscriptions";
 import { Actions, Facts, NewButton, PageBody, State, Time } from "../parts";
 import { accountQuery } from "../queries";
 import { WorkspaceLimitCard, WorkspaceLimitUnavailable } from "../workspace-limit";
@@ -35,6 +38,7 @@ export default function AccountPage() {
             </Actions>
             <Figures account={data} />
             <Details account={data} />
+            <AccountSubscriptions account={data} />
             <AccountKeyLimits account={data} />
             <AccountWorkspaceLimit account={data} />
           </PageBody>
@@ -179,4 +183,7 @@ function AccountWorkspaceLimit({ account }: { account: Account }) {
   );
 }
 
-export { default as messages } from "../locales/settings";
+export const messages = {
+  en: { ...settingsMessages.en, ...subscriptionMessages.en },
+  zh: { ...settingsMessages.zh, ...subscriptionMessages.zh },
+};
