@@ -4,7 +4,6 @@
   "type": "module",
   "exports": {
     "./Login": "./src/Login/Board.tsx",
-    "./ClawdEgg": "./src/ClawdEgg/Board.tsx",
     "./AxApp": "./src/AxApp/Board.tsx",
     "./AxApp/regions.css": "./src/AxApp/regions.css",
     "./*": "./src/*/Board.tsx",

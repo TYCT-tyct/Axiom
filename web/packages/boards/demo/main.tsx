@@ -18,9 +18,6 @@ if (path.endsWith("/regions")) {
 } else if (path === "/Login") {
   const { default: Login } = await import("../src/Login/Board.tsx");
   root.render(<Login mode={theme} />);
-} else if (path === "/ClawdEgg") {
-  const { default: ClawdEgg } = await import("../src/ClawdEgg/Board.tsx");
-  root.render(<ClawdEgg mode={theme} />);
 } else if (path !== "/AxApp" && path !== "/") {
   const load = boards[path.slice(1) as keyof typeof boards];
   if (!load) throw new Error(`no board ${path}`);
