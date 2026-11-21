@@ -1,6 +1,6 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { useEffectModule } from "@axiom/fx";
+import { peekReturn, useEffectModule } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -115,13 +115,20 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   const setCanvas = useCallback((canvas: Element | null) => {
     root.current = canvas?.closest<HTMLElement>(".tr") ?? null;
   }, []);
-  // the sea, and once it is up the eggs that play on it
+  // the sea, and once it is up the eggs that play on it; a page come back to from the sign-in pages is drawn settled,
+  // with no entrance to wait for, so its sea is asked for at once rather than come up a moment after the rest
   const [seaUp, setSeaUp] = useState<Sea | null>(null);
-  const sea = useEffectModule(root, loadSea, (module, frame) => {
-    const started = module.startSea(frame, frame.querySelector(".hs") ?? frame, scheme === "light");
-    setSeaUp(started);
-    return started;
-  });
+  const [returning] = useState(peekReturn);
+  const sea = useEffectModule(
+    root,
+    loadSea,
+    (module, frame) => {
+      const started = module.startSea(frame, frame.querySelector(".hs") ?? frame, scheme === "light");
+      setSeaUp(started);
+      return started;
+    },
+    returning,
+  );
   useSwitches(root, sea);
   useDeparture(root, sea);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });

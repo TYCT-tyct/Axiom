@@ -18,20 +18,31 @@ function setStamp(key: string) {
   }
 }
 
-function takeStamp(key: string): boolean {
+function readStamp(key: string): boolean {
   try {
     const at = Number(sessionStorage.getItem(key));
-    sessionStorage.removeItem(key);
     return at > 0 && Date.now() - at < fresh;
   } catch {
     return false;
   }
 }
 
+function takeStamp(key: string): boolean {
+  const taken = readStamp(key);
+  try {
+    sessionStorage.removeItem(key);
+  } catch {
+    // storage refused: there was nothing to take
+  }
+  return taken;
+}
+
 export const markArrival = () => setStamp(arrivalKey);
 export const takeArrival = () => takeStamp(arrivalKey);
 export const markReturn = () => setStamp(returnKey);
 export const takeReturn = () => takeStamp(returnKey);
+// whether the page is a return, leaving the marker for the one that settles it (takeReturn)
+export const peekReturn = () => readStamp(returnKey);
 
 export function markOrigin(rect: OriginRect) {
   try {
