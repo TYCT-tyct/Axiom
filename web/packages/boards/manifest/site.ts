@@ -51,8 +51,8 @@ const siteRegions: Region[] = [
       board,
       name: "Shell",
       roots: [".tr.site"],
-      // the lower screens' canvases, the sign-in page and the transition come with S2 and S3; the site has two languages
-      omit: [".tr > .cw", ".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...brand, ...otherLanguages],
+      // the sign-in page and the transition are the console's (S3); the site has two languages
+      omit: [".tr > .lg", ".tr > .fly", ".tr > canvas.ui", ...notYet, ...brand, ...otherLanguages],
       children: ".hs",
       text: {
         models: ".bar .nav.mid a:nth-child(1) > span",
@@ -89,6 +89,10 @@ const siteRegions: Region[] = [
     roots: [".hs > main"],
     omit: [".cta .outline"],
     children: "h1 > [data-i18n]",
+    // the strip's two names light when the whale or Clawd answers them (whale-egg.js, clawd-cast.js)
+    states: ["wh-lit", "cw-lit"],
+    // Clawd's lit term uses the contrast-checked token (4.5:1 in light, board's #d97757 in dark)
+    css: { ".ho .main .fam:not(.under *) > span.cw-lit": "color:var(--clawdT)" },
     text: {
       lede: ".lede > span",
       signUp: ".cta .primary > span",
