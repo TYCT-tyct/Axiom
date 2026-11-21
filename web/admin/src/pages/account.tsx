@@ -8,9 +8,12 @@ import { AccountActions } from "../account-actions";
 import { AccountSubscriptions } from "../account-subscriptions";
 import { CreditDialog } from "../credit-dialog";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
+import en from "../locales/en/platform-grants";
 import settingsMessages from "../locales/settings";
 import subscriptionMessages from "../locales/subscriptions";
+import zh from "../locales/zh/platform-grants";
 import { Actions, Facts, NewButton, PageBody, State, Time } from "../parts";
+import { PlatformGrants } from "../platform-grants";
 import { accountQuery } from "../queries";
 import { WorkspaceLimitCard, WorkspaceLimitUnavailable } from "../workspace-limit";
 
@@ -41,6 +44,7 @@ export default function AccountPage() {
             <AccountSubscriptions account={data} />
             <AccountKeyLimits account={data} />
             <AccountWorkspaceLimit account={data} />
+            <PlatformGrants owner={data.owner} />
           </PageBody>
         </>
       )}
@@ -184,6 +188,6 @@ function AccountWorkspaceLimit({ account }: { account: Account }) {
 }
 
 export const messages = {
-  en: { ...settingsMessages.en, ...subscriptionMessages.en },
-  zh: { ...settingsMessages.zh, ...subscriptionMessages.zh },
+  en: { ...settingsMessages.en, ...subscriptionMessages.en, platformGrants: en },
+  zh: { ...settingsMessages.zh, ...subscriptionMessages.zh, platformGrants: zh },
 };

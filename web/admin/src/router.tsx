@@ -135,7 +135,14 @@ const routeTree = root.addChildren([
     shellPage("/models/$modelId", () => import("./pages/model")),
     shellPage("/source-classes", () => import("./pages/source-classes")),
     shellPage("/routing-presets", () => loadTranslatedPage(import("./pages/routing-presets"))),
-    shellPage("/pricing", () => import("./pages/pricing")),
+    shellPage("/pricing", () => loadTranslatedPage(import("./pages/pricing"))),
+    shellPage("/exchange-rates", () => loadTranslatedPage(import("./pages/exchange-rates"))),
+    shellPage(
+      "/payment-discrepancies",
+      () => loadTranslatedPage(import("./pages/payment-discrepancies")),
+      (search) => ({ state: search.state === "open" || search.state === "resolved" ? search.state : undefined }),
+    ),
+    shellPage("/payment-discrepancies/$discrepancyId", () => loadTranslatedPage(import("./pages/payment-discrepancy"))),
     shellPage(
       "/subscription-plans",
       () => loadTranslatedPage(import("./pages/subscription-plans")),

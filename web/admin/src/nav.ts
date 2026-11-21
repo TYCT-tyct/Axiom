@@ -31,6 +31,7 @@ export const nav = [
   { section: "supply", to: "/mappings", label: "nav.mappings", icon: "route", permission: "suppliers.view" },
   { section: "catalog", to: "/models", label: "nav.models", icon: "plugins", permission: "catalog.view" },
   { section: "pricing", to: "/pricing", label: "nav.pricing", icon: "bill", permission: "pricing.view" },
+  { section: "pricing", to: "/exchange-rates", label: "nav.exchangeRates", icon: "bill", permission: "pricing.view" },
   {
     section: "pricing",
     to: "/subscription-plans",
@@ -53,6 +54,13 @@ export const nav = [
     permission: "sites.manage",
   },
   { section: "payments", to: "/orders", label: "nav.orders", icon: "bill", permission: "sites.manage" },
+  {
+    section: "payments",
+    to: "/payment-discrepancies",
+    label: "nav.discrepancies",
+    icon: "bill",
+    permission: "sites.manage",
+  },
   { section: "payments", to: "/redeem-codes", label: "nav.redeemCodes", icon: "keys", permission: "sites.manage" },
   { section: "operations", to: "/approvals", label: "nav.approvals", icon: "budget", permission: "operations.approve" },
   {

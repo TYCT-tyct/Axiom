@@ -27,6 +27,10 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(i18next.exists("operations.credentials.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(opsPage))).toBe(opsPage);
   for (const page of [
+    import("../pages/payment-discrepancies"),
+    import("../pages/exchange-rates"),
+    import("../pages/account"),
+    import("../pages/pricing"),
     import("../pages/alert-events"),
     import("../pages/alert-configuration"),
     import("../pages/announcements"),
