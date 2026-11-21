@@ -6,24 +6,25 @@
 
 | 场景 | 执行 |
 |---|---|
-| PR | `static`、按路径选择的 `web` 和 `boards`，非轻量改动跑四片 Go 测试，选中 `web` 时还跑四个 e2e 分片和 `journey`，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
-| 列车 | 全量作业，按整班车相对 `base` 的路径跳过无关检查；失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
+| PR | `static`、按路径选择的 `web` 和 `boards`；Go 道选中时跑四片 Go 测试，e2e 道选中时跑四个 e2e 分片，在进列车前发现问题；另有 `docs`、`secrets`、`pr`、`review`、`docs-impact` |
+| 列车 | 按整班车相对 `base` 的路径选择，Go 道、e2e 道与 PR 同一规则，另跑 `journey`、`bench`、`deploy`、`signing`；失败由列车二分定位；e2e 在列车里按内容复用通过结果 |
 | `main` | 每次推送选择全部作业；同一提交、同一树已有成功列车构建时，复用其中实际通过的作业，其他作业照跑；无证据则全量 |
 | 轻量 PR / 列车 | 按受管的 `[lanes] light` 排除 `[lanes] code`，包括纯 Markdown；`static` 跑 `just md-checks scope`（含脚本测试），列车再跑 `secrets` |
 
 非轻量作业：
 
 - `static`：`check-ci` 中的静态部分、迁移版本与 `api-compat`；列车和 main 加 docs/secrets。
-- `go-test`：四个分片各跑 `just test i/4`（按 `go list` 顺序轮流分配，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
+- 分道（`scripts/ci_skips.py`，PR 与列车相同，main 无 base 全选）：Go 道在改到 `web/` 以外的非 Markdown 文件，或 Go 服务前端时读的 `web/vite.shared.ts`、`web/scripts/embed.ts`、`web/scripts/compress.ts` 时选中；e2e 道在 `web` 的输入、服务前端的 `internal/platform/webui/` 或 `scripts/ci/` 变化时选中。纯前端改动不跑 Go 测试，Go 测试读不到 `web/` 下的其他文件；其余 Go 改动不跑 e2e，e2e 对着契约模拟的接口，真实节点由 `journey` 覆盖。
+- `go-test`：Go 道选中时跑，四个分片各跑 `just test i/4`（按 `go list` 顺序轮流分配，各自起集群、四个 worker，工具模块在第一片），仅可缓存的 `go test -race` 参数；耗时由最长的包决定，不再是总和。每个数据库测试复制新迁移模板库；集群每次运行新起，连接串不属于测试输入，经 `containertest.Untracked` 读取。
 - `web`：构建、类型、lint、长度、未使用、重复、单元测试、体积预算。PR 只在 `web/`、`api/`、`justfile`、`scripts/web_cache.py`、`scripts/ci/web-container.sh`、`scripts/ci/runner-host.sh`、`ci.yml`、setup action 或 Go 模块文件变化时跑。
 - `vitals`：独立串行页面计时；PR 不跑；列车按页面、API、构建工具、Go 服务与测试配置输入选择，main 总是选择；成功列车在同一提交上已实测则在 main 摘要报告来源与成功结果，列车未测时 main 照跑；相同构建与相同比较基线通过后也可命中内容缓存。目标与实际门禁见[前端](../frontend.md#实测)。
 - `e2e`：四个按耗时分配的分片（`scripts/ci/playwright.py e2e i/4`，默认完整文件一起分配；文件顶层明确声明 parallel 的按单例分配，保留顺序测试语义），准备嵌入前端与 Go 静态服务；排除画板证明和页面计时。
 - `boards`：四个按耗时分配的分片，各两个 worker，独立运行 `playwright.boards.config.ts`，不启动产品 Go 服务。PR 与列车按画板包、转换脚本、证明及设计工具、Playwright 配置、锁文件、固定字体数据、CI 脚本和 setup action 的路径选择；main 总是选择；路径比较失败也跑。每片按单板内容和选中的测试集合复用通过结果，只有未命中的比较进入 Playwright；整个选中集合通过才记通过标记。失败保留截图、diff 和 trace，不反复序列化大型整板 DOM；单例上限三分钟，分片上限 30 分钟。
-- `journey`：浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
+- `journey`：只在列车和 main 上跑；浏览器对真实 Axiom、PostgreSQL、Valkey 走注册到调用，宿主 `withcluster` 起库，节点与浏览器在 web 容器经 Docker 网桥连库；失败保留 trace 和节点日志。
 - `bench`：列车用 base 的 `tools/benchgate` 比分配，门禁或其模块依赖变化时再用当前版本比，两次都须过；main 用 `bench-once` 带竞态每项一次。基准不混进 `test`；非轻量改动仅纯 Markdown 或纯 `web/` 可跳过基准。
 - `deploy`：只有每个改动文件都明确不影响容器时跳过。排除 Markdown、Go 测试、testdata、`.github/`、轻量脚本、web e2e/journey 与其 Playwright 配置；生产 Go、模块文件、应用源码、迁移、deploy、Dockerfile、justfile 都触发。签名检查也在列车和 main 执行。
 
-路径判断由 `scripts/ci_skips.py` 和 `ci.yml` 的画板输入比较负责，读取失败不跳过；`*-needed` 仅退出 10 表示无需运行。`build` 是 ci.yml 唯一进入规则集的聚合检查，任一作业失败或取消即失败；所有选中的作业必须成功（含 PR 的 web/e2e、列车/main 的 Go、e2e、journey、bench、deploy、signing，以及选中的 vitals/boards）；内容命中由作业内部返回成功；只有已查证的同提交列车成功作业允许在 main 跳过，其他选中作业不能以跳过冒充通过。其他必需的 workflow 检查独立保留。`just check` 本地全跑；`check-ci` 避免重复 workflow 已跑的 secrets/docs 部分，仓库脚本测试仍跑。
+路径判断由 `scripts/ci_skips.py` 和 `ci.yml` 的画板输入比较负责，读取失败不跳过；`*-needed` 仅退出 10 表示无需运行。`build` 是 ci.yml 唯一进入规则集的聚合检查，任一作业失败或取消即失败；所有选中的作业必须成功（含选中的 web、Go、e2e，列车/main 的 journey、bench、deploy、signing，以及选中的 vitals/boards）；内容命中由作业内部返回成功；只有已查证的同提交列车成功作业允许在 main 跳过，其他选中作业不能以跳过冒充通过。其他必需的 workflow 检查独立保留。`just check` 本地全跑；`check-ci` 避免重复 workflow 已跑的 secrets/docs 部分，仓库脚本测试仍跑。
 
 列车落地后 main 不再重复整套已通过的作业：`changes` 用 `scripts/ci/train_result.py` 核对该提交的 `train/verified` 成功状态、`ci.yml` 在 `train/main/*` 上成功的 dispatch 构建、提交 SHA 与 Git 树，以及 `changes`、`static`、`build` 的成功结果；矩阵必须所有分片成功才复用。相同树已经通过相同作业，快进没有引入新代码，因此 `build` 接受这些已查证的跳过；main 的步骤摘要链接原构建并逐项报告结果，包含 vitals。未选中、未找到或未通过的列车作业仍在 main 运行；缺记录、树不同、构建不存在或 API 查询失败均回到全量。`changes`、`build` 和 flaky Issue 关闭提醒仍执行；显式 release dispatch 不复用，发布保留步骤照跑。这样无需持久化另一份落地记录，也不依赖会被删除的列车分支。
 

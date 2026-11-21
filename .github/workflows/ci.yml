@@ -70,6 +70,8 @@ jobs:
       web: ${{ steps.decide.outputs.web }}
       vitals: ${{ steps.decide.outputs.vitals }}
       boards: ${{ steps.decide.outputs.boards }}
+      go: ${{ steps.decide.outputs.go }}
+      e2e: ${{ steps.decide.outputs.e2e }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1; pinned by commit, a tag can move
         with:
@@ -86,7 +88,7 @@ jobs:
       # never hides a regression. Without a base (main) everything is selected before train reuse.
       - id: decide
         run: |
-          light=false; deploy=true; bench=true; web=true; vitals=true; boards=true
+          light=false; deploy=true; bench=true; web=true; vitals=true; boards=true; go=true; e2e=true
           if [ -n "$BASE" ]; then
             status=0
             git diff --quiet "$BASE...HEAD" -- 'web/scripts/boards*' 'web/packages/boards/**' 'web/e2e/boards*.spec.ts' 'web/e2e/design/**' ':(glob)web/*' 'web/playwright*.config.ts' 'web/e2e/collect-errors.ts' 'web/e2e/apps.ts' 'web/scripts/free-port.ts' 'web/scripts/fonts/sources.json' 'web/packages/ui/src/css/fonts/fonts.json' 'scripts/web_cache.py' 'scripts/ci/**' '.github/actions/setup/**' '.github/workflows/ci.yml' || status=$?
@@ -96,8 +98,26 @@ jobs:
               echo "board input diff exited $status; running boards"
             fi
             if python3 scripts/ci_skips.py light-only "$BASE"; then
-              light=true; deploy=false; bench=false; web=false; vitals=false
+              light=true; deploy=false; bench=false; web=false; vitals=false; go=false; e2e=false
             else
+              # PR and train alike: a web/-only change skips the Go tests, a change outside the frontend and the Go code
+              # that serves it skips the end-to-end tests; main has no base and runs both.
+              status=0
+              python3 scripts/ci_skips.py go-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "go-test skipped: only web/ (none of what the Go program reads) or Markdown changed between $BASE and HEAD"
+                go=false
+              else
+                [ "$status" -eq 0 ] || echo "go-needed check exited $status; running go-test"
+              fi
+              status=0
+              python3 scripts/ci_skips.py e2e-needed "$BASE" || status=$?
+              if [ "$status" -eq 10 ]; then
+                echo "e2e skipped: neither the frontend nor the Go code serving it changed between $BASE and HEAD"
+                e2e=false
+              else
+                [ "$status" -eq 0 ] || echo "e2e-needed check exited $status; running e2e"
+              fi
               status=0
               python3 scripts/ci_skips.py deploy-needed "$BASE" || status=$?
               if [ "$status" -eq 10 ]; then
@@ -143,7 +163,7 @@ jobs:
             fi
           fi
           if [ "${{ github.event_name }}" = pull_request ]; then vitals=false; fi
-          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\nboards=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" "$boards" >> "$GITHUB_OUTPUT"
+          printf 'light=%s\ndeploy=%s\nbench=%s\nweb=%s\nvitals=%s\nboards=%s\ngo=%s\ne2e=%s\n' "$light" "$deploy" "$bench" "$web" "$vitals" "$boards" "$go" "$e2e" >> "$GITHUB_OUTPUT"
 
   # A main push can reuse all its train jobs. Seed the default branch even then: an archive saved to a train or PR
   # ref cannot be restored by its successor. Cache warming is independent of the required build.
@@ -232,7 +252,7 @@ jobs:
   go-test:
     name: go-test (${{ matrix.shard }}/4)
     needs: changes
-    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && !inputs.gate_stress
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test') && needs.changes.outputs.light != 'true' && needs.changes.outputs.go == 'true' && !inputs.gate_stress
     runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 30
     strategy:
@@ -326,7 +346,7 @@ jobs:
     needs: changes
     # a shard takes about 11 minutes; without a limit a hung one held the merge train for an hour (GitHub's default is 6 h)
     timeout-minutes: 30
-    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e') && (inputs.gate_stress || needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true'))
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e') && (inputs.gate_stress || needs.changes.outputs.light != 'true' && needs.changes.outputs.e2e == 'true')
     permissions:
       contents: read
       issues: read
@@ -439,7 +459,7 @@ jobs:
   # keeps the browser's trace and the node's log.
   journey:
     needs: changes
-    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true')
+    if: needs.changes.result == 'success' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'journey') && needs.changes.outputs.light != 'true' && !inputs.gate_stress && github.event_name != 'pull_request'
     runs-on: ${{ fromJSON(inputs.runs_on || (inputs.base && vars.RUNS_ON_TRAIN) || vars.RUNS_ON_HEAVY || vars.RUNS_ON || '"ubuntu-latest"') }}
     timeout-minutes: 10
     steps:
@@ -620,9 +640,11 @@ jobs:
       - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.web == 'true' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'web')
         run: test '${{ needs.web.result }}' = success
       # The result aggregates the entire matrix; a selected PR suite cannot pass by being skipped either.
-      - if: needs.changes.outputs.light != 'true' && (github.event_name != 'pull_request' || needs.changes.outputs.web == 'true') && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e')
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.e2e == 'true' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'e2e')
         run: test '${{ needs.e2e.result }}' = success
-      - if: needs.changes.outputs.light != 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test')
+      # The lanes decide go-test and e2e alike on a PR and a train (scripts/ci_skips.py); main has no base, so both are
+      # selected and must pass there unless reused from the verified train.
+      - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.go == 'true' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'go-test')
         run: test '${{ needs.go-test.result }}' = success
       - if: needs.changes.outputs.light != 'true' && needs.changes.outputs.bench == 'true' && github.event_name != 'pull_request' && !contains(fromJSON(needs.changes.outputs.reuse || '[]'), 'bench')
         run: test '${{ needs.bench.result }}' = success

@@ -1,7 +1,8 @@
 """Decide which CI work a pull request can skip from the files base..head changed.
 
 Light changes run Markdown checks (including repository script tests), scope checks and train secrets checks. Outside the
-light lane, a benchmark comparison is skipped only for Markdown-only and web/-only changes, the deployment check only
+light lane, the Go tests are skipped for web/-only changes, the end-to-end tests when neither the frontend nor the Go
+code that serves it changed, a benchmark comparison only for Markdown-only and web/-only changes, the deployment check only
 when every changed file is clearly outside the container, and the web vitals only when nothing the pages are built from
 changed. The decisions come from the file list, never a guess about what reads what. A failed diff runs the build, the
 frontend checks, the timings, the comparison and the deployment check; *-needed actions use exit code 10 for "not needed", so any other outcome runs them.
@@ -48,6 +49,25 @@ def needs_web(paths: list[str]) -> bool:
     )
 
 
+# The web/ files the Go program reads when it serves the frontend: the content security policy it sends and the layout of
+# the build it embeds (internal/platform/webui). No Go test reads anything else under web/.
+GO_READS_WEB = {"web/vite.shared.ts", "web/scripts/embed.ts", "web/scripts/compress.ts"}
+
+
+def needs_go(paths: list[str]) -> bool:
+    """Go tests: any change outside web/ that is not Markdown, and the web/ files the Go program reads. A web/-only change
+    leaves every Go package as main has it, so its tests would only rerun what main passed (main runs them anyway)."""
+    return not paths or any(
+        not (path.lower().endswith(".md") or (path.startswith("web/") and path not in GO_READS_WEB)) for path in paths)
+
+
+def needs_e2e(paths: list[str]) -> bool:
+    """End-to-end tests drive the built pages against API mocks, served by the Go program's webui package: they can only
+    change with the frontend and its build inputs (needs_web), with that serving code, or with the CI scripts that shard
+    and run them. A change elsewhere in Go meets the same mocks, so the journey, which runs a real node, tests it."""
+    return needs_web(paths) or any(path.startswith(("internal/platform/webui/", "scripts/ci/")) for path in paths)
+
+
 def needs_vitals(paths: list[str]) -> bool:
     """PR and train timings: every file under web/ (the apps, the shared packages, theme.js, and the clients that
     web/packages/api/package.json generates into web/packages/api/src) and the api/*.yaml contracts those clients are
@@ -85,7 +105,8 @@ def needs_deploy_check(paths: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
-        print("usage: ci_skips.py md-only|light-only|bench-needed|deploy-needed|web-needed|vitals-needed BASE [HEAD]", file=sys.stderr)
+        print("usage: ci_skips.py md-only|light-only|bench-needed|deploy-needed|web-needed|vitals-needed|go-needed|e2e-needed"
+              " BASE [HEAD]", file=sys.stderr)
         return 2
     action, base = argv[0], argv[1]
     head = argv[2] if len(argv) == 3 else "HEAD"
@@ -104,6 +125,10 @@ def main(argv: list[str]) -> int:
         return 0 if needs_web(paths) else NOT_NEEDED
     if action == "vitals-needed":
         return 0 if needs_vitals(paths) else NOT_NEEDED
+    if action == "go-needed":
+        return 0 if needs_go(paths) else NOT_NEEDED
+    if action == "e2e-needed":
+        return 0 if needs_e2e(paths) else NOT_NEEDED
     if action == "deploy-needed":
         return 0 if needs_deploy_check(paths) else NOT_NEEDED
     print(f"unknown action {action}", file=sys.stderr)
