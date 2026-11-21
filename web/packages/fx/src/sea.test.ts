@@ -144,6 +144,18 @@ describe("startSea entrance selection", () => {
     sea.destroy();
   });
 
+  it("keeps a home page settling back from sign-in settled: no entrance plays", () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.9);
+    const { root, owner, chars } = buildFrame();
+    root.dataset.enter = "done";
+    const sea = startSea(root, owner, true);
+    expect(root.dataset.enter).toBe("done");
+    for (let t = 0; t <= 1800; t += 100) step(t);
+    expect(root.dataset.enter).toBe("done");
+    expect(chars[0]?.style.color).toBe("");
+    sea.destroy();
+  });
+
   it("picks decode when Math.random() >= 0.5, decodes cells, and restores text on completion", () => {
     vi.spyOn(Math, "random").mockReturnValue(0.9);
     const { root, owner, lede, chars } = buildFrame();
