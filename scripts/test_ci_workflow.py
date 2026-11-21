@@ -194,7 +194,7 @@ class BuildChecks(unittest.TestCase):
         self.assertIn('webServer: undefined', dedicated)
 
     @unittest.skipUnless(BASH, "Bash is unavailable")
-    def test_board_path_selection_runs_on_main_and_fails_open(self):
+    def test_boards_run_on_main_and_by_inputs_on_prs(self):
         decide = textwrap.dedent(re.search(
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
         stub = ("python3() { return 0; }\n"
@@ -211,7 +211,9 @@ class BuildChecks(unittest.TestCase):
                     script = stub + decide.replace("${{ github.event_name }}", event)
                     subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True, check=True)
                     values = dict(line.split("=", 1) for line in output.read_text().splitlines())
-                    self.assertEqual(values["boards"], "false" if event != "push" and status == 0 else "true")
+                    # A train leaves the boards to main; a PR runs them when their inputs changed or the diff failed
+                    expected = event == "push" or event == "pull_request" and status != 0
+                    self.assertEqual(values["boards"], str(expected).lower())
                     if event == "push":
                         self.assertFalse(args.exists())
                     else:
@@ -246,22 +248,18 @@ class BuildChecks(unittest.TestCase):
                     self.assertEqual(values["web"], "false" if event == "pull_request" and status == 10 and diff == 0 else "true")
 
     @unittest.skipUnless(BASH, "Bash is unavailable")
-    def test_vitals_selection_covers_prs_and_trains_and_never_skips_main(self):
+    def test_vitals_run_on_main_alone(self):
         decide = textwrap.dedent(re.search(
             r"- id: decide\n        run: \|\n(.*?)(?=^  #)", WORKFLOW, re.M | re.S)[1])
         stub = ("python3() { case \"$2\" in\n"
                 "  light-only|md-only) return \"$MD_STATUS\";;\n"
-                "  vitals-needed) return \"$VITALS_STATUS\";;\n"
                 "  *) return 0;;\n"
                 "esac; }\n")
         stub += 'git() { [ "$VITALS_STATUS" = 10 ]; }\n'
         cases = {
             "main on a push": ("push", "", "1", "10", "true"),
             "a PR touching the pages": ("pull_request", "base", "1", "0", "false"),
-            "a PR touching other files": ("pull_request", "base", "1", "10", "false"),
-            "a train touching the pages": ("workflow_dispatch", "base", "1", "0", "true"),
-            "a train touching other files": ("workflow_dispatch", "base", "1", "10", "false"),
-            "a failed diff runs them": ("workflow_dispatch", "base", "1", "37", "true"),
+            "a train touching the pages": ("workflow_dispatch", "base", "1", "0", "false"),
             "Markdown-only": ("workflow_dispatch", "base", "0", "10", "false"),
         }
         for name, (event, base, md, vitals, expected) in cases.items():
@@ -473,6 +471,8 @@ class TrainReuse(unittest.TestCase):
 
     def test_workflow_skips_only_reused_jobs_and_build_still_requires_every_other_success(self):
         reused = tuple(train_result.JOBS)
+        # A train runs the Go tests without the race detector, so main reruns them instead of reusing that run
+        self.assertNotIn("go-test", reused)
         for name in reused:
             self.assertTrue(enabled(name, "push", boards=True), name)
             self.assertFalse(enabled(name, "push", boards=True, reuse=reused), name)
@@ -481,7 +481,7 @@ class TrainReuse(unittest.TestCase):
         self.assertTrue(enabled("vitals", "push", reuse=tuple(n for n in reused if n != "vitals")))
         # Execute the actual aggregator assertions, with all reused jobs skipped.
         for failed in (None, "vitals"):
-            results = {name: "skipped" for name in reused}
+            results = {"go-test": "success", **{name: "skipped" for name in reused}}
             active = reused if failed is None else tuple(n for n in reused if n != failed)
             commands = re.findall(r"(?:- if: ([^\n]+)\n        run: |      - run: )(test [^\n]+)", job("build"))
             statuses = []

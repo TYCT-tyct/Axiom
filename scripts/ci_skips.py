@@ -2,10 +2,10 @@
 
 Light changes run Markdown checks (including repository script tests), scope checks and train secrets checks. Outside the
 light lane, the Go tests are skipped for web/-only changes, the end-to-end tests when neither the frontend nor the Go
-code that serves it changed, a benchmark comparison only for Markdown-only and web/-only changes, the deployment check only
-when every changed file is clearly outside the container, and the web vitals only when nothing the pages are built from
-changed. The decisions come from the file list, never a guess about what reads what. A failed diff runs the build, the
-frontend checks, the timings, the comparison and the deployment check; *-needed actions use exit code 10 for "not needed", so any other outcome runs them.
+code that serves it changed, a benchmark comparison only for Markdown-only and web/-only changes, the deployment check
+only when every changed file is clearly outside the container. The decisions come from the file list, never a guess
+about what reads what. A failed diff runs the build, the frontend checks, the comparison and the deployment check;
+*-needed actions use exit code 10 for "not needed", so any other outcome runs them.
 """
 
 import fnmatch
@@ -74,15 +74,6 @@ def needs_e2e(paths: list[str]) -> bool:
         path.startswith(("internal/platform/webui/", "scripts/ci/")) or path in E2E_READS_OUTSIDE_WEB for path in paths)
 
 
-def needs_vitals(paths: list[str]) -> bool:
-    """PR and train timings: every file under web/ (the apps, the shared packages, theme.js, and the clients that
-    web/packages/api/package.json generates into web/packages/api/src) and the api/*.yaml contracts those clients are
-    generated from. A diff outside these ships the same page code and assets, so a changed timing there measures the
-    runner (#503)."""
-    return not paths or any(
-        path.startswith("web/") or (path.startswith("api/") and path.endswith(".yaml")) for path in paths)
-
-
 def light_only(paths: list[str]) -> bool:
     """Use the managed lane rules, preserving the existing Markdown-only lane."""
     return not code_changed(paths, *lanes(ROOT))
@@ -111,7 +102,7 @@ def needs_deploy_check(paths: list[str]) -> bool:
 
 def main(argv: list[str]) -> int:
     if len(argv) not in (2, 3):
-        print("usage: ci_skips.py md-only|light-only|bench-needed|deploy-needed|web-needed|vitals-needed|go-needed|e2e-needed"
+        print("usage: ci_skips.py md-only|light-only|bench-needed|deploy-needed|web-needed|go-needed|e2e-needed"
               " BASE [HEAD]", file=sys.stderr)
         return 2
     action, base = argv[0], argv[1]
@@ -129,8 +120,6 @@ def main(argv: list[str]) -> int:
         return 0 if needs_benchmark(paths) else NOT_NEEDED
     if action == "web-needed":
         return 0 if needs_web(paths) else NOT_NEEDED
-    if action == "vitals-needed":
-        return 0 if needs_vitals(paths) else NOT_NEEDED
     if action == "go-needed":
         return 0 if needs_go(paths) else NOT_NEEDED
     if action == "e2e-needed":
