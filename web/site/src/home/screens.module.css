@@ -2,3 +2,14 @@
 .waiting {
   height: 100dvh;
 }
+
+/* The design's stylesheet carries the sign-in page's .lg, a whole page: a view's height and the page's background. The
+   screens' log rows (the trust screen's log, the failed request's picture in the questions) share the name and took
+   both, so a row stood a view tall over its window. A row is as tall as its line; the screens' own row rules, which
+   name the screen, still outrank this. */
+.screen div[class~="lg"] {
+  min-height: 0;
+  height: auto;
+  background: none;
+  color: inherit;
+}

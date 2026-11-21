@@ -324,6 +324,28 @@ test("the first answer's picture moves on while it is seen, and stops while the 
   await expect.poll(() => vendor(page)).not.toBe(held);
 });
 
+// The trust screen's log and the failed request's picture are rows of one line: the design's stylesheet also holds the
+// sign-in page's .lg, a page a view tall, which they must not take.
+for (const [name, viewport] of [
+  ["wide", { width: 1440, height: 900 }],
+  ["phone", { width: 390, height: 844 }],
+] as const)
+  test(`the screens' log rows are one line tall, ${name}`, async ({ page }) => {
+    await page.setViewportSize(viewport);
+    await open(page);
+    for (const sec of [4, 5]) {
+      await scrollTo(page, sec);
+      await shown(page, sec);
+    }
+    // the failed request's answer, open
+    if (name === "wide") await page.locator(".hfm5 .qs .q").nth(4).hover();
+    else await page.locator(".hfm5 .fq .q").nth(4).click();
+    const rows = page.locator(".hfm4 .lg, .hfm5 .lg");
+    await expect(rows).toHaveCount(7);
+    const heights = await rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().height));
+    for (const height of heights) expect(height).toBeLessThan(32);
+  });
+
 test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
