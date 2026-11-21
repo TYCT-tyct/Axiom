@@ -1,7 +1,7 @@
 import type { Sea } from "@axiom/fx/sea";
 import type { Whale } from "@axiom/fx/whale";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
-import { turns } from "./script";
+import { turns, typedWord } from "./script";
 
 const loadWhale = () => import("@axiom/fx/whale");
 
@@ -10,26 +10,12 @@ const password = "deepseek";
 // does, and happens once per page load; typing the word or pressing the strip calls the whale on purpose.
 const settle = 10_000;
 
-// The word typed anywhere on the page, as the board's egg listens for it; fields that take text are left alone.
-function typing(then: () => void) {
-  let typed = "";
-  return (e: KeyboardEvent) => {
-    if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
-    if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable]")) return;
-    typed = (typed + e.key.toLowerCase()).slice(-password.length);
-    if (typed === password) {
-      typed = "";
-      then();
-    }
-  };
-}
-
 const strip = ".hs > .main .fam [data-egg=deepseek]";
 
 // The calls on purpose: the word typed anywhere, which is the keyboard's way to the whale, or the first screen's strip
 // pressed (the strip is decoration, out of what is read); the returned function stops listening.
 function calls(frame: HTMLElement, call: () => void) {
-  const onKey = typing(call);
+  const onKey = typedWord(password, call);
   const onClick = (e: MouseEvent) => {
     if (e.target instanceof Element && e.target.closest(strip)) call();
   };

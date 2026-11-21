@@ -74,6 +74,9 @@
   --warnT: light-dark(#9d5d05, #ffca16);
   --bad: light-dark(#e54d2e, #e54d2e);
   --badT: light-dark(#bf3216, #ff977d);
+  /* Clawd highlight text: dark keeps the board's #d97757 (4.61:1 on --selected, 6.04:1 on slate --n1); light darkens the
+     same terracotta hue so it reaches >= 4.5:1 on normal and selected rows (4.66:1 on --selected, 5.56:1 on slate --n1). */
+  --clawdT: light-dark(#a84a2d, #d97757);
 
   /* Control boundary, focus and selection (WCAG 2.2 1.4.11, 2.4.13). Ratios against the adjacent surfaces,
      n1/n2/n3/n4, by the WCAG relative luminance formula (brand.ts contrast; web/scripts/tokens.test.ts checks them):
