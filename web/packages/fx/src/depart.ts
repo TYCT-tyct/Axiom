@@ -1,16 +1,18 @@
-// The website's half of the tiles transition (#747, port design §9): the button pressed breaks into the sea's tiles,
-// which stream to where the sign-in page's form panel will be and start filling it, and then the browser goes to the
-// button's page. It is the departure of trans.js's tiles style (STYLES.tiles start and frame), which cannot run on
-// its own here: trans.js plays both pages in one document, and the sign-in page is the console's. The geometry and
-// the easing are the engine's; its clock runs faster, so the stream lands in about half a second.
+// Bidirectional tiles transition between the website and the console's sign-in pages (#747, port design §9,
+// trans.js.txt STYLES.tiles):
+// - depart: on the website (.tr), breaks the pressed button (and any visible sea-floor wordmark tiles via
+//   frame.__axCast.wordTiles()) into sea tiles that stream into the form panel, reversible midway.
+// - departLogin: on a console Login-board page (.lg), plays the mirror in reverse — Morph releases its solid back into
+//   sharks, the form panel breaks into tiles streaming back to the trigger, reversible midway.
+// - arriveHome: on the website (.tr) after returning from sign-in, plays the short closing settle of tiles returning
+//   into the header button so the landing does not replay the cold tide entrance.
+import type { OriginRect } from "./arrival";
 import { colour } from "./colour";
 import { hash } from "./hash";
 import { own } from "./loop";
 import type { OceanEngine } from "./sea";
+import { clamp, drawWord, type FlyingWord, GLYPHS, lerp, planWord, type WordCast, type WordCell } from "./word-tiles";
 
-const GLYPHS = ":;t%SX8#@/\\<>=+*";
-const clamp = (v: number, a: number, b: number) => Math.min(Math.max(v, a), b);
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 // cubic-bezier(0.2, 0, 0, 1), trans.js's E.emph ("opens fast, settles long"), and its house ease-out E.out
 function bezier(x1: number, y1: number, x2: number, y2: number) {
   const cx = 3 * x1;
@@ -37,7 +39,7 @@ const out = bezier(0.16, 1, 0.3, 1);
 
 // The sign-in page's form panel, where the Login board puts it: the right 44% (at least 440px) of a wide window,
 // everything under the 208px sea on a phone.
-function panel(W: number, H: number) {
+function panel(W: number, H: number): Box {
   if (W < 768) return { x: 0, y: 208, w: W, h: Math.max(1, H - 208) };
   const w = Math.max(440, W * 0.44);
   return { x: W - w, y: 0, w, h: H };
@@ -45,35 +47,44 @@ function panel(W: number, H: number) {
 
 type Box = { x: number; y: number; w: number; h: number };
 type Bit = { sx: number; sy: number; tx: number; ty: number; d: number; ft: number; arc: number };
-type Cell = Box & { at: number; d: number; g: string };
+type Cell = WordCell & { d: number; g: string };
 type Grid = { cw: number; ch: number };
+type Ink = { bg: string; ring: string; tile: string; glyph: string; button: string };
+
+const toBox = (r: DOMRect | OriginRect): Box =>
+  "width" in r ? { x: r.x, y: r.y, w: r.width, h: r.height } : { x: r.x, y: r.y, w: r.w, h: r.h };
+
+function gridOf(sea?: OceanEngine): Grid {
+  const R = (sea as { renderer?: { cw?: number; ch?: number } } | undefined)?.renderer;
+  return { cw: R?.cw || 10, ch: R?.ch || R?.cw || 10 };
+}
 
 // Where the stream enters the panel: the button itself if it is over the panel (a phone), else the nearest edge; and
 // how far a point of the panel is from where it fills from (the button's whole outline when it is over the panel).
-function entry(b: DOMRect, P: Box) {
-  const bx = b.x + b.width / 2;
-  const by = b.y + b.height / 2;
+function entry(b: Box, P: Box) {
+  const bx = b.x + b.w / 2;
+  const by = b.y + b.h / 2;
   const ex = clamp(bx, P.x, P.x + P.w);
   const ey = clamp(by, P.y, P.y + P.h);
   const gap = Math.hypot(ex - bx, ey - by);
   const over = gap < 4;
   const far = (x: number, y: number) =>
     over
-      ? Math.hypot(Math.max(b.x - x, 0, x - b.right), Math.max(b.y - y, 0, y - b.bottom))
+      ? Math.hypot(Math.max(b.x - x, 0, x - (b.x + b.w)), Math.max(b.y - y, 0, y - (b.y + b.h)))
       : Math.hypot(x - ex, y - ey);
   return { ex, ey, gap, over, far };
 }
 type Entry = ReturnType<typeof entry>;
 
 // The button as the sea's cells, leaving nearest the panel first, each landing around where the stream comes in.
-function buttonBits(b: DOMRect, P: Box, e: Entry, { cw, ch }: Grid): Bit[] {
+function buttonBits(b: Box, P: Box, e: Entry, { cw, ch }: Grid): Bit[] {
   if (e.over) return [];
   const found: { sx: number; sy: number; d0: number; h: number }[] = [];
-  for (let r = Math.floor(b.y / ch); r < Math.ceil(b.bottom / ch); r++) {
-    for (let c = Math.floor(b.x / cw); c < Math.ceil(b.right / cw); c++) {
+  for (let r = Math.floor(b.y / ch); r < Math.ceil((b.y + b.h) / ch); r++) {
+    for (let c = Math.floor(b.x / cw); c < Math.ceil((b.x + b.w) / cw); c++) {
       const sx = c * cw + cw / 2;
       const sy = r * ch + ch / 2;
-      if (sx < b.x || sx > b.right || sy < b.y || sy > b.bottom) continue;
+      if (sx < b.x || sx > b.x + b.w || sy < b.y || sy > b.y + b.h) continue;
       found.push({
         sx: c * cw,
         sy: r * ch,
@@ -129,58 +140,71 @@ function panelCells(P: Box, e: Entry, t0: number, { cw, ch }: Grid) {
   return { cells, gh };
 }
 
+type Run = {
+  bits: Bit[];
+  cells: Cell[];
+  gh: number;
+  word: FlyingWord[];
+  wm: WordCast | null;
+  landed: number;
+};
+
 // plan lays the run out as trans.js's tiles start does; the panel starts filling as the first of the stream reaches
-// it. landed is when the stream is all in, on the engine's clock.
-function plan(b: DOMRect, W: number, H: number, grid: Grid) {
-  const P = panel(W, H);
+// it. When frame carries __axCast (on the website's sea floor), the wordmark's tiles are paired with incoming cells.
+function plan(b: Box, P: Box, grid: Grid, frame?: HTMLElement): Run {
   const e = entry(b, P);
   const bits = buttonBits(b, P, e, grid);
   const arrivals = bits.map((p) => p.d + p.ft);
   const t0 = e.over ? 50 : bits.length ? Math.min(...arrivals) - 30 : 120;
-  return { bits, ...panelCells(P, e, t0, grid), landed: Math.max(t0 + 560, ...arrivals) };
+  const { cells, gh } = panelCells(P, e, t0, grid);
+  const {
+    word,
+    wm,
+    landed: wordLanded,
+  } = frame ? planWord(frame, cells, e.ex, e.ey) : { word: [], wm: null, landed: 0 };
+  return { bits, cells, gh, word, wm, landed: Math.max(t0 + 560, wordLanded, ...arrivals) };
 }
-type Run = ReturnType<typeof plan>;
-type Ink = { bg: string; ring: string; tile: string; glyph: string; button: string };
+
+function drawCell(x: CanvasRenderingContext2D, cl: Cell, t: number, ink: Ink) {
+  const on = clamp((t - cl.at) / 140, 0, 1);
+  if (on <= 0) return;
+  x.globalAlpha = on;
+  x.fillStyle = ink.bg;
+  x.fillRect(cl.x, cl.y, cl.w, cl.h);
+  const a = on * (1 - clamp((t - cl.at - 110) / 150, 0, 1));
+  if (a < 0.01) return;
+  const fresh = 1 - clamp((t - cl.at - 60) / 140, 0, 1);
+  const s = cl.word ? 1 : 0.4 + 0.6 * on;
+  x.globalAlpha = a * (cl.word ? 0.6 : 0.3 + 0.4 * fresh);
+  // near where the stream comes in (or the button's own outline, over the panel) a fresh cell is the button's colour
+  x.fillStyle = fresh > 0.5 && cl.d < 0.08 ? ink.button : ink.tile;
+  x.fillRect(
+    cl.x + (cl.w * (1 - s)) / 2,
+    cl.y + (cl.h * (1 - s)) / 2,
+    Math.max(1, cl.w * s - 1),
+    Math.max(1, cl.h * s - 1),
+  );
+  if (!cl.g) return;
+  x.globalAlpha = a * 0.6;
+  x.fillStyle = fresh > 0.6 ? ink.ring : ink.glyph;
+  x.fillText(cl.g, cl.x + cl.w / 2, cl.y + cl.h / 2 + 0.5);
+}
 
 // Each panel cell comes on as a tile over the panel's ground and sets a moment later.
 function drawCells(x: CanvasRenderingContext2D, run: Run, t: number, ink: Ink) {
   x.font = `500 ${Math.round(run.gh * 0.86)}px "Axiom Mono", ui-monospace, monospace`;
   x.textAlign = "center";
   x.textBaseline = "middle";
-  for (const cl of run.cells) {
-    const on = clamp((t - cl.at) / 140, 0, 1);
-    if (on <= 0) continue;
-    x.globalAlpha = on;
-    x.fillStyle = ink.bg;
-    x.fillRect(cl.x, cl.y, cl.w, cl.h);
-    const a = on * (1 - clamp((t - cl.at - 110) / 150, 0, 1));
-    if (a < 0.01) continue;
-    const fresh = 1 - clamp((t - cl.at - 60) / 140, 0, 1);
-    const s = 0.4 + 0.6 * on;
-    x.globalAlpha = a * (0.3 + 0.4 * fresh);
-    // near where the stream comes in (or the button's own outline, over the panel) a fresh cell is the button's colour
-    x.fillStyle = fresh > 0.5 && cl.d < 0.08 ? ink.button : ink.tile;
-    x.fillRect(
-      cl.x + (cl.w * (1 - s)) / 2,
-      cl.y + (cl.h * (1 - s)) / 2,
-      Math.max(1, cl.w * s - 1),
-      Math.max(1, cl.h * s - 1),
-    );
-    if (cl.g) {
-      x.globalAlpha = a * 0.6;
-      x.fillStyle = fresh > 0.6 ? ink.ring : ink.glyph;
-      x.fillText(cl.g, cl.x + cl.w / 2, cl.y + cl.h / 2 + 0.5);
-    }
-  }
+  for (const cl of run.cells) drawCell(x, cl, t, ink);
 }
 
 // The button: for a beat its own shape, then its cells, which run to the panel.
-function drawButton(x: CanvasRenderingContext2D, run: Run, b: DOMRect, t: number, ink: Ink, { cw, ch }: Grid) {
+function drawButton(x: CanvasRenderingContext2D, run: Run, b: Box, t: number, ink: Ink, { cw, ch }: Grid) {
   if (t < 90) {
     x.globalAlpha = 1 - clamp((t - 30) / 60, 0, 1);
     x.fillStyle = ink.button;
     x.beginPath();
-    x.roundRect(b.x, b.y, b.width, b.height, Math.min(10, b.height / 2));
+    x.roundRect(b.x, b.y, b.w, b.h, Math.min(10, b.h / 2));
     x.fill();
   }
   const iw = cw - 1;
@@ -208,18 +232,17 @@ function drawButton(x: CanvasRenderingContext2D, run: Run, b: DOMRect, t: number
   }
 }
 
-// inkOf reads the colours the run draws in from the page.
-function inkOf(frame: HTMLElement, button: HTMLElement): Ink {
-  const css = getComputedStyle(frame);
-  const background = getComputedStyle(button).backgroundColor;
+// inkOf reads the resolved colours the run draws in from the page through CSSOM (handles light-dark() and brand overrides).
+function inkOf(frame: HTMLElement, button?: HTMLElement): Ink {
+  const background = button ? getComputedStyle(button).backgroundColor : "";
+  const solid = background !== "" && background !== "transparent" && !background.endsWith(", 0)");
   return {
-    bg: css.getPropertyValue("--bg").trim(),
-    ring: css.getPropertyValue("--ring").trim(),
+    bg: colour(frame, "var(--bg)"),
+    ring: colour(frame, "var(--ring)"),
     tile: colour(frame, "light-dark(var(--n8), var(--n7))"),
     glyph: colour(frame, "light-dark(var(--n12), var(--n11))"),
     // a link without a ground of its own (the header's 登录) breaks into tiles of the text's colour
-    button:
-      background === "transparent" || background.endsWith(", 0)") ? css.getPropertyValue("--text1").trim() : background,
+    button: solid ? background : colour(frame, "var(--text1)"),
   };
 }
 
@@ -242,7 +265,82 @@ function overlay(frame: HTMLElement, W: number, H: number) {
   return { canvas, x: canvas.getContext("2d"), dpr };
 }
 
-// what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + span] ms of the engine's clock
+export type Departure = {
+  readonly dir: 1 | -1;
+  // how many ms remain on the wall clock in the current direction
+  remaining: () => number;
+  // turns the transition round midway from where it currently stands
+  reverse: (onDone?: (end: 1 | -1) => void) => void;
+  destroy: () => void;
+};
+
+// Shared reversible clock on the frame loop: progress runs in [0, span] at wall-clock rate, flipping direction cleanly
+// whenever reverse() is called midway.
+function drive(
+  canvas: HTMLCanvasElement,
+  span: number,
+  start: number,
+  paint: (elapsed: number, dir: 1 | -1) => void,
+  cleanup: () => void,
+): Departure {
+  let dir: 1 | -1 = 1;
+  let pivot = 0;
+  let pivotAt = start;
+  let dead = false;
+  let active = true;
+  let onDone: ((end: 1 | -1) => void) | undefined;
+  let release = () => {};
+  const progress = (now: number) => clamp(pivot + dir * (now - pivotAt), 0, span);
+  const tick = (_dt: number, now: number) => {
+    if (dead) return;
+    const elapsed = progress(now);
+    paint(elapsed, dir);
+    if (dir === 1 && elapsed >= span) {
+      release();
+      active = false;
+      onDone?.(1);
+    } else if (dir === -1 && elapsed <= 0) {
+      dead = true;
+      release();
+      active = false;
+      cleanup();
+      onDone?.(-1);
+    }
+  };
+  release = own(canvas, tick);
+  tick(0, performance.now());
+  return {
+    get dir() {
+      return dir;
+    },
+    remaining: () => {
+      const e = progress(performance.now());
+      return dir === 1 ? span - e : e;
+    },
+    reverse: (done) => {
+      if (dead) return;
+      const now = performance.now();
+      pivot = progress(now);
+      pivotAt = now;
+      dir = dir === 1 ? -1 : 1;
+      onDone = done;
+      if (!active) {
+        active = true;
+        release = own(canvas, tick);
+      }
+      tick(0, now);
+    },
+    destroy: () => {
+      if (dead) return;
+      dead = true;
+      release();
+      active = false;
+      cleanup();
+    },
+  };
+}
+
+// what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + fade] ms of the engine's clock
 const leaving = [
   [".hs > main h1, .hs > main .lede", 120, 360],
   [".cta, .fam", 200, 200],
@@ -250,12 +348,43 @@ const leaving = [
   [".glow", 0, 460],
 ] as const;
 
-export type Departure = { destroy: () => void };
+// Shared scene setup and frame paint for depart, departLogin, and arriveHome.
+function prepare(frame: HTMLElement, b: Box, P: Box, sea?: OceanEngine, button?: HTMLElement, withWord = false) {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const grid = gridOf(sea);
+  const run = plan(b, P, grid, withWord ? frame : undefined);
+  const ink = inkOf(frame, button);
+  const { canvas, x, dpr } = overlay(frame, W, H);
+  return { W, H, grid, run, ink, canvas, x, dpr, b };
+}
+type Scene = ReturnType<typeof prepare>;
 
-// depart draws the departure from the button pressed, on the frame the website's board draws (.tr), over its sea: the
-// run started at start (performance.now()) and lands its stream span ms later, on the wall clock, so a page that
-// leaves at start + span leaves on the run's last frame however few frames came. It only draws: the caller goes. After
-// the last frame it holds the picture without frames; destroy takes everything it changed off the page.
+function paintScene(scene: Scene, t: number, withWord = false) {
+  const { x, dpr, W, H, run, b, ink, grid } = scene;
+  if (!x) return;
+  x.setTransform(dpr, 0, 0, dpr, 0, 0);
+  x.clearRect(0, 0, W, H);
+  drawCells(x, run, t, ink);
+  drawButton(x, run, b, t, ink, grid);
+  if (withWord) drawWord(x, run.word, run.wm, t, ink.tile, emph);
+  x.globalAlpha = 1;
+}
+
+function prepareSite(frame: HTMLElement, button: HTMLElement, sea: OceanEngine | undefined, withWord: boolean) {
+  return prepare(
+    frame,
+    toBox(button.getBoundingClientRect()),
+    panel(window.innerWidth, window.innerHeight),
+    sea,
+    button,
+    withWord,
+  );
+}
+
+// depart draws the departure from the button pressed, on the website's frame (.tr), over its sea: the run started at
+// start (performance.now()) and lands its stream span ms later, on the wall clock. Calling reverse() midway turns every
+// flying tile and faded layer back from where it stands; destroy() puts the page (and seabed wordmark) back.
 export function depart(
   frame: HTMLElement,
   button: HTMLElement,
@@ -263,40 +392,140 @@ export function depart(
   span: number,
   sea?: OceanEngine,
 ): Departure {
-  const W = window.innerWidth;
-  const H = window.innerHeight;
-  const R = (sea as { renderer?: { cw?: number; ch?: number } } | undefined)?.renderer;
-  const grid = { cw: R?.cw || 10, ch: R?.ch || R?.cw || 10 };
-  const b = button.getBoundingClientRect();
-  const run = plan(b, W, H, grid);
-  const speed = run.landed / span;
-  const ink = inkOf(frame, button);
-  const { canvas, x, dpr } = overlay(frame, W, H);
+  const scene = prepareSite(frame, button, sea, true);
+  const speed = scene.run.landed / span;
   const faded = leaving.flatMap(([selector, from, fade]) =>
     [...frame.querySelectorAll<HTMLElement>(selector)].map((el) => ({ el, from, fade })),
   );
-  let release = () => {};
-  const draw = (_dt: number, now: number) => {
-    const elapsed = clamp(now - start, 0, span);
-    const t = elapsed * speed;
-    button.style.visibility = t >= 60 ? "hidden" : "";
-    for (const { el, from, fade } of faded) el.style.opacity = String(1 - out(clamp((t - from) / fade, 0, 1)));
-    if (elapsed >= span) release();
-    if (!x) return;
-    x.setTransform(dpr, 0, 0, dpr, 0, 0);
-    x.clearRect(0, 0, W, H);
-    drawCells(x, run, t, ink);
-    drawButton(x, run, b, t, ink, grid);
-    x.globalAlpha = 1;
-  };
-  release = own(canvas, draw);
-  draw(0, performance.now());
-  return {
-    destroy: () => {
-      release();
-      canvas.remove();
+  return drive(
+    scene.canvas,
+    span,
+    start,
+    (elapsed) => {
+      const t = elapsed * speed;
+      button.style.visibility = t >= 60 ? "hidden" : "";
+      for (const { el, from, fade } of faded) el.style.opacity = String(1 - out(clamp((t - from) / fade, 0, 1)));
+      paintScene(scene, t, true);
+    },
+    () => {
+      scene.canvas.remove();
       button.style.visibility = "";
       for (const { el } of faded) el.style.opacity = "";
+      scene.run.wm?.show();
+    },
+  );
+}
+
+// Where return tiles aim when the sign-in page was visited directly (no saved homepage button rect): the header's
+// sign-in button on wide screens, or the top-left brand mark on phones.
+function fallbackTarget(W: number): Box {
+  if (W < 768) return { x: 20, y: 15, w: 88, h: 32 };
+  return { x: Math.max(24, W - 180), y: 18, w: 68, h: 36 };
+}
+
+function clampBox(r: OriginRect, W: number, H: number): Box {
+  const w = clamp(r.w, 24, W);
+  const h = clamp(r.h, 20, H);
+  return { x: clamp(r.x, 0, Math.max(0, W - w)), y: clamp(r.y, 0, Math.max(0, H - h)), w, h };
+}
+
+function syncLoginFrame(
+  side: HTMLElement | null,
+  seaBox: HTMLElement | null,
+  faded: HTMLElement[],
+  morphOn: boolean,
+  elapsed: number,
+  span: number,
+  dir: 1 | -1,
+) {
+  if (seaBox && morphOn) seaBox.dataset.state = dir === 1 ? "run" : "login";
+  const fade = out(clamp(elapsed / (span * 0.42), 0, 1));
+  for (const el of faded) el.style.opacity = String(1 - fade);
+  if (side) side.style.background = elapsed > 0 ? "transparent" : "";
+  if (seaBox) seaBox.style.boxShadow = elapsed > 0 ? "none" : "";
+}
+
+// departLogin plays the return half of the tiles transition on a console Login-board page (.lg): the solid disperses
+// back into sharks (by clearing data-state="login" on .lg-sea), the form fades, and the form panel dissolves ring by
+// ring into tiles streaming back toward the homepage button. Calling reverse() midway turns it cleanly back onto the
+// sign-in page and calls the sharks back in.
+export function departLogin(
+  frame: HTMLElement,
+  origin: OriginRect | null,
+  start: number,
+  span: number,
+  sea?: OceanEngine,
+): Departure {
+  const W = window.innerWidth;
+  const H = window.innerHeight;
+  const side = frame.querySelector<HTMLElement>(".lg-side");
+  const seaBox = frame.querySelector<HTMLElement>(".lg-sea");
+  const P = side ? toBox(side.getBoundingClientRect()) : panel(W, H);
+  const b = origin ? clampBox(origin, W, H) : fallbackTarget(W);
+  const scene = prepare(frame, b, P, sea);
+  const morphOn = seaBox?.dataset.state === "login";
+  const stage = morphOn ? null : seaBox?.querySelector<HTMLElement>(".lg-stg");
+  const faded = [...frame.querySelectorAll<HTMLElement>(".lg-form, .lg-top, .lg-pitch")];
+  if (stage) faded.push(stage);
+  return drive(
+    scene.canvas,
+    span,
+    start,
+    (elapsed, dir) => {
+      syncLoginFrame(side, seaBox, faded, morphOn, elapsed, span, dir);
+      paintScene(scene, (1 - elapsed / span) * scene.run.landed);
+    },
+    () => {
+      scene.canvas.remove();
+      if (side) side.style.background = "";
+      if (seaBox) seaBox.style.boxShadow = "";
+      if (seaBox && morphOn) seaBox.dataset.state = "login";
+      for (const el of faded) el.style.opacity = "";
+    },
+  );
+}
+
+// arriveHome plays the closing tail of a return transition when landing back on the website (/): the remaining tiles
+// finish landing into the trigger link while the hero fades in, then the overlay removes itself.
+export function arriveHome(
+  frame: HTMLElement,
+  button: HTMLElement,
+  start: number,
+  span: number,
+  sea?: OceanEngine,
+): Departure {
+  const scene = prepareSite(frame, button, sea, false);
+  const tail = scene.run.landed * 0.38;
+  const faded = leaving.flatMap(([selector]) => [...frame.querySelectorAll<HTMLElement>(selector)]);
+  const cleanup = () => {
+    scene.canvas.remove();
+    for (const el of faded) el.style.opacity = "";
+  };
+  let release = () => {};
+  let dead = false;
+  const tick = (_dt: number, now: number) => {
+    if (dead) return;
+    const u = clamp((now - start) / span, 0, 1);
+    const v = out(u);
+    for (const el of faded) el.style.opacity = String(0.35 + 0.65 * v);
+    paintScene(scene, (1 - u) * tail);
+    if (u >= 1) {
+      dead = true;
+      release();
+      cleanup();
+    }
+  };
+  release = own(scene.canvas, tick);
+  tick(0, performance.now());
+  return {
+    dir: -1,
+    remaining: () => clamp(span - (performance.now() - start), 0, span),
+    reverse: () => {},
+    destroy: () => {
+      if (dead) return;
+      dead = true;
+      release();
+      cleanup();
     },
   };
 }
