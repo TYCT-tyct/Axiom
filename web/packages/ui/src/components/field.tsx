@@ -1,13 +1,14 @@
 import { type ComponentProps, type ReactNode, useId } from "react";
 import { useTranslation } from "react-i18next";
+import { board } from "../board-classes";
 import { classes } from "../classes";
 import { useFormat } from "../format";
 import s from "./field.module.css";
 import { Icon } from "./icon";
 
-// The fields of a form. A field's label, hint and error are tied to its control (for, aria-describedby,
-// aria-invalid), so a screen reader reads them with it. An error never clears what was typed: the field only marks it,
-// and the value stays the caller's.
+// The fields of a form (.qfl/.qin from AxApp/regions.css). A field's label, hint and error are tied to its control
+// (for, aria-describedby, aria-invalid), so a screen reader reads them with it. An error never clears what was typed:
+// the field only marks it, and the value stays the caller's.
 type Frame = { label: string; hint?: string; error?: string };
 type Native<E extends "input" | "textarea" | "select"> = Omit<ComponentProps<E>, "id" | "className" | "style">;
 
@@ -15,7 +16,7 @@ function FieldFrame({ label, hint, error, control }: Frame & { control: (aria: A
   const id = useId();
   const described = [hint && `${id}-hint`, error && `${id}-error`].filter(Boolean).join(" ");
   return (
-    <div className={s.root}>
+    <div className={classes(board.qfl, s.root)}>
       <label htmlFor={id} className={s.label}>
         {label}
       </label>
@@ -42,7 +43,7 @@ export function Field({ label, hint, error, ...props }: Frame & Native<"input">)
       label={label}
       hint={hint}
       error={error}
-      control={(aria) => <input className={s.control} {...props} {...aria} />}
+      control={(aria) => <input className={classes(board.qin, s.control)} {...props} {...aria} />}
     />
   );
 }
@@ -53,7 +54,7 @@ export function TextArea({ label, hint, error, ...props }: Frame & Native<"texta
       label={label}
       hint={hint}
       error={error}
-      control={(aria) => <textarea className={classes(s.control, s.area)} {...props} {...aria} />}
+      control={(aria) => <textarea className={classes(board.qin, s.control, s.area)} {...props} {...aria} />}
     />
   );
 }
@@ -78,7 +79,7 @@ export function Select({
       hint={hint}
       error={error}
       control={(aria) => (
-        <select className={classes(s.control, s.select)} {...props} {...aria}>
+        <select className={classes(board.qin, s.control, s.select)} {...props} {...aria}>
           {options
             ? options.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -154,7 +155,7 @@ export function MonthField({
         <select
           aria-label={t("month.month")}
           aria-describedby={describedBy}
-          className={classes(s.control, s.select)}
+          className={classes(board.qin, s.control, s.select)}
           value={monthText}
           onChange={(event) => onChange(`${yearText}-${event.target.value}`)}
         >
@@ -167,7 +168,7 @@ export function MonthField({
         <select
           aria-label={t("month.year")}
           aria-describedby={describedBy}
-          className={classes(s.control, s.select)}
+          className={classes(board.qin, s.control, s.select)}
           value={yearText}
           onChange={(event) => onChange(`${event.target.value}-${monthText}`)}
         >

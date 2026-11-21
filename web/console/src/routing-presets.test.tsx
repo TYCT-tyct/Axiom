@@ -332,3 +332,14 @@ it("keeps a dialog open when the list read fails", async () => {
   expect(document.querySelector("dialog")).not.toBeNull();
   expect((document.querySelector("dialog") as HTMLElement).querySelector("input")?.value).toBe("Draft");
 });
+
+it("renders the page heading before the empty state and default note inside the page frame", async () => {
+  api.presets = [];
+  const { container } = await render(<RoutingPresets />);
+  const texts = [...container.querySelectorAll("h1, h2, p")].map((node) => node.textContent);
+  expect(container.firstElementChild?.className).toContain("page");
+  const titleAt = texts.indexOf("nav.routingPresets");
+  expect(titleAt).toBe(0);
+  expect(texts.indexOf("routingPresets.empty.title")).toBeGreaterThan(titleAt);
+  expect(texts.indexOf("routingPresets.defaults.hint")).toBeGreaterThan(titleAt);
+});

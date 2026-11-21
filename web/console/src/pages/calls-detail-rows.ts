@@ -1,4 +1,5 @@
 import type { Schemas } from "@axiom/api";
+import { systemPreset } from "@axiom/app";
 import type LogsAttempts from "@axiom/boards/AxApp/regions/LogsAttempts";
 import type { TFunction } from "i18next";
 import {
@@ -30,7 +31,10 @@ const idLabelStyle = "color:var(--t2);font-size:12px;line-height:20px;display:in
 function routeParts(route: Schemas["OwnCallRoute"] | undefined, t: TFunction): string[] {
   if (!route) return [];
   const parts: string[] = [];
-  if (route.preset?.id) parts.push(`${t("callsBoard.detail.route.preset")}: ${route.preset.id}`);
+  if (route.preset?.id) {
+    const presetLabel = route.preset.id === systemPreset ? t("routingPresets.key.system") : route.preset.id;
+    parts.push(`${t("callsBoard.detail.route.preset")}: ${presetLabel}`);
+  }
   if (route.selected_endpoint) parts.push(`${t("callsBoard.detail.route.selected")}: ${route.selected_endpoint}`);
   if (route.fastest_unmeasured) parts.push(t("callsBoard.detail.route.fastestUnmeasuredYes"));
   if (route.preset_unavailable) parts.push(t("callsBoard.detail.route.presetUnavailableYes"));
@@ -298,7 +302,7 @@ export function buildSpeedMetrics(call: Schemas["Call"], format: Format, t: TFun
   if (cwTok > 0)
     metrics.push({ key: "sp-cw", kind: "0", f0: t("callsBoard.detail.speed.cacheWrite"), f1: format.number(cwTok) });
   for (const [k, v] of Object.entries(call.usage)) {
-    if (!stdUsageKeys.has(k)) metrics.push({ key: `sp-u-${k}`, kind: "0", f0: k, f1: format.number(v) });
+    if (!stdUsageKeys.has(k) && v > 0) metrics.push({ key: `sp-u-${k}`, kind: "0", f0: k, f1: format.number(v) });
   }
   return metrics;
 }

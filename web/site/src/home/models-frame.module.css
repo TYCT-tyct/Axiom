@@ -1,9 +1,13 @@
 /* The website's frame for the pages that are not a board: a 1248px column with the header's bar above and the footer
    below. Padding is 16px, 24px from 640px. */
 .shell {
+  composes: board ax ov from global;
   display: flex;
   flex-direction: column;
   min-height: 100dvh;
+  background: var(--page);
+  color: var(--t1);
+  font-family: var(--family-ui);
 }
 
 .header,

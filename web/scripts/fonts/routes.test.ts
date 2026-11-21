@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
+
 import { exported, names, routeLiterals } from "./routes.ts";
 import { faceTexts, readManifest } from "./text.ts";
+
+// faceTexts traces a whole app's imports and messages: seconds of work that grow with the code, not a wait on anything.
+// A shared CI machine under load took longer than vitest's 5 s default for each of these (train 44817932330-1).
+const tracing = { timeout: 60_000 };
 
 describe("names", () => {
   it.each([
@@ -52,7 +57,7 @@ describe("routeLiterals", () => {
 });
 
 describe("faceTexts", () => {
-  it("cuts a page's plural messages into its characters", async () => {
+  it("cuts a page's plural messages into its characters", tracing, async () => {
     // admin/pages/redeem-codes shows redeem.issuedIntro, which has only plural forms: 「这是唯一一次显示」.
     // Only the face under test, so the run reads the admin's messages and not every board's region words.
     const manifest = readManifest();
@@ -65,7 +70,7 @@ describe("faceTexts", () => {
 describe("region words", () => {
   // The console's pages are cut from board regions, whose words are not in the app's messages: a page gets the words of
   // the regions it runs (its own and the shell's), and not every region's.
-  it("go to the pages that run their region, and not to others", async () => {
+  it("go to the pages that run their region, and not to others", tracing, async () => {
     const manifest = readManifest();
     const face = manifest.faces.find((one) => one.family === "Axiom CJK Console");
     const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });
@@ -79,7 +84,7 @@ describe("region words", () => {
 describe("the website's pages", () => {
   // The models page is its own document: its words are the ones its code runs, not the home page's questions; the
   // first screen's words are a page of their own, the slice the shared entry page preloads.
-  it("give the models page its own words and the first screen only its own", async () => {
+  it("give the models page its own words and the first screen only its own", tracing, async () => {
     const manifest = readManifest();
     const face = manifest.faces.find((one) => one.family === "Axiom CJK");
     const [texts] = await faceTexts({ ...manifest, faces: face ? [face] : [] });

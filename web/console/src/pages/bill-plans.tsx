@@ -148,7 +148,11 @@ function ChargeOrderForm({ pref }: { pref: BillingPreference }) {
   );
 
   return (
-    <Card title={t("settings.billing.title")} lede={t("settings.description")} layout="rows">
+    <Card
+      title={t("settings.billing.title")}
+      lede={t("settings.billing.hint", { fallback: t(`settings.billing.values.${pref.site_default}`) })}
+      layout="rows"
+    >
       <form
         onSubmit={(event) => {
           event.preventDefault();
@@ -190,7 +194,7 @@ function ChargeOrderSection() {
 
   if (query.error instanceof ApiError && query.error.status === 404) {
     return (
-      <Card title={t("settings.billing.title")} lede={t("settings.description")}>
+      <Card title={t("settings.billing.title")}>
         <Note title={t("statement.bill.plans.preferenceUnavailable")} />
       </Card>
     );

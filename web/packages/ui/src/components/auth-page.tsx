@@ -1,4 +1,6 @@
 import type { ReactNode } from "react";
+import { board } from "../board-classes";
+import { classes } from "../classes";
 import s from "./auth-page.module.css";
 import { Logo } from "./logo";
 import { usePageTitle } from "./page-title";
@@ -24,7 +26,7 @@ export function AuthPage({
 }) {
   usePageTitle(title);
   return (
-    <div className={s.root}>
+    <div className={classes(board.board, board.ax, board.ov, s.root)}>
       <header className={s.top}>
         <Logo name={name} logoUrl={logoUrl} className={s.logo} />
         <PreferenceSwitches className={s.switches} />

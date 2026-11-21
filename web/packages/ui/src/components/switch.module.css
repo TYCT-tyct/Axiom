@@ -1,17 +1,7 @@
-/* The board's .sw2.qsw: a track and a knob; on is the darkest step with the knob in the page colour. Off, the track is
-   edged in --ctl-line (docs/frontend.md「对比度令牌」), since the board's line2 fill alone is under 3:1. */
+/* 3:1 off-state edge (--ctl-line, docs/frontend.md「对比度令牌」), 44px hit target at all widths, and native
+   :disabled state on top of the board's .sw2.qsw (AxApp/regions.css). */
 .root {
-  all: unset;
-  position: relative;
-  flex: none;
-  box-sizing: border-box;
-  width: 36px;
-  height: 22px;
-  border-radius: var(--rPill);
-  background: var(--line2);
   box-shadow: inset 0 0 0 1px var(--ctl-line);
-  cursor: pointer;
-  transition: background-color var(--dur) var(--ease);
 }
 
 .root::before {
@@ -24,30 +14,8 @@
   transform: translate(-50%, -50%);
 }
 
-.knob {
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 18px;
-  height: 18px;
-  border-radius: 50%;
-  background: var(--cardBg);
-  transition: transform var(--dur) var(--easeB);
-}
-
 .root[aria-checked="true"] {
-  background: var(--t1);
   box-shadow: none;
-}
-
-.root[aria-checked="true"] .knob {
-  background: var(--page);
-  transform: translateX(14px);
-}
-
-.root:focus-visible {
-  outline: 2px solid var(--focus);
-  outline-offset: 2px;
 }
 
 .root:disabled {
