@@ -5,7 +5,7 @@
 // the same frames through its seek, the board's test hook.
 import "@axiom/boards/engines/hero-enter.js";
 import { own } from "./loop";
-import { buildSea, type OceanEngine, type Sea } from "./ocean";
+import { buildSea, type OceanEngine, pacedTick, type Sea } from "./ocean";
 
 export type { OceanEngine, Sea } from "./ocean";
 
@@ -88,6 +88,7 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
   if (root.dataset.enter !== "done") entrance.play();
   // the frame of the owner and of whoever keeps the sea awake: on a frame both are given, the sea steps once
   let stepped = -1;
+  const step = pacedTick(engine);
   const frame = (dt: number, now: number) => {
     if (now === stepped) return;
     stepped = now;
@@ -96,7 +97,7 @@ export function startSea(root: HTMLElement, owner: Element, light: boolean): Sea
       entrance.seek(elapsed);
     }
     if (!engine.held) {
-      engine.tick(dt);
+      step(dt);
     }
   };
   const release = own(owner, frame);
