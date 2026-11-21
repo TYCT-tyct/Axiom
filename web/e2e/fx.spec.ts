@@ -179,7 +179,7 @@ test("each screen below the first loads as it nears the view, and plays only whi
   const names = ["connect", "models", "steps", "trust", "faq", "bed"];
   await expect.poll(() => names.map((name) => asked.filter((one) => one === name).length)).toEqual(names.map(() => 1));
 
-  // past every screen nothing is in view to play
+  // past every screen only the sea, the whole page's background, plays: one callback a frame
   await page.evaluate(() => {
     const scroller = document.querySelector(".hs") as HTMLElement;
     const below = document.createElement("div");
@@ -187,11 +187,25 @@ test("each screen below the first loads as it nears the view, and plays only whi
     scroller.append(below);
     scroller.scrollTop = scroller.scrollHeight;
   });
-  await expect.poll(async () => (await loop(page)).pending).toBe(false);
-  const away = (await loop(page)).frames;
-  await pause(page);
-  expect((await loop(page)).frames).toBe(away);
+  await expect.poll(() => callbacksPerFrame(page)).toBe(1);
 });
+
+// callbacksPerFrame is how many owners' callbacks the loop runs in a frame, over 30 frames.
+const callbacksPerFrame = (page: Page) =>
+  page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        const state = () => (window as unknown as { axiomFx: { state: { frames: number } } }).axiomFx.state.frames;
+        let left = 31;
+        let first = 0;
+        const step = () => {
+          if (left === 31) first = state();
+          if (--left > 0) requestAnimationFrame(step);
+          else resolve(Math.round((state() - first) / 30));
+        };
+        requestAnimationFrame(step);
+      }),
+  );
 
 test("a model and a step are chosen from the keyboard", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });

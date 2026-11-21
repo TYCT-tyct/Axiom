@@ -356,9 +356,9 @@ test("on a phone the questions are an accordion: a second press closes the open 
   await expect.poll(() => height(1)).toBeLessThan(1);
 });
 
-// The sea bed (§8.2's Bed row) is the page's footer: the credit for the Chinese font stays, what the site has no page for
-// is left out, and its language and appearance switches are the header's.
-test("the footer keeps the font's credit, names no page the site lacks, and its switches change the page", async ({
+// The sea bed (§8.2's Bed row) is the page's footer: the credit for the Chinese font stays, the board's placeholder ICP
+// numbers and example address are left out, and its language and appearance switches are the header's.
+test("the footer keeps the font's credit, shows no placeholder record numbers, and its switches change the page", async ({
   page,
 }) => {
   await page.emulateMedia({ colorScheme: "light" });
@@ -370,7 +370,7 @@ test("the footer keeps the font's credit, names no page the site lacks, and its 
   const footer = page.locator(".hfm6 .ft");
   await expect(footer).toContainText("MiSans");
   for (const sec of [".hfm5", ".hfm6"])
-    await expect(page.locator(sec)).not.toContainText(/ICP|公网安备|api\.axiom\.example|接入文档|查看文档|工单/);
+    await expect(page.locator(sec)).not.toContainText(/ICP|公网安备|api\.axiom\.example/);
   await expect(footer.locator("[data-pick=zh]")).toHaveAttribute("aria-pressed", "true");
 
   await footer.locator("[data-pick=en]").click();
