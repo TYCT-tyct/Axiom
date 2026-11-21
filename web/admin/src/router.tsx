@@ -53,6 +53,8 @@ const routeTree = root.addChildren([
       (search) => ({ state: approvalState(search.state) }),
     ),
     shellPage("/approvals/$approvalId", () => import("./pages/approval")),
+    shellPage("/operations-credentials", () => loadTranslatedPage(import("./pages/operations-credentials"))),
+    shellPage("/operations-limits", () => loadTranslatedPage(import("./pages/operations-limits"))),
     shellPage(
       "/users",
       () => import("./pages/users"),
