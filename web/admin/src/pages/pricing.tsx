@@ -4,12 +4,17 @@ import { ActionButton, Card, DataState, EmptyState, PageHead, Table, Td, Text, u
 import { usePrefetchQuery, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import en from "../locales/en/price-policy";
+import zh from "../locales/zh/price-policy";
 import { Actions, Code, Head, PageBody, State, useShownAfter } from "../parts";
 import { MethodSummary } from "../pricing/describe";
 import { PreviewPanel } from "../pricing/preview-panel";
+import { PricePolicy } from "../pricing/price-policy";
 import { Publications } from "../pricing/publications";
 import { RuleDialog } from "../pricing/rule-dialog";
 import { listedModelsQuery, publicationsQuery, rulesQuery, tiersQuery } from "../queries";
+
+export const messages = { zh: { pricePolicy: zh }, en: { pricePolicy: en } };
 
 type Rule = AdminSchemas["PricingRule"];
 
@@ -49,7 +54,12 @@ export default function Pricing() {
           </DataState>
         </Card>
         {/* Both lists are asked for at once; each section below appears once the ones above it have answered. */}
-        {publicationsShown ? <Publications /> : null}
+        {publicationsShown ? (
+          <>
+            <Publications />
+            <PricePolicy />
+          </>
+        ) : null}
         {previewShown ? <PreviewPanel /> : null}
       </PageBody>
       {editing ? <RuleDialog rule={current} onClose={() => setEditing(null)} /> : null}

@@ -4,11 +4,15 @@ import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
+import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
 import operations from "./operations";
 import orders from "./orders";
+import discrepancies from "./payment-discrepancies";
+import platformGrants from "./platform-grants";
+import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
 import redeem from "./redeem";
@@ -31,6 +35,7 @@ export const initial = {
     operationsLimits: "资金与执行上限",
     users: "用户",
     orders: "订单与退款",
+    discrepancies: "支付差异",
     redeemCodes: "兑换码",
     calls: "调用记录",
     audit: "审计日志",
@@ -38,6 +43,7 @@ export const initial = {
     mappings: "待映射模型",
     models: "模型目录",
     pricing: "定价",
+    exchangeRates: "汇率",
     subscriptionPlans: "订阅套餐",
     settings: "站点设置",
     sourceClasses: "来源类别",
@@ -194,6 +200,10 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   settings,
   subscriptions,
   suppliers,
+  discrepancies,
+  exchangeRates,
+  platformGrants,
+  pricePolicy,
   alertConfig,
   alertEvents,
   announcements,

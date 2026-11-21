@@ -6,11 +6,15 @@ import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
 import calls from "./calls";
+import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
 import mappings from "./mappings";
 import models from "./models";
 import operations from "./operations";
 import orders from "./orders";
+import discrepancies from "./payment-discrepancies";
+import platformGrants from "./platform-grants";
+import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
 import redeem from "./redeem";
@@ -32,6 +36,7 @@ export const initial = {
     operationsLimits: "Money & execution limits",
     users: "Users",
     orders: "Orders",
+    discrepancies: "Payment discrepancies",
     redeemCodes: "Redeem codes",
     calls: "Calls",
     audit: "Audit log",
@@ -39,6 +44,7 @@ export const initial = {
     mappings: "Unmapped models",
     models: "Model catalog",
     pricing: "Pricing",
+    exchangeRates: "Exchange rates",
     subscriptionPlans: "Subscription plans",
     settings: "Site settings",
     sourceClasses: "Source classes",
@@ -199,6 +205,10 @@ export const initial = {
     | "settings"
     | "subscriptions"
     | "suppliers"
+    | "discrepancies"
+    | "exchangeRates"
+    | "platformGrants"
+    | "pricePolicy"
     | "alertConfig"
     | "alertEvents"
     | "announcements"
@@ -214,6 +224,10 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   settings,
   subscriptions,
   suppliers,
+  discrepancies,
+  exchangeRates,
+  platformGrants,
+  pricePolicy,
   alertConfig,
   alertEvents,
   announcements,

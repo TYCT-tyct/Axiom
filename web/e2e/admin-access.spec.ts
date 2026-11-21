@@ -203,12 +203,17 @@ test.describe("permissions", () => {
     await expect(nav.getByRole("link")).toHaveText([
       zhText("nav.models"),
       zhText("nav.pricing"),
+      zhText("nav.exchangeRates"),
       zhText("nav.subscriptionPlans"),
     ]);
     await expect(nav.getByRole("group")).toHaveCount(2);
     await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
     const pricingGroup = nav.getByRole("group", { name: "定价与套餐" });
     await expect(pricingGroup.getByRole("link", { name: zhText("nav.pricing") })).toHaveAttribute("href", "/pricing");
+    await expect(pricingGroup.getByRole("link", { name: zhText("nav.exchangeRates") })).toHaveAttribute(
+      "href",
+      "/exchange-rates",
+    );
     await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
       "href",
       "/subscription-plans",
