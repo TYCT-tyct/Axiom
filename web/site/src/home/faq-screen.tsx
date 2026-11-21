@@ -23,9 +23,6 @@ const vars = (scheme: "light" | "dark") =>
 
 const zh = { ...wideZh, ...narrowZh };
 const en = { ...wideEn, ...narrowEn };
-// The answers whose picture shows prices, bills or keys: the figures there are the board's illustration.
-const illustrated = [0, 1, 3, 4, 5, 6];
-
 // The site's name in the first picture's box, which holds about nine Latin letters, a CJK character counting as two: a
 // longer name keeps its start, enough to know it by, and ends in an ellipsis.
 const room = 9;
@@ -52,33 +49,19 @@ export function FaqScreen({ wide }: { wide: boolean }) {
   const { root, v1, known } = useApiAddress();
   const { name, join } = useSite();
   const site = { site: name };
-  const said = [
-    t("script.faq.a0", site),
-    t("script.faq.a1"),
-    t("script.faq.a2"),
-    t("script.faq.a3"),
-    t("script.faq.a4", site),
-    t("script.faq.a5"),
-    t("script.faq.a6"),
-    t(`script.faq.a7.${join}`),
-  ];
-  const answer = (i: number) => {
-    const text = said[i] as string;
-    return illustrated.includes(i) ? `${text} ${t("script.faq.sample")}` : text;
-  };
   const { setStage, values, entered } = useScript(
     (stage: HTMLElement, changed: () => void) => start(stage, changed, !wide),
     {},
   );
   const text: Props["text"] = {
-    ans0: answer(0),
-    ans1: answer(1),
-    ans2: answer(2),
-    ans3: answer(3),
-    ans4: answer(4),
-    ans5: answer(5),
-    ans6: answer(6),
-    ans7: answer(7),
+    ans0: t("script.faq.a0", site),
+    ans1: t("script.faq.a1"),
+    ans2: t("script.faq.a2"),
+    ans3: t("script.faq.a3"),
+    ans4: t("script.faq.a4", site),
+    ans5: t("script.faq.a5"),
+    ans6: t("script.faq.a6"),
+    ans7: t(`script.faq.a7.${join}`),
     apiRoot: root,
     apiV1: v1,
     billing: t("script.faq.billing"),
@@ -100,6 +83,8 @@ export function FaqScreen({ wide }: { wide: boolean }) {
             m5_noApi: !known,
             m5_setStage: setStage,
             m5_in: entered ? "in" : "",
+            // the label on the pictures whose prices, bills and keys are the board's illustration
+            m5_note: t("script.faq.sample"),
           } as Props["values"]
         }
         text={text}

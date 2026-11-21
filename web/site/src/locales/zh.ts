@@ -66,13 +66,13 @@ export default {
     // are official (docs/product.md「售卖形式」), which models a key reaches and its limits (docs/domains/accounts.md「API
     // key」) and how the site takes new users (getSite's registration). The PR's table lists each sentence's basis.
     faq: {
-      a0: "一个Key就能调用多家厂商的模型（能调哪些，由这把Key的设置决定），不用每家各开账号、各自充值。同一个模型背后可以有多个端点，{{site}}默认按价格和健康度挑一个；遇到超时、限流、上游出错这类端点的问题，允许回退且还有合格的端点时，换下一个。账单只有一份。",
-      a1: "我们直接接入的官方 API（含云厂商）之外的端点，多是中转站的分组，按匿名代号显示，通常更便宜。要限制来源，在控制台建一个路由预设（比如只走官方来源），再把它绑到这把Key上；只改默认预设不会改已有的Key。",
-      a2: "Claude Code、Codex、Cursor和OpenAI SDK都能用：按接入屏里各自的配置设好地址和Key，再从这把Key的模型列表里选模型。其他兼容OpenAI或Anthropic接口的工具也一样。",
-      a3: "按实际服务这次请求的那个端点收费，每个端点有自己的计费项和单价：对话按输入、输出token；图片看端点，有的按张，有的按token；联网搜索这类工具按次。上游没报全用量时（比如流中途断开），缺的部分按估算收；整笔都是估算、之后又能对上供应商完整记录的，会按记录重算。价格公开的站点，模型页列出各端点的价格；不公开的站点，登录后在控制台的模型页看得到。",
-      a4: "遇到超时、限流、上游出错这类端点的问题，允许回退且还有合格的端点时，{{site}}会换一个端点重试；请求本身的问题（比如参数错误）和内容审核的拒绝会直接返回给你，内容开始交给你之后也不再换。换端点之前失败的尝试不向你收费；最后一次按它的结局计费：内容已经交到你手里的，按实际用量收；已经执行的按次项目（比如搜索）照收。控制台的调用记录里能看到每次尝试。",
-      a5: "端点价格由本站的定价规则决定：按成本加成或参考价定的，会随上游成本或参考价调整；固定价一般不变，但成本涨过保本线时会上调，涨幅超过站点允许的自动幅度时，这个模型暂停新的调用，等站点确认新价格。每个请求按它发出时锁定的价格结算，之后的调价不影响已经发出的请求。",
-      a6: "在控制台删掉这个Key，再新建一个。平时给每个Key设好额度上限和IP白名单：额度上限可以按日、周、月重置，也可以设不重置的总额。上限管的是新调用能不能发出：按周期重置的上限只管每个周期，不重置的总额用完后不再放行新调用，但已经发出的请求和事后的用量校正仍可能让累计花费超过上限。所以发现泄露，尽快删掉这把Key。",
+      a0: "一个Key就能调多家厂商的模型，不用每家各开账号、各自充值。同一个模型背后可以有多个端点，{{site}}按价格和健康度挑一个，端点出问题且允许回退时换下一个。账单只有一份。",
+      a1: "我们直接接入的官方 API（含云厂商）之外的端点，多是中转站的分组，通常更便宜。要限制来源，在控制台建一个路由预设（比如只走官方来源），绑到这把Key上。",
+      a2: "Claude Code、Codex、Cursor和OpenAI SDK都能用：设好地址和Key，再从这把Key的模型列表里选模型。其他兼容OpenAI或Anthropic接口的工具也一样。",
+      a3: "按实际服务请求的端点收费：对话按输入、输出token，图片按张或token，搜索这类工具按次。上游没报全的用量按估算收；整笔都是估算的，对上供应商记录后会重算。",
+      a4: "端点超时、限流或上游出错，且允许回退时，{{site}}会换一个端点重试。换之前失败的尝试不收费；请求本身的错误直接返回给你。控制台的调用记录里能看到每次尝试。",
+      a5: "价格按本站的定价规则定，可能随上游成本或参考价调整；涨幅超过站点允许的范围时，模型先暂停新的调用，等站点确认。每个请求按它发出时锁定的价格结算。",
+      a6: "在控制台删掉这个Key，再新建一个。平时给每个Key设好额度上限和IP白名单；上限拦的是新调用，已发出的请求仍可能让累计花费超过上限，所以发现泄露要尽快删。",
       // by how the site takes new users, and before the site has said: then only what holds for every site
       a7: {
         open: "注册不要钱。目前没有试用额度，按用量扣费，用多少扣多少。",
@@ -90,8 +90,8 @@ export default {
       billing: "按用量",
       // the tools' picture: the two addresses, which are all it shows; without an address, no command
       envNote: "# 两种接口的地址；key 另外设置",
-      // after the answers whose picture shows figures: they are the board's illustration, not the site's
-      sample: "图中的价格、金额和 Key 是示例数据。",
+      // the label on the pictures that show prices, bills or keys: they are the board's illustration, not the site's
+      sample: "示例数据",
     },
     // The sea bed's way in and the line before it, by how the site takes new users (getSite's registration): a site that
     // takes nobody new, or has not said yet, is entered by signing in. The brand's line holds for a key that may use only

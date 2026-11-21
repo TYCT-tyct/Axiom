@@ -346,7 +346,7 @@ for (const [name, viewport] of [
     for (const height of heights) expect(height).toBeLessThan(32);
   });
 
-test("every answer ends above its picture, and the picture is whole inside the card", async ({ page }) => {
+test("every answer fits the board's card above its picture, and the picture is whole inside it", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await scrollTo(page, 5);
@@ -368,6 +368,8 @@ test("every answer ends above its picture, and the picture is whole inside the c
     expect(box.text, `answer ${i + 1}`).toBeLessThanOrEqual(box.stage.top - 16);
     expect(box.stage.bottom, `answer ${i + 1}`).toBeLessThanOrEqual(box.card.bottom + 0.5);
   }
+  // the answers are written to the board's three lines, so the card keeps the board's height
+  expect(await page.locator(".hfm5 .card").evaluate((card) => card.getBoundingClientRect().height)).toBe(433);
 });
 
 test("a question is chosen by pointing at it, and the cable follows it", async ({ page }) => {
