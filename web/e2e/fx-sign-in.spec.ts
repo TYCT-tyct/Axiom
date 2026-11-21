@@ -174,6 +174,28 @@ async function ringPixels(page: Page, colour?: string) {
   }, colour);
 }
 
+// The sign-in pages stand in one frame: going from signing in to registering changes the question only, and the sea and
+// the solid on it are the ones already drawn, not made again.
+test("going from signing in to registering keeps the sea and its solid", async ({ page }) => {
+  await mockConsole(page);
+  await page.goto(signInPage);
+  await expect(stageCanvas(page)).toBeAttached();
+  await page.locator(".lg canvas.sea").evaluate((sea) => {
+    (window as unknown as { sea: Element }).sea = sea;
+  });
+  const stage = await stageCanvas(page).elementHandle();
+  await page.locator(".lg-form").getByRole("link", { name: "注册", exact: true }).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  await expect(page.locator(".lg-title")).toContainText("注册");
+  expect(
+    await page.locator(".lg canvas.sea").evaluate((sea) => sea === (window as unknown as { sea: Element }).sea),
+  ).toBe(true);
+  expect(await stage?.evaluate((canvas) => canvas.isConnected)).toBe(true);
+  // one frame, one question
+  await expect(page.locator(".lg")).toHaveCount(1);
+  await expect(page.locator(".lg-form form")).toHaveCount(1);
+});
+
 test("what is typed reaches the solid: a whole address lights the envelope", async ({ page }) => {
   await mockConsole(page);
   await page.goto(signInPage);

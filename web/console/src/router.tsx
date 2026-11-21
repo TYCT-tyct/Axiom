@@ -60,47 +60,61 @@ const guestSearch = (search: Record<string, unknown>) => ({
 
 const app = createRoute({ getParentRoute: () => root, id: "app", component: Layout });
 
+// The sign-in pages stand in one frame (auth/login-frame.tsx LoginLayout), made once for all of them: going from one to
+// another changes only the question. While its code or a page's is on the way the window shows the page's ground, not
+// the console's skeleton: the frame and its question come as one.
+const blank = () => null;
+const login = createRoute({
+  getParentRoute: () => root,
+  id: "login",
+  pendingComponent: blank,
+  component: lazyRouteComponent(() => import("./auth/login-frame"), "LoginLayout"),
+});
+const signInPage = { getParentRoute: () => login, pendingComponent: blank };
+
 // Every page is its own chunk, loaded when the user is about to open it; the first screen loads the page of the address
 // it opens (scripts/budget.ts counts it).
 const routeTree = root.addChildren([
-  createRoute({
-    getParentRoute: () => root,
-    path: "/sign-in",
-    validateSearch: guestSearch,
-    component: lazyRouteComponent(() => import("./auth/sign-in")),
-  }),
-  createRoute({
-    getParentRoute: () => root,
-    path: "/mfa",
-    validateSearch: guestSearch,
-    component: lazyRouteComponent(() => import("./auth/mfa")),
-  }),
-  createRoute({
-    getParentRoute: () => root,
-    path: "/register",
-    validateSearch: guestSearch,
-    component: lazyRouteComponent(() => import("./auth/register")),
-  }),
-  createRoute({
-    getParentRoute: () => root,
-    path: "/verify-email",
-    validateSearch: guestSearch,
-    ...mailLinkRoute("/verify-email"),
-    component: lazyRouteComponent(() => import("./auth/verify-email")),
-  }),
-  createRoute({
-    getParentRoute: () => root,
-    path: "/reset-password",
-    validateSearch: guestSearch,
-    ...mailLinkRoute("/reset-password"),
-    component: lazyRouteComponent(() => import("./auth/reset-password")),
-  }),
-  createRoute({
-    getParentRoute: () => root,
-    path: "/consent",
-    validateSearch: guestSearch,
-    component: lazyRouteComponent(() => import("./auth/consent")),
-  }),
+  login.addChildren([
+    createRoute({
+      ...signInPage,
+      path: "/sign-in",
+      validateSearch: guestSearch,
+      component: lazyRouteComponent(() => import("./auth/sign-in")),
+    }),
+    createRoute({
+      ...signInPage,
+      path: "/mfa",
+      validateSearch: guestSearch,
+      component: lazyRouteComponent(() => import("./auth/mfa")),
+    }),
+    createRoute({
+      ...signInPage,
+      path: "/register",
+      validateSearch: guestSearch,
+      component: lazyRouteComponent(() => import("./auth/register")),
+    }),
+    createRoute({
+      ...signInPage,
+      path: "/verify-email",
+      validateSearch: guestSearch,
+      ...mailLinkRoute("/verify-email"),
+      component: lazyRouteComponent(() => import("./auth/verify-email")),
+    }),
+    createRoute({
+      ...signInPage,
+      path: "/reset-password",
+      validateSearch: guestSearch,
+      ...mailLinkRoute("/reset-password"),
+      component: lazyRouteComponent(() => import("./auth/reset-password")),
+    }),
+    createRoute({
+      ...signInPage,
+      path: "/consent",
+      validateSearch: guestSearch,
+      component: lazyRouteComponent(() => import("./auth/consent")),
+    }),
+  ]),
   app.addChildren([
     createRoute({
       getParentRoute: () => app,

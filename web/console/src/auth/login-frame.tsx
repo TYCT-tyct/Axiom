@@ -13,16 +13,20 @@ import { takeArrival, useEffectModule } from "@axiom/fx";
 import type { Heard, Login, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
+import { Outlet } from "@tanstack/react-router";
 import {
+  createContext,
   type FormEvent,
   type ReactNode,
   type RefObject,
+  use,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
 } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { loginPhoneWidth, useBoardMedia } from "../board-interaction";
 import { siteQuery } from "../queries";
@@ -114,54 +118,87 @@ type Frame = {
   children: ReactNode;
 };
 
-// LoginFrame is a sign-in page as the Login board draws it (port design §9): the sea and the pitch on one side, one
-// question on the other, in a form that submits through onSubmit. The sea, the solid its sharks form for the step and
-// the title's decode on an arrival from the website come from @axiom/fx/login, loaded after the first content.
-export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, answer, onSubmit, children }: Frame) {
+// What the page on show tells the frame it stands in: its title, its question and the solid for it, the stage its forms
+// tell, and whether a request of it is out.
+type Standing = {
+  title: string;
+  step: string;
+  shape: Shape;
+  stage: Stage;
+  locked: boolean;
+  titleRef: RefObject<HTMLElement | null>;
+};
+type Room = { slot: HTMLElement | null; stand: (standing: Standing) => void };
+const RoomContext = createContext<Room | null>(null);
+
+// LoginLayout is the frame every sign-in page stands in (port design §9): the sea and the pitch on one side, the
+// brand, the language switch, and the side the page's question goes in. It is made once for all of them, so going from
+// one to another (signing in to registering, the password to the second factor) changes only the question: the sea,
+// the solid and the sharks stay where they are. The sea, the solid its sharks form for the step and the title's decode
+// on an arrival from the website come from @axiom/fx/login, loaded after the first content.
+export function LoginLayout() {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
   const prefs = usePreferences();
-  usePageTitle(title);
   useBrandStyle(site.data?.brand_color);
-  const form = useRef<HTMLFormElement | null>(null);
-  const cancel = useRef<HTMLDivElement | null>(null);
-  useLock(form, cancel, attempt.kind !== null);
-  const titleRef = useRef<HTMLElement | null>(null);
-  useFocusOnStep(form, step, titleRef, answer === true && attempt.kind === null);
-  const engine = useLoginEngine({
-    stage,
-    shape,
-    dark: prefs.dark,
-    brand: site.data?.brand_color,
-    titleRef,
-    title,
-    step,
-    locked: attempt.kind !== null,
-  });
+  const [slot, setSlot] = useState<HTMLElement | null>(null);
+  const [standing, stand] = useState<Standing | null>(null);
+  const engine = useLoginEngine(standing, prefs.dark, site.data?.brand_color);
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
   const phone = useBoardMedia(loginPhoneWidth);
+  const room = useMemo(() => ({ slot, stand }), [slot]);
   return (
-    <LoginShell
-      t={(key) => (english ? ShellEN : ShellZH)[key]}
-      values={{
-        modeCls: prefs.dark ? "dark" : "light",
-        lang: prefs.locale,
-        noKern: english,
-        vars: boardVars,
-        seaCanvas: engine.seaCanvas,
-        brandStyle,
-      }}
-      text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), lede: t("auth.pitch.lede"), home: "/" }}
-      brand={
-        <>
-          <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
-          <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle(phone) }} />
-        </>
-      }
-      languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
-    >
-      <form ref={form} noValidate onSubmit={onSubmit} aria-busy={attempt.kind !== null}>
+    <RoomContext value={room}>
+      <LoginShell
+        t={(key) => (english ? ShellEN : ShellZH)[key]}
+        values={{
+          modeCls: prefs.dark ? "dark" : "light",
+          lang: prefs.locale,
+          noKern: english,
+          vars: boardVars,
+          seaCanvas: engine.seaCanvas,
+          brandStyle,
+        }}
+        text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), lede: t("auth.pitch.lede"), home: "/" }}
+        brand={
+          <>
+            <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
+            <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle(phone) }} />
+          </>
+        }
+        languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
+      >
+        {/* the page's question goes here (LoginFrame): a plain block, as the form panel lays out no child by name */}
+        <div ref={setSlot} />
+        <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
+      </LoginShell>
+      <Outlet />
+    </RoomContext>
+  );
+}
+
+// LoginFrame is a sign-in page's question as the Login board draws it, in the frame LoginLayout keeps: its title and
+// line over the fields, in a form that submits through onSubmit, and the cancel of a request that is out.
+export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, answer, onSubmit, children }: Frame) {
+  const { t } = useTranslation();
+  const room = use(RoomContext);
+  usePageTitle(title);
+  const form = useRef<HTMLFormElement | null>(null);
+  const cancel = useRef<HTMLDivElement | null>(null);
+  const locked = attempt.kind !== null;
+  useLock(form, cancel, locked);
+  const titleRef = useRef<HTMLElement | null>(null);
+  useFocusOnStep(form, step, titleRef, answer === true && !locked);
+  const stand = room?.stand;
+  useLayoutEffect(
+    () => stand?.({ title, step, shape, stage, locked, titleRef }),
+    [stand, title, step, shape, stage, locked],
+  );
+  if (!room?.slot) return null;
+  return createPortal(
+    <>
+      <form ref={form} noValidate onSubmit={onSubmit} aria-busy={locked}>
         <LoginStep key={step} t={String} values={{ stepCls: "in", shape }}>
           <FrameTitle title={title} titleRef={titleRef} />
           {sub ? (
@@ -175,8 +212,8 @@ export function LoginFrame({ title, sub, subStyle, step, shape, attempt, stage, 
       <div ref={cancel}>
         {attempt.cancel ? <NoteAction label={t("cancel", { ns: "common" })} onPress={attempt.cancel} /> : null}
       </div>
-      <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
-    </LoginShell>
+    </>,
+    room.slot,
   );
 }
 
@@ -253,63 +290,59 @@ function useReloadWhenRestored() {
 }
 
 // useLoginEngine runs the sea, the solid and an arrival's decode on the frame once their code has loaded, and keeps
-// them on the step's shape and the page's colours (the scheme, the site's brand). The decode ends when the title it
-// plays over changes (another step, another language). It hands the running engine to the page's stage.
-function useLoginEngine({
-  stage,
-  shape,
-  dark,
-  brand,
-  titleRef,
-  title,
-  step,
-  locked,
-}: {
-  stage: Stage;
-  shape: Shape;
-  dark: boolean;
-  brand: string | undefined;
-  titleRef: RefObject<HTMLElement | null>;
-  title: string;
-  step: string;
-  locked: boolean;
-}) {
-  const handle = stage;
+// them on the page's shape and colours (the scheme, the site's brand). The decode ends when the title it plays over
+// changes (another step, another page, another language). It hands the running engine to the stage of the page on show.
+function useLoginEngine(standing: Standing | null, dark: boolean, brand: string | undefined) {
   const [arrived] = useState(claimArrival);
-  const veil = useArrivalVeil(titleRef, arrived);
+  const veil = useArrivalVeil(standing?.titleRef, arrived);
   const root = useRef<HTMLElement | null>(null);
   useReloadWhenRestored();
-  useReturnHome(root, locked);
+  useReturnHome(root, standing?.locked ?? false);
   const decode = useRef<HTMLCanvasElement | null>(null);
-  const latest = useRef({ shape, dark });
-  latest.current = { shape, dark };
+  const latest = useRef({ standing, dark });
+  latest.current = { standing, dark };
   const login = useEffectModule(root, loadLogin, (module, frame) => {
-    const running = module.startLogin(frame, !latest.current.dark, latest.current.shape);
-    if (veil.on.current && titleRef.current && decode.current) {
+    const { standing: now, dark: night } = latest.current;
+    const running = module.startLogin(frame, !night, now?.shape ?? "start");
+    const title = now?.titleRef.current;
+    if (veil.on.current && title && decode.current) {
       veil.on.current = false;
-      running.decode(titleRef.current, decode.current);
+      running.decode(title, decode.current);
     }
-    for (const heard of handle.said.current.values()) running.hear(heard);
-    handle.running.current = running;
+    if (now) {
+      for (const heard of now.stage.said.current.values()) running.hear(heard);
+      now.stage.running.current = running;
+    }
     return running;
   });
-  useEffect(
-    () => () => {
-      handle.running.current = null;
-    },
-    [handle],
-  );
-  useEffect(() => login.current?.show(shape), [login, shape]);
+  // the page on show hears the engine, and an engine already running hears what its forms said before they were shown
+  const stage = standing?.stage;
+  useEffect(() => {
+    const running = login.current;
+    if (!stage) return;
+    if (running) for (const heard of stage.said.current.values()) running.hear(heard);
+    stage.running.current = running;
+    return () => {
+      stage.running.current = null;
+    };
+  }, [login, stage]);
+  const shape = standing?.shape;
+  useEffect(() => {
+    if (shape) login.current?.show(shape);
+  }, [login, shape]);
   // brand is a dependency only: useBrandStyle, an effect before this one, has put its colours on the page
   useEffect(() => login.current?.recolour(!dark), [login, dark, brand]);
   // title and step are dependencies only: when either changes, the veil and the decode of the old title end
-  useEffect(
-    () => () => {
+  const title = standing?.title;
+  const step = standing?.step;
+  useEffect(() => {
+    // the first page's title coming is no change of title
+    if (title === undefined) return;
+    return () => {
       veil.lift();
       login.current?.endDecode();
-    },
-    [login, veil, title, step],
-  );
+    };
+  }, [login, veil, title, step]);
   return {
     seaCanvas: (canvas: Element | null) => {
       root.current = canvas?.closest<HTMLElement>(".lg") ?? null;
@@ -320,15 +353,18 @@ function useLoginEngine({
   };
 }
 
-// An arrival's title is hidden from its first frame until the decode resolves it, or for veilFor if the decode's code
-// is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back. The veil lifts at once
-// when its title goes (lift): a decode that comes later does not play then.
-function useArrivalVeil(titleRef: RefObject<HTMLElement | null>, arrived: boolean) {
+// An arrival's title (the first page's) is hidden from its first frame until the decode resolves it, or for veilFor if
+// the decode's code is late; the colour goes through the CSSOM (CSP), and the decode gives each character's back. The
+// veil lifts at once when its title goes (lift): a decode that comes later does not play then.
+function useArrivalVeil(titleRef: RefObject<HTMLElement | null> | undefined, arrived: boolean) {
   const on = useRef(false);
   const end = useRef(() => {});
+  // the arrival is the first page's: a page gone on to later in the frame shows its title as it is
+  const spent = useRef(false);
   useLayoutEffect(() => {
+    if (!arrived || !titleRef || spent.current) return;
+    spent.current = true;
     const chars = titleRef.current?.querySelectorAll<HTMLElement>(".ch") ?? [];
-    if (!arrived) return;
     for (const c of chars) c.style.color = "transparent";
     on.current = true;
     const lift = () => {

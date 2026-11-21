@@ -89,6 +89,7 @@
       "style": "italic",
       "pages": [
         "site/home",
+        "console/auth/login-frame",
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",
@@ -112,6 +113,7 @@
         "site/home",
         "site/models",
         "site/first",
+        "console/auth/login-frame",
         "console/auth/sign-in",
         "console/auth/mfa",
         "console/auth/consent",

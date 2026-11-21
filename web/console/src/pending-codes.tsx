@@ -39,7 +39,8 @@ export function PendingCodesProvider({ router, children }: { router: typeof cons
   const away = useRouterState({
     router,
     select: (state) =>
-      state.matches.some(({ routeId }) => routeId === "/reset-password" || routeId === "/verify-email"),
+      // by the pages' paths, which stay the same whatever frame the pages stand in
+      state.matches.some(({ fullPath }) => fullPath === "/reset-password" || fullPath === "/verify-email"),
   });
   useHideRecoveryCodes(away);
   const [failure, setFailure] = useState<unknown>(null);
