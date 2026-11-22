@@ -18,8 +18,8 @@ export function FirstScreen() {
       t={(key) => t(`board.${key}`)}
       text={{
         lede: opened(words.lede),
-        signUp: opened(words.signUpForKey),
-        signUpHref: links.signUp,
+        signIn: opened(words.signInForKey),
+        signInHref: links.signIn,
       }}
     >
       {first.zh ? <Headline t={opened} /> : opened(words.headline)}

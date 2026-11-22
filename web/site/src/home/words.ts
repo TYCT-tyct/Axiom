@@ -7,7 +7,7 @@ export type BoardKey = keyof typeof zh.board;
 export const words = {
   headline: "m2e2a3b1e5d",
   lede: "m0d0cee5072",
-  signUpForKey: "mcaf724c6bd",
+  signInForKey: "m980e5e70bd",
   models: "mc98e118e0a",
   pricing: "m0f4371a7a9",
   signIn: "m1e2df9c307",

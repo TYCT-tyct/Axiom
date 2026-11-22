@@ -3,6 +3,6 @@
 import type { Props } from "./FirstScreen.tsx";
 import type en from "./FirstScreen.en.ts";
 export const demo = (t: (key: keyof typeof en) => string): Props => ({ t, values: {}, text: {lede: t("m0d0cee5072"),
-signUp: t("mcaf724c6bd"),
-signUpHref: "#"},  });
+signIn: t("m980e5e70bd"),
+signInHref: "#"},  });
 /* jscpd:ignore-end */

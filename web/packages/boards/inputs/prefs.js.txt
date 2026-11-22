@@ -14,16 +14,16 @@
     de: '德语 german de', fr: '法语 french francais fr', pt: '葡萄牙语 巴西 portuguese portugues pt br', ru: '俄语 russian ru',
   };
   const COPY = {
-    'zh-CN': { models: '模型', pricing: '价格', docs: '文档', login: '登录', signup: '注册', h1: '一个key，接入所有模型', lede: '每条线路实测，按实际服务的线路计费。', cta1: '注册，获取API key', cta2: '查看文档' },
-    'zh-TW': { models: '模型', pricing: '價格', docs: '文件', login: '登入', signup: '註冊', h1: '一個key，接入所有模型', lede: '每條線路實測，按實際服務的線路計費。', cta1: '註冊，取得API key', cta2: '查看文件' },
-    en: { models: 'Models', pricing: 'Pricing', docs: 'Docs', login: 'Log in', signup: 'Sign up', h1: 'One key for every model', lede: 'Every route is tested. You pay for the route that served you.', cta1: 'Sign up and get an API key', cta2: 'Read the docs' },
-    ja: { models: 'モデル', pricing: '料金', docs: 'ドキュメント', login: 'ログイン', signup: '登録', h1: '1つのキーで、すべてのモデルへ', lede: 'すべての経路を実測し、実際に使われた経路で課金します。', cta1: '登録してAPIキーを取得', cta2: 'ドキュメントを見る' },
-    ko: { models: '모델', pricing: '요금', docs: '문서', login: '로그인', signup: '가입', h1: '키 하나로 모든 모델에', lede: '모든 경로를 실측하고, 실제로 처리한 경로 기준으로 과금합니다.', cta1: '가입하고 API 키 받기', cta2: '문서 보기' },
-    es: { models: 'Modelos', pricing: 'Precios', docs: 'Docs', login: 'Iniciar sesión', signup: 'Registrarse', h1: 'Una clave para todos los modelos', lede: 'Probamos cada ruta. Pagas por la ruta que atendió tu solicitud.', cta1: 'Regístrate y obtén una API key', cta2: 'Ver la documentación' },
-    de: { models: 'Modelle', pricing: 'Preise', docs: 'Doku', login: 'Anmelden', signup: 'Registrieren', h1: 'Ein Schlüssel für alle Modelle', lede: 'Jede Route wird gemessen. Du zahlst für die Route, die deine Anfrage bedient hat.', cta1: 'Registrieren und API-Key erhalten', cta2: 'Doku ansehen' },
-    fr: { models: 'Modèles', pricing: 'Tarifs', docs: 'Docs', login: 'Connexion', signup: 'S’inscrire', h1: 'Une clé pour tous les modèles', lede: 'Chaque route est testée. Vous payez la route qui a servi votre requête.', cta1: 'S’inscrire et obtenir une clé API', cta2: 'Voir la documentation' },
-    pt: { models: 'Modelos', pricing: 'Preços', docs: 'Docs', login: 'Entrar', signup: 'Cadastrar', h1: 'Uma chave para todos os modelos', lede: 'Cada rota é testada. Você paga pela rota que atendeu sua requisição.', cta1: 'Cadastre-se e receba uma chave de API', cta2: 'Ver a documentação' },
-    ru: { models: 'Модели', pricing: 'Цены', docs: 'Документация', login: 'Войти', signup: 'Регистрация', h1: 'Один ключ для всех моделей', lede: 'Каждый маршрут проверен. Вы платите за маршрут, который обработал запрос.', cta1: 'Зарегистрироваться и получить API-ключ', cta2: 'Документация' },
+    'zh-CN': { models: '模型', pricing: '价格', docs: '文档', login: '登录', signup: '注册', h1: '一个key，接入所有模型', lede: '每条线路实测，按实际服务的线路计费。', cta1: '登录，获取API key', cta2: '查看文档' },
+    'zh-TW': { models: '模型', pricing: '價格', docs: '文件', login: '登入', signup: '註冊', h1: '一個key，接入所有模型', lede: '每條線路實測，按實際服務的線路計費。', cta1: '登入，取得API key', cta2: '查看文件' },
+    en: { models: 'Models', pricing: 'Pricing', docs: 'Docs', login: 'Log in', signup: 'Sign up', h1: 'One key for every model', lede: 'Every route is tested. You pay for the route that served you.', cta1: 'Sign in and get an API key', cta2: 'Read the docs' },
+    ja: { models: 'モデル', pricing: '料金', docs: 'ドキュメント', login: 'ログイン', signup: '登録', h1: '1つのキーで、すべてのモデルへ', lede: 'すべての経路を実測し、実際に使われた経路で課金します。', cta1: 'ログインしてAPIキーを取得', cta2: 'ドキュメントを見る' },
+    ko: { models: '모델', pricing: '요금', docs: '문서', login: '로그인', signup: '가입', h1: '키 하나로 모든 모델에', lede: '모든 경로를 실측하고, 실제로 처리한 경로 기준으로 과금합니다.', cta1: '로그인하고 API 키 받기', cta2: '문서 보기' },
+    es: { models: 'Modelos', pricing: 'Precios', docs: 'Docs', login: 'Iniciar sesión', signup: 'Registrarse', h1: 'Una clave para todos los modelos', lede: 'Probamos cada ruta. Pagas por la ruta que atendió tu solicitud.', cta1: 'Inicia sesión y obtén una API key', cta2: 'Ver la documentación' },
+    de: { models: 'Modelle', pricing: 'Preise', docs: 'Doku', login: 'Anmelden', signup: 'Registrieren', h1: 'Ein Schlüssel für alle Modelle', lede: 'Jede Route wird gemessen. Du zahlst für die Route, die deine Anfrage bedient hat.', cta1: 'Anmelden und API-Key erhalten', cta2: 'Doku ansehen' },
+    fr: { models: 'Modèles', pricing: 'Tarifs', docs: 'Docs', login: 'Connexion', signup: 'S’inscrire', h1: 'Une clé pour tous les modèles', lede: 'Chaque route est testée. Vous payez la route qui a servi votre requête.', cta1: 'Se connecter et obtenir une clé API', cta2: 'Voir la documentation' },
+    pt: { models: 'Modelos', pricing: 'Preços', docs: 'Docs', login: 'Entrar', signup: 'Cadastrar', h1: 'Uma chave para todos os modelos', lede: 'Cada rota é testada. Você paga pela rota que atendeu sua requisição.', cta1: 'Entre e receba uma chave de API', cta2: 'Ver a documentação' },
+    ru: { models: 'Модели', pricing: 'Цены', docs: 'Документация', login: 'Войти', signup: 'Регистрация', h1: 'Один ключ для всех моделей', lede: 'Каждый маршрут проверен. Вы платите за маршрут, который обработал запрос.', cta1: 'Войти и получить API-ключ', cta2: 'Документация' },
   };
   const UI = {
     'zh-CN': { search: '搜索语言', none: '没有找到「%s」', toDark: '切换到深色', toLight: '切换到浅色', sys: '跟随系统', title: '选择语言', close: '关闭' },
