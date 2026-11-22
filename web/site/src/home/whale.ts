@@ -12,6 +12,8 @@ const password = "deepseek";
 const settle = 10_000;
 
 const strip = ".hs > .main .fam [data-egg=deepseek]";
+// how long a visit takes to dive out of sight when the sign-in pages go up
+const diveFor = 420;
 
 // The calls on purpose: the word typed anywhere, which is the keyboard's way to the whale, or the first screen's strip
 // pressed (the strip is decoration, out of what is read); the returned function stops listening.
@@ -89,7 +91,8 @@ export function useWhale(
     (force: boolean) => {
       const frame = root.current;
       const engine = sea.current?.engine;
-      if (!frame || !engine || visit.current || loading.current) return;
+      // the sign-in pages up, the sea is theirs: the whale keeps away (leave)
+      if (!frame || !engine || visit.current || loading.current || signingIn(frame)) return;
       if (!force && (met.current || performance.now() < settle)) return;
       loading.current = true;
       // a module that fails to load leaves the page as it is drawn: the whale is only decoration
@@ -118,5 +121,45 @@ export function useWhale(
     };
   }, [root, summon, calling]);
 
+  useLeave(root, visit, calling);
+
   return { meet: useCallback(() => summon(false), [summon]), call: useCallback(() => summon(true), [summon]) };
+}
+
+// The sign-in pages going up: a call on its way is dropped, and a visit under way dives out of sight rather than swim on
+// under the sign-in page, whose form panel it would show through (its canvas spans the frame) and whose solid gathers the
+// sharks alone (login-ui.js leaves whale-like creatures out).
+function useLeave(
+  root: RefObject<HTMLElement | null>,
+  visit: RefObject<Whale | null>,
+  calling: ReturnType<typeof turns>,
+) {
+  useEffect(() => {
+    const frame = root.current;
+    if (!frame) return;
+    const watch = new MutationObserver(() => {
+      if (!signingIn(frame)) return;
+      calling.end();
+      const going = visit.current;
+      visit.current = null;
+      const canvas = frame.querySelector<HTMLCanvasElement>(":scope > canvas.wh");
+      if (going && canvas) dive(going, canvas);
+    });
+    watch.observe(frame, { attributes: true, attributeFilter: ["data-state"] });
+    return () => watch.disconnect();
+  }, [root, visit, calling]);
+}
+
+// the whale sinks and fades, held at its last frame until it is taken down
+function dive(going: Whale, canvas: HTMLCanvasElement) {
+  const fall = canvas.animate([{ opacity: 1 }, { opacity: 0, transform: "translateY(32px) scale(0.97)" }], {
+    duration: diveFor,
+    easing: "cubic-bezier(0.4, 0, 1, 1)",
+    fill: "forwards",
+  });
+  const gone = () => {
+    going.destroy();
+    fall.cancel();
+  };
+  fall.finished.then(gone, gone);
 }
