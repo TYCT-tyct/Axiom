@@ -12,10 +12,10 @@ tool (
 )
 
 require (
-	github.com/getkin/kin-openapi v0.152.0
+	github.com/getkin/kin-openapi v0.153.0
 	github.com/google/go-cmp v0.7.0
 	github.com/uudashr/gocognit v1.3.0
-	golang.org/x/mod v0.41.0
+	golang.org/x/mod v0.43.0
 	golang.org/x/perf v0.0.0-20260929162123-406019bb8b68
 )
 
@@ -135,7 +135,7 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.12.0 // indirect
+	github.com/jackc/pgx/v5 v5.13.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
 	github.com/jgautheron/goconst v1.11.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
@@ -177,8 +177,6 @@ require (
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/oapi-codegen/oapi-codegen/v2 v2.8.0 // indirect
-	github.com/oasdiff/yaml v0.1.1 // indirect
-	github.com/oasdiff/yaml3 v0.0.14 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pganalyze/pg_query_go/v6 v6.2.2 // indirect
@@ -252,14 +250,15 @@ require (
 	go.uber.org/multierr v1.11.0 // indirect
 	go.uber.org/zap v1.27.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v4 v4.0.0 // indirect
 	golang.org/x/exp v0.0.0-20260824195058-e88cd73687aa // indirect
 	golang.org/x/exp/typeparams v0.0.0-20260811152304-ee035b5b010f // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
-	golang.org/x/telemetry v0.0.0-20260924152758-ed294f943157 // indirect
+	golang.org/x/telemetry v0.0.0-20261009151841-97e8ea77aa2a // indirect
 	golang.org/x/text v0.43.0 // indirect
-	golang.org/x/tools v0.51.0 // indirect
+	golang.org/x/tools v0.52.0 // indirect
 	golang.org/x/vuln v1.8.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260526163538-3dc84a4a5aaa // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260819154853-08b0e4226688 // indirect
