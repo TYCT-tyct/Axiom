@@ -440,6 +440,9 @@
   SHAPES.blueArtTile = Object.assign({}, SHAPES.blueArt, { fill: true, art: 'blue', artTile: true });
   SHAPES.blueArtInk = Object.assign({}, SHAPES.blueArt, { fill: true, ink: true });
   const KINDS = Object.keys(SHAPES);
+  // the widest a plain shape's body gets, in lengths: its hw sampled finely, with a margin over what the sampling can miss
+  const bodyReachOf = new Map();
+  const bodyReach = (shape) => { let m = bodyReachOf.get(shape); if (m === undefined) { m = 0; for (let i = 0; i <= 4000; i++) m = Math.max(m, shape.hw(i / 4000)); m = m * 1.01 + 0.002; bodyReachOf.set(shape, m); } return m; };
   const inTri = (px, py, ax, ay, bx, by, cx, cy) => { const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by), d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy), d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay); return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0)); };
 
   class Renderer {
@@ -783,7 +786,8 @@
     }
     // the last column anyone can see: a panel laid over the right of the sea (visRight, in px) hides the rest
     visCols() { return this.visRight == null ? this.cols - 1 : Math.min(this.cols - 1, Math.ceil(this.visRight / this.cw)); }
-    rasterize(sharks, t) {
+    // the design's rasterize, kept as the reference the faster one below is tested against (ocean-raster.test.ts)
+    rasterizeRef(sharks, t) {
       const { flag, shade, key, sdepth, kind, cw, ch, cols, rows } = this; this.t = t;
       flag.fill(0);
       for (const sh of sharks) {
@@ -813,6 +817,118 @@
         }
         if (SHAPES[sh.kind].name && !SHAPES[sh.kind].line && (sh.nameOn ?? 1) > 0.5) this.lane(sh);
       }
+    }
+    // rasterize covers each body with cells as rasterizeRef does, cell for cell the same, with less sampling: a plain
+    // shark's cells are looked at only near its spine (cover), and a cell whose centre and two corners hit is whole.
+    rasterize(sharks, t) {
+      const { flag, shade, key, sdepth, kind, cw, ch, cols, rows } = this; this.t = t;
+      flag.fill(0);
+      for (const sh of sharks) {
+        if (sh.hidden || sh.ghost) continue;
+        if (SHAPES[sh.kind].art) { this.artCreature(sh, KINDS.indexOf(sh.kind)); continue; }
+        this.spineOf(sh);
+        if (SHAPES[sh.kind].line) { this.lineCreature(sh, KINDS.indexOf(sh.kind)); continue; }
+        const sp = this.spine, L = this.L, ki = KINDS.indexOf(sh.kind), shape = SHAPES[sh.kind];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (let k = 0; k < NN; k++) { minX = Math.min(minX, sp[k * 2]); maxX = Math.max(maxX, sp[k * 2]); minY = Math.min(minY, sp[k * 2 + 1]); maxY = Math.max(maxY, sp[k * 2 + 1]); }
+        const reach = L * 0.36, c0 = Math.max(0, Math.floor((minX - reach) / cw)), c1 = Math.min(this.visCols(), Math.floor((maxX + reach) / cw)), r0 = Math.max(0, Math.floor((minY - reach) / ch)), r1 = Math.min(rows - 1, Math.floor((maxY + reach) / ch));
+        if (c0 > c1 || r0 > r1) continue;
+        const skip = reach + Math.hypot(cw, ch), plain = !shape.side && !shape.top && sh.kind !== 'whaleTop';
+        if (plain) this.cover(sh, shape);
+        const lo = this.spanLo, hi = this.spanHi;
+        for (let r = r0; r <= r1; r++) for (let c = plain ? Math.max(c0, lo[r]) : c0, cEnd = plain ? Math.min(c1, hi[r]) : c1; c <= cEnd; c++) {
+          const x = c * cw, y = r * ch;
+          // a centre out of every segment's reach: neither it nor a corner can hit (cover), and nothing is written
+          if (plain && !this.near(x + cw / 2, y + ch / 2)) continue;
+          const centerHit = this.sample(x + cw / 2, y + ch / 2, sh);
+          if (!centerHit && this.hD > skip) continue;
+          const m = plain ? this.candidates(this.hD) : -1;
+          const f = this.hF, sh0 = this.hSh, s = this.hS, v = this.hV;
+          let hits = centerHit ? 1 : 0;
+          // three hits with the centre's among them is a whole cell however the other two fall (coverage >= 0.6)
+          for (let k = 0; k < 8 && !(centerHit && hits === 3); k += 2) {
+            const qx = x + SUB[k] * cw, qy = y + SUB[k + 1] * ch;
+            if (plain ? this.hitAt(qx, qy, sh, shape, m) : this.sample(qx, qy, sh)) hits++;
+          }
+          if (hits === 0) continue;
+          const i = r * cols + c, coverage = hits / 5;
+          key[i] = (hash3(Math.round(s * 52), Math.round(v / (cw * 0.9)), sh.id) * 4294967295) >>> 0;
+          sdepth[i] = sh.depthAt ? sh.depthAt(s) : sh.depth; kind[i] = ki;
+          if (centerHit && coverage >= 0.6) { flag[i] = f; shade[i] = clamp(sh0 + (hash3(c, r, Math.floor(t * 6)) - 0.5) * 0.06, 0, 1); }
+          else { flag[i] = EDGE; shade[i] = coverage; }
+        }
+        if (SHAPES[sh.kind].name && !SHAPES[sh.kind].line && (sh.nameOn ?? 1) > 0.5) this.lane(sh);
+      }
+    }
+    // cover bounds where a plain shark (sample's own branch) can hit. A point sample hits lies within R_k of the segment
+    // k it is nearest to, R_k the farthest reach of whatever sample tests on that segment's stretch of s: the body
+    // (its widest), the head, a pectoral (its tip), a pelvic or the caudal fin. A cell's corners are within subR of its
+    // centre, so a cell can hit only if its centre is within R_k + subR of some segment k. It fills each row's span of
+    // columns (spanLo..spanHi, a hull of the segments' boxes) and keeps each segment's (R_k + subR)² for near.
+    cover(sh, shape) {
+      const sp = this.spine, arc = this.arc, L = this.L, at = this.arcTotal, { cw, ch, rows } = this, NS = NN - 1;
+      if (!this.spanLo || this.spanLo.length !== rows) { this.spanLo = new Int32Array(rows); this.spanHi = new Int32Array(rows); this.reachK = new Float64Array(NS); }
+      const lo = this.spanLo.fill(2147483647), hi = this.spanHi.fill(-1), R2 = this.reachK;
+      let subR = 0; for (let k = 0; k < 8; k += 2) subR = Math.max(subR, Math.hypot((SUB[k] - 0.5) * cw, (SUB[k + 1] - 0.5) * ch));
+      const body = bodyReach(shape), head = shape.head, [p0, p1, p2] = shape.pectoral, [v0, v1, v2, vr] = shape.pelvic, tip = Math.max(this.tipR, this.tipL), e = 1e-6;
+      const over = (s0, s1, a, b) => s0 <= Math.max(a, b) + e && s1 >= Math.min(a, b) - e;
+      for (let k = 0; k < NS; k++) {
+        const s0 = arc[k] / at, s1 = arc[k + 1] / at;
+        let R = body * L;
+        if (head && s0 < head.sweep + head.depth + head.notch + e) R = Math.max(R, head.span * L);
+        if (over(s0, s1, Math.min(p0, p1), p2)) R = Math.max(R, tip);
+        if (over(s0, s1, Math.min(v0, v1), v2)) R = Math.max(R, vr * L);
+        if (shape.caudal > 0 && over(s0, s1, 0.86, 1)) R = Math.max(R, shape.caudal * L);
+        R += subR + 1e-6 * L; R2[k] = R * R;
+        const ax = sp[k * 2], ay = sp[k * 2 + 1], bx = sp[k * 2 + 2], by = sp[k * 2 + 3];
+        const ra = Math.max(0, Math.ceil((Math.min(ay, by) - R) / ch - 0.5)), rb = Math.min(rows - 1, Math.floor((Math.max(ay, by) + R) / ch - 0.5));
+        const ca = Math.ceil((Math.min(ax, bx) - R) / cw - 0.5), cb = Math.floor((Math.max(ax, bx) + R) / cw - 0.5);
+        for (let r = ra; r <= rb; r++) { if (ca < lo[r]) lo[r] = ca; if (cb > hi[r]) hi[r] = cb; }
+      }
+      this.subR = subR;
+    }
+    // near is whether a cell's centre (px, py) is within some segment's reach (cover's test); it keeps the squared
+    // distance to each segment for candidates.
+    near(px, py) {
+      const sp = this.spine, R2 = this.reachK, NS = NN - 1, d2s = this.d2s || (this.d2s = new Float64Array(NS));
+      let reach = false;
+      for (let k = 0; k < NS; k++) {
+        const ax = sp[k * 2], ay = sp[k * 2 + 1], sx = sp[k * 2 + 2] - ax, sy = sp[k * 2 + 3] - ay;
+        const l2 = sx * sx + sy * sy || 1, u = clamp(((px - ax) * sx + (py - ay) * sy) / l2, 0, 1), d2 = (px - ax - sx * u) ** 2 + (py - ay - sy * u) ** 2;
+        d2s[k] = d2; if (d2 <= R2[k]) reach = true;
+      }
+      return reach;
+    }
+    // candidates lists in this.cand the segments a corner's nearest can be, a the centre's distance to its nearest:
+    // a corner is within subR of the centre, so its nearest segment is within a + subR of it, and a segment farther
+    // than a + 2·subR from the centre is farther from the corner than that, never its nearest. The pixel over keeps
+    // rounding out of it.
+    candidates(a) {
+      const NS = NN - 1, d2s = this.d2s, cand = this.cand || (this.cand = new Int32Array(NS)), lim = (a + 2 * this.subR + 1) ** 2;
+      let m = 0;
+      for (let k = 0; k < NS; k++) if (d2s[k] <= lim) cand[m++] = k;
+      return m;
+    }
+    // hitAt is whether sample's plain branch hits (px, py): the same nearest segment (the first strictly nearest, over
+    // the candidates near listed, in order) and the same tests in the same arithmetic, without the shading.
+    hitAt(px, py, sh, shape, m) {
+      const sp = this.spine, arc = this.arc, L = this.L, cand = this.cand;
+      let best = Infinity, bS = 0, sign = 1;
+      for (let j = 0; j < m; j++) {
+        const k = cand[j], ax = sp[k * 2], ay = sp[k * 2 + 1], sx = sp[k * 2 + 2] - ax, sy = sp[k * 2 + 3] - ay;
+        const l2 = sx * sx + sy * sy || 1, u = clamp(((px - ax) * sx + (py - ay) * sy) / l2, 0, 1), d2 = (px - ax - sx * u) ** 2 + (py - ay - sy * u) ** 2;
+        if (d2 < best) { best = d2; const len = Math.sqrt(l2); bS = (arc[k] + u * len) / this.arcTotal; sign = sx * (py - ay) - sy * (px - ax) >= 0 ? 1 : -1; }
+      }
+      const a = Math.sqrt(best), s = bS, u = s * L, w = shape.hw(Math.min(1, s)) * L, head = shape.head;
+      if (head && u < L * (head.sweep + head.depth + head.notch)) {
+        const span = L * head.span, r = a / span, front = L * head.sweep * r * r + L * head.notch * Math.max(0, 1 - r / 0.14), depth = L * head.depth * (1 - 0.2 * r ** 4);
+        if (r <= 1 && u >= front && u <= front + depth) return true;
+      }
+      if (a <= w && s <= 1) return true;
+      const tip = sign > 0 ? this.tipR : this.tipL, [p0, p1, p2] = shape.pectoral;
+      if (inTri(u, a, L * p0, 0, L * p1, 0, L * p2, tip) && !(shape.falcate && inTri(u, a, L * p1, 0, L * (p1 + (p2 - p1) * 0.33), tip * 0.55, L * p2, tip))) return true;
+      const [v0, v1, v2, vr] = shape.pelvic;
+      return inTri(u, a, L * v0, 0, L * v1, 0, L * v2, L * vr) || (shape.caudal > 0 && inTri(u, a, L * 0.86, 0, L * 0.95, 0, L, L * shape.caudal));
     }
     // Line style: the outline of a side-view whale traced in the sea's own marks (' - . _ / \\ |), an empty body
     // that hides the fish behind it, the mouth and throat pleats as finer lines, the eye, and the name inside.
