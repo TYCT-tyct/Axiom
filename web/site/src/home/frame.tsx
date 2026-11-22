@@ -11,6 +11,7 @@ import { Eggs } from "./eggs";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
+import { useSignIn } from "./sign-in";
 import { type Join, useSite } from "./site-context";
 import { useSwitches } from "./switches";
 import { useWhale } from "./whale";
@@ -118,7 +119,17 @@ function useWholeWithSea(sea: Sea | null, returning: boolean) {
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
 // language. So React writes those words once, in the language the page opened in, and never again: they are the
 // regions' text props, fixed at mount. The other words follow the language as usual.
-export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObject<boolean>; children: ReactNode }) {
+export function SiteFrame({
+  wide,
+  met,
+  onSigning,
+  children,
+}: {
+  wide: boolean;
+  met: RefObject<boolean>;
+  onSigning: (up: boolean) => void;
+  children: ReactNode;
+}) {
   const { t, i18n } = useTranslation();
   const scheme = useScheme();
   const [opened] = useState(() => i18n.getFixedT(i18n.language));
@@ -142,7 +153,8 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
   );
   useWholeWithSea(seaUp, returning);
   useSwitches(root, sea);
-  useDeparture(root, sea);
+  const signIn = useSignIn(root, sea, seaUp !== null, onSigning);
+  useDeparture(root, sea, signIn.enter);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
   const floor = useClawd(root, sea, { narrow: !wide, dark: scheme === "dark" });
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
@@ -178,6 +190,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
       </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
       <Eggs root={root} sea={seaUp} whale={whale.call} />
+      {signIn.element}
     </>
   );
 }

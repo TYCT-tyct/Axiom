@@ -3,7 +3,6 @@ export {
   markOrigin,
   markReturn,
   type OriginRect,
-  peekArrival,
   peekReturn,
   takeArrival,
   takeOrigin,

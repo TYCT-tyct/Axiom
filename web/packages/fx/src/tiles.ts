@@ -40,7 +40,14 @@ import {
   type TilePlan,
 } from "./panel";
 import { restore as restoreSlots } from "./pen";
-import { type StyleTracker, styleTracker } from "./style-tracker";
+import {
+  type PageInit,
+  restorePageInit,
+  type StyleTracker,
+  setPageHidden,
+  snapshotPage,
+  styleTracker,
+} from "./style-tracker";
 import { clamp, drawWord, lerp } from "./word-tiles";
 
 export type TilesScene = {
@@ -61,7 +68,6 @@ export type Tiles = {
   destroy(): void; // puts everything back as it was before any run
 };
 
-type PageInit = { vis: string; visPri: string; hadStyle: boolean; hadInert: boolean };
 type FrameBox = { box: DOMRect; W: number; H: number; k: number };
 
 type ActiveRun = {
@@ -88,46 +94,38 @@ type ActiveRun = {
   ctaEls: HTMLElement[];
   famEls: HTMLElement[];
   underEls: HTMLElement[];
+  barEls: HTMLElement[];
   heroSlots: HeroSlot[];
   lgSlots: LgSlot[];
   titleCells: TrackedTitleCell[];
   titleFs: number;
   pitchCells: PitchCell[];
   kids: Kid[];
+  // the page's question: the host may put it in after the run starts (the frame comes first, its page a moment
+  // later); it is measured once it is there, before its first window (title 700, kids 720 + off)
+  asked: boolean;
+  lg: HTMLElement;
+  rect: (el: Element) => Box;
 };
 
-function snapshotPage(el: HTMLElement): PageInit {
-  return {
-    vis: el.style.getPropertyValue("visibility"),
-    visPri: el.style.getPropertyPriority("visibility"),
-    hadStyle: el.hasAttribute("style"),
-    hadInert: el.hasAttribute("inert"),
-  };
+// The question of the page (its step, the title's characters, the step's lines after the title) as it stands, or
+// null while the host has not put it in yet.
+function measureQuestion(lg: HTMLElement, rect: (el: Element) => Box, off: number) {
+  if (!lg.querySelector(".lg-step .lg-title")) return null;
+  const { cells: titleCells, fs: titleFs } = measureTitleCells(lg, rect);
+  const { step, kids } = measureKids(lg, off);
+  return { titleCells, titleFs, step, kids };
 }
 
-function setPageHidden(el: HTMLElement, init: PageInit, hidden: boolean) {
-  if (hidden) {
-    el.style.setProperty("visibility", "hidden");
-    el.inert = true;
-    el.toggleAttribute("inert", true);
-    return;
-  }
-  if (init.vis === "hidden") el.style.setProperty("visibility", "visible");
-  else if (init.vis) el.style.setProperty("visibility", init.vis, init.visPri);
-  else {
-    el.style.removeProperty("visibility");
-    if (!init.hadStyle && el.style.length === 0) el.removeAttribute("style");
-  }
-  el.inert = false;
-  el.toggleAttribute("inert", false);
-}
-
-function restorePageInit(el: HTMLElement, init: PageInit) {
-  if (init.vis) el.style.setProperty("visibility", init.vis, init.visPri);
-  else el.style.removeProperty("visibility");
-  if (!init.hadStyle && el.style.length === 0) el.removeAttribute("style");
-  el.inert = init.hadInert;
-  el.toggleAttribute("inert", init.hadInert);
+// takeQuestion measures the question the first frame it is there (a query each frame until then, one layout read once)
+// and holds its lines on their windows from that frame on, so none is seen before it is written.
+function takeQuestion(run: ActiveRun) {
+  if (run.asked) return;
+  const q = measureQuestion(run.lg, run.rect, run.plan.off);
+  if (!q) return;
+  run.asked = true;
+  Object.assign(run, { titleCells: q.titleCells, titleFs: q.titleFs, kids: q.kids });
+  if (q.step) run.styles.set(q.step, { animation: "none" });
 }
 
 function measureFrame(root: HTMLElement): FrameBox {
@@ -253,6 +251,7 @@ function paintLeaving(run: ActiveRun, mt: number, u: WindowEval, tick: number) {
   paintFade(run.famEls, String(1 - u(160, 200, E.out)), styles);
   paintFade(run.ctaEls, String(1 - u(220, 200, E.out)), styles);
   paintFade(run.underEls, String(1 - u(60, 360, E.out)), styles);
+  paintFade(run.barEls, String(1 - u(60, 360, E.out)), styles);
   if (run.glow) styles.set(run.glow, { opacity: String(1 - u(0, 460, E.out)) });
 }
 
@@ -296,6 +295,7 @@ function paintRun(run: ActiveRun, sea: OceanEngine, mt: number, dir: 1 | -1, lan
   sea.renderer.visRight = ground && run.px != null ? run.px : null;
 
   paintCanvas(run, mt, ground);
+  takeQuestion(run);
   paintLgSlots(run.lgSlots, u, tick);
   drawTitle(flyers.ctx, run.titleCells, run.titleFs, mt - 700 - off, dir, tick, ink, family, styles);
   paintKids(run.kids, u, styles);
@@ -324,14 +324,13 @@ function buildRun(scene: TilesScene, trigger: HTMLElement | null, onBrandPress: 
   const flyers = mountFlyers(root, refs, frame.W, frame.H, lower, onBrandPress);
   const heroSlots = measureHeroSlots(ho, trigger, refs.lede);
   const lgSlots = measureLgSlots(lg, plan.off);
-  const { cells: titleCells, fs: titleFs } = measureTitleCells(lg, rect);
+  const question = measureQuestion(lg, rect, plan.off);
   const pitchCells = lower ? measurePitchCells(lg, rect) : [];
-  const { step, kids } = measureKids(lg, plan.off);
   const styles = styleTracker();
   hideShared(styles, refs, lower);
   if (side) styles.set(side, { "background-color": "transparent" });
   if (lgSea) styles.set(lgSea, { "box-shadow": "none" });
-  if (step) styles.set(step, { animation: "none" });
+  if (question?.step) styles.set(question.step, { animation: "none" });
 
   return {
     clock: null as unknown as Clock,
@@ -357,12 +356,18 @@ function buildRun(scene: TilesScene, trigger: HTMLElement | null, onBrandPress: 
     ctaEls: [...ho.querySelectorAll<HTMLElement>(".cta")],
     famEls: [...ho.querySelectorAll<HTMLElement>(".fam")],
     underEls: [...ho.querySelectorAll<HTMLElement>(".hs > .under, .isl")],
+    // the header's controls that are not words (the language and theme switches, the menu) go with the page; its links
+    // un-write (heroSlots)
+    barEls: [...ho.querySelectorAll<HTMLElement>(".bar .nav > :not(a)")],
     heroSlots,
     lgSlots,
-    titleCells,
-    titleFs,
+    titleCells: question?.titleCells ?? [],
+    titleFs: question?.titleFs ?? 0,
     pitchCells,
-    kids,
+    kids: question?.kids ?? [],
+    asked: question !== null,
+    lg,
+    rect,
   };
 }
 

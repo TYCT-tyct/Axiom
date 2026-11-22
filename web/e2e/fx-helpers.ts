@@ -31,6 +31,12 @@ export async function open(page: Page) {
 
 export const running = (page: Page) => expect.poll(async () => (await loop(page)).frames).toBeGreaterThan(0);
 
+// a request that never answers: the code or page it asks for never comes
+export const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
+// The homepage opens the sign-in pages in its own document once their code is in (site/src/home/sign-in.tsx); a press
+// before then leaves through the departure to the console's page. Holding that code back keeps a case on the departure.
+export const departOnly = (page: Page) => hang(page, /\/assets\/sign-in-host-[\w-]+\.js$/);
+
 export const siteSignIn = (page: Page) => page.getByRole("banner").getByRole("link", { name: "登录", exact: true });
 // The screens below the first (§8.2's rows for the screens): each one's code comes as its place nears the view, and its
 // script runs on the same loop, so the counter speaks for them too once the first screen is out of view. The places
@@ -83,8 +89,9 @@ const canvasHash = (canvas: Locator) =>
 
 // Each canvas draws pictures that change with time: with the page's clock stopped, the picture at two moments a second
 // apart differs. Only runFor moves the clock, so the frames between are exactly the loop's, driven by the test.
-// Use expectMovingNow when the caller installed the fake clock before navigation (so performance.now() does not jump
-// behind timestamps cached at boot).
+// The caller installs the fake clock before the page opens: installed later, its performance.now() starts behind the
+// frame times the page has seen, and the first frame after it steps the sea backwards by seconds, which a browser's
+// own frames never do.
 export async function expectMovingNow(page: Page, ...canvases: Locator[]) {
   await pauseAhead(page, 100);
   await page.clock.runFor(500);
@@ -93,9 +100,4 @@ export async function expectMovingNow(page: Page, ...canvases: Locator[]) {
   const after = await Promise.all(canvases.map(canvasHash));
   for (const [i, hash] of after.entries())
     expect(hash, `canvas ${i} drew the same picture a second later`).not.toBe(before[i]);
-}
-
-export async function expectMoving(page: Page, ...canvases: Locator[]) {
-  await page.clock.install();
-  await expectMovingNow(page, ...canvases);
 }

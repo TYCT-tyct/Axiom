@@ -9,8 +9,11 @@ export const legalQuery = queryOptions({
     unwrap(consoleApi.GET("/api/console/v1/legal", { params: { query: { locales: "all" } }, signal })),
 });
 
+// fetchSite asks for the site's public settings: its name, colour, how it takes new users and the ways to sign in.
+export const fetchSite = (signal?: AbortSignal) => unwrap(consoleApi.GET("/api/console/v1/site", { signal }));
+
 export const siteQuery = queryOptions({
   queryKey: ["site"],
-  queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/site", { signal })),
+  queryFn: ({ signal }) => fetchSite(signal),
   staleTime: 5 * 60_000,
 });

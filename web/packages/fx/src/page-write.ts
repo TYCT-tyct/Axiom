@@ -212,7 +212,8 @@ export function measureHeroSlots(ho: HTMLElement, trigger: HTMLElement | null, l
 }
 
 export function measureLgSlots(lg: HTMLElement, off: number): LgSlot[] {
-  const slots = slotsOf(lg, undefined, (el) => Boolean(el.closest(".lg-form")));
+  // the language switch writes itself too; its links carry no mark, their text is the word
+  const slots = slotsOf(lg, undefined, (el) => Boolean(el.closest(".lg-form")), ".lg-top a");
   return slots.map((slot) => ({
     slot,
     start: (slot.el.closest(".lg-foot") ? 760 : 620) + off,

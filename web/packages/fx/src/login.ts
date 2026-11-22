@@ -12,6 +12,8 @@ import { mono } from "./mono";
 import { buildSea, type OceanEngine, pacedTick } from "./ocean";
 import { drawCaret, drawWaiting, glyph, type TitleCell } from "./page-write";
 
+export type { OceanEngine };
+
 // The steps of login-ui.js's solids the product has (not wechat, connect).
 export type Shape = "start" | "code" | "key" | "enter";
 // What the page tells the solid: whether the address typed looks whole, how many digits of a code are in, a refused

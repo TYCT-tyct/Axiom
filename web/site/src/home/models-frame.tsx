@@ -1,10 +1,11 @@
 import "@axiom/boards/AxApp/regions.css";
 import ModelsPage from "@axiom/boards/Models/regions/ModelsPage";
 import { Button, Logo, PreferenceSwitches } from "@axiom/ui";
-import type { ReactNode } from "react";
+import { type ReactNode, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { useSiteState } from "../shell";
 import styles from "./models-frame.module.css";
+import { useModelsSignIn } from "./models-sign-in";
 import { useWide } from "./wide";
 
 // The console lives on the same listener under /console/ (console/vite.config.ts).
@@ -35,8 +36,10 @@ function SiteShell({ children }: { children: ReactNode }) {
   const site = useSiteState();
   const brand = site.status === "ready" ? site.brand : undefined;
   const name = brand?.name ?? t("brand", { ns: "common" });
+  const shell = useRef<HTMLDivElement>(null);
+  const signIn = useModelsSignIn(useCallback(() => shell.current, []));
   return (
-    <div className={styles.shell}>
+    <div className={styles.shell} ref={shell}>
       <header className={styles.header}>
         <a href="/" className={styles.home} aria-label={t("home", { site: name })}>
           <Logo name={name} logoUrl={brand?.logo_url} />
@@ -51,7 +54,9 @@ function SiteShell({ children }: { children: ReactNode }) {
         </div>
         <div className={styles.enter}>
           <Button asChild size="sm">
-            <a href={consoleHref}>{t("signIn")}</a>
+            <a href={consoleHref} onClick={signIn.enter}>
+              {t("signIn")}
+            </a>
           </Button>
         </div>
       </header>
@@ -62,6 +67,7 @@ function SiteShell({ children }: { children: ReactNode }) {
           <PreferenceSwitches />
         </div>
       </footer>
+      {signIn.element}
     </div>
   );
 }

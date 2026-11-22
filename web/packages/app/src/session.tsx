@@ -428,6 +428,9 @@ export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
     : undefined;
 }
 
+// usePrefetchSession asks who is signed in ahead of a page that will gate on it (a sign-in page made ready before it is
+// shown), so its gate answers at once; nothing is shown or redirected from it.
+
 // Replace moves to a path of this app via the host's navigation adapter, so one gate serves hosts with different
 // routers (or an external host that enters the app with a full page load).
 function Replace({ path, target, stashToken }: { path: string; target: SessionTarget; stashToken?: string | null }) {

@@ -63,3 +63,41 @@ export function styleTracker(): StyleTracker {
     },
   };
 }
+
+// A page's own visibility and inertness before any run (the website's or the sign-in page's), so a run can hide and
+// show it and put it back as it was.
+export type PageInit = { vis: string; visPri: string; hadStyle: boolean; hadInert: boolean };
+
+export function snapshotPage(el: HTMLElement): PageInit {
+  return {
+    vis: el.style.getPropertyValue("visibility"),
+    visPri: el.style.getPropertyPriority("visibility"),
+    hadStyle: el.hasAttribute("style"),
+    hadInert: el.hasAttribute("inert"),
+  };
+}
+
+export function setPageHidden(el: HTMLElement, init: PageInit, hidden: boolean) {
+  if (hidden) {
+    el.style.setProperty("visibility", "hidden");
+    el.inert = true;
+    el.toggleAttribute("inert", true);
+    return;
+  }
+  if (init.vis === "hidden") el.style.setProperty("visibility", "visible");
+  else if (init.vis) el.style.setProperty("visibility", init.vis, init.visPri);
+  else {
+    el.style.removeProperty("visibility");
+    if (!init.hadStyle && el.style.length === 0) el.removeAttribute("style");
+  }
+  el.inert = false;
+  el.toggleAttribute("inert", false);
+}
+
+export function restorePageInit(el: HTMLElement, init: PageInit) {
+  if (init.vis) el.style.setProperty("visibility", init.vis, init.visPri);
+  else el.style.removeProperty("visibility");
+  if (!init.hadStyle && el.style.length === 0) el.removeAttribute("style");
+  el.inert = init.hadInert;
+  el.toggleAttribute("inert", init.hadInert);
+}

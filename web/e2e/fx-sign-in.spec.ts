@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import {
+  departOnly,
   expectMovingNow,
   loop,
   open,
@@ -51,6 +52,7 @@ async function watchDecode(page: Page) {
 test("arriving through the departure decodes the title once, its code asked for at once; a direct visit does not", async ({
   page,
 }) => {
+  await departOnly(page);
   const decoded = await watchDecode(page);
   const asked: boolean[] = [];
   await page.route(loginCode, async (route) => {

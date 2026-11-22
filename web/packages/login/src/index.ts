@@ -1,3 +1,4 @@
+export { type LoginHost, LoginHostContext } from "./host";
 export { registerLoginLinkFailed, useLoginLinkFailed } from "./link-failed";
 export type { LoginMessages } from "./locales";
 export { dropMailLink, keepMailLink, type MailRoute } from "./mail-link";
@@ -11,5 +12,5 @@ export {
   type LoginSearch,
 } from "./navigation";
 export { takeOAuthNext } from "./oauth-return";
-export { siteQuery } from "./queries";
+export { fetchSite, siteQuery } from "./queries";
 export { registerPasskey } from "./webauthn";

@@ -158,12 +158,19 @@ function syncNodes(nodes: Nodes, seg: NonNullable<Segments>) {
 }
 
 // slotsOf collects every [data-dx] element under scope, optionally filtering with skip and recording each element's
-// centre distance from a trigger point for wave ordering (trans.js.txt:61, 282–283).
-export function slotsOf(scope: Element, from?: { x: number; y: number }, skip?: (el: HTMLElement) => boolean): Slot[] {
+// centre distance from a trigger point for wave ordering (trans.js.txt:61, 282–283). also names words the markup does
+// not mark (the Login board's language links, whose own text is the word): each is a link word unless a marked one is
+// inside it.
+export function slotsOf(
+  scope: Element,
+  from?: { x: number; y: number },
+  skip?: (el: HTMLElement) => boolean,
+  also?: string,
+): Slot[] {
   const out: Slot[] = [];
   let index = 0;
-  for (const el of scope.querySelectorAll<HTMLElement>("[data-dx]")) {
-    if (skip?.(el)) continue;
+  for (const el of scope.querySelectorAll<HTMLElement>(also ? `[data-dx], ${also}` : "[data-dx]")) {
+    if (skip?.(el) || (!el.dataset.dx && el.querySelector("[data-dx]"))) continue;
     const text = el.textContent ?? "";
     let d = 0;
     if (from) {

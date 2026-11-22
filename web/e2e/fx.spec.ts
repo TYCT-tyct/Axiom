@@ -4,7 +4,9 @@ import { collectErrors } from "./collect-errors.ts";
 import { mockConsole } from "./console-api.ts";
 import {
   delivered,
-  expectMoving,
+  departOnly,
+  expectMovingNow,
+  hang,
   loop,
   open,
   pause,
@@ -70,6 +72,7 @@ test("the effects' code is not asked for before the first screen is drawn, and t
 });
 
 test("the sea rests only while the tab is hidden, and plays behind every screen", async ({ page }) => {
+  await page.clock.install();
   await open(page);
   await running(page);
 
@@ -86,7 +89,7 @@ test("the sea rests only while the tab is hidden, and plays behind every screen"
       const scroller = document.querySelector(".hs") as HTMLElement;
       scroller.scrollTop = (scroller.scrollHeight - scroller.clientHeight) * at;
     }, at);
-    await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+    await expectMovingNow(page, page.locator(".tr > canvas.sea:not(.cover)"));
   }
 });
 
@@ -274,7 +277,6 @@ const depart = /\/assets\/depart-[\w-]+\.js$/;
 const signIn = siteSignIn;
 // the first screen's way on: the steps screen below has one of the same name
 const signUp = (page: Page) => page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" });
-const hang = (page: Page, url: RegExp) => page.route(url, () => new Promise<void>(() => {}));
 
 // Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.
 async function watchEveryPolicy(page: Page) {
@@ -304,10 +306,11 @@ function watchDeparture(page: Page) {
 const motionSettings = ["no-preference", "reduce"] as const;
 
 for (const reducedMotion of motionSettings) {
-  test(`pressing sign in plays the departure, loaded before the press, and goes half a second later (${reducedMotion})`, async ({
+  test(`pressing sign in before its page's code is in plays the departure, loaded before the press, and goes half a second later (${reducedMotion})`, async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion });
+    await departOnly(page);
     const violations = await watchEveryPolicy(page);
     const loaded: string[] = [];
     page.on("request", (request) => {
@@ -342,17 +345,19 @@ for (const reducedMotion of motionSettings) {
   // draws nothing new would still count frames.
   test(`the sea draws a changing picture after its entrance (${reducedMotion})`, async ({ page }) => {
     await page.emulateMedia({ reducedMotion });
+    await page.clock.install();
     await open(page);
     await running(page);
     await expect.poll(() => entrance(page)).toBe("done");
-    await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+    await expectMovingNow(page, page.locator(".tr > canvas.sea:not(.cover)"));
   });
 }
 
-test("a press goes though the departure's code never comes", async ({ page }) => {
+test("a press goes though neither its page's code nor the departure's ever comes", async ({ page }) => {
   const unhandled: string[] = [];
   page.on("pageerror", (error) => unhandled.push(error.message));
   await hang(page, depart);
+  await departOnly(page);
   await open(page);
   await signUp(page).click();
   await expect(page).toHaveURL(/\/console\/register$/);
@@ -365,6 +370,7 @@ test("a press goes though the departure's code never comes", async ({ page }) =>
 test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {
   await open(page);
   await running(page);
+  await departOnly(page);
   const asked = watchDeparture(page);
   await hang(page, /\/console\/sign-in$/);
   await signIn(page).click();
@@ -379,6 +385,7 @@ test("after a departure's navigation is stopped, the next press goes at once", a
 test("a departure whose navigation is stopped puts the page back", async ({ page }) => {
   await open(page);
   await running(page);
+  await departOnly(page);
   const asked = watchDeparture(page);
   await hang(page, /\/console\/sign-in$/);
   await signIn(page).click();

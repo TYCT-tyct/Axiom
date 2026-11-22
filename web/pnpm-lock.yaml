@@ -247,15 +247,24 @@ importers:
       '@axiom/api':
         specifier: workspace:*
         version: link:../packages/api
+      '@axiom/app':
+        specifier: workspace:*
+        version: link:../packages/app
       '@axiom/boards':
         specifier: workspace:*
         version: link:../packages/boards
       '@axiom/fx':
         specifier: workspace:*
         version: link:../packages/fx
+      '@axiom/login':
+        specifier: workspace:*
+        version: link:../packages/login
       '@axiom/ui':
         specifier: workspace:*
         version: link:../packages/ui
+      '@tanstack/react-query':
+        specifier: 5.107.1
+        version: 5.107.1(@types/react@19.3.0)(react@19.3.1)
       i18next:
         specifier: 26.6.0
         version: 26.6.0(typescript@5.9.3)

@@ -16,8 +16,26 @@ const kB = 1000;
 // deferred caps what the first screen loads later, all together (port design §8.3). The site's is sized for every
 // effect the final home boards carry (sea, entrance, whale, Clawd, the sea's moments and terminal), which together
 // measured about 156 kB; the rest is headroom for the boards' remaining effects, not for unrelated code.
-const budgets: Record<string, { firstScreen: number; perPage?: number; firstPage?: string; deferred?: number }> = {
-  site: { firstScreen: 150 * kB, perPage: 50 * kB, deferred: 170 * kB },
+// apart is a part loaded later that has a budget of its own, counted outside deferred: what its entries reach. The
+// website holds the console's sign-in pages (site/src/home/sign-in.tsx): the host with the console's session and
+// requests, the tiles transition, the solid on the sea and every sign-in step, all loaded once the first screen is
+// drawn so a press moves at once. They measured about 95 kB; the cap is the first screen's own, so the sign-in pages,
+// fetched while the visitor reads, never cost more than the screen they read.
+type Apart = { what: string; entries: string[]; budget: number };
+const budgets: Record<
+  string,
+  { firstScreen: number; perPage?: number; firstPage?: string; deferred?: number; apart?: Apart }
+> = {
+  site: {
+    firstScreen: 150 * kB,
+    perPage: 50 * kB,
+    deferred: 170 * kB,
+    apart: {
+      what: "the sign-in pages",
+      entries: ["src/home/sign-in-host.tsx", "../packages/fx/src/tiles.ts", "../packages/fx/src/login.ts"],
+      budget: 150 * kB,
+    },
+  },
   console: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/overview.tsx" },
   admin: { firstScreen: 200 * kB, perPage: 50 * kB, firstPage: "src/pages/home.tsx" },
 };
@@ -116,8 +134,23 @@ if (import.meta.main) {
       budget.firstScreen,
     );
 
+    let loaded = firstScreen;
+    if (budget.apart) {
+      const { what, entries } = budget.apart;
+      const missing = entries.filter((key) => !manifest[key]);
+      if (missing.length) failures.push(`${app}: ${missing.join(", ")} not in the build; update ${what}' entries`);
+      // the entries and what they load themselves (the host's sign-in steps), not what the code they share with the
+      // homepage loads (@axiom/fx's effects, which deferred counts)
+      const own = new Set<string>();
+      for (const key of entries.flatMap((entry) => [entry, ...(manifest[entry]?.dynamicImports ?? [])])) {
+        closure(manifest, key, own);
+      }
+      const chunks = [...own].filter((key) => !firstScreen.has(key));
+      measure(`${app}: ${what}`, size(files(chunks)), budget.apart.budget);
+      loaded = new Set([...firstScreen, ...own]);
+    }
     if (budget.deferred) {
-      const later = deferred(manifest, firstScreen);
+      const later = deferred(manifest, loaded);
       measure(`${app}: after the first screen`, size([...files(later.chunks), ...later.assets]), budget.deferred);
     }
 

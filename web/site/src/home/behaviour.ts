@@ -445,13 +445,20 @@ function settleReturn(frame: HTMLElement, sea: Sea | null) {
 
 const plainClick = (e: MouseEvent) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;
 
-function handleDepartClick(frame: HTMLElement, sea: Sea | null, e: MouseEvent) {
+// enter: the sign-in pages in this document (sign-in.tsx), when it takes the press; else the departure to the console
+function handleDepartClick(
+  frame: HTMLElement,
+  sea: Sea | null,
+  e: MouseEvent,
+  enter?: (link: HTMLAnchorElement) => boolean,
+) {
   if (!plainClick(e)) return;
   const target = e.target instanceof Element ? e.target : null;
   if (!target || !frame.contains(target)) return;
   const link = target.closest<HTMLAnchorElement>("a[data-go]");
   if (link) {
     e.preventDefault();
+    if (!leaving && enter?.(link)) return;
     if (!leaving) leave(frame, link, sea);
     else if (leaving.dir === -1) reverseDeparture();
     return;
@@ -467,13 +474,19 @@ function handleDepartClick(frame: HTMLElement, sea: Sea | null, e: MouseEvent) {
 // reverses it midway. Its code is fetched once the first screen is drawn, so a press breaks the button on the next
 // frame rather than after a round trip, and the picture fills the half second. When returning from a sign-in page
 // (takeReturn), it settles the home page without replaying the cold tide entrance.
-export function useDeparture(root: RefObject<HTMLElement | null>, sea: RefObject<Sea | null>) {
+export function useDeparture(
+  root: RefObject<HTMLElement | null>,
+  sea: RefObject<Sea | null>,
+  enter?: (link: HTMLAnchorElement) => boolean,
+) {
+  const entering = useRef(enter);
+  entering.current = enter;
   useEffect(() => {
     const frame = root.current;
     if (!frame) return;
     settleReturn(frame, sea.current);
     const cancelLoad = afterFirstContent(() => void loadDepart().catch(() => {}));
-    const onClick = (e: MouseEvent) => handleDepartClick(frame, sea.current, e);
+    const onClick = (e: MouseEvent) => handleDepartClick(frame, sea.current, e, entering.current);
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented || leaving?.dir !== 1) return;
       e.preventDefault();

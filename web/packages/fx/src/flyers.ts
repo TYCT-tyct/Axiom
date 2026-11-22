@@ -79,11 +79,26 @@ function cloneContents(source: Element, target: HTMLElement) {
 
 // Headline spans (.k, .kern, .ph) inherit styles scoped under .ho in the product's CSS Modules; mirror their computed
 // typography onto the cloned spans inside .fh so the flyer keeps the italic key, kerning and phrase breaks.
+// The headline's lengths that follow its size: a span's own size (of its parent's) and its spacing (of its own).
+const ownLengths = ["letter-spacing", "padding-right", "margin-right"] as const;
+
+// The headline's spans in the copy take the page's look, their lengths as fractions of the size (em): the copy's size
+// travels from the headline's to the pitch's (fly.ts), and a span held at the headline's pixels would not travel with
+// it (the website's .ph sets its own).
 function mirrorHeadlineSpans(from: Element, clone: HTMLElement) {
   const src = from.querySelectorAll(".k, .kern, .ph");
   const dst = clone.querySelectorAll<HTMLElement>(".k, .kern, .ph");
   for (let i = 0; i < src.length && i < dst.length; i++) {
-    copyComputed(src[i] as Element, dst[i] as HTMLElement, inlineProps);
+    const el = src[i] as Element;
+    const copy = dst[i] as HTMLElement;
+    copyComputed(el, copy, inlineProps);
+    const own = parseFloat(getComputedStyle(el).fontSize) || 1;
+    const parent = el.parentElement ? parseFloat(getComputedStyle(el.parentElement).fontSize) || own : own;
+    copy.style.setProperty("font-size", `${own / parent}em`);
+    for (const prop of ownLengths) {
+      const px = parseFloat(getComputedStyle(el).getPropertyValue(prop));
+      if (Number.isFinite(px)) copy.style.setProperty(prop, `${px / own}em`);
+    }
   }
 }
 

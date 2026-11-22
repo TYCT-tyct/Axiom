@@ -187,16 +187,19 @@ function handlePop(frame: HTMLElement | null, locked: boolean) {
 }
 
 // useReturnHome wires Escape (unless typing in a non-empty input/textarea), clicking .lg .brand, and browser Back on
-// a Login-board page to play the reversible return tiles transition back to /.
-export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boolean) {
+// a Login-board page to play the reversible return tiles transition back to /. Off when the page stands in the
+// website's own document (LoginHost), whose transition takes the same ways home.
+export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boolean, on = true) {
   const isLocked = useRef(locked);
   isLocked.current = locked;
   useEffect(() => {
+    if (!on) return;
     installSentinel();
     // the return's code is fetched once the page is drawn, so the mark breaks the page on the next frame
     return afterFirstContent(() => void loadDepart().catch(() => {}));
-  }, []);
+  }, [on]);
   useEffect(() => {
+    if (!on) return;
     const onClick = (e: MouseEvent) => handleClick(root.current, isLocked.current, e);
     const onKey = (e: KeyboardEvent) => handleKey(root.current, isLocked.current, e);
     const onPop = () => handlePop(root.current, isLocked.current);
@@ -213,5 +216,5 @@ export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boole
       }
       if (shown?.frame === root.current) clearPicture();
     };
-  }, [root]);
+  }, [root, on]);
 }
