@@ -8,7 +8,7 @@ vi.mock("@axiom/api", () => ({
 }));
 vi.mock("@axiom/app", () => ({ accountKey: "account" }));
 
-import { keysQuery, legalQuery, recentErrorsQuery } from "./queries";
+import { keysQuery, recentErrorsQuery } from "./queries";
 
 afterEach(() => vi.clearAllMocks());
 
@@ -38,20 +38,6 @@ describe("key queries", () => {
       signal: expect.any(AbortSignal),
     });
     expect(keysQuery(filters).queryKey).not.toEqual(keysQuery({}).queryKey);
-    client.clear();
-  });
-});
-
-describe("legal query", () => {
-  it("asks for every published locale instead of the old one-per-kind response", async () => {
-    const data = { documents: [] };
-    get.mockResolvedValue(data);
-    const client = new QueryClient();
-    expect(await client.fetchQuery(legalQuery)).toBe(data);
-    expect(get).toHaveBeenCalledWith("/api/console/v1/legal", {
-      params: { query: { locales: "all" } },
-      signal: expect.any(AbortSignal),
-    });
     client.clear();
   });
 });

@@ -6,7 +6,7 @@ import LoginError from "@axiom/boards/Login/regions/LoginError";
 import LoginField from "@axiom/boards/Login/regions/LoginField";
 import LoginLink from "@axiom/boards/Login/regions/LoginLink";
 import LoginNote from "@axiom/boards/Login/regions/LoginNote";
-import { Link } from "@tanstack/react-router";
+import { pressBoardButton } from "@axiom/ui";
 import {
   type AnchorHTMLAttributes,
   type ComponentProps,
@@ -17,9 +17,9 @@ import {
   useMemo,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { pressKey } from "../board";
 import type { Attempt } from "./attempt";
 import type { Stage } from "./login-frame";
+import { useLoginNavigation } from "./navigation";
 
 // The parts the sign-in pages' steps share, made of the Login board's parts.
 
@@ -174,7 +174,7 @@ export function NoteAction({ label, onPress }: { label: string; onPress: () => v
             event.preventDefault();
             onPress();
           },
-          onKeyDown: (event) => pressKey(event as KeyboardEvent<Element>),
+          onKeyDown: (event) => pressBoardButton(event as KeyboardEvent<Element>),
         }}
       />
     </LoginNote>
@@ -206,12 +206,11 @@ export function SignOutNote({ label, attempt, ended }: { label: string; attempt:
 // RouteNote is a note under a step that leads to another sign-in page, carrying where the visitor was going; lead is
 // the note's words before its link.
 export function RouteNote({ to, label, lead, next }: { to: RouteTo; label: string; lead?: string; next?: string }) {
+  const { Link } = useLoginNavigation();
   const RouteLink = useMemo(
     () =>
-      ({ href: _, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => (
-        <Link to={to} search={{ next, invite: undefined }} {...props} />
-      ),
-    [to, next],
+      ({ href: _, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) => <Link to={to} search={{ next }} {...props} />,
+    [Link, to, next],
   );
   return (
     <LoginNote t={String}>

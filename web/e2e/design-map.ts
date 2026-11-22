@@ -1,12 +1,12 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { expect, type Page } from "@playwright/test";
-import { en as consoleAuthEn, zh as consoleAuthZh } from "../console/src/locales/auth.ts";
 import consoleEn from "../console/src/locales/en.ts";
 import consoleZh from "../console/src/locales/zh.ts";
 import presetsEn from "../packages/boards/src/AxApp/regions/RequestPresets.en.ts";
 import presetsZh from "../packages/boards/src/AxApp/regions/RequestPresets.zh.ts";
 import shellEn from "../packages/boards/src/AxApp/regions/Shell.en.ts";
 import shellZh from "../packages/boards/src/AxApp/regions/Shell.zh.ts";
+import { en as consoleAuthEn, zh as consoleAuthZh } from "../packages/login/src/locales/auth.ts";
 import uiEn from "../packages/ui/src/locales/en.ts";
 import uiZh from "../packages/ui/src/locales/zh.ts";
 import { withLastMonth } from "./console-calls-data.ts";

@@ -1,17 +1,11 @@
 import type { Schemas } from "@axiom/api";
 import type DesktopOverview from "@axiom/boards/AxApp/regions/Overview";
+import { siteQuery } from "@axiom/login";
 import { useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
-import {
-  balanceQuery,
-  callAggregateQuery,
-  keysQuery,
-  recentErrorsQuery,
-  siteQuery,
-  usageStatisticsQuery,
-} from "../queries";
+import { balanceQuery, callAggregateQuery, keysQuery, recentErrorsQuery, usageStatisticsQuery } from "../queries";
 import { chartOf, spendChart, statisticsWindows } from "./overview-chart";
 import { seriesColor } from "./usage-model";
 

@@ -5,10 +5,11 @@ import LogsFilters from "@axiom/boards/AxApp/regions/LogsFilters";
 import filtersZh from "@axiom/boards/AxApp/regions/LogsFilters.zh";
 import LogsSeg from "@axiom/boards/AxApp/regions/LogsSeg";
 import segZh from "@axiom/boards/AxApp/regions/LogsSeg.zh";
+import { useBoardMedia } from "@axiom/ui";
 import { Link } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { useEffect, useState } from "react";
-import { phoneWidth, useBoardMedia } from "../board-interaction";
+import { phoneWidth } from "../board-interaction";
 import type { CallFilters } from "../queries";
 import {
   dateRangeForPreset,

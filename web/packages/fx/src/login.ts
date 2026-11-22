@@ -7,10 +7,12 @@
 // website's departure (arrival.ts).
 import "@axiom/boards/engines/login-ui.js";
 import { colour } from "./colour";
-import { hash } from "./hash";
 import { own } from "./loop";
 import { mono } from "./mono";
 import { buildSea, type OceanEngine, pacedTick } from "./ocean";
+import { drawCaret, drawWaiting, glyph, type TitleCell } from "./page-write";
+
+export type { OceanEngine };
 
 // The steps of login-ui.js's solids the product has (not wechat, connect).
 export type Shape = "start" | "code" | "key" | "enter";
@@ -27,17 +29,18 @@ declare global {
   }
 }
 
-const GLYPHS = ":;t%SX8#@/\\<>=+*";
-const glyph = (i: number, t: number) => GLYPHS[Math.floor(hash(i, t) * GLYPHS.length)] ?? "";
+// What Morph reads of the transition it is part of: which way it runs (trans.js's tr.dir).
+export type Way = { readonly dir: 1 | -1 };
 
 // startMorph puts the solid on the sea. Morph's root is the element the sea's world is measured in and whose
-// data-state says the sign-in page is up (trans.js's frame, where the sea covers the frame); here the sea's canvas
-// fills .lg-sea, so that is its root, and the page is always up. Its canvas (.lg-stg) is put first in .lg-sea, and
-// Site.dc.html's rule for it, which the Login board lacks, is set through the CSSOM: over the sea's canvas, under the
-// brand and the pitch.
-function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, shape: Shape) {
-  sea.dataset.state = "login";
-  const morph = new window.AxiomLoginMorph(sea, frame, engine);
+// data-state says which page is up (trans.js's frame, where the sea covers the frame): the website's frame when the
+// website hosts the page and owns both (the transition sets its state), else .lg-sea, whose canvas is the page's own
+// sea, and the page is always up. Its canvas (.lg-stg) is put first in .lg-sea, and Site.dc.html's rule for it, which
+// the Login board lacks, is set through the CSSOM: over the sea's canvas, under the brand and the pitch.
+function startMorph(frame: HTMLElement, root: HTMLElement, engine: OceanEngine, shape: Shape, way?: Way) {
+  const alone = !way;
+  if (alone) root.dataset.state = "login";
+  const morph = new window.AxiomLoginMorph(root, frame, engine, way);
   // Morph.theme reads getComputedStyle(--ring) straight into canvas fillStyle, which rejects the runtime
   // light-dark(...) values brandStyle writes onto :root; resolve the tokens through CSSOM instead.
   let ink: MorphTheme | undefined;
@@ -52,7 +55,7 @@ function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, s
     };
     return ink;
   };
-  const canvas = sea.querySelector<HTMLCanvasElement>(":scope > canvas.lg-stg");
+  const canvas = frame.querySelector<HTMLCanvasElement>(".lg-sea > canvas.lg-stg");
   if (canvas) {
     const place = {
       position: "absolute",
@@ -80,12 +83,10 @@ function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, s
     },
     destroy: () => {
       morph.destroy();
-      sea.removeAttribute("data-state");
+      if (alone) root.removeAttribute("data-state");
     },
   };
 }
-
-type TitleCell = { x: number; y: number; r: number; blank: boolean };
 
 // The title's characters where they are drawn, in the decode canvas's box.
 function cellsOf(chars: HTMLElement[], box: HTMLElement): TitleCell[] {
@@ -99,25 +100,6 @@ function cellsOf(chars: HTMLElement[], box: HTMLElement): TitleCell[] {
       blank: (n.textContent ?? "").trim() === "",
     };
   });
-}
-
-// A character d ms before it resolves: a dot while it waits, a cycling glyph as it comes close, the ring colour next.
-function waiting(
-  x: CanvasRenderingContext2D,
-  c: TitleCell,
-  d: number,
-  g: string,
-  ink: { ring: string; dim: string; fs: number },
-) {
-  x.globalAlpha = d <= 60 ? 1 : d <= 240 ? 0.85 : 0.5;
-  x.fillStyle = d <= 60 ? ink.ring : ink.dim;
-  if (d <= 240) {
-    x.fillText(g, c.x, c.y);
-    return;
-  }
-  x.beginPath();
-  x.arc(c.x, c.y, Math.max(1.5, ink.fs * 0.04), 0, Math.PI * 2);
-  x.fill();
 }
 
 // decode resolves the title's characters one after another, as the website's hero does, and blinks the caret twice
@@ -155,10 +137,10 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     cells.forEach((c, i) => {
       const d = at(i) - ms;
       if (d <= 0) (chars[i] as HTMLElement).style.removeProperty("color");
-      else if (!c.blank) waiting(x, c, d, glyph(i, tick), ink);
+      else if (!c.blank) drawWaiting(x, c, d, glyph(i, tick), ink);
     });
     const after = ms - end;
-    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) caret(x, last, ink);
+    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) drawCaret(x, last, ink);
     x.globalAlpha = 1;
     if (after >= 700) stop();
   });
@@ -168,13 +150,6 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     x.clearRect(0, 0, canvas.width, canvas.height);
   };
   return stop;
-}
-
-function caret(x: CanvasRenderingContext2D, last: TitleCell, ink: { ring: string; fs: number }) {
-  x.globalAlpha = 1;
-  x.fillStyle = ink.ring;
-  const w = Math.max(2, Math.round(ink.fs * 0.05));
-  x.fillRect(Math.round(last.r + ink.fs * 0.06), Math.round(last.y - ink.fs * 0.42), w, Math.round(ink.fs * 0.84));
 }
 
 // The Login board's sea (its ROSTER and the options its boot passes the engine).
@@ -210,6 +185,27 @@ function seaOptions(frame: HTMLElement, canvas: HTMLCanvasElement, light: boolea
     warm: 2,
     virtualScale: 1,
     cell: Math.min(13, Math.max(8, Math.round((frame.clientWidth || innerWidth) / 124))),
+  };
+}
+
+// joinLogin puts the solid on a sea another page owns, the website's, which hosts the sign-in page in its own frame
+// (root, .tr): the sea and its frames stay the website's, the transition (way) sets the frame's state, and destroy takes
+// only the solid off. The sea's own colours follow the website's scheme, so recolour redraws only the solid.
+export function joinLogin(root: HTMLElement, frame: HTMLElement, engine: OceanEngine, shape: Shape, way: Way): Login {
+  const morph = startMorph(frame, root, engine, shape, way);
+  let stopDecode = () => {};
+  return {
+    show: morph.show,
+    hear: morph.hear,
+    recolour: () => morph.recolour(),
+    decode: (title, decodeCanvas) => {
+      stopDecode = decode(title, decodeCanvas);
+    },
+    endDecode: () => stopDecode(),
+    destroy: () => {
+      stopDecode();
+      morph.destroy();
+    },
   };
 }
 

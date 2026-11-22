@@ -2,6 +2,7 @@ import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import {
+  departOnly,
   expectMovingNow,
   loop,
   open,
@@ -17,8 +18,9 @@ import { pageHeading } from "./page-heading.ts";
 // The console's sign-in pages (port design §9): the sea and the solid on it, loaded after the first content, and the
 // title's decode, which plays once for a visitor the website's departure brought (its one-shot marker) and never for a
 // direct visit.
-// the engine's own chunk, not the frame's (login-frame-*.js)
-const loginCode = /\/assets\/login-[\w-]{8}\.js$/;
+// the console's engine chunk, not the frame's (login-frame-*.js), nor the website's own, which its homepage asks for
+// once its first screen is drawn (site/src/home/sign-in.tsx)
+const loginCode = /\/console\/assets\/login-[\w-]{8}\.js$/;
 const signInPage = `${apps[0].url.replace(/\/$/, "")}/console/sign-in`;
 const stageCanvas = (page: Page) => page.locator(".lg-sea > canvas:not(.sea)");
 // The sharks are called in and taken in before the solid is whole: up to 3.4 s for the far ones to give up, and a second
@@ -51,6 +53,7 @@ async function watchDecode(page: Page) {
 test("arriving through the departure decodes the title once, its code asked for at once; a direct visit does not", async ({
   page,
 }) => {
+  await departOnly(page);
   const decoded = await watchDecode(page);
   const asked: boolean[] = [];
   await page.route(loginCode, async (route) => {

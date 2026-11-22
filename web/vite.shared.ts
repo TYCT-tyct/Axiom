@@ -39,6 +39,21 @@ export const contentSecurityPolicy = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+// renderBlockingEntry makes the app's entry script hold the first frame: the website and the console's sign-in pages
+// listen in it for the cross-document view transition that joins them (packages/fx crossing.ts), whose pagereveal fires
+// on the first frame. Before the entry runs the page is empty, so its first contentful paint does not move. Vite drops
+// the attribute when it rewrites the tag, so it is put back on the built page.
+function renderBlockingEntry(): Plugin {
+  return {
+    name: "axiom:render-blocking-entry",
+    transformIndexHtml: {
+      order: "post",
+      handler: (html) =>
+        html.replace(/<script type="module"(?![^>]*\bblocking=)/, '<script type="module" blocking="render"'),
+    },
+  };
+}
+
 // The program from `just up` answers the API, so the dev server talks to a real one: on the public listener, or for the
 // admin, which is served only on its own listener, on that one (AXIOM_ADMIN_ADDR's default).
 const publicApi = "http://127.0.0.1:8080";
@@ -132,7 +147,7 @@ export function appConfig({
   return defineConfig({
     base,
     publicDir: false,
-    plugins: [react(), themeScript(), fontPreload()],
+    plugins: [react(), themeScript(), fontPreload(), renderBlockingEntry()],
     define: {
       // The version of the program this build ships in, exactly as `axiom version` prints it; `just web-build` sets it.
       // Empty when an app is built or served on its own, which turns the new-version prompt off.

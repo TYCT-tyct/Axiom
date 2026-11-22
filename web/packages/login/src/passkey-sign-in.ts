@@ -1,6 +1,6 @@
 import { consoleApi, unwrap } from "@axiom/api";
 import { useAdoptGrant, useStartSession } from "@axiom/app";
-import { signInWithPasskey } from "../webauthn";
+import { signInWithPasskey } from "./webauthn";
 
 // A passkey completes a sign-in from the guest page, or finishes a password sign-in that is waiting for its second
 // factor: the same assertion under the endpoints that bind the ceremony to the pending session.

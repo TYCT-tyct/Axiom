@@ -2,6 +2,7 @@ import { useEffectModule } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import { createContext, type RefObject, useCallback, useEffect, useRef } from "react";
 import { typedWord } from "./script";
+import { signingIn } from "./sign-in-place";
 
 const loadClawd = () => import("@axiom/fx/clawd");
 
@@ -36,7 +37,7 @@ export function useClawd(
     const onKey = typedWord(
       password,
       () => clawd.current?.call(),
-      (target) => !(target instanceof Node) || frame.contains(target),
+      (target) => !(target instanceof Node) || frame.contains(target) || signingIn(frame),
     );
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);

@@ -1,0 +1,33 @@
+{
+  "name": "@axiom/login",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./messages": "./src/locales/index.ts",
+    "./login-frame": "./src/login-frame.tsx",
+    "./sign-in": "./src/sign-in.tsx",
+    "./mfa": "./src/mfa.tsx",
+    "./register": "./src/register.tsx",
+    "./verify-email": "./src/verify-email.tsx",
+    "./reset-password": "./src/reset-password.tsx",
+    "./consent": "./src/consent.tsx"
+  },
+  "scripts": {
+    "typecheck": "tsc"
+  },
+  "dependencies": {
+    "@axiom/api": "workspace:*",
+    "@axiom/app": "workspace:*",
+    "@axiom/boards": "workspace:*",
+    "@axiom/fx": "workspace:*",
+    "@axiom/ui": "workspace:*",
+    "@tanstack/react-query": "5.107.1",
+    "i18next": "26.6.0",
+    "react-i18next": "17.1.10"
+  },
+  "peerDependencies": {
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  }
+}

@@ -1,5 +1,6 @@
 import type { Schemas } from "@axiom/api";
 import { useSession } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import { DataState, FormError, useFormat } from "@axiom/ui";
 import {
   type InfiniteData,
@@ -10,7 +11,7 @@ import {
 } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { identitiesQuery, siteQuery } from "../queries";
+import { identitiesQuery } from "../queries";
 import { clickedRowIndex, useBoardInputs } from "./account-board";
 import { AccountActionCard, AccountInputsCard } from "./account-cards";
 import {

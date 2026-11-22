@@ -1,10 +1,12 @@
 import { expect, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { expectMoving, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
+import { departOnly, expectMovingNow, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
-// Home <-> sign-in tiles transitions (port design §9, trans.js.txt STYLES.tiles):
+// Home <-> sign-in tiles transitions (port design §9, trans.js.txt STYLES.tiles). The homepage holds the sign-in
+// pages in its own document (site/src/home/sign-in.tsx); the cases that start from a press before that code is in
+// (departOnly) cover the departure to the console's page and its way back:
 // - return from sign-in pages via clicking .lg .brand, pressing Escape (except inside a non-empty input/textarea),
 //   or browser Back, reversible midway
 // - midway reversal of the website's forward departure via Escape
@@ -42,6 +44,7 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
   page,
 }) => {
   const violations = await watchEveryPolicy(page);
+  await departOnly(page);
   await open(page);
   await running(page);
   await siteSignIn(page).click();
@@ -63,8 +66,98 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
   expect(violations).toEqual([]);
 });
 
+// The website holds the sign-in pages in its own document (site/src/home/sign-in.tsx): a press opens the page over
+// the same sea with the console's address and no page load, and the brand, Esc and the browser's back go home the same
+// way, turning round midway. Time stands still from before the press: only runFor moves the transition.
+const frameState = (page: Page) => page.locator(".tr").getAttribute("data-state");
+const homeAddress = () => new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
+
+async function pressInPlace(page: Page) {
+  const violations = await watchEveryPolicy(page);
+  await open(page);
+  await running(page);
+  await expect(page.locator(".tr .lg")).toBeAttached();
+  await page.evaluate(() => Object.assign(window, { sameDocument: true }));
+  await page.clock.install();
+  await pauseAhead(page, 100);
+  await siteSignIn(page).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await expect.poll(() => frameState(page)).toBe("run");
+  return violations;
+}
+const sameDocument = (page: Page) =>
+  page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument === true);
+
+test("the homepage opens sign-in in place and the brand takes it home, one document, CSP-clean", async ({ page }) => {
+  const violations = await pressInPlace(page);
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).toBe("login");
+  await expect(page.locator(".lg-form input").first()).toBeVisible();
+  await page.locator(".lg a.brand").click();
+  await expect(page).toHaveURL(homeAddress());
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).not.toBe("login");
+  await expect(siteSignIn(page)).toBeVisible();
+  expect(await sameDocument(page)).toBe(true);
+  expect(violations).toEqual([]);
+});
+
+test("Escape midway turns the way in round, home again", async ({ page }) => {
+  await pressInPlace(page);
+  await page.clock.runFor(200);
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(homeAddress());
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).not.toBe("run");
+  await expect(siteSignIn(page)).toBeVisible();
+  expect(await sameDocument(page)).toBe(true);
+});
+
+test("the browser's back takes the page home, forward midway turns it round, and back again lands home", async ({
+  page,
+}) => {
+  await pressInPlace(page);
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).toBe("login");
+  await page.evaluate(() => history.back());
+  await expect.poll(() => frameState(page)).toBe("run");
+  await page.clock.runFor(200);
+  await page.evaluate(() => history.forward());
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).toBe("login");
+  await page.evaluate(() => history.back());
+  await expect(page).toHaveURL(homeAddress());
+  await page.clock.runFor(1500);
+  await expect(siteSignIn(page)).toBeVisible();
+  expect(await sameDocument(page)).toBe(true);
+});
+
+test("the window crossing the layouts' width keeps the sign-in page up; home takes the new layout", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await pressInPlace(page);
+  await page.clock.runFor(1500);
+  await expect.poll(() => frameState(page)).toBe("login");
+  await page.setViewportSize({ width: 900, height: 900 });
+  await page.clock.runFor(500);
+  await expect.poll(() => frameState(page)).toBe("login");
+  // the frame drawn in the wide layout (.d) stays, its sign-in page on it
+  await expect(page.locator(".tr.d")).toHaveCount(1);
+  await expect(page.locator(".lg-form input").first()).toBeVisible();
+  await page.locator(".lg a.brand").click();
+  await expect(page).toHaveURL(homeAddress());
+  await page.clock.runFor(1500);
+  // home again, the frame is drawn in the narrow layout (.m)
+  await expect(page.locator(".tr.m")).toHaveCount(1);
+  expect(await sameDocument(page)).toBe(true);
+});
+
 // The home page come back to is settled, with no entrance to let its sea go: the sea moves all the same.
 test("the home page come back to from sign-in is settled and its sea moves", async ({ page }) => {
+  await departOnly(page);
+  await page.clock.install();
   await open(page);
   await running(page);
   await siteSignIn(page).click();
@@ -73,7 +166,7 @@ test("the home page come back to from sign-in is settled and its sea moves", asy
   await page.locator(".lg a.brand").click();
   await expect(page).toHaveURL(new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
   await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
-  await expectMoving(page, page.locator(".tr canvas.sea:not(.cover)"));
+  await expectMovingNow(page, page.locator(".tr > canvas.sea:not(.cover)"));
   await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
 });
 
@@ -96,6 +189,7 @@ test("Escape returns to home unless typing in a non-empty input, and works under
 test("browser Back from a website arrival plays the return transition and can be reversed midway via Forward", async ({
   page,
 }) => {
+  await departOnly(page);
   await open(page);
   await running(page);
   await siteSignIn(page).click();
@@ -142,6 +236,7 @@ test("clicking the form panel midway reverses a brand-click return back onto sig
 });
 
 test("Escape midway reverses the website's forward departure back to home", async ({ page }) => {
+  await departOnly(page);
   await open(page);
   await running(page);
   await page.clock.install();
@@ -175,6 +270,7 @@ test("return still goes home if the transition chunk fails to load", async ({ pa
 test("leaving from the sea floor flies __axCast.wordTiles() into the sign-in panel and restores them on reversal", async ({
   page,
 }) => {
+  await departOnly(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await open(page);
   await running(page);

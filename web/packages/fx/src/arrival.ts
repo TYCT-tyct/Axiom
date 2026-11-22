@@ -39,6 +39,8 @@ function takeStamp(key: string): boolean {
 
 export const markArrival = () => setStamp(arrivalKey);
 export const takeArrival = () => takeStamp(arrivalKey);
+// whether the page is an arrival, leaving the marker for the one that plays it (takeArrival)
+export const peekArrival = () => readStamp(arrivalKey);
 export const markReturn = () => setStamp(returnKey);
 export const takeReturn = () => takeStamp(returnKey);
 // whether the page is a return, leaving the marker for the one that settles it (takeReturn)

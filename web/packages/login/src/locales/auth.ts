@@ -1,4 +1,5 @@
 import type { Messages } from "@axiom/ui";
+import { linkFailed } from "./link-failed";
 
 export const zh = {
   signIn: {
@@ -61,7 +62,7 @@ export const zh = {
     check: "再确认一次",
   },
   // A page a mailed link opens (reset, verification) whose code did not load: the link's token is gone with a reload.
-  linkFailed: "这个页面没能载入。如果是从邮件里的链接打开的，请回到邮件重新打开那个链接；否则刷新页面再试一次。",
+  linkFailed: linkFailed.zh,
   register: {
     title: "注册",
     inviteDescription: "用邀请码注册。密码要 12 到 256 个字符，用一个别处没用过的。",
@@ -169,8 +170,7 @@ export const en: Messages<typeof zh> = {
     unsure: "We couldn’t tell whether this browser is signed in to an account.",
     check: "Check again",
   },
-  linkFailed:
-    "This page didn’t load. If you opened it from an email’s link, go back to the email and open the link again; otherwise reload the page.",
+  linkFailed: linkFailed.en,
   register: {
     title: "Register",
     inviteDescription:

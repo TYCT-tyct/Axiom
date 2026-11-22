@@ -16,10 +16,10 @@ const i18n = createInstance();
 beforeAll(async () => {
   await i18n.init({
     lng: "en",
-    defaultNS: "console",
+    defaultNS: "login",
     resources: {
       en: {
-        console: {
+        login: {
           legal: {
             terms: "Terms of Service",
             privacy: "Privacy Policy",
@@ -64,7 +64,7 @@ function state(
 }
 
 describe("legal consent", () => {
-  it("resolves the legal keys in the console namespace", () => {
+  it("resolves the legal keys in the login namespace", () => {
     expect(i18n.t("legal.error")).toBe("The terms didn’t load.");
   });
 

@@ -1,6 +1,6 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { peekReturn, useEffectModule } from "@axiom/fx";
+import { arrivedWhole, held, peekReturn, useEffectModule } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -11,6 +11,7 @@ import { Eggs } from "./eggs";
 import { links } from "./links";
 import { useScheme } from "./scheme";
 import { WhaleContext } from "./screens";
+import { useSignIn } from "./sign-in";
 import { type Join, useSite } from "./site-context";
 import { useSwitches } from "./switches";
 import { useWhale } from "./whale";
@@ -99,6 +100,17 @@ function useFrameAttrs(
   }, [root, sea, language, scheme, themeLabel]);
 }
 
+// A page come to by the tiles transition is whole once its sea is drawn: the sign-in page held over it lets go then.
+// A sea later than the hold (crossing.ts) fades in on the page rather than appear all at once.
+function useWholeWithSea(sea: Sea | null, returning: boolean) {
+  useEffect(() => {
+    if (!sea) return;
+    if (returning && !held()) sea.engine.canvas.animate({ opacity: [0, 1] }, { duration: 360, easing: "ease-out" });
+    const frame = requestAnimationFrame(() => arrivedWhole());
+    return () => cancelAnimationFrame(frame);
+  }, [sea, returning]);
+}
+
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
 // its engines through packages/fx: the sea and Clawd (clawd.ts) after the first content, the switches when first used
@@ -107,7 +119,17 @@ function useFrameAttrs(
 // The switches' engine rewrites the header's and the first screen's words in place, decoding them into the chosen
 // language. So React writes those words once, in the language the page opened in, and never again: they are the
 // regions' text props, fixed at mount. The other words follow the language as usual.
-export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObject<boolean>; children: ReactNode }) {
+export function SiteFrame({
+  wide,
+  met,
+  onSigning,
+  children,
+}: {
+  wide: boolean;
+  met: RefObject<boolean>;
+  onSigning: (up: boolean) => void;
+  children: ReactNode;
+}) {
   const { t, i18n } = useTranslation();
   const scheme = useScheme();
   const [opened] = useState(() => i18n.getFixedT(i18n.language));
@@ -129,8 +151,10 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     },
     returning,
   );
+  useWholeWithSea(seaUp, returning);
   useSwitches(root, sea);
-  useDeparture(root, sea);
+  const signIn = useSignIn(root, sea, seaUp !== null, onSigning);
+  useDeparture(root, sea, signIn.enter);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });
   const floor = useClawd(root, sea, { narrow: !wide, dark: scheme === "dark" });
   const { scroll, island, menu } = useFrameBehaviour(root, wide);
@@ -166,6 +190,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
       </WhaleContext>
       <BrandPlaces root={root} logoUrl={brand?.logo_url} name={name} />
       <Eggs root={root} sea={seaUp} whale={whale.call} />
+      {signIn.element}
     </>
   );
 }

@@ -12,6 +12,7 @@ import {
   Note,
   Notice,
   PageFrame,
+  pressBoardButton,
   useFormat,
   usePageTitle,
 } from "@axiom/ui";
@@ -19,7 +20,6 @@ import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-q
 import { Link, useSearch } from "@tanstack/react-router";
 import { type MouseEvent, type Ref, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { pressBoardButton } from "../board-interaction";
 import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
 import { type KeyFilters, keysQuery } from "../queries";

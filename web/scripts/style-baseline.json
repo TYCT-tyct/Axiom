@@ -17,6 +17,7 @@
     "packages/app/src/presets/summary.tsx",
     "packages/app/src/qr.tsx",
     "packages/app/src/totp-dialogs.tsx",
+    "packages/login/src/",
     "packages/ui/src/components/",
     "site/src/models.tsx",
     "site/src/shell.tsx"

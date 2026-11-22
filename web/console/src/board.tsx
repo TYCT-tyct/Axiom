@@ -4,7 +4,7 @@ import { useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { wideWidth } from "./board-interaction";
 
-export { pressBoardButton as pressKey } from "./board-interaction";
+export { pressBoardButton as pressKey } from "@axiom/ui";
 
 // What the console's pages ported from the AxApp board share. The board comes in two forms, the wide one and the phone's,
 // each a region of its own, so a page renders the one the window is wide enough for: from 1024px the wide board, as the

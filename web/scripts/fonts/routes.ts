@@ -5,7 +5,7 @@
 // a literal happens to match a key it does not show, which costs bytes, never a missing glyph. Packages are followed
 // into their source through their package.json exports; anything outside the workspace is not.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import ts from "typescript";
 
 const web = join(import.meta.dirname, "..", "..");
@@ -156,7 +156,11 @@ export const fileText = (file: string) =>
 export function routeLiterals(app: string, entry: string) {
   const shell = run(join(web, entry), [], { lazy: false, seen: new Set(), ran: new Set() });
   const pages = new Map<string, { literals: Set<string>; files: Set<string> }>();
-  for (const page of [...new Set([...shell].flatMap((file) => parse(file).lazy))].sort()) {
+  // a page is the app's own module; an effect the shell asks for early (packages/fx, the sea of a page held on screen) is
+  // not one, and the page that shows it counts its glyphs among its own
+  const own = join(web, app, "src") + sep;
+  const lazy = [...shell].flatMap((file) => parse(file).lazy).filter((page) => page.startsWith(own));
+  for (const page of [...new Set(lazy)].sort()) {
     const ran = run(page, ["default"], { lazy: true, seen: new Set(), ran: new Set() });
     const name = relative(join(web, app, "src"), page).replace(/\.tsx?$/, "");
     const files = new Set([...shell, ...ran]);

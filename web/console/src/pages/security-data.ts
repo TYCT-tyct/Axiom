@@ -8,12 +8,12 @@ import {
   useStartSession,
 } from "@axiom/app";
 import type DesktopSecurity from "@axiom/boards/AxApp/regions/Security";
+import { registerPasskey } from "@axiom/login";
 import { type InfiniteData, infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { identitiesQuery, passkeysQuery } from "../queries";
-import { registerPasskey } from "../webauthn";
 
 export type SessionsState = { available: boolean; sessions: Schemas["SessionDevice"][] };
 export type PasskeyRegistrationAvailability = "ready" | "unsupported" | "site_disabled" | "wrong_domain";

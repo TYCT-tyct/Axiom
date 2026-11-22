@@ -12,6 +12,7 @@
     "@axiom/app": "workspace:*",
     "@axiom/boards": "workspace:*",
     "@axiom/fx": "workspace:*",
+    "@axiom/login": "workspace:*",
     "@axiom/ui": "workspace:*",
     "@tanstack/react-query": "5.107.1",
     "@tanstack/react-router": "1.170.46",

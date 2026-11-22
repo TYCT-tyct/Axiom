@@ -2,6 +2,7 @@ import type { Sea } from "@axiom/fx/sea";
 import type { Whale } from "@axiom/fx/whale";
 import { type RefObject, useCallback, useEffect, useRef, useState } from "react";
 import { turns, typedWord } from "./script";
+import { signingIn } from "./sign-in-place";
 
 const loadWhale = () => import("@axiom/fx/whale");
 
@@ -15,7 +16,7 @@ const strip = ".hs > .main .fam [data-egg=deepseek]";
 // The calls on purpose: the word typed anywhere, which is the keyboard's way to the whale, or the first screen's strip
 // pressed (the strip is decoration, out of what is read); the returned function stops listening.
 function calls(frame: HTMLElement, call: () => void) {
-  const onKey = typedWord(password, call);
+  const onKey = typedWord(password, call, () => signingIn(frame));
   const onClick = (e: MouseEvent) => {
     if (e.target instanceof Element && e.target.closest(strip)) call();
   };

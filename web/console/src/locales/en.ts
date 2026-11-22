@@ -1,6 +1,6 @@
+import { en as login } from "@axiom/login/messages";
 import type { Messages } from "@axiom/ui";
 import { en as announcements } from "./announcements";
-import { en as auth } from "./auth";
 import { en as callsBoard } from "./calls";
 import { en as keysMessages } from "./keys";
 import { en as notifications } from "./notifications";
@@ -15,11 +15,10 @@ import { en as shell } from "./shell";
 import { en as statement } from "./statement";
 import { en as usageBoard } from "./usage";
 import { en as workspaces } from "./workspaces";
-import type zh from "./zh";
+import type { initial as zhInitial } from "./zh";
 
-export default {
+export const initial = {
   announcements,
-  auth,
   callsBoard,
   usageBoard,
 
@@ -41,19 +40,6 @@ export default {
     notifications: "Notifications",
     settings: "Settings",
     security: "Account & security",
-  },
-  legal: {
-    title: "Updated terms",
-    description: "{{email}}, read and accept the current versions before continuing.",
-    acceptSubmit: "Accept and continue",
-    missing: "The current documents didn’t load. Try again in a moment.",
-    terms: "Terms of Service",
-    privacy: "Privacy Policy",
-    version: "Version {{version}}",
-    loading: "Loading the documents…",
-    error: "The documents didn’t load.",
-    retry: "Retry",
-    accept: "I have read and agree to the terms of service and privacy policy above.",
   },
   overview: {
     ...overviewBoard,
@@ -281,4 +267,6 @@ export default {
     tokens: "{{input}} / {{output}}",
   },
   security,
-} satisfies Messages<typeof zh>;
+} satisfies Messages<typeof zhInitial>;
+
+export default /* @__PURE__ */ Object.assign({}, initial, login);

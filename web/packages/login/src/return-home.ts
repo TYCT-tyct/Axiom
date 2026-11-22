@@ -1,6 +1,6 @@
 // Return transition from any console Login-board auth page (.lg) back to the website (/) via Escape, clicking the
 // Axiom mark (.lg .brand), or browser Back, reversible midway (port design §9, trans.js.txt STYLES.tiles reverse).
-import { afterFirstContent, markReturn, type OriginRect, takeOrigin } from "@axiom/fx";
+import { afterFirstContent, leaveTogether, markOrigin, markReturn, type OriginRect, takeOrigin } from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import { type RefObject, useEffect, useRef } from "react";
 
@@ -61,8 +61,12 @@ function installSentinel() {
   }
 }
 
-function goHome(via: Way) {
+// The home page takes the marker and settles; the tiles come home to the way in they left by (its place kept, for the
+// home page to find), and the mark slides back to the home page's place.
+function goHome(frame: HTMLElement, via: Way) {
   markReturn();
+  if (savedOrigin) markOrigin(savedOrigin);
+  leaveTogether({ brand: frame.querySelector("a.brand") });
   const state = (history.state ?? {}) as BackState;
   if (via === "back") {
     ignoreOwnPop();
@@ -83,7 +87,7 @@ function scheduleCommit(flight: InFlight, delay: number) {
     if (leaving !== flight) return;
     leaving = undefined;
     const held = shown;
-    goHome(flight.via);
+    goHome(flight.frame, flight.via);
     window.setTimeout(() => shown === held && clearPicture(), stalled);
   }, delay);
 }
@@ -183,16 +187,19 @@ function handlePop(frame: HTMLElement | null, locked: boolean) {
 }
 
 // useReturnHome wires Escape (unless typing in a non-empty input/textarea), clicking .lg .brand, and browser Back on
-// a Login-board page to play the reversible return tiles transition back to /.
-export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boolean) {
+// a Login-board page to play the reversible return tiles transition back to /. Off when the page stands in the
+// website's own document (LoginHost), whose transition takes the same ways home.
+export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boolean, on = true) {
   const isLocked = useRef(locked);
   isLocked.current = locked;
   useEffect(() => {
+    if (!on) return;
     installSentinel();
     // the return's code is fetched once the page is drawn, so the mark breaks the page on the next frame
     return afterFirstContent(() => void loadDepart().catch(() => {}));
-  }, []);
+  }, [on]);
   useEffect(() => {
+    if (!on) return;
     const onClick = (e: MouseEvent) => handleClick(root.current, isLocked.current, e);
     const onKey = (e: KeyboardEvent) => handleKey(root.current, isLocked.current, e);
     const onPop = () => handlePop(root.current, isLocked.current);
@@ -209,5 +216,5 @@ export function useReturnHome(root: RefObject<HTMLElement | null>, locked: boole
       }
       if (shown?.frame === root.current) clearPicture();
     };
-  }, [root]);
+  }, [root, on]);
 }

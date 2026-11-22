@@ -1,11 +1,11 @@
 import { useCachedSession, useReadSession } from "@axiom/app";
 import type { Shape } from "@axiom/fx/login";
-import { useSearch } from "@tanstack/react-router";
 import { type ReactNode, useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Attempt } from "./attempt";
 import { LoginFrame, type Stage } from "./login-frame";
 import { NoteAction, RouteNote, SignOutNote, wrapAnywhere } from "./login-parts";
+import { useLoginNavigation } from "./navigation";
 
 // The way to sign in from a page without a gate (a reset, an address verified). Such a page works whoever this browser
 // is signed in as, and the sign-in page opens the console of whoever is signed in. So the way to sign in is offered
@@ -24,8 +24,8 @@ export function WayOn({
   attempt: Attempt;
   guest?: ReactNode;
 }) {
-  const { t } = useTranslation();
-  const next = useSearch({ strict: false }).next;
+  const { t } = useTranslation("login");
+  const { next } = useLoginNavigation().search;
   if (browser.state === "out")
     return (
       <>
@@ -90,7 +90,7 @@ export type BrowserSession = ReturnType<typeof useBrowserSession>;
 // useSaid puts what the browser holds after a step's own sentence, in the step's line under its title, announced as it
 // changes: that a read is out, whom the browser is signed in as, or that it could not be told.
 export function useSaid(browser: BrowserSession) {
-  const { t, i18n } = useTranslation();
+  const { t, i18n } = useTranslation("login");
   const said = {
     reading: t("auth.way.checking"),
     failed: t("auth.way.unsure"),

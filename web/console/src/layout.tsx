@@ -6,14 +6,24 @@ import wideZh from "@axiom/boards/AxApp/regions/Shell.zh";
 import Phone from "@axiom/boards/AxAppPhone/regions/Shell";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/Shell.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/Shell.zh";
-import { BoardMark, BoardShell, useFormat, useKeptPage, usePreferences } from "@axiom/ui";
+import { arrivedWhole } from "@axiom/fx";
+import { siteQuery } from "@axiom/login";
+import {
+  BoardMark,
+  BoardShell,
+  pressBoardButton,
+  useBoardMedia,
+  useFormat,
+  useKeptPage,
+  usePreferences,
+} from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
 import { type AnchorHTMLAttributes, type ReactNode, type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWide } from "./board";
-import { phoneWidth, pressBoardButton, useBoardMedia } from "./board-interaction";
-import { balanceQuery, siteQuery } from "./queries";
+import { phoneWidth } from "./board-interaction";
+import { balanceQuery } from "./queries";
 
 // The pages the shell links to, by the board's page key: the address, what the session must hold to open it, and the
 // other addresses the same entry stands for. The board's other entries are not built yet (#816); the workspaces page is
@@ -254,6 +264,8 @@ function ConsoleShell({
 }) {
   const { t, i18n } = useTranslation();
   const { page, slot } = useKeptPage(children);
+  // drawn, the console is whole: a page left for it (signing in, the website) cross-fades into it now (crossing.ts)
+  useEffect(() => arrivedWhole(), []);
   const phone = useBoardMedia(phoneWidth);
   const { level, ...pageValues } = usePageValues();
   const { dark, language, locale, ...preferenceValues } = usePreferenceValues();

@@ -5,9 +5,9 @@ import { DocumentText } from "@axiom/ui";
 import { type UseQueryResult, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { legalQuery } from "../queries";
 import { legalBlocks } from "./legal-markdown";
 import { FormProblem, NoteAction } from "./login-parts";
+import { legalQuery } from "./queries";
 import { useHoldReveal } from "./reveal-hold";
 
 // useLegalConsent reads the site's current documents and the visitor's answer. The versions sent with registration are
@@ -69,7 +69,7 @@ export function canSubmitWithLegal(consent: Pick<LegalConsentState, "ready" | "d
 }
 
 export function useLegalConsent(): LegalConsentState {
-  const { i18n } = useTranslation();
+  const { i18n } = useTranslation("login");
   const query = useQuery(legalQuery);
   // the page shows the documents and their box: an arrival waits for them rather than show the button grey
   useHoldReveal(query.isPending);
@@ -107,7 +107,7 @@ function legalView(consent: LegalConsentState) {
 // failed read blocks the form rather than letting it submit into consent_required. The box shows the answer the form
 // would send: a new version on screen, or a reload after a refusal, clears it.
 export function LegalConsent({ consent }: { consent: LegalConsentState }) {
-  const { t } = useTranslation();
+  const { t } = useTranslation("login");
   const { t: common } = useTranslation("common");
   const view = legalView(consent);
   if (view === "loading") {
@@ -144,7 +144,7 @@ export function LegalConsent({ consent }: { consent: LegalConsentState }) {
 
 // LegalDocuments shows each document with its version, as the form that accepts them sends it.
 function LegalDocuments({ documents }: { documents: Schemas["LegalDocument"][] }) {
-  const { t } = useTranslation();
+  const { t } = useTranslation("login");
   return documents.map((document) => (
     <DocumentText
       key={`${document.kind}:${documentLocale(document)}`}

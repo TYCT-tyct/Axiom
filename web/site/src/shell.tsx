@@ -35,6 +35,11 @@ function kept(): SiteState {
   return { status: "pending" };
 }
 
+// The page's latest call for the site, answered or still out: the sign-in pages the website holds read the same answer
+// (home/sign-in-host.tsx) rather than ask for it again.
+let latest: Promise<Schemas["Site"]> | null = null;
+export const siteAnswer = () => latest;
+
 const brandOf = (site: Schemas["Site"]): Brand => ({
   name: site.name || undefined,
   logo_url: site.logo_url,
@@ -61,7 +66,8 @@ export function useSiteState(): SiteState {
       window.clearTimeout(timer);
       const mine = new AbortController();
       call = mine;
-      unwrap(consoleApi.GET("/api/console/v1/site", { signal: mine.signal })).then(
+      latest = unwrap(consoleApi.GET("/api/console/v1/site", { signal: mine.signal }));
+      latest.then(
         (site) => {
           if (mine.signal.aborted) return;
           failures = 0;

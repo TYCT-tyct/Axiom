@@ -1,4 +1,5 @@
 import { ApiError, consoleApi, unwrap } from "@axiom/api";
+import { arrivedWhole } from "@axiom/fx";
 import {
   Button,
   DataState,
@@ -70,6 +71,8 @@ export function Models() {
   const [filters, setFilters] = useState<ModelFilters>(readFilters);
   const [attempt, setAttempt] = useState(0);
   const query = usePublicModels(filters, attempt);
+  // drawn, the page is whole: the page left for it cross-fades into it now (crossing.ts)
+  useEffect(() => arrivedWhole(), []);
 
   useEffect(() => {
     const back = () => setFilters(readFilters());

@@ -205,7 +205,9 @@ function controls(
   options: EggsOptions,
   feedBy: (card: DOMRect) => void,
 ) {
-  const onKey = hiddenKeys(options);
+  const hidden = hiddenKeys(options);
+  // the website's sign-in page over the homepage (or the way there) has the keys: the sea's are the homepage's
+  const onKey = (e: KeyboardEvent) => frame.dataset.state === "login" || frame.dataset.state === "run" || hidden(e);
   const onControl = (e: Event) => {
     if (e.target instanceof Element && e.target.closest(quiet)) moments.touched();
   };

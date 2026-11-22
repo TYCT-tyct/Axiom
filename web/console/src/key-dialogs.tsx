@@ -1,11 +1,11 @@
 import { consoleApi, type Schemas, unwrap, unwrapEmpty } from "@axiom/api";
 import { accountKey } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import { Button, Cluster, CodeBlock, CopyButton, Dialog, FormError, keyGuide, Stack, Text } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
 import { KeyForm } from "./key-form";
-import { siteQuery } from "./queries";
 import { useWorkspaces } from "./workspaces";
 
 type Key = Schemas["Key"];

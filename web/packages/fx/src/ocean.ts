@@ -6,15 +6,15 @@ import "@axiom/boards/engines/ocean-orig.js";
 // What the page and the preference effects use of the engine; its own members are the engine's (ocean-orig.js).
 export type OceanEngine = {
   readonly canvas: HTMLCanvasElement;
-  readonly renderer: { readonly cw: number; readonly ch: number };
+  readonly renderer: { readonly cw: number; readonly ch: number; visRight?: number | null };
   held: boolean;
   schedule(): void;
   // draw: false steps the water without drawing it; the next drawn frame takes the time it skipped
   tick(dt: number, draw?: boolean): void;
   setLight(light: boolean): void;
   destroy(): void;
-  // the engine's sharks: the whale's ghost joins them, so the fish steer around it
-  world?: { sharks: object[] };
+  // the engine's sharks: the whale's ghost joins them, so the fish steer around it; width/right hold the wall
+  world?: { width?: number; right?: number | null; sharks: object[] };
 };
 
 declare global {

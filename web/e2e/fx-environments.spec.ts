@@ -149,7 +149,7 @@ test("under reduced motion the sea changes between two looks and the whale comes
   await running(page);
   const look = () =>
     page
-      .locator("canvas.sea:not(.cover)")
+      .locator(".tr > canvas.sea:not(.cover)")
       .evaluate((canvas: HTMLCanvasElement) => canvas.toDataURL().length + canvas.toDataURL().slice(-200));
   const before = await look();
   await expect.poll(look).not.toBe(before);
