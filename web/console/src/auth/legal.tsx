@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import { legalQuery } from "../queries";
 import { legalBlocks } from "./legal-markdown";
 import { FormProblem, NoteAction } from "./login-parts";
+import { useHoldReveal } from "./reveal-hold";
 
 // useLegalConsent reads the site's current documents and the visitor's answer. The versions sent with registration are
 // exactly the ones on screen; a later publication changes them, which clears the answer until the new text is seen.
@@ -70,6 +71,8 @@ export function canSubmitWithLegal(consent: Pick<LegalConsentState, "ready" | "d
 export function useLegalConsent(): LegalConsentState {
   const { i18n } = useTranslation();
   const query = useQuery(legalQuery);
+  // the page shows the documents and their box: an arrival waits for them rather than show the button grey
+  useHoldReveal(query.isPending);
   const [acceptedKey, setAcceptedKey] = useState<string | null>(null);
   const documents = legalDocumentsForLanguage(query.data?.documents ?? [], i18n.resolvedLanguage ?? i18n.language);
   const versionKey = documents
