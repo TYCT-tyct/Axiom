@@ -322,9 +322,14 @@ test("leaving from the sea floor flies __axCast.wordTiles() into the sign-in pan
   await running(page);
   await scrollTo(page, 6);
   await shown(page, 6);
-  // If PR #891's Clawd engine is mounted on .tr, observe its real __axCast.wordTiles(); otherwise attach a faithful
-  // spy implementing clawd-cast.js's wordTiles() contract so the flight and restore path is verified end to end.
-  const installed = await page.evaluate(() => {
+  // Clawd's engine (clawd-cast.js) puts the buried wordmark's cells on the frame (__axCast.wordTiles()) once it has
+  // come; it is watched once it is there, so a late engine cannot take the place of what is watched
+  await page.waitForFunction(() =>
+    Boolean(
+      (document.querySelector(".tr") as HTMLElement & { __axCast?: { wordTiles?: unknown } }).__axCast?.wordTiles,
+    ),
+  );
+  await page.evaluate(() => {
     const frame = document.querySelector(".tr") as HTMLElement & {
       __axCast?: {
         wordTiles?: () => {
@@ -339,61 +344,28 @@ test("leaving from the sea floor flies __axCast.wordTiles() into the sign-in pan
     };
     const log = { calls: 0, hidden: 0, shown: 0, tileCount: 0 };
     (window as unknown as { __wordLog: typeof log }).__wordLog = log;
-    if (frame.__axCast?.wordTiles) {
-      const orig = frame.__axCast.wordTiles.bind(frame.__axCast);
-      frame.__axCast.wordTiles = () => {
-        log.calls++;
-        const res = orig();
-        if (!res) return null;
-        log.tileCount = res.tiles.length;
-        const hide = res.hide;
-        const show = res.show;
-        return {
-          ...res,
-          hide: () => {
-            log.hidden++;
-            hide();
-          },
-          show: () => {
-            log.shown++;
-            show();
-          },
-        };
+    const cast = frame.__axCast as NonNullable<typeof frame.__axCast>;
+    const orig = (cast.wordTiles as NonNullable<typeof cast.wordTiles>).bind(cast);
+    cast.wordTiles = () => {
+      log.calls++;
+      const res = orig();
+      if (!res) return null;
+      log.tileCount = res.tiles.length;
+      const hide = res.hide;
+      const show = res.show;
+      return {
+        ...res,
+        hide: () => {
+          log.hidden++;
+          hide();
+        },
+        show: () => {
+          log.shown++;
+          show();
+        },
       };
-      return "real";
-    }
-    const art = frame.querySelector(".hfm6 canvas.art")?.getBoundingClientRect();
-    const y0 = art ? Math.max(40, art.top + 20) : 640;
-    const x0 = art ? Math.max(40, art.left + 80) : 120;
-    const tiles = Array.from({ length: 40 }, (_, i) => ({
-      x: x0 + (i % 10) * 14,
-      y: y0 + Math.floor(i / 10) * 14,
-      w: 10,
-      h: 10,
-      m: 0.9,
-      li: i % 5,
-    }));
-    frame.__axCast = {
-      wordTiles: () => {
-        log.calls++;
-        log.tileCount = tiles.length;
-        return {
-          tiles,
-          tile: "#556677",
-          ink: "#112233",
-          gf: 8,
-          hide: () => {
-            log.hidden++;
-          },
-          show: () => {
-            log.shown++;
-          },
-        };
-      },
     };
-    return "stub";
   });
-  expect(["real", "stub"]).toContain(installed);
   await page.clock.install();
   await pauseAhead(page, 100);
   await page.locator(".hfm6 a[data-go]").first().click();
