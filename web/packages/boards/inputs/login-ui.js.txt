@@ -404,6 +404,76 @@
     // done: a ring with a tick in it
     enter(x, y, z) { const r = sdTor(x, y, z, 0.74, 0.1), t = mn(sdCap(x, y, z, -0.32, 0, 0, -0.08, -0.25, 0, 0.078), sdCap(x, y, z, -0.08, -0.25, 0, 0.36, 0.25, 0, 0.078)); MAT = t < r ? 1 : 0; return mn(r, t); },
   };
+  const SOLID_FAST = {
+    // Symmetric flap capsules mirror across x = 0 (negating x negates px and ex alike, preserving every bit).
+    // When PAR.mail === 0, letter l and lines w lie strictly inside b's core by >= 0.008 (+0.035 rounding), so b < l and b < w everywhere.
+    startIdle(x, y, z) {
+      const b = sdBox(x, y, z, 0.85, 0.55, 0.07) - 0.035, v = sdCap(ab(x), y, z, 0.84, 0.53, 0.12, 0, -0.02, 0.12, 0.04), seal = L3(x, y + 0.02, (z - 0.13) * 1.6) - 0.11;
+      const n = mn(b, v); MAT = seal < n ? 1 : 0; return mn(seal, n);
+    },
+    start(x, y, z) {
+      const b = sdBox(x, y, z, 0.85, 0.55, 0.07) - 0.035, v = sdCap(ab(x), y, z, 0.84, 0.53, 0.12, 0, -0.02, 0.12, 0.04), seal = L3(x, y + 0.02, (z - 0.13) * 1.6) - 0.11;
+      const up = 0.46 * PAR.mail, l = sdBox(x, y - 0.1 - up, z + 0.02, 0.66, 0.44, 0.025), w = mn(sdBox(x + 0.12, y - 0.4 - up, z - 0.05, 0.4, 0.028, 0.012), sdBox(x + 0.22, y - 0.28 - up, z - 0.05, 0.3, 0.028, 0.012)), a = mn(seal, w), n = mn(b, v, l);
+      MAT = a < n ? 1 : 0; return mn(a, n);
+    },
+    // -mx(kh, 0.12 - z) <= -(0.12 - z), so kh cannot raise b when -(0.12 - z) < b.
+    // When PAR.open === 0, both vertical shackle legs are exact x-mirrors so |x| collapses them into one capsule.
+    codeClosed(x, y, z) {
+      let b = sdBox(x, y + 0.38, z, 0.5, 0.36, 0.2) - 0.06;
+      if (-(0.12 - z) >= b) { const kh = mn(L2(x, y + 0.24) - 0.085, sdBox(x, y + 0.37, z, 0.04, 0.13, 1)); b = mx(b, -mx(kh, 0.12 - z)); }
+      const i = mx(0, mn(5, Math.round((x + 0.3) / 0.12))), st = L3(x - (-0.3 + i * 0.12), y + 0.65, z - 0.25) - 0.052;
+      const sh = mn(sdCap(ab(x), y, z, 0.28, 0.24, 0, 0.28, -0.05, 0, 0.085), y > 0.24 ? sdTor(x, y - 0.24, z, 0.28, 0.085) : 1e3), n = mn(b, sh);
+      MAT = st < n && i < PAR.n ? 1 : 0; return mn(st, n);
+    },
+    code(x, y, z) {
+      let b = sdBox(x, y + 0.38, z, 0.5, 0.36, 0.2) - 0.06;
+      if (-(0.12 - z) >= b) { const kh = mn(L2(x, y + 0.24) - 0.085, sdBox(x, y + 0.37, z, 0.04, 0.13, 1)); b = mx(b, -mx(kh, 0.12 - z)); }
+      const i = mx(0, mn(5, Math.round((x + 0.3) / 0.12))), st = L3(x - (-0.3 + i * 0.12), y + 0.65, z - 0.25) - 0.052;
+      const c = 0.24 + PAR.open * 0.26, sh = mn(sdCap(x, y, z, -0.28, c, 0, -0.28, -0.05, 0, 0.085), sdCap(x, y, z, 0.28, c, 0, 0.28, lerp(-0.05, c - 0.06, PAR.open), 0, 0.085), y > c ? sdTor(x, y - c, z, 0.28, 0.085) : 1e3), n = mn(b, sh);
+      MAT = st < n && i < PAR.n ? 1 : 0; return mn(st, n);
+    },
+    wechat: SOLID.wechat,
+    key: SOLID.key,
+    connect: SOLID.connect,
+    enter: SOLID.enter,
+  };
+  const fastShape = (name) => {
+    if (name === 'start') return PAR.mail === 0 ? SOLID_FAST.startIdle : SOLID_FAST.start;
+    if (name === 'code') return PAR.open === 0 ? SOLID_FAST.codeClosed : SOLID_FAST.code;
+    return SOLID_FAST[name];
+  };
+  // Tight object-space AABBs [x0, x1, y0, y1, z0, z1]: every primitive is an exact Euclidean SDF (or >= Euclidean, as in
+  // start's 1.6x z-scaled seal and CSG subtractions), so any point outside the box padded by p has SDF >= p.
+  const boundsOf = (name) => {
+    if (name === 'start') return [-0.885, 0.885, mn(-0.585, -0.34 + 0.46 * PAR.mail), mx(0.585, 0.54 + 0.46 * PAR.mail), -0.105, 0.19875];
+    if (name === 'code') return [-0.56, 0.56, -0.8, 0.605 + 0.26 * PAR.open, -0.26, 0.302];
+    if (name === 'wechat') return [-0.62, 0.62, -0.62, 0.62, -0.12, 0.12];
+    if (name === 'key') return [-1.025, 0.995, -0.405, 0.405, -0.13, 0.13];
+    if (name === 'connect') return [-1.015, 1.015, -1.015, 1.015, -1.015, 1.015];
+    if (name === 'enter') return [-0.84, 0.84, -0.84, 0.84, -0.1, 0.1];
+    return [-1.32, 1.32, -1.32, 1.32, -1.32, 1.32];
+  };
+  // tob is orthogonal, so view (vx, vy) is the dot product of object coordinates with its first two columns; projecting the padded box tightly bounds (vx, vy).
+  const projBox = (b, p, cy, sy, v0, v1, v2) => {
+    const bx = (b[0] + b[1]) * 0.5, by = (b[2] + b[3]) * 0.5, bz = (b[4] + b[5]) * 0.5;
+    const ex = (b[1] - b[0]) * 0.5 + p, ey = (b[3] - b[2]) * 0.5 + p, ez = (b[5] - b[4]) * 0.5 + p;
+    const vcx = cy * bx + sy * bz, vrx = ab(cy) * ex + ab(sy) * ez, vcy = v0 * bx + v1 * by + v2 * bz, vry = ab(v0) * ex + ab(v1) * ey + ab(v2) * ez;
+    return [vcx - vrx, vcx + vrx, vcy - vry, vcy + vry];
+  };
+  // Slab intersection of o + k*z on [-1.32, 1.32] with padded box [x0..z1]; returns far exit zLo, or 9 on miss.
+  const slabZ = (ox, oy, oz, x0, x1, y0, y1, z0, z1, kx, ky, kz, ikx, iky, ikz) => {
+    let lo = -1.32, hi = 1.32;
+    if (kx > 1e-12) { const a = (x0 - ox) * ikx, c = (x1 - ox) * ikx; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (kx < -1e-12) { const a = (x1 - ox) * ikx, c = (x0 - ox) * ikx; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (ox < x0 || ox > x1) return 9;
+    if (ky > 1e-12) { const a = (y0 - oy) * iky, c = (y1 - oy) * iky; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (ky < -1e-12) { const a = (y1 - oy) * iky, c = (y0 - oy) * iky; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (oy < y0 || oy > y1) return 9;
+    if (kz > 1e-12) { const a = (z0 - oz) * ikz, c = (z1 - oz) * ikz; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (kz < -1e-12) { const a = (z1 - oz) * ikz, c = (z0 - oz) * ikz; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (oz < z0 || oz > z1) return 9;
+    return lo <= hi ? lo : 9;
+  };
   const SPIN = { start: 0, code: 0, wechat: 0, key: 0, connect: 0.75, enter: 0 }, SCALE = { connect: 0.92, code: 0.96 };
   const T_EAT = 950, T_BACK = 760, LEVELS = 9;
   class Morph {
@@ -450,8 +520,8 @@
       for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { const i = r * cols + c; if (flag[i] && kind[i] === ki) out.push(i); }
       return out;
     }
-    // the solid as small tiles: where each ray meets it, how dark it is there, whether that is the accent part
-    solid(g, now) {
+    // Design's original solid(), kept verbatim as the reference the fast solid() is tested against.
+    solidRef(g, now) {
       const m = this.mix(now), A = SOLID[this.A], B = SOLID[this.B], kT = (now - this.kick) / 760, t = g.t;
       // it turns once round as it melts into the next thing, and once when something is copied
       const th = this.th + Math.PI * 2 * (m < 1 ? m : 0) + (kT < 1 ? Math.PI * 2 * io3(kT) : 0), ph = this.ph, cy = Math.cos(th), sy = Math.sin(th), cx = Math.cos(ph), sx = Math.sin(ph);
@@ -470,6 +540,93 @@
           out.push({ x: c * t, y: r * t, tone: clamp01(0.05 + 0.78 * (1 - lam) + 0.4 * rim * rim + fall - 0.3 * sp - 0.3 * band), lam, a: 1, mat, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
         } else if (md < aa) out.push({ x: c * t, y: r * t, tone: 0.5, lam: 0.5, a: 1 - md / aa, mat: 0, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
         else if (boil > 0.02 && md < 0.06 + boil * 0.3 && hash(c * 131 + r, tick) < boil * 0.3) out.push({ x: c * t, y: r * t, tone: 0.25 + 0.5 * hash(c, r + tick), lam: 0.5, a: 0.7, mat: 0, o: 0 });
+      }
+      return out;
+    }
+    // the solid as small tiles: where each ray meets it, how dark it is there, whether that is the accent part
+    solid(g, now) {
+      const m = this.mix(now), A = fastShape(this.A), B = fastShape(this.B), kT = (now - this.kick) / 760, t = g.t;
+      const th = this.th + Math.PI * 2 * (m < 1 ? m : 0) + (kT < 1 ? Math.PI * 2 * io3(kT) : 0), ph = this.ph, cy = Math.cos(th), sy = Math.sin(th), cx = Math.cos(ph), sx = Math.sin(ph);
+      const morph = m > 0 && m < 1, fn = m >= 1 ? B : A;
+      const Ly = 0.52 * cx - 0.74 * sx, Lz1 = 0.52 * sx + 0.74 * cx, Lx = -0.42 * cy - Lz1 * sy, Lz = -0.42 * sy + Lz1 * cy;
+      const ky = 0 * cx - 1 * sx, kz1 = 0 * sx + 1 * cx, kx = 0 * cy - kz1 * sy, kz = 0 * sy + kz1 * cy;
+      const hl = L3(Lx + kx, Ly + ky, Lz + kz) || 1, hx = (Lx + kx) / hl, hy = (Ly + ky) / hl, hz = (Lz + kz) / hl;
+      const gT = (now - this.glint) / 760, gp = gT >= 0 && gT < 1 ? lerp(-1.9, 1.9, gT) : 9, bT = now - this.bad, shake = bT < 420 ? Math.sin(bT / 420 * Math.PI * 6) * (1 - bT / 420) * t * 1.6 : 0;
+      const S = g.S * this.size * lerp(SCALE[this.A] || 1, SCALE[this.B] || 1, m) * (1 + 0.05 * Math.exp(-(now - this.pulse) / 170)), ccx = g.cx + shake, ccy = g.cy, boil = Math.sin(Math.PI * m), tick = Math.floor(now / 90);
+      const n = Math.ceil(S * 1.34 / t), c0 = Math.round(ccx / t), r0 = Math.round(ccy / t), out = [], e = 0.012, aa = 0.8 * t / S;
+      // Only rays whose minimum SDF falls below hit (0.012), edge AA (aa), or boil (0.06 + 0.3 * boil, gated by hash) emit a tile; +1e-4 covers float rounding.
+      const padBase = mx(0.012, aa) + 1e-4, boilOn = boil > 0.02, boilLim = 0.06 + boil * 0.3, boilProb = boil * 0.3, padFull = boilOn ? mx(padBase, boilLim + 1e-4) : padBase;
+      const bA = morph ? boundsOf(this.A) : boundsOf(m >= 1 ? this.B : this.A), bB = morph ? boundsOf(this.B) : null;
+      const v0 = -sx * sy, v1 = cx, v2 = sx * cy;
+      let prF = projBox(bA, padFull, cy, sy, v0, v1, v2);
+      if (morph) { const q = projBox(bB, padFull, cy, sy, v0, v1, v2); prF = [mn(prF[0], q[0]), mx(prF[1], q[1]), mn(prF[2], q[2]), mx(prF[3], q[3])]; }
+      const iMin = mx(-n, Math.floor((ccx + prF[0] * S) / t - 0.5) - c0), iMax = mn(n, Math.ceil((ccx + prF[1] * S) / t - 0.5) - c0);
+      const jMin = mx(-n, Math.floor((ccy - prF[3] * S) / t - 0.5) - r0), jMax = mn(n, Math.ceil((ccy - prF[2] * S) / t - 0.5) - r0);
+      let iMinB = iMin, iMaxB = iMax, jMinB = jMin, jMaxB = jMax;
+      if (boilOn) {
+        let prB = projBox(bA, padBase, cy, sy, v0, v1, v2);
+        if (morph) { const q = projBox(bB, padBase, cy, sy, v0, v1, v2); prB = [mn(prB[0], q[0]), mx(prB[1], q[1]), mn(prB[2], q[2]), mx(prB[3], q[3])]; }
+        iMinB = mx(-n, Math.floor((ccx + prB[0] * S) / t - 0.5) - c0); iMaxB = mn(n, Math.ceil((ccx + prB[1] * S) / t - 0.5) - c0);
+        jMinB = mx(-n, Math.floor((ccy - prB[3] * S) / t - 0.5) - r0); jMaxB = mn(n, Math.ceil((ccy - prB[2] * S) / t - 0.5) - r0);
+      }
+      const ikx = ab(kx) > 1e-12 ? 1 / kx : 0, iky = ab(ky) > 1e-12 ? 1 / ky : 0, ikz = ab(kz) > 1e-12 ? 1 / kz : 0;
+      const ax0 = bA[0] - padBase, ax1 = bA[1] + padBase, ay0 = bA[2] - padBase, ay1 = bA[3] + padBase, az0 = bA[4] - padBase, az1 = bA[5] + padBase;
+      const bx0 = bB ? bB[0] - padBase : 0, bx1 = bB ? bB[1] + padBase : 0, by0 = bB ? bB[2] - padBase : 0, by1 = bB ? bB[3] + padBase : 0, bz0 = bB ? bB[4] - padBase : 0, bz1 = bB ? bB[5] + padBase : 0;
+      const dPad = padFull - padBase;
+      for (let j = jMin; j <= jMax; j++) {
+        const r = r0 + j, vy = -((r + 0.5) * t - ccy) / S, vy2 = vy * vy; if (vy2 > 1.72) continue;
+        // Hoist row-constant terms of tob(vx, vy, 0) out of the inner i-loop (same ops and order, no array allocation).
+        const oy = vy * cx, z1 = vy * sx, z1sy = z1 * sy, z1cy = z1 * cy, ry = r * t, inBaseRow = !boilOn || (j >= jMinB && j <= jMaxB);
+        for (let i = iMin; i <= iMax; i++) {
+          const c = c0 + i, vx = ((c + 0.5) * t - ccx) / S, rr = vx * vx + vy2; if (rr > 1.72) continue;
+          // Pixels failing the boil hash can never emit a boil tile, so they cull against the tighter padBase box.
+          const wantBoil = boilOn && hash(c * 131 + r, tick) < boilProb;
+          const inBase = inBaseRow && i >= iMinB && i <= iMaxB;
+          if (!wantBoil && !inBase) continue;
+          const ox = vx * cy - z1sy, oz = vx * sy + z1cy, dp = wantBoil ? dPad : 0;
+          let zStop;
+          if (morph) {
+            const za = slabZ(ox, oy, oz, ax0 - dp, ax1 + dp, ay0 - dp, ay1 + dp, az0 - dp, az1 + dp, kx, ky, kz, ikx, iky, ikz);
+            const zb = slabZ(ox, oy, oz, bx0 - dp, bx1 + dp, by0 - dp, by1 + dp, bz0 - dp, bz1 + dp, kx, ky, kz, ikx, iky, ikz);
+            zStop = za < zb ? za : zb;
+          } else {
+            zStop = slabZ(ox, oy, oz, ax0 - dp, ax1 + dp, ay0 - dp, ay1 + dp, az0 - dp, az1 + dp, kx, ky, kz, ikx, iky, ikz);
+          }
+          if (zStop > 2) continue;
+          // Start at z = 1.32 so sampled z positions match solidRef; once z < zStop every remaining point is outside the padded box(es) with d >= p, unable to hit or lower any used md.
+          // A boil ray outside the padBase projection cannot hit or improve AA, and boil only tests md < boilLim, so it stops once md < boilLim.
+          const boilOnly = wantBoil && !inBase;
+          let z = 1.32, hit = false, md = 9, d = 0, mat = 0;
+          if (morph) {
+            for (let s = 0; s < 22; s++) {
+              const px = ox + kx * z, py = oy + ky * z, pz = oz + kz * z, da = A(px, py, pz), ma = MAT, db = B(px, py, pz);
+              d = da + (db - da) * m; if (d < md) md = d; if (d < 0.012) { hit = true; mat = m < 0.5 ? ma : MAT; break; }
+              z -= d > 0.02 ? d * 0.92 : 0.02; if (z < zStop || (boilOnly && md < boilLim)) break;
+            }
+          } else {
+            for (let s = 0; s < 22; s++) {
+              d = fn(ox + kx * z, oy + ky * z, oz + kz * z); if (d < md) md = d; if (d < 0.012) { hit = true; mat = MAT; break; }
+              z -= d > 0.02 ? d * 0.92 : 0.02; if (z < zStop) break;
+            }
+          }
+          if (hit) {
+            const X = ox + kx * z, Y = oy + ky * z, Z = oz + kz * z;
+            let a, b, cc, dd;
+            if (morph) {
+              a = A(X + e, Y - e, Z - e); a += (B(X + e, Y - e, Z - e) - a) * m;
+              b = A(X - e, Y - e, Z + e); b += (B(X - e, Y - e, Z + e) - b) * m;
+              cc = A(X - e, Y + e, Z - e); cc += (B(X - e, Y + e, Z - e) - cc) * m;
+              dd = A(X + e, Y + e, Z + e); dd += (B(X + e, Y + e, Z + e) - dd) * m;
+            } else {
+              a = fn(X + e, Y - e, Z - e); b = fn(X - e, Y - e, Z + e); cc = fn(X - e, Y + e, Z - e); dd = fn(X + e, Y + e, Z + e);
+            }
+            const nx = a - b - cc + dd, ny = -a - b + cc + dd, nz = -a + b - cc + dd, nl = L3(nx, ny, nz) || 1;
+            // When gp === 9 (no glint) and rr <= 1.72, (vx - 0.45*vy - 9)^2 / 0.035 > 1630 so exp underflows to exact 0.
+            const band = gp === 9 ? 0 : Math.exp(-Math.pow(vx - vy * 0.45 - gp, 2) / 0.035), nh = nx * hx + ny * hy + nz * hz, sp = nh > 0 ? Math.pow(nh / nl, 28) : 0, lam = clamp01((nx * Lx + ny * Ly + nz * Lz) / nl * 0.66 + 0.34 + band * 0.5), rim = 1 - ab(nx * kx + ny * ky + nz * kz) / nl, fall = (vx - vy) * 0.085;
+            out.push({ x: c * t, y: ry, tone: clamp01(0.05 + 0.78 * (1 - lam) + 0.4 * rim * rim + fall - 0.3 * sp - 0.3 * band), lam, a: 1, mat, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
+          } else if (md < aa) out.push({ x: c * t, y: ry, tone: 0.5, lam: 0.5, a: 1 - md / aa, mat: 0, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
+          else if (wantBoil && md < boilLim) out.push({ x: c * t, y: ry, tone: 0.25 + 0.5 * hash(c, r + tick), lam: 0.5, a: 0.7, mat: 0, o: 0 });
+        }
       }
       return out;
     }
@@ -573,6 +730,7 @@
       this.parts = []; this.again = again; this.phase = 'back'; this.pAt = performance.now() - (N || this.fill > 0.05 ? 0 : T_BACK);
     }
   }
+  Morph.PAR = PAR;
   window.AxiomLoginMorph = Morph;
   window.AxiomLogin = Login;
 })();
