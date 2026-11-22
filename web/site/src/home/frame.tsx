@@ -70,8 +70,8 @@ function useFrameLayout(root: RefObject<HTMLElement | null>, wide: boolean) {
   }, [root, wide]);
 }
 
-// The header's, the island's, the menu's and the first screen's ways to register are offered only once the site has said
-// it takes new users: a site that takes nobody new, or one that has not answered yet, offers signing in (the screens
+// The header's, the island's and the menu's ways to register are offered only once the site has said it takes new
+// users: a site that takes nobody new, or one that has not answered yet, offers signing in (the screens
 // below lead there instead, links.ts joinHref). Their words are the switches' engine's, which writes "register" into
 // them whatever the page says, so they are taken out rather than reworded.
 function useRegistration(root: RefObject<HTMLElement | null>, join: Join) {

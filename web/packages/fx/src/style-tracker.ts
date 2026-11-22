@@ -15,6 +15,17 @@ export type StyleTracker = {
   restore(): void;
 };
 
+// What a revert lets go lands at once: a transition it lets run from the value the frames left (transition was off while
+// they drove it), or an entrance animation it lets play again (animation was off), would show the element a second time
+// after the run has already shown it whole.
+function settle(el: HTMLElement, animated: boolean) {
+  for (const a of el.getAnimations()) {
+    const transition = "transitionProperty" in a;
+    const entrance = animated && "animationName" in a && Number.isFinite(a.effect?.getComputedTiming().endTime);
+    if (transition || entrance) a.finish();
+  }
+}
+
 function applySaved(el: HTMLElement, prop: string, saved: SavedProp) {
   if (saved.value) el.style.setProperty(prop, saved.value, saved.priority);
   else el.style.removeProperty(prop);
@@ -59,6 +70,7 @@ export function styleTracker(): StyleTracker {
         for (const [prop, saved] of entry.props) applySaved(el, prop, saved);
         if (!entry.hadAttr && el.style.length === 0) el.removeAttribute("style");
       }
+      for (const [el, entry] of touched) settle(el, entry.props.has("animation"));
       touched.clear();
     },
   };

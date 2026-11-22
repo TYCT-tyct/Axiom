@@ -5,6 +5,6 @@ export default {
   "m2e2a3b1e5d": "One key for every model",
   "md006830a9e": "Read the docs",
   "m0d0cee5072": "Every route is tested. You pay for the route that served you.",
-  "mcaf724c6bd": "Sign up and get an API key"
+  "m980e5e70bd": "Sign in and get an API key"
 } satisfies Record<keyof typeof zh, string>;
 /* jscpd:ignore-end */

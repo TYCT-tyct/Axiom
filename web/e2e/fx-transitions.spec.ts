@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { departOnly, expectMovingNow, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
@@ -72,16 +72,17 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
 const frameState = (page: Page) => page.locator(".tr").getAttribute("data-state");
 const homeAddress = () => new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
-async function pressInPlace(page: Page) {
+async function pressInPlace(page: Page, way: (page: Page) => Locator = siteSignIn, watch?: () => Promise<void>) {
   const violations = await watchEveryPolicy(page);
   await open(page);
   await running(page);
   await expect(page.locator(".tr .lg")).toBeAttached();
   await page.evaluate(() => Object.assign(window, { sameDocument: true }));
+  await watch?.();
   await page.clock.install();
   await pauseAhead(page, 100);
-  await siteSignIn(page).click();
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await way(page).click();
+  await expect(page).toHaveURL(/\/console\/(sign-in|register)$/);
   await expect.poll(() => frameState(page)).toBe("run");
   return violations;
 }
@@ -101,6 +102,51 @@ test("the homepage opens sign-in in place and the brand takes it home, one docum
   expect(await sameDocument(page)).toBe(true);
   expect(violations).toEqual([]);
 });
+
+// The transition hands the page over whole: each line of the question has come in before it ends (registering's many
+// lines too), and none comes in a second time when the page is let go (its entrance animation, its transitions).
+for (const [name, way] of [
+  [
+    "the header's way to register",
+    (page: Page) => page.getByRole("banner").getByRole("link", { name: "注册", exact: true }),
+  ],
+  ["the first screen's way on", (page: Page) => page.locator(".hs > main .cta .primary")],
+] as const)
+  test(`${name} hands its page over whole, nothing shown twice`, async ({ page }) => {
+    const watch = () =>
+      page.evaluate(() => {
+        const seen = { cut: [] as number[], again: -1 };
+        Object.assign(window, { handover: seen });
+        const frame = document.querySelector(".tr") as HTMLElement;
+        // a line of the question let go: the opacity the run left it at
+        new MutationObserver((records) => {
+          for (const r of records) {
+            const el = r.target as HTMLElement;
+            const was = /opacity: ([\d.]+)/.exec(r.oldValue ?? "")?.[1];
+            if (el.parentElement?.classList.contains("lg-step") && was && !el.style.opacity) seen.cut.push(Number(was));
+          }
+        }).observe(frame, { subtree: true, attributes: true, attributeFilter: ["style"], attributeOldValue: true });
+        // what plays on the page once it is let go, but the caret's blink
+        const settled = new MutationObserver(() => {
+          const step = frame.querySelector(".lg-step");
+          if (frame.dataset.state !== "login" || !step) return;
+          settled.disconnect();
+          seen.again = step
+            .getAnimations({ subtree: true })
+            .filter((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)).length;
+        });
+        settled.observe(frame, { attributes: true, attributeFilter: ["data-state"] });
+      });
+    await pressInPlace(page, way, watch);
+    await page.clock.runFor(2500);
+    await expect.poll(() => frameState(page)).toBe("login");
+    const { cut, again } = await page.evaluate(
+      () => (window as unknown as { handover: { cut: number[]; again: number } }).handover,
+    );
+    expect(cut.length).toBeGreaterThan(0);
+    expect(Math.min(...cut)).toBeGreaterThan(0.99);
+    expect(again).toBe(0);
+  });
 
 test("Escape midway turns the way in round, home again", async ({ page }) => {
   await pressInPlace(page);
@@ -276,9 +322,14 @@ test("leaving from the sea floor flies __axCast.wordTiles() into the sign-in pan
   await running(page);
   await scrollTo(page, 6);
   await shown(page, 6);
-  // If PR #891's Clawd engine is mounted on .tr, observe its real __axCast.wordTiles(); otherwise attach a faithful
-  // spy implementing clawd-cast.js's wordTiles() contract so the flight and restore path is verified end to end.
-  const installed = await page.evaluate(() => {
+  // Clawd's engine (clawd-cast.js) puts the buried wordmark's cells on the frame (__axCast.wordTiles()) once it has
+  // come; it is watched once it is there, so a late engine cannot take the place of what is watched
+  await page.waitForFunction(() =>
+    Boolean(
+      (document.querySelector(".tr") as HTMLElement & { __axCast?: { wordTiles?: unknown } }).__axCast?.wordTiles,
+    ),
+  );
+  await page.evaluate(() => {
     const frame = document.querySelector(".tr") as HTMLElement & {
       __axCast?: {
         wordTiles?: () => {
@@ -293,61 +344,28 @@ test("leaving from the sea floor flies __axCast.wordTiles() into the sign-in pan
     };
     const log = { calls: 0, hidden: 0, shown: 0, tileCount: 0 };
     (window as unknown as { __wordLog: typeof log }).__wordLog = log;
-    if (frame.__axCast?.wordTiles) {
-      const orig = frame.__axCast.wordTiles.bind(frame.__axCast);
-      frame.__axCast.wordTiles = () => {
-        log.calls++;
-        const res = orig();
-        if (!res) return null;
-        log.tileCount = res.tiles.length;
-        const hide = res.hide;
-        const show = res.show;
-        return {
-          ...res,
-          hide: () => {
-            log.hidden++;
-            hide();
-          },
-          show: () => {
-            log.shown++;
-            show();
-          },
-        };
+    const cast = frame.__axCast as NonNullable<typeof frame.__axCast>;
+    const orig = (cast.wordTiles as NonNullable<typeof cast.wordTiles>).bind(cast);
+    cast.wordTiles = () => {
+      log.calls++;
+      const res = orig();
+      if (!res) return null;
+      log.tileCount = res.tiles.length;
+      const hide = res.hide;
+      const show = res.show;
+      return {
+        ...res,
+        hide: () => {
+          log.hidden++;
+          hide();
+        },
+        show: () => {
+          log.shown++;
+          show();
+        },
       };
-      return "real";
-    }
-    const art = frame.querySelector(".hfm6 canvas.art")?.getBoundingClientRect();
-    const y0 = art ? Math.max(40, art.top + 20) : 640;
-    const x0 = art ? Math.max(40, art.left + 80) : 120;
-    const tiles = Array.from({ length: 40 }, (_, i) => ({
-      x: x0 + (i % 10) * 14,
-      y: y0 + Math.floor(i / 10) * 14,
-      w: 10,
-      h: 10,
-      m: 0.9,
-      li: i % 5,
-    }));
-    frame.__axCast = {
-      wordTiles: () => {
-        log.calls++;
-        log.tileCount = tiles.length;
-        return {
-          tiles,
-          tile: "#556677",
-          ink: "#112233",
-          gf: 8,
-          hide: () => {
-            log.hidden++;
-          },
-          show: () => {
-            log.shown++;
-          },
-        };
-      },
     };
-    return "stub";
   });
-  expect(["real", "stub"]).toContain(installed);
   await page.clock.install();
   await pauseAhead(page, 100);
   await page.locator(".hfm6 a[data-go]").first().click();

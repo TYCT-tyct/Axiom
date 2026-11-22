@@ -393,6 +393,8 @@ export type Clock = {
   remaining: () => number;
   reverse: (onDone?: (end: 1 | -1) => void) => void;
   seek: (ms: number) => void;
+  // lengthens the run to ms (never shortens it), for a part that came in after it started
+  extend: (ms: number) => void;
   stop: () => void;
 };
 
@@ -427,7 +429,8 @@ function finishClock(
 // Shared reversible wall-clock loop on loop.ts: pos runs in [0, span] (0 -> span when dir === 1, span -> 0 when
 // dir === -1), flipping cleanly on reverse() and jumping deterministically on seek().
 export function drive(opts: ClockOptions): Clock {
-  const { canvas, span, start, paint } = opts;
+  const { canvas, start, paint } = opts;
+  let span = opts.span;
   const initialDir = opts.dir ?? 1;
   const s: ClockState = {
     dir: initialDir,
@@ -453,10 +456,7 @@ export function drive(opts: ClockOptions): Clock {
     get pos() {
       return clockPos(s, span, performance.now());
     },
-    remaining: () => {
-      const p = clockPos(s, span, performance.now());
-      return s.dir === 1 ? span - p : p;
-    },
+    remaining: () => Math.abs((s.dir === 1 ? span : 0) - clockPos(s, span, performance.now())),
     reverse: (done) => {
       if (s.dead) return;
       const now = performance.now();
@@ -477,6 +477,9 @@ export function drive(opts: ClockOptions): Clock {
       s.pivotAt = performance.now();
       if (ms >= span) return finishClock(s, s.dir, s.dir === 1 ? span : 0, opts);
       paint(s.pivot, s.dir, false);
+    },
+    extend: (ms) => {
+      span = Math.max(span, ms);
     },
     stop: () => {
       if (s.dead) return;

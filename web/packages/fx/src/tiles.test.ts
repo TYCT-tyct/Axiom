@@ -5,6 +5,9 @@ import { E, planTiles } from "./panel";
 import { tiles } from "./tiles";
 import { lerp, type RawWordTile, type WordCast } from "./word-tiles";
 
+// jsdom has no Web Animations, which restoring a run's styles asks for (style-tracker.ts settle)
+Element.prototype.getAnimations = () => [];
+
 type StubCtx = Record<
   | "setTransform"
   | "clearRect"
@@ -243,6 +246,10 @@ function buildLogin(L: Layout) {
   return { lg, lgSide, lgSub, input, tCh1, pCh1, pitchS };
 }
 
+// the run's plan as the driver lays it out for a scene
+const box = ([x, y, w, h]: RectSpec) => ({ x, y, w, h });
+const planOf = (L: { trig: RectSpec; side: RectSpec }) => planTiles(box(L.trig), box(L.side), { cw: 10, ch: 16 });
+
 function buildScene(opts: { phone?: boolean; lower?: boolean; wordCast?: WordCast } = {}) {
   const L = opts.phone ? phoneLayout : desktopLayout;
   const root = el("div", "tr site d light");
@@ -423,9 +430,8 @@ describe("tiles single-document transition driver", () => {
 
   it("matches prototype seaTo world.right and ground visRight values across seek() timestamps", () => {
     const { root, ho, lg, sea, trigger, lgSide, L } = buildScene();
-    const [tx, ty, tw, th] = L.trig;
-    const [sx, sy, sw, sh] = L.side;
-    const off = planTiles({ x: tx, y: ty, w: tw, h: th }, { x: sx, y: sy, w: sw, h: sh }, { cw: 10, ch: 16 }).off;
+    const sx = L.side[0];
+    const { off } = planOf(L);
     const tr = tiles({ root, ho, lg, sea }, { end: vi.fn() });
 
     tr.run(1, trigger);
@@ -458,8 +464,24 @@ describe("tiles single-document transition driver", () => {
     expect([sea.world.right, sea.renderer.visRight]).toEqual([null, null]);
     expect(Number(root.querySelector<HTMLElement>(".fly .fs")?.style.opacity)).toBeLessThan(1);
 
-    tr.seek(1080);
+    tr.seek(2000);
     expect([tr.state, sea.world.right, sea.renderer.visRight]).toEqual(["login", null, null]);
+    tr.destroy();
+  });
+
+  it("lasts until the question's last line is whole, rather than cut it off at the tiles' end", () => {
+    const { root, ho, lg, sea, trigger, L } = buildScene();
+    const { T } = planOf(L);
+    // registering's question: a line under the title, three labels and fields, the button and a note
+    const last = document.createElement("p");
+    lg.querySelector(".lg-step")?.append(...Array.from({ length: 5 }, () => document.createElement("p")), last);
+    const tr = tiles({ root, ho, lg, sea }, { end: vi.fn() });
+
+    tr.run(1, trigger);
+    tr.seek(T);
+    expect([tr.state, Number(last.style.opacity) < 1]).toEqual(["run", true]);
+    tr.seek(2000);
+    expect([tr.state, last.style.opacity]).toEqual(["login", ""]);
     tr.destroy();
   });
 

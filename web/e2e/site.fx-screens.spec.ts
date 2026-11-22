@@ -54,7 +54,8 @@ for (const [registration, { href, ...words }] of Object.entries(joins))
         await pageHeading(page);
         const offered = registration !== "closed";
         if (width > 1000) await expect(page.locator(".bar .btn.primary")).toBeVisible({ visible: offered });
-        await expect(page.locator(".hs > main .cta .primary")).toBeVisible({ visible: offered });
+        // the first screen's way on signs in, which every site offers
+        await expect(page.locator(".hs > main .cta .primary")).toHaveAttribute("href", "/console/sign-in");
         for (const sec of delivered) {
           await scrollTo(page, sec);
           await shown(page, sec);

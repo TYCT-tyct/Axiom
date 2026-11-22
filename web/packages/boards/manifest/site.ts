@@ -21,6 +21,7 @@ const siteEnglish: Record<string, string> = {
   m4144869c18: "Search languages",
   m9937e365aa: "简体中文",
   mcaf724c6bd: "Sign up and get an API key",
+  m980e5e70bd: "Sign in and get an API key",
   m2e2a3b1e5d: "One key for every model",
   m0d0cee5072: "Every route is tested. You pay for the route that served you.",
   m854975fac5: "On this page",
@@ -94,10 +95,10 @@ const siteRegions: Region[] = [
     css: { ".ho .main .fam:not(.under *) > span.cw-lit": "color:var(--clawdT)" },
     text: {
       lede: ".lede > span",
-      signUp: ".cta .primary > span",
+      signIn: ".cta .primary > span",
     },
     attributes: {
-      signUpHref: { selector: ".cta .primary", attribute: "href" },
+      signInHref: { selector: ".cta .primary", attribute: "href" },
     },
     english: siteEnglish,
   },

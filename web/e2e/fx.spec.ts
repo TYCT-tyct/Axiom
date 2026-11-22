@@ -122,7 +122,7 @@ test("the language decodes in and the theme dives, each kept on reload, with no 
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One key for every model");
   await expect(decode).toHaveCount(0);
-  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
+  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign in and get an API key" })).toBeVisible();
 
   await page.getByRole("button", { name: "Switch to dark" }).click();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
@@ -275,8 +275,8 @@ test("without the site's API address the steps say so rather than show an empty 
 // became of the picture on the way. Its code is there before the press.
 const depart = /\/assets\/depart-[\w-]+\.js$/;
 const signIn = siteSignIn;
-// the first screen's way on: the steps screen below has one of the same name
-const signUp = (page: Page) => page.locator(".hs > main").getByRole("link", { name: "注册，获取API key" });
+// the header's way to register (the first screen's way on signs in)
+const signUp = (page: Page) => page.getByRole("banner").getByRole("link", { name: "注册", exact: true });
 
 // Policy violations of every document the tab shows, the website's and the one it goes to, kept in the test.
 async function watchEveryPolicy(page: Page) {

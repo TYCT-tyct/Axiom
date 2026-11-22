@@ -2,6 +2,9 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { brandFlight, pitchFlight } from "./fly";
 
+// jsdom has no Web Animations: restoring a run's styles finishes what the revert started (style-tracker.ts settle)
+Element.prototype.getAnimations = () => [];
+
 afterEach(() => {
   document.body.innerHTML = "";
   vi.restoreAllMocks();

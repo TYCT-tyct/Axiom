@@ -99,7 +99,7 @@ test("switching language mid-decode settles the entrance without reverting text"
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("One key for every model");
   // Wait longer than decode duration (1560ms) to confirm text does not revert.
   await page.waitForTimeout(1800);
-  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign up and get an API key" })).toBeVisible();
+  await expect(page.locator(".hs > main").getByRole("link", { name: "Sign in and get an API key" })).toBeVisible();
 });
 
 for (const { label, width, height, lang } of [
