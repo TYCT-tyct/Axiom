@@ -19,6 +19,7 @@ export {
   claimSession,
   consumeEmailChangeToken,
   currentSession,
+  EnteringContext,
   endUnauthenticated,
   Gate,
   holdsIdentity,

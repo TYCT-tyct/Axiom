@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { EnteringContext } from "@axiom/app";
+import { use, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 // A sign-in page has one request out at a time, and while it is out the page takes nothing else (LoginFrame locks
 // every press, submit and link but the cancel): so no answer can arrive for a step the visitor has since left, and no
@@ -59,6 +60,7 @@ type Out = { controller: AbortController; committed: boolean };
 export function useAttempt(): Attempt {
   const [state, setState] = useState<State>(idle);
   const held = useSyncExternalStore(subscribe, () => committed);
+  const entering = use(EnteringContext);
   const out = useRef<Out | null>(null);
   useEffect(
     () => () => {
@@ -96,7 +98,8 @@ export function useAttempt(): Attempt {
         (error: unknown) => settle({ ...idle, failure: { kind, error } }) && onFail?.(error),
       );
   };
-  // a request committed from another page of the document holds this one too, with nothing of its own to show
-  const kind = state.kind ?? held?.kind ?? null;
+  // a request committed from another page of the document holds this one too, with nothing of its own to show; one that
+  // let its visitor in goes on until the console replaces the page (Gate)
+  const kind = state.kind ?? held?.kind ?? (entering ? state.done : null);
   return { ...state, kind, run, dismiss: () => setState((now) => ({ ...now, failure: null })) };
 }

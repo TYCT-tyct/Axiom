@@ -25,11 +25,13 @@ import {
   type MouseEvent,
   type ReactNode,
   Suspense,
+  useEffect,
   useMemo,
   useState,
 } from "react";
 import { createPortal } from "react-dom";
 import { siteAnswer } from "../shell";
+import { askForConsole } from "./console-ahead";
 import { consoleHref, type Place, placeOf } from "./sign-in-place";
 
 // The sign-in pages, each loaded when first shown, but signing in and registering, which the homepage's buttons open:
@@ -142,6 +144,10 @@ export function SignInHost({ mount, host, place: read, go }: SignInHostProps) {
   );
   const navigation = useNavigation(place ?? waiting, go);
   const session = useSession(place ?? waiting, go);
+  // a page on show may let its visitor into the console: its code is asked for while they answer
+  useEffect(() => {
+    if (place) askForConsole();
+  }, [place]);
   return createPortal(
     <AppProviders api={consoleAuth} requiresMfa={false} requiresConsent>
       <SessionNavigationProvider value={session}>
