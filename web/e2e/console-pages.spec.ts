@@ -178,6 +178,26 @@ test.describe("registering", () => {
 });
 
 test.describe("API keys", () => {
+  // A dialog takes the board's styles but the console's face (packages/ui dialog.module.css): the website's face would be
+  // a second Chinese face asked for on the press, its text laid out again once it came.
+  test("a dialog is set in the console's face and asks for no other on opening", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/keys");
+    await expect(page.getByRole("heading", { level: 1, name: "API Keys" })).toBeVisible();
+    await page.waitForLoadState("networkidle");
+    const siteFaces: string[] = [];
+    page.on("request", (request) => {
+      if (/\/axiom-cjk-400\.[\w-]+\.woff2$/.test(request.url())) siteFaces.push(request.url());
+    });
+    await page.getByRole("button", { name: "创建 key", exact: true }).click();
+    const title = page.getByRole("dialog").getByRole("heading").first();
+    await expect(title).toBeVisible();
+    expect(await title.evaluate((element) => getComputedStyle(element).fontFamily)).toContain('"Axiom CJK Console"');
+    await page.waitForLoadState("networkidle");
+    expect(siteFaces).toEqual([]);
+  });
+
   test("a new key shows its text once, in a dialog that stays until the user is done", async ({ page }) => {
     const errors = collectErrors(page);
     const state = await mockConsole(page);

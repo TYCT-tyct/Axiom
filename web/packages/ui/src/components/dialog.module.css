@@ -17,8 +17,12 @@
   display: contents;
 }
 
+/* The board sets its type in the website's Chinese face ('Axiom CJK' on .ax, which the host carries for the dialog's
+   board styles); a dialog sets the app's own (--family-ui), whose face is cut for the app's text and already loaded, so
+   opening one fetches no other face and lays its text out once. */
 .root {
   position: fixed;
+  font-family: var(--family-ui);
 }
 
 .root:not([open]) {
