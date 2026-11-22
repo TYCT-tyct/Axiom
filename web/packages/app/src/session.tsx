@@ -319,6 +319,10 @@ export function useSignOut() {
 
 const SessionContext = createContext<Session | null>(null);
 
+// EnteringContext tells a page the gate keeps on screen while it sends its new member on (Gate): what it was doing
+// goes on until the console replaces it.
+export const EnteringContext = createContext(false);
+
 export function useSession() {
   const session = use(SessionContext);
   if (!session) {
@@ -487,17 +491,31 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
   // The page on screen, not the address the router is moving to: while the next page loads the current one stays, and
   // a gate that read the new address would redirect again from there.
   const { here } = useSessionNavigation();
+  const now = result.data === undefined ? null : stageOf(result.data, requiresMfa, requiresConsent);
+  // The session the page was last shown for. A visitor a sign-in step lets in keeps that step on screen, its button
+  // still waiting, while the console comes (a page load from the website's document, or the next page's data), rather
+  // than an empty page. Only on the way in: a page another stage turns away from (signed out, another account) goes at
+  // once, its account's answers already dropped.
+  const [shown, setShown] = useState<{ data: Session | null } | null>(null);
+  if (now === stage && shown?.data !== result.data) setShown({ data: result.data ?? null });
   return (
     <DataState query={session} page>
-      {(data) =>
-        stageOf(data, requiresMfa, requiresConsent) === stage ? (
-          <SessionContext key={identityOf(data)} value={data}>
-            {children}
-          </SessionContext>
-        ) : (
-          <Redirect stage={stageOf(data, requiresMfa, requiresConsent)} page={stage} here={here} />
-        )
-      }
+      {(data) => {
+        // the page keeps its place in the tree whether it is shown or kept, so a kept page is not made again
+        const showing = now === stage ? data : now === "member" && shown ? shown.data : undefined;
+        return (
+          <>
+            {showing === undefined ? null : (
+              <SessionContext key={identityOf(showing)} value={showing}>
+                <EnteringContext value={now !== stage}>{children}</EnteringContext>
+              </SessionContext>
+            )}
+            {now === stage ? null : (
+              <Redirect stage={stageOf(data, requiresMfa, requiresConsent)} page={stage} here={here} />
+            )}
+          </>
+        );
+      }}
     </DataState>
   );
 }

@@ -13,6 +13,7 @@ import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Gate, SessionNavigationProvider, type SessionTarget, safeNext } from "./index";
+import type { SessionNavigation } from "./navigation";
 import { AuthProvider, type Session } from "./session";
 import { TanStackSessionNavigation } from "./tanstack";
 
@@ -107,6 +108,56 @@ describe("Gate with SessionNavigationProvider", () => {
       null,
     );
     expect(calls).toEqual([["/sign-in?next=%2Fkeys%3Fx%3D1", "auth"]]);
+  });
+});
+
+type SessionNavigationReplace = SessionNavigation["replace"];
+
+describe("Gate on the way in", () => {
+  // the gate's page in a container, with the cache it reads, so a test can change the session under it
+  async function shown(stage: "guest" | "member", session: Session | null, replace: SessionNavigationReplace) {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: Number.POSITIVE_INFINITY } },
+    });
+    client.setQueryData(["session"], session);
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <AuthProvider api={stubApi(session)} requiresMfa={false} requiresConsent>
+            <SessionNavigationProvider value={{ here: "/sign-in", next: undefined, replace }}>
+              <Gate stage={stage}>
+                <p>{"the page"}</p>
+              </Gate>
+            </SessionNavigationProvider>
+          </AuthProvider>
+        </QueryClientProvider>,
+      );
+    });
+    return { client, container };
+  }
+
+  // the cache tells its observers on the next task (notifyManager), after act's microtasks
+  const changed = (change: () => void) =>
+    act(async () => {
+      change();
+      await new Promise((done) => setTimeout(done, 0));
+    });
+
+  it("keeps a sign-in step on screen while it sends its new member on, but not a page left for another stage", async () => {
+    const replace = vi.fn();
+    const signIn = await shown("guest", null, replace);
+    await changed(() => signIn.client.setQueryData(["session"], member()));
+    expect(replace).toHaveBeenCalledWith("/", "member");
+    expect(signIn.container.textContent).toBe("the page");
+
+    replace.mockClear();
+    const memberPage = await shown("member", member(), replace);
+    await changed(() => memberPage.client.setQueryData(["session"], null));
+    expect(replace).toHaveBeenCalledWith("/sign-in?next=%2Fsign-in", "auth");
+    expect(memberPage.container.textContent).toBe("");
   });
 });
 

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { EnteringContext } from "@axiom/app";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it } from "vitest";
@@ -118,4 +119,20 @@ it("ends what is out when the page goes", async () => {
   unmount();
   unmount = () => {};
   expect(request.out.signal?.aborted).toBe(true);
+});
+
+it("goes on, once it let its visitor in, while the gate keeps the page for the console", async () => {
+  const root = createRoot(document.createElement("div"));
+  await act(async () =>
+    root.render(
+      <EnteringContext value>
+        <Probe />
+      </EnteringContext>,
+    ),
+  );
+  unmount = () => act(() => root.unmount());
+  const request = deferred();
+  await act(async () => held.run("password", request.work));
+  await act(async () => request.out.resolve());
+  expect(held).toMatchObject({ kind: "password", done: "password" });
 });
