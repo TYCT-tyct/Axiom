@@ -1,4 +1,4 @@
-import { can, currentSession } from "@axiom/app";
+import { askedAhead, can, currentSession } from "@axiom/app";
 import type { QueryClient } from "@tanstack/react-query";
 
 type Session = NonNullable<ReturnType<typeof currentSession>>;
@@ -12,13 +12,20 @@ export type Warm<D = unknown> = (client: QueryClient, session: Session, deps: D)
 
 // A query a page reads, as its hook passes it: an infinite list carries how to page on (getNextPageParam), and one the
 // page does not ask for (enabled false) is not asked for ahead of it either.
-type Asked = { queryKey: readonly unknown[]; enabled?: unknown; getNextPageParam?: unknown };
+type Asked = {
+  queryKey: readonly unknown[];
+  enabled?: unknown;
+  getNextPageParam?: unknown;
+  meta?: Record<string, unknown>;
+};
 
-// ask asks for the queries a page reads that it would ask for itself.
+// ask asks for the queries a page reads that it would ask for itself, marked as asked ahead of the page: one refused for
+// want of a session leaves the session to end on the page it was for (providers.tsx).
 export function ask(client: QueryClient, queries: Asked[]) {
   return Promise.all(
     queries
       .filter((query) => query.enabled !== false)
+      .map((query): Asked => ({ ...query, meta: { ...query.meta, ...askedAhead } }))
       .map((query) =>
         "getNextPageParam" in query
           ? client.prefetchInfiniteQuery(query as Parameters<QueryClient["prefetchInfiniteQuery"]>[0])

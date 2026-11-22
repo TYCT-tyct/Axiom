@@ -1,7 +1,7 @@
 import { ApiError } from "@axiom/api";
 import { QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
-import { createQueryClient } from "./providers";
+import { askedAhead, createQueryClient } from "./providers";
 import { accountKey, type Session } from "./session";
 
 const session = (over: Partial<Session> = {}) =>
@@ -117,6 +117,44 @@ describe("a late unauthenticated answer", () => {
     answer.reject(refused());
     await settled;
 
+    expect(client.getQueryData(["session"])).toBeNull();
+  });
+});
+
+describe("a query asked for ahead of its page", () => {
+  const ahead = (client: ReturnType<typeof createQueryClient>, answer: Promise<string>) =>
+    client.getQueryCache().build(client, { queryKey: [accountKey, "ahead"], queryFn: () => answer, meta: askedAhead });
+
+  it("refused for want of a session while no page reads it, leaves the session to that page and is not kept", async () => {
+    const client = createQueryClient();
+    client.setQueryData(["session"], session());
+    const answer = deferred<string>();
+    const settled = ahead(client, answer.promise)
+      .fetch()
+      .catch((error: unknown) => error);
+    answer.reject(refused());
+    await settled;
+    await Promise.resolve();
+    expect(client.getQueryData(["session"])).toEqual(session());
+    expect(client.getQueryCache().find({ queryKey: [accountKey, "ahead"] })).toBeUndefined();
+  });
+
+  it("refused once a page reads it, ends the session", async () => {
+    const client = createQueryClient();
+    client.setQueryData(["session"], session());
+    const answer = deferred<string>();
+    const query = ahead(client, answer.promise);
+    // the page reads it with its own options
+    const page = new QueryObserver(client, {
+      queryKey: [accountKey, "ahead"],
+      queryFn: () => answer.promise,
+      enabled: false,
+    });
+    const unsubscribe = page.subscribe(() => {});
+    const settled = query.fetch().catch((error: unknown) => error);
+    answer.reject(refused());
+    await settled;
+    unsubscribe();
     expect(client.getQueryData(["session"])).toBeNull();
   });
 });
