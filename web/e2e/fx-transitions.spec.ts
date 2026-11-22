@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
 import { departOnly, expectMovingNow, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
@@ -72,16 +72,17 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
 const frameState = (page: Page) => page.locator(".tr").getAttribute("data-state");
 const homeAddress = () => new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
-async function pressInPlace(page: Page) {
+async function pressInPlace(page: Page, way: (page: Page) => Locator = siteSignIn, watch?: () => Promise<void>) {
   const violations = await watchEveryPolicy(page);
   await open(page);
   await running(page);
   await expect(page.locator(".tr .lg")).toBeAttached();
   await page.evaluate(() => Object.assign(window, { sameDocument: true }));
+  await watch?.();
   await page.clock.install();
   await pauseAhead(page, 100);
-  await siteSignIn(page).click();
-  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await way(page).click();
+  await expect(page).toHaveURL(/\/console\/(sign-in|register)$/);
   await expect.poll(() => frameState(page)).toBe("run");
   return violations;
 }
@@ -101,6 +102,51 @@ test("the homepage opens sign-in in place and the brand takes it home, one docum
   expect(await sameDocument(page)).toBe(true);
   expect(violations).toEqual([]);
 });
+
+// The transition hands the page over whole: each line of the question has come in before it ends (registering's many
+// lines too), and none comes in a second time when the page is let go (its entrance animation, its transitions).
+for (const [name, way] of [
+  [
+    "the header's way to register",
+    (page: Page) => page.getByRole("banner").getByRole("link", { name: "注册", exact: true }),
+  ],
+  ["the first screen's way on", (page: Page) => page.locator(".hs > main .cta .primary")],
+] as const)
+  test(`${name} hands its page over whole, nothing shown twice`, async ({ page }) => {
+    const watch = () =>
+      page.evaluate(() => {
+        const seen = { cut: [] as number[], again: -1 };
+        Object.assign(window, { handover: seen });
+        const frame = document.querySelector(".tr") as HTMLElement;
+        // a line of the question let go: the opacity the run left it at
+        new MutationObserver((records) => {
+          for (const r of records) {
+            const el = r.target as HTMLElement;
+            const was = /opacity: ([\d.]+)/.exec(r.oldValue ?? "")?.[1];
+            if (el.parentElement?.classList.contains("lg-step") && was && !el.style.opacity) seen.cut.push(Number(was));
+          }
+        }).observe(frame, { subtree: true, attributes: true, attributeFilter: ["style"], attributeOldValue: true });
+        // what plays on the page once it is let go, but the caret's blink
+        const settled = new MutationObserver(() => {
+          const step = frame.querySelector(".lg-step");
+          if (frame.dataset.state !== "login" || !step) return;
+          settled.disconnect();
+          seen.again = step
+            .getAnimations({ subtree: true })
+            .filter((a) => a.playState === "running" && Number.isFinite(a.effect?.getComputedTiming().endTime)).length;
+        });
+        settled.observe(frame, { attributes: true, attributeFilter: ["data-state"] });
+      });
+    await pressInPlace(page, way, watch);
+    await page.clock.runFor(2500);
+    await expect.poll(() => frameState(page)).toBe("login");
+    const { cut, again } = await page.evaluate(
+      () => (window as unknown as { handover: { cut: number[]; again: number } }).handover,
+    );
+    expect(cut.length).toBeGreaterThan(0);
+    expect(Math.min(...cut)).toBeGreaterThan(0.99);
+    expect(again).toBe(0);
+  });
 
 test("Escape midway turns the way in round, home again", async ({ page }) => {
   await pressInPlace(page);

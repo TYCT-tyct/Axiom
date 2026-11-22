@@ -189,9 +189,14 @@ export function measureKids(lg: HTMLElement, off: number): { step: HTMLElement |
   return { step, kids };
 }
 
+const kidFor = 300;
+
+// when the last line is whole: the run lasts until then, or the lines it has not written yet would be cut off at its end
+export const kidsEnd = (kids: Kid[]) => kids.reduce((end, k) => Math.max(end, k.delay + kidFor), 0);
+
 export function paintKids(kids: Kid[], u: WindowEval, styles: StyleTracker) {
   for (const k of kids) {
-    const v = u(k.delay, 300, E.out);
+    const v = u(k.delay, kidFor, E.out);
     styles.set(k.el, { opacity: String(v), transform: `translateY(${(1 - v) * 8}px)` });
   }
 }

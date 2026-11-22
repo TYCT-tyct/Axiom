@@ -9,6 +9,7 @@ import {
   drawTitle,
   type HeroSlot,
   type Kid,
+  kidsEnd,
   type LgSlot,
   measureHeroSlots,
   measureKids,
@@ -126,6 +127,9 @@ function takeQuestion(run: ActiveRun) {
   run.asked = true;
   Object.assign(run, { titleCells: q.titleCells, titleFs: q.titleFs, kids: q.kids });
   if (q.step) run.styles.set(q.step, { animation: "none" });
+  // the run lasts until its last line is whole: a page with many lines (registering) would have its last ones cut off
+  run.plan.T = Math.max(run.plan.T, kidsEnd(q.kids));
+  run.clock.extend(run.plan.T);
 }
 
 function measureFrame(root: HTMLElement): FrameBox {
@@ -331,6 +335,7 @@ function buildRun(scene: TilesScene, trigger: HTMLElement | null, onBrandPress: 
   if (side) styles.set(side, { "background-color": "transparent" });
   if (lgSea) styles.set(lgSea, { "box-shadow": "none" });
   if (question?.step) styles.set(question.step, { animation: "none" });
+  if (question) plan.T = Math.max(plan.T, kidsEnd(question.kids));
 
   return {
     clock: null as unknown as Clock,
