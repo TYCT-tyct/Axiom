@@ -1,5 +1,17 @@
 import { ApiError, type Schemas } from "@axiom/api";
-import type { CallFilters } from "../queries";
+import { can } from "@axiom/app";
+import {
+  type CallFilters,
+  type CallGroupBy,
+  callAggregateQuery,
+  callQuery,
+  callSessionsQuery,
+  callsQuery,
+  keysQuery,
+  modelsQuery,
+  workspacesQuery,
+} from "../queries";
+import { ask, type Warm } from "../warm";
 
 export type RangePreset = "all" | "today" | "d7" | "d30" | "month" | "custom";
 export type PresetChoice = Exclude<RangePreset, "all" | "custom">;
@@ -263,3 +275,36 @@ export function hasActiveCallFilters(filters: CallFilters) {
     ["since", "until", "model", "client_app", "key_id", "workspace_id", "status", "fell_back", "request_id"] as const
   ).some((k) => Boolean(filters[k]));
 }
+
+export type CallsSearch = CallFilters & {
+  preset?: PresetChoice;
+  group_by?: CallGroupBy;
+  tab?: "sessions";
+  call?: string;
+};
+
+// The queries the calls page reads on its first render, each with whether it is asked for: the page's hook and its
+// route's loader (warm.ts) build them here, so the loader asks for exactly what the page reads. The list's filters are
+// the rest of the address after the page's own parameters, unknown ones included, as the page has always read them.
+export function callsPageQueries(search: CallsSearch, canKeys: boolean) {
+  const { group_by, tab, call: selectedId, preset: _preset, ...filters } = search;
+  const groupBy: CallGroupBy = group_by ?? "day";
+  const sessionsTab = tab === "sessions";
+  return {
+    filters,
+    groupBy,
+    sessionsTab,
+    selectedId,
+    queries: {
+      calls: { ...callsQuery(filters), enabled: !sessionsTab },
+      sessions: { ...callSessionsQuery(filters), enabled: sessionsTab },
+      report: { ...callAggregateQuery(filters, groupBy), enabled: !sessionsTab },
+      selected: { ...callQuery(selectedId ?? ""), enabled: Boolean(selectedId) },
+      keys: { ...keysQuery({}), enabled: canKeys },
+      workspaces: { ...workspacesQuery, enabled: canKeys },
+    },
+  };
+}
+
+export const warmCalls: Warm<CallsSearch> = (client, session, search) =>
+  ask(client, [...Object.values(callsPageQueries(search, can(session, "api_keys.view")).queries), modelsQuery({})]);

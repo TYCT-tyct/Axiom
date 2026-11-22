@@ -2,7 +2,7 @@ import { safeNext } from "@axiom/app";
 import { dropMailLink, keepMailLink, type MailRoute, takeOAuthNext, useLoginLinkFailed } from "@axiom/login";
 import { focusHeading, modelAbilities, NotFoundState, PageFailedState, routerDefaults } from "@axiom/ui";
 import {
-  createRootRoute,
+  createRootRouteWithContext,
   createRoute,
   createRouter,
   lazyRouteComponent,
@@ -12,12 +12,25 @@ import {
 } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { Layout } from "./layout";
+import type { PresetChoice } from "./pages/calls-data";
+import type { UsageSearch } from "./pages/usage-handlers";
+import {
+  balanceQuery,
+  type CallFilters,
+  type CallGroupBy,
+  type KeyFilters,
+  keyFiltersOf,
+  keysQuery,
+  type ModelFilters,
+  modelsQuery,
+} from "./queries";
+import { ask, type RouterContext, warming } from "./warm";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
 // where the visitor was going (auth/oauth-return.ts). That return is a document of its own: its first page takes what
 // was kept, and any other first page drops it, so a later visit to the root is not sent anywhere. A preload is no visit.
 let landing = true;
-const root = createRootRoute({
+const root = createRootRouteWithContext<RouterContext>()({
   component: Outlet,
   beforeLoad: ({ preload, location }) => {
     if (preload || !landing) return;
@@ -120,6 +133,7 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/",
+      loader: warming(() => import("./pages/overview").then((page) => page.warm)),
       component: lazyRouteComponent(() => import("./pages/overview")),
     }),
     createRoute({
@@ -133,6 +147,8 @@ const routeTree = root.addChildren([
         created_before: text(search.created_before),
         workspace_id: text(search.workspace_id),
       }),
+      loaderDeps: ({ search }) => keyFiltersOf(search),
+      loader: warming(async () => (client, _session, filters: KeyFilters) => ask(client, [keysQuery(filters)])),
       component: lazyRouteComponent(() => import("./pages/keys")),
     }),
     createRoute({
@@ -163,6 +179,9 @@ const routeTree = root.addChildren([
         author: text(search.author),
         ability: modelAbility(search.ability),
       }),
+      // the page reads the whole of its search as its filters
+      loaderDeps: ({ search }) => search,
+      loader: warming(async () => (client, _session, filters: ModelFilters) => ask(client, [modelsQuery(filters)])),
       component: lazyRouteComponent(() => import("./pages/models")),
     }),
     createRoute({
@@ -180,6 +199,8 @@ const routeTree = root.addChildren([
         key_id: text(search.key_id),
         workspace_id: text(search.workspace_id),
       }),
+      loaderDeps: ({ search }) => search,
+      loader: warming(() => import("./pages/usage").then((page) => page.warm)),
       component: lazyRouteComponent(() => import("./pages/usage")),
     }),
     createRoute({
@@ -201,6 +222,8 @@ const routeTree = root.addChildren([
         tab: search.tab === "sessions" ? ("sessions" as const) : undefined,
         call: text(search.call),
       }),
+      loaderDeps: ({ search }) => search,
+      loader: warming(() => import("./pages/calls").then((page) => page.warm)),
       component: lazyRouteComponent(() => import("./pages/calls")),
     }),
     createRoute({
@@ -211,6 +234,8 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/balance",
+      // the plans (#plans) and a top-up under way (its order, kept in the tab) ask for more of their own
+      loader: warming(async () => (client) => ask(client, [balanceQuery])),
       component: lazyRouteComponent(() => import("./pages/balance")),
     }),
     createRoute({
@@ -257,33 +282,33 @@ function text(value: unknown) {
 }
 
 // A result or grouping from the address is one the API knows; anything else is no filter, not a request it would refuse.
-function callStatus(value: unknown) {
+function callStatus(value: unknown): CallFilters["status"] {
   return value === "success" || value === "error" ? value : undefined;
 }
 
-function callGroupBy(value: unknown) {
+function callGroupBy(value: unknown): CallGroupBy | undefined {
   return value === "day" || value === "model" || value === "key" ? value : undefined;
 }
 
-function callRangePreset(value: unknown) {
+function callRangePreset(value: unknown): PresetChoice | undefined {
   return value === "today" || value === "d7" || value === "d30" || value === "month" ? value : undefined;
 }
 
-function usageRange(value: unknown) {
+function usageRange(value: unknown): UsageSearch["range"] {
   return value === "today" || value === "d7" || value === "d30" || value === "month" || value === "custom"
     ? value
     : undefined;
 }
 
-function usageGranularity(value: unknown) {
+function usageGranularity(value: unknown): UsageSearch["granularity"] {
   return value === "hour" || value === "day" || value === "week" ? value : undefined;
 }
 
-function usageMetric(value: unknown) {
+function usageMetric(value: unknown): UsageSearch["metric"] {
   return value === "spend" || value === "requests" || value === "tokens" ? value : undefined;
 }
 
-function usageGroupBy(value: unknown) {
+function usageGroupBy(value: unknown): UsageSearch["group_by"] {
   return value === "model" || value === "key" || value === "workspace" ? value : undefined;
 }
 
@@ -295,11 +320,18 @@ function modelAbility(value: unknown) {
 }
 
 // A status from the address is one the API knows; anything else is no filter, not a request it would refuse.
-function keyStatus(value: unknown) {
+function keyStatus(value: unknown): KeyFilters["status"] {
   return value === "active" || value === "disabled" || value === "expired" ? value : undefined;
 }
 
-export const router = createRouter({ ...routerDefaults, routeTree, basepath: import.meta.env.BASE_URL });
+// The pages' data lives in the query cache, which decides what is fresh: the router asks a page's loader every time.
+export const router = createRouter({
+  ...routerDefaults,
+  routeTree,
+  basepath: import.meta.env.BASE_URL,
+  context: { queryClient: undefined as unknown as RouterContext["queryClient"] },
+  defaultPreloadStaleTime: 0,
+});
 
 router.subscribe("onResolved", focusHeading);
 

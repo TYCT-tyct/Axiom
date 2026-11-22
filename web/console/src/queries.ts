@@ -52,6 +52,17 @@ export type KeyFilters = {
   workspace_id?: string;
 };
 
+// The key filters of the keys page's address: the address keeps parameters the page does not know, and the router
+// hands them on with the ones it validated (x=1 from a link that carried it); only the key filters narrow the list.
+export const keyFiltersOf = (search: KeyFilters): KeyFilters => ({
+  name: search.name,
+  prefix: search.prefix,
+  status: search.status,
+  created_after: search.created_after,
+  created_before: search.created_before,
+  workspace_id: search.workspace_id,
+});
+
 export const keysQuery = (filters: KeyFilters = {}) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "keys", filters],

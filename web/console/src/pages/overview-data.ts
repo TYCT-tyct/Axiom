@@ -6,6 +6,7 @@ import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useCallback, useEffect, useState } from "react";
 import { balanceQuery, callAggregateQuery, keysQuery, recentErrorsQuery, usageStatisticsQuery } from "../queries";
+import { ask, type Warm } from "../warm";
 import { chartOf, spendChart, statisticsWindows } from "./overview-chart";
 import { seriesColor } from "./usage-model";
 
@@ -408,22 +409,41 @@ function aggregateFailure(
 // answer is what a query's last fetch gave: a failed refetch keeps its old data, which is no longer the account's.
 const answer = <T>(query: { isSuccess: boolean; data?: T }) => (query.isSuccess ? query.data : undefined);
 
+// The board's queries for a month window: its hook reads them, and its route's loader asks for them ahead (warm.ts).
+function boardQueries(period: MonthWindow) {
+  const windows = statisticsWindows(period);
+  return {
+    keys: keysQuery(),
+    errors: recentErrorsQuery,
+    days: callAggregateQuery(windows.month, "day"),
+    models: callAggregateQuery(windows.month, "model"),
+    // Only the chart's split by model and the spend's comparison wait on these, in parallel with the rest.
+    byModel: usageStatisticsQuery({ ...windows.month, granularity: "day", group_by: "model" }),
+    // the same query as byModel unless last month is the shorter and cuts this month's side
+    month: usageStatisticsQuery({ ...windows.comparison.month, granularity: "day", group_by: "model" }),
+    lastMonth: usageStatisticsQuery({ ...windows.comparison.lastMonth, granularity: "week" }),
+    balance: balanceQuery,
+    site: siteQuery,
+  };
+}
+
+export const warmOverview: Warm = (client) => ask(client, Object.values(boardQueries(monthWindow())));
+
 export function useBoardData(t: TFunction) {
   const format = useFormat();
   const { period, advance } = useMonthWindow();
   useLocalMidnight();
   const windows = statisticsWindows(period);
-  const keys = useInfiniteQuery(keysQuery());
-  const errors = useQuery(recentErrorsQuery);
-  const days = useQuery(callAggregateQuery(windows.month, "day"));
-  const models = useQuery(callAggregateQuery(windows.month, "model"));
-  // Only the chart's split by model and the spend's comparison wait on these, in parallel with the rest.
-  const byModel = useQuery(usageStatisticsQuery({ ...windows.month, granularity: "day", group_by: "model" }));
-  // the same query as byModel unless last month is the shorter and cuts this month's side
-  const month = useQuery(usageStatisticsQuery({ ...windows.comparison.month, granularity: "day", group_by: "model" }));
-  const lastMonth = useQuery(usageStatisticsQuery({ ...windows.comparison.lastMonth, granularity: "week" }));
-  const balance = useQuery(balanceQuery);
-  const site = useQuery(siteQuery);
+  const q = boardQueries(period);
+  const keys = useInfiniteQuery(q.keys);
+  const errors = useQuery(q.errors);
+  const days = useQuery(q.days);
+  const models = useQuery(q.models);
+  const byModel = useQuery(q.byModel);
+  const month = useQuery(q.month);
+  const lastMonth = useQuery(q.lastMonth);
+  const balance = useQuery(q.balance);
+  const site = useQuery(q.site);
   const currency = balance.data?.balance.currency ?? site.data?.currency;
   const keyList = keys.data?.pages[0]?.data ?? [];
   const keyState = keyStateOf(keys);
