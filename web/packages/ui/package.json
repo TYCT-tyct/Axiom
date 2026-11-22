@@ -13,9 +13,9 @@
   },
   "dependencies": {
     "@axiom/api": "workspace:*",
-    "i18next": "26.6.0",
+    "i18next": "27.1.2",
     "radix-ui": "1.8.1",
-    "react-i18next": "17.1.10"
+    "react-i18next": "18.0.1"
   },
   "peerDependencies": {
     "react": "^19.3.0",
