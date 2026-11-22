@@ -1,9 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { readNode } from "./node.ts";
 
-// One user's first day on a real node (cmd/axiom/journey_test.go): register with an invite, sign in, make a key, top up
-// through the payment gateway the node is given, call a model through the supplier it is given, and find the call and
-// its charge in the console. The console has no page for topping up yet (#317), so that step is the console's API, called
+// One user's first day on a real node (cmd/axiom/journey_test.go): register with an invite from the website, which holds
+// the console's sign-in pages in its own document (site/src/home/sign-in.tsx), sign in on the console's own page, make
+// a key, top up through the payment gateway the node is given, call a model through the supplier it is given, and find
+// the call and its charge in the console. The console has no page for topping up yet (#317), so that step is the console's API, called
 // with the page's own session as the page would.
 
 const password = "a journey horse battery";
@@ -15,7 +16,14 @@ test("register, sign in, key, top-up, call, and see the call and its charge", as
   const consoleApi = `${node.console}/api/console/v1`;
   const email = "journey@example.com";
 
-  await page.goto(`${node.console}/console/register?invite=${node.invite_code}`);
+  await page.goto(`${node.console}/`);
+  // the sign-in pages stand ready in the website's frame once its first screen is drawn
+  await expect(page.locator(".tr .lg")).toBeAttached();
+  await page.evaluate(() => Object.assign(window, { sameDocument: true }));
+  await page.getByRole("banner").getByRole("link", { name: "注册", exact: true }).click();
+  await expect(page).toHaveURL(/\/console\/register$/);
+  await page.getByLabel("邀请码").fill(node.invite_code);
+  expect(await page.evaluate(() => (window as unknown as { sameDocument?: boolean }).sameDocument)).toBe(true);
   await page.getByLabel("邮箱").fill(email);
   await page.getByLabel("密码").fill(password);
   await page.getByRole("button", { name: "注册", exact: true }).click();
