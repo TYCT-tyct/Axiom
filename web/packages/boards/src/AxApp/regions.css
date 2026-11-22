@@ -1167,6 +1167,11 @@ a:where(.board.ax.ov, .board.ax.ov *){color:inherit;text-decoration:none}
 .ov .tmv table th:nth-child(4){padding-right:24px}}
 .ov .qhlp .fnext{margin-left:auto;width:14px;height:14px;fill:none;stroke:var(--t3);stroke-width:1.5px;stroke-linecap:round;stroke-linejoin:round}
 .ov .qhlp .pmi:has(.qsd) .fnext{margin-left:8px}
+@container ov (min-width: 601px){.ov .lgl{display:grid;column-gap:12px}.ov .lgl > *{grid-column:1/-1}.ov .lgw .lgl > :is(.lgh,.lgr){grid-template-columns:subgrid}}
+@container ov (min-width: 1101px){.ov .lgl{grid-template-columns:92px 88px minmax(0,1.3fr) minmax(0,1fr) 92px 64px 64px 112px minmax(92px,max-content)}}
+@container ov (min-width: 901px){.ov .lgw.open .lgl{grid-template-columns:92px 88px minmax(0,1fr) minmax(92px,max-content)}}
+@container ov (min-width: 901px) and (max-width: 1100px){.ov .lgl{grid-template-columns:84px 84px minmax(0,1.2fr) minmax(0,1fr) 60px 100px minmax(88px,max-content)}}
+@container ov (min-width: 601px) and (max-width: 900px){.ov .lgl{grid-template-columns:84px 76px minmax(136px,1.4fr) minmax(0,1fr) 100px minmax(88px,max-content)}}
 .ov .qseg[data-rows="2"]{display:grid;grid-auto-flow:row;grid-template-columns:repeat(var(--n),1fr)}
 .ov .qseg[data-rows="2"] > i{bottom:auto;height:calc((100% - 4px) / 2);transform:translate(calc(var(--i) * 100%),calc(var(--r) * 100%))}
 .ov .qses .btn.pri span{color:inherit}
