@@ -2,8 +2,8 @@ import { ApiError, type Schemas, setCsrfToken } from "@axiom/api";
 import type { AuthApi } from "@axiom/api/auth";
 import { DataState } from "@axiom/ui";
 import { type QueryClient, queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useRouter, useRouterState, useSearch } from "@tanstack/react-router";
 import { createContext, type ReactNode, use, useCallback, useEffect, useRef, useState } from "react";
+import { type SessionTarget, useSessionNavigation } from "./navigation";
 
 export type Session = Schemas["Session"];
 
@@ -428,16 +428,16 @@ export function safeNext(value: unknown, base = import.meta.env.BASE_URL) {
     : undefined;
 }
 
-// Replace moves to a path of this app. The history takes the app's base in front of the path, and no route is named, so
-// one gate serves apps whose routes differ.
-function Replace({ path, stashToken }: { path: string; stashToken?: string | null }) {
-  const router = useRouter();
+// Replace moves to a path of this app via the host's navigation adapter, so one gate serves hosts with different
+// routers (or an external host that enters the app with a full page load).
+function Replace({ path, target, stashToken }: { path: string; target: SessionTarget; stashToken?: string | null }) {
+  const { replace } = useSessionNavigation();
   useEffect(() => {
     if (stashToken) {
       stashEmailChangeToken(stashToken);
     }
-    router.history.replace(import.meta.env.BASE_URL.replace(/\/$/, "") + path);
-  }, [router, path, stashToken]);
+    replace(path, target);
+  }, [replace, path, target, stashToken]);
   return null;
 }
 
@@ -466,10 +466,10 @@ export function redirectPath(
 // redirect itself changes, so reading it again would put that address in `next`, redirect again, and never stop.
 function Redirect({ stage, page, here }: { stage: Stage; page: Stage; here: string }) {
   // Only a sign-in flow page validates its `next` (guestSearch); a protected page's is part of its own address.
-  const inherited = useSearch({ strict: false }).next;
+  const { next: inherited } = useSessionNavigation();
   const [from] = useState(here);
   const { path, token } = redirectPath(stage, page, from, inherited);
-  return <Replace path={path} stashToken={token} />;
+  return <Replace path={path} target={stage === "member" ? "member" : "auth"} stashToken={token} />;
 }
 
 // Gate shows its page only to a visitor in the stage the page is for; anyone else is sent where they belong. A member
@@ -483,7 +483,7 @@ export function Gate({ stage, children }: { stage: Stage; children: ReactNode })
   const session = result.data === undefined ? result : { ...result, status: "success" as const };
   // The page on screen, not the address the router is moving to: while the next page loads the current one stays, and
   // a gate that read the new address would redirect again from there.
-  const here = useRouterState({ select: (state) => (state.resolvedLocation ?? state.location).href });
+  const { here } = useSessionNavigation();
   return (
     <DataState query={session} page>
       {(data) =>

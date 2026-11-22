@@ -3,7 +3,7 @@ import { mockConsole, mockConsoleTab, signedInAs } from "./console-api.ts";
 import { knownEmail, mfaEmail } from "./mock-auth.ts";
 import { hold, locked, pressAt, signIn } from "./sign-in.ts";
 
-// One request at a time on the sign-in pages (console/src/auth/attempt.ts): while one is out the page takes nothing
+// One request at a time on the sign-in pages (packages/login/src/attempt.ts): while one is out the page takes nothing
 // but its cancel, a request that may set the session's cookie is followed whatever became of the page, and the page
 // shows the session the cookie holds.
 

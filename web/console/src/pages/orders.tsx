@@ -1,5 +1,6 @@
 import { ApiError, type Schemas } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import {
   Button,
   Card,
@@ -15,7 +16,7 @@ import {
 import { type UseQueryResult, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { balanceQuery, ordersQuery, siteQuery } from "../queries";
+import { balanceQuery, ordersQuery } from "../queries";
 import { receiptState } from "../receipt";
 import { useBoardKind } from "./bill-data";
 import { BillShell } from "./bill-shell";

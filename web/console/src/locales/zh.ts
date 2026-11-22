@@ -1,6 +1,6 @@
 // The console's messages in Chinese, the source every other language follows.
+import { zh as login } from "@axiom/login/messages";
 import { zh as announcements } from "./announcements";
-import { zh as auth } from "./auth";
 import { zh as callsBoard } from "./calls";
 import { zh as keysMessages } from "./keys";
 import { zh as notifications } from "./notifications";
@@ -16,9 +16,8 @@ import { zh as statement } from "./statement";
 import { zh as usageBoard } from "./usage";
 import { zh as workspaces } from "./workspaces";
 
-export default {
+export const initial = {
   announcements,
-  auth,
   callsBoard,
   usageBoard,
 
@@ -40,19 +39,6 @@ export default {
     notifications: "通知",
     settings: "设置",
     security: "账户与安全",
-  },
-  legal: {
-    title: "更新后的条款",
-    description: "{{email}}，继续使用前请阅读并同意当前版本。",
-    acceptSubmit: "同意并继续",
-    missing: "没有加载到当前条款，请稍后重试。",
-    terms: "服务条款",
-    privacy: "隐私政策",
-    version: "第 {{version}} 版",
-    loading: "正在加载条款…",
-    error: "条款没有加载出来。",
-    retry: "重试",
-    accept: "我已阅读并同意上述服务条款和隐私政策。",
   },
   overview: {
     ...overviewBoard,
@@ -272,3 +258,7 @@ export default {
   },
   security,
 };
+
+// The complete catalog is for font tooling (scripts/fonts/sources.json); the app imports only initial, while
+// @axiom/login registers its own "login" namespace when a sign-in page mounts.
+export default /* @__PURE__ */ Object.assign({}, initial, login);

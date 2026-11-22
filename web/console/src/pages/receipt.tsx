@@ -1,8 +1,9 @@
+import { siteQuery } from "@axiom/login";
 import { Button, Cluster, DataState, usePageTitle } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { receiptQuery, siteQuery } from "../queries";
+import { receiptQuery } from "../queries";
 import { BillShell } from "./bill-shell";
 import { ReceiptBody } from "./receipt-body";
 

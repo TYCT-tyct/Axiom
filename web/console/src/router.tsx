@@ -1,4 +1,5 @@
 import { safeNext } from "@axiom/app";
+import { dropMailLink, keepMailLink, type MailRoute, takeOAuthNext, useLoginLinkFailed } from "@axiom/login";
 import { focusHeading, modelAbilities, NotFoundState, PageFailedState, routerDefaults } from "@axiom/ui";
 import {
   createRootRoute,
@@ -10,8 +11,6 @@ import {
   redirect,
 } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { dropMailLink, keepMailLink, type MailRoute } from "./auth/mail-link";
-import { takeOAuthNext } from "./auth/oauth-return";
 import { Layout } from "./layout";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
@@ -35,7 +34,8 @@ const root = createRootRoute({
 // A page a mailed link opens that did not load. The link's token was only in memory (auth/mail-link.ts), which a reload
 // clears (the router reloads once by itself when a page's code fails to load), so the way back is the email's link.
 function MailLinkFailed() {
-  const { t } = useTranslation();
+  useLoginLinkFailed();
+  const { t } = useTranslation("login");
   return <PageFailedState body={t("auth.linkFailed")} />;
 }
 

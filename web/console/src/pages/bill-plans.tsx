@@ -1,5 +1,6 @@
 import { ApiError } from "@axiom/api";
 import { useErrors } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import {
   Card,
   Cluster,
@@ -23,7 +24,7 @@ import {
   billingPreferenceOptions,
   useBillingPreferenceForm,
 } from "../billing-preference";
-import { balanceQuery, billingPreferenceQuery, siteQuery } from "../queries";
+import { balanceQuery, billingPreferenceQuery } from "../queries";
 import { type AccountSubscription, accountSubscriptionsQuery } from "./bill-data";
 
 function PlanNameCell({ sub }: { sub: AccountSubscription }) {

@@ -12,7 +12,7 @@ import { FormProblem, fieldRefused, hearAddress, InputField, primaryLook } from 
 
 // The language a mail is written in: the page's.
 export function useMailLanguage(): "en" | "zh" {
-  const { i18n } = useTranslation();
+  const { i18n } = useTranslation("login");
   return (i18n.resolvedLanguage ?? i18n.language).startsWith("en") ? "en" : "zh";
 }
 
@@ -69,7 +69,7 @@ export const unanswered = (error: unknown) => !(error instanceof ApiError) || er
 // form's line, formProblem, which a limit's wait keeps), and the address to send. A failure is said once: the field's
 // line, when it has one, stands for the step's.
 export function useEmailStep(stage: Stage, attempt: Attempt, kind: string, refusedBy: (error: unknown) => boolean) {
-  const { t } = useTranslation();
+  const { t } = useTranslation("login");
   const errors = useErrors();
   const input = useRef<HTMLInputElement | null>(null);
   const [email, setEmail] = useState("");
@@ -113,7 +113,7 @@ export function usePasswordStep(
   pointer: "/password" | "/new_password",
   length: string,
 ) {
-  const { t } = useTranslation();
+  const { t } = useTranslation("login");
   const errors = useErrors();
   const input = useRef<HTMLInputElement | null>(null);
   const [missing, setMissing] = useState(false);

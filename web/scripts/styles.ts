@@ -36,7 +36,7 @@ const isScript = (path: string) =>
   (/\.[cm]?[jt]sx?$/.test(path) && /^(site|console|admin|packages\/[^/]+)\/src\//.test(path)) ||
   path === "packages/boards/demo/main.tsx";
 const isApp = (path: string) =>
-  /^(console|admin|site|packages\/app)\/src\//.test(path) && !path.startsWith("site/src/home/");
+  /^(console|admin|site|packages\/(?:app|login))\/src\//.test(path) && !path.startsWith("site/src/home/");
 const isModule = (path: string) => path.endsWith(".module.css");
 const moduleHomes = [
   /^packages\/ui\/src\/components\//,

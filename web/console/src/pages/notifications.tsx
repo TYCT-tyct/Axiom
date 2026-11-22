@@ -6,11 +6,12 @@ import DesktopNotifyZh from "@axiom/boards/AxApp/regions/Notify.zh";
 import PhoneNotify from "@axiom/boards/AxAppPhone/regions/Notify";
 import PhoneNotifyEn from "@axiom/boards/AxAppPhone/regions/Notify.en";
 import PhoneNotifyZh from "@axiom/boards/AxAppPhone/regions/Notify.zh";
+import { siteQuery } from "@axiom/login";
 import { Button, DataState, FormError, Notice, parseMoney, usePageTitle } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { notificationPreferencesQuery, siteQuery } from "../queries";
+import { notificationPreferencesQuery } from "../queries";
 import { boardPageStyle, clickedRowIndex, makeBoardT, useBoardInputs, useEnglish, useWide } from "./account-board";
 import { AccountActionCard, AccountInputsCard } from "./account-cards";
 import {

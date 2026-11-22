@@ -9,12 +9,13 @@ import {
   useErrors,
   useRulesCheck,
 } from "@axiom/app";
+import { siteQuery } from "@axiom/login";
 import { Button, Cluster, Dialog, FormError, Grid, Note, Stack, Text, TextField, useFormat } from "@axiom/ui";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ConfirmDialog } from "./confirm-dialog";
-import { routingDefaultQuery, routingPresetsQuery, siteQuery, sourceClassesQuery } from "./queries";
+import { routingDefaultQuery, routingPresetsQuery, sourceClassesQuery } from "./queries";
 import { Actions } from "./workspace-dialogs";
 
 type Preset = Schemas["RoutingPreset"];

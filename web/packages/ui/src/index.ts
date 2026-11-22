@@ -1,5 +1,6 @@
 // The redesign's primitives (#747) live beside the current components until every page has moved; the three whose
 // names the current ones still hold are ActionButton, SegmentedControl and DataTable.
+export { boardMedia, pressBoardButton, useBoardMedia } from "./board-interaction";
 export { brandPreview, useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
 export { Announcement } from "./components/announcement";
