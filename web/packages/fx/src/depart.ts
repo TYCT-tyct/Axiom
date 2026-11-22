@@ -198,9 +198,14 @@ function drawCells(x: CanvasRenderingContext2D, run: Run, t: number, ink: Ink) {
   for (const cl of run.cells) drawCell(x, cl, t, ink);
 }
 
-// The button: for a beat its own shape, then its cells, which run to the panel.
-function drawButton(x: CanvasRenderingContext2D, run: Run, b: Box, t: number, ink: Ink, { cw, ch }: Grid) {
-  if (t < 90) {
+// The button: for a beat its own shape, then its cells, which run to the panel. Going back on the sign-in page (lands
+// false) the cells fade as they come home rather than make the button again: it is the home page's to show, where the
+// tiles land on it (arriveHome), not a button of no page on the sea.
+function drawButton(x: CanvasRenderingContext2D, run: Run, b: Box, t: number, ink: Ink, grid: Grid, lands = true) {
+  const { cw, ch } = grid;
+  const home = lands ? 1 : clamp((t - 60) / 220, 0, 1);
+  if (home <= 0) return;
+  if (t < 90 && lands) {
     x.globalAlpha = 1 - clamp((t - 30) / 60, 0, 1);
     x.fillStyle = ink.button;
     x.beginPath();
@@ -214,14 +219,14 @@ function drawButton(x: CanvasRenderingContext2D, run: Run, b: Box, t: number, in
     const lt = (t - p.d) / p.ft;
     if (lt >= 1 || (lt <= 0 && enter <= 0)) continue;
     if (lt <= 0) {
-      x.globalAlpha = enter;
+      x.globalAlpha = enter * home;
       x.fillStyle = ink.button;
       x.fillRect(p.sx, p.sy, iw, ih);
       continue;
     }
     const e = emph(lt);
     const k = 1 - 0.25 * Math.sin(Math.PI * e);
-    x.globalAlpha = (1 - clamp((lt - 0.8) / 0.2, 0, 1)) * 0.95;
+    x.globalAlpha = (1 - clamp((lt - 0.8) / 0.2, 0, 1)) * 0.95 * home;
     x.fillStyle = e < 0.5 ? ink.button : ink.tile;
     x.fillRect(
       lerp(p.sx, p.tx, e) + (iw * (1 - k)) / 2,
@@ -340,13 +345,34 @@ function drive(
   };
 }
 
-// what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + fade] ms of the engine's clock
+// what fades as the homepage leaves (trans.js's tiles frame), each over [from, from + fade] ms of the engine's clock;
+// the header's links (all but the mark, which travels) go too, each later by its distance from the press (barLeaving)
 const leaving = [
   [".hs > main h1, .hs > main .lede", 120, 360],
   [".cta, .fam", 200, 200],
   [".hs > .under, .isl", 60, 360],
   [".glow", 0, 460],
 ] as const;
+
+type Fade = { el: HTMLElement; from: number; fade: number };
+
+// The header's links un-write nearest the press first (trans.js: 200 ms over 1800 px, then 140 ms each).
+function barLeaving(frame: HTMLElement, b: Box): Fade[] {
+  const cx = b.x + b.w / 2;
+  const cy = b.y + b.h / 2;
+  return [...frame.querySelectorAll<HTMLElement>(".bar .nav > *")].map((el) => {
+    const r = el.getBoundingClientRect();
+    const d = Math.hypot(r.x + r.width / 2 - cx, r.y + r.height / 2 - cy);
+    return { el, from: 40 + (d / 1800) * 200, fade: 140 };
+  });
+}
+
+function leavingParts(frame: HTMLElement, b: Box): Fade[] {
+  const page = leaving.flatMap(([selector, from, fade]) =>
+    [...frame.querySelectorAll<HTMLElement>(selector)].map((el) => ({ el, from, fade })),
+  );
+  return [...page, ...barLeaving(frame, b)];
+}
 
 // Shared scene setup and frame paint for depart, departLogin, and arriveHome.
 function prepare(frame: HTMLElement, b: Box, P: Box, sea?: OceanEngine, button?: HTMLElement, withWord = false) {
@@ -360,13 +386,13 @@ function prepare(frame: HTMLElement, b: Box, P: Box, sea?: OceanEngine, button?:
 }
 type Scene = ReturnType<typeof prepare>;
 
-function paintScene(scene: Scene, t: number, withWord = false) {
+function paintScene(scene: Scene, t: number, withWord = false, lands = true) {
   const { x, dpr, W, H, run, b, ink, grid } = scene;
   if (!x) return;
   x.setTransform(dpr, 0, 0, dpr, 0, 0);
   x.clearRect(0, 0, W, H);
   drawCells(x, run, t, ink);
-  drawButton(x, run, b, t, ink, grid);
+  drawButton(x, run, b, t, ink, grid, lands);
   if (withWord) drawWord(x, run.word, run.wm, t, ink.tile, emph);
   x.globalAlpha = 1;
 }
@@ -394,9 +420,7 @@ export function depart(
 ): Departure {
   const scene = prepareSite(frame, button, sea, true);
   const speed = scene.run.landed / span;
-  const faded = leaving.flatMap(([selector, from, fade]) =>
-    [...frame.querySelectorAll<HTMLElement>(selector)].map((el) => ({ el, from, fade })),
-  );
+  const faded = leavingParts(frame, scene.b);
   return drive(
     scene.canvas,
     span,
@@ -473,7 +497,7 @@ export function departLogin(
     start,
     (elapsed, dir) => {
       syncLoginFrame(side, seaBox, faded, morphOn, elapsed, span, dir);
-      paintScene(scene, (1 - elapsed / span) * scene.run.landed);
+      paintScene(scene, (1 - elapsed / span) * scene.run.landed, false, false);
     },
     () => {
       scene.canvas.remove();
@@ -496,7 +520,7 @@ export function arriveHome(
 ): Departure {
   const scene = prepareSite(frame, button, sea, false);
   const tail = scene.run.landed * 0.38;
-  const faded = leaving.flatMap(([selector]) => [...frame.querySelectorAll<HTMLElement>(selector)]);
+  const faded = leavingParts(frame, scene.b).map(({ el }) => el);
   const cleanup = () => {
     scene.canvas.remove();
     for (const el of faded) el.style.opacity = "";

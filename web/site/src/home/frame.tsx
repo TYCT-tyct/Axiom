@@ -1,6 +1,6 @@
 import Wide from "@axiom/boards/Site/regions/Shell";
 import Narrow from "@axiom/boards/SitePhone/regions/Shell";
-import { peekReturn, useEffectModule } from "@axiom/fx";
+import { arrivedWhole, held, peekReturn, useEffectModule } from "@axiom/fx";
 import type { Sea } from "@axiom/fx/sea";
 import { type ReactNode, type RefObject, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -99,6 +99,17 @@ function useFrameAttrs(
   }, [root, sea, language, scheme, themeLabel]);
 }
 
+// A page come to by the tiles transition is whole once its sea is drawn: the sign-in page held over it lets go then.
+// A sea later than the hold (crossing.ts) fades in on the page rather than appear all at once.
+function useWholeWithSea(sea: Sea | null, returning: boolean) {
+  useEffect(() => {
+    if (!sea) return;
+    if (returning && !held()) sea.engine.canvas.animate({ opacity: [0, 1] }, { duration: 360, easing: "ease-out" });
+    const frame = requestAnimationFrame(() => arrivedWhole());
+    return () => cancelAnimationFrame(frame);
+  }, [sea, returning]);
+}
+
 // SiteFrame is the home page's frame as the board draws it: the sea, the header with the language and theme switches,
 // and the island, around the scroller children go in. The board's behaviours run on it (behaviour.ts), and
 // its engines through packages/fx: the sea and Clawd (clawd.ts) after the first content, the switches when first used
@@ -129,6 +140,7 @@ export function SiteFrame({ wide, met, children }: { wide: boolean; met: RefObje
     },
     returning,
   );
+  useWholeWithSea(seaUp, returning);
   useSwitches(root, sea);
   useDeparture(root, sea);
   const whale = useWhale(root, sea, met, { narrow: !wide, dark: scheme === "dark" });

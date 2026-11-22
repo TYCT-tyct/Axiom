@@ -30,14 +30,18 @@ declare global {
 const GLYPHS = ":;t%SX8#@/\\<>=+*";
 const glyph = (i: number, t: number) => GLYPHS[Math.floor(hash(i, t) * GLYPHS.length)] ?? "";
 
+// What Morph reads of the transition it is part of: which way it runs (trans.js's tr.dir).
+export type Way = { readonly dir: 1 | -1 };
+
 // startMorph puts the solid on the sea. Morph's root is the element the sea's world is measured in and whose
-// data-state says the sign-in page is up (trans.js's frame, where the sea covers the frame); here the sea's canvas
-// fills .lg-sea, so that is its root, and the page is always up. Its canvas (.lg-stg) is put first in .lg-sea, and
-// Site.dc.html's rule for it, which the Login board lacks, is set through the CSSOM: over the sea's canvas, under the
-// brand and the pitch.
-function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, shape: Shape) {
-  sea.dataset.state = "login";
-  const morph = new window.AxiomLoginMorph(sea, frame, engine);
+// data-state says which page is up (trans.js's frame, where the sea covers the frame): the website's frame when the
+// website hosts the page and owns both (the transition sets its state), else .lg-sea, whose canvas is the page's own
+// sea, and the page is always up. Its canvas (.lg-stg) is put first in .lg-sea, and Site.dc.html's rule for it, which
+// the Login board lacks, is set through the CSSOM: over the sea's canvas, under the brand and the pitch.
+function startMorph(frame: HTMLElement, root: HTMLElement, engine: OceanEngine, shape: Shape, way?: Way) {
+  const alone = !way;
+  if (alone) root.dataset.state = "login";
+  const morph = new window.AxiomLoginMorph(root, frame, engine, way);
   // Morph.theme reads getComputedStyle(--ring) straight into canvas fillStyle, which rejects the runtime
   // light-dark(...) values brandStyle writes onto :root; resolve the tokens through CSSOM instead.
   let ink: MorphTheme | undefined;
@@ -52,7 +56,7 @@ function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, s
     };
     return ink;
   };
-  const canvas = sea.querySelector<HTMLCanvasElement>(":scope > canvas.lg-stg");
+  const canvas = frame.querySelector<HTMLCanvasElement>(".lg-sea > canvas.lg-stg");
   if (canvas) {
     const place = {
       position: "absolute",
@@ -80,7 +84,7 @@ function startMorph(frame: HTMLElement, sea: HTMLElement, engine: OceanEngine, s
     },
     destroy: () => {
       morph.destroy();
-      sea.removeAttribute("data-state");
+      if (alone) root.removeAttribute("data-state");
     },
   };
 }
@@ -210,6 +214,27 @@ function seaOptions(frame: HTMLElement, canvas: HTMLCanvasElement, light: boolea
     warm: 2,
     virtualScale: 1,
     cell: Math.min(13, Math.max(8, Math.round((frame.clientWidth || innerWidth) / 124))),
+  };
+}
+
+// joinLogin puts the solid on a sea another page owns, the website's, which hosts the sign-in page in its own frame
+// (root, .tr): the sea and its frames stay the website's, the transition (way) sets the frame's state, and destroy takes
+// only the solid off. The sea's own colours follow the website's scheme, so recolour redraws only the solid.
+export function joinLogin(root: HTMLElement, frame: HTMLElement, engine: OceanEngine, shape: Shape, way: Way): Login {
+  const morph = startMorph(frame, root, engine, shape, way);
+  let stopDecode = () => {};
+  return {
+    show: morph.show,
+    hear: morph.hear,
+    recolour: () => morph.recolour(),
+    decode: (title, decodeCanvas) => {
+      stopDecode = decode(title, decodeCanvas);
+    },
+    endDecode: () => stopDecode(),
+    destroy: () => {
+      stopDecode();
+      morph.destroy();
+    },
   };
 }
 

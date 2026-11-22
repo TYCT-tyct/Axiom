@@ -1,4 +1,15 @@
-import { afterFirstContent, markArrival, markOrigin, own, takeReturn } from "@axiom/fx";
+import {
+  afterFirstContent,
+  flyParts,
+  leaveTogether,
+  markArrival,
+  markOrigin,
+  type OriginRect,
+  own,
+  takeOrigin,
+  takeReturn,
+  whenWhole,
+} from "@axiom/fx";
 import type { Departure } from "@axiom/fx/depart";
 import type { Sea } from "@axiom/fx/sea";
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -324,6 +335,7 @@ const stalled = 3000;
 type Flight = {
   press: object;
   href: string;
+  frame: HTMLElement;
   link: HTMLAnchorElement;
   dir: 1 | -1;
   timer: number;
@@ -349,8 +361,9 @@ function scheduleLeave(flight: Flight, delay: number) {
     const held = shown;
     const r = flight.link.getBoundingClientRect();
     markOrigin({ x: r.x, y: r.y, w: r.width, h: r.height });
-    // the page gone to, signing in or registering, takes the marker and plays its arrival
+    // the page gone to, signing in or registering, takes the marker and plays its arrival, the mark sliding over
     markArrival();
+    leaveTogether({ brand: flight.frame.querySelector(".bar .brand") });
     window.location.assign(flight.href);
     window.setTimeout(() => shown === held && clear(), stalled);
   }, delay);
@@ -359,7 +372,7 @@ function scheduleLeave(flight: Flight, delay: number) {
 function leave(frame: HTMLElement, link: HTMLAnchorElement, sea: Sea | null) {
   clear();
   const start = performance.now();
-  const flight: Flight = { press: {}, href: link.href, link, dir: 1, timer: 0 };
+  const flight: Flight = { press: {}, href: link.href, frame, link, dir: 1, timer: 0 };
   leaving = flight;
   scheduleLeave(flight, departSpan);
   // code that comes after the page started to go, after the frame has gone, or after the page has come back, draws
@@ -398,20 +411,36 @@ function reverseDeparture() {
   picture.reverse();
 }
 
+// The way in the tiles come home to: the one the sign-in page sent them to (the one pressed to leave, its place kept
+// through the round), else the header's.
+function homeOf(frame: HTMLElement, aim: OriginRect | null) {
+  const ways = [...frame.querySelectorAll<HTMLElement>("a[data-go]")].filter((a) => a.offsetParent !== null);
+  if (!aim) return frame.querySelector<HTMLElement>(".bar a[data-go]") ?? ways[0];
+  const off = (a: HTMLElement) => {
+    const r = a.getBoundingClientRect();
+    return Math.hypot(r.x + r.width / 2 - (aim.x + aim.w / 2), r.y + r.height / 2 - (aim.y + aim.h / 2));
+  };
+  return ways.sort((p, q) => off(p) - off(q))[0];
+}
+
+// A return lands once the page is whole and on screen (crossing.ts: until then the sign-in page is): the mark slides
+// back, and the tiles finish landing on the way in they were sent to while the page comes up around them.
 function settleReturn(frame: HTMLElement, sea: Sea | null) {
   if (!takeReturn()) return;
   frame.dataset.enter = "done";
-  const target = frame.querySelector<HTMLElement>(".bar a[data-go], a[data-go]");
+  const target = homeOf(frame, takeOrigin());
   if (!target) return;
-  const start = performance.now();
-  loadDepart().then(
-    ({ arriveHome }) => {
-      if (leaving || !frame.isConnected || !target.isConnected) return;
+  // asked for now, so it is likely here once the page is; code that never comes only costs the landing
+  const arrive = loadDepart().catch(() => null);
+  whenWhole(() => {
+    flyParts({ brand: frame.querySelector<HTMLElement>(".bar .brand") });
+    const start = performance.now();
+    void arrive.then((module) => {
+      if (!module || leaving || !frame.isConnected || !target.isConnected) return;
       clear();
-      shown = { frame, picture: arriveHome(frame, target, start, arriveSpan, sea?.engine) };
-    },
-    () => {},
-  );
+      shown = { frame, picture: module.arriveHome(frame, target, start, arriveSpan, sea?.engine) };
+    });
+  });
 }
 
 const plainClick = (e: MouseEvent) => e.button === 0 && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey;

@@ -3,11 +3,13 @@ export {
   markOrigin,
   markReturn,
   type OriginRect,
+  peekArrival,
   peekReturn,
   takeArrival,
   takeOrigin,
   takeReturn,
 } from "./arrival";
+export { arrivedWhole, crossDocuments, flyParts, held, leaveTogether, prepareArrival, whenWhole } from "./crossing";
 export { hash } from "./hash";
 export { own } from "./loop";
 export { timeline } from "./timeline";

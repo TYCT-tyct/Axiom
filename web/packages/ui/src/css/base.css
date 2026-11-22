@@ -229,3 +229,9 @@
     color-scheme: light;
   }
 }
+
+/* Going from one of the apps' pages to another is never a blank page between them: the page left stays on screen until
+   the page come to is whole, then the two cross-fade (packages/fx crossing.ts). */
+@view-transition {
+  navigation: auto;
+}

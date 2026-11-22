@@ -9,7 +9,7 @@ import ShellZH from "@axiom/boards/Login/regions/LoginShell.zh";
 import LoginStep from "@axiom/boards/Login/regions/LoginStep";
 import LoginSub from "@axiom/boards/Login/regions/LoginSub";
 import LoginTitle from "@axiom/boards/Login/regions/LoginTitle";
-import { takeArrival, useEffectModule } from "@axiom/fx";
+import { arrivedWhole, flyParts, held, takeArrival, useEffectModule } from "@axiom/fx";
 import type { Heard, Login, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -403,10 +403,15 @@ function useArrivalReveal(root: RefObject<HTMLElement | null>, arrived: boolean,
       if (shown) return;
       shown = true;
       window.clearTimeout(timer);
+      // under the website still held on screen (crossing.ts) the view transition's cross-fade brings the page in, so
+      // its parts are shown at once; the mark slides over from the website's place
+      const fade = !held();
       for (const part of parts) {
-        part.style.transition = `opacity ${revealIn}ms ease-out`;
+        if (fade) part.style.transition = `opacity ${revealIn}ms ease-out`;
         part.style.removeProperty("opacity");
       }
+      arrivedWhole();
+      flyParts({ brand: frame.querySelector<HTMLElement>("a.brand") });
       // the parts' own opacity is the return's to fade (departLogin), at its own pace
       settled = window.setTimeout(() => {
         for (const part of parts) part.style.removeProperty("transition");
@@ -421,7 +426,10 @@ function useArrivalReveal(root: RefObject<HTMLElement | null>, arrived: boolean,
     };
   }, [arrived, root]);
   useEffect(() => {
-    if (ready) show.current();
+    if (!ready) return;
+    show.current();
+    // a page come to any other way is whole too: the page left for it cross-fades into it now (crossing.ts)
+    arrivedWhole();
   }, [ready]);
 }
 

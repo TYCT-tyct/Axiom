@@ -6,6 +6,7 @@ import wideZh from "@axiom/boards/AxApp/regions/Shell.zh";
 import Phone from "@axiom/boards/AxAppPhone/regions/Shell";
 import phoneEn from "@axiom/boards/AxAppPhone/regions/Shell.en";
 import phoneZh from "@axiom/boards/AxAppPhone/regions/Shell.zh";
+import { arrivedWhole } from "@axiom/fx";
 import { BoardMark, BoardShell, useFormat, useKeptPage, usePreferences } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { Link, type LinkProps, Outlet, useLocation, useMatchRoute, useNavigate } from "@tanstack/react-router";
@@ -254,6 +255,8 @@ function ConsoleShell({
 }) {
   const { t, i18n } = useTranslation();
   const { page, slot } = useKeptPage(children);
+  // drawn, the console is whole: a page left for it (signing in, the website) cross-fades into it now (crossing.ts)
+  useEffect(() => arrivedWhole(), []);
   const phone = useBoardMedia(phoneWidth);
   const { level, ...pageValues } = usePageValues();
   const { dark, language, locale, ...preferenceValues } = usePreferenceValues();
