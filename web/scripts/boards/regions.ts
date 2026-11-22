@@ -168,7 +168,10 @@ function expose(roots: Element[], state: ReturnType<typeof emitter>) {
 }
 
 const added = (region: Region) =>
-  Object.entries(region.css ?? {}).map(([selector, body]) => `${scoped(selector)}{${body}}`);
+  Object.entries(region.css ?? {}).map(([selector, body]) => {
+    if (selector.startsWith("@")) throw new Error(`${region.name}: ${selector} needs the board family's shared sheet`);
+    return `${scoped(selector)}{${body}}`;
+  });
 
 function collectCSS(
   css: string,

@@ -49,6 +49,8 @@ export type Region = {
   // them are kept although the cut markup does not carry them yet.
   states?: string[];
   // Rules the product needs that the drawing leaves out, by selector, in the board's own terms (a field under another:
-  // the board never stacks two); each is tied to the region as the board's rules are.
+  // the board never stacks two); each is tied to the region as the board's rules are. A key that is a conditional
+  // group (`@container ov (…)`) holds whole rules under `.ov`, the way the board writes its own; only a board family's
+  // shared sheet takes one.
   css?: Record<string, string>;
 };

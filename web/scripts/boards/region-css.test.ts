@@ -121,13 +121,17 @@ describe("shared board stylesheet", () => {
     const dom = new JSDOM('<div class="board ax ov"><div class="first"></div><div class="second"></div></div>').window;
     collectMatched(candidates, kept, new Set([dom.document.querySelector(".second") as Element]));
     collectMatched(candidates, kept, new Set([dom.document.querySelector(".first") as Element]));
-    const out = sharedRegionCSS(css, kept, [[".ov .first", "margin:0"]]);
+    const out = sharedRegionCSS(css, kept, [
+      [".ov .first", "margin:0"],
+      ["@container ov (min-width: 601px)", ".ov .first{margin:1px}"],
+    ]);
     expect(out).toMatch(/^@layer base, board;\n@layer board \{/);
     expect(out.indexOf("color:red")).toBeLessThan(out.indexOf("animation:spin"));
     expect(out.indexOf("animation:spin")).toBeLessThan(out.indexOf("color:blue"));
     expect(out.indexOf("color:blue")).toBeLessThan(out.indexOf("margin:0"));
     expect(out).toContain(".ax .first:where(.board.ax.ov, .board.ax.ov *){color:red}");
     expect(out).toContain(".ov .first{color:blue}");
+    expect(out).toContain("@container ov (min-width: 601px){.ov .first{margin:1px}}");
     expect(out).toContain("@keyframes spin");
     expect(out).not.toMatch(/unused|dead/);
   });

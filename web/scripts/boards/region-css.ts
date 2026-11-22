@@ -247,7 +247,7 @@ function selectBlocks(
 // scopedSheet scopes a plain-CSS rule to the AxApp board container using :where() so specificity and cascade stay
 // identical to the original board stylesheet; selectors already anchored under .ov need no extra wrapper.
 function scopedSheet(selector: string, scope = ".board.ax.ov") {
-  if (/^\.ov(?![\w-])/.test(selector)) return selector;
+  if (/^(\.ov(?![\w-])|@container )/.test(selector)) return selector;
   const at = selector.indexOf("::");
   const subject = at < 0 ? selector : selector.slice(0, at);
   const pseudo = at < 0 ? "" : selector.slice(at);
