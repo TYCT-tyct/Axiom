@@ -13,13 +13,22 @@ type MorphInstance = {
   th: number;
   ph: number;
   size: number;
+  fill: number;
+  phase: string;
+  cells: Tile[];
+  cellsAt: number;
+  last: number;
   bad: number;
   pulse: number;
   kick: number;
   glint: number;
+  x: CanvasRenderingContext2D;
+  theme: (now: number) => { t1: string; ring: string; dark: boolean };
   mix(now: number): number;
   solid(g: Geometry, now: number): Tile[];
   solidRef(g: Geometry, now: number): Tile[];
+  draw(g: Geometry, now: number, fill: number, from: number): void;
+  tick(R: object, w: object): void;
   destroy(): void;
 };
 
@@ -208,5 +217,86 @@ describe("Morph.solid matches solidRef", () => {
     // Edge-AA and morph-boil tiles rely on OBB padding; removing the pad from the cull fails these cases.
     if (c.expectEdge) expect(actual.some((tile) => tile.a < 1 && tile.o > 0)).toBe(true);
     if (c.expectBoil) expect(actual.some((tile) => tile.a === 0.7 && tile.o === 0)).toBe(true);
+  });
+});
+
+function buildTickRig() {
+  const root = document.createElement("div");
+  root.dataset.state = "login";
+  const lg = document.createElement("div");
+  const sea = document.createElement("div");
+  sea.className = "lg-sea";
+  lg.append(sea);
+  root.append(lg);
+  document.body.append(root);
+  Object.defineProperty(root, "offsetWidth", { value: 1440, configurable: true });
+  Object.defineProperty(sea, "offsetWidth", { value: 806, configurable: true });
+  Object.defineProperty(sea, "offsetHeight", { value: 900, configurable: true });
+  root.getBoundingClientRect = () => new DOMRect(0, 0, 1440, 900);
+  sea.getBoundingClientRect = () => new DOMRect(0, 0, 806, 900);
+  const ctx = ctxStub();
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    (() => ctx) as unknown as typeof HTMLCanvasElement.prototype.getContext,
+  );
+  const R = { cw: 10, ch: 16, cols: 10, rows: 10, flag: new Uint8Array(100), kind: new Uint8Array(100) };
+  const w = { sharks: [] as object[], pointer: null };
+  const Ctor = window.AxiomLoginMorph as unknown as MorphCtor;
+  const morph = new Ctor(root, lg, { renderer: R });
+  morph.theme = () => ({ t1: "#1c2024", ring: "#107d98", dark: false });
+  return { root, morph, ctx, R, w };
+}
+
+describe("Morph phase === 'back' reuse and reversal", () => {
+  let morph: MorphInstance | undefined;
+
+  afterEach(() => {
+    morph?.destroy();
+    morph = undefined;
+    vi.restoreAllMocks();
+    document.body.innerHTML = "";
+  });
+
+  it("reuses cached tiles with canvas scale while leaving and recomputes at once on reverse", () => {
+    let now = 1000;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const rig = buildTickRig();
+    morph = rig.morph;
+    morph.phase = "hold";
+    morph.fill = 1;
+    morph.size = 1;
+    morph.last = now;
+    const solidSpy = vi.spyOn(morph, "solid");
+
+    // Initial hold frame computes tiles once.
+    rig.morph.tick(rig.R, rig.w);
+    expect(solidSpy).toHaveBeenCalledTimes(1);
+    const cached = morph.cells;
+    expect(cached.length).toBeGreaterThan(0);
+    expect(rig.ctx.scale).not.toHaveBeenCalled();
+
+    // Departure starts: phase enters 'back', tiles are reused without calling solid(), and canvas scales toward 0.7.
+    rig.root.dataset.state = "run";
+    now += 50;
+    rig.morph.tick(rig.R, rig.w);
+    now += 50;
+    rig.morph.tick(rig.R, rig.w);
+    expect(morph.phase).toBe("back");
+    expect(solidSpy).toHaveBeenCalledTimes(1);
+    expect(morph.cells).toBe(cached);
+    const scaleCalls = (rig.ctx.scale as ReturnType<typeof vi.fn>).mock.calls;
+    expect(scaleCalls.length).toBe(2);
+    const [sx, sy] = scaleCalls[1] as [number, number];
+    expect(sx).toBeLessThan(1);
+    expect(sx).toBeGreaterThan(0.7);
+    expect(sx).toBe(sy);
+
+    // Reverse departure (even within < 30 ms): recomputes solid() immediately and draws unscaled.
+    (rig.ctx.scale as ReturnType<typeof vi.fn>).mockClear();
+    rig.root.dataset.state = "login";
+    now += 10;
+    rig.morph.tick(rig.R, rig.w);
+    expect(solidSpy).toHaveBeenCalledTimes(2);
+    expect(morph.cells).not.toBe(cached);
+    expect(rig.ctx.scale).not.toHaveBeenCalled();
   });
 });
