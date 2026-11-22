@@ -167,6 +167,16 @@ test("a copy's word belongs to the tool it copied", async ({ page }) => {
 });
 
 // Each tool's card is a configuration as its target takes it: Codex's file keeps the key's terminal line a comment, so
+// A picked tool's lines are decoded in and its card eases to their height: wait until nothing is left tumbling or still
+// to come and the card stands still. Read or pointed at before, a line is not yet where it ends up, and the pointer
+// lands on whichever line moves under it.
+async function written(page: Page) {
+  const unwritten = () =>
+    page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join(""));
+  await expect.poll(unwritten).toBe("");
+  await page.locator(".hfm1 .code").evaluate((card) => Promise.all(card.getAnimations().map((a) => a.finished)));
+}
+
 // the card is a valid file, and its button copies the file; without an address there is no command at all.
 test("each tool's card holds what its target takes, and says what its button copies", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -180,10 +190,7 @@ test("each tool's card holds what its target takes, and says what its button cop
     await expect(copy).toHaveAttribute("aria-label", label);
   }
   await page.locator(".hfm1 .tab").nth(1).click();
-  // the picked tool's lines are decoded in: read them once nothing is left tumbling or still to come
-  const unwritten = () =>
-    page.locator(".hfm1 pre .g, .hfm1 pre .z").evaluateAll((els) => els.map((el) => el.textContent).join(""));
-  await expect.poll(unwritten).toBe("");
+  await written(page);
   const lines = await page.locator(".hfm1 pre .ln").allTextContents();
   // every line of the Codex card that is not TOML is a comment
   expect(lines.filter((line) => /export/.test(line))).toEqual([expect.stringMatching(/#\s*export AXIOM_API_KEY=/)]);
@@ -218,6 +225,7 @@ test("pointing at the address line lights the machine's plug", async ({ page }) 
   await expect(page.locator(".hfm1 .fig .lamp.on")).toHaveCount(1);
   // Cursor's lines: the address, then the key
   await page.locator(".hfm1 .tab").nth(2).click();
+  await written(page);
   const edge = page.locator('.hfm1 .fig [data-m="plug"] .iso-edge').first();
   const stroke = () => edge.evaluate((el) => getComputedStyle(el).stroke);
   const unlit = await stroke();
