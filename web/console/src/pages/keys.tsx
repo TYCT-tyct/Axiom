@@ -22,7 +22,7 @@ import { type MouseEvent, type Ref, useCallback, useImperativeHandle, useMemo, u
 import { useTranslation } from "react-i18next";
 import { CreateKeyDialog, DeleteKeyDialog, SecretDialog } from "../key-dialogs";
 import { keyFiltersApplied } from "../key-filters";
-import { type KeyFilters, keysQuery } from "../queries";
+import { type KeyFilters, keyFiltersOf, keysQuery } from "../queries";
 import { keyRow, today } from "./keys-data";
 import { KeyDetailDialog } from "./keys-detail";
 import { hasFilters, KeyFiltersDialog, noFilters } from "./keys-filters";
@@ -48,17 +48,7 @@ export default function KeysPage() {
   const { t, i18n } = useTranslation();
   const manage = can(useSession(), "api_keys.manage");
   const format = useFormat();
-  // The address keeps parameters the page does not know, and the router hands them on with the ones it validated (x=1
-  // from a link that carried it); only the key filters narrow the list.
-  const search = useSearch({ from: "/app/keys" });
-  const filters: KeyFilters = {
-    name: search.name,
-    prefix: search.prefix,
-    status: search.status,
-    created_after: search.created_after,
-    created_before: search.created_before,
-    workspace_id: search.workspace_id,
-  };
+  const filters = keyFiltersOf(useSearch({ from: "/app/keys" }));
   const keys = useInfiniteQuery(keysQuery(filters));
   const pages = keys.data?.pages ?? [];
   const list = useMemo(() => pages.flatMap((page) => page.data), [pages]);

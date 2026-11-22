@@ -52,6 +52,17 @@ export type KeyFilters = {
   workspace_id?: string;
 };
 
+// The key filters of the keys page's address: the address keeps parameters the page does not know, and the router
+// hands them on with the ones it validated (x=1 from a link that carried it); only the key filters narrow the list.
+export const keyFiltersOf = (search: KeyFilters): KeyFilters => ({
+  name: search.name,
+  prefix: search.prefix,
+  status: search.status,
+  created_after: search.created_after,
+  created_before: search.created_before,
+  workspace_id: search.workspace_id,
+});
+
 export const keysQuery = (filters: KeyFilters = {}) =>
   infiniteQueryOptions({
     queryKey: [accountKey, "keys", filters],
@@ -69,6 +80,13 @@ export const keysQuery = (filters: KeyFilters = {}) =>
 // The routing presets a key of the account may be bound to, the account's default for new keys, and the source classes
 // a rule can name. A change to a preset or the default makes the presets page and the key form ask again; the classes
 // are the platform's and change rarely.
+// The account's request presets: the server permits at most 100 live configurations per account.
+export const requestPresetsQuery = queryOptions({
+  queryKey: [accountKey, "request-presets"] as const,
+  queryFn: ({ signal }) =>
+    unwrap(consoleApi.GET("/api/console/v1/presets", { params: { query: { limit: 100 } }, signal })),
+});
+
 export const routingPresetsQuery = queryOptions({
   queryKey: [accountKey, "routing-presets"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-presets", { signal })),

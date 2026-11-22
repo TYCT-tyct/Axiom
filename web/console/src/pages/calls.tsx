@@ -17,18 +17,15 @@ import type { TFunction } from "i18next";
 import { useDeferredValue, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { filtersUnsupported } from "../calls";
+import { modelsQuery } from "../queries";
 import {
-  type CallFilters,
-  type CallGroupBy,
-  callAggregateQuery,
-  callQuery,
-  callSessionsQuery,
-  callsQuery,
-  keysQuery,
-  modelsQuery,
-  workspacesQuery,
-} from "../queries";
-import { cleanSearchFilters, dateRangeForPreset, hasActiveCallFilters, type PresetChoice } from "./calls-data";
+  type CallsSearch,
+  callsPageQueries,
+  cleanSearchFilters,
+  dateRangeForPreset,
+  hasActiveCallFilters,
+  type PresetChoice,
+} from "./calls-data";
 import { CallsBoardList, InlineCallSplit } from "./calls-detail";
 import { ExportNotice, ExportScopeNote, useCallsExport } from "./calls-export";
 import { CallsFilterBar } from "./calls-filters";
@@ -45,7 +42,8 @@ import {
   usePhoneWidth,
 } from "./calls-states";
 
-type CallsSearch = CallFilters & { preset?: PresetChoice; group_by?: CallGroupBy; tab?: "sessions"; call?: string };
+// the route's loader asks for the page's first screen with its code (warm.ts)
+export { warmCalls as warm } from "./calls-data";
 
 function CallsHeaderActions({
   t,
@@ -200,16 +198,14 @@ function useCallsPageQueries(
   canKeys: boolean,
 ) {
   const router = useRouter();
-  const { group_by, tab, call: selectedId, preset: _preset, ...filters } = search;
-  const groupBy: CallGroupBy = group_by ?? "day";
-  const sessionsTab = tab === "sessions";
-  const calls = useInfiniteQuery({ ...callsQuery(filters), enabled: !sessionsTab });
-  const sessions = useInfiniteQuery({ ...callSessionsQuery(filters), enabled: sessionsTab });
-  const report = useQuery({ ...callAggregateQuery(filters, groupBy), enabled: !sessionsTab });
-  const selectedQuery = useQuery({ ...callQuery(selectedId ?? ""), enabled: Boolean(selectedId) });
+  const { filters, groupBy, sessionsTab, selectedId, queries: q } = callsPageQueries(search, canKeys);
+  const calls = useInfiniteQuery(q.calls);
+  const sessions = useInfiniteQuery(q.sessions);
+  const report = useQuery(q.report);
+  const selectedQuery = useQuery(q.selected);
   const models = useQuery({ ...modelsQuery({}), enabled: identity !== "" });
-  const keys = useInfiniteQuery({ ...keysQuery({}), enabled: canKeys });
-  const workspaces = useQuery({ ...workspacesQuery, enabled: canKeys });
+  const keys = useInfiniteQuery(q.keys);
+  const workspaces = useQuery(q.workspaces);
   const exported = useCallsExport(filters);
   const callRows = useMemo(() => calls.data?.pages.flatMap((p) => p.data) ?? [], [calls.data]);
   // The summary above the list is the page's largest text, and it and the rows come with the same answers: drawn in one
@@ -245,9 +241,9 @@ function useCallsPageQueries(
   }, [listShown, sessions.isSuccess, sessionsTab, restoreId, identity, searchStr, router]);
   return {
     filters,
-    group_by,
+    group_by: search.group_by,
     groupBy,
-    tab,
+    tab: search.tab,
     sessionsTab,
     selectedId,
     calls,

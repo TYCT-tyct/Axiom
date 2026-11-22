@@ -18,6 +18,9 @@ import { usageText } from "../locales/usage";
 import type { HoverTipData } from "./usage-chart-view";
 import { useUsagePage } from "./usage-data";
 
+// the route's loader asks for the page's first screen with its code (warm.ts)
+export { warmUsage as warm } from "./usage-data";
+
 const phoneQuery = "(max-width: 819px)";
 
 function subscribePhone(listener: () => void) {

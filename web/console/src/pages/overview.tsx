@@ -13,6 +13,9 @@ import { Announcements } from "../announcements";
 import { useWide } from "../board";
 import { useBoardData } from "./overview-data";
 
+// the route's loader asks for the page's first screen with its code (warm.ts)
+export { warmOverview as warm } from "./overview-data";
+
 // The console's overview is the board's Overview slice (#747). The Shell slice that carries the board's frame and its
 // page padding lands in its own change; until then the page keeps the frame classes the slice's CSS scopes itself with.
 // When the shell replaces layout.tsx, the wrapper and the padding go with it.

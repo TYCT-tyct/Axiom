@@ -7,6 +7,8 @@ import type { TFunction } from "i18next";
 import { type SyntheticEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { billingPreferenceChoice, billingPreferenceChoices } from "../billing-preference";
+import { billingPreferenceQuery } from "../queries";
+import { ask, type Warm } from "../warm";
 import { type ThemeChoice, useBoardInputs } from "./account-board";
 
 export type DisplayNameState = { available: boolean; name: string };
@@ -394,3 +396,6 @@ export function useProfileActions(nameData: DisplayNameState | undefined, curren
     },
   };
 }
+
+// the settings page's first screen, for its route's loader (warm.ts)
+export const warmSettings: Warm = (client) => ask(client, [displayNameQuery, billingPreferenceQuery]);

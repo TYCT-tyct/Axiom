@@ -17,6 +17,7 @@ import {
   workspacesQuery,
 } from "../queries";
 import { save } from "../statement";
+import { ask, type Warm } from "../warm";
 import type { UsageLanguage } from "./usage-chart-view";
 import { type CalState, resolveRange, type UsageSearch, usePopEffects, useUsageHandlers } from "./usage-handlers";
 import {
@@ -74,31 +75,67 @@ function summarizeMainPayload(
   return { missingFields, currency, totals, hasUsage, prevRaw, prevTotals, prevHasCalls };
 }
 
-function useUsageQueries(params: {
+type Session = ReturnType<typeof useSession>;
+type UsageQueryParams = {
   since: string;
   until: string;
   granularity: UsageGranularity;
   groupBy: UsageGroupBy;
   search: UsageSearch;
   valid: boolean;
-  prevRange: { since: string; until: string } | null;
-}) {
-  const { since, until, granularity, groupBy, search, valid, prevRange } = params;
-  const session = useSession();
-  const base = {
-    ...(search.model ? { model: search.model } : {}),
-    ...(search.key_id ? { key_id: search.key_id } : {}),
-    ...(search.workspace_id ? { workspace_id: search.workspace_id } : {}),
+};
+
+// what the address narrows the statistics to
+const usageBase = (search: UsageSearch) => ({
+  ...(search.model ? { model: search.model } : {}),
+  ...(search.key_id ? { key_id: search.key_id } : {}),
+  ...(search.workspace_id ? { workspace_id: search.workspace_id } : {}),
+});
+
+// The usage page's window for its address at a moment: the range, its granularity and grouping, whether the API takes
+// it, and the window before it. The page's hook and its route's loader (warm.ts) read it from here.
+function usageWindow(search: UsageSearch, now: Date) {
+  const resolved = resolveRange(search, now);
+  const granularity: UsageGranularity = search.granularity ?? defaultGranularity(resolved.preset, resolved.days || 1);
+  const groupBy: UsageGroupBy = search.group_by ?? "model";
+  const validation = validateUsageRange(resolved.since, resolved.until, granularity);
+  const prevRange = validation.ok ? previousWindow(validation.sinceMs, validation.untilMs) : null;
+  return { resolved, granularity, groupBy, validation, prevRange };
+}
+
+// The queries the usage page reads on its first render, each with whether it is asked for: the page's hook and its
+// route's loader build them here. The previous window's breakdown waits on the main answer, so it is not among them.
+function usageQueries({ since, until, granularity, groupBy, search, valid }: UsageQueryParams, session: Session) {
+  return {
+    main: usageStatisticsQuery(
+      { since, until, granularity, group_by: groupBy, compare: "previous", ...usageBase(search) },
+      valid,
+    ),
+    balance: { ...balanceQuery, enabled: can(session, "balance.view") },
+    site: siteQuery,
+    keys: { ...keysQuery(), enabled: can(session, "api_keys.view") },
+    workspaces: workspacesQuery,
+    models: modelsQuery({}),
   };
-  const main = useQuery({
-    ...usageStatisticsQuery({ since, until, granularity, group_by: groupBy, compare: "previous", ...base }, valid),
-    retry: noClientRetry,
-  });
-  const balance = useQuery({ ...balanceQuery, enabled: can(session, "balance.view"), retry: noClientRetry });
-  const site = useQuery(siteQuery);
-  const keys = useInfiniteQuery({ ...keysQuery(), enabled: can(session, "api_keys.view"), retry: noClientRetry });
-  const workspaces = useQuery({ ...workspacesQuery, retry: noClientRetry });
-  const models = useQuery({ ...modelsQuery({}), retry: noClientRetry });
+}
+
+export const warmUsage: Warm<UsageSearch> = (client, session, search) => {
+  const w = usageWindow(search, new Date());
+  const { since, until } = w.resolved;
+  const params = { since, until, granularity: w.granularity, groupBy: w.groupBy, search, valid: w.validation.ok };
+  return ask(client, Object.values(usageQueries(params, session)));
+};
+
+function useUsageQueries(params: UsageQueryParams & { prevRange: { since: string; until: string } | null }) {
+  const { groupBy, search, valid, prevRange } = params;
+  const base = usageBase(search);
+  const q = usageQueries(params, useSession());
+  const main = useQuery({ ...q.main, retry: noClientRetry });
+  const balance = useQuery({ ...q.balance, retry: noClientRetry });
+  const site = useQuery(q.site);
+  const keys = useInfiniteQuery({ ...q.keys, retry: noClientRetry });
+  const workspaces = useQuery({ ...q.workspaces, retry: noClientRetry });
+  const models = useQuery({ ...q.models, retry: noClientRetry });
   const currencies = useMemo(
     () => (main.isSuccess && hasUsageStatisticsPayload(main.data) ? currenciesOfUsage(main.data) : []),
     [main.isSuccess, main.data],
@@ -232,12 +269,8 @@ function useUsageParams() {
   const search: UsageSearch = useSearch({ from: "/app/usage" });
   const [now, setNow] = useState(() => new Date());
   const todayDay = useMemo(() => utcDayOf(now), [now]);
-  const resolved = resolveRange(search, now);
-  const granularity: UsageGranularity = search.granularity ?? defaultGranularity(resolved.preset, resolved.days || 1);
+  const { resolved, granularity, groupBy, validation, prevRange } = usageWindow(search, now);
   const metric: UsageMetricKey = search.metric ?? "spend";
-  const groupBy: UsageGroupBy = search.group_by ?? "model";
-  const validation = validateUsageRange(resolved.since, resolved.until, granularity);
-  const prevRange = validation.ok ? previousWindow(validation.sinceMs, validation.untilMs) : null;
   const updateSearch = (patch: Partial<UsageSearch>) => {
     void navigate({ to: "/usage", search: (prev: UsageSearch) => ({ ...prev, ...patch }), replace: true });
   };
