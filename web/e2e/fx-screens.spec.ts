@@ -2,7 +2,19 @@ import { expect, type Page, test } from "@playwright/test";
 import { brandStyle } from "../packages/ui/src/brand.ts";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { delivered, open, pause, place, running, screenChunk, scrollTo, setHidden, shown } from "./fx-helpers.ts";
+import {
+  delivered,
+  open,
+  pause,
+  pauseAhead,
+  place,
+  running,
+  screenChunk,
+  scrollTo,
+  setHidden,
+  shown,
+  siteSignIn,
+} from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // The connect screen (§8.2's connect row): the machine is one SVG, fetched once the screen's code has come, which is when
@@ -484,6 +496,31 @@ test("pressing deepseek in the first screen's strip calls the whale", async ({ p
   await page.locator(".hs > .main .fam [data-egg=deepseek]").click();
   await expect.poll(() => asked).toHaveLength(1);
   await whaleShows(page);
+});
+
+// The sign-in pages going up send a visiting whale away: it dives out of sight rather than swim on under the sign-in
+// page (its canvas spans the frame, the form panel included), and none comes while the pages are up.
+test("the sign-in pages going up send the whale away, and none comes while they are up", async ({ page }) => {
+  const asked = watchWhale(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await open(page);
+  await running(page);
+  await expect(page.locator(".tr .lg")).toBeAttached();
+  await page.clock.install();
+  await page.keyboard.type("deepseek");
+  await whaleShows(page);
+  // the page's time held: the whale cannot swim off by itself, so only its going away clears the water
+  await pauseAhead(page, 100);
+  await siteSignIn(page).click();
+  await expect(page).toHaveURL(/\/console\/sign-in$/);
+  await expect.poll(() => painted(page)).toBe(false);
+  await page.clock.runFor(2000);
+  // the page's background is pressed so the keys reach the page, not the form's field
+  await page.mouse.click(200, 450);
+  await page.keyboard.type("deepseek");
+  await page.clock.runFor(2000);
+  expect(await painted(page)).toBe(false);
+  expect(asked).toHaveLength(1);
 });
 
 // The sea bed's dune is drawn, from the site's own name: its wordmark mask is made by drawing the name on an offscreen
