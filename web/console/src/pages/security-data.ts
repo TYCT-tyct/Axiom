@@ -8,12 +8,13 @@ import {
   useStartSession,
 } from "@axiom/app";
 import type DesktopSecurity from "@axiom/boards/AxApp/regions/Security";
-import { registerPasskey } from "@axiom/login";
+import { registerPasskey, siteQuery } from "@axiom/login";
 import { type InfiniteData, infiniteQueryOptions, queryOptions, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { identitiesQuery, passkeysQuery } from "../queries";
+import { ask, type Warm } from "../warm";
 
 export type SessionsState = { available: boolean; sessions: Schemas["SessionDevice"][] };
 export type PasskeyRegistrationAvailability = "ready" | "unsupported" | "site_disabled" | "wrong_domain";
@@ -493,3 +494,7 @@ export function useIdentityActions() {
 
   return { errors, failure, busy, link, unlink };
 }
+
+// the security page's first screen, for its route's loader (warm.ts)
+export const warmSecurity: Warm = (client) =>
+  ask(client, [passkeysQuery, sessionsQuery, siteQuery, identitiesQuery, invitationsQuery]);

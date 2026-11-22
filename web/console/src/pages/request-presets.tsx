@@ -1,5 +1,5 @@
-import { ApiError, consoleApi, type Schemas, unwrap } from "@axiom/api";
-import { accountKey, can, useSession } from "@axiom/app";
+import { ApiError, type Schemas } from "@axiom/api";
+import { can, useSession } from "@axiom/app";
 import Desktop from "@axiom/boards/AxApp/regions/RequestPresets";
 import State from "@axiom/boards/AxApp/regions/RequestPresetsState";
 import Phone from "@axiom/boards/AxAppPhone/regions/RequestPresets";
@@ -10,11 +10,10 @@ import { type MouseEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { phoneWidth } from "../board-interaction";
 import type { zh } from "../locales/request-presets";
+import { requestPresetsQuery } from "../queries";
 import { PresetDialog } from "./request-presets-dialog";
 
 type Row = Parameters<typeof Desktop>[0]["rows"]["presets0"][number];
-const listKey = [accountKey, "request-presets"] as const;
-const path = "/api/console/v1/presets";
 type Copy = typeof zh;
 
 export default function RequestPresetsPage() {
@@ -23,12 +22,7 @@ export default function RequestPresetsPage() {
   const view = can(session, "api_keys.view");
   const manage = can(session, "api_keys.manage");
   const [selected, setSelected] = useState<{ slug: string; opener: HTMLElement }>();
-  const list = useQuery({
-    queryKey: listKey,
-    // The server permits at most 100 live configurations per account.
-    queryFn: ({ signal }) => unwrap(consoleApi.GET(path, { params: { query: { limit: 100 } }, signal })),
-    enabled: view,
-  });
+  const list = useQuery({ ...requestPresetsQuery, enabled: view });
   const language = i18n.resolvedLanguage ?? i18n.language;
   const copy = t("requestPresets.copy", { returnObjects: true });
   usePageTitle(copy.title);
@@ -56,7 +50,7 @@ export default function RequestPresetsPage() {
           slug={selected.slug}
           opener={selected.opener}
           manage={manage}
-          listKey={listKey}
+          listKey={requestPresetsQuery.queryKey}
           copy={copy}
           onClose={() => setSelected(undefined)}
         />

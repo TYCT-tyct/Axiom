@@ -49,11 +49,16 @@ const warmed = [
   { from: "/console/", path: "/console/calls" },
   { from: "/console/", path: "/console/usage" },
   { from: "/console/calls", path: "/console/balance" },
+  { from: "/console/", path: "/console/routing-presets" },
+  { from: "/console/", path: "/console/request-presets" },
+  { from: "/console/", path: "/console/provider-keys" },
 ];
 for (const { from, path } of warmed)
   test(`${path} asks nothing of its first screen once its link's intent warmed it`, async ({ page }) => {
     const state = await mockConsole(page);
     signedInAs(state);
+    // the mocked API has no request presets of its own (console-scenes.ts answers them the same way)
+    await page.route("**/api/console/v1/presets?*", (route) => route.fulfill({ json: { data: [] } }));
     await page.goto(from);
     await expect(page.getByRole("main")).toBeVisible();
     await page.waitForLoadState("networkidle");

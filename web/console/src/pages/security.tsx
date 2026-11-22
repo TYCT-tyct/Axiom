@@ -34,6 +34,9 @@ import {
 import { ChangePasswordDialog, ReplaceTotpDialog } from "./security-dialogs";
 import { IdentitiesSection, InvitesSection, PasskeysSection } from "./security-sections";
 
+// the route's loader asks for the page's first screen with its code (warm.ts)
+export { warmSecurity as warm } from "./security-data";
+
 export default function Security() {
   const { t } = useTranslation();
   const wide = useWide();

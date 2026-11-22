@@ -80,6 +80,13 @@ export const keysQuery = (filters: KeyFilters = {}) =>
 // The routing presets a key of the account may be bound to, the account's default for new keys, and the source classes
 // a rule can name. A change to a preset or the default makes the presets page and the key form ask again; the classes
 // are the platform's and change rarely.
+// The account's request presets: the server permits at most 100 live configurations per account.
+export const requestPresetsQuery = queryOptions({
+  queryKey: [accountKey, "request-presets"] as const,
+  queryFn: ({ signal }) =>
+    unwrap(consoleApi.GET("/api/console/v1/presets", { params: { query: { limit: 100 } }, signal })),
+});
+
 export const routingPresetsQuery = queryOptions({
   queryKey: [accountKey, "routing-presets"],
   queryFn: ({ signal }) => unwrap(consoleApi.GET("/api/console/v1/routing-presets", { signal })),

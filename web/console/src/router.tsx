@@ -1,5 +1,5 @@
 import { safeNext } from "@axiom/app";
-import { dropMailLink, keepMailLink, type MailRoute, takeOAuthNext, useLoginLinkFailed } from "@axiom/login";
+import { dropMailLink, keepMailLink, type MailRoute, siteQuery, takeOAuthNext, useLoginLinkFailed } from "@axiom/login";
 import { focusHeading, modelAbilities, NotFoundState, PageFailedState, routerDefaults } from "@axiom/ui";
 import {
   createRootRouteWithContext,
@@ -23,8 +23,17 @@ import {
   keysQuery,
   type ModelFilters,
   modelsQuery,
+  notificationPreferencesQuery,
+  ordersQuery,
+  providerKeysQuery,
+  redemptionsQuery,
+  requestPresetsQuery,
+  routingDefaultQuery,
+  routingPresetsQuery,
+  statementQuery,
+  workspacesQuery,
 } from "./queries";
-import { ask, type RouterContext, warming } from "./warm";
+import { ask, asking, askingWith, type RouterContext, warming } from "./warm";
 
 // A provider's sign-in comes back to the root when it succeeded and to the sign-in page when it failed, neither knowing
 // where the visitor was going (auth/oauth-return.ts). That return is a document of its own: its first page takes what
@@ -154,21 +163,25 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/workspaces",
+      loader: askingWith("api_keys.view", workspacesQuery),
       component: lazyRouteComponent(() => import("./pages/workspaces")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/routing-presets",
+      loader: askingWith("api_keys.view", routingPresetsQuery, routingDefaultQuery),
       component: lazyRouteComponent(() => import("./pages/routing-presets")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/request-presets",
+      loader: askingWith("api_keys.view", requestPresetsQuery),
       component: lazyRouteComponent(() => import("./pages/request-presets")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/provider-keys",
+      loader: askingWith("api_keys.view", providerKeysQuery),
       component: lazyRouteComponent(() => import("./pages/provider-keys")),
     }),
     createRoute({
@@ -235,17 +248,19 @@ const routeTree = root.addChildren([
       getParentRoute: () => app,
       path: "/balance",
       // the plans (#plans) and a top-up under way (its order, kept in the tab) ask for more of their own
-      loader: warming(async () => (client) => ask(client, [balanceQuery])),
+      loader: asking(balanceQuery),
       component: lazyRouteComponent(() => import("./pages/balance")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/redeem",
+      loader: asking(redemptionsQuery),
       component: lazyRouteComponent(() => import("./pages/redeem")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/orders",
+      loader: asking(ordersQuery, balanceQuery, siteQuery),
       component: lazyRouteComponent(() => import("./pages/orders")),
     }),
     createRoute({
@@ -256,21 +271,25 @@ const routeTree = root.addChildren([
     createRoute({
       getParentRoute: () => app,
       path: "/statement",
+      loader: asking(statementQuery),
       component: lazyRouteComponent(() => import("./pages/statement")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/security",
+      loader: warming(() => import("./pages/security").then((page) => page.warm)),
       component: lazyRouteComponent(() => import("./pages/security")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/notifications",
+      loader: asking(notificationPreferencesQuery, siteQuery),
       component: lazyRouteComponent(() => import("./pages/notifications")),
     }),
     createRoute({
       getParentRoute: () => app,
       path: "/settings",
+      loader: warming(() => import("./pages/settings").then((page) => page.warm)),
       component: lazyRouteComponent(() => import("./pages/settings")),
     }),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),

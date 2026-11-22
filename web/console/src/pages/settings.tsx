@@ -41,6 +41,9 @@ import {
   validateEmailChange,
 } from "./settings-data";
 
+// the route's loader asks for the page's first screen with its code (warm.ts)
+export { warmSettings as warm } from "./settings-data";
+
 const themes = ["system", "light", "dark"] as const;
 const emailIssueKeys = {
   invalid: "settings.profile.emailInvalid",

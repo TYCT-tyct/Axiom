@@ -1,4 +1,4 @@
-import { currentSession } from "@axiom/app";
+import { can, currentSession } from "@axiom/app";
 import type { QueryClient } from "@tanstack/react-query";
 
 type Session = NonNullable<ReturnType<typeof currentSession>>;
@@ -47,3 +47,16 @@ export function warming<D>(load: () => Promise<Warm<D>>) {
     ]);
   };
 }
+
+// A page whose first screen reads these queries whatever its address.
+export const asking = (...queries: Asked[]) => warming(async () => (client) => ask(client, queries));
+
+// A page whose first screen reads these queries only with a permission (each page's enabled: can(session, …)).
+export const askingWith = (permission: string, ...queries: Asked[]) =>
+  warming(
+    async () => (client, session) =>
+      ask(
+        client,
+        queries.map((query) => ({ ...query, enabled: can(session, permission) })),
+      ),
+  );
