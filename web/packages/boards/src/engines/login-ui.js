@@ -407,13 +407,83 @@ import { boardHTML, boardCSS } from "../dom.ts";
     // done: a ring with a tick in it
     enter(x, y, z) { const r = sdTor(x, y, z, 0.74, 0.1), t = mn(sdCap(x, y, z, -0.32, 0, 0, -0.08, -0.25, 0, 0.078), sdCap(x, y, z, -0.08, -0.25, 0, 0.36, 0.25, 0, 0.078)); MAT = t < r ? 1 : 0; return mn(r, t); },
   };
+  const SOLID_FAST = {
+    // Symmetric flap capsules mirror across x = 0 (negating x negates px and ex alike, preserving every bit).
+    // When PAR.mail === 0, letter l and lines w lie strictly inside b's core by >= 0.008 (+0.035 rounding), so b < l and b < w everywhere.
+    startIdle(x, y, z) {
+      const b = sdBox(x, y, z, 0.85, 0.55, 0.07) - 0.035, v = sdCap(ab(x), y, z, 0.84, 0.53, 0.12, 0, -0.02, 0.12, 0.04), seal = L3(x, y + 0.02, (z - 0.13) * 1.6) - 0.11;
+      const n = mn(b, v); MAT = seal < n ? 1 : 0; return mn(seal, n);
+    },
+    start(x, y, z) {
+      const b = sdBox(x, y, z, 0.85, 0.55, 0.07) - 0.035, v = sdCap(ab(x), y, z, 0.84, 0.53, 0.12, 0, -0.02, 0.12, 0.04), seal = L3(x, y + 0.02, (z - 0.13) * 1.6) - 0.11;
+      const up = 0.46 * PAR.mail, l = sdBox(x, y - 0.1 - up, z + 0.02, 0.66, 0.44, 0.025), w = mn(sdBox(x + 0.12, y - 0.4 - up, z - 0.05, 0.4, 0.028, 0.012), sdBox(x + 0.22, y - 0.28 - up, z - 0.05, 0.3, 0.028, 0.012)), a = mn(seal, w), n = mn(b, v, l);
+      MAT = a < n ? 1 : 0; return mn(a, n);
+    },
+    // -mx(kh, 0.12 - z) <= -(0.12 - z), so kh cannot raise b when -(0.12 - z) < b.
+    // When PAR.open === 0, both vertical shackle legs are exact x-mirrors so |x| collapses them into one capsule.
+    codeClosed(x, y, z) {
+      let b = sdBox(x, y + 0.38, z, 0.5, 0.36, 0.2) - 0.06;
+      if (-(0.12 - z) >= b) { const kh = mn(L2(x, y + 0.24) - 0.085, sdBox(x, y + 0.37, z, 0.04, 0.13, 1)); b = mx(b, -mx(kh, 0.12 - z)); }
+      const i = mx(0, mn(5, Math.round((x + 0.3) / 0.12))), st = L3(x - (-0.3 + i * 0.12), y + 0.65, z - 0.25) - 0.052;
+      const sh = mn(sdCap(ab(x), y, z, 0.28, 0.24, 0, 0.28, -0.05, 0, 0.085), y > 0.24 ? sdTor(x, y - 0.24, z, 0.28, 0.085) : 1e3), n = mn(b, sh);
+      MAT = st < n && i < PAR.n ? 1 : 0; return mn(st, n);
+    },
+    code(x, y, z) {
+      let b = sdBox(x, y + 0.38, z, 0.5, 0.36, 0.2) - 0.06;
+      if (-(0.12 - z) >= b) { const kh = mn(L2(x, y + 0.24) - 0.085, sdBox(x, y + 0.37, z, 0.04, 0.13, 1)); b = mx(b, -mx(kh, 0.12 - z)); }
+      const i = mx(0, mn(5, Math.round((x + 0.3) / 0.12))), st = L3(x - (-0.3 + i * 0.12), y + 0.65, z - 0.25) - 0.052;
+      const c = 0.24 + PAR.open * 0.26, sh = mn(sdCap(x, y, z, -0.28, c, 0, -0.28, -0.05, 0, 0.085), sdCap(x, y, z, 0.28, c, 0, 0.28, lerp(-0.05, c - 0.06, PAR.open), 0, 0.085), y > c ? sdTor(x, y - c, z, 0.28, 0.085) : 1e3), n = mn(b, sh);
+      MAT = st < n && i < PAR.n ? 1 : 0; return mn(st, n);
+    },
+    wechat: SOLID.wechat,
+    key: SOLID.key,
+    connect: SOLID.connect,
+    enter: SOLID.enter,
+  };
+  const fastShape = (name) => {
+    if (name === 'start') return PAR.mail === 0 ? SOLID_FAST.startIdle : SOLID_FAST.start;
+    if (name === 'code') return PAR.open === 0 ? SOLID_FAST.codeClosed : SOLID_FAST.code;
+    return SOLID_FAST[name];
+  };
+  // Tight object-space AABBs [x0, x1, y0, y1, z0, z1]: every primitive is an exact Euclidean SDF (or >= Euclidean, as in
+  // start's 1.6x z-scaled seal and CSG subtractions), so any point outside the box padded by p has SDF >= p.
+  const boundsOf = (name) => {
+    if (name === 'start') return [-0.885, 0.885, mn(-0.585, -0.34 + 0.46 * PAR.mail), mx(0.585, 0.54 + 0.46 * PAR.mail), -0.105, 0.19875];
+    if (name === 'code') return [-0.56, 0.56, -0.8, 0.605 + 0.26 * PAR.open, -0.26, 0.302];
+    if (name === 'wechat') return [-0.62, 0.62, -0.62, 0.62, -0.12, 0.12];
+    if (name === 'key') return [-1.025, 0.995, -0.405, 0.405, -0.13, 0.13];
+    if (name === 'connect') return [-1.015, 1.015, -1.015, 1.015, -1.015, 1.015];
+    if (name === 'enter') return [-0.84, 0.84, -0.84, 0.84, -0.1, 0.1];
+    return [-1.32, 1.32, -1.32, 1.32, -1.32, 1.32];
+  };
+  // tob is orthogonal, so view (vx, vy) is the dot product of object coordinates with its first two columns; projecting the padded box tightly bounds (vx, vy).
+  const projBox = (b, p, cy, sy, v0, v1, v2) => {
+    const bx = (b[0] + b[1]) * 0.5, by = (b[2] + b[3]) * 0.5, bz = (b[4] + b[5]) * 0.5;
+    const ex = (b[1] - b[0]) * 0.5 + p, ey = (b[3] - b[2]) * 0.5 + p, ez = (b[5] - b[4]) * 0.5 + p;
+    const vcx = cy * bx + sy * bz, vrx = ab(cy) * ex + ab(sy) * ez, vcy = v0 * bx + v1 * by + v2 * bz, vry = ab(v0) * ex + ab(v1) * ey + ab(v2) * ez;
+    return [vcx - vrx, vcx + vrx, vcy - vry, vcy + vry];
+  };
+  // Slab intersection of o + k*z on [-1.32, 1.32] with padded box [x0..z1]; returns far exit zLo, or 9 on miss.
+  const slabZ = (ox, oy, oz, x0, x1, y0, y1, z0, z1, kx, ky, kz, ikx, iky, ikz) => {
+    let lo = -1.32, hi = 1.32;
+    if (kx > 1e-12) { const a = (x0 - ox) * ikx, c = (x1 - ox) * ikx; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (kx < -1e-12) { const a = (x1 - ox) * ikx, c = (x0 - ox) * ikx; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (ox < x0 || ox > x1) return 9;
+    if (ky > 1e-12) { const a = (y0 - oy) * iky, c = (y1 - oy) * iky; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (ky < -1e-12) { const a = (y1 - oy) * iky, c = (y0 - oy) * iky; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (oy < y0 || oy > y1) return 9;
+    if (kz > 1e-12) { const a = (z0 - oz) * ikz, c = (z1 - oz) * ikz; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (kz < -1e-12) { const a = (z1 - oz) * ikz, c = (z0 - oz) * ikz; if (a > lo) lo = a; if (c < hi) hi = c; }
+    else if (oz < z0 || oz > z1) return 9;
+    return lo <= hi ? lo : 9;
+  };
   const SPIN = { start: 0, code: 0, wechat: 0, key: 0, connect: 0.75, enter: 0 }, SCALE = { connect: 0.92, code: 0.96 };
   const T_EAT = 950, T_BACK = 760, LEVELS = 9;
   class Morph {
     constructor(root, lg, eng, tr) {
       this.root = root; this.lg = lg; this.eng = eng; this.tr = tr; this.dead = false; this.sea = lg.querySelector('.lg-sea'); if (!this.sea) return;
       const cv = this.cv = document.createElement('canvas'); cv.className = 'lg-stg'; cv.setAttribute('aria-hidden', 'true'); this.sea.insertBefore(cv, this.sea.firstChild); this.x = cv.getContext('2d');
-      this.phase = 'off'; this.A = 'start'; this.B = 'start'; this.mAt = -1e9; this.step = 'start'; this.th = 0; this.ph = 0.3; this.lit = 0; this.pack = []; this.parts = []; this.size = 0.78; this.fill = 0; this.cells = []; this.cellsAt = -1e9;
+      this.phase = 'off'; this.A = 'start'; this.B = 'start'; this.mAt = -1e9; this.step = 'start'; this.th = 0; this.ph = 0.3; this.lit = 0; this.pack = []; this.parts = []; this.size = 0.78; this.fill = 0; this.cells = []; this.cellsAt = -1e9; this.cellsSize = 0; this.cellsCx = 0; this.cellsCy = 0; this.want = false;
       this.st = { ok: false, n: 0 }; this.bad = -1e9; this.pulse = -1e9; this.kick = -1e9; this.glint = -1e9; this.touch = performance.now(); this.last = performance.now();
       this.onLg = (e) => this.hear(e.detail || {}); root.addEventListener('lg', this.onLg);
       this.onUse = () => { this.touch = performance.now(); }; lg.addEventListener('keydown', this.onUse, true); lg.addEventListener('pointerdown', this.onUse, true);
@@ -443,7 +513,7 @@ import { boardHTML, boardCSS } from "../dom.ts";
       const KINDS = Object.keys(window.AxiomOceanOrig.SHAPES), now = performance.now();
       this.pack = w.sharks.filter((sh) => !sh.hidden && !sh.scripted && !sh.whaleLike && sh.nodes).map((sh) => ({ sh, ki: KINDS.indexOf(sh.kind), eat: -1, frac: 0, done: false }));
       for (const m of this.pack) m.sh.lure = { x: g.cx + g.ox, y: g.cy + g.oy, w: 5, fast: 3.4 };
-      this.phase = 'gather'; this.pAt = now; this.loginAt = 0; this.fill = 0; this.size = this.pack.length > 1 ? 0.78 : 1; this.parts = []; this.first = true;
+      this.phase = 'gather'; this.pAt = now; this.loginAt = 0; this.fill = 0; this.size = this.pack.length > 1 ? 0.78 : 1; this.parts = []; this.first = true; this.cellsAt = -1e9;
     }
     free() { for (const m of this.pack) { m.sh.lure = null; if (m.sh.hidden && !m.sh.scripted) m.sh.hidden = false; } this.pack = []; this.parts = []; }
     cellsOf(R, sh, ki) {
@@ -453,8 +523,8 @@ import { boardHTML, boardCSS } from "../dom.ts";
       for (let r = r0; r <= r1; r++) for (let c = c0; c <= c1; c++) { const i = r * cols + c; if (flag[i] && kind[i] === ki) out.push(i); }
       return out;
     }
-    // the solid as small tiles: where each ray meets it, how dark it is there, whether that is the accent part
-    solid(g, now) {
+    // Design's original solid(), kept verbatim as the reference the fast solid() is tested against.
+    solidRef(g, now) {
       const m = this.mix(now), A = SOLID[this.A], B = SOLID[this.B], kT = (now - this.kick) / 760, t = g.t;
       // it turns once round as it melts into the next thing, and once when something is copied
       const th = this.th + Math.PI * 2 * (m < 1 ? m : 0) + (kT < 1 ? Math.PI * 2 * io3(kT) : 0), ph = this.ph, cy = Math.cos(th), sy = Math.sin(th), cx = Math.cos(ph), sx = Math.sin(ph);
@@ -476,6 +546,93 @@ import { boardHTML, boardCSS } from "../dom.ts";
       }
       return out;
     }
+    // the solid as small tiles: where each ray meets it, how dark it is there, whether that is the accent part
+    solid(g, now) {
+      const m = this.mix(now), A = fastShape(this.A), B = fastShape(this.B), kT = (now - this.kick) / 760, t = g.t;
+      const th = this.th + Math.PI * 2 * (m < 1 ? m : 0) + (kT < 1 ? Math.PI * 2 * io3(kT) : 0), ph = this.ph, cy = Math.cos(th), sy = Math.sin(th), cx = Math.cos(ph), sx = Math.sin(ph);
+      const morph = m > 0 && m < 1, fn = m >= 1 ? B : A;
+      const Ly = 0.52 * cx - 0.74 * sx, Lz1 = 0.52 * sx + 0.74 * cx, Lx = -0.42 * cy - Lz1 * sy, Lz = -0.42 * sy + Lz1 * cy;
+      const ky = 0 * cx - 1 * sx, kz1 = 0 * sx + 1 * cx, kx = 0 * cy - kz1 * sy, kz = 0 * sy + kz1 * cy;
+      const hl = L3(Lx + kx, Ly + ky, Lz + kz) || 1, hx = (Lx + kx) / hl, hy = (Ly + ky) / hl, hz = (Lz + kz) / hl;
+      const gT = (now - this.glint) / 760, gp = gT >= 0 && gT < 1 ? lerp(-1.9, 1.9, gT) : 9, bT = now - this.bad, shake = bT < 420 ? Math.sin(bT / 420 * Math.PI * 6) * (1 - bT / 420) * t * 1.6 : 0;
+      const S = g.S * this.size * lerp(SCALE[this.A] || 1, SCALE[this.B] || 1, m) * (1 + 0.05 * Math.exp(-(now - this.pulse) / 170)), ccx = g.cx + shake, ccy = g.cy, boil = Math.sin(Math.PI * m), tick = Math.floor(now / 90);
+      const n = Math.ceil(S * 1.34 / t), c0 = Math.round(ccx / t), r0 = Math.round(ccy / t), out = [], e = 0.012, aa = 0.8 * t / S;
+      // Only rays whose minimum SDF falls below hit (0.012), edge AA (aa), or boil (0.06 + 0.3 * boil, gated by hash) emit a tile; +1e-4 covers float rounding.
+      const padBase = mx(0.012, aa) + 1e-4, boilOn = boil > 0.02, boilLim = 0.06 + boil * 0.3, boilProb = boil * 0.3, padFull = boilOn ? mx(padBase, boilLim + 1e-4) : padBase;
+      const bA = morph ? boundsOf(this.A) : boundsOf(m >= 1 ? this.B : this.A), bB = morph ? boundsOf(this.B) : null;
+      const v0 = -sx * sy, v1 = cx, v2 = sx * cy;
+      let prF = projBox(bA, padFull, cy, sy, v0, v1, v2);
+      if (morph) { const q = projBox(bB, padFull, cy, sy, v0, v1, v2); prF = [mn(prF[0], q[0]), mx(prF[1], q[1]), mn(prF[2], q[2]), mx(prF[3], q[3])]; }
+      const iMin = mx(-n, Math.floor((ccx + prF[0] * S) / t - 0.5) - c0), iMax = mn(n, Math.ceil((ccx + prF[1] * S) / t - 0.5) - c0);
+      const jMin = mx(-n, Math.floor((ccy - prF[3] * S) / t - 0.5) - r0), jMax = mn(n, Math.ceil((ccy - prF[2] * S) / t - 0.5) - r0);
+      let iMinB = iMin, iMaxB = iMax, jMinB = jMin, jMaxB = jMax;
+      if (boilOn) {
+        let prB = projBox(bA, padBase, cy, sy, v0, v1, v2);
+        if (morph) { const q = projBox(bB, padBase, cy, sy, v0, v1, v2); prB = [mn(prB[0], q[0]), mx(prB[1], q[1]), mn(prB[2], q[2]), mx(prB[3], q[3])]; }
+        iMinB = mx(-n, Math.floor((ccx + prB[0] * S) / t - 0.5) - c0); iMaxB = mn(n, Math.ceil((ccx + prB[1] * S) / t - 0.5) - c0);
+        jMinB = mx(-n, Math.floor((ccy - prB[3] * S) / t - 0.5) - r0); jMaxB = mn(n, Math.ceil((ccy - prB[2] * S) / t - 0.5) - r0);
+      }
+      const ikx = ab(kx) > 1e-12 ? 1 / kx : 0, iky = ab(ky) > 1e-12 ? 1 / ky : 0, ikz = ab(kz) > 1e-12 ? 1 / kz : 0;
+      const ax0 = bA[0] - padBase, ax1 = bA[1] + padBase, ay0 = bA[2] - padBase, ay1 = bA[3] + padBase, az0 = bA[4] - padBase, az1 = bA[5] + padBase;
+      const bx0 = bB ? bB[0] - padBase : 0, bx1 = bB ? bB[1] + padBase : 0, by0 = bB ? bB[2] - padBase : 0, by1 = bB ? bB[3] + padBase : 0, bz0 = bB ? bB[4] - padBase : 0, bz1 = bB ? bB[5] + padBase : 0;
+      const dPad = padFull - padBase;
+      for (let j = jMin; j <= jMax; j++) {
+        const r = r0 + j, vy = -((r + 0.5) * t - ccy) / S, vy2 = vy * vy; if (vy2 > 1.72) continue;
+        // Hoist row-constant terms of tob(vx, vy, 0) out of the inner i-loop (same ops and order, no array allocation).
+        const oy = vy * cx, z1 = vy * sx, z1sy = z1 * sy, z1cy = z1 * cy, ry = r * t, inBaseRow = !boilOn || (j >= jMinB && j <= jMaxB);
+        for (let i = iMin; i <= iMax; i++) {
+          const c = c0 + i, vx = ((c + 0.5) * t - ccx) / S, rr = vx * vx + vy2; if (rr > 1.72) continue;
+          // Pixels failing the boil hash can never emit a boil tile, so they cull against the tighter padBase box.
+          const wantBoil = boilOn && hash(c * 131 + r, tick) < boilProb;
+          const inBase = inBaseRow && i >= iMinB && i <= iMaxB;
+          if (!wantBoil && !inBase) continue;
+          const ox = vx * cy - z1sy, oz = vx * sy + z1cy, dp = wantBoil ? dPad : 0;
+          let zStop;
+          if (morph) {
+            const za = slabZ(ox, oy, oz, ax0 - dp, ax1 + dp, ay0 - dp, ay1 + dp, az0 - dp, az1 + dp, kx, ky, kz, ikx, iky, ikz);
+            const zb = slabZ(ox, oy, oz, bx0 - dp, bx1 + dp, by0 - dp, by1 + dp, bz0 - dp, bz1 + dp, kx, ky, kz, ikx, iky, ikz);
+            zStop = za < zb ? za : zb;
+          } else {
+            zStop = slabZ(ox, oy, oz, ax0 - dp, ax1 + dp, ay0 - dp, ay1 + dp, az0 - dp, az1 + dp, kx, ky, kz, ikx, iky, ikz);
+          }
+          if (zStop > 2) continue;
+          // Start at z = 1.32 so sampled z positions match solidRef; once z < zStop every remaining point is outside the padded box(es) with d >= p, unable to hit or lower any used md.
+          // A boil ray outside the padBase projection cannot hit or improve AA, and boil only tests md < boilLim, so it stops once md < boilLim.
+          const boilOnly = wantBoil && !inBase;
+          let z = 1.32, hit = false, md = 9, d = 0, mat = 0;
+          if (morph) {
+            for (let s = 0; s < 22; s++) {
+              const px = ox + kx * z, py = oy + ky * z, pz = oz + kz * z, da = A(px, py, pz), ma = MAT, db = B(px, py, pz);
+              d = da + (db - da) * m; if (d < md) md = d; if (d < 0.012) { hit = true; mat = m < 0.5 ? ma : MAT; break; }
+              z -= d > 0.02 ? d * 0.92 : 0.02; if (z < zStop || (boilOnly && md < boilLim)) break;
+            }
+          } else {
+            for (let s = 0; s < 22; s++) {
+              d = fn(ox + kx * z, oy + ky * z, oz + kz * z); if (d < md) md = d; if (d < 0.012) { hit = true; mat = MAT; break; }
+              z -= d > 0.02 ? d * 0.92 : 0.02; if (z < zStop) break;
+            }
+          }
+          if (hit) {
+            const X = ox + kx * z, Y = oy + ky * z, Z = oz + kz * z;
+            let a, b, cc, dd;
+            if (morph) {
+              a = A(X + e, Y - e, Z - e); a += (B(X + e, Y - e, Z - e) - a) * m;
+              b = A(X - e, Y - e, Z + e); b += (B(X - e, Y - e, Z + e) - b) * m;
+              cc = A(X - e, Y + e, Z - e); cc += (B(X - e, Y + e, Z - e) - cc) * m;
+              dd = A(X + e, Y + e, Z + e); dd += (B(X + e, Y + e, Z + e) - dd) * m;
+            } else {
+              a = fn(X + e, Y - e, Z - e); b = fn(X - e, Y - e, Z + e); cc = fn(X - e, Y + e, Z - e); dd = fn(X + e, Y + e, Z + e);
+            }
+            const nx = a - b - cc + dd, ny = -a - b + cc + dd, nz = -a + b - cc + dd, nl = L3(nx, ny, nz) || 1;
+            // When gp === 9 (no glint) and rr <= 1.72, (vx - 0.45*vy - 9)^2 / 0.035 > 1630 so exp underflows to exact 0.
+            const band = gp === 9 ? 0 : Math.exp(-Math.pow(vx - vy * 0.45 - gp, 2) / 0.035), nh = nx * hx + ny * hy + nz * hz, sp = nh > 0 ? Math.pow(nh / nl, 28) : 0, lam = clamp01((nx * Lx + ny * Ly + nz * Lz) / nl * 0.66 + 0.34 + band * 0.5), rim = 1 - ab(nx * kx + ny * ky + nz * kz) / nl, fall = (vx - vy) * 0.085;
+            out.push({ x: c * t, y: ry, tone: clamp01(0.05 + 0.78 * (1 - lam) + 0.4 * rim * rim + fall - 0.3 * sp - 0.3 * band), lam, a: 1, mat, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
+          } else if (md < aa) out.push({ x: c * t, y: ry, tone: 0.5, lam: 0.5, a: 1 - md / aa, mat: 0, o: 0.55 * mn(1, SQ(rr) / 1.3) + 0.45 * hash(c * 3 + 1, r * 5 + 2) });
+          else if (wantBoil && md < boilLim) out.push({ x: c * t, y: ry, tone: 0.25 + 0.5 * hash(c, r + tick), lam: 0.5, a: 0.7, mat: 0, o: 0 });
+        }
+      }
+      return out;
+    }
     theme(now) {
       if (this.ink && now - this.inkAt < 500) return this.ink; const cs = getComputedStyle(this.lg), bg = cs.getPropertyValue('--bg').trim() || '#fcfcfd', x = this.x;
       x.fillStyle = '#000'; x.fillStyle = bg; const h = x.fillStyle, lum = /^#[0-9a-f]{6}$/i.test(h) ? (parseInt(h.slice(1, 3), 16) * 0.3 + parseInt(h.slice(3, 5), 16) * 0.59 + parseInt(h.slice(5, 7), 16) * 0.11) / 255 : 1;
@@ -486,11 +643,17 @@ import { boardHTML, boardCSS } from "../dom.ts";
       const cv = this.cv, x = this.x, dpr = mn(window.devicePixelRatio || 1, 3), t = g.t, tw = t >= 4 ? t - 1 : t - 0.5, k = this.theme(now);
       if (cv.width !== Math.round(g.W * dpr) || cv.height !== Math.round(g.H * dpr)) { cv.width = Math.round(g.W * dpr); cv.height = Math.round(g.H * dpr); }
       x.setTransform(dpr, 0, 0, dpr, 0, 0); x.clearRect(0, 0, g.W, g.H); if (fill <= 0.001 && !this.parts.length) return;
-      if (now - this.cellsAt > 30) { const t0 = performance.now(); this.cells = this.solid(g, now); this.cellsAt = now; this.cost = performance.now() - t0; }
+      // as the page is left the solid comes apart as it last stood, shrinking by a canvas scale rather than turning: no new
+      // tiles in the departure's frames. cellsAt is cleared so a departure undone recomputes at once; a solid left alone
+      // (again) still turns as it comes apart.
+      const freeze = this.phase === 'back' && this.cells.length > 0 && !this.want;
+      if (freeze) this.cellsAt = -1e9;
+      else if (now - this.cellsAt > 30) { const t0 = performance.now(); this.cells = this.solid(g, now); this.cellsAt = now; this.cellsSize = this.size; this.cellsCx = g.cx; this.cellsCy = g.cy; this.cost = performance.now() - t0; }
       const hotOn = this.B === 'start' && this.A === 'start' ? this.lit > 0.5 : true, buckets = [], hot = [], soft = [], bob = Math.round(Math.sin(TIME * 1.15) * mn(6, g.S * 0.025));
       for (const q of this.cells) { if (q.o >= fill || q.o < from) continue; if (q.a < 1) soft.push(q); else if (q.mat && hotOn) hot.push(q); else { const l = mn(LEVELS - 1, (q.tone * LEVELS) | 0); (buckets[l] || (buckets[l] = [])).push(q); } }
       if (g.H > 420 && fill > 0.6) { x.fillStyle = k.t1; x.globalAlpha = (0.075 - bob * 0.004) * clamp01((fill - 0.6) / 0.4) * (from ? 1 - from : 1); const S = g.S * this.size, y0 = Math.round((g.cy + S * 1.02) / t) * t; for (let r = 0; r < 4; r++) { const hw = S * (0.62 - r * 0.12); for (let px = Math.round((g.cx - hw) / t) * t; px < g.cx + hw; px += t) if (((px / t + r) & 1) === 0) x.fillRect(px, y0 + r * t, tw, tw); } }
       x.save(); x.translate(0, bob);
+      if (freeze && this.cellsSize) { const sc = this.size / this.cellsSize; x.translate(g.cx, g.cy); x.scale(sc, sc); x.translate(-this.cellsCx, -this.cellsCy); }
       x.fillStyle = k.t1; for (let l = 0; l < LEVELS; l++) { const b = buckets[l]; if (!b) continue; const tone = (l + 0.5) / LEVELS; x.globalAlpha = k.dark ? mx(0.16, 1.02 - tone * 0.92) : 0.15 + 0.84 * tone; for (const q of b) x.fillRect(q.x, q.y, tw, tw); }
       for (const q of soft) { x.globalAlpha = (k.dark ? 0.5 : 0.55) * q.a; x.fillRect(q.x, q.y, tw, tw); }
       x.fillStyle = k.ring; for (const q of hot) { x.globalAlpha = mn(1, 0.72 + 0.28 * q.lam); x.fillRect(q.x, q.y, tw, tw); }
@@ -503,6 +666,7 @@ import { boardHTML, boardCSS } from "../dom.ts";
     tick(R, w) {
       const now = performance.now(), dt = mn(0.05, (now - this.last) / 1000); this.last = now; TIME = now / 1000;
       const st = this.root.dataset.state, tr = this.tr, want = st === 'login' || (st === 'run' && !!tr && tr.dir > 0), g = this.place(R);
+      this.want = want;
       if (!g) { this.ghost.hidden = true; if (this.phase !== 'off') { this.free(); this.phase = 'off'; this.x.clearRect(0, 0, this.cv.width, this.cv.height); } return; }
       { const gh = this.ghost, on = (this.phase === 'hold' || this.phase === 'gather') && this.fill > 0.35, r = g.S * this.size * 1.05, X = g.cx + g.ox, Y = g.cy + g.oy; if (w.sharks.indexOf(gh) < 0) w.sharks.push(gh); gh.hidden = !on; gh.length = r * 2; for (let k = 0; k < 20; k++) { gh.nodes[k * 2] = X + r - k * r * 2 / 19; gh.nodes[k * 2 + 1] = Y; } }
       if (want && this.phase === 'off') { this.A = this.B = SOLID[this.step] ? this.step : 'start'; this.call(w, g); }
@@ -576,6 +740,7 @@ import { boardHTML, boardCSS } from "../dom.ts";
       this.parts = []; this.again = again; this.phase = 'back'; this.pAt = performance.now() - (N || this.fill > 0.05 ? 0 : T_BACK);
     }
   }
+  Morph.PAR = PAR;
   window.AxiomLoginMorph = Morph;
   window.AxiomLogin = Login;
 })();

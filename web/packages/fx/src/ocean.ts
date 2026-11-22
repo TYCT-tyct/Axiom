@@ -48,7 +48,9 @@ const drawBudget = 6;
 // else every other frame, the skipped frame's time passed on to the drawn one (the engine's tick(dt, draw)). The sea is
 // drawn in cells whose marks change a few times a second, so every other frame does not read as slower, and a slow
 // machine keeps whole frames for what moves over it. The cost is measured as it goes, so a machine fast enough draws
-// every frame.
+// every frame. A drawing counts for at most one and a half times the budget: a page's first drawings (the engine's code not yet
+// compiled, its glyphs not yet cached) take 100 ms and must not hold a fast machine to every other frame for the next
+// dozen, while a machine that is slow every frame still averages over the budget.
 export function pacedTick(engine: OceanEngine): (dt: number) => void {
   let cost = 0;
   let skipped = false;
@@ -61,7 +63,7 @@ export function pacedTick(engine: OceanEngine): (dt: number) => void {
     skipped = false;
     const start = performance.now();
     engine.tick(dt);
-    const took = performance.now() - start;
+    const took = Math.min(performance.now() - start, drawBudget * 1.5);
     cost = cost ? cost * 0.8 + took * 0.2 : took;
   };
 }

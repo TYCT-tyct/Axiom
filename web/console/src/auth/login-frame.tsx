@@ -12,7 +12,7 @@ import LoginTitle from "@axiom/boards/Login/regions/LoginTitle";
 import { takeArrival, useEffectModule } from "@axiom/fx";
 import type { Heard, Login, Shape } from "@axiom/fx/login";
 import { BoardMark, useBrandStyle, usePageTitle, usePreferences } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Outlet } from "@tanstack/react-router";
 import {
   createContext,
@@ -20,6 +20,7 @@ import {
   type ReactNode,
   type RefObject,
   use,
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -33,6 +34,7 @@ import { legalQuery, siteQuery } from "../queries";
 import type { Attempt } from "./attempt";
 import { NoteAction } from "./login-parts";
 import { useReturnHome } from "./return-home";
+import { RevealHold } from "./reveal-hold";
 
 const loadLogin = () => import("@axiom/fx/login");
 
@@ -139,46 +141,52 @@ const RoomContext = createContext<Room | null>(null);
 export function LoginLayout() {
   const { t, i18n } = useTranslation();
   const site = useQuery(siteQuery);
-  // the terms a registration accepts, read with the frame: a page gone on to that asks for them (registering) has them
-  // already, its button ready from its first frame rather than grey until they come
-  const legal = useQuery(legalQuery);
+  // the terms a registration accepts, read with the frame but not waited for: a page gone on to that asks for them
+  // (registering) has them already, its button ready from its first frame rather than grey until they come, and a page
+  // that shows none (signing in) does not wait for them (useHoldReveal)
+  const client = useQueryClient();
+  useEffect(() => void client.prefetchQuery(legalQuery), [client]);
   const prefs = usePreferences();
   useBrandStyle(site.data?.brand_color);
   const [slot, setSlot] = useState<HTMLElement | null>(null);
   const [standing, stand] = useState<Standing | null>(null);
+  const [held, setHeld] = useState(0);
   const [arrived] = useState(claimArrival);
   const engine = useLoginEngine(standing, prefs.dark, site.data?.brand_color, arrived);
-  useArrivalReveal(engine.root, arrived, engine.started && !site.isPending && !legal.isPending && standing !== null);
+  useArrivalReveal(engine.root, arrived, engine.started && !site.isPending && standing !== null && held === 0);
   const english = (i18n.resolvedLanguage ?? i18n.language).startsWith("en");
   const name = site.data?.name ?? t("brand", { ns: "common" });
   const phone = useBoardMedia(loginPhoneWidth);
   const room = useMemo(() => ({ slot, stand }), [slot]);
+  const hold = useCallback((by: 1 | -1) => setHeld((n) => n + by), []);
   return (
     <RoomContext value={room}>
-      <LoginShell
-        t={(key) => (english ? ShellEN : ShellZH)[key]}
-        values={{
-          modeCls: prefs.dark ? "dark" : "light",
-          lang: prefs.locale,
-          noKern: english,
-          vars: boardVars,
-          seaCanvas: engine.seaCanvas,
-          brandStyle,
-        }}
-        text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), lede: t("auth.pitch.lede"), home: "/" }}
-        brand={
-          <>
-            <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
-            <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle(phone) }} />
-          </>
-        }
-        languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
-      >
-        {/* the page's question goes here (LoginFrame): a plain block, as the form panel lays out no child by name */}
-        <div ref={setSlot} />
-        <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
-      </LoginShell>
-      <Outlet />
+      <RevealHold value={hold}>
+        <LoginShell
+          t={(key) => (english ? ShellEN : ShellZH)[key]}
+          values={{
+            modeCls: prefs.dark ? "dark" : "light",
+            lang: prefs.locale,
+            noKern: english,
+            vars: boardVars,
+            seaCanvas: engine.seaCanvas,
+            brandStyle,
+          }}
+          text={{ pitch0: t("auth.pitch.lead"), pitch1: t("auth.pitch.tail"), lede: t("auth.pitch.lede"), home: "/" }}
+          brand={
+            <>
+              <BoardMark logoUrl={site.data?.logo_url} name={name} fallback={<LoginMark t={String} />} />
+              <LoginBrandName t={String} text={{ name }} values={{ style: brandNameStyle(phone) }} />
+            </>
+          }
+          languages={<Languages current={english ? "en" : "zh"} choose={prefs.other.choose} />}
+        >
+          {/* the page's question goes here (LoginFrame): a plain block, as the form panel lays out no child by name */}
+          <div ref={setSlot} />
+          <LoginDecode t={String} values={{ canvas: engine.decodeCanvas }} />
+        </LoginShell>
+        <Outlet />
+      </RevealHold>
     </RoomContext>
   );
 }
