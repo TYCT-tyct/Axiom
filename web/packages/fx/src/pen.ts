@@ -25,6 +25,7 @@ type SlotState = {
   mounted: boolean;
   nodes: Nodes | null;
   anchor: HTMLElement | null | undefined;
+  anchorHadAttr: boolean;
   anchorSaved: SavedProp | null;
   hidUnderline: boolean;
   addedAria: boolean;
@@ -34,14 +35,15 @@ const states = new WeakMap<Slot, SlotState>();
 
 const glyph = (i: number, tick: number) => GLYPHS[Math.floor(hash(i, tick) * GLYPHS.length)] ?? ":";
 
-function initState(text: string, index: number): SlotState {
+function initState(text: string, index: number, anchor?: HTMLElement | null): SlotState {
   return {
     index,
     chars: [...text],
     key: "",
     mounted: false,
     nodes: null,
-    anchor: undefined,
+    anchor,
+    anchorHadAttr: anchor?.hasAttribute("style") ?? false,
     anchorSaved: null,
     hidUnderline: false,
     addedAria: false,
@@ -84,7 +86,10 @@ function underlinedAnchor(el: HTMLElement): HTMLElement | null {
 }
 
 function setUnderlineHidden(slot: Slot, state: SlotState, hidden: boolean) {
-  if (state.anchor === undefined) state.anchor = underlinedAnchor(slot.el);
+  if (state.anchor === undefined) {
+    state.anchor = underlinedAnchor(slot.el);
+    state.anchorHadAttr = state.anchor?.hasAttribute("style") ?? false;
+  }
   const a = state.anchor;
   if (!a || hidden === state.hidUnderline) return;
   if (hidden) {
@@ -99,6 +104,7 @@ function setUnderlineHidden(slot: Slot, state: SlotState, hidden: boolean) {
   const saved = state.anchorSaved;
   if (saved?.value) a.style.setProperty("text-decoration-color", saved.value, saved.priority);
   else a.style.removeProperty("text-decoration-color");
+  if (!state.anchorHadAttr && a.style.length === 0) a.removeAttribute("style");
   state.anchorSaved = null;
   state.hidUnderline = false;
 }
@@ -113,6 +119,9 @@ function unpen(slot: Slot, state: SlotState) {
     state.addedAria = false;
   }
   if (state.hidUnderline) setUnderlineHidden(slot, state, false);
+  else if (state.anchor && !state.anchorHadAttr && state.anchor.style.length === 0) {
+    state.anchor.removeAttribute("style");
+  }
   state.key = "";
 }
 
@@ -162,7 +171,8 @@ export function slotsOf(scope: Element, from?: { x: number; y: number }, skip?: 
       d = Math.hypot(r.left + r.width / 2 - from.x, r.top + r.height / 2 - from.y);
     }
     const slot: Slot = { el, text, mode: el.dataset.dx === "s" ? "s" : "r", d };
-    states.set(slot, initState(text, index++));
+    // Resolve underlined ancestor up front at start() so frame ticks perform no getComputedStyle reads.
+    states.set(slot, initState(text, index++, underlinedAnchor(el)));
     out.push(slot);
   }
   return out;

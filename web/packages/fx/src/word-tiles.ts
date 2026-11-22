@@ -113,9 +113,10 @@ export function drawWord(
   t: number,
   tileInk: string,
   ease: (u: number) => number,
+  family = '"Axiom Mono", ui-monospace, monospace',
 ) {
   if (!word.length || !wm) return;
-  x.font = `${wm.gf}px "Axiom Mono", ui-monospace, monospace`;
+  x.font = `${wm.gf}px ${family}`;
   x.textAlign = "center";
   x.textBaseline = "middle";
   for (const w of word) {

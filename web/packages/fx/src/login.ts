@@ -7,10 +7,10 @@
 // website's departure (arrival.ts).
 import "@axiom/boards/engines/login-ui.js";
 import { colour } from "./colour";
-import { hash } from "./hash";
 import { own } from "./loop";
 import { mono } from "./mono";
 import { buildSea, type OceanEngine, pacedTick } from "./ocean";
+import { drawCaret, drawWaiting, glyph, type TitleCell } from "./page-write";
 
 // The steps of login-ui.js's solids the product has (not wechat, connect).
 export type Shape = "start" | "code" | "key" | "enter";
@@ -26,9 +26,6 @@ declare global {
     AxiomLoginMorph: new (root: HTMLElement, lg: HTMLElement, engine: OceanEngine, transition?: object) => Morph;
   }
 }
-
-const GLYPHS = ":;t%SX8#@/\\<>=+*";
-const glyph = (i: number, t: number) => GLYPHS[Math.floor(hash(i, t) * GLYPHS.length)] ?? "";
 
 // What Morph reads of the transition it is part of: which way it runs (trans.js's tr.dir).
 export type Way = { readonly dir: 1 | -1 };
@@ -89,8 +86,6 @@ function startMorph(frame: HTMLElement, root: HTMLElement, engine: OceanEngine, 
   };
 }
 
-type TitleCell = { x: number; y: number; r: number; blank: boolean };
-
 // The title's characters where they are drawn, in the decode canvas's box.
 function cellsOf(chars: HTMLElement[], box: HTMLElement): TitleCell[] {
   const frame = box.getBoundingClientRect();
@@ -103,25 +98,6 @@ function cellsOf(chars: HTMLElement[], box: HTMLElement): TitleCell[] {
       blank: (n.textContent ?? "").trim() === "",
     };
   });
-}
-
-// A character d ms before it resolves: a dot while it waits, a cycling glyph as it comes close, the ring colour next.
-function waiting(
-  x: CanvasRenderingContext2D,
-  c: TitleCell,
-  d: number,
-  g: string,
-  ink: { ring: string; dim: string; fs: number },
-) {
-  x.globalAlpha = d <= 60 ? 1 : d <= 240 ? 0.85 : 0.5;
-  x.fillStyle = d <= 60 ? ink.ring : ink.dim;
-  if (d <= 240) {
-    x.fillText(g, c.x, c.y);
-    return;
-  }
-  x.beginPath();
-  x.arc(c.x, c.y, Math.max(1.5, ink.fs * 0.04), 0, Math.PI * 2);
-  x.fill();
 }
 
 // decode resolves the title's characters one after another, as the website's hero does, and blinks the caret twice
@@ -159,10 +135,10 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     cells.forEach((c, i) => {
       const d = at(i) - ms;
       if (d <= 0) (chars[i] as HTMLElement).style.removeProperty("color");
-      else if (!c.blank) waiting(x, c, d, glyph(i, tick), ink);
+      else if (!c.blank) drawWaiting(x, c, d, glyph(i, tick), ink);
     });
     const after = ms - end;
-    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) caret(x, last, ink);
+    if (after >= 0 && (after < 260 || (after >= 400 && after < 660))) drawCaret(x, last, ink);
     x.globalAlpha = 1;
     if (after >= 700) stop();
   });
@@ -172,13 +148,6 @@ function decode(title: HTMLElement, canvas: HTMLCanvasElement): () => void {
     x.clearRect(0, 0, canvas.width, canvas.height);
   };
   return stop;
-}
-
-function caret(x: CanvasRenderingContext2D, last: TitleCell, ink: { ring: string; fs: number }) {
-  x.globalAlpha = 1;
-  x.fillStyle = ink.ring;
-  const w = Math.max(2, Math.round(ink.fs * 0.05));
-  x.fillRect(Math.round(last.r + ink.fs * 0.06), Math.round(last.y - ink.fs * 0.42), w, Math.round(ink.fs * 0.84));
 }
 
 // The Login board's sea (its ROSTER and the options its boot passes the engine).

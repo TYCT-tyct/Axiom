@@ -4,6 +4,7 @@
 // fractional padding so text lands on the same sub-pixel grid with no jump, and interpolated frosted-lens variables.
 // Every style write goes through CSSOM and is tracked per property so restore() never touches the style attribute.
 import { colour } from "./colour";
+import { type StyleTracker, styleTracker } from "./style-tracker";
 import { clamp, lerp } from "./word-tiles";
 
 export type Track = (u: number) => void;
@@ -12,7 +13,6 @@ type Box = { x: number; y: number; w: number; h: number };
 type Point = { x: number; y: number };
 type Frame = { left: number; top: number; k: number };
 type Rgba = readonly [number, number, number, number];
-type SavedProp = { value: string; priority: string };
 type VeilPair = { a: Rgba; b: Rgba } | null;
 
 type TypeEnd = {
@@ -89,49 +89,19 @@ function veilOf(el: Element): Rgba | null {
   return el instanceof HTMLElement ? parseRgba(colour(el, "var(--veil)")) : null;
 }
 
-function styleTracker() {
-  const touched = new Map<HTMLElement, Map<string, SavedProp>>();
-  const write = (el: HTMLElement, prop: string, value: string) => {
-    let saved = touched.get(el);
-    if (!saved) {
-      saved = new Map();
-      touched.set(el, saved);
-    }
-    if (!saved.has(prop)) {
-      saved.set(prop, {
-        value: el.style.getPropertyValue(prop),
-        priority: el.style.getPropertyPriority(prop),
-      });
-    }
-    el.style.setProperty(prop, value);
-  };
-  return {
-    set(el: HTMLElement, props: Record<string, string>) {
-      // Suppress CSS transitions on first touch so frame-driven geometry never lags behind the clock (trans.js.txt:132).
-      if (!touched.has(el)) write(el, "transition", "none");
-      for (const [prop, value] of Object.entries(props)) write(el, prop, value);
-    },
-    restore() {
-      for (const [el, saved] of touched) {
-        for (const [prop, { value, priority }] of saved) {
-          if (value) el.style.setProperty(prop, value, priority);
-          else el.style.removeProperty(prop);
-        }
-      }
-      touched.clear();
-    },
-  };
-}
-
-type StyleTracker = ReturnType<typeof styleTracker>;
-
 // Containing coordinate frame of a travelling copy (.fly inside .tr), accounting for any ancestor scale factor k.
+// Walks past an unlaid-out wrapper (e.g. a freshly appended .fly in jsdom) to the sized .tr root above it.
 function frameOf(copy: HTMLElement): Frame {
-  const parent = (copy.offsetParent as HTMLElement | null) ?? copy.parentElement;
-  if (!parent) return { left: 0, top: 0, k: 1 };
-  const b = parent.getBoundingClientRect();
-  const k = parent.offsetWidth > 0 && b.width > 0 ? b.width / parent.offsetWidth : 1;
-  return { left: b.left, top: b.top, k };
+  let parent = (copy.offsetParent as HTMLElement | null) ?? copy.parentElement;
+  while (parent) {
+    const b = parent.getBoundingClientRect();
+    if (b.width > 0 || b.height > 0 || !parent.parentElement) {
+      const k = parent.offsetWidth > 0 && b.width > 0 ? b.width / parent.offsetWidth : 1;
+      return { left: b.left, top: b.top, k };
+    }
+    parent = parent.parentElement;
+  }
+  return { left: 0, top: 0, k: 1 };
 }
 
 function toBox(b: DOMRect, frame: Frame): Box {
