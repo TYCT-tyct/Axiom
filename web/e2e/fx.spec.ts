@@ -368,9 +368,10 @@ test("a press goes though neither its page's code nor the departure's ever comes
 });
 
 test("after a departure's navigation is stopped, the next press goes at once", async ({ page }) => {
+  // held back before the page opens: the homepage asks for it once its first screen is drawn
+  await departOnly(page);
   await open(page);
   await running(page);
-  await departOnly(page);
   const asked = watchDeparture(page);
   await hang(page, /\/console\/sign-in$/);
   await signIn(page).click();
@@ -383,9 +384,9 @@ test("after a departure's navigation is stopped, the next press goes at once", a
 });
 
 test("a departure whose navigation is stopped puts the page back", async ({ page }) => {
+  await departOnly(page);
   await open(page);
   await running(page);
-  await departOnly(page);
   const asked = watchDeparture(page);
   await hang(page, /\/console\/sign-in$/);
   await signIn(page).click();
