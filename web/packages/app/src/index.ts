@@ -11,7 +11,7 @@ export { useRulesCheck } from "./presets/check";
 export { RulesEditor, useClassOptions } from "./presets/editor";
 export { draftOf, type Invalid, priced, rulesOf, systemPreset } from "./presets/rules";
 export { RulesSummary, summaryLine } from "./presets/summary";
-export { AppProviders } from "./providers";
+export { AppProviders, askedAhead } from "./providers";
 export { QrCode } from "./qr";
 export {
   accountKey,

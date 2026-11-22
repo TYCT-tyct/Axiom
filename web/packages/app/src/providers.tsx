@@ -21,6 +21,11 @@ import { RecoveryCodesHost } from "./totp-dialogs";
 // by every tab, though, so an answer belongs to the session that started the call, not to whoever is signed in when it
 // lands; a late refusal from before another tab signed in must not end the session that replaced it.
 
+// askedAhead marks a query asked for ahead of the page that reads it (a link's intent, console/src/warm.ts).
+export const askedAhead = { askedAhead: true } as const;
+
+const unauthenticated = (error: unknown) => error instanceof ApiError && error.code === "unauthenticated";
+
 // SessionBoundQueryCache remembers the session each fetch belongs to in that fetch's own meta. QueryCache has no
 // per-fetch hook, so it wraps Query.fetch when the cache builds a query. A duplicate fetch that reuses the request in
 // flight returns before it reads the new meta, so the binding kept is the one of the request that actually runs.
@@ -34,9 +39,15 @@ class SessionBoundQueryCache extends QueryCache {
       onError: (error, query) => {
         const client = this.#clients.get(query);
         const meta = query.state.fetchMeta;
-        if (client && meta) {
-          endUnauthenticated(client, error, this.#startedIn.get(meta) ?? "");
+        if (!client || !meta) return;
+        // Asked for ahead of its page and refused for want of a session while no page reads it: the page it was for
+        // has not come, so the session ends there, once that page asks itself, and signing in leads back to it, not to
+        // the page the press came from. The refusal is not kept for that page to read instead of asking.
+        if (query.meta?.askedAhead && query.getObserversCount() === 0 && unauthenticated(error)) {
+          queueMicrotask(() => client.removeQueries({ queryKey: query.queryKey, exact: true }));
+          return;
         }
+        endUnauthenticated(client, error, this.#startedIn.get(meta) ?? "");
       },
     });
   }
