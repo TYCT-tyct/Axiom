@@ -220,6 +220,29 @@ test("a key's secret, shown once, stays while the window crosses from the phone 
   }
 });
 
+// The console takes the phone's shell below 820px, where the board lays the page out for a tablet from 601px: the
+// tabs are still one row along the window's foot, not stacked over the page's corner.
+for (const width of [390, 768, 819]) {
+  test(`at ${width}px the phone's tabs are one row along the foot of the window`, async ({ page }) => {
+    await openConsole(page, built);
+    await page.setViewportSize({ width, height: 700 });
+    await page.goto("/console/calls");
+    const tabs = page.getByRole("navigation", { name: "主导航" });
+    await expect(tabs.getByRole("link", { name: "日志" })).toBeVisible();
+    const bar = await tabs.boundingBox();
+    expect(bar && { left: bar.x, right: bar.x + bar.width, bottom: bar.y + bar.height }).toEqual({
+      left: 0,
+      right: width,
+      bottom: 700,
+    });
+    const tops = await tabs
+      .locator(":scope > *")
+      .evaluateAll((all) => all.map((tab) => tab.getBoundingClientRect().top));
+    expect(tops).toHaveLength(5);
+    expect(new Set(tops).size).toBe(1);
+  });
+}
+
 test("a followed link opens the new page at its top with focus on its heading", async ({ page }) => {
   await openConsole(page, built);
   await page.setViewportSize({ width: 1280, height: 400 });
