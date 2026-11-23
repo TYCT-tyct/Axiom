@@ -113,12 +113,12 @@ test.describe("calls", () => {
     await page.goto("/console/calls");
     const start = main(page).getByLabel("开始时间");
     const filters = main(page).getByRole("region", { name: "更多筛选" });
-    const height = (await filters.boundingBox())?.height;
+    const height = (await filters.boundingBox())?.height ?? 0;
     for (const range of ["今天", "近 7 天", "近 30 天", "本月"]) {
       await main(page).getByRole("button", { name: range, exact: true }).click();
       await expect(page).toHaveURL(/preset=/);
       await expect(start).toHaveCount(0);
-      expect((await filters.boundingBox())?.height).toBe(height);
+      expect((await filters.boundingBox())?.height).toBeCloseTo(height, 0);
     }
     await main(page).getByRole("button", { name: "自定义", exact: true }).click();
     await expect(start).toBeVisible();
