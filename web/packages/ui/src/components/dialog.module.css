@@ -29,8 +29,25 @@
   display: none;
 }
 
+/* The board's way in plays once (nkIn, ppSide); on the way out (.out) its transition takes over from where it ended. */
+.root[data-leaving] {
+  animation: none;
+}
+
 .root::backdrop {
   background: var(--scrim);
+  animation: backdrop-in 250ms ease-out;
+}
+
+.root[data-leaving]::backdrop {
+  opacity: 0;
+  transition: opacity 250ms ease-out;
+}
+
+@keyframes backdrop-in {
+  from {
+    opacity: 0;
+  }
 }
 
 .body {

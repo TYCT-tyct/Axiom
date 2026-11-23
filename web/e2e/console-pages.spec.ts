@@ -198,6 +198,27 @@ test.describe("API keys", () => {
     expect(siteFaces).toEqual([]);
   });
 
+  // Closing plays the board's way out (.nkdlg.out) before the dialog goes, and the backdrop fades with it. Animations are
+  // held still to look at the way out, then let go.
+  test("a dialog leaves the way the board draws it, then hands the focus back", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/keys");
+    const open = page.getByRole("button", { name: "创建 key", exact: true });
+    await open.click();
+    const dialog = page.getByRole("dialog", { name: "创建 key" });
+    await expect(dialog).toBeVisible();
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send("Animation.enable");
+    await cdp.send("Animation.setPlaybackRate", { playbackRate: 0 });
+    await page.keyboard.press("Escape");
+    await expect(dialog).toHaveClass(/(^|\s)out(\s|$)/);
+    await expect(dialog).toHaveJSProperty("open", true);
+    await cdp.send("Animation.setPlaybackRate", { playbackRate: 1 });
+    await expect(dialog).toHaveCount(0);
+    await expect(open).toBeFocused();
+  });
+
   test("a new key shows its text once, in a dialog that stays until the user is done", async ({ page }) => {
     const errors = collectErrors(page);
     const state = await mockConsole(page);
