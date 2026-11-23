@@ -89,6 +89,26 @@ const listTableElements: NonNullable<Region["elements"]> = {
   },
 };
 
+// The drawing gives each row its own grid with a fixed cost column sized for its sample amounts (¥0.42); a real amount
+// is shown to the billionth (US$0.000031, 缓存 · 免单 · US$12.345678901) and was cut short. From 601px the list is
+// one grid whose rows are its subgrids, so the cost column takes the widest amount on the page (never narrower than
+// the drawing's) and stays one column down the rows. The tracks are the drawing's at each width; the first and last
+// are 20px wider because a subgrid's padding, the rows' 0 20px, goes into its edge tracks. A phone stacks each call
+// on its own and keeps the drawing's rows, whose cost is already as wide as it needs.
+const listColumns: NonNullable<Region["css"]> = {
+  "@container ov (min-width: 601px)":
+    ".ov .lgl{display:grid;column-gap:12px}.ov .lgl > *{grid-column:1/-1}" +
+    ".ov .lgw .lgl > :is(.lgh,.lgr){grid-template-columns:subgrid}",
+  "@container ov (min-width: 1101px)":
+    ".ov .lgl{grid-template-columns:92px 88px minmax(0,1.3fr) minmax(0,1fr) 92px 64px 64px 112px minmax(92px,max-content)}",
+  "@container ov (min-width: 901px)":
+    ".ov .lgw.open .lgl{grid-template-columns:92px 88px minmax(0,1fr) minmax(92px,max-content)}",
+  "@container ov (min-width: 901px) and (max-width: 1100px)":
+    ".ov .lgl{grid-template-columns:84px 84px minmax(0,1.2fr) minmax(0,1fr) 60px 100px minmax(88px,max-content)}",
+  "@container ov (min-width: 601px) and (max-width: 900px)":
+    ".ov .lgl{grid-template-columns:84px 76px minmax(136px,1.4fr) minmax(0,1fr) 100px minmax(88px,max-content)}",
+};
+
 const detailPageElements: NonNullable<Region["elements"]> = {
   ...unbuiltElements,
   ".p-logs": { unless: "hidePage", set: { style: "{{pageStyle}}" } },
@@ -182,6 +202,7 @@ function baseLogRegions(board: string): Region[] {
       ".lgmore": { unless: "hideMore" },
       ".lgmore .btn": { set: { onclick: "{{onMore}}", disabled: "{{moreDisabled}}" } },
     },
+    css: listColumns,
     english,
   };
   return [base];

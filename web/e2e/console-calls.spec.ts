@@ -433,3 +433,52 @@ for (const language of ["zh", "en"] as const) {
     await expect(main(page).getByLabel(language === "en" ? "Start time" : "开始时间")).toBeVisible();
   });
 }
+
+// Every amount in the call tables is shown whole, however long (#939): the cost column takes the widest amount on the
+// page and stays one column down the rows and under its heading, at each of the list's layouts.
+const costCells = (page: Page, name: string) =>
+  page
+    .getByRole("region", { name })
+    .locator(".lgh > :last-child, .lgr > .lgc")
+    .evaluateAll((all) =>
+      all
+        .filter((cell) => cell.getClientRects().length > 0)
+        .map((cell) => {
+          const { left, right } = cell.getBoundingClientRect();
+          const whole = cell.scrollWidth <= cell.clientWidth;
+          return { text: cell.textContent, whole, left: Math.round(left), right: Math.round(right) };
+        }),
+    );
+
+for (const { width, drawer } of [
+  { width: 1440, drawer: false },
+  { width: 1440, drawer: true },
+  { width: 1000, drawer: false },
+  { width: 800, drawer: true },
+  { width: 390, drawer: false },
+]) {
+  test(`at ${width}px${drawer ? " with a call open" : ""} the amounts are whole in one column`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await mockConsole(page);
+    signedInAs(state);
+    // Some calls cost the most digits an amount shows, behind the cached mark.
+    state.calls = state.calls.map((call, index) =>
+      index % 10 ? call : { ...call, cache_hit: true, price: { amount: "12345678901", currency: "USD" } },
+    );
+    await page.goto("/console/calls?group_by=model");
+    if (drawer) {
+      await page.getByRole("region", { name: "调用记录" }).locator('[data-a="lrow"] button.lgm').first().click();
+      await expect(page).toHaveURL(/call=/);
+    }
+    await expect(page.getByText("缓存 · US$12.345678901").first()).toBeVisible();
+    for (const name of ["调用记录", "调用汇总"]) {
+      const cells = await costCells(page, name);
+      expect(cells.length, name).toBeGreaterThan(1);
+      const cut = cells.filter((cell) => !cell.whole).map((cell) => cell.text);
+      expect(cut, name).toEqual([]);
+      expect(new Set(cells.map((cell) => cell.right)).size, name).toBe(1);
+      // A phone stacks each call on its own, so only the amounts' right edges line up there.
+      if (width > 600) expect(new Set(cells.map((cell) => cell.left)).size, name).toBe(1);
+    }
+  });
+}
