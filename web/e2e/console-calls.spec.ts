@@ -126,6 +126,36 @@ test.describe("calls", () => {
     await expect(start).toBeVisible();
   });
 
+  // The details drawer opens on details already here: asked for while the pointer rests on a row, and for the calls
+  // either side of the one open, which j and k step to.
+  test("a call's details are on hand before its row is pressed, and its neighbours' once it is open", async ({
+    page,
+  }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    const asked = new Set<string>();
+    page.on("request", (request) => {
+      const id = /\/api\/console\/v1\/calls\/([\w-]{36})$/.exec(new URL(request.url()).pathname)?.[1];
+      if (id) asked.add(id);
+    });
+    await page.goto("/console/calls");
+    const rows = page.getByRole("region", { name: "调用记录" }).locator('[data-a="lrow"]');
+    await expect(rows).toHaveCount(50);
+    const id = async (n: number) => (await rows.nth(n).getAttribute("data-id")) ?? "";
+    const third = await id(2);
+    await rows.nth(2).hover();
+    await expect.poll(() => asked.has(third)).toBe(true);
+
+    // From here no details answer: the drawer has only what was asked for ahead.
+    await page.route("**/api/console/v1/calls/*", (route) =>
+      /\/calls\/[\w-]{36}$/.test(new URL(route.request().url()).pathname) ? undefined : route.fallback(),
+    );
+    await rows.nth(2).locator("button.lgm").click();
+    await expect(page).toHaveURL(new RegExp(`call=${third}`));
+    await expect(page.getByText("尝试与路由")).toBeVisible();
+    await expect.poll(async () => asked.has(await id(1)) && asked.has(await id(3))).toBe(true);
+  });
+
   test("inline drawer shows retry on GET failure, updates URL rules, supports keyboard, and drops O8/O24", async ({
     page,
     context,

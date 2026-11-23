@@ -67,7 +67,14 @@ const unbuiltElements: NonNullable<Region["elements"]> = {
 const listTableElements: NonNullable<Region["elements"]> = {
   ".lgl": {
     unless: "hideList",
-    set: { "aria-label": "{{tableLabel}}", onclick: "{{onListClick}}" },
+    set: {
+      "aria-label": "{{tableLabel}}",
+      onclick: "{{onListClick}}",
+      // A row the pointer rests on or the keyboard reaches: the page may ask for its details ahead of a press.
+      onpointerover: "{{onListAhead}}",
+      onfocus: "{{onListAhead}}",
+      onmouseleave: "{{onListLeave}}",
+    },
   },
   ".lgr": { set: { style: "{{rowStyle}}" } },
   ".lgr > .lgs > i": { unless: "hideStatusDot" },
