@@ -74,7 +74,7 @@ it("Toast announces status, auto-dismisses, and supports undo with hover pause",
   expect(onDismissFail).toHaveBeenCalledTimes(1);
 });
 
-it("SidePanel renders .nkdlg.side with live-save status and closes cleanly", () => {
+it("SidePanel renders .nkdlg.side with live-save status and closes cleanly", async () => {
   const onClose = vi.fn();
   const onRetry = vi.fn();
   const box = mount(
@@ -98,6 +98,8 @@ it("SidePanel renders .nkdlg.side with live-save status and closes cleanly", () 
   expect(alert.className).toContain("bad");
   act(() => (alert.querySelector("button") as HTMLButtonElement).click());
   expect(onRetry).toHaveBeenCalledTimes(1);
-  act(() => (dialog.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click());
+  // The way out (.out) comes first; the dialog closes when it has played, at once without animations.
+  await act(async () => (dialog.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click());
+  expect(dialog.className).toContain("out");
   expect(onClose).toHaveBeenCalledTimes(1);
 });

@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useId, useRef } from "react";
+import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { board } from "../board-classes";
 import { classes } from "../classes";
@@ -10,6 +10,8 @@ type SaveState = "idle" | "saved" | "error";
 
 // ModalShell is the native <dialog> engine shared by Dialog and SidePanel (ppDlg in AxApp.logic.html, .nkdlg and
 // .nkdlg.side in AxApp/regions.css): it traps focus, closes on Escape and backdrop click, and restores focus natively.
+// Closing plays the board's way out first (.nkdlg.out: the dialog fades and sinks, the side panel slides off), and the
+// backdrop fades with it; onClose follows when the dialog has closed.
 function ModalShell({
   title,
   subtitle,
@@ -30,10 +32,26 @@ function ModalShell({
   const { t } = useTranslation("common");
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
+  // On the way out: "start" lets the way in go (data-leaving), "out" plays the board's way out.
+  const [leaving, setLeaving] = useState<"start" | "out" | null>(null);
   useEffect(() => {
     if (ref.current && !ref.current.open) ref.current.showModal();
   }, []);
-  const close = () => ref.current?.close();
+  useEffect(() => {
+    const dialog = ref.current;
+    if (!leaving || !dialog) return;
+    if (leaving === "start") {
+      // A transition never starts on a property an animation holds, and the way in (nkIn, ppSide) holds opacity and
+      // transform to its end: it is let go and its end style read before the way out is put on.
+      void getComputedStyle(dialog).opacity;
+      setLeaving("out");
+      return;
+    }
+    // A DOM without the Web Animations API (the unit tests') has nothing to play and closes at once.
+    const playing = dialog.getAnimations?.() ?? [];
+    void Promise.allSettled(playing.map((animation) => animation.finished)).then(() => dialog.close());
+  }, [leaving]);
+  const close = () => setLeaving((now) => now ?? "start");
   return (
     <div className={classes(board.board, board.ax, board.ov, s.host)}>
       {/* biome-ignore lint/a11y/useKeyWithClickEvents: the keyboard path is the dialog's own Escape and the close button */}
@@ -42,13 +60,15 @@ function ModalShell({
         aria-labelledby={titleId}
         onClose={onClose}
         onCancel={(event) => {
-          if (!dismissible) event.preventDefault();
+          event.preventDefault();
+          if (dismissible) close();
         }}
         onClick={(event) => {
           // a click on the backdrop lands on the dialog itself, not on its content
           if (dismissible && event.target === ref.current) close();
         }}
-        className={classes(board.nkdlg, side && board.side, s.root)}
+        className={classes(board.nkdlg, side && board.side, s.root, leaving === "out" && board.out)}
+        data-leaving={leaving ? "" : undefined}
       >
         <div className={board.nkh}>
           <div>
