@@ -6,6 +6,8 @@ export const { JSDOM } = require("jsdom") as {
 };
 export const events: Record<string, string> = {
   onclick: "onClick",
+  onfocus: "onFocus",
+  onpointerover: "onPointerOver",
   oninput: "onInput",
   onchange: "onChange",
   onkeydown: "onKeyDown",

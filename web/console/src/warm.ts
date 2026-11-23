@@ -11,10 +11,12 @@ export type RouterContext = { queryClient: QueryClient };
 export type Warm<D = unknown> = (client: QueryClient, session: Session, deps: D) => Promise<unknown>;
 
 // A query a page reads, as its hook passes it: an infinite list carries how to page on (getNextPageParam), and one the
-// page does not ask for (enabled false) is not asked for ahead of it either.
+// page does not ask for (enabled false) is not asked for ahead of it either. One with a staleTime is asked for again
+// only once its answer is that old.
 type Asked = {
   queryKey: readonly unknown[];
   enabled?: unknown;
+  staleTime?: unknown;
   getNextPageParam?: unknown;
   meta?: Record<string, unknown>;
 };

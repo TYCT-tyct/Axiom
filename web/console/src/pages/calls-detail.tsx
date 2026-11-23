@@ -152,6 +152,8 @@ export type SplitProps = {
   moreDisabled: boolean;
   onMore: () => void;
   onListClick: (e: React.SyntheticEvent) => void;
+  onListAhead: (e: React.SyntheticEvent) => void;
+  onListLeave: () => void;
   selectedCall?: Schemas["Call"];
   selectedQuery: UseQueryResult<Schemas["Call"], Error>;
   keyNames: Map<string, string>;
@@ -173,7 +175,16 @@ function toFailRows(rows: ListRowItem[]): FailRowItem[] {
 
 type CallsListTableProps = Pick<
   SplitProps,
-  "headers" | "rows" | "moreLabel" | "hideMore" | "moreDisabled" | "onMore" | "onListClick" | "t"
+  | "headers"
+  | "rows"
+  | "moreLabel"
+  | "hideMore"
+  | "moreDisabled"
+  | "onMore"
+  | "onListClick"
+  | "onListAhead"
+  | "onListLeave"
+  | "t"
 >;
 
 export function CallsBoardList(p: CallsListTableProps) {
@@ -191,6 +202,8 @@ export function CallsBoardList(p: CallsListTableProps) {
         moreDisabled: p.moreDisabled,
         onMore: p.onMore,
         onListClick: p.onListClick,
+        onListAhead: p.onListAhead,
+        onListLeave: p.onListLeave,
       }}
       rows={{ summaryItems0: [], headers0: p.headers, rows0: p.rows }}
       text={{ heading: "", moreLabel: p.moreLabel }}
@@ -250,6 +263,8 @@ function buildUnavailableProps(
       unbuilt: true,
       tableLabel: p.t("callsBoard.list.tableLabel"),
       onListClick: p.onListClick,
+      onListAhead: p.onListAhead,
+      onListLeave: p.onListLeave,
       statusBadgeStyle: hdr.statusBadgeStyle,
       statusDotStyle: hdr.statusDotStyle,
       errRole: errState.role,
@@ -356,6 +371,8 @@ export function InlineCallSplit(p: SplitProps) {
         moreDisabled: p.moreDisabled,
         onMore: p.onMore,
         onListClick: p.onListClick,
+        onListAhead: p.onListAhead,
+        onListLeave: p.onListLeave,
         tableLabel: p.t("callsBoard.list.tableLabel"),
         ...nav,
         ...content.values,

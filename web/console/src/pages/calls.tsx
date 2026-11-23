@@ -12,13 +12,15 @@ import {
   type UseQueryResult,
   useInfiniteQuery,
   useQuery,
+  useQueryClient,
 } from "@tanstack/react-query";
 import { useLocation, useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
-import { useDeferredValue, useEffect, useMemo } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { filtersUnsupported } from "../calls";
-import { modelsQuery } from "../queries";
+import { callQuery, modelsQuery } from "../queries";
+import { ask } from "../warm";
 import {
   type CallsSearch,
   callsPageQueries,
@@ -132,8 +134,45 @@ type CallsListBodyProps = {
   onOpenCall: (id: string) => void;
 };
 
+// A call's details are asked for before the press that opens them: while the pointer rests on its row (restFor, so a
+// pointer passing over the list asks for nothing) or the keyboard reaches it, and for the calls either side of the one
+// open, which j and k step to. The drawer then opens on its details at once. A call's details asked for once are not
+// asked for again on the way (staleTime); the drawer refreshes them as it opens.
+const restFor = 80;
+
+function useDetailsAhead(callRows: Schemas["Call"][], selectedId: string | undefined) {
+  const client = useQueryClient();
+  const resting = useRef<{ id?: string; timer?: number }>({});
+  const askFor = useCallback(
+    (id: string | undefined) => id && void ask(client, [{ ...callQuery(id), staleTime: Number.POSITIVE_INFINITY }]),
+    [client],
+  );
+  useEffect(() => {
+    const at = selectedId ? callRows.findIndex((call) => call.id === selectedId) : -1;
+    if (at < 0) return;
+    askFor(callRows[at - 1]?.id);
+    askFor(callRows[at + 1]?.id);
+  }, [selectedId, callRows, askFor]);
+  useEffect(() => () => window.clearTimeout(resting.current.timer), []);
+  const leave = () => {
+    window.clearTimeout(resting.current.timer);
+    resting.current = {};
+  };
+  return {
+    onListAhead: (e: React.SyntheticEvent) => {
+      const id = (e.target as Element).closest('[data-a="lrow"]')?.getAttribute("data-id") ?? undefined;
+      if (id === resting.current.id) return;
+      leave();
+      if (e.type === "focus") askFor(id);
+      else resting.current = { id, timer: window.setTimeout(() => askFor(id), restFor) };
+    },
+    onListLeave: leave,
+  };
+}
+
 function CallsListTable(p: CallsListBodyProps) {
   const router = useRouter();
+  const ahead = useDetailsAhead(p.callRows, p.selectedId);
   const format = useFormat();
   const headers = callHeaders(p.t);
   const hrefOf = (callId: string) => router.buildLocation({ to: "/calls/$callId", params: { callId } }).href;
@@ -147,6 +186,7 @@ function CallsListTable(p: CallsListBodyProps) {
     moreDisabled: p.calls.isFetchingNextPage,
     onMore: () => void p.calls.fetchNextPage(),
     onListClick: (e: React.SyntheticEvent) => handleCallRowClick(e, p.selectedId, p.onSelectCall, p.onOpenCall),
+    ...ahead,
     t: p.t,
   };
   if (p.selectedId) {

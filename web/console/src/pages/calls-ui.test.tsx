@@ -36,6 +36,8 @@ it("keeps the call list, close and retry controls in a failed detail drawer with
         moreDisabled={false}
         onMore={() => {}}
         onListClick={() => {}}
+        onListAhead={() => {}}
+        onListLeave={() => {}}
         selectedQuery={query}
         keyNames={new Map()}
         hasPrev={false}
