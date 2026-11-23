@@ -11,16 +11,18 @@ import { ForbiddenHint } from "./states";
 
 // BoardShell frames a shell a design board draws (#747) as a page of the app: a skip link to #main, the app's notices
 // floating above it, and the rules the board's fixed frame lacks (board-shell.module.css). forbiddenHint and brandColor
-// are AppShell's.
+// are AppShell's. While the page waits for what the visitor asked for (waiting), a line runs along the window's top.
 export function BoardShell({
   banner,
   forbiddenHint,
   brandColor,
+  waiting = false,
   children,
 }: {
   banner?: ReactNode;
   forbiddenHint?: string;
   brandColor?: string;
+  waiting?: boolean;
   children: ReactNode;
 }) {
   const { t } = useTranslation("common");
@@ -30,6 +32,7 @@ export function BoardShell({
       <a href="#main" className={styles.skip}>
         {t("shell.skipToContent")}
       </a>
+      <div className={styles.waiting} data-on={waiting || undefined} aria-hidden="true" />
       {banner && <div className={classes(board.board, board.ax, board.ov, styles.banner)}>{banner}</div>}
       <ForbiddenHint value={forbiddenHint}>{children}</ForbiddenHint>
     </div>

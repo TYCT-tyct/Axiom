@@ -1,3 +1,4 @@
+import { useIsFetching } from "@tanstack/react-query";
 import { type AnyRouter, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useCallback, useMemo } from "react";
 import { type SessionNavigation, SessionNavigationProvider } from "./index";
@@ -25,4 +26,16 @@ export function TanStackSessionNavigation({ router, children }: { router: AnyRou
   );
   const value = useMemo<SessionNavigation>(() => ({ here, next, replace }), [here, next, replace]);
   return <SessionNavigationProvider value={value}>{children}</SessionNavigationProvider>;
+}
+
+// useWaiting tells whether the page is waiting for something the visitor asked for: the router bringing in a page, or a
+// query a page shows that has no answer yet (a filter's new list, a call's details), whether the page shows the answer
+// before it meanwhile or a placeholder. A query asked for ahead of its page has no observer yet, and one refreshing an
+// answer already shown has data: neither is waited for.
+export function useWaiting() {
+  const routing = useRouterState({ select: (state) => state.status === "pending" });
+  const asking = useIsFetching({
+    predicate: (query) => query.state.data === undefined && query.getObserversCount() > 0,
+  });
+  return routing || asking > 0;
 }

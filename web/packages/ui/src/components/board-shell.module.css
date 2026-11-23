@@ -39,6 +39,47 @@
   transform: none;
 }
 
+/* What the visitor asked for is on its way: a short bar runs along the window's top, over the sticky bar. An answer
+   within 150 ms never shows it, so a quick page or filter does not flash; it fades as the answer lands. */
+.waiting {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 95;
+  height: 2px;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 200ms ease-out;
+}
+
+.waiting[data-on] {
+  opacity: 1;
+  transition: opacity 120ms ease-out 150ms;
+}
+
+.waiting::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--accentSolid);
+  transform: translateX(-100%);
+  animation: waiting 1100ms cubic-bezier(0.65, 0, 0.35, 1) infinite paused;
+}
+
+/* Paused rather than stopped when the answer lands, so the bar fades where it is instead of jumping back. */
+.waiting[data-on]::before {
+  animation-play-state: running;
+}
+
+@keyframes waiting {
+  to {
+    transform: translateX(250%);
+  }
+}
+
 /* The notices float over the page's corner, above the phone's tabs, and never take room from the frame. */
 .banner {
   position: fixed;

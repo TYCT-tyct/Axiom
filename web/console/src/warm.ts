@@ -41,11 +41,13 @@ const warmFor = 400;
 // warming makes a route's loader from its page's warm, which may come in a chunk of its own: on a press's intent
 // (defaultPreload) and on the way in, the old page staying up while the answers come. Only once the session is known:
 // the first answer for it drops what was asked for the account before it (session.tsx), and the page's permissions are
-// the session's. Data that cannot come leaves the page to ask for it itself.
+// the session's. Data that cannot come leaves the page to ask for it itself. A change of the page's own address (a
+// filter, a tab, a call's details: cause "stay") is never held: the press answers at once, and the page keeps what it
+// showed until the answers come (keepPreviousData where it reads them).
 export function warming<D>(load: () => Promise<Warm<D>>) {
-  return ({ context, deps }: { context: RouterContext; deps: D }) => {
+  return ({ context, deps, cause }: { context: RouterContext; deps: D; cause: "preload" | "enter" | "stay" }) => {
     const session = currentSession(context.queryClient);
-    if (!session) return;
+    if (!session || cause === "stay") return;
     return Promise.race([
       load()
         .then((warm) => warm(context.queryClient, session, deps))

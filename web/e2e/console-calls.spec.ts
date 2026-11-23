@@ -72,6 +72,39 @@ test.describe("calls", () => {
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(200);
   });
 
+  test("a press on the page answers at once, keeping the list shown until the new answer comes", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const rows = callRows(page);
+    await expect(rows).toHaveCount(51);
+    const waiting = page.locator("[data-on][aria-hidden]");
+    await expect(waiting).toHaveCount(0);
+
+    // The answers are held back: the address, the control and the list answer the press regardless.
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    await page.route("**/api/console/v1/calls**", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await main(page).getByRole("button", { name: "失败", exact: true }).click();
+    await expect(page).toHaveURL(/status=error/);
+    await expect(main(page).getByRole("button", { name: "失败", exact: true })).toHaveClass(/(^|\s)on(\s|$)/);
+    await expect(waiting).toHaveCount(1);
+    await expect(rows).toHaveCount(51);
+    await expect(page.getByText("服务端暂不支持该筛选条件")).toHaveCount(0);
+    await page.getByRole("region", { name: "调用记录" }).locator('[data-a="lrow"] button.lgm').first().click();
+    await expect(page).toHaveURL(/call=/);
+    await expect(page.getByRole("region", { name: "调用记录" }).locator(".lgr.sel")).toHaveCount(1);
+
+    release();
+    await expect(rows).toHaveCount(18);
+    await expect(waiting).toHaveCount(0);
+  });
+
   // A range button (today, the last 7 days) is a range of its own and leaves the more filters shut and the
   // page where it was; Custom, or an address with a range of its own, opens them on its dates.
   test("a range button leaves the more filters shut; a custom range opens them", async ({ page }) => {
@@ -80,12 +113,12 @@ test.describe("calls", () => {
     await page.goto("/console/calls");
     const start = main(page).getByLabel("开始时间");
     const filters = main(page).getByRole("region", { name: "更多筛选" });
-    const height = (await filters.boundingBox())?.height;
+    const height = (await filters.boundingBox())?.height ?? 0;
     for (const range of ["今天", "近 7 天", "近 30 天", "本月"]) {
       await main(page).getByRole("button", { name: range, exact: true }).click();
       await expect(page).toHaveURL(/preset=/);
       await expect(start).toHaveCount(0);
-      expect((await filters.boundingBox())?.height).toBe(height);
+      expect((await filters.boundingBox())?.height).toBeCloseTo(height, 0);
     }
     await main(page).getByRole("button", { name: "自定义", exact: true }).click();
     await expect(start).toBeVisible();

@@ -2,7 +2,7 @@ import { ApiError } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
 import { siteQuery } from "@axiom/login";
 import { useFormat } from "@axiom/ui";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -130,7 +130,8 @@ function useUsageQueries(params: UsageQueryParams & { prevRange: { since: string
   const { groupBy, search, valid, prevRange } = params;
   const base = usageBase(search);
   const q = usageQueries(params, useSession());
-  const main = useQuery({ ...q.main, retry: noClientRetry });
+  // Another range or filter keeps the figures shown until the new ones come (warming's cause "stay").
+  const main = useQuery({ ...q.main, retry: noClientRetry, placeholderData: keepPreviousData });
   const balance = useQuery({ ...q.balance, retry: noClientRetry });
   const site = useQuery(q.site);
   const keys = useInfiniteQuery({ ...q.keys, retry: noClientRetry });
