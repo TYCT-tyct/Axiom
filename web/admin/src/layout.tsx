@@ -1,5 +1,6 @@
 import "@axiom/boards/AxApp/regions.css";
 import { can, Gate, NewVersionNotice, SignOutError, useSession, useSignOut } from "@axiom/app";
+import { useWaiting } from "@axiom/app/tanstack";
 import WideNav from "@axiom/boards/AxApp/regions/AdminNav";
 import Wide from "@axiom/boards/AxApp/regions/AdminShell";
 import wideEn from "@axiom/boards/AxApp/regions/AdminShell.en";
@@ -146,6 +147,7 @@ const wideIcons = [...tabIcons, ...sheetIcons];
 export function Layout() {
   const { t } = useTranslation();
   const signOut = useSignOut();
+  const waiting = useWaiting();
   return (
     <Gate stage="member">
       <BoardShell
@@ -156,6 +158,7 @@ export function Layout() {
           </>
         }
         forbiddenHint={t("forbiddenHint")}
+        waiting={waiting}
       >
         <AdminShell signOut={() => signOut.isPending || signOut.mutate()}>
           <Outlet />

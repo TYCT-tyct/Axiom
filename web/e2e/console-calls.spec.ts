@@ -72,6 +72,39 @@ test.describe("calls", () => {
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(200);
   });
 
+  test("a press on the page answers at once, keeping the list shown until the new answer comes", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const rows = callRows(page);
+    await expect(rows).toHaveCount(51);
+    const waiting = page.locator("[data-on][aria-hidden]");
+    await expect(waiting).toHaveCount(0);
+
+    // The answers are held back: the address, the control and the list answer the press regardless.
+    let release = () => {};
+    const held = new Promise<void>((done) => {
+      release = done;
+    });
+    await page.route("**/api/console/v1/calls**", async (route) => {
+      await held;
+      await route.fallback();
+    });
+    await main(page).getByRole("button", { name: "失败", exact: true }).click();
+    await expect(page).toHaveURL(/status=error/);
+    await expect(main(page).getByRole("button", { name: "失败", exact: true })).toHaveClass(/(^|\s)on(\s|$)/);
+    await expect(waiting).toHaveCount(1);
+    await expect(rows).toHaveCount(51);
+    await expect(page.getByText("服务端暂不支持该筛选条件")).toHaveCount(0);
+    await page.getByRole("region", { name: "调用记录" }).locator('[data-a="lrow"] button.lgm').first().click();
+    await expect(page).toHaveURL(/call=/);
+    await expect(page.getByRole("region", { name: "调用记录" }).locator(".lgr.sel")).toHaveCount(1);
+
+    release();
+    await expect(rows).toHaveCount(18);
+    await expect(waiting).toHaveCount(0);
+  });
+
   test("inline drawer shows retry on GET failure, updates URL rules, supports keyboard, and drops O8/O24", async ({
     page,
     context,

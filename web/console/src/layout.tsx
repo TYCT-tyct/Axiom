@@ -1,5 +1,6 @@
 import "@axiom/boards/AxApp/regions.css";
 import { can, Gate, NewVersionNotice, SignOutError, useSession, useSignOut } from "@axiom/app";
+import { useWaiting } from "@axiom/app/tanstack";
 import Wide from "@axiom/boards/AxApp/regions/Shell";
 import wideEn from "@axiom/boards/AxApp/regions/Shell.en";
 import wideZh from "@axiom/boards/AxApp/regions/Shell.zh";
@@ -146,6 +147,7 @@ export function Layout() {
   const site = useQuery(siteQuery);
   // One sign-out for the menu's button and the notice that says it failed.
   const signOut = useSignOut();
+  const waiting = useWaiting();
   const notices = (
     <>
       <NewVersionNotice />
@@ -154,7 +156,12 @@ export function Layout() {
   );
   return (
     <Gate stage="member">
-      <BoardShell banner={notices} forbiddenHint={t("forbiddenHint")} brandColor={site.data?.brand_color}>
+      <BoardShell
+        banner={notices}
+        forbiddenHint={t("forbiddenHint")}
+        brandColor={site.data?.brand_color}
+        waiting={waiting}
+      >
         <ConsoleShell
           name={site.data?.name}
           logoUrl={site.data?.logo_url}

@@ -7,6 +7,7 @@ import segZh from "@axiom/boards/AxApp/regions/LogsSeg.zh";
 import { useFormat, usePageTitle } from "@axiom/ui";
 import {
   type InfiniteData,
+  keepPreviousData,
   type UseInfiniteQueryResult,
   type UseQueryResult,
   useInfiniteQuery,
@@ -199,9 +200,10 @@ function useCallsPageQueries(
 ) {
   const router = useRouter();
   const { filters, groupBy, sessionsTab, selectedId, queries: q } = callsPageQueries(search, canKeys);
-  const calls = useInfiniteQuery(q.calls);
-  const sessions = useInfiniteQuery(q.sessions);
-  const report = useQuery(q.report);
+  // A filter, a tab or a grouping keeps the answers shown until the new ones come (warming's cause "stay").
+  const calls = useInfiniteQuery({ ...q.calls, placeholderData: keepPreviousData });
+  const sessions = useInfiniteQuery({ ...q.sessions, placeholderData: keepPreviousData });
+  const report = useQuery({ ...q.report, placeholderData: keepPreviousData });
   const selectedQuery = useQuery(q.selected);
   const models = useQuery({ ...modelsQuery({}), enabled: identity !== "" });
   const keys = useInfiniteQuery(q.keys);
@@ -280,7 +282,9 @@ function CallsResults({
   clearAll: () => void;
   onOpenCall: (callId: string) => void;
 }) {
-  const unsupported = !q.sessionsTab && filtersUnsupported(q.filters, q.calls.data?.pages ?? []);
+  // The answer to the filters before a change is no evidence on the new ones.
+  const unsupported =
+    !q.sessionsTab && !q.calls.isPlaceholderData && filtersUnsupported(q.filters, q.calls.data?.pages ?? []);
   const filtered = hasActiveCallFilters(q.filters);
   const unsupportedName = q.filters.fell_back ? t("callsBoard.filter.statusFallback") : t("callsBoard.filter.status");
   return (

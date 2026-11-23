@@ -16,7 +16,7 @@ import {
   useFormat,
   usePageTitle,
 } from "@axiom/ui";
-import { useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link, useSearch } from "@tanstack/react-router";
 import { type MouseEvent, type Ref, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -49,7 +49,8 @@ export default function KeysPage() {
   const manage = can(useSession(), "api_keys.manage");
   const format = useFormat();
   const filters = keyFiltersOf(useSearch({ from: "/app/keys" }));
-  const keys = useInfiniteQuery(keysQuery(filters));
+  // Another filter keeps the keys shown until the new list comes (warming's cause "stay").
+  const keys = useInfiniteQuery({ ...keysQuery(filters), placeholderData: keepPreviousData });
   const pages = keys.data?.pages ?? [];
   const list = useMemo(() => pages.flatMap((page) => page.data), [pages]);
   // The open dialog is the Dialogs' own state: opening one renders the dialog alone, not the page and its list again,
