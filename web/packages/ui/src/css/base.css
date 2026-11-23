@@ -219,6 +219,13 @@
   body:has(dialog[open]) {
     overflow: hidden;
   }
+
+  /* Where a scrollbar takes room (Windows), an app's pages keep it whether they scroll or not and while a modal holds
+     them still, so the bar, the sidebar and the page never shift sideways. Only under an app's shell: the website's
+     and the sign-in pages fill the window and never scroll. */
+  :root:has([data-shell]) {
+    scrollbar-gutter: stable;
+  }
 }
 
 /* Paper is light: a receipt printed from the dark scheme would be pale text on white. The selector carries the theme
