@@ -105,6 +105,27 @@ test.describe("calls", () => {
     await expect(waiting).toHaveCount(0);
   });
 
+  // A range button (today, the last 7 days) is a range of its own and leaves the more filters shut and the
+  // page where it was; Custom, or an address with a range of its own, opens them on its dates.
+  test("a range button leaves the more filters shut; a custom range opens them", async ({ page }) => {
+    const state = await mockConsole(page);
+    signedInAs(state);
+    await page.goto("/console/calls");
+    const start = main(page).getByLabel("开始时间");
+    const filters = main(page).getByRole("region", { name: "更多筛选" });
+    const height = (await filters.boundingBox())?.height;
+    for (const range of ["今天", "近 7 天", "近 30 天", "本月"]) {
+      await main(page).getByRole("button", { name: range, exact: true }).click();
+      await expect(page).toHaveURL(/preset=/);
+      await expect(start).toHaveCount(0);
+      expect((await filters.boundingBox())?.height).toBe(height);
+    }
+    await main(page).getByRole("button", { name: "自定义", exact: true }).click();
+    await expect(start).toBeVisible();
+    await page.goto("/console/calls?since=2026-10-01T00:00:00.000Z&until=2026-10-10T00:00:00.000Z");
+    await expect(start).toBeVisible();
+  });
+
   test("inline drawer shows retry on GET failure, updates URL rules, supports keyboard, and drops O8/O24", async ({
     page,
     context,
