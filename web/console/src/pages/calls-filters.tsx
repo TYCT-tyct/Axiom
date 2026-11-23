@@ -374,11 +374,12 @@ function CallsFilterForm({
 
 export function CallsFilterBar(p: FilterSourceProps) {
   const missingKeyOption = Boolean(p.filters.key_id && !p.keys.some((k) => k.id === p.filters.key_id));
+  // A range one of the range buttons names (today, the last 7 days) is theirs; only a custom one is in the more filters.
+  const customRange = resolveRangePreset(p.filters.since, p.filters.until, p.preset) === "custom";
   const hasAdvanced = Boolean(
     p.filters.client_app ||
       p.filters.request_id ||
-      p.filters.since ||
-      p.filters.until ||
+      customRange ||
       (!p.canKeys && Boolean(p.filters.key_id || p.filters.workspace_id)) ||
       missingKeyOption,
   );
