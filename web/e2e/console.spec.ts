@@ -230,9 +230,11 @@ for (const width of [390, 768, 819]) {
     const tabs = page.getByRole("navigation", { name: "主导航" });
     await expect(tabs.getByRole("link", { name: "日志" })).toBeVisible();
     const bar = await tabs.boundingBox();
+    // As wide as the bar above the page: the window's width less the room a scrollbar keeps (base.css).
+    const across = await page.evaluate(() => document.querySelector("header")?.getBoundingClientRect().right);
     expect(bar && { left: bar.x, right: bar.x + bar.width, bottom: bar.y + bar.height }).toEqual({
       left: 0,
-      right: width,
+      right: across,
       bottom: 700,
     });
     const tops = await tabs
