@@ -121,6 +121,18 @@ const phone = {
   ...links(".qmi", ["route", "presets", "byok", "bill"]),
 };
 
+// The board styles its tabs only where it lays the page out for a phone (up to 600px), but the console and admin take
+// the phone's shell below 820px, where the page keeps the tablet layout; the tabs keep the phone's look at those widths
+// too. These are the board's rules for them as drawn; only the phone's shell has the tabs.
+const phoneTabs: NonNullable<Region["css"]> = {
+  ".ov .otabs":
+    "position:absolute;left:0;right:0;bottom:0;z-index:9;display:grid;grid-template-columns:repeat(5,1fr);height:84px;padding:8px 8px 30px;background:var(--glass);backdrop-filter:blur(18px) saturate(1.4);box-shadow:inset 0 var(--bw) 0 var(--line)",
+  ".ov .otabs a": "display:flex;flex-direction:column;align-items:center;gap:3px;font-size:12px;color:var(--t2)",
+  ".ov .otabs a.on": "color:var(--t1)",
+  ".ov .otabs a.on .ic .f": "opacity:1",
+  ".ov .otabs a.on .ic .o": "opacity:0",
+};
+
 const shell = (board: string): Region => ({
   board,
   name: "Shell",
@@ -166,6 +178,7 @@ const shell = (board: string): Region => ({
     frameStyle: { selector: ".frame", attribute: "style" },
   },
   elements: { ...menus, ...(board === "AxApp" ? wide : phone) },
+  ...(board === "AxApp" ? {} : { css: phoneTabs }),
 });
 
 /** @public loaded by regions.ts from the directory listing */
