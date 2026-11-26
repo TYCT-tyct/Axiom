@@ -23,9 +23,18 @@ export function BuiltState<T>(props: ComponentProps<typeof DataState<T>>) {
 // What the last day's calls say of each supplier and line, for a session that may read the operations monitor; none
 // for one that may not, or before the monitor answers.
 export function useTraffic() {
+  return useTrafficRead().traffic;
+}
+
+// useTrafficRead is useTraffic with whether the monitor is still to answer, for a view whose shape (a figure, a
+// column) waits for it rather than growing when it arrives.
+export function useTrafficRead() {
   const allowed = can(useSession(), "sites.manage");
   const monitor = useQuery({ ...monitorQuery("24h"), enabled: allowed });
-  return monitor.data ? trafficOf(monitor.data.lines ?? []) : undefined;
+  return {
+    traffic: monitor.data ? trafficOf(monitor.data.lines ?? []) : undefined,
+    pending: allowed && monitor.isPending,
+  };
 }
 
 const tones = {

@@ -207,6 +207,7 @@ const scenes: Scene[] = [
   view("home", ""),
   view("users", "users"),
   view("orders", "orders"),
+  view("redeem-codes", "redeem-codes"),
   view("account", `accounts/${acct(1)}`),
   view("calls", "calls"),
   inDrawer("call", "calls", 1),

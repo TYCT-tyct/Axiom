@@ -9,6 +9,7 @@ import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pluginHandlers, startPlugins } from "./admin-plugins-api.ts";
 import { policyHandlers, startPolicies } from "./admin-policies-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
+import { listRedeemCodes } from "./admin-redeem-api.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { routingHandlers, startRouting } from "./admin-routing.ts";
 import { siteExtraHandlers, startSiteExtras } from "./admin-site-api.ts";
@@ -481,6 +482,7 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
   route("get", `${base}/payments/paid-batches`, reads("sites.manage"), listPaidBatches),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
+  route("get", `${base}/payments/redeem-codes`, reads("sites.manage"), listRedeemCodes),
   route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),
   ),

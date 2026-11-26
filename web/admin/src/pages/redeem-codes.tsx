@@ -5,6 +5,7 @@ import {
   DataState,
   DrawerFacts,
   Figure,
+  LoadingState,
   MetricStrip,
   PageBody,
   PageHead,
@@ -12,7 +13,7 @@ import {
   Text,
   useFormat,
 } from "@axiom/ui";
-import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { useState } from "react";
@@ -118,9 +119,13 @@ function Current({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; currenc
   const [selected, select] = useSelected();
   const [now] = useState(() => Date.now());
   const { text, setText } = useAddressParam("note");
-  const query = useInfiniteQuery(redeemCodesQuery(siteId, { state, note }));
+  // A narrowed list keeps the codes it had until the new ones arrive, so only the first load is pending.
+  const query = useInfiniteQuery({ ...redeemCodesQuery(siteId, { state, note }), placeholderData: keepPreviousData });
   const rows = query.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const open = rows.find((code) => code.id === selected);
+  // The strip is counted from the list, so the page waits for it whole: a strip arriving above the table would push
+  // it down (docs/frontend.md「工程要求」).
+  if (query.isPending) return <LoadingState page />;
   return (
     <>
       <PageBody>
