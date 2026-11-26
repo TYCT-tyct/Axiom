@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/mail"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 	"uuid"
@@ -28,20 +29,26 @@ type AlertRule struct {
 	RepeatSeconds   int     `json:"repeat_seconds"`
 }
 
-// AlertChannel is a platform operator destination; its mail uses the reserved zero-site outbox.
+// AlertChannel is a platform operator destination: exactly one of its destination members is set, and it names the
+// channel's kind (channelKinds). Its mail uses the reserved zero-site outbox; its secret is never part of it.
 type AlertChannel struct {
-	ID         string `json:"id"`
-	Email      string `json:"email,omitempty"`
-	WebhookURL string `json:"webhook_url,omitempty"`
+	ID             string `json:"id"`
+	Email          string `json:"email,omitempty"`
+	WebhookURL     string `json:"webhook_url,omitempty"`
+	FeishuURL      string `json:"feishu_url,omitempty"`
+	WeComURL       string `json:"wecom_url,omitempty"`
+	TelegramChatID string `json:"telegram_chat_id,omitempty"`
 }
 
 // AlertConfiguration is replaced atomically with optimistic concurrency. SpendDetection is optional so an older node's
-// replacement leaves it untouched.
+// replacement leaves it untouched. AdminOrigin is the admin origin the last replacement came from: the links a
+// notification carries open it.
 type AlertConfiguration struct {
 	Rev            int64           `json:"rev"`
 	Rules          []AlertRule     `json:"rules"`
 	Channels       []AlertChannel  `json:"channels"`
 	SpendDetection *SpendDetection `json:"spend_detection,omitempty"`
+	AdminOrigin    string          `json:"admin_origin,omitempty"`
 }
 
 // AlertEvent is an incident, with independent receipts for each destination.
@@ -116,9 +123,10 @@ func SetAlertConfiguration(ctx context.Context, tx pg.Tx, c AlertConfiguration) 
 	}
 	// Detection is stored apart from the rules so a node that predates it cannot drop it while replacing the body.
 	stored := struct {
-		Rules    []AlertRule    `json:"rules"`
-		Channels []AlertChannel `json:"channels"`
-	}{Rules: c.Rules, Channels: c.Channels}
+		Rules       []AlertRule    `json:"rules"`
+		Channels    []AlertChannel `json:"channels"`
+		AdminOrigin string         `json:"admin_origin,omitempty"`
+	}{Rules: c.Rules, Channels: c.Channels, AdminOrigin: c.AdminOrigin}
 	body, err := jsonx.MarshalCanonical(stored)
 	if err != nil {
 		return err
@@ -176,33 +184,40 @@ func validateAlertConfiguration(c AlertConfiguration) error {
 }
 
 func validateAlertChannel(ch AlertChannel) error {
-	if ch.ID == "" || len(ch.ID) > 64 || len(ch.Email) > 254 {
+	if ch.ID == "" || len(ch.ID) > 64 {
 		return ErrAlertConfiguration
 	}
-	if ch.WebhookURL != "" {
-		return validateWebhookChannel(ch)
-	}
-	if _, err := mail.ParseAddress(ch.Email); err != nil {
-		return ErrAlertConfiguration
-	}
-	return nil
-}
-
-func validateWebhookChannel(ch AlertChannel) error {
-	if ch.Email != "" {
-		return ErrAlertConfiguration
-	}
-	_, err := ValidateAlertWebhookURL(ch.WebhookURL)
+	_, err := AlertChannelHost(ch)
 	return err
 }
 
-// ValidateAlertWebhookURL is shared by configuration validation and egress preflight outside the database transaction.
-func ValidateAlertWebhookURL(raw string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil || len(raw) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" {
+// AlertChannelHost is the host a notification on ch connects to, "" for mail, once ch names exactly one valid
+// destination. Configuration validation and the admin's egress preflight outside the transaction share it.
+func AlertChannelHost(ch AlertChannel) (string, error) {
+	k, dest, ok := kindOf(ch)
+	if !ok {
 		return "", ErrAlertConfiguration
 	}
-	return u.Hostname(), nil
+	return k.check(dest)
+}
+
+func checkEmail(address string) (string, error) {
+	if _, err := mail.ParseAddress(address); err != nil || len(address) > 254 {
+		return "", ErrAlertConfiguration
+	}
+	return "", nil
+}
+
+// httpsHost checks an HTTPS destination and returns its host; given hosts, it accepts only those, on the default port.
+func httpsHost(hosts ...string) func(string) (string, error) {
+	return func(raw string) (string, error) {
+		u, err := url.Parse(raw)
+		if err != nil || len(raw) > 2048 || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.Fragment != "" ||
+			len(hosts) > 0 && (!slices.Contains(hosts, u.Hostname()) || u.Port() != "") {
+			return "", ErrAlertConfiguration
+		}
+		return u.Hostname(), nil
+	}
 }
 
 func validateAlertRule(r AlertRule) error {

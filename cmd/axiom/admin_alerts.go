@@ -41,6 +41,8 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 		if err != nil {
 			return adminapi.AlertConfiguration{}, err
 		}
+		// The guard admitted this change only from the admin's own origin, which a notification's link then opens.
+		c.AdminOrigin = callOf(ctx).r.Header.Get("Origin")
 		if err = observability.SetAlertConfiguration(ctx, tx, c); err != nil {
 			return adminapi.AlertConfiguration{}, err
 		}
@@ -59,13 +61,14 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 func (a adminAPI) checkAlertDestinations(ctx context.Context, body *adminapi.AlertConfigurationRequest) error {
 	check, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	for _, ch := range body.Channels {
-		if ch.WebhookUrl == nil {
-			continue
-		}
-		host, err := observability.ValidateAlertWebhookURL(*ch.WebhookUrl)
+	for _, in := range body.Channels {
+		ch, err := adminJSON[observability.AlertChannel](in)
 		if err != nil {
 			return err
+		}
+		host, err := observability.AlertChannelHost(ch)
+		if err != nil || host == "" {
+			continue // the configuration's own validation refuses it, or it is mail
 		}
 		if err = a.exit.Check(check, host); err != nil {
 			return observability.ErrAlertConfiguration

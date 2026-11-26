@@ -26,12 +26,50 @@ func scheduleAlertTests(ctx context.Context, tx pg.Tx, now time.Time) error {
 			return err
 		}
 	}
-	_, err = tx.Exec(ctx, `DELETE FROM observability.webhook_keys k WHERE expires_at<=$1 OR (
- NOT EXISTS(SELECT FROM observability.alert_configuration c,jsonb_array_elements(c.body->'channels') ch WHERE ch->>'id'=k.channel_id AND ch->>'webhook_url'=k.destination)
- AND NOT EXISTS(SELECT FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id
+	return dropUnusedSecrets(ctx, tx, c.Channels, now)
+}
+
+// dropUnusedSecrets deletes the expired channel secrets and those of a destination neither configured nor named by a
+// notification still to be sent or recovered.
+func dropUnusedSecrets(ctx context.Context, tx pg.Tx, configured []AlertChannel, now time.Time) error {
+	rows, err := tx.Query(ctx, `SELECT DISTINCT r.channel FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id
  WHERE (r.state IN ('pending','queued') OR e.resolved_at IS NULL OR e.pending_recovery)
- AND r.channel->>'id'=k.channel_id AND r.channel->>'webhook_url'=k.destination))`, now)
+ AND EXISTS(SELECT FROM observability.webhook_keys k WHERE k.channel_id=r.channel->>'id')`)
+	if err != nil {
+		return err
+	}
+	inUse := configured
+	for rows.Next() {
+		var raw []byte
+		var ch AlertChannel
+		if err = rows.Scan(&raw); err == nil {
+			err = jsonx.Unmarshal(raw, &ch)
+		}
+		if err != nil {
+			break
+		}
+		inUse = append(inUse, ch)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	ids, dests := channelDestinations(inUse)
+	_, err = tx.Exec(ctx, `DELETE FROM observability.webhook_keys k WHERE expires_at<=$1
+ OR (k.channel_id,k.destination) NOT IN (SELECT * FROM unnest($2::text[],$3::text[]))`, now, ids, dests)
 	return err
+}
+
+// channelDestinations are the channels' IDs and destinations, side by side, for a query to unnest.
+func channelDestinations(channels []AlertChannel) (ids, dests []string) {
+	ids, dests = make([]string, len(channels)), make([]string, len(channels))
+	for i, ch := range channels {
+		ids[i], dests[i] = ch.ID, destination(ch)
+	}
+	return ids, dests
 }
 
 func repairAlertReceipts(ctx context.Context, tx pg.Tx, now time.Time) error {
@@ -41,7 +79,7 @@ func repairAlertReceipts(ctx context.Context, tx pg.Tx, now time.Time) error {
 	}
 	for _, d := range deliveries {
 		kind := "mail.send_tracked"
-		if d.ch.WebhookURL != "" {
+		if posted(d.ch) {
 			kind = "observability.webhook"
 		}
 		pending, err := pg.HasPendingJob(ctx, tx, kind, receiptArgs{Receipt: d.id})
@@ -58,9 +96,9 @@ func repairAlertReceipts(ctx context.Context, tx pg.Tx, now time.Time) error {
 }
 
 func scheduleChannelTest(ctx context.Context, tx pg.Tx, ch AlertChannel, now time.Time) error {
-	destination := ch.Email + ch.WebhookURL
+	dest := destination(ch)
 	var due bool
-	err := tx.QueryRow(ctx, `SELECT destination<>$2 OR (next_due<=$3 AND NOT EXISTS(SELECT FROM observability.alert_receipts WHERE id=receipt_id AND state IN ('pending','queued'))) FROM observability.channel_tests WHERE channel_id=$1`, ch.ID, destination, now).Scan(&due)
+	err := tx.QueryRow(ctx, `SELECT destination<>$2 OR (next_due<=$3 AND NOT EXISTS(SELECT FROM observability.alert_receipts WHERE id=receipt_id AND state IN ('pending','queued'))) FROM observability.channel_tests WHERE channel_id=$1`, ch.ID, dest, now).Scan(&due)
 	if err != nil && !errors.Is(err, pg.ErrNoRows) {
 		return err
 	}
@@ -72,7 +110,7 @@ func scheduleChannelTest(ctx context.Context, tx pg.Tx, ch AlertChannel, now tim
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO observability.channel_tests(channel_id,destination,receipt_id,next_due) VALUES($1,$2,$3,$4)
- ON CONFLICT(channel_id) DO UPDATE SET destination=EXCLUDED.destination,receipt_id=EXCLUDED.receipt_id,next_due=EXCLUDED.next_due,reported_state=''`, ch.ID, destination, id, now.Add(time.Hour))
+ ON CONFLICT(channel_id) DO UPDATE SET destination=EXCLUDED.destination,receipt_id=EXCLUDED.receipt_id,next_due=EXCLUDED.next_due,reported_state=''`, ch.ID, dest, id, now.Add(time.Hour))
 	return err
 }
 
@@ -120,9 +158,15 @@ func reportChannelHealth(ctx context.Context, tx pg.Tx) error {
 	if err := retireChannelTests(ctx, tx); err != nil {
 		return err
 	}
-	rows, err := tx.Query(ctx, `SELECT t.channel_id,r.state FROM observability.channel_tests t JOIN observability.alert_receipts r ON r.id=t.receipt_id,observability.alert_configuration c
- WHERE r.state IN ('delivered','failed') AND r.state<>t.reported_state AND EXISTS(SELECT FROM jsonb_array_elements(c.body->'channels') ch WHERE ch->>'id'=t.channel_id AND coalesce(ch->>'email','')||coalesce(ch->>'webhook_url','')=t.destination)
- ORDER BY t.channel_id LIMIT 32 FOR UPDATE OF t SKIP LOCKED`)
+	c, err := readAlertConfiguration(ctx, tx, false)
+	if err != nil {
+		return err
+	}
+	// Only a test of the destination still configured reports: one of a replaced destination says nothing of the new.
+	ids, dests := channelDestinations(c.Channels)
+	rows, err := tx.Query(ctx, `SELECT t.channel_id,r.state FROM observability.channel_tests t JOIN observability.alert_receipts r ON r.id=t.receipt_id
+ WHERE r.state IN ('delivered','failed') AND r.state<>t.reported_state AND (t.channel_id,t.destination) IN (SELECT * FROM unnest($1::text[],$2::text[]))
+ ORDER BY t.channel_id LIMIT 32 FOR UPDATE OF t SKIP LOCKED`, ids, dests)
 	if err != nil {
 		return err
 	}
