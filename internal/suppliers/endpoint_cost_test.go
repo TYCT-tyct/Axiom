@@ -121,22 +121,45 @@ func TestEndpointCostLinesShowTheirFactors(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
 	old := w.tieredCost()
+	cost := w.confirmedCost("1.37")
+	if len(cost.Lines) != len(old.Lines) {
+		t.Fatalf("%d lines, want %d", len(cost.Lines), len(old.Lines))
+	}
+	for i, l := range cost.Lines {
+		if len(old.Lines[i].Factors) != 0 {
+			t.Errorf("a plan stored without factors has %v on %s", old.Lines[i].Factors, l.Item)
+		}
+		if len(l.Factors) != 2 || l.Factors[0].Kind != "base_price" || l.Factors[1] != (CostFactor{Kind: "group_ratio", Value: "1.37"}) {
+			t.Fatalf("%s above %d: factors %v, want the base price then the group ratio", l.Item, l.Above, l.Factors)
+		}
+		product := productOf(t, l.Factors)
+		if gap := new(big.Rat).Sub(l.Native.Rat(), product); gap.Sign() < 0 || gap.Cmp(big.NewRat(1, 1e15)) >= 0 {
+			t.Errorf("%s above %d: the factors multiply out to %s, the native price is %s", l.Item, l.Above, product.FloatString(18), l.Native)
+		}
+		expectPrice(t, l, cost.UnitValue.Rat())
+	}
+}
+
+// confirmedCost gives the world's endpoint the plan tieredCost's schedule makes as a confirmed base at the group ratio,
+// stored with its factors as the sync stores them, and reads its price lines.
+func (w *world) confirmedCost(ratio adapter.Amount) EndpointCost {
+	w.t.Helper()
 	base, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"XXX","rates":{"input":"0.075","cache_read":"0.0075","output":"0.3"},
 		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"input":"0.15","output":"0.45"}}]}}`))
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
-	scaled, err := adapter.ScaleSchedule(base, "1.37")
+	scaled, err := adapter.ScaleSchedule(base, ratio)
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
-	derivation, err := adapter.ScaledDerivation(base, "1.37").Text()
+	derivation, err := adapter.ScaledDerivation(base, ratio).Text()
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
 	schedule, err := scaled.MarshalJSON()
 	if err != nil {
-		t.Fatal(err)
+		w.t.Fatal(err)
 	}
 	w.tx(func(ctx context.Context, tx pg.Tx) error {
 		plan, err := store.New().EnsureCostSchedule(ctx, tx, store.EnsureCostScheduleParams{
@@ -153,27 +176,19 @@ func TestEndpointCostLinesShowTheirFactors(t *testing.T) {
 		cost, err = w.adminOf().EndpointCost(ctx, tx, w.supplier, w.endpoint, PlatformOwned)
 		return err
 	})
-	if len(cost.Lines) != len(old.Lines) {
-		t.Fatalf("%d lines, want %d", len(cost.Lines), len(old.Lines))
+	return cost
+}
+
+// productOf is the exact product of the factors.
+func productOf(t *testing.T, factors []CostFactor) *big.Rat {
+	t.Helper()
+	product := big.NewRat(1, 1)
+	for _, f := range factors {
+		v, ok := new(big.Rat).SetString(f.Value)
+		if !ok {
+			t.Fatalf("factor %v", f)
+		}
+		product.Mul(product, v)
 	}
-	for i, l := range cost.Lines {
-		if len(old.Lines[i].Factors) != 0 {
-			t.Errorf("a plan stored without factors has %v on %s", old.Lines[i].Factors, l.Item)
-		}
-		if len(l.Factors) != 2 || l.Factors[0].Kind != "base_price" || l.Factors[1] != (CostFactor{Kind: "group_ratio", Value: "1.37"}) {
-			t.Fatalf("%s above %d: factors %v, want the base price then the group ratio", l.Item, l.Above, l.Factors)
-		}
-		product := big.NewRat(1, 1)
-		for _, f := range l.Factors {
-			v, ok := new(big.Rat).SetString(f.Value)
-			if !ok {
-				t.Fatalf("factor %v", f)
-			}
-			product.Mul(product, v)
-		}
-		if gap := new(big.Rat).Sub(l.Native.Rat(), product); gap.Sign() < 0 || gap.Cmp(big.NewRat(1, 1e15)) >= 0 {
-			t.Errorf("%s above %d: the factors multiply out to %s, the native price is %s", l.Item, l.Above, product.FloatString(18), l.Native)
-		}
-		expectPrice(t, l, cost.UnitValue.Rat())
-	}
+	return product
 }

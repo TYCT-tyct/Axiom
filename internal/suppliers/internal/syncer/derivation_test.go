@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"math/big"
+	"slices"
 	"testing"
 
 	"axiom/internal/catalog"
@@ -16,20 +17,9 @@ import (
 // plans carried factors, and the same prices with factors are another version of the plan.
 func TestAPlanKeepsItsFactors(t *testing.T) {
 	t.Parallel()
-	published, err := catalog.ParseSchedule([]byte(`{"currency":"XXX","v":1,"rates":{"input":"0.15","output":"0.6"}}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ratios := adapter.Derive(published, func(catalog.ScheduleRate) map[adapter.FactorKind]*big.Rat {
-		return map[adapter.FactorKind]*big.Rat{adapter.FactorModelRatio: big.NewRat(1, 10), adapter.FactorGroupRatio: big.NewRat(3, 2)}
-	}, []adapter.FactorKind{adapter.FactorModelRatio, adapter.FactorGroupRatio})
-	right := adapter.Derive(published, func(r catalog.ScheduleRate) map[adapter.FactorKind]*big.Rat {
-		f := map[adapter.FactorKind]*big.Rat{adapter.FactorModelRatio: big.NewRat(1, 10), adapter.FactorGroupRatio: big.NewRat(3, 2)}
-		if r.Item == catalog.ItemOutput {
-			f[adapter.FactorCompletionRatio] = big.NewRat(4, 1)
-		}
-		return f
-	}, []adapter.FactorKind{adapter.FactorModelRatio, adapter.FactorGroupRatio, adapter.FactorCompletionRatio})
+	published := mustSchedule(t, `{"currency":"XXX","v":1,"rates":{"input":"0.15","output":"0.6"}}`)
+	ratios := ratiosOf(published, nil)
+	right := ratiosOf(published, big.NewRat(4, 1))
 	wrong := adapter.Derivation{{ServiceTier: "standard", Item: "input", Factors: []adapter.Factor{{Kind: adapter.FactorModelRatio, Value: "7"}}}}
 	cases := []struct {
 		name      string
@@ -47,21 +37,8 @@ func TestAPlanKeepsItsFactors(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			m := healthy()
-			m.offer = offerOf(tc.model, "1.5")
-			e, st, _ := engine(m)
-			if tc.confirmed {
-				st.state.Confirmed = map[string]string{"m1": confirmedBase}
-			}
-			round(t, e)
-			if len(st.plans) != 1 {
-				t.Fatalf("%d plans, want 1", len(st.plans))
-			}
-			p := st.plans[0]
-			s, err := catalog.ParseSchedule([]byte(p.Schedule))
-			if err != nil {
-				t.Fatal(err)
-			}
+			p := onePlan(t, tc.model, tc.confirmed)
+			s := mustSchedule(t, p.Schedule)
 			d, err := adapter.ParseDerivation(p.Derivation)
 			if err != nil || (d != nil) != tc.factors {
 				t.Fatalf("derivation %q (%v), want factors %t", p.Derivation, err, tc.factors)
@@ -77,9 +54,37 @@ func TestAPlanKeepsItsFactors(t *testing.T) {
 	// The confirmed plan's factors: the base's price, then the group's ratio.
 	got := adapter.ScaledDerivation(mustSchedule(t, confirmedBase), "1.5")
 	want := []adapter.Factor{{Kind: adapter.FactorBasePrice, Value: "0.000015"}, {Kind: adapter.FactorGroupRatio, Value: "1.5"}}
-	if len(got) != 2 || got[1].Item != "output" || len(got[1].Factors) != 2 || got[1].Factors[0] != want[0] || got[1].Factors[1] != want[1] {
+	if len(got) != 2 || got[1].Item != "output" || !slices.Equal(got[1].Factors, want) {
 		t.Errorf("the confirmed plan's derivation %+v, want the output's to be %v", got, want)
 	}
+}
+
+// ratiosOf is a derivation of s at a model ratio of 0.1 and a group ratio of 1.5, with the output at completion times
+// the input when completion is not nil.
+func ratiosOf(s catalog.Schedule, completion *big.Rat) adapter.Derivation {
+	return adapter.Derive(s, func(r catalog.ScheduleRate) map[adapter.FactorKind]*big.Rat {
+		f := map[adapter.FactorKind]*big.Rat{adapter.FactorModelRatio: big.NewRat(1, 10), adapter.FactorGroupRatio: big.NewRat(3, 2)}
+		if r.Item == catalog.ItemOutput && completion != nil {
+			f[adapter.FactorCompletionRatio] = completion
+		}
+		return f
+	}, []adapter.FactorKind{adapter.FactorModelRatio, adapter.FactorGroupRatio, adapter.FactorCompletionRatio})
+}
+
+// onePlan is the one plan a round makes of a group of ratio 1.5 offering the model, with a confirmed base when asked.
+func onePlan(t *testing.T, model adapter.Model, confirmed bool) Plan {
+	t.Helper()
+	m := healthy()
+	m.offer = offerOf(model, "1.5")
+	e, st, _ := engine(m)
+	if confirmed {
+		st.state.Confirmed = map[string]string{"m1": confirmedBase}
+	}
+	round(t, e)
+	if len(st.plans) != 1 {
+		t.Fatalf("%d plans, want 1", len(st.plans))
+	}
+	return st.plans[0]
 }
 
 // TestFactorsMultiplyOutAcrossBands: a confirmed base with a context tier and a ratio whose products need rounding

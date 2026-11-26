@@ -101,18 +101,23 @@ func (a *Admin) EndpointCost(ctx context.Context, tx pg.Tx, supplier, endpoint u
 	}
 	c.Plan, c.Basis, c.Schedule = r.PlanID, deref(r.Basis), &schedule
 	for _, rate := range schedule.View().Rates {
-		line := CostLine{Item: rate.Item, ServiceTier: rate.ServiceTier, Base: rate.Base, Above: rate.Above, Native: rate.Price}
-		for _, f := range derivation.Of(rate) {
-			line.Factors = append(line.Factors, CostFactor{Kind: string(f.Kind), Value: f.Value})
-		}
-		if c.UnitValue != nil {
-			if price, err := oneUnit.Scale(inSettlement(rate.Price.Rat(), c.UnitValue.Rat())); err == nil {
-				line.Price = &price
-			}
-		}
-		c.Lines = append(c.Lines, line)
+		c.Lines = append(c.Lines, costLine(rate, derivation.Of(rate), c.UnitValue))
 	}
 	return c, nil
+}
+
+// costLine is one rate of a plan as a price line: in the settlement currency when a unit value is confirmed.
+func costLine(rate catalog.ScheduleRate, factors []adapter.Factor, unitValue *platform.UnitPrice) CostLine {
+	line := CostLine{Item: rate.Item, ServiceTier: rate.ServiceTier, Base: rate.Base, Above: rate.Above, Native: rate.Price}
+	for _, f := range factors {
+		line.Factors = append(line.Factors, CostFactor{Kind: string(f.Kind), Value: f.Value})
+	}
+	if unitValue != nil {
+		if price, err := oneUnit.Scale(inSettlement(rate.Price.Rat(), unitValue.Rat())); err == nil {
+			line.Price = &price
+		}
+	}
+	return line
 }
 
 // oneUnit is 1, which Scale rounds an exact amount up to a unit price with.

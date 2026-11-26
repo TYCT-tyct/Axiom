@@ -59,20 +59,7 @@ func intakeRuleOf(r store.GetIntakeRuleRow) (intakeRule, error) {
 // by the snapshot alone, exactly as under `listed`. It asks the tables once for every name of the listing and every
 // alias's model that the snapshot does not know.
 func (p *projector) withDrafts(ctx context.Context) (draftCatalog, error) {
-	var names []string
-	for _, g := range p.st.Groups {
-		for _, m := range g.Models {
-			if _, ok := p.snap.Recognize(m.Name); !ok {
-				names = append(names, m.Name)
-			}
-		}
-	}
-	var ids []catalog.ModelID
-	for _, a := range p.aliases {
-		if _, ok := p.snap.Model(a.model); !ok {
-			ids = append(ids, a.model)
-		}
-	}
+	names, ids := p.notInSnapshot()
 	known, err := catalog.RecognizeIn(ctx, p.tx, names)
 	if err != nil {
 		return draftCatalog{}, err
@@ -93,6 +80,23 @@ func (p *projector) withDrafts(ctx context.Context) (draftCatalog, error) {
 		}
 	}
 	return c, nil
+}
+
+// notInSnapshot are the listing's names the snapshot does not recognise and the models of aliases it does not hold.
+func (p *projector) notInSnapshot() (names []string, ids []catalog.ModelID) {
+	for _, g := range p.st.Groups {
+		for _, m := range g.Models {
+			if _, ok := p.snap.Recognize(m.Name); !ok {
+				names = append(names, m.Name)
+			}
+		}
+	}
+	for _, a := range p.aliases {
+		if _, ok := p.snap.Model(a.model); !ok {
+			ids = append(ids, a.model)
+		}
+	}
+	return names, ids
 }
 
 // draftCatalog is the snapshot with the drafts withDrafts read beside it.

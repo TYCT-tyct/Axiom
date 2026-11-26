@@ -205,22 +205,12 @@ func TestOfferHandsOverTheFactors(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, m := range offer[0].Models {
-		if m.Cost == nil || m.Derivation == nil {
-			t.Fatalf("%s: cost %v, derivation %v", m.UpstreamName, m.Cost, m.Derivation)
+		if m.Cost == nil {
+			t.Fatalf("%s has no cost", m.UpstreamName)
 		}
 		if err := m.Derivation.Check(*m.Cost); err != nil {
 			t.Errorf("%s: %v", m.UpstreamName, err)
 		}
-	}
-	factors := func(name, item string) []adapter.Factor {
-		for _, m := range offer[0].Models {
-			for _, r := range m.Derivation {
-				if m.UpstreamName == name && r.Item == item {
-					return r.Factors
-				}
-			}
-		}
-		return nil
 	}
 	f2 := func(kind adapter.FactorKind, v string) adapter.Factor { return adapter.Factor{Kind: kind, Value: v} }
 	model, group := f2(adapter.FactorModelRatio, "0.075"), f2(adapter.FactorGroupRatio, "1.37")
@@ -235,8 +225,20 @@ func TestOfferHandsOverTheFactors(t *testing.T) {
 		{"plain", "cache_write", []adapter.Factor{f2(adapter.FactorModelRatio, "2"), group, f2(adapter.FactorCacheWriteRatio, "1.25")}},
 		{"fine", "output", []adapter.Factor{f2(adapter.FactorModelRatio, "0.000000123456789"), group, f2(adapter.FactorCompletionRatio, "3.3333")}},
 	} {
-		if diff := cmp.Diff(tc.want, factors(tc.name, tc.item)); diff != "" {
+		if diff := cmp.Diff(tc.want, factorsOf(offer[0].Models, tc.name, tc.item)); diff != "" {
 			t.Errorf("%s %s (-want +got):\n%s", tc.name, tc.item, diff)
 		}
 	}
+}
+
+// factorsOf is the factors of one item of one model of a group.
+func factorsOf(models []adapter.Model, name, item string) []adapter.Factor {
+	for _, m := range models {
+		for _, r := range m.Derivation {
+			if m.UpstreamName == name && r.Item == item {
+				return r.Factors
+			}
+		}
+	}
+	return nil
 }
