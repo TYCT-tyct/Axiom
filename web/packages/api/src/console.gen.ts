@@ -2371,7 +2371,7 @@ export interface components {
             permissions: string[];
             /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
             consent?: components["schemas"]["SessionConsent"];
-            /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Absent on an older node. */
+            /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console, absent on the admin and on an older node. */
             calls_paused?: boolean;
         };
         SessionList: {

@@ -7259,6 +7259,9 @@ type Session struct {
 	// Account An account's ID (TypeID).
 	Account AccountId `json:"account"`
 
+	// CallsPaused Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console, absent on the admin and on an older node.
+	CallsPaused *bool `json:"calls_paused,omitempty"`
+
 	// Consent What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it.
 	Consent   *SessionConsent `json:"consent,omitempty"`
 	CsrfToken string          `json:"csrf_token"`
