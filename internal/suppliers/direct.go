@@ -267,10 +267,7 @@ func outcomeOf(o adapter.KeyOutcome) CheckOutcome {
 // storing now, is a duplicate here too. snap is the catalog the keys' model names are mapped by and the official
 // prices come from.
 func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, p *DirectPlan) (Connected, error) {
-	if err := takeStoreTurn(ctx, tx); err != nil {
-		return Connected{}, err
-	}
-	if err := p.skipStored(ctx, tx); err != nil {
+	if err := p.recheck(ctx, tx); err != nil {
 		return Connected{}, err
 	}
 	passed := slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed })

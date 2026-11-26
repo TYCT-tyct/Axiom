@@ -66,10 +66,7 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return nil, err
 	}
-	if err := takeStoreTurn(ctx, tx); err != nil {
-		return nil, err
-	}
-	if err := p.skipStored(ctx, tx); err != nil {
+	if err := p.recheck(ctx, tx); err != nil {
 		return nil, err
 	}
 	if !slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed }) {
@@ -104,4 +101,13 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 		return nil, err
 	}
 	return p.Checks, nil
+}
+
+// recheck takes the store turn and then marks the keys a credential holds now as duplicates: what a write does just
+// before it stores pasted keys.
+func (p *DirectPlan) recheck(ctx context.Context, tx pg.Tx) error {
+	if err := takeStoreTurn(ctx, tx); err != nil {
+		return err
+	}
+	return p.skipStored(ctx, tx)
 }
