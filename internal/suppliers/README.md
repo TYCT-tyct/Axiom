@@ -38,7 +38,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |
 | `endpoints` | `UNIQUE (supplier_group_id, model_id)`；成本已知必有成本计划（`known_has_schedule`） |
 | `cost_schedules` | 只追加，`UNIQUE (endpoint_id, fingerprint)` |
-| `attempt_costs` | PK `(request_id, attempt_seq)`，`attempt_seq` 1 到 33；`charge_record_id` 唯一；`test` 标记检测行 |
+| `attempt_costs` | PK `(request_id, attempt_seq)`，`attempt_seq` 1 到 33；`charge_record_id` 唯一；`test` 标记检测行；索引 `(endpoint_id, finished_at)` 供盈亏点读近 24 小时 |
 | `ended_requests`、`lost_requests`、`lost_request_resolutions` | 只插入；带请求所属租户 |
 | `charge_records`、`charge_events` | `UNIQUE (supplier_id, charge_ref)`；事件 `UNIQUE (charge_record_id, revision)` |
 | `sync_states`、`sync_events`、`sync_plans` | 状态 jsonb 加格式号、清单位置 `listing`、栅栏、租约；事件和计划只插入 |
@@ -142,6 +142,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | 移除后库里没有这家的密文，做过的尝试仍能结算 | `Admin.Remove` 一个事务；`erased` 的 CHECK |
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`（平台范围）；`just adapters-removable` 对 new-api、sub2api、cpa、openai |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
+| 价目行就是收费：原生单价取计价用的同一份计划，换成结算币种走 `Credits` 的同一个乘法 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged`（各档、各计费项对照 `Credits`） |
 
 ## 管理接口
 
@@ -157,4 +158,5 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | `SetLimits` | `ErrNoCredential`、`ErrLimits`、`ErrStatusLocked` |
 | `MapModel`、`MapPending` | `ErrAliasExists`、`ErrAliasRevision`、`ErrNotPending`、`ErrModelTaken`、`ErrNoGroup`、`ErrStatusLocked` |
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
-| `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`（只读） | `ErrNoSupplier` |
+| `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`（分堆）（只读） | `ErrNoSupplier` |
+| `EndpointCost`（价目行）、`EndpointTraffic`（近 24 小时用量）（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
