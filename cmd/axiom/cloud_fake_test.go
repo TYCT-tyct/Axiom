@@ -43,8 +43,8 @@ var cloudHosts = []string{
 const (
 	cloudKeyID             = "AKIAFAKEHARBOR0001"
 	cloudOtherVersionKeyID = "AKIAFAKEHARBOR0003"
-	cloudResourceKey = "az-good-key-0042"
-	cloudGrant       = "fake-grant-1"
+	cloudResourceKey       = "az-good-key-0042"
+	cloudGrant             = "fake-grant-1"
 )
 
 // fakeCloud is Vertex AI, Bedrock and Azure OpenAI over TLS on loopback. Each lists or serves the models named, takes

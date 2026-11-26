@@ -183,10 +183,8 @@ func (p *DirectPlan) resolve(currency string) error {
 	return nil
 }
 
-// takeStoreTurn makes the transactions that store a pasted key or a cloud credential for a supplier take turns until
-// they commit, so the skipStored each runs next sees what the one before it stored. Without it two of them (READ
-// COMMITTED) would each find a credential not stored yet and both store it, each for a supplier of its own: the
-// table's unique constraint is per supplier, and nothing in a credential's row says it is a direct or cloud one.
+// takeStoreTurn makes the transactions that store a pasted key or cloud credential take turns until they commit, so
+// the skipStored each runs next sees what the one before stored; the unique constraint is only per supplier.
 func takeStoreTurn(ctx context.Context, tx pg.Tx) error {
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('suppliers.pasted_credentials'))`); err != nil {
 		return fmt.Errorf("wait for the credentials being stored: %w", err)

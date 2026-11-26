@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 	"uuid"
@@ -127,19 +128,14 @@ func TestCredentialLoadIsThisNodesCount(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 1, LastMinute: 1}) {
-				t.Errorf("holding a call: %+v", got)
-			}
+			held := w.svc.CredentialLoad(w.credential, w.supplier)
 			a.Done()
-			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 0, LastMinute: 1}) {
-				t.Errorf("after the call: %+v", got)
-			}
+			after := w.svc.CredentialLoad(w.credential, w.supplier)
 			w.clock.advance(61 * time.Second)
-			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{}) {
-				t.Errorf("a minute later: %+v", got)
-			}
-			if got := w.svc.CredentialLoad(uuid.NewV7(), uuid.NewV7()); got != (Load{}) {
-				t.Errorf("a credential never loaded: %+v", got)
+			got := []Load{held, after, w.svc.CredentialLoad(w.credential, w.supplier), w.svc.CredentialLoad(uuid.NewV7(), uuid.NewV7())}
+			// holding a call, after it, a minute later, and a credential never loaded
+			if want := []Load{{InFlight: 1, LastMinute: 1}, {LastMinute: 1}, {}, {}}; !slices.Equal(got, want) {
+				t.Errorf("the loads are %+v, want %+v", got, want)
 			}
 		})
 	}
