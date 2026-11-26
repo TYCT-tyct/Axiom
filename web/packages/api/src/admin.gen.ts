@@ -2300,7 +2300,7 @@ export interface paths {
         put?: never;
         /**
          * Have a supplier synced now
-         * @description Makes every task of the supplier due now, as replacing its login does, without clearing a halted task or a backoff: the next scan, within 15 seconds, queues it. The answer is the tasks as scheduled; `listSupplierSyncRuns` shows what the run changed. A supplier that is not synced (`paused`, `needs_attention`, `removed`) is 409.
+         * @description Makes every task of the supplier due now, as replacing its login does, without clearing a halted task or a backoff: the next scan, within 15 seconds, queues it. The answer is the tasks as scheduled; `listSupplierSyncRuns` shows what the run changed. A supplier that is not synced (`paused`, `needs_attention`, `removed`, or any `mode` but `relay`) is 409.
          */
         post: operations["requestSupplierSync"];
         delete?: never;
@@ -2359,7 +2359,7 @@ export interface paths {
         get?: never;
         /**
          * Choose which of a supplier's models become endpoints
-         * @description The rule the sync's projection applies to the supplier's names, in place of the fixed choice: `listed` takes a name of a model on sale, as every supplier did before; `known` also takes a name of a draft model, whose endpoint waits until the model is listed; `names` takes a name of a model on sale that matches one of `include` and none of `exclude`. A group a person never chose is selected when the rule takes one of its names; a person's choice of a group is never changed. The change applies from the next catalog sync; endpoints the rule no longer takes become cost unknown and leave routing, as a delisted model's do. As of `rev`: 409 `stale_revision` when the rule changed since it was read.
+         * @description The rule the sync's projection applies to the supplier's names, in place of the fixed choice: `listed` takes a name of a model on sale, as every supplier did before; `known` also takes a name of a draft model, whose endpoint waits until the model is listed; `names` takes a name of a model on sale that matches one of `include` and none of `exclude`. A group a person never chose is selected when the rule takes one of its names; a person's choice of a group is never changed. The change applies from the next catalog sync; endpoints the rule no longer takes become cost unknown and leave routing, as a delisted model's do. As of `rev`: 409 `stale_revision` when the rule changed since it was read. Only a relay is synced: 409 `conflict` for a direct API or a cloud supplier, whose models come from its keys.
          */
         put: operations["setSupplierIntakeRule"];
         post?: never;

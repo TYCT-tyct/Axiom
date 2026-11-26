@@ -47,7 +47,7 @@ func TestSupplierSyncRuns(t *testing.T) {
 }
 
 // TestRequestSupplierSync: asking for a sync makes every task due and answers how they stand, recorded once; a paused
-// supplier is not synced; the detail gives the tasks and the default rule.
+// supplier is not synced, nor is one that is not a relay; the detail gives the tasks and the default rule.
 func TestRequestSupplierSync(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
@@ -62,6 +62,11 @@ func TestRequestSupplierSync(t *testing.T) {
 	expectSame(t, "requests recorded", f.auditCount("supplier.sync_request"), "1")
 	f.run("UPDATE suppliers.suppliers SET status = 'paused' WHERE id = '" + supplier + "'")
 	expectAdmin(t, "paused", f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/sync-requests", `{"reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
+	for _, mode := range []string{"direct", "cloud"} {
+		f.run("UPDATE suppliers.suppliers SET status = 'active', mode = '" + mode + "' WHERE id = '" + supplier + "'")
+		expectAdmin(t, mode, f.change(f.s, http.MethodPost, "/suppliers/"+supplier+"/sync-requests", `{"reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
+	}
+	expectSame(t, "requests recorded at last", f.auditCount("supplier.sync_request"), "1")
 	var detail adminapi.SupplierDetail
 	decode(t, f.do(http.MethodGet, "/suppliers/"+supplier, "", as(f.s)), &detail)
 	expectSame(t, "the detail's tasks and rule", []any{len(valueOf(detail.SyncTasks)), valueOf(detail.IntakeRule)},
@@ -149,7 +154,7 @@ func TestSupplierReconciliation(t *testing.T) {
 }
 
 // TestSupplierIntakeRule: the rule is replaced as of its revision; a rule that does not fit its mode is refused, a stale
-// revision is a conflict, and the same rule changes nothing.
+// revision is a conflict, and the same rule changes nothing. A supplier the sync does not run has no rule to set.
 func TestSupplierIntakeRule(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
@@ -176,6 +181,11 @@ func TestSupplierIntakeRule(t *testing.T) {
 	f.send(http.MethodPut, path, `{"mode":"known","rev":1,"reason":"all we know"}`, http.StatusOK, &rule)
 	expectSame(t, "known", rule, adminapi.SupplierIntakeRule{Mode: "known", Include: []string{}, Exclude: []string{}, Rev: 2})
 	expectAdmin(t, "no supplier", f.change(f.s, http.MethodPut, "/suppliers/"+uuid.NewV7().String()+"/intake-rule", `{"mode":"known","rev":0,"reason":"r"}`, newKey()), http.StatusNotFound, codeNotFound)
+	for _, mode := range []string{"direct", "cloud"} {
+		f.run("UPDATE suppliers.suppliers SET mode = '" + mode + "' WHERE id = '" + supplier + "'")
+		expectAdmin(t, mode, f.change(f.s, http.MethodPut, path, `{"mode":"listed","rev":2,"reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
+	}
+	expectSame(t, "rules recorded at last", f.auditCount("supplier.intake_rule"), "2")
 }
 
 // inboxShows is what the queue lists and counts now: kind:credential@group of each key_invalid item, the total and the

@@ -21,6 +21,9 @@ var (
 	ErrIntakeRule = errors.New("suppliers: names takes include and exclude patterns, and only names does")
 	// ErrIntakeRevision is a rule decided against a revision that is no longer current.
 	ErrIntakeRevision = errors.New("suppliers: the intake rule changed since it was read")
+	// ErrNotSynced is a sync or an intake rule asked of a supplier the sync never runs for: a direct API's or a cloud
+	// supplier's models come from its keys when it is connected, and nothing would ever apply the change.
+	ErrNotSynced = errors.New("suppliers: the sync does not run for a direct API or a cloud supplier")
 )
 
 // IntakeRule is a supplier's rule. Rev 0 is the default rule `listed`, never written.
@@ -61,6 +64,18 @@ func lockedIntakeRule(ctx context.Context, tx pg.Tx, q *store.Queries, supplier 
 	return IntakeRule{Mode: rows[0].Mode, Include: rows[0].Include, Exclude: rows[0].Exclude, Rev: rows[0].Rev}, nil
 }
 
+// synced is nil for a supplier the sync runs for and ErrNotSynced for any other; the supplier exists.
+func synced(ctx context.Context, tx pg.Tx, supplier uuid.UUID) error {
+	relay, err := store.New().SupplierSynced(ctx, tx, supplier)
+	switch {
+	case err != nil:
+		return fmt.Errorf("read the supplier's mode: %w", err)
+	case !relay:
+		return ErrNotSynced
+	}
+	return nil
+}
+
 // IntakeRuleOf reads the supplier's rule, the default when none is stored.
 func (*Admin) IntakeRuleOf(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (IntakeRule, error) {
 	rows, err := store.New().GetIntakeRule(ctx, tx, supplier)
@@ -74,13 +89,17 @@ func (*Admin) IntakeRuleOf(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (I
 }
 
 // SetIntakeRule replaces the supplier's rule, decided against rev. A rule as it is changes nothing and records nothing.
-// It applies from the projection of the next sync; an endpoint the rule no longer takes then leaves routing.
+// It applies from the projection of the next sync; an endpoint the rule no longer takes then leaves routing. A supplier
+// the sync does not run for is ErrNotSynced.
 func (a *Admin) SetIntakeRule(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, rule IntakeRule, reason string) (IntakeRule, error) {
 	rule, err := rule.checked()
 	if err != nil {
 		return IntakeRule{}, err
 	}
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
+		return IntakeRule{}, err
+	}
+	if err := synced(ctx, tx, supplier); err != nil {
 		return IntakeRule{}, err
 	}
 	q := store.New()

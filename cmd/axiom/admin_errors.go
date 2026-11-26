@@ -107,6 +107,7 @@ var adminRefusals = []refusal{
 	{suppliers.ErrTooManyCredentials, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("more than %d credentials to test: test them by supplier", suppliers.MaxCredentialTests)},
 	{suppliers.ErrIntakeRule, http.StatusUnprocessableEntity, codeUnprocessable, "names takes include and exclude patterns, and only names does"},
 	{suppliers.ErrIntakeRevision, http.StatusConflict, codeStaleRevision, "the intake rule changed since it was read"},
+	{suppliers.ErrNotSynced, http.StatusConflict, codeConflict, "a direct API or a cloud supplier is not synced: its models come from its keys"},
 	{suppliers.ErrNoInboxItem, http.StatusNotFound, codeNotFound, "no such resource"},
 }
 

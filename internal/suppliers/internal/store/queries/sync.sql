@@ -79,6 +79,10 @@ WHERE s.status = ANY(@statuses::text[]) AND s.mode = 'relay'
 ORDER BY y.next_due NULLS FIRST, s.id
 LIMIT @max;
 
+-- name: SupplierSynced :one
+-- Whether the sync runs for the supplier at all: only a relay has a listing to read, as ListSyncDue says.
+SELECT mode = 'relay' FROM suppliers.suppliers WHERE id = @id;
+
 -- name: GetSupplierLogin :one
 SELECT ciphertext, nonce, wrapped_dek, key_version, version FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;
 

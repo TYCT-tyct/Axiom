@@ -112,7 +112,7 @@
 - **贴 key**：`addSupplierKeys` 逐把处理：同一请求里重复的、对方的 ref 已经存过的是 `duplicate`；对方列在别的分组的、对方不列但检测能通过的（别的账号的 key）是 `wrong_group`；其余发一次检测，通过的才存，各成一条凭证（`source` 为 `pasted`，`hint` 是末四位），带上对方清单给的模型限制和到期时间。幂等指纹只含末四位。
 - **检测 key**：`GET /v1/models`，10 秒，对方不收费。2xx 通过；401 `credential_rejected`；403 适配器认出是 key 额度用尽为失败，否则 `not_permitted` 不可判定（可能是地区封锁）；429、5xx、超时、传输失败不可判定。存过的凭证：通过时 `rejected` 回到 `active`，401 改为 `rejected`，其余不改状态；结果写进凭证的 `checked_at` 等列并审计。`disabled`、`erased` 不检测。全部检测一次至多 200 条、8 条并发，与单条共用每会话每分钟 10 次。
 - **停用与擦除**：`setSupplierCredentialEnabled` 关掉即 `disabled`，打开只把 `disabled` 改回 `active`，`rejected` 打开仍是 `rejected`；`removeSupplierCredential` 清空密文、标 `erased`，审计记要去对方吊销的 ref；`removeInvalidSupplierCredentials` 只擦此刻仍是 `rejected` 的。这几项提交后回答请求的节点当场重建端点快照和路由，其他节点在下一次 `Reload`（5 秒）。
-- **同步记录**：`listSupplierSyncRuns` 读 `sync_events`，按版本成组、新的在前，分组的事件按 ref、模型的按 `ref/模型` 找回分组。`requestSupplierSync` 把未停止的任务提前到现在，不清退避、不清停止，只对 `connecting`、`active`、`low_balance`。
+- **同步记录**：`listSupplierSyncRuns` 读 `sync_events`，按版本成组、新的在前，分组的事件按 ref、模型的按 `ref/模型` 找回分组。`requestSupplierSync` 把未停止的任务提前到现在，不清退避、不清停止，只对 `connecting`、`active`、`low_balance` 的中转站；直连和云供应商没有同步（调度只扫中转站），请求是 409，免得页面显示同步成功、什么也没发生。
 - **对账报告**：`getSupplierReconciliation` 按 UTC 天给当天尝试的估算合计（含检测）、当天扣费记录合计、对上、暂挂、按对账判定偏高偏低的笔数，和过了宽限仍没扣费的有键尝试数；差值按估算算基点，精确计算后四舍五入（远离零）。从没有扣费记录的供应商没有天。
 - **测试端点**：`testSupplierEndpoint` 发一次真实生成，每会话每分钟 10 次，见[模块 README 的「用真实生成测试端点」](../../internal/suppliers/README.md#用真实生成测试端点)。
 - **读**：调用方用 `Owners` 选读谁的供应商；运营接口只读平台的，管理后台读全部归属（含 BYOK）。`TopUpBasis` 给运营 agent 的充值提案读归属、状态、原生单位、结算币种和现行单位价值，不加锁，串行由运营的上限计数器负责（见 [operations 的「资金上限」](../../internal/operations/README.md#资金上限)）。
@@ -183,7 +183,7 @@
 
 ### 接入规则
 
-每个供应商一条 `intake_rules`，没有就是 `listed`：收已上架模型的名字，就是规则出现前的做法。`names` 只收与 `include` 之一整段匹配、且不匹配任何 `exclude` 的已上架模型名字（`*` 是任意一串，不分大小写）。`known` 还收草稿模型的名字：快照认不出的名字和别名指向的模型，在投影的事务里用目录含草稿的识别（`catalog.RecognizeIn`、`ModelsIn`，与分堆同一个来源）再查一次，只取草稿；端点照常生成，但网关只给已上架模型建路由条目，等模型过了上架门槛才被路由。不再收的名字仍记着映射，不进待映射；它的端点成本改为未知（原因是接入规则），规则再收时恢复。从没人选过的分组在规则收下它的一个有价名字时才自动选中，人的选择不改。投影每次提交读一次规则，改规则不加配置代次。
+每个供应商一条 `intake_rules`，没有就是 `listed`：收已上架模型的名字，就是规则出现前的做法。`names` 只收与 `include` 之一整段匹配、且不匹配任何 `exclude` 的已上架模型名字（`*` 是任意一串，不分大小写）。`known` 还收草稿模型的名字：快照认不出的名字和别名指向的模型，在投影的事务里用目录含草稿的识别（`catalog.RecognizeIn`、`ModelsIn`，与分堆同一个来源）再查一次，只取草稿；端点照常生成，但网关只给已上架模型建路由条目，等模型过了上架门槛才被路由。不再收的名字仍记着映射，不进待映射；它的端点成本改为未知（原因是接入规则），规则再收时恢复。从没人选过的分组在规则收下它的一个有价名字时才自动选中，人的选择不改。投影每次提交读一次规则，改规则不加配置代次。规则只有同步的投影会用，直连和云供应商的模型在接入时来自 key 自己的清单，给它们设规则是 409。
 
 ### 待处理队列
 
