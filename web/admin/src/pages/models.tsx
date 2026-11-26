@@ -1,55 +1,118 @@
-import type { AdminSchemas } from "@axiom/api";
-import { LoadMore } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, Field, Icon, PageHead, Table, Td } from "@axiom/ui";
+import { can, LoadMore, useSession } from "@axiom/app";
+import { ActionButton, Card, Cluster, DataState, EmptyState, Field } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useLines } from "../lines";
 import { Authors } from "../models/authors";
 import { modelStatus, modelStatuses } from "../models/catalog";
+import { CatalogTable } from "../models/catalog-table";
 import { DraftDialog } from "../models/draft-dialog";
-import { ModelState } from "../models/parts";
-import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody, text, useShownAfter } from "../parts";
+import { ModelDrawer } from "../models/drawer";
+import { useModelLibrary } from "../models/library";
+import { ImportDialog } from "../models/library-dialogs";
+import { ChoiceFilter, FilterBar, NewButton, text } from "../parts";
 import { authorsQuery, type ModelFilters, modelsQuery } from "../queries";
+import { TabbedPage, useTabs } from "../tabbed-page";
 
+type Search = { status?: string; author?: string; q?: string; model?: string };
+
+// The catalog and the authors of its models (adPg_models in admin_pages_a.js). A model opens in a drawer over the
+// catalog, which the address names (`?model=`), so a link to a model is a link to the catalog with it open.
 export default function Models() {
   const { t } = useTranslation();
   const search = useSearch({ from: "/app/models" });
-  const filters: ModelFilters = { status: search.status, author: search.author, slug_prefix: search.q };
-  const models = useInfiniteQuery(modelsQuery(filters));
-  const rows = models.data?.pages.flatMap((page) => page.data) ?? [];
-  const filtered = Object.values(filters).some(Boolean);
-  const listed = useShownAfter(models.isPending);
+  const library = useModelLibrary();
+  const tab: "catalog" | "authors" = search.tab ?? "catalog";
+  const tabs = useTabs(
+    "/models",
+    [
+      { key: "catalog", label: t("models.tabs.catalog") },
+      { key: "authors", label: t("models.tabs.authors") },
+    ],
+    tab,
+  );
+  const manage = can(useSession(), "catalog.manage");
+  return (
+    <TabbedPage
+      title={t("nav.models")}
+      lede={tab === "catalog" ? t("models.description") : undefined}
+      label={t("models.tabs.label")}
+      tabs={tabs}
+      actions={
+        tab === "catalog" && manage ? (
+          <Cluster>
+            {library ? <ImportButton /> : null}
+            <NewButton permission="catalog.manage" label={t("models.draft.open")}>
+              {(close) => <DraftDialog onClose={close} />}
+            </NewButton>
+          </Cluster>
+        ) : undefined
+      }
+    >
+      {tab === "authors" ? <Authors /> : <Catalog search={search} library={library} />}
+    </TabbedPage>
+  );
+}
+
+function ImportButton() {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(false);
   return (
     <>
-      <PageHead title={t("nav.models")} lede={t("models.description")} />
-      <PageBody>
-        <Actions>
-          <NewButton permission="catalog.manage" label={t("models.draft.open")}>
-            {(close) => <DraftDialog onClose={close} />}
-          </NewButton>
-        </Actions>
-        <Filter search={search} />
-        <Card layout="flush">
-          <DataState
-            query={models}
-            isEmpty={() => rows.length === 0}
-            empty={
-              <EmptyState title={filtered ? t("models.noMatch.title") : t("models.empty.title")}>
-                {filtered ? t("models.noMatch.body") : t("models.empty.body")}
-              </EmptyState>
-            }
-          >
-            {() => <ModelsTable rows={rows} />}
-          </DataState>
-          <LoadMore list={models} />
-        </Card>
-        {listed ? <Authors /> : null}
-      </PageBody>
+      <ActionButton onClick={() => setOpen(true)}>{t("models.import.open")}</ActionButton>
+      {open ? <ImportDialog onClose={() => setOpen(false)} /> : null}
     </>
   );
 }
 
-type Search = { status?: string; author?: string; q?: string };
+function Catalog({ search, library }: { search: Search; library: boolean }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const filters: ModelFilters = { status: modelStatus(search.status), author: search.author, slug_prefix: search.q };
+  const models = useInfiniteQuery(modelsQuery(filters));
+  const authors = useQuery(authorsQuery);
+  const lines = useLines();
+  const rows = models.data?.pages.flatMap((page) => page.data) ?? [];
+  const filtered = Object.values(filters).some(Boolean);
+  const names = new Map((authors.data?.data ?? []).map((author) => [author.slug, author.name]));
+  const selected = (id: string | undefined, replace = false) =>
+    void navigate({ to: "/models", search: { ...search, model: id }, replace });
+  const index = rows.findIndex((row) => row.id === search.model);
+  return (
+    <>
+      <Filter search={search} />
+      <Card layout="flush">
+        <DataState
+          query={models}
+          isEmpty={() => rows.length === 0}
+          empty={
+            <EmptyState title={filtered ? t("models.noMatch.title") : t("models.empty.title")}>
+              {filtered ? t("models.noMatch.body") : t("models.empty.body")}
+            </EmptyState>
+          }
+        >
+          {() => <CatalogTable rows={rows} authors={names} lines={lines} onOpen={selected} />}
+        </DataState>
+        <LoadMore list={models} />
+      </Card>
+      {search.model ? (
+        <ModelDrawer
+          id={search.model}
+          index={index}
+          count={rows.length}
+          slug={rows[index]?.slug}
+          authors={names}
+          lines={lines}
+          library={library}
+          onStep={(by) => selected(rows[index + by]?.id, true)}
+          onClose={() => selected(undefined)}
+        />
+      ) : null}
+    </>
+  );
+}
 
 function Filter({ search }: { search: Search }) {
   const { t } = useTranslation();
@@ -57,7 +120,7 @@ function Filter({ search }: { search: Search }) {
   const authors = useQuery(authorsQuery);
   return (
     <FilterBar
-      values={search}
+      values={{ status: search.status, author: search.author, q: search.q }}
       onApply={(values) =>
         navigate({
           to: "/models",
@@ -88,47 +151,5 @@ function Filter({ search }: { search: Search }) {
         spellCheck={false}
       />
     </FilterBar>
-  );
-}
-
-function ModelsTable({ rows }: { rows: AdminSchemas["ModelSummary"][] }) {
-  const { t } = useTranslation();
-  return (
-    <Table label={t("nav.models")}>
-      <Head
-        cols={[
-          [t("models.col.slug"), { main: true }],
-          t("models.col.status"),
-          t("models.col.basis"),
-          t("models.col.source"),
-        ]}
-        action
-      />
-      <tbody>
-        {rows.map((model) => (
-          <tr key={model.id}>
-            <Td main>
-              <Code>{model.slug}</Code>
-            </Td>
-            <Td>
-              <ModelState status={model.status} />
-            </Td>
-            <Td>{t(`models.basis.${model.version_basis}`)}</Td>
-            <Td>{t(`models.source.${model.price_source}`)}</Td>
-            <Td actions>
-              <ActionButton variant="gho" size="sm" square asChild>
-                <Link
-                  to="/models/$modelId"
-                  params={{ modelId: model.id }}
-                  aria-label={t("models.open", { slug: model.slug })}
-                >
-                  <Icon name="right" />
-                </Link>
-              </ActionButton>
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
   );
 }

@@ -81,7 +81,11 @@ export function usePaletteSections(nav: Navigation, signOut: () => void): Palett
       label: entry.label,
       meta,
       icon: entry.icon,
-      onSelect: () => void navigate({ to: entry.href }),
+      onSelect: () => {
+        // A tab's route carries its tab in the query, which the router takes apart.
+        const url = new URL(entry.href, window.location.origin);
+        void navigate({ to: url.pathname, search: Object.fromEntries(url.searchParams) });
+      },
     });
   const pages = nav.main.flatMap((group) => group.entries);
   const settings = nav.settings?.groups.flatMap((group) => group.entries) ?? [];

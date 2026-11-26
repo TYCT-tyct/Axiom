@@ -18,7 +18,8 @@ export async function open(
   return state;
 }
 
-export const dialog = (page: Page) => page.getByRole("dialog");
+// The change's dialog, which a page may hold a drawer under.
+export const dialog = (page: Page) => page.locator("dialog.nkdlg");
 
 // The reason every change asks for, and the button that sends it.
 export async function send(page: Page, reason = "because the owner asked") {

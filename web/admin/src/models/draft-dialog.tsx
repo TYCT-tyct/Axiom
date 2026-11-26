@@ -53,7 +53,7 @@ export function DraftDialog({ onClose }: { onClose: () => void }) {
             {t("models.draft.done")} <Code>{model.slug}</Code>
           </p>
           <TextLink>
-            <Link to="/models/$modelId" params={{ modelId: model.id }}>
+            <Link to="/models" search={{ model: model.id }} onClick={onClose}>
               {t("models.draft.review")}
             </Link>
           </TextLink>

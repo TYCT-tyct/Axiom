@@ -298,14 +298,14 @@ test.describe("the four states of a view of data", () => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
     const session = await hold(page, "**/api/admin/v1/session");
-    const chunk = await hold(page, "**/assets/model-*.js");
-    const data = await hold(page, "**/api/admin/v1/models/*");
+    const chunk = await hold(page, "**/assets/models-*.js");
+    const data = await hold(page, "**/api/admin/v1/models?*");
     const model = state.models[0];
     if (!model) {
       throw new Error("the mock has no model");
     }
 
-    await page.goto(`/models/${model.id}`);
+    await page.goto("/models");
 
     await session.entered;
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
@@ -319,11 +319,14 @@ test.describe("the four states of a view of data", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
     chunk.release();
 
+    // The page's own heading is up while its list is still on its way.
     await data.entered;
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(zhText("nav.models"));
     data.release();
 
-    await expect(h1(page, model.slug)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: zhText("models.open").replace("{{slug}}", model.slug), exact: true }),
+    ).toBeVisible();
   });
 
   test("loading, empty and failing lists say what to do", async ({ page }) => {
@@ -336,13 +339,15 @@ test.describe("the four states of a view of data", () => {
     await page.goto("/mappings");
     await expect(page.getByRole("heading", { name: zhText("mappings.empty.title") })).toBeVisible();
     await page.getByRole("link", { name: zhText("shell.nav.pricing") }).click();
+    await expect(page.getByRole("heading", { name: zhText("pricing.sale.empty") })).toBeVisible();
+    await page.getByRole("tab", { name: zhText("pricing.tabs.rules") }).click();
     await expect(page.getByRole("heading", { name: zhText("pricing.empty.title") })).toBeVisible();
   });
 
   test("an address of something that is not there names the page so and offers home, not a retry", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
-    for (const path of [`/accounts/${acct(999)}`, `/suppliers/${uuid(2, 999)}`, `/models/${uuid(5, 999)}`]) {
+    for (const path of [`/accounts/${acct(999)}`, `/suppliers/${uuid(2, 999)}`]) {
       await page.goto(path);
       await expect(h1(page, "找不到要查看的内容")).toBeVisible();
       await expect(page).toHaveTitle("找不到要查看的内容 · Axiom");

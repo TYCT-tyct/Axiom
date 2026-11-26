@@ -18,7 +18,21 @@ async function open(page: Page, path: string) {
   return state;
 }
 
-const dialog = (page: Page) => page.getByRole("dialog");
+const dialog = (page: Page) => page.locator("dialog.nkdlg");
+
+// The page with the model library's read answering as given, which the catalog takes to say whether the library is there:
+// 501 before its backend, 404 for the supplier that is not there after it. It is put over the mock's own answer.
+async function openWithLibrary(page: Page, path: string, status: 404 | 501) {
+  const state = await mockAdmin(page);
+  signedInAs(state, "mfa");
+  await page.route("**/api/admin/v1/suppliers/*/models*", (route) =>
+    route.fulfill({
+      status,
+      json: { error: { code: status === 501 ? "not_implemented" : "not_found", message: "no" } },
+    }),
+  );
+  await page.goto(path);
+}
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
 const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
@@ -36,7 +50,9 @@ async function send(page: Page, reason = "because the owner asked") {
 const inputRate = zhText("models.price.perMillion").replace("{{item}}", zhText("models.item.input"));
 // The table of models; the page has the authors' table too.
 const models = (page: Page) => page.getByRole("table", { name: zhText("nav.models") });
-const model1 = `/models/${uuid(5, 1)}`;
+const model1 = `/models?model=${uuid(5, 1)}`;
+// The model's drawer, which stays open under the dialogs a change opens over it.
+const drawer = (page: Page) => page.locator("dialog:not(.nkdlg)");
 
 test.describe("the model catalog", () => {
   test("models are filtered by state, author and the start of the slug, and the filters stay in the address", async ({
@@ -77,8 +93,8 @@ test.describe("the model catalog", () => {
     await dialog(page)
       .getByRole("link", { name: zhText("models.draft.review") })
       .click();
-    await expect(h1(page, "anthropic/new-model")).toBeVisible();
-    await expect(page.getByText(zhText("models.state.draft")).first()).toBeVisible();
+    await expect(drawer(page).getByRole("heading", { name: "anthropic/new-model" })).toBeVisible();
+    await expect(drawer(page).getByText(zhText("models.state.draft")).first()).toBeVisible();
 
     // the review gate: no public name and no price yet
     await press(page, "models.status.listed.action").click();
@@ -163,8 +179,51 @@ test.describe("the model catalog", () => {
     await expect(dialog(page).getByRole("alert")).toHaveText(/这个名称已经有了/);
   });
 
+  test("the lines a model runs on are in its row and its drawer, named by the supplier", async ({ page }) => {
+    await open(page, "/models");
+    const row = page.getByRole("row").filter({ hasText: "openai/model-1" });
+    // five suppliers offer it; three of them can take a request now
+    await expect(row.getByText(zhText("models.lines.inUse_other").replace("{{count}}", "3"))).toBeVisible();
+    await expect(row.getByText(zhText("models.lines.total").replace("{{count}}", "5"))).toBeVisible();
+    await page
+      .getByRole("button", { name: zhText("models.open").replace("{{slug}}", "openai/model-1"), exact: true })
+      .click();
+    const lines = drawer(page).getByRole("table", { name: zhText("models.lines.title") });
+    await expect(lines.getByRole("row")).toHaveCount(6);
+    await expect(lines.getByRole("cell", { name: "Example US", exact: true })).toBeVisible();
+  });
+
+  test("a model that does not exist says so in its drawer, and offers no retry", async ({ page }) => {
+    await open(page, `/models?model=${uuid(5, 999)}`);
+    await expect(drawer(page).getByRole("heading", { name: words("state.goneTitle") })).toBeVisible();
+    await expect(drawer(page).getByRole("button", { name: "重试" })).toHaveCount(0);
+  });
+
+  test("the family and the import are left out, without a word, until the model library answers", async ({ page }) => {
+    await openWithLibrary(page, `/models?model=${uuid(5, 1)}`, 501);
+    await expect(drawer(page).getByRole("heading", { name: "openai/model-1" })).toBeVisible();
+    await expect(drawer(page).getByText(words("models.family.label"))).toHaveCount(0);
+    await expect(page.getByRole("alert")).toHaveCount(0);
+    await drawer(page)
+      .getByRole("button", { name: words("dialog.close") })
+      .click();
+    await expect(page.getByRole("button", { name: words("models.import.open") })).toHaveCount(0);
+  });
+
+  test("the family and the import are offered once it does", async ({ page }) => {
+    // a supplier that is not there: the answer a node with the library gives
+    await openWithLibrary(page, `/models?model=${uuid(5, 1)}`, 404);
+    await drawer(page)
+      .getByRole("button", { name: words("models.family.set") })
+      .click();
+    await expect(dialog(page).getByLabel(words("models.family.field"))).toBeVisible();
+    await dialog(page).getByLabel(words("models.family.field")).fill("Not A Family");
+    await send(page);
+    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("models.family.invalid"));
+  });
+
   test("authors are added and renamed", async ({ page }) => {
-    const state = await open(page, "/models");
+    const state = await open(page, "/models?tab=authors");
     await press(page, "models.authors.add").click();
     await dialog(page).getByLabel(words("models.authors.slug")).fill("mistral");
     await dialog(page).getByLabel(words("models.authors.name")).fill("Mistral AI");
@@ -182,8 +241,68 @@ test.describe("the model catalog", () => {
 });
 
 test.describe("pricing", () => {
-  test("rules are listed most specific first, and a rule is previewed before it is saved", async ({ page }) => {
+  test("the sale tab lists each proposal next to what sells now, and a new price is published once confirmed", async ({
+    page,
+  }) => {
     const state = await open(page, "/pricing");
+    await expect(h1(page, zhText("nav.pricing"))).toBeVisible();
+    const table = page.getByRole("table", { name: words("pricing.publish.title") });
+    await expect(table.getByRole("row")).toHaveCount(4);
+    const row = table.getByRole("row").filter({ hasText: "openai/model-1" });
+    // the cost and the margin come from the preview of the same models
+    await expect(row.getByText(/\d%$/)).toBeVisible();
+    await expect(row.getByText(zhText("pricing.sale.standing.waiting"))).toBeVisible();
+    await row.getByRole("button", { name: words("pricing.publish.short") }).click();
+    // the price goes up for everyone at once, and the floor cannot be overridden from here
+    await expect(dialog(page).getByText(zhText("pricing.publish.raisesWarn"))).toBeVisible();
+    const sent = page.waitForRequest(
+      (request) => request.method() === "POST" && /\/pricing\/publications\//.test(request.url()),
+    );
+    const model = state.models[0];
+    await dialog(page)
+      .getByLabel(zhText("change.confirmLabel").replace("{{name}}", model?.id ?? ""))
+      .fill(model?.id ?? "");
+    await send(page, "the vendor's price went up");
+    expect((await sent).postDataJSON()).toMatchObject({
+      candidate_id: uuid(10, 0),
+      current_id: uuid(11, 0),
+      confirmed: true,
+      override_floor: false,
+    });
+    await expect(done(page)).toBeVisible();
+    await close(page);
+    await expect(row.getByText(zhText("pricing.sale.standing.current"))).toBeVisible();
+  });
+
+  test("a price the rule asks below the floor is marked, and goes to the rules or out at the floor", async ({
+    page,
+  }) => {
+    await open(page, "/pricing");
+    const table = page.getByRole("table", { name: words("pricing.publish.title") });
+    const low = table.getByRole("row").filter({ hasText: "google/model-2" });
+    await expect(low.getByText(zhText("pricing.sale.standing.floor"))).toBeVisible();
+    await expect(low.getByRole("button", { name: words("pricing.publish.short") })).toHaveCount(0);
+    await page
+      .getByRole("button", { name: zhText("pricing.sale.open").replace("{{model}}", "google/model-2") })
+      .click();
+    await expect(drawer(page).getByText(zhText("pricing.sale.floorTitle"))).toBeVisible();
+    await drawer(page)
+      .getByRole("button", { name: words("pricing.publish.atFloor") })
+      .click();
+    await expect(dialog(page).getByText(zhText("pricing.publish.floorWarn"))).toBeVisible();
+    await close(page);
+    await drawer(page)
+      .getByRole("button", { name: words("pricing.sale.seeRules") })
+      .click();
+    await expect(page).toHaveURL(/\/pricing\?tab=rules$/);
+    await expect(page.getByRole("tab", { name: zhText("pricing.tabs.rules") })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  test("rules are listed most specific first, and a rule is previewed before it is saved", async ({ page }) => {
+    const state = await open(page, "/pricing?tab=rules");
     await expect(h1(page, zhText("nav.pricing"))).toBeVisible();
     const rules = page.getByRole("table", { name: words("pricing.rules.title") });
     await expect(rules.getByRole("row")).toHaveCount(state.rules.length + 1);
@@ -212,7 +331,7 @@ test.describe("pricing", () => {
   });
 
   test("a rule for a target and audience that has one is refused, and a bad ratio is told", async ({ page }) => {
-    await open(page, "/pricing");
+    await open(page, "/pricing?tab=rules");
     await press(page, "pricing.rule.new").click();
     await dialog(page).getByLabel(words("pricing.method.multiplier")).fill("twenty");
     await send(page);
@@ -223,7 +342,7 @@ test.describe("pricing", () => {
   });
 
   test("a rule is changed as of the revision read and can be turned off", async ({ page }) => {
-    const state = await open(page, "/pricing");
+    const state = await open(page, "/pricing?tab=rules");
     await page
       .getByRole("button", { name: /修改“.*”规则/ })
       .first()
@@ -250,7 +369,7 @@ test.describe("pricing", () => {
   test("limits are not applied yet: the inputs are disabled, a stored limit is told, and editing clears it", async ({
     page,
   }) => {
-    const state = await open(page, "/pricing");
+    const state = await open(page, "/pricing?tab=rules");
     await press(page, "pricing.rule.new").click();
     for (const key of ["minMargin", "refMin", "refMax"]) {
       await expect(dialog(page).getByLabel(words(`pricing.constraints.${key}`))).toBeDisabled();
@@ -274,7 +393,7 @@ test.describe("pricing", () => {
   test("retiring a rule preserves its stored target, audience, method and unsupported constraints", async ({
     page,
   }) => {
-    const state = await open(page, "/pricing");
+    const state = await open(page, "/pricing?tab=rules");
     const existing = structuredClone(state.rules[0]);
     if (!existing) throw new Error("the pricing fixture needs a rule to retire");
     expect(existing.constraints).not.toEqual({});
@@ -298,7 +417,7 @@ test.describe("pricing", () => {
   });
 
   test("the preview prices chosen models for a tier and says what it cannot price", async ({ page }) => {
-    await open(page, "/pricing");
+    await open(page, "/pricing?tab=rules");
     await page.getByLabel(words("pricing.preview.tier")).selectOption({ label: "Pro" });
     await page.getByRole("button", { name: words("pricing.preview.run") }).click();
     await expect(page.getByRole("cell", { name: /openai\/model-1/ }).first()).toBeVisible();
@@ -309,13 +428,13 @@ test.describe("pricing", () => {
   });
 });
 
-test("the preview's lists are asked for with the page's, not after the lists above answer", async ({ page }) => {
+test("the preview's lists are asked for with the rules', not after the rules above answer", async ({ page }) => {
   signedInAs(await mockAdmin(page), "mfa");
   let release = () => {};
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route("**/api/admin/v1/pricing/publications", async (route) => {
+  await page.route("**/api/admin/v1/pricing/rules", async (route) => {
     await held;
     await route.fallback();
   });
@@ -323,7 +442,7 @@ test("the preview's lists are asked for with the page's, not after the lists abo
     page.waitForRequest((request) => /\/api\/admin\/v1\/models\?.*status=listed/.test(request.url())),
     page.waitForRequest((request) => new URL(request.url()).pathname === "/api/admin/v1/tiers"),
   ]);
-  await page.goto("/pricing");
+  await page.goto("/pricing?tab=rules");
   await asked;
   await expect(page.getByLabel(words("pricing.preview.account"))).toHaveCount(0);
   release();
@@ -338,7 +457,7 @@ test("a retry of the rules above keeps what the preview below holds", async ({ p
       ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "unavailable" } } })
       : route.fallback(),
   );
-  await page.goto("/pricing");
+  await page.goto("/pricing?tab=rules");
   const account = page.getByLabel(words("pricing.preview.account"));
   const held = `acct_${"1".repeat(26)}`;
   await account.fill(held);

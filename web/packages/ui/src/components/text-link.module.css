@@ -16,3 +16,18 @@
   outline-offset: 2px;
   border-radius: var(--r4);
 }
+
+/* A button lent the look (LinkButton): its own box is taken off. */
+.root:is(button) {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  text-align: inherit;
+}
+
+.root:is(button):disabled {
+  color: var(--t3);
+  cursor: default;
+  text-decoration: none;
+}

@@ -28,6 +28,10 @@ export default {
   also: {
     discrepancies: "支付差异",
     mappings: "待处理",
+    modelAuthors: "作者",
+    routingDefaults: "默认与上限",
+    pricingRules: "价格规则",
+    pricingPolicy: "定价策略",
     sourceClasses: "来源类别",
     exchangeRates: "汇率",
     subscriptionPlans: "套餐",

@@ -196,7 +196,8 @@ function aGroup(supplier: number, n: number, over: Partial<Schemas["SupplierGrou
     name: n === 1 ? "default" : `vip-${n}`,
     ratio: n === 1 ? "1" : "1.5",
     selected: n === 1,
-    codename: n === 1 ? "Maple" : undefined,
+    // A group's codename is the supplier's own: no two lines share one.
+    codename: n === 1 ? (supplier === 1 ? "Maple" : `Maple ${supplier}`) : undefined,
     present: true,
     ...over,
   };

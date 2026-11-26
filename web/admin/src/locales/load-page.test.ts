@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import en, { initial as initialEn } from "./en";
 import { loadTranslatedPage } from "./load-page";
 import operations from "./operations";
+import routing from "./routing";
 import settings from "./settings";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
@@ -19,6 +20,7 @@ it("loads complete deferred copy before returning a page and preserves both lang
   const supplierPage = { default: () => null, messages: suppliers };
   const subscriptionPage = { default: () => null, messages: subscriptions };
   const opsPage = { default: () => null, messages: operations };
+  const routingPage = { default: () => null, messages: routing };
   expect(await loadTranslatedPage(Promise.resolve(page))).toBe(page);
   expect(i18next.exists("suppliers.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(supplierPage))).toBe(supplierPage);
@@ -26,9 +28,10 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(await loadTranslatedPage(Promise.resolve(subscriptionPage))).toBe(subscriptionPage);
   expect(i18next.exists("operations.credentials.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(opsPage))).toBe(opsPage);
+  expect(i18next.exists("routingPresets.title")).toBe(false);
+  expect(await loadTranslatedPage(Promise.resolve(routingPage))).toBe(routingPage);
   for (const page of [
     import("../pages/payment-discrepancies"),
-    import("../pages/exchange-rates"),
     import("../pages/account"),
     import("../pages/pricing"),
     import("../pages/alert-events"),
@@ -46,4 +49,4 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(i18next.t("settings.title")).toBe(zh.settings.title);
   expect(await loadTranslatedPage(Promise.resolve(page))).toBe(page);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
-});
+}, 20_000); // it imports every page that carries copy, which takes seconds when the suite runs beside it

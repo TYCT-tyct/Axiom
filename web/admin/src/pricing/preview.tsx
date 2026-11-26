@@ -8,12 +8,13 @@ import { showRate } from "../models/price-fields";
 import { Code, Head, State } from "../parts";
 
 export type PreviewRequest = AdminSchemas["PricingPreviewRequest"];
-type Row = AdminSchemas["PricingPreviewRow"];
+export type PreviewRow = AdminSchemas["PricingPreviewRow"];
+type Row = PreviewRow;
 
 // A preview asks what models would sell for, and with what margin, under the stored rules, with a rule added or put in
 // place of one for this preview only. It stores nothing, so it is asked as a query: the same request is the same answer
 // until a change invalidates it.
-function usePreview(request: PreviewRequest | null) {
+export function usePreview(request: PreviewRequest | null) {
   return useQuery({
     queryKey: [accountKey, "preview", request],
     queryFn: ({ signal }) =>
@@ -31,7 +32,7 @@ const tones = {
 } as const satisfies Record<Row["status"], "good" | "warn" | "bad">;
 
 // The two prices people compare first, input and output, as they read them: per million tokens.
-function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefined }) {
+export function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefined }) {
   const { t } = useTranslation();
   const { decimal } = useFormat();
   if (!schedule) {
@@ -59,7 +60,7 @@ function Price({ schedule }: { schedule: AdminSchemas["PriceSchedule"] | undefin
 }
 
 // The lowest margin of the sale over the cost, as a percentage; a loss shows as one.
-function Margin({ row }: { row: Row }) {
+export function Margin({ row }: { row: Row }) {
   const { t } = useTranslation();
   const { decimal } = useFormat();
   if (row.margin_ratio === undefined) {

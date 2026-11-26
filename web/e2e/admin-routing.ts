@@ -71,7 +71,7 @@ function usualRouting(): RoutingState {
         slug: "official",
         name: "Official only",
         version: 3,
-        rules: rules({ default: { classes: ["official"] }, advanced: { order: ["g1"] } }),
+        rules: rules({ default: { classes: ["official"] }, advanced: { order: ["Maple"] } }),
       }),
       aPreset(2, {
         slug: "cheap-usd",

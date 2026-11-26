@@ -42,6 +42,7 @@ export { Id, IdLink, IdText } from "./components/id";
 export { ImageBox } from "./components/image-box";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";
+export { LinkButton } from "./components/link-button";
 export { List, ListItem } from "./components/list";
 export { ListDetail } from "./components/list-detail";
 export { LoadMore } from "./components/load-more";

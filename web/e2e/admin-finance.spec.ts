@@ -30,7 +30,9 @@ test("a payment investigation reads exact amounts and saves its outcome without 
 });
 
 test("exchange rates use exact terms and the current version and expose immutable history", async ({ page }) => {
+  // The page's old address lands on its tab.
   const state = await open(page, "/exchange-rates");
+  await expect(page).toHaveURL(/\/pricing\?tab=rates$/);
   await page.getByRole("button", { name: words("exchangeRates.edit") }).click();
   await dialog(page).locator("[name=numerator]").fill("9007199254740993");
   await dialog(page).locator("[name=denominator]").fill("63050394783186951");
@@ -70,7 +72,7 @@ test("exchange rates use exact terms and the current version and expose immutabl
 });
 
 test("selling policy saves an explicit zero fee and keeps read-only sessions read-only", async ({ page }) => {
-  const state = await open(page, "/pricing");
+  const state = await open(page, "/pricing?tab=policy");
   await page.getByRole("button", { name: words("pricePolicy.edit") }).click();
   await dialog(page).locator("[name=byok_fee_bps]").fill("0");
   await send(page, "zero fee during the launch");

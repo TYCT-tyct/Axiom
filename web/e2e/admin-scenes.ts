@@ -44,27 +44,47 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
 // on), so the suspended page and each of its two dialogs are in every width, scheme and language. The dialogs that
 // change presets open with it off: while it is on their buttons are disabled.
-async function routingPage(p: Page, suspended: boolean) {
+async function routingPage(p: Page, suspended: boolean, tab = "") {
   await p.route("**/api/admin/v1/settings/routing-suspension", (route) =>
     route.request().method() === "GET"
       ? route.fulfill({ json: suspended ? { suspended, since: "2026-11-01T08:00:00Z" } : { suspended } })
       : route.fallback(),
   );
-  await goto(p, "routing-presets");
+  await goto(p, `routing${tab}`);
 }
 
 const routingSuspended: Scene = { name: "routing-suspended", signedIn: true, open: (p) => routingPage(p, true) };
-const routingSwitch = (name: string, suspended: boolean, button: string) =>
+const routingSwitch = (name: string, suspended: boolean, tab: string, ...buttons: string[]) =>
   scene(
     name,
-    (p) => routingPage(p, suspended),
-    (p) => press(p, button),
+    (p) => routingPage(p, suspended, tab),
+    async (p) => {
+      for (const button of buttons) {
+        await press(p, button);
+      }
+    },
+  );
+
+// The second preset's drawer (the first with a name that changes), and the buttons pressed in it.
+const routingPreset = (name: string, ...buttons: string[]) =>
+  scene(
+    name,
+    (p) => routingPage(p, false),
+    async (p) => {
+      await p
+        .getByRole("button", { name: words("routingPresets.open") })
+        .nth(1)
+        .click();
+      for (const button of buttons) {
+        await press(p, button);
+      }
+    },
   );
 
 const audienceScenes = (["tier", "account"] as const).map((kind) =>
   scene(
     `rule-${kind}`,
-    (p) => goto(p, "pricing"),
+    (p) => goto(p, "pricing?tab=rules"),
     async (p) => {
       await press(p, "pricing.rule.new");
       await p.getByRole("dialog").locator("select[name=audience_kind]").selectOption(kind);
@@ -76,14 +96,14 @@ const pricingPreview: Scene = {
   name: "pricing-preview",
   signedIn: true,
   open: async (p) => {
-    await goto(p, "pricing");
+    await goto(p, "pricing?tab=rules");
     await press(p, "pricing.preview.run");
     await p.getByRole("table", { name: words("pricing.preview.title") }).waitFor();
   },
 };
 
 const supplier = (n: number) => `suppliers/${uuid(2, n)}`;
-const model = (n: number) => `models/${uuid(5, n)}`;
+const model = (n: number) => `models?model=${uuid(5, n)}`;
 
 // The connect dialog's second step: an address the probe recognises.
 const connectDetails = scene(
@@ -168,9 +188,11 @@ const scenes: Scene[] = [
   view("model", model(1)),
   view("model-draft", model(3)),
   view("pricing", "pricing"),
-  dialog("price-policy", "pricing", "pricePolicy.edit"),
-  view("exchange-rates", "exchange-rates"),
-  dialog("exchange-rate-history", "exchange-rates", "exchangeRates.history"),
+  view("pricing-rules", "pricing?tab=rules"),
+  view("pricing-policy", "pricing?tab=policy"),
+  dialog("price-policy", "pricing?tab=policy", "pricePolicy.edit"),
+  view("exchange-rates", "pricing?tab=rates"),
+  dialog("exchange-rate-history", "pricing?tab=rates", "exchangeRates.history"),
   view("payment-discrepancies", "payment-discrepancies"),
   view("payment-discrepancy", `payment-discrepancies/${uuid(33, 1)}`),
   dialog("platform-grant", `accounts/${acct(1)}`, "platformGrants.revoke"),
@@ -186,16 +208,19 @@ const scenes: Scene[] = [
   view("legal-documents", "legal-documents"),
   view("retention", "retention"),
   rateLimit,
-  view("routing-presets", "routing-presets"),
-  routingSwitch("routing-preset-create", false, "routingPresets.create"),
-  routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),
-  routingSwitch("routing-default", false, "routingPresets.defaults.edit"),
-  // The first preset the page may disable is a default and has keys bound (admin-routing.ts), so the dialog says both.
-  routingSwitch("routing-preset-disable", false, "routingPresets.disableNamed"),
-  dialog("routing-limits", "routing-presets", "routingPresets.limits.edit"),
+  view("routing", "routing"),
+  view("routing-source-classes", "routing?tab=sources"),
+  routingSwitch("routing-preset-create", false, "", "routingPresets.createTitle.platform"),
+  // The first preset with a name to open is the system's; the second is a default with keys bound (admin-routing.ts), so
+  // its drawer says the order and its disable dialog says both.
+  routingPreset("routing-preset"),
+  routingPreset("routing-preset-edit", "routingPresets.order.rules"),
+  routingSwitch("routing-default", false, "?tab=defaults", "routingPresets.defaults.edit"),
+  routingPreset("routing-preset-disable", "routingPresets.disable"),
+  dialog("routing-limits", "routing?tab=defaults", "routingPresets.limits.edit"),
   routingSuspended,
-  routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),
-  routingSwitch("routing-resume", true, "routingPresets.suspension.resume"),
+  routingSwitch("routing-suspend", false, "?tab=defaults", "routingPresets.suspension.suspend"),
+  routingSwitch("routing-resume", true, "?tab=defaults", "routingPresets.suspension.resume"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
   view("approvals", "approvals"),
   // The first approval is a credit grant with its caps, the third a sale price with its envelope (admin-operations.ts).
@@ -235,14 +260,14 @@ const scenes: Scene[] = [
   testResult,
   dialog("mapping", "mappings", "mappings.map"),
   dialog("model-draft-new", "models", "models.draft.open"),
-  dialog("author", "models", "models.authors.add"),
+  dialog("author", "models?tab=authors", "models.authors.add"),
   dialog("model-spec", model(1), "models.spec.edit"),
   dialog("model-name", model(1), "models.names.add"),
   dialog("model-list", model(3), "models.status.listed.action"),
   dialog("model-retire", model(1), "models.status.retired.action"),
   dialog("price-publish", model(1), "models.prices.publish"),
   dialog("price-source", model(1), "models.prices.changeSource"),
-  dialog("rule-new", "pricing", "pricing.rule.new"),
+  dialog("rule-new", "pricing?tab=rules", "pricing.rule.new"),
   dialog("targets", "", "overview.targets.edit"),
   dialog("settings-edit", "settings", "settings.edit"),
   dialog("site-brand", "settings", "settings.brand.edit"),

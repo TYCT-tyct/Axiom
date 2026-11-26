@@ -1,6 +1,13 @@
 import { safeNext } from "@axiom/app";
 import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+  Outlet,
+  redirect,
+} from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { approvalState } from "./approvals";
 import { Layout } from "./layout";
@@ -10,6 +17,7 @@ import { paymentOrderState } from "./orders/states";
 import { callStatus, cashView, overviewRange } from "./overview";
 import { redeemState } from "./redeem";
 import { supplierStatus } from "./suppliers/statuses";
+import { tabOf } from "./tab-of";
 
 const root = createRootRoute({ component: Outlet });
 
@@ -33,6 +41,17 @@ const shellPage = <S extends Record<string, unknown> = Record<never, never>>(
   load: () => Promise<{ default: () => ReactNode }>,
   validateSearch?: (search: Record<string, unknown>) => S,
 ) => createRoute({ getParentRoute: () => app, path, validateSearch, component: lazyRouteComponent(load) });
+
+// A page that has moved: its old address takes the visitor to where it is now, and is never shown.
+type Moved = { to: string; search?: Record<string, string> };
+const movedPage = (path: string, to: (params: Record<string, string | undefined>) => Moved) =>
+  createRoute({
+    getParentRoute: () => app,
+    path,
+    beforeLoad: ({ params }) => {
+      throw redirect({ ...to(params), replace: true } as never);
+    },
+  });
 
 // A filter in the address is text, or nothing.
 const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value : undefined);
@@ -127,16 +146,29 @@ const routeTree = root.addChildren([
       "/models",
       () => import("./pages/models"),
       (search) => ({
+        tab: tabOf(search.tab, ["authors"] as const),
         status: modelStatus(search.status),
         author: text(search.author),
         q: text(search.q),
+        model: text(search.model),
       }),
     ),
-    shellPage("/models/$modelId", () => import("./pages/model")),
-    shellPage("/source-classes", () => import("./pages/source-classes")),
-    shellPage("/routing-presets", () => loadTranslatedPage(import("./pages/routing-presets"))),
-    shellPage("/pricing", () => loadTranslatedPage(import("./pages/pricing"))),
-    shellPage("/exchange-rates", () => loadTranslatedPage(import("./pages/exchange-rates"))),
+    shellPage(
+      "/routing",
+      () => loadTranslatedPage(import("./pages/routing")),
+      (search) => ({ tab: tabOf(search.tab, ["defaults", "sources"] as const), preset: text(search.preset) }),
+    ),
+    shellPage(
+      "/pricing",
+      () => loadTranslatedPage(import("./pages/pricing")),
+      (search) => ({ tab: tabOf(search.tab, ["rules", "rates", "policy"] as const), price: text(search.price) }),
+    ),
+    // The pages the design folded into tabs and drawers keep their addresses: a link, a bookmark or the bell's old
+    // target lands on the tab or the open row that has them now.
+    movedPage("/models/$modelId", ({ modelId = "" }) => ({ to: "/models", search: { model: modelId } })),
+    movedPage("/routing-presets", () => ({ to: "/routing" })),
+    movedPage("/source-classes", () => ({ to: "/routing", search: { tab: "sources" } })),
+    movedPage("/exchange-rates", () => ({ to: "/pricing", search: { tab: "rates" } })),
     shellPage(
       "/payment-discrepancies",
       () => loadTranslatedPage(import("./pages/payment-discrepancies")),

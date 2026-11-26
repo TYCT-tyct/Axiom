@@ -253,11 +253,9 @@
         "admin/pages/audit",
         "admin/pages/call",
         "admin/pages/calls",
-        "admin/pages/exchange-rates",
         "admin/pages/home",
         "admin/pages/legal-documents",
         "admin/pages/mappings",
-        "admin/pages/model",
         "admin/pages/models",
         "admin/pages/operations-credentials",
         "admin/pages/operations-limits",
@@ -268,9 +266,8 @@
         "admin/pages/rate-limits",
         "admin/pages/redeem-codes",
         "admin/pages/retention",
-        "admin/pages/routing-presets",
+        "admin/pages/routing",
         "admin/pages/settings",
-        "admin/pages/source-classes",
         "admin/pages/subscription-plans",
         "admin/pages/supplier",
         "admin/pages/suppliers",
@@ -281,7 +278,7 @@
       "absent": "",
       "files": [
         {
-          "file": "axiom-cjk-admin-400.d3d52492.woff2",
+          "file": "axiom-cjk-admin-400.a9cb9b8b.woff2",
           "pages": [
             "admin/auth/enroll",
             "admin/auth/mfa",
@@ -296,11 +293,9 @@
             "admin/pages/audit",
             "admin/pages/call",
             "admin/pages/calls",
-            "admin/pages/exchange-rates",
             "admin/pages/home",
             "admin/pages/legal-documents",
             "admin/pages/mappings",
-            "admin/pages/model",
             "admin/pages/models",
             "admin/pages/operations-credentials",
             "admin/pages/operations-limits",
@@ -311,49 +306,28 @@
             "admin/pages/rate-limits",
             "admin/pages/redeem-codes",
             "admin/pages/retention",
-            "admin/pages/routing-presets",
+            "admin/pages/routing",
             "admin/pages/settings",
-            "admin/pages/source-classes",
             "admin/pages/subscription-plans",
             "admin/pages/supplier",
             "admin/pages/suppliers",
             "admin/pages/users"
           ],
-          "bytes": 52016,
-          "sha256": "b3cad733c30cfbf1723c9f064c2fe5947b5e2865f45a94d080c3a36e1081f000",
-          "chars": "、。「」一三上下不与两个中串为主么之也了予事二于些交人什仅仍从他付代以仪们件价任份会但位何余作你使例供便保修值做停允先兑入全公关其内册再写冲决准出分切列则刚删判别到制刷刻前功加务动助包匹单印原及发取受变口另只可台号合同名后吧含启告员和品商器回因围在型域填处备复外多大天太失头套如始字存它完定审容宽密对导小尝就展差已币布帮常平年并应废度建开异弱归当录待律得志态恢意成我或户所手打执扫批找把择持按换授掉接控描提搜操支收改放政效数整文断新方无日旧早时明是显暂更最月有服期未本权束条来板果查校格框档检模次款正此步每求汇没法注流浅浏消深清渠游源点版牌状率现理生用由留登的监盖盘目直看真知码确示私种秒称移稍空突立站端符第等策筛算管箱类精系索繁级经绑结给络统维编网置者联能自航色节范菜营行表被要覆见观规览解言警计订认记许设证试话该语误请读调象负责败账资走起超跟路跳载较输边达过运近返还这连退选通道邀那邮部都配里重量金钟钥链键长闭问间阅附限除随隐需面页项预频题额餐首验默（），：；"
+          "bytes": 51640,
+          "sha256": "cb59e43e89eb7ef6fbbe7d3ef16065a3eb64bc2390fc1d9c5a1af7d597a02a22",
+          "chars": "、。「」一三上下不与两个中串为主么之也了予事二于些交人什仅仍从他付以仪们件价任份会但位何作你使例供便保修值做停允充先兑入全公关其内册再写冲决准出分切列则刚删判别到制刷刻前功加务动助包匹单印即原及发取受变口另只可台号合同名后吧含启告员和品商器回因围在型域填处备复外多天太失头套如始字存它完定审容宽密对导小尝就展差已布帮常平年并应废度建开异弱当录形待律得志态恢意成我或户所手打执扫批找把择持按换授掉接控描提搜操支收改放政效数整文断新方无日旧早时明是显晚暂更最月有服期未本权束条来果查校格框档检模次款正此步每求汇没法注流浅浏消深清渠游源点版牌状率现理生用由留略登的监盖盘目直看真知码确示私秒称移稍空突立站端符第等策筛管箱类精系索繁级经绑结给络统维编网置者联能自航色节范菜营行表被要覆见观规览解言警计订认记许设证试话该语误请读调象负责败账资走起超跟路跳载输边达过运近返还这连退选通道邀那邮部都配里重量金钟钥链键长闭问间阅附限除随隐需面页项预频题额餐首验默（），：；"
         },
         {
-          "file": "axiom-cjk-admin-400.7603704e.woff2",
-          "pages": [
-            "admin/auth/mfa",
-            "admin/pages/approval",
-            "admin/pages/approvals",
-            "admin/pages/audit-entry",
-            "admin/pages/mappings",
-            "admin/pages/model",
-            "admin/pages/models",
-            "admin/pages/pricing",
-            "admin/pages/routing-presets",
-            "admin/pages/settings"
-          ],
-          "bytes": 3500,
-          "sha256": "68c5371e51140b7e92873c5b3e05a58e14f7399ffcc3971d33d8b6a041a6b478",
-          "chars": "万乘优依候十声层弹形快性搬摘架着稿草议谁"
-        },
-        {
-          "file": "axiom-cjk-admin-400.a6cd9615.woff2",
+          "file": "axiom-cjk-admin-400.0ad7c576.woff2",
           "pages": [
             "admin/pages/account",
             "admin/pages/alert-configuration",
             "admin/pages/alert-events",
             "admin/pages/announcements",
             "admin/pages/approval",
-            "admin/pages/exchange-rates",
             "admin/pages/home",
             "admin/pages/legal-documents",
             "admin/pages/mappings",
-            "admin/pages/model",
             "admin/pages/models",
             "admin/pages/operations-credentials",
             "admin/pages/operations-limits",
@@ -363,115 +337,123 @@
             "admin/pages/rate-limits",
             "admin/pages/redeem-codes",
             "admin/pages/retention",
-            "admin/pages/routing-presets",
+            "admin/pages/routing",
             "admin/pages/settings",
-            "admin/pages/source-classes",
             "admin/pages/subscription-plans",
             "admin/pages/supplier",
             "admin/pages/suppliers"
           ],
-          "bytes": 9704,
-          "sha256": "b8209bae47311a6d2c15b13cf161de37f840083f8ef8551e5b8b04d011627476",
-          "chars": "且丢信倍创办勾厂历去史各响哪地址基实将少尚己带弃弄式影必息才护报据排撤故标样核母沿测添申窗签线组继续至致花识诉费进送适销锁错际险障靠须风"
+          "bytes": 9672,
+          "sha256": "d08a5c913a621a8ba541aae11b8d2d83fb787877c546c226004922bd1279d69e",
+          "chars": "且丢令信凭创办区去各哪地址子实将少尚带弃弄式必息情才护报据排撤故标样核母沿测申窗签线组继续至致花触论识诉详费进送适销锁错队际险障靠须风"
         },
         {
-          "file": "axiom-cjk-admin-400.0564b180.woff2",
+          "file": "axiom-cjk-admin-400.6bc6b7e7.woff2",
           "pages": [
             "admin/pages/account",
-            "admin/pages/alert-configuration",
-            "admin/pages/alert-events",
-            "admin/pages/approval",
-            "admin/pages/call",
-            "admin/pages/legal-documents",
-            "admin/pages/mappings",
-            "admin/pages/payment-discrepancy",
-            "admin/pages/routing-presets",
-            "admin/pages/settings",
-            "admin/pages/source-classes"
-          ],
-          "bytes": 3412,
-          "sha256": "463e95e67f750206499687e80682b530ecf430b19e871bd864672f748ed0d71c",
-          "chars": "严伪几升均序延引情机程终英触论详质辑队顺"
-        },
-        {
-          "file": "axiom-cjk-admin-400.b60f0689.woff2",
-          "pages": [
-            "admin/pages/account",
-            "admin/pages/announcements",
             "admin/pages/approval",
             "admin/pages/approvals",
-            "admin/pages/calls",
+            "admin/pages/audit-entry",
+            "admin/pages/audit",
             "admin/pages/home",
-            "admin/pages/model",
+            "admin/pages/mappings",
             "admin/pages/models",
             "admin/pages/operations-credentials",
             "admin/pages/operations-limits",
             "admin/pages/orders",
             "admin/pages/pricing",
-            "admin/pages/redeem-codes",
-            "admin/pages/routing-presets",
-            "admin/pages/settings",
-            "admin/pages/source-classes",
-            "admin/pages/subscription-plans",
-            "admin/pages/supplier",
-            "admin/pages/suppliers"
+            "admin/pages/routing"
           ],
-          "bytes": 11500,
-          "sha256": "4b4e9692dbaba90dab306e43ef0f2d9afddbadec648c8f5cd5ddd16d2f4bd193",
-          "chars": "义享令低住元充共具减凭利化区卖占即参吊否周命售唯固图增好官客属工底急总扣折拒指推晚析某案止段比毛水满然照片独略百硬笔紧累绝缓群考而落让访说赠足身转轮逗速钱隔零非音驳高"
+          "bytes": 5880,
+          "sha256": "fcd18af0fe4ebd8fa30ebcee252a90e886daaa725c829350321cdce0d92cf22c",
+          "chars": "冻利剩勾占厂历史吊向块声底急指易构架案毛独硬禁稿笔紧细织群背草角议赠跑银驳"
         },
         {
-          "file": "axiom-cjk-admin-400.fba28602.woff2",
+          "file": "axiom-cjk-admin-400.a9acf787.woff2",
           "pages": [
             "admin/pages/account",
             "admin/pages/approval",
-            "admin/pages/retention",
-            "admin/pages/routing-presets",
-            "admin/pages/source-classes"
+            "admin/pages/approvals",
+            "admin/pages/home",
+            "admin/pages/models",
+            "admin/pages/operations-limits",
+            "admin/pages/pricing",
+            "admin/pages/redeem-codes",
+            "admin/pages/routing",
+            "admin/pages/settings",
+            "admin/pages/subscription-plans",
+            "admin/pages/supplier",
+            "admin/pages/suppliers",
+            "admin/pages/users"
           ],
-          "bytes": 6428,
-          "sha256": "38059849c44c1b05ad984a7f786bcd45378218250d5e746f16deb9d63e6718da",
-          "chars": "产亿今储况剩叫吐向吞局库构活滤热础禁稳章红纹练织绕绩缀胜腾衡角训跑迁迟遍释银"
+          "bytes": 5136,
+          "sha256": "f9c01551ce67be67d43adf9e7e1a170f75463b72283fd55b30feda24350b6a09",
+          "chars": "义低余倍元共卖周响售唯基增大好家尾币影总扣比满然照百种答算累零非高"
         },
         {
-          "file": "axiom-cjk-admin-400.2263e6af.woff2",
+          "file": "axiom-cjk-admin-400.079c441b.woff2",
           "pages": [
-            "admin/pages/audit-entry",
-            "admin/pages/audit",
+            "admin/pages/account",
+            "admin/pages/approval",
             "admin/pages/call",
             "admin/pages/calls",
-            "admin/pages/model",
+            "admin/pages/home",
+            "admin/pages/legal-documents",
+            "admin/pages/models",
+            "admin/pages/operations-limits",
             "admin/pages/orders",
+            "admin/pages/pricing",
+            "admin/pages/routing",
+            "admin/pages/settings",
+            "admin/pages/supplier"
+          ],
+          "bytes": 5896,
+          "sha256": "34c77da4327ade97a14801d6c06a9cb2376c5c48716608ec969ba0b19b9980a0",
+          "chars": "享代减参否图客属工己序延归折拒推板某止段毫水绝考而耗英落视让说足身转较辑速钱顺"
+        },
+        {
+          "file": "axiom-cjk-admin-400.a65d73ac.woff2",
+          "pages": [
+            "admin/pages/alert-events",
+            "admin/pages/mappings",
+            "admin/pages/retention",
+            "admin/pages/routing",
+            "admin/pages/settings"
+          ],
+          "bytes": 10716,
+          "sha256": "3944df74acb60392cba88267e592bbc1d77f7b45b29aa31eb6aff95c1103f299",
+          "chars": "严久书买产伪储像六几升吐吞均境安宝封局库引强微恰想战拦挑插擎料旦机材活热环白盾矛短离积程章素红练终绕绩缀胜脚腾衡装裸训译询质越迁迟追逐闲难颜"
+        },
+        {
+          "file": "axiom-cjk-admin-400.ec56c3c6.woff2",
+          "pages": [
+            "admin/pages/approval",
+            "admin/pages/audit-entry",
+            "admin/pages/models",
+            "admin/pages/operations-credentials",
+            "admin/pages/pricing",
+            "admin/pages/routing",
+            "admin/pages/settings",
+            "admin/pages/supplier",
+            "admin/pages/suppliers"
+          ],
+          "bytes": 7612,
+          "sha256": "d4cc6c387b1c7f4e5c0a36a58f23b013f679607c072ba9621f14ac614537b22a",
+          "chars": "万东乘亿今优住依候偏健具况化十又叫命固坏官层康张弹快性探搬摘族替析添熔片着础缓缺美西访词谁轮逗遍释隔音马"
+        },
+        {
+          "file": "axiom-cjk-admin-400.a213062d.woff2",
+          "pages": [
+            "admin/pages/home",
+            "admin/pages/mappings",
+            "admin/pages/pricing",
+            "admin/pages/rate-limits",
             "admin/pages/redeem-codes",
             "admin/pages/supplier"
           ],
-          "bytes": 3192,
-          "sha256": "cb3379218e7bfca5164d4589bd721107601954b7c9979f0a52ede1b3f7caff88",
-          "chars": "冻块旁易毫秘答粘细缺耗背视贴途"
-        },
-        {
-          "file": "axiom-cjk-admin-400.a276be17.woff2",
-          "pages": [
-            "admin/pages/exchange-rates",
-            "admin/pages/home",
-            "admin/pages/mappings",
-            "admin/pages/pricing",
-            "admin/pages/rate-limits",
-            "admin/pages/redeem-codes",
-            "admin/pages/settings",
-            "admin/pages/supplier",
-            "admin/pages/suppliers"
-          ],
-          "bytes": 7496,
-          "sha256": "d26d6a479dfc7ffef6f5586d52ad3275998bfaf38bb12a65bb6d50d8b0aee31e",
-          "chars": "专业东五估偏健免冷净初却坏央子家射尽尾幅康忙怎戒扩承抬担探映普替欧洲涨滑熔相窄纠约绪美补西词豁货距钻？"
-        },
-        {
-          "file": "axiom-cjk-admin-400.3ddde696.woff2",
-          "pages": ["admin/pages/settings"],
-          "bytes": 6752,
-          "sha256": "a22bbf4ec7ec6b107b334c64872520513f126dfae43f95b4cdcbd0a84ee25282",
-          "chars": "久书买像六境安宝封强微恰想战拦挑插擎料旦材环白盾矛短离积素脚装裸译询越追逐闲难颜马"
+          "bytes": 6592,
+          "sha256": "0fff37f2a5aa3a790493368ec836856a1f9f0ce3d84dae5810a06f472d5ea681",
+          "chars": "专业五估体免冷净初却央奏射尽幅忙怎戒扩承担旁映普欧洲涨滑相秘窄粘纠约绪补豁货贴距途钻？"
         }
       ]
     },
