@@ -278,7 +278,8 @@ const getSupplierView = `-- name: GetSupplierView :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
+    s.mode, s.api_format
 FROM suppliers.suppliers s WHERE s.id = $1 AND ($2::boolean OR s.owner_scope = 'platform')
 `
 
@@ -303,6 +304,8 @@ type GetSupplierViewRow struct {
 	BalanceObservedAt   *time.Time
 	LowBalanceThreshold string
 	UnitValue           string
+	Mode                string
+	ApiFormat           *string
 }
 
 func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierViewParams) ([]GetSupplierViewRow, error) {
@@ -330,6 +333,8 @@ func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierV
 			&i.BalanceObservedAt,
 			&i.LowBalanceThreshold,
 			&i.UnitValue,
+			&i.Mode,
+			&i.ApiFormat,
 		); err != nil {
 			return nil, err
 		}
@@ -617,7 +622,8 @@ const listSuppliersPage = `-- name: ListSuppliersPage :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
+    s.mode, s.api_format
 FROM suppliers.suppliers s
 WHERE ($1::boolean OR s.owner_scope = 'platform')
     AND ($2::text IS NULL OR s.status = $2)
@@ -649,6 +655,8 @@ type ListSuppliersPageRow struct {
 	BalanceObservedAt   *time.Time
 	LowBalanceThreshold string
 	UnitValue           string
+	Mode                string
+	ApiFormat           *string
 }
 
 // What the admin API reads and writes of suppliers, in the platform scope (internal/suppliers/README.md「管理接口」).
@@ -686,6 +694,8 @@ func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppli
 			&i.BalanceObservedAt,
 			&i.LowBalanceThreshold,
 			&i.UnitValue,
+			&i.Mode,
+			&i.ApiFormat,
 		); err != nil {
 			return nil, err
 		}

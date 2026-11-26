@@ -63,9 +63,9 @@ func (q *Queries) InsertByokCredential(ctx context.Context, db DBTX, arg InsertB
 const insertByokSupplier = `-- name: InsertByokSupplier :one
 
 INSERT INTO suppliers.suppliers (owner_scope, site_id, account_id, name, kind, origin, upstream_account, native_unit,
-    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback)
+    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback, mode)
 VALUES ('account', $1, $2, $3, 'openai', 'https://api.openai.com', $4, 'usd', 'USD',
-    'direct', 'byok', 1, now(), $5)
+    'direct', 'byok', 1, now(), $5, 'direct')
 RETURNING id
 `
 

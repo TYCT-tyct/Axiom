@@ -63,7 +63,14 @@ func keyReason(s string) *adminapi.SupplierGroupKeyReason {
 
 // supplierBody is a supplier as the contract gives it.
 func supplierBody(s suppliers.Supplier) adminapi.Supplier {
+	var format *adminapi.ApiFormat
+	if s.APIFormat != "" {
+		f := adminapi.ApiFormat(s.APIFormat)
+		format = &f
+	}
+	mode := adminapi.SupplierMode(s.Mode)
 	return adminapi.Supplier{
+		Mode: &mode, ApiFormat: format,
 		Id: s.ID.String(), Name: s.Name, Kind: s.Kind, Origin: s.Origin, UpstreamAccount: s.UpstreamAccount,
 		Generation: text(s.Generation), DetectedVersion: text(s.DetectedVersion),
 		NativeUnit: adminapi.SupplierNativeUnit(s.NativeUnit), SettlementCurrency: s.SettlementCurrency,

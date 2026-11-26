@@ -71,6 +71,7 @@ type world struct {
 	keys                                      *secret.Keyring
 	supplier, group, credential, endpoint, sc uuid.UUID
 	svc                                       *Service
+	cfg                                       Config // what svc was made with, for restart
 	clock                                     *testClock
 	second                                    bool // seed makes the second supplier
 }
@@ -114,6 +115,12 @@ func newKeys(t *testing.T) *secret.Keyring {
 // newWorld seeds the tables and loads a service. maxConcurrency is the credential's limit.
 func newWorld(t *testing.T, maxConcurrency int32) *world {
 	t.Helper()
+	return newWorldWith(t, maxConcurrency, fakeKind{})
+}
+
+// newWorldWith is newWorld with the adapters the service has besides.
+func newWorldWith(t *testing.T, maxConcurrency int32, adapters ...adapter.Adapter) *world {
+	t.Helper()
 	database := pgtest.New(t, Module())
 	db, err := pg.Open(t.Context(), database.App)
 	if err != nil {
@@ -123,21 +130,28 @@ func newWorld(t *testing.T, maxConcurrency int32) *world {
 	w := &world{t: t, db: db, database: database, keys: newKeys(t), clock: &testClock{t: time.Date(2026, 10, 15, 12, 0, 0, 0, time.UTC)}}
 	w.credential = uuid.NewV7()
 	w.tx(func(ctx context.Context, tx pg.Tx) error { return w.seed(ctx, tx, maxConcurrency) })
-	reg, err := registry.New(fakeKind{})
+	reg, err := registry.New(adapters...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.svc, err = New(Config{
+	w.cfg = Config{
 		DB: db, Scope: platformScope, Keys: w.keys, Egress: egress.NewForTesting(egresstest.Loopback(t)),
 		Registry: reg, Clock: w.clock.now,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	if err := w.svc.Reload(t.Context()); err != nil {
-		t.Fatal(err)
-	}
+	w.restart()
 	return w
+}
+
+// restart is a new node's service over the world's database: nothing of the old one's running state is kept.
+func (w *world) restart() {
+	w.t.Helper()
+	var err error
+	if w.svc, err = New(w.cfg); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := w.svc.Reload(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
 }
 
 // seed makes the supplier, group, credential, endpoint and its schedule, chosen and active.

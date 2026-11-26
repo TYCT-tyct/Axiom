@@ -138,18 +138,19 @@ func ceiling(n *int32) int32 {
 	return *n
 }
 
-// runtimeOf is the running state of a credential, made when it is first seen and kept after.
-func (s *Service) runtimeOf(id, supplier uuid.UUID, max, perMinute int32) *credRuntime {
+// runtimeOf is the running state of a credential, made when it is first seen and kept after. account is the upstream
+// account its rolling minute is counted for.
+func (s *Service) runtimeOf(id, account uuid.UUID, max, perMinute int32) *credRuntime {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
 	if !ok {
 		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api repository/user_rpm_cache.go (8f2cbb53)
 		// count upstream accounts; another key of the same supplier must not create another quota.
-		requests := s.minutes[supplier]
+		requests := s.minutes[account]
 		if requests == nil {
 			requests = &minuteRuntime{now: s.now}
-			s.minutes[supplier] = requests
+			s.minutes[account] = requests
 		}
 		rt = &credRuntime{requests: requests}
 		s.runtime[id] = rt

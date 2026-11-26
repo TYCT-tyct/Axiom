@@ -14,10 +14,13 @@ import (
 )
 
 // Funds pairs one synced native balance with the supplier's live refusal state. Copies keep the balance they were
-// built with, but a refusal stops all of them at once, including routes frozen before it happened.
+// built with, but a refusal stops all of them at once, including routes frozen before it happened. Unbounded is a
+// supplier with no balance to read (a provider's own API, docs/domains/suppliers.md「直连接口」): what its calls cost is
+// billed to its keys' accounts, which a refusal still stops.
 type Funds struct {
-	Balance platform.Exact
-	state   *fundsState
+	Balance   platform.Exact
+	Unbounded bool
+	state     *fundsState
 }
 
 type fundsState struct {
@@ -32,12 +35,12 @@ type fundsState struct {
 
 // CanPay compares a native cost bound to the snapshot's balance. A refusal overrides even a positive balance.
 func (f *Funds) CanPay(cost platform.Exact) bool {
-	return f.Balance.Cmp(cost) >= 0 && !f.resting()
+	return (f.Unbounded || f.Balance.Cmp(cost) >= 0) && !f.resting()
 }
 
 func (f *Funds) resting() bool { return f.state != nil && f.state.rested.Load() }
 
-func (s *Service) fundsOf(id uuid.UUID, balance platform.Exact, observed *time.Time) *Funds {
+func (s *Service) fundsOf(id uuid.UUID, balance platform.Exact, observed *time.Time, unbounded bool) *Funds {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt := s.funds[id]
@@ -53,7 +56,7 @@ func (s *Service) fundsOf(id uuid.UUID, balance platform.Exact, observed *time.T
 		}
 	}
 	rt.mu.Unlock()
-	return &Funds{Balance: balance, state: rt}
+	return &Funds{Balance: balance, Unbounded: unbounded, state: rt}
 }
 
 func (f *Funds) rest(now time.Time) {

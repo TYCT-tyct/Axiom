@@ -64,7 +64,7 @@ func TestCreateSupplier(t *testing.T) {
 	made := f.connect()
 	want := adminapi.Supplier{
 		Id: made.Id, Name: "Acme", Kind: "newapi", Origin: publicOrigin, UpstreamAccount: "ops", NativeUnit: "quota",
-		SettlementCurrency: "USD", Status: "connecting",
+		SettlementCurrency: "USD", Status: "connecting", Mode: new(adminapi.SupplierMode("relay")),
 	}
 	if diff := cmp.Diff(want, made); diff != "" {
 		t.Errorf("the supplier (-want +got):\n%s", diff)

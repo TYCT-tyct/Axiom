@@ -38,13 +38,13 @@ func TestSupplierRefusalSurvivesReloadUntilFreshFunds(t *testing.T) {
 		}
 	}
 	zeroObserved := w.clock.now().Add(-time.Second)
-	if w.svc.fundsOf(w.supplier, platform.Exact{}, &zeroObserved).CanPay(platform.Exact{}) {
+	if w.svc.fundsOf(w.supplier, platform.Exact{}, &zeroObserved, false).CanPay(platform.Exact{}) {
 		t.Fatal("a fresh zero balance cleared the refusal")
 	}
 	oldObserved := w.clock.now()
 	// Equal timestamps are not newer evidence.
 	original.rest(w.clock.now())
-	if w.svc.fundsOf(w.supplier, original.Balance, &oldObserved).CanPay(platform.Exact{}) {
+	if w.svc.fundsOf(w.supplier, original.Balance, &oldObserved, false).CanPay(platform.Exact{}) {
 		t.Fatal("a balance observed at the refusal cleared it")
 	}
 	w.clock.advance(time.Second)
@@ -71,7 +71,7 @@ func TestSupplierFundsAreShared(t *testing.T) {
 	w := newWorld(t, 4)
 	ep := w.svc.snap.Load().endpoints[w.endpoint]
 	ep.funds.rest(w.clock.now())
-	other := w.svc.fundsOf(w.supplier, ep.funds.Balance, nil)
+	other := w.svc.fundsOf(w.supplier, ep.funds.Balance, nil, false)
 	if other.CanPay(platform.Exact{}) {
 		t.Fatal("another endpoint did not share the supplier's refusal")
 	}
@@ -194,9 +194,9 @@ func TestLateProbeDoesNotClearNewerSupplierRefusal(t *testing.T) {
 	// A successful sync may recover the supplier while the old probe is still reading. A later refusal must keep a
 	// different version even at the same clock tick (no ABA after the recovery).
 	observed := w.clock.now().Add(time.Second)
-	w.svc.fundsOf(w.supplier, funds.Balance, &observed)
+	w.svc.fundsOf(w.supplier, funds.Balance, &observed, false)
 	funds.rest(w.clock.now())
-	w.svc.fundsOf(w.supplier, funds.Balance, &observed) // reloading the same observation is not another sync
+	w.svc.fundsOf(w.supplier, funds.Balance, &observed, false) // reloading the same observation is not another sync
 	close(release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
