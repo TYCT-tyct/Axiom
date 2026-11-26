@@ -2,9 +2,9 @@ import type { AdminSchemas } from "@axiom/api";
 import { Text } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { Columns, Format } from "../list-table";
-import { Code, State, SubLine } from "../parts";
+import { ShortId, State, SubLine } from "../parts";
 import { refundStateText } from "./refunds";
-import { refundTone, shortId } from "./states";
+import { refundTone } from "./states";
 
 type Refund = AdminSchemas["PaymentRefund"];
 
@@ -16,9 +16,9 @@ export function refundsColumns(t: TFunction, format: Format): Columns<Refund> {
       header: t("orders.refund.col.refund"),
       cell: (refund) => (
         <>
-          <Code title={refund.id}>{shortId(refund.id)}</Code>
+          <ShortId id={refund.id} />
           <SubLine>
-            {t("orders.refund.col.order")} <Code title={refund.order_id}>{shortId(refund.order_id)}</Code>
+            {t("orders.refund.col.order")} <ShortId id={refund.order_id} />
             {refund.via === "offline" ? ` · ${t("orders.refund.viaOffline")}` : ""}
           </SubLine>
         </>
@@ -26,8 +26,9 @@ export function refundsColumns(t: TFunction, format: Format): Columns<Refund> {
     },
     {
       key: "account",
+      from: "sm",
       header: t("orders.refund.col.account"),
-      cell: (refund) => <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>,
+      cell: (refund) => <ShortId id={refund.account_id} />,
     },
     {
       key: "amount",
@@ -42,6 +43,7 @@ export function refundsColumns(t: TFunction, format: Format): Columns<Refund> {
     },
     {
       key: "reason",
+      from: "lg",
       header: t("orders.refund.col.reason"),
       cell: (refund) => (
         <Text lines={2} title={refund.reason}>
@@ -51,6 +53,7 @@ export function refundsColumns(t: TFunction, format: Format): Columns<Refund> {
     },
     {
       key: "asked",
+      from: "sm",
       header: t("orders.refund.col.requested"),
       muted: true,
       cell: (refund) => (refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"),

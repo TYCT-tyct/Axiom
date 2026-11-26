@@ -5,8 +5,7 @@ import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Columns, type Format, ListTable } from "../list-table";
-import { shortId } from "../orders/states";
-import { Code, State } from "../parts";
+import { ShortId, State } from "../parts";
 import { useAddressParam, useSelected } from "../row-drawer";
 import { isNotImplemented, platformSubscriptionsQuery } from "../subscription-queries";
 import { Ends, usedShare } from "./ends";
@@ -23,11 +22,12 @@ function subscriptionColumns(t: TFunction, format: Format, now: number): Columns
     {
       key: "account",
       header: t("subscriptions.col.account"),
-      cell: (sub) => <Code title={sub.account_id}>{shortId(sub.account_id)}</Code>,
+      cell: (sub) => <ShortId id={sub.account_id} />,
     },
     { key: "plan", header: t("subscriptions.col.plan"), cell: (sub) => sub.plan_name },
     {
       key: "quota",
+      from: "sm",
       header: t("subscriptions.col.quota"),
       sort: usedShare,
       cell: (sub) => (
@@ -41,6 +41,7 @@ function subscriptionColumns(t: TFunction, format: Format, now: number): Columns
     },
     {
       key: "ends",
+      from: "lg",
       header: t("subscriptions.col.ends"),
       sort: (sub) => Date.parse(sub.ends_at),
       cell: (sub) => <Ends sub={sub} now={now} />,
@@ -56,6 +57,7 @@ function subscriptionColumns(t: TFunction, format: Format, now: number): Columns
     },
     {
       key: "started",
+      from: "lg",
       header: t("subscriptions.col.started"),
       muted: true,
       cell: (sub) => format.dayFull(new Date(sub.starts_at)),

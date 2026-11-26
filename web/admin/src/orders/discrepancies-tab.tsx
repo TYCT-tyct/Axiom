@@ -7,30 +7,32 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { discrepanciesQuery, discrepancyStates } from "../finance-queries";
 import { type Columns, type Format, ListTable } from "../list-table";
-import { Code, State } from "../parts";
+import { ShortId, State } from "../parts";
 import { useSelected } from "../row-drawer";
 import { DiscrepancyDrawer } from "./discrepancy-drawer";
-import { shortId } from "./states";
 
 type Discrepancy = AdminSchemas["PaymentDiscrepancy"];
 type Standing = "all" | (typeof discrepancyStates)[number];
 
 function discrepancyColumns(t: TFunction, format: Format): Columns<Discrepancy> {
   return [
-    { key: "id", header: t("discrepancies.id"), cell: (row) => <Code title={row.id}>{shortId(row.id)}</Code> },
-    { key: "kind", header: t("discrepancies.kind"), cell: (row) => row.kind ?? "—" },
+    { key: "id", header: t("discrepancies.id"), cell: (row) => <ShortId id={row.id} /> },
+    { key: "kind", from: "sm", header: t("discrepancies.kind"), cell: (row) => row.kind ?? "—" },
     {
       key: "order",
+      from: "lg",
       header: t("discrepancies.order"),
-      cell: (row) => <Code title={row.order_id}>{shortId(row.order_id)}</Code>,
+      cell: (row) => <ShortId id={row.order_id} />,
     },
     {
       key: "account",
+      from: "sm",
       header: t("discrepancies.account"),
-      cell: (row) => <Code title={row.account_id}>{shortId(row.account_id)}</Code>,
+      cell: (row) => <ShortId id={row.account_id} />,
     },
     {
       key: "created",
+      from: "lg",
       header: t("discrepancies.created"),
       muted: true,
       cell: (row) => (row.created_at ? format.dateTime(new Date(row.created_at)) : "—"),

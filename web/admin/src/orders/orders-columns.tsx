@@ -1,9 +1,9 @@
 import type { AdminSchemas } from "@axiom/api";
 import type { TFunction } from "i18next";
 import type { Columns, Format } from "../list-table";
-import { Code, State, SubLine } from "../parts";
+import { ShortId, State, SubLine } from "../parts";
 import { CreditedAmount, PaidAmount } from "./order-amounts";
-import { orderTone, shortId } from "./states";
+import { orderTone } from "./states";
 
 type Order = AdminSchemas["PaymentOrder"];
 
@@ -16,25 +16,28 @@ export function ordersColumns(t: TFunction, format: Format): Columns<Order> {
       header: t("orders.col.order"),
       cell: (order) => (
         <>
-          <Code title={order.id}>{shortId(order.id)}</Code>
+          <ShortId id={order.id} />
           <SubLine>{[order.merchant_name, order.method].filter(Boolean).join(" · ")}</SubLine>
         </>
       ),
     },
     {
       key: "account",
+      from: "sm",
       header: t("orders.col.account"),
-      cell: (order) => <Code title={order.account_id}>{shortId(order.account_id)}</Code>,
+      cell: (order) => <ShortId id={order.account_id} />,
     },
     { key: "paid", header: t("orders.col.total"), align: "end", cell: (order) => <PaidAmount order={order} /> },
     {
       key: "credited",
+      from: "lg",
       header: t("orders.col.credits"),
       align: "end",
       cell: (order) => <CreditedAmount order={order} />,
     },
     {
       key: "created",
+      from: "lg",
       header: t("orders.col.time"),
       muted: true,
       cell: (order) => (order.created_at ? format.dateTime(new Date(order.created_at)) : "—"),

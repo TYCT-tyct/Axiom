@@ -100,15 +100,18 @@ export function Rate({ rate }: { rate: number | undefined }) {
 
 export type ModeFilters = { q: string; mode: "all" | Mode };
 
-// The row above a list of channels or keys: a search box, and the ways in to narrow it to (中转站, 直连接口, 云平台).
+// The row above a list of channels or keys: a search box, the ways in to narrow it to (中转站, 直连接口, 云平台), and how
+// many of the list's rows (total) they leave.
 export function ModeFilter({
   search,
   values,
   onChange,
+  count,
 }: {
   search: string;
   values: ModeFilters;
   onChange: (values: ModeFilters) => void;
+  count: { shown: number; total: number };
 }) {
   const { t } = useTranslation();
   return (
@@ -130,6 +133,7 @@ export function ModeFilter({
       values={values}
       onChange={(key, value) => onChange({ ...values, [key]: value })}
       onClear={() => onChange({ q: "", mode: "all" })}
+      count={{ ...count, unit: t("upstream.rows") }}
     />
   );
 }

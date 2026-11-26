@@ -39,24 +39,22 @@ export default function GatewaySettings() {
   const probeView = useQuery(probeSettingsQuery);
   const retentionView = useQuery(logRetentionQuery);
   return (
-    <>
+    <PageBody>
       <PageHead title={t("shell.nav.gateway")} lede={t("settings.pages.gateway.lede")} />
-      <PageBody>
-        <OptionalView query={segmentView}>
-          {(segmentsLoaded) => (
-            <OptionalView query={probeView}>
-              {(probesLoaded) => (
-                <OptionalView query={retentionView}>
-                  {(retentionLoaded) => (
-                    <Rows segments={segmentsLoaded} probes={probesLoaded} days={retentionLoaded?.hot_days} />
-                  )}
-                </OptionalView>
-              )}
-            </OptionalView>
-          )}
-        </OptionalView>
-      </PageBody>
-    </>
+      <OptionalView query={segmentView}>
+        {(segmentsLoaded) => (
+          <OptionalView query={probeView}>
+            {(probesLoaded) => (
+              <OptionalView query={retentionView}>
+                {(retentionLoaded) => (
+                  <Rows segments={segmentsLoaded} probes={probesLoaded} days={retentionLoaded?.hot_days} />
+                )}
+              </OptionalView>
+            )}
+          </OptionalView>
+        )}
+      </OptionalView>
+    </PageBody>
   );
 }
 

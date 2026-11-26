@@ -108,20 +108,24 @@ function GroupTable({ detail }: { detail: SupplierView }) {
     paste: () => setOpen({ kind: "paste" }),
   });
   return (
-    <Card layout="flush" title={t("upstream.groups.title")} lede={t("upstream.groups.lede")}>
+    <Card
+      layout="flush"
+      title={t("upstream.groups.title")}
+      lede={t("upstream.groups.lede")}
+      actions={
+        groups.length === 0 ? undefined : (
+          <Text as="span" size="sm" tone="faint" numeric>
+            {t("upstream.groups.inUse", { count: groups.filter((g) => g.selected).length, all: groups.length })}
+          </Text>
+        )
+      }
+    >
       {groups.length === 0 ? (
         <EmptyState compact title={t("suppliers.groups.empty.title")}>
           {t("suppliers.groups.empty.body")}
         </EmptyState>
       ) : (
-        <DataTable
-          label={t("upstream.groups.title")}
-          rows={groups}
-          rowKey={(group) => group.id}
-          total={groups.length}
-          unit={t("upstream.groups.inUse", { count: groups.filter((g) => g.selected).length, all: groups.length })}
-          columns={columns}
-        />
+        <DataTable label={t("upstream.groups.title")} rows={groups} rowKey={(group) => group.id} columns={columns} />
       )}
       <Text size="sm" tone="muted">
         {t("upstream.groups.foot")}

@@ -80,10 +80,11 @@ export function CatalogTable({
             </LinkButton>
           ),
         },
-        text("author", 140, t("models.col.author"), (row) => authors.get(row.author) ?? row.author),
+        { ...text("author", 140, t("models.col.author"), (row) => authors.get(row.author) ?? row.author), from: "lg" },
         ...when(named, {
           key: "family",
           width: 140,
+          from: "lg" as const,
           header: t("models.col.family"),
           cell: (row: Summary) => (row.family ? <Code>{row.family}</Code> : "—"),
         }),
@@ -96,15 +97,17 @@ export function CatalogTable({
         ...when(billed, {
           key: "units",
           width: 130,
+          from: "lg" as const,
           header: t("models.col.units"),
           muted: true,
           cell: (row: Summary) => row.billing_units?.map((unit) => t(`models.unit.${unit}`)).join(", ") || "—",
         }),
-        text("basis", 120, t("models.col.basis"), (row) => t(`models.basis.${row.version_basis}`)),
-        text("source", 140, t("models.col.source"), (row) => t(`models.source.${row.price_source}`)),
+        { ...text("basis", 120, t("models.col.basis"), (row) => t(`models.basis.${row.version_basis}`)), from: "lg" },
+        { ...text("source", 140, t("models.col.source"), (row) => t(`models.source.${row.price_source}`)), from: "sm" },
         ...when(lines.allowed, {
           key: "lines",
           width: 150,
+          from: "sm" as const,
           header: t("models.col.lines"),
           cell: (row: Summary) => <ModelLines lines={lines} modelId={row.id} />,
         }),

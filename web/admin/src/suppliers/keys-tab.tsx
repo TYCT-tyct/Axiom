@@ -32,13 +32,14 @@ export default function KeysTab({ credential }: { credential: string | undefined
   );
   const open = (id: string | undefined, replace = false) =>
     void navigate({ to: "/suppliers", search: { tab: "keys", credential: id }, replace });
+  const count = { shown: shown.length, total: rows.length };
   const index = shown.findIndex((row) => row.id === credential);
   const opened = shown[index];
   return (
     <>
       {rows.length > 0 ? <Strip rows={rows} suppliers={suppliers} /> : null}
       <Cluster justify="between">
-        <ModeFilter search={t("upstream.keys.search")} values={filters} onChange={setFilters} />
+        <ModeFilter search={t("upstream.keys.search")} values={filters} onChange={setFilters} count={count} />
         <TestAll />
       </Cluster>
       <Card layout="flush">
@@ -51,7 +52,6 @@ export default function KeysTab({ credential }: { credential: string | undefined
             <>
               <CredentialTable
                 rows={shown}
-                total={rows.length}
                 suppliers={suppliers}
                 lineOf={lineOf}
                 across

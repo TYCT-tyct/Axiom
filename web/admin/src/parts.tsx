@@ -1,9 +1,10 @@
 import { can, readForm, useSession } from "@axiom/app";
 import { CodeBlock } from "@axiom/boards/ds";
-import { ActionButton, Card, Cluster, Grid, Select, Stack, Tag, Text, Th, useFormat } from "@axiom/ui";
+import { ActionButton, Card, Cluster, Grid, Mono, Select, Stack, Tag, Text, Th, useFormat } from "@axiom/ui";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { formatJSON } from "./lossless";
+import { shortId } from "./orders/states";
 
 export { toInstant, toLocalInput } from "@axiom/app";
 // Under the names the admin's pages use: a row of the things a page offers (Actions), what is known about one thing
@@ -16,6 +17,16 @@ export function SubLine({ children }: { children: ReactNode }) {
     <Text as="div" size="sm" tone="faint">
       {children}
     </Text>
+  );
+}
+
+// ShortId is an identifier in a list by its last eight characters (shortId), the whole of it in the title: one line that
+// a narrow column cuts rather than breaks. The title, not a Tooltip, as the cell may be the button that opens its row.
+export function ShortId({ id }: { id: string | undefined }) {
+  return (
+    <Mono title={id} clip>
+      {shortId(id)}
+    </Mono>
   );
 }
 
@@ -92,8 +103,12 @@ export function text(value: string | undefined) {
 }
 
 // Head is the header row of a table: a label per column, the column that names a row marked main, and an empty last
-// column for the buttons of a row. A table too wide for the window scrolls inside its box; no column is hidden.
-type HeadColumn = string | [label: string, layout?: { main?: boolean; align?: "end"; shrink?: boolean }];
+// column for the buttons of a row. A column the drawer or dialog of a row also shows may appear only from a width (from,
+// the same on the column's Td), so a phone keeps the two or three that matter; a table still too wide scrolls inside its
+// box.
+type HeadColumn =
+  | string
+  | [label: string, layout?: { main?: boolean; align?: "end"; shrink?: boolean; from?: "sm" | "md" | "lg" }];
 
 export function Head({ cols, action = false }: { cols: HeadColumn[]; action?: boolean }) {
   return (

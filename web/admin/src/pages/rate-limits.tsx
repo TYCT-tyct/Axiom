@@ -35,10 +35,10 @@ export default function RateLimits() {
   const { t } = useTranslation();
   const allowed = can(useSession(), "sites.manage");
   return (
-    <>
+    <PageBody>
       <PageHead title={t("shell.nav.rateLimits")} lede={t("rateLimits.description")} />
-      <PageBody>{allowed ? <Lookup /> : <ForbiddenState />}</PageBody>
-    </>
+      {allowed ? <Lookup /> : <ForbiddenState />}
+    </PageBody>
   );
 }
 

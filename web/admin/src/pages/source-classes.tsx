@@ -87,8 +87,8 @@ export function Classes({ classes }: { classes: Class[] }) {
               cols={[
                 [t("sourceClasses.position"), { align: "end" }],
                 [t("sourceClasses.colName"), { main: true }],
-                t("sourceClasses.colRules"),
-                t("sourceClasses.updated"),
+                [t("sourceClasses.colRules"), { from: "sm" }],
+                [t("sourceClasses.updated"), { from: "sm" }],
               ]}
               action
             />
@@ -142,14 +142,14 @@ function ClassRow({
           {item.description || t("sourceClasses.noDescription")}
         </Text>
       </Td>
-      <Td>
+      <Td from="sm">
         {item.rules.conditions.length === 0
           ? t("sourceClasses.noRules")
           : `${t("sourceClasses.rulesCount", { count: item.rules.conditions.length })} · ${
               item.rules.match === "any" ? t("sourceClasses.matchAny") : t("sourceClasses.matchAll")
             }`}
       </Td>
-      <Td>{format.dateTime(new Date(item.updated_at))}</Td>
+      <Td from="sm">{format.dateTime(new Date(item.updated_at))}</Td>
       <Td actions>
         <Cluster>
           <ActionButton size="sm" onClick={onEdit}>

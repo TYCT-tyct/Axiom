@@ -33,7 +33,7 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
       <Head
         cols={[
           [t("suppliers.credentials.key"), { main: true }],
-          t("suppliers.unbound.groupRef"),
+          [t("suppliers.unbound.groupRef"), { from: "sm" }],
           t("suppliers.col.status"),
         ]}
         action={onOpen !== undefined}
@@ -44,7 +44,7 @@ export function UnboundKeys({ keys, onOpen }: { keys: AdminSchemas["UpstreamKey"
             <Td main>
               <Code>{key.ref}</Code>
             </Td>
-            <Td>{key.group_ref ? <Code>{key.group_ref}</Code> : "—"}</Td>
+            <Td from="sm">{key.group_ref ? <Code>{key.group_ref}</Code> : "—"}</Td>
             <Td>{t(`suppliers.unbound.state.${key.status}`)}</Td>
             {onOpen ? (
               <Td actions>

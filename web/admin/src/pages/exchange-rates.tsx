@@ -74,8 +74,8 @@ function Rates({ rows, manage, open }: { rows: Rate[]; manage: boolean; open: (p
         cols={[
           [t("exchangeRates.pair"), { main: true }],
           t("exchangeRates.rate"),
-          t("exchangeRates.version"),
-          t("exchangeRates.source"),
+          [t("exchangeRates.version"), { from: "sm" }],
+          [t("exchangeRates.source"), { from: "sm" }],
         ]}
         action
       />
@@ -88,8 +88,8 @@ function Rates({ rows, manage, open }: { rows: Rate[]; manage: boolean; open: (p
             <Td>
               <RateValue rate={row} />
             </Td>
-            <Td>{format.number(row.version)}</Td>
-            <Td>
+            <Td from="sm">{format.number(row.version)}</Td>
+            <Td from="sm">
               {row.source === "manual" || row.source === "ecb" ? t(`exchangeRates.sources.${row.source}`) : row.source}
             </Td>
             <Td actions>

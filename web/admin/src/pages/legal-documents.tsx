@@ -77,7 +77,7 @@ function Versions({ documents, select }: { documents: Document[]; select: (docum
           [t("legalDocs.kind"), { main: true }],
           t("legalDocs.locale"),
           t("legalDocs.version"),
-          t("legalDocs.publishedAt"),
+          [t("legalDocs.publishedAt"), { from: "sm" }],
         ]}
         action
       />
@@ -87,7 +87,7 @@ function Versions({ documents, select }: { documents: Document[]; select: (docum
             <Td main>{t(`legalDocs.kinds.${document.kind}`)}</Td>
             <Td>{t(`legalDocs.languages.${document.locale ?? "zh"}`)}</Td>
             <Td>{document.version}</Td>
-            <Td>
+            <Td from="sm">
               <Time at={document.published_at} />
             </Td>
             <Td actions>

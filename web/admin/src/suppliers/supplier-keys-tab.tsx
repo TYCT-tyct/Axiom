@@ -54,7 +54,6 @@ export default function SupplierKeysTab({ detail, credential }: { detail: Suppli
         ) : (
           <CredentialTable
             rows={rows}
-            total={rows.length}
             suppliers={known}
             lineOf={lineOf}
             across={false}

@@ -85,7 +85,8 @@ test.describe("calls and audit", () => {
   });
 
   test("a call's ids keep both ends and offer a copy, the table scrolling inside its box", async ({ page }) => {
-    await page.setViewportSize({ width: 800, height: 900 });
+    // The narrowest window that has the request's column: a tablet leaves it to the call's drawer.
+    await page.setViewportSize({ width: 1024, height: 900 });
     await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
     const state = await open(page, "/calls");
     const first = state.calls[0];
@@ -96,7 +97,7 @@ test.describe("calls and audit", () => {
     await expect(row).toContainText(first.id.slice(-8));
     await expect(row.locator(`[title="${first.id}"]`)).toBeVisible();
     expect((await row.getByRole("cell").nth(1).boundingBox())?.height ?? 0).toBeLessThan(80);
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(800);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(1024);
 
     await row
       .getByRole("button", { name: zhText("copy.id") })
@@ -113,7 +114,7 @@ test.describe("calls and audit", () => {
 
   for (const mode of ["denied", "missing"] as const) {
     test(`a ${mode} clipboard says so visibly`, async ({ page }) => {
-      await page.setViewportSize({ width: 800, height: 900 });
+      await page.setViewportSize({ width: 1024, height: 900 });
       await page.addInitScript((value) => {
         Object.defineProperty(navigator, "clipboard", {
           configurable: true,

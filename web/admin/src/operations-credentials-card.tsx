@@ -112,9 +112,9 @@ function CredentialsTable({ credentials, onOpen }: { credentials: Credential[]; 
       <Head
         cols={[
           [t("operations.credentials.col.name"), { main: true }],
-          t("operations.credentials.col.state"),
-          [t("operations.credentials.col.scope"), { main: true }],
-          t("operations.credentials.col.expiry"),
+          [t("operations.credentials.col.state"), { from: "sm" }],
+          [t("operations.credentials.col.scope"), { main: true, from: "lg" }],
+          [t("operations.credentials.col.expiry"), { from: "lg" }],
         ]}
         action
       />
@@ -153,10 +153,10 @@ function CredentialRow({ credential, onOpen }: { credential: Credential; onOpen:
           ) : null}
         </Stack>
       </Td>
-      <Td>
+      <Td from="sm">
         <State tone={tone}>{t(`operations.credentials.state.${status}`)}</State>
       </Td>
-      <Td main>
+      <Td main from="lg">
         <Stack gap={4}>
           <Cluster gap={4}>
             {credential.platform ? <Tag tone="warn">{t("operations.credentials.platformScope")}</Tag> : null}
@@ -170,7 +170,7 @@ function CredentialRow({ credential, onOpen }: { credential: Credential; onOpen:
           <SubLine>{t("operations.credentials.vendors", { list: credential.proposer_vendors.join(", ") })}</SubLine>
         </Stack>
       </Td>
-      <Td shrink>
+      <Td shrink from="lg">
         <Text as="div">{format.dateTimeMinute(new Date(credential.expires_at))}</Text>
         <SubLine>
           {credential.last_used_at

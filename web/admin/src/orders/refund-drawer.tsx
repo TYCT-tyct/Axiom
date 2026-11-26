@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Code, State } from "../parts";
+import { Code, ShortId, State } from "../parts";
 import { accountQuery } from "../queries";
 import { RowDrawer, type useSelected } from "../row-drawer";
 import { type Decision, RefundActions, RefundDecision, refundStateText } from "./refunds";
@@ -120,7 +120,7 @@ function RefundFacts({ refund }: { refund: Refund }) {
           t("orders.refund.col.order"),
           <TextLink key="order">
             <Link to="/orders" search={{ selected: refund.order_id }}>
-              <Code title={refund.order_id}>{shortId(refund.order_id)}</Code>
+              <ShortId id={refund.order_id} />
             </Link>
           </TextLink>,
         ],

@@ -5,7 +5,7 @@ import type { TFunction } from "i18next";
 import { type ComponentProps, type Key, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Columns, type Format, ListTable } from "../list-table";
-import { Code } from "../parts";
+import { ShortId } from "../parts";
 import { cashMovementsQuery, paidBatchesQuery } from "../queries";
 import { shortId } from "./states";
 import { type LedgerListProps, useListWindow } from "./window";
@@ -81,11 +81,11 @@ const kinds: Record<Kind, (movement: Movement) => boolean> = {
 
 function cashColumns(t: TFunction, format: Format): Columns<Movement> {
   return [
-    { key: "id", header: t("orders.cash.col.id"), cell: (movement) => <Code>{shortId(movement.id)}</Code> },
+    { key: "id", header: t("orders.cash.col.id"), cell: (movement) => <ShortId id={movement.id} /> },
     {
       key: "account",
       header: t("orders.cash.col.account"),
-      cell: (movement) => <Code title={movement.account_id}>{shortId(movement.account_id)}</Code>,
+      cell: (movement) => <ShortId id={movement.account_id} />,
     },
     {
       key: "amount",
@@ -165,12 +165,12 @@ function batchColumns(t: TFunction, format: Format): Columns<Batch> {
     {
       key: "id",
       header: t("orders.paidBatches.col.id"),
-      cell: (batch) => <Code title={batch.id}>{shortId(batch.id)}</Code>,
+      cell: (batch) => <ShortId id={batch.id} />,
     },
     {
       key: "account",
       header: t("orders.paidBatches.col.account"),
-      cell: (batch) => <Code title={batch.account_id}>{shortId(batch.account_id)}</Code>,
+      cell: (batch) => <ShortId id={batch.account_id} />,
     },
     {
       key: "amount",
@@ -181,6 +181,7 @@ function batchColumns(t: TFunction, format: Format): Columns<Batch> {
     {
       key: "from",
       header: t("orders.paidBatches.col.channel"),
+      from: "lg",
       cell: (batch) =>
         batch.online
           ? t("orders.paidBatches.online")
@@ -191,6 +192,7 @@ function batchColumns(t: TFunction, format: Format): Columns<Batch> {
     {
       key: "at",
       header: t("orders.paidBatches.col.at"),
+      from: "lg",
       muted: true,
       cell: (batch) => format.dateTime(new Date(batch.created_at)),
       sort: (batch) => Date.parse(batch.created_at),

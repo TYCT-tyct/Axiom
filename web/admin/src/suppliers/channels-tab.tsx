@@ -25,10 +25,11 @@ export default function ChannelsTab() {
   const [filters, setFilters] = useState<ModeFilters>({ q: "", mode: "all" });
   const rows = suppliers.data?.pages.flatMap((page) => page.data) ?? [];
   const shown = rows.filter((supplier) => matches(supplier, lines.all, filters));
+  const count = { shown: shown.length, total: rows.length };
   return (
     <>
       {rows.length > 0 ? <Strip suppliers={rows} lines={lines.all} traffic={traffic} /> : null}
-      <ModeFilter search={t("upstream.channels.search")} values={filters} onChange={setFilters} />
+      <ModeFilter search={t("upstream.channels.search")} values={filters} onChange={setFilters} count={count} />
       <Card layout="flush">
         <DataState
           query={suppliers}
@@ -43,7 +44,7 @@ export default function ChannelsTab() {
             )
           }
         >
-          {() => <ChannelTable rows={shown} total={rows.length} lines={lines.all} traffic={traffic} />}
+          {() => <ChannelTable rows={shown} lines={lines.all} traffic={traffic} />}
         </DataState>
         <LoadMore list={suppliers} />
       </Card>
@@ -112,17 +113,7 @@ function Strip({ suppliers, lines, traffic }: { suppliers: Supplier[]; lines: Li
   );
 }
 
-function ChannelTable({
-  rows,
-  total,
-  lines,
-  traffic,
-}: {
-  rows: Supplier[];
-  total: number;
-  lines: Line[];
-  traffic: Traffics;
-}) {
+function ChannelTable({ rows, lines, traffic }: { rows: Supplier[]; lines: Line[]; traffic: Traffics }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const of = (supplier: Supplier): Traffic | undefined => traffic?.ofSupplier(supplier.id);
@@ -130,7 +121,6 @@ function ChannelTable({
     <DataTable
       label={t("upstream.tabs.channels")}
       rows={rows}
-      total={total}
       rowKey={(row) => row.id}
       onOpen={(row) => void navigate({ to: "/suppliers/$supplierId", params: { supplierId: row.id } })}
       columns={[
@@ -162,7 +152,7 @@ function ChannelTable({
         {
           key: "days",
           header: t("upstream.channels.col.days"),
-          from: "md",
+          from: "lg",
           sort: (row) => row.balance_days,
           cell: (row) => <Days days={row.balance_days} />,
         },

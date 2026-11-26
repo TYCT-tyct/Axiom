@@ -25,21 +25,19 @@ export default function Users() {
   const roles = can(useSession(), "platform_grants.manage");
   const Current = tabs[path] ?? UsersTab;
   return (
-    <>
+    <PageBody>
       <PageHead title={t("shell.nav.users")} />
-      <PageBody>
-        <RouteTabs
-          label={t("users.tabs.label")}
-          current={path}
-          tabs={[
-            { key: "/users", to: "/users", label: t("users.tabs.users") },
-            { key: "/users/accounts", to: "/users/accounts", label: t("users.tabs.accounts") },
-            ...(roles ? [{ key: "/users/roles" as const, to: "/users/roles", label: t("users.tabs.roles") }] : []),
-          ]}
-        />
-        <Current />
-      </PageBody>
-    </>
+      <RouteTabs
+        label={t("users.tabs.label")}
+        current={path}
+        tabs={[
+          { key: "/users", to: "/users", label: t("users.tabs.users") },
+          { key: "/users/accounts", to: "/users/accounts", label: t("users.tabs.accounts") },
+          ...(roles ? [{ key: "/users/roles" as const, to: "/users/roles", label: t("users.tabs.roles") }] : []),
+        ]}
+      />
+      <Current />
+    </PageBody>
   );
 }
 

@@ -27,6 +27,18 @@
   width: var(--w);
 }
 
+/* Below a desktop a fixed table keeps only its two to four key columns (from), and the desktop's widths add up to more
+   than a tablet's or a phone's screen: the columns that are left share it by their content instead. */
+@media (max-width: 1023px) {
+  .fixed {
+    table-layout: auto;
+  }
+
+  .col {
+    width: auto;
+  }
+}
+
 .table .end {
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -193,6 +205,16 @@
     width: max(100%, 44px);
     height: 44px;
     transform: translate(-50%, -50%);
+  }
+
+  /* A phone's few columns share its width: the row's name (a call's time) wraps between its words, and a column that
+     names a row keeps less room, rather than push the last column out. An identifier does not break (Mono clip). */
+  .opener {
+    white-space: normal;
+  }
+
+  .main {
+    min-width: 120px;
   }
 }
 

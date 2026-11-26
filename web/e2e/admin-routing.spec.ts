@@ -111,10 +111,11 @@ test("a new platform preset that limits a price names its currency, and one that
 test("one vendor rule reads in the singular, and the key count has its own column", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "en"));
   await open(page, "/routing");
-  await page.setViewportSize({ width: 360, height: 900 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   // The site preset has one rule by vendor or model, and the summary under the name counts it as one.
   await expect(page.getByText(words("presetRules.summary.overrides_one")).first()).toBeVisible();
-  // No column is hidden on a phone: the table scrolls, and the key count sits in its own column in the page's number format.
+  // On a desktop the key count sits in its own column in the page's number format (a phone or a tablet keeps the preset
+  // and its order).
   const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
   await expect(counted.getByRole("cell", { name: "12,345", exact: true })).toBeVisible();
   // The system preset has no count: it says what it is.
@@ -125,7 +126,7 @@ test("one vendor rule reads in the singular, and the key count has its own colum
 test("the key count keeps the same number format in Chinese", async ({ page }) => {
   await page.addInitScript(() => localStorage.setItem("axiom.language", "zh"));
   await open(page, "/routing");
-  await page.setViewportSize({ width: 360, height: 900 });
+  await page.setViewportSize({ width: 1280, height: 900 });
   const counted = page.getByRole("row").filter({ hasText: "Cheapest, in dollars" });
   await expect(counted.getByRole("cell", { name: "12,345", exact: true })).toBeVisible();
 });
