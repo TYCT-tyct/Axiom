@@ -108,8 +108,8 @@ func (f supplierFixture) supplierModels(supplier, query string) []adminapi.Suppl
 }
 
 // TestSupplierEndpointCostThroughTheAPI: an endpoint's price lines are its plan's rates at each condition, in quota and
-// in the settlement currency at the unit value, with where the plan came from; an endpoint of unknown cost has none, and
-// one the supplier lacks is a 404.
+// in the settlement currency at the unit value, with where the plan came from and the factors the plan stored for each
+// line before the unit value; an endpoint of unknown cost has none, and one the supplier lacks is a 404.
 func TestSupplierEndpointCostThroughTheAPI(t *testing.T) {
 	t.Parallel()
 	f := newSupplierFixture(t)
@@ -124,9 +124,11 @@ func TestSupplierEndpointCostThroughTheAPI(t *testing.T) {
 	if unknown.CostState != "unknown" || len(unknown.Lines) != 0 || unknown.PlanId != nil || unknown.UnitValue != nil {
 		t.Errorf("an endpoint of unknown cost: %+v", unknown)
 	}
-	plan := f.text(fmt.Sprintf(`INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
+	plan := f.text(fmt.Sprintf(`INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
 		VALUES ('%s', '%s', 'quota', '{"v":1,"currency":"XXX","rates":{"input":"0.75","output":"3"},
-		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":200000,"rates":{"input":"1.5"}}]}}', 'published', 'v1') RETURNING id::text`, supplier, endpoint))
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":200000,"rates":{"input":"1.5"}}]}}', 'published', 'v1',
+		'[{"item":"input","service_tier":"standard","factors":[{"kind":"model_ratio","value":"0.5"},{"kind":"group_ratio","value":"1.5"}]}]')
+		RETURNING id::text`, supplier, endpoint))
 	f.run(fmt.Sprintf(`UPDATE suppliers.endpoints SET cost_state = 'known', cost_schedule_id = '%s' WHERE id = '%s'`, plan, endpoint),
 		fmt.Sprintf(`INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ('%s', 0.000002, 'test', 'confirmed')`, supplier))
 	rec := f.do(http.MethodGet, path, "", as(f.s))
@@ -138,11 +140,13 @@ func TestSupplierEndpointCostThroughTheAPI(t *testing.T) {
 		return adminapi.CostLine{Item: item, Unit: "token", Above: above, NativePrice: &native, Price: &price, Factors: uv}
 	}
 	above := int64(200000)
+	baseInput := line("input", nil, "0.75", "0.0000015")
+	baseInput.Factors = append([]adminapi.CostFactor{{Kind: "model_ratio", Value: "0.5"}, {Kind: "group_ratio", Value: "1.5"}}, uv...)
 	want := adminapi.EndpointCost{
 		EndpointId: endpoint, CostState: "known", Source: new(adminapi.CostSource("read")), SettlementCurrency: "USD",
 		UnitValue: new("0.000002"), PlanId: &plan,
 		Lines: []adminapi.CostLine{
-			line("input", nil, "0.75", "0.0000015"), line("output", nil, "3", "0.000006"),
+			baseInput, line("output", nil, "3", "0.000006"),
 			line("input", &above, "1.5", "0.000003"), line("output", &above, "3", "0.000006"),
 		},
 	}

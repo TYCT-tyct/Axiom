@@ -153,8 +153,8 @@ func (a adminAPI) modelCounts(ctx context.Context, tx pg.Tx, id uuid.UUID, owner
 var costSources = map[string]adminapi.CostSource{"published": "read", "confirmed": "confirmed"}
 
 // GetSupplierEndpointCost answers an endpoint's cost plan as price lines, and the break-even of one the upstream charges
-// per request. A line's price is its native price times the unit value, the one factor the plan's conversion takes; how
-// the supplier came to its native price is not stored with the plan, so it is not a factor here.
+// per request. A line's factors are what its native price is the product of, as the plan stored them (none for a plan
+// stored without), then the unit value its price is converted with.
 func (a adminAPI) GetSupplierEndpointCost(ctx context.Context, request adminapi.GetSupplierEndpointCostRequestObject) (adminapi.GetSupplierEndpointCostResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -195,6 +195,9 @@ func endpointCostBody(c suppliers.EndpointCost) adminapi.EndpointCost {
 	}
 	for _, l := range c.Lines {
 		line := adminapi.CostLine{Item: adminapi.MeteringItem(l.Item.String()), Unit: meteringUnit(l.Item), Factors: []adminapi.CostFactor{}}
+		for _, f := range l.Factors {
+			line.Factors = append(line.Factors, adminapi.CostFactor{Kind: adminapi.CostFactorKind(f.Kind), Value: f.Value})
+		}
 		if l.ServiceTier != catalog.ServiceTierStandard {
 			tier := adminapi.ServiceTier(l.ServiceTier.String())
 			line.ServiceTier = &tier

@@ -269,9 +269,10 @@ FROM (VALUES `, `) AS v(id, name, formats) WHERE t.id = v.id`, []string{"uuid", 
 		return fmt.Errorf("project changed endpoints: %w", err)
 	}
 	if err := projectionPages(ctx, db, w.Costs, `
-WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint) AS (VALUES `, `), made AS (
- INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
- SELECT * FROM wanted ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
+WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation) AS (VALUES `, `), made AS (
+ INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
+ SELECT supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, NULLIF(derivation, '')::jsonb FROM wanted
+ ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
  RETURNING id, endpoint_id
 ), schedules AS (
  SELECT id, endpoint_id FROM made
@@ -280,8 +281,8 @@ WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
  JOIN wanted w ON w.endpoint_id = c.endpoint_id AND w.fingerprint = c.fingerprint
 )
 UPDATE suppliers.endpoints e SET cost_state = 'known', cost_schedule_id = s.id, cost_state_reason = NULL
-FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text"}, func(r EnsureCostScheduleParams) []any {
-		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint}
+FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text", "text"}, func(r EnsureCostScheduleParams) []any {
+		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint, r.Derivation}
 	}); err != nil {
 		return fmt.Errorf("project costs: %w", err)
 	}

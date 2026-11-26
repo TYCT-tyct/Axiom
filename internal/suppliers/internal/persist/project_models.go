@@ -119,7 +119,7 @@ func (p *projector) mapping(key nameKey) nameState {
 		found = a
 		mapped = &a.model
 	}
-	m := syncer.MapUpstreamDrafts(p.snap, mapped, key.name, p.rule.drafts)
+	m := syncer.MapUpstreamDrafts(p.mapBy, mapped, key.name, p.rule.drafts)
 	if !m.Mapped {
 		return nameState{why: m.Why}
 	}

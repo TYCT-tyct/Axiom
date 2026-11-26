@@ -452,5 +452,10 @@ func TestListSupplierCredentials(t *testing.T) {
 	expectSame(t, "refused", credentialIDs(refused), []string{ids[0]})
 	decode(t, f.do(http.MethodGet, "/supplier-credentials?mode=direct", "", as(f.s)), &direct)
 	expectSame(t, "direct", credentialIDs(direct), []string{})
+	// The filter is the supplier's own mode: the same keys are a direct supplier's once the supplier is one.
+	f.run("UPDATE suppliers.suppliers SET mode = 'direct' WHERE id = '" + f.supplier + "'")
+	decode(t, f.do(http.MethodGet, "/supplier-credentials?mode=direct", "", as(f.s)), &direct)
+	decode(t, f.do(http.MethodGet, "/supplier-credentials?mode=relay&supplier_id="+f.supplier, "", as(f.s)), &refused)
+	expectSame(t, "by the supplier's mode", []any{credentialIDs(direct), credentialIDs(refused)}, []any{[]string{ids[2], ids[1], ids[0]}, []string{}})
 	expectAdmin(t, "a bad cursor", f.do(http.MethodGet, "/supplier-credentials?cursor=nope", "", as(f.s)), http.StatusBadRequest, codeInvalidRequest)
 }

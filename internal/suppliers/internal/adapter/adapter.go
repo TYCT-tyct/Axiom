@@ -260,6 +260,9 @@ type Model struct {
 	UpstreamName string
 	Formats      []protocol.Format
 	Cost         *catalog.Schedule
+	// Derivation is what each price of Cost is the product of, nil when the adapter does not say; it explains Cost and
+	// prices nothing.
+	Derivation Derivation
 	// Without are the capabilities the supplier's price does not cover (images priced at a ratio of their own, say):
 	// the endpoint does not claim them, so routing keeps requests that need them away.
 	Without protocol.Capabilities

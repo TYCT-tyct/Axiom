@@ -187,3 +187,58 @@ func TestFormatsOfDirectFormats(t *testing.T) {
 		}
 	}
 }
+
+// TestOfferHandsOverTheFactors: each price of a model's plan comes with what new-api multiplies into it, in its order
+// (model ratio, group ratio, then the ratio to the input price, its default when the pricing leaves it out), and the
+// factors multiply out to the price the plan stores, rounded up once to a unit price. A ratio of more decimals than a
+// price holds is rounded in the price only, so the factors still say exactly what new-api uses.
+func TestOfferHandsOverTheFactors(t *testing.T) {
+	t.Parallel()
+	f := offerClient(t,
+		`{"success":true,"data":{"vip":{"ratio":1.37,"desc":"v"}}}`,
+		`{"success":true,"data":[{"model_name":"m","quota_type":0,"model_ratio":0.075,"completion_ratio":4,"cache_ratio":0.5,"create_cache_ratio":1.25},
+			{"model_name":"plain","quota_type":0,"model_ratio":2},
+			{"model_name":"fine","quota_type":0,"model_ratio":0.000000123456789,"completion_ratio":"3.3333"}]}`)
+	f.routes["GET /api/user/models?group=vip"] = answer(200, `{"success":true,"data":["fine","m","plain"]}`)
+	offer, err := readOffer(t, open(t, f, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range offer[0].Models {
+		if m.Cost == nil {
+			t.Fatalf("%s has no cost", m.UpstreamName)
+		}
+		if err := m.Derivation.Check(*m.Cost); err != nil {
+			t.Errorf("%s: %v", m.UpstreamName, err)
+		}
+	}
+	f2 := func(kind adapter.FactorKind, v string) adapter.Factor { return adapter.Factor{Kind: kind, Value: v} }
+	model, group := f2(adapter.FactorModelRatio, "0.075"), f2(adapter.FactorGroupRatio, "1.37")
+	for _, tc := range []struct {
+		name, item string
+		want       []adapter.Factor
+	}{
+		{"m", "input", []adapter.Factor{model, group}},
+		{"m", "output", []adapter.Factor{model, group, f2(adapter.FactorCompletionRatio, "4")}},
+		{"m", "cache_read", []adapter.Factor{model, group, f2(adapter.FactorCacheRatio, "0.5")}},
+		{"m", "cache_write_1h", []adapter.Factor{model, group, f2(adapter.FactorCacheWriteRatio, "2")}},
+		{"plain", "cache_write", []adapter.Factor{f2(adapter.FactorModelRatio, "2"), group, f2(adapter.FactorCacheWriteRatio, "1.25")}},
+		{"fine", "output", []adapter.Factor{f2(adapter.FactorModelRatio, "0.000000123456789"), group, f2(adapter.FactorCompletionRatio, "3.3333")}},
+	} {
+		if diff := cmp.Diff(tc.want, factorsOf(offer[0].Models, tc.name, tc.item)); diff != "" {
+			t.Errorf("%s %s (-want +got):\n%s", tc.name, tc.item, diff)
+		}
+	}
+}
+
+// factorsOf is the factors of one item of one model of a group.
+func factorsOf(models []adapter.Model, name, item string) []adapter.Factor {
+	for _, m := range models {
+		for _, r := range m.Derivation {
+			if m.UpstreamName == name && r.Item == item {
+				return r.Factors
+			}
+		}
+	}
+	return nil
+}

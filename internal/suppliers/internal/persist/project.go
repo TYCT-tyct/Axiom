@@ -33,6 +33,7 @@ type projector struct {
 	id         uuid.UUID
 	st         syncer.State
 	snap       *catalog.Snapshot
+	mapBy      syncer.Catalog // what a name maps by: the snapshot, with drafts under the rule `known` (withDrafts)
 	nativeUnit string
 	now        time.Time
 	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
@@ -85,6 +86,12 @@ func (p *projector) read(ctx context.Context) (err error) {
 	}
 	if p.rule, err = p.readIntakeRule(ctx); err != nil {
 		return err
+	}
+	p.mapBy = p.snap
+	if p.rule.drafts {
+		if p.mapBy, err = p.withDrafts(ctx); err != nil {
+			return err
+		}
 	}
 	p.plans, err = p.readPlans(ctx)
 	return err
@@ -355,7 +362,7 @@ func (p *projector) setCost(r store.ListProjectedEndpointsRow, d desiredEndpoint
 func (p *projector) putCost(endpoint uuid.UUID, plan store.PlanVersion) {
 	p.writes.Costs = append(p.writes.Costs, store.EnsureCostScheduleParams{
 		SupplierID: p.id, EndpointID: endpoint, NativeUnit: p.nativeUnit,
-		Schedule: []byte(plan.Schedule), Basis: plan.Basis, Fingerprint: plan.Fingerprint,
+		Schedule: []byte(plan.Schedule), Basis: plan.Basis, Fingerprint: plan.Fingerprint, Derivation: plan.Derivation,
 	})
 }
 

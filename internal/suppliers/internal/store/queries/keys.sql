@@ -2,8 +2,8 @@
 -- suppliers, pasted, checked, switched and erased. The sealed key is read only where a check sends it.
 
 -- name: CredentialsPage :many
--- Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). Every
--- platform supplier is a relay until a supplier has another mode, so the mode filter `relay` is every one of them.
+-- Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). The mode
+-- filter is the supplier's own mode (relay, direct, cloud).
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
     c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status
 FROM suppliers.credentials c
@@ -11,7 +11,7 @@ JOIN suppliers.suppliers s ON s.id = c.supplier_id
 WHERE s.owner_scope = 'platform'
     AND (sqlc.narg(supplier_id)::uuid IS NULL OR c.supplier_id = sqlc.narg(supplier_id))
     AND (sqlc.narg(status)::text IS NULL OR c.status = sqlc.narg(status))
-    AND (sqlc.narg(mode)::text IS NULL OR sqlc.narg(mode) = 'relay')
+    AND (sqlc.narg(mode)::text IS NULL OR s.mode = sqlc.narg(mode))
     AND (sqlc.narg(after)::uuid IS NULL OR c.id < sqlc.narg(after))
 ORDER BY c.id DESC
 LIMIT @page_size::int;

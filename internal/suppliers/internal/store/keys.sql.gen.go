@@ -64,7 +64,7 @@ JOIN suppliers.suppliers s ON s.id = c.supplier_id
 WHERE s.owner_scope = 'platform'
     AND ($1::uuid IS NULL OR c.supplier_id = $1)
     AND ($2::text IS NULL OR c.status = $2)
-    AND ($3::text IS NULL OR $3 = 'relay')
+    AND ($3::text IS NULL OR s.mode = $3)
     AND ($4::uuid IS NULL OR c.id < $4)
 ORDER BY c.id DESC
 LIMIT $5::int
@@ -98,8 +98,8 @@ type CredentialsPageRow struct {
 
 // The credentials as the admin's upstream pages manage them (internal/suppliers/README.md「管理接口」): listed across
 // suppliers, pasted, checked, switched and erased. The sealed key is read only where a check sends it.
-// Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). Every
-// platform supplier is a relay until a supplier has another mode, so the mode filter `relay` is every one of them.
+// Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). The mode
+// filter is the supplier's own mode (relay, direct, cloud).
 func (q *Queries) CredentialsPage(ctx context.Context, db DBTX, arg CredentialsPageParams) ([]CredentialsPageRow, error) {
 	rows, err := db.Query(ctx, credentialsPage,
 		arg.SupplierID,

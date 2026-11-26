@@ -36,9 +36,11 @@ func (c *cluster) rule(mode, include, exclude string, rev int) {
 }
 
 // TestTheIntakeRuleChoosesTheEndpoints: with no rule, or `listed`, a name of a model on sale becomes an endpoint, as
-// before rules; `names` takes only the names its patterns take, whatever their case. A group is put in use only when the
-// rule takes one of its priced names. (`known` maps a draft's name, which the catalog's snapshot does not hold yet:
-// syncer's TestMapUpstreamDrafts.)
+// before rules; `known` also takes the name of a draft, which the catalog's snapshot does not hold, by the catalog's own
+// recognition, and the name of a draft a group alias stands for; `names` takes only the names its patterns take,
+// whatever their case. No rule takes a retired model's name. A group is put in use only when the rule takes one of its
+// priced names. (The draft's endpoint serves nothing until the model is listed: gateway's listedModelOf builds routing
+// entries of listed models only, and a draft is not in the catalog's snapshot at all.)
 func TestTheIntakeRuleChoosesTheEndpoints(t *testing.T) {
 	t.Parallel()
 	listedGPT := []string{"gpt-6", "gpt-6-mini"}
@@ -48,10 +50,11 @@ func TestTheIntakeRuleChoosesTheEndpoints(t *testing.T) {
 		pending                      []string
 		selected                     string
 	}{
-		{"no rule", "", "", "", []string{"gpt-6 known", "gpt-6-mini known"}, []string{"draft-x"}, "true"},
-		{"listed", "listed", "{}", "{}", []string{"gpt-6 known", "gpt-6-mini known"}, []string{"draft-x"}, "true"},
-		{"names", "names", "{GPT-*}", "{*-mini}", []string{"gpt-6 known"}, []string{"draft-x"}, "true"},
-		{"names that take nothing", "names", "{claude-*}", "{}", nil, []string{"draft-x"}, "false"},
+		{"no rule", "", "", "", []string{"gpt-6 known", "gpt-6-mini known"}, []string{"draft-x", "old-x"}, "true"},
+		{"listed", "listed", "{}", "{}", []string{"gpt-6 known", "gpt-6-mini known"}, []string{"draft-x", "old-x"}, "true"},
+		{"known", "known", "{}", "{}", []string{"draft-x known", "gpt-6 known", "gpt-6-mini known", "x-alias known"}, []string{"old-x"}, "true"},
+		{"names", "names", "{GPT-*}", "{*-mini}", []string{"gpt-6 known"}, []string{"draft-x", "old-x"}, "true"},
+		{"names that take nothing", "names", "{claude-*}", "{}", nil, []string{"draft-x", "old-x"}, "false"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -61,11 +64,13 @@ func TestTheIntakeRuleChoosesTheEndpoints(t *testing.T) {
 				c.model(name, catalog.StatusListed)
 			}
 			c.model("draft-x", catalog.StatusDraft)
+			c.alias(uuid.Nil(), "x-alias", c.model("draft-y", catalog.StatusDraft))
+			c.model("old-x", catalog.StatusRetired)
 			if tc.mode != "" {
 				c.rule(tc.mode, tc.include, tc.exclude, 1)
 			}
 			var models []listedModel
-			for _, name := range []string{"draft-x", "gpt-6", "gpt-6-mini"} {
+			for _, name := range []string{"draft-x", "gpt-6", "gpt-6-mini", "old-x", "x-alias"} {
 				models = append(models, listedModel{name: name, formats: []protocol.Format{protocol.Chat}, plan: &unitPrice})
 			}
 			c.commitListing(c.acquire(c.node("a")), 1, []listedGroup{{ref: "default", name: "Default", ratio: "1", models: models}})

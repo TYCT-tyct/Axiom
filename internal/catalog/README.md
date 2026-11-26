@@ -86,7 +86,7 @@
 
 操作：`SaveAuthor`、`CreateModel`、`AddName`、`SaveAlias`、`UpdateSpec`、`ListModel`、`Retire`、`SetFamily`（带 `rev`）、`PublishPrice`（`base` 不符报 `ErrPriceChanged`）、`SelectPriceSource`（只接受 `official`、`manual`）、`SelectDatasetSource`、`WatchPage`、`UnwatchPage`、`ReviewPage`；`Import` 在调用方事务里为数据集里认不出的条目逐个经前三个操作建草稿，被拒的退回保存点记 held；各自的检查见[领域文档](../../docs/domains/catalog.md#参考价怎么进入目录)和[生命周期](../../docs/domains/catalog.md#模型的生命周期)。
 
-读取（各一个一致的读，含草稿）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、slug 字面前缀筛选，slug 键集分页）、`Model`、`Aliases`；`ModelIn` 在调用方的事务里读回模型；`RecognizeIn`、`ModelsIn` 是含草稿的内部识别（供应商分堆用）。另有命令 `sync`、`check`、`check-pages`、`apply-dialect`。
+读取（各一个一致的读，含草稿）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、slug 字面前缀筛选，slug 键集分页）、`Model`、`Aliases`；`ModelIn` 在调用方的事务里读回模型；`RecognizeIn`、`ModelsIn` 是含草稿的内部识别（供应商分堆和接入规则 `known` 用）。另有命令 `sync`、`check`、`check-pages`、`apply-dialect`。
 
 ## 不变量
 
