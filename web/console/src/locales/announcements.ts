@@ -9,7 +9,7 @@ export const zh = {
   error: "公告加载失败，请重试。",
   retry: "重试",
   empty: "暂无有效公告。",
-  unread: "{{count}} 条未读",
+  unread: "新",
 };
 
 export const en: Messages<typeof zh> = {
@@ -19,5 +19,5 @@ export const en: Messages<typeof zh> = {
   error: "Could not load announcements. Try again.",
   retry: "Try again",
   empty: "No active announcements.",
-  unread: "{{count}} new",
+  unread: "New",
 };

@@ -4560,6 +4560,11 @@ export interface components {
             consent?: components["schemas"]["SessionConsent"];
             /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console, absent on the admin and on an older node. */
             calls_paused?: boolean;
+            /**
+             * Format: date-time
+             * @description When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on the admin and on an older node.
+             */
+            latest_announcement_at?: string;
         };
         /** @description The legal documents the signed-in user has not accepted. A page built before this field shows nothing and the server refuses its requests with `consent_required` instead. */
         SessionConsent: {

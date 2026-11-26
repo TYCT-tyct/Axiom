@@ -7269,6 +7269,9 @@ type Session struct {
 	// ExpiresAt When the session ends if it is not used again; the idle timeout moves it.
 	ExpiresAt time.Time `json:"expires_at"`
 
+	// LatestAnnouncementAt When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on the admin and on an older node.
+	LatestAnnouncementAt *time.Time `json:"latest_announcement_at,omitempty"`
+
 	// Level What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.
 	Level SessionLevel `json:"level"`
 

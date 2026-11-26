@@ -146,6 +146,9 @@ func (c consoleAPI) GetSession(ctx context.Context, _ consoleapi.GetSessionReque
 		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, TotpEnabled: &info.TOTP,
 		Permissions: info.Permissions, CallsPaused: &info.CallsPaused,
 	}
+	if !info.LatestAnnouncement.IsZero() {
+		session.LatestAnnouncementAt = &info.LatestAnnouncement
+	}
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
 	pending, err := c.accounts.PendingLegalDocuments(ctx, callOf(ctx).principal)
 	if err != nil {

@@ -197,8 +197,11 @@ SELECT role_id FROM accounts.platform_grants WHERE user_id = @user_id AND revoke
 -- name: SessionInfo :many
 -- What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
 -- whichever comes first, both cut by the site's lifetimes now (ValidSession). calls_paused is the account's own switch
--- that admission refuses calls by (ErrAccountSuspended).
+-- that admission refuses calls by (ErrAccountSuspended); latest_announcement is when the newest live announcement of
+-- the site began, for the console's unread mark, from the announcements_active index.
 SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, (a.status <> 'active')::boolean AS calls_paused,
+    (SELECT max(n.starts_at) FROM accounts.announcements n WHERE n.site_id = s.site_id AND n.withdrawn_at IS NULL
+        AND n.starts_at <= now() AND n.ends_at > now())::timestamptz AS latest_announcement,
     (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => @max_age_seconds::bigint),
     now() + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)))::timestamptz AS expires_at

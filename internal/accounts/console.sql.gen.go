@@ -787,6 +787,8 @@ func (q *Queries) RevokeSession(ctx context.Context, db DBTX, id uuid.UUID) (int
 
 const sessionInfo = `-- name: SessionInfo :many
 SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, (a.status <> 'active')::boolean AS calls_paused,
+    (SELECT max(n.starts_at) FROM accounts.announcements n WHERE n.site_id = s.site_id AND n.withdrawn_at IS NULL
+        AND n.starts_at <= now() AND n.ends_at > now())::timestamptz AS latest_announcement,
     (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => $1::bigint),
     now() + least(s.idle_timeout, make_interval(secs => $2::bigint)))::timestamptz AS expires_at
@@ -803,18 +805,20 @@ type SessionInfoParams struct {
 }
 
 type SessionInfoRow struct {
-	Email       string
-	InviteCode  string
-	Mfa         bool
-	CallsPaused bool
-	Passkeys    int64
-	CsrfToken   string
-	ExpiresAt   pgtype.Timestamptz
+	Email              string
+	InviteCode         string
+	Mfa                bool
+	CallsPaused        bool
+	LatestAnnouncement pgtype.Timestamptz
+	Passkeys           int64
+	CsrfToken          string
+	ExpiresAt          pgtype.Timestamptz
 }
 
 // What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
 // whichever comes first, both cut by the site's lifetimes now (ValidSession). calls_paused is the account's own switch
-// that admission refuses calls by (ErrAccountSuspended).
+// that admission refuses calls by (ErrAccountSuspended); latest_announcement is when the newest live announcement of
+// the site began, for the console's unread mark, from the announcements_active index.
 func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParams) ([]SessionInfoRow, error) {
 	rows, err := db.Query(ctx, sessionInfo, arg.MaxAgeSeconds, arg.IdleSeconds, arg.ID)
 	if err != nil {
@@ -829,6 +833,7 @@ func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParam
 			&i.InviteCode,
 			&i.Mfa,
 			&i.CallsPaused,
+			&i.LatestAnnouncement,
 			&i.Passkeys,
 			&i.CsrfToken,
 			&i.ExpiresAt,

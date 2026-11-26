@@ -347,7 +347,9 @@ func TestSecurityFailureScope(t *testing.T) {
 }
 
 // TestSessionSaysCallsArePaused: the console learns from its own session that the account's calls are paused, so it
-// can say so before a key is refused, and that they are no longer once the pause is lifted.
+// can say so before a key is refused, and that they are no longer once the pause is lifted; and when the newest live
+// announcement of the site began, so it can mark one it has not opened, while a future one, another site's or none
+// says nothing.
 func TestSessionSaysCallsArePaused(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -360,8 +362,22 @@ func TestSessionSaysCallsArePaused(t *testing.T) {
 			return x.s.SetAccountSuspended(t.Context(), tx, system, p.AccountID(), paused, "review")
 		})
 		info, err := x.s.SessionInfo(t.Context(), p)
-		if err != nil || info.CallsPaused != paused {
-			t.Fatalf("paused=%v: the session says %v, %v", paused, info.CallsPaused, err)
+		if err != nil || info.CallsPaused != paused || !info.LatestAnnouncement.IsZero() {
+			t.Fatalf("paused=%v: the session says %v, latest %v, %v", paused, info.CallsPaused, info.LatestAnnouncement, err)
 		}
+	}
+	live := time.Now().Add(-time.Minute).UTC().Truncate(time.Microsecond)
+	for _, a := range []accounts.Announcement{
+		{Site: s1, StartsAt: live.Add(-time.Hour), EndsAt: live.Add(time.Hour)},
+		{Site: s1, StartsAt: live, EndsAt: live.Add(time.Hour)},
+		{Site: s1, StartsAt: live.Add(time.Hour), EndsAt: live.Add(2 * time.Hour)},
+		{Site: s2, StartsAt: live.Add(30 * time.Second), EndsAt: live.Add(time.Hour)},
+	} {
+		a.ID, a.Title, a.Body = accounts.AnnouncementID(uuid.NewV7()), "Notice", "Body"
+		inPlatform(t, x.db, func(tx pg.Tx) error { return accounts.PublishAnnouncement(t.Context(), tx, a) })
+	}
+	info, err := x.s.SessionInfo(t.Context(), p)
+	if err != nil || !info.LatestAnnouncement.Equal(live) {
+		t.Fatalf("the latest announcement is %v, %v; want %v", info.LatestAnnouncement, err, live)
 	}
 }

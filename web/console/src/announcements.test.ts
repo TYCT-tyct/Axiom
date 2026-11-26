@@ -7,6 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 import { Announcements } from "./announcements";
 
 vi.mock("react-i18next", () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+// The session the entry reads when the newest live announcement began from; a test sets it.
+const session = vi.hoisted(() => ({ latest: undefined as string | undefined }));
+vi.mock("@axiom/app", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@axiom/app")>()),
+  useSession: () => ({ latest_announcement_at: session.latest }),
+}));
 
 function render(data?: object, error?: Error) {
   const client = new QueryClient();
@@ -48,22 +54,19 @@ describe("site announcement entry", () => {
     expect(html).toContain("announcements.retry");
   });
 
-  it("marks the announcements that began after the newest one this browser opened", () => {
-    const data = {
-      data: [
-        { id: "a", title: "A", starts_at: "2026-11-20T00:00:00Z" },
-        { id: "b", title: "B", starts_at: "2026-11-25T00:00:00Z" },
-      ],
-    };
-    expect(render(data)).toContain("announcements.unread");
-    const stored = new Map([["axiom.announcements.seen", "2026-11-25T00:00:00.000Z"]]);
+  it("marks an announcement that began after the list was last opened in this browser, without reading the list", () => {
+    expect(render()).not.toContain("announcements.unread");
+    session.latest = "2026-11-25T00:00:00Z";
+    expect(render()).toContain("announcements.unread");
+    const stored = new Map([["axiom.announcements.seen", "2026-11-25T08:00:00+08:00"]]);
     vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: () => {} });
     try {
-      expect(render(data)).not.toContain("announcements.unread");
-      stored.set("axiom.announcements.seen", "2026-11-21T00:00:00+08:00");
-      expect(render(data)).toContain("announcements.unread");
+      expect(render()).not.toContain("announcements.unread");
+      stored.set("axiom.announcements.seen", "2026-11-21T00:00:00Z");
+      expect(render()).toContain("announcements.unread");
     } finally {
       vi.unstubAllGlobals();
+      session.latest = undefined;
     }
   });
 
