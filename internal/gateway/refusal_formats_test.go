@@ -75,6 +75,25 @@ func TestEveryFormatRefusesInItsOwnShape(t *testing.T) {
 	}
 }
 
+// refusalBody is what the three error shapes hold between them.
+type refusalBody struct {
+	Type      string `json:"type"`
+	RequestID string `json:"request_id"`
+	Error     struct {
+		Type      string `json:"type"`
+		Message   string `json:"message"`
+		Code      int    `json:"code"`
+		Status    string `json:"status"`
+		ErrorType string `json:"error_type"`
+		Metadata  struct {
+			ErrorType string `json:"error_type"`
+		} `json:"metadata"`
+		Details []struct {
+			Reason string `json:"reason"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
 // checkRefusalShape: the refusal has the status, the request ID and the format's own error shape with the error type.
 func checkRefusalShape(t *testing.T, format, errorType, google string, status int, resp reply, body string) {
 	t.Helper()
@@ -82,35 +101,30 @@ func checkRefusalShape(t *testing.T, format, errorType, google string, status in
 	if resp.StatusCode != status || id == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
 		t.Fatalf("%d, request ID %q: %s", resp.StatusCode, id, body)
 	}
-	var got struct {
-		Type      string `json:"type"`
-		RequestID string `json:"request_id"`
-		Error     struct {
-			Type      string `json:"type"`
-			Message   string `json:"message"`
-			Code      int    `json:"code"`
-			Status    string `json:"status"`
-			ErrorType string `json:"error_type"`
-			Metadata  struct {
-				ErrorType string `json:"error_type"`
-			} `json:"metadata"`
-			Details []struct {
-				Reason string `json:"reason"`
-			} `json:"details"`
-		} `json:"error"`
-	}
+	var got refusalBody
 	if err := jsonx.Unmarshal([]byte(body), &got); err != nil || got.Error.Message == "" {
 		t.Fatalf("not an error object (%v): %s", err, body)
 	}
-	e := got.Error
-	ok := e.Code == status && e.Type != "" && e.Metadata.ErrorType == errorType
+	ok := got.openAI(status, errorType)
 	switch format {
 	case "messages":
-		ok = got.Type == "error" && e.Type != "" && e.ErrorType == errorType && got.RequestID == id
+		ok = got.anthropic(errorType, id)
 	case "gemini":
-		ok = e.Code == status && e.Status == google && len(e.Details) == 1 && e.Details[0].Reason == errorType
+		ok = got.google(status, google, errorType)
 	}
 	if !ok {
 		t.Errorf("not %s's shape for %s (request %s): %s", format, errorType, id, body)
 	}
+}
+
+func (b refusalBody) openAI(status int, errorType string) bool {
+	return b.Error.Code == status && b.Error.Type != "" && b.Error.Metadata.ErrorType == errorType
+}
+
+func (b refusalBody) anthropic(errorType, id string) bool {
+	return b.Type == "error" && b.Error.Type != "" && b.Error.ErrorType == errorType && b.RequestID == id
+}
+
+func (b refusalBody) google(status int, name, errorType string) bool {
+	return b.Error.Code == status && b.Error.Status == name && len(b.Error.Details) == 1 && b.Error.Details[0].Reason == errorType
 }

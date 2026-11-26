@@ -293,11 +293,6 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	if err != nil {
 		return err
 	}
-	if c.gemini != nil {
-		if body, err = h.geminiBody(c, body); err != nil {
-			return err
-		}
-	}
 	sessionBody := body // default expansion must not move a client cache key beyond the session prefix
 	body, req, err := h.expandPreset(c, body)
 	if err != nil {

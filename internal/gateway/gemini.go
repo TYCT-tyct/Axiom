@@ -2,7 +2,9 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -34,12 +36,8 @@ func (h *Handler) geminiRoutes() {
 // or the key query parameter, as well as a bearer token.
 func (h *Handler) gemini(w http.ResponseWriter, r *http.Request) {
 	in := &geminiInbound{}
-	gw := &geminiWriter{ResponseWriter: w, in: in, writeFor: h.Limits.cfg.WriteTimeout}
-	defer func() {
-		if err := gw.finish(); err != nil { // the client may be gone; nothing more can be told
-			h.Logger.Debug("a Gemini answer was not written whole", "request_id", httpserver.RequestID(r.Context()), "err", err)
-		}
-	}()
+	gw := &geminiWriter{ResponseWriter: w, out: w, in: in, writeFor: h.Limits.cfg.WriteTimeout}
+	defer h.finishGemini(r.Context(), gw)
 	geminiKey(r)
 	action := r.PathValue("action")
 	at := strings.LastIndexByte(action, ':')
@@ -73,6 +71,13 @@ func (h *Handler) gemini(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.Run(gw, r, c)
+}
+
+// finishGemini writes a whole answer in Gemini's shape once the call path is done with it.
+func (h *Handler) finishGemini(ctx context.Context, gw *geminiWriter) {
+	if err := gw.finish(); err != nil { // the client may be gone; nothing more can be told
+		h.Logger.DebugContext(ctx, "a Gemini answer was not written whole", "request_id", httpserver.RequestID(ctx), "err", err)
+	}
 }
 
 // geminiKey moves a key given Google's way into the bearer header the call path reads, and takes it out of the query.
@@ -128,6 +133,7 @@ func (h *Handler) geminiCount(w http.ResponseWriter, r *http.Request, in *gemini
 // whole body, a refusal's included, once the handler returns. Only a Gemini path pays for the second reading.
 type geminiWriter struct {
 	http.ResponseWriter
+	out      io.Writer // the client's body, which a stream's converted events go to
 	in       *geminiInbound
 	reply    *protocol.GeminiReply
 	writeFor time.Duration
@@ -198,7 +204,7 @@ func (g *geminiWriter) event(event []byte) error {
 	for line := range bytes.SplitSeq(event, []byte("\n")) {
 		switch {
 		case bytes.HasPrefix(line, []byte(":")):
-			if _, err := g.ResponseWriter.Write(append(bytes.Clone(line), "\n\n"...)); err != nil {
+			if _, err := g.out.Write(append(bytes.Clone(line), "\n\n"...)); err != nil {
 				return err
 			}
 		case bytes.HasPrefix(line, []byte("data:")):
@@ -212,7 +218,7 @@ func (g *geminiWriter) event(event []byte) error {
 	if err != nil || out == nil {
 		return err
 	}
-	_, err = g.ResponseWriter.Write(append(append([]byte("data: "), out...), "\n\n"...))
+	_, err = g.out.Write(append(append([]byte("data: "), out...), "\n\n"...))
 	return err
 }
 
@@ -231,7 +237,8 @@ func (g *geminiWriter) finish() error {
 		return err
 	}
 	g.Header().Set("Content-Type", "application/json")
+	g.Header().Set("Cache-Control", "no-store")
 	g.ResponseWriter.WriteHeader(g.status)
-	_, err = g.ResponseWriter.Write(body)
-	return err
+	writeBody(g.ResponseWriter, body)
+	return nil
 }

@@ -89,8 +89,14 @@ type geminiToolConfig struct {
 // geminiSettings are the generation settings that are the same number or list on both sides, by their Gemini and their
 // Chat name.
 var geminiSettings = [...]struct{ gemini, chat string }{
-	{"temperature", "temperature"}, {"topP", "top_p"}, {"topK", "top_k"}, {"maxOutputTokens", "max_tokens"},
-	{"stopSequences", "stop"}, {"seed", "seed"}, {"presencePenalty", "presence_penalty"}, {"frequencyPenalty", "frequency_penalty"},
+	{"temperature", "temperature"},
+	{"topP", "top_p"},
+	{"topK", "top_k"},
+	{"maxOutputTokens", "max_tokens"},
+	{"stopSequences", "stop"},
+	{"seed", "seed"},
+	{"presencePenalty", "presence_penalty"},
+	{"frequencyPenalty", "frequency_penalty"},
 }
 
 // geminiChoices are the function calling modes and Chat's tool choices; ANY with named functions is the choice of one,
@@ -205,8 +211,10 @@ func geminiModelTurn(out []requestObject, c geminiContent, at int, pending map[s
 			if isNull(args) {
 				args = jsonx.Raw("{}")
 			}
-			call := requestObject{"id": jsonValue(id), "type": jsonValue("function"),
-				"function": jsonValue(requestObject{"name": jsonValue(p.FunctionCall.Name), "arguments": jsonValue(string(args))})}
+			call := requestObject{
+				"id": jsonValue(id), "type": jsonValue("function"),
+				"function": jsonValue(requestObject{"name": jsonValue(p.FunctionCall.Name), "arguments": jsonValue(string(args))}),
+			}
 			if p.ThoughtSignature != "" {
 				call["extra_content"] = googleExtra(p.ThoughtSignature)
 			}
@@ -231,31 +239,37 @@ func geminiUserTurn(out []requestObject, c geminiContent, pending map[string][]s
 		if err := unknownMember("part", p.Unknown); err != nil {
 			return nil, err
 		}
-		switch {
-		case p.FunctionResponse != nil:
+		if p.FunctionResponse != nil {
 			result, err := geminiResultMessage(p.FunctionResponse, pending)
 			if err != nil {
 				return nil, err
 			}
 			out = append(out, result)
-		case p.Text != nil && !p.Thought:
-			parts = append(parts, requestObject{"type": jsonValue("text"), "text": jsonValue(*p.Text)})
-		case p.InlineData != nil:
-			part, err := geminiMedia(p.InlineData.MimeType, "data:"+p.InlineData.MimeType+";base64,"+p.InlineData.Data, p.InlineData.Data)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, part)
-		case p.FileData != nil && strings.HasPrefix(p.FileData.MimeType, "image/"):
-			parts = append(parts, requestObject{"type": jsonValue("image_url"), "image_url": jsonValue(requestObject{"url": jsonValue(p.FileData.FileURI)})})
-		default:
-			return nil, fmt.Errorf("%w: a Gemini user part must be text, inline data, an image file or a function response", ErrInvalid)
+			continue
 		}
+		part, err := geminiUserPart(p)
+		if err != nil {
+			return nil, err
+		}
+		parts = append(parts, part)
 	}
 	if len(parts) > 0 {
 		out = append(out, requestObject{"role": jsonValue("user"), "content": jsonValue(parts)})
 	}
 	return out, nil
+}
+
+// geminiUserPart is a user part other than a function response as a Chat content part.
+func geminiUserPart(p geminiPart) (requestObject, error) {
+	switch {
+	case p.Text != nil && !p.Thought:
+		return requestObject{"type": jsonValue("text"), "text": jsonValue(*p.Text)}, nil
+	case p.InlineData != nil:
+		return geminiMedia(p.InlineData.MimeType, "data:"+p.InlineData.MimeType+";base64,"+p.InlineData.Data, p.InlineData.Data)
+	case p.FileData != nil && strings.HasPrefix(p.FileData.MimeType, "image/"):
+		return requestObject{"type": jsonValue("image_url"), "image_url": jsonValue(requestObject{"url": jsonValue(p.FileData.FileURI)})}, nil
+	}
+	return nil, fmt.Errorf("%w: a Gemini user part must be text, inline data, an image file or a function response", ErrInvalid)
 }
 
 // geminiMedia is inline data as a Chat part: an image, a document or audio Chat takes inline.
@@ -418,8 +432,10 @@ func geminiFormat(config map[string]jsonx.Raw, dst requestObject) error {
 		dst["response_format"] = jsonx.Raw(`{"type":"json_object"}`)
 		return nil
 	}
-	dst["response_format"] = jsonValue(requestObject{"type": jsonValue("json_schema"),
-		"json_schema": jsonValue(requestObject{"name": jsonValue("response"), "schema": jsonSchema})})
+	dst["response_format"] = jsonValue(requestObject{
+		"type":        jsonValue("json_schema"),
+		"json_schema": jsonValue(requestObject{"name": jsonValue("response"), "schema": jsonSchema}),
+	})
 	return nil
 }
 

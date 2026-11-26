@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"maps"
 	"strings"
 
 	"axiom/internal/platform/jsonx"
@@ -266,23 +267,11 @@ func (c *canon) geminiChoice(g *geminiRequest) error {
 // refused unless it is Chat's default or one only Axiom reads (identities, caching keys, the usage it always asks for).
 func (c *canon) geminiGeneration(config map[string]jsonx.Raw) error {
 	chat := map[string]jsonx.Raw{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
-	for name, v := range c.Unknown {
-		chat[name] = v
-	}
+	maps.Copy(chat, c.Unknown)
 	if n := c.maxOutput(); n > 0 {
 		chat["max_tokens"] = jsonValue(n)
 	}
-	for _, s := range geminiSettings {
-		v := chat[s.chat]
-		delete(chat, s.chat)
-		if isNull(v) {
-			continue
-		}
-		if s.chat == "stop" && v.Kind() == '"' {
-			v = jsonValue([]jsonx.Raw{v})
-		}
-		config[s.gemini] = v
-	}
+	moveSettings(chat, config)
 	for name, v := range chat {
 		if !isNull(v) && name != "max_completion_tokens" && !isDefault(name, v) {
 			return &NotSupported{Reason: name + " has no Gemini counterpart"}
@@ -295,6 +284,21 @@ func (c *canon) geminiGeneration(config map[string]jsonx.Raw) error {
 		return err
 	}
 	return c.geminiThinking(config)
+}
+
+// moveSettings moves the settings both sides share from chat into Gemini's config; a lone stop is Gemini's list of one.
+func moveSettings(chat, config map[string]jsonx.Raw) {
+	for _, s := range geminiSettings {
+		v := chat[s.chat]
+		delete(chat, s.chat)
+		if isNull(v) {
+			continue
+		}
+		if s.chat == "stop" && v.Kind() == '"' {
+			v = jsonValue([]jsonx.Raw{v})
+		}
+		config[s.gemini] = v
+	}
 }
 
 func (c *canon) geminiFormat(config map[string]jsonx.Raw) error {
@@ -314,26 +318,7 @@ func (c *canon) geminiFormat(config map[string]jsonx.Raw) error {
 // geminiThinking is geminiThinking of gemini.go the other way: effort none or reasoning disabled is a budget of 0, a
 // reasoning budget is the thinking budget, any other effort the level; thoughts come back unless the client hid them.
 func (c *canon) geminiThinking(config map[string]jsonx.Raw) error {
-	t := requestObject{}
-	effort := ""
-	if c.ReasoningEffort != nil {
-		effort = *c.ReasoningEffort
-	}
-	if r := c.Reasoning; r != nil {
-		switch {
-		case r.Enabled != nil && !*r.Enabled:
-			effort = "none"
-		case r.MaxTokens != nil:
-			t["thinkingBudget"] = jsonValue(*r.MaxTokens)
-		case r.Effort != nil:
-			effort = *r.Effort
-		}
-		if r.Exclude == nil || !*r.Exclude {
-			t["includeThoughts"] = jsonx.Raw("true")
-		}
-	} else if effort != "" && effort != "none" {
-		t["includeThoughts"] = jsonx.Raw("true")
-	}
+	t, effort := c.thinkingAsked()
 	switch effort {
 	case "":
 	case "none":
@@ -347,6 +332,35 @@ func (c *canon) geminiThinking(config map[string]jsonx.Raw) error {
 		config["thinkingConfig"] = jsonValue(t)
 	}
 	return nil
+}
+
+// thinkingAsked is what the request's reasoning settings ask of Gemini's thinking before the effort is written: the
+// budget and whether thoughts come back, and the effort.
+func (c *canon) thinkingAsked() (requestObject, string) {
+	t := requestObject{}
+	effort := ""
+	if c.ReasoningEffort != nil {
+		effort = *c.ReasoningEffort
+	}
+	r := c.Reasoning
+	if r == nil {
+		if effort != "" && effort != "none" {
+			t["includeThoughts"] = jsonx.Raw("true")
+		}
+		return t, effort
+	}
+	switch {
+	case r.Enabled != nil && !*r.Enabled:
+		effort = "none"
+	case r.MaxTokens != nil:
+		t["thinkingBudget"] = jsonValue(*r.MaxTokens)
+	case r.Effort != nil:
+		effort = *r.Effort
+	}
+	if r.Exclude == nil || !*r.Exclude {
+		t["includeThoughts"] = jsonx.Raw("true")
+	}
+	return t, effort
 }
 
 // errGeminiStream is a Gemini stream that broke the shape a generateContent stream has.

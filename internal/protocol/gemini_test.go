@@ -175,8 +175,8 @@ func TestChatFromGemini(t *testing.T) {
 	}
 }
 
-// A Chat reply reaches a Gemini client as Gemini's: streamed, the thoughts only when asked for, each call whole at the
-// finish with its signature and Gemini's usage; whole, the same in one body; refused, Google's error object.
+// A Chat stream reaches a Gemini client as Gemini's: the thoughts only when asked for, each call whole at the finish with
+// its signature, and Gemini's usage.
 func TestGeminiReply(t *testing.T) {
 	t.Parallel()
 	chat := relayTo(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream))),
@@ -184,9 +184,21 @@ func TestGeminiReply(t *testing.T) {
 	if chat.err != nil {
 		t.Fatal(chat.err)
 	}
-	reply := protocol.NewGeminiReply(protocol.GeminiOptions{Thoughts: false})
+	events := geminiEvents(t, protocol.NewGeminiReply(protocol.GeminiOptions{Thoughts: false}), chat.out)
+	all := strings.Join(events, "\n")
+	if len(events) != 3 || strings.Contains(all, "Weighing") || !strings.Contains(events[0], `{"text":"Checking."}`) ||
+		!strings.Contains(events[1], `"functionCall":{"args":{"city":"Paris"},"id":"call_r1_0","name":"get_weather"},"thoughtSignature":"c2ln"`) ||
+		strings.Count(all, `"finishReason":"STOP"`) != 1 || !strings.Contains(events[1], `"finishReason":"STOP"`) ||
+		!strings.Contains(events[2], `"usageMetadata":{"cachedContentTokenCount":4,"candidatesTokenCount":5,"promptTokenCount":10,"thoughtsTokenCount":7,"totalTokenCount":22}`) {
+		t.Errorf("Gemini events:\n%s", all)
+	}
+}
+
+// geminiEvents is the Gemini events the reply makes of a Chat stream.
+func geminiEvents(t *testing.T, reply *protocol.GeminiReply, chat []byte) []string {
+	t.Helper()
 	var events []string
-	r := sse.NewReader(bytes.NewReader(chat.out), 1<<20)
+	r := sse.NewReader(bytes.NewReader(chat), 1<<20)
 	for data, err := r.Next(); err == nil; data, err = r.Next() {
 		out, err := reply.Event(data)
 		if err != nil {
@@ -196,14 +208,12 @@ func TestGeminiReply(t *testing.T) {
 			events = append(events, string(out))
 		}
 	}
-	all := strings.Join(events, "\n")
-	if len(events) != 3 || strings.Contains(all, "Weighing") || !strings.Contains(events[0], `{"text":"Checking."}`) ||
-		!strings.Contains(events[1], `"functionCall":{"args":{"city":"Paris"},"id":"call_r1_0","name":"get_weather"},"thoughtSignature":"c2ln"`) ||
-		strings.Count(all, `"finishReason":"STOP"`) != 1 || !strings.Contains(events[1], `"finishReason":"STOP"`) ||
-		!strings.Contains(events[2], `"usageMetadata":{"cachedContentTokenCount":4,"candidatesTokenCount":5,"promptTokenCount":10,"thoughtsTokenCount":7,"totalTokenCount":22}`) {
-		t.Errorf("Gemini events:\n%s", all)
-	}
+	return events
+}
 
+// TestGeminiReplyBody: a whole Chat reply, and a refusal, become Gemini's.
+func TestGeminiReplyBody(t *testing.T) {
+	t.Parallel()
 	whole := aggregate(t, protocol.Chat, protocol.Chat, protocol.ChatFromGemini(io.NopCloser(strings.NewReader(geminiStream))), protocol.NewMemory(64<<20), unsettled)
 	if whole.err != nil {
 		t.Fatal(whole.err)

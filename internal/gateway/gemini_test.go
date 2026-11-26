@@ -29,7 +29,8 @@ func TestGeminiPaths(t *testing.T) {
 	}{
 		{
 			"streamed, key in x-goog-api-key", "/v1beta/models/acme/beta:streamGenerateContent?alt=sse", "", body,
-			[]string{"X-Goog-Api-Key", a.key}, http.StatusOK, "text/event-stream",
+			[]string{"X-Goog-Api-Key", a.key},
+			http.StatusOK, "text/event-stream",
 			[]string{`data: {"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"index":0}]`, `"finishReason":"STOP"`, `"usageMetadata":{"candidatesTokenCount":`},
 		},
 		{

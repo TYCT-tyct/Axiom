@@ -40,32 +40,40 @@ func schemaKeyword(k string, v jsonx.Raw) (jsonx.Raw, error) {
 	case "items":
 		return jsonSchemaOf(v)
 	case "properties":
-		var props map[string]jsonx.Raw
-		if err := jsonx.Unmarshal(v, &props); err != nil {
-			return nil, fmt.Errorf("%w: Gemini schema properties are not an object", ErrInvalid)
-		}
-		converted := requestObject{}
-		for name, p := range props {
-			inner, err := jsonSchemaOf(p)
-			if err != nil {
-				return nil, err
-			}
-			converted[name] = inner
-		}
-		return jsonValue(converted), nil
+		return schemaProperties(v)
 	case "anyOf":
-		var alts []jsonx.Raw
-		if err := jsonx.Unmarshal(v, &alts); err != nil {
-			return nil, fmt.Errorf("%w: a Gemini schema's anyOf is not a list", ErrInvalid)
-		}
-		for i, a := range alts {
-			inner, err := jsonSchemaOf(a)
-			if err != nil {
-				return nil, err
-			}
-			alts[i] = inner
-		}
-		return jsonValue(alts), nil
+		return schemaAlternatives(v)
 	}
 	return v, nil
+}
+
+func schemaProperties(v jsonx.Raw) (jsonx.Raw, error) {
+	var props map[string]jsonx.Raw
+	if err := jsonx.Unmarshal(v, &props); err != nil {
+		return nil, fmt.Errorf("%w: Gemini schema properties are not an object", ErrInvalid)
+	}
+	converted := requestObject{}
+	for name, p := range props {
+		inner, err := jsonSchemaOf(p)
+		if err != nil {
+			return nil, err
+		}
+		converted[name] = inner
+	}
+	return jsonValue(converted), nil
+}
+
+func schemaAlternatives(v jsonx.Raw) (jsonx.Raw, error) {
+	var alts []jsonx.Raw
+	if err := jsonx.Unmarshal(v, &alts); err != nil {
+		return nil, fmt.Errorf("%w: a Gemini schema's anyOf is not a list", ErrInvalid)
+	}
+	for i, a := range alts {
+		inner, err := jsonSchemaOf(a)
+		if err != nil {
+			return nil, err
+		}
+		alts[i] = inner
+	}
+	return jsonValue(alts), nil
 }

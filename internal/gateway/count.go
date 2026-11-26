@@ -85,11 +85,6 @@ func (h *Handler) countAs(w http.ResponseWriter, r *http.Request, format protoco
 	if err != nil {
 		return 0, err
 	}
-	if gemini != nil {
-		if body, err = h.geminiBody(c, body); err != nil {
-			return 0, err
-		}
-	}
 	body, req, err := h.expandPreset(c, body)
 	if err != nil {
 		return 0, err
@@ -98,6 +93,12 @@ func (h *Handler) countAs(w http.ResponseWriter, r *http.Request, format protoco
 	if err := h.checkRate(c.rate, h.Limits.cfg.CountRate, errCountRate, c.rateReset); err != nil {
 		return 0, err
 	}
+	return h.countFor(r, c, body, req)
+}
+
+// countFor is the count of a request whose body is read and rate counted: refused as its call would be, then asked of
+// the call's route or estimated.
+func (h *Handler) countFor(r *http.Request, c *Call, body []byte, req protocol.Request) (int64, error) {
 	snap, err := h.currentCatalog()
 	if err != nil {
 		return 0, err
@@ -114,14 +115,14 @@ func (h *Handler) countAs(w http.ResponseWriter, r *http.Request, format protoco
 		return 0, err
 	}
 	var admission routing.Admission
-	err = h.authorise(r, caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
-		admission = routingAdmission(a, caller, site, snap)
+	err = h.authorise(r, c.caller, func(_ context.Context, _ pg.Tx, a accounts.Admission) error {
+		admission = routingAdmission(a, c.caller, c.site, snap)
 		return h.countAdmission(a, c, snap, model.Model)
 	})
 	if err != nil {
 		return 0, err
 	}
-	if format != protocol.Messages { // only Anthropic's API counts tokens, and the body is not its shape
+	if c.Format != protocol.Messages { // only Anthropic's API counts tokens, and the body is not its shape
 		return countInput(req), nil
 	}
 	return h.countOf(r, routing.Input{
