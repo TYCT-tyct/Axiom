@@ -1,12 +1,11 @@
 import type { AdminOperation } from "@axiom/api";
 import { accountKey, useErrors } from "@axiom/app";
 import { Dialog } from "@axiom/boards/ds";
-import { SettingRow, Stack, Text } from "@axiom/ui";
+import { SettingRow, Stack, Text, UnsavedBar } from "@axiom/ui";
 import { useQueryClient } from "@tanstack/react-query";
 import { useBlocker, useSearch } from "@tanstack/react-router";
 import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { UnsavedBar } from "../../packages/ui/src/components/unsaved-bar";
 import { ChangeDialog, type Context, type Problem } from "./change";
 import { type OperationOf, type SettingKey, settingKeys, settingsRegistry } from "./settings-registry";
 import { say } from "./toasts";

@@ -1,9 +1,7 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import { Card, DataState, SegmentedControl, Switch } from "@axiom/ui";
+import { Card, ChipField, DataState, NumberField, SegmentedControl, Switch } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { ChipField } from "../../packages/ui/src/components/chip-field";
-import { NumberField } from "../../packages/ui/src/components/number-field";
 import { Facts } from "./parts";
 import { siteRegistrationQuery } from "./queries";
 import { DraftRow, type SettingDrafts, SettingsSubmit, type SettingValue, useSettingDrafts } from "./settings-drafts";

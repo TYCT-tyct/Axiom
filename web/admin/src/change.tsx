@@ -10,12 +10,10 @@ import {
   useSession,
 } from "@axiom/app";
 import { Dialog, TextField } from "@axiom/boards/ds";
-import { FormError, Stack, Tag, Text } from "@axiom/ui";
+import { type DiffRow, DiffRows, FormError, ReasonPicks, Stack, Tag, Text } from "@axiom/ui";
 import { useIsFetching, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { type DiffRow, DiffRows } from "../../packages/ui/src/components/diff-rows";
-import { ReasonPicks } from "../../packages/ui/src/components/reason-picks";
 import { say } from "./toasts";
 import { unsettled } from "./unsettled";
 
@@ -384,6 +382,7 @@ function ChangeFields({
         picks={picks.map((pick) => t(`change.picks.${pick}`))}
         value={reason.value}
         onChange={reason.onChange}
+        maxLength={1000}
         error={problem?.field === "reason" ? problem.message : errors.field(error, "reason")}
       />
       {confirm === undefined ? null : (

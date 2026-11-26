@@ -15,6 +15,7 @@ export function ReasonPicks({
   placeholder,
   hint,
   error,
+  maxLength,
   disabled = false,
 }: {
   label: string;
@@ -25,6 +26,7 @@ export function ReasonPicks({
   placeholder?: string;
   hint?: string;
   error?: string;
+  maxLength?: number;
   disabled?: boolean;
 }) {
   const box = useRef<HTMLTextAreaElement>(null);
@@ -41,6 +43,7 @@ export function ReasonPicks({
         error={error}
         placeholder={placeholder}
         value={value}
+        maxLength={maxLength}
         disabled={disabled}
         onChange={(event) => onChange(event.target.value)}
       />
