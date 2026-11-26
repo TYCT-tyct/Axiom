@@ -79,22 +79,70 @@ type Pool struct {
 
 // Credential is a key Axiom uses for a group.
 type Credential struct {
-	ID, Group      uuid.UUID
-	UpstreamKeyRef string
-	Status         string
-	CooldownUntil  *time.Time
-	ExpiresAt      *time.Time
-	MaxConcurrency int
+	ID, Supplier, Group uuid.UUID
+	UpstreamKeyRef      string
+	Status              string
+	CooldownUntil       *time.Time
+	ExpiresAt           *time.Time
+	MaxConcurrency      int
 	// RequestsPerMinute is the account RPM ceiling for selecting this credential; nil adds no ceiling.
 	RequestsPerMinute *int
+	// Source is where the key came from: made, bound or pasted; empty for a row from before it was recorded.
+	Source string
+	// Last4 is the last four characters of a pasted key, and empty for any other.
+	Last4 string
+	// CreatedAt is when the row was made, read from its UUIDv7.
+	CreatedAt time.Time
+	// LastCheck is what the last check of the key found; nil when it was never checked.
+	LastCheck *KeyCheck
+}
+
+// credentialFacts is one credential row as the tables hold it. Every read of a credential for the admin selects these
+// columns in this order, so each of those queries' rows converts to it and there is one conversion to Credential.
+type credentialFacts struct {
+	ID                uuid.UUID
+	SupplierID        uuid.UUID
+	SupplierGroupID   uuid.UUID
+	UpstreamKeyRef    string
+	Status            string
+	CooldownUntil     *time.Time
+	ExpiresAt         *time.Time
+	MaxConcurrency    int32
+	RequestsPerMinute *int32
+	Hint              *string
+	Source            *string
+	CheckedAt         *time.Time
+	CheckOutcome      *string
+	CheckCause        *string
+	CheckStatus       *int32
 }
 
 // credentialOf is a credential as the admin shows it.
-func credentialOf(id, group uuid.UUID, ref, status string, cooldown, expires *time.Time, concurrency int32, perMinute *int32) Credential {
-	return Credential{
-		ID: id, Group: group, UpstreamKeyRef: ref, Status: status, CooldownUntil: cooldown, ExpiresAt: expires,
-		MaxConcurrency: int(concurrency), RequestsPerMinute: limited(perMinute),
+func credentialOf(f credentialFacts) Credential {
+	c := Credential{
+		ID: f.ID, Supplier: f.SupplierID, Group: f.SupplierGroupID, UpstreamKeyRef: f.UpstreamKeyRef, Status: f.Status,
+		CooldownUntil: f.CooldownUntil, ExpiresAt: f.ExpiresAt, MaxConcurrency: int(f.MaxConcurrency),
+		RequestsPerMinute: limited(f.RequestsPerMinute), Source: deref(f.Source), Last4: deref(f.Hint), CreatedAt: createdAt(f.ID),
 	}
+	if f.CheckedAt != nil && f.CheckOutcome != nil && f.CheckStatus != nil {
+		c.LastCheck = &KeyCheck{
+			Credential: f.ID, Last4: c.Last4, Outcome: CheckOutcome(*f.CheckOutcome), Cause: CheckCause(deref(f.CheckCause)),
+			UpstreamStatus: int(*f.CheckStatus), CheckedAt: *f.CheckedAt,
+		}
+	}
+	return c
+}
+
+// createdAt is when a UUIDv7 was made: its first 48 bits are the Unix time in milliseconds. Another version has none.
+func createdAt(id uuid.UUID) time.Time {
+	if id[6]>>4 != 7 {
+		return time.Time{}
+	}
+	var ms int64
+	for _, b := range id[:6] {
+		ms = ms<<8 | int64(b)
+	}
+	return time.UnixMilli(ms).UTC()
 }
 
 // limited is a per-minute limit as the admin shows it: a column with no value is no ceiling of Axiom's, which stays no

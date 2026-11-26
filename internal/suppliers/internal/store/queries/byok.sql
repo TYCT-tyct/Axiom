@@ -39,13 +39,6 @@ UPDATE suppliers.credentials c SET status = @status
 FROM suppliers.suppliers s
 WHERE c.supplier_id = s.id AND s.status = 'byok' AND s.id = @supplier_id AND c.id = @credential_id;
 
--- name: SetByokRejected :exec
--- The call path learned the provider refused this key. Addressed by credential, without a tenant: the caller holds an
--- id from the snapshot and has no account at hand.
-UPDATE suppliers.credentials c SET status = 'rejected'
-FROM suppliers.suppliers s
-WHERE c.supplier_id = s.id AND s.status = 'byok' AND c.id = @credential_id AND c.status = 'active';
-
 -- name: LockByokCredential :execrows
 -- The console's writes on one key take this row lock: a switch and a test answer that cross would let the switch put back
 -- a status the test just found refused.

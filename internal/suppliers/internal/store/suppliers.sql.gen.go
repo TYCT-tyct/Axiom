@@ -37,9 +37,9 @@ func (q *Queries) GetCredentialSecret(ctx context.Context, db DBTX, id uuid.UUID
 
 const insertCredential = `-- name: InsertCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce,
-    wrapped_dek, key_version, status, max_concurrency)
+    wrapped_dek, key_version, status, max_concurrency, source)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-    $9, $10)
+    $9, $10, 'made')
 `
 
 type InsertCredentialParams struct {

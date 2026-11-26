@@ -85,7 +85,10 @@ func TestBindKey(t *testing.T) {
 	}
 	c, err := bind(chosen, "key-7")
 	refuses(t, "a key", err, nil)
-	same(t, "the key", Credential{ID: c.ID, Group: chosen, UpstreamKeyRef: "key-7", Status: "binding", MaxConcurrency: defaultMaxConcurrency}, c)
+	same(t, "the key", Credential{
+		ID: c.ID, Supplier: id, Group: chosen, UpstreamKeyRef: "key-7", Status: "binding", MaxConcurrency: defaultMaxConcurrency,
+		Source: "bound", CreatedAt: createdAt(c.ID),
+	}, c)
 	same(t, "a key with no text yet", "true", a.text(`SELECT (ciphertext IS NULL)::text FROM suppliers.credentials`))
 	_, err = bind(chosen, "key-7")
 	refuses(t, "the same key again", err, ErrKeyBound)

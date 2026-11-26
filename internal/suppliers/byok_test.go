@@ -248,7 +248,7 @@ func TestByokNoFallbackSurvivesRejection(t *testing.T) {
 	}
 	credential := byokCredential(t.Context(), t, a, key.ID)
 	if _, err := inTx(a, func(ctx context.Context, tx pg.Tx) (struct{}, error) {
-		return struct{}{}, store.New().SetByokRejected(ctx, tx, credential)
+		return struct{}{}, store.New().SetCredentialRejected(ctx, tx, credential)
 	}); err != nil {
 		t.Fatal(err)
 	}

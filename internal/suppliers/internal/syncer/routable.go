@@ -16,4 +16,7 @@ const (
 	// NoFormat is a name the listing still has in a group nothing can be called from — one sold by subscription, or one
 	// whose price changes by the hour: its formats are none, so it is not a model of the supplier at all.
 	NoFormat Reason = "no call format is served here"
+	// NotTaken is a name of a model the supplier's intake rule does not take (docs/domains/suppliers.md「接入规则」): its
+	// endpoint is kept for when the rule takes it again and is taken out of routing meanwhile.
+	NotTaken Reason = "the supplier's intake rule does not take the model"
 )

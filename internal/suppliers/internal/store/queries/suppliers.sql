@@ -16,9 +16,9 @@ RETURNING id;
 
 -- name: InsertCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce,
-    wrapped_dek, key_version, status, max_concurrency)
+    wrapped_dek, key_version, status, max_concurrency, source)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
-    @status, @max_concurrency);
+    @status, @max_concurrency, 'made');
 
 -- name: GetCredentialSecret :one
 SELECT ciphertext, nonce, wrapped_dek, key_version FROM suppliers.credentials WHERE id = @id;

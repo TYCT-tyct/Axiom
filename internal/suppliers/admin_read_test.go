@@ -113,7 +113,9 @@ func TestSupplierDetail(t *testing.T) {
 	})
 	refuses(t, "the detail", err, nil)
 	same(t, "its groups", []Group{{ID: group, UpstreamRef: "g", Name: "Group g", Ratio: "1.5", Present: true, Facts: map[string]any{"platform": "anthropic"}, KeyState: "pending"}}, detail.Groups)
-	same(t, "its keys", []Credential{{ID: key, Group: group, UpstreamKeyRef: "k1", Status: "binding", MaxConcurrency: 4}}, detail.Credentials)
+	same(t, "its keys", []Credential{{
+		ID: key, Supplier: id, Group: group, UpstreamKeyRef: "k1", Status: "binding", MaxConcurrency: 4, CreatedAt: createdAt(key),
+	}}, detail.Credentials)
 	same(t, "its endpoints", []Endpoint{
 		{ID: alpha, Group: group, Model: two, UpstreamName: "alpha", Formats: []string{"responses"}, CostState: "unknown"},
 		{ID: zeta, Group: group, Model: one, UpstreamName: "zeta", Formats: []string{"messages", "chat"}, CostState: "unknown", Enabled: true},

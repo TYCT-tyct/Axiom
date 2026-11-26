@@ -372,15 +372,17 @@ func (s *Service) reportRejected(supplier uuid.UUID, cred *credential) {
 }
 
 // markRejected writes the rejected status until the queue is empty. An error is logged and not retried: the credential
-// is resting in this node anyway, and the next rejection after a restart tries again.
+// is resting in this node anyway, and the next rejection after a restart tries again. The suppliers' queue shows the key
+// from the next sync that reads the offer: writing the queue here, without the supplier's lock, would take its rows after
+// the credential's, the other order from the sync's.
 func (s *Service) markRejected() {
 	for r := range s.rejected {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
-			return store.New().SetByokRejected(ctx, tx, r.credential)
+			return store.New().SetCredentialRejected(ctx, tx, r.credential)
 		})
 		if err != nil {
-			s.cfg.Logger.Error("marking a refused provider key", "supplier", r.supplier.String(), "err", err)
+			s.cfg.Logger.Error("marking a refused key", "supplier", r.supplier.String(), "err", err)
 		}
 		r.runtime.reporting.Store(false)
 		cancel()

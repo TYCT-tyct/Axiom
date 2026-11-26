@@ -33,7 +33,8 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `suppliers` | `UNIQUE (origin, upstream_account)`；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
-| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID） |
+| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有 |
+| `intake_rules`、`inbox_items` | PK `supplier_id`；`UNIQUE (supplier_id, kind, subject)` |
 | `supplier_models` | PK `(supplier_group_id, upstream_name)`；`model_id` 空即待映射 |
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |
 | `endpoints` | `UNIQUE (supplier_group_id, model_id)`；成本已知必有成本计划（`known_has_schedule`） |
@@ -49,7 +50,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 
 - **行级安全**：`suppliers` 按本行归属与范围比较，平台供应商只有平台范围可见；子表策略是"所属供应商对本事务可见"，插入也挡住挂到看不见的供应商下。同步、对账、限速和采集的表是平台范围。
 - **复合外键**：同时存 `supplier_id` 与 `supplier_group_id` 的表外键指向 `supplier_groups (id, supplier_id)`；`model_id` 是目录 ID，没有外键。
-- **授权**：应用角色只对 `supplier_logins`（移除时）和 `usage_records` 有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`。后台任务角色还没有，所以应用角色暂时能改 `attempt_costs` 与 `charge_records` 的对账列。
+- **授权**：应用角色只对 `supplier_logins`（移除时）、`usage_records` 和 `inbox_items`（情况结束）有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`。后台任务角色还没有，所以应用角色暂时能改 `attempt_costs` 与 `charge_records` 的对账列。
 - **密钥**：没有明文列；数据库只检查信封四列齐全和长度，加密由写入边界只收 `secret.Sealed` 保证。触发器 `fence_envelope_key_version` 拒绝已退役的主密钥版本（见 [platform 的「凭证加密」](../platform/README.md#凭证加密)）。`serve` 缺 `AXIOM_MASTER_KEY_FILE` 不启动。
 
 ## 调用面
@@ -68,6 +69,7 @@ func (a *Attempt) Sanitize(protocol.Rejection) *protocol.Rejection // 流里的�
 func (a *Attempt) Policy() CallPolicy                          // 适配器默认，端点实测覆盖 Cancels
 func (a *Attempt) Done() AttemptReceipt                        // 幂等，释放占位；回执字段不对外
 func (s *Service) SetMeasuredCancels(ep EndpointID, cancels bool)
+func (s *Service) CredentialLoad(credential, supplier uuid.UUID) Load // 本节点的在途数、账号这一分钟的请求数
 func (s *Service) Cost(r AttemptReceipt, u []catalog.Usage) (AttemptCost, error)
 func (s *Service) Credits(r AttemptReceipt, u []catalog.Usage, c platform.Currency) (AttemptCost, int64, bool, error)
 func (s *Service) TestEndpoint(ctx context.Context, r TestRequest) (TestResult, error)
@@ -143,6 +145,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`（平台范围）；`just adapters-removable` 对 new-api、sub2api、cpa、openai |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 | 价目行就是收费：原生单价取计价用的同一份计划，换成结算币种走 `Credits` 的同一个乘法 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged`（各档、各计费项对照 `Credits`） |
+| 停用、擦除、被拒的凭证不再被挑 | `ListRoutable` 只取 `active`；回答请求的节点提交后当场 `Reload` |
 
 ## 管理接口
 
@@ -160,3 +163,6 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`（分堆）（只读） | `ErrNoSupplier` |
 | `EndpointCost`（价目行）、`EndpointTraffic`（近 24 小时用量）（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
+| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach` 问对方，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
+| `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
