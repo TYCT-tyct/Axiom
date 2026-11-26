@@ -13,8 +13,7 @@ import (
 )
 
 // dashboardUsage is what the dashboard shows beside the overview's exact counts: the hourly rollups' tokens, active
-// accounts, spenders and model use, the time to first token, and the users who signed up (docs/domains/operations.md
-// 「决策与理由」).
+// accounts and model use, the time to first token, and the users who signed up (docs/domains/operations.md「决策与理由」).
 type dashboardUsage struct {
 	usage    observability.SiteUsage
 	newUsers accounts.NewUsers
@@ -36,7 +35,8 @@ func readDashboardUsage(ctx context.Context, tx pg.Tx, site accounts.Site, overv
 }
 
 // addTo puts the dashboard's optional members in body, and the ranked models' tokens and charge in models, which is
-// body's top_models in the overview's order.
+// body's top_models in the overview's order. The spenders are the ledger's, from the read that gave the revenue, so a
+// corrected charge moves both alike.
 func (d dashboardUsage) addTo(body map[string]any, models []map[string]any, overview observability.AdminOverview, money billing.PlatformReport, currency string, since, until time.Time) {
 	u := d.usage
 	body["tokens"] = tokensBody(u.Tokens)
@@ -45,9 +45,9 @@ func (d dashboardUsage) addTo(body map[string]any, models []map[string]any, over
 	if p, ok := u.FirstToken.Percentile(50); ok {
 		body["first_token_ms_p50"] = p
 	}
-	spenders := make([]map[string]any, len(u.Spenders))
-	for i, s := range u.Spenders {
-		spenders[i] = map[string]any{"account_id": accounts.AccountID(s.Account).TypeID(), "spend": adminapi.Money{Amount: s.Spend, Currency: currency}}
+	spenders := make([]map[string]any, len(money.Spenders))
+	for i, s := range money.Spenders {
+		spenders[i] = map[string]any{"account_id": accounts.AccountID(s.Account).TypeID(), "spend": adminapi.Money{Amount: s.Revenue, Currency: currency}}
 	}
 	body["top_spenders"] = spenders
 	for i, m := range overview.Models {

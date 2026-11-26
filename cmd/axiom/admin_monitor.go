@@ -176,9 +176,9 @@ func (a adminAPI) GetPluginStats(ctx context.Context, r adminapi.GetPluginStatsR
 		for j, h := range s.Hours {
 			hours[j] = map[string]any{"at": h.At, "calls": h.Calls}
 		}
-		plugins[i] = map[string]any{
-			"plugin": s.Plugin, "calls": s.Calls, "failures": s.Failures, "uses": s.Uses, "hours": hours,
-			"revenue": adminapi.Money{Amount: s.Price, Currency: currency},
+		plugins[i] = map[string]any{"plugin": s.Plugin, "calls": s.Calls, "failures": s.Failures, "uses": s.Uses, "hours": hours}
+		if s.Price != "" {
+			plugins[i]["revenue"] = adminapi.Money{Amount: s.Price, Currency: currency}
 		}
 		if s.Timed > 0 {
 			plugins[i]["mean_ms"] = s.MeanMS

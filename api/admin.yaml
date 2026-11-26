@@ -8443,7 +8443,9 @@ components:
         first_token_ms_p50: {type: integer, minimum: 0, description: "The median time to the first token of the window's calls."}
         top_spenders:
           type: array
-          description: The accounts whose settled calls were charged the most in the window, most first.
+          description: >-
+            The ten accounts whose settled calls were charged the most in the window, most first, by the ledger's
+            charge as `revenue` counts it, so a corrected charge moves both alike.
           items: {$ref: '#/components/schemas/OverviewSpender'}
         days:
           type: array
@@ -8633,8 +8635,12 @@ components:
         model: {type: string}
         calls: {type: integer, format: int64}
         errors: {type: integer, format: int64}
-        tokens: {type: integer, format: int64, description: "Input, cached and output tokens the model's calls reported."}
-        revenue: {$ref: '#/components/schemas/Money'}
+        tokens: {type: integer, format: int64, description: "The tokens of the model's calls: each prompt once, cached tokens included, and the output."}
+        revenue:
+          allOf: [{$ref: '#/components/schemas/Money'}]
+          description: >-
+            What the model's settled calls were charged when they were recorded, over the hours that start in the
+            window. A later correction of a charge moves the ledger's `revenue` and `top_spenders`, not this.
     CashAmount:
       type: object
       required: [amount, currency]
@@ -12193,7 +12199,7 @@ components:
         at: {type: string, format: date-time, description: "The bucket's start."}
         calls: {type: integer, format: int64, minimum: 0}
         failures: {type: integer, format: int64, minimum: 0}
-        tokens: {type: integer, format: int64, minimum: 0, description: "Input, cached and output tokens the calls reported."}
+        tokens: {type: integer, format: int64, minimum: 0, description: "The tokens of the calls: each prompt once, cached tokens included, and the output."}
         first_token_ms_p50: {type: integer, minimum: 0}
         first_token_ms_p95: {type: integer, minimum: 0}
     MonitorFailureCause:
@@ -12238,7 +12244,9 @@ components:
           type: integer
           format: int64
           minimum: 0
-          description: Calls that moved to another endpoint after an attempt failed.
+          description: >-
+            Calls whose attempts went to more than one endpoint. A retry with another key on the same endpoint is not a
+            switch.
         first_token_ms: {$ref: "#/components/schemas/MonitorPercentiles"}
         total_ms: {$ref: "#/components/schemas/MonitorPercentiles"}
         durations:
@@ -12320,7 +12328,9 @@ components:
         mean_ms: {type: integer, minimum: 0, description: "Absent when it never ran."}
         revenue:
           allOf: [{$ref: "#/components/schemas/Money"}]
-          description: What the calls were charged for the plugin.
+          description: >-
+            What the calls were charged for the plugin. Absent when it is unknown: a successful run's charge could not be
+            told apart from its call's other per-use items, such as a second plugin's.
         cost:
           allOf: [{$ref: "#/components/schemas/Money"}]
           description: What the plugin's backends cost the platform, at the costs set in its settings.
