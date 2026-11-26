@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"uuid"
@@ -316,6 +317,7 @@ func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suff
 		var sql strings.Builder
 		sql.WriteString(prefix)
 		args := make([]any, 0, len(page)*len(types))
+		var number [20]byte
 		for i, r := range page {
 			if i > 0 {
 				sql.WriteByte(',')
@@ -325,7 +327,12 @@ func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suff
 				if j > 0 {
 					sql.WriteByte(',')
 				}
-				fmt.Fprintf(&sql, "$%d::%s", len(args)+j+1, typ)
+				// Not fmt.Fprintf: boxing the number and the type costs two allocations per value, and a page holds
+				// thousands of them (BenchmarkProjectionPage).
+				sql.WriteByte('$')
+				sql.Write(strconv.AppendInt(number[:0], int64(len(args)+j+1), 10))
+				sql.WriteString("::")
+				sql.WriteString(typ)
 			}
 			sql.WriteByte(')')
 			args = append(args, values(r)...)
