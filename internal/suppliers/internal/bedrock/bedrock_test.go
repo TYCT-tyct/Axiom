@@ -19,23 +19,17 @@ import (
 
 // frame is one event-stream message with string headers, as Bedrock frames them.
 func frame(headers map[string]string, payload []byte) []byte {
-	var h bytes.Buffer
+	var h []byte
 	for name, value := range headers {
-		h.WriteByte(byte(len(name)))
-		h.WriteString(name)
-		h.WriteByte(7)
-		_ = binary.Write(&h, binary.BigEndian, uint16(len(value))) //nolint:errcheck // a bytes.Buffer
-		h.WriteString(value)
+		h = append(append(h, byte(len(name))), name...)                     //nolint:gosec // a short name
+		h = binary.BigEndian.AppendUint16(append(h, 7), uint16(len(value))) //nolint:gosec // a short value
+		h = append(h, value...)
 	}
-	total := uint32(prelude + h.Len() + len(payload) + 4) //nolint:gosec // a test's small message
-	var m bytes.Buffer
-	_ = binary.Write(&m, binary.BigEndian, total)           //nolint:errcheck // a bytes.Buffer
-	_ = binary.Write(&m, binary.BigEndian, uint32(h.Len())) //nolint:errcheck,gosec // a bytes.Buffer
-	_ = binary.Write(&m, binary.BigEndian, crc32.ChecksumIEEE(m.Bytes()))
-	m.Write(h.Bytes())
-	m.Write(payload)
-	_ = binary.Write(&m, binary.BigEndian, crc32.ChecksumIEEE(m.Bytes())) //nolint:errcheck // a bytes.Buffer
-	return m.Bytes()
+	m := binary.BigEndian.AppendUint32(nil, uint32(prelude+len(h)+len(payload)+4)) //nolint:gosec // a test's small message
+	m = binary.BigEndian.AppendUint32(m, uint32(len(h)))                           //nolint:gosec // a test's small message
+	m = binary.BigEndian.AppendUint32(m, crc32.ChecksumIEEE(m))
+	m = append(append(m, h...), payload...)
+	return binary.BigEndian.AppendUint32(m, crc32.ChecksumIEEE(m))
 }
 
 // chunk is a chunk event carrying one of Anthropic's events.
@@ -85,10 +79,14 @@ func TestSign(t *testing.T) {
 	for _, tc := range []struct {
 		body, url, want, accept string
 	}{
-		{`{"model":"anthropic.claude-x-v1:0","stream":true,"max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke-with-response-stream",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, eventStream},
-		{`{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json"},
+		{
+			`{"model":"anthropic.claude-x-v1:0","stream":true,"max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke-with-response-stream",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, eventStream,
+		},
+		{
+			`{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json",
+		},
 	} {
 		req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
 			Format: protocol.Messages, Region: "eu-central-1", Model: "eu.anthropic.claude-x-v1:0", Body: []byte(tc.body),

@@ -33,11 +33,11 @@ var (
 
 // sse reads an event stream as Anthropic's SSE.
 type sse struct {
-	src     io.ReadCloser
-	r       *bufio.Reader
-	message []byte       // the message being read, kept for the next
-	out     bytes.Buffer // SSE not read yet
-	err     error
+	src io.ReadCloser
+	r   *bufio.Reader
+	buf []byte       // the message being read, kept for the next
+	out bytes.Buffer // SSE not read yet
+	err error
 }
 
 func newSSE(src io.ReadCloser) *sse { return &sse{src: src, r: bufio.NewReader(src)} }
@@ -66,26 +66,15 @@ func (s *sse) next() error {
 		}
 		return errFraming
 	}
-	total, headers := binary.BigEndian.Uint32(head[0:4]), binary.BigEndian.Uint32(head[4:8])
-	if crc32.ChecksumIEEE(head[:8]) != binary.BigEndian.Uint32(head[8:12]) || total < prelude+4 || total > maxMessage || headers > total-prelude-4 {
-		return errFraming
-	}
-	if cap(s.message) < int(total) {
-		s.message = make([]byte, total)
-	}
-	m := s.message[:total]
-	copy(m, head[:])
-	if _, err := io.ReadFull(s.r, m[prelude:]); err != nil {
-		return errFraming
-	}
-	if crc32.ChecksumIEEE(m[:total-4]) != binary.BigEndian.Uint32(m[total-4:]) {
+	m, headers, ok := s.message(head)
+	if !ok {
 		return errFraming
 	}
 	h, ok := readHeaders(m[prelude : prelude+headers])
 	if !ok {
 		return errFraming
 	}
-	payload := m[prelude+headers : total-4]
+	payload := m[prelude+headers : len(m)-4]
 	switch {
 	case h.messageType == "event" && h.eventType == "chunk":
 		return s.chunk(payload)
@@ -94,6 +83,24 @@ func (s *sse) next() error {
 		return errStreamFailed
 	}
 	return nil // an event of another type carries no event of Anthropic's
+}
+
+// message reads the rest of the message whose prelude is head, checked against its lengths and CRCs: the whole
+// message and the length of its headers.
+func (s *sse) message(head [prelude]byte) ([]byte, uint32, bool) {
+	total, headers := binary.BigEndian.Uint32(head[0:4]), binary.BigEndian.Uint32(head[4:8])
+	if crc32.ChecksumIEEE(head[:8]) != binary.BigEndian.Uint32(head[8:12]) || total < prelude+4 || total > maxMessage || headers > total-prelude-4 {
+		return nil, 0, false
+	}
+	if cap(s.buf) < int(total) {
+		s.buf = make([]byte, total)
+	}
+	m := s.buf[:total]
+	copy(m, head[:])
+	if _, err := io.ReadFull(s.r, m[prelude:]); err != nil {
+		return nil, 0, false
+	}
+	return m, headers, crc32.ChecksumIEEE(m[:total-4]) == binary.BigEndian.Uint32(m[total-4:])
 }
 
 // chunk writes the Anthropic event a chunk carries as one SSE event named by its type. A line break inside the JSON,
@@ -137,7 +144,7 @@ func (s *sse) failed(exception string) {
 // safe is an exception's type as it may go in a JSON string: letters only.
 func safe(s string) string {
 	for i := range len(s) {
-		if c := s[i]; !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z') {
+		if c := s[i]; (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
 			return "exception"
 		}
 	}

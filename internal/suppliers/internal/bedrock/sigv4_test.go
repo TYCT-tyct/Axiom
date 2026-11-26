@@ -9,7 +9,7 @@ import (
 )
 
 // awsExample is the access key every one of AWS's published signing examples uses.
-var awsExample = keys{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"}
+var awsExample = keys{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"} //nolint:gosec // AWS's published example, no account's
 
 // TestSignatureMatchesAWSVectors: requests signed as AWS's own examples have them come out with the published
 // signatures: the get-vanilla, post-vanilla and get-vanilla-query-order-key-case cases of the Signature Version 4 test
@@ -20,14 +20,22 @@ func TestSignatureMatchesAWSVectors(t *testing.T) {
 	for _, tc := range []struct {
 		name, method, url, service, contentType, want string
 	}{
-		{"get-vanilla", http.MethodGet, "https://example.amazonaws.com/", "service", "",
-			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31"},
-		{"post-vanilla", http.MethodPost, "https://example.amazonaws.com/", "service", "",
-			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b"},
-		{"get-vanilla-query-order-key-case", http.MethodGet, "https://example.amazonaws.com/?Param2=value2&Param1=value1", "service", "",
-			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500"},
-		{"iam-list-users", http.MethodGet, "https://iam.amazonaws.com/?Action=ListUsers&Version=2010-05-08", "iam", "application/x-www-form-urlencoded; charset=utf-8",
-			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/iam/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7"},
+		{
+			"get-vanilla", http.MethodGet, "https://example.amazonaws.com/", "service", "",
+			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+		},
+		{
+			"post-vanilla", http.MethodPost, "https://example.amazonaws.com/", "service", "",
+			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b",
+		},
+		{
+			"get-vanilla-query-order-key-case", http.MethodGet, "https://example.amazonaws.com/?Param2=value2&Param1=value1", "service", "",
+			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=b97d918cfa904a5beff61c982a1b6f458b799221646efd99d3219ec94cdf2500",
+		},
+		{
+			"iam-list-users", http.MethodGet, "https://iam.amazonaws.com/?Action=ListUsers&Version=2010-05-08", "iam", "application/x-www-form-urlencoded; charset=utf-8",
+			"AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/iam/aws4_request, SignedHeaders=content-type;host;x-amz-date, Signature=5d672d79c15b13162d9279b0855cfba6789a8edb4c82c400e06b5924a6f2b5d7",
+		},
 	} {
 		req, err := http.NewRequestWithContext(t.Context(), tc.method, tc.url, nil)
 		if err != nil {

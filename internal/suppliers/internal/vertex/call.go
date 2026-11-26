@@ -36,12 +36,11 @@ func (q quirks) Sign(ctx context.Context, d adapter.Doer, c adapter.SignedCall) 
 		body   = c.Body
 	)
 	acct, err := q.a.tokens.get(ctx, d, c.Key, c.At)
-	var refused *refusal
-	switch {
-	case errors.As(err, &refused):
+	if r, refused := errors.AsType[*refusal](err); refused && r != nil {
 		f := cloud.Rejected()
 		return nil, &f
-	case err != nil:
+	}
+	if err != nil {
 		return nil, cloud.Unsigned()
 	}
 	switch c.Format {
@@ -57,7 +56,7 @@ func (q quirks) Sign(ctx context.Context, d adapter.Doer, c adapter.SignedCall) 
 		target = base(acct.project, c.Region) + "/publishers/anthropic/models/" + url.PathEscape(c.Model) + action
 	case protocol.Chat:
 		target = base(acct.project, c.Region) + "/endpoints/openapi/chat/completions"
-	default:
+	case protocol.Responses, protocol.Embeddings, protocol.Rerank, protocol.Completions:
 		return nil, cloud.BadBody()
 	}
 	req, f := cloud.Post(ctx, target, body, c.Header)

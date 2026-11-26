@@ -40,75 +40,96 @@ func TestCloudSuppliersServeAtTheOfficialPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		name              string
-		request           suppliers.CloudRequest
-		path, body        string
-		sentTo, auth      string
-		charge, cost      int64
-		estimated         string
-		rejectedOnRefusal bool
-	}{
-		{"vertex", suppliers.CloudRequest{Kind: "vertex", Input: suppliers.CloudInput{ServiceAccountJSON: serviceAccountKey()}, Regions: []string{"us-east5"}},
+	for _, tc := range []cloudCall{
+		{
+			"vertex",
+			suppliers.CloudRequest{Kind: "vertex", Input: suppliers.CloudInput{ServiceAccountJSON: serviceAccountKey()}, Regions: []string{"us-east5"}},
 			"/v1/messages", messagesCall, "us-east5-aiplatform.googleapis.com/v1/projects/harbor-prod/locations/us-east5/publishers/anthropic/models/claude-opus-5-5@20261101:streamRawPredict",
-			"Bearer " + cloudToken, messagesCharge, directCost, "0.0003", false},
-		{"bedrock", suppliers.CloudRequest{Kind: "bedrock", Input: suppliers.CloudInput{AccessKeyID: cloudAccessKey, SecretAccessKey: "fake/secret+key"}, Regions: []string{"us-east-1"}},
-			"/v1/messages", messagesCall, "bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5-v1:0/invoke-with-response-stream",
-			"AWS4-HMAC-SHA256 Credential=" + cloudAccessKey + "/", messagesCharge, directCost, "0.0003", true},
-		{"azure", suppliers.CloudRequest{Kind: "azure", Origin: "https://harbor.openai.azure.com", Input: suppliers.CloudInput{APIKey: cloudAPIKey}},
+			"Bearer " + cloudGrant, messagesCharge, directCost, "0.0003", false,
+		},
+		{
+			"bedrock",
+			suppliers.CloudRequest{Kind: "bedrock", Input: suppliers.CloudInput{AccessKeyID: cloudKeyID, SecretAccessKey: "fake/secret+key"}, Regions: []string{"us-east-1"}},
+			"/v1/messages", messagesCall, "bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5-v1%3A0/invoke-with-response-stream",
+			"AWS4-HMAC-SHA256 Credential=" + cloudKeyID + "/", messagesCharge, directCost, "0.0003", true,
+		},
+		{
+			"azure",
+			suppliers.CloudRequest{Kind: "azure", Origin: "https://harbor.openai.azure.com", Input: suppliers.CloudInput{APIKey: cloudResourceKey}},
 			"/v1/chat/completions", `{"model":"gpt-6-astra","messages":[{"role":"user","content":"Hello"}]}`,
-			"harbor.openai.azure.com/openai/deployments/prod-astra/chat/completions", cloudAPIKey, cloudChatCharge, cloudChatCost, "0.000207", false},
+			"harbor.openai.azure.com/openai/deployments/prod-astra/chat/completions", cloudResourceKey, cloudChatCharge, cloudChatCost, "0.000207", false,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			w := newCallWorld(t)
-			// The fixture's relay stops, so a call can only be served by the cloud platform.
-			if err := pgtest.Run(t.Context(), w.database.Superuser, "UPDATE suppliers.suppliers SET status = 'paused'"); err != nil {
-				t.Fatal(err)
-			}
-			fake := newFakeCloud(t, string(messages), withChatUsage(string(chat)))
-			w.trusted, w.routes = append(w.trusted, fake.cert), fake.routes(t)
-			if tc.name == "vertex" {
-				// Vertex AI names a fixed model by its dated name, which the catalog has for a model of the vendor's.
-				w.addPublicName("anthropic/claude-opus-5-5", "claude-opus-5-5-20261101")
-			}
-			supplier := w.connectCloud(fake, tc.request)
-			w.price()
-			n := w.start()
-			waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
-
-			r := w.call(n, tc.path, w.richKey, tc.body)
-			if r.status != http.StatusOK {
-				t.Fatalf("status %d: %s", r.status, r.body)
-			}
-			sent := fake.sent()
-			call := sent[len(sent)-1]
-			if !strings.HasSuffix(call.path, strings.Replace(tc.sentTo, ":0/", "%3A0/", 1)) && call.path != tc.sentTo || !strings.HasPrefix(call.auth, tc.auth) {
-				t.Errorf("the platform was sent %s with %q, want %s with %s", call.path, call.auth, tc.sentTo, tc.auth)
-			}
-			id := r.header.Get("X-Generation-Id")
-			w.checkSettled(r, tc.charge)
-			w.checkBalanced()
-			if got := w.query(`SELECT supplier_id::text || ' ' || estimated_native::text || ' ' || cost_flag || ' ' || coalesce(charge_ref, '-')
-				FROM suppliers.attempt_costs WHERE request_id::text = $1`, id); got != supplier+" "+tc.estimated+" complete -" {
-				t.Errorf("the supplier's cost row is %q, want the platform's at the official price, with no request id", got)
-			}
-			var logged string
-			waitUntil(t, 5*time.Second, func() bool {
-				logged = w.query(`SELECT coalesce(max(price_nano)::text || ' ' || max(cost_nano)::text, '') FROM observability.call_log WHERE id::text = $1`, id)
-				return logged != ""
-			})
-			if want := strconv.FormatInt(tc.charge, 10) + " " + strconv.FormatInt(tc.cost, 10); logged != want {
-				t.Errorf("the call log holds %q, want the sale price and the official price %q", logged, want)
-			}
-			if tc.rejectedOnRefusal {
-				fake.refuse.Store(true)
-				w.call(n, tc.path, w.richKey, tc.body)
-				waitUntil(t, 10*time.Second, func() bool {
-					return w.query(`SELECT string_agg(status, ',') FROM suppliers.credentials WHERE supplier_id::text = $1`, supplier) == "rejected"
-				})
-			}
+			tc.serve(t, newFakeCloud(t, string(messages), withChatUsage(string(chat))))
 		})
+	}
+}
+
+// cloudCall is one platform's call: how it is connected, the call a client makes, where and how the platform is sent
+// it, what it charges and costs, and whether a refused key is then marked rejected.
+type cloudCall struct {
+	name              string
+	request           suppliers.CloudRequest
+	path, body        string
+	sentTo, auth      string
+	charge, cost      int64
+	estimated         string
+	rejectedOnRefusal bool
+}
+
+// serve connects the platform at the fake in a world whose relay is paused, makes the call and checks what it cost.
+func (tc cloudCall) serve(t *testing.T, fake *fakeCloud) {
+	t.Helper()
+	w := newCallWorld(t)
+	if err := pgtest.Run(t.Context(), w.database.Superuser, "UPDATE suppliers.suppliers SET status = 'paused'"); err != nil {
+		t.Fatal(err)
+	}
+	w.trusted, w.routes = append(w.trusted, fake.cert), fake.routes(t)
+	if tc.name == "vertex" {
+		// Vertex AI names a fixed model by its dated name, which the catalog has for a model of the vendor's.
+		w.addPublicName("anthropic/claude-opus-5-5", "claude-opus-5-5-20261101")
+	}
+	supplier := w.connectCloud(fake, tc.request)
+	w.price()
+	n := w.start()
+	waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
+	r := w.call(n, tc.path, w.richKey, tc.body)
+	if r.status != http.StatusOK {
+		t.Fatalf("status %d: %s", r.status, r.body)
+	}
+	sent := fake.sent()
+	if call := sent[len(sent)-1]; call.path != tc.sentTo || !strings.HasPrefix(call.auth, tc.auth) {
+		t.Errorf("the platform was sent %s with %q, want %s with %s", call.path, call.auth, tc.sentTo, tc.auth)
+	}
+	tc.checkCost(w, r, supplier)
+	if tc.rejectedOnRefusal {
+		fake.refuse.Store(true)
+		w.call(n, tc.path, w.richKey, tc.body)
+		waitUntil(t, 10*time.Second, func() bool {
+			return w.query(`SELECT string_agg(status, ',') FROM suppliers.credentials WHERE supplier_id::text = $1`, supplier) == "rejected"
+		})
+	}
+}
+
+// checkCost: the client paid the sale price, and the supplier's cost row and the call log hold the official price.
+func (tc cloudCall) checkCost(w *callWorld, r reply, supplier string) {
+	w.t.Helper()
+	id := r.header.Get("X-Generation-Id")
+	w.checkSettled(r, tc.charge)
+	w.checkBalanced()
+	if got := w.query(`SELECT supplier_id::text || ' ' || estimated_native::text || ' ' || cost_flag || ' ' || coalesce(charge_ref, '-')
+		FROM suppliers.attempt_costs WHERE request_id::text = $1`, id); got != supplier+" "+tc.estimated+" complete -" {
+		w.t.Errorf("the supplier's cost row is %q, want the platform's at the official price, with no request id", got)
+	}
+	var logged string
+	waitUntil(w.t, 5*time.Second, func() bool {
+		logged = w.query(`SELECT coalesce(max(price_nano)::text || ' ' || max(cost_nano)::text, '') FROM observability.call_log WHERE id::text = $1`, id)
+		return logged != ""
+	})
+	if want := strconv.FormatInt(tc.charge, 10) + " " + strconv.FormatInt(tc.cost, 10); logged != want {
+		w.t.Errorf("the call log holds %q, want the sale price and the official price %q", logged, want)
 	}
 }
 
@@ -119,9 +140,9 @@ func (w *callWorld) addPublicName(slug, name string) {
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	op := catalog.Op{Actor: audit.System("callpath.test"), Key: uuid.NewV7(), Reason: "test"}
 	if _, err := cat.AddName(w.t.Context(), catalog.AddNameRequest{
-		Op: catalog.Op{Actor: audit.System("callpath.test"), Key: uuid.NewV7(), Reason: "test"}, Model: catalog.ModelID(w.models[slug]),
-		Name: name, Visibility: catalog.VisibilityPublic,
+		Op: op, Model: catalog.ModelID(w.models[slug]), Name: name, Visibility: catalog.VisibilityPublic,
 	}); err != nil {
 		w.t.Fatal(err)
 	}
@@ -147,7 +168,7 @@ func (w *callWorld) connectCloud(fake *fakeCloud, r suppliers.CloudRequest) stri
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	r.Name, r.MaxConcurrency, r.Reason = "Cloud", 4, "a cloud source"
+	r.Name, r.Limits, r.Reason = "Cloud", suppliers.Limits{MaxConcurrency: 4}, "a cloud source"
 	var plan *suppliers.CloudPlan
 	if err := w.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
 		plan, err = admin.PlanCloud(ctx, tx, r)

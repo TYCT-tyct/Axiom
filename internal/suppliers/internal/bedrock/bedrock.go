@@ -176,20 +176,25 @@ func profileRoutes(ctx context.Context, d adapter.Doer, k keys, region string, a
 		if _, ok := list(ctx, d, k, region, path, at, &page); !ok {
 			return routes
 		}
-		for _, p := range page.InferenceProfileSummaries {
-			geography, model, found := strings.Cut(p.InferenceProfileID, ".")
-			if !found || p.Status != "ACTIVE" {
-				continue
-			}
-			if current, taken := routes[model]; !taken || strings.HasPrefix(current, "global.") && geography != "global" {
-				routes[model] = p.InferenceProfileID
-			}
-		}
+		page.route(routes)
 		if next = page.NextToken; next == "" {
 			return routes
 		}
 	}
 	return routes
+}
+
+// route adds the page's active profiles to routes, a geography's in place of the global one.
+func (page profiles) route(routes map[string]string) {
+	for _, p := range page.InferenceProfileSummaries {
+		geography, model, found := strings.Cut(p.InferenceProfileID, ".")
+		if !found || p.Status != "ACTIVE" {
+			continue
+		}
+		if current, taken := routes[model]; !taken || strings.HasPrefix(current, "global.") && geography != "global" {
+			routes[model] = p.InferenceProfileID
+		}
+	}
 }
 
 // versioned is a Bedrock model ID's vendor prefix and version suffix around the name Anthropic calls the model.

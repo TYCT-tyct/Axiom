@@ -12,6 +12,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -41,7 +42,7 @@ func keyFile(t *testing.T) string {
 		t.Fatal(err)
 	}
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}))
-	b, err := jsonx.MarshalCanonical(map[string]string{
+	b, err := jsonx.MarshalCanonical(map[string]string{ //nolint:gosec // a key made by the test itself
 		"type": "service_account", "project_id": "harbor-prod", "private_key_id": "0123456789abcdef0123456789abcdef0123cafe",
 		"private_key": pemText, "client_email": "relay@harbor-prod.iam.gserviceaccount.com", "token_uri": "https://evil.example/token",
 	})
@@ -90,7 +91,7 @@ func TestJWTIsSignedWithTheAccountsKey(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
 	sa := serviceAccount{ProjectID: "p", PrivateKeyID: "kid-1", ClientEmail: "a@p.iam.gserviceaccount.com"}
-	jwt, err := signJWT(sa, testKey(), tokenURL, at)
+	jwt, err := signJWT(sa, testKey(), exchangeAt, at)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func newTokenService(t *testing.T) *tokenService {
 			_, _ = io.WriteString(w, `{"error":"invalid_grant","error_description":"Invalid JWT Signature."}`) //nolint:errcheck // a test server
 			return
 		}
-		_, _ = io.WriteString(w, `{"access_token":"ya29.token-`+string(rune('a'+s.asked.Load()))+`","expires_in":3599,"token_type":"Bearer"}`) //nolint:errcheck // a test server
+		_, _ = io.WriteString(w, `{"access_token":"ya29.token-`+strconv.Itoa(int(s.asked.Load()))+`","expires_in":3599,"token_type":"Bearer"}`) //nolint:errcheck // a test server
 	}))
 	t.Cleanup(s.server.Close)
 	return s
@@ -207,15 +208,21 @@ func TestSign(t *testing.T) {
 		region, model, url string
 		body, want         string
 	}{
-		{protocol.Messages, "us-east5", "claude-sonnet-4-5@20250929",
+		{
+			protocol.Messages, "us-east5", "claude-sonnet-4-5@20250929",
 			"https://us-east5-aiplatform.googleapis.com/v1/projects/harbor-prod/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-5@20250929:streamRawPredict",
-			`{"model":"claude-sonnet-4-5@20250929","stream":true,"max_tokens":8}`, `{"stream":true,"max_tokens":8,"anthropic_version":"vertex-2023-10-16"}`},
-		{protocol.Messages, "global", "claude-sonnet-4-5@20250929",
+			`{"model":"claude-sonnet-4-5@20250929","stream":true,"max_tokens":8}`, `{"stream":true,"max_tokens":8,"anthropic_version":"vertex-2023-10-16"}`,
+		},
+		{
+			protocol.Messages, "global", "claude-sonnet-4-5@20250929",
 			"https://aiplatform.googleapis.com/v1/projects/harbor-prod/locations/global/publishers/anthropic/models/claude-sonnet-4-5@20250929:rawPredict",
-			`{"model":"claude-sonnet-4-5@20250929","max_tokens":8}`, `{"max_tokens":8,"anthropic_version":"vertex-2023-10-16"}`},
-		{protocol.Chat, "europe-west4", "google/gemini-2.5-pro",
+			`{"model":"claude-sonnet-4-5@20250929","max_tokens":8}`, `{"max_tokens":8,"anthropic_version":"vertex-2023-10-16"}`,
+		},
+		{
+			protocol.Chat, "europe-west4", "google/gemini-2.5-pro",
 			"https://europe-west4-aiplatform.googleapis.com/v1/projects/harbor-prod/locations/europe-west4/endpoints/openapi/chat/completions",
-			`{"model":"google/gemini-2.5-pro","stream":true}`, `{"model":"google/gemini-2.5-pro","stream":true}`},
+			`{"model":"google/gemini-2.5-pro","stream":true}`, `{"model":"google/gemini-2.5-pro","stream":true}`,
+		},
 	} {
 		req, f := a.Calls().(adapter.Signer).Sign(t.Context(), svc.server.Client(), adapter.SignedCall{
 			Format: tc.format, Region: tc.region, Model: tc.model, Body: []byte(tc.body), Header: http.Header{"Anthropic-Version": {"2023-06-01"}}, Key: key, At: at,

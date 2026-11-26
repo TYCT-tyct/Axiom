@@ -40,9 +40,9 @@ var cloudHosts = []string{
 
 // The fake's credentials: a key that starts as these do passes, any other is refused.
 const (
-	cloudAccessKey = "AKIAFAKEHARBOR0001"
-	cloudAPIKey    = "az-good-key-0042"
-	cloudToken     = "ya29.fake-token"
+	cloudKeyID       = "AKIAFAKEHARBOR0001"
+	cloudResourceKey = "az-good-key-0042"
+	cloudGrant       = "fake-grant-1"
 )
 
 // fakeCloud is Vertex AI, Bedrock and Azure OpenAI over TLS on loopback. Each lists or serves the models named, takes
@@ -133,7 +133,7 @@ func (c *fakeCloud) serve(w http.ResponseWriter, r *http.Request) {
 		host = r.Host
 	}
 	c.mu.Lock()
-	c.seen = append(c.seen, supplied{host + r.URL.Path, r.Header.Get("Authorization") + r.Header.Get("Api-Key"), string(body)})
+	c.seen = append(c.seen, supplied{host + r.URL.EscapedPath(), r.Header.Get("Authorization") + r.Header.Get("Api-Key"), string(body)})
 	c.mu.Unlock()
 	switch {
 	case host == "oauth2.googleapis.com":
@@ -155,12 +155,12 @@ func (c *fakeCloud) token(w http.ResponseWriter, body string) {
 		_, _ = io.WriteString(w, `{"error":"invalid_grant"}`) //nolint:errcheck // a test server
 		return
 	}
-	_, _ = io.WriteString(w, `{"access_token":"`+cloudToken+`","expires_in":3600,"token_type":"Bearer"}`) //nolint:errcheck // a test server
+	_, _ = io.WriteString(w, `{"access_token":"`+cloudGrant+`","expires_in":3600,"token_type":"Bearer"}`) //nolint:errcheck // a test server
 }
 
 func (c *fakeCloud) vertex(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case r.Header.Get("Authorization") != "Bearer "+cloudToken:
+	case r.Header.Get("Authorization") != "Bearer "+cloudGrant:
 		w.WriteHeader(http.StatusUnauthorized)
 	case r.Method == http.MethodGet:
 		_, _ = io.WriteString(w, `{"name":"projects/harbor-prod/locations/us-east5"}`) //nolint:errcheck // a test server
@@ -175,7 +175,7 @@ func (c *fakeCloud) vertex(w http.ResponseWriter, r *http.Request) {
 // bedrockList is the control plane: an on-demand model of each of the tests' catalogs; us-west-2 denies the key.
 func (c *fakeCloud) bedrockList(w http.ResponseWriter, r *http.Request, host string) {
 	switch {
-	case c.refuse.Load() || !strings.Contains(r.Header.Get("Authorization"), "Credential="+cloudAccessKey[:14]):
+	case c.refuse.Load() || !strings.Contains(r.Header.Get("Authorization"), "Credential="+cloudKeyID[:14]):
 		w.Header().Set("X-Amzn-Errortype", "UnrecognizedClientException:http://internal.amazon.com/coral/com.amazon.coral.service/")
 		w.WriteHeader(http.StatusForbidden)
 	case strings.Contains(host, "us-west-2"):
@@ -204,7 +204,7 @@ func (c *fakeCloud) invoke(w http.ResponseWriter) {
 
 func (c *fakeCloud) azure(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case c.refuse.Load() || r.Header.Get("Api-Key") != cloudAPIKey:
+	case c.refuse.Load() || r.Header.Get("Api-Key") != cloudResourceKey:
 		w.WriteHeader(http.StatusUnauthorized)
 	case r.URL.Path == "/openai/deployments":
 		_, _ = io.WriteString(w, `{"data":[{"id":"prod-astra","model":"gpt-6-astra","status":"succeeded"},`+ //nolint:errcheck // a test server
@@ -235,7 +235,7 @@ func eventFrames(stream string) []byte {
 func eventFrame(headers map[string]string, payload string) []byte {
 	var h bytes.Buffer
 	for name, value := range headers {
-		h.WriteByte(byte(len(name)))
+		h.WriteByte(byte(len(name))) //nolint:gosec // a short header name
 		h.WriteString(name)
 		h.WriteByte(7)
 		h.Write(binary.BigEndian.AppendUint16(nil, uint16(len(value)))) //nolint:gosec // a short header
@@ -268,12 +268,3 @@ var serviceAccountKey = sync.OnceValue(func() string {
 	}
 	return string(b)
 })
-
-// quoted is s as a JSON string.
-func quoted(s string) string {
-	b, err := jsonx.MarshalCanonical(s)
-	if err != nil {
-		panic(err)
-	}
-	return string(b)
-}

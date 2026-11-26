@@ -88,14 +88,27 @@ func TestCloudCallsAreSignedByTheirPlatform(t *testing.T) {
 	}
 	a.Done()
 	mu.Lock()
-	defer mu.Unlock()
-	if path != "/eu-central-1/eu.gpt-v1:0" || key != "sk-test-key" || resp.Header.Get("X-Answered") != "signed" {
-		t.Errorf("sent to %s with key %q; the answer was marked %q", path, key, resp.Header.Get("X-Answered"))
+	sentPath, sentKey := path, key
+	mu.Unlock()
+	if sentPath != "/eu-central-1/eu.gpt-v1:0" || sentKey != "sk-test-key" || resp.Header.Get("X-Answered") != "signed" {
+		t.Errorf("sent to %s with key %q; the answer was marked %q", sentPath, sentKey, resp.Header.Get("X-Answered"))
 	}
 
-	_, f, _ = w.send(protocol.Messages, "refuse")
-	if _, rejected := f.Cause.(adapter.CredentialRejected); f == nil || !rejected || f.Scope != ScopeCredential || f.Executed != NotExecuted || asked != 1 {
-		t.Errorf("a call the platform refused to sign for: %+v, %d requests sent", f, asked)
+	checkRefusedSigning(w, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return asked
+	})
+}
+
+// checkRefusedSigning: a call the platform refused to sign for the credential's sake fails as the credential's,
+// sends nothing, and rests the credential.
+func checkRefusedSigning(w *world, asked func() int) {
+	w.t.Helper()
+	t := w.t
+	_, f, _ := w.send(protocol.Messages, "refuse")
+	if _, rejected := f.Cause.(adapter.CredentialRejected); f == nil || !rejected || f.Scope != ScopeCredential || f.Executed != NotExecuted || asked() != 1 {
+		t.Errorf("a call the platform refused to sign for: %+v, %d requests sent", f, asked())
 	}
 	if _, err := w.svc.Acquire(w.endpoint); !errors.Is(err, ErrNoSlot) {
 		t.Errorf("a credential refused at signing is picked again at once: %v", err)

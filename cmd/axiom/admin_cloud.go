@@ -33,7 +33,7 @@ func (a adminAPI) CreateCloudSupplier(ctx context.Context, request adminapi.Crea
 		return nil, cloudProblem(err)
 	}
 	claim, err := idempotencyClaim(ctx, "createCloudSupplier", request.Params.IdempotencyKey,
-		[]any{r.Kind, r.Name, r.Origin, r.Regions, r.Currency.String(), r.MaxConcurrency, r.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
+		[]any{r.Kind, r.Name, r.Origin, r.Regions, r.Currency.String(), r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
 	if err != nil {
 		return nil, err
 	}
@@ -73,16 +73,15 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 	if b.Credential == nil {
 		return nil, invalidField("/credential", "required")
 	}
-	r := suppliers.CloudRequest{Input: cloudInput(b.Credential), MaxConcurrency: newRegionConcurrency, Reason: b.Reason}
+	r := suppliers.CloudRequest{
+		Input: cloudInput(b.Credential), Reason: b.Reason,
+		Limits: suppliers.Limits{MaxConcurrency: newRegionConcurrency, RequestsPerMinute: b.RequestsPerMinute},
+	}
 	if b.Regions != nil {
 		r.Regions = *b.Regions
 	}
 	if b.MaxConcurrency != nil {
-		r.MaxConcurrency = int32(*b.MaxConcurrency) //nolint:gosec // the schema bounds it to 2³¹-1
-	}
-	if b.RequestsPerMinute != nil {
-		rpm := int32(*b.RequestsPerMinute) //nolint:gosec // the schema bounds it to 100000
-		r.RequestsPerMinute = &rpm
+		r.Limits.MaxConcurrency = *b.MaxConcurrency
 	}
 	var plan *suppliers.CloudPlan
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
@@ -92,7 +91,7 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 		return nil, cloudProblem(err)
 	}
 	claim, err := idempotencyClaim(ctx, "replaceSupplierCloudCredential", request.Params.IdempotencyKey,
-		[]any{request.SupplierId, r.Regions, r.MaxConcurrency, r.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
+		[]any{request.SupplierId, r.Regions, r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +117,8 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 // cloudRequest reads the body; what the contract's schema already refuses is not checked again.
 func cloudRequest(b *adminapi.CloudSupplierCreate) (suppliers.CloudRequest, error) {
 	r := suppliers.CloudRequest{
-		Kind: string(b.Provider), Name: b.Name, MaxConcurrency: int32(b.MaxConcurrency), Reason: b.Reason, //nolint:gosec // the schema bounds it to 2³¹-1
+		Kind: string(b.Provider), Name: b.Name, Reason: b.Reason,
+		Limits: suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute},
 	}
 	if b.Credential == nil {
 		return r, invalidField("/credential", "required")
@@ -140,10 +140,6 @@ func cloudRequest(b *adminapi.CloudSupplierCreate) (suppliers.CloudRequest, erro
 			return r, invalidField("/settlement_currency", "not a currency code")
 		}
 		r.Currency = currency
-	}
-	if b.RequestsPerMinute != nil {
-		rpm := int32(*b.RequestsPerMinute) //nolint:gosec // the schema bounds it to 100000
-		r.RequestsPerMinute = &rpm
 	}
 	return r, nil
 }

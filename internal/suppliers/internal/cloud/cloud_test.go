@@ -16,8 +16,13 @@ func TestRewrite(t *testing.T) {
 		add              []Member
 		stream           bool
 	}{
-		{"drop and add", `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi é"}],"max_tokens":1e3}`,
-			`{"stream":true,"messages":[{"role":"user","content":"hi é"}],"max_tokens":1e3,"anthropic_version":"v1"}`, []string{"model"}, []Member{version}, true},
+		{
+			"drop and add", `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi é"}],"max_tokens":1e3}`,
+			`{"stream":true,"messages":[{"role":"user","content":"hi é"}],"max_tokens":1e3,"anthropic_version":"v1"}`,
+			[]string{"model"},
+			[]Member{version},
+			true,
+		},
 		{"the stream dropped", `{"model":"m","stream":true}`, `{"anthropic_version":"v1"}`, []string{"model", "stream"}, []Member{version}, true},
 		{"the body's own version replaced", `{"anthropic_version":"old","stream":false}`, `{"stream":false,"anthropic_version":"v1"}`, nil, []Member{version}, false},
 		{"nothing left", `{"model":"m"}`, `{}`, []string{"model"}, nil, false},

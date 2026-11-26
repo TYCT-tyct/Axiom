@@ -17,7 +17,6 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
-	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -38,11 +37,12 @@ var (
 	ErrNotCloud = errors.New("suppliers: the supplier is not a cloud platform")
 )
 
-// CloudInput is what a person pasted (CloudCredentialInput); CloudAccount is what is not secret about it; a
-// *CredentialError is a credential that cannot be one of the platform, by the member at fault.
 type (
-	CloudInput      = adapter.CloudInput
-	CloudAccount    = adapter.CloudAccount
+	// CloudInput is what a person pasted (CloudCredentialInput in the contract).
+	CloudInput = adapter.CloudInput
+	// CloudAccount is what is not secret about a cloud credential.
+	CloudAccount = adapter.CloudAccount
+	// CredentialError is a credential that cannot be one of the platform, by the member at fault.
 	CredentialError = adapter.CredentialFormError
 )
 
@@ -54,8 +54,7 @@ type CloudRequest struct {
 	Input              CloudInput
 	Regions            []string
 	Currency           platform.Currency
-	MaxConcurrency     int32
-	RequestsPerMinute  *int32
+	Limits             Limits
 	Reason             string
 }
 
@@ -86,6 +85,9 @@ func (p *CloudPlan) Account() CloudAccount { return p.cred.Account }
 // Currency is the settlement currency the supplier will have.
 func (p *CloudPlan) Currency() platform.Currency { return p.r.Currency }
 
+// limits are the request's limits as the columns hold them.
+func (r CloudRequest) limits() (concurrency int32, perMinute *int32) { return r.Limits.columns() }
+
 // region is a region's spelling, as the contract's CloudRegion.
 var region = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,39}$`)
 
@@ -107,7 +109,7 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 	if n := len([]rune(strings.TrimSpace(r.Name))); n == 0 || n > 200 {
 		return nil, ErrDirectName
 	}
-	if r.MaxConcurrency < 1 || r.RequestsPerMinute != nil && (*r.RequestsPerMinute < 1 || *r.RequestsPerMinute > MaxRequestsPerMinute) {
+	if !r.Limits.valid() {
 		return nil, ErrLimits
 	}
 	origin := c.Origin()
@@ -240,18 +242,8 @@ func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, sn
 	if err != nil {
 		return Connected{}, err
 	}
-	for i := range p.Checks {
-		if p.Checks[i].Outcome == CheckPassed {
-			p.Checks[i].Credential = uuid.NewV7()
-			if err := a.insertRegion(ctx, tx, q, id, group, p, i, p.r.MaxConcurrency, p.r.RequestsPerMinute); err != nil {
-				return Connected{}, err
-			}
-		}
-	}
-	if err := q.InsertUnitValue(ctx, tx, store.InsertUnitValueParams{
-		SupplierID: id, Value: "1", Actor: "cloud", Reason: "a cloud platform's costs are its official prices in the settlement currency",
-	}); err != nil {
-		return Connected{}, fmt.Errorf("set the cloud platform's unit value: %w", err)
+	if err := a.insertRegions(ctx, tx, q, id, group, p); err != nil {
+		return Connected{}, err
 	}
 	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(snap), nil)
 	if err != nil {
@@ -267,6 +259,26 @@ func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, sn
 		return Connected{}, err
 	}
 	return Connected{Supplier: &s, Checks: p.Checks}, nil
+}
+
+// insertRegions stores each region that passed as a new credential with the request's limits, and the supplier's unit
+// value of 1.
+func (a *Admin) insertRegions(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, p *CloudPlan) error {
+	concurrency, perMinute := p.r.limits()
+	for i := range p.Checks {
+		if p.Checks[i].Outcome == CheckPassed {
+			p.Checks[i].Credential = uuid.NewV7()
+			if err := a.insertRegion(ctx, tx, q, id, group, p, i, concurrency, perMinute); err != nil {
+				return err
+			}
+		}
+	}
+	if err := q.InsertUnitValue(ctx, tx, store.InsertUnitValueParams{
+		SupplierID: id, Value: "1", Actor: "cloud", Reason: "a cloud platform's costs are its official prices in the settlement currency",
+	}); err != nil {
+		return fmt.Errorf("set the cloud platform's unit value: %w", err)
+	}
+	return nil
 }
 
 // sealedRegion is the columns of a region's credential that a check decides: the sealed credential, its ref and
@@ -312,7 +324,7 @@ func (a *Admin) insertRegion(ctx context.Context, tx pg.Tx, q *store.Queries, id
 	if err != nil {
 		return err
 	}
-	status := int32(c.UpstreamStatus) //nolint:gosec // an HTTP status
+	status := statusColumn(c.UpstreamStatus)
 	if err := q.InsertCloudCredential(ctx, tx, store.InsertCloudCredentialParams{
 		ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: p.regions[i].ref,
 		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
@@ -389,227 +401,9 @@ func cloudAudit(p *CloudPlan) map[string]any {
 	for i, c := range p.Checks {
 		regions[i] = map[string]any{"region": c.Region, "outcome": string(c.Outcome)}
 	}
-	detail := map[string]any{"kind": p.kind, "last4": p.cred.Last4, "regions": regions, "max_concurrency": p.r.MaxConcurrency}
-	if p.r.RequestsPerMinute != nil {
-		detail["requests_per_minute"] = *p.r.RequestsPerMinute
+	detail := map[string]any{"kind": p.kind, "last4": p.cred.Last4, "regions": regions, "max_concurrency": p.r.Limits.MaxConcurrency}
+	if p.r.Limits.RequestsPerMinute != nil {
+		detail["requests_per_minute"] = *p.r.Limits.RequestsPerMinute
 	}
 	return detail
-}
-
-// PlanCloudReplace reads a replacement of a cloud supplier's credential: the new credential, and the regions to serve
-// from (none: those it serves from now), each to be checked. A region of the supplier's own is not a duplicate. r
-// carries the limits a new region takes and the reason; nothing is asked of the platform and nothing is written.
-func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UUID, r CloudRequest) (*CloudPlan, error) {
-	rows, err := store.New().GetSupplierView(ctx, tx, store.GetSupplierViewParams{ID: supplier})
-	if err != nil {
-		return nil, fmt.Errorf("read the supplier: %w", err)
-	}
-	if len(rows) == 0 {
-		return nil, ErrNoSupplier
-	}
-	s := rows[0]
-	switch {
-	case s.Mode != "cloud":
-		return nil, ErrNotCloud
-	case Status(s.Status) == Removing || Status(s.Status) == Removed:
-		return nil, fmt.Errorf("%w: it is %s", ErrStatusLocked, s.Status)
-	}
-	c, ok := a.cloudOf(s.Kind)
-	if !ok {
-		return nil, ErrNoAdapter
-	}
-	if r.MaxConcurrency < 1 || r.RequestsPerMinute != nil && (*r.RequestsPerMinute < 1 || *r.RequestsPerMinute > MaxRequestsPerMinute) {
-		return nil, ErrLimits
-	}
-	regions := r.Regions
-	if regions == nil && c.Regional() {
-		if regions, err = servedRegions(ctx, tx, supplier); err != nil {
-			return nil, err
-		}
-	}
-	if r.Currency, err = platform.ParseCurrency(s.SettlementCurrency); err != nil {
-		return nil, fmt.Errorf("the supplier's settlement currency: %w", err)
-	}
-	p, err := planCredential(c, s.Kind, s.Origin, r.Input, regions)
-	if err != nil {
-		return nil, err
-	}
-	p.r, p.supplier = r, supplier
-	return p, p.skipStored(ctx, tx)
-}
-
-// servedRegions is the regions a cloud supplier's credentials serve from now.
-func servedRegions(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]string, error) {
-	creds, err := store.New().ListCredentialsOf(ctx, tx, supplier)
-	if err != nil {
-		return nil, fmt.Errorf("read the credentials: %w", err)
-	}
-	var regions []string
-	for _, c := range creds {
-		if c.Status != "erased" && c.Region != nil {
-			regions = append(regions, *c.Region)
-		}
-	}
-	slices.Sort(regions)
-	return regions, nil
-}
-
-// ReplaceCloud puts the new credential in place in the caller's transaction, under the supplier's lock: each region
-// that passed is the supplier's from then on, re-sealed in the region's own row with that row's limits, or a new row
-// with the limits given; every other region is erased. When no region passed nothing changes and Connected has no
-// supplier. Calls in flight end with the credential they hold. The models a new region lists get endpoints.
-func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, p *CloudPlan) (Connected, error) {
-	if _, err := a.locked(ctx, tx, p.supplier); err != nil {
-		return Connected{}, err
-	}
-	if err := p.skipStored(ctx, tx); err != nil {
-		return Connected{}, err
-	}
-	if !p.passed() {
-		return Connected{Checks: p.Checks}, nil
-	}
-	q := store.New()
-	group, err := lineOf(ctx, tx, q, p.supplier)
-	if err != nil {
-		return Connected{}, err
-	}
-	erased, err := a.replaceRegions(ctx, tx, q, group, p)
-	if err != nil {
-		return Connected{}, err
-	}
-	account, err := jsonx.MarshalCanonical(p.cred.Account)
-	if err != nil {
-		return Connected{}, err
-	}
-	if err := q.SetCloudAccount(ctx, tx, store.SetCloudAccountParams{CloudAccount: account, ID: p.supplier}); err != nil {
-		return Connected{}, fmt.Errorf("set the cloud account: %w", err)
-	}
-	served, err := q.LineEndpointModels(ctx, tx, group)
-	if err != nil {
-		return Connected{}, fmt.Errorf("read the line's endpoints: %w", err)
-	}
-	has := make(map[catalog.ModelID]bool, len(served))
-	for _, m := range served {
-		has[catalog.ModelID(m)] = true
-	}
-	if _, _, err := insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has); err != nil {
-		return Connected{}, err
-	}
-	detail := cloudAudit(p)
-	detail["erased_regions"] = erased
-	if err := a.record(ctx, tx, actor, "supplier.cloud_credential_replace", p.supplier, p.r.Reason, detail); err != nil {
-		return Connected{}, err
-	}
-	if err := persist.ObserveInbox(ctx, tx, p.supplier, a.now(), persist.InboxKeys, false); err != nil {
-		return Connected{}, err
-	}
-	s, err := a.view(ctx, tx, p.supplier, EveryOwner)
-	if err != nil {
-		return Connected{}, err
-	}
-	return Connected{Supplier: &s, Checks: p.Checks}, nil
-}
-
-// replaceRegions stores each region that passed and erases the supplier's other credentials; it returns the regions
-// erased. A row's identity is its credential and region, so a region that passed with the credential a row of the
-// supplier was made for is sealed again in that row, and any other gets a new row: with the limits of the row it
-// replaces in its region, or the limits given for a region not served now. The rows replaced are erased first, since a
-// region is served by one row at a time.
-func (a *Admin) replaceRegions(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UUID, p *CloudPlan) ([]string, error) {
-	rows, err := q.LockCloudCredentials(ctx, tx, p.supplier)
-	if err != nil {
-		return nil, fmt.Errorf("lock the credentials: %w", err)
-	}
-	byRef := make(map[string]store.LockCloudCredentialsRow, len(rows))
-	serving := map[string]store.LockCloudCredentialsRow{} // by region, the rows not erased
-	for _, r := range rows {
-		byRef[r.UpstreamKeyRef] = r
-		if r.Status != "erased" {
-			serving[deref(r.Region)] = r
-		}
-	}
-	kept := map[uuid.UUID]bool{}
-	for i, c := range p.Checks {
-		if row, ok := byRef[p.regions[i].ref]; ok && c.Outcome == CheckPassed {
-			kept[row.ID] = true
-		}
-	}
-	var erased []string
-	for _, r := range rows {
-		if r.Status == "erased" || kept[r.ID] {
-			continue
-		}
-		if err := q.EraseCredentialOf(ctx, tx, store.EraseCredentialOfParams{SupplierID: p.supplier, ID: r.ID}); err != nil {
-			return nil, fmt.Errorf("erase the credential: %w", err)
-		}
-		if served := deref(r.Region); !slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed && c.Region == served }) {
-			erased = append(erased, served)
-		}
-	}
-	for i := range p.Checks {
-		if p.Checks[i].Outcome == CheckPassed {
-			if err := a.storeRegion(ctx, tx, q, group, p, i, byRef, serving); err != nil {
-				return nil, err
-			}
-		}
-	}
-	return erased, nil
-}
-
-// storeRegion stores region i of a replacement: sealed again in the row made for the same credential, or in a new row
-// with the limits of the one it replaces, or those given.
-func (a *Admin) storeRegion(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UUID, p *CloudPlan, i int, byRef, serving map[string]store.LockCloudCredentialsRow) error {
-	c := &p.Checks[i]
-	concurrency, perMinute := p.r.MaxConcurrency, p.r.RequestsPerMinute
-	if row, ok := byRef[p.regions[i].ref]; ok {
-		c.Credential = row.ID
-		if err := a.resealRegion(ctx, tx, q, p, i); err != nil {
-			return err
-		}
-		if row.Status != "erased" {
-			return nil
-		}
-	} else {
-		if row, ok := serving[c.Region]; ok {
-			concurrency, perMinute = row.MaxConcurrency, row.RequestsPerMinute
-		}
-		c.Credential = uuid.NewV7()
-		return a.insertRegion(ctx, tx, q, p.supplier, group, p, i, concurrency, perMinute)
-	}
-	// a region served again is a new one, which takes the limits given
-	if _, err := q.SetCredentialLimits(ctx, tx, store.SetCredentialLimitsParams{
-		SupplierID: p.supplier, ID: c.Credential, MaxConcurrency: concurrency, RequestsPerMinute: perMinute,
-	}); err != nil {
-		return fmt.Errorf("set the region %q's limits: %w", c.Region, err)
-	}
-	return nil
-}
-
-// resealRegion seals the credential again in the row made for it, p.Checks[i].Credential.
-func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p *CloudPlan, i int) error {
-	c := &p.Checks[i]
-	s, err := a.sealRegion(p, i, c.Credential)
-	if err != nil {
-		return err
-	}
-	status := int32(c.UpstreamStatus) //nolint:gosec // an HTTP status
-	if err := q.ResealCloudCredential(ctx, tx, store.ResealCloudCredentialParams{
-		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
-		AllowedModels: s.allowed, CallNames: s.callNames, CheckedAt: &c.CheckedAt, CheckStatus: &status, SupplierID: p.supplier, ID: c.Credential,
-	}); err != nil {
-		return fmt.Errorf("re-seal the region %q: %w", c.Region, err)
-	}
-	return nil
-}
-
-// lineOf is a direct or cloud supplier's one line.
-func lineOf(ctx context.Context, tx pg.Tx, q *store.Queries, supplier uuid.UUID) (uuid.UUID, error) {
-	groups, err := q.ListGroupsOf(ctx, tx, supplier)
-	if err != nil {
-		return uuid.UUID{}, fmt.Errorf("read the line: %w", err)
-	}
-	if len(groups) != 1 {
-		return uuid.UUID{}, fmt.Errorf("%w: the supplier has %d lines", ErrNoGroup, len(groups))
-	}
-	return groups[0].ID, nil
 }

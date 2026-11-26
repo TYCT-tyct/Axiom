@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"slices"
 	"time"
 
 	"axiom/internal/catalog"
@@ -82,14 +83,9 @@ func Rewrite(body []byte, drop []string, add ...Member) (out []byte, stream bool
 	out = make([]byte, 0, len(body)+64)
 	out = append(out, '{')
 	for dec.PeekKind() != '}' {
-		tok, err := dec.ReadToken()
+		name, value, err := member(dec)
 		if err != nil {
-			return nil, false, fmt.Errorf("%w: %w", ErrNotObject, err)
-		}
-		name := tok.String()
-		value, err := dec.ReadValue()
-		if err != nil {
-			return nil, false, fmt.Errorf("%w: %w", ErrNotObject, err)
+			return nil, false, err
 		}
 		if name == "stream" {
 			stream = string(value) == "true"
@@ -97,22 +93,47 @@ func Rewrite(body []byte, drop []string, add ...Member) (out []byte, stream bool
 		if dropped(name, drop, add) {
 			continue
 		}
-		out = appendMember(out, name, value)
+		if out, err = appendMember(out, name, value); err != nil {
+			return nil, false, err
+		}
 	}
+	if out, err = closeObject(out, add); err != nil {
+		return nil, false, err
+	}
+	return out, stream, nil
+}
+
+// closeObject appends the members of add and ends the object.
+func closeObject(out []byte, add []Member) ([]byte, error) {
+	var err error
 	for _, m := range add {
-		out = appendMember(out, m.Name, m.Value)
+		if out, err = appendMember(out, m.Name, m.Value); err != nil {
+			return nil, err
+		}
 	}
 	if len(out) > 1 && out[len(out)-1] == ',' {
 		out = out[:len(out)-1]
 	}
-	return append(out, '}'), stream, nil
+	return append(out, '}'), nil
+}
+
+// member reads the next member of an object: its name and its value as written.
+func member(dec *jsontext.Decoder) (string, []byte, error) {
+	tok, err := dec.ReadToken()
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrNotObject, err)
+	}
+	name := tok.String() // the token is the decoder's until the next read
+	value, err := dec.ReadValue()
+	if err != nil {
+		return "", nil, fmt.Errorf("%w: %w", ErrNotObject, err)
+	}
+	return name, value, nil
 }
 
 func dropped(name string, drop []string, add []Member) bool {
-	for _, d := range drop {
-		if d == name {
-			return true
-		}
+	if slices.Contains(drop, name) {
+		return true
 	}
 	for _, m := range add {
 		if m.Name == name {
@@ -123,10 +144,13 @@ func dropped(name string, drop []string, add []Member) bool {
 }
 
 // appendMember appends "name":value, and a comma Rewrite takes off the last one.
-func appendMember(out []byte, name string, value []byte) []byte {
-	out, _ = jsontext.AppendQuote(out, name) //nolint:errcheck // name was read from valid JSON, so it quotes
+func appendMember(out []byte, name string, value []byte) ([]byte, error) {
+	out, err := jsontext.AppendQuote(out, name)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotObject, err)
+	}
 	out = append(out, ':')
-	return append(append(out, value...), ',')
+	return append(append(out, value...), ','), nil
 }
 
 const (
@@ -152,12 +176,17 @@ func Fetch(ctx context.Context, d adapter.Doer, req *http.Request) (adapter.Resp
 		}
 		return adapter.Response{}, check, err
 	}
-	defer resp.Body.Close()                                        //nolint:errcheck // the answer was read; closing it says nothing more
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxListing)) // a listing longer than this is cut, and fails to parse
+	body, err := Read(resp, maxListing) // a listing longer than this is cut, and fails to parse
 	if err != nil {
 		return adapter.Response{}, adapter.CloudCheck{Status: resp.StatusCode, Cause: adapter.CauseTransport}, err
 	}
 	return adapter.Response{Status: resp.StatusCode, Header: resp.Header, Body: body}, adapter.CloudCheck{Status: resp.StatusCode}, nil
+}
+
+// Read is up to limit bytes of resp's body, which it closes.
+func Read(resp *http.Response, limit int64) ([]byte, error) {
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit))
+	return body, errors.Join(err, resp.Body.Close())
 }
 
 // Judge is what a check's status says of the credential: 401 is it refused; 403 may be a permission or a block of the

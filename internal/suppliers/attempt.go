@@ -293,6 +293,15 @@ func (a *Attempt) Done() AttemptReceipt {
 // supplier states it refused before running the request is NotExecuted, and a timeout, a reset or a 5xx is not.
 // Neither suppliers nor egress retries a POST.
 func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure) {
+	resp, f := a.send(ctx, call)
+	if f != nil {
+		a.rest(*f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
+	}
+	return resp, f
+}
+
+// send is Send without resting what a failure says is at fault.
+func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure) {
 	signer, cloud := a.ep.quirks.(adapter.Signer)
 	var (
 		req *http.Request
@@ -307,12 +316,11 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 		req, f = a.request(ctx, call)
 	}
 	if f != nil {
-		a.rest(*f) //nolint:contextcheck // as below
 		return nil, f
 	}
 	var wrote atomic.Bool
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
-	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(req.Context(), trace)))
+	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
 	if err != nil {
 		return nil, transportFailure(wrote.Load())
 	}
@@ -329,7 +337,6 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if failure.Scope == adapter.ScopeRequest {
 		failure.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
 	}
-	a.rest(failure) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
 	return nil, &failure
 }
 

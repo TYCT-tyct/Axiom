@@ -24,8 +24,8 @@ import (
 // key signs with RS256 is exchanged at the token service for an access token, which calls carry as a bearer token
 // (https://developers.google.com/identity/protocols/oauth2/service-account#authorizingrequests).
 const (
-	// tokenURL is the token service, and the JWT's audience.
-	tokenURL = "https://oauth2.googleapis.com/token"
+	// exchangeAt is the token service, and the JWT's audience.
+	exchangeAt = "https://oauth2.googleapis.com/token"
 	// scope is what the token may do: Vertex AI is under the cloud platform's scope.
 	scope = "https://www.googleapis.com/auth/cloud-platform"
 	// lifetime is how long the JWT asks the token to last: the most Google grants.
@@ -152,8 +152,8 @@ func (t *tokens) exchangeKey(ctx context.Context, d adapter.Doer, text string, a
 	if err != nil {
 		return nil, errUnanswered
 	}
-	defer resp.Body.Close()                                            //nolint:errcheck // the answer was read; closing it says nothing more
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenAnswer)) // read only for the token; nothing else of it is kept
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxTokenAnswer)) // read only for the token; nothing else is kept
+	err = errors.Join(err, resp.Body.Close())
 	if err != nil {
 		return nil, errUnanswered
 	}

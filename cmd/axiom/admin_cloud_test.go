@@ -26,9 +26,9 @@ func newCloudFixture(t *testing.T) (catalogFixture, *fakeCloud) {
 	return f, c
 }
 
-// bedrockBody is Bedrock with the access key ID given, in the regions.
-func bedrockBody(accessKey string, regions ...string) string {
-	return `{"provider":"bedrock","name":"Harbor Bedrock","credential":{"access_key_id":"` + accessKey + `","secret_access_key":"fake/secret+key"},` +
+// bedrockBody is Bedrock with the fake's access key, in the regions.
+func bedrockBody(regions ...string) string {
+	return `{"provider":"bedrock","name":"Harbor Bedrock","credential":{"access_key_id":"` + cloudKeyID + `","secret_access_key":"fake/secret+key"},` +
 		`"regions":["` + strings.Join(regions, `","`) + `"],"max_concurrency":3,"requests_per_minute":60,"reason":"a cloud source"}`
 }
 
@@ -63,7 +63,7 @@ func boolText(b bool) string {
 func TestCreateCloudSupplier(t *testing.T) {
 	t.Parallel()
 	f, c := newCloudFixture(t)
-	body := bedrockBody(cloudAccessKey, "us-east-1", "us-west-2", "us-east-1")
+	body := bedrockBody("us-east-1", "us-west-2", "us-east-1")
 	key := newKey()
 	rec := f.change(f.s, http.MethodPost, "/suppliers/cloud", body, key)
 	expectAdmin(t, "createCloudSupplier", rec, http.StatusCreated, "")
@@ -82,20 +82,37 @@ func TestCreateCloudSupplier(t *testing.T) {
 	}, regionsOf(made.Checks)); diff != "" {
 		t.Errorf("the checks (-want +got):\n%s", diff)
 	}
+	f.checkCloudRows(s.Id, rec.Body.String())
+	f.checkCloudRetries(c, body, key, made)
+	f.checkCloudTest(c, s.Id)
+}
+
+// checkCloudRows: the region that passed is stored with the request's limits and the models it lists, the line has an
+// endpoint at the official price, and no credential text is in the audit log or the answer.
+func (f catalogFixture) checkCloudRows(id, answer string) {
+	f.t.Helper()
+	t := f.t
 	if got := f.text(`SELECT count(*)::text || ' ' || max(region) || ' ' || max(max_concurrency)::text || ' ' || max(requests_per_minute)::text || ' ' ||
-		max(hint) || ' ' || max(array_to_string(allowed_models, ',')) || ' ' || max(status) || ' ' || max(source) FROM suppliers.credentials WHERE supplier_id = '` + s.Id + `'`); got !=
+		max(hint) || ' ' || max(array_to_string(allowed_models, ',')) || ' ' || max(status) || ' ' || max(source) FROM suppliers.credentials WHERE supplier_id = '` + id + `'`); got !=
 		"1 us-east-1 3 60 0001 anthropic.claude-direct-1-v1:0,anthropic.claude-opus-5-5-v1:0 active pasted" {
 		t.Errorf("the credentials are %q", got)
 	}
 	if got := f.text(`SELECT string_agg(e.upstream_name || ' ' || e.cost_state || ' ' || (c.schedule->'rates'->>'output') || ' ' || c.basis, ',')
-		FROM suppliers.endpoints e JOIN suppliers.cost_schedules c ON c.id = e.cost_schedule_id WHERE e.supplier_id = '` + s.Id + `'`); got != "anthropic.claude-direct-1-v1:0 known 0.000002 published" {
+		FROM suppliers.endpoints e JOIN suppliers.cost_schedules c ON c.id = e.cost_schedule_id WHERE e.supplier_id = '` + id + `'`); got != "anthropic.claude-direct-1-v1:0 known 0.000002 published" {
 		t.Errorf("the endpoints are %q, want the listed model's at its official price", got)
 	}
-	f.expectAudit("supplier.cloud_connect", map[string]string{"reason": "a cloud source", "target_id": s.Id, "detail->>'priced_endpoints'": "1"})
-	if leaked := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE detail::text LIKE '%` + cloudAccessKey + `%' OR detail::text LIKE '%secret+key%'`); leaked != "0" ||
-		strings.Contains(rec.Body.String(), cloudAccessKey) || strings.Contains(rec.Body.String(), "secret") {
+	f.expectAudit("supplier.cloud_connect", map[string]string{"reason": "a cloud source", "target_id": id, "detail->>'priced_endpoints'": "1"})
+	if leaked := f.text(`SELECT count(*)::text FROM platform.audit_log WHERE detail::text LIKE '%` + cloudKeyID + `%' OR detail::text LIKE '%secret+key%'`); leaked != "0" ||
+		strings.Contains(answer, cloudKeyID) || strings.Contains(answer, "secret") {
 		t.Error("the credential's text is in the audit log or the answer")
 	}
+}
+
+// checkCloudRetries: the same request again is answered from its claim, and a region stored for another supplier is
+// a duplicate; neither asks the platform anything.
+func (f catalogFixture) checkCloudRetries(c *fakeCloud, body, key string, made adminapi.SupplierConnected) {
+	f.t.Helper()
+	t := f.t
 	asked := len(c.sent())
 	again := f.change(f.s, http.MethodPost, "/suppliers/cloud", body, key)
 	var replay adminapi.SupplierConnected
@@ -103,14 +120,13 @@ func TestCreateCloudSupplier(t *testing.T) {
 	if diff := cmp.Diff(made, replay); diff != "" || again.Header().Get("Idempotency-Replayed") != "true" {
 		t.Errorf("the replay (-first +replay), replayed %q:\n%s", again.Header().Get("Idempotency-Replayed"), diff)
 	}
-	stored := f.change(f.s, http.MethodPost, "/suppliers/cloud", strings.Replace(bedrockBody(cloudAccessKey, "us-east-1"), "Harbor Bedrock", "Harbor 2", 1), newKey())
+	stored := f.change(f.s, http.MethodPost, "/suppliers/cloud", strings.Replace(bedrockBody("us-east-1"), "Harbor Bedrock", "Harbor 2", 1), newKey())
 	expectAdmin(t, "a stored region", stored, http.StatusOK, "")
 	var dup adminapi.SupplierConnected
 	decode(t, stored, &dup)
 	if dup.Supplier != nil || len(dup.Checks) != 1 || dup.Checks[0].Outcome != "duplicate" || len(c.sent()) != asked {
 		t.Errorf("a stored region: %+v, the platform asked %d more times", dup, len(c.sent())-asked)
 	}
-	f.checkCloudTest(c, s.Id)
 }
 
 // checkCloudTest: a test of the region's credential asks the region, and once the platform refuses the key it is
@@ -138,7 +154,7 @@ func TestCreateCloudSupplierNothingPassed(t *testing.T) {
 	t.Parallel()
 	f, c := newCloudFixture(t)
 	c.refuse.Store(true)
-	rec := f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody(cloudAccessKey, "us-east-1"), newKey())
+	rec := f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody("us-east-1"), newKey())
 	expectAdmin(t, "createCloudSupplier", rec, http.StatusOK, "")
 	var got adminapi.SupplierConnected
 	decode(t, rec, &got)
@@ -157,15 +173,15 @@ func TestCreateCloudSupplierNothingPassed(t *testing.T) {
 func TestCreateCloudSupplierRefusals(t *testing.T) {
 	t.Parallel()
 	f, c := newCloudFixture(t)
-	azure := `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"` + cloudAPIKey + `"},"max_concurrency":1,"reason":"r"}`
+	azure := `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"` + cloudResourceKey + `"},"max_concurrency":1,"reason":"r"}`
 	for _, tc := range []struct {
 		name, body, pointer string
 	}{
-		{"Bedrock with an origin", strings.Replace(bedrockBody(cloudAccessKey, "us-east-1"), `"name"`, `"origin":"https://bedrock.example.com","name"`, 1), "/origin"},
+		{"Bedrock with an origin", strings.Replace(bedrockBody("us-east-1"), `"name"`, `"origin":"https://bedrock.example.com","name"`, 1), "/origin"},
 		{"Azure without an origin", strings.Replace(azure, `"origin":"https://harbor.openai.azure.com",`, "", 1), "/origin"},
 		{"Azure with regions", strings.Replace(azure, `"max_concurrency"`, `"regions":["eastus"],"max_concurrency"`, 1), "/regions"},
-		{"Bedrock without regions", strings.Replace(bedrockBody(cloudAccessKey, "x"), `"regions":["x"],`, "", 1), "/regions"},
-		{"Bedrock with a key of Azure's", strings.Replace(bedrockBody(cloudAccessKey, "us-east-1"), `"secret_access_key"`, `"api_key":"x","secret_access_key"`, 1), "/credential/access_key_id"},
+		{"Bedrock without regions", strings.Replace(bedrockBody("x"), `"regions":["x"],`, "", 1), "/regions"},
+		{"Bedrock with a key of Azure's", strings.Replace(bedrockBody("us-east-1"), `"secret_access_key"`, `"api_key":"x","secret_access_key"`, 1), "/credential/access_key_id"},
 		{"Vertex AI with a file that is not a key", `{"provider":"vertex","name":"V","credential":{"service_account_json":"{}"},"regions":["us-east5"],"max_concurrency":1,"reason":"r"}`, "/credential/service_account_json"},
 	} {
 		rec := f.change(f.s, http.MethodPost, "/suppliers/cloud", tc.body, newKey())
@@ -192,7 +208,7 @@ func TestReplaceSupplierCloudCredential(t *testing.T) {
 	t.Parallel()
 	f, _ := newCloudFixture(t)
 	var made adminapi.SupplierConnected
-	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody(cloudAccessKey, "us-east-1", "us-east-2"), newKey()), &made)
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody("us-east-1", "us-east-2"), newKey()), &made)
 	id := made.Supplier.Id
 	path := "/suppliers/" + id + "/cloud-credential"
 	replace := `{"credential":{"access_key_id":"AKIAFAKEHARBOR0002","secret_access_key":"fake/second"},"regions":["us-east-2","us-west-2"],"max_concurrency":7,"reason":"a new key"}`
@@ -233,9 +249,9 @@ func TestReplaceSupplierCloudCredential(t *testing.T) {
 		t.Errorf("the regions served now (-want +got):\n%s", diff)
 	}
 	var azure adminapi.SupplierConnected
-	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"`+cloudAPIKey+`"},"max_concurrency":1,"reason":"r"}`, newKey()), &azure)
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"`+cloudResourceKey+`"},"max_concurrency":1,"reason":"r"}`, newKey()), &azure)
 	azurePath := "/suppliers/" + azure.Supplier.Id + "/cloud-credential"
-	azureKey := `{"credential":{"api_key":"` + cloudAPIKey + `"},"reason":"r"}`
+	azureKey := `{"credential":{"api_key":"` + cloudResourceKey + `"},"reason":"r"}`
 	expectAdmin(t, "Azure with regions", f.change(f.s, http.MethodPut, azurePath, strings.Replace(azureKey, `"reason"`, `"regions":["eastus"],"reason"`, 1), newKey()), http.StatusBadRequest, codeInvalidRequest)
 	if err := pgtest.Run(t.Context(), f.database.Superuser, "UPDATE suppliers.suppliers SET mode = 'direct', cloud_account = NULL WHERE id = '"+azure.Supplier.Id+"'"); err != nil {
 		t.Fatal(err)

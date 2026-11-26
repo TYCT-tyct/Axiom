@@ -147,11 +147,14 @@ func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	_ = jsonx.Unmarshal(body, &e) //nolint:errcheck // a malformed error body still classifies by status
+	code := ""
+	if jsonx.Unmarshal(body, &e) == nil { // a malformed error body still classifies by status
+		code = e.Error.Code
+	}
 	switch {
-	case status == http.StatusBadRequest && e.Error.Code == "content_filter":
+	case status == http.StatusBadRequest && code == "content_filter":
 		return adapter.Failure{Scope: adapter.ScopeRequest, Cause: adapter.ContentRejected{}}
-	case status == http.StatusBadRequest && e.Error.Code == "context_length_exceeded":
+	case status == http.StatusBadRequest && code == "context_length_exceeded":
 		return adapter.Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.ContextTooLong{}}
 	}
 	return cloud.Classify(status, h, body)

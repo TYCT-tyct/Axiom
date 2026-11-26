@@ -43,7 +43,7 @@ var (
 )
 
 // New is the adapter.
-func New() *Adapter { return &Adapter{tokens: newTokens(tokenURL)} }
+func New() *Adapter { return &Adapter{tokens: newTokens(exchangeAt)} }
 
 // Kind implements adapter.Adapter.
 func (*Adapter) Kind() adapter.Kind { return Kind }
@@ -162,8 +162,7 @@ func (a *Adapter) CheckRegion(ctx context.Context, d adapter.Doer, _, region str
 
 // tokenCheck is a check whose exchange of the key failed.
 func tokenCheck(ctx context.Context, err error) adapter.CloudCheck {
-	var refused *refusal
-	if errors.As(err, &refused) {
+	if refused, ok := errors.AsType[*refusal](err); ok {
 		return adapter.CloudCheck{Outcome: adapter.KeyFailed, Cause: adapter.CauseRejected, Status: refused.status}
 	}
 	if ctx.Err() != nil {
