@@ -19,7 +19,7 @@ func grant(issued accounts.Issued) consoleapi.SessionGrant {
 }
 
 // GetSite tells the sign-in and registration pages whose they are, and where a key's calls go.
-func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
+func (c consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject) (consoleapi.GetSiteResponseObject, error) {
 	site := callOf(ctx).site
 	id := site.ID.TypeID()
 	response := consoleapi.Site{
@@ -42,8 +42,8 @@ func (consoleAPI) GetSite(ctx context.Context, _ consoleapi.GetSiteRequestObject
 	if site.LoginOrigin != "" {
 		response.LoginOrigin = &site.LoginOrigin
 	}
-	passkeys := site.Passkeys
-	response.Passkeys = &passkeys
+	passkeys, mail := site.Passkeys, c.accounts.MailEnabled()
+	response.Passkeys, response.EmailDelivery = &passkeys, &mail
 	providers := make([]consoleapi.OAuthProvider, 0, len(site.OAuth))
 	for _, name := range accounts.ProviderNames {
 		if _, ok := site.OAuth[name]; ok {
@@ -144,7 +144,7 @@ func (c consoleAPI) GetSession(ctx context.Context, _ consoleapi.GetSessionReque
 	session := consoleapi.Session{
 		Account: info.Account.TypeID(), CsrfToken: info.CSRFToken, ExpiresAt: info.ExpiresAt,
 		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, TotpEnabled: &info.TOTP,
-		Permissions: info.Permissions,
+		Permissions: info.Permissions, CallsPaused: &info.CallsPaused,
 	}
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
 	pending, err := c.accounts.PendingLegalDocuments(ctx, callOf(ctx).principal)

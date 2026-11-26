@@ -379,7 +379,7 @@ func TestOpenRegistrationWithoutMailRefuses(t *testing.T) {
 	if err := x.s.Reload(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: "no-mail@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrBusy) {
+	if _, err := x.s.Register(t.Context(), accounts.RegisterRequest{Host: console, Email: "no-mail@example.com", Password: password, ClientIP: client}); !errors.Is(err, accounts.ErrMailDisabled) {
 		t.Fatalf("without mail: %v", err)
 	}
 	if got := count(t, x.db, "SELECT count(*) FROM accounts.registration_requests"); got != 0 {

@@ -345,3 +345,23 @@ func TestSecurityFailureScope(t *testing.T) {
 		}
 	}
 }
+
+// TestSessionSaysCallsArePaused: the console learns from its own session that the account's calls are paused, so it
+// can say so before a key is refused, and that they are no longer once the pause is lifted.
+func TestSessionSaysCallsArePaused(t *testing.T) {
+	t.Parallel()
+	x := newTestSite(t)
+	p, err := x.principal(t, console, x.signIn(t, console))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, paused := range []bool{false, true, false} {
+		inPlatform(t, x.db, func(tx pg.Tx) error {
+			return x.s.SetAccountSuspended(t.Context(), tx, system, p.AccountID(), paused, "review")
+		})
+		info, err := x.s.SessionInfo(t.Context(), p)
+		if err != nil || info.CallsPaused != paused {
+			t.Fatalf("paused=%v: the session says %v, %v", paused, info.CallsPaused, err)
+		}
+	}
+}

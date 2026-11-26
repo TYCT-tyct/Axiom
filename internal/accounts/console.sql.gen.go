@@ -786,12 +786,13 @@ func (q *Queries) RevokeSession(ctx context.Context, db DBTX, id uuid.UUID) (int
 }
 
 const sessionInfo = `-- name: SessionInfo :many
-SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, (a.status <> 'active')::boolean AS calls_paused,
     (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => $1::bigint),
     now() + least(s.idle_timeout, make_interval(secs => $2::bigint)))::timestamptz AS expires_at
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+JOIN accounts.accounts a ON a.site_id = s.site_id AND a.id = s.account_id
 WHERE s.id = $3
 `
 
@@ -802,16 +803,18 @@ type SessionInfoParams struct {
 }
 
 type SessionInfoRow struct {
-	Email      string
-	InviteCode string
-	Mfa        bool
-	Passkeys   int64
-	CsrfToken  string
-	ExpiresAt  pgtype.Timestamptz
+	Email       string
+	InviteCode  string
+	Mfa         bool
+	CallsPaused bool
+	Passkeys    int64
+	CsrfToken   string
+	ExpiresAt   pgtype.Timestamptz
 }
 
 // What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
-// whichever comes first, both cut by the site's lifetimes now (ValidSession).
+// whichever comes first, both cut by the site's lifetimes now (ValidSession). calls_paused is the account's own switch
+// that admission refuses calls by (ErrAccountSuspended).
 func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParams) ([]SessionInfoRow, error) {
 	rows, err := db.Query(ctx, sessionInfo, arg.MaxAgeSeconds, arg.IdleSeconds, arg.ID)
 	if err != nil {
@@ -825,6 +828,7 @@ func (q *Queries) SessionInfo(ctx context.Context, db DBTX, arg SessionInfoParam
 			&i.Email,
 			&i.InviteCode,
 			&i.Mfa,
+			&i.CallsPaused,
 			&i.Passkeys,
 			&i.CsrfToken,
 			&i.ExpiresAt,

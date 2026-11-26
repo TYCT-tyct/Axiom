@@ -2371,6 +2371,8 @@ export interface components {
             permissions: string[];
             /** @description What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it. */
             consent?: components["schemas"]["SessionConsent"];
+            /** @description Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Absent on an older node. */
+            calls_paused?: boolean;
         };
         SessionList: {
             /** @description Newest first, at most 100. A page that gets no `sessions` shows the list as unavailable. */
@@ -2600,6 +2602,8 @@ export interface components {
             login_origin?: string;
             /** @description Whether the site offers passkeys. False on an older node that does not know the field. */
             passkeys?: boolean;
+            /** @description Whether this node sends mail. Without it a password reset, a password change and an email change are refused, since each must mail the user (docs/security.md「账户安全」), so the sign-in page offers no reset link and the security page says why. Absent on an older node. */
+            email_delivery?: boolean;
             /** @description The third-party providers the site configured, for the sign-in page's buttons. */
             oauth_providers?: components["schemas"]["OAuthProvider"][];
         };

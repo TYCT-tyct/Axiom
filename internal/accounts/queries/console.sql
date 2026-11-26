@@ -196,13 +196,15 @@ SELECT role_id FROM accounts.platform_grants WHERE user_id = @user_id AND revoke
 
 -- name: SessionInfo :many
 -- What a page shows of the session it is in; the session ends at its absolute end or after the idle time from now,
--- whichever comes first, both cut by the site's lifetimes now (ValidSession).
-SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa,
+-- whichever comes first, both cut by the site's lifetimes now (ValidSession). calls_paused is the account's own switch
+-- that admission refuses calls by (ErrAccountSuspended).
+SELECT u.email, u.invite_code, (u.mfa_enabled_at IS NOT NULL)::boolean AS mfa, (a.status <> 'active')::boolean AS calls_paused,
     (SELECT count(*) FROM accounts.passkey_credentials p WHERE p.user_id = u.id)::bigint AS passkeys, s.csrf_token,
     least(s.expires_at, s.created_at + make_interval(secs => @max_age_seconds::bigint),
     now() + least(s.idle_timeout, make_interval(secs => @idle_seconds::bigint)))::timestamptz AS expires_at
 FROM accounts.sessions s
 JOIN accounts.users u ON u.site_id = s.site_id AND u.account_id = s.account_id AND u.id = s.user_id
+JOIN accounts.accounts a ON a.site_id = s.site_id AND a.id = s.account_id
 WHERE s.id = @id;
 
 -- name: BillingPreference :one

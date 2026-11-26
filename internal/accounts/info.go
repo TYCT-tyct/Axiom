@@ -25,6 +25,7 @@ type SessionInfo struct {
 	CSRFToken   string
 	ExpiresAt   time.Time
 	Permissions []string // sorted; none while the session waits for its second factor
+	CallsPaused bool     // the account's calls are refused (SetAccountSuspended); signing in and paying still work
 }
 
 // SessionInfo reads p's session. The permissions are those of p's roles in its own account that the session's level
@@ -57,7 +58,7 @@ func (s *Service) SessionInfo(ctx context.Context, p Principal) (SessionInfo, er
 		// A passkey protects the console but not the admin listener, which cannot run WebAuthn; an admin session
 		// reports only TOTP as its second factor so the page does not claim a protection it cannot use.
 		MFAEnabled: r.Mfa || (r.Passkeys > 0 && p.surface == Console), TOTP: r.Mfa, Passkeys: int(r.Passkeys),
-		CSRFToken: r.CsrfToken, ExpiresAt: r.ExpiresAt.Time, Permissions: s.permissionsOf(p, roles),
+		CSRFToken: r.CsrfToken, ExpiresAt: r.ExpiresAt.Time, Permissions: s.permissionsOf(p, roles), CallsPaused: r.CallsPaused,
 	}, nil
 }
 
