@@ -43,6 +43,9 @@ func (a adminAPI) SetAlertConfiguration(ctx context.Context, r adminapi.SetAlert
 		}
 		// The guard admitted this change only from the admin's own origin, which a notification's link then opens.
 		c.AdminOrigin = callOf(ctx).r.Header.Get("Origin")
+		if err = observability.SealAlertAddresses(ctx, tx, a.keys, &c); err != nil {
+			return adminapi.AlertConfiguration{}, err
+		}
 		if err = observability.SetAlertConfiguration(ctx, tx, c); err != nil {
 			return adminapi.AlertConfiguration{}, err
 		}

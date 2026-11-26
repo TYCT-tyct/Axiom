@@ -24,10 +24,12 @@ import (
 // names it, how its destination is checked, what secret it takes, and, for one that posts over HTTPS, how a
 // notification is posted and what answer is a delivery. Email has no post: it goes through the mail outbox.
 type channelKind struct {
-	name   string
-	of     func(AlertChannel) string             // the member that names the kind; "" when ch is of another kind
-	check  func(string) (host string, err error) // the destination's form, and the host a post connects to
-	secret secretRule
+	name  string
+	field func(*AlertChannel) *string // the member that names the kind, empty when ch is of another kind
+	// addressSecret is set for a bot whose address is its credential: it is sealed apart (SealAlertAddresses).
+	addressSecret bool
+	check         func(string) (host string, err error) // the destination's form, and the host a post connects to
+	secret        secretRule
 	// post is the request that delivers text on ch with the channel's live secrets, nil for email. Webhook posts the
 	// frozen signed event instead (webhookWorker.send).
 	post func(ctx context.Context, ch AlertChannel, text string, keys []secret.Secret, now time.Time) (*http.Request, error)
@@ -56,21 +58,21 @@ const telegramAPI = "https://api.telegram.org"
 // channelKinds is every kind, the table the configuration, the dispatch and the worker read. The bots' hosts are their
 // official ones: a URL elsewhere is a typo or someone else's endpoint, and a bot's answer is read by its own rules.
 var channelKinds = []channelKind{
-	{name: "email", of: func(c AlertChannel) string { return c.Email }, check: checkEmail},
+	{name: "email", field: func(c *AlertChannel) *string { return &c.Email }, check: checkEmail},
 	{
-		name: "webhook", of: func(c AlertChannel) string { return c.WebhookURL }, check: httpsHost(),
+		name: "webhook", field: func(c *AlertChannel) *string { return &c.WebhookURL }, check: httpsHost(),
 		secret: secretRule{min: 32, max: 512, required: true, overlap: time.Hour}, // the receiver checks either while it switches
 	},
 	{
-		name: "feishu", of: func(c AlertChannel) string { return c.FeishuURL }, check: httpsHost("open.feishu.cn", "open.larksuite.com"),
-		secret: secretRule{min: 1, max: 512}, post: postFeishu, delivered: zeroCode("code", "StatusCode"),
+		name: "feishu", field: func(c *AlertChannel) *string { return &c.FeishuURL }, check: httpsHost("open.feishu.cn", "open.larksuite.com"),
+		secret: secretRule{min: 1, max: 512}, post: postFeishu, delivered: zeroCode("code", "StatusCode"), addressSecret: true,
 	},
 	{
-		name: "wecom", of: func(c AlertChannel) string { return c.WeComURL }, check: httpsHost("qyapi.weixin.qq.com"),
-		post: postWeCom, delivered: zeroCode("errcode"),
+		name: "wecom", field: func(c *AlertChannel) *string { return &c.WeComURL }, check: httpsHost("qyapi.weixin.qq.com"),
+		post: postWeCom, delivered: zeroCode("errcode"), addressSecret: true,
 	},
 	{
-		name: "telegram", of: func(c AlertChannel) string { return c.TelegramChatID }, check: checkTelegramChat,
+		name: "telegram", field: func(c *AlertChannel) *string { return &c.TelegramChatID }, check: checkTelegramChat,
 		secret: secretRule{min: 1, max: 512, required: true, form: telegramToken}, post: postTelegram, delivered: telegramOK,
 	},
 }
@@ -80,7 +82,7 @@ func kindOf(ch AlertChannel) (*channelKind, string, bool) {
 	var found *channelKind
 	var dest string
 	for i := range channelKinds {
-		if v := channelKinds[i].of(ch); v != "" {
+		if v := *channelKinds[i].field(&ch); v != "" {
 			if found != nil {
 				return nil, "", false
 			}
@@ -92,11 +94,14 @@ func kindOf(ch AlertChannel) (*channelKind, string, bool) {
 
 // destination is what ch's self-test and secrets are bound to: changing it tests the channel again and leaves the
 // secrets of the old one behind. Email and webhook are their address alone, as they were before the other kinds; the
-// others carry their kind, so that one value can never name two kinds.
+// others carry their kind, so that one value can never name two kinds; a sealed address is its digest.
 func destination(ch AlertChannel) string {
 	k, dest, ok := kindOf(ch)
-	if !ok || k.name == "email" || k.name == "webhook" {
+	switch {
+	case !ok || k.name == "email" || k.name == "webhook":
 		return dest
+	case k.addressSecret:
+		return k.name + ":" + ch.AddressDigest
 	}
 	return k.name + ":" + dest
 }

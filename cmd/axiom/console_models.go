@@ -126,8 +126,8 @@ func endpointRecord(out *consoleapi.PublicEndpoint, e gateway.PublicEndpoint, cl
 	if class, ok := classes[e.SourceClass]; ok {
 		out.SourceClass = &class
 	}
-	if e.Score > 0 {
-		score := math.Round(e.Score*10) / 10
+	if e.Score != nil {
+		score := math.Round(*e.Score*10) / 10
 		out.QualityScore = &score
 	}
 	for i, field := range []**consoleapi.EndpointUptime{&out.UptimeLast5m, &out.UptimeLast30m, &out.UptimeLast1d} {

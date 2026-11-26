@@ -3459,7 +3459,7 @@ type AdminSite struct {
 type AlertChannel struct {
 	Email *openapi_types.Email `json:"email,omitempty"`
 
-	// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
+	// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
 	FeishuUrl *string `json:"feishu_url,omitempty"`
 	Id        *string `json:"id,omitempty"`
 
@@ -3469,7 +3469,7 @@ type AlertChannel struct {
 	// WebhookUrl HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
 	WebhookUrl *string `json:"webhook_url,omitempty"`
 
-	// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com; its key is its credential. Exactly one destination member is set; configure only after all nodes support bots.
+	// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
 	WecomUrl *string `json:"wecom_url,omitempty"`
 }
 
@@ -3490,7 +3490,7 @@ type AlertConfigurationRequest struct {
 	Channels []struct {
 		Email *openapi_types.Email `json:"email,omitempty"`
 
-		// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
+		// FeishuUrl A Feishu or Lark custom bot's webhook address on open.feishu.cn or open.larksuite.com. The address carries the bot's token, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Its signing secret, when the bot has one, is set with the channel secret. Exactly one destination member is set; configure only after all nodes support bots.
 		FeishuUrl *string `json:"feishu_url,omitempty"`
 		Id        string  `json:"id"`
 
@@ -3500,7 +3500,7 @@ type AlertConfigurationRequest struct {
 		// WebhookUrl HTTPS destination, exclusive with email. Configure only after all nodes support webhooks; set its signing secret before use.
 		WebhookUrl *string `json:"webhook_url,omitempty"`
 
-		// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com; its key is its credential. Exactly one destination member is set; configure only after all nodes support bots.
+		// WecomUrl A WeCom group bot's webhook address on qyapi.weixin.qq.com. Its key is its credential, so it is stored sealed and read back masked (https://<host>/…<last 4>); sending the masked form back keeps the stored address. Exactly one destination member is set; configure only after all nodes support bots.
 		WecomUrl *string `json:"wecom_url,omitempty"`
 	} `json:"channels"`
 

@@ -246,12 +246,13 @@ func publicEndpointsOf(endpoints []routing.Endpoint) []publicEndpoint {
 	return page
 }
 
-// measuredScore is e's product score, 0 when no run counts for it: a score without confidence is not one to show.
-func measuredScore(e routing.Endpoint) float64 {
+// measuredScore is e's product score, nil when no run counts for it: the confidence says whether there is one, and a
+// valid run can score 0.
+func measuredScore(e routing.Endpoint) *float64 {
 	if e.ScoreConfidence <= 0 {
-		return 0
+		return nil
 	}
-	return e.Score
+	return &e.Score
 }
 
 // publicID is the name the model is served and fetched under: its standard ID, the slug without the internal version

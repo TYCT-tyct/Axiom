@@ -242,8 +242,10 @@ type State struct {
 	// The rolling windows the percentile preferences read, fed by the same samples as latency and speed.
 	latencyWindow sampleWindow
 	speedWindow   sampleWindow
-	outcomes      outcomes // the counted outcomes by minute and hour, for Recent's uptime
-	samples       int      // counted outcomes, capped at scoreSamples: the confidence's evidence
+	outcomes      outcomes  // the counted outcomes by minute and hour, for Recent's uptime
+	recentLatency histogram // Recent's times to first token, in milliseconds
+	recentSpeed   histogram // Recent's output speeds, in tokens a second
+	samples       int       // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled       time.Time
 	verify        verification                      // the last fingerprint check and its schedule
 	verifying     bool                              // a verification generation is in flight
@@ -339,11 +341,13 @@ func (m *Monitor) Observe(ctx context.Context, o Observation) {
 		seconds := o.FirstToken.Sub(o.Sent).Seconds()
 		e.latency.add(seconds, o.Ended)
 		e.latencyWindow.add(seconds, o.FirstToken)
+		e.recentLatency.add(seconds*1000, o.FirstToken)
 	}
 	if v == success && o.Done && o.content() && o.OutputTokens >= speedMinOutput && o.Ended.After(o.FirstToken) {
 		speed := float64(o.OutputTokens) / o.Ended.Sub(o.FirstToken).Seconds()
 		e.speed.add(speed, o.Ended)
 		e.speedWindow.add(speed, o.Ended)
+		e.recentSpeed.add(speed, o.Ended)
 	}
 	e.sampleTools(v, &o)
 }

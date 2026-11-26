@@ -34,7 +34,7 @@ func scheduleAlertTests(ctx context.Context, tx pg.Tx, now time.Time) error {
 func dropUnusedSecrets(ctx context.Context, tx pg.Tx, configured []AlertChannel, now time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT DISTINCT r.channel FROM observability.alert_receipts r JOIN observability.alert_events e ON e.id=r.event_id
  WHERE (r.state IN ('pending','queued') OR e.resolved_at IS NULL OR e.pending_recovery)
- AND EXISTS(SELECT FROM observability.webhook_keys k WHERE k.channel_id=r.channel->>'id')`)
+ AND (EXISTS(SELECT FROM observability.webhook_keys k WHERE k.channel_id=r.channel->>'id') OR r.channel ? 'address_digest')`)
 	if err != nil {
 		return err
 	}
@@ -58,8 +58,15 @@ func dropUnusedSecrets(ctx context.Context, tx pg.Tx, configured []AlertChannel,
 		return err
 	}
 	ids, dests := channelDestinations(inUse)
-	_, err = tx.Exec(ctx, `DELETE FROM observability.webhook_keys k WHERE expires_at<=$1
- OR (k.channel_id,k.destination) NOT IN (SELECT * FROM unnest($2::text[],$3::text[]))`, now, ids, dests)
+	if _, err = tx.Exec(ctx, `DELETE FROM observability.webhook_keys k WHERE expires_at<=$1
+ OR (k.channel_id,k.destination) NOT IN (SELECT * FROM unnest($2::text[],$3::text[]))`, now, ids, dests); err != nil {
+		return err
+	}
+	addresses := make([]string, 0, len(inUse))
+	for _, ch := range inUse {
+		addresses = append(addresses, ch.ID+"/"+ch.AddressDigest)
+	}
+	_, err = tx.Exec(ctx, `DELETE FROM observability.channel_addresses WHERE NOT id=ANY($1::text[])`, addresses)
 	return err
 }
 

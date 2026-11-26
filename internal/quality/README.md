@@ -71,6 +71,6 @@ func (l *Loop) Drain(ctx context.Context) error
 | 真伪未知、矛盾和假冒分开，证据只属于检测过的配置 | `TestVerificationPassesAndFailsClosed`、`TestInconclusiveVerificationKeepsThePass`、`TestVerificationDropsACheckOfAnotherClaim` |
 | 结构事实按配置和格式绑定，旧 Generation 不能翻回当前配置 | 端点锁内核对；`TestMeasureByFormat`、`TestMeasureStaleConfiguration`、`TestPrepareRejectsOlderGeneration` |
 | 运营质量的未知不等于差，试探不进入独立来源窗口 | `TestQualityWithoutCountedOutcomesIsNeutral`、`TestProbeResultsScoreTheEndpoint` |
-| 公开可用率只数计入的尝试，晚到的结局不抹掉新桶 | 固定大小的分钟和小时桶；`TestRecentWindows` |
+| 公开窗口不漏算起点的桶，晚到的结局不抹掉新桶，30 分钟分位数覆盖整窗 | 固定大小的分钟、小时桶与 5 分钟一段的直方图；`TestRecentUptime`、`TestRecentPercentiles` |
 | 成绩只用当前题库、基线、配置与持久代次；写失败不发布 | `TestBenchmarkConfigurationChangeDoesNotResurrect`、`TestBenchmarkPersistsAcrossRestartAndNodes`、`TestBenchmarkStoreFailureLeavesMemoryUnchanged` |
 | 调用路径不做 I/O，预建端点上的观测不分配；共享状态受锁保护 | 端点表用 `RWMutex`，每个端点独立锁；`BenchmarkObserve` 断言分配数，`TestObserveConcurrently` 覆盖并发访问 |

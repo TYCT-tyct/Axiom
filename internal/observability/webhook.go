@@ -47,7 +47,7 @@ func (w *webhookWorker) work(ctx context.Context, job *river.Job[webhookArgs]) e
 	delivered := false
 	// A destination no longer valid, or a required secret missing, fails without a request: never unsigned, never to
 	// a bot without its token.
-	if k, _, ok := kindOf(d.ch); ok && posted(d.ch) && validateAlertChannel(d.ch) == nil && (len(keys) > 0 || !k.secret.required) {
+	if k, dest, ok := kindOf(d.ch); ok && posted(d.ch) && sendable(k, dest) && (len(keys) > 0 || !k.secret.required) {
 		if k.post == nil {
 			err = w.send(ctx, d, keys)
 		} else {
@@ -134,6 +134,9 @@ func (w *webhookWorker) load(ctx context.Context, id uuid.UUID) (alertDelivery, 
 			return err
 		}
 		if err = jsonx.Unmarshal(raw, &d.ch); err != nil {
+			return err
+		}
+		if err = openAddress(ctx, tx, w.keys, &d.ch); err != nil {
 			return err
 		}
 		keys, err = readWebhookKeys(ctx, tx, w.keys, d.ch, w.now().UTC())

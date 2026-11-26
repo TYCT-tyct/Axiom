@@ -24,9 +24,9 @@ type PublicEndpoint struct {
 	Verified      bool
 	Pricing       catalog.ScheduleView
 	// SourceClass is the slug of the source class quality recognized; Score the product score, 0 to 100 with the
-	// official direct run at 100, and 0 while it is not measured; Recent its uptime, time to first token and speed.
+	// official direct run at 100, nil while no run counts for it; Recent its uptime, time to first token and speed.
 	SourceClass string
-	Score       float64
+	Score       *float64
 	Recent      quality.Recent
 }
 
@@ -58,7 +58,7 @@ type publicEndpoint struct {
 	quantization  string
 	verified      bool
 	class         string
-	score         float64
+	score         *float64
 	recent        quality.Recent
 }
 

@@ -30,7 +30,9 @@ type AlertRule struct {
 }
 
 // AlertChannel is a platform operator destination: exactly one of its destination members is set, and it names the
-// channel's kind (channelKinds). Its mail uses the reserved zero-site outbox; its secret is never part of it.
+// channel's kind (channelKinds). Its mail uses the reserved zero-site outbox; its secret is never part of it. A bot
+// whose address is its credential holds the address's masked form and AddressDigest, and the address is sealed apart
+// (SealAlertAddresses).
 type AlertChannel struct {
 	ID             string `json:"id"`
 	Email          string `json:"email,omitempty"`
@@ -38,6 +40,7 @@ type AlertChannel struct {
 	FeishuURL      string `json:"feishu_url,omitempty"`
 	WeComURL       string `json:"wecom_url,omitempty"`
 	TelegramChatID string `json:"telegram_chat_id,omitempty"`
+	AddressDigest  string `json:"address_digest,omitempty"`
 }
 
 // AlertConfiguration is replaced atomically with optimistic concurrency. SpendDetection is optional so an older node's
@@ -185,6 +188,11 @@ func validateAlertConfiguration(c AlertConfiguration) error {
 
 func validateAlertChannel(ch AlertChannel) error {
 	if ch.ID == "" || len(ch.ID) > 64 {
+		return ErrAlertConfiguration
+	}
+	k, dest, ok := kindOf(ch)
+	// An address that is a credential is saved only sealed: the configuration holds its masked form and digest.
+	if ok && k.addressSecret != (masked(dest) && ch.AddressDigest != "") {
 		return ErrAlertConfiguration
 	}
 	_, err := AlertChannelHost(ch)

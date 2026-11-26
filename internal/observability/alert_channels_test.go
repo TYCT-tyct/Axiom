@@ -135,6 +135,9 @@ func configureBot(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel
 		}
 		c.Channels, c.AdminOrigin = []AlertChannel{ch}, adminOrigin
 		c.Rules = []AlertRule{{ID: "approvals", Kind: "operations.approval_pending", Channel: ch.ID, MinimumSeverity: "info", Threshold: 1}}
+		if err = SealAlertAddresses(t.Context(), tx, keys, &c); err != nil {
+			return err
+		}
 		if err = SetAlertConfiguration(t.Context(), tx, c); err != nil || value == "" {
 			return err
 		}
@@ -384,4 +387,68 @@ func rotateSecret(t *testing.T, db *pg.DB, keys *secret.Keyring, channel, value 
 		}
 		return err
 	})
+}
+
+const wecomKey = "wecom-group-key-0123456789"
+
+func readAlertConfig(t *testing.T, db *pg.DB) (c AlertConfiguration) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) (err error) { c, err = GetAlertConfiguration(t.Context(), tx); return err })
+	return c
+}
+
+// saveChannel replaces the channels with ch as an admin's save does: its addresses sealed first.
+func saveChannel(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel) error {
+	t.Helper()
+	return db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels, c.Rules = []AlertChannel{ch}, nil
+		if err = SealAlertAddresses(t.Context(), tx, keys, &c); err != nil {
+			return err
+		}
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+}
+
+// TestBotAddressesAreWriteOnly: an address that is a bot's credential is read back only masked, a save that sends the
+// masked form keeps the sealed address, and a masked form is no address for a channel that has none.
+func TestBotAddressesAreWriteOnly(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	configureBot(t, db, keys, AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, "", time.Now())
+	c := readAlertConfig(t, db)
+	raw, err := jsonx.MarshalCanonical(c)
+	if err != nil || strings.Contains(string(raw), wecomKey) || c.Channels[0].WeComURL != "https://qyapi.weixin.qq.com/…6789" {
+		t.Fatalf("configuration shows the address: %s %v", raw, err)
+	}
+	digest := c.Channels[0].AddressDigest
+	for _, tc := range []struct {
+		ch   AlertChannel
+		want error
+	}{
+		{AlertChannel{ID: "wc", WeComURL: c.Channels[0].WeComURL}, nil},
+		{AlertChannel{ID: "other", WeComURL: c.Channels[0].WeComURL}, ErrAlertConfiguration},
+	} {
+		if err := saveChannel(t, db, keys, tc.ch); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.ch.ID, err, tc.want)
+		}
+	}
+	if got := readAlertConfig(t, db).Channels[0].AddressDigest; got != digest {
+		t.Errorf("resaving the masked address changed it: %s, want %s", got, digest)
+	}
+}
+
+// TestTelegramTokenStaysOutOfErrors: a post that fails names its category, never the token in its path.
+func TestTelegramTokenStaysOutOfErrors(t *testing.T) {
+	bots := newFakeBots(t)
+	w := &webhookWorker{alertWorker: &alertWorker{now: time.Now}, exit: bots.exit(t, true)}
+	d := alertDelivery{ch: AlertChannel{ID: "tg", TelegramChatID: "-1001234"}, payload: []byte(`{"text":"hi"}`)}
+	k, _, _ := kindOf(d.ch)
+	err := w.sendBot(t.Context(), k, d, []secret.Secret{secret.New(telegramBot)})
+	if err == nil || strings.Contains(err.Error(), telegramBot) || strings.Contains(err.Error(), "api.telegram.org") {
+		t.Fatalf("refused post: %v", err)
+	}
 }
