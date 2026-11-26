@@ -102,7 +102,7 @@ Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时�
 - Compose 不另加命令墙钟期限或 `--wait-timeout`；步骤上限 20 分钟、作业上限 22 分钟，健康等待由健康条件控制，数据库 `start_period` 2 分钟；down 最多 5 秒，CI 容器无重启策略。
 - 全新部署从空卷起栈（`scripts/ops/up.sh`，与生产入口同一条路径），再用命令行建站点、第一个管理员（`user create` 加 `user grant-platform`），第一个管理员在管理监听上用密码登录时还打不开平台页面，开启两步验证后能读用户列表；节点的健康检查（镜像的 `HEALTHCHECK`）此时为 healthy。
 - 旧迁移角色升级先停节点，再改数据库环境并启动，避免旧进程丢会话锁退出时被误算为新启动。
-- `old-binary-check.sh` 用当前二进制迁移独立库，再启动上一版本并等 readyz；不在 compose 栈里的遗留库按 `axiom.ci.old-binary-check` 和 40 分钟年龄清理。
+- `old-binary-check.sh` 先用上一版本迁移独立库并写入站点和用户，再用当前二进制向前迁移，启动上一版本、等 readyz 并让该用户登录；不在 compose 栈里的遗留库按 `axiom.ci.old-binary-check` 和 40 分钟年龄清理。
 - 下一作业清理自身旧栈，任意 runner 的部署检查也清理带本脚本标签、名以 `axiom-ci-` 开头且创建超过 40 分钟的遗留栈，不碰其他容器。
 - Compose 的 `x-hardened` 将 `${AXIOM_TEST_CGROUP_PARENT:-}` 传给 PG、Valkey、Axiom、迁移与密钥初始化；空值省略。启动后、删除前 inspect 全部容器（包括退出的一次性服务），非空则核对父级；默认父级由 Docker 决定。隔离后可并行、不用文件锁；本地 just up 仍用 `axiom`、`axiom:local` 与 8080/8082。
 
