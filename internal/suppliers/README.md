@@ -10,7 +10,7 @@
 internal/suppliers/            公开接口：Service（调用面）、RecordAttempts 等写入、Admin（管理接口）、BYOK、
                                CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
 internal/suppliers/internal/
-  adapter/      契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、KeyFinder、Pool、UsageQueue、Direct、Wire、Cloud、Signer
+  adapter/      契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec 和可选接口
   registry/     唯一同时引用所有适配器的文件，一个内置适配器一行，另加声明式目录
   newapi/ sub2api/ cpa/   中转站和号池的内置适配器（testdata/ 是脱敏样本）
   openai/ anthropic/ google/ moonshot/ compatible/   直连接口，共用 direct/
@@ -144,6 +144,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 | 价目行就是收费：同一份计划、同一个 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |
+| sub2api 公布价 × 分组倍率即成本 | `TestPublishedPricesAreWhatACallIsCharged` |
 | 停用、擦除、被拒的凭证不再被挑 | `ListRoutable` 只取 `active`；应答节点提交后即 `Reload` |
 
 ## 管理接口

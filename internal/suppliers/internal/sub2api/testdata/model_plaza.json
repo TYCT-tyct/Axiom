@@ -1,0 +1,80 @@
+{
+ "method": "GET",
+ "path": "/api/v1/model-plaza",
+ "status": 200,
+ "header": {},
+ "body": {
+  "code": 0,
+  "message": "success",
+  "data": {
+   "description": "",
+   "groups": [
+    {
+     "id": 2,
+     "name": "claude-mock",
+     "description": "",
+     "platform": "anthropic",
+     "subscription_type": "standard",
+     "rate_multiplier": 1,
+     "peak_rate_enabled": false,
+     "peak_start": "",
+     "peak_end": "",
+     "peak_rate_multiplier": 1,
+     "is_exclusive": false,
+     "image_rate_independent": false,
+     "image_rate_multiplier": 1,
+     "video_rate_independent": false,
+     "video_rate_multiplier": 1,
+     "long_context_pricing_enabled": false,
+     "models": [
+      {
+       "name": "claude-fable-5",
+       "platform": "anthropic",
+       "pricing": {
+        "billing_mode": "token",
+        "input_price": 3e-06,
+        "output_price": 1.5e-05,
+        "cache_write_price": 3.75e-06,
+        "cache_write_1h_price": 6e-06,
+        "cache_write_12h_price": null,
+        "cache_read_price": 3e-07,
+        "image_input_price": null,
+        "image_output_price": null,
+        "per_request_price": null,
+        "intervals": []
+       },
+       "official_pricing": {
+        "input_price": 3e-06,
+        "output_price": 1.5e-05,
+        "cache_write_price": 3.75e-06,
+        "cache_read_price": 3e-07
+       }
+      },
+      {
+       "name": "claude-fable-5-1",
+       "platform": "anthropic",
+       "pricing": {
+        "billing_mode": "token",
+        "input_price": 3e-06,
+        "output_price": 1.5e-05,
+        "cache_write_price": 3.75e-06,
+        "cache_write_1h_price": 6e-06,
+        "cache_write_12h_price": null,
+        "cache_read_price": 3e-07,
+        "image_input_price": null,
+        "image_output_price": null,
+        "per_request_price": null,
+        "intervals": [
+         {"min_tokens": 0, "max_tokens": 200000, "input_price": 3e-06, "output_price": 1.5e-05, "cache_read_price": 3e-07},
+         {"min_tokens": 200000, "max_tokens": null, "input_price": 6e-06, "output_price": 2.25e-05, "cache_read_price": 6e-07}
+        ]
+       },
+       "official_pricing": null,
+       "long_context_basis": "whole_request"
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

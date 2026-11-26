@@ -3979,14 +3979,14 @@ type CostBreakEven struct {
 
 // CostFactor defines model for CostFactor.
 type CostFactor struct {
-	// Kind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+	// Kind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
 	Kind CostFactorKind `json:"kind"`
 
 	// Value An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 	Value Decimal `json:"value"`
 }
 
-// CostFactorKind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+// CostFactorKind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
 type CostFactorKind string
 
 // CostLine One price of the plan. The line's price applies to its item under its condition and service tier.
@@ -8008,7 +8008,7 @@ type SupplierGroup struct {
 	// Description The supplier's own description of the group, as its adapter read it (new-api's `desc`).
 	Description *string `json:"description,omitempty"`
 
-	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
+	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
 	Facts *map[string]interface{} `json:"facts,omitempty"`
 
 	// FirstSeenAt When the sync first saw the group.

@@ -5946,7 +5946,7 @@ export interface components {
              * @enum {string}
              */
             key_reason?: "not_permitted" | "group_unavailable" | "refused";
-            /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
+            /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
             facts?: {
                 [key: string]: unknown;
             };
@@ -7022,7 +7022,7 @@ export interface components {
          */
         CostSource: "read" | "confirmed" | "price_list" | "bill";
         /**
-         * @description One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+         * @description One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
          * @enum {string}
          */
         CostFactorKind: "model_ratio" | "completion_ratio" | "cache_ratio" | "cache_write_ratio" | "group_ratio" | "scale" | "unit_value" | "base_price" | "official_price" | "exchange_rate";

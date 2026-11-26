@@ -31,6 +31,7 @@ func panel(t testing.TB) map[string]adapter.Response {
 		"GET /api/v1/keys/2":                    fixture(t, "key_2"),
 		"GET /v1/sub2api/billing":               fixture(t, "billing"),
 		"GET /api/v1/settings/public":           fixture(t, "settings_public"),
+		"GET /api/v1/model-plaza":               fixture(t, "model_plaza_off"),
 	}
 }
 
