@@ -1,10 +1,8 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, Field } from "@axiom/ui";
-import { type ReactNode, useState } from "react";
+import { Field } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "./change";
-import { Facts, State } from "./parts";
 
 type Limits = AdminSchemas["KeyLimits"];
 type View = AdminSchemas["KeyLimitsView"];
@@ -40,66 +38,6 @@ export function readBoundedInts<K extends string>(
 }
 
 type Send = (limits: Limits, context: { reason: string; key: string }) => Promise<{ data: View; replayed: boolean }>;
-
-// KeyLimitsUnavailable stands in for the card where the server does not give the limits: a page of this release talking
-// to a node of the one before, which has neither the account's `key_limits` nor the site's operation. The page around it
-// works as it did.
-export function KeyLimitsUnavailable({ level }: { level: "site" | "account" }) {
-  const { t } = useTranslation();
-  return (
-    <Facts
-      title={t(`settings.keyLimits.title.${level}`)}
-      rows={[[t("settings.keyLimits.unavailableLabel"), t("settings.keyLimits.unavailable")]]}
-    />
-  );
-}
-
-// KeyLimitsCard shows what an account of a site, or the site's accounts, are held to, and where it comes from; with
-// the right to, it opens the change.
-export function KeyLimitsCard({
-  operation,
-  level,
-  view,
-  send,
-  editable,
-}: {
-  // Whose limits these are ("key-limits:" + the site's or the account's id), for ChangeDialog to meet an unsettled try again.
-  operation: string;
-  level: "site" | "account";
-  view: View;
-  send: Send;
-  editable: boolean;
-}) {
-  const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const rows = limits.map(({ name }): [string, ReactNode] => [
-    t(`settings.keyLimits.field.${name}`),
-    <span key={name}>
-      {view.effective[name]}{" "}
-      <State tone="neutral">
-        {view.limits[name] === undefined ? t(`settings.keyLimits.from.${level}`) : t("settings.keyLimits.own")}
-      </State>
-    </span>,
-  ]);
-  return (
-    <>
-      <Facts
-        title={t(`settings.keyLimits.title.${level}`)}
-        rows={rows}
-        actions={
-          editable ? (
-            <ActionButton onClick={() => setOpen(true)} icon="pencil">
-              {t("settings.keyLimits.edit")}
-            </ActionButton>
-          ) : undefined
-        }
-      />
-      {open ? (
-        <KeyLimitsDialog operation={operation} level={level} view={view} send={send} onClose={() => setOpen(false)} />
-      ) : null}
-    </>
-  );
-}
 
 export function KeyLimitsDialog({
   operation,

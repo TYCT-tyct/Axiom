@@ -20,7 +20,6 @@ export { BoardDialog } from "./components/board-dialog";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
 export { BrandSwatch } from "./components/brand-swatch";
 export { Card } from "./components/card";
-export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
 export { ChipField } from "./components/chip-field";
 export { ChoiceCards } from "./components/choice-cards";
@@ -50,7 +49,7 @@ export { type Filter, FilterBar, filterDefaults } from "./components/filter-bar"
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
 export { Glyph, type GlyphName } from "./components/glyph";
 export { Icon } from "./components/icon";
-export { Id, IdLink, IdText } from "./components/id";
+export { Id, IdText } from "./components/id";
 export { ImageBox } from "./components/image-box";
 export { InlineError } from "./components/inline-error";
 export { Cluster, Grid, Stack } from "./components/layout";
@@ -85,16 +84,14 @@ export { PreferenceSwitches } from "./components/preferences";
 export { ProposalCard } from "./components/proposal-card";
 export { QrMatrix } from "./components/qr-matrix";
 export { ReasonPicks } from "./components/reason-picks";
-export { RingChart, type RingPart, type Swatch } from "./components/ring-chart";
+export { RingChart, type RingPart } from "./components/ring-chart";
 export { type RowItem, RowList } from "./components/row-list";
 export { ScrollArea } from "./components/scroll-area";
 export { SecretField } from "./components/secret-field";
 export { SegmentedControl } from "./components/segmented-control";
 export { SelectBox } from "./components/select-box";
 export { SettingRow } from "./components/setting-row";
-export { type Shortcut, ShortcutList } from "./components/shortcut-list";
 export { Sparkline } from "./components/sparkline";
-export { Stat } from "./components/stat";
 export {
   DataState,
   EmptyState,
@@ -104,9 +101,9 @@ export {
   PageFailedState,
 } from "./components/states";
 export { StatusDot } from "./components/status-dot";
-export { type ListedStep, StepList } from "./components/step-list";
+export { StepList } from "./components/step-list";
 export { Switch } from "./components/switch";
-export { type SortOrder, Table, Td, Th, Tr } from "./components/table";
+export { Table, Td, Th } from "./components/table";
 export { TableToolbar } from "./components/table-toolbar";
 // Badge is the name pages were written with for a Tag (#747).
 export { Tag as Badge, Tag } from "./components/tag";

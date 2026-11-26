@@ -47,7 +47,7 @@ export function CredentialState({ credential }: { credential: Credential }) {
 }
 
 // A credential's use against a ceiling, as a short bar and the two numbers; a ceiling not set is said in words.
-export function Use({ label, used, ceiling }: { label: string; used: number; ceiling: number | undefined }) {
+function Use({ label, used, ceiling }: { label: string; used: number; ceiling: number | undefined }) {
   const { t } = useTranslation();
   if (ceiling === undefined) {
     return (

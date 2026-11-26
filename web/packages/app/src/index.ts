@@ -6,7 +6,7 @@ export { useErrors } from "./errors";
 export { preloadFirstPage } from "./first-page";
 export { readForm, toInstant, toLocalInput } from "./forms";
 export { type SessionNavigation, SessionNavigationProvider, type SessionTarget } from "./navigation";
-export { LoadMore, SignOutError, Stat } from "./parts";
+export { LoadMore, SignOutError } from "./parts";
 export { useRulesCheck } from "./presets/check";
 export { RulesEditor, useClassOptions } from "./presets/editor";
 export { draftOf, type Invalid, priced, rulesOf, systemPreset } from "./presets/rules";
