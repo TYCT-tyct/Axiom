@@ -55,7 +55,10 @@ func TestCloudSuppliersServeAtTheOfficialPrice(t *testing.T) {
 		},
 		{
 			"azure",
-			suppliers.CloudRequest{Kind: "azure", Origin: "https://harbor.openai.azure.com", Input: suppliers.CloudInput{APIKey: cloudResourceKey}},
+			suppliers.CloudRequest{
+				Kind: "azure", Origin: "https://harbor.openai.azure.com", Input: suppliers.CloudInput{APIKey: cloudResourceKey},
+				Deployments: []suppliers.Deployment{{Name: "prod-astra", Model: "gpt-6-astra"}},
+			},
 			"/v1/chat/completions", `{"model":"gpt-6-astra","messages":[{"role":"user","content":"Hello"}]}`,
 			"harbor.openai.azure.com/openai/deployments/prod-astra/chat/completions", cloudResourceKey, cloudChatCharge, cloudChatCost, "0.000207", false,
 		},
@@ -153,32 +156,8 @@ func (w *callWorld) addPublicName(slug, name string) {
 func (w *callWorld) connectCloud(fake *fakeCloud, r suppliers.CloudRequest) string {
 	w.t.Helper()
 	ctx := w.t.Context()
-	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	if err := cat.Refresh(ctx); err != nil {
-		w.t.Fatal(err)
-	}
-	snap, err := cat.Current()
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	admin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(w.t), Egress: fake.egress(w.t)})
-	if err != nil {
-		w.t.Fatal(err)
-	}
-	r.Name, r.Limits, r.Reason = "Cloud", suppliers.Limits{MaxConcurrency: 4}, "a cloud source"
-	var plan *suppliers.CloudPlan
-	if err := w.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-		plan, err = admin.PlanCloud(ctx, tx, r)
-		return err
-	}); err != nil {
-		w.t.Fatal(err)
-	}
-	if err := admin.CheckCloud(ctx, plan); err != nil {
-		w.t.Fatal(err)
-	}
+	admin, snap := w.cloudAdmin(fake)
+	plan := w.checkedCloud(admin, r)
 	var made suppliers.Connected
 	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
 		made, err = admin.CreateCloud(ctx, tx, audit.System("callpath.test"), snap, plan)
@@ -190,6 +169,45 @@ func (w *callWorld) connectCloud(fake *fakeCloud, r suppliers.CloudRequest) stri
 		w.t.Fatalf("the credential did not pass: %+v", made.Checks)
 	}
 	return made.Supplier.ID.String()
+}
+
+// cloudAdmin is the suppliers module's admin side reaching the fake, and the world's catalog as it is now.
+func (w *callWorld) cloudAdmin(fake *fakeCloud) (*suppliers.Admin, *catalog.Snapshot) {
+	w.t.Helper()
+	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	if err := cat.Refresh(w.t.Context()); err != nil {
+		w.t.Fatal(err)
+	}
+	snap, err := cat.Current()
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	admin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(w.t), Egress: fake.egress(w.t)})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return admin, snap
+}
+
+// checkedCloud is the request planned and checked at the fake, as the admin handler does before it stores anything.
+func (w *callWorld) checkedCloud(admin *suppliers.Admin, r suppliers.CloudRequest) *suppliers.CloudPlan {
+	w.t.Helper()
+	ctx := w.t.Context()
+	r.Name, r.Limits, r.Reason = "Cloud", suppliers.Limits{MaxConcurrency: 4}, "a cloud source"
+	var plan *suppliers.CloudPlan
+	if err := w.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		plan, err = admin.PlanCloud(ctx, tx, r)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := admin.CheckCloud(ctx, plan); err != nil {
+		w.t.Fatal(err)
+	}
+	return plan
 }
 
 // withChatUsage is the Chat sample with the usage chunk that stream_options.include_usage asks for, which the sample

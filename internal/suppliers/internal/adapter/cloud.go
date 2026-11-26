@@ -20,6 +20,9 @@ type Cloud interface {
 	// Regional says a credential serves by region, each checked and limited on its own; a platform that does not takes
 	// no region.
 	Regional() bool
+	// Named says a person names the models a credential serves, which the platform does not list to it (Azure
+	// OpenAI's deployments); a check of such a platform lists none, and its Offer offers none.
+	Named() bool
 	// ReadCredential reads what a person pasted, asking nothing of the platform. A *CredentialFormError is one that
 	// cannot be a credential of the platform.
 	ReadCredential(in CloudInput) (CloudCredential, error)

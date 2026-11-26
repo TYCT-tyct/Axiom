@@ -1,6 +1,7 @@
 package suppliers
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/syncer"
 )
 
 // Cloud platforms (docs/domains/suppliers.md「云平台」): Vertex AI, Bedrock or Azure OpenAI reached with a credential a
@@ -33,6 +35,8 @@ var (
 	ErrCloudOrigin = errors.New("suppliers: a platform with an address of its own takes none, and Azure OpenAI needs one")
 	// ErrCloudRegions is regions given to a platform without them, none to one with them, or one that is not a region.
 	ErrCloudRegions = errors.New("suppliers: Vertex AI and Bedrock need regions, and Azure OpenAI takes none")
+	// ErrCloudDeployments is deployments named for a platform that lists its models, or none for one that does not.
+	ErrCloudDeployments = errors.New("suppliers: Azure OpenAI needs its deployments named, and the others take none")
 	// ErrNotCloud is a credential replacement for a supplier that is not a cloud platform's.
 	ErrNotCloud = errors.New("suppliers: the supplier is not a cloud platform")
 )
@@ -48,15 +52,21 @@ type (
 
 // CloudRequest is a cloud platform to connect, or the limits of a replacement's new regions. Origin is as
 // NormalizeOrigin returns it and only for a platform whose address a person gives; Regions only for one that serves by
-// region; a zero Currency is USD. Input is plaintext and is only sealed.
+// region; Deployments only for one whose models a person names, and not for a replacement, which keeps them; a zero
+// Currency is USD. Input is plaintext and is only sealed.
 type CloudRequest struct {
 	Kind, Name, Origin string
 	Input              CloudInput
 	Regions            []string
+	Deployments        []Deployment
 	Currency           platform.Currency
 	Limits             Limits
 	Reason             string
 }
+
+// Deployment is a model a person names for a platform that does not list them (Azure OpenAI): the name its calls
+// send, and the model it deploys, empty when it is the name.
+type Deployment struct{ Name, Model string }
 
 // CloudPlan is a cloud credential about to be stored: the request as checked, the credential as read, and each
 // region's check once CheckCloud has asked the platform. It holds the credential in memory only.
@@ -69,10 +79,13 @@ type CloudPlan struct {
 	supplier uuid.UUID // the supplier a replacement is for; zero for a new one
 	Checks   []KeyCheck
 	regions  []cloudRegion // one for each of Checks
+	// lineNames is, for a name a region lists, the other name the line's endpoint of its model is stored by: set once
+	// the line's endpoints are written, so that each region's credential can serve them (mapLine).
+	lineNames map[string]string
 }
 
 // cloudRegion is what a plan holds of one region beside its check: the ref its credential is stored and found by, and
-// the models its check listed (listed false: the platform lists none, and the catalog offers them).
+// the models its check listed or a person named (listed false: neither, and the catalog offers them).
 type cloudRegion struct {
 	ref    string
 	models []adapter.CloudModel
@@ -126,7 +139,10 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 		}
 		r.Currency = usd
 	}
-	p, err := planCredential(c, r.Kind, origin, r.Input, r.Regions)
+	if c.Named() != (len(r.Deployments) > 0) {
+		return nil, ErrCloudDeployments
+	}
+	p, err := planCredential(c, r.Kind, origin, r.Input, r.Regions, deployed(r.Deployments))
 	if err != nil {
 		return nil, err
 	}
@@ -134,9 +150,23 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 	return p, p.skipStored(ctx, tx)
 }
 
+// deployed is the models deployments name, each name once: the first naming it says its model.
+func deployed(ds []Deployment) []adapter.CloudModel {
+	seen := map[string]bool{}
+	var models []adapter.CloudModel
+	for _, d := range ds {
+		if !seen[d.Name] {
+			seen[d.Name] = true
+			models = append(models, adapter.CloudModel{Name: d.Name, Known: d.Model})
+		}
+	}
+	return models
+}
+
 // planCredential reads the credential and lays out a check for each region, in order; a region named earlier is a
-// duplicate. A platform without regions has one check, of no region.
-func planCredential(c adapter.Cloud, kind, origin string, in CloudInput, regions []string) (*CloudPlan, error) {
+// duplicate. A platform without regions has one check, of no region. named is the models a person named, which every
+// region serves; nil for a platform whose check lists them or whose catalog offers them.
+func planCredential(c adapter.Cloud, kind, origin string, in CloudInput, regions []string, named []adapter.CloudModel) (*CloudPlan, error) {
 	if c.Regional() != (len(regions) > 0) {
 		return nil, ErrCloudRegions
 	}
@@ -159,7 +189,7 @@ func planCredential(c adapter.Cloud, kind, origin string, in CloudInput, regions
 		}
 		seen[at] = true
 		p.Checks = append(p.Checks, check)
-		p.regions = append(p.regions, cloudRegion{ref: keyRef(cred.Identity + "\x00" + at)})
+		p.regions = append(p.regions, cloudRegion{ref: keyRef(cred.Identity + "\x00" + at), models: named, listed: named != nil})
 	}
 	return p, nil
 }
@@ -204,7 +234,9 @@ func (a *Admin) CheckCloud(ctx context.Context, p *CloudPlan) error {
 			defer func() { <-slots }()
 			got := p.cloud.CheckRegion(ctx, a.egress, p.origin, p.Checks[i].Region, p.cred.Key, a.now())
 			p.Checks[i] = checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, p.Checks[i], a.now())
-			p.regions[i].models, p.regions[i].listed = got.Models, got.Models != nil // each goroutine writes only its own
+			if got.Models != nil { // a platform whose models are named lists none
+				p.regions[i].models, p.regions[i].listed = got.Models, true // each goroutine writes only its own
+			}
 		})
 	}
 	wg.Wait()
@@ -217,9 +249,12 @@ func (p *CloudPlan) passed() bool {
 }
 
 // CreateCloud stores what the checks let in, in the caller's transaction: when no region passed, nothing, and Connected
-// has no supplier. A region another transaction stored since PlanCloud read is a duplicate here too. snap is the
-// catalog the models are mapped by and the official prices come from.
+// has no supplier. A region another transaction stored since PlanCloud read, or is storing now, is a duplicate here
+// too. snap is the catalog the models are mapped by and the official prices come from.
 func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, p *CloudPlan) (Connected, error) {
+	if err := takeStoreTurn(ctx, tx); err != nil {
+		return Connected{}, err
+	}
 	if err := p.skipStored(ctx, tx); err != nil {
 		return Connected{}, err
 	}
@@ -242,11 +277,14 @@ func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, sn
 	if err != nil {
 		return Connected{}, err
 	}
-	if err := a.insertRegions(ctx, tx, q, id, group, p); err != nil {
-		return Connected{}, err
-	}
 	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(snap), nil)
 	if err != nil {
+		return Connected{}, err
+	}
+	if err := p.mapLine(ctx, tx, q, group, snap); err != nil {
+		return Connected{}, err
+	}
+	if err := a.insertRegions(ctx, tx, q, id, group, p); err != nil {
 		return Connected{}, err
 	}
 	detail := cloudAudit(p)
@@ -291,7 +329,9 @@ type sealedRegion struct {
 }
 
 // sealRegion seals the plan's credential for the row credential, with what region i's check listed: the names it
-// serves (none listed is every name, as the catalog offers them) and the ones its calls name otherwise.
+// serves (none listed is every name, as the catalog offers them) and the ones its calls name otherwise. A model the
+// line's endpoint stores by a name the region does not list is served under the endpoint's name too, called by the
+// region's own: routing pairs a credential with an endpoint by the endpoint's name.
 func (a *Admin) sealRegion(p *CloudPlan, i int, credential uuid.UUID) (sealedRegion, error) {
 	s := sealedRegion{sealed: a.keys.Seal(p.cred.Key, keyAt(credential))}
 	s.keyVersion = int64(s.sealed.KeyVersion)
@@ -300,11 +340,18 @@ func (a *Admin) sealRegion(p *CloudPlan, i int, credential uuid.UUID) (sealedReg
 		return s, nil
 	}
 	s.allowed = make([]string, 0, len(r.models))
+	served := make(map[string]bool, len(r.models))
+	for _, m := range r.models {
+		s.allowed, served[m.Name] = append(s.allowed, m.Name), true
+	}
 	calls := map[string]string{}
 	for _, m := range r.models {
-		s.allowed = append(s.allowed, m.Name)
-		if m.Call != "" && m.Call != m.Name {
-			calls[m.Name] = m.Call
+		call := cmp.Or(m.Call, m.Name)
+		if call != m.Name {
+			calls[m.Name] = call
+		}
+		if e, ok := p.lineNames[m.Name]; ok && !served[e] {
+			s.allowed, served[e], calls[e] = append(s.allowed, e), true, call
 		}
 	}
 	if len(calls) > 0 {
@@ -332,6 +379,33 @@ func (a *Admin) insertRegion(ctx context.Context, tx pg.Tx, q *store.Queries, id
 		Hint: &c.Last4, Region: regionColumn(c.Region), CheckedAt: &c.CheckedAt, CheckStatus: &status,
 	}); err != nil {
 		return fmt.Errorf("store the region %q: %w", c.Region, err)
+	}
+	return nil
+}
+
+// mapLine reads the line's endpoints once they are written and keeps, for each name a region that passed lists, the
+// other name the endpoint of the same model is stored by (lineNames): a line has one endpoint a model, by the name the
+// first region or credential to list it gave, and another may list the model by another name.
+func (p *CloudPlan) mapLine(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UUID, snap *catalog.Snapshot) error {
+	line, err := q.LineEndpoints(ctx, tx, group)
+	if err != nil {
+		return fmt.Errorf("read the line's endpoints: %w", err)
+	}
+	stored := make(map[catalog.ModelID]string, len(line))
+	for _, e := range line {
+		stored[catalog.ModelID(e.ModelID)] = e.UpstreamName
+	}
+	p.lineNames = map[string]string{}
+	for i, c := range p.Checks {
+		if c.Outcome != CheckPassed {
+			continue
+		}
+		for _, m := range p.regions[i].models {
+			mapped := syncer.MapUpstream(snap, nil, cmp.Or(m.Known, m.Name))
+			if e, ok := stored[mapped.Model]; mapped.Mapped && ok && e != m.Name {
+				p.lineNames[m.Name] = e
+			}
+		}
 	}
 	return nil
 }

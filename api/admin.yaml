@@ -4693,7 +4693,7 @@ paths:
         what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region
         chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute
         ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the
-        resource is one credential, and the deployments it lists are its models. Costs are the catalog's official
+        resource is one credential, and the deployments named are its models. Costs are the catalog's official
         reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts
         `connecting`, and its endpoints wait for the quality check before they take traffic.
 
@@ -4742,7 +4742,8 @@ paths:
         Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes
         in at least one, seals it in place of the old one in the same change: the regions that passed are the
         supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and
-        a region that failed or was left out is erased. Calls in flight end with the credential they hold. When it
+        a region that failed or was left out is erased. Azure OpenAI's new key serves the deployments named when the
+        supplier was connected. Calls in flight end with the credential they hold. When it
         passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409
         for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit
         entry names the regions, never the credential.
@@ -11516,6 +11517,19 @@ components:
       type: string
       pattern: '^[a-z0-9][a-z0-9-]{0,39}$'
       description: A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
+    CloudDeployment:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$'
+          description: The deployment's name in the resource, which its calls' path names.
+        model:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name.
     CloudSupplierCreate:
       type: object
       required: [provider, name, credential, max_concurrency, reason]
@@ -11534,6 +11548,15 @@ components:
           maxItems: 20
           description: Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400).
           items: {$ref: "#/components/schemas/CloudRegion"}
+        deployments:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: >-
+            Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI
+            does not list to the resource's key. Each one's calls go to its path; the quality check calls each before
+            it takes traffic. A deployment named twice is named once.
+          items: {$ref: "#/components/schemas/CloudDeployment"}
         settlement_currency:
           type: string
           pattern: '^[A-Z]{3}$'

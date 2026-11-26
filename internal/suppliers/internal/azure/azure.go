@@ -1,6 +1,6 @@
 // Package azure is Azure OpenAI, reached with a resource's address and key (docs/domains/suppliers.md「云平台」): the
-// deployments the resource lists are its models, each called in OpenAI's Chat at the deployment's path with an
-// api-version, the key in the api-key header. A resource has no region to choose: it is one credential.
+// deployments a person names are its models, each called in OpenAI's Chat at the deployment's path with an api-version,
+// the key in the api-key header. A resource has no region to choose: it is one credential.
 package azure
 
 import (
@@ -21,12 +21,10 @@ import (
 // Kind is the adapter's name in suppliers.kind.
 const Kind adapter.Kind = "azure"
 
-const (
-	// apiVersion is the data plane's version calls name: the generally available one that streams usage.
-	apiVersion = "2024-10-21"
-	// listVersion is the version deployments are listed in: the last that lists them with the key.
-	listVersion = "2022-12-01"
-)
+// apiVersion is the data plane's version calls and the check name: the generally available one that streams usage.
+// No version after 2022-12-01 lists a resource's deployments to its key (listing moved to Azure Resource Manager, which
+// takes an Entra ID token), so the check does not list them and a person names them.
+const apiVersion = "2024-10-21"
 
 // Adapter is Azure OpenAI's adapter. It holds nothing: the key comes from the credential the call picked.
 type Adapter struct {
@@ -51,6 +49,9 @@ func (*Adapter) Origin() string { return "" }
 // Regional implements adapter.Cloud.
 func (*Adapter) Regional() bool { return false }
 
+// Named implements adapter.Cloud: a resource's deployments are not listed to its key.
+func (*Adapter) Named() bool { return true }
+
 // ReadCredential implements adapter.Cloud: the resource's key.
 func (*Adapter) ReadCredential(in adapter.CloudInput) (adapter.CloudCredential, error) {
 	switch {
@@ -63,21 +64,18 @@ func (*Adapter) ReadCredential(in adapter.CloudInput) (adapter.CloudCredential, 
 	return adapter.CloudCredential{Key: secret.New(in.APIKey), Identity: in.APIKey, Last4: tail, Account: adapter.CloudAccount{KeyLast4: tail}}, nil
 }
 
-// deployments is the resource's deployment listing, as far as it is read.
-type deployments struct {
-	Data []struct {
-		ID     string `json:"id"`
-		Model  string `json:"model"`
-		Status string `json:"status"`
-	} `json:"data"`
+// models is the resource's list of the models it can deploy, read only to tell the resource's answer from another page.
+type models struct {
+	Data []struct{} `json:"data"`
 }
 
-// CheckRegion implements adapter.Cloud: the resource's deployments, which listing does not charge for. Each one that
-// is up is a model, named by its deployment and known by the model it deploys.
+// CheckRegion implements adapter.Cloud: one request, the list of the models the resource can deploy, which is not
+// charged for and answers on the version calls use. It shows the address is a resource that takes the key. It lists no
+// models: the deployments are named, and the quality check calls each before it takes traffic.
 func (*Adapter) CheckRegion(ctx context.Context, d adapter.Doer, origin, _ string, key secret.Secret, _ time.Time) adapter.CloudCheck {
 	ctx, cancel := cloud.Checked(ctx)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/openai/deployments?api-version="+listVersion, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, origin+"/openai/models?api-version="+apiVersion, nil)
 	if err != nil {
 		return adapter.CloudCheck{Cause: adapter.CauseUnknown}
 	}
@@ -89,20 +87,14 @@ func (*Adapter) CheckRegion(ctx context.Context, d adapter.Doer, origin, _ strin
 	if check := cloud.Judge(resp.Status); check.Outcome != adapter.KeyPassed {
 		return check
 	}
-	var listed deployments
+	var listed models
 	if jsonx.Unmarshal(resp.Body, &listed) != nil || listed.Data == nil {
 		return adapter.CloudCheck{Cause: adapter.CauseUnknown, Status: resp.Status}
 	}
-	models := []adapter.CloudModel{}
-	for _, dep := range listed.Data {
-		if dep.Status == "succeeded" && dep.ID != "" && len(dep.ID) <= 200 {
-			models = append(models, adapter.CloudModel{Name: dep.ID, Known: dep.Model})
-		}
-	}
-	return adapter.CloudCheck{Outcome: adapter.KeyPassed, Status: resp.Status, Models: models}
+	return adapter.CloudCheck{Outcome: adapter.KeyPassed, Status: resp.Status}
 }
 
-// Offer implements adapter.Cloud: a check lists the models.
+// Offer implements adapter.Cloud: the deployments are named.
 func (*Adapter) Offer(catalog.Model, string) (string, bool) { return "", false }
 
 // Formats implements adapter.Cloud: Chat, for a model that generates.

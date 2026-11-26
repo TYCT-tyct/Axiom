@@ -98,24 +98,29 @@ func (q *Queries) InsertCloudSupplier(ctx context.Context, db DBTX, arg InsertCl
 	return id, err
 }
 
-const lineEndpointModels = `-- name: LineEndpointModels :many
-SELECT model_id FROM suppliers.endpoints WHERE supplier_group_id = $1 ORDER BY model_id
+const lineEndpoints = `-- name: LineEndpoints :many
+SELECT model_id, upstream_name FROM suppliers.endpoints WHERE supplier_group_id = $1 ORDER BY model_id
 `
 
-// The models the line has an endpoint for already.
-func (q *Queries) LineEndpointModels(ctx context.Context, db DBTX, supplierGroupID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := db.Query(ctx, lineEndpointModels, supplierGroupID)
+type LineEndpointsRow struct {
+	ModelID      uuid.UUID
+	UpstreamName string
+}
+
+// The models the line has an endpoint for already, and the name each endpoint is stored by.
+func (q *Queries) LineEndpoints(ctx context.Context, db DBTX, supplierGroupID uuid.UUID) ([]LineEndpointsRow, error) {
+	rows, err := db.Query(ctx, lineEndpoints, supplierGroupID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []uuid.UUID
+	var items []LineEndpointsRow
 	for rows.Next() {
-		var model_id uuid.UUID
-		if err := rows.Scan(&model_id); err != nil {
+		var i LineEndpointsRow
+		if err := rows.Scan(&i.ModelID, &i.UpstreamName); err != nil {
 			return nil, err
 		}
-		items = append(items, model_id)
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -201,6 +206,38 @@ func (q *Queries) ResealCloudCredential(ctx context.Context, db DBTX, arg Reseal
 		arg.ID,
 	)
 	return err
+}
+
+const servedNames = `-- name: ServedNames :many
+SELECT allowed_models, call_names FROM suppliers.credentials
+WHERE supplier_id = $1 AND status <> 'erased' ORDER BY id DESC LIMIT 1
+`
+
+type ServedNamesRow struct {
+	AllowedModels []string
+	CallNames     []byte
+}
+
+// The names the supplier's credential serving now was stored with and how its calls name them: what a replacement
+// keeps for a platform whose models a person named. A platform without regions has one such row.
+func (q *Queries) ServedNames(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ServedNamesRow, error) {
+	rows, err := db.Query(ctx, servedNames, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ServedNamesRow
+	for rows.Next() {
+		var i ServedNamesRow
+		if err := rows.Scan(&i.AllowedModels, &i.CallNames); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setCloudAccount = `-- name: SetCloudAccount :exec

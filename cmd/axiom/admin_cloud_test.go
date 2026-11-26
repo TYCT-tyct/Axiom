@@ -1,14 +1,19 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 
 	"axiom/internal/platform/adminapi"
+	"axiom/internal/platform/audit"
+	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
+	"axiom/internal/suppliers"
 )
 
 // newCloudFixture is the admin on a node that reaches the fake cloud by the platforms' names, with the model the fake
@@ -31,6 +36,11 @@ func bedrockBody(regions ...string) string {
 	return `{"provider":"bedrock","name":"Harbor Bedrock","credential":{"access_key_id":"` + cloudKeyID + `","secret_access_key":"fake/secret+key"},` +
 		`"regions":["` + strings.Join(regions, `","`) + `"],"max_concurrency":3,"requests_per_minute":60,"reason":"a cloud source"}`
 }
+
+// azureBody is the fake's Azure OpenAI resource with its key, serving a deployment of the catalog's model, one of a
+// model the catalog does not have, and the first again.
+const azureBody = `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"` + cloudResourceKey + `"},` +
+	`"deployments":[{"name":"prod-direct","model":"` + directModel + `"},{"name":"prod-other"},{"name":"prod-direct","model":"other"}],"max_concurrency":1,"reason":"r"}`
 
 // regionsOf is each check as "region last4 outcome cause stored".
 func regionsOf(checks []adminapi.CredentialCheck) []string {
@@ -173,7 +183,7 @@ func TestCreateCloudSupplierNothingPassed(t *testing.T) {
 func TestCreateCloudSupplierRefusals(t *testing.T) {
 	t.Parallel()
 	f, c := newCloudFixture(t)
-	azure := `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"` + cloudResourceKey + `"},"max_concurrency":1,"reason":"r"}`
+	azure := azureBody
 	for _, tc := range []struct {
 		name, body, pointer string
 	}{
@@ -181,6 +191,8 @@ func TestCreateCloudSupplierRefusals(t *testing.T) {
 		{"Azure without an origin", strings.Replace(azure, `"origin":"https://harbor.openai.azure.com",`, "", 1), "/origin"},
 		{"Azure with regions", strings.Replace(azure, `"max_concurrency"`, `"regions":["eastus"],"max_concurrency"`, 1), "/regions"},
 		{"Bedrock without regions", strings.Replace(bedrockBody("x"), `"regions":["x"],`, "", 1), "/regions"},
+		{"Azure without deployments", strings.Replace(azure, `"deployments":[{"name":"prod-direct","model":"`+directModel+`"},{"name":"prod-other"},{"name":"prod-direct","model":"other"}],`, "", 1), "/deployments"},
+		{"Bedrock with deployments", strings.Replace(bedrockBody("us-east-1"), `"max_concurrency"`, `"deployments":[{"name":"d"}],"max_concurrency"`, 1), "/deployments"},
 		{"Bedrock with a key of Azure's", strings.Replace(bedrockBody("us-east-1"), `"secret_access_key"`, `"api_key":"x","secret_access_key"`, 1), "/credential/access_key_id"},
 		{"Vertex AI with a file that is not a key", `{"provider":"vertex","name":"V","credential":{"service_account_json":"{}"},"regions":["us-east5"],"max_concurrency":1,"reason":"r"}`, "/credential/service_account_json"},
 	} {
@@ -249,7 +261,7 @@ func TestReplaceSupplierCloudCredential(t *testing.T) {
 		t.Errorf("the regions served now (-want +got):\n%s", diff)
 	}
 	var azure adminapi.SupplierConnected
-	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", `{"provider":"azure","name":"A","origin":"https://harbor.openai.azure.com","credential":{"api_key":"`+cloudResourceKey+`"},"max_concurrency":1,"reason":"r"}`, newKey()), &azure)
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", azureBody, newKey()), &azure)
 	azurePath := "/suppliers/" + azure.Supplier.Id + "/cloud-credential"
 	azureKey := `{"credential":{"api_key":"` + cloudResourceKey + `"},"reason":"r"}`
 	expectAdmin(t, "Azure with regions", f.change(f.s, http.MethodPut, azurePath, strings.Replace(azureKey, `"reason"`, `"regions":["eastus"],"reason"`, 1), newKey()), http.StatusBadRequest, codeInvalidRequest)
@@ -258,4 +270,160 @@ func TestReplaceSupplierCloudCredential(t *testing.T) {
 	}
 	expectAdmin(t, "a direct API", f.change(f.s, http.MethodPut, azurePath, azureKey, newKey()), http.StatusConflict, codeConflict)
 	expectAdmin(t, "no supplier", f.change(f.s, http.MethodPut, "/suppliers/01a2163e-0000-7000-8000-000000000000/cloud-credential", same, newKey()), http.StatusNotFound, codeNotFound)
+}
+
+// TestAzureServesTheDeploymentsNamed: an Azure OpenAI resource is checked with one request on the generally available
+// version (the fake answers no other) and serves the deployments named, each once, known by the model named for it:
+// the catalog's is an endpoint at its official price, the other waits to be mapped. A new key of the resource serves
+// the same deployments, and the line is as it was.
+func TestAzureServesTheDeploymentsNamed(t *testing.T) {
+	t.Parallel()
+	f, c := newCloudFixture(t)
+	rec := f.change(f.s, http.MethodPost, "/suppliers/cloud", azureBody, newKey())
+	expectAdmin(t, "createCloudSupplier", rec, http.StatusCreated, "")
+	var made adminapi.SupplierConnected
+	decode(t, rec, &made)
+	if sent := c.sent(); len(sent) != 1 || sent[0].path != "harbor.openai.azure.com/openai/models" {
+		t.Errorf("the resource was sent %+v, want one request for its models", sent)
+	}
+	id := made.Supplier.Id
+	line := `SELECT (SELECT string_agg(upstream_name || ' ' || (model_id IS NULL)::text, ',' ORDER BY upstream_name) FROM suppliers.supplier_models WHERE supplier_id = '` + id + `') || ' / ' ||
+		(SELECT string_agg(e.upstream_name || ' ' || e.cost_state, ',') FROM suppliers.endpoints e WHERE e.supplier_id = '` + id + `') || ' / ' ||
+		(SELECT string_agg(hint || ' ' || array_to_string(allowed_models, ','), ';') FROM suppliers.credentials WHERE status = 'active' AND supplier_id = '` + id + `')`
+	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct known / 0042 prod-direct,prod-other" {
+		t.Errorf("the models, endpoints and credential are %q", got)
+	}
+	replace := `{"credential":{"api_key":"az-good-key-0043"},"reason":"a new key"}`
+	expectAdmin(t, "a new key", f.change(f.s, http.MethodPut, "/suppliers/"+id+"/cloud-credential", replace, newKey()), http.StatusOK, "")
+	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct known / 0043 prod-direct,prod-other" {
+		t.Errorf("after a new key, the models, endpoints and credential are %q", got)
+	}
+}
+
+// TestReplaceCloudCredentialBackKeepsTheRegionsLimits: a key put back in the row it was made for, while another key's
+// row serves the region, takes that region's limits, as any key replacing the region does, not those of a new region.
+func TestReplaceCloudCredentialBackKeepsTheRegionsLimits(t *testing.T) {
+	t.Parallel()
+	f, _ := newCloudFixture(t)
+	var made adminapi.SupplierConnected
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody("us-east-1"), newKey()), &made)
+	id := made.Supplier.Id
+	path := "/suppliers/" + id + "/cloud-credential"
+	second := `{"credential":{"access_key_id":"AKIAFAKEHARBOR0002","secret_access_key":"fake/second"},"reason":"a new key"}`
+	expectAdmin(t, "the second key", f.change(f.s, http.MethodPut, path, second, newKey()), http.StatusOK, "")
+	if err := pgtest.Run(t.Context(), f.database.Superuser,
+		"UPDATE suppliers.credentials SET max_concurrency = 9, requests_per_minute = 30 WHERE status = 'active' AND supplier_id = '"+id+"'"); err != nil {
+		t.Fatal(err)
+	}
+	first := `{"credential":{"access_key_id":"` + cloudKeyID + `","secret_access_key":"fake/secret+key"},"reason":"the first key back"}`
+	expectAdmin(t, "the first key back", f.change(f.s, http.MethodPut, path, first, newKey()), http.StatusOK, "")
+	serving := `SELECT string_agg(hint || ' ' || max_concurrency::text || ' ' || coalesce(requests_per_minute::text, 'none'), ',') FROM suppliers.credentials
+		WHERE status = 'active' AND supplier_id = '` + id + `'`
+	if got := f.text(serving); got != "0001 9 30" {
+		t.Errorf("the region is served by %q, want the first key at the region's limits", got)
+	}
+}
+
+// TestReplaceCloudCredentialServesTheLinesEndpoints: a new key that lists the line's model by another name serves the
+// endpoint the line has, under the endpoint's name and calling it by the name the key lists, so the model keeps its
+// line; the endpoint is not made again.
+func TestReplaceCloudCredentialServesTheLinesEndpoints(t *testing.T) {
+	t.Parallel()
+	f, _ := newCloudFixture(t)
+	var made adminapi.SupplierConnected
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/cloud", bedrockBody("us-east-1"), newKey()), &made)
+	id := made.Supplier.Id
+	other := `{"credential":{"access_key_id":"` + cloudOtherVersionKeyID + `","secret_access_key":"fake/third"},"reason":"a key of another account"}`
+	expectAdmin(t, "the other key", f.change(f.s, http.MethodPut, "/suppliers/"+id+"/cloud-credential", other, newKey()), http.StatusOK, "")
+	// What ListRoutable pairs: an active credential that allows the endpoint's name, and the name its calls send.
+	routed := `SELECT coalesce(string_agg(e.upstream_name || ' ' || coalesce(c.call_names ->> e.upstream_name, e.upstream_name), ','), 'none')
+		FROM suppliers.endpoints e JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active'
+			AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models))
+		WHERE e.supplier_id = '` + id + `'`
+	if got := f.text(routed); got != "anthropic.claude-direct-1-v1:0 anthropic.claude-direct-1-v2:0" {
+		t.Errorf("the line's endpoints are served as %q, want the endpoint called by the name the new key lists", got)
+	}
+	if n := f.text(`SELECT count(*)::text FROM suppliers.endpoints WHERE supplier_id = '` + id + `'`); n != "1" {
+		t.Errorf("%s endpoints, want the one the line had", n)
+	}
+}
+
+// TestConnectingAtOnceStoresTheCredentialOnce: two requests that connect the same pasted key or cloud credential at
+// the same time, each checked before either is stored, store it once; the one that waited finds it stored, a
+// duplicate, and makes no supplier. The first's transaction is held open until the second is seen waiting for it, or
+// has finished without waiting.
+func TestConnectingAtOnceStoresTheCredentialOnce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name    string
+		planned func(*callWorld) storeFunc // a request planned and checked, to be stored
+		stored  string                     // how many credentials hold it
+	}{
+		{"direct", func(w *callWorld) storeFunc {
+			provider := newFakeProvider(t, "", directModel)
+			admin, snap := w.directAdmin(provider)
+			plan := w.checkedDirect(admin, provider)
+			return func(ctx context.Context, tx pg.Tx) (suppliers.Connected, error) {
+				return admin.CreateDirect(ctx, tx, audit.System("test"), snap, plan)
+			}
+		}, `SELECT count(*)::text FROM suppliers.credentials WHERE status <> 'erased' AND hint = '-key'`},
+		{"cloud", func(w *callWorld) storeFunc {
+			admin, snap := w.cloudAdmin(newFakeCloud(t, "", ""))
+			plan := w.checkedCloud(admin, suppliers.CloudRequest{
+				Kind: "bedrock", Input: suppliers.CloudInput{AccessKeyID: cloudKeyID, SecretAccessKey: "fake/secret+key"}, Regions: []string{"us-east-1"},
+			})
+			return func(ctx context.Context, tx pg.Tx) (suppliers.Connected, error) {
+				return admin.CreateCloud(ctx, tx, audit.System("test"), snap, plan)
+			}
+		}, `SELECT count(*)::text FROM suppliers.credentials WHERE status <> 'erased' AND region = 'us-east-1'`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			w := newCallWorld(t)
+			made, got := storedAtOnce(t, w, tc.planned(w), tc.planned(w))
+			if made.err != nil || got.err != nil {
+				t.Fatal(made.err, got.err)
+			}
+			stored := w.query(tc.stored)
+			if made.made.Supplier == nil || got.made.Supplier != nil || len(got.made.Checks) != 1 || got.made.Checks[0].Outcome != suppliers.CheckDuplicate || stored != "1" {
+				t.Errorf("the second request made a supplier: %t, with %+v; the credential is stored %s times, want once", got.made.Supplier != nil, got.made.Checks, stored)
+			}
+		})
+	}
+}
+
+// storeFunc stores a planned connection in the transaction.
+type storeFunc func(context.Context, pg.Tx) (suppliers.Connected, error)
+
+// storeOutcome is what storing a planned connection came to.
+type storeOutcome struct {
+	made suppliers.Connected
+	err  error
+}
+
+// storedAtOnce stores first and holds its transaction open while second is stored, until second is seen waiting for
+// an advisory lock or has finished; then it commits first and answers both.
+func storedAtOnce(t *testing.T, w *callWorld, first, second storeFunc) (storeOutcome, storeOutcome) {
+	t.Helper()
+	run := func(store storeFunc, created chan<- struct{}, hold <-chan struct{}, done chan<- storeOutcome) {
+		var made suppliers.Connected
+		err := w.db.Tx(t.Context(), pg.PlatformScope(), func(tx pg.Tx) (err error) {
+			if made, err = store(t.Context(), tx); err != nil || hold == nil {
+				return err
+			}
+			close(created)
+			<-hold
+			return nil
+		})
+		done <- storeOutcome{made, err}
+	}
+	created, commit, firstDone, secondDone := make(chan struct{}), make(chan struct{}), make(chan storeOutcome, 1), make(chan storeOutcome, 1)
+	go run(first, created, commit, firstDone)
+	<-created
+	go run(second, nil, nil, secondDone)
+	waitUntil(t, 10*time.Second, func() bool {
+		return len(secondDone) > 0 || w.query(`SELECT count(*)::text FROM pg_locks WHERE locktype = 'advisory' AND NOT granted`) != "0"
+	})
+	close(commit)
+	return <-firstDone, <-secondDone
 }
