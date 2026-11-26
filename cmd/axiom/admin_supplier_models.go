@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"math/big"
 	"slices"
+	"sort"
 	"strings"
 	"uuid"
 
@@ -306,30 +307,15 @@ func settlementRate(ctx context.Context, tx pg.Tx, settlement string, site platf
 }
 
 // breakEvenOf is the fewest tokens a request needs for the sale price to cover the request price, in the site's currency
-// at rate: what the sale charges a request of its own, if anything, plus each token at the mean sale price of a token
-// at the endpoint's mix of the last 24 hours (meanTokenPrice). nil when no token of the mix has a sale price, which no
-// number of tokens covers, or when no request could be that long.
+// at rate, at the endpoint's mix of the last 24 hours. nil when no request up to maxTokens long is covered: a sale with
+// no token price, or one too low for any length.
 func breakEvenOf(request platform.UnitPrice, rate *big.Rat, sale catalog.Schedule, t suppliers.Traffic) *adminapi.CostBreakEven {
-	perToken, tokens := meanTokenPrice(sale, t.Units)
-	if perToken.Sign() == 0 {
+	mix, tokens := tokenMix(t.Units)
+	n, ok := fewestCovering(sale, mix, new(big.Rat).Mul(request.Rat(), rate))
+	if !ok {
 		return nil
 	}
-	need := new(big.Rat).Mul(request.Rat(), rate)
-	if p, ok := sale.BaseRate(catalog.ItemRequest); ok {
-		need.Sub(need, p.Rat())
-	}
-	b := &adminapi.CostBreakEven{RequestPrice: request.String(), Requests24h: &t.Requests}
-	if need.Sign() > 0 {
-		q := need.Quo(need, perToken)
-		n, rem := new(big.Int).QuoRem(q.Num(), q.Denom(), new(big.Int))
-		if rem.Sign() > 0 {
-			n.Add(n, big.NewInt(1))
-		}
-		if !n.IsInt64() {
-			return nil
-		}
-		b.Tokens = n.Int64()
-	}
+	b := &adminapi.CostBreakEven{RequestPrice: request.String(), Tokens: n, Requests24h: &t.Requests}
 	if t.Requests > 0 {
 		mean := tokens / t.Requests
 		b.MeanTokens24h = &mean
@@ -337,28 +323,62 @@ func breakEvenOf(request platform.UnitPrice, rate *big.Rat, sale catalog.Schedul
 	return b
 }
 
-// meanTokenPrice is the sale price of a token at the mix of units, each token item at its base price, and how many
-// tokens the units have. With no tokens the mix is all input, the side a sale prices lowest, so a break-even errs high.
-func meanTokenPrice(sale catalog.Schedule, units map[catalog.Item]int64) (*big.Rat, int64) {
-	var tokens int64
+// tokenMix is the token items of the units and how many tokens they have. With no tokens the mix is all input, the
+// side a sale prices lowest, so a break-even errs high.
+func tokenMix(units map[catalog.Item]int64) (map[catalog.Item]int64, int64) {
+	mix, tokens := map[catalog.Item]int64{}, int64(0)
 	for it, n := range units {
-		if tokenItems.Has(it) {
-			tokens += n
+		if tokenItems.Has(it) && n > 0 {
+			mix[it], tokens = n, tokens+n
 		}
 	}
-	mix := units
 	if tokens == 0 {
-		mix = map[catalog.Item]int64{catalog.ItemInput: 1}
+		return map[catalog.Item]int64{catalog.ItemInput: 1}, 0
 	}
-	revenue, weight := new(big.Rat), int64(0)
-	for it, n := range mix {
-		if p, ok := sale.BaseRate(it); ok && tokenItems.Has(it) {
-			revenue.Add(revenue, new(big.Rat).Mul(p.Rat(), big.NewRat(n, 1)))
-			weight += n
+	return mix, tokens
+}
+
+// maxTokens is the longest request a break-even is looked for in: catalog.NewUsage's bound on one count.
+const maxTokens = 10_000_000_000
+
+// fewestCovering is the fewest tokens n, split by the mix, for which billing's own price of one request of them
+// (catalog's Schedule.Cost, with the sale's request price and the context tier the length falls in) is at least need.
+// Each item's share is rounded down, so the request is never credited with more than its n tokens. Every share grows
+// with n, so the context tier never falls as n grows and, within a tier, neither does the price: the search finds
+// where each tier ends, and in the first tier whose longest request is covered, its shortest covered one. Prices need
+// not rise with the tier, so a longer request than the answer may again fall short.
+func fewestCovering(sale catalog.Schedule, mix map[catalog.Item]int64, need *big.Rat) (int64, bool) {
+	var total int64
+	for _, m := range mix {
+		total += m
+	}
+	usage := func(n int64) catalog.Usage {
+		counts := map[catalog.Item]int64{catalog.ItemRequest: 1}
+		for it, m := range mix {
+			share := new(big.Int).Mul(big.NewInt(n), big.NewInt(m))  // up to 10¹⁰ × a day's tokens: past int64
+			counts[it] = share.Quo(share, big.NewInt(total)).Int64() // at most n, since m ≤ total
 		}
+		u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+		if err != nil {
+			panic(err) // every count is at most maxTokens
+		}
+		return u
 	}
-	if weight == 0 {
-		return revenue, tokens
+	tier := func(n int64) int {
+		_, band, _ := sale.Rate(usage(n), catalog.ItemInput)
+		return band
 	}
-	return revenue.Quo(revenue, big.NewRat(weight, 1)), tokens
+	covers := func(n int64) bool {
+		cost, _, err := sale.Cost(usage(n))
+		return err == nil && cost.Rat().Cmp(need) >= 0
+	}
+	for lo := int64(0); lo <= maxTokens; {
+		band := tier(lo)
+		hi := lo + int64(sort.Search(int(maxTokens-lo+1), func(i int) bool { return tier(lo+int64(i)) != band })) - 1
+		if covers(hi) {
+			return lo + int64(sort.Search(int(hi-lo), func(i int) bool { return covers(lo + int64(i)) })), true
+		}
+		lo = hi + 1
+	}
+	return 0, false
 }
