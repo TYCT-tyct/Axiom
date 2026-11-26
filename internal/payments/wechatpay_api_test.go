@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"crypto/x509"
 	"net/http"
 	"strings"
 	"sync"
@@ -251,5 +252,37 @@ func TestWechatPayClose(t *testing.T) {
 	gateway.omit = true
 	if err := channel.Close(t.Context(), order, ""); err == nil {
 		t.Fatal("close accepted an unsigned 404")
+	}
+}
+
+// TestWechatPayAsksForThePublicKeySignature: while a merchant moves from platform certificates to the WeChat Pay
+// public key, WeChat signs a response with the public key only when the request names its ID in Wechatpay-Serial
+// (pay.wechatpay.cn/doc/v3/merchant/4012154180). A certificate-mode merchant sends no such header.
+func TestWechatPayAsksForThePublicKeySignature(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		config func(t *testing.T, gateway string, serverCert *x509.Certificate, old bool) MerchantConfig
+		want   string
+	}{
+		{"public key", wpPublicConfig, wpTestKeyID},
+		{"certificate", wpCertConfig, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var serial string
+			gateway := &wpTestGateway{t: t, respond: func(r *http.Request, _ []byte) (int, []byte) {
+				serial = r.Header.Get("Wechatpay-Serial")
+				return http.StatusOK, wpQueryJSON("ord_01ARZ3NDEKTSV4RRFFQ69G5FAV", "SUCCESS", map[string]any{"total": 1, "currency": "CNY"})
+			}}
+			if tc.want != "" {
+				gateway.serial = tc.want
+			}
+			server := wpTestServer(t, gateway)
+			if _, err := wpOpen(t, tc.config(t, server.URL, server.Certificate(), false)).Query(t.Context(), "ord_01ARZ3NDEKTSV4RRFFQ69G5FAV", ""); err != nil {
+				t.Fatal(err)
+			}
+			if serial != tc.want {
+				t.Fatalf("Wechatpay-Serial %q, want %q", serial, tc.want)
+			}
+		})
 	}
 }

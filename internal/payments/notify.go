@@ -104,13 +104,16 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 	if n.Success {
 		state = PayPaid
 	}
-	c := confirmed{merchant: merchant, order: n.Order, payment: Payment{State: state, TradeNo: n.TradeNo, Paid: n.Paid}, source: "notify", raw: n.Raw}
+	c := confirmed{merchant: merchant, order: n.Order, payment: Payment{State: state, TradeNo: n.TradeNo, Paid: n.Paid}, source: "notify", raw: n.Raw, checkout: n.Checkout}
 	if !n.Success {
 		return p.receive(ctx, c)
 	}
-	known, replay, err := p.callbackOrder(ctx, c)
+	known, replay, foreign, err := p.callbackOrder(ctx, c)
 	if err != nil || replay {
 		return err
+	}
+	if foreign {
+		c.reason = "confirmation_mismatch"
 	}
 	if !ch.Caps().Has(CapQuery) {
 		return p.receive(ctx, c)
@@ -133,11 +136,11 @@ func (p *Payments) notify(ctx context.Context, ch Channel, merchant MerchantID, 
 	return p.receive(ctx, c)
 }
 
-// A replay bypasses the gateway only when both identity and exact amounts match a committed, credited receipt.
-func (p *Payments) callbackOrder(ctx context.Context, c confirmed) (bool, bool, error) {
-	var known, replay bool
+// A replay bypasses the gateway only when both identity and exact amounts match a committed, credited receipt. foreign
+// reports a notice whose checkout reference is not the order's: it may be confirmed and recorded, never credited.
+func (p *Payments) callbackOrder(ctx context.Context, c confirmed) (known, replay, foreign bool, err error) {
 	id, parseErr := orderPrefix.Decode(c.order)
-	err := p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
+	err = p.db.ReadTx(ctx, p.platform, func(tx pg.Tx) error {
 		// Invalid IDs decode to zero and cannot match an order; absence still needs a gateway query.
 		o, err := loadOrder(ctx, tx, OrderID(id))
 		if errors.Is(err, ErrNotFound) {
@@ -147,6 +150,7 @@ func (p *Payments) callbackOrder(ctx context.Context, c confirmed) (bool, bool, 
 			return err
 		}
 		known = true
+		foreign = c.foreignTo(o)
 		if o.State.canMoveTo(Paid) || invalidPaymentText(c.payment.TradeNo) {
 			return nil
 		}
@@ -156,7 +160,13 @@ func (p *Payments) callbackOrder(ctx context.Context, c confirmed) (bool, bool, 
 		}
 		return err
 	})
-	return known, replay, err
+	return known, replay, foreign, err
+}
+
+// foreignTo reports a notice naming o whose checkout reference o never had: o still carries the reference Create
+// stored, or the trade number of the payment that already settled it.
+func (c confirmed) foreignTo(o Order) bool {
+	return c.checkout != "" && o.TradeNo != c.checkout && o.TradeNo != c.payment.TradeNo
 }
 
 // callbackChannel caches decrypted configuration for a minute. The revision is still read on every request so saves

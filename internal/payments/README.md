@@ -40,9 +40,9 @@ type Channel interface {
 }
 // CreateRequest: Order, Merchant, Method, Upstream, Total, Subject, ReturnURL（核心校验 https）, NotifyURL（核心生成）, ClientIP, Mobile, ExpiresAt
 // Checkout: TradeNo, PayURL, QRCode, ClientSecret（只交给浏览器，不存库）
-// Notice: Relevant, Success, Order, TradeNo, Paid, Raw, Dispute *DisputeNotice（非 nil 时只走拒付）
+// Notice: Relevant, Success, Order, TradeNo, Paid, Raw, Checkout（非空时必须是订单下单时存的 Checkout.TradeNo，否则转待处理）, Dispute *DisputeNotice（非 nil 时只走拒付）
 // DisputeNotice: ID, PaymentIntent, Order（可空）, Status, Reason, Amount, Action（Open | Lost | Won | Warning）
-// RefundCall: Refund, Order, TradeNo, ProviderRef, Amount, Reason, SentAt（首次发送时间，零值表示不知道）
+// RefundCall: Refund, Order, TradeNo, ProviderRef, Amount, Refunded（该订单此前成功退款之和）, Reason, SentAt（首次发送时间，零值表示不知道）
 // Payment{State Pending|Paid|Closed}；RefundState{State Succeeded|Failed|Pending, ProviderRef}；*Rejected 实现 error
 ```
 
@@ -61,7 +61,7 @@ type Channel interface {
 
 ### 易支付配置与边界
 
-`EasyPay{}`，`Kind` 是 `easypay`，币种来自商户账户。`settings`：`preset`（省略为通用，或 `epusdt`、`ezpay`）、`gateway`、`pid`、`mode`（`redirect`/`api`）、`sign_type`（省略为 `MD5`）、`cids`（付款方式 → 通道号）、`query`、`close`、`refund`（省略为不支持）。密钥：`key`，轮换期可加 `old_key`（只验签）。能力按配置声明，从不声明 `RefundKey`、`QueryRefund`。身份字段：`preset`、`gateway`、`pid`、`sign_type`。
+`EasyPay{}`，`Kind` 是 `easypay`，币种来自商户账户；通用协议（无预设）只接受 CNY。`settings`：`preset`（省略为通用，或 `epusdt`、`ezpay`）、`gateway`、`pid`、`mode`（`redirect`/`api`）、`sign_type`（省略为 `MD5`）、`cids`（付款方式 → 通道号）、`query`、`close`、`refund`（省略为不支持）。密钥：`key`，轮换期可加 `old_key`（只验签）。能力按配置声明，从不声明 `RefundKey`、`QueryRefund`。身份字段：`preset`、`gateway`、`pid`、`sign_type`。
 
 - `epusdt`：强制 `query`、`redirect`，拒绝接口下单、cid、关单和退款；币种 CNY/USD；`pid` 是无前导零的正 int64。
 - `ezpay`：只接受 `preset`、`gateway`、`pid`（1–32 位字母、数字、下划线或连字符）；币种 USD；`Methods()` 只返回 `usdt.tron`，`upstream` 必须是 `usdt_trc20`；`Caps` 只有 `Query`；创建签名用 `ezPayCreateSign`，回调仍用 `easyPaySign`。
@@ -73,7 +73,7 @@ type Channel interface {
 
 ### Stripe 配置与边界
 
-`Stripe{}`，`Kind` 是 `stripe`，`settings` 是空对象（未知成员拒绝），币种来自商户账户。密钥：`secret_key`（`sk_` 或 `rk_`）、`webhook_secret`（`whsec_`）、可选 `old_webhook_secret`；不接受 `old_secret_key`。`upstream` 只接受 `card`、`alipay`、`wechat_pay`、`link`。`Caps`：`Query|Close|Refund|QueryRefund|RefundKey`。SDK 的 HTTP 经 `egress.Client`，没有期限时补 10 秒，不重试、不记日志；API 地址固定，只有测试能注入。
+`Stripe{}`，`Kind` 是 `stripe`，`settings` 是空对象（未知成员拒绝），币种来自商户账户，三位小数币种拒绝；ISK、UGX 发给 Stripe 时乘 100，读回时除 100，除不尽为无效付款。密钥：`secret_key`（`sk_` 或 `rk_`）、`webhook_secret`（`whsec_`）、可选 `old_webhook_secret`；不接受 `old_secret_key`。`upstream` 只接受 `card`、`alipay`、`wechat_pay`、`link`。`Caps`：`Query|Close|Refund|QueryRefund|RefundKey`。SDK 的 HTTP 经 `egress.Client`，没有期限时补 10 秒，不重试、不记日志；API 地址固定，只有测试能注入。
 
 ### billing 要提供的接口
 

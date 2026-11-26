@@ -25,6 +25,7 @@ type confirmed struct {
 	payment  Payment
 	source   string
 	reason   string // a notice that disagrees with the query must never credit automatically
+	checkout string // Notice.Checkout: the order must still carry this reference, or have been paid by this payment
 	raw      string // only the plugin's sanitized description, never the request's form or query
 }
 

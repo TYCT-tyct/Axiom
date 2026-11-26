@@ -22,6 +22,7 @@ type alipayE2EState struct {
 	mu         sync.Mutex
 	orders     map[string]*alipayE2EOrder
 	refunds    map[string]string // out_request_no to refund_amount
+	refunded   map[string]int64  // out_trade_no to the fen refunded so far, which refund_fee reports
 	refundMode string            // "", "unknown" or "success"
 }
 
@@ -67,6 +68,10 @@ func alipayE2EGateway(t *testing.T, state *alipayE2EState) *alipayTestGateway {
 			mode := state.refundMode
 			amount := alipayBiz(t, biz, "refund_amount")
 			state.refunds[alipayBiz(t, biz, "out_request_no")] = amount
+			if mode != "unknown" {
+				state.refunded[id] += parseMinorText(amount, 2)
+			}
+			total := fmt.Sprintf("%d.%02d", state.refunded[id]/100, state.refunded[id]%100)
 			state.mu.Unlock()
 			if mode == "unknown" {
 				return `{"code":"40004","msg":"Business Failed","sub_code":"ACQ.SYSTEM_ERROR"}`, true
@@ -78,7 +83,7 @@ func alipayE2EGateway(t *testing.T, state *alipayE2EState) *alipayTestGateway {
 			}
 			state.mu.Unlock()
 			return fmt.Sprintf(`{"code":"10000","msg":"Success","out_trade_no":%q,"trade_no":%q,"fund_change":"Y","refund_fee":%q}`,
-				id, trade, amount), true
+				id, trade, total), true
 		case "alipay.trade.fastpay.refund.query":
 			state.mu.Lock()
 			mode := state.refundMode
@@ -111,7 +116,7 @@ func newAlipayE2E(t *testing.T) *alipayE2E {
 	t.Helper()
 	f := &alipayE2E{
 		t: t, w: newTestWorld(t, Alipay{}),
-		state: &alipayE2EState{orders: map[string]*alipayE2EOrder{}, refunds: map[string]string{}},
+		state: &alipayE2EState{orders: map[string]*alipayE2EOrder{}, refunds: map[string]string{}, refunded: map[string]int64{}},
 		keys:  alipayKeys(t),
 	}
 	f.gateway = alipayE2EGateway(t, f.state)
@@ -334,4 +339,19 @@ func TestAlipayLocalGatewayEndToEnd(t *testing.T) {
 	f.checkCancelAndRefund(f.paid, lost)
 	f.checkUnknownRefund()
 	f.checkNoSecrets()
+}
+
+// TestAlipaySecondPartialRefundSucceeds: Alipay's refund_fee is the trade's running total, so a second partial refund
+// succeeds on its first answer instead of waiting for a refund query.
+func TestAlipaySecondPartialRefundSucceeds(t *testing.T) {
+	f := newAlipayE2E(t)
+	f.checkCheckoutAndCallback()
+	for i, credits := range []int64{f.paid.Credits / 2, f.paid.Credits - f.paid.Credits/2} {
+		refund := f.w.approve(f.w.mustRefund(f.paid, credits, fmt.Sprintf("alipay-partial-%d", i)))
+		f.w.dueRefunds()
+		stored, err := f.w.p.GetRefund(f.t.Context(), f.w.accountA(), refund.ID)
+		if err != nil || stored.State != "succeeded" {
+			t.Fatalf("partial refund %d: %+v %v", i, stored, err)
+		}
+	}
 }
