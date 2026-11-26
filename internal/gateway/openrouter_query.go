@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"uuid"
 
 	"axiom/internal/platform"
 	"axiom/internal/routing"
@@ -22,19 +23,20 @@ const (
 	orCheapestFirst
 	orDearestFirst
 	orLongestContext
+	orNewest
 )
 
-// orOrderings are the values of sort Axiom's data can rank by: the average of a model's prompt and completion prices, and
-// its context length.
+// orOrderings are the values of sort Axiom's data can rank by: the average of a model's prompt and completion prices, its
+// context length, and when it was added to the catalog.
 var orOrderings = map[string]orSort{
 	"pricing-low-to-high": orCheapestFirst, "pricing-high-to-low": orDearestFirst, "context-high-to-low": orLongestContext,
+	"newest": orNewest,
 }
 
 // orUnranked are the values of sort that are refused, with the data ranking by them would need.
 var orUnranked = map[string]string{
 	"most-popular":                 "Axiom counts no requests per model",
 	"top-weekly":                   "Axiom counts no tokens per model",
-	"newest":                       "the catalog keeps no creation time",
 	"throughput-high-to-low":       "Axiom measures no throughput for the list",
 	"latency-low-to-high":          "Axiom measures no latency for the list",
 	"intelligence-high-to-low":     "Axiom has no benchmark scores",
@@ -97,8 +99,8 @@ var orRefused = map[string]string{
 	"distillable":            "the catalog says nothing about distillation",
 	"zdr":                    "the data policies of a model's endpoints are not in the list",
 	"region":                 "suppliers are not placed in a region",
-	"min_age_days":           "the catalog keeps no creation time",
-	"max_age_days":           "the catalog keeps no creation time",
+	"min_age_days":           "the list orders by age (sort=newest) but does not filter by it",
+	"max_age_days":           "the list orders by age (sort=newest) but does not filter by it",
 	"min_intelligence_index": "Axiom measures no benchmark indices",
 	"max_intelligence_index": "Axiom measures no benchmark indices",
 	"min_coding_index":       "Axiom measures no benchmark indices",
@@ -358,8 +360,8 @@ func includes(has, want []string) bool {
 	return true
 }
 
-// compare orders two models by the sort, and by their catalog names when they tie, so the same request always gets the
-// same pages.
+// compare orders two models by the sort, and by their catalog names (newest: their IDs) when they tie, so the same
+// request always gets the same pages.
 func (q *orQuery) compare(a, b *orModel) int {
 	switch q.sort {
 	case orCatalogOrder: // the list's own order, which a sorted page is never asked for: the names decide
@@ -375,8 +377,20 @@ func (q *orQuery) compare(a, b *orModel) int {
 		if c := cmp.Compare(b.ContextLength, a.ContextLength); c != 0 {
 			return c
 		}
+	case orNewest:
+		// created is in seconds; the IDs it is read from order the models added within one second, newest first too.
+		if c := cmp.Compare(b.Created, a.Created); c != 0 {
+			return c
+		}
+		return uuid.UUID(b.model).Compare(uuid.UUID(a.model))
 	}
 	return strings.Compare(a.CanonicalSlug, b.CanonicalSlug)
+}
+
+// byPrice reports whether the query filters or orders by price: a visitor of a site that keeps its prices to members
+// may do neither, since the answers would tell the prices the list leaves out.
+func (q *orQuery) byPrice() bool {
+	return q.prompt != (orRange{}) || q.output != (orRange{}) || q.sort == orCheapestFirst || q.sort == orDearestFirst
 }
 
 // page is the range of matches the query returns: the offset into them and the one past the end. A query without a limit

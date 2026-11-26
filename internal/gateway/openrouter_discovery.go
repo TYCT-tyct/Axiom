@@ -15,7 +15,8 @@ import (
 
 // Discovery shares the model list's admission and publication. Supplier identities, credentials, upstream model names
 // and costs never enter this projection; each public group endpoint is named by the group's stable codename under the
-// public provider Axiom, the same identity provider.only, provider.ignore and presets route by.
+// public provider Axiom, the same identity provider.only, provider.ignore and presets route by. The count is the list's,
+// so a visitor without a key reads it as the list (readable); the rest need a key.
 func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 	format := formatFor(r)
 	release, ok := h.ipSlot(w, r, format)
@@ -23,7 +24,11 @@ func (h *Handler) discoverOpenRouter(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	v, err := h.visible(r)
+	see := h.visible
+	if r.URL.Path == orListPath+"/count" {
+		see = h.readable
+	}
+	v, err := see(r)
 	if err != nil {
 		h.fail(w, r, format, err)
 		return

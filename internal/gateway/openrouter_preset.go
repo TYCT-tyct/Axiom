@@ -3,6 +3,7 @@ package gateway
 import (
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/routing"
 )
 
@@ -31,7 +32,8 @@ func (l *openRouterListing) entry(v visibility, i int) *orModel {
 // narrow is e as the key's preset leaves it (docs/domains/routing.md「请求覆盖与组合」): nil when the preset passes none
 // of the model's endpoints, e itself when it passes all or the endpoints share one price, and otherwise an entry encoded
 // now and priced at the cheapest endpoint the preset passes, which is the cheapest the key can be routed to. Only that
-// last case allocates, so a key whose preset narrows nothing costs the list no more than before.
+// last case allocates, so a key whose preset narrows nothing costs the list no more than before. A visitor without a
+// key has no preset: it reads the build's entry.
 func (l *openRouterListing) narrow(v visibility, e *orModel) *orModel {
 	if v.keys == nil {
 		return e
@@ -56,7 +58,19 @@ func (l *openRouterListing) narrow(v visibility, e *orModel) *orModel {
 	if err != nil || !ok {
 		return nil
 	}
+	if out.v1, err = encodeEntries(l.snap, m, &out.orEntry); err != nil {
+		return nil
+	}
 	return &out
+}
+
+// entryOf is entry for model m, nil when the build does not list it.
+func (l *openRouterListing) entryOf(v visibility, m catalog.ModelID) *orModel {
+	i, ok := l.index[m]
+	if !ok {
+		return nil
+	}
+	return l.entry(v, i)
 }
 
 // kept is the endpoints of e the key's preset passes, and whether that leaves any out. It allocates only when one is

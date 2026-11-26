@@ -60,13 +60,18 @@ func (m *orModel) forAudience(a billing.Audience) *orModel {
 	return &m.variants[at]
 }
 
-func (m *orModel) encodeEndpoints(endpoints []routing.Endpoint) error {
+// encodeResponses encodes, from the same build, what discovery and /v1 serve of each priced entry: its endpoints and
+// its object under each name /v1 lists the model by.
+func (m *orModel) encodeResponses(snap *catalog.Snapshot, model catalog.Model, endpoints []routing.Endpoint) error {
 	encode := func(e *orModel) error {
 		var err error
 		// Price every endpoint from its effective abilities, whether the version prices each endpoint or shares one
 		// schedule: a measurement can add or remove images or reasoning, and the endpoint's price shape must agree with
 		// the capabilities the same snapshot routes on.
-		e.endpoints, err = encodeOREndpointPrices(e.orEntry, e.sold, e.serving.Abilities, endpoints)
+		if e.endpoints, err = encodeOREndpointPrices(e.orEntry, e.sold, e.serving.Abilities, endpoints); err != nil {
+			return err
+		}
+		e.v1, err = encodeEntries(snap, model, &e.orEntry)
 		return err
 	}
 	if m.audiences == nil {

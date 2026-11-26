@@ -228,18 +228,27 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 // authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
 // host that is not an API domain and a key that is not known are all the same 401.
 func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
-	site, surface, err := h.Accounts.SiteForHost(r.Host)
-	if errors.Is(err, accounts.ErrStale) {
+	site, err := h.apiSite(r)
+	if err != nil {
 		return accounts.Site{}, accounts.Caller{}, err
-	}
-	h.outage.recovered(depAccounts)
-	if err != nil || surface != accounts.API {
-		return accounts.Site{}, accounts.Caller{}, errUnauthorized
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.Limits.cfg.KeyLookup)
 	defer cancel()
 	caller, err := h.Accounts.AuthenticateKey(ctx, site.ID, apiKey(r))
 	return site, caller, err
+}
+
+// apiSite is the site whose API domain the Host is; any other host is the 401 a key that is not known gets.
+func (h *Handler) apiSite(r *http.Request) (accounts.Site, error) {
+	site, surface, err := h.Accounts.SiteForHost(r.Host)
+	if errors.Is(err, accounts.ErrStale) {
+		return accounts.Site{}, err
+	}
+	h.outage.recovered(depAccounts)
+	if err != nil || surface != accounts.API {
+		return accounts.Site{}, errUnauthorized
+	}
+	return site, nil
 }
 
 // apiKey is the key in Authorization: Bearer, or else in x-api-key.

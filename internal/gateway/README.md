@@ -9,7 +9,7 @@
 - `NewHandler(Deps)` → `Handler`（外面套 `httpserver.Public`）：入口、准入、模型列表、辅助接口。`NewExecutor(ExecDeps)` → `Executor.Run`（即 `Deps.Run`）：准入后把 `Call` 做到结算。依赖缺一个不启动，没有生产 stub，由 `cmd/axiom/callpath.go` 接线。
 - `New(Config)` → `Backpressure`（`InFlight`、`Funds`、`Pool`、`Queue`、`RateCounter`）：先 `Config.Validate`，一次报出全部问题；默认值只在 `DefaultConfig`。
 - `Call` 的所有权归 `Run`；`Call.Done` 归还名额和内存，可能晚于 `Run` 返回。`Outstanding` 是两者共用的排空计数。
-- `RouteDeps`（`Build`/`Publish`/`Rebuild`/`Run`）产出路由快照和模型列表；`ModelList.Public` 给价格页。`ResponseCache` 可为空；`StreamCacheSealed`/`OpenCachePayload` 供受控导出；`LedgerAmounts` 按账本补记录金额。
+- `RouteDeps`（`Build`/`Publish`/`Rebuild`/`Run`）产出路由快照和模型列表；`ModelList.Public` 给价格页，`PublicAudience` 是它与网关匿名列表共用的受众和价格是否公开。`ResponseCache` 可为空；`StreamCacheSealed`/`OpenCachePayload` 供受控导出；`LedgerAmounts` 按账本补记录金额。
 
 ## 不变量
 
@@ -49,7 +49,7 @@
 - **错误出口**：`writeRefusal` 与 `protocol.RenderError` 写同一个外壳（`TestARefusalIsAnErrorOfProtocol`）；`Retry-After` 至多 60。映射表见[错误](../../docs/domains/gateway.md#错误)。
 - **依赖故障按状态变化记日志**（`outage.go`）：数据库不可用（`pg.Unavailable`）和 accounts、catalog、routing 快照过旧回 503，每个依赖只在故障开始或原因变化时记一条 error，首个成功用它的请求记 warn 结束；每次拒绝计入 `axiom_gateway_outage_refusals_total{dependency}`。
 - **派生标识**：`Prepare` 拒绝超过 128 字节的标识和 `metadata.user_id`；派生值是 HMAC-SHA256（`ExecDeps.IdentitySecret` 加账户 ID）的 32 个十六进制字符。所有节点的 `AXIOM_IDENTITY_KEY_FILE` 必须相同，否则上游缓存换节点就断。转发的头只在 `headers.go` 一处。
-- **模型列表**：鉴权同准入（准入类名额、`accounts.Admit`，不过闸），模型集合与路由过滤同用 `allowedModels`。列表与快照同次构建，`Publish` 在 `ModelList.mu` 写锁内一起换，迟到的被拒；读锁只盖内存工作（`TestModelPublicationExcludesReaders`）；请求路径不读价。
+- **模型列表**：鉴权同准入（准入类名额、`accounts.Admit`，不过闸），模型集合与路由过滤同用 `allowedModels`。列表与快照同次构建，`Publish` 在 `ModelList.mu` 写锁内一起换，迟到的被拒；读锁只盖内存工作（`TestModelPublicationExcludesReaders`）；请求路径不读价。不带任何 key 的列表、单模型和计数读公开视图（`publicView`：本次构建的公共模型、`PublicAudience` 的价），不读库；带错 key 仍 401。`/v1` 条目的 OpenRouter 成员与隐藏价格的切口（`pricingIn`）都在构建时编码，列表请求只拷字节。
 
 ## 辅助接口
 
