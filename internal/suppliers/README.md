@@ -7,14 +7,14 @@
 ## 代码结构
 
 ```
-internal/suppliers/            公开接口：Service（调用面）、RecordAttempts 等写入、Admin（管理接口）、BYOK、
-                               CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
+internal/suppliers/  公开接口：Service（调用面）、RecordAttempts 等写入、Admin（管理接口）、BYOK、
+  CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
 internal/suppliers/internal/
-  adapter/      契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、KeyFinder、Pool、UsageQueue、Direct、Wire、Cloud、Signer
-  registry/     唯一同时引用所有适配器的文件，一个内置适配器一行，另加声明式目录
-  newapi/ sub2api/ cpa/   中转站和号池的内置适配器（testdata/ 是脱敏样本）
-  openai/ anthropic/ google/ moonshot/ compatible/   直连接口，共用 direct/
-  vertex/ bedrock/ azure/   云平台，共用 cloud/
+  adapter/      契约：Adapter、Type、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、KeyFinder、Pool、UsageQueue、Direct、Wire、Cloud、Signer
+  registry/     唯一同时引用所有适配器的文件，一个内置适配器包一行，另加声明式目录
+  newapi/ sub2api/ cpa/ 中转站和号池的内置适配器（testdata/ 是脱敏样本）
+  vendors/ anthropic/ compatible/ 直连（vendors 是 OpenAI 格式的厂商表），共用 direct/
+  vertex/ bedrock/ azure/ 云平台，共用 cloud/
   declared/     声明式适配器
   client/       适配器唯一的出站入口：egress 加限速桶（进程内 Limiter、数据库 SharedLimiter）
   collector/    CPA 用量队列的常驻采集器
@@ -35,7 +35,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `suppliers` | `UNIQUE (origin, upstream_account)`；`mode`（relay、direct、cloud）和 `api_format` 创建后不变；`cloud_account` 只有云平台有；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
-| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名 |
+| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名；`settings` 是按类型描述核对的设置 |
 | `intake_rules`、`inbox_items` | PK `supplier_id`；`UNIQUE (supplier_id, kind, subject)` |
 | `supplier_models` | PK `(supplier_group_id, upstream_name)`；`model_id` 空即待映射 |
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |
@@ -48,12 +48,12 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `unit_values` | 只插入；`value` 在 (0, 1000]、至多 15 位小数；币种与原生单位都匹配的最新一行生效 |
 | `rate_buckets` | PK `(scope, name)` |
 | `usage_records` | `UNIQUE (supplier_id, request_id)`；`new`/`rejected` |
-| `attempt_journal` | 旧对账日志，无人读写，待删 |
+| `attempt_journal` | 旧对账日志，不再读写 |
 
 - **行级安全**：`suppliers` 按本行归属与范围比较，平台供应商只有平台范围可见；子表策略是"所属供应商对本事务可见"，插入也挡住挂到看不见的供应商下。同步、对账、限速和采集的表是平台范围。
 - **复合外键**：同时存 `supplier_id` 与 `supplier_group_id` 的表外键指向 `supplier_groups (id, supplier_id)`；`model_id` 是目录 ID，没有外键。
-- **授权**：应用角色只对 `supplier_logins`（移除时）、`usage_records` 和 `inbox_items`（情况结束）有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`、`upstream_key_ref`。后台任务角色还没有，应用角色暂能改 `attempt_costs` 与 `charge_records` 的对账列。
-- **密钥**：没有明文列；数据库只检查信封四列齐全和长度，加密由写入边界只收 `secret.Sealed` 保证。触发器 `fence_envelope_key_version` 拒绝已退役的主密钥版本（见 [platform 的「凭证加密」](../platform/README.md#凭证加密)）。`serve` 缺 `AXIOM_MASTER_KEY_FILE` 不启动。
+- **授权**：应用角色只对 `supplier_logins`（移除时）、`usage_records`、`inbox_items`（情况结束）有 DELETE；UPDATE 按列授予，不含 `id`、`supplier_id`、归属、`kind`、`origin`、`upstream_account`、`upstream_key_ref`。没有后台任务角色，应用角色暂能改 `attempt_costs` 与 `charge_records` 的对账列。
+- **密钥**：没有明文列；数据库只查信封四列齐全和长度，写入边界只收 `secret.Sealed`。触发器 `fence_envelope_key_version` 拒绝退役的主密钥版本（[platform 的「凭证加密」](../platform/README.md#凭证加密)）。`serve` 缺 `AXIOM_MASTER_KEY_FILE` 不启动。
 
 ## 调用面
 
@@ -90,7 +90,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 - **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行：`Codename` 是分组的公开代号（不暴露名称、地址或内部 ID），`Generation` 是快照的单调版本，`Schedule` 已按分组倍率缩放，`Funds` 是原生余额与自动暂停（路由用 `billing.ReservedCost` 调 `Funds.CanPay`），`Credentials` 是未过期、未冷却的凭证数。模型规格由 routing 向目录取。
 - **回执**带凭证、端点、成本计划版本、单位价值行 id 和对账键；gateway 用 `AttemptReceipt.WithExchange` 传回冻结的汇率。`Credits` = 原生金额 × 单位价值 × 汇率，精确相乘、转成十亿分之一时向上取整一次；缺汇率或溢出返回未知，原生 `CostFlag` 不变。`attempt_costs` 存换算依据 `Conversion`，只有 converted 和 overflow 写汇率 ID。
 - **写入**：`RecordAttempts` 在 billing 的结算事务里用一条 `unnest` 写全部尝试，`EndRequests` 同样一条语句，重复都保留第一次。平台自己的尝试传零值租户，写成 NULL；失联请求必须有租户。
-- **路径**：调用路径只来自 `attempt.go` 的 `wire` 表（`/v1/chat/completions`、`/v1/responses`、`/v1/messages`、`/v1/completions`、`/v1/embeddings`、`/v1/rerank`，只有 `/v1/messages` 加 Anthropic 版本头）和 `compactPaths`（`Call.Compact` 时 Responses 走 `/v1/responses/compact`，见[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。云平台的请求由适配器按区域和模型名签出（`adapter.Signer`），签不出算凭证的失败，2xx 由它转成格式的帧。
+- **路径**：来自 `attempt.go` 的 `wire` 表（Chat、Responses、Messages、Completions、Embeddings、Rerank 的 `/v1/…`，只有 Messages 加 Anthropic 版本头）和 `compactPaths`（[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）；直连经 `adapter.Wire` 换前缀、带凭证的设置，凭证另起名字时发它的名字。云平台由适配器按区域、模型名和设置签出（`adapter.Signer`），签不出算凭证的失败，2xx 由它转成格式的帧。
 - **`EnabledCurrencies`**：active、low_balance 供应商的结算币种，缺汇率时告警。
 - **`TestRequest.AvoidCredential`** 在有另一把可用 key 时避开它；`TestResult.CredentialID` 只给 ID。
 
@@ -104,7 +104,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 ## 用真实生成测试端点
 
-`TestEndpoint` 只测平台供应商的端点（否则 `ErrTestOwner`），走真实的 `Acquire`、`Send`、`Done`：一次流式生成，输出上限 16（真伪检测 48，留 4 KiB 回答），不开推理。格式必须是端点的一种生成格式（Messages、Responses、Chat、Completions）（否则 `ErrNoFormat`），管理接口只收前三种。
+`TestEndpoint` 只测平台供应商的端点（否则 `ErrTestOwner`），走真实的 `Acquire`、`Send`、`Done`：一次流式生成，输出上限 16（真伪检测 48，留 4 KiB 回答），不开推理。格式必须是端点的生成格式之一（否则 `ErrNoFormat`），管理接口不收 Completions。
 
 - **读到流结束**：调用方的取消被挡在外面，只留 45 秒上限。
 - **判定**（`TestResult.Outcome()`）见[什么算一次失败](../../docs/domains/quality.md#什么算一次失败)：2xx 且读到正常结束事件才通过，未到结束就断是 `stream_broken`。
@@ -116,7 +116,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 ## 没有对账日志
 
-请求进行中不记"哪些尝试到过供应商"。已结算的尝试由 `attempt_costs` 在结算事务里留下成本、对账键和端点，与账本同成同败（[计费的「结算与账本」](../billing/README.md#结算与账本)）。清理接管崩溃留下的预留时写 `lost_requests`，迟到的结算回来时写 `lost_request_resolutions`；对不上的扣费暂挂后由人归属（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
+请求进行中不记哪些尝试到过供应商。已结算的尝试由 `attempt_costs` 在结算事务里留下成本、对账键和端点，与账本同成同败（[计费的「结算与账本」](../billing/README.md#结算与账本)）。清理接管崩溃留下的预留时写 `lost_requests`，迟到的结算回来时写 `lost_request_resolutions`；对不上的扣费暂挂后由人归属（[计费的「持有者与截止时间」](../../docs/domains/billing.md#持有者与截止时间)）。
 
 ## 不变量
 
@@ -140,7 +140,8 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | 多节点合计不超过对方的限速 | `SharedLimiter` 一个事务内按键序占全部桶，全取或全不取；429 封桶对所有节点生效 |
 | 退出信号不取消在跑的同步 | `pg.Queue.Start` 与启动 context 脱钩，只有 `Stop` 的期限取消 |
 | 移除后库里没有密文，做过的尝试仍能结算 | `Admin.Remove` 一个事务；`erased` 的 CHECK |
-| 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`；`just adapters-removable` 对注册表的每一个 |
+| 正常供应商一定有注册的适配器；删任一适配器其余照常编译；描述不合法不启动 | `CheckAdapters`；`just adapters-removable` 逐行；`registry.New` 核对描述 |
+| 直连和云线路的成本 = 参考价 × 线路倍率，与倍率同成同败 | `SetCostRatio` 一个事务 |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 | 价目行就是收费：同一份计划、同一个 `inSettlement` | `TestEndpointCostIsWhatAnAttemptIsCharged` |
 | 推导因子乘出向上取整即原生单价 | 写入前 `Derivation.Check` |
@@ -154,8 +155,10 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 |---|---|
 | `NormalizeOrigin`、`CheckOrigin`（只在幂等回调里）、`Detect` | `ErrBadOrigin`、`ErrAddressRefused`、`ErrUnreachable` |
 | `Connect` | `ErrNoAdapter`、`*LoginError`（只带字段名）、`ErrSupplierExists` |
-| `PlanDirect`、`PlanDirectKeys`、`CheckDirect`、`CreateDirect`、`AddDirectKeys` | `ErrDirect`：`Provider`、`Origin`、`Format`、`Gemini`、`Currency`、`Name`，`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
-| `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud`（云平台） | `ErrCloudProvider`、`ErrCloudOrigin`、`ErrCloudRegions`、`ErrCloudDeployments`、`*CredentialError`、`ErrNotCloud` |
+| `Types`（只读） | |
+| `PlanDirect`、`PlanDirectKeys`、`CheckDirect`、`CreateDirect`、`AddDirectKeys` | `ErrNoType`、`ErrTypeOrigin`、`*FieldError`，`ErrDirect`：`Format`、`Gemini`、`Currency`、`Name`，`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
+| `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud` | 前三种，`ErrCloudRegions`、`ErrCloudDeployments`、`ErrNotCloud` |
+| `SetCostRatio` | `ErrCostRatio`、`ErrNotPasted`、`ErrStatusLocked` |
 | `SetStatus`、`Remove`、`ReplaceLogin`、`ConfirmUnitValue` | `ErrStatusLocked`、`ErrNoSupplier`、`ErrUnitValue`、`ErrUnitValueFixed` |
 | `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound` |
 | `SetLimits` | `ErrNoCredential`、`ErrLimits`、`ErrStatusLocked` |

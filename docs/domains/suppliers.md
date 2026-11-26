@@ -8,7 +8,7 @@
 - 中转站多数基于 new-api、sub2api，约一成是自研系统；我们通常只有普通用户账号。
 - 自研系统先看能不能用声明式适配器接；不能的单独写 Go 适配器。以后不再接入的，适配可以干净地移除。
 - 号池一般是自建的 sub2api、new-api、CPA 等系统；除非必要，不自己写号池模块，但要预留。
-- 官方 API：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口贴 key 直连，Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，都是第一版的平台货源（[产品需求的「范围」](../product.md#范围)）。规则见[直连接口与云平台](suppliers-direct.md)。账户自带 key（BYOK）用同一个 OpenAI 适配，只服务账户自己的 key（见[账户](accounts.md#自带的供应商-keybyok)）。
+- 官方 API：OpenAI、Anthropic、Google、DeepSeek、Kimi 等厂商和其他兼容接口贴 key 直连，Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，都是第一版的平台货源（[产品需求的「范围」](../product.md#范围)）。规则见[直连接口与云平台](suppliers-direct.md)。账户自带 key（BYOK）用同一个 OpenAI 适配，只服务账户自己的 key（见[账户](accounts.md#自带的供应商-keybyok)）。
 - 接入、同步、变化处理尽量自动，人只处理例外。
 
 ## 设计
@@ -38,7 +38,7 @@
 
 - **普通用户身份**：new-api 1.0（个人访问令牌；0.13 只识别、不接入）、sub2api（邮箱密码或令牌，加刷新令牌）。
 - **管理员身份，用于自建号池**：sub2api 管理接口、CPA（CLIProxyAPI，Go 适配器加常驻采集器），见「号池」和「CPA」。
-- **官方 API（直连接口）**：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口，各一个适配器，共用 `direct` 包；OpenAI 的也服务账户自带的 key。三种主流协议的调用面同时是转换和检测的基准。云平台 Vertex AI、Bedrock、Azure OpenAI 共用 `cloud` 包。
+- **官方 API（直连接口）**：只说 OpenAI 格式的厂商是 `vendors` 包里厂商表的行，Anthropic 和人填地址的兼容接口各一个包，共用 `direct` 包；OpenAI 那一行也服务账户自带的 key。三种主流协议的调用面同时是转换和检测的基准。云平台 Vertex AI、Bedrock、Azure OpenAI 共用 `cloud` 包。类型怎么描述见[直连接口与云平台的「渠道类型」](suppliers-direct.md#渠道类型)。
 
 ### 声明式适配器
 
@@ -73,7 +73,7 @@
 ### 代码组织：适配器可以干净地移除
 
 - 每个适配器是 `suppliers` 内部的独立包，带录制样本和契约测试；其他模块在编译层面引用不到（见[总体架构的「AI 好写好维护」](../architecture.md#ai-好写好维护)）。
-- 注册表一个内置适配器一行。移除一个内置适配器只删它的目录和那一行；`just adapters-removable` 对每个适配器验证这一点。声明式的移除见上。
+- 注册表一个内置适配器包一行（厂商表的包整体一行，表里删一行即删一个类型）。移除一个内置适配器只删它的目录和那一行；`just adapters-removable` 对每一行验证这一点。声明式的移除见上。
 - 适配器识别对方系统的版本并按版本选接口，不到处写特殊判断。
 
 ### 接入方式逐级兜底
