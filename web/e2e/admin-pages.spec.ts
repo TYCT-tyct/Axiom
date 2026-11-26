@@ -15,8 +15,6 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
-// The settings dialog says itself whether the save took, since a node of the release before may drop the price switch.
-const saved = (page: Page) => dialog(page).getByText(zhText("settings.saved"));
 
 test.describe("users and credit", () => {
   test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
@@ -167,74 +165,71 @@ test.describe("users and credit", () => {
 });
 
 test.describe("site settings", () => {
+  const review = (page: Page) => page.getByRole("button", { name: new RegExp(zhText("drafts.review")) });
+
   test("a server of the release before has no key limits operation, and the settings still work", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
     await page.route("**/api/admin/v1/sites/*/key-limits", (route) =>
       route.fulfill({ status: 404, json: { error: { code: "not_found", message: "no such resource" } } }),
     );
-    await page.goto("/settings");
-    await expect(page.getByText(/7\s*天/)).toBeVisible();
-    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
-    await expect(press(page, "settings.edit")).toBeVisible();
+    await page.goto("/settings/limits");
+    await expect(page.getByLabel(words("setting.limits.newKeyDaily"))).toBeVisible();
+    await expect(page.getByLabel(words("setting.limits.maxKeys"))).toHaveCount(0);
   });
 
-  test("the values in force show with where they come from, and a change keeps the defaults for what is left empty", async ({
+  test("the values in force show in their rows, and a change keeps the defaults for what is left empty", async ({
     page,
   }) => {
-    const state = await open(page, "/settings");
-    await expect(page.getByText(/7\s*天/)).toBeVisible();
-    await expect(page.getByText(/30\s*天/).first()).toBeVisible();
-    await press(page, "settings.edit").click();
-    await dialog(page).getByLabel(words("settings.field.admin_idle_timeout_seconds")).fill("100");
+    const state = await open(page, "/settings/sessions");
+    await expect(page.getByLabel(words("setting.session.consoleIdle"))).toHaveValue("7");
+    await expect(page.getByLabel(words("setting.session.consoleMax"))).toHaveValue("30");
+    // one minute is under the 300 seconds the contract allows an administrator's idle time
+    await page.getByLabel(words("setting.session.adminIdle")).fill("1");
+    await expect(page.getByText(words("drafts.invalid_other"))).toBeVisible();
+    await expect(review(page)).toBeDisabled();
+    await page.getByLabel(words("setting.session.adminIdle")).fill("120");
+    await page.getByLabel(words("setting.session.consoleIdle")).fill("");
+    await review(page).click();
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("settings.invalidRange"));
-    await dialog(page).getByLabel(words("settings.field.admin_idle_timeout_seconds")).fill("7200");
-    await dialog(page).getByLabel(words("settings.field.console_idle_timeout_seconds")).fill("");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(saved(page)).toBeVisible();
-    expect(state.settings.settings).toEqual({
-      billing_preference: "subscription_first",
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
+    expect(state.settings.settings).toMatchObject({
       admin_idle_timeout_seconds: 7200,
-      model_prices_public: true,
       new_key_daily_limit: { amount: "20000000000", currency: "USD" },
     });
-    await close(page);
-    await expect(page.getByText(/7,200/)).toBeVisible();
+    expect(state.settings.settings).not.toHaveProperty("console_idle_timeout_seconds");
+    await expect(page.getByLabel(words("setting.session.adminIdle"))).toHaveValue("120");
   });
 
   test("model prices are kept to signed-in members when the switch is turned off", async ({ page }) => {
-    const state = await open(page, "/settings");
-    const shown = page
-      .getByText(zhText("settings.field.model_prices_public"), { exact: true })
-      .locator("xpath=following-sibling::dd[1]");
-    await expect(shown).toContainText(zhText("settings.publicPrices.values.public"));
-    await press(page, "settings.edit").click();
-    await dialog(page).getByLabel(words("settings.field.model_prices_public")).uncheck();
+    const state = await open(page, "/settings/site");
+    const prices = page.getByRole("switch", { name: words("setting.site.pricesPublic") });
+    await expect(prices).toHaveAttribute("aria-checked", "true");
+    await prices.click();
+    await review(page).click();
     await send(page);
-    await expect(saved(page)).toBeVisible();
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(state.settings.settings.model_prices_public).toBe(false);
-    await close(page);
-    await expect(shown).toContainText(zhText("settings.publicPrices.values.private"));
+    await expect(prices).toHaveAttribute("aria-checked", "false");
   });
 
   test("the site's key limits are changed apart from the settings, and a settings change leaves them", async ({
     page,
   }) => {
-    const state = await open(page, "/settings");
-    await expect(page.getByText(words("settings.keyLimits.own")).first()).toBeVisible();
-    await press(page, "settings.keyLimits.edit").click();
-    await dialog(page).getByLabel(words("settings.keyLimits.field.creations_per_hour")).fill("30");
+    const state = await open(page, "/settings/limits");
+    await page.getByLabel(words("setting.limits.perHour")).fill("30");
+    await review(page).click();
     await send(page);
-    await expect(done(page)).toBeVisible();
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(state.keyLimits).toEqual({
       limits: { max_keys: 20, creations_per_hour: 30 },
       effective: { max_keys: 20, creations_per_hour: 30 },
     });
-    await close(page);
-    await press(page, "settings.edit").click();
-    await send(page);
-    await expect(saved(page)).toBeVisible();
+    await page.getByLabel(words("setting.limits.newKeyDaily")).fill("30");
+    await review(page).click();
+    await send(page, "raise what a new key may spend");
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
+    expect(state.settings.settings.new_key_daily_limit).toEqual({ amount: "30000000000", currency: "USD" });
     expect(state.keyLimits.limits).toEqual({ max_keys: 20, creations_per_hour: 30 });
   });
 });

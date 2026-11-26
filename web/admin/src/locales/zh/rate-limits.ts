@@ -1,5 +1,7 @@
 export default {
   description: "查看并设置等级、账户或 Key 每分钟可发出的请求数。",
+  cardTitle: "单独的上限",
+  cardLede: "给某个账户或某个 Key 单独设每分钟的请求数，优先于全站默认值",
   target: "限制对象",
   targets: {
     tier: "等级",

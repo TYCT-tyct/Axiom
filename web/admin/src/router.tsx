@@ -1,6 +1,13 @@
 import { safeNext } from "@axiom/app";
 import { focusPage, NotFoundState, routerDefaults } from "@axiom/ui";
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import {
+  createRootRoute,
+  createRoute,
+  createRouter,
+  lazyRouteComponent,
+  Outlet,
+  redirect,
+} from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { approvalState } from "./approvals";
 import { Layout } from "./layout";
@@ -37,6 +44,20 @@ const shellPage = <S extends Record<string, unknown> = Record<never, never>>(
 // A filter in the address is text, or nothing.
 const text = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value : undefined);
 
+// A settings page, which the palette reaches with the row to flash named in the address (settings-drafts.tsx).
+const settingsPage = (path: string, load: () => Promise<{ default: () => ReactNode }>) =>
+  shellPage(path, load, (search) => ({ setting: text(search.setting) }));
+
+// A page that moved: its old address goes on to the new one.
+const movedPage = (path: string, to: string) =>
+  createRoute({
+    getParentRoute: () => app,
+    path,
+    beforeLoad: () => {
+      throw redirect({ to });
+    },
+  });
+
 const routeTree = root.addChildren([
   guestPage("/sign-in", () => import("./auth/sign-in")),
   guestPage("/mfa", () => import("./auth/mfa")),
@@ -53,8 +74,6 @@ const routeTree = root.addChildren([
       (search) => ({ state: approvalState(search.state) }),
     ),
     shellPage("/approvals/$approvalId", () => import("./pages/approval")),
-    shellPage("/operations-credentials", () => loadTranslatedPage(import("./pages/operations-credentials"))),
-    shellPage("/operations-limits", () => loadTranslatedPage(import("./pages/operations-limits"))),
     shellPage(
       "/users",
       () => import("./pages/users"),
@@ -151,12 +170,24 @@ const routeTree = root.addChildren([
       }),
     ),
     shellPage("/alert-events", () => loadTranslatedPage(import("./pages/alert-events"))),
-    shellPage("/alert-configuration", () => loadTranslatedPage(import("./pages/alert-configuration"))),
+    settingsPage("/alert-configuration", () => loadTranslatedPage(import("./pages/alert-configuration"))),
     shellPage("/announcements", () => loadTranslatedPage(import("./pages/announcements"))),
     shellPage("/legal-documents", () => loadTranslatedPage(import("./pages/legal-documents"))),
-    shellPage("/retention", () => loadTranslatedPage(import("./pages/retention"))),
     shellPage("/rate-limits", () => loadTranslatedPage(import("./pages/rate-limits"))),
-    shellPage("/settings", () => loadTranslatedPage(import("./pages/settings"))),
+    settingsPage("/settings/site", () => loadTranslatedPage(import("./pages/settings-site"))),
+    settingsPage("/settings/sign-in", () => loadTranslatedPage(import("./pages/settings-sign-in"))),
+    settingsPage("/settings/registration", () => loadTranslatedPage(import("./pages/settings-registration"))),
+    settingsPage("/settings/sessions", () => loadTranslatedPage(import("./pages/settings-sessions"))),
+    settingsPage("/settings/limits", () => loadTranslatedPage(import("./pages/settings-limits"))),
+    settingsPage("/settings/payments", () => loadTranslatedPage(import("./pages/settings-payments"))),
+    settingsPage("/settings/mail", () => loadTranslatedPage(import("./pages/settings-mail"))),
+    settingsPage("/settings/gateway", () => loadTranslatedPage(import("./pages/settings-gateway"))),
+    settingsPage("/settings/agent", () => loadTranslatedPage(import("./pages/settings-agent"))),
+    // Where the pages of the earlier settings went (adAlias): a link or a bookmark still lands on the page.
+    movedPage("/settings", "/settings/site"),
+    movedPage("/retention", "/settings/gateway"),
+    movedPage("/operations-credentials", "/settings/agent"),
+    movedPage("/operations-limits", "/settings/agent"),
     createRoute({ getParentRoute: () => app, path: "$", component: NotFoundState }),
   ]),
 ]);

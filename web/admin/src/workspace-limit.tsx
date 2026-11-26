@@ -1,13 +1,11 @@
-import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
+import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, DataState, Field, useFormat } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
+import { ActionButton, Field, useFormat } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
 import { readBoundedInts } from "./key-limits";
 import { Facts, State } from "./parts";
-import { siteWorkspaceLimitQuery } from "./queries";
 
 type View = AdminSchemas["WorkspaceLimitView"];
 type Level = "site" | "account";
@@ -103,32 +101,5 @@ function EditWorkspaceLimit({
       done={() => <p>{t("settings.workspaceLimit.saved")}</p>}
       onClose={onClose}
     />
-  );
-}
-
-export function SiteWorkspaceLimit({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
-  const limit = useQuery(siteWorkspaceLimitQuery(siteId));
-  if (limit.error instanceof ApiError && limit.error.status === 404) {
-    return <WorkspaceLimitUnavailable level="site" />;
-  }
-  return (
-    <DataState query={limit}>
-      {(view) => (
-        <WorkspaceLimitCard
-          operation={`workspace-limit:${siteId}`}
-          level="site"
-          view={view}
-          editable
-          send={(max_workspaces, { reason, key }) =>
-            unwrapChange(
-              adminApi.PUT("/api/admin/v1/sites/{site_id}/workspace-limit", {
-                params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
-                body: { ...(max_workspaces !== undefined ? { max_workspaces } : {}), reason },
-              }),
-            )
-          }
-        />
-      )}
-    </DataState>
   );
 }

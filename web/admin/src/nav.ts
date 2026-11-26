@@ -1,5 +1,6 @@
 import type { GlyphName } from "@axiom/ui";
 import type shell from "./locales/zh/shell";
+import type { SettingsPage } from "./settings-registry";
 
 // The admin's navigation as the admin board draws it (adNavDef, adSetDef and adPhoneTabs in admin_core.js; the table in
 // ADMIN_HOWTO「导航怎么分」): four named groups in the sidebar, and the system settings, whose pages replace the
@@ -90,37 +91,65 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
   },
 ];
 
+// The route of each settings page whose rows are registered (settings-registry.ts), and the name it has in the
+// navigation: the palette sends a setting there, with its row to flash.
+export const settingsRoutes = {
+  site: { to: "/settings/site", nav: "site" },
+  signin: { to: "/settings/sign-in", nav: "signIn" },
+  registration: { to: "/settings/registration", nav: "registration" },
+  session: { to: "/settings/sessions", nav: "sessions" },
+  limits: { to: "/settings/limits", nav: "keysAndWorkspaces" },
+  payments: { to: "/settings/payments", nav: "payments" },
+  mail: { to: "/settings/mail", nav: "mail" },
+  gateway: { to: "/settings/gateway", nav: "gateway" },
+  alerts: { to: "/alert-configuration", nav: "alertRules" },
+  agent: { to: "/settings/agent", nav: "agent" },
+} as const satisfies Record<SettingsPage, { to: string; nav: keyof typeof shell.nav }>;
+
 export const settingsEntry: NavEntry = {
   key: "settings",
-  to: "/settings",
+  to: settingsRoutes.site.to,
   icon: "settings",
   permission: "sites.manage",
 };
 
-// The settings' five groups. The pages F10 splits out of today's one settings page (登录方式, 注册, 会话与登录保护,
-// Key 与工作区, 充值与商户, 邮件) are on /settings until then, so their groups show only what has a route of its own;
-// 主题 is not built (#948).
+// The settings' five groups (adSetDef); 主题 is not built (#948).
 export const settingsGroups: readonly Group<keyof typeof shell.settingsGroups>[] = [
   {
     key: "site",
     entries: [
-      { key: "site", to: "/settings", icon: "spaces", permission: "sites.manage" },
+      { key: "site", to: settingsRoutes.site.to, icon: "spaces", permission: "sites.manage" },
       { key: "legal", to: "/legal-documents", icon: "docs", permission: "sites.manage" },
     ],
   },
-  { key: "limits", entries: [{ key: "rateLimits", to: "/rate-limits", icon: "budget", permission: "sites.manage" }] },
-  { key: "services", entries: [{ key: "gateway", to: "/retention", icon: "status", permission: "sites.manage" }] },
+  {
+    key: "access",
+    entries: [
+      { key: "signIn", to: settingsRoutes.signin.to, icon: "keys", permission: "sites.manage" },
+      { key: "registration", to: settingsRoutes.registration.to, icon: "user", permission: "sites.manage" },
+      { key: "sessions", to: settingsRoutes.session.to, icon: "security", permission: "sites.manage" },
+    ],
+  },
+  {
+    key: "limits",
+    entries: [
+      { key: "keysAndWorkspaces", to: settingsRoutes.limits.to, icon: "mkey", permission: "sites.manage" },
+      { key: "rateLimits", to: "/rate-limits", icon: "budget", permission: "sites.manage" },
+      { key: "payments", to: settingsRoutes.payments.to, icon: "wallet", permission: "sites.manage" },
+    ],
+  },
+  {
+    key: "services",
+    entries: [
+      { key: "mail", to: settingsRoutes.mail.to, icon: "mail", permission: "sites.manage" },
+      { key: "gateway", to: settingsRoutes.gateway.to, icon: "status", permission: "sites.manage" },
+    ],
+  },
   {
     key: "running",
     entries: [
-      { key: "alertRules", to: "/alert-configuration", icon: "bell", permission: "sites.manage" },
-      {
-        key: "agent",
-        to: "/operations-credentials",
-        icon: "presets",
-        permission: "operations.manage",
-        also: [{ to: "/operations-limits", label: "operationsLimits" }],
-      },
+      { key: "alertRules", to: settingsRoutes.alerts.to, icon: "bell", permission: "sites.manage" },
+      { key: "agent", to: settingsRoutes.agent.to, icon: "presets", permission: "operations.manage" },
     ],
   },
 ];

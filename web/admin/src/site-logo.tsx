@@ -1,11 +1,10 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, Cluster, DataState, Field, ImageBox, Stack, Text, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Field, ImageBox, SettingRow, Stack, Text } from "@axiom/ui";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ReactNode, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
-import { Facts } from "./parts";
 import { adminSiteQuery, siteLogoQuery } from "./queries";
 
 type Logo = AdminSchemas["SiteLogo"];
@@ -51,73 +50,45 @@ function base64(data: ArrayBuffer): string {
   return btoa(binary);
 }
 
-const names: Record<LogoType, string> = { "image/svg+xml": "SVG", "image/png": "PNG", "image/webp": "WebP" };
-
-export function SiteLogo({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
-  const { t } = useTranslation();
+// LogoRow is the site's logo in the brand card: the image, and the two things done to it. It is a file, so it is not a
+// draft: it is set or cleared through its own dialog. A node of the release before has no logo operation, and the row
+// is then not there.
+export function LogoRow({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
   const logo = useQuery(siteLogoQuery(siteId));
+  if (logo.error instanceof ApiError && logo.error.status === 404) {
+    return null;
+  }
+  return <DataState query={logo}>{(view) => <LogoControls siteId={siteId} logo={view.logo} />}</DataState>;
+}
+
+function LogoControls({ siteId, logo }: { siteId: AdminSchemas["SiteId"]; logo: Logo | undefined }) {
+  const { t } = useTranslation();
   const [setting, setSetting] = useState(false);
   const [clearing, setClearing] = useState(false);
-  if (logo.error instanceof ApiError && logo.error.status === 404) {
-    return (
-      <Facts
-        title={t("settings.logo.title")}
-        rows={[[t("settings.logo.unavailableLabel"), t("settings.logo.unavailable")]]}
-      />
-    );
-  }
   return (
-    <DataState query={logo}>
-      {(view) => {
-        const rows: [string, ReactNode][] = [
-          [
-            t("settings.logo.current"),
-            view.logo ? (
-              <Current logo={view.logo} />
-            ) : (
-              <Text as="span" tone="muted">
-                {t("settings.logo.none")}
-              </Text>
-            ),
-          ],
-        ];
-        if (view.logo) {
-          rows.push([t("settings.logo.details"), <LogoDetails key="details" logo={view.logo} />]);
-        }
-        return (
-          <>
-            <Facts
-              title={t("settings.logo.title")}
-              actions={
-                <Cluster>
-                  <ActionButton onClick={() => setSetting(true)} icon="pencil">
-                    {t("settings.logo.set")}
-                  </ActionButton>
-                  {view.logo ? (
-                    <ActionButton variant="gho" onClick={() => setClearing(true)}>
-                      {t("settings.logo.clear")}
-                    </ActionButton>
-                  ) : null}
-                </Cluster>
-              }
-              rows={rows}
-            />
-            {setting ? <SetLogo siteId={siteId} onClose={() => setSetting(false)} /> : null}
-            {clearing ? <ClearLogo siteId={siteId} onClose={() => setClearing(false)} /> : null}
-          </>
-        );
-      }}
-    </DataState>
+    <>
+      <SettingRow title={t("settings.logo.title")} detail={t("settings.logo.hint")}>
+        {logo ? <Current logo={logo} /> : <Text tone="muted">{t("settings.logo.none")}</Text>}
+        <Cluster>
+          <ActionButton size="sm" onClick={() => setSetting(true)}>
+            {t(logo ? "settings.logo.replace" : "settings.logo.set")}
+          </ActionButton>
+          {logo ? (
+            <ActionButton size="sm" variant="gho" onClick={() => setClearing(true)}>
+              {t("settings.logo.clear")}
+            </ActionButton>
+          ) : null}
+        </Cluster>
+      </SettingRow>
+      {setting ? <SetLogo siteId={siteId} had={logo !== undefined} onClose={() => setSetting(false)} /> : null}
+      {clearing ? <ClearLogo siteId={siteId} onClose={() => setClearing(false)} /> : null}
+    </>
   );
 }
 
 function Current({ logo }: { logo: Logo }) {
   if (!logo.data_url) {
-    return (
-      <Text as="span" tone="muted">
-        {logo.content_type}
-      </Text>
-    );
+    return <Text tone="muted">{logo.content_type}</Text>;
   }
   return <ImageBox src={logo.data_url} size={40} />;
 }
@@ -164,7 +135,7 @@ function useLogoFile() {
   return { chosen, problem, choose };
 }
 
-function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose: () => void }) {
+function SetLogo({ siteId, had, onClose }: { siteId: AdminSchemas["SiteId"]; had: boolean; onClose: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const queryClient = useQueryClient();
@@ -174,6 +145,13 @@ function SetLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClose:
       operation={`site-logo:${siteId}`}
       title={t("settings.logo.setTitle")}
       intro={<p>{t("settings.logo.intro")}</p>}
+      diff={[
+        {
+          label: t("settings.logo.title"),
+          before: t(had ? "settings.logo.current" : "settings.logo.nothing"),
+          after: chosen?.name ?? "—",
+        },
+      ]}
       action={t("settings.logo.save")}
       fields={(error) => (
         <Stack gap={12}>
@@ -221,6 +199,9 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       operation={`site-logo-clear:${siteId}`}
       title={t("settings.logo.clearTitle")}
       intro={<p>{t("settings.logo.clearIntro")}</p>}
+      diff={[
+        { label: t("settings.logo.title"), before: t("settings.logo.current"), after: t("settings.logo.nothing") },
+      ]}
       action={t("settings.logo.clear")}
       danger
       fields={() => <Text tone="muted">{t("settings.logo.clearHint")}</Text>}
@@ -238,20 +219,5 @@ function ClearLogo({ siteId, onClose }: { siteId: AdminSchemas["SiteId"]; onClos
       done={() => <p>{t("settings.logo.cleared")}</p>}
       onClose={onClose}
     />
-  );
-}
-
-// LogoDetails is what the stored image is: its type, its size in pixels when known, and its bytes.
-function LogoDetails({ logo }: { logo: Logo }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Text as="span" tone="muted">
-      {names[logo.content_type as LogoType] ?? logo.content_type}
-      {logo.width > 0 && logo.height > 0
-        ? ` · ${t("settings.logo.pixels", { width: logo.width, height: logo.height })}`
-        : ""}
-      {` · ${t("settings.logo.bytes", { size: format.number(logo.size) })}`}
-    </Text>
   );
 }

@@ -4,8 +4,6 @@ import { Field, Text, useFormat } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem, useSnapshot } from "./change";
 
-type AgentLimits = AdminSchemas["OperationsAgentLimits"];
-type AgentLimitsBody = Omit<AdminSchemas["OperationsAgentLimitsUpdate"], "reason">;
 type Envelope = AdminSchemas["OperationsPriceEnvelopeSetting"];
 type EnvelopeLimits = AdminSchemas["OperationsPriceEnvelope"];
 
@@ -18,90 +16,6 @@ function parseBoundedInt(raw: string | undefined, min: number, max: number): num
   }
   const value = Number(trimmed);
   return Number.isInteger(value) && value >= min && value <= max ? value : null;
-}
-
-const agentLimitSpec = [
-  { name: "requests_per_minute", maxKey: "requests_per_minute_max", fallbackMax: 600, label: "requestsPerMinute" },
-  {
-    name: "money_writes_per_minute",
-    maxKey: "money_writes_per_minute_max",
-    fallbackMax: 30,
-    label: "moneyWritesPerMinute",
-  },
-  { name: "money_writes_per_hour", maxKey: "money_writes_per_hour_max", fallbackMax: 300, label: "moneyWritesPerHour" },
-  { name: "alerts_per_hour", maxKey: "alerts_per_hour_max", fallbackMax: 60, label: "alertsPerHour" },
-] as const;
-
-function readAgentLimits(
-  values: Record<string, string>,
-  view: AgentLimits,
-  invalid: string,
-): AgentLimitsBody | Problem {
-  const alerts = parseBoundedInt(values.alerts_per_hour, 1, view.alerts_per_hour_max ?? 60);
-  if (alerts === null) {
-    return { problem: invalid };
-  }
-  const out: AgentLimitsBody = { alerts_per_hour: alerts, rev: view.rev ?? 0 };
-  for (const field of agentLimitSpec) {
-    if (field.name === "alerts_per_hour" || view[field.name] === undefined) {
-      continue;
-    }
-    const max = view[field.maxKey] ?? field.fallbackMax;
-    const parsed = parseBoundedInt(values[field.name], 1, max);
-    if (parsed === null) {
-      return { problem: invalid };
-    }
-    out[field.name] = parsed;
-  }
-  return out;
-}
-
-export function AgentLimitsDialog({ view, onClose }: { view: AgentLimits; onClose: () => void }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const [read, reload] = useSnapshot(view);
-  return (
-    <ChangeDialog
-      operation="ops-agent-limits"
-      title={t("operations.limits.agent.editTitle")}
-      intro={<p>{t("operations.limits.agent.editIntro")}</p>}
-      action={t("operations.limits.agent.saveAction")}
-      reload={reload}
-      fields={(error) => (
-        <>
-          {agentLimitSpec.map((field) => {
-            if (field.name !== "alerts_per_hour" && read[field.name] === undefined) {
-              return null;
-            }
-            const max = read[field.maxKey] ?? field.fallbackMax;
-            return (
-              <Field
-                key={field.name}
-                label={t(`operations.limits.agent.${field.label}`)}
-                hint={t("operations.limits.agent.rangeHint", { max })}
-                name={field.name}
-                defaultValue={String(read[field.name] ?? max)}
-                inputMode="numeric"
-                autoComplete="off"
-                error={errors.field(error, field.name)}
-              />
-            );
-          })}
-        </>
-      )}
-      read={(values) => readAgentLimits(values, read, t("operations.limits.agent.invalid"))}
-      send={(body, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/operations/agent-limits", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-          }),
-        )
-      }
-      done={(saved) => <Text>{t("operations.limits.agent.saved", { rev: saved.rev ?? 0 })}</Text>}
-      onClose={onClose}
-    />
-  );
 }
 
 type EnvelopePayload = { siteId: string; limits: EnvelopeLimits; rev: number };

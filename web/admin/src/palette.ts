@@ -2,9 +2,10 @@ import { can, useSession } from "@axiom/app";
 import type { PaletteItem, PaletteSection, ShellEntry, ShellGroup } from "@axiom/ui";
 import { usePreferences } from "@axiom/ui";
 import { useNavigate } from "@tanstack/react-router";
-import { useState } from "react";
+import i18next from "i18next";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { groups, settingsGroups } from "./nav";
+import { groups, settingsGroups, settingsRoutes } from "./nav";
 
 type Navigation = { main: ShellGroup[]; settings?: { entry: ShellEntry; groups: ShellGroup[] } };
 
@@ -69,9 +70,45 @@ function useActions(signOut: () => void): PaletteItem[] {
   ];
 }
 
+type SettingSearch = typeof import("./settings-registry").settingSearchItems;
+
+// The registry of settings and their words are loaded when the palette is first opened, not with the first screen: the
+// admin's first screen is held to a budget, and nobody searches before opening the palette.
+function useSettingSearch(open: boolean): SettingSearch | undefined {
+  const [search, setSearch] = useState<SettingSearch>();
+  useEffect(() => {
+    if (!open || search) return;
+    void Promise.all([import("./settings-registry"), import("./locales/settings")]).then(([registry, words]) => {
+      for (const language of ["zh", "en"] as const) {
+        i18next.addResourceBundle(language, "admin", words.default[language], true);
+      }
+      setSearch(() => registry.settingSearchItems);
+    });
+  }, [open, search]);
+  return search;
+}
+
+// Every registered setting by its name, to its page with the row named so that the page flashes it (adPalAll).
+function useSettingItems(open: boolean): PaletteItem[] {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const search = useSettingSearch(open);
+  return (search?.(t) ?? []).map((setting) => {
+    const page = settingsRoutes[setting.page];
+    return {
+      key: `setting:${setting.key}`,
+      label: setting.label,
+      meta: t(`shell.nav.${page.nav}`),
+      icon: "settings",
+      keywords: setting.detail,
+      onSelect: () => void navigate({ to: page.to, search: setting.search }),
+    };
+  });
+}
+
 // The palette's sources (adPalItems): with no query, the recent pages, the actions, then every page; a query also
 // finds the settings and the tabs' routes.
-export function usePaletteSections(nav: Navigation, signOut: () => void): PaletteSection[] {
+export function usePaletteSections(nav: Navigation, signOut: () => void, open: boolean): PaletteSection[] {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const item =
@@ -89,6 +126,7 @@ export function usePaletteSections(nav: Navigation, signOut: () => void): Palett
   const recent = useRecent(all.find((entry) => entry.current)?.href);
   const tabPages = useTabPages(all);
   const actions = useActions(signOut);
+  const settingRows = useSettingItems(open);
   const page = item(t("shell.palette.page"));
   return [
     {
@@ -98,7 +136,7 @@ export function usePaletteSections(nav: Navigation, signOut: () => void): Palett
     },
     { label: t("shell.palette.actions"), idle: true, items: actions },
     { label: t("shell.palette.pages"), idle: true, items: pages.map(page) },
-    { label: t("shell.palette.setting"), items: settings.map(item(t("shell.palette.setting"))) },
+    { label: t("shell.palette.setting"), items: [...settings.map(item(t("shell.palette.setting"))), ...settingRows] },
     { label: t("shell.palette.pages"), items: tabPages.map(page) },
   ];
 }

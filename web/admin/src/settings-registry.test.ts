@@ -15,5 +15,8 @@ it("lists every registered setting for the palette, in words, with the page and 
     search: { setting: "registration.burst" },
   });
   // a label that is its own key was not found in the words the palette has before any settings page loads
-  for (const item of items) expect(item.label).not.toMatch(/^setting\./);
+  for (const item of items) {
+    expect(item.label).not.toMatch(/^setting\./);
+    expect(item.detail ?? "").not.toMatch(/^setting\./);
+  }
 });

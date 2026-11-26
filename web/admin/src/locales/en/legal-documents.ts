@@ -1,5 +1,6 @@
 export default {
-  description: "Publish terms and privacy policies by language and read previous versions.",
+  description:
+    "The terms people agree to when they sign up and top up. After a new version is published, existing users are asked to agree again at their next sign-in.",
   history: "Publication history",
   empty: "No legal documents published",
   document: "{{kind}} · Version {{version}}",
@@ -10,8 +11,8 @@ export default {
   read: "Read document",
   body: "Document body (Markdown)",
   publish: "Publish new version",
-  publishIntro:
-    "Published versions are immutable. After publication, users must accept the new version before continuing in the console.",
+  publishIntro: "A published version cannot be changed; publish another one instead.",
+  publishWarn: "Every registered user has to agree again at their next sign-in.",
   invalid: "Select the document kind and language and enter the body.",
   kinds: {
     terms: "Terms of service",

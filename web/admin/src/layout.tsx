@@ -145,7 +145,7 @@ function Shell({ signOut, children }: { signOut: () => void; children: ReactNode
   const inSettings = Boolean(nav.settings?.groups.some((group) => group.entries.some((entry) => entry.current)));
   const back = useBack(nav.pathname, inSettings, home);
   const bell = useBell((id) => `/alert-events?event=${encodeURIComponent(id)}`);
-  const sections = usePaletteSections(nav, signOut);
+  const sections = usePaletteSections(nav, signOut, searching);
   const email = session.user.email;
   return (
     <AdminShell

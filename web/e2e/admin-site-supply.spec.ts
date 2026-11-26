@@ -16,61 +16,58 @@ test.describe("site brand, workspace and login limits", () => {
   test("site brand previews light/dark accents with contrast, saves a new hex and clears to default", async ({
     page,
   }) => {
-    const state = await open(page, "/settings");
-    await expect(page.getByText("#2563eb").first()).toBeVisible();
+    const state = await open(page, "/settings/site");
+    const color = page.getByLabel(words("setting.site.color"));
+    await expect(color).toHaveValue("#2563eb");
     await expect(page.getByText(zhText("settings.brand.light")).first()).toBeVisible();
     await expect(page.getByText(zhText("settings.brand.dark")).first()).toBeVisible();
 
-    await press(page, "settings.brand.edit").click();
-    const input = dialog(page).getByLabel(words("settings.brand.color"));
-    await input.fill("not-a-color");
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("settings.brand.invalid"));
+    // Text that is no colour is marked and cannot be submitted.
+    await color.fill("not-a-color");
+    await expect(page.getByText(words("drafts.invalid_other"))).toBeVisible();
+    await expect(page.getByRole("button", { name: new RegExp(zhText("drafts.review")) })).toBeDisabled();
 
     // Extreme yellow triggers automatic contrast correction while keeping live WCAG contrast ratios visible.
-    await input.fill("#FFFF00");
-    await expect(dialog(page).getByText(/文字对比度 \d+\.\d+:1/)).toHaveCount(2);
-    await expect(dialog(page).getByText(zhText("settings.brand.adjusted"))).toBeVisible();
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
+    await color.fill("#FFFF00");
+    await expect(page.getByText(/文字对比度 \d+\.\d+:1/)).toHaveCount(2);
+    await expect(page.getByText(zhText("settings.brand.adjusted"))).toBeVisible();
+    await page.getByRole("button", { name: new RegExp(zhText("drafts.review")) }).click();
+    await expect(dialog(page).locator("ins")).toHaveText("#FFFF00");
+    await send(page);
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(siteExtrasOf(state).brand).toEqual({ brand_color: "#ffff00" });
-    await close(page);
-    await expect(page.getByText("#ffff00").first()).toBeVisible();
 
-    await press(page, "settings.brand.edit").click();
-    await dialog(page).getByLabel(words("settings.brand.color")).fill("");
+    await color.fill("");
+    await page.getByRole("button", { name: new RegExp(zhText("drafts.review")) }).click();
     await send(page, "return to default palette");
-    await expect(done(page)).toBeVisible();
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(siteExtrasOf(state).brand).toEqual({});
-    await close(page);
-    await expect(page.getByText(zhText("settings.brand.default"))).toBeVisible();
   });
 
   test("site workspace limit and login limits validate bounds and save with a reason", async ({ page }) => {
-    const state = await open(page, "/settings");
+    const state = await open(page, "/settings/limits");
+    const review = page.getByRole("button", { name: new RegExp(zhText("drafts.review")) });
 
-    await press(page, "settings.workspaceLimit.edit").click();
-    await dialog(page).getByLabel(words("settings.workspaceLimit.field")).fill("2000");
+    const workspaces = page.getByLabel(words("setting.limits.maxWorkspaces"));
+    await workspaces.fill("2000");
+    await expect(page.getByText(words("drafts.invalid_other"))).toBeVisible();
+    await expect(review).toBeDisabled();
+    await workspaces.fill("80");
+    await review.click();
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(
-      zhText("settings.workspaceLimit.invalid").replace("{{min}}", "1").replace("{{max}}", "1000"),
-    );
-    await dialog(page).getByLabel(words("settings.workspaceLimit.field")).fill("80");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(siteExtrasOf(state).workspaceLimit).toEqual({ max_workspaces: 80, effective: 80 });
-    await close(page);
 
-    await press(page, "settings.loginLimits.edit").click();
-    await dialog(page).getByLabel(words("settings.loginLimits.field.challenge_code_attempts")).fill("200");
+    await page.goto("/settings/sessions");
+    const challenge = page.getByLabel(words("setting.session.challenge"));
+    await challenge.fill("200");
+    await expect(page.getByText(words("drafts.invalid_other"))).toBeVisible();
+    await challenge.fill("8");
+    await page.getByLabel(words("setting.session.ipBurst")).fill("");
+    await review.click();
     await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("settings.loginLimits.invalid"));
-    await dialog(page).getByLabel(words("settings.loginLimits.field.challenge_code_attempts")).fill("8");
-    await dialog(page).getByLabel(words("settings.loginLimits.field.ip_attempt_burst")).fill("");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
     expect(siteExtrasOf(state).loginLimits.limits).toEqual({ challenge_code_attempts: 8 });
-    await close(page);
   });
 
   test("an older node without brand, workspace limit or login limits leaves the rest of settings working", async ({
@@ -83,11 +80,15 @@ test.describe("site brand, workspace and login limits", () => {
         route.fulfill({ status: 404, json: { error: { code: "not_found", message: "not found" } } }),
       );
     }
-    await page.goto("/settings");
-    await expect(page.getByText(zhText("settings.brand.unavailable"))).toBeVisible();
-    await expect(page.getByText(zhText("settings.workspaceLimit.unavailable"))).toBeVisible();
-    await expect(page.getByText(zhText("settings.loginLimits.unavailable"))).toBeVisible();
-    await expect(press(page, "settings.edit")).toBeVisible();
+    await page.goto("/settings/site");
+    await expect(page.getByLabel(words("setting.site.name"))).toBeVisible();
+    await expect(page.getByLabel(words("setting.site.color"))).toHaveCount(0);
+    await page.goto("/settings/limits");
+    await expect(page.getByLabel(words("setting.limits.maxKeys"))).toBeVisible();
+    await expect(page.getByLabel(words("setting.limits.maxWorkspaces"))).toHaveCount(0);
+    await page.goto("/settings/sessions");
+    await expect(page.getByLabel(words("setting.session.consoleIdle"))).toBeVisible();
+    await expect(page.getByLabel(words("setting.session.ipBurst"))).toHaveCount(0);
   });
 
   test("an account's workspace limit can be overridden and cleared back to the site limit", async ({ page }) => {
