@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"slices"
@@ -179,8 +180,9 @@ func (f *fakeSupplier) sent() []supplied {
 // samples, and a supplier that serves them, all but the sale price, which a test adds when it wants the node to route.
 type callWorld struct {
 	commandLine
-	bound          func([]*listening)  // lets the journey set its domains before startup reads them
-	trusted        []*x509.Certificate // test servers the node's outbound client trusts besides the loopback supplier
+	bound          func([]*listening)        // lets the journey set its domains before startup reads them
+	trusted        []*x509.Certificate       // test servers the node's outbound client trusts besides the loopback supplier
+	routes         map[string]netip.AddrPort // public addresses the node's outbound client reaches at a test server
 	supplier       *fakeSupplier
 	site           uuid.UUID
 	richKey, noKey string
@@ -410,7 +412,7 @@ func (w *callWorld) start(extra ...string) runningNode {
 	done := make(chan error, 1)
 	// The node reaches the supplier, which listens on loopback, through a client that is allowed to.
 	loopback := func(tel *telemetry.Telemetry) (*egress.Client, error) { //nolint:unparam // the signature serveWith asks for; the production client can fail
-		return egress.NewForTesting(egresstest.Loopback(w.t, w.trusted...), egress.WithTracerProvider(tel.Traces)), nil
+		return egress.NewForTesting(withRoutes(egresstest.Loopback(w.t, w.trusted...), w.routes), egress.WithTracerProvider(tel.Traces)), nil
 	}
 	bound := w.bound
 	if bound == nil {

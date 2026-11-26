@@ -61,6 +61,8 @@ const (
 	CauseTransport     KeyCause = "transport"
 	CauseUpstreamError KeyCause = "upstream_error"
 	CauseUnknown       KeyCause = "unknown"
+	// CauseRegionUnavailable is a cloud region that does not serve the account's models.
+	CauseRegionUnavailable KeyCause = "region_unavailable"
 )
 
 // KeyCheck is the answer to one key's check. Status is the provider's HTTP status, 0 when it answered nothing. Models

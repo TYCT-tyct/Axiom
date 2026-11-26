@@ -58,13 +58,13 @@ func (q *Queries) CredentialByRef(ctx context.Context, db DBTX, arg CredentialBy
 const credentialsPage = `-- name: CredentialsPage :many
 
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
 FROM suppliers.credentials c
 JOIN suppliers.suppliers s ON s.id = c.supplier_id
 WHERE s.owner_scope = 'platform'
     AND ($1::uuid IS NULL OR c.supplier_id = $1)
     AND ($2::text IS NULL OR c.status = $2)
-    AND ($3::text IS NULL OR $3 = 'relay')
+    AND ($3::text IS NULL OR s.mode = $3)
     AND ($4::uuid IS NULL OR c.id < $4)
 ORDER BY c.id DESC
 LIMIT $5::int
@@ -94,12 +94,12 @@ type CredentialsPageRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // The credentials as the admin's upstream pages manage them (internal/suppliers/README.md「管理接口」): listed across
 // suppliers, pasted, checked, switched and erased. The sealed key is read only where a check sends it.
-// Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). Every
-// platform supplier is a relay until a supplier has another mode, so the mode filter `relay` is every one of them.
+// Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK).
 func (q *Queries) CredentialsPage(ctx context.Context, db DBTX, arg CredentialsPageParams) ([]CredentialsPageRow, error) {
 	rows, err := db.Query(ctx, credentialsPage,
 		arg.SupplierID,
@@ -131,6 +131,7 @@ func (q *Queries) CredentialsPage(ctx context.Context, db DBTX, arg CredentialsP
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -263,7 +264,7 @@ func (q *Queries) InsertSealedCredential(ctx context.Context, db DBTX, arg Inser
 
 const lockCredentialOf = `-- name: LockCredentialOf :many
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
 FROM suppliers.credentials c WHERE c.supplier_id = $1 AND c.id = $2 FOR UPDATE
 `
 
@@ -288,6 +289,7 @@ type LockCredentialOfRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // One credential of one supplier, held for a change of its status until the transaction ends: a check's answer and a
@@ -317,6 +319,7 @@ func (q *Queries) LockCredentialOf(ctx context.Context, db DBTX, arg LockCredent
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}

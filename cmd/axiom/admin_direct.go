@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
-	"uuid"
 
 	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
@@ -43,7 +42,7 @@ func (a adminAPI) CreateDirectSupplier(ctx context.Context, request adminapi.Cre
 	}
 	body, replay, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.SupplierConnected, error) {
 		made, err := a.suppliers.CreateDirect(ctx, tx, actor(ctx), snap, plan)
-		return connectedBody(made), err
+		return connectedBody(made, true), err
 	})
 	if err != nil {
 		return nil, err
@@ -119,27 +118,16 @@ func directAnswer(body adminapi.SupplierConnected, replay bool) adminapi.CreateD
 	return adminapi.CreateDirectSupplier201JSONResponse{Body: body, Headers: adminapi.CreateDirectSupplier201ResponseHeaders{IdempotencyReplayed: replayedHeader(replay)}}
 }
 
-// connectedBody is the API's view of what the keys came to. A key is never in it, only its last four characters.
-func connectedBody(c suppliers.Connected) adminapi.SupplierConnected {
+// connectedBody is the API's view of what the keys, or a cloud credential's regions, came to: a pasted key's check has
+// its place in the request. A key is never in it, only its last four characters.
+func connectedBody(c suppliers.Connected, pasted bool) adminapi.SupplierConnected {
 	out := adminapi.SupplierConnected{Checks: make([]adminapi.CredentialCheck, len(c.Checks))}
 	if c.Supplier != nil {
 		s := supplierBody(*c.Supplier)
 		out.Supplier = &s
 	}
 	for i, k := range c.Checks {
-		check := adminapi.CredentialCheck{Index: &k.Index, Last4: &k.Last4, Outcome: adminapi.CredentialCheckOutcome(k.Outcome)}
-		if k.Cause != "" {
-			cause := adminapi.CredentialCheckCause(k.Cause)
-			check.Cause = &cause
-		}
-		if k.Credential != (uuid.UUID{}) {
-			id := k.Credential.String()
-			check.CredentialId = &id
-		}
-		if k.Outcome != suppliers.DirectKeyDuplicate { // a duplicate was not sent, so nothing answered it
-			check.UpstreamStatus, check.CheckedAt = &k.Status, &k.CheckedAt
-		}
-		out.Checks[i] = check
+		out.Checks[i] = keyCheckBody(k, pasted)
 	}
 	return out
 }

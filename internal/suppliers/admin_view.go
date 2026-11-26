@@ -25,6 +25,8 @@ type Supplier struct {
 	// Mode is how Axiom reaches it: relay, direct or cloud. APIFormat is the family a compatible direct API speaks,
 	// empty for every other.
 	Mode, APIFormat string
+	// CloudAccount is what is not secret about a cloud supplier's credential; nil for every other.
+	CloudAccount *CloudAccount
 }
 
 func supplierOf(r store.GetSupplierViewRow) Supplier {
@@ -33,8 +35,17 @@ func supplierOf(r store.GetSupplierViewRow) Supplier {
 		Generation: deref(r.Generation), DetectedVersion: deref(r.DetectedVersion), NativeUnit: r.NativeUnit,
 		SettlementCurrency: r.SettlementCurrency, Status: Status(r.Status), StatusReason: deref(r.StatusReason),
 		BalanceNative: r.BalanceNative, LowBalanceThreshold: r.LowBalanceThreshold, BalanceObservedAt: r.BalanceObservedAt,
-		UnitValue: r.UnitValue, Mode: r.Mode, APIFormat: deref(r.ApiFormat),
+		UnitValue: r.UnitValue, Mode: r.Mode, APIFormat: deref(r.ApiFormat), CloudAccount: cloudAccountOf(r.CloudAccount),
 	}
+}
+
+// cloudAccountOf reads the column, which only the module writes; a value that does not read is shown as none.
+func cloudAccountOf(b []byte) *CloudAccount {
+	var a CloudAccount
+	if b == nil || jsonx.Unmarshal(b, &a) != nil {
+		return nil
+	}
+	return &a
 }
 
 func derefQuantization(s *string) Quantization {
@@ -98,6 +109,8 @@ type Credential struct {
 	CreatedAt time.Time
 	// LastCheck is what the last check of the key found; nil when it was never checked.
 	LastCheck *KeyCheck
+	// Region is the cloud region the credential serves from; empty for every other.
+	Region string
 }
 
 // credentialFacts is one credential row as the tables hold it. Every read of a credential for the admin selects these
@@ -118,6 +131,7 @@ type credentialFacts struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // credentialOf is a credential as the admin shows it.
@@ -126,10 +140,11 @@ func credentialOf(f credentialFacts) Credential {
 		ID: f.ID, Supplier: f.SupplierID, Group: f.SupplierGroupID, UpstreamKeyRef: f.UpstreamKeyRef, Status: f.Status,
 		CooldownUntil: f.CooldownUntil, ExpiresAt: f.ExpiresAt, MaxConcurrency: int(f.MaxConcurrency),
 		RequestsPerMinute: limited(f.RequestsPerMinute), Source: deref(f.Source), Last4: deref(f.Hint), CreatedAt: createdAt(f.ID),
+		Region: deref(f.Region),
 	}
 	if f.CheckedAt != nil && f.CheckOutcome != nil && f.CheckStatus != nil {
 		c.LastCheck = &KeyCheck{
-			Credential: f.ID, Last4: c.Last4, Outcome: CheckOutcome(*f.CheckOutcome), Cause: CheckCause(deref(f.CheckCause)),
+			Credential: f.ID, Last4: c.Last4, Region: c.Region, Outcome: CheckOutcome(*f.CheckOutcome), Cause: CheckCause(deref(f.CheckCause)),
 			UpstreamStatus: int(*f.CheckStatus), CheckedAt: *f.CheckedAt,
 		}
 	}

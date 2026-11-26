@@ -276,6 +276,9 @@ func keyCheckBody(c suppliers.KeyCheck, pasted bool) adminapi.CredentialCheck {
 	if c.Cause != "" {
 		body.Cause = new(adminapi.CredentialCheckCause(c.Cause))
 	}
+	if c.Region != "" {
+		body.Region = new(c.Region)
+	}
 	if !c.CheckedAt.IsZero() { // a request was sent
 		body.UpstreamStatus, body.CheckedAt = &c.UpstreamStatus, new(c.CheckedAt.UTC())
 	}

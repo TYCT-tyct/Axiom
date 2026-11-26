@@ -203,6 +203,8 @@ type endpoint struct {
 type credential struct {
 	id                              uuid.UUID
 	key                             secret.Secret
+	region                          string // the cloud region it serves from; empty for every other
+	call                            string // the endpoint's model as this credential's calls name it
 	configuredMax, configuredMinute int32
 	max                             int32
 	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
@@ -430,7 +432,7 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
 	return &credential{
-		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
 		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
 		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, upstreamAccount(r), r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
 	}, nil
