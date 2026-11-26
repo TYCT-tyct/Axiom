@@ -48,6 +48,25 @@ describe("site announcement entry", () => {
     expect(html).toContain("announcements.retry");
   });
 
+  it("marks the announcements that began after the newest one this browser opened", () => {
+    const data = {
+      data: [
+        { id: "a", title: "A", starts_at: "2026-11-20T00:00:00Z" },
+        { id: "b", title: "B", starts_at: "2026-11-25T00:00:00Z" },
+      ],
+    };
+    expect(render(data)).toContain("announcements.unread");
+    const stored = new Map([["axiom.announcements.seen", "2026-11-25T00:00:00.000Z"]]);
+    vi.stubGlobal("localStorage", { getItem: (key: string) => stored.get(key) ?? null, setItem: () => {} });
+    try {
+      expect(render(data)).not.toContain("announcements.unread");
+      stored.set("axiom.announcements.seen", "2026-11-21T00:00:00+08:00");
+      expect(render(data)).toContain("announcements.unread");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("shows a permission state instead of cached announcements after access is refused", () => {
     const html = render({ data: [{ title: "Cached announcement" }] }, new ApiError(403, "request"));
     expect(html).toContain("state.forbiddenTitle");

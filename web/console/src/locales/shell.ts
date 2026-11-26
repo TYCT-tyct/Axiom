@@ -7,6 +7,7 @@ export const zh = {
   collapse: "收起",
   expand: "展开",
   balanceUnavailable: "暂不可用",
+  callsPaused: "这个账户的调用已被站点暂停，所有 key 的调用都会被拒绝；登录、充值和管理 key 不受影响。请联系站点管理员。",
 };
 
 export const en: Messages<typeof zh> = {
@@ -14,4 +15,6 @@ export const en: Messages<typeof zh> = {
   collapse: "Collapse",
   expand: "Expand",
   balanceUnavailable: "Unavailable",
+  callsPaused:
+    "The site has paused this account's calls, so every key's calls are refused; signing in, paying and managing keys still work. Contact the site's administrator.",
 };
