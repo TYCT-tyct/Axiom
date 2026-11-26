@@ -165,13 +165,20 @@ func (a adminAPI) ListTiers(ctx context.Context, request adminapi.ListTiersReque
 	}
 	list := adminapi.TierList{Data: make([]adminapi.TierRef, len(tiers))}
 	for i, t := range tiers {
-		list.Data[i] = tierRef(t)
+		list.Data[i] = tierView(t)
 	}
 	return adminapi.ListTiers200JSONResponse(list), nil
 }
 
 func tierRef(t accounts.Tier) adminapi.TierRef {
 	return adminapi.TierRef{Id: t.ID.TypeID(), Name: t.Name}
+}
+
+// tierView is a tier as the tier list and the tier operations show it, with whether it is disabled or the default.
+func tierView(t accounts.Tier) adminapi.TierRef {
+	ref := tierRef(t)
+	ref.Disabled, ref.Default = &t.Disabled, &t.Default
+	return ref
 }
 
 // registrationPolicyBody is a site's registration policy as the contract writes it.

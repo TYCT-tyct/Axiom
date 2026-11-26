@@ -3805,6 +3805,117 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
+    post:
+      operationId: createTier
+      tags: [Users]
+      summary: Add a tier
+      description: >-
+        Adds an enabled tier to the site, the main site unless `site_id` names another. No account joins it until it is
+        moved there or the tier becomes the default. What it pays is a pricing rule for the tier
+        (docs/domains/accounts.md「等级」). A name another tier of the site has, ignoring case, is a 409 `name_taken`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TierCreate"}
+      responses:
+        "201":
+          description: Added.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TierRef"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/tiers/{tier_id}:
+    parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/TierId"}
+    patch:
+      operationId: updateTier
+      tags: [Users]
+      summary: Rename, disable or enable a tier
+      description: >-
+        Changes the members given. A disabled tier keeps its accounts and its pricing rules, but no account, sign-up
+        or default moves onto it. The site's default tier cannot be disabled (409 `conflict`): make another the default
+        first. A name another tier has is a 409 `name_taken`; a change to what the tier already is writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TierUpdate"}
+      responses:
+        "200":
+          description: The tier as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/TierRef"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/tiers/{tier_id}/default:
+    parameters:
+      - name: tier_id
+        in: path
+        required: true
+        schema: {$ref: "#/components/schemas/TierId"}
+    put:
+      operationId: setDefaultTier
+      tags: [Users]
+      summary: Make a tier the one new accounts join
+      description: >-
+        New accounts of the tier's site join it, read from the database at sign-up, and visitors see its prices;
+        accounts already on another tier stay there. A disabled tier is a 422 pointing at `tier_id`; the current default
+        changes nothing and writes no audit entry.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/TierDefault"}
+      responses:
+        "204":
+          description: The default stored; the current one changes nothing
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/users:
     get:
       operationId: listUsers
@@ -9418,6 +9529,32 @@ components:
       properties:
         id: {$ref: "#/components/schemas/TierId"}
         name: {type: string}
+        disabled: {type: boolean, description: "No account, sign-up or default moves onto it. Absent on an older node."}
+        default: {type: boolean, description: "The tier new accounts join. Absent on an older node."}
+    TierCreate:
+      type: object
+      additionalProperties: false
+      required: [name, reason]
+      properties:
+        site_id:
+          description: "The tier's site. Absent: the main site."
+          allOf: [{$ref: "#/components/schemas/SiteId"}]
+        name: {type: string, minLength: 1, maxLength: 100, description: "Trimmed; 1 to 100 characters."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    TierUpdate:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: "Trimmed; 1 to 100 characters. Absent keeps it."}
+        disabled: {type: boolean, description: "Absent keeps it."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    TierDefault:
+      type: object
+      additionalProperties: false
+      required: [reason]
+      properties:
+        reason: {$ref: "#/components/schemas/Reason"}
     TierList:
       type: object
       required: [data]
@@ -11231,9 +11368,11 @@ components:
         the site's currency. `exchange` selects a reference in the site's currency, then USD, then a supported currency
         in alphabetical order; the multiplier and exact exchange fraction are combined before one upward rounding.
         A missing exchange rate stops publication for the matched model, without falling through to another rule
-        (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. The members of the other kinds must be absent.
+        (docs/domains/billing.md「汇率」). `fixed`: `schedule` is the price. `default_multiplier`, for a tier or an account
+        only: the price for all accounts × `multiplier`, also where a more specific rule sets that price, which is how a
+        tier pays a share more or less (docs/domains/billing.md「定价」). The members of the other kinds must be absent.
       properties:
-        kind: {type: string, enum: [cost_plus, reference_multiplier, fixed]}
+        kind: {type: string, enum: [cost_plus, reference_multiplier, fixed, default_multiplier]}
         markup_ratio: {$ref: "#/components/schemas/Decimal"}
         margin_ratio: {$ref: "#/components/schemas/Decimal"}
         fixed_markup: {$ref: "#/components/schemas/Rates"}
