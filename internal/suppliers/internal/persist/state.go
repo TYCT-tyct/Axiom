@@ -284,7 +284,7 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 	if len(c.Plans) > 0 {
 		rows := make([]store.SyncPlanRow, len(c.Plans))
 		for i, p := range c.Plans {
-			rows[i] = store.SyncPlanRow{Endpoint: p.Endpoint, Fingerprint: p.Fingerprint, Schedule: p.Schedule, Basis: p.Basis}
+			rows[i] = store.SyncPlanRow{Endpoint: p.Endpoint, Fingerprint: p.Fingerprint, Schedule: p.Schedule, Basis: p.Basis, Derivation: p.Derivation}
 		}
 		if err := store.InsertSyncPlans(ctx, tx, id, c.State.Version, rows); err != nil {
 			return fmt.Errorf("write the cost plans: %w", err)

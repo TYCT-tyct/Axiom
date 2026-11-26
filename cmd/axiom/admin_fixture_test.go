@@ -116,7 +116,7 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(c.t), Egress: exit})
+	supplierAdmin, err := suppliers.NewAdmin(suppliers.AdminConfig{Keys: masterKeys(c.t), Egress: exit, Clock: clock.Now})
 	if err != nil {
 		c.t.Fatal(err)
 	}

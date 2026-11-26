@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -111,4 +112,68 @@ func linesCharge(t *testing.T, cost EndpointCost, above int64, counts map[catalo
 		q.Add(q, big.NewInt(1))
 	}
 	return q.Int64()
+}
+
+// TestEndpointCostLinesShowTheirFactors: a line of a plan stored with its factors carries them, in order, and they
+// multiply out to the line's native price within the plan's own rounding (up, once, to a unit price), across bands; a
+// plan stored without factors (one from before plans kept them) has lines with none.
+func TestEndpointCostLinesShowTheirFactors(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	old := w.tieredCost()
+	base, err := catalog.ParseSchedule([]byte(`{"v":1,"currency":"XXX","rates":{"input":"0.075","cache_read":"0.0075","output":"0.3"},
+		"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":1000,"rates":{"input":"0.15","output":"0.45"}}]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	scaled, err := adapter.ScaleSchedule(base, "1.37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	derivation, err := adapter.ScaledDerivation(base, "1.37").Text()
+	if err != nil {
+		t.Fatal(err)
+	}
+	schedule, err := scaled.MarshalJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		plan, err := store.New().EnsureCostSchedule(ctx, tx, store.EnsureCostScheduleParams{
+			SupplierID: w.supplier, EndpointID: w.endpoint, NativeUnit: "quota", Basis: "confirmed", Fingerprint: "v3",
+			Schedule: schedule, Derivation: derivation,
+		})
+		if err != nil {
+			return err
+		}
+		return store.New().SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &plan})
+	})
+	var cost EndpointCost
+	w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
+		cost, err = w.adminOf().EndpointCost(ctx, tx, w.supplier, w.endpoint, PlatformOwned)
+		return err
+	})
+	if len(cost.Lines) != len(old.Lines) {
+		t.Fatalf("%d lines, want %d", len(cost.Lines), len(old.Lines))
+	}
+	for i, l := range cost.Lines {
+		if len(old.Lines[i].Factors) != 0 {
+			t.Errorf("a plan stored without factors has %v on %s", old.Lines[i].Factors, l.Item)
+		}
+		if len(l.Factors) != 2 || l.Factors[0].Kind != "base_price" || l.Factors[1] != (CostFactor{Kind: "group_ratio", Value: "1.37"}) {
+			t.Fatalf("%s above %d: factors %v, want the base price then the group ratio", l.Item, l.Above, l.Factors)
+		}
+		product := big.NewRat(1, 1)
+		for _, f := range l.Factors {
+			v, ok := new(big.Rat).SetString(f.Value)
+			if !ok {
+				t.Fatalf("factor %v", f)
+			}
+			product.Mul(product, v)
+		}
+		if gap := new(big.Rat).Sub(l.Native.Rat(), product); gap.Sign() < 0 || gap.Cmp(big.NewRat(1, 1e15)) >= 0 {
+			t.Errorf("%s above %d: the factors multiply out to %s, the native price is %s", l.Item, l.Above, product.FloatString(18), l.Native)
+		}
+		expectPrice(t, l, cost.UnitValue.Rat())
+	}
 }

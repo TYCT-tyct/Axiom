@@ -9,6 +9,7 @@ import (
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -32,6 +33,16 @@ type CostLine struct {
 	// Price is Native in the settlement currency, rounded up to a unit price; nil while no unit value is confirmed or
 	// when it is beyond what a unit price may be.
 	Price *platform.UnitPrice
+	// Factors are what Native is the product of, in order, rounded up to a unit price once: a relay's ratios, or a
+	// confirmed base price and the group's ratio. Empty for a plan stored without them (one from before plans kept
+	// them, or one whose adapter gives none). The unit value Price adds is the supplier's, not the plan's, and not here.
+	Factors []CostFactor
+}
+
+// CostFactor is one input of a price line (CostFactorKind of api/admin.yaml), as exact decimal text.
+type CostFactor struct {
+	Kind  string
+	Value string
 }
 
 // EndpointCost is an endpoint's cost plan in force as price lines. Plan is nil, and Lines empty, while the cost is not
@@ -84,9 +95,16 @@ func (a *Admin) EndpointCost(ctx context.Context, tx pg.Tx, supplier, endpoint u
 	if err != nil {
 		return EndpointCost{}, fmt.Errorf("the cost plan %s: %w", *r.PlanID, err)
 	}
+	derivation, err := adapter.ParseDerivation(r.Derivation)
+	if err != nil {
+		return EndpointCost{}, fmt.Errorf("the cost plan %s: %w", *r.PlanID, err)
+	}
 	c.Plan, c.Basis, c.Schedule = r.PlanID, deref(r.Basis), &schedule
 	for _, rate := range schedule.View().Rates {
 		line := CostLine{Item: rate.Item, ServiceTier: rate.ServiceTier, Base: rate.Base, Above: rate.Above, Native: rate.Price}
+		for _, f := range derivation.Of(rate) {
+			line.Factors = append(line.Factors, CostFactor{Kind: string(f.Kind), Value: f.Value})
+		}
 		if c.UnitValue != nil {
 			if price, err := oneUnit.Scale(inSettlement(rate.Price.Rat(), c.UnitValue.Rat())); err == nil {
 				line.Price = &price

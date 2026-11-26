@@ -13,7 +13,7 @@ ORDER BY m.supplier_group_id, m.upstream_name;
 
 -- name: GetEndpointPlan :many
 -- An endpoint of the supplier with the cost plan in force, none when its cost is not known.
-SELECT e.id, e.model_id, e.cost_state, cs.id AS plan_id, cs.schedule, cs.basis
+SELECT e.id, e.model_id, e.cost_state, cs.id AS plan_id, cs.schedule, cs.basis, COALESCE(cs.derivation::text, '')::text AS derivation
 FROM suppliers.endpoints e
 LEFT JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
 WHERE e.id = @id AND e.supplier_id = @supplier_id;

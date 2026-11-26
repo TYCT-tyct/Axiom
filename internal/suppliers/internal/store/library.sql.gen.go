@@ -13,7 +13,7 @@ import (
 )
 
 const getEndpointPlan = `-- name: GetEndpointPlan :many
-SELECT e.id, e.model_id, e.cost_state, cs.id AS plan_id, cs.schedule, cs.basis
+SELECT e.id, e.model_id, e.cost_state, cs.id AS plan_id, cs.schedule, cs.basis, COALESCE(cs.derivation::text, '')::text AS derivation
 FROM suppliers.endpoints e
 LEFT JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
 WHERE e.id = $1 AND e.supplier_id = $2
@@ -25,12 +25,13 @@ type GetEndpointPlanParams struct {
 }
 
 type GetEndpointPlanRow struct {
-	ID        uuid.UUID
-	ModelID   uuid.UUID
-	CostState string
-	PlanID    *uuid.UUID
-	Schedule  []byte
-	Basis     *string
+	ID         uuid.UUID
+	ModelID    uuid.UUID
+	CostState  string
+	PlanID     *uuid.UUID
+	Schedule   []byte
+	Basis      *string
+	Derivation string
 }
 
 // An endpoint of the supplier with the cost plan in force, none when its cost is not known.
@@ -50,6 +51,7 @@ func (q *Queries) GetEndpointPlan(ctx context.Context, db DBTX, arg GetEndpointP
 			&i.PlanID,
 			&i.Schedule,
 			&i.Basis,
+			&i.Derivation,
 		); err != nil {
 			return nil, err
 		}

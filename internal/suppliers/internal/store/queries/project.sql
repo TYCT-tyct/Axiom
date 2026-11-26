@@ -89,8 +89,8 @@ UPDATE suppliers.endpoints SET upstream_name = @upstream_name, formats = @format
 -- A cost schedule is append-only and an endpoint has one row per fingerprint: a plan the endpoint already has a row for
 -- is that row, so a listing read twice adds none.
 WITH made AS (
-    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-    VALUES (@supplier_id, @endpoint_id, @native_unit, @schedule::jsonb, @basis, @fingerprint)
+    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
+    VALUES (@supplier_id, @endpoint_id, @native_unit, @schedule::jsonb, @basis, @fingerprint, NULLIF(@derivation::text, '')::jsonb)
     ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
     RETURNING id
 )

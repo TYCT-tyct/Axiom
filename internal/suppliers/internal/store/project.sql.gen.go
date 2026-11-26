@@ -26,8 +26,8 @@ func (q *Queries) ClearProjectedGroupPool(ctx context.Context, db DBTX, id uuid.
 
 const ensureCostSchedule = `-- name: EnsureCostSchedule :one
 WITH made AS (
-    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-    VALUES ($1, $2, $3, $4::jsonb, $5, $6)
+    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
+    VALUES ($1, $2, $3, $4::jsonb, $5, $6, NULLIF($7::text, '')::jsonb)
     ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
     RETURNING id
 )
@@ -44,6 +44,7 @@ type EnsureCostScheduleParams struct {
 	Schedule    []byte
 	Basis       string
 	Fingerprint string
+	Derivation  string
 }
 
 // A cost schedule is append-only and an endpoint has one row per fingerprint: a plan the endpoint already has a row for
@@ -56,6 +57,7 @@ func (q *Queries) EnsureCostSchedule(ctx context.Context, db DBTX, arg EnsureCos
 		arg.Schedule,
 		arg.Basis,
 		arg.Fingerprint,
+		arg.Derivation,
 	)
 	var id uuid.UUID
 	err := row.Scan(&id)

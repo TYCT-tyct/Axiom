@@ -29,35 +29,36 @@ func InsertSyncEvents(ctx context.Context, db DBTX, supplier uuid.UUID, version 
 	return err
 }
 
-// SyncPlanRow is a version of a cost plan.
-type SyncPlanRow struct{ Endpoint, Fingerprint, Schedule, Basis string }
+// SyncPlanRow is a version of a cost plan. Derivation is "" for a plan without one, stored as NULL.
+type SyncPlanRow struct{ Endpoint, Fingerprint, Schedule, Basis, Derivation string }
 
 const insertSyncPlans = `
-INSERT INTO suppliers.sync_plans (supplier_id, version, seq, endpoint, fingerprint, schedule, basis)
-SELECT $1::uuid, $2::bigint, p.seq - 1, p.endpoint, p.fingerprint, p.schedule::jsonb, p.basis
-FROM unnest($3::text[], $4::text[], $5::text[], $6::text[]) WITH ORDINALITY
-    AS p (endpoint, fingerprint, schedule, basis, seq)`
+INSERT INTO suppliers.sync_plans (supplier_id, version, seq, endpoint, fingerprint, schedule, basis, derivation)
+SELECT $1::uuid, $2::bigint, p.seq - 1, p.endpoint, p.fingerprint, p.schedule::jsonb, p.basis, NULLIF(p.derivation, '')::jsonb
+FROM unnest($3::text[], $4::text[], $5::text[], $6::text[], $7::text[]) WITH ORDINALITY
+    AS p (endpoint, fingerprint, schedule, basis, derivation, seq)`
 
 // InsertSyncPlans writes the cost plans of the step that stored version, in their order.
 func InsertSyncPlans(ctx context.Context, db DBTX, supplier uuid.UUID, version int64, rows []SyncPlanRow) error {
-	var endpoint, fingerprint, schedule, basis []string
+	var endpoint, fingerprint, schedule, basis, derivation []string
 	for _, r := range rows {
 		endpoint, fingerprint = append(endpoint, r.Endpoint), append(fingerprint, r.Fingerprint)
-		schedule, basis = append(schedule, r.Schedule), append(basis, r.Basis)
+		schedule, basis, derivation = append(schedule, r.Schedule), append(basis, r.Basis), append(derivation, r.Derivation)
 	}
-	_, err := db.Exec(ctx, insertSyncPlans, supplier, version, endpoint, fingerprint, schedule, basis)
+	_, err := db.Exec(ctx, insertSyncPlans, supplier, version, endpoint, fingerprint, schedule, basis, derivation)
 	return err
 }
 
 // PlanVersion is one version of a cost plan as it was stored: the endpoint as the supplier names it, its fingerprint,
-// and the schedule itself.
-type PlanVersion struct{ Endpoint, Fingerprint, Schedule, Basis string }
+// the schedule itself and what its prices are the product of ("" for none).
+type PlanVersion struct{ Endpoint, Fingerprint, Schedule, Basis, Derivation string }
 
 // planVersions reads one row per version asked for. DISTINCT ON keeps the newest row of a version that is stored more
 // than once: the same schedule confirmed by a person and then published by the supplier has one fingerprint and two
 // bases, and which one is read back must not depend on the order the rows come in.
 const planVersions = `
-SELECT DISTINCT ON (p.endpoint, p.fingerprint) p.endpoint, p.fingerprint, p.schedule::text, p.basis
+SELECT DISTINCT ON (p.endpoint, p.fingerprint) p.endpoint, p.fingerprint, p.schedule::text, p.basis,
+    COALESCE(p.derivation::text, '')
 FROM suppliers.sync_plans p
 JOIN unnest($2::text[], $3::text[]) AS k (endpoint, fingerprint)
     ON k.endpoint = p.endpoint AND k.fingerprint = p.fingerprint
@@ -80,7 +81,7 @@ func PlanVersions(ctx context.Context, db DBTX, supplier uuid.UUID, keys []PlanV
 	var out []PlanVersion
 	for rows.Next() {
 		var p PlanVersion
-		if err := rows.Scan(&p.Endpoint, &p.Fingerprint, &p.Schedule, &p.Basis); err != nil {
+		if err := rows.Scan(&p.Endpoint, &p.Fingerprint, &p.Schedule, &p.Basis, &p.Derivation); err != nil {
 			return nil, err
 		}
 		out = append(out, p)

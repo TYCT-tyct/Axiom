@@ -127,8 +127,8 @@ func TestSupplierReconciliation(t *testing.T) {
 	decode(t, f.do(http.MethodGet, "/suppliers/"+supplier+"/reconciliation", "", as(f.s)), &r)
 	expectSame(t, "no records", []any{len(r.Days), r.NativeUnit}, []any{0, adminapi.SupplierReconciliationNativeUnit("quota")})
 	rows := reconciliationRows{supplier, f.group(supplier, "1"), uuid.NewV7().String(), uuid.NewV7().String(), uuid.NewV7().String()}
-	// The admin's suppliers side reads the wall clock in these tests, so the days are the wall clock's.
-	today := time.Now().UTC().Truncate(24 * time.Hour)
+	// The admin's suppliers side reads the node's clock, which holds still: the days are its days, also across midnight.
+	today := f.clock.Now().UTC().Truncate(24 * time.Hour)
 	yesterday := today.AddDate(0, 0, -1)
 	f.run(append(rows.seed(),
 		rows.attempt(yesterday.Add(time.Hour), "100", "'r1'"),
