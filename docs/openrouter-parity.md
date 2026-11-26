@@ -22,6 +22,8 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有| 有 | 有 | 无 |
 | Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有 | 未启用（路由已注释掉） | 有 | Axiom 比 OpenRouter 多，非缺口 |
+| Gemini 原生 `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent?alt=sse`、`:countTokens` | OpenRouter 文档未列 | — | 有：入口换成 Chat 调用、出口写回 Gemini 的回复、用量和错误，key 收 `x-goog-api-key`、`?key=`、bearer（`docs/domains/gateway.md`）；`cachedContent`、Google 自带工具、多候选 400 | 有（不含 countTokens） | 无 | Axiom 比 OpenRouter 多，非缺口 |
+| 跨格式的工具：Codex 的 Responses `custom`、Claude Code 的服务端工具 | 各家原格式 | — | 部分：`custom` 转成单个 `input` 字符串的函数并还原成 `custom_tool_call`；Anthropic 服务端与带类型工具、OpenAI 托管工具无等价函数，按类型点名拒绝，只走原格式端点 | 部分 | 部分 | 与 CLIProxyAPI、sub2api 一致；服务端工具跨格式要本站代跑工具循环 |
 | `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 有：按 OpenAI 旧接口原生提供，只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转 | 有 | 无 | 基线取 OpenAI 的旧接口；OpenRouter 的 `prompt`-on-chat 变体不采用（要改 Chat 的形状）；旧补全的 `logprobs`、`n`、`best_of` 没有 Chat 对应写法，所以不转格式（[决策](domains/gateway.md#决策与理由)） |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活，Chat 最后一块带 usage（`docs/domains/gateway.md`） | 有（ping，见差分规则） | 有 | 无 |
 | 流式取消（断开连接即停止上游） | 断开连接立即停止模型处理和计费 | docs/api_reference/streaming | 有：用 `context.Cause` 区分客户端断开 | 有（relay 取消） | 有（`gateway_handler_cancellation_test.go`） | 无 |
@@ -90,7 +92,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，取值做�
 | 变体 `:thinking`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking | 部分：请求自己已经要求推理时接受，按基础模型服务（本目录没有独立思考条目，后缀没有别的含义）；否则 400，提示改用 `reasoning` 参数 | 无 | 无 | 发现接口不执行请求级判断，按基础模型回 200 |
 | 变体 `:extended`（已弃用） | 目录变体 | docs/guides/routing/model-variants/extended | 没有：400，官方已下线且没有模型再提供 | 无 | 无 | 不补 |
 | 后缀叠加（任意顺序，最后一个排序变体生效） | 规则 | docs/guides/routing/model-variants/overview | 有（`TestParseModelName`） | 无 | 无 | 无 |
-| 提供者透传头 `x-anthropic-beta` | 透传 Anthropic beta 特性 | docs/guides/routing/provider-selection | 有：`anthropic-beta` 白名单转发，不筛选值（`docs/domains/gateway.md`） | 有 | 有 | 无 |
+| 提供者透传头 `x-anthropic-beta` | 透传 Anthropic beta 特性 | docs/guides/routing/provider-selection | 有：`anthropic-beta` 白名单转发，不筛选值；发往 Vertex AI、Bedrock 时只留各自接受的（`docs/domains/gateway.md`） | 有 | 有 | 无 |
 
 ## 4. 自动路由和其他路由器
 
@@ -213,7 +215,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，取值做�
 | 错误体外壳 `{"error":{"code":<数字>,"message","metadata"}}`，HTTP 状态码与 `error.code` 相同 | 数字 code | docs/api_reference/errors-and-debugging | 有：Chat/Responses 用 `{"error":{"message","type","param","code":<数字>,"metadata"}}`，状态码与 `error.code` 相同；Messages 用 Anthropic 外壳（[协议错误渲染](../internal/protocol/errors.go) 的 `appendOpenAIError`） | OpenAI 外壳 | OpenAI/Anthropic 外壳 | 多 `type`、`param` 两个 OpenAI 兼容字段，不影响读 `code`/`metadata` 的客户端 |
 | 状态码语义 400/401/402/403/408/429/502/503 | 见文档表 | 同上 | 部分：有 400/401/402/403/404/408/413/429/502/503（[协议错误词表](../internal/protocol/errors.go) 的 `errorTypes`）；有 403 `permission_denied`（含账户暂停）和 `content_policy_violation`，本地模型权限仍隐藏为 404 | 有 | 有 | 内容护栏本身尚未实现；能识别上游内容拒绝 |
 | `error_type` 类型化词表（约 30 个，如 `context_length_exceeded`、`authentication`、`permission_denied`、`payment_required`、`rate_limit_exceeded`、`provider_overloaded`、`invalid_request`、`content_policy_violation`、`invalid_image`、`timeout`…） | 稳定、可程序判断 | 同上（Typed error codes） | 部分：已有 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、`payload_too_large` 等；HTTP 与 SSE、流式与聚合共用，原话脱敏后保留；`error.code` 只是状态码，分类读 `metadata.error_type` | 无 | 无 | 图片等其他细分类仍缺 |
-| `error_type` 的位置：Chat `error.metadata.error_type`；Messages `error.error_type`；Responses 顶层 | 三种外壳各自位置 | 同上 | 有：位置与 OpenRouter 一致（`docs/domains/gateway.md`） | 无 | 无 | 无 |
+| `error_type` 的位置：Chat `error.metadata.error_type`；Messages `error.error_type`；Responses 顶层 | 三种外壳各自位置 | 同上 | 有：位置与 OpenRouter 一致；Gemini 路径在 `details` 的 `ErrorInfo.reason`；Messages 错误体另带 `request_id`（`TestEveryFormatRefusesInItsOwnShape`） | 无 | 无 | 无 |
 | `error.metadata.provider_code`、`provider_name`、`raw`（上游原始错误） | 非 500 时给出上游错误码 | 同上 | 部分：上游 4xx 的原话和 `code` 交给客户端，`code` 放 `metadata.provider_code`，并去掉能指向供应商的内容；没有 `provider_name`、`raw`；上游 429/5xx 一律 502（`docs/domains/gateway.md` 的「错误」） | 原样 | 原样 | 供应商身份不暴露是有意；`provider_code` 已对齐 |
 | 审核错误 `error.metadata{reasons, flagged_input, provider_name, model_slug}` | 403 | 同上 | 没有 | 无 | 无 | 随内容护栏做 |
 | 预算错误：403，`metadata{limit_source: openrouter_guardrail_budget/workspace_budget/key_limit, scope, limit_usd, spend_usd, resets_at, remedy_hint}` | 预算耗尽 | 同上 | 部分：工作区预算和 key 上限返回 403，`limit_source` 为 `openrouter_workspace_budget`/`openrouter_key_limit`；余额不足是 402、`limit_source: balance`；套餐作为最后来源而不够时 402、`limit_source: subscription`（本站自有） | 无 | 无 | 状态码和 `limit_source` 已对齐；金额、scope 和 remedy_hint 仍缺 |
@@ -310,7 +312,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，取值做�
 
 ## Axiom 比 OpenRouter 多的（不算缺口，只是行为不一致，迁移时要说明）
 
-- `POST /v1/messages/count_tokens`、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
+- `POST /v1/messages/count_tokens`、Gemini 原生路径、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
 - `/key`、`/credits` 同时接受调用 key 和管理 key。OpenRouter 的 `/credits` 只收管理 key；本站保留调用 key，因为其他中转站常用调用 key 查余额和用量（决定见 [gateway](domains/gateway.md#决策与理由)）。
 - 响应总是带 `usage.cost`/`cost_currency`/`cost_estimated`，不需要 `usage.include`。
 - 推理文本同时写 `reasoning` 与 `reasoning_content`。
