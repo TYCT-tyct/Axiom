@@ -311,6 +311,21 @@ function listPaymentRefunds({ query, state }: Ctx<"/api/admin/v1/payments/refund
   return page ? ok(page) : fail(400, "invalid_request");
 }
 
+// The site's redeem codes, narrowed by state and by the start of their note as the server does, ignoring case.
+function listRedeemCodes({ query, state }: Ctx<"/api/admin/v1/payments/redeem-codes", "get">) {
+  if (query.get("site_id") !== state.siteId) {
+    return fail(404, "not_found");
+  }
+  const wanted = query.get("state");
+  const note = (query.get("note") ?? "").toLowerCase();
+  const codes = state.redeemCodes.filter(
+    (code) => (!wanted || code.state === wanted) && code.note.toLowerCase().startsWith(note),
+  );
+  const page = paged(codes, query);
+  // The list's cursor is absent on the last page, not null.
+  return page ? ok({ data: page.data, next_cursor: page.next_cursor ?? undefined }) : fail(400, "invalid_request");
+}
+
 // A decision changes the refund the page already has: a second person's approval, or a withdrawal that returns the
 // credits. The mock keeps the idempotency the real server has by refusing a refund that is no longer frozen.
 function decideRefund(
@@ -481,6 +496,7 @@ const handlers: Handler<AdminState>[] = [
   route("get", `${base}/payments/orders`, reads("sites.manage"), listPaymentOrders),
   route("get", `${base}/payments/paid-batches`, reads("sites.manage"), listPaidBatches),
   route("get", `${base}/payments/refunds`, reads("sites.manage"), listPaymentRefunds),
+  route("get", `${base}/payments/redeem-codes`, reads("sites.manage"), listRedeemCodes),
   route("get", `${base}/payments/cash`, reads("sites.manage"), ({ query, state }) =>
     query.get("site_id") === state.siteId ? ok({ data: [], next_cursor: null }) : fail(404, "not_found"),
   ),

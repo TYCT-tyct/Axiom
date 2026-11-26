@@ -38,6 +38,7 @@ export type AdminState = AuthState & {
   orders: Schemas["PaymentOrder"][];
   paidBatches: Schemas["PaidBatch"][];
   refunds: Schemas["PaymentRefund"][];
+  redeemCodes: Schemas["RedeemCode"][];
   audit: Schemas["AuditEntry"][];
   auditEntries: Map<string, Schemas["AuditEntry"]>;
   suppliers: Schemas["SupplierDetail"][];
@@ -420,6 +421,7 @@ export function emptyState(): AdminState {
     orders: [],
     paidBatches: [],
     refunds: [],
+    redeemCodes: [],
     audit: [],
     auditEntries: new Map(),
     suppliers: [],

@@ -251,7 +251,10 @@ const overview = sceneOf(consoleSuite, "overview");
 // the reference for all of these and has its own test.
 const pages: [Suite, string][] = [
   ...["sign-in", "keys", "calls", "balance", "statement"].map((name): [Suite, string] => [consoleSuite, name]),
-  ...["users", "suppliers", "models", "pricing", "settings"].map((name): [Suite, string] => [adminSuite, name]),
+  ...["users", "suppliers", "models", "pricing", "settings", "redeem-codes"].map((name): [Suite, string] => [
+    adminSuite,
+    name,
+  ]),
   [siteSuite, "home"],
 ];
 
