@@ -25,18 +25,7 @@ func TestTierAdministration(t *testing.T) {
 	}); err != nil || pro.Name != "Pro" {
 		t.Fatalf("create Pro: %+v, %v", pro, err)
 	}
-	var defaultTier accounts.TierID
-	if err := do(func(tx pg.Tx) error {
-		tiers, err := x.s.Tiers(t.Context(), tx, site)
-		for _, tier := range tiers {
-			if tier.Default {
-				defaultTier = tier.ID
-			}
-		}
-		return err
-	}); err != nil || defaultTier == (accounts.TierID{}) {
-		t.Fatalf("the site's tiers name no default: %v", err)
-	}
+	defaultTier := x.defaultTier(t, site)
 	disable, enable, rename := true, false, "Plus"
 	for _, c := range []struct {
 		name string
@@ -77,10 +66,7 @@ func TestTierAdministration(t *testing.T) {
 			return err
 		}, nil},
 	} {
-		err := do(c.do)
-		var setting *accounts.SettingError
-		if _, wantSetting := c.want.(*accounts.SettingError); wantSetting && !errors.As(err, &setting) ||
-			!wantSetting && !errors.Is(err, c.want) {
+		if err := do(c.do); !refusedAs(err, c.want) {
 			t.Errorf("%s: %v, want %v", c.name, err, c.want)
 		}
 	}
@@ -97,4 +83,32 @@ func TestTierAdministration(t *testing.T) {
 	if got := texts(t, x.db, platform, "SELECT count(*)::text FROM platform.audit_log WHERE action IN ('tier.create','tier.update','site.default_tier_change')"); got[0] != "5" {
 		t.Errorf("tier audit entries = %v, want 5", got)
 	}
+}
+
+// defaultTier is the site's default tier, as the tier list marks it.
+func (x site) defaultTier(t *testing.T, site accounts.SiteID) accounts.TierID {
+	t.Helper()
+	var tiers []accounts.Tier
+	if err := x.db.Tx(t.Context(), platform, func(tx pg.Tx) (err error) {
+		tiers, err = x.s.Tiers(t.Context(), tx, site)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tier := range tiers {
+		if tier.Default {
+			return tier.ID
+		}
+	}
+	t.Fatal("the site's tiers name no default")
+	return accounts.TierID{}
+}
+
+// refusedAs reports whether err is want: any *SettingError when want is one, else errors.Is.
+func refusedAs(err, want error) bool {
+	if _, setting := want.(*accounts.SettingError); setting {
+		_, ok := errors.AsType[*accounts.SettingError](err)
+		return ok
+	}
+	return errors.Is(err, want)
 }
