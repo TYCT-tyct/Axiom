@@ -68,16 +68,16 @@ type DirectRequest struct {
 
 // The outcomes of a key's check, as the admin API names them.
 const (
-	KeyPassed       = "passed"
-	KeyFailed       = "failed"
-	KeyInconclusive = "inconclusive"
-	KeyDuplicate    = "duplicate"
+	DirectKeyPassed       = "passed"
+	DirectKeyFailed       = "failed"
+	DirectKeyInconclusive = "inconclusive"
+	DirectKeyDuplicate    = "duplicate"
 )
 
-// KeyCheck is what one pasted key came to. Credential is the credential it was stored as, the zero ID when it was not;
+// DirectKeyCheck is what one pasted key came to. Credential is the credential it was stored as, the zero ID when it was not;
 // Status is the provider's HTTP status, 0 when it answered nothing; CheckedAt is zero for a key that was not checked.
 // The key itself is never in it.
-type KeyCheck struct {
+type DirectKeyCheck struct {
 	Index      int
 	Last4      string
 	Outcome    string
@@ -97,7 +97,7 @@ type DirectPlan struct {
 	family adapter.Family
 	origin string
 	direct adapter.Direct
-	Checks []KeyCheck
+	Checks []DirectKeyCheck
 }
 
 // Currency is the settlement currency the supplier will have: the request's, or the provider's own.
@@ -110,7 +110,7 @@ func Last4(key string) string { return hintOf(strings.TrimSpace(key)) }
 // and every key's check in the order sent.
 type Connected struct {
 	Supplier *Supplier
-	Checks   []KeyCheck
+	Checks   []DirectKeyCheck
 }
 
 // keyRef is what a pasted key is stored and found by: the first 128 bits of its SHA-256, as a key CPA lists is. It
@@ -156,17 +156,17 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 }
 
 // pastedKeys is a check for each key, in order; one that came earlier in the list is a duplicate.
-func pastedKeys(keys []string) ([]KeyCheck, error) {
-	checks := make([]KeyCheck, 0, len(keys))
+func pastedKeys(keys []string) ([]DirectKeyCheck, error) {
+	checks := make([]DirectKeyCheck, 0, len(keys))
 	seen := map[string]bool{}
 	for i, raw := range keys {
 		key := strings.TrimSpace(raw)
 		if !bearerToken(key) {
 			return nil, &KeyError{Index: i}
 		}
-		c := KeyCheck{Index: i, Last4: Last4(key), key: secret.New(key), ref: keyRef(key)}
+		c := DirectKeyCheck{Index: i, Last4: Last4(key), key: secret.New(key), ref: keyRef(key)}
 		if seen[c.ref] {
-			c.Outcome = KeyDuplicate
+			c.Outcome = DirectKeyDuplicate
 		}
 		seen[c.ref] = true
 		checks = append(checks, c)
@@ -215,7 +215,7 @@ func (p *DirectPlan) skipStored(ctx context.Context, tx pg.Tx) error {
 	}
 	for i := range p.Checks {
 		if _, found := slices.BinarySearch(stored, p.Checks[i].ref); found {
-			p.Checks[i].Outcome, p.Checks[i].Cause, p.Checks[i].Status = KeyDuplicate, "", 0
+			p.Checks[i].Outcome, p.Checks[i].Cause, p.Checks[i].Status = DirectKeyDuplicate, "", 0
 			p.Checks[i].CheckedAt, p.Checks[i].models = time.Time{}, nil
 		}
 	}
@@ -241,7 +241,7 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, checkParallel)
 	for i := range p.Checks {
-		if p.Checks[i].Outcome == KeyDuplicate {
+		if p.Checks[i].Outcome == DirectKeyDuplicate {
 			continue
 		}
 		slots <- struct{}{}
@@ -260,12 +260,12 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 func outcomeOf(o adapter.KeyOutcome) string {
 	switch o {
 	case adapter.KeyPassed:
-		return KeyPassed
+		return DirectKeyPassed
 	case adapter.KeyFailed:
-		return KeyFailed
+		return DirectKeyFailed
 	case adapter.KeyInconclusive:
 	}
-	return KeyInconclusive
+	return DirectKeyInconclusive
 }
 
 // CreateDirect stores what the checks let in, in the caller's transaction (docs/domains/suppliers.md「直连接口」): when no
@@ -275,7 +275,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err := p.skipStored(ctx, tx); err != nil {
 		return Connected{}, err
 	}
-	passed := slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == KeyPassed })
+	passed := slices.ContainsFunc(p.Checks, func(c DirectKeyCheck) bool { return c.Outcome == DirectKeyPassed })
 	if !passed {
 		return Connected{Checks: p.Checks}, nil
 	}
@@ -335,7 +335,7 @@ func insertLine(ctx context.Context, tx pg.Tx, q *store.Queries, id uuid.UUID, k
 func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, p *DirectPlan) error {
 	for i := range p.Checks {
 		c := &p.Checks[i]
-		if c.Outcome != KeyPassed {
+		if c.Outcome != DirectKeyPassed {
 			continue
 		}
 		c.Credential = uuid.NewV7()
@@ -447,10 +447,10 @@ func familyFormats(f adapter.Family) []protocol.Format {
 }
 
 // directNames is every name a passed key listed, sorted and once each.
-func directNames(checks []KeyCheck) []string {
+func directNames(checks []DirectKeyCheck) []string {
 	var names []string
 	for _, c := range checks {
-		if c.Outcome == KeyPassed {
+		if c.Outcome == DirectKeyPassed {
 			names = append(names, c.models...)
 		}
 	}

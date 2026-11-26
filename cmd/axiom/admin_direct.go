@@ -136,7 +136,7 @@ func connectedBody(c suppliers.Connected) adminapi.SupplierConnected {
 			id := k.Credential.String()
 			check.CredentialId = &id
 		}
-		if k.Outcome != suppliers.KeyDuplicate { // a duplicate was not sent, so nothing answered it
+		if k.Outcome != suppliers.DirectKeyDuplicate { // a duplicate was not sent, so nothing answered it
 			check.UpstreamStatus, check.CheckedAt = &k.Status, &k.CheckedAt
 		}
 		out.Checks[i] = check
