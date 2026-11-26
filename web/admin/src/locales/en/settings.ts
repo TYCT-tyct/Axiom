@@ -258,7 +258,8 @@ export default {
     no: "no",
     revision: "Revision",
     testTitle: "Test {{name}}",
-    testIntro: "Makes one read-only query to the channel with the saved configuration. No order is created and no money moves.",
+    testIntro:
+      "Makes one read-only query to the channel with the saved configuration. No order is created and no money moves.",
     runTest: "Run the test",
     outcome: {
       accepted: "Passed",
@@ -270,7 +271,8 @@ export default {
     status: {
       accepted: "The channel accepted the configuration.",
       rejected: "The channel refused the configuration.",
-      failed: "The channel did not confirm the configuration: check the gateway address, merchant ID and keys. The server log has the reason.",
+      failed:
+        "The channel did not confirm the configuration: check the gateway address, merchant ID and keys. The server log has the reason.",
       disabled: "The account is disabled; enable it first.",
       unsupported: "This channel cannot test its configuration.",
     },

@@ -3,6 +3,7 @@ package payments
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -50,9 +51,7 @@ func (w *world) deliver(merchant MerchantID, cb Callback) *httptest.ResponseReco
 		target += "?" + cb.RawQuery
 	}
 	r := httptest.NewRequestWithContext(w.t.Context(), cb.Method, target, bytes.NewReader(cb.Body))
-	for k, v := range cb.Header {
-		r.Header[k] = v
-	}
+	maps.Copy(r.Header, cb.Header)
 	rw := httptest.NewRecorder()
 	mux.ServeHTTP(rw, r)
 	return rw
@@ -73,8 +72,12 @@ func TestProviderNotifyReplay(t *testing.T) {
 		name string
 		open func(t *testing.T) *replayProvider
 	}{
-		{"alipay", replayAlipay}, {"wechatpay", replayWechatPay}, {"stripe", replayStripe},
-		{"easypay", replayEasyPay}, {"epusdt", replayEpusdt}, {"ezpay", replayEzPay},
+		{"alipay", replayAlipay},
+		{"wechatpay", replayWechatPay},
+		{"stripe", replayStripe},
+		{"easypay", replayEasyPay},
+		{"epusdt", replayEpusdt},
+		{"ezpay", replayEzPay},
 	}
 	for _, provider := range providers {
 		t.Run(provider.name, func(t *testing.T) {
@@ -231,42 +234,50 @@ func replayWechatPay(t *testing.T) *replayProvider {
 	}
 }
 
+// replayStripeAPI answers the Stripe API calls of a Checkout payment, its confirmation and its refund.
+type replayStripeAPI struct {
+	t       *testing.T
+	mu      sync.Mutex
+	intents map[string]int64 // PaymentIntent ID to the amount Stripe reports
+}
+
+func (a *replayStripeAPI) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		a.t.Error(err)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/v1/balance":
+		writeStripeJSON(a.t, rw, map[string]any{"object": "balance", "available": []any{}, "pending": []any{}})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/checkout/sessions":
+		session := stripeSession("cs_"+r.PostForm.Get("client_reference_id"), "open", "unpaid")
+		session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
+		session["expires_at"] = time.Now().Add(time.Hour).Unix()
+		writeStripeJSON(a.t, rw, session)
+	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/payment_intents/"):
+		id := strings.TrimPrefix(r.URL.Path, "/v1/payment_intents/")
+		writeStripeJSON(a.t, rw, map[string]any{"id": id, "object": "payment_intent", "status": "succeeded", "amount": a.intents[id], "currency": "usd"})
+	case r.Method == http.MethodPost && r.URL.Path == "/v1/refunds":
+		amount, err := strconv.ParseInt(r.PostForm.Get("amount"), 10, 64)
+		if err != nil {
+			a.t.Error(err)
+		}
+		writeStripeJSON(a.t, rw, map[string]any{
+			"id": "re_" + r.PostForm.Get("payment_intent"), "object": "refund", "status": "succeeded",
+			"amount": amount, "currency": "usd", "payment_intent": r.PostForm.Get("payment_intent"),
+		})
+	default:
+		http.NotFound(rw, r)
+	}
+}
+
 // replayStripe follows Checkout: checkout.session.completed signed with the endpoint's whsec_ secret, confirmed and
 // refunded through the PaymentIntent.
 func replayStripe(t *testing.T) *replayProvider {
 	w := newTestWorld(t, Stripe{})
-	var mu sync.Mutex
-	intents := map[string]int64{} // PaymentIntent ID to the amount Stripe reports
-	server := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			t.Error(err)
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/v1/balance":
-			writeStripeJSON(t, rw, map[string]any{"object": "balance", "available": []any{}, "pending": []any{}})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/checkout/sessions":
-			session := stripeSession("cs_"+r.PostForm.Get("client_reference_id"), "open", "unpaid")
-			session["url"] = "https://checkout.stripe.com/c/pay/cs_1"
-			session["expires_at"] = time.Now().Add(time.Hour).Unix()
-			writeStripeJSON(t, rw, session)
-		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v1/payment_intents/"):
-			id := strings.TrimPrefix(r.URL.Path, "/v1/payment_intents/")
-			writeStripeJSON(t, rw, map[string]any{"id": id, "object": "payment_intent", "status": "succeeded", "amount": intents[id], "currency": "usd"})
-		case r.Method == http.MethodPost && r.URL.Path == "/v1/refunds":
-			amount, err := strconv.ParseInt(r.PostForm.Get("amount"), 10, 64)
-			if err != nil {
-				t.Error(err)
-			}
-			writeStripeJSON(t, rw, map[string]any{
-				"id": "re_" + r.PostForm.Get("payment_intent"), "object": "refund", "status": "succeeded",
-				"amount": amount, "currency": "usd", "payment_intent": r.PostForm.Get("payment_intent"),
-			})
-		default:
-			http.NotFound(rw, r)
-		}
-	}))
+	api := &replayStripeAPI{t: t, intents: map[string]int64{}}
+	server := httptest.NewTLSServer(api)
 	t.Cleanup(server.Close)
 	old := stripeAPIBase
 	stripeAPIBase = server.URL
@@ -293,9 +304,9 @@ func replayStripe(t *testing.T) *replayProvider {
 			return o
 		},
 		pay: func(o Order, minor int64) {
-			mu.Lock()
-			defer mu.Unlock()
-			intents["pi_"+o.ID.TypeID()] = minor
+			api.mu.Lock()
+			defer api.mu.Unlock()
+			api.intents["pi_"+o.ID.TypeID()] = minor
 		},
 		notify: func(t *testing.T, o Order, minor int64, forged bool) Callback {
 			payload := stripeEvent(t, map[string]any{
@@ -305,7 +316,7 @@ func replayStripe(t *testing.T) *replayProvider {
 			}, "checkout.session.completed")
 			secretValue := stripeTestWebhookSecret
 			if forged {
-				secretValue = "whsec_not_this_endpoint"
+				secretValue = "whsec_not_this_endpoint" //nolint:gosec // a test secret that is deliberately not the endpoint's
 			}
 			return stripeSigned(t, payload, secretValue)
 		},
@@ -330,9 +341,7 @@ func easyPayNotify(o Order, minor int64, forged bool, extra url.Values) Callback
 		"pid": {"1001"}, "trade_no": {"T-" + o.ID.TypeID()}, "out_trade_no": {o.ID.TypeID()}, "type": {"alipay"},
 		"name": {"Axiom 充值"}, "money": {minorText(o, minor)}, "trade_status": {"TRADE_SUCCESS"}, "sign_type": {"MD5"},
 	}
-	for k, values := range extra {
-		v[k] = values
-	}
+	maps.Copy(v, extra)
 	key := theKey
 	if forged {
 		key = "not-the-merchant-key"
@@ -397,7 +406,7 @@ func replayEpusdt(t *testing.T) *replayProvider {
 func replayEzPay(t *testing.T) *replayProvider {
 	w := newTestWorld(t, EasyPay{})
 	var mu sync.Mutex
-	paid := map[string]string{} // order to the USD amount EzPay reports
+	paid := map[string]string{} // order to EzPay's query answer for it
 	server := httptest.NewTLSServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if r.Method != http.MethodGet || r.URL.Path != "/api.php" || q.Get("act") != "order" || q.Get("key") != theKey {
@@ -405,14 +414,12 @@ func replayEzPay(t *testing.T) *replayProvider {
 			return
 		}
 		mu.Lock()
-		money, ok := paid[q.Get("out_trade_no")]
+		answer, ok := paid[q.Get("out_trade_no")]
 		mu.Unlock()
 		if !ok {
-			ezPayWrite(rw, `{"code":-1,"msg":"订单不存在"}`)
-			return
+			answer = `{"code":-1,"msg":"订单不存在"}`
 		}
-		id := q.Get("out_trade_no")
-		ezPayWrite(rw, fmt.Sprintf(`{"code":1,"trade_status":"TRADE_SUCCESS","money":%q,"trade_no":"T-%s","out_trade_no":%q,"type":"usdt_trc20","currency":"USD"}`, money, id, id))
+		ezPayWrite(rw, answer)
 	}))
 	t.Cleanup(server.Close)
 	w.p.client = ezPayConfig(t, server.URL, server.Certificate()).Client
@@ -435,7 +442,9 @@ func replayEzPay(t *testing.T) *replayProvider {
 		pay: func(o Order, minor int64) {
 			mu.Lock()
 			defer mu.Unlock()
-			paid[o.ID.TypeID()] = minorText(o, minor)
+			id := o.ID.TypeID()
+			paid[id] = fmt.Sprintf(`{"code":1,"trade_status":"TRADE_SUCCESS","money":%q,"trade_no":"T-%s","out_trade_no":%q,"type":"usdt_trc20","currency":"USD"}`,
+				minorText(o, minor), id, id)
 		},
 		notify: func(_ *testing.T, o Order, minor int64, forged bool) Callback {
 			return easyPayNotify(o, minor, forged, url.Values{

@@ -3,6 +3,7 @@
 package payments
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -72,40 +73,56 @@ func newSandboxRun(t *testing.T, plugin Plugin) *sandboxRun {
 	if listen == "" {
 		listen = "127.0.0.1:8787"
 	}
-	listener, err := net.Listen("tcp", listen)
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", listen)
 	if err != nil {
 		t.Fatalf("listen on %s: %v", listen, err)
 	}
-	server := &http.Server{Handler: http.HandlerFunc(s.serve), ReadHeaderTimeout: 10 * time.Second}
-	go func() { _ = server.Serve(listener) }()
-	t.Cleanup(func() { _ = server.Close() })
+	mux := http.NewServeMux()
+	mux.Handle("GET "+NotifyPath+"{merchant}", s.w.p.Notify())
+	mux.Handle("POST "+NotifyPath+"{merchant}", s.w.p.Notify())
+	server := &http.Server{Handler: s.record(mux), ReadHeaderTimeout: 10 * time.Second}
+	go func() {
+		if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("callback server: %v", err)
+		}
+	}()
+	t.Cleanup(func() {
+		if err := server.Close(); err != nil {
+			t.Errorf("close the callback server: %v", err)
+		}
+	})
 	return s
 }
 
-func (s *sandboxRun) serve(rw http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, callbackMax+1))
-	if err != nil {
-		http.Error(rw, "read", http.StatusBadRequest)
-		return
-	}
-	merchant, err := ParseMerchantID(strings.TrimPrefix(r.URL.Path, NotifyPath))
-	if err != nil || !strings.HasPrefix(r.URL.Path, NotifyPath) {
-		http.NotFound(rw, r)
-		return
-	}
-	cb := Callback{Method: r.Method, RawQuery: r.URL.RawQuery, Body: body, Header: r.Header.Clone()}
-	response := s.w.deliver(merchant, cb)
-	s.w.t.Logf("notification %s %s answered %d", r.Method, r.URL.Path, response.Code)
-	if response.Code >= 200 && response.Code < 300 {
-		s.mu.Lock()
-		s.notify = &cb
-		s.mu.Unlock()
-	}
-	for k, v := range response.Header() {
-		rw.Header()[k] = v
-	}
-	rw.WriteHeader(response.Code)
-	_, _ = rw.Write(response.Body.Bytes())
+// statusWriter keeps the status the core answered a notification with.
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+// record serves the callback route and keeps the last notification the core acknowledged, to replay it later.
+func (s *sandboxRun) record(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(io.LimitReader(r.Body, callbackMax+1))
+		if err != nil {
+			http.Error(rw, "read", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		w := &statusWriter{ResponseWriter: rw, status: http.StatusOK}
+		next.ServeHTTP(w, r)
+		s.w.t.Logf("notification %s %s answered %d", r.Method, r.URL.Path, w.status)
+		if w.status >= 200 && w.status < 300 {
+			s.mu.Lock()
+			s.notify = &Callback{Method: r.Method, RawQuery: r.URL.RawQuery, Body: body, Header: r.Header.Clone()}
+			s.mu.Unlock()
+		}
+	})
 }
 
 // returnURL is where the payer comes back to; the core derives the notification URL from its host.

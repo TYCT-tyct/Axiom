@@ -39,7 +39,7 @@ func TestEpusdtPreset(t *testing.T) {
 // TestEpusdtDocumentedSignatures replays the sample messages of Epusdt's EPay-compatible API documentation
 // (epusdt.com/api/payment), signed with its demonstration key: the create request and the GET callback.
 func TestEpusdtDocumentedSignatures(t *testing.T) {
-	const key = "epusdt_secret_key" //nolint:gosec // the documentation's demonstration key
+	const key = "epusdt_secret_key"
 	create := url.Values{
 		"pid": {"1000"}, "money": {"100"}, "out_trade_no": {"ORD202605230001"}, "notify_url": {"https://merchant.example/notify"},
 		"return_url": {"https://merchant.example/return"}, "name": {"VIP"}, "type": {"alipay"},
