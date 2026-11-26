@@ -1,6 +1,7 @@
 package newapi
 
 import (
+	"errors"
 	"math/big"
 	"testing"
 
@@ -72,6 +73,49 @@ func TestOfferPricesTheRecordedModelsLikeTheRecordedCharge(t *testing.T) {
 	}
 	if diff := cmp.Diff(`{"desc":"Default group","endpoint_types":["openai"]}`, string(def.Facts)); diff != "" {
 		t.Errorf("facts (-want +got):\n%s", diff)
+	}
+}
+
+// TestHiddenPricesLeaveTheCostUnknown: a site that turned its pricing module off refuses the price list to a logged-in
+// user, which is not a refused login: the groups and models are read and every model's cost is unknown. A 403 with a
+// code of a refused login on the same read is still one.
+func TestHiddenPricesLeaveTheCostUnknown(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		answer  adapter.Response
+		refused bool
+	}{
+		{"only the root may read it", sample(t, "44-pricing-hidden"), false},
+		{"a release before that check", answer(403, `{"message":"pricing is disabled","success":false}`), false},
+		{"an expired token", answer(401, `{"code":"ACCESS_TOKEN_EXPIRED","success":false}`), true},
+		{"a refused token", answer(403, `{"code":"AUTH_UNAUTHORIZED","success":false}`), true},
+		{"a page from a firewall", answer(403, `<html>denied</html>`), true},
+	} {
+		f := offerClient(t, "", "")
+		f.routes["GET /api/pricing"] = c.answer
+		f.routes["GET /api/user/models?group=default"] = sample(t, "42-user-models")
+		f.routes["GET /api/user/models?group=vip"] = answer(200, `{"success":true,"data":["mock-gpt"]}`)
+		offer, err := readOffer(t, open(t, f, now))
+		switch {
+		case c.refused && !errors.Is(err, adapter.ErrAuthRejected):
+			t.Errorf("%s: %v, want a refused login", c.name, err)
+		case !c.refused && (err != nil || len(offer) != 2 || len(offer[0].Models) != 2):
+			t.Errorf("%s: %+v, %v; want both groups and their models", c.name, offer, err)
+		case !c.refused:
+			checkNoCost(t, c.name, offer)
+		}
+	}
+}
+
+func checkNoCost(t *testing.T, name string, offer []adapter.Group) {
+	t.Helper()
+	for _, g := range offer {
+		for _, m := range g.Models {
+			if m.Cost != nil || m.Derivation != nil {
+				t.Errorf("%s: %s/%s has a cost %v, want none while the prices are hidden", name, g.Ref, m.UpstreamName, m.Cost)
+			}
+		}
 	}
 }
 

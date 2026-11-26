@@ -1,0 +1,7 @@
+# 44-pricing-hidden
+GET /api/pricing
+> Authorization: Bearer <ALICE_PAT>
+< status: 403  (elapsed 0.01s)
+< Content-Type: application/json; charset=utf-8
+< X-Oneapi-Request-Id: sample-request-id
+< body: {"code":"AUTH_INSUFFICIENT_PRIVILEGE","message":"Unauthorized, insufficient privileges","message_key":"Unauthorized, insufficient privileges","success":false}

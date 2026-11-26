@@ -2,7 +2,6 @@ package newapi
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -215,7 +214,7 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 		} `json:"data"`
 	}
 	if err := m.api.do(ctx, "POST", "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
-		if errors.Is(err, errScopeDenied) {
+		if scopeDenied(err) {
 			return secret.Secret{}, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
 		return secret.Secret{}, err
