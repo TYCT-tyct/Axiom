@@ -25,27 +25,40 @@ type supplierModelCursor struct {
 	Name  string    `json:"n"`
 }
 
-func supplierModelAfter(cursor *string) (*supplierModelCursor, error) {
+// supplierModelAfter reads a page's cursor; the zero cursor, with no name, is the first page.
+func supplierModelAfter(cursor *string) (supplierModelCursor, error) {
+	var c supplierModelCursor
 	if cursor == nil {
-		return nil, nil //nolint:nilnil // no cursor is the first page
+		return c, nil
 	}
 	decoded, err := base64.RawURLEncoding.DecodeString(*cursor)
-	var c supplierModelCursor
 	if err != nil || jsonx.Unmarshal(decoded, &c) != nil || c.Name == "" {
-		return nil, invalidField("cursor", "not a cursor this API gave out")
+		return c, invalidField("cursor", "not a cursor this API gave out")
 	}
-	return &c, nil
+	return c, nil
 }
 
 // after reports whether the name comes after the cursor, in the list's order of group, then name.
-func (c *supplierModelCursor) after(m suppliers.SupplierModel) bool {
-	if c == nil {
+func (c supplierModelCursor) after(m suppliers.SupplierModel) bool {
+	if c.Name == "" {
 		return true
 	}
 	if g := m.Group.Compare(c.Group); g != 0 {
 		return g > 0
 	}
 	return m.UpstreamName > c.Name
+}
+
+// supplierModelFilter is what a page of a supplier's names is chosen by.
+type supplierModelFilter struct {
+	pile  *adminapi.SupplierModelPile
+	group *uuid.UUID
+	after supplierModelCursor
+	size  int
+}
+
+func (f supplierModelFilter) takes(m suppliers.SupplierModel) bool {
+	return (f.pile == nil || string(m.Pile) == string(*f.pile)) && (f.group == nil || m.Group == *f.group) && f.after.after(m)
 }
 
 // ListSupplierModels lists a page of a supplier's names, sorted into piles, by group and name. The piles are worked out
@@ -57,16 +70,15 @@ func (a adminAPI) ListSupplierModels(ctx context.Context, request adminapi.ListS
 		return nil, err
 	}
 	p := request.Params
-	var group *uuid.UUID
+	f := supplierModelFilter{pile: p.Pile, size: pageSize(p.Limit)}
 	if p.GroupId != nil {
 		g, err := idIn("group_id", *p.GroupId)
 		if err != nil {
 			return nil, err
 		}
-		group = &g
+		f.group = &g
 	}
-	after, err := supplierModelAfter(p.Cursor)
-	if err != nil {
+	if f.after, err = supplierModelAfter(p.Cursor); err != nil {
 		return nil, err
 	}
 	var models []suppliers.SupplierModel
@@ -76,25 +88,34 @@ func (a adminAPI) ListSupplierModels(ctx context.Context, request adminapi.ListS
 	}); err != nil {
 		return nil, err
 	}
-	size := pageSize(p.Limit)
-	list := adminapi.SupplierModelList{Data: []adminapi.SupplierModel{}}
-	for _, m := range models {
-		if (p.Pile != nil && string(m.Pile) != string(*p.Pile)) || (group != nil && m.Group != *group) || !after.after(m) {
-			continue
-		}
-		if len(list.Data) == size {
-			last := list.Data[size-1]
-			encoded, err := jsonx.MarshalCanonical(supplierModelCursor{Group: uuid.MustParse(last.GroupId), Name: last.UpstreamName})
-			if err != nil {
-				return nil, err
-			}
-			next := base64.RawURLEncoding.EncodeToString(encoded)
-			list.NextCursor = &next
-			break
-		}
-		list.Data = append(list.Data, supplierModelBody(m))
+	list, err := supplierModelPage(models, f)
+	if err != nil {
+		return nil, err
 	}
 	return adminapi.ListSupplierModels200JSONResponse(list), nil
+}
+
+// supplierModelPage is the page of the names f takes, with the cursor of the next page when there is one.
+func supplierModelPage(models []suppliers.SupplierModel, f supplierModelFilter) (adminapi.SupplierModelList, error) {
+	list := adminapi.SupplierModelList{Data: []adminapi.SupplierModel{}}
+	for _, m := range models {
+		if !f.takes(m) {
+			continue
+		}
+		if len(list.Data) < f.size {
+			list.Data = append(list.Data, supplierModelBody(m))
+			continue
+		}
+		last := list.Data[f.size-1]
+		encoded, err := jsonx.MarshalCanonical(supplierModelCursor{Group: uuid.MustParse(last.GroupId), Name: last.UpstreamName})
+		if err != nil {
+			return list, err
+		}
+		next := base64.RawURLEncoding.EncodeToString(encoded)
+		list.NextCursor = &next
+		break
+	}
+	return list, nil
 }
 
 // supplierModelBody is a name as the contract gives it.
@@ -149,10 +170,7 @@ func (a adminAPI) GetSupplierEndpointCost(ctx context.Context, request adminapi.
 			return err
 		}
 		body = endpointCostBody(cost)
-		if body.BreakEven, err = a.breakEven(ctx, tx, cost); err != nil {
-			return err
-		}
-		return nil
+		return a.breakEven(ctx, tx, cost, &body)
 	})
 	if err != nil {
 		return nil, err
@@ -205,27 +223,24 @@ var tokenItems = func() (items catalog.ItemSet) {
 	return items
 }()
 
-// breakEven is the break-even of an endpoint the upstream charges per request, and for no token, while the platform
-// sells the model by the token: nil for any other, and while the request's price, the sale price or a rate between the
-// two currencies is not known.
-func (a adminAPI) breakEven(ctx context.Context, tx pg.Tx, c suppliers.EndpointCost) (*adminapi.CostBreakEven, error) {
-	if c.Schedule == nil || c.Schedule.Priced(tokenItems) {
-		return nil, nil //nolint:nilnil // no break-even is an answer of its own
-	}
+// breakEven sets the break-even of an endpoint the upstream charges per request, and for no token, while the platform
+// sells the model by the token. It sets none for any other, nor while the request's price, the sale price or a rate
+// between the two currencies is not known.
+func (a adminAPI) breakEven(ctx context.Context, tx pg.Tx, c suppliers.EndpointCost, body *adminapi.EndpointCost) error {
 	i := slices.IndexFunc(c.Lines, func(l suppliers.CostLine) bool {
 		return l.Item == catalog.ItemRequest && l.Base && l.ServiceTier == catalog.ServiceTierStandard && l.Price != nil
 	})
 	site, ok := a.accounts.MainSite()
-	if i < 0 || !ok {
-		return nil, nil //nolint:nilnil // no one request price, or no site that sells it
+	if c.Schedule == nil || c.Schedule.Priced(tokenItems) || i < 0 || !ok {
+		return nil
 	}
 	sold, err := billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	sale, ok := sold[c.Model]
 	if !ok {
-		return nil, nil //nolint:nilnil // not on sale
+		return nil
 	}
 	schedule := sale.Schedule
 	if p, ok := sale.Endpoints[c.Endpoint]; ok {
@@ -233,13 +248,14 @@ func (a adminAPI) breakEven(ctx context.Context, tx pg.Tx, c suppliers.EndpointC
 	}
 	rate, ok, err := settlementRate(ctx, tx, c.SettlementCurrency, site.Currency)
 	if err != nil || !ok {
-		return nil, err
+		return err
 	}
 	traffic, err := a.suppliers.EndpointTraffic(ctx, tx, c.Endpoint)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return breakEvenOf(*c.Lines[i].Price, rate, schedule, traffic), nil
+	body.BreakEven = breakEvenOf(*c.Lines[i].Price, rate, schedule, traffic)
+	return nil
 }
 
 // settlementRate is what one unit of the settlement currency is in the site's currency now: 1 for the same currency,
@@ -266,31 +282,13 @@ func settlementRate(ctx context.Context, tx pg.Tx, settlement string, site platf
 
 // breakEvenOf is the fewest tokens a request needs for the sale price to cover the request price, in the site's currency
 // at rate: what the sale charges a request of its own, if anything, plus each token at the mean sale price of a token
-// at the endpoint's mix of the last 24 hours, by each token item's base price. With no traffic the mix is all input, the
-// side a sale prices lowest, so the break-even errs high. nil when no token of the mix has a sale price, which no number
-// of tokens covers.
+// at the endpoint's mix of the last 24 hours (meanTokenPrice). nil when no token of the mix has a sale price, which no
+// number of tokens covers, or when no request could be that long.
 func breakEvenOf(request platform.UnitPrice, rate *big.Rat, sale catalog.Schedule, t suppliers.Traffic) *adminapi.CostBreakEven {
-	units := t.Units
-	var tokens int64
-	for it, n := range units {
-		if tokenItems.Has(it) {
-			tokens += n
-		}
-	}
-	if tokens == 0 {
-		units = map[catalog.Item]int64{catalog.ItemInput: 1}
-	}
-	revenue, weight := new(big.Rat), int64(0)
-	for it, n := range units {
-		if p, ok := sale.BaseRate(it); ok && tokenItems.Has(it) {
-			revenue.Add(revenue, new(big.Rat).Mul(p.Rat(), big.NewRat(n, 1)))
-			weight += n
-		}
-	}
-	if revenue.Sign() == 0 {
+	perToken, tokens := meanTokenPrice(sale, t.Units)
+	if perToken.Sign() == 0 {
 		return nil
 	}
-	perToken := revenue.Quo(revenue, big.NewRat(weight, 1))
 	need := new(big.Rat).Mul(request.Rat(), rate)
 	if p, ok := sale.BaseRate(catalog.ItemRequest); ok {
 		need.Sub(need, p.Rat())
@@ -303,7 +301,7 @@ func breakEvenOf(request platform.UnitPrice, rate *big.Rat, sale catalog.Schedul
 			n.Add(n, big.NewInt(1))
 		}
 		if !n.IsInt64() {
-			return nil // no request is that long
+			return nil
 		}
 		b.Tokens = n.Int64()
 	}
@@ -312,4 +310,30 @@ func breakEvenOf(request platform.UnitPrice, rate *big.Rat, sale catalog.Schedul
 		b.MeanTokens24h = &mean
 	}
 	return b
+}
+
+// meanTokenPrice is the sale price of a token at the mix of units, each token item at its base price, and how many
+// tokens the units have. With no tokens the mix is all input, the side a sale prices lowest, so a break-even errs high.
+func meanTokenPrice(sale catalog.Schedule, units map[catalog.Item]int64) (*big.Rat, int64) {
+	var tokens int64
+	for it, n := range units {
+		if tokenItems.Has(it) {
+			tokens += n
+		}
+	}
+	mix := units
+	if tokens == 0 {
+		mix = map[catalog.Item]int64{catalog.ItemInput: 1}
+	}
+	revenue, weight := new(big.Rat), int64(0)
+	for it, n := range mix {
+		if p, ok := sale.BaseRate(it); ok && tokenItems.Has(it) {
+			revenue.Add(revenue, new(big.Rat).Mul(p.Rat(), big.NewRat(n, 1)))
+			weight += n
+		}
+	}
+	if weight == 0 {
+		return revenue, tokens
+	}
+	return revenue.Quo(revenue, big.NewRat(weight, 1)), tokens
 }
