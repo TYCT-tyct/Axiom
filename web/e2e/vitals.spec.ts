@@ -439,13 +439,10 @@ test.describe("interaction", () => {
   test("admin users: INP of filtering and opening an account", async ({ browser }) => {
     const { page, scene } = await slowPage(browser, adminSuite, "users");
     await scene.open(page);
-    await page.getByLabel(words("users.searchLabel")).fill("user1");
-    await page.getByRole("button", { name: words("filter.apply") }).click();
-    await page
-      .getByRole("link", { name: words("users.open") })
-      .first()
-      .click();
-    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    await page.getByRole("searchbox", { name: words("users.search") }).fill("user1");
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("user1");
+    await page.getByRole("row").nth(1).locator("td").first().getByRole("button").click();
+    await expect(page.getByRole("dialog").first().getByRole("heading", { name: "user1@example.com" })).toBeVisible();
     record("INP admin users", (await vitals(page)).INP ?? 0, budget.inp);
     await page.context().close();
   });

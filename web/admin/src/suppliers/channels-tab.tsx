@@ -1,13 +1,23 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { Card, DataState, DataTable, EmptyState, MetricStrip, type StripItem, Text, useFormat } from "@axiom/ui";
+import {
+  Card,
+  DataState,
+  DataTable,
+  EmptyState,
+  LoadingState,
+  MetricStrip,
+  type StripItem,
+  Text,
+  useFormat,
+} from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { type Line, useLines } from "../lines";
 import { suppliersQuery } from "../queries";
-import { ModeFilter, type ModeFilters, ModeTag, NativeBalance, Rate, SupplierState, useTraffic } from "./parts";
+import { ModeFilter, type ModeFilters, ModeTag, NativeBalance, Rate, SupplierState, useTrafficRead } from "./parts";
 import { modeOf, type Traffic } from "./upstream";
 
 type Supplier = AdminSchemas["Supplier"];
@@ -21,11 +31,14 @@ export default function ChannelsTab() {
   const { t } = useTranslation();
   const suppliers = useInfiniteQuery(suppliersQuery());
   const lines = useLines();
-  const traffic = useTraffic();
+  const { traffic, pending } = useTrafficRead();
   const [filters, setFilters] = useState<ModeFilters>({ q: "", mode: "all" });
   const rows = suppliers.data?.pages.flatMap((page) => page.data) ?? [];
   const shown = rows.filter((supplier) => matches(supplier, lines.all, filters));
   const count = { shown: shown.length, total: rows.length };
+  // The strip and the table are drawn from the list and the traffic, so the tab waits for both whole: a strip arriving
+  // above the filter, or a figure joining it, would push the rows down (docs/frontend.md「工程要求」).
+  if (suppliers.isPending || pending) return <LoadingState />;
   return (
     <>
       {rows.length > 0 ? <Strip suppliers={rows} lines={lines.all} traffic={traffic} /> : null}
@@ -63,7 +76,7 @@ function matches(supplier: Supplier, lines: readonly Line[], { q, mode }: ModeFi
   return typed === "" || words.some((word) => word.toLowerCase().includes(typed));
 }
 
-type Traffics = ReturnType<typeof useTraffic>;
+type Traffics = ReturnType<typeof useTrafficRead>["traffic"];
 
 function Strip({ suppliers, lines, traffic }: { suppliers: Supplier[]; lines: Line[]; traffic: Traffics }) {
   const { t } = useTranslation();

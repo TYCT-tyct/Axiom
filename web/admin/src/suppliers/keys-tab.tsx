@@ -1,7 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
-import { ActionButton, Card, Cluster, EmptyState, MetricStrip, Text } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { ActionButton, Card, Cluster, EmptyState, LoadingState, MetricStrip, Text } from "@axiom/ui";
+import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -21,7 +21,11 @@ export default function KeysTab({ credential }: { credential: string | undefined
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<ModeFilters>({ q: "", mode: "all" });
-  const list = useInfiniteQuery(credentialsListQuery({ mode: filters.mode === "all" ? undefined : filters.mode }));
+  // A narrowed list keeps the rows it had until the new ones arrive, so only the first load is pending.
+  const list = useInfiniteQuery({
+    ...credentialsListQuery({ mode: filters.mode === "all" ? undefined : filters.mode }),
+    placeholderData: keepPreviousData,
+  });
   const { suppliers, lineOf } = useSuppliers();
   const rows = list.data?.pages.flatMap((page) => page.data) ?? [];
   const typed = filters.q.trim().toLowerCase();
@@ -35,6 +39,9 @@ export default function KeysTab({ credential }: { credential: string | undefined
   const count = { shown: shown.length, total: rows.length };
   const index = shown.findIndex((row) => row.id === credential);
   const opened = shown[index];
+  // The strip is drawn from the list, so the tab waits for it whole: a strip arriving above the filter and the table
+  // would push them down (docs/frontend.md「工程要求」).
+  if (list.isPending) return <LoadingState />;
   return (
     <>
       {rows.length > 0 ? <Strip rows={rows} suppliers={suppliers} /> : null}
