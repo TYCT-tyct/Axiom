@@ -167,7 +167,7 @@ OpenRouter 付费模型没有平台级速率上限；Axiom 对付费调用也施
 
 - **接受**（语义与组合见[请求覆盖](routing.md#请求覆盖)和[请求覆盖与组合](routing.md#请求覆盖与组合)，都不能放宽 key 的预设）：`provider` 对象（`only`、`ignore`、`order`、`allow_fallbacks`、`require_parameters`、`data_collection`、`zdr`、`sort`、`max_price`、性能偏好、`quantizations`）；`models` 备选，Messages 也认 `fallbacks: [{model}]`（[命名预设](routing.md#命名预设)）；模型名变体；`@preset/名称`、`model@preset/名称`、`preset`（账户的命名请求配置）；`session_id`、`x-session-id` 头、`prompt_cache_key`（体优先，最多 256 字符）；`user`。
 - **要点**：`only`/`ignore`/`order` 用分组公开代号精确匹配（区分大小写），未知的 `only`、关闭回退时未知的 `order` 回 404，空列表和 `null` 不加限制。`sort` 收 `price`/`throughput`/`latency` 或 `{by, partition}`。`max_price.prompt`/`completion` 按本站货币每百万 token、`request` 按每个生成请求，只收可精确表示的十进制，非美元站点不声称美元上限。性能偏好的数字按 EWMA、分位对象按滚动五分钟窗口，不满足的排后不排除。`quantizations` 匹配管理员记录的级别。`require_parameters: true` 按端点实际调用格式的有效参数清单（含实测）过滤，请求里出现的能力参数才算需要。
-- **偏离**：无法兑现的在预留前回 400 `invalid_request` 并点名 `provider` 成员。
+- **偏离**：认识的成员取值无法兑现时在预留前回 400 `invalid_request` 并点名；不认识的成员（`enforce_distillable_text`、`options` 等）忽略，同 OpenRouter。
 
 | 参数 | 这里与理由 | 支持还需要 |
 |---|---|---|

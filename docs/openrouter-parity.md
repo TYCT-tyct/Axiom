@@ -57,7 +57,7 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
 
-Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识的成员和暂不支持的取值一律 400 并指明成员名（不静默忽略）。
+Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，取值做不到的 400 并指明成员名；不认识的成员忽略，与 OpenRouter 放行扩展成员一致，免得带完整偏好对象的客户端整个请求失败。下表「没有」的成员都属忽略。
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
@@ -67,13 +67,13 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | 部分：按端点公布的 `supported_parameters`（模型规格能力与方言，和 `/api/v1/models` 同一份）过滤；清单外参数 400 | 无 | 无 | 逐端点的采样/提供商参数清单仍缺（`seed`、`logprobs` 等 400）；需要供应商同步逐端点读出，见 gateway 领域文档 |
 | `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`readDataCollection`，`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
 | `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`readZDR`，与 `data_collection: deny` 同一个过滤 | 无 | 无 | 无 |
-| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，由 `override` 拒绝 400 | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
+| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：忽略，不过滤（目录不记录蒸馏许可） | 无 | 无 | 低优先；要过滤得先在目录记录许可 |
 | `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 有：按端点精确匹配；空列表和 null 不限制 | 无 | 无 | 级别由管理员在端点管理接口和页面记录，不是供应商自报；没有记录不等同于 `unknown`，不匹配非空列表，偏离见 gateway 领域文档 |
 | `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 有：三种维度分别排序 | 无 | 无 | 未测量的按价格加权排在测量值之后 |
 | `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 有：默认 model；none 跨主模型和备选排序 | 无 | 无 | `by`、`partition` 之外的成员明确 400；OpenRouter 文档没有 `sort.percentile`，百分位截断属于下面的性能偏好 |
 | `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 有：数字按 EWMA，对象按滚动五分钟窗口的 p50/p75/p90/p99；写出的截断全满足才进偏好组，不满足的排后不排除 | 无 | 无 | 未测过的端点不判为不满足；窗口样本有界，内存每端点固定，偏离见 quality 与 gateway 领域文档 |
 | `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | prompt/completion 精确比较受众售价；request 按每个生成请求的售价精确比较；image 明确 400 | 无 | 无 | image 的按张项已有（`image_in_piece`、`image_out_piece`，#320），但上限管输入、生成还是按 token 计价的图未定，端点也不报按张用量；`image_in`/`image_out` 是按 token 价；非美元站点以站点记账货币为单位，偏离见 gateway 领域文档 |
-| `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
+| `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：忽略，不透传（不开放自由的参数覆盖） | 无 | 无 | 有意不做 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有（`MaxAttempts`） | 有（`RetryTimes`） | 有（failover） | 无 |
 | 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排；错误分参数不是 JSON、工具名不存在、参数不符合 schema 三类，按请求统计（2026-11-04 核实） | docs/guides/routing/auto-exacto | 部分：按真实流量的工具调用错误率排序，只在「均衡」「质量优先」策略下生效；错误率只统计参数不是 JSON 的一类（`quality` 的 `ToolErrorRate`） | 无 | 无 | 工具名、schema 两类未测，见 docs/domains/quality.md「待定问题」；吞吐和基准评分另由「最快」、产品成绩提供 |
