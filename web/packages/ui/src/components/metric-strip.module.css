@@ -10,6 +10,7 @@
 }
 
 .cell {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -90,27 +91,84 @@
   border-radius: 0 16px 16px 0;
 }
 
+/* The trend line sits at the cell's top right (admin_style.css .adk8 > div > .adspk). */
+.trend {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  display: flex;
+}
+
+/* Two or more rows (.adk8, .adk6): rows of three or four, a hairline above every row after the first, and the card's
+   rounded corners clip the hovered cells instead of each cell carrying a corner. */
+.c3,
+.c4 {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.c4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.c3 .cell:nth-child(3n + 1),
+.c4 .cell:nth-child(4n + 1) {
+  box-shadow: none;
+}
+
+.c3 .cell:nth-child(n + 4),
+.c4 .cell:nth-child(n + 5) {
+  box-shadow:
+    inset var(--bw) 0 0 var(--line),
+    inset 0 var(--bw) 0 var(--line);
+}
+
+.c3 .cell:nth-child(4),
+.c4 .cell:nth-child(5) {
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+}
+
+.c3 .link:nth-child(n),
+.c4 .link:nth-child(n) {
+  border-radius: 0;
+}
+
+.c3 .note {
+  flex-wrap: wrap;
+  row-gap: 0;
+  white-space: normal;
+}
+
 @media (max-width: 1023px) {
   .root {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .cell:nth-child(odd) {
+  .link:nth-child(n) {
+    border-radius: 0;
+  }
+
+  /* One class heavier than the rows' rules above, so the two-column layout wins over the three- and four-column one. */
+  .root .cell:nth-child(odd) {
     box-shadow: none;
   }
 
-  .cell:nth-child(n + 3) {
+  .root .cell:nth-child(even) {
+    box-shadow: inset var(--bw) 0 0 var(--line);
+  }
+
+  .root .cell:nth-child(n + 3) {
     box-shadow: inset 0 var(--bw) 0 var(--line);
   }
 
-  .cell:nth-child(even):nth-child(n + 3) {
+  .root .cell:nth-child(even):nth-child(n + 3) {
     box-shadow:
       inset var(--bw) 0 0 var(--line),
       inset 0 var(--bw) 0 var(--line);
-  }
-
-  .link:nth-child(n) {
-    border-radius: 0;
   }
 }
 
@@ -123,5 +181,21 @@
     flex-wrap: wrap;
     row-gap: 0;
     white-space: normal;
+  }
+
+  .trend {
+    top: 14px;
+    right: 16px;
+  }
+
+  .trend svg {
+    width: 48px;
+    height: auto;
+  }
+
+  /* Two cells to a row leave 160px for a figure and its trend line; a money figure at 24px would run under it. */
+  .c3 .value,
+  .c4 .value {
+    font-size: 20px;
   }
 }

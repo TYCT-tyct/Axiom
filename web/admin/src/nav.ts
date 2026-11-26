@@ -29,7 +29,14 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
     key: "run",
     entries: [
       { key: "overview", to: "/", icon: "overview", permission: "sites.manage" },
-      { key: "ops", to: "/alert-events", icon: "status", permission: "sites.manage", pending: "alerts" },
+      {
+        key: "ops",
+        to: "/monitor",
+        icon: "status",
+        permission: "sites.manage",
+        pending: "alerts",
+        also: [{ to: "/alert-events", label: "alerts" }],
+      },
       { key: "approvals", to: "/approvals", icon: "privacy", permission: "operations.approve", pending: "approvals" },
     ],
   },

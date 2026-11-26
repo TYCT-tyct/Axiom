@@ -46,6 +46,7 @@ export default {
   },
   tabs: { overview: "Dashboard", ops: "Monitor", approvals: "Approvals", users: "Users", calls: "Log" },
   also: {
+    alerts: "Alerts",
     discrepancies: "Payment discrepancies",
     mappings: "To review",
     modelAuthors: "Authors",

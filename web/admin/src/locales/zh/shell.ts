@@ -33,6 +33,7 @@ export default {
   },
   tabs: { overview: "仪表盘", ops: "监控", approvals: "审批", users: "用户", calls: "记录" },
   also: {
+    alerts: "告警",
     discrepancies: "支付差异",
     mappings: "待处理",
     modelAuthors: "作者",

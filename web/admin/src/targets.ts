@@ -27,10 +27,6 @@ const allTargetMetrics: readonly TargetMetric[] = [
 
 export const legacyTargetMetrics: readonly TargetMetric[] = ["calls", "errors", "revenue", "cost"];
 
-export type TargetComparison = AdminSchemas["OperationsTargetComparison"];
-export type CountComparison = AdminSchemas["OperationsCountTarget"];
-export type MoneyComparison = AdminSchemas["OperationsMoneyTarget"];
-export type RateComparison = AdminSchemas["OperationsRateTarget"];
 export type TargetsInput = Pick<
   AdminSchemas["OperationsTargetsUpdate"],
   "calls" | "errors" | "revenue" | "cost" | "paid_users" | "monthly_revenue" | "gross_margin" | "retention"
@@ -39,35 +35,6 @@ export type TargetsInput = Pick<
 // The month a new target is for: the visit's UTC month, the same calendar the dashboard's window uses.
 export function targetMonth(at: Date): string {
   return at.toISOString().slice(0, 7);
-}
-
-export function targetsEmpty(targets: TargetComparison): boolean {
-  return (
-    targets.calls === undefined &&
-    targets.errors === undefined &&
-    targets.revenue === undefined &&
-    targets.cost === undefined &&
-    targets.paid_users === undefined &&
-    targets.monthly_revenue === undefined &&
-    targets.gross_margin === undefined &&
-    targets.retention === undefined
-  );
-}
-
-export type GapSign = -1 | 0 | 1;
-
-export type TargetTone = "ahead" | "behind" | "over" | "under" | "at";
-
-// targetTone says how to read a gap: above a floor is ahead, above a ceiling is over, and the reverse below. At the
-// target is neutral for both.
-export function targetTone(metric: TargetMetric, sign: GapSign): TargetTone {
-  if (sign === 0) {
-    return "at";
-  }
-  if (metric === "errors" || metric === "cost") {
-    return sign > 0 ? "over" : "under";
-  }
-  return sign > 0 ? "ahead" : "behind";
 }
 
 const maxCount = 1_000_000_000_000_000;

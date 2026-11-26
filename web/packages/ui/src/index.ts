@@ -15,6 +15,7 @@ export { Announcement } from "./components/announcement";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { AuthPage } from "./components/auth-page";
 export { Avatar } from "./components/avatar";
+export { BarRows } from "./components/bar-rows";
 export { BoardDialog } from "./components/board-dialog";
 export { BoardMark, BoardShell, focusHeading, useKeptPage, usePreferences } from "./components/board-shell";
 export { BrandSwatch } from "./components/brand-swatch";
@@ -71,9 +72,11 @@ export { usePageTitle } from "./components/page-title";
 export { Panel } from "./components/panel";
 export { Popover } from "./components/popover";
 export { PreferenceSwitches } from "./components/preferences";
+export { ProposalCard } from "./components/proposal-card";
 export { QrMatrix } from "./components/qr-matrix";
 export { ReasonPicks } from "./components/reason-picks";
 export { RingChart, type RingPart, type Swatch } from "./components/ring-chart";
+export { type RowItem, RowList } from "./components/row-list";
 export { ScrollArea } from "./components/scroll-area";
 export { SecretField } from "./components/secret-field";
 export { SegmentedControl } from "./components/segmented-control";
@@ -82,7 +85,15 @@ export { SettingRow } from "./components/setting-row";
 export { type Shortcut, ShortcutList } from "./components/shortcut-list";
 export { Sparkline } from "./components/sparkline";
 export { Stat } from "./components/stat";
-export { DataState, EmptyState, ForbiddenState, NotFoundState, PageFailedState } from "./components/states";
+export {
+  DataState,
+  EmptyState,
+  ForbiddenState,
+  LoadingState,
+  NotFoundState,
+  PageFailedState,
+} from "./components/states";
+export { StatusDot } from "./components/status-dot";
 export { Switch } from "./components/switch";
 export { type SortOrder, Table, Td, Th, Tr } from "./components/table";
 // Badge is the name pages were written with for a Tag (#747).

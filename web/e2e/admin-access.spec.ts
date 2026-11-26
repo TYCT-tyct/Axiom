@@ -49,7 +49,7 @@ test.describe("signing in", () => {
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
 
-    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:title"))).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");
     expect(state.log.filter((line) => line === "POST /auth/sign-in")).toHaveLength(2);
     // the browser logs the 401s (no session yet, a wrong password, a wrong code) itself
@@ -93,7 +93,7 @@ test.describe("signing in", () => {
     await expect(page.getByLabel("验证码或恢复码")).toHaveCount(0);
     unreadable = false;
     await page.getByRole("button", { name: "重试" }).click();
-    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:title"))).toBeVisible();
     expect(state.log.filter((line) => line === "POST /auth/mfa" || line === "POST /auth/sign-out")).toEqual([
       "POST /auth/mfa",
     ]);
@@ -259,7 +259,7 @@ test.describe("permissions", () => {
     state.permissions = [];
     signedInAs(state, "mfa");
     await page.goto("/");
-    await expect(h1(page, zhText("home.noAccessTitle"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:noAccessTitle"))).toBeVisible();
     await page.goto("/suppliers");
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
     await expect(page.getByText("请联系站长授予权限。")).toBeVisible();

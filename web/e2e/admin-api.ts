@@ -2,6 +2,7 @@ import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
 import { financeHandlers, startFinance } from "./admin-finance-api.ts";
+import { monitorHandlers, overviewExtras, ranked } from "./admin-monitor-api.ts";
 import { operationsHandlers, startOperations } from "./admin-operations.ts";
 import { opsControlHandlers, startOpsControl } from "./admin-ops-control-api.ts";
 import { listPaidBatches } from "./admin-paid-batches-api.ts";
@@ -133,19 +134,7 @@ const registration: Schemas["RegistrationPolicy"] = {
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
   const revenue = state.calls.reduce((sum, call) => sum + BigInt(call.price?.amount ?? 0), 0n);
-  const rank = (key: (call: Schemas["AdminCallSummary"]) => string | undefined) =>
-    [
-      ...state.calls
-        .reduce((groups, call) => {
-          const name = key(call) ?? "";
-          const group = groups.get(name) ?? { calls: 0, errors: 0 };
-          groups.set(name, { calls: group.calls + 1, errors: group.errors + (call.error_kind ? 1 : 0) });
-          return groups;
-        }, new Map<string, { calls: number; errors: number }>())
-        .entries(),
-    ]
-      .sort((a, b) => b[1].calls - a[1].calls)
-      .slice(0, 10);
+  const rank = ranked(state);
   const cost = (revenue * 6n) / 10n;
   const errors = state.calls.filter((call) => call.error_kind).length;
   const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
@@ -185,7 +174,16 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       account_id: account_id as Schemas["AccountId"],
       ...n,
     })),
-    top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
+    top_models: rank((call) => call.model).map(([model, n]) => ({
+      model,
+      ...n,
+      tokens: n.calls * 1000,
+      revenue: {
+        amount: String((revenue * BigInt(n.calls)) / BigInt(Math.max(1, state.calls.length))),
+        currency: "USD",
+      },
+    })),
+    ...overviewExtras(state, query, revenue, cost, errors),
     targets,
   });
 }
@@ -518,6 +516,7 @@ const handlers: Handler<AdminState>[] = [
   ...opsControlHandlers,
   ...policyHandlers,
   ...pluginHandlers,
+  ...monitorHandlers,
 ];
 
 // mockAdmin answers the admin's API for a page. The returned state is live: a test reads what the page did to it

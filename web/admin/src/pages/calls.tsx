@@ -23,7 +23,7 @@ import { CallDrawer } from "../call-drawer";
 import en from "../locales/en/calls";
 import zh from "../locales/zh/calls";
 import type { CallsEmptyKind } from "../overview";
-import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind, overviewWindow } from "../overview";
+import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind, lastDay } from "../overview";
 import { usePanelSteps } from "../panel-steps";
 import { ChoiceFilter, FilterBar, PageBody, State, text, toInstant, toLocalInput } from "../parts";
 import { adminPlugins, callPlugin } from "../plugins";
@@ -199,7 +199,7 @@ function Strip() {
   const format = useFormat();
   const allowed = can(useSession(), "sites.manage");
   const [anchor] = useState(() => new Date());
-  const window = useMemo(() => overviewWindow("24h", anchor), [anchor]);
+  const window = useMemo(() => lastDay(anchor), [anchor]);
   const overview = useQuery({ ...overviewQuery(window.since, window.until), enabled: allowed });
   const data = overview.data;
   if (!data) return null;

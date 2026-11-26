@@ -4,16 +4,9 @@ import type { TFunction } from "i18next";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { percentOf } from "./approval-parts";
-import { envelopeMaximaOf, type RuleChange, type RuleMove, ruleChangeOf } from "./approval-rule";
-import {
-  type CapLimit,
-  capOf,
-  type EnvelopeLimit,
-  type PriceRow,
-  priceRows,
-  type Reason,
-  reasonsOf,
-} from "./approvals";
+import { type RuleChange, type RuleMove, ruleChangeOf } from "./approval-rule";
+import { unknown, whyLines } from "./approval-why";
+import { type PriceRow, priceRows } from "./approvals";
 import { isPerUse, rateItems } from "./models/catalog";
 import { showRate } from "./models/price-fields";
 import { Rates } from "./models/prices";
@@ -36,9 +29,7 @@ const field = (summary: unknown, key: string) => {
 export function WhyAsked({ approval }: { approval: Approval }) {
   const { t } = useTranslation();
   const format = useFormat();
-  const reasons = reasonsOf(approval);
-  // Two codes a later server added read the same here, so each line is shown once.
-  const lines = reasons && [...new Set(reasons.map((reason) => sentenceOf(t, format, approval, reason)))];
+  const lines = whyLines(t, format, approval);
   if (lines?.length === 0) {
     return null;
   }
@@ -55,46 +46,6 @@ export function WhyAsked({ approval }: { approval: Approval }) {
       )}
     </Card>
   );
-}
-
-// unknown stands for a limit the summary did not keep, so a sentence never shows a placeholder.
-const unknown = "—";
-
-function sentenceOf(t: TFunction, format: Format, approval: Approval, reason: Reason): string {
-  switch (reason.kind) {
-    case "always":
-      return approval.risk === "gift" || approval.risk === "delisting" || approval.risk === "refund"
-        ? t(`approvals.why.always.${approval.risk}`)
-        : t("approvals.why.always.other");
-    case "paused":
-      return t("approvals.why.paused");
-    case "cap":
-      return capSentence(t, format, approval, reason.limit);
-    case "envelope":
-      return envelopeSentence(t, format, approval, reason.limit);
-    default:
-      return t("approvals.why.unknown");
-  }
-}
-
-function capSentence(t: TFunction, format: Format, approval: Approval, limit: CapLimit): string {
-  const cap = capOf(approval.summary);
-  if (limit === "count") {
-    return t("approvals.why.count", { max: cap ? format.number(cap.count.max) : unknown });
-  }
-  const max = cap?.[limit].max;
-  return t(`approvals.why.${limit}`, { max: max ? format.money(max) : unknown });
-}
-
-function envelopeSentence(t: TFunction, format: Format, approval: Approval, limit: EnvelopeLimit): string {
-  const envelope = envelopeMaximaOf(approval.summary);
-  const percent = percentOf(format.decimal);
-  return t(`approvals.why.envelope.${limit}`, {
-    min: envelope ? percent(envelope.minMargin) : unknown,
-    max: envelope ? percent(envelope.modelChange) : unknown,
-    changes: envelope ? format.number(envelope.changes) : unknown,
-    models: envelope ? format.number(envelope.models) : unknown,
-  });
 }
 
 type Fact = [string, ReactNode] | undefined;

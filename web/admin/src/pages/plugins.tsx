@@ -25,7 +25,7 @@ import { useCallColumns } from "../call-columns";
 import { CallDrawer } from "../call-drawer";
 import { pluginStatsQuery } from "../content-queries";
 import { FileParserSettings } from "../file-parser-settings";
-import { overviewWindow } from "../overview";
+import { lastDay } from "../overview";
 import { usePanelSteps } from "../panel-steps";
 import { PageBody } from "../parts";
 import { type AdminPlugin, adminPlugins, notBuilt } from "../plugins";
@@ -75,7 +75,7 @@ export default function Plugins() {
 function Overview() {
   const { t } = useTranslation();
   const [anchor] = useState(() => new Date());
-  const window = useMemo(() => overviewWindow("24h", anchor), [anchor]);
+  const window = useMemo(() => lastDay(anchor), [anchor]);
   const stats = useQuery(pluginStatsQuery(window.since, window.until));
   const canSearch = can(useSession(), "calls.search");
   const hasStats = !notBuilt(stats.error);

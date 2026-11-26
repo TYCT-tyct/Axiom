@@ -6,8 +6,6 @@ import {
   parseTargetRate,
   readTargets,
   targetMonth,
-  targetsEmpty,
-  targetTone,
 } from "./targets";
 
 const problem = { count: "count", money: "money", rate: "rate" };
@@ -15,33 +13,6 @@ const problem = { count: "count", money: "money", rate: "rate" };
 it("takes the UTC month of the visit", () => {
   expect(targetMonth(new Date("2026-11-30T23:30:00Z"))).toBe("2026-11");
   expect(targetMonth(new Date("2026-12-01T00:30:00Z"))).toBe("2026-12");
-});
-
-it("calls a set with no metric empty", () => {
-  expect(targetsEmpty({})).toBe(true);
-  expect(targetsEmpty({ calls: { target: 0 } })).toBe(false);
-  expect(targetsEmpty({ cost: { target: { amount: "0", currency: "USD" } } })).toBe(false);
-  expect(targetsEmpty({ paid_users: { target: 0 } })).toBe(false);
-  expect(targetsEmpty({ monthly_revenue: { target: { amount: "0", currency: "USD" } } })).toBe(false);
-  expect(targetsEmpty({ gross_margin: { target: 0 } })).toBe(false);
-  expect(targetsEmpty({ retention: { target: 0 } })).toBe(false);
-});
-
-it.each([
-  { metric: "calls" as const, sign: 1 as const, tone: "ahead" },
-  { metric: "calls" as const, sign: -1 as const, tone: "behind" },
-  { metric: "revenue" as const, sign: 1 as const, tone: "ahead" },
-  { metric: "paid_users" as const, sign: 1 as const, tone: "ahead" },
-  { metric: "monthly_revenue" as const, sign: -1 as const, tone: "behind" },
-  { metric: "gross_margin" as const, sign: 1 as const, tone: "ahead" },
-  { metric: "retention" as const, sign: -1 as const, tone: "behind" },
-  { metric: "errors" as const, sign: 1 as const, tone: "over" },
-  { metric: "errors" as const, sign: -1 as const, tone: "under" },
-  { metric: "cost" as const, sign: 1 as const, tone: "over" },
-  { metric: "cost" as const, sign: -1 as const, tone: "under" },
-  { metric: "calls" as const, sign: 0 as const, tone: "at" },
-])("$metric with a $sign gap is $tone", ({ metric, sign, tone }) => {
-  expect(targetTone(metric, sign)).toBe(tone);
 });
 
 it("keeps a target amount above int64 and up to 38 digits", () => {

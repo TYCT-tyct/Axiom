@@ -221,6 +221,7 @@ const scenes: Scene[] = [
   view("settings-payments", "settings/payments"),
   view("settings-mail", "settings/mail"),
   view("settings-gateway", "settings/gateway"),
+  view("monitor", "monitor"),
   view("alert-events", "alert-events"),
   view("alert-configuration", "alert-configuration"),
   view("announcements", "announcements"),
