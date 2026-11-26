@@ -521,3 +521,37 @@ func TestListSupplierCredentials(t *testing.T) {
 	expectSame(t, "by the supplier's mode", []any{credentialIDs(direct), credentialIDs(refused)}, []any{[]string{ids[2], ids[1], ids[0]}, []string{}})
 	expectAdmin(t, "a bad cursor", f.do(http.MethodGet, "/supplier-credentials?cursor=nope", "", as(f.s)), http.StatusBadRequest, codeInvalidRequest)
 }
+
+// TestAddDirectSupplierKeys: a direct API takes more keys with no group, each checked at the provider as a new direct
+// API's are; only the ones that pass are stored, on its line, with the limits given and the models they list. A repeat
+// and a key stored already are duplicates the provider is not asked about, a group is refused, a replay answers from
+// its claim, and a cloud supplier's keys are not pasted one by one.
+func TestAddDirectSupplierKeys(t *testing.T) {
+	t.Parallel()
+	f, p := newDirectFixture(t)
+	var made adminapi.SupplierConnected
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/direct", directBody(p.server.URL, "sk-good-key-0001"), newKey()), &made)
+	path := "/suppliers/" + made.Supplier.Id + "/keys"
+	asked := len(p.sent())
+	body := `{"keys":["sk-good-key-0002","sk-refused-0003","sk-good-key-0001","sk-good-key-0002"],"max_concurrency":2,"requests_per_minute":30,"reason":"more keys"}`
+	key := newKey()
+	rec := f.change(f.s, http.MethodPost, path, body, key)
+	expectAdmin(t, "add", rec, http.StatusCreated, "")
+	var checks adminapi.CredentialCheckList
+	decode(t, rec, &checks)
+	expectSame(t, "the checks", outcomes(checks), []string{"0 passed", "1 failed/credential_rejected", "2 duplicate", "3 duplicate"})
+	expectSame(t, "the provider asked", len(p.sent())-asked, 2)
+	expectSame(t, "the stored key", f.text(`SELECT max_concurrency || '/' || requests_per_minute || '/' || hint || '/' || array_to_string(allowed_models, ',') || '/' || supplier_group_id::text
+		FROM suppliers.credentials WHERE id = '`+valueOf(checks.Data[0].CredentialId)+`'`),
+		"2/30/0002/"+directModel+",mystery-model/"+f.text(`SELECT id::text FROM suppliers.supplier_groups WHERE supplier_id = '`+made.Supplier.Id+`'`))
+	expectSame(t, "the key's text in the answer", strings.Contains(rec.Body.String(), "good-key"), false)
+	replay := f.change(f.s, http.MethodPost, path, body, key)
+	expectSame(t, "replay", []any{replay.Code, replay.Header().Get("Idempotency-Replayed"), f.text("SELECT count(*)::text FROM suppliers.credentials"), f.auditCount("credential.paste")},
+		[]any{http.StatusCreated, "true", "2", "1"})
+	expectSame(t, "the line's endpoints", f.text(`SELECT count(*)::text FROM suppliers.endpoints WHERE supplier_id = '`+made.Supplier.Id+`'`), "1")
+	expectAdmin(t, "a group", f.change(f.s, http.MethodPost, path, `{"group_id":"`+uuid.NewV7().String()+`","keys":["sk-good-key-0009"],"max_concurrency":1,"reason":"r"}`, newKey()),
+		http.StatusBadRequest, codeInvalidRequest)
+	f.run("UPDATE suppliers.suppliers SET mode = 'cloud', api_format = NULL WHERE id = '" + made.Supplier.Id + "'")
+	expectAdmin(t, "a cloud supplier", f.change(f.s, http.MethodPost, path, `{"keys":["sk-good-key-0009"],"max_concurrency":1,"reason":"r"}`, newKey()),
+		http.StatusConflict, codeConflict)
+}

@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strconv"
 	"time"
 	"unicode"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/pg"
@@ -230,11 +232,22 @@ func (a adminAPI) groupByRef(ctx context.Context, tx pg.Tx, supplier uuid.UUID, 
 	return uuid.UUID{}, err
 }
 
-// AddSupplierKeys checks pasted keys of one of a relay's groups and stores the ones that pass.
+// AddSupplierKeys checks pasted keys and stores the ones that pass: a relay's for one of its groups, a direct API's for
+// its one line. A cloud supplier's credential is replaced whole (409).
 func (a adminAPI) AddSupplierKeys(ctx context.Context, request adminapi.AddSupplierKeysRequestObject) (adminapi.AddSupplierKeysResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
 		return nil, err
+	}
+	var mode string
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		mode, err = a.suppliers.Mode(ctx, tx, supplier)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if mode != "relay" {
+		return a.addDirectKeys(ctx, request, supplier)
 	}
 	b := request.Body
 	group, texts, tails, err := pastedKeysOf(b)
@@ -262,21 +275,76 @@ func (a adminAPI) AddSupplierKeys(ctx context.Context, request adminapi.AddSuppl
 		for _, s := range stored {
 			checks[s.Index] = s
 		}
-		list := adminapi.CredentialCheckList{Data: make([]adminapi.CredentialCheck, len(checks))}
-		for i, c := range checks {
-			list.Data[i] = keyCheckBody(c, true)
-		}
-		return list, nil
+		return checkListBody(checks), nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	return a.keysAdded(ctx, body, replayed), nil
+}
+
+// addDirectKeys is AddSupplierKeys for a direct API: its keys take no group, are checked at the provider's model list
+// as a new direct API's are, and each that passes is a credential of the line with the models it lists.
+func (a adminAPI) addDirectKeys(ctx context.Context, request adminapi.AddSupplierKeysRequestObject, supplier uuid.UUID) (adminapi.AddSupplierKeysResponseObject, error) {
+	b := request.Body
+	switch {
+	case b.GroupId != nil:
+		return nil, invalidField("/group_id", "refused for a direct API")
+	case b.Keys == nil || len(*b.Keys) == 0:
+		return nil, invalidField("/keys", "at least one key is required")
+	}
+	tails := make([]string, len(*b.Keys))
+	for i, k := range *b.Keys {
+		tails[i] = suppliers.Last4(k)
+	}
+	claim, err := idempotencyClaim(ctx, "addSupplierKeys", request.Params.IdempotencyKey,
+		[]any{request.SupplierId, "", tails, b.MaxConcurrency, b.RequestsPerMinute, b.Reason})
+	if err != nil {
+		return nil, err
+	}
+	limits := suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
+	defer cancel()
+	var plan *suppliers.DirectPlan
+	var snap *catalog.Snapshot
+	body, replayed, err := probed(ctx, a, claim, func(ctx context.Context) (err error) {
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+			plan, err = a.suppliers.PlanDirectKeys(ctx, tx, supplier, *b.Keys, limits, b.Reason)
+			return err
+		}); err != nil {
+			return directProblem(err)
+		}
+		if snap, err = a.catalog.Current(); err != nil {
+			return &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
+		}
+		return directProblem(a.suppliers.CheckDirect(ctx, plan))
+	}, func(tx pg.Tx) (adminapi.CredentialCheckList, error) {
+		checks, err := a.suppliers.AddDirectKeys(ctx, tx, actor(ctx), snap, supplier, plan)
+		return checkListBody(checks), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return a.keysAdded(ctx, body, replayed), nil
+}
+
+// checkListBody is the API's view of the checks of pasted keys, in the order sent.
+func checkListBody(checks []suppliers.KeyCheck) adminapi.CredentialCheckList {
+	list := adminapi.CredentialCheckList{Data: make([]adminapi.CredentialCheck, len(checks))}
+	for i, c := range checks {
+		list.Data[i] = keyCheckBody(c, true)
+	}
+	return list
+}
+
+// keysAdded answers 201 when a key was stored, after this node has put it in its routing, and 200 when none was.
+func (a adminAPI) keysAdded(ctx context.Context, body adminapi.CredentialCheckList, replayed bool) adminapi.AddSupplierKeysResponseObject {
 	headers := adminapi.AddSupplierKeys201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if !slices.ContainsFunc(body.Data, func(c adminapi.CredentialCheck) bool { return c.CredentialId != nil }) {
-		return adminapi.AddSupplierKeys200JSONResponse{Body: body, Headers: adminapi.AddSupplierKeys200ResponseHeaders(headers)}, nil
+		return adminapi.AddSupplierKeys200JSONResponse{Body: body, Headers: adminapi.AddSupplierKeys200ResponseHeaders(headers)}
 	}
 	a.leaveRouting(ctx, replayed)
-	return adminapi.AddSupplierKeys201JSONResponse{Body: body, Headers: headers}, nil
+	return adminapi.AddSupplierKeys201JSONResponse{Body: body, Headers: headers}
 }
 
 // pastedKeysOf reads the group and the keys a request pastes, with each key's last four characters.
