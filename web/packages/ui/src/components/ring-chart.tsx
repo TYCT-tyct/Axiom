@@ -4,20 +4,7 @@ import s from "./ring-chart.module.css";
 
 // The colour of a part: the data colour in its three steps, a category colour (--c0…--c4, a model's own), grey, red; the
 // status colours of a score (ok, warn, bad), and the track the rest of a score is drawn on.
-export type Swatch =
-  | "data"
-  | "data2"
-  | "data3"
-  | "c0"
-  | "c1"
-  | "c2"
-  | "c3"
-  | "c4"
-  | "muted"
-  | "bad"
-  | "ok"
-  | "warn"
-  | "track";
+type Swatch = "data" | "data2" | "data3" | "c0" | "c1" | "c2" | "c3" | "c4" | "muted" | "bad" | "ok" | "warn" | "track";
 
 export type RingPart = {
   key: Key;

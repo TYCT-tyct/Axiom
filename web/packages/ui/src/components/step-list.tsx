@@ -3,7 +3,7 @@ import { classes } from "../classes";
 import { Icon } from "./icon";
 import s from "./step-list.module.css";
 
-export type ListedStep = { key: Key; title: string; detail?: ReactNode; done: boolean; action?: ReactNode };
+type ListedStep = { key: Key; title: string; detail?: ReactNode; done: boolean; action?: ReactNode };
 
 // StepList is a checklist of the steps a thing takes before it is ready (the admin's .adsteps, a channel's 接入检查):
 // each step numbered in a ring, a tick once done, the first one not done ringed darker as the one to do now, with its
