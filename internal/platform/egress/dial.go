@@ -26,6 +26,12 @@ func (d *dialer) dialContext(ctx context.Context, network, address string) (net.
 	if err != nil {
 		return nil, fmt.Errorf("egress split destination: %w", err)
 	}
+	if at, routed := d.policy.Routed(host); routed { // a test's fake of a public address, still held to the policy
+		if !allowedAddress(at.Addr(), d.policy) {
+			return nil, fmt.Errorf("egress %s: %w", host, ErrAddressDenied)
+		}
+		return d.connectOne(ctx, network, at.String(), 1)
+	}
 	ips, err := d.resolve(ctx, host)
 	if err != nil {
 		return nil, err
@@ -71,6 +77,9 @@ func (d *dialer) resolve(ctx context.Context, host string) ([]netip.Addr, error)
 // A mapped literal in the URL is refused as written. Resolver answers are unmapped instead: Go's pure resolver
 // returns IPv4 entries of /etc/hosts as IPv4-mapped addresses, and the IPv4 checks then apply to what is dialed.
 func (d *dialer) addresses(ctx context.Context, host string) ([]netip.Addr, error) {
+	if at, routed := d.policy.Routed(host); routed {
+		return []netip.Addr{at.Addr()}, nil
+	}
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return []netip.Addr{ip}, nil
 	}

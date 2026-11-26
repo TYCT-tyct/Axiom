@@ -31,10 +31,81 @@
   transition: transform var(--dur) var(--ease);
 }
 
-.root[open] > .summary .chevron {
+.body {
+  padding-top: 12px;
+}
+
+/* A pile (the admin's .adpile and .adpilb): the summary is a 44px row across the card, name, count and a quiet note at
+   its end; what it holds sits indented under the name. */
+.pile {
+  min-width: 0;
+}
+
+.pile > .summary {
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: 20px auto auto minmax(0, 1fr);
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  border-radius: var(--r8);
+  color: var(--t1);
+  transition: background-color var(--dur) var(--ease);
+}
+
+.pile > .summary:hover {
+  background: var(--hover);
+}
+
+.pile > .summary .chevron {
+  justify-self: center;
+  color: var(--t2);
+}
+
+.pile > .summary b {
+  font-size: var(--fs14);
+  font-weight: 500;
+}
+
+.count {
+  display: inline-grid;
+  place-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: var(--r6);
+  background: var(--hover);
+  font-style: normal;
+  font-size: var(--fs12);
+  font-variant-numeric: tabular-nums;
+  color: var(--t1);
+}
+
+.note {
+  justify-self: end;
+  font-size: var(--fs12);
+  color: var(--t3);
+}
+
+.pile > .body {
+  padding: 4px 12px 12px 40px;
+}
+
+.root[open] > .summary .chevron,
+.pile[open] > .summary .chevron {
   transform: rotate(90deg);
 }
 
-.body {
-  padding-top: 12px;
+@media (max-width: 599px) {
+  .pile > .summary {
+    grid-template-columns: 20px minmax(0, 1fr) auto;
+  }
+
+  .note {
+    display: none;
+  }
+
+  .pile > .body {
+    padding-left: 12px;
+  }
 }

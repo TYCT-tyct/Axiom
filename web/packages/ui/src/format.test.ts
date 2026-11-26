@@ -22,6 +22,28 @@ describe("money", () => {
   });
 });
 
+describe("rounded money and compact counts", () => {
+  // A figure that is read rounds to two decimals from the digits, so a rounding at the 9th place never leaks in.
+  it.each([
+    { zh: "US$12,345.68", en: "$12,345.68", amount: "12345678901234" },
+    { zh: "US$0.00", en: "$0.00", amount: "1" },
+    { zh: "US$1.01", en: "$1.01", amount: "1005000000" },
+  ])("rounds $amount to cents in both languages", ({ zh, en, amount }) => {
+    const money = { amount, currency: "USD" };
+    expect(formatters("zh").rounded(money)).toBe(zh);
+    expect(formatters("en").rounded(money)).toBe(en);
+  });
+
+  it.each([
+    { value: 345_600_000, zh: "3.5亿", en: "345.6M" },
+    { value: 12_000, zh: "1.2万", en: "12K" },
+    { value: 950, zh: "950", en: "950" },
+  ])("writes $value in the language's own units", ({ value, zh, en }) => {
+    expect(formatters("zh").compact(value)).toBe(zh);
+    expect(formatters("en").compact(value)).toBe(en);
+  });
+});
+
 describe("decimal", () => {
   // Decimal text from the API is shown grouped for the language, without rounding a digit.
   it.each([

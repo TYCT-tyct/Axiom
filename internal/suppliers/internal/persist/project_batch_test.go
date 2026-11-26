@@ -59,7 +59,7 @@ func setRowCost(ctx context.Context, db store.DBTX, r store.EnsureCostSchedulePa
 	if err != nil {
 		return err
 	}
-	return q.SetProjectedEndpointCost(ctx, db, store.SetProjectedEndpointCostParams{ID: r.EndpointID, CostScheduleID: &id})
+	return q.SetProjectedEndpointCost(ctx, db, store.SetProjectedEndpointCostParams{ID: r.EndpointID, CostScheduleID: id})
 }
 
 func projectionDB(t testing.TB) (*pg.DB, uuid.UUID) {
@@ -209,6 +209,7 @@ func randomProjection(rng *rand.Rand, initial store.ProjectionWrites, round int)
 				cost.Fingerprint = plusVAT.fingerprint
 				cost.Schedule = []byte(plusVAT.schedule)
 				cost.Basis = plusVAT.basis
+				cost.Derivation = `[{"item":"input","service_tier":"standard","factors":[{"kind":"base_price","value":"0.06"},{"kind":"group_ratio","value":"1.5"}]}]`
 			}
 			w.Costs = append(w.Costs, cost)
 		case 5:

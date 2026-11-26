@@ -8,7 +8,6 @@ import {
   EmptyState,
   Field,
   LoadMore,
-  PageHead,
   Select,
   Stack,
   Table,
@@ -22,11 +21,7 @@ import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem, useSnapshot } from "../change";
 import { paymentCurrencies } from "../credit-read";
 import { exchangeHistoryQuery, exchangeRatesQuery } from "../finance-queries";
-import en from "../locales/en/exchange-rates";
-import zh from "../locales/zh/exchange-rates";
-import { Actions, Code, Head, PageBody, Time } from "../parts";
-
-export const messages = { zh: { exchangeRates: zh }, en: { exchangeRates: en } };
+import { Actions, Code, Head, Time } from "../parts";
 
 type Rate = AdminSchemas["ExchangeRate"];
 type Input = Omit<AdminSchemas["ExchangeRateInput"], "reason">;
@@ -37,6 +32,7 @@ const samePair = (a: Pair, b: Pair) => a.base === b.base && a.quote === b.quote;
 const kinds = ["initial", "adjustment", "correction"] as const;
 const pairName = ({ base, quote }: Pair) => `${base} / ${quote}`;
 
+// ExchangeRates is the pricing page's tab of the rates costs in a foreign currency are turned into the site's with.
 export default function ExchangeRates() {
   const { t } = useTranslation();
   const manage = can(useSession(), "pricing.manage");
@@ -46,25 +42,22 @@ export default function ExchangeRates() {
   const current = panel?.kind === "edit" ? query.data?.data.find((rate) => samePair(rate, panel.pair)) : undefined;
   return (
     <>
-      <PageHead title={t("nav.exchangeRates")} lede={t("exchangeRates.description")} />
-      <PageBody>
-        {manage && query.isSuccess ? (
-          <Actions>
-            <ActionButton variant="pri" icon="plus" onClick={() => setPanel({ kind: "add" })}>
-              {t("exchangeRates.add")}
-            </ActionButton>
-          </Actions>
-        ) : null}
-        <Card layout="flush">
-          <DataState
-            query={query}
-            isEmpty={(list) => list.data.length === 0}
-            empty={<EmptyState title={t("exchangeRates.empty")} />}
-          >
-            {({ data }) => <Rates rows={data} manage={manage} open={setPanel} />}
-          </DataState>
-        </Card>
-      </PageBody>
+      {manage && query.isSuccess ? (
+        <Actions>
+          <ActionButton variant="pri" icon="plus" onClick={() => setPanel({ kind: "add" })}>
+            {t("exchangeRates.add")}
+          </ActionButton>
+        </Actions>
+      ) : null}
+      <Card layout="flush">
+        <DataState
+          query={query}
+          isEmpty={(list) => list.data.length === 0}
+          empty={<EmptyState title={t("exchangeRates.empty")} />}
+        >
+          {({ data }) => <Rates rows={data} manage={manage} open={setPanel} />}
+        </DataState>
+      </Card>
       {panel?.kind === "history" ? <History pair={panel.pair} onClose={close} /> : null}
       {panel?.kind === "add" ? <EditRate onClose={close} /> : null}
       {current ? <EditRate live={current} onClose={close} /> : null}
@@ -76,13 +69,13 @@ function Rates({ rows, manage, open }: { rows: Rate[]; manage: boolean; open: (p
   const { t } = useTranslation();
   const format = useFormat();
   return (
-    <Table label={t("nav.exchangeRates")}>
+    <Table label={t("pricing.tabs.rates")}>
       <Head
         cols={[
           [t("exchangeRates.pair"), { main: true }],
           t("exchangeRates.rate"),
-          t("exchangeRates.version"),
-          t("exchangeRates.source"),
+          [t("exchangeRates.version"), { from: "sm" }],
+          [t("exchangeRates.source"), { from: "sm" }],
         ]}
         action
       />
@@ -95,8 +88,8 @@ function Rates({ rows, manage, open }: { rows: Rate[]; manage: boolean; open: (p
             <Td>
               <RateValue rate={row} />
             </Td>
-            <Td>{format.number(row.version)}</Td>
-            <Td>
+            <Td from="sm">{format.number(row.version)}</Td>
+            <Td from="sm">
               {row.source === "manual" || row.source === "ecb" ? t(`exchangeRates.sources.${row.source}`) : row.source}
             </Td>
             <Td actions>

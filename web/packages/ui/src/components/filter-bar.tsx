@@ -1,7 +1,9 @@
 import { useTranslation } from "react-i18next";
+import { classes } from "../classes";
 import { ActionButton } from "./action-button";
 import { Field, Select } from "./field";
 import s from "./filter-bar.module.css";
+import { ListCount } from "./list-count";
 import { SegmentedControl } from "./segmented-control";
 
 type Option = { value: string; label: string };
@@ -22,19 +24,22 @@ export function filterDefaults<K extends string>(filters: readonly Filter<K>[]) 
 
 // FilterBar is the row of filters above a list. It holds no state: the values are the caller's, normally the address's
 // search params (useUrlParams), so a filtered list survives reload and Back. "Clear" shows only while something is
-// filtered and resets every filter at once.
+// filtered and resets every filter at once. Given the list's count, the row says "3 / 10 条" at its end while the
+// filters hide some of the list's rows (total), and nothing while they hide none.
 export function FilterBar<K extends string>({
   label,
   filters,
   values,
   onChange,
   onClear,
+  count,
 }: {
   label: string;
   filters: readonly Filter<K>[];
   values: Record<K, string>;
   onChange: (key: K, value: string) => void;
   onClear: () => void;
+  count?: { shown: number; total: number; unit: string };
 }) {
   const { t } = useTranslation("common");
   const active = filters.some((filter) => values[filter.key] !== filter.initial);
@@ -67,8 +72,9 @@ export function FilterBar<K extends string>({
           )}
         </div>
       ))}
+      {count ? <ListCount {...count} whileFiltered /> : null}
       {active ? (
-        <div className={s.clear}>
+        <div className={classes(s.clear, count && s.afterCount)}>
           <ActionButton variant="gho" icon="close" onClick={onClear}>
             {t("filters.clear")}
           </ActionButton>

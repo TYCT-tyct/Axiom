@@ -1,7 +1,7 @@
 import { ApiError } from "@axiom/api";
 import { expect, it } from "vitest";
 import { isProblem } from "./change";
-import { mailSavedRestart } from "./mail-settings";
+import { mailSavedRestart } from "./mail-read";
 import {
   bufferRefused,
   defaultMethodRows,
@@ -13,7 +13,7 @@ import {
   readPayments,
   withoutBuffer,
 } from "./payment-read";
-import { nameEditable, siteSettingsInput } from "./site-info";
+import { nameEditable, siteSettingsInput } from "./site-settings-write";
 
 const paymentWords = { amount: "amount", range: "range", buffer: "buffer" };
 const merchantWords = {

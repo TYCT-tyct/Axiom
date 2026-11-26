@@ -63,9 +63,9 @@ func (q *Queries) InsertByokCredential(ctx context.Context, db DBTX, arg InsertB
 const insertByokSupplier = `-- name: InsertByokSupplier :one
 
 INSERT INTO suppliers.suppliers (owner_scope, site_id, account_id, name, kind, origin, upstream_account, native_unit,
-    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback)
+    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback, mode)
 VALUES ('account', $1, $2, $3, 'openai', 'https://api.openai.com', $4, 'usd', 'USD',
-    'direct', 'byok', 1, now(), $5)
+    'direct', 'byok', 1, now(), $5, 'direct')
 RETURNING id
 `
 
@@ -225,18 +225,5 @@ type SetByokCredentialStatusParams struct {
 // a normal supplier's credential status belongs to its sync.
 func (q *Queries) SetByokCredentialStatus(ctx context.Context, db DBTX, arg SetByokCredentialStatusParams) error {
 	_, err := db.Exec(ctx, setByokCredentialStatus, arg.Status, arg.SupplierID, arg.CredentialID)
-	return err
-}
-
-const setByokRejected = `-- name: SetByokRejected :exec
-UPDATE suppliers.credentials c SET status = 'rejected'
-FROM suppliers.suppliers s
-WHERE c.supplier_id = s.id AND s.status = 'byok' AND c.id = $1 AND c.status = 'active'
-`
-
-// The call path learned the provider refused this key. Addressed by credential, without a tenant: the caller holds an
-// id from the snapshot and has no account at hand.
-func (q *Queries) SetByokRejected(ctx context.Context, db DBTX, credentialID uuid.UUID) error {
-	_, err := db.Exec(ctx, setByokRejected, credentialID)
 	return err
 }

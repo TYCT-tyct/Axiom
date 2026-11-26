@@ -89,8 +89,8 @@ UPDATE suppliers.endpoints SET upstream_name = @upstream_name, formats = @format
 -- A cost schedule is append-only and an endpoint has one row per fingerprint: a plan the endpoint already has a row for
 -- is that row, so a listing read twice adds none.
 WITH made AS (
-    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
-    VALUES (@supplier_id, @endpoint_id, @native_unit, @schedule::jsonb, @basis, @fingerprint)
+    INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
+    VALUES (@supplier_id, @endpoint_id, @native_unit, @schedule::jsonb, @basis, @fingerprint, NULLIF(@derivation::text, '')::jsonb)
     ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
     RETURNING id
 )
@@ -100,12 +100,22 @@ SELECT id FROM suppliers.cost_schedules WHERE endpoint_id = @endpoint_id AND fin
 LIMIT 1;
 
 -- name: SetProjectedEndpointCost :exec
--- Puts the endpoint's cost schedule in force. The caller decides when: a plan that is already in force is only written
--- back over a reason the projection itself wrote, so a verdict of reconciliation (an estimate the supplier's charges
--- exceeded) stands until a new estimate or a person lifts it.
-UPDATE suppliers.endpoints
-SET cost_state = 'known', cost_schedule_id = @cost_schedule_id, cost_state_reason = NULL
-WHERE id = @id;
+-- Puts the endpoint's cost schedule in force, one row at a time as ProjectionWrites.Apply does in pages. The caller
+-- decides when: a plan that is already in force is only written back over a reason the projection itself wrote, so a
+-- verdict of reconciliation (an estimate the supplier's charges exceeded) stands until a new price or a person lifts
+-- it; a new version at the same prices is taken up and keeps the verdict.
+UPDATE suppliers.endpoints e
+SET cost_schedule_id = v.id,
+    cost_state = CASE WHEN v.kept THEN e.cost_state ELSE 'known' END,
+    cost_state_reason = CASE WHEN v.kept THEN e.cost_state_reason END
+FROM (
+    SELECT nxt.id, coalesce(cur.cost_state_reason = 'under_estimated' AND was.schedule = nxt.schedule AND was.native_unit = nxt.native_unit, false) AS kept
+    FROM suppliers.endpoints cur
+    JOIN suppliers.cost_schedules nxt ON nxt.id = @cost_schedule_id
+    LEFT JOIN suppliers.cost_schedules was ON was.id = cur.cost_schedule_id
+    WHERE cur.id = @id
+) v
+WHERE e.id = @id;
 
 -- name: UnsetProjectedEndpointCost :exec
 -- The endpoint has no cost to route by: it is not routable, and the row and its enabled switch stay for when it has.

@@ -379,7 +379,7 @@ func (s *Snapshot) addNames(rows []CatalogName) {
 			public:   Visibility(n.Visibility) == VisibilityPublic,
 			retired:  m.Status == StatusRetired,
 			floating: m.VersionBasis == VersionFloating,
-			exact:    m.VersionBasis == VersionFloating || hasDate(n.Norm),
+			exact:    versionEvidence(m.VersionBasis, n.Norm),
 		}
 	}
 }

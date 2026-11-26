@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"uuid"
@@ -269,19 +270,31 @@ FROM (VALUES `, `) AS v(id, name, formats) WHERE t.id = v.id`, []string{"uuid", 
 		return fmt.Errorf("project changed endpoints: %w", err)
 	}
 	if err := projectionPages(ctx, db, w.Costs, `
-WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint) AS (VALUES `, `), made AS (
- INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint)
- SELECT * FROM wanted ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
+WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation) AS (VALUES `, `), made AS (
+ INSERT INTO suppliers.cost_schedules (supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, derivation)
+ SELECT supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint, NULLIF(derivation, '')::jsonb FROM wanted
+ ON CONFLICT (endpoint_id, fingerprint) DO NOTHING
  RETURNING id, endpoint_id
 ), schedules AS (
  SELECT id, endpoint_id FROM made
  UNION ALL
  SELECT c.id, c.endpoint_id FROM suppliers.cost_schedules c
  JOIN wanted w ON w.endpoint_id = c.endpoint_id AND w.fingerprint = c.fingerprint
+), verdicts AS (
+ -- A version at the prices reconciliation found too low only explains them another way: the endpoint takes it up and
+ -- stays out of routing (docs/domains/suppliers.md「同步与变化」).
+ SELECT s.id, s.endpoint_id,
+  coalesce(e.cost_state_reason = 'under_estimated' AND cur.schedule = w.schedule AND cur.native_unit = w.native_unit, false) AS kept
+ FROM schedules s
+ JOIN wanted w ON w.endpoint_id = s.endpoint_id
+ JOIN suppliers.endpoints e ON e.id = s.endpoint_id
+ LEFT JOIN suppliers.cost_schedules cur ON cur.id = e.cost_schedule_id
 )
-UPDATE suppliers.endpoints e SET cost_state = 'known', cost_schedule_id = s.id, cost_state_reason = NULL
-FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text"}, func(r EnsureCostScheduleParams) []any {
-		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint}
+UPDATE suppliers.endpoints e SET cost_schedule_id = v.id,
+ cost_state = CASE WHEN v.kept THEN e.cost_state ELSE 'known' END,
+ cost_state_reason = CASE WHEN v.kept THEN e.cost_state_reason END
+FROM verdicts v WHERE e.id = v.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text", "text"}, func(r EnsureCostScheduleParams) []any {
+		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint, r.Derivation}
 	}); err != nil {
 		return fmt.Errorf("project costs: %w", err)
 	}
@@ -304,6 +317,7 @@ func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suff
 		var sql strings.Builder
 		sql.WriteString(prefix)
 		args := make([]any, 0, len(page)*len(types))
+		var number [20]byte
 		for i, r := range page {
 			if i > 0 {
 				sql.WriteByte(',')
@@ -313,7 +327,12 @@ func projectionPages[T any](ctx context.Context, db DBTX, rows []T, prefix, suff
 				if j > 0 {
 					sql.WriteByte(',')
 				}
-				fmt.Fprintf(&sql, "$%d::%s", len(args)+j+1, typ)
+				// Not fmt.Fprintf: boxing the number and the type costs two allocations per value, and a page holds
+				// thousands of them (BenchmarkProjectionPage).
+				sql.WriteByte('$')
+				sql.Write(strconv.AppendInt(number[:0], int64(len(args)+j+1), 10))
+				sql.WriteString("::")
+				sql.WriteString(typ)
 			}
 			sql.WriteByte(')')
 			args = append(args, values(r)...)

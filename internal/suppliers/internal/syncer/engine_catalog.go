@@ -100,10 +100,11 @@ func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[str
 func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[string]string) (string, error) {
 	key := PlanKey(g.Ref, m.UpstreamName)
 	var schedule catalog.Schedule
+	var derivation adapter.Derivation
 	var basis string
 	switch base, confirmed := c.State.Confirmed[m.UpstreamName]; {
 	case m.Cost != nil:
-		schedule, basis = *m.Cost, "published"
+		schedule, derivation, basis = *m.Cost, m.Derivation, "published"
 	case confirmed:
 		parsed, err := catalog.ParseSchedule([]byte(base))
 		if err != nil {
@@ -112,7 +113,7 @@ func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[st
 		if schedule, err = adapter.ScaleSchedule(parsed, g.Ratio); err != nil {
 			return "", err
 		}
-		basis = "confirmed"
+		derivation, basis = adapter.ScaledDerivation(parsed, g.Ratio), "confirmed"
 	default:
 		if kept != "" {
 			plans[key] = kept
@@ -123,13 +124,32 @@ func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[st
 	if err != nil {
 		return "", err
 	}
-	sum := sha256.Sum256(b)
-	fp := hex.EncodeToString(sum[:8])
+	if derivation.Check(schedule) != nil {
+		derivation = nil // an explanation that does not multiply out to the price is none; the price stands
+	}
+	d, err := derivation.Text()
+	if err != nil {
+		return "", err
+	}
+	fp := fingerprint(b, d)
 	plans[key] = fp
 	if c.State.Plans[key] != fp {
-		c.Plans = append(c.Plans, Plan{Endpoint: key, Fingerprint: fp, Schedule: string(b), Basis: basis})
+		c.Plans = append(c.Plans, Plan{Endpoint: key, Fingerprint: fp, Schedule: string(b), Basis: basis, Derivation: d})
 	}
 	return fp, nil
+}
+
+// fingerprint names a version of a plan: its schedule, and its derivation when it has one, so a plan without factors
+// keeps the fingerprint it had before plans carried them, and one whose factors change is a new version of the plan
+// even at the same prices.
+func fingerprint(schedule []byte, derivation string) string {
+	h := sha256.New()
+	h.Write(schedule)
+	if derivation != "" {
+		h.Write([]byte{0})
+		h.Write([]byte(derivation))
+	}
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 func diffGroups(c *Commit, prev map[string]GroupSnap, now []GroupSnap) {

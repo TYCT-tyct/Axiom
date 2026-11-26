@@ -36,6 +36,7 @@ type Call struct {
 	serverLoop    bool                      // openrouter:web_search runs the model-side loop through searchBackend
 	searchPrice   platform.UnitPrice        // the backend's published price per search, zero to use the model's
 	files         []protocol.FileAnnotation // the annotations a parsed Chat reply returns, so the client can skip reparsing
+	plugins       []observability.PluginRun // the plugins the gateway ran, for the call log; their prices are set as it is written
 	Header        http.Header               // the client's values of the headers that may go upstream, which headers.go derives per attempt
 	cache         cachePlan                 // the response cache this call may read or write, zero when it did not ask
 	presetCache   *bool                     // the preset's cache_enabled, nil when it does not decide the switch

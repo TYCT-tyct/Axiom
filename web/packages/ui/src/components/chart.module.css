@@ -110,6 +110,40 @@
   --sc: var(--c4);
 }
 
+/* The admin's colours for a series that names one; --scd is the step deeper the current slot draws in, where it is
+   not the general one below (the data colour deepens to --adData3, grey stays grey as the board keeps it). */
+.data {
+  --sc: var(--adData);
+}
+
+.data2 {
+  --sc: var(--adData2);
+  --scd: var(--adData);
+}
+
+.data3 {
+  --sc: var(--adData3);
+}
+
+.bad {
+  --sc: var(--bad);
+}
+
+.muted {
+  --sc: var(--line3);
+  --scd: var(--line3);
+}
+
+/* The current slot (the admin's .adcc.cur): its bars a step deeper, its axis name in the text colour. */
+.bar.now {
+  fill: var(--scd, color-mix(in srgb, var(--sc) 56%, var(--t1)));
+}
+
+.xax .now {
+  color: var(--t1);
+  font-weight: 500;
+}
+
 .empty {
   position: absolute;
   inset: 0;

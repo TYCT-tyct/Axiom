@@ -7,7 +7,6 @@ import {
   EmptyState,
   Field,
   Grid,
-  PageHead,
   Table,
   Td,
   Text,
@@ -19,7 +18,7 @@ import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem, useSnapshot } from "../change";
-import { Code, Head, PageBody, State } from "../parts";
+import { Code, Head, State } from "../parts";
 import { sourceClassesQuery } from "../queries";
 import { ConditionRows, type Rules, readRules } from "../source-class-rules";
 
@@ -35,32 +34,20 @@ type EditorInput = {
   rules?: Rules;
 };
 
-// SourceClassesPage lists the classes in recognition order. The fallback is still a class like the others; it just has
-// no conditions and is chosen when nothing matches.
+// SourceClassesPage is the routing page's tab of source classes, in recognition order. The fallback is still a class
+// like the others; it just has no conditions and is chosen when nothing matches.
 export default function SourceClassesPage() {
   const { t } = useTranslation();
   const query = useQuery(sourceClassesQuery);
   // A node of the release before has no such operation. DataState would call that a missing page; say what it is.
   if (query.isError && query.error instanceof ApiError && query.error.status === 404) {
     return (
-      <>
-        <PageHead title={t("sourceClasses.title")} lede={t("sourceClasses.description")} />
-        <PageBody>
-          <Card title={t("sourceClasses.unavailableTitle")}>
-            <Text tone="muted">{t("sourceClasses.unavailableBody")}</Text>
-          </Card>
-        </PageBody>
-      </>
+      <Card title={t("sourceClasses.unavailableTitle")}>
+        <Text tone="muted">{t("sourceClasses.unavailableBody")}</Text>
+      </Card>
     );
   }
-  return (
-    <>
-      <PageHead title={t("sourceClasses.title")} lede={t("sourceClasses.description")} />
-      <PageBody>
-        <DataState query={query}>{(view) => <Classes classes={view.classes} />}</DataState>
-      </PageBody>
-    </>
-  );
+  return <DataState query={query}>{(view) => <Classes classes={view.classes} />}</DataState>;
 }
 
 // Editing is the open editor: a new class, or an existing one by slug. Every slug is a valid name for a class, "new"
@@ -100,8 +87,8 @@ export function Classes({ classes }: { classes: Class[] }) {
               cols={[
                 [t("sourceClasses.position"), { align: "end" }],
                 [t("sourceClasses.colName"), { main: true }],
-                t("sourceClasses.colRules"),
-                t("sourceClasses.updated"),
+                [t("sourceClasses.colRules"), { from: "sm" }],
+                [t("sourceClasses.updated"), { from: "sm" }],
               ]}
               action
             />
@@ -155,14 +142,14 @@ function ClassRow({
           {item.description || t("sourceClasses.noDescription")}
         </Text>
       </Td>
-      <Td>
+      <Td from="sm">
         {item.rules.conditions.length === 0
           ? t("sourceClasses.noRules")
           : `${t("sourceClasses.rulesCount", { count: item.rules.conditions.length })} · ${
               item.rules.match === "any" ? t("sourceClasses.matchAny") : t("sourceClasses.matchAll")
             }`}
       </Td>
-      <Td>{format.dateTime(new Date(item.updated_at))}</Td>
+      <Td from="sm">{format.dateTime(new Date(item.updated_at))}</Td>
       <Td actions>
         <Cluster>
           <ActionButton size="sm" onClick={onEdit}>

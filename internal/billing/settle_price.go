@@ -264,3 +264,6 @@ func costWithout(s catalog.Schedule, u catalog.Usage, items catalog.ItemSet) (pl
 	cost, _, err := s.Cost(rest)
 	return cost, err
 }
+
+// ServerToolItems are the per-use items whose sale price Final.ServerToolCost adds up.
+const ServerToolItems = waivedPerUseItems

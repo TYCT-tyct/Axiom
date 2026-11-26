@@ -16,7 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
-	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/persist"
 )
 
 // Failure is a failed attempt, as the adapter classified it: who is at fault (Scope), what went wrong (Cause) and
@@ -75,7 +75,8 @@ func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt 
 }
 
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in
-// Authorization: Bearer, which new-api and sub2api both accept on all three.
+// Authorization: Bearer, which new-api and sub2api both accept on all three; a provider's own API says otherwise
+// (adapter.Wire).
 var wire = map[protocol.Format]struct {
 	path    string
 	version string
@@ -86,6 +87,15 @@ var wire = map[protocol.Format]struct {
 	protocol.Embeddings:  {path: "/v1/embeddings"},
 	protocol.Rerank:      {path: "/v1/rerank"},
 	protocol.Completions: {path: "/v1/completions"},
+}
+
+// relayWire is how every relay takes a call: at the format's path, with the key as a bearer token.
+type relayWire struct{}
+
+func (relayWire) Path(_ protocol.Format, path string) string { return path }
+
+func (relayWire) Authorize(h http.Header, _ protocol.Format, key string) {
+	h.Set("Authorization", "Bearer "+key)
 }
 
 // compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
@@ -171,15 +181,15 @@ func (c *Capacity) Full() bool {
 }
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
-// count of attempts it was found with.
+// count of attempts it was found with. Each credential is held to its upstream account's rolling minute: a relay's
+// credentials share one, so it is counted once, and a pasted key's is its own.
 func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, bestN int32) {
-	if len(ep.creds) == 0 {
-		return nil, 0
-	}
-	used := ep.creds[0].rt.requests.count(now)
-	var bestLoad float64
+	var (
+		bestLoad float64
+		minute   accountMinute
+	)
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= int64(c.perMinute)) {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || minute.full(c, now) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -195,6 +205,23 @@ func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, 
 		}
 	}
 	return best, bestN
+}
+
+// accountMinute is the rolling minute of the upstream account last looked at, read once for all of its credentials.
+type accountMinute struct {
+	account *minuteRuntime
+	used    int64
+}
+
+// full reports whether the credential's account has used its ceiling this minute; a credential with none never is.
+func (m *accountMinute) full(c *credential, now time.Time) bool {
+	if c.perMinute == 0 {
+		return false
+	}
+	if c.rt.requests != m.account {
+		m.account, m.used = c.rt.requests, c.rt.requests.count(now)
+	}
+	return m.used >= int64(c.perMinute)
 }
 
 // NotExecuted is the Executed of a failure after which the supplier is known not to have run the request; any other
@@ -257,51 +284,90 @@ func (a *Attempt) Done() AttemptReceipt {
 
 // Send posts the call to the supplier. A response in the 2xx range is returned for the caller to read and close.
 // Anything else comes back as a Failure. The supplier's request id is taken from the response headers of any answer,
-// failed or not, because it is what the charge will be matched by.
+// failed or not, because it is what the charge will be matched by. A cloud platform's adapter makes the request itself
+// (adapter.Signer), from the credential's region and the model as it names it, and gives its answer in the format's
+// framing; a failure to sign is the call's before anything was sent.
 //
 // Whether the supplier ran a request that failed is decided in two places. A failure before the request was fully
 // written is NotExecuted whatever its cause. After it, the adapter's Classify says: only an answer by which the
 // supplier states it refused before running the request is NotExecuted, and a timeout, a reset or a 5xx is not.
 // Neither suppliers nor egress retries a POST.
 func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure) {
+	resp, f := a.send(ctx, call)
+	if f != nil {
+		a.rest(*f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
+	}
+	return resp, f
+}
+
+// send is Send without resting what a failure says is at fault.
+func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure) {
+	signer, cloud := a.ep.quirks.(adapter.Signer)
+	var (
+		req *http.Request
+		f   *Failure
+	)
+	if cloud {
+		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
+			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
+			Header: call.Header, Key: a.cred.key, At: a.s.now(),
+		})
+	} else {
+		req, f = a.request(ctx, call)
+	}
+	if f != nil {
+		return nil, f
+	}
+	var wrote atomic.Bool
+	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
+	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	if err != nil {
+		return nil, transportFailure(wrote.Load())
+	}
+	a.noteResponse(resp.StatusCode, resp.Header)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if cloud {
+			resp = signer.Answer(resp)
+		}
+		return resp, nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
+	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
+	failure := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
+	if failure.Scope == adapter.ScopeRequest {
+		failure.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
+	}
+	return nil, &failure
+}
+
+// request is the call as a relay or a provider's own API takes it: at the format's path under the origin, with the key
+// in the header the format takes there.
+func (a *Attempt) request(ctx context.Context, call Call) (*http.Request, *Failure) {
 	w, ok := wire[call.Format]
 	if !ok {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
-	var wrote atomic.Bool
-	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
 	path := w.path
 	if call.Compact {
 		if path, ok = compactPaths[call.Format]; !ok {
 			return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 		}
 	}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+path, bytes.NewReader(call.Body))
+	wire, own := a.ep.quirks.(adapter.Wire)
+	if !own {
+		wire = relayWire{}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	maps.Copy(req.Header, call.Header)
-	req.Header.Set("Authorization", "Bearer "+a.cred.key.Reveal())
+	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal())
 	req.Header.Set("Content-Type", "application/json")
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)
 	}
-	resp, err := a.s.cfg.Egress.Do(req)
-	if err != nil {
-		return nil, transportFailure(wrote.Load())
-	}
-	a.noteResponse(resp.StatusCode, resp.Header)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp, nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
-	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
-	f := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
-	if f.Scope == adapter.ScopeRequest {
-		f.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
-	}
-	a.rest(f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
-	return nil, &f
+	return req, nil
 }
 
 func (a *Attempt) noteResponse(status int, h http.Header) {
@@ -371,16 +437,17 @@ func (s *Service) reportRejected(supplier uuid.UUID, cred *credential) {
 	}
 }
 
-// markRejected writes the rejected status until the queue is empty. An error is logged and not retried: the credential
-// is resting in this node anyway, and the next rejection after a restart tries again.
+// markRejected writes the rejected status, and the suppliers' queue with it, until the queue of reports is empty. An
+// error is logged and not retried: the credential is resting in this node anyway, and the next rejection after a
+// restart tries again.
 func (s *Service) markRejected() {
 	for r := range s.rejected {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
-			return store.New().SetByokRejected(ctx, tx, r.credential)
+			return persist.RejectCredential(ctx, tx, r.supplier, r.credential, s.now())
 		})
 		if err != nil {
-			s.cfg.Logger.Error("marking a refused provider key", "supplier", r.supplier.String(), "err", err)
+			s.cfg.Logger.Error("marking a refused key", "supplier", r.supplier.String(), "err", err)
 		}
 		r.runtime.reporting.Store(false)
 		cancel()

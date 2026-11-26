@@ -24,7 +24,7 @@ for (const language of ["zh", "en"] as const) {
     const errors = collectErrors(page);
     await page.addInitScript((value) => localStorage.setItem("axiom.language", value), language);
     await open(page, "/", "usual", { version: deployed });
-    await expect(h1(page, words("home.title"))).toBeVisible();
+    await expect(h1(page, words("dashboard:title"))).toBeVisible();
     const notice = newVersionNotice(page);
     await expect(notice).toBeVisible();
     await expect(notice).toHaveText(language === "zh" ? /Axiom 已经更新/ : /Axiom has been updated/);
@@ -42,7 +42,7 @@ test("the admin offers no reload while the program answering is the one it was b
   expect(built, "run the end-to-end tests with `just web`, which stamps the build and passes its version").not.toBe("");
   const asked = page.waitForResponse("**/api/admin/v1/version");
   await open(page, "/", "usual", { version: built });
-  await expect(h1(page, words("home.title"))).toBeVisible();
+  await expect(h1(page, words("dashboard:title"))).toBeVisible();
   await asked;
   // The answer is compared on the next frames; a notice would be on screen by the second.
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
@@ -61,17 +61,17 @@ for (const storage of ["available", "blocked"] as const) {
       loads += 1;
     });
     await open(page, "/", "usual", { version: built });
-    await expect(h1(page, words("home.title"))).toBeVisible();
+    await expect(h1(page, words("dashboard:title"))).toBeVisible();
 
     // A deployment removed the chunk of a page this build knows.
     await page.route(/\/assets\/calls-[\w-]+\.js$/, (route) => route.fulfill({ status: 404 }));
-    const calls = page.getByRole("navigation").getByRole("link", { name: words("nav.calls") });
+    const calls = page.getByRole("navigation").getByRole("link", { name: words("shell.nav.calls") });
     const preloaded = page.waitForResponse(/\/assets\/calls-/);
     await calls.hover();
     await preloaded;
     await calls.focus();
     // Pointing at a link only preloads its page; the current page stays.
-    await expect(h1(page, words("home.title"))).toBeVisible();
+    await expect(h1(page, words("dashboard:title"))).toBeVisible();
     await expect.poll(() => loads).toBe(1);
 
     await calls.click();

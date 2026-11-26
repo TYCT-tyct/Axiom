@@ -46,7 +46,8 @@ func TestSetLimits(t *testing.T) {
 	changed, err := a.limitsOf(id, bound.ID, Limits{MaxConcurrency: 8, RequestsPerMinute: &minute})
 	refuses(t, "both limits", err, nil)
 	same(t, "the credential", Credential{
-		ID: bound.ID, Group: group, UpstreamKeyRef: "key-7", Status: "binding", MaxConcurrency: 8, RequestsPerMinute: &minute,
+		ID: bound.ID, Supplier: id, Group: group, UpstreamKeyRef: "key-7", Status: "binding", MaxConcurrency: 8, RequestsPerMinute: &minute,
+		Source: "bound", CreatedAt: createdAt(bound.ID),
 	}, changed)
 	same(t, "the row", "8|60",
 		a.text(fmt.Sprintf(`SELECT max_concurrency || '|' || requests_per_minute FROM suppliers.credentials WHERE id = '%s'`, bound.ID)))

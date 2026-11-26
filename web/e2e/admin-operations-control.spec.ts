@@ -1,6 +1,7 @@
 import { expect, test } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
 import { opsControlOf } from "./admin-ops-control-api.ts";
+import { dialog, send } from "./admin-page.ts";
 import { adminUrl } from "./apps.ts";
 import { signedInAs } from "./mock-auth.ts";
 import { words, zhText } from "./words.ts";
@@ -14,8 +15,8 @@ test.describe("operations credentials", () => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
 
-    await page.goto("/operations-credentials");
-    await expect(page.getByRole("heading", { level: 1, name: zhText("operations.credentials.title") })).toBeVisible();
+    await page.goto("/settings/agent");
+    await expect(page.getByRole("heading", { level: 1, name: zhText("shell.nav.agent") })).toBeVisible();
     await expect(page.getByText("hermes-prod")).toBeVisible();
 
     // Create a credential and verify the one-time token dialog cannot be dismissed with Escape.
@@ -84,8 +85,8 @@ test.describe("operations limits and emergency stop", () => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
 
-    await page.goto("/operations-limits");
-    await expect(page.getByRole("heading", { level: 1, name: zhText("operations.limits.title") })).toBeVisible();
+    await page.goto("/settings/agent");
+    await expect(page.getByRole("heading", { level: 1, name: zhText("shell.nav.agent") })).toBeVisible();
     await expect(page.getByText(zhText("operations.limits.cap.paused"))).toBeVisible();
 
     // Repair paused refund cap counters.
@@ -127,32 +128,16 @@ test.describe("operations limits and emergency stop", () => {
       .click();
     await expect(page.getByText(/单笔 US\$75\.00/)).toBeVisible();
 
-    // Edit agent execution limits.
-    await page.getByRole("button", { name: zhText("operations.limits.agent.edit") }).click();
-    const limits = page.getByRole("dialog");
-    await limits.locator("input[name=requests_per_minute]").fill("240");
-    await limits.locator("input[name=alerts_per_hour]").fill("25");
-    await limits.getByLabel(words("change.reason")).fill("tighten rate ceiling");
-    await limits.locator("button[type=submit]").click();
-    await expect(limits.getByText(/已保存运营执行上限/)).toBeVisible();
-    await limits
-      .getByRole("button", { name: zhText("change.close") })
-      .last()
-      .click();
-    await expect(page.getByText("240")).toBeVisible();
-
-    // Edit price envelope.
-    await page.getByRole("button", { name: /修改站点包络/ }).click();
-    const env = page.getByRole("dialog");
-    await env.locator("input[name=min_margin_bps]").fill("1850");
-    await env.getByLabel(words("change.reason")).fill("raise floor margin");
-    await env.locator("button[type=submit]").click();
-    await expect(env.getByText(/已保存站点/)).toBeVisible();
-    await env
-      .getByRole("button", { name: zhText("change.close") })
-      .last()
-      .click();
-    await expect(page.getByText("18.5%")).toBeVisible();
+    // Edit the execution limits and the price envelope in their rows: one submit sends both, each by its operation.
+    await page.getByLabel(words("setting.agent.requests")).fill("240");
+    await page.getByLabel(words("setting.agent.alertsHour")).fill("25");
+    await page.getByLabel(words("setting.agent.margin")).fill("18.5");
+    await page.getByRole("button", { name: new RegExp(zhText("drafts.review")) }).click();
+    await expect(dialog(page).getByText(zhText("setting.agent.margin"))).toBeVisible();
+    await send(page, "tighten rate ceiling and raise floor margin");
+    await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
+    await expect(page.getByLabel(words("setting.agent.requests"))).toHaveValue("240");
+    await expect(page.getByLabel(words("setting.agent.margin"))).toHaveValue("18.5");
 
     // Emergency stop requires typed confirmation "STOP".
     await page.getByRole("button", { name: zhText("operations.limits.stop.open") }).click();

@@ -1,0 +1,27 @@
+/* The admin's .addl (admin_style.css, overview and round five): an inline arrow and figure. */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-style: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--t1);
+}
+
+.root svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.good {
+  color: var(--adOkT);
+}
+
+.bad {
+  color: var(--adBadT);
+}

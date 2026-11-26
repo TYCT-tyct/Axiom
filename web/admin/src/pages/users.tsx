@@ -1,105 +1,47 @@
-import type { AdminSchemas } from "@axiom/api";
-import { LoadMore } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, Field, Icon, PageHead, Table, Td, Th, useFormat } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { can, useSession } from "@axiom/app";
+import { PageBody, PageHead } from "@axiom/ui";
+import { useLocation } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { FilterBar, PageBody, State, text } from "../parts";
-import { usersQuery } from "../queries";
+import enGrants from "../locales/en/platform-grants";
+import enUsers from "../locales/en/users";
+import settingsMessages from "../locales/settings";
+import subscriptionMessages from "../locales/subscriptions";
+import zhGrants from "../locales/zh/platform-grants";
+import zhUsers from "../locales/zh/users";
+import { RouteTabs } from "../row-drawer";
+import { AccountsTab } from "../users/accounts-tab";
+import { RolesTab } from "../users/roles-tab";
+import { UsersTab } from "../users/users-tab";
 
+const tabs = { "/users": UsersTab, "/users/accounts": AccountsTab, "/users/roles": RolesTab } as const;
+type Tab = keyof typeof tabs;
+
+// 用户管理: the people who signed up, the accounts they own and the platform roles that let some of them into the admin,
+// as three tabs of one page. Users and accounts are apart: an account is the money and the limits, a user is a person
+// who signs in. The old /accounts/{id} address leads to the account's drawer (router.tsx).
 export default function Users() {
   const { t } = useTranslation();
-  const filters = useSearch({ from: "/app/users" });
-  const users = useInfiniteQuery(usersQuery({ email_prefix: filters.q }));
-  const rows = users.data?.pages.flatMap((page) => page.data) ?? [];
+  const path = useLocation({ select: (location) => location.pathname.replace(/\/$/, "") || "/" }) as Tab;
+  const roles = can(useSession(), "platform_grants.manage");
+  const Current = tabs[path] ?? UsersTab;
   return (
-    <>
-      <PageHead title={t("nav.users")} lede={t("users.description")} />
-      <PageBody>
-        <Search q={filters.q} />
-        <Card layout="flush">
-          <DataState
-            query={users}
-            isEmpty={() => rows.length === 0}
-            empty={
-              <EmptyState title={filters.q ? t("users.noMatch.title") : t("users.empty.title")}>
-                {filters.q ? t("users.noMatch.body") : t("users.empty.body")}
-              </EmptyState>
-            }
-          >
-            {() => <UsersTable rows={rows} />}
-          </DataState>
-          <LoadMore list={users} />
-        </Card>
-      </PageBody>
-    </>
-  );
-}
-
-function Search({ q }: { q: string | undefined }) {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
-  return (
-    <FilterBar values={{ q }} onApply={(values) => navigate({ to: "/users", search: { q: text(values.q) } })}>
-      <Field
-        label={t("users.searchLabel")}
-        hint={t("users.searchHint")}
-        name="q"
-        maxLength={254}
-        defaultValue={q}
-        autoComplete="off"
-        spellCheck={false}
-        inputMode="email"
+    <PageBody>
+      <PageHead title={t("shell.nav.users")} />
+      <RouteTabs
+        label={t("users.tabs.label")}
+        current={path}
+        tabs={[
+          { key: "/users", to: "/users", label: t("users.tabs.users") },
+          { key: "/users/accounts", to: "/users/accounts", label: t("users.tabs.accounts") },
+          ...(roles ? [{ key: "/users/roles" as const, to: "/users/roles", label: t("users.tabs.roles") }] : []),
+        ]}
       />
-    </FilterBar>
+      <Current />
+    </PageBody>
   );
 }
 
-function UsersTable({ rows }: { rows: AdminSchemas["UserSummary"][] }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <Table label={t("nav.users")}>
-      <thead>
-        <tr>
-          <Th main>{t("users.col.email")}</Th>
-          <Th>{t("users.col.status")}</Th>
-          <Th>{t("users.col.tier")}</Th>
-          <Th>{t("users.col.mfa")}</Th>
-          <Th>{t("users.col.created")}</Th>
-          <Th actions />
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((user) => (
-          <tr key={user.id}>
-            <Td main>{user.email}</Td>
-            <Td>
-              <State tone={user.status === "active" ? "good" : "warn"}>
-                {user.status === "active" ? t("users.active") : t("users.disabled")}
-              </State>
-            </Td>
-            <Td>{user.tier.name}</Td>
-            <Td>
-              <State tone={user.mfa_enabled ? "good" : "neutral"}>
-                {user.mfa_enabled ? t("users.mfaOn") : t("users.mfaOff")}
-              </State>
-            </Td>
-            <Td>{format.dateTime(new Date(user.created_at))}</Td>
-            <Td actions>
-              <ActionButton variant="gho" size="sm" square asChild>
-                <Link
-                  to="/accounts/$accountId"
-                  params={{ accountId: user.account_id }}
-                  aria-label={t("users.open", { email: user.email })}
-                >
-                  <Icon name="right" />
-                </Link>
-              </ActionButton>
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
-  );
-}
+export const messages = {
+  en: { ...settingsMessages.en, ...subscriptionMessages.en, platformGrants: enGrants, users: enUsers },
+  zh: { ...settingsMessages.zh, ...subscriptionMessages.zh, platformGrants: zhGrants, users: zhUsers },
+};

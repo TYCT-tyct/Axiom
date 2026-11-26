@@ -1,5 +1,28 @@
 // The admin's redeem codes: a batch is generated, listed by what is known about it, and disabled before it is used.
 export default {
+  unit: "codes",
+  search: "Search the start of a note",
+  never: "Never expires",
+  expired: "Expired",
+  daysLeft_one: "{{count}} day left",
+  daysLeft_other: "{{count}} days left",
+  redeemedAt: "Redeemed",
+  disableFinal: "Disabling cannot be undone; credit already redeemed is not affected.",
+  strip: {
+    label: "Redeem code figures",
+    enabled: "Codes still to redeem",
+    used: "Redeemed",
+    redeemed: "Credit redeemed",
+    soon: "Expiring within 30 days",
+    soonNote: "An unredeemed code lapses on its date",
+    loaded: "Counts only the {{count}} loaded",
+    all: "{{count}} in all",
+  },
+  drawer: {
+    id: "ID",
+    createdBy: "Created by",
+    once: "A code is shown once, the moment it is made, and is not shown here. If it is lost, disable this one and make a new one.",
+  },
   description:
     "Codes worth credit, made in batches. A code is a secret: it is shown once, when its batch is made, and never again.",
   codes: "Redeem codes",
@@ -33,8 +56,6 @@ export default {
   filters: {
     state: "State",
     stateAny: "Any state",
-    note: "Note",
-    noteHint: "The note starts with this text.",
   },
   state: { enabled: "Enabled", used: "Used", disabled: "Disabled", expired: "Expired" },
   col: {
@@ -46,5 +67,4 @@ export default {
     expires: "Expires",
   },
   empty: { title: "No redeem codes yet", body: "Generate a batch to hand out credit." },
-  noMatch: { title: "No code matches", body: "Change or clear the filters." },
 } as const;

@@ -203,6 +203,8 @@ type endpoint struct {
 type credential struct {
 	id                              uuid.UUID
 	key                             secret.Secret
+	region                          string // the cloud region it serves from; empty for every other
+	call                            string // the endpoint's model as this credential's calls name it
 	configuredMax, configuredMinute int32
 	max                             int32
 	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
@@ -375,7 +377,7 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
-		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt),
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode),
 		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback,
 	}
 	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
@@ -404,6 +406,19 @@ func optionalQuantization(r store.ListRoutableRow) (Quantization, error) {
 	return quantization, nil
 }
 
+// relayMode is the mode of a supplier Axiom logs in to: its keys draw on one account there.
+const relayMode = "relay"
+
+// upstreamAccount is the account at the supplier a credential's requests count against: a relay's keys all draw on the
+// one account Axiom logs in as, and every key pasted for a provider's own API, or a cloud region, is an account of its
+// own (docs/domains/suppliers.md「凭证」).
+func upstreamAccount(r store.ListRoutableRow) uuid.UUID {
+	if r.Mode == relayMode {
+		return r.SupplierID
+	}
+	return r.CredentialID
+}
+
 func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if r.KeyVersion == nil {
 		return nil, fmt.Errorf("credential %s is active without a key", r.CredentialID)
@@ -417,9 +432,9 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
 	return &credential{
-		id: r.CredentialID, key: key, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
 		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
-		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, r.SupplierID, r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
+		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, upstreamAccount(r), r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
 	}, nil
 }
 

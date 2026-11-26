@@ -1,0 +1,13 @@
+/* A row opened in place (.admvx): its detail spans the table on the hover colour, indented under the row's name. */
+.detail > td,
+.detail:hover > td {
+  padding: 4px 24px 8px 56px;
+  background: var(--hover);
+}
+
+@media (max-width: 599px) {
+  .detail > td,
+  .detail:hover > td {
+    padding: 4px 16px 8px;
+  }
+}

@@ -1,15 +1,32 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import { useErrors } from "@axiom/app";
-import { ActionButton, CheckField, DataState, Field, Select, TextArea, useFormat } from "@axiom/ui";
+import { DataState } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { ChangeDialog, type Problem } from "./change";
 import { Facts } from "./parts";
 import { siteRegistrationQuery } from "./queries";
+import { ChipSetting, ChoiceSetting, NumberSetting, SettingsCard, SwitchSetting } from "./setting-rows";
+import { type SettingDrafts, SettingsSubmit, type SettingValue, useSettingDrafts } from "./settings-drafts";
 
 type Policy = AdminSchemas["RegistrationPolicy"];
 type View = AdminSchemas["RegistrationPolicyView"];
+type Mode = Policy["mode"];
+type Key =
+  | "registration.mode"
+  | "registration.humanCheck"
+  | "registration.bits"
+  | "registration.burst"
+  | "registration.perHour"
+  | "registration.allow"
+  | "registration.deny";
+type NumberKey = "registration.bits" | "registration.burst" | "registration.perHour";
+
+const modes: readonly Mode[] = ["invite", "closed", "open"];
+// The bounds the contract gives each number (api/admin.yaml RegistrationPolicy).
+const bounds: Record<NumberKey, { min: number; max: number }> = {
+  "registration.bits": { min: 12, max: 24 },
+  "registration.burst": { min: 1, max: 10_000 },
+  "registration.perHour": { min: 1, max: 100_000 },
+};
 
 // RegistrationUnavailable stands in for the card where an older node has no registration operation: the rest of the
 // settings still work.
@@ -30,224 +47,113 @@ export function SiteRegistration({ siteId }: { siteId: AdminSchemas["SiteId"] })
   if (query.error instanceof ApiError && query.error.status === 404) {
     return <RegistrationUnavailable />;
   }
-  return <DataState query={query}>{(view) => <RegistrationCard siteId={siteId} view={view} />}</DataState>;
+  return <DataState query={query}>{(view) => <RegistrationRows siteId={siteId} view={view} />}</DataState>;
 }
 
-function RegistrationCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: View }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const [open, setOpen] = useState(false);
-  const { policy } = view;
-  const rows: [string, ReactNode][] = [
-    [t("settings.registration.mode"), <span key="mode">{t(`settings.registration.modes.${policy.mode}`)}</span>],
-    [
-      t("settings.registration.humanCheck"),
-      <span key="human">
-        {policy.human_check
-          ? t("settings.registration.on", { bits: policy.human_check_bits })
-          : t("settings.registration.off")}
-      </span>,
-    ],
-    [t("settings.registration.domainBurst"), <span key="burst">{format.number(policy.domain_burst)}</span>],
-    [t("settings.registration.domainPerHour"), <span key="perHour">{format.number(policy.domain_per_hour)}</span>],
-    [
-      t("settings.registration.domainAllow"),
-      <span key="allow">
-        {policy.domain_allow.length ? policy.domain_allow.join(", ") : t("settings.registration.any")}
-      </span>,
-    ],
-    [
-      t("settings.registration.domainDeny"),
-      <span key="deny">
-        {policy.domain_deny.length ? policy.domain_deny.join(", ") : t("settings.registration.none")}
-      </span>,
-    ],
-  ];
-  return (
-    <>
-      <Facts
-        title={t("settings.registration.title")}
-        rows={rows}
-        actions={
-          <ActionButton onClick={() => setOpen(true)} icon="pencil">
-            {t("settings.registration.edit")}
-          </ActionButton>
-        }
-      />
-      {open ? <RegistrationDialog siteId={siteId} view={view} onClose={() => setOpen(false)} /> : null}
-    </>
-  );
-}
-
-function splitDomains(text: string): string[] {
-  return text.split(/[\s,]+/).filter(Boolean);
-}
-
-function readPolicy(values: Record<string, string>, words: string[]): Policy | Problem {
-  const mode = values.mode;
-  if (mode !== "invite" && mode !== "closed" && mode !== "open") {
-    return { problem: words[0] ?? "" };
-  }
-  const read = (name: string, min: number, max: number): number | undefined => {
-    const typed = (values[name] ?? "").trim();
-    const value = Number(typed);
-    return /^\d+$/.test(typed) && value >= min && value <= max ? value : undefined;
-  };
-  const bits = read("human_check_bits", 12, 24);
-  const burst = read("domain_burst", 1, 10_000);
-  const perHour = read("domain_per_hour", 1, 100_000);
-  if (bits === undefined || burst === undefined || perHour === undefined) {
-    return { problem: words[1] ?? "" };
-  }
+function savedOf({ policy }: View): Record<Key, SettingValue> {
   return {
-    mode,
-    human_check: values.human_check === "true",
-    human_check_bits: bits,
-    domain_burst: burst,
-    domain_per_hour: perHour,
-    domain_allow: splitDomains(values.domain_allow ?? ""),
-    domain_deny: splitDomains(values.domain_deny ?? ""),
+    "registration.mode": policy.mode,
+    "registration.humanCheck": policy.human_check,
+    "registration.bits": String(policy.human_check_bits),
+    "registration.burst": String(policy.domain_burst),
+    "registration.perHour": String(policy.domain_per_hour),
+    "registration.allow": policy.domain_allow,
+    "registration.deny": policy.domain_deny,
   };
 }
 
-function NumericPolicyField({
-  label,
-  hint,
-  name,
-  value,
-  error,
-}: {
-  label: string;
-  hint: string;
-  name: string;
-  value: number;
-  error?: string;
-}) {
-  return (
-    <Field
-      label={label}
-      hint={hint}
-      name={name}
-      inputMode="numeric"
-      autoComplete="off"
-      defaultValue={value}
-      error={error}
-    />
-  );
+const isNumberKey = (key: Key): key is NumberKey => key in bounds;
+
+// A number is a whole number in its bounds, typed as digits only.
+function validRegistrationValue(key: Key, value: SettingValue): boolean {
+  if (!isNumberKey(key)) return true;
+  const { min, max } = bounds[key];
+  return typeof value === "string" && /^\d+$/.test(value.trim()) && Number(value) >= min && Number(value) <= max;
 }
 
-function DomainPolicyField({
-  label,
-  name,
-  domains,
-  error,
-}: {
-  label: string;
-  name: string;
-  domains: string[];
-  error?: string;
-}) {
-  const { t } = useTranslation();
-  return (
-    <TextArea
-      label={label}
-      hint={t("settings.registration.domainHint")}
-      name={name}
-      defaultValue={domains.join("\n")}
-      error={error}
-    />
-  );
+function policyOf(values: Record<Key, SettingValue>): Policy {
+  return {
+    mode: values["registration.mode"] as Mode,
+    human_check: values["registration.humanCheck"] === true,
+    human_check_bits: Number(values["registration.bits"]),
+    domain_burst: Number(values["registration.burst"]),
+    domain_per_hour: Number(values["registration.perHour"]),
+    domain_allow: [...(values["registration.allow"] as readonly string[])],
+    domain_deny: [...(values["registration.deny"] as readonly string[])],
+  };
 }
-
-function RegistrationFields({ policy, error }: { policy: Policy; error: unknown }) {
+function RegistrationRows({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: View }) {
   const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <Select
-        label={t("settings.registration.mode")}
-        name="mode"
-        defaultValue={policy.mode}
-        error={errors.field(error, "mode")}
-      >
-        <option value="invite">{t("settings.registration.modes.invite")}</option>
-        <option value="closed">{t("settings.registration.modes.closed")}</option>
-        <option value="open">{t("settings.registration.modes.open")}</option>
-      </Select>
-      <CheckField
-        label={t("settings.registration.humanCheck")}
-        hint={t("settings.registration.humanCheckHint")}
-        name="human_check"
-        value="true"
-        defaultChecked={policy.human_check}
-      />
-      <NumericPolicyField
-        label={t("settings.registration.bits")}
-        hint={t("settings.registration.bitsHint")}
-        name="human_check_bits"
-        value={policy.human_check_bits}
-        error={errors.field(error, "human_check_bits")}
-      />
-      <NumericPolicyField
-        label={t("settings.registration.domainBurst")}
-        hint={t("settings.registration.burstHint")}
-        name="domain_burst"
-        value={policy.domain_burst}
-        error={errors.field(error, "domain_burst")}
-      />
-      <NumericPolicyField
-        label={t("settings.registration.domainPerHour")}
-        hint={t("settings.registration.perHourHint")}
-        name="domain_per_hour"
-        value={policy.domain_per_hour}
-        error={errors.field(error, "domain_per_hour")}
-      />
-      <DomainPolicyField
-        label={t("settings.registration.domainAllow")}
-        name="domain_allow"
-        domains={policy.domain_allow}
-        error={errors.field(error, "domain_allow")}
-      />
-      <DomainPolicyField
-        label={t("settings.registration.domainDeny")}
-        name="domain_deny"
-        domains={policy.domain_deny}
-        error={errors.field(error, "domain_deny")}
-      />
-    </>
-  );
-}
-
-function RegistrationDialog({
-  siteId,
-  view,
-  onClose,
-}: {
-  siteId: AdminSchemas["SiteId"];
-  view: View;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  return (
-    <ChangeDialog
-      operation={`site-registration:${siteId}`}
-      title={t("settings.registration.edit")}
-      intro={<p>{t("settings.registration.intro")}</p>}
-      action={t("settings.registration.save")}
-      fields={(error) => <RegistrationFields policy={view.policy} error={error} />}
-      read={(values) =>
-        readPolicy(values, [t("settings.registration.invalidMode"), t("settings.registration.invalidNumber")])
-      }
-      send={(policy, { reason, key }) =>
+  const drafts = useSettingDrafts<Key>({
+    scope: `settings:registration:${siteId}`,
+    saved: savedOf(view),
+    check: validRegistrationValue,
+    show: (key, value) => (key === "registration.mode" ? t(`settings.registration.modes.${value as Mode}`) : undefined),
+    warn: (values) =>
+      values["registration.mode"] === "open" && values["registration.humanCheck"] !== true
+        ? t("settings.registration.openWarn")
+        : undefined,
+    writes: {
+      updateSiteRegistration: (values, { reason, key }) =>
         unwrapChange(
           adminApi.PUT("/api/admin/v1/sites/{site_id}/registration", {
             params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
-            body: { policy, reason },
+            body: { policy: policyOf(values), reason },
           }),
-        )
-      }
-      done={() => <p>{t("settings.registration.saved")}</p>}
-      onClose={onClose}
+        ),
+    },
+  });
+  return (
+    <>
+      <SettingsCard scope="site" title={t("settings.pages.registration.entry")}>
+        <ChoiceSetting
+          drafts={drafts}
+          setting="registration.mode"
+          options={modes.map((mode) => ({ value: mode, label: t(`settings.registration.modes.${mode}`) }))}
+        />
+        <SwitchSetting drafts={drafts} setting="registration.humanCheck" />
+        <RegistrationNumber drafts={drafts} setting="registration.bits" unit={t("unit.bits")} />
+      </SettingsCard>
+      <SettingsCard
+        scope="site"
+        title={t("settings.pages.registration.domains")}
+        lede={t("settings.pages.registration.domainsLede")}
+      >
+        <RegistrationNumber drafts={drafts} setting="registration.burst" unit={t("unit.count")} />
+        <RegistrationNumber drafts={drafts} setting="registration.perHour" unit={t("unit.count")} />
+        <ChipSetting
+          drafts={drafts}
+          setting="registration.allow"
+          placeholder={t("settings.registration.domainPlaceholder")}
+        />
+        <ChipSetting
+          drafts={drafts}
+          setting="registration.deny"
+          placeholder={t("settings.registration.denyPlaceholder")}
+        />
+      </SettingsCard>
+      <SettingsSubmit drafts={drafts} />
+    </>
+  );
+}
+
+function RegistrationNumber({
+  drafts,
+  setting,
+  unit,
+}: {
+  drafts: SettingDrafts<Key>;
+  setting: NumberKey;
+  unit: string;
+}) {
+  return (
+    <NumberSetting
+      drafts={drafts}
+      setting={setting}
+      unit={unit}
+      min={bounds[setting].min}
+      max={bounds[setting].max}
+      disabled={setting === "registration.bits" && drafts.value("registration.humanCheck") !== true}
     />
   );
 }

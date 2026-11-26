@@ -105,4 +105,44 @@ describe("steps", () => {
     expect(done(all, "keys")).toBe(false);
     expect(done(all, "unit")).toBe(false);
   });
+
+  it("names a relay's steps by what it needs: logged in, groups, keys and the unit", () => {
+    const all = steps(input({ status: "needs_attention" }));
+    expect(all.map((step) => step.key)).toEqual(["connected", "login", "groups", "keys", "unit"]);
+    expect(done(all, "connected")).toBe(true);
+    expect(done(all, "login")).toBe(false);
+  });
+
+  it.each([
+    ["direct", false, ["connected", "pasted", "line", "models", "cost"]],
+    ["cloud", false, ["credential", "regions", "line", "models", "cost"]],
+  ] as const)("names a %s supplier's steps by its way in", (mode, regionless, keys) => {
+    const all = steps(input({ mode, regionless, endpoints: [] }));
+    expect(all.map((step) => step.key)).toEqual(keys);
+  });
+
+  it("counts a direct API's refused keys and waits for a cost before it is done", () => {
+    const all = steps(
+      input({
+        mode: "direct",
+        credentials: [
+          { group_id: "g1", status: "active" },
+          { group_id: "g1", status: "rejected" },
+        ],
+        endpoints: [{ cost_state: "unknown" }],
+      }),
+    );
+    expect(all.find((step) => step.key === "pasted")).toEqual({ key: "pasted", done: true, failed: 1 });
+    expect(done(all, "models")).toBe(true);
+    expect(done(all, "cost")).toBe(false);
+  });
+
+  it("takes a cloud credential's regions, or its one credential where the platform has no regions", () => {
+    const live = [{ group_id: "g1", status: "active" as const }];
+    expect(done(steps(input({ mode: "cloud", credentials: live })), "regions")).toBe(false);
+    expect(done(steps(input({ mode: "cloud", credentials: live, regionless: true })), "regions")).toBe(true);
+    expect(
+      done(steps(input({ mode: "cloud", credentials: [{ ...live[0], region: "us-east5" } as never] })), "regions"),
+    ).toBe(true);
+  });
 });

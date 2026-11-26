@@ -1,0 +1,65 @@
+/* The common reasons under a change's reason box (.adrs in admin_style.css). Each chip is position: relative, so its
+   phone hit area is centred on the chip and not on some ancestor. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.picks {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pick {
+  all: unset;
+  position: relative;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: var(--r6);
+  background: var(--hover);
+  font-size: var(--fs12);
+  line-height: 24px;
+  color: var(--t2);
+  cursor: pointer;
+  transition:
+    background-color 250ms ease-out,
+    color 250ms ease-out;
+}
+
+.pick:hover {
+  background: var(--selected);
+  color: var(--t1);
+}
+
+.pick:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.pick:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Rows 12px apart, so the 44px hit areas of two rows of 32px chips meet without overlapping. */
+@media (max-width: 599px) {
+  .picks {
+    gap: 12px 8px;
+    margin-top: 4px;
+  }
+
+  .pick {
+    height: 32px;
+    padding: 0 10px;
+    line-height: 32px;
+  }
+
+  .pick::before {
+    content: "";
+    position: absolute;
+    inset: min(0px, calc((100% - 44px) / 2));
+  }
+}

@@ -1,5 +1,28 @@
 // 后台的兑换码：批量生成、按已知信息筛选，未使用的可以停用。
 export default {
+  unit: "个",
+  search: "搜索备注开头",
+  never: "不过期",
+  expired: "已过期",
+  daysLeft_one: "还有 {{count}} 天",
+  daysLeft_other: "还有 {{count}} 天",
+  redeemedAt: "兑换时间",
+  disableFinal: "停用后不能恢复；已经兑了的额度不受影响。",
+  strip: {
+    label: "兑换码的数字",
+    enabled: "还能兑的码",
+    used: "已兑换",
+    redeemed: "已兑成额度",
+    soon: "30 天内过期",
+    soonNote: "过期后没兑的自动作废",
+    loaded: "只数了已载入的 {{count}} 个",
+    all: "共 {{count}} 个",
+  },
+  drawer: {
+    id: "编号",
+    createdBy: "创建人",
+    once: "兑换码只在生成的那一刻显示一次，这里看不到。丢了的话，停用这一个再生成新的。",
+  },
   description: "可以兑换成余额的码，按批次生成。码是秘密：只在生成的那一次显示，之后不再出现。",
   codes: "兑换码",
   generate: "生成兑换码",
@@ -31,8 +54,6 @@ export default {
   filters: {
     state: "状态",
     stateAny: "全部状态",
-    note: "备注",
-    noteHint: "备注以此开头。",
   },
   state: { enabled: "可用", used: "已兑换", disabled: "已停用", expired: "已过期" },
   col: {
@@ -44,5 +65,4 @@ export default {
     expires: "有效期",
   },
   empty: { title: "还没有兑换码", body: "生成一批，用来发放余额。" },
-  noMatch: { title: "没有符合条件的码", body: "修改或清除筛选条件。" },
 } as const;

@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { isProblem } from "./change";
-import { readCredit } from "./credit-read";
+import { readCredit, shownBalance } from "./credit-read";
 
 const words = { amountInvalid: "amount", expiresInvalid: "expires", channelInvalid: "channel" };
 
@@ -30,4 +30,16 @@ it.each([
 ])("refuses %o", (values, problem) => {
   const read = readCredit(values, "USD", words);
   expect(isProblem(read) ? read.problem : null).toBe(problem);
+});
+
+it.each([
+  // Past 2^53 billionths: a float would drop the last digits.
+  ["9007199254740993", "0.000000007", "9007199254741000"],
+  ["-500000000", "1", "500000000"],
+])("shows the balance %s plus %s as exact integers", (amount, typed, after) => {
+  expect(shownBalance({ amount, currency: "USD" }, typed)).toEqual({ amount: after, currency: "USD" });
+});
+
+it("shows no balance for what is not an amount", () => {
+  expect(shownBalance({ amount: "1", currency: "USD" }, "1.2.3")).toBeUndefined();
 });

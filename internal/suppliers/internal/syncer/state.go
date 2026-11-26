@@ -161,6 +161,9 @@ type Plan struct {
 	Fingerprint string
 	Schedule    string // canonical JSON
 	Basis       string // "published" or "confirmed"
+	// Derivation is what each price of Schedule is the product of (adapter.Derivation), canonical JSON; "" when the
+	// plan's adapter gives no factors.
+	Derivation string
 }
 
 // Commit is the outcome of one step, applied whole or not at all.

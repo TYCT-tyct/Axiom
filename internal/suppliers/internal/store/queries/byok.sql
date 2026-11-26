@@ -6,9 +6,9 @@
 -- upstream_account is the key's own public id: the table requires it, and it keeps two keys of the same provider apart.
 -- The balance and unit value that make the supplier routable are written by the caller, next to this row.
 INSERT INTO suppliers.suppliers (owner_scope, site_id, account_id, name, kind, origin, upstream_account, native_unit,
-    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback)
+    settlement_currency, mgmt_egress_id, status, balance_native, balance_observed_at, byok_fallback, mode)
 VALUES ('account', @site_id, @account_id, @name, 'openai', 'https://api.openai.com', @upstream_account, 'usd', 'USD',
-    'direct', 'byok', 1, now(), @byok_fallback)
+    'direct', 'byok', 1, now(), @byok_fallback, 'direct')
 RETURNING id;
 
 -- name: InsertByokCredential :exec
@@ -38,13 +38,6 @@ ORDER BY c.id LIMIT 1;
 UPDATE suppliers.credentials c SET status = @status
 FROM suppliers.suppliers s
 WHERE c.supplier_id = s.id AND s.status = 'byok' AND s.id = @supplier_id AND c.id = @credential_id;
-
--- name: SetByokRejected :exec
--- The call path learned the provider refused this key. Addressed by credential, without a tenant: the caller holds an
--- id from the snapshot and has no account at hand.
-UPDATE suppliers.credentials c SET status = 'rejected'
-FROM suppliers.suppliers s
-WHERE c.supplier_id = s.id AND s.status = 'byok' AND c.id = @credential_id AND c.status = 'active';
 
 -- name: LockByokCredential :execrows
 -- The console's writes on one key take this row lock: a switch and a test answer that cross would let the switch put back

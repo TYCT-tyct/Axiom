@@ -7,19 +7,24 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import en from "../locales/en/legal-documents";
+import settingWords from "../locales/settings";
 import zh from "../locales/zh/legal-documents";
 import { Actions, Head, Time } from "../parts";
 import { legalDocumentQuery } from "../policy-queries";
 import { SiteContentPage } from "../site-content-page";
 
-export const messages = { zh: { legalDocs: zh }, en: { legalDocs: en } };
+// The scope label of the card is a word of the settings.
+export const messages = {
+  zh: { legalDocs: zh, scope: settingWords.zh.scope },
+  en: { legalDocs: en, scope: settingWords.en.scope },
+};
 
 type Document = AdminSchemas["LegalDocument"];
 
 export default function LegalDocuments() {
   const { t } = useTranslation();
   return (
-    <SiteContentPage title={t("nav.legalDocs")} description={t("legalDocs.description")}>
+    <SiteContentPage title={t("shell.nav.legal")} description={t("legalDocs.description")}>
       {(siteId) => <History siteId={siteId} />}
     </SiteContentPage>
   );
@@ -40,7 +45,7 @@ function History({ siteId }: { siteId: string }) {
           </ActionButton>
         </Actions>
       ) : null}
-      <Card title={t("legalDocs.history")} layout="flush">
+      <Card title={t("legalDocs.history")} layout="flush" scope={{ label: t("scope.site"), tip: t("scope.siteTip") }}>
         <DataState query={query} isEmpty={() => rows.length === 0} empty={<EmptyState title={t("legalDocs.empty")} />}>
           {() => <Versions documents={rows} select={setSelected} />}
         </DataState>
@@ -72,7 +77,7 @@ function Versions({ documents, select }: { documents: Document[]; select: (docum
           [t("legalDocs.kind"), { main: true }],
           t("legalDocs.locale"),
           t("legalDocs.version"),
-          t("legalDocs.publishedAt"),
+          [t("legalDocs.publishedAt"), { from: "sm" }],
         ]}
         action
       />
@@ -82,7 +87,7 @@ function Versions({ documents, select }: { documents: Document[]; select: (docum
             <Td main>{t(`legalDocs.kinds.${document.kind}`)}</Td>
             <Td>{t(`legalDocs.languages.${document.locale ?? "zh"}`)}</Td>
             <Td>{document.version}</Td>
-            <Td>
+            <Td from="sm">
               <Time at={document.published_at} />
             </Td>
             <Td actions>
@@ -105,6 +110,7 @@ function Publish({ siteId, onClose }: { siteId: string; onClose: () => void }) {
       title={t("legalDocs.publish")}
       action={t("legalDocs.publish")}
       intro={<p>{t("legalDocs.publishIntro")}</p>}
+      warn={t("legalDocs.publishWarn")}
       fields={(error) => <PublishFields error={error} />}
       read={({ kind, locale, body }): Omit<AdminSchemas["LegalDocumentPublish"], "reason"> | Problem => {
         if ((kind !== "terms" && kind !== "privacy") || (locale !== "zh" && locale !== "en") || !body?.trim()) {

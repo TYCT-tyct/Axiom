@@ -4,10 +4,13 @@ import (
 	"context"
 	"errors"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 	"uuid"
 
 	"axiom/internal/platform/audit"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 )
 
@@ -144,6 +147,87 @@ func ActiveAnnouncements(ctx context.Context, tx pg.Tx, site uuid.UUID, now time
 		out = append(out, a)
 	}
 	return out, rows.Err()
+}
+
+// AdminAnnouncement is an announcement with where it stands at the database's clock: scheduled before StartsAt,
+// showing until EndsAt, ended after it, and withdrawn once taken down, whatever its interval.
+type AdminAnnouncement struct {
+	Announcement
+	State       string
+	WithdrawnAt *time.Time
+}
+
+// AnnouncementQuery is one page of every announcement, newest first by (starts_at, id). Site and State are exact and
+// narrow nothing when unset; After is the last row of the previous page.
+type AnnouncementQuery struct {
+	Site  *uuid.UUID
+	State string
+	After *page.Cursor
+	Limit int
+}
+
+// announcementState is the state of a row at the transaction's clock; announcementStates is each state's condition, so
+// the filter and the column cannot disagree.
+const announcementState = `CASE WHEN withdrawn_at IS NOT NULL THEN 'withdrawn' WHEN now() < starts_at THEN 'scheduled'
+ WHEN now() < ends_at THEN 'showing' ELSE 'ended' END`
+
+var announcementStates = map[string]string{
+	"withdrawn": "withdrawn_at IS NOT NULL",
+	"scheduled": "withdrawn_at IS NULL AND now() < starts_at",
+	"showing":   "withdrawn_at IS NULL AND starts_at <= now() AND now() < ends_at",
+	"ended":     "withdrawn_at IS NULL AND ends_at <= now()",
+}
+
+// ErrAnnouncementState is a state filter that is none of the four.
+var ErrAnnouncementState = errors.New("accounts: unknown announcement state")
+
+// ListAllAnnouncements reads one page of q in tx, which must hold the platform scope. Announcements are written by
+// hand, a few a week, so the table stays small enough to sort without an index of its own.
+func ListAllAnnouncements(ctx context.Context, tx pg.Tx, q AnnouncementQuery) ([]AdminAnnouncement, *page.Cursor, error) {
+	var where []string
+	var args []any
+	arg := func(v any) string { args = append(args, v); return "$" + strconv.Itoa(len(args)) }
+	if q.Site != nil {
+		where = append(where, "site_id = "+arg(*q.Site))
+	}
+	if q.State != "" {
+		cond, ok := announcementStates[q.State]
+		if !ok {
+			return nil, nil, ErrAnnouncementState
+		}
+		where = append(where, cond)
+	}
+	if q.After != nil {
+		where = append(where, "(starts_at, id) < ("+arg(q.After.At)+", "+arg(q.After.ID)+")")
+	}
+	sql := `SELECT id, site_id, title, body, starts_at, ends_at, ` + announcementState + `, withdrawn_at FROM accounts.announcements`
+	if len(where) > 0 {
+		sql += " WHERE " + strings.Join(where, " AND ")
+	}
+	sql += " ORDER BY starts_at DESC, id DESC LIMIT " + arg(q.Limit+1)
+	rows, err := tx.Query(ctx, sql, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	out := make([]AdminAnnouncement, 0, q.Limit+1)
+	for rows.Next() {
+		var a AdminAnnouncement
+		if err = rows.Scan(&a.ID, &a.Site, &a.Title, &a.Body, &a.StartsAt, &a.EndsAt, &a.State, &a.WithdrawnAt); err != nil {
+			return nil, nil, err
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	var next *page.Cursor
+	if len(out) > q.Limit {
+		out = out[:q.Limit]
+		last := out[len(out)-1]
+		next = &page.Cursor{At: last.StartsAt, ID: uuid.UUID(last.ID)}
+	}
+	return out, next, nil
 }
 
 // NotificationPreferences reads only the signed-in user's preferences.

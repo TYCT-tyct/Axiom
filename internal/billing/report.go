@@ -38,23 +38,49 @@ type PlatformReport struct {
 	PaidUsers      int64            // distinct accounts with a paid top-up in the window
 	MonthlyRevenue string           // accounting currency, billionths, in decimal text: the credit paid top-ups granted
 	Retention      Retention        // the UTC month the window ends in, and its cohort and returners
+	Days           []DayMoney       // the UTC days of the window that had settled calls, oldest first; they add up to the window
+	Spenders       []AccountCharge  // the ten accounts whose calls were charged the most, most first, from the same read
+}
+
+// AccountCharge is what one account's calls admitted in a report's window were charged, as Revenue counts it.
+type AccountCharge struct {
+	Account uuid.UUID
+	Revenue string
+}
+
+// DayMoney is the calls admitted on one UTC day of a report's window, in the terms of the report's own figures.
+type DayMoney struct {
+	Day           time.Time // the day's start
+	Revenue, Cost string
+	UnknownCost   int64
 }
 
 // ReadPlatformReport reads the site's calls, cash and paid top-ups over [since, until) in tx, which must hold the
 // platform scope (or the site's). Revenue is what the calls were charged and cost is what the supplier charged us where
 // billing could convert it; a call whose cost is unknown is counted apart and never added as zero, so a profit computed
 // from these two figures would be wrong while UnknownCost is above zero. The time axis is the call's start, as in the
-// call log, and a correction restates the call's own window. Cash is the ledger's cash book: paid credit in, refunds
-// out, in the payment's currency — what a user paid is not revenue, and the call log's charge is not cash. PaidUsers
-// and MonthlyRevenue come from the paid credit batches on their own time axis; retention compares the previous UTC
-// month's paying accounts with the month the window ends in, through the window's end.
+// call log, and a correction restates the call's own window; Spenders ranks the accounts by the same charge. Cash is
+// the ledger's cash book: paid credit in, refunds out, in the payment's currency — what a user paid is not revenue, and
+// the call log's charge is not cash. PaidUsers and MonthlyRevenue come from the paid credit batches on their own time
+// axis; retention compares the previous UTC month's paying accounts with the month the window ends in, through the
+// window's end.
 func ReadPlatformReport(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, since, until time.Time) (PlatformReport, error) {
 	if !until.After(since) {
 		return PlatformReport{}, fmt.Errorf("billing: the report window ends before it starts")
 	}
-	calls, err := queries.PlatformCallMoney(ctx, tx, PlatformCallMoneyParams{SiteID: site, Since: since, Until: until})
+	sums, err := queries.PlatformCallMoney(ctx, tx, PlatformCallMoneyParams{SiteID: site, Since: since, Until: until})
 	if err != nil {
 		return PlatformReport{}, fmt.Errorf("billing: read the calls over the window: %w", err)
+	}
+	calls := sums[0] // the window's total, which the query always returns first
+	var byDay []DayMoney
+	var spenders []AccountCharge
+	for _, d := range sums[1:] {
+		if d.Set == 2 {
+			spenders = append(spenders, AccountCharge{Account: d.AccountID, Revenue: d.Revenue})
+			continue
+		}
+		byDay = append(byDay, DayMoney{Day: d.Day.Time.UTC(), Revenue: d.Revenue, Cost: d.Cost, UnknownCost: d.UnknownCostCalls})
 	}
 	rows, err := queries.PlatformCash(ctx, tx, PlatformCashParams{SiteID: site, Since: since, Until: until})
 	if err != nil {
@@ -84,7 +110,7 @@ func ReadPlatformReport(ctx context.Context, tx pg.Tx, site uuid.UUID, currency 
 	return PlatformReport{
 		Revenue: calls.Revenue, Cost: calls.Cost, UnknownCost: calls.UnknownCostCalls, Cash: amounts,
 		PaidUsers: paid.PaidUsers, MonthlyRevenue: paid.MonthlyRevenue,
-		Retention: Retention{Month: month, Cohort: paid.Cohort, Retained: paid.Retained},
+		Retention: Retention{Month: month, Cohort: paid.Cohort, Retained: paid.Retained}, Days: byDay, Spenders: spenders,
 	}, nil
 }
 

@@ -7,7 +7,9 @@ import s from "./chart.module.css";
 // The charts of the usage pages, drawn in SVG: stacked bars and lines over time. The shapes are stretched to the width
 // (preserveAspectRatio none) so they stay one drawing at any width; every word (axis ticks, the tooltip, the legend)
 // is HTML beside them, so it stays sharp and a user's fonts and language apply.
-type Series = { key: string; label: string };
+// A series takes the next category colour (--c0…--c4) unless it names one: the data colour in its three steps (the
+// admin's charts, one hue split into deeper and lighter), red for failures, grey for what is set aside.
+type Series = { key: string; label: string; colour?: "data" | "data2" | "data3" | "bad" | "muted" };
 // One time slot: its values by series key. A key it lacks is 0; a negative or non-finite value is drawn as 0, since a
 // usage chart has no such value and the scale must stay finite.
 // A money value is the exact amount text the API gave and is shown as it is; a number is for counts, or money already in
@@ -29,6 +31,10 @@ type ChartProps = {
   step: Step;
   // The zone the slots are named in; the viewer's own when absent.
   timeZone?: string;
+  // The slot that is now (today, this hour): its bars drawn a step deeper and its axis name set in the text colour.
+  current?: number;
+  // Name the baseline 0 on the axis too, as the admin's charts do.
+  zero?: boolean;
 };
 
 const plotHeight = 190;
@@ -45,7 +51,7 @@ const clean = (input: Value | undefined) => {
   const value = typeof input === "object" ? Number(input.amount) / 10 ** 9 : input;
   return value !== undefined && Number.isFinite(value) && value > 0 ? Math.min(value, maxValue) : 0;
 };
-const colour = (order: number) => s[`s${order % colours}`];
+const colour = (one: Series, order: number) => (one.colour ? s[one.colour] : s[`s${order % colours}`]);
 
 // niceStep rounds a step up to 1, 2, 5 times a power of ten, so the gridlines fall on round numbers.
 function niceStep(raw: number) {
@@ -91,7 +97,17 @@ function moveActive(key: string, active: number | null, n: number) {
 }
 
 // Bars stack in series order from the bottom, each slot's bar at most maxBar units wide so one point is a bar, not a wall.
-function Bars({ series, points, top }: { series: readonly Series[]; points: readonly Point[]; top: number }) {
+function Bars({
+  series,
+  points,
+  top,
+  current,
+}: {
+  series: readonly Series[];
+  points: readonly Point[];
+  top: number;
+  current?: number;
+}) {
   const slot = plotWidth / points.length;
   const width = Math.min(slot * 0.62, maxBar);
   return (
@@ -104,7 +120,7 @@ function Bars({ series, points, top }: { series: readonly Series[]; points: read
           return height > 0 ? (
             <rect
               key={`${point.at.getTime()}-${one.key}`}
-              className={classes(s.bar, colour(order))}
+              className={classes(s.bar, colour(one, order), at === current && s.now)}
               x={slot * at + (slot - width) / 2}
               y={floor}
               width={width}
@@ -139,7 +155,7 @@ function Lines({
           `${slot * (index + 0.5)},${plotHeight - (Math.min(clean(points[index]?.values[one.key]), top) / top) * plotHeight}`;
         const path = points.length === 1 ? `M${at(0)}h0` : `M${points.map((_, index) => at(index)).join("L")}`;
         return (
-          <g key={one.key} className={colour(order)}>
+          <g key={one.key} className={colour(one, order)}>
             <path className={s.line} d={path} />
             {active === null ? null : <path className={s.dot} d={`M${at(active)}h0`} />}
           </g>
@@ -155,7 +171,7 @@ function Tip({ point, x, series, words }: { point: Point; x: number; series: rea
       <b>{words.slot(point.at)}</b>
       {series.map((one, order) => (
         <span key={one.key}>
-          <i className={colour(order)} />
+          <i className={colour(one, order)} />
           {one.label}
           <b>{words.value(point.values[one.key])}</b>
         </span>
@@ -241,7 +257,8 @@ function Plot({
   words,
   scale,
   children,
-}: Pick<ChartProps, "label" | "empty" | "series" | "points"> & {
+  zero,
+}: Pick<ChartProps, "label" | "empty" | "series" | "points" | "zero"> & {
   words: Words;
   scale: { step: number; top: number };
   children: (active: number | null) => ReactNode;
@@ -263,6 +280,7 @@ function Plot({
         {...handlers}
       >
         <div className={s.yax} aria-hidden="true">
+          {zero ? <span style={{ "--at": 0 } as Vars}>{words.amount(0)}</span> : null}
           {gridlines.map((value, at) => (
             <span key={value} style={{ "--at": ((at + 1) * 100) / ticks } as Vars}>
               {words.amount(value)}
@@ -306,7 +324,7 @@ function Plot({
 }
 
 function Chart({ kind, ...props }: ChartProps & { kind: "bar" | "line" }) {
-  const { series, points, unit, step, timeZone } = props;
+  const { series, points, unit, step, timeZone, current } = props;
   const words = useChartWords(unit, step, timeZone);
   const highest = Math.max(
     0,
@@ -324,7 +342,7 @@ function Chart({ kind, ...props }: ChartProps & { kind: "bar" | "line" }) {
       <Plot {...props} words={words} scale={scale}>
         {(active) =>
           kind === "bar" ? (
-            <Bars series={series} points={points} top={scale.top} />
+            <Bars series={series} points={points} top={scale.top} current={current} />
           ) : (
             <Lines series={series} points={points} top={scale.top} active={active} />
           )
@@ -332,8 +350,12 @@ function Chart({ kind, ...props }: ChartProps & { kind: "bar" | "line" }) {
       </Plot>
       <div className={s.xax} aria-hidden="true">
         {points.map((point, at) =>
-          at % labelEvery === 0 ? (
-            <span key={point.at.getTime()} style={{ "--x": ((at + 0.5) / n) * 100 } as Vars}>
+          at % labelEvery === 0 || at === current ? (
+            <span
+              key={point.at.getTime()}
+              className={at === current ? s.now : undefined}
+              style={{ "--x": ((at + 0.5) / n) * 100 } as Vars}
+            >
               {words.tick(point.at)}
             </span>
           ) : null,
@@ -342,7 +364,7 @@ function Chart({ kind, ...props }: ChartProps & { kind: "bar" | "line" }) {
       <ul className={s.legend}>
         {series.map((one, order) => (
           <li key={one.key}>
-            <i className={colour(order)} />
+            <i className={colour(one, order)} />
             {one.label}
           </li>
         ))}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"axiom/internal/observability"
 	"axiom/internal/protocol"
 	"axiom/internal/websearch"
 )
@@ -97,17 +98,23 @@ func (s *session) webSearch(ctx context.Context) *ended {
 	}
 	searchCtx, cancel := context.WithTimeout(ctx, websearch.Timeout)
 	defer cancel()
+	began := time.Now()
 	results, err := backend.Search(searchCtx, websearch.Query{
 		Text: s.c.search, MaxResults: web.MaxResults,
 		IncludeDomains: web.IncludeDomains, ExcludeDomains: web.ExcludeDomains,
 	})
+	run := observability.PluginRun{Plugin: observability.PluginWeb, OK: err == nil, Engine: backend.Name, Duration: time.Since(began)}
 	if err != nil {
 		if errors.Is(err, websearch.ErrQueryTooLong) {
+			// The request's query, not the engine, failed: no search ran.
 			return &ended{err: protocol.Error{Type: protocol.InvalidRequest, Message: "The web plugin's search query is longer than this search engine accepts."}}
 		}
+		s.c.plugins = append(s.c.plugins, run)
 		s.logger.WarnContext(ctx, "the web search backend failed", "err", err)
 		return &ended{err: protocol.Error{Type: protocol.UpstreamFailed}}
 	}
+	run.Uses = 1
+	s.c.plugins = append(s.c.plugins, run)
 	if !s.reserveSearch(3*int64(len(s.c.Body)) + protocol.WebSearchMaxBytes) {
 		return &ended{err: protocol.Error{Type: protocol.Overloaded}}
 	}

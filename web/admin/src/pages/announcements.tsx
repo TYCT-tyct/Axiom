@@ -1,123 +1,168 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
-import { accountKey, toInstant, useErrors } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, Field, Table, Td, Text, TextArea } from "@axiom/ui";
-import { skipToken, useQuery, useQueryClient } from "@tanstack/react-query";
+import { LoadMore, toInstant, useErrors } from "@axiom/app";
+import {
+  ActionButton,
+  Announcement,
+  Card,
+  DataState,
+  EmptyState,
+  Field,
+  Grid,
+  Id,
+  List,
+  SettingRow,
+  Tag,
+  Text,
+  TextArea,
+  useFormat,
+} from "@axiom/ui";
+import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
+import { announcementsQuery } from "../content-queries";
 import en from "../locales/en/announcements";
 import zh from "../locales/zh/announcements";
-import { Actions, Code, Head, State, Time } from "../parts";
+import { Actions, Code } from "../parts";
+import { notBuilt } from "../plugins";
 import { SiteContentPage } from "../site-content-page";
 
 export const messages = { zh: { announcements: zh }, en: { announcements: en } };
 
-type Announcement = AdminSchemas["Announcement"];
-type Published = Announcement & { withdrawn?: boolean };
+type Item = AdminSchemas["AdminAnnouncement"];
+
+const tones = { scheduled: "accent", showing: "ok", ended: "neutral", withdrawn: "neutral" } as const;
 
 export default function Announcements() {
   const { t } = useTranslation();
   return (
-    <SiteContentPage title={t("nav.announcements")} description={t("announcements.description")}>
+    <SiteContentPage title={t("shell.nav.announcements")} description={t("announcements.description")}>
       {(siteId) => <Current siteId={siteId} />}
     </SiteContentPage>
   );
 }
 
+// The announcements of the site, and beside them what its users see now (adPg_ann in admin_pages_d.js). A node that has
+// no list yet (501) shows the page as it is before any announcement: publishing still works.
 function Current({ siteId }: { siteId: string }) {
   const { t } = useTranslation();
-  const cache = useQueryClient();
-  const queryKey = [accountKey, "session-announcements", siteId];
-  const session = useQuery<Published[]>({ queryKey, queryFn: skipToken, initialData: [], gcTime: Infinity });
-  const [edit, setEdit] = useState<{ kind: "publish" } | { kind: "withdraw"; id?: string }>();
-  const close = () => setEdit(undefined);
-  const update = (change: (current: Published[]) => Published[]) =>
-    cache.setQueryData<Published[]>(queryKey, (current) => (current ? change(current) : current));
+  const list = useInfiniteQuery(announcementsQuery(siteId));
+  const rows = list.data?.pages.flatMap((page) => page.data) ?? [];
+  const [edit, setEdit] = useState<"publish" | Item>();
+  const publish = (
+    <ActionButton variant="pri" icon="plus" onClick={() => setEdit("publish")}>
+      {t("announcements.publish")}
+    </ActionButton>
+  );
+  const none = (
+    <EmptyState title={t("announcements.empty.title")} action={publish}>
+      {t("announcements.empty.body")}
+    </EmptyState>
+  );
   return (
     <>
-      <Actions>
-        <ActionButton variant="pri" icon="plus" onClick={() => setEdit({ kind: "publish" })}>
-          {t("announcements.publish")}
-        </ActionButton>
-        <ActionButton onClick={() => setEdit({ kind: "withdraw" })}>{t("announcements.withdrawById")}</ActionButton>
-      </Actions>
-      <Card title={t("announcements.session")} layout="flush">
-        <DataState
-          query={session}
-          isEmpty={(rows) => rows.length === 0}
-          empty={<EmptyState title={t("announcements.empty")} />}
-        >
-          {(rows) => <AnnouncementsTable rows={rows} withdraw={(id) => setEdit({ kind: "withdraw", id })} />}
+      {rows.length > 0 ? <Actions>{publish}</Actions> : null}
+      {notBuilt(list.error) ? (
+        none
+      ) : (
+        <DataState query={list} isEmpty={() => rows.length === 0} empty={none}>
+          {() => (
+            <Grid columns={2}>
+              <Card title={t("announcements.listTitle")} lede={t("announcements.listLede")} layout="rows">
+                <List plain>
+                  {rows.map((row) => (
+                    <Row key={row.id} row={row} withdraw={() => setEdit(row)} />
+                  ))}
+                </List>
+                <LoadMore list={list} />
+              </Card>
+              <Preview rows={rows} />
+            </Grid>
+          )}
         </DataState>
-      </Card>
-      {edit?.kind === "publish" ? (
-        <Publish
-          siteId={siteId}
-          onClose={close}
-          onPublish={(row) => update((rows) => [row, ...rows.filter((item) => item.id !== row.id)])}
-        />
-      ) : null}
-      {edit?.kind === "withdraw" ? (
-        <Withdraw
-          siteId={siteId}
-          id={edit.id}
-          onClose={close}
-          onWithdraw={(id) => update((rows) => rows.map((row) => (row.id === id ? { ...row, withdrawn: true } : row)))}
-        />
-      ) : null}
+      )}
+      {edit === "publish" ? <Publish siteId={siteId} onClose={() => setEdit(undefined)} /> : null}
+      {edit && edit !== "publish" ? <Withdraw row={edit} onClose={() => setEdit(undefined)} /> : null}
     </>
   );
 }
 
-function AnnouncementsTable({ rows, withdraw }: { rows: Published[]; withdraw: (id: string) => void }) {
+function Row({ row, withdraw }: { row: Item; withdraw: () => void }) {
   const { t } = useTranslation();
+  const format = useFormat();
   return (
-    <Table label={t("announcements.session")}>
-      <Head
-        cols={[[t("announcements.title"), { main: true }], t("announcements.starts"), t("announcements.ends")]}
-        action
-      />
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.id}>
-            <Td main>
-              <Text medium>{row.title}</Text>
-              <Text size="sm" tone="faint" lines={2}>
-                {row.body}
-              </Text>
-              <Code>{row.id}</Code>
-            </Td>
-            <Td>
-              <Time at={row.starts_at} />
-            </Td>
-            <Td>
-              <Time at={row.ends_at} />
-            </Td>
-            <Td actions>
-              {row.withdrawn ? (
-                <State tone="neutral">{t("announcements.withdrawn")}</State>
-              ) : row.id ? (
-                <ActionButton size="sm" onClick={() => withdraw(row.id as string)}>
-                  {t("announcements.withdraw")}
-                </ActionButton>
-              ) : null}
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <SettingRow
+      as="li"
+      title={row.title}
+      detail={
+        <>
+          <Text as="span" size="sm" tone="muted" lines={2}>
+            {row.body}
+          </Text>
+          <Text as="div" size="sm" tone="faint">
+            <Id value={row.id} />{" "}
+            {t("announcements.range", {
+              from: format.dateTime(new Date(row.starts_at)),
+              to: format.dateTime(new Date(row.ends_at)),
+            })}
+          </Text>
+        </>
+      }
+    >
+      <Tag tone={tones[row.state]}>{t(`announcements.state.${row.state}`)}</Tag>
+      {row.state === "scheduled" || row.state === "showing" ? (
+        <ActionButton size="sm" onClick={withdraw}>
+          {t("announcements.withdraw")}
+        </ActionButton>
+      ) : null}
+    </SettingRow>
   );
 }
 
-function Publish({
-  siteId,
-  onClose,
-  onPublish,
-}: {
-  siteId: string;
-  onClose: () => void;
-  onPublish: (row: Announcement) => void;
-}) {
+// What users see now, drawn as the console draws it. The list is newest start first, so the first one showing is the
+// newest; the others follow it in turn. One that has not started is not shown, only counted.
+function Preview({ rows }: { rows: Item[] }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  const showing = rows.filter((row) => row.state === "showing");
+  const waiting = rows.filter((row) => row.state === "scheduled");
+  const shown = showing[0];
+  const next = waiting.reduce<Item | undefined>(
+    (soonest, row) => (soonest && soonest.starts_at <= row.starts_at ? soonest : row),
+    undefined,
+  );
+  return (
+    <Card title={t("announcements.preview.title")} lede={t("announcements.preview.lede")}>
+      {shown ? (
+        <Announcement title={shown.title}>
+          <Text tone="muted">{shown.body}</Text>
+        </Announcement>
+      ) : (
+        <Text tone="muted">{t("announcements.preview.none")}</Text>
+      )}
+      {shown ? (
+        <Text size="sm" tone="faint">
+          {t("announcements.preview.until", { at: format.dateTime(new Date(shown.ends_at)) })}
+          {showing.length > 1 ? ` ${t("announcements.preview.more", { count: showing.length - 1 })}` : ""}
+        </Text>
+      ) : waiting.length === 0 ? (
+        <Text size="sm" tone="faint">
+          {t("announcements.preview.noneHint")}
+        </Text>
+      ) : null}
+      {next ? (
+        <Text size="sm" tone="faint">
+          {t("announcements.preview.waiting", {
+            count: waiting.length,
+            at: format.dateTime(new Date(next.starts_at)),
+          })}
+        </Text>
+      ) : null}
+    </Card>
+  );
+}
+
+function Publish({ siteId, onClose }: { siteId: string; onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <ChangeDialog
@@ -134,16 +179,14 @@ function Publish({
           return { problem: t("announcements.invalid") };
         return { title, body, starts_at, ends_at };
       }}
-      send={async (content, { key, reason }) => {
-        const result = await unwrapChange(
+      send={(content, { key, reason }) =>
+        unwrapChange(
           adminApi.POST("/api/admin/v1/announcements", {
             params: { header: { "Idempotency-Key": key } },
             body: { site_id: siteId, ...content, reason },
           }),
-        );
-        if (result.data.id) onPublish(result.data);
-        return result;
-      }}
+        )
+      }
       done={(row) => (row.id ? <Code>{row.id}</Code> : null)}
       onClose={onClose}
     />
@@ -179,42 +222,34 @@ function PublishFields({ error }: { error: unknown }) {
   );
 }
 
-function Withdraw({
-  siteId,
-  id,
-  onClose,
-  onWithdraw,
-}: {
-  siteId: string;
-  id?: string;
-  onClose: () => void;
-  onWithdraw: (id: string) => void;
-}) {
+// A withdrawal has no way back: no undo is offered, and the dialog says so.
+function Withdraw({ row, onClose }: { row: Item; onClose: () => void }) {
   const { t } = useTranslation();
   return (
     <ChangeDialog
-      operation={`announcement-withdraw:${siteId}:${id ?? "by-id"}`}
-      title={t(id ? "announcements.withdraw" : "announcements.withdrawById")}
+      operation={`announcement-withdraw:${row.site_id}:${row.id}`}
+      title={t("announcements.withdrawTitle")}
       action={t("announcements.withdraw")}
       danger
-      intro={id ? <Code>{id}</Code> : undefined}
-      fields={() => (id ? null : <Field name="id" label={t("announcements.id")} autoComplete="off" maxLength={30} />)}
-      read={(values) => {
-        const target = id ?? values.id?.trim();
-        return target && /^ann_[0-9a-hjkmnp-tv-z]{26}$/.test(target)
-          ? target
-          : { problem: t("announcements.invalidId") };
-      }}
-      send={async (target, { key, reason }) => {
-        const result = await unwrapChange(
+      intro={<Code>{row.id}</Code>}
+      diff={[
+        {
+          label: row.title,
+          before: t(`announcements.state.${row.state}`),
+          after: t("announcements.state.withdrawn"),
+        },
+      ]}
+      warn={t("announcements.withdrawWarn")}
+      read={() => row.id}
+      send={(id, { key, reason }) =>
+        unwrapChange(
           adminApi.POST("/api/admin/v1/announcements/{announcement_id}/withdraw", {
-            params: { path: { announcement_id: target }, header: { "Idempotency-Key": key } },
+            params: { path: { announcement_id: id }, header: { "Idempotency-Key": key } },
             body: { reason },
           }),
-        );
-        onWithdraw(target);
-        return result;
-      }}
+        )
+      }
+      toast={() => t("announcements.withdrawnToast")}
       done={(result) => (result.id ? <Code>{result.id}</Code> : null)}
       onClose={onClose}
     />

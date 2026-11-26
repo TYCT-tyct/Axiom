@@ -29,7 +29,7 @@
 
 ## ID
 
-库里是 `uuid`；Go 里每种实体一个以 `uuid.UUID` 为底层的命名类型（`SiteID`、`TierID`、`AccountID`、`WorkspaceID`、`UserID`、`KeyID`、`SessionID` 等），不能互相赋值。对外是 TypeID（前缀加 `_` 加 26 个小写 Crockford base32 字符；`site`、`tier`、`acct`、`ws`、`user`、`key`、`sess`、`ann` 前缀，编解码在 `platform/typeid`），只在 HTTP 边界用 `TypeID()`/`Parse…ID` 转换；ID 类型不实现 `TextMarshaler`。
+库里是 `uuid`；Go 里每种实体一个以 `uuid.UUID` 为底层的命名类型（`SiteID`、`TierID`、`AccountID`、`WorkspaceID`、`UserID`、`KeyID` 等），不能互相赋值。对外是 TypeID（前缀加 `_` 加 26 个小写 Crockford base32 字符；`site`、`tier`、`acct`、`ws`、`user`、`key`、`sess`、`ann` 前缀，编解码在 `platform/typeid`），只在 HTTP 边界用 `TypeID()`/`Parse…ID` 转换；ID 类型不实现 `TextMarshaler`。
 
 ## 授权与租户范围
 
@@ -122,7 +122,7 @@
 
 ## 管理接口
 
-管理处理器在 `cmd/axiom`，函数收调用方平台范围的事务，在目标行锁内读前值、写、同事务记审计，写后由组装层 `Refresh`：`SiteSettings`、`SiteLoginLimits`、`ReadSystemSettings`、`ReadSiteBrand`、`SiteKeyLimits`、`AccountKeyLimits`、`SiteWorkspaceLimit`、`AccountWorkspaceLimit`、`RateLimit`、`LegalDocumentHistory`（每页最多 200）、`CurrentSiteLogo`（各有对应的 `Set…`/`Publish…`），`SetAccountSuspended`、`SetUserSignInDisabled`、`SetAccountTier`、`UserPlatformGrants`、`SetPlatformGrantRevoked`，以及只读的 `Site`、`MainSite`、`Tiers`、`Users`（新的在前，键集分页，邮箱前缀按字面、不分大小写）、`Account`、`SiteLogoByHash`。越界是 `*SettingError`（带接口字段名），目标不存在是 `ErrNotFound`。`ParseLogo` 是 logo 唯一的解析入口。管理面会话的权限取自未撤销的平台授予。
+管理处理器在 `cmd/axiom`，函数收调用方平台范围的事务，在目标行锁内读前值、写、同事务记审计，写后由组装层 `Refresh`：`SiteSettings`、`SiteLoginLimits`、`ReadSystemSettings`、`ReadSiteBrand`、`SiteKeyLimits`、`AccountKeyLimits`、`SiteWorkspaceLimit`、`AccountWorkspaceLimit`、`RateLimit`、`LegalDocumentHistory`（每页最多 200）、`CurrentSiteLogo`（各有对应的 `Set…`/`Publish…`），`SetAccountSuspended`、`SetUserSignInDisabled`、`SetAccountTier`、`UserPlatformGrants`、`SetPlatformGrantRevoked`，以及只读的 `Site`、`MainSite`、`Tiers`、`Users`（新的在前，键集分页，邮箱前缀按字面、不分大小写）、`Account`、`SiteLogoByHash`、`ReadNewUsers`。越界是 `*SettingError`（带接口字段名），目标不存在是 `ErrNotFound`。`ParseLogo` 是 logo 唯一的解析入口。管理面会话的权限取自未撤销的平台授予。
 
 内置角色（迁移写入，以后加权限也只用迁移改）：
 

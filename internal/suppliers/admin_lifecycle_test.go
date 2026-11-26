@@ -142,6 +142,23 @@ func TestUnitValue(t *testing.T) {
 	refuses(t, "a value for a removed supplier", err, ErrStatusLocked)
 }
 
+// TestUnitValueIsARelays: a provider's own API and a cloud platform are priced in money, one unit worth 1 from the day
+// they are made; a person's value for either would multiply every cost by it, so it is refused and nothing is kept.
+func TestUnitValueIsARelays(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"direct", "cloud"} {
+		a := newAdmins(t)
+		id := a.connect("https://api.example.com", "ops@example.com").ID
+		a.sql(fmt.Sprintf("UPDATE suppliers.suppliers SET mode = '%s' WHERE id = '%s'", mode, id),
+			fmt.Sprintf("INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ('%s', 1, 'test', 'made')", id))
+		_, err := inTx(a, func(ctx context.Context, tx pg.Tx) (Supplier, error) {
+			return a.admin.ConfirmUnitValue(ctx, tx, a.actor, id, "2", "read from the console")
+		})
+		refuses(t, "a unit value for a "+mode+" supplier", err, ErrUnitValueFixed)
+		same(t, mode+": the values kept", "1", a.text(`SELECT string_agg(value::text, ',') FROM suppliers.unit_values`))
+	}
+}
+
 // TestEndpointQuantization: a person records and clears an endpoint's precision, the detail shows it as recorded, and a
 // supplier without that endpoint is refused. The sync never writes it.
 func TestEndpointQuantization(t *testing.T) {

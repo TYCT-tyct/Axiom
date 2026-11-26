@@ -1,0 +1,89 @@
+/* The admin's .adtool, .adsrch and .adcnt (admin_style.css): the search box 280px wide and 36px high, the count small and
+   quiet at the end of the row; on a phone the box takes the whole first row and the filter the second. */
+.root {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin-bottom: 12px;
+}
+
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 280px;
+  max-width: 100%;
+  height: 36px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  border-radius: var(--r8);
+  background: var(--cardBg);
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
+  color: var(--t3);
+  transition: box-shadow var(--dur) var(--ease);
+}
+
+.search svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.search input {
+  all: unset;
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs14);
+  color: var(--t1);
+}
+
+.search input::placeholder {
+  color: var(--t3);
+}
+
+.search input::-webkit-search-cancel-button {
+  display: none;
+}
+
+.search:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.search kbd {
+  flex: none;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 4px;
+  background: var(--hover);
+  font-size: var(--fs12);
+  line-height: 18px;
+  text-align: center;
+  color: var(--t3);
+  transition: opacity var(--dur) var(--ease);
+}
+
+.search:focus-within kbd,
+.search input:not(:placeholder-shown) + kbd {
+  opacity: 0;
+}
+
+.select {
+  width: auto;
+  height: 36px;
+  cursor: pointer;
+  appearance: none;
+  background: var(--cardBg);
+  box-shadow: inset 0 0 0 1px var(--ctl-line);
+}
+
+@media (max-width: 599px) {
+  .search {
+    width: 100%;
+    height: 44px;
+  }
+}

@@ -31,6 +31,13 @@ type Mapping struct {
 // A name that the catalog recognises as a retired model, or does not know, is not mapped. A suffix such as :free is not
 // recognised, so it is mapped only by an alias, which says what it stands for.
 func MapUpstream(snap Catalog, alias *catalog.ModelID, name string) Mapping {
+	return MapUpstreamDrafts(snap, alias, name, false)
+}
+
+// MapUpstreamDrafts is MapUpstream that, with drafts, also maps a name of a model the catalog has as a draft: the intake
+// rule `known` takes such a name, and its endpoint waits until the model is listed, because routing serves only listed
+// models. A retired model's name is not mapped either way.
+func MapUpstreamDrafts(snap Catalog, alias *catalog.ModelID, name string, drafts bool) Mapping {
 	var m Mapping
 	switch {
 	case alias != nil:
@@ -46,7 +53,7 @@ func MapUpstream(snap Catalog, alias *catalog.ModelID, name string) Mapping {
 	switch {
 	case !ok:
 		return Mapping{Why: Unmapped}
-	case model.Status != catalog.StatusListed:
+	case model.Status != catalog.StatusListed && (!drafts || model.Status != catalog.StatusDraft):
 		return Mapping{Why: NotListed}
 	}
 	m.Mapped = true

@@ -172,6 +172,7 @@ export default {
       quota_exhausted: "额度用尽",
       expired: "已过期",
       disabled: "已停用",
+      rejected: "被上游拒绝",
       erased: "已清除",
     },
     empty: { title: "还没有 key", body: "Axiom 会为每个能调用的分组建 key，同步推进后会出现在这里。" },

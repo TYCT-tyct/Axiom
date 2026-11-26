@@ -35,7 +35,7 @@ test("the admin sign-in page and shell show the site's logo", async ({ page }) =
 test("a site logo is uploaded, previewed, and cleared", async ({ page }) => {
   const state = await mockAdmin(page);
   signedInAs(state, "mfa");
-  await page.goto("/settings");
+  await page.goto("/settings/site");
   const dialog = page.getByRole("dialog");
   await page.getByRole("button", { name: words("settings.logo.set") }).click();
   await dialog.locator("input[type=file]").setInputFiles({

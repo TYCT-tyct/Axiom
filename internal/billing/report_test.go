@@ -70,6 +70,10 @@ func TestPlatformReportReadsTheCallsOverTheWindow(t *testing.T) {
 	if len(report.Cash) != 1 || report.Cash[0].Amount != "800" || report.Cash[0].Currency.String() != "USD" {
 		t.Errorf("cash = %+v, want 800 USD", report.Cash)
 	}
+	// The window is one UTC day, so that day is the whole of it.
+	if want := []DayMoney{{Day: start, Revenue: "1200", Cost: "800", UnknownCost: 1}}; fmt.Sprint(report.Days) != fmt.Sprint(want) {
+		t.Errorf("days = %+v, want %+v", report.Days, want)
+	}
 }
 
 // TestPlatformReportNamesCashInItsCurrency: a payment in another currency keeps it, the accounting currency's NULL

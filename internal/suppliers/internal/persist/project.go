@@ -33,10 +33,12 @@ type projector struct {
 	id         uuid.UUID
 	st         syncer.State
 	snap       *catalog.Snapshot
+	mapBy      syncer.Catalog // what a name maps by: the snapshot, with drafts under the rule `known` (withDrafts)
 	nativeUnit string
 	now        time.Time
 	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
 	plans      map[string]store.PlanVersion
+	rule       intakeRule                              // which mapped names become endpoints
 	offerRead  bool                                    // this commit holds a complete offer listing
 	groupRows  map[string]store.ListProjectedGroupsRow // what the tables held before the listing was applied
 }
@@ -76,10 +78,20 @@ func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State
 	return p.writes.Apply(ctx, tx)
 }
 
-// read reads the supplier's aliases and the schedules of the plans in force, which the writes below compare and copy.
+// read reads the supplier's aliases, its intake rule and the schedules of the plans in force, which the writes below
+// compare and copy.
 func (p *projector) read(ctx context.Context) (err error) {
 	if p.aliases, err = p.readAliases(ctx); err != nil {
 		return err
+	}
+	if p.rule, err = p.readIntakeRule(ctx); err != nil {
+		return err
+	}
+	p.mapBy = p.snap
+	if p.rule.drafts {
+		if p.mapBy, err = p.withDrafts(ctx); err != nil {
+			return err
+		}
 	}
 	p.plans, err = p.readPlans(ctx)
 	return err
@@ -271,7 +283,8 @@ func (p *projector) endpoints(ctx context.Context, groups map[string]uuid.UUID, 
 	return nil
 }
 
-// autoSelect puts a group in use when it has an endpoint with a cost plan and no person has ever chosen it. A group with
+// autoSelect puts a group in use when it has an endpoint with a cost plan the intake rule takes and no person has ever
+// chosen it. A group with
 // a codename has been chosen, selected or not, and is left alone: the sync never undoes a person's choice. The codename
 // is made here, once, and never changes; the database enforces both parts.
 func (p *projector) autoSelect(groups map[string]uuid.UUID, states map[nameKey]nameState) {
@@ -295,7 +308,7 @@ func (p *projector) hasPricedEndpoint(g syncer.GroupSnap, group uuid.UUID, state
 		if m.Plan == "" || len(m.Formats) == 0 {
 			continue
 		}
-		if states[nameKey{group: group, name: m.Name}].model == (catalog.ModelID{}) {
+		if state := states[nameKey{group: group, name: m.Name}]; state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
 			continue
 		}
 		if v, ok := p.plans[syncer.PlanKey(g.Ref, m.Name)]; ok && v.Fingerprint == m.Plan {
@@ -325,9 +338,10 @@ func (p *projector) endpoint(r store.ListProjectedEndpointsRow, desired map[mode
 	p.clearCost(r, why)
 }
 
-// setCost puts the endpoint's cost plan in force. The plan in force is named by the fingerprint of its schedule: a row
-// that already has this plan is left alone, and a new version of the plan replaces the old one, which stays in
-// cost_schedules because what a settled attempt was priced by must remain readable.
+// setCost puts the endpoint's cost plan in force. The plan in force is named by the fingerprint of its schedule and
+// factors: a row that already has this plan is left alone, and a new version of the plan replaces the old one, which
+// stays in cost_schedules because what a settled attempt was priced by must remain readable. A new version at the same
+// prices keeps reconciliation's verdict (the write compares the schedules): factors explain a price, they do not change it.
 func (p *projector) setCost(r store.ListProjectedEndpointsRow, d desiredEndpoint) {
 	if d.plan == nil {
 		p.clearCost(r, syncer.CostUnknown)
@@ -349,7 +363,7 @@ func (p *projector) setCost(r store.ListProjectedEndpointsRow, d desiredEndpoint
 func (p *projector) putCost(endpoint uuid.UUID, plan store.PlanVersion) {
 	p.writes.Costs = append(p.writes.Costs, store.EnsureCostScheduleParams{
 		SupplierID: p.id, EndpointID: endpoint, NativeUnit: p.nativeUnit,
-		Schedule: []byte(plan.Schedule), Basis: plan.Basis, Fingerprint: plan.Fingerprint,
+		Schedule: []byte(plan.Schedule), Basis: plan.Basis, Fingerprint: plan.Fingerprint, Derivation: plan.Derivation,
 	})
 }
 
@@ -378,13 +392,13 @@ func (p *projector) makeEndpoint(key modelKey, d desiredEndpoint) {
 
 // ours reports whether the reason an endpoint carries is one the projection wrote: every reason it clears an endpoint
 // with, and nothing else. Any other is reconciliation's: it takes an endpoint down when the supplier's charges came out
-// above our estimate, and only a new estimate or a person lifts that. A reason left out here is one the projection can
+// above our estimate, and only a new price or a person lifts that. A reason left out here is one the projection can
 // write and never lift, so the endpoint would stay out of routing after its model came back.
 func ours(found *string) bool {
 	if found == nil {
 		return true
 	}
-	for _, why := range [...]syncer.Reason{syncer.Unmapped, syncer.NotListed, syncer.NoFormat, syncer.CostUnknown, syncer.Gone} {
+	for _, why := range [...]syncer.Reason{syncer.Unmapped, syncer.NotListed, syncer.NoFormat, syncer.CostUnknown, syncer.Gone, syncer.NotTaken} {
 		if *found == string(why) {
 			return true
 		}

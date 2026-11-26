@@ -249,48 +249,6 @@ export function UnitValueDialog({ supplier, onClose }: { supplier: Supplier; onC
   );
 }
 
-// A selected group gets its code name, the name users see in place of the group's, and its models become endpoints.
-export function SelectGroupDialog({
-  supplier,
-  group,
-  onClose,
-}: {
-  supplier: Supplier;
-  group: Group;
-  onClose: () => void;
-}) {
-  const { t } = useTranslation();
-  const selected = !group.selected;
-  const way = selected ? "select" : "unselect";
-  return (
-    <ChangeDialog
-      operation={`supplier-group:${group.id}:${way}`}
-      title={t(`suppliers.group.${way}.title`, { name: group.name })}
-      intro={<p>{t(`suppliers.group.${way}.body`)}</p>}
-      action={t(`suppliers.group.${way}.action`)}
-      read={() => selected}
-      send={(value, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}", {
-            params: { path: { supplier_id: supplier.id, group_id: group.id }, header: { "Idempotency-Key": key } },
-            body: { selected: value, reason },
-          }),
-        )
-      }
-      done={(changed) =>
-        changed.codename ? (
-          <p>
-            {t("suppliers.group.codename")}
-            {": "}
-            <Code>{changed.codename}</Code>
-          </p>
-        ) : null
-      }
-      onClose={onClose}
-    />
-  );
-}
-
 // Binding is the exception: the sync makes the keys a group needs, and this binds one that already exists at the
 // supplier to a group.
 export function BindKeyDialog({

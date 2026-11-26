@@ -107,7 +107,8 @@ func sameName(was store.ListProjectedModelsRow, state nameState) bool {
 }
 
 // mapping is where an upstream name stands: the supplier's alias for it, else the catalog's own names, and only for a
-// model that is on sale (syncer.MapUpstream).
+// model that is on sale, or a draft when the intake rule is `known` (syncer.MapUpstreamDrafts); a mapped name the rule
+// does not take says so in why.
 func (p *projector) mapping(key nameKey) nameState {
 	var found alias
 	var mapped *catalog.ModelID
@@ -118,11 +119,16 @@ func (p *projector) mapping(key nameKey) nameState {
 		found = a
 		mapped = &a.model
 	}
-	m := syncer.MapUpstream(p.snap, mapped, key.name)
+	m := syncer.MapUpstreamDrafts(p.mapBy, mapped, key.name, p.rule.drafts)
 	if !m.Mapped {
 		return nameState{why: m.Why}
 	}
-	return nameState{model: m.Model, declared: found.formats, unverified: m.Unverified}
+	state := nameState{model: m.Model, declared: found.formats, unverified: m.Unverified}
+	if !p.rule.takes(key.name) {
+		// Still mapped, so the name is not one to map; but no endpoint of it is made or kept in routing.
+		state.why = syncer.NotTaken
+	}
+	return state
 }
 
 func compareModelKeys(a, b modelKey) int {
@@ -159,7 +165,7 @@ func (p *projector) desired(groups map[string]uuid.UUID, states map[nameKey]name
 // wanted is the endpoint one name of the listing asks for: not one at all when the name maps to no model, whatever its
 // plan says.
 func (p *projector) wanted(ref string, group uuid.UUID, m syncer.ModelSnap, state nameState) (modelKey, desiredEndpoint, bool) {
-	if state.model == (catalog.ModelID{}) {
+	if state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
 		return modelKey{}, desiredEndpoint{}, false
 	}
 	d := desiredEndpoint{upstream: m.Name, formats: state.formats, exact: !state.unverified}

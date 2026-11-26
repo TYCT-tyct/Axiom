@@ -337,4 +337,4 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 - `:floor` 准入 flex 层要不要改写上游 `service_tier`。
 - `-latest` 别名没有后台界面。
 - `/embeddings/models` 与嵌入模型进列表：要先给规格加输出模态。
-- Bedrock、Vertex 和 Gemini 原生格式以后再做。
+- Gemini 原生格式（`generateContent`）以后再做。Bedrock、Vertex AI 作为上游由供应商的适配器签名和转帧，网关照常发 Messages、Chat（见[供应商的「云平台」](suppliers-direct.md#云平台)）。

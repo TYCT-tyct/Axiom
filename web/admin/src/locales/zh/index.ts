@@ -3,25 +3,30 @@ import alertEvents from "./alert-events";
 import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
+import auditEvents from "./audit-events";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
-import mappings from "./mappings";
+import me from "./me";
 import models from "./models";
 import operations from "./operations";
 import orders from "./orders";
 import discrepancies from "./payment-discrepancies";
 import platformGrants from "./platform-grants";
+import plugins from "./plugins";
 import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
 import redeem from "./redeem";
-import logRetention from "./retention";
 import routingPresets from "./routing-presets";
+import settingWords from "./setting-words";
 import settings from "./settings";
+import shell from "./shell";
 import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
+import upstream from "./upstream";
+import channel from "./upstream-channel";
 import users from "./users";
 
 // The admin's messages in Chinese, the source every other language follows.
@@ -29,97 +34,29 @@ export const initial = {
   brandName: "Axiom 管理后台",
   forbiddenHint: "请联系站长授予权限。",
   nav: {
-    overview: "运营看板",
-    approvals: "运营审批",
-    operationsCredentials: "运营凭证",
-    operationsLimits: "资金与执行上限",
     users: "用户",
     orders: "订单与退款",
     discrepancies: "支付差异",
     redeemCodes: "兑换码",
     calls: "调用记录",
     audit: "审计日志",
-    suppliers: "供应商",
-    mappings: "待映射模型",
-    models: "模型目录",
+    models: "模型",
     pricing: "定价",
-    exchangeRates: "汇率",
     subscriptionPlans: "订阅套餐",
-    settings: "站点设置",
-    sourceClasses: "来源类别",
-    routingPresets: "路由预设",
     alertEvents: "告警事件",
-    alertConfig: "告警规则与渠道",
     announcements: "公告",
-    legalDocs: "法律文档",
-    retention: "记录保留",
-    rateLimits: "请求限流",
-    more: "更多",
   },
-  navSections: {
-    overview: "运营概览",
-    users: "用户与账户",
-    supply: "供应商与线路",
-    catalog: "模型目录",
-    pricing: "定价与套餐",
-    routing: "路由与来源",
-    payments: "支付与对账",
-    operations: "运营与审批",
-    alerts: "告警",
-    site: "站点",
-    platform: "平台设置",
-    calls: "调用记录",
-    audit: "审计日志",
-    security: "登录与安全",
-  },
-  shell: { collapse: "收起", expand: "展开" },
-  calls,
-  audit,
-  sourceClasses,
-  routingPresets,
+  shell,
+  drawerSteps: { previous: "上一条", next: "下一条" },
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
-  home: {
-    title: "运营看板",
-    description: "所选时段内本站的调用、收入、成本、现金与付费客户；每个数字都能下钻到对应的调用记录、订单或现金流水。",
-    noAccessTitle: "还没有可用的页面",
-    noAccessBody: "你的账户没有任何管理权限。请联系负责人授权。",
-  },
   overview: {
-    rangeLabel: "时间范围",
-    range: { "24h": "24 小时", "7d": "7 天", "30d": "30 天" },
-    window: "{{since}} 至 {{until}}",
-    calls: "调用量",
-    errors: "错误数",
-    revenue: "收入",
-    revenueNote: "用户实付，已扣除平台承担的部分",
-    cost: "供应商成本",
-    costNote: "已按汇率换算的成本",
-    unknownCost: "{{calls}} 次调用的成本未知，未计入合计",
-    callsIncomplete: "{{since}} 之前的调用已归档，调用量和排名不含它们；收入、成本、现金和付费充值数据仍覆盖整个时段。",
-    callsIncompleteUnknown:
-      "此节点保留的调用记录之前的调用已归档，调用量和排名不完整；收入、成本、现金和付费充值数据仍覆盖整个时段。",
-    coverageUnavailable: "此节点无法判断较早的调用是否已归档，调用量和排名可能不完整。",
-    cash: "现金净流入",
-    cashNote: "充值实付减退款，不是调用收入",
-    business: "经营数据",
-    paidUsers: "付费用户",
-    paidUsersNote: "所选时段内有付费充值的账户数",
-    monthlyRevenue: "月流水",
-    monthlyRevenueNote: "付费充值带来的额度，不是调用收入",
-    grossMargin: "毛利率",
-    grossMarginNote: "调用收入减去供应商成本；成本不完整时不显示",
-    retention: "留存率",
-    retentionNote: "上月付费的 {{cohort}} 个账户中，有 {{retained}} 个在所选时段结束前再次付费",
-    retentionEmpty: "上月没有账户付费，无法计算留存",
-    retentionUnavailable: "此节点不提供留存率",
     targets: {
-      description: "目标按 UTC 自然月设置。数量和金额按所选时段折算；毛利率和留存率取时段结束所在月份的目标。",
       month: "目标月份",
       monthHint: "按 UTC 自然月选择；页面上的时间按你的时区（{{zone}}）显示。",
       edit: "设置目标",
       title: "{{month}}的目标",
       intro:
-        "设置这个月的目标。留空的项会清除该目标；看板把数量和金额按所选时段折算，毛利率和留存率取时段结束所在月份的目标，再与实际数字对照。",
+        "设置这个月的目标。留空的项会清除该目标；仪表盘的「本月目标」把收入、付费账户、毛利率和留存率与这个月到现在的实际数字对照。",
       calls: "调用量",
       callsHint: "这个月至少要达到的调用量。",
       errors: "错误数",
@@ -141,33 +78,23 @@ export const initial = {
       rateInvalid: "请填写 0 到 100 之间的百分比，最多两位小数；留空表示清除目标。",
       save: "保存目标",
       saved: "这个月的目标已保存。",
-      target: "目标 {{value}}",
-      none: "未设目标",
-      empty: "这个时段没有业务目标。可以在上方为目标月份设置。",
-      unavailable: "此节点不提供业务目标。",
-      incomplete: "调用记录不完整，暂不显示差距",
-      costIncomplete: "供应商成本不完整，暂不显示差距",
-      marginIncomplete: "收入为零或供应商成本不完整，暂不显示差距",
-      retentionIncomplete: "上月没有付费账户，暂不显示差距",
-      cashNoTarget: "现金按支付币种分别统计，不设目标。",
-      at: "正好达到目标",
-      ahead: "比目标多 {{amount}}",
-      behind: "比目标少 {{amount}}",
-      over: "超出目标 {{amount}}",
-      under: "低于目标 {{amount}}",
     },
-    unavailable: "此节点不提供",
-    topAccounts: "调用最多的账户",
-    topModels: "调用最多的模型",
-    col: { account: "账户", model: "模型", calls: "调用", errors: "错误" },
-    noAccounts: { title: "该时段没有账户调用", body: "扩大时间范围试试。" },
-    noModels: { title: "该时段没有模型被调用", body: "扩大时间范围试试。" },
   },
+  list: { noMatch: { title: "没有符合条件的记录", body: "换一个关键词，或者清除筛选。" } },
   filter: { apply: "筛选", reset: "清除" },
   change: {
     reason: "理由",
     reasonHint: "为什么做这件事。会写进审计日志，之后可以查到。",
     reasonMissing: "请填写理由。",
+    reasonPlaceholder: "写给以后查操作日志的人看",
+    picksLabel: "常用理由",
+    picks: { routine: "例行维护", request: "用户申请", incident: "故障处理", price: "价格调整", risk: "风险处理" },
+    replayedToast: "已经生效，没有重复执行",
+    undo: "撤销",
+    undoReason: "撤销：{{reason}}",
+    undone: "已撤销",
+    undoRefused: "没有撤销：{{message}}",
+    undoUnknown: "不确定撤销有没有生效。先看一下页面上的结果，不要再撤销一次。",
     confirmLabel: "输入“{{name}}”以确认",
     confirmMismatch: "输入的名称和要操作的对象不一致。",
     done: "已完成。",
@@ -185,21 +112,57 @@ export const initial = {
     reused:
       "这个请求的标识已经用于另一份内容，第一次提交可能已经生效，这里不会再发送。关闭后看到的数据可能还不包含它，不能据此判断要不要重做。",
   },
-  users,
-  orders,
-  mappings,
+  // A settings page's changes that are not yet submitted (settings-drafts.tsx).
+  drafts: {
+    pending_one: "{{count}} 项修改还没提交",
+    pending_other: "{{count}} 项修改还没提交",
+    invalid_one: "{{count}} 项填得不对，改好才能提交",
+    invalid_other: "{{count}} 项填得不对，改好才能提交",
+    discard: "放弃",
+    discarded: "已放弃修改",
+    review: "查看并提交",
+    title_one: "提交 {{count}} 项修改",
+    title_other: "提交 {{count}} 项修改",
+    intro: "提交后马上生效。几组设置分开保存时，按顺序逐组提交；没提交成功的那组留在页面上，可以改了再提交。",
+    action: "提交",
+    submitted_one: "已提交 {{count}} 项修改",
+    submitted_other: "已提交 {{count}} 项修改",
+    done: "已提交。",
+    went: "已提交：{{names}}",
+    failed: "没有提交：{{names}}。{{message}}",
+    waiting: "还没发出：{{names}}",
+    moved: "{{names}} 在你改了之后被别人改过。为了不覆盖那次修改，先还原这几项，看过最新的再改。",
+    revert: "还原",
+    revertName: "还原「{{name}}」",
+    on: "开",
+    off: "关",
+    none: "无",
+    remove: "去掉 {{value}}",
+    leaveTitle: "还有修改没提交",
+    leaveBody: "离开这一页，没提交的修改会丢掉。",
+    leave: "离开",
+    stay: "留下",
+    secretSet: "已设置",
+    secretUnset: "未设置",
+    secretReplace: "更换",
+    secretNew: "新的密钥",
+    default: "默认值",
+    noLimit: "不限",
+  },
   models,
   pricing,
-  redeem,
   approvals,
 };
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, {
+export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   operations,
   settings,
   subscriptions,
   suppliers,
+  upstream: /* @__PURE__ */ Object.assign({}, upstream, channel),
+  sourceClasses,
+  routingPresets,
   discrepancies,
   exchangeRates,
   platformGrants,
@@ -209,5 +172,12 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   announcements,
   legalDocs,
   rateLimits,
-  logRetention,
+  plugins,
+  me,
+  auditEvents,
+  calls,
+  audit,
+  users,
+  orders,
+  redeem,
 });

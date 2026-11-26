@@ -19,7 +19,7 @@
 | 表 | 键与约束 | 类别 | 写法 |
 |---|---|---|---|
 | `author` | PK `slug` | 公开 | 增、改名 |
-| `model`：`status`（draft / listed / retired）、`version_basis`（dated / floating）、`price_source`（litellm / openrouter / official / manual）、`spec` jsonb、`rev` | PK `id`（UUIDv7）；UNIQUE `slug`；`split_part(slug, '/', 1) = author` | 公开，草稿只有平台可见 | 只许改 `status`、`price_source`、`spec`、`rev` |
+| `model`：`status`（draft / listed / retired）、`version_basis`（dated / floating）、`price_source`（litellm / openrouter / official / manual）、`spec` jsonb、`rev`、`family`（可空） | PK `id`（UUIDv7）；UNIQUE `slug`；`split_part(slug, '/', 1) = author` | 公开，草稿只有平台可见 | 只许改 `status`、`price_source`、`spec`、`rev`、`family` |
 | `name`：`name`、`norm`、`visibility`、`model_id` | PK `name`；UNIQUE `norm`；public 不以 `-latest` 结尾、不含 `~@`；`:` 只能是结尾的 `:free`；`octet_length` 1 … 200 | 公开，只含 listed 模型的 | 只追加 |
 | `alias`：`name`、`rev`、`model_id` | PK `(name, rev)`；`~…-latest` 格式 | 公开 | 只追加 |
 | `reference_price`：`currency`、`source`、`schedule`（撤下时为空）、`schedule_sha256`、`supersedes` | UNIQUE `supersedes`；`(model_id, currency) WHERE supersedes IS NULL` 唯一；外键 `(supersedes, model_id, currency)` 只能替代同一时间线的行；`supersedes <> id`；币种与 `schedule` 一致 | 公开，只含 listed 模型的 | 只追加 |
@@ -84,9 +84,9 @@
 3. 对着锁住的行检查并写入；写 `change`（改前改后和证据）和 `audit.Record`（动作名同 `change`，`detail` 只放 `change_id`），审计写不进操作就不成立；影响快照的写入让 `revision` 加一。
 4. 提交后本节点立即重建快照，失败只记日志。
 
-操作：`SaveAuthor`、`CreateModel`、`AddName`、`SaveAlias`、`UpdateSpec`、`ListModel`、`Retire`（带 `rev`）、`PublishPrice`（`base` 不符报 `ErrPriceChanged`）、`SelectPriceSource`（只接受 `official`、`manual`）、`SelectDatasetSource`、`WatchPage`、`UnwatchPage`、`ReviewPage`；各自的检查见[领域文档](../../docs/domains/catalog.md#参考价怎么进入目录)和[生命周期](../../docs/domains/catalog.md#模型的生命周期)。
+操作：`SaveAuthor`、`CreateModel`、`AddName`、`SaveAlias`、`UpdateSpec`、`ListModel`、`Retire`、`SetFamily`（带 `rev`）、`PublishPrice`（`base` 不符报 `ErrPriceChanged`）、`SelectPriceSource`（只接受 `official`、`manual`）、`SelectDatasetSource`、`WatchPage`、`UnwatchPage`、`ReviewPage`；`Import` 在调用方事务里为数据集里认不出的条目逐个经前三个操作建草稿，被拒的退回保存点记 held；各自的检查见[领域文档](../../docs/domains/catalog.md#参考价怎么进入目录)和[生命周期](../../docs/domains/catalog.md#模型的生命周期)。
 
-读取（各一个一致的读，含草稿）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、slug 字面前缀筛选，slug 键集分页）、`Model`、`Aliases`；`ModelIn` 在调用方的事务里读回模型。另有命令 `sync`、`check`、`check-pages`、`apply-dialect`。
+读取（各一个一致的读，含草稿）：`Authors`、`GetAuthor`、`Models`（按状态、厂商、slug 字面前缀筛选，slug 键集分页）、`Model`、`Aliases`；`ModelIn` 在调用方的事务里读回模型；`RecognizeIn`、`ModelsIn` 是含草稿的内部识别（供应商分堆和接入规则 `known` 用）。另有命令 `sync`、`check`、`check-pages`、`apply-dialect`。
 
 ## 不变量
 

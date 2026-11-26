@@ -12,13 +12,16 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 const press = (page: Page, key: string) => page.getByRole("button", { name: words(key) }).click();
 
 test.describe("business targets", () => {
-  test("the dashboard compares each target and the editor replaces the month", async ({ page }) => {
+  test("the month's goals show each target against the month so far and the editor replaces the month", async ({
+    page,
+  }) => {
     const state = await open(page, "");
-    await expect(page.getByText(zhText("overview.targets.description"))).toBeVisible();
-    await expect(page.getByText(words("overview.targets.target")).first()).toBeVisible();
-    for (const label of ["paidUsers", "monthlyRevenue", "grossMargin", "retention"] as const) {
-      await expect(page.getByText(words(`overview.${label}`)).first()).toBeVisible();
+    const goals = page.getByRole("region", { name: words("goals:title") });
+    await expect(goals).toBeVisible();
+    for (const goal of ["paid", "margin", "retention"] as const) {
+      await expect(goals.getByText(words(`goals:${goal}`)).first()).toBeVisible();
     }
+    await expect(goals.getByRole("progressbar")).not.toHaveCount(0);
 
     await press(page, "overview.targets.edit");
     const editor = dialog(page);
@@ -43,42 +46,40 @@ test.describe("business targets", () => {
     expect(state.targets.get(month)?.retention).toBe(7500);
 
     await close(page);
-    await expect(page.getByText(words("overview.targets.ahead")).first()).toBeVisible();
+    // The goals read the new targets: the margin bar's figure is now against 40.5%, retention against 75%.
+    await expect(goals).toContainText("40.5%");
+    await expect(goals).toContainText("75%");
   });
 
-  test("business figures drill into the records behind them with the same window", async ({ page }) => {
+  test("the goals for paying accounts and retention open the records behind them with the month's window", async ({
+    page,
+  }) => {
     await open(page, "");
-    const link = (key: string) => page.getByRole("link", { name: new RegExp(zhText(`overview.${key}`)) });
-    const address = async (key: string) => new URL((await link(key).getAttribute("href")) ?? "", "http://axiom");
-    const [paid, revenue, margin, retention] = await Promise.all([
-      address("paidUsers"),
-      address("monthlyRevenue"),
-      address("grossMargin"),
-      address("retention"),
-    ]);
-    for (const url of [paid, revenue]) {
-      expect(url.pathname).toBe("/orders");
-      expect(url.searchParams.get("paid")).toBe("batches");
-      expect(url.searchParams.get("since")).toBeTruthy();
-      expect(url.searchParams.get("until")).toBeTruthy();
-    }
-    expect(margin.pathname).toBe("/calls");
-    expect(margin.searchParams.get("site_id")).toBeTruthy();
-    expect(margin.searchParams.get("since")).toBeTruthy();
-    expect(margin.searchParams.get("until")).toBeTruthy();
+    const goals = page.getByRole("region", { name: words("goals:title") });
+    const address = async (key: string) =>
+      new URL(
+        (await goals.getByRole("link", { name: zhText(`goals:${key}`) }).getAttribute("href")) ?? "",
+        "http://axiom",
+      );
+    const [paid, retention] = await Promise.all([address("paid"), address("retention")]);
+    expect(paid.pathname).toBe("/orders");
+    expect(paid.searchParams.get("paid")).toBe("batches");
+    expect(paid.searchParams.get("since")).toMatch(/-01T00:00:00\.000Z$/);
+    expect(paid.searchParams.get("until")).toBeTruthy();
     expect(retention.pathname).toBe("/orders");
     expect(retention.searchParams.get("paid")).toBe("batches");
+    // The cohort is the month before, so the list starts there and ends where the window does.
     expect(retention.searchParams.get("since")).toMatch(/-01T00:00:00\.000Z$/);
+    expect(retention.searchParams.get("since")).not.toBe(paid.searchParams.get("since"));
     expect(retention.searchParams.get("until")).toBe(paid.searchParams.get("until"));
 
-    await link("monthlyRevenue").click();
-    await page.waitForURL(/\/orders\?/);
+    await goals.getByRole("link", { name: zhText("goals:paid") }).click();
+    await page.waitForURL(/\/orders\/batches\?/);
     const landed = new URL(page.url());
-    expect(landed.searchParams.get("paid")).toBe("batches");
-    expect(landed.searchParams.get("since")).toBe(revenue.searchParams.get("since"));
-    expect(landed.searchParams.get("until")).toBe(revenue.searchParams.get("until"));
-    // Exact: the URL changes before the overview unmounts, and its notes contain the title as a substring.
-    await expect(page.getByText(zhText("orders.paidBatches.title"), { exact: true })).toBeVisible();
+    expect(landed.pathname).toBe("/orders/batches");
+    expect(landed.searchParams.get("since")).toBe(paid.searchParams.get("since"));
+    expect(landed.searchParams.get("until")).toBe(paid.searchParams.get("until"));
+    await expect(page.getByRole("table", { name: zhText("orders.paidBatches.title") })).toBeVisible();
     await expect(page.getByText("bank transfer")).toBeVisible();
   });
 
@@ -152,8 +153,8 @@ test.describe("business targets", () => {
   });
 
   test("a month with no target says so and still offers the editor", async ({ page }) => {
-    await open(page, "", "empty");
-    await expect(page.getByText(zhText("overview.targets.empty"))).toBeVisible();
+    await open(page, "", "usual", { targets: new Map() });
+    await expect(page.getByText(zhText("goals:none"))).toBeVisible();
     await expect(page.getByRole("button", { name: words("overview.targets.edit") })).toBeVisible();
   });
 
@@ -213,46 +214,6 @@ test.describe("business targets", () => {
     await expect(
       dialog(page).getByRole("heading", { name: zhText("overview.targets.title").replace("{{month}}", label) }),
     ).toBeVisible();
-  });
-
-  test("at 360 the rank tables keep their headers and account ids on one line", async ({ page }) => {
-    await page.setViewportSize({ width: 360, height: 900 });
-    await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
-    // The 31-character fixture can fit the column exactly on a font that renders slightly narrower; a longer id makes
-    // this a test of the clip, not of the font.
-    const state = await mockAdmin(page, "worst");
-    const full = `acct_${"0".repeat(40)}1`;
-    state.calls = state.calls.map((call) => ({ ...call, account_id: full as typeof call.account_id }));
-    signedInAs(state, "mfa");
-    await page.goto("/");
-    for (const table of await page.getByRole("table").all()) {
-      for (const head of await table.getByRole("columnheader").all()) {
-        expect((await head.boundingBox())?.height ?? 0).toBeLessThan(40);
-      }
-    }
-
-    const accounts = page.getByRole("table", { name: zhText("overview.topAccounts") });
-    const first = accounts.getByRole("row").nth(1).getByRole("cell").first();
-    await expect(first).toContainText("acct_");
-    await expect(first).toContainText(full.slice(-8));
-    const text = first.locator("[title]").first();
-    await expect(text).toHaveAttribute("title", full);
-    expect((await first.boundingBox())?.height ?? 0).toBeLessThan(50);
-    const head = text.locator("span[aria-hidden]").first();
-    const box = await head.evaluate((el) => {
-      const cell = el.closest("[role=cell]")?.getBoundingClientRect();
-      const rect = el.getBoundingClientRect();
-      return {
-        right: rect.right,
-        cell: cell?.right ?? 0,
-        scroll: el.scrollWidth,
-        client: el.clientWidth,
-      };
-    });
-    expect(box.right).toBeLessThanOrEqual(box.cell + 0.5);
-    expect(box.scroll).toBeGreaterThan(box.client);
-    await first.getByRole("button", { name: zhText("copy.copy") }).click();
-    await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(full);
   });
 
   test("a call's time is shown in the viewer's zone, and the zone is named", async ({ page }) => {

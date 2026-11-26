@@ -1,0 +1,147 @@
+/* The admin's .adlist and .adli (admin_style.css): rows of 48px at least inside a card, a dot or a number before the
+   text, the second line in the secondary colour, and the arrow that moves 2px when the row is pointed at. */
+.list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+  padding: 0 12px 8px;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  min-height: 48px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.link {
+  cursor: pointer;
+}
+
+.link:hover {
+  background: var(--hover);
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.top .row {
+  align-items: flex-start;
+  min-height: 44px;
+  padding: 12px;
+}
+
+.dot {
+  flex: none;
+  align-self: flex-start;
+  width: 6px;
+  height: 6px;
+  margin-top: 7px;
+  border-radius: 50%;
+  background: var(--line3);
+}
+
+.ok {
+  background: var(--ok);
+}
+
+.warn {
+  background: var(--warn);
+}
+
+.bad {
+  background: var(--bad);
+}
+
+.text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.text b {
+  font-size: var(--fs14);
+  line-height: 20px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.text span {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.end {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  font-size: var(--fs12);
+  color: var(--t2);
+  font-variant-numeric: tabular-nums;
+}
+
+.arrow {
+  flex: none;
+  align-self: center;
+  color: var(--t3);
+  transition: transform var(--dur) var(--ease);
+}
+
+.link:hover .arrow {
+  transform: translateX(2px);
+}
+
+.none {
+  margin: 0;
+  padding: 8px 24px 20px;
+  font-size: var(--fs14);
+  color: var(--t2);
+}
+
+.more {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: calc(100% - 24px);
+  height: 40px;
+  margin: 0 12px 8px;
+  border-radius: 8px;
+  font-size: var(--fs12);
+  color: var(--t2);
+  cursor: pointer;
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease);
+}
+
+.more:hover {
+  background: var(--hover);
+  color: var(--t1);
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+@media (max-width: 767px) {
+  .more {
+    height: 44px;
+  }
+}

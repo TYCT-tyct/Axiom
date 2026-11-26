@@ -1,5 +1,6 @@
-import type { Key, ReactNode } from "react";
-import { Table, Td, Th } from "./table";
+import { type Key, type ReactNode, useEffect, useState } from "react";
+import s from "./data-table.module.css";
+import { RowButton, type SortOrder, Table, Td, Th, Tr } from "./table";
 
 type Column<Row> = {
   key: string;
@@ -10,46 +11,184 @@ type Column<Row> = {
   muted?: boolean;
   // A width in pixels, which only a fixed table keeps.
   width?: number;
+  // The width from which the column shows (the admin's adtx and phx: a phone keeps the two or three that matter).
+  from?: "sm" | "md" | "lg" | "xl" | "2xl";
+  // The number a numeric column sorts by; a column with one gets a sort button. A row without a number sorts last
+  // from high to low and first from low to high.
+  sort?: (row: Row) => number | null | undefined;
 };
 
+type Sorting = { key: string; order: Exclude<SortOrder, "none"> } | null;
+
+// A press on a header steps its column through high to low, low to high, and back to the rows' own order (the
+// admin's adTbl); a press on another column starts that one at high to low.
+const nextSort = (sorting: Sorting, key: string): Sorting =>
+  sorting?.key !== key
+    ? { key, order: "descending" }
+    : sorting.order === "descending"
+      ? { key, order: "ascending" }
+      : null;
+
+function sorted<Row>(rows: readonly Row[], column: Column<Row> | undefined, sorting: Sorting) {
+  const by = column?.sort;
+  if (!by || !sorting) return rows;
+  const sign = sorting.order === "ascending" ? 1 : -1;
+  const value = (row: Row) => by(row) ?? Number.NEGATIVE_INFINITY;
+  // toSorted is stable, so rows of one value keep their own order.
+  return rows.toSorted((a, b) => {
+    const x = value(a);
+    const y = value(b);
+    return x === y ? 0 : (x < y ? -1 : 1) * sign;
+  });
+}
+
+// A cell of a row. The first of a row that opens holds a button, which is how a keyboard opens it.
+function Cell<Row>({
+  column,
+  row,
+  open,
+  expanded,
+}: {
+  column: Column<Row>;
+  row: Row;
+  open?: () => void;
+  expanded?: boolean;
+}) {
+  const content = column.cell(row);
+  return (
+    <Td align={column.align === "end" ? "end" : undefined} muted={column.muted} from={column.from}>
+      {open ? (
+        <RowButton onClick={open} expanded={expanded}>
+          {content}
+        </RowButton>
+      ) : (
+        content
+      )}
+    </Td>
+  );
+}
+
 // DataTable lists rows under named columns, from data: the Table with its columns described once. A long identifier
-// goes in the cell as an Id, in a fixed table with the column's width.
+// goes in the cell as an Id, in a fixed table with the column's width. A column with a sort number can be sorted from
+// its header. How many rows a filter leaves is the filter row's to say (TableToolbar, FilterBar's count), not the
+// table's. flash names a row an edit just changed, which lights once. Given onOpen, a row opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
+// button a keyboard reaches, which is the first column's text, so that column holds text and no control. selected is
+// the key of the row whose detail is open. Given detail, a row opens in place instead (the admin's 按模型, .admv): onOpen toggles
+// it, the row named by expanded shows detail in a full-width row under it, and its button says it is expanded.
 export function DataTable<Row>({
   label,
   columns,
   rows,
   rowKey,
   fixed = false,
+  flash,
+  onOpen,
+  selected,
+  detail,
+  expanded,
 }: {
   label: string;
   columns: readonly Column<Row>[];
   rows: readonly Row[];
   rowKey: (row: Row) => Key;
   fixed?: boolean;
+  flash?: Key;
+  onOpen?: (row: Row) => void;
+  selected?: Key | null;
+  detail?: (row: Row) => ReactNode;
+  expanded?: Key;
 }) {
-  const align = (column: Column<Row>) => (column.align === "end" ? "end" : undefined);
+  const [sorting, setSorting] = useState<Sorting>(null);
+  const [lit, setLit] = useState(flash);
+  useEffect(() => setLit(flash), [flash]);
+  const shown = sorted(
+    rows,
+    columns.find((column) => column.key === sorting?.key),
+    sorting,
+  );
   return (
-    <Table label={label} fixed={fixed} widths={columns.map((column) => column.width)}>
+    <Table label={label} fixed={fixed} cols={columns}>
       <thead>
         <tr>
           {columns.map((column) => (
-            <Th key={column.key} align={align(column)}>
+            <Th
+              key={column.key}
+              align={column.align === "end" ? "end" : undefined}
+              from={column.from}
+              sort={column.sort ? (sorting?.key === column.key ? sorting.order : "none") : undefined}
+              onSort={column.sort ? () => setSorting(nextSort(sorting, column.key)) : undefined}
+            >
               {column.header}
             </Th>
           ))}
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr key={rowKey(row)}>
-            {columns.map((column) => (
-              <Td key={column.key} align={align(column)} muted={column.muted}>
-                {column.cell(row)}
-              </Td>
-            ))}
-          </tr>
+        {shown.map((row) => (
+          <BodyRow
+            key={rowKey(row)}
+            row={row}
+            id={rowKey(row)}
+            columns={columns}
+            lit={lit}
+            onLit={() => setLit(undefined)}
+            onOpen={onOpen}
+            selected={selected}
+            detail={detail}
+            expanded={expanded}
+          />
         ))}
       </tbody>
     </Table>
+  );
+}
+
+// A body row, and under it, when it is the one opened in place, its detail across the table.
+function BodyRow<Item>({
+  row,
+  id,
+  columns,
+  lit,
+  onLit,
+  onOpen,
+  selected,
+  detail,
+  expanded,
+}: {
+  row: Item;
+  id: Key;
+  columns: readonly Column<Item>[];
+  lit?: Key;
+  onLit: () => void;
+  onOpen?: (row: Item) => void;
+  selected?: Key | null;
+  detail?: (row: Item) => ReactNode;
+  expanded?: Key;
+}) {
+  const open = detail !== undefined && expanded === id;
+  return (
+    <>
+      <Tr
+        flash={lit !== undefined && lit === id}
+        onFlashEnd={onLit}
+        onOpen={onOpen && (() => onOpen(row))}
+        selected={selected === id || open}
+      >
+        {columns.map((column, at) => (
+          <Cell
+            key={column.key}
+            column={column}
+            row={row}
+            open={onOpen && at === 0 ? () => onOpen(row) : undefined}
+            expanded={detail ? open : undefined}
+          />
+        ))}
+      </Tr>
+      {open ? (
+        <tr className={s.detail}>
+          <td colSpan={columns.length}>{detail(row)}</td>
+        </tr>
+      ) : null}
+    </>
   );
 }

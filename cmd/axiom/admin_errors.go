@@ -93,12 +93,23 @@ var adminRefusals = []refusal{
 	{suppliers.ErrUnreachable, http.StatusUnprocessableEntity, codeUnprocessable, "the site did not answer"},
 	{suppliers.ErrGroupNotSelected, http.StatusUnprocessableEntity, codeUnprocessable, "the group is not selected"},
 	{suppliers.ErrUnitValue, http.StatusUnprocessableEntity, codeUnprocessable, "a unit value is above 0 and at most 1000, with at most 15 decimals"},
+	{suppliers.ErrUnitValueFixed, http.StatusConflict, codeConflict, "only a relay's unit value is confirmed: the supplier is billed in money"},
 	{suppliers.ErrNoEndpoint, http.StatusConflict, codeConflict, "the endpoint cannot be called now: it is not in this node's snapshot"},
 	{suppliers.ErrNoSlot, http.StatusConflict, codeConflict, "no credential of the endpoint has a slot free now"},
 	{suppliers.ErrTestOwner, http.StatusUnprocessableEntity, codeUnprocessable, "only platform endpoints may be tested"},
 	{suppliers.ErrTestCost, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint has no complete price for a test generation"},
 	{suppliers.ErrNoFormat, http.StatusUnprocessableEntity, codeUnprocessable, "the endpoint does not serve that call format"},
 	{suppliers.ErrLimits, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("concurrency is 1 to 2147483647, and requests a minute 1 to %d or none", suppliers.MaxRequestsPerMinute)},
+	{suppliers.ErrCannotMakeKey, http.StatusUnprocessableEntity, codeUnprocessable, "the supplier's adapter cannot make keys"},
+	{suppliers.ErrCannotFindKey, http.StatusUnprocessableEntity, codeUnprocessable, "the supplier's adapter cannot tell which group a key is in"},
+	{suppliers.ErrSupplierRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the supplier refused Axiom's login; replace it"},
+	{suppliers.ErrSupplierUnanswered, http.StatusServiceUnavailable, codeUnavailable, "the supplier did not answer; try again shortly"},
+	{suppliers.ErrGroupHasKey, http.StatusConflict, codeConflict, "the group already has a key: pause or resume it by selecting it"},
+	{suppliers.ErrTooManyCredentials, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("more than %d credentials to test: test them by supplier", suppliers.MaxCredentialTests)},
+	{suppliers.ErrIntakeRule, http.StatusUnprocessableEntity, codeUnprocessable, "names takes include and exclude patterns, and only names does"},
+	{suppliers.ErrIntakeRevision, http.StatusConflict, codeStaleRevision, "the intake rule changed since it was read"},
+	{suppliers.ErrNotSynced, http.StatusConflict, codeConflict, "a direct API or a cloud supplier is not synced: its models come from its keys"},
+	{suppliers.ErrNoInboxItem, http.StatusNotFound, codeNotFound, "no such resource"},
 }
 
 // unprocessable is a request that is well formed but that a rule refuses; message says which.

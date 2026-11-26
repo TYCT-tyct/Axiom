@@ -49,7 +49,7 @@ test.describe("signing in", () => {
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
 
-    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:title"))).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/");
     expect(state.log.filter((line) => line === "POST /auth/sign-in")).toHaveLength(2);
     // the browser logs the 401s (no session yet, a wrong password, a wrong code) itself
@@ -93,7 +93,7 @@ test.describe("signing in", () => {
     await expect(page.getByLabel("验证码或恢复码")).toHaveCount(0);
     unreadable = false;
     await page.getByRole("button", { name: "重试" }).click();
-    await expect(h1(page, zhText("nav.overview"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:title"))).toBeVisible();
     expect(state.log.filter((line) => line === "POST /auth/mfa" || line === "POST /auth/sign-out")).toEqual([
       "POST /auth/mfa",
     ]);
@@ -178,16 +178,20 @@ test.describe("signing in", () => {
   test("a session that ends while a page is open sends the user to sign in and back to that page", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
+    // The shell's last count (the refunds, asked once the account's site is known) has its answer, so the next request
+    // is the one the click makes.
+    const counted = page.waitForResponse("**/api/admin/v1/payments/refunds?*");
     await page.goto("/users");
     await expect(page.getByText("user1@example.com")).toBeVisible();
+    await counted;
     state.level = "none";
-    await page.getByRole("link", { name: zhText("nav.suppliers") }).click();
+    await page.getByRole("link", { name: zhText("shell.nav.suppliers") }).click();
     await expect(h1(page, "登录")).toBeVisible();
     state.mfaEnabled = true;
     await signIn(page, mfaEmail);
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
-    await expect(h1(page, zhText("nav.suppliers"))).toBeVisible();
+    await expect(h1(page, zhText("upstream.title"))).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/suppliers");
   });
 });
@@ -200,24 +204,19 @@ test.describe("permissions", () => {
     await page.goto("/");
     await expect(h1(page, zhText("nav.models"))).toBeVisible();
     const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.getByRole("link")).toHaveText([
-      zhText("nav.models"),
-      zhText("nav.pricing"),
-      zhText("nav.exchangeRates"),
-      zhText("nav.subscriptionPlans"),
-    ]);
-    await expect(nav.getByRole("group")).toHaveCount(2);
-    await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    const pricingGroup = nav.getByRole("group", { name: "定价与套餐" });
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.pricing") })).toHaveAttribute("href", "/pricing");
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.exchangeRates") })).toHaveAttribute(
-      "href",
-      "/exchange-rates",
+    await expect(nav.getByRole("link")).toHaveText([zhText("shell.nav.models"), zhText("shell.nav.pricing")]);
+    // The other groups have nothing this session may open, and the settings need sites.manage.
+    await expect(nav.getByRole("group")).toHaveCount(1);
+    const supply = nav.getByRole("group", { name: zhText("shell.groups.supply") });
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute("href", "/models");
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
-      "href",
-      "/subscription-plans",
-    );
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.pricing") })).toHaveAttribute("href", "/pricing");
+    await expect(page.getByRole("link", { name: zhText("shell.nav.settings") })).toHaveCount(0);
+    // Nor may it see alerts, so there is no bell.
+    await expect(page.getByRole("button", { name: zhText("shell.alerts") })).toHaveCount(0);
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);
       await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/nav-desktop.png` });
@@ -234,11 +233,17 @@ test.describe("permissions", () => {
     signedInAs(state, "mfa");
     await page.goto("/models");
     const tabs = page.getByRole("navigation", { name: "主导航" });
-    await expect(tabs.getByRole("link")).toHaveText([zhText("nav.calls")]);
-    const more = tabs.getByRole("button", { name: zhText("nav.more") });
+    // The first four of 仪表盘, 监控, 审批, 用户 and 记录 the session may open: only 记录 here.
+    await expect(tabs.getByRole("link")).toHaveText([zhText("shell.tabs.calls")]);
+    const more = tabs.getByRole("button", { name: zhText("shell.more") });
     await more.click();
-    await expect(page.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    const pricing = page.getByRole("group", { name: "定价与套餐" }).getByRole("link", { name: zhText("nav.pricing") });
+    const sheet = page.getByRole("dialog", { name: zhText("shell.more") });
+    const supply = sheet.getByRole("group", { name: zhText("shell.groups.supply") });
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute("href", "/models");
+    await expect(sheet.getByRole("group", { name: zhText("shell.groups.records") }).getByRole("link")).toHaveText([
+      zhText("shell.nav.calls"),
+    ]);
+    const pricing = supply.getByRole("link", { name: zhText("shell.nav.pricing") });
     await expect(pricing).toBeVisible();
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);
@@ -254,7 +259,7 @@ test.describe("permissions", () => {
     state.permissions = [];
     signedInAs(state, "mfa");
     await page.goto("/");
-    await expect(h1(page, zhText("home.noAccessTitle"))).toBeVisible();
+    await expect(h1(page, zhText("dashboard:noAccessTitle"))).toBeVisible();
     await page.goto("/suppliers");
     await expect(page.getByRole("heading", { name: "没有权限" })).toBeVisible();
     await expect(page.getByText("请联系站长授予权限。")).toBeVisible();
@@ -293,20 +298,20 @@ test.describe("the four states of a view of data", () => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
     const session = await hold(page, "**/api/admin/v1/session");
-    const chunk = await hold(page, "**/assets/model-*.js");
-    const data = await hold(page, "**/api/admin/v1/models/*");
+    const chunk = await hold(page, "**/assets/models-*.js");
+    const data = await hold(page, "**/api/admin/v1/models?*");
     const model = state.models[0];
     if (!model) {
       throw new Error("the mock has no model");
     }
 
-    await page.goto(`/models/${model.id}`);
+    await page.goto("/models");
 
     await session.entered;
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
     session.release();
     await page
-      .getByRole("link", { name: zhText("nav.models") })
+      .getByRole("link", { name: zhText("shell.nav.models") })
       .first()
       .waitFor();
 
@@ -314,11 +319,14 @@ test.describe("the four states of a view of data", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
     chunk.release();
 
+    // The page's own heading is up while its list is still on its way.
     await data.entered;
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText(zhText("nav.models"));
     data.release();
 
-    await expect(h1(page, model.slug)).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: zhText("models.open").replace("{{slug}}", model.slug), exact: true }),
+    ).toBeVisible();
   });
 
   test("loading, empty and failing lists say what to do", async ({ page }) => {
@@ -326,18 +334,24 @@ test.describe("the four states of a view of data", () => {
     signedInAs(state, "mfa");
     await page.goto("/users");
     await expect(page.getByRole("heading", { name: zhText("users.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.suppliers") }).click();
-    await expect(page.getByRole("heading", { name: zhText("suppliers.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.mappings") }).click();
-    await expect(page.getByRole("heading", { name: zhText("mappings.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.pricing") }).click();
+    await page.getByRole("link", { name: zhText("shell.nav.suppliers") }).click();
+    await expect(page.getByRole("heading", { name: zhText("upstream.channels.empty.title") })).toBeVisible();
+    await page.goto("/mappings");
+    await expect(page.getByRole("heading", { name: zhText("upstream.inbox.empty.title") })).toBeVisible();
+    await page.getByRole("link", { name: zhText("shell.nav.pricing") }).click();
+    await expect(page.getByRole("heading", { name: zhText("pricing.sale.empty") })).toBeVisible();
+    await page.getByRole("tab", { name: zhText("pricing.tabs.rules") }).click();
     await expect(page.getByRole("heading", { name: zhText("pricing.empty.title") })).toBeVisible();
   });
 
   test("an address of something that is not there names the page so and offers home, not a retry", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
-    for (const path of [`/accounts/${acct(999)}`, `/suppliers/${uuid(2, 999)}`, `/models/${uuid(5, 999)}`]) {
+    // An account is a drawer over the users: the drawer says so, and the list stays.
+    await page.goto(`/accounts/${acct(999)}`);
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "找不到要查看的内容" })).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("button", { name: "重试" })).toHaveCount(0);
+    for (const path of [`/suppliers/${uuid(2, 999)}`]) {
       await page.goto(path);
       await expect(h1(page, "找不到要查看的内容")).toBeVisible();
       await expect(page).toHaveTitle("找不到要查看的内容 · Axiom");

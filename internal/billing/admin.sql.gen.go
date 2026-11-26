@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -160,14 +161,32 @@ func (q *Queries) ListPaidBatches(ctx context.Context, db DBTX, arg ListPaidBatc
 	return items, nil
 }
 
-const platformCallMoney = `-- name: PlatformCallMoney :one
-SELECT
-    coalesce(sum(charged::numeric), 0)::text AS revenue,
-    coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0)::text AS cost,
-    count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
-FROM billing.reservations
-WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
-    AND state IN ('settled', 'cleanup_settled')
+const platformCallMoney = `-- name: PlatformCallMoney :many
+WITH sums AS (
+    SELECT grouping(day, account_id)::int AS set, day, account_id,
+        coalesce(sum(charged::numeric), 0) AS revenue,
+        coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0) AS cost,
+        count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
+    FROM (
+        -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects a
+        -- group per row and sorts the window instead of hashing its few days.
+        SELECT charged, profit, account_id, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
+        FROM billing.reservations
+        WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
+            AND state IN ('settled', 'cleanup_settled')
+    ) r
+    GROUP BY GROUPING SETS ((day), (), (account_id))
+), shown AS (
+    SELECT set, day, account_id, revenue, cost, unknown_cost_calls FROM sums WHERE set <> 2
+    UNION ALL
+    (SELECT set, day, account_id, revenue, cost, unknown_cost_calls FROM sums WHERE set = 2 ORDER BY revenue DESC, account_id LIMIT 10)
+)
+SELECT set,
+    coalesce(day, '0001-01-01T00:00:00'::timestamp)::timestamp AS day,
+    coalesce(account_id, '00000000-0000-0000-0000-000000000000')::uuid AS account_id,
+    revenue::text AS revenue, cost::text AS cost, unknown_cost_calls
+FROM shown
+ORDER BY set DESC, CASE WHEN set = 2 THEN revenue END DESC, day, account_id
 `
 
 type PlatformCallMoneyParams struct {
@@ -177,6 +196,9 @@ type PlatformCallMoneyParams struct {
 }
 
 type PlatformCallMoneyRow struct {
+	Set              int32
+	Day              pgtype.Timestamp
+	AccountID        uuid.UUID
 	Revenue          string
 	Cost             string
 	UnknownCostCalls int64
@@ -184,12 +206,34 @@ type PlatformCallMoneyRow struct {
 
 // One site's calls admitted in a window: what they were charged and, where it is known, what the supplier cost. The
 // amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
-// time axis is the call's, the same as the call log's (README.md「运营看板」).
-func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) (PlatformCallMoneyRow, error) {
-	row := db.QueryRow(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
-	var i PlatformCallMoneyRow
-	err := row.Scan(&i.Revenue, &i.Cost, &i.UnknownCostCalls)
-	return i, err
+// time axis is the call's, the same as the call log's (README.md「运营看板」). The window's total (set = 3), which the
+// empty grouping set gives even when nothing settled, then the ten accounts charged the most (set = 2), then one row
+// per UTC day (set = 1): one read of the window gives every figure, so they agree with each other.
+func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) ([]PlatformCallMoneyRow, error) {
+	rows, err := db.Query(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformCallMoneyRow
+	for rows.Next() {
+		var i PlatformCallMoneyRow
+		if err := rows.Scan(
+			&i.Set,
+			&i.Day,
+			&i.AccountID,
+			&i.Revenue,
+			&i.Cost,
+			&i.UnknownCostCalls,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const platformCash = `-- name: PlatformCash :many

@@ -66,6 +66,18 @@
   --columns: 4;
 }
 
+.wide {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+}
+
+.half {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.third {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 /* As many columns as leave each at least --min wide, top-aligned so a field's hint never pushes its neighbours. */
 .m12,
 .m16 {
@@ -79,6 +91,14 @@
 
 .m16 {
   --min: 16rem;
+}
+
+@media (max-width: 1099px) {
+  .wide,
+  .half,
+  .third {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* Four columns become two on a tablet; every grid is one column on a phone. */

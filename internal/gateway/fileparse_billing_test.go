@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"uuid"
 
+	"axiom/internal/observability"
 	"axiom/internal/websearch"
 )
 
@@ -87,6 +89,21 @@ func checkSearchParseCase(t *testing.T, tc searchParseCase) {
 	}
 	checkSearchParseBilling(t, r, calls[0].ID, tc.wantSearches, tc.wantPages)
 	r.idle(1 << 30)
+	// The parse runs before admission and the plugin's search after it; the server tool's search is not the plugin.
+	want := []string{observability.PluginFileParser}
+	if !tc.tool {
+		want = append(want, observability.PluginWeb)
+	}
+	var got []string
+	for _, run := range calls[0].plugins {
+		got = append(got, run.Plugin)
+		if !run.OK || run.Engine == "" {
+			t.Errorf("run = %+v, want a successful run that names its engine", run)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("plugin runs = %v, want %v", got, want)
+	}
 }
 
 // checkSearchParseBilling reads the settled usage and the ledger: the two per-use counts the call was charged for, the

@@ -47,7 +47,7 @@ export function selectable(layer: PresetLayer, preset: Preset, currency: string 
 
 // What the server says when a write is over a layer's limit or refuses the rules, in words for this page: the shared
 // words for preset_quota speak of an account's presets, and a rules refusal names the rule in the server's own words.
-function useExplain() {
+export function useExplain() {
   const { t } = useTranslation();
   return (error: unknown) => {
     if (!(error instanceof ApiError)) {
@@ -171,7 +171,7 @@ function DefaultDialog({
   );
 }
 
-type PresetInput = { slug: string; name: string; currency?: string; rules: AdminSchemas["RoutingRules"] };
+export type PresetInput = { slug: string; name: string; currency?: string; rules: AdminSchemas["RoutingRules"] };
 
 // PresetDialog makes a preset of the layer, or changes one at the revision it was opened with: a change made elsewhere
 // meanwhile is refused, and the dialog fills again from the preset as it is now. The rules are edited in place, so they
@@ -251,7 +251,7 @@ export function PresetDialog({
 
 // checkRules asks how the layer's keys would be routed by the rules: a platform preset's with the currency typed, when it
 // is one, a site's in the site's own.
-function checkRules(layer: PresetLayer, rules: AdminSchemas["RoutingRules"], code: string) {
+export function checkRules(layer: PresetLayer, rules: AdminSchemas["RoutingRules"], code: string) {
   const body =
     layer.scope === "site"
       ? { rules, site_id: layer.siteId }
@@ -362,7 +362,13 @@ function CurrencyField({ preset, code, onCode }: { preset?: Preset; code: string
   );
 }
 
-function savePreset(layer: PresetLayer, preset: Preset | undefined, input: PresetInput, reason: string, key: string) {
+export function savePreset(
+  layer: PresetLayer,
+  preset: Preset | undefined,
+  input: PresetInput,
+  reason: string,
+  key: string,
+) {
   const header = { "Idempotency-Key": key };
   const { slug, ...content } = input;
   if (preset) {

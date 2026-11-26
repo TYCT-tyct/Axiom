@@ -18,6 +18,8 @@ HTMLDialogElement.prototype.showModal = function () {
 HTMLDialogElement.prototype.close = function () {
   this.open = false;
 };
+// Nor scrolling into view, which a locked change dialog does to bring its notice beside the actions.
+Element.prototype.scrollIntoView = () => {};
 
 export const i18n = createInstance();
 const ready = i18n.init({ lng: "en", defaultNS: "admin", resources: { en: { admin: en } } });
@@ -59,4 +61,13 @@ export async function signedIn(importOriginal: <T>() => Promise<T>, permissions:
 // vi.mock("@axiom/api", async (original) => (await import("./test-dom")).withAdminApi(original, { GET: vi.fn(...) })).
 export async function withAdminApi(importOriginal: <T>() => Promise<T>, adminApi: Record<string, unknown>) {
   return { ...(await importOriginal<typeof import("@axiom/api")>()), adminApi };
+}
+
+// typeInto puts text in a controlled field as typing would: React hears the input event, not a bare value change.
+export async function typeInto(field: HTMLTextAreaElement | HTMLInputElement, text: string) {
+  const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(prototype, "value")?.set?.call(field, text);
+    field.dispatchEvent(new Event("input", { bubbles: true }));
+  });
 }

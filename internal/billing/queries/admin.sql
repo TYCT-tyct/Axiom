@@ -6,17 +6,37 @@ SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce
     merchant_id, coalesce(offline_channel, '')::text AS offline_channel, rate_id
 FROM billing.credit_batches WHERE id = @id;
 
--- name: PlatformCallMoney :one
+-- name: PlatformCallMoney :many
 -- One site's calls admitted in a window: what they were charged and, where it is known, what the supplier cost. The
 -- amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
--- time axis is the call's, the same as the call log's (README.md「运营看板」).
-SELECT
-    coalesce(sum(charged::numeric), 0)::text AS revenue,
-    coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0)::text AS cost,
-    count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
-FROM billing.reservations
-WHERE site_id = @site_id AND created_at >= @since AND created_at < @until
-    AND state IN ('settled', 'cleanup_settled');
+-- time axis is the call's, the same as the call log's (README.md「运营看板」). The window's total (set = 3), which the
+-- empty grouping set gives even when nothing settled, then the ten accounts charged the most (set = 2), then one row
+-- per UTC day (set = 1): one read of the window gives every figure, so they agree with each other.
+WITH sums AS (
+    SELECT grouping(day, account_id)::int AS set, day, account_id,
+        coalesce(sum(charged::numeric), 0) AS revenue,
+        coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0) AS cost,
+        count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
+    FROM (
+        -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects a
+        -- group per row and sorts the window instead of hashing its few days.
+        SELECT charged, profit, account_id, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
+        FROM billing.reservations
+        WHERE site_id = @site_id AND created_at >= @since AND created_at < @until
+            AND state IN ('settled', 'cleanup_settled')
+    ) r
+    GROUP BY GROUPING SETS ((day), (), (account_id))
+), shown AS (
+    SELECT * FROM sums WHERE set <> 2
+    UNION ALL
+    (SELECT * FROM sums WHERE set = 2 ORDER BY revenue DESC, account_id LIMIT 10)
+)
+SELECT set,
+    coalesce(day, '0001-01-01T00:00:00'::timestamp)::timestamp AS day,
+    coalesce(account_id, '00000000-0000-0000-0000-000000000000')::uuid AS account_id,
+    revenue::text AS revenue, cost::text AS cost, unknown_cost_calls
+FROM shown
+ORDER BY set DESC, CASE WHEN set = 2 THEN revenue END DESC, day, account_id;
 
 -- name: PlatformCash :many
 -- The cash that moved for one site in a window, by payment currency: paid credits in, refunds and chargebacks out,

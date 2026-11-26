@@ -138,22 +138,50 @@ func ceiling(n *int32) int32 {
 	return *n
 }
 
-// runtimeOf is the running state of a credential, made when it is first seen and kept after.
-func (s *Service) runtimeOf(id, supplier uuid.UUID, max, perMinute int32) *credRuntime {
+// runtimeOf is the running state of a credential, made when it is first seen and kept after. account is the upstream
+// account its rolling minute is counted for.
+func (s *Service) runtimeOf(id, account uuid.UUID, max, perMinute int32) *credRuntime {
 	s.runtimeMu.Lock()
 	defer s.runtimeMu.Unlock()
 	rt, ok := s.runtime[id]
 	if !ok {
 		// new-api middleware/model-rate-limit.go (206e0fa5) and sub2api repository/user_rpm_cache.go (8f2cbb53)
 		// count upstream accounts; another key of the same supplier must not create another quota.
-		requests := s.minutes[supplier]
+		requests := s.minutes[account]
 		if requests == nil {
 			requests = &minuteRuntime{now: s.now}
-			s.minutes[supplier] = requests
+			s.minutes[account] = requests
 		}
 		rt = &credRuntime{requests: requests}
 		s.runtime[id] = rt
 	}
 	rt.configuredMax, rt.configuredMinute = max, perMinute
 	return rt
+}
+
+// Load is what one node holds against a credential's limits now: the calls holding it, and the requests of its upstream
+// account in the rolling minute, the count requests_per_minute is compared with. Both are this node's own counts in
+// memory (README.md「并发与速率」): every node counts its own, and a credential this node has not called holds nothing
+// here, which is 0 and true of this node.
+type Load struct {
+	InFlight, LastMinute int64
+}
+
+// CredentialLoad reads this node's load on a credential of supplier. A credential this node loaded counts its minute
+// where runtimeOf put it, under the account it draws on; of one it did not load, only a relay's has a count here, under
+// supplier, the account all its keys draw on.
+func (s *Service) CredentialLoad(credential, supplier uuid.UUID) Load {
+	s.runtimeMu.Lock()
+	rt := s.runtime[credential]
+	minute := s.minutes[supplier]
+	s.runtimeMu.Unlock()
+	var load Load
+	if rt != nil {
+		load.InFlight = int64(rt.inflight.Load())
+		minute = rt.requests
+	}
+	if minute != nil {
+		load.LastMinute = minute.count(s.now())
+	}
+	return load
 }

@@ -71,6 +71,7 @@ export type AdminCallFilters = {
   site_id?: string;
   model?: string;
   status?: "ok" | "error";
+  plugin?: AdminSchemas["AdminPlugin"];
   since?: string;
   until?: string;
 };
@@ -261,6 +262,12 @@ export const pendingMappingsQuery = (supplierId?: string) =>
     initialPageParam: firstPage,
     getNextPageParam: nextCursor,
   });
+
+// 上游's queue counted, for the sidebar's count and the tab's (getSupplierInboxSummary).
+export const inboxSummaryQuery = queryOptions({
+  queryKey: [accountKey, "supplier-inbox", "summary"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/supplier-inbox/summary`, { signal })),
+});
 
 export const authorsQuery = queryOptions({
   queryKey: [accountKey, "authors"],

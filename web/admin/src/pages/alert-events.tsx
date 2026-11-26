@@ -12,32 +12,52 @@ import {
   Td,
   Text,
   useFormat,
+  useUrlParams,
 } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import en from "../locales/en/alert-events";
+import enMonitor from "../locales/en/monitor";
 import zh from "../locales/zh/alert-events";
+import zhMonitor from "../locales/zh/monitor";
+import { MonitorTabs } from "../monitor-tabs";
 import { Code, Facts, Head, Json, PageBody, State, Time } from "../parts";
 import { alertEventsQuery } from "../policy-queries";
 
 export const messages = { zh: { alertEvents: zh }, en: { alertEvents: en } };
+export const namespaces = { monitor: { zh: zhMonitor, en: enMonitor } };
 
 type Event = AdminSchemas["AlertEvent"];
 type Receipt = AdminSchemas["AlertReceipt"];
 
+// The open event is in the address, so the shell's bell opens one (?event=<id>) and Back closes it.
+const selection = { event: "" };
+
 export default function AlertEvents() {
   const { t } = useTranslation();
+  const { t: monitor } = useTranslation("monitor");
   const query = useInfiniteQuery(alertEventsQuery);
-  const [selected, setSelected] = useState<string>();
+  const [{ event: selected }, setUrl] = useUrlParams(selection);
+  const setSelected = (id: string | undefined) => setUrl({ event: id }, id ? "push" : "replace");
   const [resolving, setResolving] = useState<string>();
   const rows = query.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const event = query.isSuccess && selected ? rows.find((row) => row.id === selected) : undefined;
   return (
     <>
-      <PageHead title={t("nav.alertEvents")} lede={t("alertEvents.description")} />
       <PageBody>
+        <PageHead
+          title={monitor("title")}
+          actions={
+            <ActionButton asChild size="sm">
+              <Link to="/alert-configuration">{monitor("rules")}</Link>
+            </ActionButton>
+          }
+        />
+        <MonitorTabs current="alerts" />
+        <Text tone="muted">{t("alertEvents.description")}</Text>
         <Card layout="flush">
           <DataState
             query={query}
@@ -72,9 +92,9 @@ function Events({ rows, select }: { rows: Event[]; select: (id: string) => void 
       <Head
         cols={[
           [t("alertEvents.kind"), { main: true }],
-          t("alertEvents.severityLabel"),
+          [t("alertEvents.severityLabel"), { from: "sm" }],
           t("alertEvents.status"),
-          t("alertEvents.fired"),
+          [t("alertEvents.fired"), { from: "sm" }],
         ]}
         action
       />
@@ -92,11 +112,11 @@ function Events({ rows, select }: { rows: Event[]; select: (id: string) => void 
                 <Text>{row.kind}</Text>
                 <Code>{row.key}</Code>
               </Td>
-              <Td>{knownSeverity ? t(`alertEvents.severity.${knownSeverity}`) : row.severity}</Td>
+              <Td from="sm">{knownSeverity ? t(`alertEvents.severity.${knownSeverity}`) : row.severity}</Td>
               <Td>
                 {row.state ? <State tone={eventTone[row.state]}>{t(`alertEvents.state.${row.state}`)}</State> : "—"}
               </Td>
-              <Td>
+              <Td from="sm">
                 <Time at={row.fired_at} />
               </Td>
               <Td actions>

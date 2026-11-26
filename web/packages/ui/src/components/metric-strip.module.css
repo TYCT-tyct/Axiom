@@ -1,0 +1,201 @@
+/* The admin's .qcard.usm.adkpi.ad4 (the board's .usm with admin_style.css's overview and strip rules): cells side by
+   side split by a hairline, two to a row below 1024px with the hairline above the second row, and a cell that is a link
+   lit on hover. */
+.root {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  margin-bottom: 16px;
+  padding: 0;
+  border-radius: var(--r16);
+}
+
+.cell {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 20px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell + .cell {
+  box-shadow: inset var(--bw) 0 0 var(--line);
+}
+
+.label {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.value {
+  display: flex;
+  align-items: baseline;
+  height: 36px;
+  font-size: var(--fs24);
+  line-height: var(--lh24);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--t1);
+}
+
+.prefix,
+.suffix {
+  font-size: var(--fs14);
+  font-weight: 400;
+  color: var(--t2);
+}
+
+.prefix {
+  margin-right: 0.1em;
+}
+
+.suffix {
+  margin-left: 0.25em;
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  font-style: normal;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.link {
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.link:hover {
+  background: var(--hover);
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.link:first-child {
+  border-radius: 16px 0 0 16px;
+}
+
+.link:last-child {
+  border-radius: 0 16px 16px 0;
+}
+
+/* The trend line sits at the cell's top right (admin_style.css .adk8 > div > .adspk). */
+.trend {
+  position: absolute;
+  top: 16px;
+  right: 20px;
+  display: flex;
+}
+
+/* Two or more rows (.adk8, .adk6): rows of three or four, a hairline above every row after the first, and the card's
+   rounded corners clip the hovered cells instead of each cell carrying a corner. */
+.c3,
+.c4 {
+  margin-bottom: 0;
+  overflow: hidden;
+}
+
+.c3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.c4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.c3 .cell:nth-child(3n + 1),
+.c4 .cell:nth-child(4n + 1) {
+  box-shadow: none;
+}
+
+.c3 .cell:nth-child(n + 4),
+.c4 .cell:nth-child(n + 5) {
+  box-shadow:
+    inset var(--bw) 0 0 var(--line),
+    inset 0 var(--bw) 0 var(--line);
+}
+
+.c3 .cell:nth-child(4),
+.c4 .cell:nth-child(5) {
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+}
+
+.c3 .link:nth-child(n),
+.c4 .link:nth-child(n) {
+  border-radius: 0;
+}
+
+.c3 .note {
+  flex-wrap: wrap;
+  row-gap: 0;
+  white-space: normal;
+}
+
+@media (max-width: 1023px) {
+  .root {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .link:nth-child(n) {
+    border-radius: 0;
+  }
+
+  /* One class heavier than the rows' rules above, so the two-column layout wins over the three- and four-column one. */
+  .root .cell:nth-child(odd) {
+    box-shadow: none;
+  }
+
+  .root .cell:nth-child(even) {
+    box-shadow: inset var(--bw) 0 0 var(--line);
+  }
+
+  .root .cell:nth-child(n + 3) {
+    box-shadow: inset 0 var(--bw) 0 var(--line);
+  }
+
+  .root .cell:nth-child(even):nth-child(n + 3) {
+    box-shadow:
+      inset var(--bw) 0 0 var(--line),
+      inset 0 var(--bw) 0 var(--line);
+  }
+}
+
+@media (max-width: 767px) {
+  .cell:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  .note {
+    flex-wrap: wrap;
+    row-gap: 0;
+    white-space: normal;
+  }
+
+  .trend {
+    top: 14px;
+    right: 16px;
+  }
+
+  .trend svg {
+    width: 48px;
+    height: auto;
+  }
+
+  /* Two cells to a row leave 160px for a figure and its trend line; a money figure at 24px would run under it. */
+  .c3 .value,
+  .c4 .value {
+    font-size: 20px;
+  }
+}

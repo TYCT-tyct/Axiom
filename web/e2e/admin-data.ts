@@ -23,6 +23,8 @@ export type AdminState = AuthState & {
   retention: Schemas["OperationsRetention"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
+  // The registration policy as last saved; until then the one admin-api.ts starts from.
+  registration?: Schemas["RegistrationPolicy"];
   logo: Schemas["SiteLogoView"];
   // The public brand's name and logo address; the server gives the logo as a path, the settings preview as a data URL.
   brandName?: string;
@@ -194,7 +196,8 @@ function aGroup(supplier: number, n: number, over: Partial<Schemas["SupplierGrou
     name: n === 1 ? "default" : `vip-${n}`,
     ratio: n === 1 ? "1" : "1.5",
     selected: n === 1,
-    codename: n === 1 ? "Maple" : undefined,
+    // A group's codename is the supplier's own: no two lines share one.
+    codename: n === 1 ? (supplier === 1 ? "Maple" : `Maple ${supplier}`) : undefined,
     present: true,
     ...over,
   };
@@ -245,7 +248,7 @@ function aDetail(n: number, over: Partial<Schemas["Supplier"]> = {}): Schemas["S
 
 function suppliers(): Schemas["SupplierDetail"][] {
   return [
-    aDetail(1),
+    aDetail(1, { balance_days: 21 }),
     aDetail(2, { name: "Example US", unit_value: undefined, unit_value_hint: "1" }),
     aDetail(3, {
       name: "Broken Upstream",
@@ -253,7 +256,7 @@ function suppliers(): Schemas["SupplierDetail"][] {
       status_reason: "The supplier rejected the login (401).",
     }),
     aDetail(4, { name: "Paused Site", status: "paused" }),
-    aDetail(5, { name: "Low On Funds", status: "low_balance", balance_native: "40" }),
+    aDetail(5, { name: "Low On Funds", status: "low_balance", balance_native: "40", balance_days: 3 }),
   ];
 }
 

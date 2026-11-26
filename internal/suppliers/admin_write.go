@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -14,11 +15,15 @@ import (
 	"axiom/internal/suppliers/internal/store"
 )
 
+// ErrUnitValueFixed is a unit value for a supplier that is not a relay: a provider's own API and a cloud platform are
+// billed in money, and the value of 1 they are made with is what their official prices are costed at.
+var ErrUnitValueFixed = errors.New("suppliers: only a relay's unit value is confirmed; the others' is 1")
+
 // originPattern is the origin a supplier is connected at: https, a host in lower case, a port if it is not the default.
 var unitValue = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$`)
 
-// ConfirmUnitValue records what one unit of the supplier's balance is worth, in its settlement currency. A later value
-// applies from now: the earlier ones stay, and what was costed keeps its own.
+// ConfirmUnitValue records what one unit of a relay's balance is worth, in its settlement currency. A later value
+// applies from now: the earlier ones stay, and what was costed keeps its own. Any other supplier's is fixed at 1.
 func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, value, reason string) (Supplier, error) {
 	if !unitValue.MatchString(value) {
 		return Supplier{}, ErrUnitValue
@@ -29,6 +34,11 @@ func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Acto
 	row, err := a.locked(ctx, tx, id)
 	if err != nil {
 		return Supplier{}, err
+	}
+	if s, err := a.view(ctx, tx, id, EveryOwner); err != nil {
+		return Supplier{}, err
+	} else if s.Mode != relayMode {
+		return Supplier{}, ErrUnitValueFixed
 	}
 	if err := store.New().InsertUnitValue(ctx, tx, store.InsertUnitValueParams{SupplierID: id, Value: value, Actor: actor.String(), Reason: reason}); err != nil {
 		return Supplier{}, fmt.Errorf("keep the unit value: %w", err)
@@ -88,6 +98,11 @@ func (*Admin) chooseGroup(ctx context.Context, tx pg.Tx, group uuid.UUID, select
 	return nil
 }
 
+// GroupOf reads one group of a platform supplier; ErrNoGroup when the supplier has no such group.
+func (a *Admin) GroupOf(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Group, error) {
+	return a.group(ctx, tx, supplier, id)
+}
+
 // group reads one group of a supplier.
 func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Group, error) {
 	rows, err := store.New().GetGroupOf(ctx, tx, store.GetGroupOfParams{SupplierID: supplier, ID: id})
@@ -138,7 +153,10 @@ func (a *Admin) BindKey(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 	if err := a.record(ctx, tx, actor, "credential.bind", supplier, reason, map[string]any{"group": group.String(), "credential": id.String(), "upstream_key_ref": keyRef}); err != nil {
 		return Credential{}, err
 	}
-	return Credential{ID: id, Group: group, UpstreamKeyRef: keyRef, Status: "binding", MaxConcurrency: defaultMaxConcurrency}, nil
+	return Credential{
+		ID: id, Supplier: supplier, Group: group, UpstreamKeyRef: keyRef, Status: "binding", MaxConcurrency: defaultMaxConcurrency,
+		Source: "bound", CreatedAt: createdAt(id),
+	}, nil
 }
 
 // Limits are a credential's concurrency and its ceiling on the upstream account's shared rolling minute in this node.
@@ -175,12 +193,7 @@ func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supp
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Credential{}, err
 	}
-	concurrency := int32(limits.MaxConcurrency) //nolint:gosec // valid checked it is 1 to 2³¹-1
-	var perMinute *int32
-	if limits.RequestsPerMinute != nil {
-		n := int32(*limits.RequestsPerMinute) //nolint:gosec // valid checked it is 1 to MaxRequestsPerMinute
-		perMinute = &n
-	}
+	concurrency, perMinute := limits.columns()
 	q := store.New()
 	rows, err := q.GetCredentialOf(ctx, tx, store.GetCredentialOfParams{SupplierID: supplier, ID: credentialID})
 	if err != nil {
@@ -194,7 +207,7 @@ func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supp
 		return Credential{}, ErrStatusLocked
 	}
 	if row.MaxConcurrency == concurrency && sameLimit(row.RequestsPerMinute, perMinute) {
-		return credentialOf(row.ID, row.SupplierGroupID, row.UpstreamKeyRef, row.Status, row.CooldownUntil, row.ExpiresAt, row.MaxConcurrency, row.RequestsPerMinute), nil
+		return credentialOf(credentialFacts(row)), nil
 	}
 	changed, err := q.SetCredentialLimits(ctx, tx, store.SetCredentialLimitsParams{
 		SupplierID: supplier, ID: credentialID, MaxConcurrency: concurrency, RequestsPerMinute: perMinute,
@@ -214,7 +227,18 @@ func (a *Admin) SetLimits(ctx context.Context, tx pg.Tx, actor audit.Actor, supp
 	}); err != nil {
 		return Credential{}, err
 	}
-	return credentialOf(row.ID, row.SupplierGroupID, row.UpstreamKeyRef, row.Status, row.CooldownUntil, row.ExpiresAt, concurrency, perMinute), nil
+	row.MaxConcurrency, row.RequestsPerMinute = concurrency, perMinute
+	return credentialOf(credentialFacts(row)), nil
+}
+
+// columns are valid limits as the columns hold them.
+func (l Limits) columns() (concurrency int32, perMinute *int32) {
+	concurrency = int32(l.MaxConcurrency) //nolint:gosec // valid checked it is 1 to 2³¹-1
+	if l.RequestsPerMinute != nil {
+		n := int32(*l.RequestsPerMinute) //nolint:gosec // valid checked it is 1 to MaxRequestsPerMinute
+		perMinute = &n
+	}
+	return concurrency, perMinute
 }
 
 // sameLimit is whether two per-minute limits are the same, absent counting as a value.

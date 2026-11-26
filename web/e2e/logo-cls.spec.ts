@@ -91,13 +91,13 @@ async function observeShifts(page: Page) {
   });
 }
 
-// One Logo is visible at a time: in the admin's sidebar at a desk, in its top bar below 1024px, on the admin's sign-in
-// page in its header, on the console's in the Login board's brand over the sea, and in the console's bar, where the
-// board's mark holds it. The hidden copy in the drawer and the other breakpoint's copy have no layout box.
-const slotSelector =
-  "header > span:has(> img), header > span:has(> svg), nav span:has(> img), nav span:has(> svg), .lg-sea > a.brand";
-// The console's mark, which shows the site's initial when there is no logo, as the board draws Axiom's A.
-const boardMark = "header a.glogo > span";
+// One Logo is visible at a time: on the admin's sign-in page in its header, on the console's in the Login board's brand
+// over the sea, and in either shell's top bar at every width, where the board's mark holds it. The admin's sidebar
+// holds no logo; its spans with an icon (the settings entry's chevron) are not one.
+const slotSelector = "header > span:has(> img), header > span:has(> svg), .lg-sea > a.brand";
+// The shells' marks, which show the site's initial when there is no logo, as the boards draw Axiom's A: the console's
+// board mark, and the one child of the admin bar's home link.
+const boardMark = "header a.glogo > span, header > a > span";
 const logoSlot = (page: Page) => page.locator(`${slotSelector}, ${boardMark}`).filter({ visible: true });
 
 async function waitForLogo(page: Page, path: string, failing: boolean) {
@@ -133,12 +133,14 @@ async function shiftsAroundLogo(page: Page) {
     type Entry = PerformanceEntry & { value: number; hadRecentInput: boolean; sources?: Source[] };
     const entries = (window as unknown as { __logoShifts?: Entry[] }).__logoShifts ?? [];
     const slots = [
-      ...document.querySelectorAll<HTMLElement>("header > span, nav span, header a.glogo > span, .lg-sea > a.brand"),
+      ...document.querySelectorAll<HTMLElement>(
+        "header > span, header a.glogo > span, header > a > span, .lg-sea > a.brand",
+      ),
     ].filter((span) => {
       if (span.getClientRects().length === 0) {
         return false;
       }
-      const mark = span.matches("a.glogo > span");
+      const mark = span.matches("a.glogo > span, header > a > span");
       return mark || [...span.children].some((child) => ["img", "svg"].includes(child.tagName.toLowerCase()));
     });
     const touches = (source: Source) => {
@@ -198,8 +200,8 @@ async function checkSurface(browser: Browser, app: App, surface: string, logo: L
   await page.waitForLoadState("networkidle");
   await frames(page);
 
-  // The shell's initial in place of a failed logo (console and admin wear the AxApp shell) is the board's own 24px mark,
-  // not a 20x20 box.
+  // The shell's initial in place of a failed logo (the console's AxApp shell, the admin's AdminShell) is the board's own
+  // 24px mark, not a 20x20 box.
   const lettered = surface !== "sign-in" && logo.fail;
   const slot = logoSlot(page);
   const mark = await (lettered ? slot : slot.locator("img, svg")).first().boundingBox();

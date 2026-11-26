@@ -196,7 +196,7 @@ func (q *Queries) HoldSyncLease(ctx context.Context, db DBTX, arg HoldSyncLeaseP
 const listSyncDue = `-- name: ListSyncDue :many
 SELECT s.id FROM suppliers.suppliers s
 LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
-WHERE s.status = ANY($1::text[])
+WHERE s.status = ANY($1::text[]) AND s.mode = 'relay'
     AND (y.supplier_id IS NULL OR (y.next_due <= $2 AND (y.lease_until IS NULL OR y.lease_until <= $2)))
 ORDER BY y.next_due NULLS FIRST, s.id
 LIMIT $3
@@ -209,7 +209,7 @@ type ListSyncDueParams struct {
 }
 
 // The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
-// whose lease is free or has run out. Only suppliers in one of the statuses are listed.
+// whose lease is free or has run out. Only relays in one of the statuses are listed: another mode has nothing to sync.
 func (q *Queries) ListSyncDue(ctx context.Context, db DBTX, arg ListSyncDueParams) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, listSyncDue, arg.Statuses, arg.Now, arg.Max)
 	if err != nil {
@@ -392,6 +392,18 @@ type SetSupplierStatusParams struct {
 func (q *Queries) SetSupplierStatus(ctx context.Context, db DBTX, arg SetSupplierStatusParams) error {
 	_, err := db.Exec(ctx, setSupplierStatus, arg.Status, arg.StatusReason, arg.ID)
 	return err
+}
+
+const supplierSynced = `-- name: SupplierSynced :one
+SELECT mode = 'relay' FROM suppliers.suppliers WHERE id = $1
+`
+
+// Whether the sync runs for the supplier at all: only a relay has a listing to read, as ListSyncDue says.
+func (q *Queries) SupplierSynced(ctx context.Context, db DBTX, id uuid.UUID) (bool, error) {
+	row := db.QueryRow(ctx, supplierSynced, id)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
 }
 
 const swapSupplierLogin = `-- name: SwapSupplierLogin :execrows

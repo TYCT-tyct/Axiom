@@ -71,13 +71,17 @@ UPDATE suppliers.suppliers SET balance_native = @balance::numeric, balance_obser
 
 -- name: ListSyncDue :many
 -- The suppliers a round is due for and that no node holds: those never synced, and those whose next_due has come and
--- whose lease is free or has run out. Only suppliers in one of the statuses are listed.
+-- whose lease is free or has run out. Only relays in one of the statuses are listed: another mode has nothing to sync.
 SELECT s.id FROM suppliers.suppliers s
 LEFT JOIN suppliers.sync_states y ON y.supplier_id = s.id
-WHERE s.status = ANY(@statuses::text[])
+WHERE s.status = ANY(@statuses::text[]) AND s.mode = 'relay'
     AND (y.supplier_id IS NULL OR (y.next_due <= @now AND (y.lease_until IS NULL OR y.lease_until <= @now)))
 ORDER BY y.next_due NULLS FIRST, s.id
 LIMIT @max;
+
+-- name: SupplierSynced :one
+-- Whether the sync runs for the supplier at all: only a relay has a listing to read, as ListSyncDue says.
+SELECT mode = 'relay' FROM suppliers.suppliers WHERE id = @id;
 
 -- name: GetSupplierLogin :one
 SELECT ciphertext, nonce, wrapped_dek, key_version, version FROM suppliers.supplier_logins WHERE supplier_id = @supplier_id;

@@ -188,7 +188,7 @@ func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []st
 		entry, priced := prices[upstream]
 		model := adapter.Model{UpstreamName: upstream, Formats: formatsOf(entry.Endpoints)}
 		if priced {
-			model.Cost = schedule(entry, ratio)
+			model.Cost, model.Derivation = schedule(entry, ratio)
 			model.Without = unsupported(entry)
 			for _, e := range entry.Endpoints {
 				endpoints[e] = true
@@ -235,47 +235,73 @@ func unsupported(e priceEntry) protocol.Capabilities {
 }
 
 // schedule is the model's cost as a catalog schedule in new-api's own unit, quota per token, with the currency XXX
-// ("no currency"): the amounts it yields are quota, not money. It is nil, which makes the cost unknown, for what a
-// schedule cannot express: a price per call, an expression, a ratio that is missing or not a number, or a price above
-// what a unit price may be. Rounding goes up, so a price is never lower than new-api's.
+// ("no currency"): the amounts it yields are quota, not money, and the factors each price is the product of. It is nil,
+// which makes the cost unknown, for what a schedule cannot express: a price per call, an expression, a ratio that is
+// missing or not a number, or a price above what a unit price may be. Rounding goes up, so a price is never lower than
+// new-api's.
 //
 // new-api charges (prompt + completion × completion_ratio) × model_ratio × group_ratio, a cache read at cache_ratio of
 // the input price (1 when the pricing does not say), a cache write at create_cache_ratio of it (1.25 by default) and
-// an hour-long cache write at 1.6 times that (constants in new-api's code).
-func schedule(e priceEntry, group *big.Rat) *catalog.Schedule {
+// an hour-long cache write at 1.6 times that (constants in new-api's code). The ratio a price has to the input price is
+// its factor beside the model and group ratios, the default when the pricing leaves it out; the hour-long write's is
+// 1.6 × create_cache_ratio.
+func schedule(e priceEntry, group *big.Rat) (*catalog.Schedule, adapter.Derivation) {
 	if e.BillingMode == "tiered_expr" || e.QuotaType != 0 {
-		return nil
+		return nil, nil
 	}
 	model, ok := e.ModelRatio.rat()
 	if !ok {
-		return nil
+		return nil, nil
+	}
+	cacheWrite := ratioOr(e.CreateCache, big.NewRat(5, 4))
+	toInput := map[string]toInputRatio{
+		"input":          {},
+		"output":         {adapter.FactorCompletionRatio, ratioOr(e.CompletionRatio, big.NewRat(1, 1))},
+		"cache_read":     {adapter.FactorCacheRatio, ratioOr(e.CacheRatio, big.NewRat(1, 1))},
+		"cache_write":    {adapter.FactorCacheWriteRatio, cacheWrite},
+		"cache_write_1h": {adapter.FactorCacheWriteRatio, new(big.Rat).Mul(cacheWrite, big.NewRat(8, 5))},
 	}
 	input := new(big.Rat).Mul(model, group)
-	cacheWrite := new(big.Rat).Mul(input, ratioOr(e.CreateCache, big.NewRat(5, 4)))
-	prices := map[string]*big.Rat{
-		"input":          input,
-		"output":         new(big.Rat).Mul(input, ratioOr(e.CompletionRatio, big.NewRat(1, 1))),
-		"cache_read":     new(big.Rat).Mul(input, ratioOr(e.CacheRatio, big.NewRat(1, 1))),
-		"cache_write":    cacheWrite,
-		"cache_write_1h": new(big.Rat).Mul(cacheWrite, big.NewRat(8, 5)),
-	}
-	rates := make(map[string]string, len(prices))
-	for item, p := range prices {
+	rates := make(map[string]string, len(toInput))
+	for item, r := range toInput {
+		p := input
+		if r.ratio != nil {
+			p = new(big.Rat).Mul(input, r.ratio)
+		}
 		text, ok := unitPrice(p)
 		if !ok {
-			return nil
+			return nil, nil
 		}
 		rates[item] = text
 	}
 	stored, err := jsonx.MarshalCanonical(map[string]any{"v": 1, "currency": "XXX", "rates": rates})
 	if err != nil {
-		return nil
+		return nil, nil
 	}
 	s, err := catalog.ParseSchedule(stored)
 	if err != nil {
-		return nil
+		return nil, nil
 	}
-	return &s
+	d := adapter.Derive(s, func(rate catalog.ScheduleRate) map[adapter.FactorKind]*big.Rat {
+		f := map[adapter.FactorKind]*big.Rat{adapter.FactorModelRatio: model, adapter.FactorGroupRatio: group}
+		if r := toInput[rate.Item.String()]; r.ratio != nil {
+			f[r.kind] = r.ratio
+		}
+		return f
+	}, factorOrder)
+	return &s, d
+}
+
+// toInputRatio is the ratio a price has to the input price, and the factor it is; none for the input price itself.
+type toInputRatio struct {
+	kind  adapter.FactorKind
+	ratio *big.Rat
+}
+
+// factorOrder is the order new-api multiplies a price's factors in.
+var factorOrder = []adapter.FactorKind{
+	adapter.FactorModelRatio, adapter.FactorGroupRatio, adapter.FactorCompletionRatio, adapter.FactorCacheRatio,
+	adapter.FactorCacheWriteRatio,
 }
 
 // ratioOr is the ratio n holds, or fallback when the pricing leaves it out.

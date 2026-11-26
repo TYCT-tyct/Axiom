@@ -63,7 +63,20 @@ func keyReason(s string) *adminapi.SupplierGroupKeyReason {
 
 // supplierBody is a supplier as the contract gives it.
 func supplierBody(s suppliers.Supplier) adminapi.Supplier {
+	var format *adminapi.ApiFormat
+	if s.APIFormat != "" {
+		f := adminapi.ApiFormat(s.APIFormat)
+		format = &f
+	}
+	mode := adminapi.SupplierMode(s.Mode)
+	var account *adminapi.CloudAccount
+	if c := s.CloudAccount; c != nil {
+		account = &adminapi.CloudAccount{
+			ProjectId: text(c.ProjectID), ClientEmail: text(c.ClientEmail), AccessKeyLast4: text(c.AccessKeyLast4), KeyLast4: text(c.KeyLast4),
+		}
+	}
 	return adminapi.Supplier{
+		Mode: &mode, ApiFormat: format, CloudAccount: account,
 		Id: s.ID.String(), Name: s.Name, Kind: s.Kind, Origin: s.Origin, UpstreamAccount: s.UpstreamAccount,
 		Generation: text(s.Generation), DetectedVersion: text(s.DetectedVersion),
 		NativeUnit: adminapi.SupplierNativeUnit(s.NativeUnit), SettlementCurrency: s.SettlementCurrency,
@@ -91,11 +104,24 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 }
 
 func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
-	return adminapi.SupplierCredential{
-		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
+	body := adminapi.SupplierCredential{
+		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.CredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
-		RequestsPerMinute: c.RequestsPerMinute,
+		RequestsPerMinute: c.RequestsPerMinute, Last4: text(c.Last4), Region: text(c.Region),
 	}
+	if c.Supplier != (uuid.UUID{}) {
+		body.SupplierId = new(c.Supplier.String())
+	}
+	if c.Source != "" {
+		body.KeySource = new(adminapi.SupplierCredentialKeySource(c.Source))
+	}
+	if !c.CreatedAt.IsZero() {
+		body.CreatedAt = new(c.CreatedAt)
+	}
+	if c.LastCheck != nil {
+		body.LastCheck = new(keyCheckBody(*c.LastCheck, false))
+	}
+	return body
 }
 
 // cursorOf reads the cursor of a list of suppliers: the last supplier's ID.
@@ -153,8 +179,20 @@ func (a adminAPI) getSupplier(ctx context.Context, request adminapi.GetSupplierR
 		return nil, err
 	}
 	var detail suppliers.Detail
+	var counts *adminapi.SupplierModelCounts
+	var rule suppliers.IntakeRule
+	var tasks []suppliers.SyncTask
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		detail, err = a.suppliers.Supplier(ctx, tx, id, owners)
+		if detail, err = a.suppliers.Supplier(ctx, tx, id, owners); err != nil {
+			return err
+		}
+		if counts, err = a.modelCounts(ctx, tx, id, owners); err != nil {
+			return err
+		}
+		if rule, err = a.suppliers.IntakeRuleOf(ctx, tx, id); err != nil {
+			return err
+		}
+		tasks, err = a.suppliers.SyncTasks(ctx, tx, id)
 		return err
 	}); err != nil {
 		return nil, err
@@ -162,13 +200,14 @@ func (a adminAPI) getSupplier(ctx context.Context, request adminapi.GetSupplierR
 	body := adminapi.SupplierDetail{
 		Supplier: supplierBody(detail.Supplier), Groups: make([]adminapi.SupplierGroup, len(detail.Groups)),
 		Credentials: make([]adminapi.SupplierCredential, len(detail.Credentials)), UnboundKeys: []adminapi.UpstreamKey{},
-		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)),
+		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)), ModelCounts: counts,
+		IntakeRule: new(intakeRuleBody(rule)), SyncTasks: new(syncTasksBody(tasks)),
 	}
 	for i, g := range detail.Groups {
 		body.Groups[i] = groupBody(g)
 	}
 	for i, c := range detail.Credentials {
-		body.Credentials[i] = credentialBody(c)
+		body.Credentials[i] = a.credentialBody(c)
 	}
 	for i, e := range detail.Endpoints {
 		body.Endpoints[i] = endpointBody(e)
@@ -228,8 +267,8 @@ func (a adminAPI) DetectSupplier(ctx context.Context, request adminapi.DetectSup
 	return adminapi.DetectSupplier200JSONResponse(body), nil
 }
 
-// windowLimiter lets n requests through per key in each window, in this node's memory: the limit on detectSupplier
-// is a guard against a runaway page, and a node's own count is enough for it.
+// windowLimiter lets n requests through per key in each rolling minute, in this node's memory: the limits on the
+// requests an admin page makes to a third party are a guard against a runaway page, and a node's own count is enough.
 type windowLimiter struct {
 	mu     sync.Mutex
 	n      int
@@ -238,8 +277,8 @@ type windowLimiter struct {
 	hits   map[uuid.UUID][]time.Time
 }
 
-func newWindowLimiter(n int, window time.Duration, now func() time.Time) *windowLimiter {
-	return &windowLimiter{n: n, window: window, now: now, hits: map[uuid.UUID][]time.Time{}}
+func newWindowLimiter(n int, now func() time.Time) *windowLimiter {
+	return &windowLimiter{n: n, window: time.Minute, now: now, hits: map[uuid.UUID][]time.Time{}}
 }
 
 // allow counts a request of key, or says how long until one would be let through.

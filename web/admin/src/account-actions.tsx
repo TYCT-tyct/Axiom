@@ -1,6 +1,6 @@
 import { type AdminSchemas, adminApi, unwrapEmptyChange } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
-import { ActionButton, Select, Text } from "@axiom/ui";
+import { ActionButton, type DiffRow, Select, Text } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -42,7 +42,7 @@ function ManageActions({ account }: { account: Account }) {
         <SuspensionAction account={account} suspended={calls} onClose={() => setAction(null)} />
       ) : null}
       {action === "signIn" && signIn !== undefined ? (
-        <SignInAction account={account} disabled={signIn} onClose={() => setAction(null)} />
+        <SignInAction owner={account.owner} accountId={account.id} disabled={signIn} onClose={() => setAction(null)} />
       ) : null}
       {action === "tier" ? <TierDialog account={account} onClose={() => setAction(null)} /> : null}
     </>
@@ -59,6 +59,7 @@ function SuspensionAction({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const state = (off: boolean) => t(off ? "users.account.callsSuspended" : "users.account.callsActive");
   return (
     <StateDialog
       title={t(suspended ? "users.account.suspension.resumeTitle" : "users.account.suspension.title", {
@@ -69,6 +70,10 @@ function SuspensionAction({
       action={t(suspended ? "users.account.resume" : "users.account.suspend")}
       danger={!suspended}
       payload={{ suspended: !suspended }}
+      diff={[{ label: t("users.account.calls"), before: state(suspended), after: state(!suspended) }]}
+      toast={t(suspended ? "users.account.suspension.resumed" : "users.account.suspension.suspended", {
+        email: account.owner.email,
+      })}
       send={(body, reason, key) =>
         unwrapEmptyChange(
           adminApi.PUT("/api/admin/v1/accounts/{account_id}/suspension", {
@@ -82,22 +87,39 @@ function SuspensionAction({
   );
 }
 
-function SignInAction({ account, disabled, onClose }: { account: Account; disabled: boolean; onClose: () => void }) {
+// Whether a user may sign in is the user's, so the dialog needs only the owner and the account's id (which names the
+// operation): a user's drawer opens it without reading the account.
+export function SignInAction({
+  owner,
+  accountId,
+  disabled,
+  onClose,
+}: {
+  owner: Account["owner"];
+  accountId: AdminSchemas["AccountId"];
+  disabled: boolean;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
+  const state = (off: boolean) => t(off ? "users.account.signInDisabled" : "users.account.signInActive");
   return (
     <StateDialog
       title={t(disabled ? "users.account.signInChange.enableTitle" : "users.account.signInChange.title", {
-        email: account.owner.email,
+        email: owner.email,
       })}
       intro={<p>{t(disabled ? "users.account.signInChange.enableIntro" : "users.account.signInChange.intro")}</p>}
-      operation={`account-sign-in:${account.id}`}
+      operation={`account-sign-in:${accountId}`}
       action={t(disabled ? "users.account.enableSignIn" : "users.account.disableSignIn")}
       danger={!disabled}
       payload={{ disabled: !disabled }}
+      diff={[{ label: t("users.account.signIn"), before: state(disabled), after: state(!disabled) }]}
+      toast={t(disabled ? "users.account.signInChange.enabled" : "users.account.signInChange.disabled", {
+        email: owner.email,
+      })}
       send={(body, reason, key) =>
         unwrapEmptyChange(
           adminApi.PUT("/api/admin/v1/users/{user_id}/sign-in", {
-            params: { path: { user_id: account.owner.id }, header: { "Idempotency-Key": key } },
+            params: { path: { user_id: owner.id }, header: { "Idempotency-Key": key } },
             body: { ...body, reason },
           }),
         )
@@ -107,6 +129,7 @@ function SignInAction({ account, disabled, onClose }: { account: Account; disabl
   );
 }
 
+// A switch is its own inverse: the toast's undo sends it back to the state it was read in.
 function StateDialog<Input extends Record<string, boolean>>({
   title,
   intro,
@@ -114,6 +137,8 @@ function StateDialog<Input extends Record<string, boolean>>({
   action,
   danger,
   payload,
+  diff,
+  toast,
   send,
   onClose,
 }: {
@@ -123,9 +148,12 @@ function StateDialog<Input extends Record<string, boolean>>({
   action: string;
   danger: boolean;
   payload: Input;
+  diff: readonly DiffRow[];
+  toast: string;
   send: (body: Input, reason: string, key: string) => Promise<{ data: null; replayed: boolean }>;
   onClose: () => void;
 }) {
+  const inverse = Object.fromEntries(Object.entries(payload).map(([name, on]) => [name, !on])) as Input;
   return (
     <ChangeDialog
       title={title}
@@ -133,8 +161,11 @@ function StateDialog<Input extends Record<string, boolean>>({
       operation={operation}
       action={action}
       danger={danger}
+      diff={diff}
       read={() => payload}
       send={(body, { reason, key }) => send(body, reason, key)}
+      toast={() => toast}
+      undo={(_, { reason, key }) => send(inverse, reason, key)}
       done={() => null}
       onClose={onClose}
     />
@@ -144,6 +175,13 @@ function StateDialog<Input extends Record<string, boolean>>({
 function TierDialog({ account, onClose }: { account: Account; onClose: () => void }) {
   const { t } = useTranslation();
   const tiers = useQuery(tiersQuery(account.site_id));
+  const putTier = (body: { tier_id: string }, reason: string, key: string) =>
+    unwrapEmptyChange(
+      adminApi.PUT("/api/admin/v1/accounts/{account_id}/tier", {
+        params: { path: { account_id: account.id }, header: { "Idempotency-Key": key } },
+        body: { ...body, reason },
+      }),
+    );
   return (
     <ChangeDialog
       title={t("users.account.tierChange.title", { email: account.owner.email })}
@@ -158,14 +196,9 @@ function TierDialog({ account, onClose }: { account: Account; onClose: () => voi
           ? { tier_id: values.tier_id }
           : { problem: t("users.account.tierChange.choose") }
       }
-      send={(body, { reason, key }) =>
-        unwrapEmptyChange(
-          adminApi.PUT("/api/admin/v1/accounts/{account_id}/tier", {
-            params: { path: { account_id: account.id }, header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-          }),
-        )
-      }
+      send={(body, { reason, key }) => putTier(body, reason, key)}
+      toast={() => t("users.account.tierChange.done", { email: account.owner.email })}
+      undo={(_, { reason, key }) => putTier({ tier_id: account.tier.id }, reason, key)}
       done={() => null}
       onClose={onClose}
     />

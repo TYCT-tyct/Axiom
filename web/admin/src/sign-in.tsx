@@ -1,59 +1,40 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, Card, CheckField, Cluster, DataState, Field, SettingRow, Tag } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
-import { type ReactNode, useState } from "react";
+import { ActionButton, Cluster, Field, SettingRow, Tag } from "@axiom/ui";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "./change";
-import { Facts } from "./parts";
-import { siteSignInQuery } from "./queries";
+import { SettingsCard } from "./setting-rows";
 
-type View = AdminSchemas["SiteSignIn"];
 type Provider = AdminSchemas["SiteOAuthProvider"];
 type ProviderInput = { client_id: string; client_secret: string };
 
-// SiteSignIn is where a site's owner chooses the domain third-party callbacks and passkeys live on, turns passkeys
-// on, and stores each provider's application. The secret is sealed on arrival and never shown again.
-export function SiteSignIn({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
-  const query = useQuery(siteSignInQuery(siteId));
-  return <DataState query={query}>{(view) => <SignInCard siteId={siteId} view={view} />}</DataState>;
-}
-
-function SignInCard({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: View }) {
+// Providers is the third-party sign-in of a site: each provider's application, whose secret is sealed on arrival and
+// never shown again, so setting it and taking it off are dialogs of their own and not drafts.
+export function Providers({ siteId, providers }: { siteId: AdminSchemas["SiteId"]; providers: Provider[] }) {
   const { t } = useTranslation();
-  const [edit, setEdit] = useState(false);
-  const [provider, setProvider] = useState<{ name: Provider; remove: boolean } | null>(null);
-  const rows: [string, ReactNode][] = [
-    [t("settings.signIn.loginDomain"), view.login_domain ?? t("settings.signIn.domainNone")],
-    [t("settings.signIn.passkeys"), view.passkeys ? t("settings.signIn.on") : t("settings.signIn.off")],
-  ];
+  const [open, setOpen] = useState<{ name: Provider; remove: boolean } | null>(null);
   return (
     <>
-      <Facts
-        title={t("settings.signIn.title")}
-        rows={rows}
-        actions={
-          <ActionButton onClick={() => setEdit(true)} icon="pencil">
-            {t("settings.signIn.edit")}
-          </ActionButton>
-        }
-      />
-      <Card layout="rows">
-        {view.providers.map((entry) => (
+      <SettingsCard
+        scope="site"
+        title={t("settings.pages.signIn.providers")}
+        lede={t("settings.pages.signIn.providersLede")}
+      >
+        {providers.map((entry) => (
           <ProviderLine
             key={entry.provider}
             provider={entry}
-            onEdit={() => setProvider({ name: entry, remove: false })}
-            onRemove={() => setProvider({ name: entry, remove: true })}
+            onEdit={() => setOpen({ name: entry, remove: false })}
+            onRemove={() => setOpen({ name: entry, remove: true })}
           />
         ))}
-      </Card>
-      {edit ? <SignInDialog siteId={siteId} view={view} onClose={() => setEdit(false)} /> : null}
-      {provider && !provider.remove ? (
-        <ProviderDialog siteId={siteId} provider={provider.name} onClose={() => setProvider(null)} />
+      </SettingsCard>
+      {open && !open.remove ? (
+        <ProviderDialog siteId={siteId} provider={open.name} onClose={() => setOpen(null)} />
       ) : null}
-      {provider?.remove ? (
-        <RemoveProviderDialog siteId={siteId} provider={provider.name} onClose={() => setProvider(null)} />
+      {open?.remove ? (
+        <RemoveProviderDialog siteId={siteId} provider={open.name} onClose={() => setOpen(null)} />
       ) : null}
     </>
   );
@@ -89,56 +70,6 @@ function ProviderLine({
         ) : null}
       </Cluster>
     </SettingRow>
-  );
-}
-
-function SignInDialog({ siteId, view, onClose }: { siteId: AdminSchemas["SiteId"]; view: View; onClose: () => void }) {
-  const { t } = useTranslation();
-  return (
-    <ChangeDialog
-      operation={`site-sign-in:${siteId}`}
-      title={t("settings.signIn.edit")}
-      intro={<p>{t("settings.signIn.intro")}</p>}
-      action={t("settings.signIn.save")}
-      fields={(error) => <SignInFields view={view} error={error} />}
-      read={(values) => ({
-        login_domain: (values.login_domain ?? "").trim().toLowerCase(),
-        passkeys: values.passkeys === "true",
-      })}
-      send={(body, { reason, key }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/sites/{site_id}/sign-in", {
-            params: { path: { site_id: siteId }, header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-          }),
-        )
-      }
-      done={() => <p>{t("settings.signIn.saved")}</p>}
-      onClose={onClose}
-    />
-  );
-}
-
-function SignInFields({ view, error }: { view: View; error: unknown }) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <Field
-        label={t("settings.signIn.loginDomain")}
-        hint={t("settings.signIn.domainHint")}
-        name="login_domain"
-        defaultValue={view.login_domain ?? ""}
-        error={errors.field(error, "login_domain")}
-      />
-      <CheckField
-        label={t("settings.signIn.passkeys")}
-        hint={t("settings.signIn.passkeysHint")}
-        name="passkeys"
-        value="true"
-        defaultChecked={view.passkeys}
-      />
-    </>
   );
 }
 
@@ -220,6 +151,14 @@ function RemoveProviderDialog({
       operation={`site-oauth-provider-remove:${siteId}:${provider.provider}`}
       title={t("settings.signIn.providerRemove")}
       intro={<p>{t("settings.signIn.removeIntro")}</p>}
+      diff={[
+        {
+          label: t(`settings.signIn.providers.${provider.provider}`),
+          before: t("settings.signIn.providerOn"),
+          after: t("settings.signIn.providerOff"),
+        },
+      ]}
+      warn={t("settings.signIn.removeWarn", { provider: t(`settings.signIn.providers.${provider.provider}`) })}
       action={t("settings.signIn.providerRemove")}
       danger
       read={() => ({})}

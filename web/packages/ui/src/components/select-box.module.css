@@ -1,0 +1,20 @@
+/* A setting's choice as a select: the box of a number (NumberField) with the choice left aligned, as wide as its words. */
+.root {
+  composes: root from "./number-field.module.css";
+  width: auto;
+  min-width: 160px;
+  max-width: 100%;
+}
+
+.input {
+  composes: input from "./number-field.module.css";
+  font-variant-numeric: normal;
+  text-align: left;
+  cursor: pointer;
+}
+
+@media (max-width: 599px) {
+  .root {
+    width: 100%;
+  }
+}

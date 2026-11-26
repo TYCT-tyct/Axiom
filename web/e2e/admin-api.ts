@@ -2,9 +2,11 @@ import type { Page } from "@playwright/test";
 import { catalogHandlers } from "./admin-catalog.ts";
 import { type AdminState, emptyState, type Schemas, usualState, worstState } from "./admin-data.ts";
 import { financeHandlers, startFinance } from "./admin-finance-api.ts";
+import { monitorHandlers, overviewExtras, ranked } from "./admin-monitor-api.ts";
 import { operationsHandlers, startOperations } from "./admin-operations.ts";
 import { opsControlHandlers, startOpsControl } from "./admin-ops-control-api.ts";
 import { listPaidBatches } from "./admin-paid-batches-api.ts";
+import { pluginHandlers, startPlugins } from "./admin-plugins-api.ts";
 import { policyHandlers, startPolicies } from "./admin-policies-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
@@ -85,13 +87,17 @@ function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
   const site = query.get("site_id");
   const model = query.get("model");
   const status = query.get("status");
+  const plugin = query.get("plugin");
+  // A filter given narrows to the calls it holds true of.
+  const when = (value: string | null, holds: (value: string) => boolean) => !value || holds(value);
   const calls = state.calls.filter(
     (call) =>
-      (!account || call.account_id === account) &&
-      (!request || call.id === request) &&
-      (!site || site === state.siteId) &&
-      (!model || call.model === model) &&
-      (!status || (status === "error" ? Boolean(call.error_kind) : !call.error_kind)),
+      when(plugin, (name) => Boolean(call.plugins?.some((run) => run.plugin === name))) &&
+      when(account, (id) => call.account_id === id) &&
+      when(request, (id) => call.id === id) &&
+      when(site, (id) => id === state.siteId) &&
+      when(model, (name) => call.model === name) &&
+      when(status, (result) => (result === "error" ? Boolean(call.error_kind) : !call.error_kind)),
   );
   const page = paged(calls, query, ["since", "until"]);
   if (!page) {
@@ -128,19 +134,7 @@ const registration: Schemas["RegistrationPolicy"] = {
 // cash comes back in two currencies, one of them negative, as a site with refunds in another currency would see.
 function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "get">) {
   const revenue = state.calls.reduce((sum, call) => sum + BigInt(call.price?.amount ?? 0), 0n);
-  const rank = (key: (call: Schemas["AdminCallSummary"]) => string | undefined) =>
-    [
-      ...state.calls
-        .reduce((groups, call) => {
-          const name = key(call) ?? "";
-          const group = groups.get(name) ?? { calls: 0, errors: 0 };
-          groups.set(name, { calls: group.calls + 1, errors: group.errors + (call.error_kind ? 1 : 0) });
-          return groups;
-        }, new Map<string, { calls: number; errors: number }>())
-        .entries(),
-    ]
-      .sort((a, b) => b[1].calls - a[1].calls)
-      .slice(0, 10);
+  const rank = ranked(state);
   const cost = (revenue * 6n) / 10n;
   const errors = state.calls.filter((call) => call.error_kind).length;
   const month = (query.get("until") ?? new Date().toISOString()).slice(0, 7);
@@ -180,7 +174,16 @@ function getOverview({ query, state }: Ctx<"/api/admin/v1/reports/overview", "ge
       account_id: account_id as Schemas["AccountId"],
       ...n,
     })),
-    top_models: rank((call) => call.model).map(([model, n]) => ({ model, ...n })),
+    top_models: rank((call) => call.model).map(([model, n]) => ({
+      model,
+      ...n,
+      tokens: n.calls * 1000,
+      revenue: {
+        amount: String((revenue * BigInt(n.calls)) / BigInt(Math.max(1, state.calls.length))),
+        currency: "USD",
+      },
+    })),
+    ...overviewExtras(state, query, revenue, cost, errors),
     targets,
   });
 }
@@ -442,8 +445,12 @@ const handlers: Handler<AdminState>[] = [
     }),
   ),
   route("get", `${base}/sites/{site_id}/registration`, reads("sites.manage"), ({ params, state }) =>
-    ofSite(state, params.site_id, { policy: registration, defaults: registration }),
+    ofSite(state, params.site_id, { policy: state.registration ?? registration, defaults: registration }),
   ),
+  route("put", `${base}/sites/{site_id}/registration`, changes("sites.manage"), ({ body, params, state }) => {
+    if (params.site_id === state.siteId) state.registration = body.policy;
+    return ofSite(state, params.site_id, { policy: body.policy, defaults: registration });
+  }),
   route("get", `${base}/sites/{site_id}/sign-in`, reads("sites.manage"), ({ params, state }) =>
     ofSite(state, params.site_id, {
       login_domain: "login.example.com",
@@ -508,6 +515,8 @@ const handlers: Handler<AdminState>[] = [
   ...operationsHandlers,
   ...opsControlHandlers,
   ...policyHandlers,
+  ...pluginHandlers,
+  ...monitorHandlers,
 ];
 
 // mockAdmin answers the admin's API for a page. The returned state is live: a test reads what the page did to it
@@ -522,5 +531,6 @@ export async function mockAdmin(page: Page, data: MockData = "usual", over: Part
   startOpsControl(state, data);
   startSiteExtras(state);
   startPolicies(state, data);
+  startPlugins(state);
   return mockApi(page, base, handlers, state);
 }

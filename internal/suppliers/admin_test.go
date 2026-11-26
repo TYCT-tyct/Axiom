@@ -223,7 +223,7 @@ func TestConnectSealsTheLogin(t *testing.T) {
 	made := a.connect("https://api.example.com", "ops@example.com")
 	same(t, "the supplier", Supplier{
 		ID: made.ID, Name: "Example", Kind: "token", Origin: "https://api.example.com", UpstreamAccount: "ops@example.com",
-		NativeUnit: "usd", SettlementCurrency: "USD", Status: Connecting,
+		NativeUnit: "usd", SettlementCurrency: "USD", Status: Connecting, Mode: "relay",
 	}, made)
 	opened, err := a.keys.Open(a.sealedLogin(made.ID), loginAt(made.ID))
 	if err != nil {

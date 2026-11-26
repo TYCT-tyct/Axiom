@@ -121,18 +121,29 @@ func (m *manager) keysPage(ctx context.Context, p *keysProgress) (adapter.Page[a
 		if p.Page > maxPages {
 			return nil, 0, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
 		}
-		items, total, err := m.keyPage(ctx, p.Page)
+		tokens, total, err := m.keyPage(ctx, p.Page)
+		items := make([]adapter.KeyState, len(tokens))
+		for i, t := range tokens {
+			items[i] = t.state
+		}
 		return items, total, len(items) < keyPageSize, err
 	}, listed, func(k listedKey) adapter.KeyRef { return k.Ref }, listedKey.state)
 }
 
-func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, int, error) {
+// token is one key of the listing: its state, and its text as the listing masks it (maskKey).
+type token struct {
+	state  adapter.KeyState
+	masked string
+}
+
+func (m *manager) keyPage(ctx context.Context, page int) ([]token, int, error) {
 	var list struct {
 		Data *struct {
 			Total *int `json:"total"`
 			Items []struct {
 				ID            int64   `json:"id"`
 				Name          string  `json:"name"`
+				Key           string  `json:"key"`
 				Status        int     `json:"status"`
 				Group         string  `json:"group"`
 				Expires       *int64  `json:"expired_time"`
@@ -148,7 +159,7 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 	if list.Data == nil || list.Data.Total == nil || list.Data.Items == nil {
 		return nil, 0, errMissing("list of keys or how many there are")
 	}
-	keys := make([]adapter.KeyState, 0, len(list.Data.Items))
+	keys := make([]token, 0, len(list.Data.Items))
 	for _, item := range list.Data.Items {
 		status, ok := keyStatus[item.Status]
 		if !ok || item.ID <= 0 {
@@ -158,9 +169,9 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]adapter.KeyState, in
 		if err != nil {
 			return nil, 0, err
 		}
-		keys = append(keys, adapter.KeyState{
+		keys = append(keys, token{state: adapter.KeyState{
 			Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Name: item.Name, Status: status, Policy: policy,
-		})
+		}, masked: item.Key})
 	}
 	return keys, *list.Data.Total, nil
 }

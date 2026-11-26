@@ -105,3 +105,46 @@ func (q *Queries) ListNamesOfModel(ctx context.Context, db DBTX, modelID uuid.UU
 	}
 	return items, nil
 }
+
+const recognizeNorms = `-- name: RecognizeNorms :many
+SELECT n.norm, m.id, m.slug, m.status, m.version_basis, m.family
+FROM catalog.name n JOIN catalog.model m ON m.id = n.model_id
+WHERE n.norm = ANY($1::text[])
+`
+
+type RecognizeNormsRow struct {
+	Norm         string
+	ID           uuid.UUID
+	Slug         string
+	Status       string
+	VersionBasis string
+	Family       *string
+}
+
+// The names among norms, of every model drafts included, with what a pile of a supplier's names is sorted by.
+func (q *Queries) RecognizeNorms(ctx context.Context, db DBTX, norms []string) ([]RecognizeNormsRow, error) {
+	rows, err := db.Query(ctx, recognizeNorms, norms)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecognizeNormsRow
+	for rows.Next() {
+		var i RecognizeNormsRow
+		if err := rows.Scan(
+			&i.Norm,
+			&i.ID,
+			&i.Slug,
+			&i.Status,
+			&i.VersionBasis,
+			&i.Family,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

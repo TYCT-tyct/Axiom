@@ -22,6 +22,11 @@
   margin-left: auto;
 }
 
+/* After the count, which already takes the row's free space, the clear button sits next to it. */
+.afterCount {
+  margin-left: 0;
+}
+
 @media (max-width: 767px) {
   .search {
     flex-basis: 100%;

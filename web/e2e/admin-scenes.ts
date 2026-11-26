@@ -41,30 +41,68 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
+// A list whose row is opened into its drawer, by the button its first cell holds, then the buttons in the drawer (a
+// button's name may be followed by what it names, as a grant's is by its role). row counts the header as 0.
+const inDrawer = (name: string, path: string, row: RegExp | number, ...buttons: string[]): Scene =>
+  scene(
+    name,
+    (p) => goto(p, path),
+    async (p) => {
+      const line = typeof row === "number" ? p.getByRole("row").nth(row) : p.getByRole("row", { name: row });
+      await line.locator("td").first().getByRole("button").click();
+      for (const button of buttons) {
+        await p
+          .getByRole("button", { name: new RegExp(words(button).source.slice(2, -2)) })
+          .first()
+          .click();
+      }
+    },
+  );
+
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
 // on), so the suspended page and each of its two dialogs are in every width, scheme and language. The dialogs that
 // change presets open with it off: while it is on their buttons are disabled.
-async function routingPage(p: Page, suspended: boolean) {
+async function routingPage(p: Page, suspended: boolean, tab = "") {
   await p.route("**/api/admin/v1/settings/routing-suspension", (route) =>
     route.request().method() === "GET"
       ? route.fulfill({ json: suspended ? { suspended, since: "2026-11-01T08:00:00Z" } : { suspended } })
       : route.fallback(),
   );
-  await goto(p, "routing-presets");
+  await goto(p, `routing${tab}`);
 }
 
 const routingSuspended: Scene = { name: "routing-suspended", signedIn: true, open: (p) => routingPage(p, true) };
-const routingSwitch = (name: string, suspended: boolean, button: string) =>
+const routingSwitch = (name: string, suspended: boolean, tab: string, ...buttons: string[]) =>
   scene(
     name,
-    (p) => routingPage(p, suspended),
-    (p) => press(p, button),
+    (p) => routingPage(p, suspended, tab),
+    async (p) => {
+      for (const button of buttons) {
+        await press(p, button);
+      }
+    },
+  );
+
+// The second preset's drawer (the first with a name that changes), and the buttons pressed in it.
+const routingPreset = (name: string, ...buttons: string[]) =>
+  scene(
+    name,
+    (p) => routingPage(p, false),
+    async (p) => {
+      await p
+        .getByRole("button", { name: words("routingPresets.open") })
+        .nth(1)
+        .click();
+      for (const button of buttons) {
+        await press(p, button);
+      }
+    },
   );
 
 const audienceScenes = (["tier", "account"] as const).map((kind) =>
   scene(
     `rule-${kind}`,
-    (p) => goto(p, "pricing"),
+    (p) => goto(p, "pricing?tab=rules"),
     async (p) => {
       await press(p, "pricing.rule.new");
       await p.getByRole("dialog").locator("select[name=audience_kind]").selectOption(kind);
@@ -76,21 +114,35 @@ const pricingPreview: Scene = {
   name: "pricing-preview",
   signedIn: true,
   open: async (p) => {
-    await goto(p, "pricing");
+    await goto(p, "pricing?tab=rules");
     await press(p, "pricing.preview.run");
     await p.getByRole("table", { name: words("pricing.preview.title") }).waitFor();
   },
 };
 
-const supplier = (n: number) => `suppliers/${uuid(2, n)}`;
-const model = (n: number) => `models/${uuid(5, n)}`;
+const supplier = (n: number, tab?: string) => `suppliers/${uuid(2, n)}${tab ? `?tab=${tab}` : ""}`;
+
+// A channel's endpoints are its pile of models on sale, folded on the models tab until opened.
+const openListed = (p: Page) => p.getByText(words("upstream.models.listed"), { exact: true }).click();
+
+// A dialog opened from a channel's endpoints, after the pile that holds them is opened.
+const endpointDialog = (name: string, n: number, button: string) =>
+  scene(
+    name,
+    (p) => goto(p, supplier(n, "models")),
+    async (p) => {
+      await openListed(p);
+      await press(p, button);
+    },
+  );
+const model = (n: number) => `models?model=${uuid(5, n)}`;
 
 // The connect dialog's second step: an address the probe recognises.
 const connectDetails = scene(
   "supplier-connect-details",
   (p) => goto(p, "suppliers"),
   async (p) => {
-    await press(p, "suppliers.connect.open");
+    await press(p, "upstream.add");
     await p.getByRole("dialog").locator("input[name=origin]").fill("https://api.example.cn");
     await p.getByRole("dialog").locator("button[type=submit]").click();
     await p.getByRole("dialog").locator("input[name=upstream_account]").waitFor();
@@ -101,8 +153,9 @@ const connectDetails = scene(
 // with the worst it passes it under a 200-character upstream name (admin-data.ts, admin-supply.ts).
 const testResult = scene(
   "supplier-test-result",
-  (p) => goto(p, supplier(1)),
+  (p) => goto(p, supplier(1, "models")),
   async (p) => {
+    await openListed(p);
     await press(p, "suppliers.test.title");
     const form = p.getByRole("dialog");
     await form.getByLabel(words("change.reason")).fill("check the endpoint after the key rotation");
@@ -156,46 +209,70 @@ const scenes: Scene[] = [
   view("orders", "orders"),
   view("account", `accounts/${acct(1)}`),
   view("calls", "calls"),
-  view("call", `calls/${uuid(11, 1)}`),
+  inDrawer("call", "calls", 1),
   view("audit", "audit"),
-  view("audit-entry", `audit/${uuid(12, 1)}`),
+  inDrawer("audit-entry", "audit", 1),
+  view("plugins", "plugins"),
+  view("plugins-web", "plugins/web"),
+  view("plugins-file", "plugins/file"),
+  view("me", "me"),
   view("suppliers", "suppliers"),
   view("supplier", supplier(1)),
   view("supplier-setup", supplier(2)),
   view("supplier-attention", supplier(3)),
-  view("mappings", "mappings"),
+  view("upstream-models", "suppliers?tab=models"),
+  view("upstream-inbox", "suppliers?tab=inbox"),
+  view("upstream-keys", "suppliers?tab=keys"),
+  view("supplier-models", supplier(1, "models")),
+  view("supplier-keys", supplier(1, "keys")),
+  view("supplier-sync", supplier(1, "sync")),
+  view("supplier-settings", supplier(1, "settings")),
   view("models", "models"),
   view("model", model(1)),
   view("model-draft", model(3)),
   view("pricing", "pricing"),
-  dialog("price-policy", "pricing", "pricePolicy.edit"),
-  view("exchange-rates", "exchange-rates"),
-  dialog("exchange-rate-history", "exchange-rates", "exchangeRates.history"),
-  view("payment-discrepancies", "payment-discrepancies"),
-  view("payment-discrepancy", `payment-discrepancies/${uuid(33, 1)}`),
-  dialog("platform-grant", `accounts/${acct(1)}`, "platformGrants.revoke"),
+  view("pricing-rules", "pricing?tab=rules"),
+  view("pricing-policy", "pricing?tab=policy"),
+  dialog("price-policy", "pricing?tab=policy", "pricePolicy.edit"),
+  view("exchange-rates", "pricing?tab=rates"),
+  dialog("exchange-rate-history", "pricing?tab=rates", "exchangeRates.history"),
+  view("payment-discrepancies", "orders/discrepancies"),
+  inDrawer("payment-discrepancy", "orders/discrepancies", 1),
+  inDrawer("platform-grant", "users/roles", 1, "platformGrants.revoke"),
+  view("subscriptions", "subscriptions"),
+  inDrawer("subscription", "subscriptions", 1),
   pricingPreview,
   ...audienceScenes,
-  view("subscription-plans", "subscription-plans"),
-  dialog("subscription-plan-new", "subscription-plans", "subscriptions.new"),
-  dialog("subscription-plan-edit", "subscription-plans", "subscriptions.editNamed"),
-  view("settings", "settings"),
+  view("subscription-plans", "subscriptions/plans"),
+  dialog("subscription-plan-new", "subscriptions/plans", "subscriptions.new"),
+  dialog("subscription-plan-edit", "subscriptions/plans", "subscriptions.editNamed"),
+  view("settings", "settings/site"),
+  view("settings-sign-in", "settings/sign-in"),
+  view("settings-registration", "settings/registration"),
+  view("settings-sessions", "settings/sessions"),
+  view("settings-limits", "settings/limits"),
+  view("settings-payments", "settings/payments"),
+  view("settings-mail", "settings/mail"),
+  view("settings-gateway", "settings/gateway"),
+  view("monitor", "monitor"),
   view("alert-events", "alert-events"),
   view("alert-configuration", "alert-configuration"),
   view("announcements", "announcements"),
   view("legal-documents", "legal-documents"),
-  view("retention", "retention"),
   rateLimit,
-  view("routing-presets", "routing-presets"),
-  routingSwitch("routing-preset-create", false, "routingPresets.create"),
-  routingSwitch("routing-preset-edit", false, "routingPresets.editNamed"),
-  routingSwitch("routing-default", false, "routingPresets.defaults.edit"),
-  // The first preset the page may disable is a default and has keys bound (admin-routing.ts), so the dialog says both.
-  routingSwitch("routing-preset-disable", false, "routingPresets.disableNamed"),
-  dialog("routing-limits", "routing-presets", "routingPresets.limits.edit"),
+  view("routing", "routing"),
+  view("routing-source-classes", "routing?tab=sources"),
+  routingSwitch("routing-preset-create", false, "", "routingPresets.createTitle.platform"),
+  // The first preset with a name to open is the system's; the second is a default with keys bound (admin-routing.ts), so
+  // its drawer says the order and its disable dialog says both.
+  routingPreset("routing-preset"),
+  routingPreset("routing-preset-edit", "routingPresets.order.rules"),
+  routingSwitch("routing-default", false, "?tab=defaults", "routingPresets.defaults.edit"),
+  routingPreset("routing-preset-disable", "routingPresets.disable"),
+  dialog("routing-limits", "routing?tab=defaults", "routingPresets.limits.edit"),
   routingSuspended,
-  routingSwitch("routing-suspend", false, "routingPresets.suspension.suspend"),
-  routingSwitch("routing-resume", true, "routingPresets.suspension.resume"),
+  routingSwitch("routing-suspend", false, "?tab=defaults", "routingPresets.suspension.suspend"),
+  routingSwitch("routing-resume", true, "?tab=defaults", "routingPresets.suspension.resume"),
   dialog("credit", `accounts/${acct(1)}`, "users.credit.open"),
   view("approvals", "approvals"),
   // The first approval is a credit grant with its caps, the third a sale price with its envelope (admin-operations.ts).
@@ -203,51 +280,51 @@ const scenes: Scene[] = [
   view("approval-price", `approvals/${uuid(17, 3)}`),
   dialog("approval-approve", `approvals/${uuid(17, 1)}`, "approvals.approve"),
   dialog("approval-reject", `approvals/${uuid(17, 1)}`, "approvals.reject"),
-  view("operations-credentials", "operations-credentials"),
-  dialog("operations-credential-new", "operations-credentials", "operations.credentials.new"),
-  dialog("operations-credential-rotate", "operations-credentials", "operations.credentials.rotateNamed"),
-  dialog("operations-credential-revoke", "operations-credentials", "operations.credentials.revokeNamed"),
-  view("operations-limits", "operations-limits"),
-  dialog("operations-cap-edit", "operations-limits", "operations.limits.cap.editNamed"),
-  dialog("operations-agent-limits", "operations-limits", "operations.limits.agent.edit"),
-  dialog("operations-envelope-edit", "operations-limits", "operations.limits.envelope.editNamed"),
-  dialog("operations-agent-stop", "operations-limits", "operations.limits.stop.open"),
-  dialog("refund-approve", "orders", "orders.refund.approve"),
-  dialog("refund-reject", "orders", "orders.refund.reject"),
+  view("settings-agent", "settings/agent"),
+  dialog("operations-credential-new", "settings/agent", "operations.credentials.new"),
+  dialog("operations-credential-rotate", "settings/agent", "operations.credentials.rotateNamed"),
+  dialog("operations-credential-revoke", "settings/agent", "operations.credentials.revokeNamed"),
+  dialog("operations-cap-edit", "settings/agent", "operations.limits.cap.editNamed"),
+  dialog("operations-agent-stop", "settings/agent", "operations.limits.stop.open"),
+  inDrawer("refund-approve", "orders/refunds", 1, "orders.refund.approve"),
+  inDrawer("refund-reject", "orders/refunds", 1, "orders.refund.reject"),
   dialog("account-suspend", `accounts/${acct(1)}`, "users.account.suspend"),
   dialog("account-sign-in", `accounts/${acct(1)}`, "users.account.disableSignIn"),
   dialog("account-tier", `accounts/${acct(1)}`, "users.account.changeTier"),
   dialog("account-subscription-grant", `accounts/${acct(1)}`, "subscriptions.account.grant"),
-  dialog("account-subscription-refund", `accounts/${acct(1)}`, "subscriptions.account.refundRequest"),
-  dialog("account-subscription-refund-approve", `accounts/${acct(1)}`, "subscriptions.account.refundApprove"),
-  dialog("account-workspace-limit", `accounts/${acct(1)}`, "settings.workspaceLimit.edit"),
-  dialog("supplier-connect", "suppliers", "suppliers.connect.open"),
+  inDrawer("account-subscription-refund", "subscriptions", 1, "subscriptions.account.refundRequest"),
+  inDrawer("account-subscription-refund-approve", "subscriptions", 1, "subscriptions.account.refundApprove"),
+  scene(
+    "account-workspace-limit",
+    (p) => goto(p, `accounts/${acct(1)}`),
+    (p) =>
+      p
+        .getByRole("button", { name: words("users.account.editLimit") })
+        .nth(2)
+        .click(),
+  ),
+  dialog("supplier-connect", "suppliers", "upstream.add"),
   connectDetails,
-  dialog("supplier-unit", supplier(2), "suppliers.unit.open"),
-  dialog("supplier-login", supplier(1), "suppliers.login.open"),
-  dialog("supplier-remove", supplier(4), "suppliers.remove.open"),
-  dialog("supplier-pause", supplier(2), "suppliers.status.paused.action"),
-  dialog("supplier-group", supplier(1), "suppliers.group.unselect.action"),
-  dialog("supplier-bind", supplier(1), "suppliers.bind.action"),
-  dialog("supplier-credential-limits", supplier(1), "suppliers.credentialLimits.title"),
-  dialog("supplier-endpoint-disable", supplier(1), "suppliers.endpointEnabled.disable.title"),
-  dialog("supplier-test", supplier(1), "suppliers.test.title"),
+  dialog("supplier-unit", supplier(2, "settings"), "suppliers.unit.open"),
+  dialog("supplier-login", supplier(1, "settings"), "suppliers.login.open"),
+  dialog("supplier-remove", supplier(4, "settings"), "suppliers.remove.open"),
+  dialog("supplier-pause", supplier(2), "upstream.detail.pause"),
+  dialog("supplier-bind", supplier(1, "keys"), "suppliers.bind.action"),
+  dialog("supplier-test-all", supplier(1, "keys"), "upstream.keys.testAll"),
+  endpointDialog("supplier-endpoint-disable", 1, "suppliers.endpointEnabled.disable.title"),
+  endpointDialog("supplier-test", 1, "suppliers.test.title"),
   testResult,
-  dialog("mapping", "mappings", "mappings.map"),
+  dialog("mapping", "suppliers?tab=inbox", "upstream.inbox.item.unknown_model.act"),
   dialog("model-draft-new", "models", "models.draft.open"),
-  dialog("author", "models", "models.authors.add"),
+  dialog("author", "models?tab=authors", "models.authors.add"),
   dialog("model-spec", model(1), "models.spec.edit"),
   dialog("model-name", model(1), "models.names.add"),
   dialog("model-list", model(3), "models.status.listed.action"),
   dialog("model-retire", model(1), "models.status.retired.action"),
   dialog("price-publish", model(1), "models.prices.publish"),
   dialog("price-source", model(1), "models.prices.changeSource"),
-  dialog("rule-new", "pricing", "pricing.rule.new"),
+  dialog("rule-new", "pricing?tab=rules", "pricing.rule.new"),
   dialog("targets", "", "overview.targets.edit"),
-  dialog("settings-edit", "settings", "settings.edit"),
-  dialog("site-brand", "settings", "settings.brand.edit"),
-  dialog("site-workspace-limit", "settings", "settings.workspaceLimit.edit"),
-  dialog("site-login-limits", "settings", "settings.loginLimits.edit"),
   unsettled(
     "change-unknown",
     `accounts/${acct(1)}`,

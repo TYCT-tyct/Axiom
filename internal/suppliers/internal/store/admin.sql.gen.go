@@ -89,7 +89,8 @@ func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uu
 }
 
 const getCredentialOf = `-- name: GetCredentialOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = $1 AND id = $2
 `
 
@@ -100,6 +101,7 @@ type GetCredentialOfParams struct {
 
 type GetCredentialOfRow struct {
 	ID                uuid.UUID
+	SupplierID        uuid.UUID
 	SupplierGroupID   uuid.UUID
 	UpstreamKeyRef    string
 	Status            string
@@ -107,6 +109,13 @@ type GetCredentialOfRow struct {
 	ExpiresAt         *time.Time
 	MaxConcurrency    int32
 	RequestsPerMinute *int32
+	Hint              *string
+	Source            *string
+	CheckedAt         *time.Time
+	CheckOutcome      *string
+	CheckCause        *string
+	CheckStatus       *int32
+	Region            *string
 }
 
 // One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
@@ -121,6 +130,7 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 		var i GetCredentialOfRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.SupplierID,
 			&i.SupplierGroupID,
 			&i.UpstreamKeyRef,
 			&i.Status,
@@ -128,6 +138,13 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 			&i.ExpiresAt,
 			&i.MaxConcurrency,
 			&i.RequestsPerMinute,
+			&i.Hint,
+			&i.Source,
+			&i.CheckedAt,
+			&i.CheckOutcome,
+			&i.CheckCause,
+			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -263,7 +280,8 @@ const getSupplierView = `-- name: GetSupplierView :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s WHERE s.id = $1 AND ($2::boolean OR s.owner_scope = 'platform')
 `
 
@@ -288,6 +306,9 @@ type GetSupplierViewRow struct {
 	BalanceObservedAt   *time.Time
 	LowBalanceThreshold string
 	UnitValue           string
+	Mode                string
+	ApiFormat           *string
+	CloudAccount        []byte
 }
 
 func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierViewParams) ([]GetSupplierViewRow, error) {
@@ -315,6 +336,9 @@ func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierV
 			&i.BalanceObservedAt,
 			&i.LowBalanceThreshold,
 			&i.UnitValue,
+			&i.Mode,
+			&i.ApiFormat,
+			&i.CloudAccount,
 		); err != nil {
 			return nil, err
 		}
@@ -382,8 +406,8 @@ func (q *Queries) InsertAliasRevision(ctx context.Context, db DBTX, arg InsertAl
 }
 
 const insertBindingCredential = `-- name: InsertBindingCredential :exec
-INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency)
-VALUES ($1, $2, $3, $4, 'binding', $5)
+INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency, source)
+VALUES ($1, $2, $3, $4, 'binding', $5, 'bound')
 `
 
 type InsertBindingCredentialParams struct {
@@ -428,12 +452,14 @@ func (q *Queries) InsertUnitValue(ctx context.Context, db DBTX, arg InsertUnitVa
 }
 
 const listCredentialsOf = `-- name: ListCredentialsOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = $1 ORDER BY id
 `
 
 type ListCredentialsOfRow struct {
 	ID                uuid.UUID
+	SupplierID        uuid.UUID
 	SupplierGroupID   uuid.UUID
 	UpstreamKeyRef    string
 	Status            string
@@ -441,6 +467,13 @@ type ListCredentialsOfRow struct {
 	ExpiresAt         *time.Time
 	MaxConcurrency    int32
 	RequestsPerMinute *int32
+	Hint              *string
+	Source            *string
+	CheckedAt         *time.Time
+	CheckOutcome      *string
+	CheckCause        *string
+	CheckStatus       *int32
+	Region            *string
 }
 
 func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListCredentialsOfRow, error) {
@@ -454,6 +487,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 		var i ListCredentialsOfRow
 		if err := rows.Scan(
 			&i.ID,
+			&i.SupplierID,
 			&i.SupplierGroupID,
 			&i.UpstreamKeyRef,
 			&i.Status,
@@ -461,6 +495,13 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 			&i.ExpiresAt,
 			&i.MaxConcurrency,
 			&i.RequestsPerMinute,
+			&i.Hint,
+			&i.Source,
+			&i.CheckedAt,
+			&i.CheckOutcome,
+			&i.CheckCause,
+			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -587,7 +628,8 @@ const listSuppliersPage = `-- name: ListSuppliersPage :many
 SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detected_version, s.native_unit,
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
-    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value
+    coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s
 WHERE ($1::boolean OR s.owner_scope = 'platform')
     AND ($2::text IS NULL OR s.status = $2)
@@ -619,6 +661,9 @@ type ListSuppliersPageRow struct {
 	BalanceObservedAt   *time.Time
 	LowBalanceThreshold string
 	UnitValue           string
+	Mode                string
+	ApiFormat           *string
+	CloudAccount        []byte
 }
 
 // What the admin API reads and writes of suppliers, in the platform scope (internal/suppliers/README.md「管理接口」).
@@ -656,6 +701,9 @@ func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppli
 			&i.BalanceObservedAt,
 			&i.LowBalanceThreshold,
 			&i.UnitValue,
+			&i.Mode,
+			&i.ApiFormat,
+			&i.CloudAccount,
 		); err != nil {
 			return nil, err
 		}

@@ -12,7 +12,7 @@ import (
 )
 
 const getModel = `-- name: GetModel :one
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE id = $1
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model WHERE id = $1
 `
 
 func (q *Queries) GetModel(ctx context.Context, db DBTX, id uuid.UUID) (CatalogModel, error) {
@@ -27,14 +27,15 @@ func (q *Queries) GetModel(ctx context.Context, db DBTX, id uuid.UUID) (CatalogM
 		&i.PriceSource,
 		&i.Spec,
 		&i.Rev,
+		&i.Family,
 	)
 	return i, err
 }
 
 const insertModel = `-- name: InsertModel :one
-INSERT INTO catalog.model (author, slug, version_basis, price_source, spec)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, author, slug, status, version_basis, price_source, spec, rev
+INSERT INTO catalog.model (author, slug, version_basis, price_source, spec, family)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, author, slug, status, version_basis, price_source, spec, rev, family
 `
 
 type InsertModelParams struct {
@@ -43,6 +44,7 @@ type InsertModelParams struct {
 	VersionBasis string
 	PriceSource  string
 	Spec         []byte
+	Family       *string
 }
 
 func (q *Queries) InsertModel(ctx context.Context, db DBTX, arg InsertModelParams) (CatalogModel, error) {
@@ -52,6 +54,7 @@ func (q *Queries) InsertModel(ctx context.Context, db DBTX, arg InsertModelParam
 		arg.VersionBasis,
 		arg.PriceSource,
 		arg.Spec,
+		arg.Family,
 	)
 	var i CatalogModel
 	err := row.Scan(
@@ -63,12 +66,13 @@ func (q *Queries) InsertModel(ctx context.Context, db DBTX, arg InsertModelParam
 		&i.PriceSource,
 		&i.Spec,
 		&i.Rev,
+		&i.Family,
 	)
 	return i, err
 }
 
 const listModelsForSnapshot = `-- name: ListModelsForSnapshot :many
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE status IN ('listed', 'retired')
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model WHERE status IN ('listed', 'retired')
 `
 
 func (q *Queries) ListModelsForSnapshot(ctx context.Context, db DBTX) ([]CatalogModel, error) {
@@ -89,6 +93,7 @@ func (q *Queries) ListModelsForSnapshot(ctx context.Context, db DBTX) ([]Catalog
 			&i.PriceSource,
 			&i.Spec,
 			&i.Rev,
+			&i.Family,
 		); err != nil {
 			return nil, err
 		}
@@ -101,7 +106,7 @@ func (q *Queries) ListModelsForSnapshot(ctx context.Context, db DBTX) ([]Catalog
 }
 
 const listModelsForSync = `-- name: ListModelsForSync :many
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE status IN ('draft', 'listed') AND price_source = $1 ORDER BY id
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model WHERE status IN ('draft', 'listed') AND price_source = $1 ORDER BY id
 `
 
 // A dataset sync follows the models that take their prices from it, drafts too: a draft's first price is how it gets listed.
@@ -123,6 +128,7 @@ func (q *Queries) ListModelsForSync(ctx context.Context, db DBTX, priceSource st
 			&i.PriceSource,
 			&i.Spec,
 			&i.Rev,
+			&i.Family,
 		); err != nil {
 			return nil, err
 		}
@@ -135,7 +141,7 @@ func (q *Queries) ListModelsForSync(ctx context.Context, db DBTX, priceSource st
 }
 
 const listModelsOfAuthors = `-- name: ListModelsOfAuthors :many
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE author = ANY($1::text[]) AND status <> 'retired' ORDER BY slug
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model WHERE author = ANY($1::text[]) AND status <> 'retired' ORDER BY slug
 `
 
 func (q *Queries) ListModelsOfAuthors(ctx context.Context, db DBTX, authors []string) ([]CatalogModel, error) {
@@ -156,6 +162,7 @@ func (q *Queries) ListModelsOfAuthors(ctx context.Context, db DBTX, authors []st
 			&i.PriceSource,
 			&i.Spec,
 			&i.Rev,
+			&i.Family,
 		); err != nil {
 			return nil, err
 		}
@@ -168,7 +175,7 @@ func (q *Queries) ListModelsOfAuthors(ctx context.Context, db DBTX, authors []st
 }
 
 const lockModel = `-- name: LockModel :one
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model WHERE id = $1 FOR UPDATE
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model WHERE id = $1 FOR UPDATE
 `
 
 // Every change to a model starts by locking its row, so two operations on one model take turns and the second sees
@@ -185,8 +192,59 @@ func (q *Queries) LockModel(ctx context.Context, db DBTX, id uuid.UUID) (Catalog
 		&i.PriceSource,
 		&i.Spec,
 		&i.Rev,
+		&i.Family,
 	)
 	return i, err
+}
+
+const modelsByID = `-- name: ModelsByID :many
+SELECT id, slug, status, family FROM catalog.model WHERE id = ANY($1::uuid[])
+`
+
+type ModelsByIDRow struct {
+	ID     uuid.UUID
+	Slug   string
+	Status string
+	Family *string
+}
+
+func (q *Queries) ModelsByID(ctx context.Context, db DBTX, ids []uuid.UUID) ([]ModelsByIDRow, error) {
+	rows, err := db.Query(ctx, modelsByID, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelsByIDRow
+	for rows.Next() {
+		var i ModelsByIDRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Status,
+			&i.Family,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setModelFamily = `-- name: SetModelFamily :exec
+UPDATE catalog.model SET family = $1, rev = rev + 1 WHERE id = $2
+`
+
+type SetModelFamilyParams struct {
+	Family *string
+	ID     uuid.UUID
+}
+
+func (q *Queries) SetModelFamily(ctx context.Context, db DBTX, arg SetModelFamilyParams) error {
+	_, err := db.Exec(ctx, setModelFamily, arg.Family, arg.ID)
+	return err
 }
 
 const updateModel = `-- name: UpdateModel :exec

@@ -4,3 +4,13 @@
   line-height: var(--lh12);
   overflow-wrap: anywhere;
 }
+
+.clip {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-wrap: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}

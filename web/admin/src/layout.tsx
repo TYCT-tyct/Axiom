@@ -1,148 +1,115 @@
 import "@axiom/boards/AxApp/regions.css";
 import { can, Gate, NewVersionNotice, SignOutError, useSession, useSignOut } from "@axiom/app";
 import { useWaiting } from "@axiom/app/tanstack";
-import WideNav from "@axiom/boards/AxApp/regions/AdminNav";
-import Wide from "@axiom/boards/AxApp/regions/AdminShell";
-import wideEn from "@axiom/boards/AxApp/regions/AdminShell.en";
-import wideZh from "@axiom/boards/AxApp/regions/AdminShell.zh";
-import PhoneMore from "@axiom/boards/AxAppPhone/regions/AdminMore";
-import Phone from "@axiom/boards/AxAppPhone/regions/AdminShell";
-import phoneEn from "@axiom/boards/AxAppPhone/regions/AdminShell.en";
-import phoneZh from "@axiom/boards/AxAppPhone/regions/AdminShell.zh";
-import PhoneTab from "@axiom/boards/AxAppPhone/regions/AdminTab";
-import { BoardMark, BoardShell, NavGroup, Stack, useKeptPage, usePreferences } from "@axiom/ui";
-import { Link, Outlet, useLocation, useMatchRoute } from "@tanstack/react-router";
 import {
-  type AnchorHTMLAttributes,
-  type KeyboardEvent,
-  type ReactNode,
-  type SyntheticEvent,
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-} from "react";
+  AdminShell,
+  type AdminShellText,
+  BoardShell,
+  CommandPalette,
+  type ShellEntry,
+  type ShellGroup,
+  type ShellLink,
+  searchKeys,
+} from "@axiom/ui";
+import { Link, Outlet, useLocation } from "@tanstack/react-router";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAdminBrand } from "./brand";
-import { nav, sections, sheetIcons, tabIcons } from "./nav";
+import { groups, type NavEntry, phoneTabs, settingsEntry, settingsGroups } from "./nav";
+import { usePaletteSections } from "./palette";
+import { useBell, usePending } from "./pending";
 
-// The admin wears the console's shell (packages/boards/manifest/admin-shell.ts) until it has a design of its own: the
-// AxApp board's bar and sidebar on wide windows and the AxAppPhone board's bar and tabs on phones, with the admin's
-// pages in the navigation. As in the console, the document scrolls rather than the board's fixed frame, the window's
-// width replaces the board's, and the admin's font stack the board's; the pages not ported yet bring their own padding.
-const departures = {
-  vars: "width: auto; font-family: var(--family-ui)",
-  appStyle: "position: relative; inset: auto; min-height: 100dvh",
-  barStyle: "position: sticky; top: 0; background: var(--page)",
-  mainStyle: "overflow: visible; flex: 1 0 auto",
-  pagesStyle: "padding: 0; max-width: none",
-  bodyStyle: "flex: 1 0 auto",
-  // 56px is the bar's height.
-  sidebarStyle: "position: sticky; top: 56px; height: calc(100dvh - 56px)",
-  panelStyle: "overflow: clip",
-  sheetStyle: "position: fixed",
-  // The command palette is not built; the bar keeps its place.
-  placeholder: "visibility: hidden",
-  monoStyle: "font-family: var(--family-mono)",
-};
-const frameStyle = "overflow: clip; min-height: 100dvh";
-// The board's state classes for the personal space, which is the level whose sidebar the admin's navigation replaces.
-const rootState = "lvP pg-none spP woP wa2 rw tx0 tm1 ap0 lf0 wsk0 nks0 cz0 ck0 ct1 den0 kp0 yrc0 pico0";
-
-// An entry the board draws without an address, given a button's role, is pressed with Enter or Space too.
-function press(event: KeyboardEvent) {
-  if (event.key !== "Enter" && event.key !== " ") return;
-  event.preventDefault();
-  (event.currentTarget as HTMLElement).click();
-}
-
-// The wide sidebar shows from 1024px; below it the board's tablet layout folds it, and below 820px the phone board
-// takes over. Only one board is in the DOM.
-function useWidth(query: string) {
-  return useSyncExternalStore(
-    (changed) => {
-      const list = matchMedia(query);
-      list.addEventListener("change", changed);
-      return () => list.removeEventListener("change", changed);
-    },
-    () => matchMedia(query).matches,
+// The router's link where the shell draws one. An address may carry a query (the bell's alert), which the router takes
+// apart. The shell marks the current page itself, so the router's own mark is only ever on an exact match.
+const RouterLink: ShellLink = ({ href, ...props }) => {
+  const url = new URL(href, window.location.origin);
+  return (
+    <Link
+      to={url.pathname}
+      search={url.search ? Object.fromEntries(url.searchParams) : undefined}
+      activeOptions={{ exact: true }}
+      {...props}
+    />
   );
-}
+};
 
-// The router's link where the board draws an <a>, which marks the current page with aria-current.
-function RouterLink({ href, ...props }: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  return <Link to={href} activeOptions={{ exact: href === "/" }} {...props} />;
-}
+// A page is under an entry when it is the entry's own route or below it; the dashboard only on its own.
+const under = (pathname: string, to: string) =>
+  to === "/" ? pathname === "/" : pathname === to || pathname.startsWith(`${to}/`);
 
-type Menu = "me" | "more";
+const owns = (entry: NavEntry, pathname: string) =>
+  under(pathname, entry.to) || Boolean(entry.also?.some((page) => under(pathname, page.to)));
 
-// The account menu and the phone's sheet of more pages, one open at a time and only on the page it was opened on. A
-// press outside it and its button, or Escape, closes it; Escape also gives focus back to its button.
-function useMenus() {
-  const pathname = useLocation({ select: (location) => location.pathname });
-  const [state, setState] = useState<{ menu: Menu; on: string }>();
-  const button = useRef<HTMLElement>(null);
-  const open = state?.on === pathname ? state.menu : undefined;
-  useEffect(() => {
-    if (!open) return;
-    const listening = new AbortController();
-    const options = { signal: listening.signal };
-    document.addEventListener(
-      "pointerdown",
-      ({ target }) => {
-        if (!(target as Element).closest('[data-shell="popover"], [aria-expanded]')) setState(undefined);
-      },
-      options,
-    );
-    document.addEventListener(
-      "keydown",
-      ({ key }) => {
-        if (key !== "Escape") return;
-        setState(undefined);
-        button.current?.focus();
-      },
-      options,
-    );
-    return () => listening.abort();
-  }, [open]);
-  const toggle = (menu: Menu) => (event: SyntheticEvent) => {
-    button.current = event.currentTarget as HTMLElement;
-    setState(open === menu ? undefined : { menu, on: pathname });
-  };
-  return {
-    pop_me: open === "me" ? "open" : "",
-    pop_more: open === "more" ? "open" : "",
-    meOpen: open === "me",
-    moreOpen: open === "more",
-    oMe: toggle("me"),
-    oMore: toggle("more"),
-  };
-}
-
-// The admin's pages the session may open, each with its label, its borrowed icon and whether it is open now.
-function usePages() {
+// The navigation the session may use, in the shell's terms: each entry's name, whether it is open, and its count.
+function useNavigation() {
   const { t } = useTranslation();
   const session = useSession();
-  const matchRoute = useMatchRoute();
-  return nav
-    .filter((page) => can(session, page.permission))
-    .map((page) => ({
-      ...page,
-      label: t(page.label),
-      current: Boolean(matchRoute({ to: page.to, fuzzy: page.to !== "/" })),
-    }));
+  const pathname = useLocation({ select: (location) => location.pathname });
+  const pending = usePending();
+  const entry = (item: NavEntry): ShellEntry => ({
+    href: item.to,
+    label: t(`shell.nav.${item.key}`),
+    icon: item.icon,
+    current: owns(item, pathname),
+    count: item.pending ? pending[item.pending] : undefined,
+  });
+  const visible = (list: readonly { label: string; entries: readonly NavEntry[] }[]) =>
+    list.flatMap((group): ShellGroup[] => {
+      const entries = group.entries.filter((item) => can(session, item.permission)).map(entry);
+      return entries.length ? [{ label: group.label, entries }] : [];
+    });
+  const main = visible(groups.map((group) => ({ ...group, label: t(`shell.groups.${group.key}`) })));
+  const settings = can(session, settingsEntry.permission)
+    ? {
+        entry: entry(settingsEntry),
+        groups: visible(settingsGroups.map((group) => ({ ...group, label: t(`shell.settingsGroups.${group.key}`) }))),
+      }
+    : undefined;
+  const all = groups.flatMap((group) => group.entries);
+  const tabs = phoneTabs
+    .flatMap((key) => all.filter((item) => item.key === key && can(session, item.permission)))
+    .slice(0, 4)
+    .map((item) => ({ ...entry(item), label: t(`shell.tabs.${item.key as (typeof phoneTabs)[number]}`) }));
+  return { pathname, main, settings, tabs };
 }
-type Page = ReturnType<typeof usePages>[number];
 
-// Which of the board's entries an entry region, which draws them all, shows: the one with the icon, or none.
-const only = (icons: readonly string[], shown?: string) =>
-  Object.fromEntries(icons.map((icon) => [`not_${icon}`, icon !== shown]));
-
-// What an entry region needs to show one page: its address, whether it is current, and the entry with its icon.
-function entry(page: Page, current: string, icons: readonly string[]) {
-  return { to: page.to, on: page.current ? current : "", not_more: true, ...only(icons, page.icon) };
+// The page the settings' 返回 goes back to: the last one outside the settings, or the first page.
+function useBack(pathname: string, inSettings: boolean, home: string) {
+  const back = useRef(home);
+  useEffect(() => {
+    if (!inSettings) back.current = pathname;
+  }, [pathname, inSettings]);
+  return inSettings ? back.current : pathname;
 }
-const wideIcons = [...tabIcons, ...sheetIcons];
+
+function useShellText(): AdminShellText {
+  const { t } = useTranslation();
+  return {
+    navigation: t("shell.navigation"),
+    settingsNavigation: t("shell.settingsNavigation"),
+    home: t("shell.home"),
+    search: t("shell.search"),
+    searchHint: t("shell.searchHint"),
+    alerts: t("shell.alerts"),
+    alertsWithCount: (count) => t("shell.alertsWithCount", { count }),
+    unresolved: t("shell.unresolved"),
+    noAlerts: t("shell.noAlerts"),
+    allAlerts: t("shell.allAlerts"),
+    alertRules: t("shell.alertRules"),
+    help: t("shell.help"),
+    shortcuts: t("shell.shortcuts"),
+    account: t("shell.account"),
+    myLogin: t("shell.myLogin"),
+    appearance: t("shell.appearance"),
+    themes: { system: t("shell.themes.system"), light: t("shell.themes.light"), dark: t("shell.themes.dark") },
+    signOut: t("shell.signOut"),
+    back: t("shell.back"),
+    more: t("shell.more"),
+    collapse: t("shell.collapse"),
+    expand: t("shell.expand"),
+    pending: (count) => t("shell.pending", { count }),
+  };
+}
 
 export function Layout() {
   const { t } = useTranslation();
@@ -160,186 +127,65 @@ export function Layout() {
         forbiddenHint={t("forbiddenHint")}
         waiting={waiting}
       >
-        <AdminShell signOut={() => signOut.isPending || signOut.mutate()}>
+        <Shell signOut={() => signOut.isPending || signOut.mutate()}>
           <Outlet />
-        </AdminShell>
+        </Shell>
       </BoardShell>
     </Gate>
   );
 }
 
-// The account menu: who is signed in, the language and theme switches, and signing out, as the board draws them.
-function useAccountValues(signOut: () => void) {
+function Shell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
+  const { t } = useTranslation();
   const session = useSession();
-  const preferences = usePreferences();
-  const theme = preferences.themes.indexOf(preferences.theme);
-  const email = session.user.email;
-  return {
-    rootC: `${rootState}${preferences.dark ? " thD" : ""}`,
-    meN: email.split("@")[0],
-    meE: email,
-    meI: email.slice(0, 1).toUpperCase(),
-    meC: 0,
-    go_prefs: preferences.other.choose,
-    languageTag: preferences.other.locale,
-    tsi: theme,
-    // The switch's buttons in the order of the themes: chosen, pressed with a click, and pressed for screen readers.
-    ...Object.fromEntries(
-      preferences.themes.flatMap((name, i) => [
-        [`tsg${i}`, i === theme ? "on" : ""],
-        [`th${i}`, () => preferences.chooseTheme(name)],
-        [`theme${name.charAt(0).toUpperCase()}${name.slice(1)}`, i === theme],
-      ]),
-    ),
-    fnOut: signOut,
-  };
-}
-
-// The wide sidebar folds below 1024px until the person unfolds it.
-function useSidebarValues() {
-  const { t } = useTranslation();
-  const wide = useWidth("(min-width: 1024px)");
-  const [folded, setFolded] = useState<boolean>();
-  const shut = folded ?? !wide;
-  return {
-    cold: shut ? "cold" : "",
-    tgCol: () => setFolded(!shut),
-    sidebarOpen: !shut,
-    colT: t(shut ? "shell.expand" : "shell.collapse"),
-  };
-}
-
-// The phone's tabs: the pages with a tab's icon, then the button that opens the sheet of the rest.
-function PhoneTabs({ tabs, more, menus }: { tabs: Page[]; more: Page[]; menus: ReturnType<typeof useMenus> }) {
-  const { t } = useTranslation();
-  return (
-    <>
-      {tabs.map((p) => (
-        <PhoneTab key={p.to} t={String} values={entry(p, "on", tabIcons)} link={RouterLink} label={p.label} />
-      ))}
-      {more.length ? (
-        <PhoneTab
-          t={String}
-          values={{
-            ...only(tabIcons),
-            moreC: menus.moreOpen ? "on" : "",
-            oMore: menus.oMore,
-            moreOpen: menus.moreOpen,
-            press,
-          }}
-          label={t("nav.more")}
-        />
-      ) : null}
-    </>
-  );
-}
-
-// The sidebar scrolls independently from the page. Keep its current link in view when lists reach past the fold.
-function revealCurrentNav() {
-  const link = document.querySelector('[data-shell="app"] nav [aria-current="page"]');
-  const scroller = link?.closest("nav")?.parentElement;
-  if (!link || !scroller) return;
-  const entry = link.getBoundingClientRect();
-  const pane = scroller.getBoundingClientRect();
-  if (entry.top < pane.top) scroller.scrollTop += entry.top - pane.top;
-  else if (entry.bottom > pane.bottom) scroller.scrollTop += entry.bottom - pane.bottom;
-}
-
-function NavigationGroups({
-  pages,
-  phone = false,
-  showLabel = true,
-}: {
-  pages: Page[];
-  phone?: boolean;
-  showLabel?: boolean;
-}) {
-  const { t } = useTranslation();
-  const Item = phone ? PhoneMore : WideNav;
-  const current = pages.find((p) => p.current)?.to;
-  useEffect(() => {
-    if (!phone && showLabel && current) revealCurrentNav();
-  }, [phone, showLabel, current]);
-  return sections.map((section) => {
-    const links = pages.filter((p) => p.section === section);
-    if (!links.length) return null;
-    const label = t(`navSections.${section}`);
-    return (
-      <NavGroup key={section} label={label} showLabel={showLabel} tiles={phone}>
-        {links.map((p) => (
-          <Item
-            key={p.to}
-            t={String}
-            values={entry(p, "on", phone ? sheetIcons : wideIcons)}
-            link={RouterLink}
-            label={p.label}
-          />
-        ))}
-      </NavGroup>
-    );
-  });
-}
-
-function AdminShell({ signOut, children }: { signOut: () => void; children: ReactNode }) {
-  const { t, i18n } = useTranslation();
-  const { page, slot } = useKeptPage(children);
   const brand = useAdminBrand();
-  const preferences = usePreferences();
-  const phone = useWidth("(max-width: 819px)");
-  const pages = usePages();
-  const menus = useMenus();
-  const values = {
-    ...departures,
-    ...menus,
-    ...useAccountValues(signOut),
-    ...useSidebarValues(),
-    press,
-    to_ov: "/",
-    home: brand.name,
-    navigation: t("shell.navigation", { ns: "common" }),
-  };
-  const text = { language: preferences.other.name, lang: preferences.locale, frameStyle };
-  const words = (zh: Record<string, string>, en: Record<string, string>) => (key: string) =>
-    (i18n.language === "en" ? en : zh)[key] as string;
-  const mark = <BoardMark name={brand.name} logoUrl={brand.logo_url} />;
-  const tabs = pages.filter((p) => (tabIcons as readonly string[]).includes(p.icon));
-  const more = pages.filter((p) => !tabs.includes(p));
-  const columns = tabs.length + (more.length ? 1 : 0);
-  // The page comes after the board, so the slot holds the page's element before the page's own effects run.
+  const nav = useNavigation();
+  const text = useShellText();
+  const [searching, setSearching] = useState(false);
+  const home = nav.main[0]?.entries[0]?.href ?? "/";
+  const inSettings = Boolean(nav.settings?.groups.some((group) => group.entries.some((entry) => entry.current)));
+  const back = useBack(nav.pathname, inSettings, home);
+  const bell = useBell((id) => `/alert-events?event=${encodeURIComponent(id)}`);
+  const sections = usePaletteSections(nav, signOut, searching);
+  const email = session.user.email;
   return (
-    <>
-      {phone ? (
-        <Phone
-          t={words(phoneZh, phoneEn)}
-          values={{
-            ...values,
-            tabsStyle: `position: sticky; bottom: 0; grid-template-columns: repeat(${columns}, 1fr)`,
-          }}
-          text={text}
-          link={RouterLink}
-          mark={mark}
-          tabs={<PhoneTabs tabs={tabs} more={more} menus={menus} />}
-          more={<NavigationGroups pages={more} phone />}
-        >
-          {slot}
-        </Phone>
-      ) : (
-        <Wide
-          t={words(wideZh, wideEn)}
-          values={values}
-          text={text}
-          link={RouterLink}
-          mark={mark}
-          nav={
-            <Stack gap={4}>
-              <NavigationGroups pages={pages} showLabel={values.sidebarOpen} />
-            </Stack>
-          }
-        >
-          {slot}
-        </Wide>
-      )}
-      {page}
-    </>
+    <AdminShell
+      brand={{ name: brand.name, logoUrl: brand.logo_url }}
+      homeHref={home}
+      groups={nav.main}
+      settings={nav.settings && { ...nav.settings, backHref: back }}
+      tabs={nav.tabs}
+      alerts={
+        can(session, "sites.manage")
+          ? { ...bell, allHref: "/alert-events", rulesHref: "/alert-configuration" }
+          : undefined
+      }
+      account={{ name: email.split("@")[0] ?? email, email, href: "/me" }}
+      shortcuts={[
+        { keys: searchKeys(), label: t("shell.keys.palette") },
+        { keys: "↑ ↓", label: t("shell.keys.move") },
+        { keys: "↵", label: t("shell.keys.open") },
+        { keys: "esc", label: t("shell.keys.close") },
+      ]}
+      onSearch={() => setSearching(true)}
+      onSignOut={signOut}
+      link={RouterLink}
+      text={text}
+    >
+      {children}
+      <CommandPalette
+        open={searching}
+        onOpenChange={setSearching}
+        sections={sections}
+        text={{
+          label: t("shell.palette.label"),
+          placeholder: t("shell.palette.placeholder"),
+          empty: (query) => t("shell.palette.empty", { query }),
+          move: t("shell.palette.move"),
+          open: t("shell.palette.open"),
+          close: t("shell.palette.close"),
+        }}
+      />
+    </AdminShell>
   );
 }

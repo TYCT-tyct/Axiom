@@ -4,7 +4,7 @@ type Approval = AdminSchemas["OperationsApproval"];
 type Money = AdminSchemas["Money"];
 
 // The states a page can narrow the list by (api/admin.yaml OperationsApprovalState).
-export const approvalStates = ["pending", "approved", "rejected", "expired", "canceled"] as const;
+const approvalStates = ["pending", "approved", "rejected", "expired", "canceled"] as const;
 
 // approvalState is the state in the address, or nothing: anything else does not narrow.
 export function approvalState(value: unknown) {

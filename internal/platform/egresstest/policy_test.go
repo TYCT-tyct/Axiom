@@ -75,3 +75,19 @@ func TestTestRootsAreImmutableAndAbsentByDefault(t *testing.T) {
 		t.Fatal("mutating the copied roots changed the policy")
 	}
 }
+
+// TestRouteAddsAHostWithoutChangingTheOriginal: a route is the policy's own copy, and a host it does not route is not.
+func TestRouteAddsAHostWithoutChangingTheOriginal(t *testing.T) {
+	at := netip.MustParseAddrPort("127.0.0.1:8443")
+	base := egresstest.Loopback(t)
+	routed := base.Route("api.example.com", at)
+	if got, ok := routed.Routed("api.example.com"); !ok || got != at {
+		t.Fatalf("the route is %v %v", got, ok)
+	}
+	if _, ok := routed.Routed("other.example.com"); ok {
+		t.Error("an unrouted host is routed")
+	}
+	if _, ok := base.Routed("api.example.com"); ok {
+		t.Error("routing changed the policy it was made from")
+	}
+}

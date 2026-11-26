@@ -1,5 +1,7 @@
 export default {
   description: "View or set requests per minute for a tier, account, or key.",
+  cardTitle: "Separate limits",
+  cardLede: "Set requests per minute for one account or one key, which wins over the default",
   target: "Target type",
   targets: {
     tier: "Tier",

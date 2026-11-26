@@ -10,18 +10,32 @@ import (
 	"slices"
 
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/anthropic"
+	"axiom/internal/suppliers/internal/azure"
+	"axiom/internal/suppliers/internal/bedrock"
+	"axiom/internal/suppliers/internal/compatible"
 	"axiom/internal/suppliers/internal/cpa"
 	"axiom/internal/suppliers/internal/declared"
+	"axiom/internal/suppliers/internal/google"
+	"axiom/internal/suppliers/internal/moonshot"
 	"axiom/internal/suppliers/internal/newapi"
 	"axiom/internal/suppliers/internal/openai"
 	"axiom/internal/suppliers/internal/sub2api"
+	"axiom/internal/suppliers/internal/vertex"
 )
 
 var adapters = []adapter.Adapter{
+	anthropic.New(),
+	azure.New(),
+	bedrock.New(),
+	compatible.New(),
 	cpa.New(),
+	google.New(),
+	moonshot.New(),
 	newapi.New(),
 	openai.New(),
 	sub2api.New(),
+	vertex.New(),
 }
 
 // Registry finds an adapter by the kind stored in suppliers.kind.

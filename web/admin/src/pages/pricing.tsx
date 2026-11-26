@@ -1,129 +1,67 @@
-import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, PageHead, Table, Td, Text, useFormat } from "@axiom/ui";
-import { usePrefetchQuery, useQuery } from "@tanstack/react-query";
+import { ActionButton } from "@axiom/ui";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import enRates from "../locales/en/exchange-rates";
 import en from "../locales/en/price-policy";
+import zhRates from "../locales/zh/exchange-rates";
 import zh from "../locales/zh/price-policy";
-import { Actions, Code, Head, PageBody, State, useShownAfter } from "../parts";
-import { MethodSummary } from "../pricing/describe";
-import { PreviewPanel } from "../pricing/preview-panel";
 import { PricePolicy } from "../pricing/price-policy";
-import { Publications } from "../pricing/publications";
-import { RuleDialog } from "../pricing/rule-dialog";
-import { listedModelsQuery, publicationsQuery, rulesQuery, tiersQuery } from "../queries";
+import { PricesTab } from "../pricing/prices-tab";
+import { newRule, RulesTab } from "../pricing/rules-tab";
+import { TabbedPage, useTabs } from "../tabbed-page";
+import ExchangeRates from "./exchange-rates";
 
-export const messages = { zh: { pricePolicy: zh }, en: { pricePolicy: en } };
+export const messages = {
+  zh: { pricePolicy: zh, exchangeRates: zhRates },
+  en: { pricePolicy: en, exchangeRates: enRates },
+};
 
-type Rule = AdminSchemas["PricingRule"];
-
-// What is being edited is the rule with this ID as the page has it now, so a change made elsewhere shows; a new rule has none.
-const newRule = "new";
-
+// Pricing in the admin's one page (adPg_pricing in admin_pages_b.js): the sale prices and what is waiting to be
+// published, the rules they are made by, the exchange rates costs are turned into the site's currency with, and the
+// policy every publication is held to.
 export default function Pricing() {
   const { t } = useTranslation();
-  const rules = useQuery(rulesQuery);
-  const publications = useQuery(publicationsQuery);
-  // The preview appears last but its lists are asked for with the others, so it does not wait a round of its own.
-  usePrefetchQuery(listedModelsQuery);
-  usePrefetchQuery(tiersQuery());
-  const publicationsShown = useShownAfter(rules.isPending);
-  const previewShown = useShownAfter(rules.isPending || publications.isPending);
+  const navigate = useNavigate();
+  const search = useSearch({ from: "/app/pricing" });
+  const tab: "prices" | "rules" | "rates" | "policy" = search.tab ?? "prices";
   const manage = can(useSession(), "pricing.manage");
+  // What is being edited is the rule with this ID as the page has it now; the dialog is the rules tab's.
   const [editing, setEditing] = useState<string | null>(null);
-  const current = rules.data?.data.find((rule) => rule.id === editing);
-  return (
-    <>
-      <PageHead title={t("nav.pricing")} lede={t("pricing.description")} />
-      <PageBody>
-        {manage ? (
-          <Actions>
-            <ActionButton variant="pri" icon="plus" onClick={() => setEditing(newRule)}>
-              {t("pricing.rule.new")}
-            </ActionButton>
-          </Actions>
-        ) : null}
-        <Card layout="flush" title={t("pricing.rules.title")}>
-          <DataState
-            query={rules}
-            isEmpty={(data) => data.data.length === 0}
-            empty={<EmptyState title={t("pricing.empty.title")}>{t("pricing.empty.body")}</EmptyState>}
-          >
-            {(data) => <RulesTable rules={data.data} onEdit={manage ? (rule) => setEditing(rule.id) : undefined} />}
-          </DataState>
-        </Card>
-        {/* Both lists are asked for at once; each section below appears once the ones above it have answered. */}
-        {publicationsShown ? (
-          <>
-            <Publications />
-            <PricePolicy />
-          </>
-        ) : null}
-        {previewShown ? <PreviewPanel /> : null}
-      </PageBody>
-      {editing ? <RuleDialog rule={current} onClose={() => setEditing(null)} /> : null}
-    </>
+  const tabs = useTabs(
+    "/pricing",
+    [
+      { key: "prices", label: t("pricing.tabs.prices") },
+      { key: "rules", label: t("pricing.tabs.rules") },
+      { key: "rates", label: t("pricing.tabs.rates") },
+      { key: "policy", label: t("pricing.tabs.policy") },
+    ],
+    tab,
   );
-}
-
-function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) => void) | undefined }) {
-  const { t } = useTranslation();
-  const format = useFormat();
   return (
-    <Table label={t("pricing.rules.title")}>
-      <Head
-        cols={[
-          [t("pricing.rules.target"), { main: true }],
-          t("pricing.rules.audience"),
-          t("pricing.rules.method"),
-          t("pricing.rules.state"),
-          t("pricing.rules.updated"),
-        ]}
-        action={onEdit !== undefined}
-      />
-      <tbody>
-        {rules.map((rule) => (
-          <tr key={rule.id}>
-            <Td main>
-              <Text>{t(`pricing.target.${rule.target.kind}`)}</Text>
-              {rule.target.id ? (
-                <Text size="sm" tone="faint">
-                  <Code>{rule.target.id}</Code>
-                </Text>
-              ) : null}
-            </Td>
-            <Td>
-              <Text>{t(`pricing.audience.${rule.audience.kind}`)}</Text>
-              {rule.audience.id ? (
-                <Text size="sm" tone="faint">
-                  <Code>{rule.audience.id}</Code>
-                </Text>
-              ) : null}
-            </Td>
-            <Td>
-              <MethodSummary method={rule.method} />
-            </Td>
-            <Td>
-              <State tone={rule.enabled ? "good" : "neutral"}>
-                {rule.enabled ? t("pricing.on") : t("pricing.off")}
-              </State>
-            </Td>
-            <Td>{format.dateTime(new Date(rule.updated_at))}</Td>
-            {onEdit ? (
-              <Td actions>
-                <ActionButton
-                  variant="gho"
-                  size="sm"
-                  icon="pencil"
-                  aria-label={t("pricing.rules.edit", { target: t(`pricing.target.${rule.target.kind}`) })}
-                  onClick={() => onEdit(rule)}
-                />
-              </Td>
-            ) : null}
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <TabbedPage
+      title={t("nav.pricing")}
+      lede={tab === "prices" ? undefined : t(`pricing.lede.${tab}`)}
+      label={t("pricing.tabs.label")}
+      tabs={tabs}
+      actions={
+        tab === "rules" && manage ? (
+          <ActionButton variant="pri" icon="plus" onClick={() => setEditing(newRule)}>
+            {t("pricing.rule.new")}
+          </ActionButton>
+        ) : undefined
+      }
+    >
+      {tab === "prices" ? (
+        <PricesTab
+          selected={search.price}
+          onRules={() => void navigate({ to: "/pricing", search: { tab: "rules" } })}
+        />
+      ) : null}
+      {tab === "rules" ? <RulesTab editing={editing} onEdit={setEditing} /> : null}
+      {tab === "rates" ? <ExchangeRates /> : null}
+      {tab === "policy" ? <PricePolicy /> : null}
+    </TabbedPage>
   );
 }

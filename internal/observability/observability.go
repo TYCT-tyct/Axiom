@@ -109,7 +109,33 @@ type CallRecord struct {
 	// parks it and stays open for the settled record of the same call, which replaces it; it reaches the call log only
 	// when none will, and the writer then takes its Amounts from the ledger if the settlement did commit (README「写入」).
 	BillingPending bool
+	Plugins        []PluginRun // the plugins the gateway ran for the call; nil when none
 }
+
+// PluginRun is what one of the gateway's plugins did in a call: the web plugin's search through a backend, or the
+// file parser's parse. A search or a file the provider handles itself is the provider's tool, not a run.
+type PluginRun struct {
+	Plugin   string // the ID a request names it with: PluginWeb or PluginFileParser
+	OK       bool   // false when its run failed
+	Engine   string // the search engine's or the parser engine's name
+	Uses     int64  // searches run; pages parsed, or files where the engine counts no pages
+	Duration time.Duration
+	// PriceNano is what the call was charged for the plugin, in the call's currency; -1 when the charge cannot be
+	// told apart from the call's other per-use items.
+	PriceNano int64
+}
+
+// The plugins a run names.
+const (
+	PluginWeb        = "web"
+	PluginFileParser = "file-parser"
+)
+
+// A call runs each plugin at most once; an engine's name is a settings name.
+const (
+	maxPluginRuns   = 2
+	maxPluginEngine = 64
+)
 
 // Amounts is what the call's settlement charged, as the ledger stores it: the usage it billed, the tier and price
 // version it priced at, the charge, whether the waiver rules made it free, and the upstream's prompt total. A record
@@ -167,6 +193,17 @@ type row struct {
 	CacheHit        bool             `json:"cache_hit"`
 	PhysicalInput   int64            `json:"physical_input"`
 	BillingPending  bool             `json:"billing_pending,omitempty"` // omitted when settled: a settled record's bytes are as they were
+	Plugins         []pluginRow      `json:"plugins,omitempty"`         // omitted when none ran, so such a record's bytes are as they were
+}
+
+// pluginRow is a PluginRun as the plugins column stores it.
+type pluginRow struct {
+	Plugin    string `json:"plugin"`
+	OK        bool   `json:"ok"`
+	Engine    string `json:"engine,omitempty"`
+	Uses      int64  `json:"uses"`
+	MS        int64  `json:"ms"`
+	PriceNano *int64 `json:"price_nano,omitempty"`
 }
 
 // attemptRow is an AttemptRecord as the insert statement reads it: the call's ID, start and tenant, then its own
@@ -265,9 +302,40 @@ func newCallRow(r CallRecord) (row, error) {
 		ConsentVersion: r.ConsentVersion, TrainingAllowed: r.TrainingAllowed, Streamed: r.Streamed,
 		CacheHit: r.CacheHit,
 	}
-	err := call.settle(r.Amounts)
+	var err error
+	if call.Plugins, err = pluginRows(r.Plugins); err != nil {
+		return row{}, err
+	}
+	err = call.settle(r.Amounts)
 	call.BillingPending = r.BillingPending
 	return call, err
+}
+
+// pluginRows converts the call's plugin runs, refusing what the column or the reads cannot take.
+func pluginRows(runs []PluginRun) ([]pluginRow, error) {
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	if len(runs) > maxPluginRuns {
+		return nil, fmt.Errorf("plugins: %d runs, at most %d", len(runs), maxPluginRuns)
+	}
+	out := make([]pluginRow, len(runs))
+	for i, p := range runs {
+		if p.Plugin != PluginWeb && p.Plugin != PluginFileParser {
+			return nil, fmt.Errorf("plugins: unknown plugin %q", p.Plugin)
+		}
+		if p.Uses < 0 || p.Duration < 0 || len(p.Engine) > maxPluginEngine {
+			return nil, fmt.Errorf("plugins: the %s run is out of range", p.Plugin)
+		}
+		if err := checkText(map[string]string{"plugin engine": p.Engine}); err != nil {
+			return nil, err
+		}
+		out[i] = pluginRow{Plugin: p.Plugin, OK: p.OK, Engine: p.Engine, Uses: p.Uses, MS: p.Duration.Milliseconds()}
+		if p.PriceNano >= 0 {
+			out[i].PriceNano = &runs[i].PriceNano
+		}
+	}
+	return out, nil
 }
 
 // settle puts the settlement's amounts in the row and marks it settled. A record's own amounts go through it, and so do

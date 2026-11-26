@@ -115,7 +115,7 @@ func adminPlanLines(t *testing.T, db *pg.DB, since, until time.Time, account str
 		if err := planOwnPage(t.Context(), tx); err != nil {
 			return err
 		}
-		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+adminListSQL(account != ""), until, uuid.Nil().String(), since, until, account, "", "", "", 51, "")
+		rows, err := tx.Query(t.Context(), "EXPLAIN (ANALYZE, BUFFERS) "+adminListSQL(account != "", false), until, uuid.Nil().String(), since, until, account, "", "", "", 51, "", "")
 		if err != nil {
 			return err
 		}

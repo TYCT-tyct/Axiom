@@ -284,7 +284,7 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 	if len(c.Plans) > 0 {
 		rows := make([]store.SyncPlanRow, len(c.Plans))
 		for i, p := range c.Plans {
-			rows[i] = store.SyncPlanRow{Endpoint: p.Endpoint, Fingerprint: p.Fingerprint, Schedule: p.Schedule, Basis: p.Basis}
+			rows[i] = store.SyncPlanRow{Endpoint: p.Endpoint, Fingerprint: p.Fingerprint, Schedule: p.Schedule, Basis: p.Basis, Derivation: p.Derivation}
 		}
 		if err := store.InsertSyncPlans(ctx, tx, id, c.State.Version, rows); err != nil {
 			return fmt.Errorf("write the cost plans: %w", err)
@@ -301,10 +301,23 @@ func writeStep(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur
 		// left them.
 		return nil
 	}
+	return projectRead(ctx, tx, id, c, cur, snap, keys, now)
+}
+
+// projectRead writes a listing that was read onto the supplier's tables, with the keys the step made. A read of the whole
+// offer is the sync's observation of the supplier too: the queue is brought in line with what the step just wrote, and
+// what a person ignored and still holds shows again.
+func projectRead(ctx context.Context, tx pg.Tx, id uuid.UUID, c syncer.Commit, cur store.LockSupplierRow, snap *catalog.Snapshot, keys *secret.Keyring, now time.Time) error {
 	if err := projectListing(ctx, tx, id, c.State, cur, snap, c.OfferRead, now); err != nil {
 		return err
 	}
-	return projectOnboarding(ctx, tx, id, c.KeyWrites, keys)
+	if err := projectOnboarding(ctx, tx, id, c.KeyWrites, keys); err != nil {
+		return err
+	}
+	if !c.OfferRead {
+		return nil
+	}
+	return ObserveInbox(ctx, tx, id, now, InboxEverything, true)
 }
 
 // nextDue is when the supplier next needs a round: the earliest time one of its tasks may run, or never while the

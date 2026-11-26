@@ -64,7 +64,7 @@ func TestCreateSupplier(t *testing.T) {
 	made := f.connect()
 	want := adminapi.Supplier{
 		Id: made.Id, Name: "Acme", Kind: "newapi", Origin: publicOrigin, UpstreamAccount: "ops", NativeUnit: "quota",
-		SettlementCurrency: "USD", Status: "connecting",
+		SettlementCurrency: "USD", Status: "connecting", Mode: new(adminapi.SupplierMode("relay")),
 	}
 	if diff := cmp.Diff(want, made); diff != "" {
 		t.Errorf("the supplier (-want +got):\n%s", diff)
@@ -238,7 +238,7 @@ func TestDetectSupplier(t *testing.T) {
 func TestWindowLimiter(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 10, 16, 12, 0, 0, 0, time.UTC)
-	l := newWindowLimiter(2, time.Minute, func() time.Time { return now })
+	l := newWindowLimiter(2, func() time.Time { return now })
 	a, b := uuid.NewV7(), uuid.NewV7()
 	steps := []struct {
 		key     uuid.UUID

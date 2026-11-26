@@ -107,32 +107,68 @@ function preview({ body, state }: Ctx<"/api/admin/v1/pricing/previews", "post">)
   return ok({ data: models.map((m) => priced(m as Schemas["Model"], markup)) });
 }
 
-function publications({ state }: Ctx<"/api/admin/v1/pricing/publications", "get">) {
+// The models the publications are of that a person has published since: a published price has nothing waiting.
+const published = new WeakMap<AdminState, Set<string>>();
+
+const scaled = (schedule: Schemas["PriceSchedule"] | undefined, ratio: string) =>
+  schedule && {
+    ...schedule,
+    rates: Object.fromEntries(
+      Object.entries(schedule.rates).flatMap(([item, price]) =>
+        price === undefined ? [] : [[item, mul(price, ratio)]],
+      ),
+    ),
+  };
+
+// Three publications: a new price for everyone, one for a tier whose rule asks 90% of what the floor lets it, and one
+// that is up to date. What sells now is 80% of the proposal.
+function publicationList(state: AdminState) {
   const audiences: Schemas["PricingAudience"][] = [
     { kind: "all" },
     { kind: "tier", id: state.tiers[0]?.id },
     { kind: "account", id: state.accounts.keys().next().value },
   ];
-  return ok({
+  return {
     policy: pricePolicy(state),
     data: state.models.slice(0, 3).map((model, index) => {
       const schedule = model.prices.find((p) => p.schedule)?.schedule;
+      const done = index === 2 || published.get(state)?.has(model.id);
       return {
         model_id: model.id,
         candidate_id: uuid(10, index),
         current_id: uuid(11, index),
         audience: audiences[index],
-        status: "pending" as const,
+        status: done ? ("published" as const) : ("pending" as const),
         schedule,
-        requested: schedule,
+        current_schedule: scaled(schedule, "0.8"),
+        requested: index === 1 ? scaled(schedule, "0.9") : schedule,
         floor: schedule,
       };
     }),
-  });
+  };
+}
+
+function publications({ state }: Ctx<"/api/admin/v1/pricing/publications", "get">) {
+  return ok(publicationList(state));
+}
+
+// A publication is confirmed against the version it was read at, and the floor is never overridden from the page.
+function publish({ body, params, state }: Ctx<"/api/admin/v1/pricing/publications/{model_id}", "post">) {
+  const index = state.models.slice(0, 3).findIndex((model) => model.id === params.model_id);
+  const model = state.models[index];
+  if (!model) {
+    return fail(422, "unprocessable");
+  }
+  if (body.candidate_id !== uuid(10, index) || body.current_id !== uuid(11, index) || !body.confirmed) {
+    return fail(409, "stale_revision");
+  }
+  published.set(state, (published.get(state) ?? new Set<string>()).add(model.id));
+  return ok(publicationList(state));
 }
 
 export const pricingHandlers: Handler<AdminState>[] = [
   route("get", `${base}/pricing/publications`, reads("pricing.view"), publications),
+  route("post", `${base}/pricing/publications/{model_id}`, changes("pricing.manage"), publish),
   route("get", `${base}/pricing/rules`, reads("pricing.view"), ({ state }) => ok({ data: state.rules })),
   route("post", `${base}/pricing/rules`, changes("pricing.manage"), createRule),
   route("put", `${base}/pricing/rules/{rule_id}`, changes("pricing.manage"), updateRule),
