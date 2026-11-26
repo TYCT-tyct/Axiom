@@ -35,7 +35,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 | `suppliers` | `UNIQUE (origin, upstream_account)`；`mode`（relay、direct、cloud）和 `api_format` 创建后不变；`cloud_account` 只有云平台有；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
-| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是本区域调用的模型名 |
+| `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID）；检测结果同空同有；`UNIQUE (supplier_id, region)`，`call_names` 是这条凭证（云平台区域或直连 key）调用端点时用的模型名 |
 | `intake_rules`、`inbox_items` | PK `supplier_id`；`UNIQUE (supplier_id, kind, subject)` |
 | `supplier_models` | PK `(supplier_group_id, upstream_name)`；`model_id` 空即待映射 |
 | `supplier_aliases`、`supplier_alias_revisions` | 首版不可变，`UNIQUE NULLS NOT DISTINCT (supplier_id, supplier_group_id, upstream_name)`；修订 PK `(alias_id, revision)`，只追加 |

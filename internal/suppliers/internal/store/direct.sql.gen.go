@@ -13,9 +13,9 @@ import (
 
 const insertDirectCredential = `-- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, allowed_models, hint)
+    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-    'active', $9, $10, $11, $12)
+    'active', $9, $10, $11, $12, $13)
 `
 
 type InsertDirectCredentialParams struct {
@@ -30,6 +30,7 @@ type InsertDirectCredentialParams struct {
 	MaxConcurrency    int32
 	RequestsPerMinute *int32
 	AllowedModels     []string
+	CallNames         []byte
 	Hint              *string
 }
 
@@ -46,6 +47,7 @@ func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg Inser
 		arg.MaxConcurrency,
 		arg.RequestsPerMinute,
 		arg.AllowedModels,
+		arg.CallNames,
 		arg.Hint,
 	)
 	return err

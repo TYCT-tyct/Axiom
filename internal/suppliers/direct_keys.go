@@ -77,9 +77,6 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 	if err != nil {
 		return nil, err
 	}
-	if err := a.insertDirectKeys(ctx, tx, q, supplier, group, p); err != nil {
-		return nil, err
-	}
 	served, err := q.LineEndpoints(ctx, tx, group)
 	if err != nil {
 		return nil, fmt.Errorf("read the line's endpoints: %w", err)
@@ -89,6 +86,9 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 		has[catalog.ModelID(e.ModelID)] = true
 	}
 	if _, _, err := insertLineModels(ctx, tx, q, supplier, group, snap, p.r.Currency, p.offer(), has); err != nil {
+		return nil, err
+	}
+	if err := a.insertDirectKeys(ctx, tx, q, supplier, group, snap, p); err != nil {
 		return nil, err
 	}
 	var stored []string

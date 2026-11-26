@@ -12,9 +12,9 @@ RETURNING id;
 
 -- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, allowed_models, hint)
+    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
-    'active', @max_concurrency, sqlc.narg(requests_per_minute), @allowed_models, @hint);
+    'active', @max_concurrency, sqlc.narg(requests_per_minute), @allowed_models, sqlc.narg(call_names), @hint);
 
 -- name: StoredKeyRefs :many
 -- The pasted keys already stored as a credential that is not erased, by the reference a pasted key is stored under.
