@@ -10,7 +10,7 @@ const plans = "/subscriptions/plans";
 
 // 订阅管理: the subscriptions accounts hold, and the plans they were sold as. Subscriptions were a card on the account
 // page and the plans a page of their own under pricing; here they are two tabs. /subscription-plans leads to the second
-// (router.tsx).
+// (routes/people.ts).
 export default function Subscriptions() {
   const { t } = useTranslation();
   const path = useLocation({ select: (location) => location.pathname.replace(/\/$/, "") });
