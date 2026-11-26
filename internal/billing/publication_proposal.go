@@ -52,9 +52,9 @@ func proposePrice(policy PricePolicy, rules, everyone []Rule, m catalog.Model, s
 	p.matched = matched != nil
 	if matched != nil {
 		p.target = matched.Target
-	}
-	if matched != nil && matched.Method.Kind != "reference_multiplier" {
-		ref.ID = uuid.Nil()
+		if matched.Method.Kind != "reference_multiplier" {
+			ref.ID = uuid.Nil()
+		}
 	}
 	if err != nil {
 		p.Problem = err.Error()

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -11,10 +12,10 @@ import (
 	"axiom/internal/protocol"
 )
 
-// tokenPrices prices every token item apart, in billionths of a dollar a token, so a count charged as another item
+// itemPrices prices every token item apart, in billionths of a dollar a token, so a count charged as another item
 // shows in the total: input 1, cache read 2, cache write 3, an hour's cache write 4, audio in 5, image in 6, output 7,
 // reasoning 8, audio out 9, image out 10.
-const tokenPrices = `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000002",
+const itemPrices = `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cache_read":"0.000000002",
 	"cache_write":"0.000000003","cache_write_1h":"0.000000004","audio_in":"0.000000005","image_in":"0.000000006",
 	"output":"0.000000007","reasoning":"0.000000008","audio_out":"0.000000009","image_out":"0.00000001"}}`
 
@@ -25,7 +26,7 @@ const tokenPrices = `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cac
 func TestTokenItemsArePricedByTheirOwnItem(t *testing.T) {
 	t.Parallel()
 	recorded := func(path string) string {
-		b, err := os.ReadFile("../../internal/protocol/testdata/" + path)
+		b, err := fs.ReadFile(os.DirFS("../../internal/protocol/testdata"), path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -92,7 +93,7 @@ data: {"type":"message_stop"}
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			u := relayedUsage(t, c.format, c.stream)
-			schedule, err := catalog.ParseSchedule([]byte(tokenPrices))
+			schedule, err := catalog.ParseSchedule([]byte(itemPrices))
 			if err != nil {
 				t.Fatal(err)
 			}

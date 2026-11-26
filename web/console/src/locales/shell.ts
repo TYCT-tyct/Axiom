@@ -7,8 +7,7 @@ export const zh = {
   collapse: "收起",
   expand: "展开",
   balanceUnavailable: "暂不可用",
-  callsPaused:
-    "站点已暂停这个账户的调用，所有 key 暂时不能调用模型。请联系站点管理员。",
+  callsPaused: "站点已暂停这个账户的调用，所有 key 暂时不能调用模型。请联系站点管理员。",
 };
 
 export const en: Messages<typeof zh> = {
