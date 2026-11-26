@@ -1,7 +1,17 @@
 import { expect, type Locator, type Page, test } from "@playwright/test";
 import { apps } from "./apps.ts";
 import { mockConsole } from "./console-api.ts";
-import { departOnly, expectMovingNow, open, pauseAhead, running, scrollTo, shown, siteSignIn } from "./fx-helpers.ts";
+import {
+  departOnly,
+  expectMovingNow,
+  open,
+  pauseAhead,
+  running,
+  scrollTo,
+  seaFrame,
+  shown,
+  siteSignIn,
+} from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
 // Home <-> sign-in tiles transitions (port design §9, trans.js.txt STYLES.tiles). The homepage holds the sign-in
@@ -62,14 +72,14 @@ test("clicking the Axiom mark on sign-in plays the return tiles transition back 
   await page.clock.runFor(350);
   await expect(page).toHaveURL(new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
   await pageHeading(page);
-  await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
+  await expect(seaFrame(page)).toHaveAttribute("data-enter", "done");
   expect(violations).toEqual([]);
 });
 
 // The website holds the sign-in pages in its own document (site/src/home/sign-in.tsx): a press opens the page over
 // the same sea with the console's address and no page load, and the brand, Esc and the browser's back go home the same
 // way, turning round midway. Time stands still from before the press: only runFor moves the transition.
-const frameState = (page: Page) => page.locator(".tr").getAttribute("data-state");
+const frameState = (page: Page) => seaFrame(page).getAttribute("data-state");
 const homeAddress = () => new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`);
 
 async function pressInPlace(page: Page, way: (page: Page) => Locator = siteSignIn, watch?: () => Promise<void>) {
@@ -211,9 +221,9 @@ test("the home page come back to from sign-in is settled and its sea moves", asy
   await pageHeading(page);
   await page.locator(".lg a.brand").click();
   await expect(page).toHaveURL(new RegExp(`^${apps[0].url.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`));
-  await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
+  await expect(seaFrame(page)).toHaveAttribute("data-enter", "done");
   await expectMovingNow(page, page.locator(".tr > canvas.sea:not(.cover)"));
-  await expect(page.locator(".tr")).toHaveAttribute("data-enter", "done");
+  await expect(seaFrame(page)).toHaveAttribute("data-enter", "done");
 });
 
 test("Escape returns to home unless typing in a non-empty input, and works under reduced motion", async ({ page }) => {

@@ -5,6 +5,7 @@ import { mockConsole } from "./console-api.ts";
 import {
   delivered,
   open,
+  painted,
   pause,
   pauseAhead,
   place,
@@ -12,8 +13,10 @@ import {
   screenChunk,
   scrollTo,
   setHidden,
+  settled,
   shown,
   siteSignIn,
+  whaleShows,
 } from "./fx-helpers.ts";
 import { pageHeading } from "./page-heading.ts";
 
@@ -239,11 +242,15 @@ test("pointing at the address line lights the machine's plug", async ({ page }) 
   await page.locator(".hfm1 .tab").nth(2).click();
   await written(page);
   const edge = page.locator('.hfm1 .fig [data-m="plug"] .iso-edge').first();
-  const stroke = () => edge.evaluate((el) => getComputedStyle(el).stroke);
+  // the edge's colour eases (the board's 250 ms), so each is read once its easing is over
+  const stroke = async () => {
+    await settled(edge);
+    return edge.evaluate((el) => getComputedStyle(el).stroke);
+  };
   const unlit = await stroke();
   await page.locator(".hfm1 pre .ln").nth(0).hover();
   await expect(page.locator('.hfm1 .fig [data-m="plug"]')).toHaveClass(/\bhl\b/);
-  await expect.poll(stroke).not.toBe(unlit);
+  expect(await stroke()).not.toBe(unlit);
 });
 
 test("at 820 the page is laid out for a tablet as the board's script lays it out", async ({ page }) => {
@@ -450,29 +457,6 @@ const watchWhale = (page: Page) => {
   });
   return asked;
 };
-// the whale's canvas has something on it: the shadow, or the whale
-const painted = (page: Page) =>
-  page.locator(".tr > canvas.wh").evaluate((canvas: HTMLCanvasElement) => {
-    const { data } = (canvas.getContext("2d") as CanvasRenderingContext2D).getImageData(
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
-    return data.some((value, i) => i % 4 === 3 && value > 0);
-  });
-
-// The whale's first pixels come after about 1.3 s of its own time, and its step is capped at 0.05 s, so a machine
-// drawing under 20 frames a second stretches that past any wall-clock wait. The page's clock drives it instead, as
-// fx-environments.spec.ts does: the case no longer depends on how busy the machine is.
-async function whaleShows(page: Page) {
-  for (let seen = 0; !(await painted(page).catch(() => false)); seen += 100) {
-    expect(seen, "the whale drew within 5 s of the page's time").toBeLessThan(5000);
-    await page.clock.runFor(100);
-    await page.waitForTimeout(20);
-  }
-}
-
 test("the whale's code comes when deepseek is typed, not before, and the whale swims on the sea", async ({ page }) => {
   const asked = watchWhale(page);
   await page.setViewportSize({ width: 1440, height: 900 });
