@@ -100,6 +100,7 @@ Ryuk 无公开父 cgroup 配置；仅 go-test/journey/bench 在父级非空时�
 `deploy-check.sh` 为每个 runner 与工作区哈希生成独立 compose 项目、镜像、卷和空闲端口；前后清自身资源，失败先输出日志。数据库镜像每作业只构建一次，列车复用已构建镜像，防止标签或 provenance 变化重建正在服务的库。
 
 - Compose 不另加命令墙钟期限或 `--wait-timeout`；步骤上限 20 分钟、作业上限 22 分钟，健康等待由健康条件控制，数据库 `start_period` 2 分钟；down 最多 5 秒，CI 容器无重启策略。
+- 全新部署从空卷起栈（`scripts/ops/up.sh`，与生产入口同一条路径），再用命令行建站点、第一个管理员（`user create` 加 `user grant-platform`），第一个管理员在管理监听上用密码登录时还打不开平台页面，开启两步验证后能读用户列表；节点的健康检查（镜像的 `HEALTHCHECK`）此时为 healthy。
 - 旧迁移角色升级先停节点，再改数据库环境并启动，避免旧进程丢会话锁退出时被误算为新启动。
 - `old-binary-check.sh` 用当前二进制迁移独立库，再启动上一版本并等 readyz；不在 compose 栈里的遗留库按 `axiom.ci.old-binary-check` 和 40 分钟年龄清理。
 - 下一作业清理自身旧栈，任意 runner 的部署检查也清理带本脚本标签、名以 `axiom-ci-` 开头且创建超过 40 分钟的遗留栈，不碰其他容器。
