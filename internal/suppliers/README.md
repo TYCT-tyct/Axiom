@@ -154,7 +154,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 |---|---|
 | `NormalizeOrigin`、`CheckOrigin`（只在幂等回调里）、`Detect` | `ErrBadOrigin`、`ErrAddressRefused`、`ErrUnreachable` |
 | `Connect` | `ErrNoAdapter`、`*LoginError`（只带字段名）、`ErrSupplierExists` |
-| `PlanDirect`、`CheckDirect`、`CreateDirect`（直连接口） | `ErrDirectProvider`、`ErrDirectOrigin`、`ErrDirectFormat`、`ErrDirectGemini`、`ErrDirectCurrency`、`ErrDirectName`、`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
+| `PlanDirect`、`PlanDirectKeys`、`CheckDirect`、`CreateDirect`、`AddDirectKeys` | `ErrDirect`：`Provider`、`Origin`、`Format`、`Gemini`、`Currency`、`Name`，`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
 | `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud`（[云平台](../../docs/domains/suppliers-direct.md#云平台)） | `ErrCloudProvider`、`ErrCloudOrigin`、`ErrCloudRegions`、`*CredentialError`、`ErrNotCloud` |
 | `SetStatus`、`Remove`、`ReplaceLogin` | `ErrStatusLocked`、`ErrNoSupplier` |
 | `ConfirmUnitValue` | `ErrUnitValue` |
@@ -164,7 +164,6 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `SetEndpointEnabled`、`SetEndpointQuantization` | `ErrNoSupplierEndpoint`、`ErrStatusLocked` |
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`（只读） | `ErrNoSupplier` |
 | `EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
-| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里；`FindKey` 不把文字发给对方，`MakeKey` 先查分组再建） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked`、`ErrGroupGone`、`ErrGroupHasKey` |
+| `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
-| `PlanDirectKeys`、`AddDirectKeys`（直连接口加 key；`CheckDirect` 在两者之间、事务外） | `*KeyError`、`ErrLimits`、`ErrStatusLocked`（不是直连接口）、`ErrAddressRefused` |
-| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`（直连和云供应商没有同步）、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
