@@ -27,7 +27,7 @@ type Path = keyof typeof paths;
 
 // 订单: what people paid and what was done with it, in five tabs: the orders, the cash movements behind them, the credit
 // batches they made, the refunds asked for and the differences the channel's records have with ours. The old addresses,
-// /orders?cash=1, /orders?paid=batches and /payment-discrepancies, lead to the tabs (router.tsx). The site is the admin
+// /orders?cash=1, /orders?paid=batches and /payment-discrepancies, lead to the tabs (routes/people.ts). The site is the admin
 // account's, as on the settings page (the admin has no site list).
 export default function Orders() {
   const { t } = useTranslation();

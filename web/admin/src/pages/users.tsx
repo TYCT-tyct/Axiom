@@ -18,7 +18,7 @@ type Tab = keyof typeof tabs;
 
 // 用户管理: the people who signed up, the accounts they own and the platform roles that let some of them into the admin,
 // as three tabs of one page. Users and accounts are apart: an account is the money and the limits, a user is a person
-// who signs in. The old /accounts/{id} address leads to the account's drawer (router.tsx).
+// who signs in. The old /accounts/{id} address leads to the account's drawer (routes/people.ts).
 export default function Users() {
   const { t } = useTranslation();
   const path = useLocation({ select: (location) => location.pathname.replace(/\/$/, "") || "/" }) as Tab;
