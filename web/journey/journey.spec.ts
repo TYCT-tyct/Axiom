@@ -23,7 +23,9 @@ const calls = [
   { path: "/v1/messages", body: messagesCall },
 ];
 
-test("register, sign in with two steps, key, top-up, calls, their charges, and a key switched off", async ({ page }) => {
+test("register, sign in with two steps, key, top-up, calls, their charges, and a key switched off", async ({
+  page,
+}) => {
   const node = readNode();
   const consoleApi = `${node.console}/api/console/v1`;
   const email = "journey@example.com";
@@ -68,7 +70,10 @@ test("register, sign in with two steps, key, top-up, calls, their charges, and a
   const verified = page.waitForResponse((r) => r.url().endsWith("/auth/mfa") && r.request().method() === "POST");
   await page.getByRole("button", { name: "验证", exact: true }).click();
   const { csrf_token: csrf } = await (await verified).json();
-  await expect(page.getByRole("heading", { level: 1, name: "概览" })).toBeVisible();
+  // The code is the sign-in: the page it was left from opens again, with two-step verification on.
+  await expect(page.getByRole("heading", { level: 1, name: "两步验证" })).toHaveCount(0);
+  await page.goto(`${node.console}/console/security`);
+  await expect(page.getByText(/^已设置 ·/)).toBeVisible();
 
   await page.goto(`${node.console}/console/keys`);
   await page.getByRole("button", { name: "创建 key", exact: true }).click();
@@ -118,7 +123,10 @@ test("register, sign in with two steps, key, top-up, calls, their charges, and a
   await expect(async () => {
     const listed = await (await page.request.get(`${consoleApi}/calls?limit=50`)).json();
     expect(listed.data).toHaveLength(calls.length * 2);
-    const charged = listed.data.reduce((sum: bigint, c: { price: { amount: string } }) => sum + BigInt(c.price.amount), 0n);
+    const charged = listed.data.reduce(
+      (sum: bigint, c: { price: { amount: string } }) => sum + BigInt(c.price.amount),
+      0n,
+    );
     expect(charged).toBeGreaterThan(0n);
     const balance = await (await page.request.get(`${consoleApi}/balance`)).json();
     expect([balance.balance.amount, balance.reserved.amount]).toEqual([(grant - charged).toString(), "0"]);
