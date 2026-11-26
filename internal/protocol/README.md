@@ -6,7 +6,7 @@
 
 | 包 | 做什么 |
 |---|---|
-| `protocol` | `Inspect` 读摘要；`Prepare`、`PrepareBudgeted` 改写或转换请求；`Relay` 转发、计量或聚合；`RenderError` 写流开始前的错误；直接格式的 `DirectUsage`、`ValidateDirectReply`、`RewriteDirectReply`；compact 的 `UsageOf`、`ValidateCompactReply`、`RewriteCompactReply` |
+| `protocol` | `Inspect` 读摘要；`Prepare`、`PrepareBudgeted` 改写或转换请求；`Relay` 转发、计量或聚合；`RenderError` 写流开始前的错误；直接格式的 `DirectUsage`、`ValidateDirectReply`、`RewriteDirectReply`；compact 的 `UsageOf`、`ValidateCompactReply`、`RewriteCompactReply`；`CountBody` 写 count_tokens 的请求体（端点的模型名加 Anthropic 收的五个成员，先向 `Memory` 申请） |
 | `internal/sse` | 把上游字节读成严格校验过的事件 |
 | `internal/streamcheck` | 按格式检查流结构；`Sample` 检查样本 |
 | `internal/record` | `just record`，见「录制样本」 |

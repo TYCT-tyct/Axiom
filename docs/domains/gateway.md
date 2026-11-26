@@ -29,7 +29,7 @@
 - **旧版补全**：只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转；上游一律流式并强制 `stream_options.include_usage:true`，非流式由网关按序聚合每个 choice 的 `text` 和四个 `logprobs` 数组。`prompt` 的数组是一次请求里的多份补全：输入按整批（含 `suffix`）预留、暂估、分档，上下文按最长一份（含 `suffix`）检查，输出按 `n × prompt 数 × 上限` 一次预留、不分段（[计费](billing.md#预留与结算)）。`best_of > 1` 准入前 400；超过报价上限的 `max_tokens` 按上限发；`max_tokens: 0` 是零输出，只带结束原因的空 choice 是正常回答。`echo` 回显算交付文字（决定提交点和空响应）而不算生成输出，无用量时只按回显之后的文字暂估输出，token 数组按每 token 4 字节估。
 - **格式声明**：适配器推不出的格式由管理接口模型映射的 `formats` 声明（省略不改、`[]` 清除、未知 422），与适配器格式取并集，同步不覆盖。
 - **`GET /v1/models`**：OpenAI 与 Anthropic 合一的形状，同次构建列出的模型旁边另带 OpenRouter 模型对象的成员（`id`、`created` 取本形状的，见下文模型对象）；只列 key 能调用、有端点的模型（权限与调用同一判断），不带 key 时同 `/api/v1/models` 的公开视图；不能用、没端点和不存在的都回 404 `model_not_found`。Anthropic 模型另列厂商原生名（Claude Code 只认含 `claude`/`anthropic` 的 ID，启动探测 3 秒超时、跳转算失败）。单模型按调用的方式解析别名，`id` 是请求里的名字。没端点（没接供应商、缺规格或售价）的不列，满载、熔断、暂停、预算用尽不让模型少列。`/v1` 下的 `models/count`、`models/user`、`models/{author}/{slug}/endpoints` 回 404 `not_found`。响应带 `Cache-Control: no-store`。`/embeddings/models` 不提供。
-- **`count_tokens`**：返回本地估算的 `{"input_tokens": n}`，不转发、不收费、不记录，只收调用 key，频率池与调用分开。
+- **`count_tokens`**：转给调用会走的路由里第一个原生 Messages 的端点（模型换成端点的名字，只带 `model`、`messages`、`system`、`tools`、`tool_choice`、`thinking`），回它的数；没有这样的端点、云平台端点、出错、3 秒没答或答得不对，回本地估算。不收费、不记录，失败不让凭证或端点冷却，只收调用 key，频率池与调用分开。
 - **鉴权**：`Authorization: Bearer` 或 `x-api-key`；key 只能在所属站点登记的 API 域名上用（[API key](accounts.md#api-key)）；只凭域名和请求头认 key，认出前不读请求体，认不出立即 401 并关连接。浏览器跨域默认不允许，站点可为指定来源开放。
 - **限制**：下表是代码默认值（`gateway.DefaultConfig`），各项关系启动时校验，不满足不启动。
 
@@ -311,7 +311,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | `completions` 编号追加在末尾 | 已存的 `embeddings`、`rerank` 编号不变。 |
 | 推不出的格式由模型映射声明 | 按渠道类型猜会误标；直接改同步表会被覆盖。 |
 | compact 只换 `usage` | 每次调用都要返回用量和费用。批准：2026-10-28，#309。 |
-| `count_tokens` 本地估算 | 转发要占端点名额；文件按固定页数可能偏低，不承诺不超窗口。 |
+| `count_tokens` 先问上游、答不了才估算 | 上游用自己的分词器，估算对文件按固定页数可能偏低；只走调用会走的路由，正文不去调用去不了的地方；中转站常没有这条路由，所以失败不算凭证和端点的错。 |
 | `/credits`、`/key` 也收管理 key | 与 OpenRouter 一致，保留中转站常用的调用 key。批准：2026-10-28，#309。 |
 | 提供两种余额接口 | new-api 查 OpenAI 类渠道用旧版接口，OpenRouter 格式服务兼容工具。 |
 | 内容接口不给内容，`activity` 不给端点 | 产品不让人查看内容，货源不公开。 |

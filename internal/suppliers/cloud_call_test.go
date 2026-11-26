@@ -45,8 +45,8 @@ func (signedQuirks) Answer(resp *http.Response) *http.Response {
 
 // TestCloudCallsAreSignedByTheirPlatform: a cloud credential's call is the request its platform's adapter makes, from
 // the credential's region and the model as that region names it (call_names), and its answer is the one the adapter
-// gives back; a call the adapter refuses to sign for the credential's sake fails as the credential's, which rests it,
-// and nothing is sent.
+// gives back; a count is refused unsent; a call the adapter refuses to sign for the credential's sake fails as the
+// credential's, which rests it, and nothing is sent.
 func TestCloudCallsAreSignedByTheirPlatform(t *testing.T) {
 	t.Parallel()
 	w := newWorldWith(t, 4, fakeKind{}, signedKind{})
@@ -93,12 +93,30 @@ func TestCloudCallsAreSignedByTheirPlatform(t *testing.T) {
 	if sentPath != "/eu-central-1/eu.gpt-v1:0" || sentKey != "sk-test-key" || resp.Header.Get("X-Answered") != "signed" {
 		t.Errorf("sent to %s with key %q; the answer was marked %q", sentPath, sentKey, resp.Header.Get("X-Answered"))
 	}
-
-	checkRefusedSigning(w, func() int {
+	sent := func() int {
 		mu.Lock()
 		defer mu.Unlock()
 		return asked
-	})
+	}
+	checkCountUnsent(w, sent)
+	checkRefusedSigning(w, sent)
+}
+
+// checkCountUnsent: a platform's own count API is not called; a count is refused unsent, as the request's failure.
+func checkCountUnsent(w *world, asked func() int) {
+	w.t.Helper()
+	a, err := w.svc.Acquire(w.endpoint)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer a.Done()
+	resp, f := a.Send(w.t.Context(), Call{Format: protocol.Messages, Count: true, Body: []byte(`{}`)})
+	if resp != nil {
+		_ = resp.Body.Close() //nolint:errcheck // a count here is never answered
+	}
+	if f == nil || f.Executed != NotExecuted || f.Scope != ScopeRequest || asked() != 1 {
+		w.t.Errorf("a count on a cloud platform: %+v, %d requests sent", f, asked())
+	}
 }
 
 // checkRefusedSigning: a call the platform refused to sign for the credential's sake fails as the credential's,

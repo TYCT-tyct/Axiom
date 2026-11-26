@@ -41,8 +41,10 @@ type Deps struct {
 	Limits   *Backpressure
 	Memory   *protocol.Memory // the node's budget for request bodies and streams
 	Run      Run
-	Logger   *slog.Logger
-	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Upstreams are the credentials count_tokens asks, the Executor's own.
+	Upstreams Upstreams
+	Logger    *slog.Logger
+	Meter     metric.Meter // where the handler's counters go; nil for none
 	// Models is the model list in OpenRouter's shape, which the route builder fills with each snapshot it publishes: the
 	// handler serves it and reads no price of its own, so a client's estimate and a call's charge are one reading.
 	Models *ModelList
@@ -83,7 +85,7 @@ type Handler struct {
 // complete reports whether every dependency is there.
 func (d Deps) complete() bool {
 	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
-		d.Run != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
+		d.Run != nil && d.Upstreams != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.

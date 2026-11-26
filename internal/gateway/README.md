@@ -57,7 +57,7 @@
 
 - `/key`：`usage*` 只算已收，窗口是数据库时钟的 UTC 日、周、月；`limit_remaining` = 上限 −（窗口内已收 + 在途预留），不为负，与准入拒绝的依据相同。
 - 余额类字段读 `billing.spend` 的合计，不对随调用数增长的账本求和。
-- `count_tokens` 不调上游：`⌈TextBytes ÷ 3⌉ + 图片数 × 1600 + 文件数 × 3000`，`TextBytes` 是体字节减去图片、文件数据。不预留、不收费、不记录；模型必须存在且 key 可用，否则 404 `model_not_found`。
+- `count_tokens`：准入事务和池许可还回后，按调用的路由（`NativeOnly`）取第一个能拿到凭证的端点，用 `protocol.CountBody` 和 `suppliers.Call.Count` 发出，等 `countWait`（3s），严格读至多 4 KiB 的 `{"input_tokens": n}`；凭证名额发完即还。答不了就估算：`⌈TextBytes ÷ 3⌉ + 图片数 × 1600 + 文件数 × 3000`，`TextBytes` 是体字节减去图片、文件数据。不预留、不收费、不记录；模型必须存在且 key 可用，否则 404 `model_not_found`。
 
 ## 尝试与转发
 
