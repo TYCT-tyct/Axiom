@@ -15,11 +15,11 @@
 | `vendor` | 厂商标识，也决定图标；只卖一家模型的类型就是目录作者的 slug（`openai`、`deepseek`、`moonshotai`），云平台和聚合商是它自己的标识（`aws`、`siliconflow`） |
 | `serves` | 能卖哪些目录作者的模型；空表示任何作者（聚合商、兼容接口、中转站） |
 | `name`、`group` | 显示名（厂商的品牌名，不翻译）；分组：官方 API、国内厂商、云平台、中转站 |
-| `origins` | 价目入口：地址和它的价目表币种是一个值，同一地址有两份价目表的列两项（DeepSeek）；第一个是默认；空表示人填（兼容接口、Azure） |
+| `entries` | 价目入口：每个有自己的 ID、地址和价目表币种，地址和币种是一个值；同一地址可以有两个入口（DeepSeek 的人民币价和美元价）；请求选入口的 ID，从不另给币种；第一个是默认；没有入口的类型由人填地址和结算币种（兼容接口、Azure） |
 | `families` | 能说的调用族：`openai`、`anthropic`、`gemini`；兼容接口是人选其一 |
 | `forms` | 凭证的形式，每种是一组字段；多于一种时人选一种，第一种是默认 |
 | `fields` | 所有形式共用的字段，按顺序显示 |
-| 能力 | 列模型、读余额、按区域、要填部署 |
+| 能力 | 列模型（`lists`：有不收费、要鉴权的清单接口，检测和定期重读都用它；没有的不定期重读，模型来自目录，key 只在加入时用一次最小生成检测）、读余额、按区域、要填部署 |
 
 - **字段**：每个字段有名字、种类、是否必填、格式（正则）和长度上限。种类：`keys`（一行一把 key，每把一条凭证）、`secret`（一段密文）、`json`（一份密文 JSON，如服务账号）、`text`（不是秘密的设置）、`regions`（区域清单，每个一条凭证）、`deployments`（Azure 的部署）。字段名取自一个固定词表（`keys`、`api_key`、`access_key_id`、`secret_access_key`、`service_account_json`、`organization`、`project`、`api_version`、`regions`、`deployments`），页面按名字写标签；新类型要新字段时先加进词表。
 - **启动时核对**：`kind` 合法且唯一；`mode` 与适配器实现的接口一致（`direct` 实现 `Direct`，`cloud` 实现 `Cloud` 和 `Signer`）；地址是裸 origin、币种是三位代码、默认在第一位；字段名在词表里、不重复，格式能编译；`regions` 只出现在按区域的类型，`deployments` 只出现在要填部署的类型；每种形式至少一个密文字段。
@@ -49,7 +49,7 @@
 | `openrouter` | OpenRouter | `openrouter.ai`（USD） | `/api/v1` | — | — |
 | `perplexity` | Perplexity | `api.perplexity.ai`（USD） | 空（`/chat/completions`） | — | — |
 
-- **检测用的清单**：缺省是前缀加 `/models`。OpenRouter 的 `/api/v1/models` 对无效 key 也回 200，改用要鉴权的 `/api/v1/models/user`；Perplexity 的 `/models` 是 404，用 `/v1/models`，录制样本证明它校验 key；证明不了就声明这一行不列模型：模型按目录在售的该作者模型生成（同 Vertex），检测改为一次输出上限 1 的最小生成。
+- **检测用的清单**：缺省是前缀加 `/models`。OpenRouter 的 `/api/v1/models` 对无效 key 也回 200，改用要鉴权的 `/api/v1/models/user`。Perplexity 的 `/models` 是 404，用 `/v1/models`，录制样本证明它校验 key；证明不了就声明这一行不列模型：模型按目录在售的该作者模型生成（同 Vertex），key 只在加入时用一次输出上限 1 的最小生成检测，定期重读跳过它，重读永远不发收费的请求。
 - **不在这一批**：硅基流动没有机器可读的价目表，又卖多家的模型，按原厂官方价算会算错，这一批不收这一行（见「待定问题」）。
 
 - **两个调用族**：有 Anthropic 前缀的行同时说两族，`families` 是 `openai` 和 `anthropic`。Messages 按模型声明，不按厂商：行里列出厂商的 Anthropic 兼容接口服务的模型名（如百炼文档列出的那几个，`*` 只用于厂商写明全部模型都服务的），名单里的生成模型端点同时声明 Chat 和 Messages，其余只有 Chat，Messages 请求由网关转换。Messages 发到 `<地址><Anthropic 前缀>/v1/messages`，用 `x-api-key`，与 Chat 同一把 key、同一个价；网关对 Messages 请求优先选原生的 Messages，Claude Code 这类客户端不必经过转换。Anthropic 前缀与 OpenAI 前缀在同一地址下，凭证只发往供应商自己的地址这一条不变。
@@ -67,7 +67,7 @@
 
 ### 接入
 
-所有贴 key 和贴凭证的类型用同一个操作：`POST /api/admin/v1/supplier-types/{kind}/suppliers`（`createTypedSupplier`），按类型的 `mode` 走直连或云平台的流程。请求：名字、地址（类型允许多个或要人填时）、`format`（只有 `compatible`）、`form`、`fields`（密文和设置）、`keys`、`regions`、`deployments`、结算币种（只有人填地址的类型）、线路倍率、每把 key 或每个区域的并发和每分钟上限、原因。未知的 `kind` 是 404；地址不在类型的价目入口里、内置类型给了结算币种，都是 400。原来的 `createDirectSupplier`、`createCloudSupplier` 由它取代。
+所有贴 key 和贴凭证的类型用同一个操作：`POST /api/admin/v1/supplier-types/{kind}/suppliers`（`createTypedSupplier`），按类型的 `mode` 走直连或云平台的流程。请求：名字、价目入口的 ID（`entry`，缺省第一个）或人填的地址、`format`（只有 `compatible`）、`form`、`fields`（密文和设置）、`keys`、`regions`、`deployments`、结算币种（只有没有入口的类型）、线路倍率、每把 key 或每个区域的并发和每分钟上限、原因。未知的 `kind` 是 404；入口 ID 不是这个类型的、有入口的类型给了地址或结算币种，都是 400。原来的 `createDirectSupplier`、`createCloudSupplier` 由它取代。
 
 - **顺序**：先在只读事务里核对请求、在请求内和已存凭证里找重复（`PlanDirect`），再在事务外逐把检测（`CheckDirect`，同时最多 16 把），最后在幂等事务里写（`CreateDirect`），写前再找一次重复。同一幂等键的重发直接得到第一次的回答，不再问厂商；指纹只含 key 的个数和末四位。
 - **检测**：每把 key 经出站客户端 `GET` 一次模型清单（厂商不收费），10 秒，带上它的设置。200 且是清单为通过；401 和 Google 的 400 `API_KEY_INVALID` 为失败（`credential_rejected`）；403（可能是地区封锁）、429、超时、5xx、读不懂的回答都不可判定，不存，可以重贴。没有一把通过时什么都不写。
@@ -95,8 +95,8 @@
 
 以下任务只扫平台的直连和云供应商，不碰 BYOK。
 
-- **重读**：直连 key 的模型清单定期免费重读（复用 `CheckKey`，每把 key 每小时一次，River 任务，只扫 `active` 的供应商）：新列出的名字照「写什么」补进 `supplier_models` 和端点，不再列的名字不删端点，凭证的 `allowed_models` 跟着清单走；聚合商顺带重读价。目录的修订变了（新上架的模型、新的参考价），直连和云线路重新投影一次：之前待映射的名字映射上了就建端点；Vertex 这类不列模型的按目录在售模型补端点；价变了的重新定价。重读被拒（401）照调用路径的规则标 `rejected`。
-- **余额按钱包，不按供应商**：同一线路的 key 可能属于不同项目或钱包，所以声明了余额读法的类型（DeepSeek、Kimi）每把 key 各读各的余额，存在凭证上（金额和读到的时间，币种是价目入口的币种）；接入时随检测读一次。准入用厂商自己会扣的钱比余额：请求的成本上界按标价算（倍率只用于算我们的成本，不用于这里）。供应商的可用资金是它可用 key 中余额最大的一个，路由按它判断；挑凭证时跳过余额不大于 0 的 key；厂商以余额不足拒绝时只歇这把 key，直到读到正余额。某把 key 余额低于告警线发 `BalanceLow`，回升后才再发。一个钱包空了，其余照常。没声明余额读法的仍不看余额（`Funds.Unbounded`）。
+- **重读**：直连 key 的模型清单定期免费重读（只对能列模型的类型，复用 `CheckKey`，每把 key 每小时一次，River 任务，只扫 `active` 的供应商）：新列出的名字照「写什么」补进 `supplier_models` 和端点，不再列的名字不删端点，凭证的 `allowed_models` 跟着清单走；聚合商顺带重读价。目录的修订变了（新上架的模型、新的参考价），直连和云线路重新投影一次：之前待映射的名字映射上了就建端点；Vertex 这类不列模型的按目录在售模型补端点；价变了的重新定价。重读被拒（401）照调用路径的规则标 `rejected`。
+- **余额按钱包，不按供应商**：同一线路的 key 可能属于不同项目或钱包，所以声明了余额读法的类型（DeepSeek、Kimi）每把 key 各读各的余额，存在凭证上（金额和读到的时间，币种是价目入口的币种）；接入时随检测读一次。付不付得起用厂商自己会扣的钱比余额：请求的成本上界按标价算（倍率只用于算我们的成本）。路由和挑凭证用同一个判断：供应商的可用资金是可用 key 中余额最大的一个，路由按它筛端点；挑凭证时跳过自己钱包付不起这次请求标价上界的 key。厂商以余额不足拒绝时只歇这把 key，直到读到够用的余额。某把 key 余额低于告警线发 `BalanceLow`，回升后才再发。一个钱包空了，其余照常。没声明余额读法的仍不看余额（`Funds.Unbounded`）。
 
 ### 云平台
 
