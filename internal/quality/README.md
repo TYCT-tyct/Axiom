@@ -33,7 +33,7 @@ func (l *Loop) Drain(ctx context.Context) error
 - `Cut` 区分 `HeaderWait`、`Idle` 和 `Ours`；网关从尝试 context 原因转换，不能把自己的期限或退出当成端点失败。`FirstToken` / `Ended` 在读取上游时记录，不含后续追加预留、关闭和算成本的等待。
 - `Source` 必须是账户所有者 UUID；没有所有者时仍可更新测量，但不进入熔断窗口。`Delivered` 表示首段内容交付时客户端还在；客户端离开后才出现的内容不能设置它。
 - 响应头和 `UsageItems` 必须来自同一次响应；多跳服务端搜索取第一跳，估算补上的用量不算报告证据。`Config` 是尝试发出时的模型、上游名和格式集。
-- `RouteDeps.Build` 和尝试使用同一个 `Monitor`。构建快照前调用 `Prepare`，再取 `MeasuredFor`；测量按值进快照，实时熔断和慢启动取 `Live` 返回的 `State`。`State.Routing` 给熔断时刻和临时并发上限；`State.Offline(time.Time) bool` 给离线状态。路由不调用写入接口。
+- `RouteDeps.Build` 和尝试使用同一个 `Monitor`。构建快照前调用 `Prepare`，再取 `MeasuredFor`；测量按值进快照，实时熔断和慢启动取 `Live` 返回的 `State`。`State.Routing` 给熔断时刻和临时并发上限；`State.Offline(time.Time) bool` 给离线状态。路由不调用写入接口。 `Measures.Recent` 是公开端点视图用的近期可用率、首字延迟与速度；它的 `Percent`、`LatencyMS`、`Speeds` 给出对外的取整值，路由不读它。
 - `Measures` 中运营测量、产品成绩、真伪、来源和逐格式 `Facts` 是独立信号，字段的零值、有效期及算法见[测量规则](../../docs/domains/quality.md#质量分吞吐与延迟)、[真伪检测](../../docs/domains/quality.md#真伪检测)和[来源指纹](../../docs/domains/quality.md#来源类别与指纹)。`VerifiedAt` 在过期或矛盾后保留最近通过时刻，配置变化时清零。
 - `Facts` 的 `Supported` / `Unsupported` 与参数的对应字段分别表达确认的支持和不支持；零字段不改旧值，正的 `Context` / `MaxOutput` 替换旧值。同一批里同一位同时声明支持与不支持时，支持优先；后续测量可以翻转旧结论。`Measure` 拒绝旧配置或端点未提供的格式。
 
@@ -71,5 +71,6 @@ func (l *Loop) Drain(ctx context.Context) error
 | 真伪未知、矛盾和假冒分开，证据只属于检测过的配置 | `TestVerificationPassesAndFailsClosed`、`TestInconclusiveVerificationKeepsThePass`、`TestVerificationDropsACheckOfAnotherClaim` |
 | 结构事实按配置和格式绑定，旧 Generation 不能翻回当前配置 | 端点锁内核对；`TestMeasureByFormat`、`TestMeasureStaleConfiguration`、`TestPrepareRejectsOlderGeneration` |
 | 运营质量的未知不等于差，试探不进入独立来源窗口 | `TestQualityWithoutCountedOutcomesIsNeutral`、`TestProbeResultsScoreTheEndpoint` |
+| 公开可用率只数计入的尝试，晚到的结局不抹掉新桶 | 固定大小的分钟和小时桶；`TestRecentWindows` |
 | 成绩只用当前题库、基线、配置与持久代次；写失败不发布 | `TestBenchmarkConfigurationChangeDoesNotResurrect`、`TestBenchmarkPersistsAcrossRestartAndNodes`、`TestBenchmarkStoreFailureLeavesMemoryUnchanged` |
 | 调用路径不做 I/O，预建端点上的观测不分配；共享状态受锁保护 | 端点表用 `RWMutex`，每个端点独立锁；`BenchmarkObserve` 断言分配数，`TestObserveConcurrently` 覆盖并发访问 |

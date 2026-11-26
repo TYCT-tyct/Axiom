@@ -274,7 +274,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | `metadata`、`trace`（`trace_id`、`span_name`…）字段 | 链路与广播 | spec `ChatRequest.trace` | 部分：`metadata` 同格式透传；`trace` 不识别 | 无 | 无 | 低优先 |
 | 广播 Broadcast（把 trace 发给 Langfuse、Datadog、S3 等 20 多个平台）与 `/observability/destinations` | 可观测性集成 | docs/guides/features/broadcast | 没有（对应 #316 通知渠道，形态不同） | 无 | 无 | 低优先 |
 | 日志与输入输出记录开关 | 控制台功能 | docs/guides/features/logs、input-output-logging | 部分：内容保存由平台统一决定，站点和账户不能关（`docs/product.md`） | 有 | 有 | 与 OpenRouter 的「用户可选」不同，有意 |
-| 运行时间/性能：模型端点的 `uptime_last_*`、`throughput_last_30m`、`latency_last_30m` | 在 `/models/.../endpoints` 里公开 | docs/guides/best-practices/uptime-optimization | 没有（内部有健康度数据用于路由，不对外） | 无 | 无 | 见 §2 |
+| 运行时间/性能：模型端点的 `uptime_last_*`、`throughput_last_30m`、`latency_last_30m` | 在 `/models/.../endpoints` 里公开 | docs/guides/best-practices/uptime-optimization | 有：取本节点计入的尝试按比例算，未知为 null，控制台模型页同样显示（[端点评估](domains/quality.md#质量分吞吐与延迟)） | 无 | 无 | — |
 | 零数据保留（ZDR）账户级/按模型组设置 | 隐私设置 | docs/guides/features/zdr | 部分：请求级 `provider.zdr`/`data_collection` 有；账户级设置没有核实 | 无 | 无 | #315 |
 | 地域路由（`eu.openrouter.ai`、`us.openrouter.ai`） | 企业功能 | docs/guides/features/in-region-routing | 没有 | 无 | 无 | 不跟 |
 | 批量 API `/api/v1/batches`（异步批量，`:batch` 价） | 异步批处理 | docs/batch-quickstart | 没有（范围「以后」） | 无 | 有（图片批量） | 低优先 |
