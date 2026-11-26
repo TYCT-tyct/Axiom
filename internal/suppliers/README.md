@@ -86,7 +86,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 `Failure.Cause` 的 13 种原因都以同名类型别名导出，`NotExecuted` 是 `Failure.Executed` 唯一需要比较的取值。
 
-- **`Routable`** 只含能调的端点，与 `ListRoutable` 是同一批行，字段见类型定义：`Codename` 是分组的公开代号，不暴露真实名称、地址或内部 ID；`Schedule` 已按分组倍率缩放；路由用 `billing.ReservedCost` 调 `Funds.CanPay`。模型规格不在这里，routing 向目录取。
+- **`Routable`** 只含能调的端点，与 `ListRoutable` 同一批行：`Codename` 是分组的公开代号，不暴露真实名称、地址或内部 ID；`Schedule` 已乘分组倍率；路由用 `billing.ReservedCost` 调 `Funds.CanPay`。模型规格不在这里，routing 向目录取。
 - **回执**带凭证、端点、成本计划版本、单位价值行 id 和对账键；gateway 用 `AttemptReceipt.WithExchange` 传回冻结的汇率。`Credits` = 原生金额 × 单位价值 × 汇率，精确相乘、转成十亿分之一时向上取整一次；缺汇率或溢出返回未知，原生 `CostFlag` 不变。`attempt_costs` 存换算依据（`Conversion`：same_currency、converted、missing_rate、overflow、unpriced、not_executed），只有 converted 和 overflow 写汇率 ID。
 - **写入**：`RecordAttempts` 在 billing 的结算事务里用一条 `unnest` 写全部尝试，`ON CONFLICT DO NOTHING`；`EndRequests` 同样一条语句，重复保留第一次。平台自己的尝试传零值租户，写成 NULL；失联请求必须有租户。
 - **路径**：调用路径只来自 `attempt.go` 的 `wire` 表和 `compactPaths`，只有 `/v1/messages` 加 Anthropic 版本头（见[接入的「路径与格式」](../../docs/domains/gateway.md#路径与格式)）。
@@ -151,7 +151,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 
 ## 管理接口
 
-`Admin`（`admin*.go`）在调用方的平台范围事务里写，处理器 `cmd/axiom/admin_suppliers.go` 只做转换；行为见[供应商的「管理操作」](../../docs/domains/suppliers.md#管理操作)。
+`Admin`（`admin*.go`）在调用方的平台范围事务里写，处理器只做转换；行为见[供应商的「管理操作」](../../docs/domains/suppliers.md#管理操作)。
 
 | 操作 | 拒绝 |
 |---|---|
