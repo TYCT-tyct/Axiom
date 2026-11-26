@@ -12,7 +12,8 @@ import (
 )
 
 // The kinds of the suppliers' to-do queue that the tables can show (docs/domains/suppliers.md「待处理队列」).
-// unlisted_model_called is not among them: the refused calls are in the call log, which this module does not read.
+// unlisted_model_called is not among them and is never produced: the refused calls are in the call log, which this
+// module does not read. The contract marks it so.
 var (
 	// InboxEverything is every kind an observation by the sync brings in line.
 	InboxEverything = []string{"low_balance", "ratio_changed", "cost_mismatch", "group_added", "key_invalid", "unknown_model"}
@@ -30,6 +31,20 @@ const (
 	costDays     = 7
 	inboxPercent = 6 // digits of the tolerance as a decimal
 )
+
+// RejectCredential marks a credential the supplier refused in a call, if it is still active, and brings the supplier's
+// queue in line in the same transaction. The supplier's row is taken first, as the sync and every admin change take
+// it before a credential's: no sync would ever bring a direct API's or a cloud supplier's queue in line.
+func RejectCredential(ctx context.Context, tx pg.Tx, supplier, credential uuid.UUID, now time.Time) error {
+	q := store.New()
+	if _, err := q.LockSupplier(ctx, tx, supplier); err != nil {
+		return fmt.Errorf("persist: lock supplier %s: %w", supplier, err)
+	}
+	if err := q.SetCredentialRejected(ctx, tx, credential); err != nil {
+		return fmt.Errorf("persist: mark credential %s rejected: %w", credential, err)
+	}
+	return ObserveInbox(ctx, tx, supplier, now, InboxKeys, false)
+}
 
 // ObserveInbox brings the supplier's queue in line with its tables for the kinds named. sighting is an observation by
 // the sync, which shows an ignored item again; a person's change that starts or ends a condition is not one.

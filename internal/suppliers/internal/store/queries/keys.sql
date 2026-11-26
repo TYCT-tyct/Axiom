@@ -67,12 +67,14 @@ WHERE s.owner_scope = 'platform' AND s.status IN ('active', 'low_balance', 'paus
 SELECT id FROM suppliers.credentials WHERE supplier_id = @supplier_id AND upstream_key_ref = @upstream_key_ref;
 
 -- name: InsertSealedCredential :exec
--- A key a person gave or Axiom made at their asking, sealed to this row: active, with what its check found.
+-- A key a person gave or Axiom made at their asking, sealed to this row: active, with what its check found and what the
+-- supplier's listing lets it call (allowed_models NULL is every model).
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, hint, source, checked_at, check_outcome, check_status)
+    key_version, status, max_concurrency, requests_per_minute, hint, source, checked_at, check_outcome, check_status,
+    allowed_models, expires_at)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
     'active', @max_concurrency, sqlc.narg(requests_per_minute), sqlc.narg(hint), @source, sqlc.narg(checked_at),
-    sqlc.narg(check_outcome), sqlc.narg(check_status));
+    sqlc.narg(check_outcome), sqlc.narg(check_status), sqlc.narg(allowed_models), sqlc.narg(expires_at));
 
 -- name: GroupHasCredential :one
 -- Whether the group has a credential that holds a key or waits for one.

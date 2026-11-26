@@ -394,6 +394,18 @@ func (q *Queries) SetSupplierStatus(ctx context.Context, db DBTX, arg SetSupplie
 	return err
 }
 
+const supplierSynced = `-- name: SupplierSynced :one
+SELECT mode = 'relay' FROM suppliers.suppliers WHERE id = $1
+`
+
+// Whether the sync runs for the supplier at all: only a relay has a listing to read, as ListSyncDue says.
+func (q *Queries) SupplierSynced(ctx context.Context, db DBTX, id uuid.UUID) (bool, error) {
+	row := db.QueryRow(ctx, supplierSynced, id)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const swapSupplierLogin = `-- name: SwapSupplierLogin :execrows
 UPDATE suppliers.supplier_logins
 SET ciphertext = $1, nonce = $2, wrapped_dek = $3, key_version = $4, version = version + 1

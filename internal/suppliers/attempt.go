@@ -16,7 +16,7 @@ import (
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
-	"axiom/internal/suppliers/internal/store"
+	"axiom/internal/suppliers/internal/persist"
 )
 
 // Failure is a failed attempt, as the adapter classified it: who is at fault (Scope), what went wrong (Cause) and
@@ -437,15 +437,14 @@ func (s *Service) reportRejected(supplier uuid.UUID, cred *credential) {
 	}
 }
 
-// markRejected writes the rejected status until the queue is empty. An error is logged and not retried: the credential
-// is resting in this node anyway, and the next rejection after a restart tries again. The suppliers' queue shows the key
-// from the next sync that reads the offer: writing the queue here, without the supplier's lock, would take its rows after
-// the credential's, the other order from the sync's.
+// markRejected writes the rejected status, and the suppliers' queue with it, until the queue of reports is empty. An
+// error is logged and not retried: the credential is resting in this node anyway, and the next rejection after a
+// restart tries again.
 func (s *Service) markRejected() {
 	for r := range s.rejected {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		err := s.cfg.DB.Tx(ctx, s.cfg.Scope, func(tx pg.Tx) error {
-			return store.New().SetCredentialRejected(ctx, tx, r.credential)
+			return persist.RejectCredential(ctx, tx, r.supplier, r.credential, s.now())
 		})
 		if err != nil {
 			s.cfg.Logger.Error("marking a refused key", "supplier", r.supplier.String(), "err", err)

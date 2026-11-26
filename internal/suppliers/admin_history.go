@@ -27,7 +27,8 @@ func (a *Admin) SyncTasks(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]
 }
 
 // RequestSync makes every task of a supplier the sync runs due now, without clearing a halted task or a backoff: the
-// next sweep queues it. A supplier the sync does not run (paused, needing a person, removed) is ErrStatusLocked.
+// next sweep queues it. A supplier the sync does not run now (paused, needing a person, removed) is ErrStatusLocked, and
+// one it never runs for (a direct API, a cloud supplier) is ErrNotSynced.
 func (a *Admin) RequestSync(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, reason string) ([]SyncTask, error) {
 	// The state's row before the supplier's, the order the sync's step takes them in (persist.Wake).
 	tasks, err := persist.RequestSync(ctx, tx, supplier, a.now())
@@ -36,6 +37,9 @@ func (a *Admin) RequestSync(ctx context.Context, tx pg.Tx, actor audit.Actor, su
 	}
 	row, err := a.locked(ctx, tx, supplier, Connecting, Active, LowBalance)
 	if err != nil {
+		return nil, err
+	}
+	if err := synced(ctx, tx, supplier); err != nil {
 		return nil, err
 	}
 	if err := a.record(ctx, tx, actor, "supplier.sync_request", supplier, reason, map[string]any{"status": row.Status}); err != nil {
