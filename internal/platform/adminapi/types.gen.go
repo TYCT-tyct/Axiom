@@ -8077,7 +8077,7 @@ type SupplierInboxItem struct {
 	// IgnoredAt When a person ignored it; absent while it shows.
 	IgnoredAt *time.Time `json:"ignored_at,omitempty"`
 
-	// Kind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name no model matches (`listPendingMappings`).
+	// Kind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists; not produced yet, since the refused calls are in the call log, which the suppliers' queue cannot read yet: no item has this kind and its count is 0. `key_invalid`: the supplier refused a credential (`rejected`), at a check or in a call, of any mode. `unknown_model`: an upstream name no model matches (`listPendingMappings`).
 	Kind       SupplierInboxKind `json:"kind"`
 	LastSeenAt time.Time         `json:"last_seen_at"`
 
@@ -8095,7 +8095,7 @@ type SupplierInboxItem struct {
 	UpstreamName *string `json:"upstream_name,omitempty"`
 }
 
-// SupplierInboxKind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name no model matches (`listPendingMappings`).
+// SupplierInboxKind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists; not produced yet, since the refused calls are in the call log, which the suppliers' queue cannot read yet: no item has this kind and its count is 0. `key_invalid`: the supplier refused a credential (`rejected`), at a check or in a call, of any mode. `unknown_model`: an upstream name no model matches (`listPendingMappings`).
 type SupplierInboxKind string
 
 // SupplierInboxList defines model for SupplierInboxList.

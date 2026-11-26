@@ -266,7 +266,8 @@ func (a *Admin) AddKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 
 // RecordCheck writes what a check of a stored credential found: a pass puts a rejected credential back to active, and
 // a refusal as not valid makes it rejected, so routing stops picking it; any other outcome changes no status. A
-// credential a person disabled or erased since the check was sent keeps its status, and its check is recorded.
+// credential a person disabled or erased since the check was sent keeps its status, and its check is recorded. The
+// queue is brought in line every time, so a check also mends an item a failed write of a call's refusal left out.
 func (a *Admin) RecordCheck(ctx context.Context, tx pg.Tx, actor audit.Actor, supplier uuid.UUID, check KeyCheck, reason string) (Credential, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
 		return Credential{}, err
@@ -296,10 +297,8 @@ func (a *Admin) RecordCheck(ctx context.Context, tx pg.Tx, actor audit.Actor, su
 	}); err != nil {
 		return Credential{}, err
 	}
-	if from != to {
-		if err := persist.ObserveInbox(ctx, tx, supplier, a.now(), persist.InboxKeys, false); err != nil {
-			return Credential{}, err
-		}
+	if err := persist.ObserveInbox(ctx, tx, supplier, a.now(), persist.InboxKeys, false); err != nil {
+		return Credential{}, err
 	}
 	return a.credential(ctx, tx, supplier, check.Credential)
 }

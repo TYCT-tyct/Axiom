@@ -204,7 +204,8 @@ func (f relayFixture) inboxShows() []any {
 }
 
 // TestSupplierInbox: a key the supplier refused at a check is in the queue at once, counted by kind; ignoring it hides
-// it, and ignoring it again changes nothing; a check that passes takes it out.
+// it, and ignoring it again changes nothing; a check that passes takes it out. A key already rejected that a check
+// finds refused again is in the queue too.
 func TestSupplierInbox(t *testing.T) {
 	t.Parallel()
 	f := newRelayFixture(t)
@@ -232,4 +233,9 @@ func TestSupplierInbox(t *testing.T) {
 	f.relay.setRefuse(false)
 	f.send(http.MethodPost, f.path("/credentials/"+id+"/tests"), `{"reason":"r"}`, http.StatusCreated, &check)
 	expectSame(t, "items after the key passed", f.text("SELECT count(*)::text FROM suppliers.inbox_items"), "0")
+
+	f.run("UPDATE suppliers.credentials SET status = 'rejected' WHERE id = '" + id + "'")
+	f.relay.setRefuse(true)
+	f.send(http.MethodPost, f.path("/credentials/"+id+"/tests"), `{"reason":"r"}`, http.StatusCreated, &check)
+	expectSame(t, "the queue for a key rejected already", f.inboxShows(), []any{[]string{"key_invalid:" + id + "@" + f.def}, int64(1), int64(1)})
 }
