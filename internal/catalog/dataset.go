@@ -14,10 +14,11 @@ const datasetCurrency = "USD"
 
 // Entry is what a dataset says about one model, read but not yet matched to a model of ours.
 type Entry struct {
-	Key   string   // the dataset's own name for it
-	Names []string // the model names it may stand for, as the dataset writes them
-	Text  bool     // the model takes and gives text only
-	Raw   jsonx.Raw
+	Key    string   // the dataset's own name for it
+	Author string   // the catalog author whose model it is, as the dataset files it
+	Names  []string // the model names it may stand for, as the dataset writes them
+	Text   bool     // the model takes and gives text only
+	Raw    jsonx.Raw
 	// Err says why the entry's prices cannot be used; the entry still matches by name, so that a model that follows
 	// the dataset is held with this reason instead of looking as if the dataset lacked it.
 	Err   error

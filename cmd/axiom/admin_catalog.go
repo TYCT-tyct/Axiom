@@ -121,10 +121,7 @@ func (a adminAPI) ListModels(ctx context.Context, request adminapi.ListModelsReq
 	}
 	list := adminapi.ModelList{Data: make([]adminapi.ModelSummary, len(models))}
 	for i, m := range models {
-		list.Data[i] = adminapi.ModelSummary{
-			Id: m.ID.String(), Slug: m.Slug, Author: m.Author, Status: adminapi.ModelStatus(m.Status),
-			VersionBasis: adminapi.VersionBasis(m.VersionBasis), PriceSource: adminapi.PriceSource(m.PriceSource), Rev: m.Rev,
-		}
+		list.Data[i] = modelSummaryBody(m)
 	}
 	if more {
 		next := base64.RawURLEncoding.EncodeToString([]byte(models[len(models)-1].Slug))
@@ -140,8 +137,13 @@ func modelBody(v catalog.ModelView) (adminapi.Model, error) {
 		Id: v.ID.String(), Slug: v.Slug, Author: v.Author, Status: adminapi.ModelStatus(v.Status),
 		VersionBasis: adminapi.VersionBasis(v.VersionBasis), PriceSource: adminapi.PriceSource(v.PriceSource), Rev: v.Rev,
 		Names: make([]adminapi.ModelName, len(v.Names)), Prices: make([]adminapi.ReferencePrice, len(v.Prices)),
+		Family: familyBody(v.Family),
 	}
 	if err := jsonx.Unmarshal(v.Spec, &body.Spec); err != nil {
+		return adminapi.Model{}, err
+	}
+	var err error
+	if body.BillingUnits, err = billingUnits(v.Prices); err != nil {
 		return adminapi.Model{}, err
 	}
 	for i, n := range v.Names {

@@ -143,7 +143,7 @@ func serveWith(ctx context.Context, environ []string, logger *slog.Logger, outbo
 	if err != nil {
 		return err
 	}
-	console.paymentSignals = paymentSignals
+	console.paymentSignals, console.datasets = paymentSignals, datasetReader(prices, exit)
 	defer startAlerts(ctx, db, recorder, &console, logger, signals)()
 	// Every way out closes the recorder, or its writer would outlive a failed start. The normal shutdown closes it
 	// earlier, after the listeners drain and with the shutdown deadline; Close is idempotent, so this one then
@@ -260,8 +260,17 @@ type consoleParts struct {
 	frontend           *webui.Frontend // the pages of the three apps
 	alerts             alert.Sink
 	paymentSignals     *payments.SignalState
+	datasets           *catalog.Fetcher // the price job's reader of the public price lists, which importModels reads too; nil without it
 
 	sessionCursorKey [32]byte // derived from the master snapshot under its own cursor label
+}
+
+// datasetReader is the price job's reader of the public price lists, or nil on a node started without the job.
+func datasetReader(prices func(*egress.Client) *catalog.Fetcher, exit *egress.Client) *catalog.Fetcher {
+	if prices == nil {
+		return nil
+	}
+	return prices(exit)
 }
 
 func loadConsole(cfg nodeSettings, limits gateway.Config) (consoleParts, error) {

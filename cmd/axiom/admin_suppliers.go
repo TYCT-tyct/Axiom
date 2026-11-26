@@ -153,8 +153,12 @@ func (a adminAPI) getSupplier(ctx context.Context, request adminapi.GetSupplierR
 		return nil, err
 	}
 	var detail suppliers.Detail
+	var counts *adminapi.SupplierModelCounts
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
-		detail, err = a.suppliers.Supplier(ctx, tx, id, owners)
+		if detail, err = a.suppliers.Supplier(ctx, tx, id, owners); err != nil {
+			return err
+		}
+		counts, err = a.modelCounts(ctx, tx, id, owners)
 		return err
 	}); err != nil {
 		return nil, err
@@ -162,7 +166,7 @@ func (a adminAPI) getSupplier(ctx context.Context, request adminapi.GetSupplierR
 	body := adminapi.SupplierDetail{
 		Supplier: supplierBody(detail.Supplier), Groups: make([]adminapi.SupplierGroup, len(detail.Groups)),
 		Credentials: make([]adminapi.SupplierCredential, len(detail.Credentials)), UnboundKeys: []adminapi.UpstreamKey{},
-		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)),
+		Endpoints: make([]adminapi.SupplierEndpoint, len(detail.Endpoints)), ModelCounts: counts,
 	}
 	for i, g := range detail.Groups {
 		body.Groups[i] = groupBody(g)

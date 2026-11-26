@@ -147,7 +147,7 @@ func (s *Service) Credits(r AttemptReceipt, usage []catalog.Usage, currency plat
 		c.Conversion = ConversionUnpriced
 		return c, 0, false, err
 	}
-	money := new(big.Rat).Mul(c.Native.Rat(), r.unitValue.Rat())
+	money := inSettlement(c.Native.Rat(), r.unitValue.Rat())
 	c.Conversion = ConversionSame
 	if r.currency != currency {
 		rate, ok := r.exchange.Between(r.currency, currency)

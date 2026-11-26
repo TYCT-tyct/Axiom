@@ -59,13 +59,22 @@ type ModelSummary struct {
 	VersionBasis VersionBasis
 	PriceSource  PriceSource
 	Rev          int64
+	Family       string // empty for a model in no family
 }
 
 func summaryOf(row CatalogModel) ModelSummary {
 	return ModelSummary{
 		ID: ModelID(row.ID), Slug: row.Slug, Author: row.Author, Status: Status(row.Status),
 		VersionBasis: VersionBasis(row.VersionBasis), PriceSource: PriceSource(row.PriceSource), Rev: row.Rev,
+		Family: deref(row.Family),
 	}
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // ModelQuery chooses the models to list, by slug. An empty field is no filter; SlugPrefix is matched literally; After is

@@ -43,6 +43,7 @@ type adminFixture struct {
 	logs      *bytes.Buffer
 	upstreams *suppliers.Service
 	mount     func(*gateway.RouteDeps) (admin, ops http.Handler) // the two listeners' routes over the node's handlers
+	remount   func(func(*adminAPI)) (admin, ops http.Handler)    // the same over handlers a test changes
 }
 
 // newAdminFixture is the main site with its admin domain and one operator, the owner, who holds the admin role.
@@ -135,14 +136,23 @@ func startAdminNodeWithSignals(c commandLine, clock *testClock, exit *egress.Cli
 	if err != nil {
 		c.t.Fatal(err)
 	}
-	mount := func(routes *gateway.RouteDeps) (http.Handler, http.Handler) {
+	remount := func(change func(*adminAPI)) (http.Handler, http.Handler) {
 		api := api
-		api.routes = routes
+		change(&api)
 		return adminRoutes(api, &guard{contract: contract, accounts: svc, logger: logger, admin: true}, testFrontend(c.t), logger),
 			operationsRoutes(operationsAPI{admin: api, db: c.db}, &agentGuard{contract: opsContract, accounts: svc, db: c.db, logger: logger}, logger)
 	}
+	mount := func(routes *gateway.RouteDeps) (http.Handler, http.Handler) {
+		return remount(func(api *adminAPI) { api.routes = routes })
+	}
 	routes, ops := mount(nil)
-	return adminFixture{commandLine: c, svc: svc, routes: routes, ops: ops, clock: clock, logs: logs, upstreams: upstreams, mount: mount}
+	return adminFixture{commandLine: c, svc: svc, routes: routes, ops: ops, clock: clock, logs: logs, upstreams: upstreams, mount: mount, remount: remount}
+}
+
+// withAPI is the node with its handlers changed, such as given a reader of local price lists.
+func (f adminFixture) withAPI(change func(*adminAPI)) adminFixture {
+	f.routes, f.ops = f.remount(change)
+	return f
 }
 
 // routing is the node with a call path whose routing routes builds: each change it commits rebuilds that routing, as on

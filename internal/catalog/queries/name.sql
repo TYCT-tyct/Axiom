@@ -9,3 +9,9 @@ SELECT * FROM catalog.name WHERE model_id = @model_id;
 
 -- name: ListNamesForSnapshot :many
 SELECT n.* FROM catalog.name n JOIN catalog.model m ON m.id = n.model_id WHERE m.status IN ('listed', 'retired');
+
+-- The names among norms, of every model drafts included, with what a pile of a supplier's names is sorted by.
+-- name: RecognizeNorms :many
+SELECT n.norm, m.id, m.slug, m.status, m.version_basis, m.family
+FROM catalog.name n JOIN catalog.model m ON m.id = n.model_id
+WHERE n.norm = ANY(@norms::text[]);

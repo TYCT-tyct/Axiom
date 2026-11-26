@@ -36,7 +36,7 @@ func (q *Queries) ListAuthors(ctx context.Context, db DBTX) ([]CatalogAuthor, er
 }
 
 const listModelsPage = `-- name: ListModelsPage :many
-SELECT id, author, slug, status, version_basis, price_source, spec, rev FROM catalog.model
+SELECT id, author, slug, status, version_basis, price_source, spec, rev, family FROM catalog.model
 WHERE ($1::text IS NULL OR status = $1)
     AND ($2::text IS NULL OR author = $2)
     AND ($3::text IS NULL OR slug LIKE $3 || '%')
@@ -79,6 +79,7 @@ func (q *Queries) ListModelsPage(ctx context.Context, db DBTX, arg ListModelsPag
 			&i.PriceSource,
 			&i.Spec,
 			&i.Rev,
+			&i.Family,
 		); err != nil {
 			return nil, err
 		}
