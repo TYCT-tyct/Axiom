@@ -1,0 +1,68 @@
+/* The admin's .qpace (a compact bar in a row or a cell) and .adgb (a goal bar with the "by today" mark), with the
+   round-five data and warning fills (admin_style.css). */
+.root {
+  position: relative;
+  display: block;
+  background: var(--hover);
+}
+
+.compact {
+  display: inline-block;
+  width: var(--w, 110px);
+  height: 6px;
+  margin-right: 10px;
+  border-radius: 3px;
+  vertical-align: middle;
+  overflow: hidden;
+}
+
+.goal {
+  height: 6px;
+  border-radius: var(--r4);
+}
+
+.fill {
+  display: block;
+  width: var(--p);
+  height: 100%;
+  border-radius: inherit;
+  background: var(--adData);
+  transition: width var(--dur) var(--ease);
+}
+
+.warn {
+  background: var(--warn);
+}
+
+.frame {
+  position: relative;
+  display: block;
+}
+
+/* The board draws the 2px mark with a 2px halo in the card colour (a box-shadow); here the halo is the mark's own fill
+   and the line its ::after, so neither reads as a control's edge. */
+.mark {
+  position: absolute;
+  left: var(--at);
+  top: -6px;
+  bottom: -6px;
+  width: 6px;
+  margin-left: -3px;
+  border-radius: 3px;
+  background: var(--cardBg);
+}
+
+.mark::after {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border-radius: 1px;
+  background: var(--t1);
+  pointer-events: none;
+}
+
+.hit {
+  display: block;
+  width: 6px;
+  height: 18px;
+}

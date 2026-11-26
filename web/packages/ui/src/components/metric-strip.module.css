@@ -1,0 +1,127 @@
+/* The admin's .qcard.usm.adkpi.ad4 (the board's .usm with admin_style.css's overview and strip rules): cells side by
+   side split by a hairline, two to a row below 1024px with the hairline above the second row, and a cell that is a link
+   lit on hover. */
+.root {
+  display: grid;
+  grid-template-columns: repeat(var(--n), minmax(0, 1fr));
+  margin-bottom: 16px;
+  padding: 0;
+  border-radius: var(--r16);
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 16px 20px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.cell + .cell {
+  box-shadow: inset var(--bw) 0 0 var(--line);
+}
+
+.label {
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+}
+
+.value {
+  display: flex;
+  align-items: baseline;
+  height: 36px;
+  font-size: var(--fs24);
+  line-height: var(--lh24);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--t1);
+}
+
+.prefix,
+.suffix {
+  font-size: var(--fs14);
+  font-weight: 400;
+  color: var(--t2);
+}
+
+.prefix {
+  margin-right: 0.1em;
+}
+
+.suffix {
+  margin-left: 0.25em;
+}
+
+.note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 18px;
+  font-style: normal;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.link {
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.link:hover {
+  background: var(--hover);
+}
+
+.link:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.link:first-child {
+  border-radius: 16px 0 0 16px;
+}
+
+.link:last-child {
+  border-radius: 0 16px 16px 0;
+}
+
+@media (max-width: 1023px) {
+  .root {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cell:nth-child(odd) {
+    box-shadow: none;
+  }
+
+  .cell:nth-child(n + 3) {
+    box-shadow: inset 0 var(--bw) 0 var(--line);
+  }
+
+  .cell:nth-child(even):nth-child(n + 3) {
+    box-shadow:
+      inset var(--bw) 0 0 var(--line),
+      inset 0 var(--bw) 0 var(--line);
+  }
+
+  .link:nth-child(n) {
+    border-radius: 0;
+  }
+}
+
+@media (max-width: 767px) {
+  .cell:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+
+  .note {
+    flex-wrap: wrap;
+    row-gap: 0;
+    white-space: normal;
+  }
+}

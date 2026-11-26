@@ -57,10 +57,50 @@ const column = ({ align, shrink, main, actions, from }: Column) =>
     from && s[`from${from}`],
   );
 
-export function Th({ children, ...layout }: { children?: ReactNode } & Column) {
+// Tr is a body row. flash lights it once after an edit changed it; onFlashEnd says the light has gone, so the caller
+// can flash it again later.
+export function Tr({
+  children,
+  flash = false,
+  onFlashEnd,
+}: {
+  children: ReactNode;
+  flash?: boolean;
+  onFlashEnd?: () => void;
+}) {
   return (
-    <th scope="col" className={column(layout)}>
+    <tr className={flash ? s.flash : undefined} onAnimationEnd={flash ? onFlashEnd : undefined}>
       {children}
+    </tr>
+  );
+}
+
+// A sortable header (the admin's adsort) is a button in the cell, and the cell says the order: the arrow points down
+// while the column is off or high to low, up when low to high, and turns to the accent once the column sorts.
+export type SortOrder = "ascending" | "descending" | "none";
+
+export function Th({
+  children,
+  sort,
+  onSort,
+  ...layout
+}: { children?: ReactNode; sort?: SortOrder; onSort?: () => void } & Column) {
+  return (
+    <th scope="col" aria-sort={onSort ? (sort ?? "none") : undefined} className={column(layout)}>
+      {onSort ? (
+        <button
+          type="button"
+          className={classes(s.sort, sort !== undefined && sort !== "none" && s.sorted)}
+          onClick={onSort}
+        >
+          <span>{children}</span>
+          <svg viewBox="0 0 12 12" aria-hidden="true">
+            <path d={sort === "ascending" ? "M6 9.5v-7M3 5.5l3-3 3 3" : "M6 2.5v7M3 6.5l3 3 3-3"} />
+          </svg>
+        </button>
+      ) : (
+        children
+      )}
     </th>
   );
 }

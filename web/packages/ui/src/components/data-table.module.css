@@ -1,0 +1,10 @@
+/* The admin's .adcnt: how many rows the table lists, small and quiet at the end of the row above it. */
+.count {
+  margin: 0 0 8px;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-variant-numeric: tabular-nums;
+  color: var(--t3);
+  text-align: right;
+  white-space: nowrap;
+}

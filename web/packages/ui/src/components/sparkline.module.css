@@ -1,0 +1,36 @@
+/* The admin's svg.adspk (admin_style.css): a 1.5px round-capped line in the data colour, with its end dot. */
+.root {
+  display: block;
+  flex: none;
+  fill: none;
+  stroke-width: 1.5px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.data {
+  --spark: var(--adData);
+}
+
+.bad {
+  --spark: var(--bad);
+}
+
+.line {
+  stroke: var(--spark);
+}
+
+.end {
+  fill: var(--spark);
+  stroke: none;
+}
+
+.rule {
+  stroke: var(--line2);
+}
+
+.named {
+  display: block;
+  flex: none;
+  width: fit-content;
+}

@@ -1,0 +1,168 @@
+/* The admin's .adring and the model mix beside it (.admixb, .admixl, .admxr in admin_style.css, with the round-five
+   hover link): a 16-unit ring whose part thickens to 21 when its row is pointed at, and rows that light the other way. */
+.root {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.ring {
+  position: relative;
+  flex: none;
+  width: var(--size);
+  height: var(--size);
+}
+
+.ring svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  fill: none;
+  stroke-width: 16px;
+  animation: turn var(--dur) var(--ease) both;
+}
+
+.arc {
+  stroke: var(--sw);
+  transition: stroke-width var(--dur) var(--ease);
+}
+
+.hot {
+  stroke-width: 21px;
+}
+
+.data {
+  --sw: var(--adData);
+}
+
+.data2 {
+  --sw: var(--adData2);
+}
+
+.data3 {
+  --sw: var(--adData3);
+}
+
+.c0 {
+  --sw: var(--c0);
+}
+
+.c1 {
+  --sw: var(--c1);
+}
+
+.c2 {
+  --sw: var(--c2);
+}
+
+.c3 {
+  --sw: var(--c3);
+}
+
+.c4 {
+  --sw: var(--c4);
+}
+
+.muted {
+  --sw: var(--line3);
+}
+
+.bad {
+  --sw: var(--bad);
+}
+
+.centre {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.centre b {
+  font-size: var(--fs24);
+  line-height: 32px;
+  font-weight: 500;
+}
+
+.centre span {
+  font-size: var(--fs12);
+  line-height: 16px;
+  color: var(--t2);
+}
+
+.list {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: calc(100% + 16px);
+  min-height: 30px;
+  margin: 0 -8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: var(--r8);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  transition: background-color var(--dur) var(--ease);
+}
+
+button.row {
+  cursor: pointer;
+}
+
+.lit {
+  background: var(--hover);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+.swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--sw);
+}
+
+.name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mono {
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+}
+
+.share {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@keyframes turn {
+  from {
+    transform: rotate(-40deg);
+    opacity: 0;
+  }
+}
