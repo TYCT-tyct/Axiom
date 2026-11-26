@@ -74,7 +74,7 @@
 
 依据 Claude Code 的网关兼容指南。
 
-- **请求头白名单**（`internal/gateway/headers.go`）：Messages 端点收 `anthropic-beta`（不筛值）、`anthropic-version`；Responses 端点收 `x-codex-turn-state`；Responses、Chat、旧版补全端点收会话头 `session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`，值换成派生值。其余（`Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`User-Agent`、归因头 `HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）不转发，归因头记入调用记录（[记录](observability.md#写入时记全)）。
+- **请求头白名单**（`internal/gateway/headers.go`）：Messages 端点收 `anthropic-beta`（不筛值；发往 Vertex AI 和 Bedrock 时只留它们接受的）、`anthropic-version`；Responses 端点收 `x-codex-turn-state`；Responses、Chat、旧版补全端点收会话头 `session_id`、`session-id`、`conversation_id`、`X-Session-Affinity`、`X-Session-Id`、`X-OpenCode-Session`、`X-Conversation-ID`，值换成派生值。其余（`Authorization`、`x-api-key`、`x-axiom-*`、`x-claude-code-*`、`User-Agent`、归因头 `HTTP-Referer`、`X-OpenRouter-Title`、`X-Title`、`X-OpenRouter-Categories`）不转发，归因头记入调用记录（[记录](observability.md#写入时记全)）。
 - **派生标识**：`prompt_cache_key`、会话头、`metadata.user_id` 换成用账户密钥派生的不透明值（[会话粘性](routing.md#会话粘性)）。`metadata.user_id` 写成 JSON 串 `{"device_id":"…","account_uuid":"","session_id":"…"}`，`device_id` 每账户固定，空白的写空串；`user`、`safety_identifier` 换成哈希。
 - **上游一律流式**，非流式由网关聚合，所以交付前失败仍可换端点、各次尝试不混。
 - **只改必须改的**：`model` 换成端点的名字，标识派生，路由参数和 `axiom` 扩展删除；同格式时缓存标记、块状 system 和 Chat 的方言成员（`reasoning`、`cache_control`、回传的 `reasoning_content` 等）原样发。
@@ -270,7 +270,7 @@ OpenAI、Anthropic 格式跟随官方规范；扩展只增不改；不兼容的�
 | 决策 | 理由 |
 |---|---|
 | 同时提供 `/v1` 和 `/api/v1` | OpenRouter 的客户端只改地址就能接入。 |
-| 请求头白名单，`anthropic-beta` 不筛值 | 筛值会让新功能失效；客户端凭证和身份不能流向上游。 |
+| 请求头白名单，`anthropic-beta` 不筛值（Vertex AI、Bedrock 除外） | 筛值会让新功能失效；客户端凭证和身份不能流向上游。 |
 | 标识换成派生值 | 删除让上游缓存失效，原样转发会串租户。 |
 | 上游一律流式，强制 `include_usage`，输出上限写在端点读的成员里 | 计量要靠上游用量，端点忽略的上限罩不住预留。 |
 | 能同格式就不转换 | 转换会拒绝表达不了的成员。 |

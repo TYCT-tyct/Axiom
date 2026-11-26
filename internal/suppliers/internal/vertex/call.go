@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -14,6 +15,15 @@ import (
 // anthropicVersion is the version of Anthropic's API Vertex AI's Anthropic endpoints take, in the body in place of the
 // model, which is in the path (https://docs.anthropic.com/en/api/claude-on-vertex-ai).
 var anthropicVersion = []byte(`"vertex-2023-10-16"`)
+
+// accepted is the beta features Vertex AI's Anthropic endpoints take (the client's name for a feature, Vertex's name for
+// it): the rest, Claude Code's own among them, fail the call.
+var accepted = map[string]string{
+	"context-1m-2025-08-07":                  "context-1m-2025-08-07",
+	"context-management-2025-06-27":          "context-management-2025-06-27",
+	"fine-grained-tool-streaming-2025-05-14": "fine-grained-tool-streaming-2025-05-14",
+	"interleaved-thinking-2025-05-14":        "interleaved-thinking-2025-05-14",
+}
 
 type quirks struct {
 	cloud.Quirks
@@ -64,6 +74,10 @@ func (q quirks) Sign(ctx context.Context, d adapter.Doer, c adapter.SignedCall) 
 		return nil, f
 	}
 	req.Header.Del("Anthropic-Version") // the version is the body's
+	req.Header.Del("Anthropic-Beta")
+	if betas := cloud.Betas(c.Header.Values("Anthropic-Beta"), accepted); betas != nil {
+		req.Header.Set("Anthropic-Beta", strings.Join(betas, ","))
+	}
 	req.Header.Set("Authorization", "Bearer "+acct.token)
 	return req, nil
 }
