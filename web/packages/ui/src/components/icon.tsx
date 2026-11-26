@@ -13,6 +13,7 @@ const icons = {
   ),
   right: <path d="m6 3.5 4.5 4.5L6 12.5" />,
   down: <path d="m4 6 4 4 4-4" />,
+  up: <path d="m4 10 4-4 4 4" />,
   grid: (
     <>
       <rect x="2.25" y="2.25" width="4.5" height="4.5" rx="1.2" />

@@ -1,0 +1,131 @@
+/* The unsaved-changes bar (.adbar/.adbari in admin_style.css): the primary colours turned round, centred at the bottom
+   of the viewport, above the phone's bottom tabs. */
+.root {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 16px;
+  z-index: 8;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(12px);
+  transition:
+    opacity 250ms ease-out,
+    transform 250ms ease-out;
+}
+
+.open {
+  opacity: 1;
+  transform: none;
+}
+
+.inner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  height: 48px;
+  padding: 0 8px 0 16px;
+  border-radius: var(--r12);
+  background: var(--priBg);
+  color: var(--priFg);
+  box-shadow: var(--shPop);
+}
+
+.open .inner {
+  pointer-events: auto;
+}
+
+.message {
+  min-width: 0;
+  margin-right: 16px;
+  overflow: hidden;
+  font-size: var(--fs14);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.message b {
+  font-weight: 500;
+}
+
+.discard {
+  color: var(--priFg);
+  opacity: 0.72;
+}
+
+.discard:hover {
+  background: color-mix(in srgb, var(--priFg) 14%, transparent);
+  opacity: 1;
+}
+
+.submit {
+  background: var(--priFg);
+  color: var(--priBg);
+}
+
+.submit:hover {
+  background: color-mix(in srgb, var(--priFg) 88%, var(--priBg));
+}
+
+.submit:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.discard:focus-visible,
+.submit:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.shortcut {
+  margin-left: 8px;
+  padding: 0 5px;
+  height: 18px;
+  border-radius: var(--r4);
+  background: color-mix(in srgb, var(--priBg) 12%, transparent);
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  line-height: 18px;
+  color: inherit;
+  opacity: 0.7;
+}
+
+@media (max-width: 1023px) {
+  .shortcut {
+    display: none;
+  }
+}
+
+@media (max-width: 599px) {
+  .root {
+    bottom: 96px;
+    padding: 0 8px;
+  }
+
+  .inner {
+    flex: 1;
+    height: 52px;
+  }
+
+  .message {
+    margin-right: auto;
+  }
+
+  .discard,
+  .submit {
+    position: relative;
+    height: 36px;
+  }
+
+  .discard::before,
+  .submit::before {
+    content: "";
+    position: absolute;
+    inset: min(0px, calc((100% - 44px) / 2));
+  }
+}
