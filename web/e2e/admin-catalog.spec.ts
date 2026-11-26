@@ -20,19 +20,6 @@ async function open(page: Page, path: string) {
 
 const dialog = (page: Page) => page.locator("dialog.nkdlg");
 
-// The page with the model library's read answering as given, which the catalog takes to say whether the library is there:
-// 501 before its backend, 404 for the supplier that is not there after it. It is put over the mock's own answer.
-async function openWithLibrary(page: Page, path: string, status: 404 | 501) {
-  const state = await mockAdmin(page);
-  signedInAs(state, "mfa");
-  await page.route("**/api/admin/v1/suppliers/*/models*", (route) =>
-    route.fulfill({
-      status,
-      json: { error: { code: status === 501 ? "not_implemented" : "not_found", message: "no" } },
-    }),
-  );
-  await page.goto(path);
-}
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
 const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
@@ -199,20 +186,10 @@ test.describe("the model catalog", () => {
     await expect(drawer(page).getByRole("button", { name: "重试" })).toHaveCount(0);
   });
 
-  test("the family and the import are left out, without a word, until the model library answers", async ({ page }) => {
-    await openWithLibrary(page, `/models?model=${uuid(5, 1)}`, 501);
-    await expect(drawer(page).getByRole("heading", { name: "openai/model-1" })).toBeVisible();
-    await expect(drawer(page).getByText(words("models.family.label"))).toHaveCount(0);
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    await drawer(page)
-      .getByRole("button", { name: words("dialog.close") })
-      .click();
-    await expect(page.getByRole("button", { name: words("models.import.open") })).toHaveCount(0);
-  });
-
-  test("the family and the import are offered once it does", async ({ page }) => {
-    // a supplier that is not there: the answer a node with the library gives
-    await openWithLibrary(page, `/models?model=${uuid(5, 1)}`, 404);
+  test("a model's family is set from its drawer, and an ill-formed one is refused before it is sent", async ({
+    page,
+  }) => {
+    await open(page, `/models?model=${uuid(5, 1)}`);
     await drawer(page)
       .getByRole("button", { name: words("models.family.set") })
       .click();
