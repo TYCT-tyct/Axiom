@@ -81,6 +81,7 @@ export const initial = {
       saved: "The targets for this month are saved.",
     },
   },
+  list: { noMatch: { title: "No record matches", body: "Try another word, or clear the filter." } },
   filter: { apply: "Filter", reset: "Clear" },
   change: {
     reason: "Reason",
@@ -156,11 +157,8 @@ export const initial = {
     default: "Default",
     noLimit: "No limit",
   },
-  users,
-  orders,
   models,
   pricing,
-  redeem,
   approvals,
 } satisfies Messages<
   Omit<
@@ -189,6 +187,9 @@ export const initial = {
     | "calls"
     | "audit"
     | "me"
+    | "users"
+    | "orders"
+    | "redeem"
   >
 >;
 
@@ -215,4 +216,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   auditEvents,
   calls,
   audit,
+  users,
+  orders,
+  redeem,
 }) satisfies Messages<typeof zh>;

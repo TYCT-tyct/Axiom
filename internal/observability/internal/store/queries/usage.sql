@@ -15,9 +15,9 @@ WITH batch AS MATERIALIZED (
 ), enqueued AS (
     INSERT INTO observability.usage_journal
         (site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano,
-        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins)
+        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins,request_id)
     SELECT site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano,
-        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins
+        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins,id
     FROM batch
     RETURNING 1
 ), last_row AS (
@@ -38,7 +38,7 @@ WITH batch AS (
 ), rolled AS (
     INSERT INTO observability.usage_hourly AS h
         (site_id,account_id,hour,workspace_id,key_id,model,currency,requests,successes,
-        input,output,cache_read,cache_write,cache_rate_requests,cache_rate_read,cache_rate_input,spend)
+        input,output,cache_read,cache_write,cache_rate_requests,cache_rate_read,cache_rate_input,spend,tokens)
     SELECT site_id,account_id,date_trunc('hour',at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
         workspace_id,key_id,model,currency,count(*),count(*) FILTER (WHERE success),
         sum(CASE WHEN usage ? 'input' OR usage ? 'audio_in' OR usage ? 'image_in'
@@ -53,7 +53,7 @@ WITH batch AS (
         count(*) FILTER (WHERE usage ? 'cache_read' AND physical_input >= 0),
         coalesce(sum((usage->>'cache_read')::numeric) FILTER (WHERE physical_input >= 0),0),
         coalesce(sum(physical_input::numeric) FILTER (WHERE usage ? 'cache_read' AND physical_input >= 0),0),
-        sum(price_nano::numeric)
+        sum(price_nano::numeric), sum(observability.call_tokens(usage, physical_input))
     FROM batch
     WHERE NOT billing_pending -- a pending call's usage and price were never known (README「写入」)
     GROUP BY site_id,account_id,date_trunc('hour',at AT TIME ZONE 'UTC'),workspace_id,key_id,model,currency
@@ -66,26 +66,29 @@ WITH batch AS (
         cache_write=CASE WHEN h.cache_write IS NOT NULL OR excluded.cache_write IS NOT NULL THEN coalesce(h.cache_write,0)+coalesce(excluded.cache_write,0) END,
         cache_rate_requests=h.cache_rate_requests+excluded.cache_rate_requests,
         cache_rate_read=h.cache_rate_read+excluded.cache_rate_read,cache_rate_input=h.cache_rate_input+excluded.cache_rate_input,
-        spend=h.spend+excluded.spend
+        spend=h.spend+excluded.spend,
+        tokens=h.tokens+excluded.tokens -- a row without them, from before 00051, keeps none (docs/domains/observability.md「监控汇总」)
     RETURNING 1
 ), calls AS (
-    SELECT at, site_id, endpoint_id, error_kind, attempt_count, latency_ms, first_token_ms, currency, plugins,
-        coalesce((usage->>'input')::numeric,0) + coalesce((usage->>'audio_in')::numeric,0)
-            + coalesce((usage->>'image_in')::numeric,0) + coalesce((usage->>'cache_read')::numeric,0)
-            + coalesce((usage->>'cache_write')::numeric,0) + coalesce((usage->>'cache_write_1h')::numeric,0)
-            + coalesce((usage->>'output')::numeric,0) + coalesce((usage->>'reasoning')::numeric,0)
-            + coalesce((usage->>'audio_out')::numeric,0) + coalesce((usage->>'image_out')::numeric,0) AS tokens
-    FROM batch
+    -- A call switched when one of its attempts was on another endpoint than the last; a retry with another key on the
+    -- same endpoint is not a switch. The attempts were written in the call's own transaction. A row journaled before
+    -- 00051 names no call and stays out of the monitor's rollups.
+    SELECT b.at, b.site_id, b.endpoint_id, b.error_kind, b.latency_ms, b.first_token_ms, b.currency, b.plugins,
+        b.attempt_count > 1 AND EXISTS (SELECT 1 FROM observability.call_attempt a
+            WHERE a.request_id = b.request_id AND a.at = b.at AND a.endpoint_id <> b.endpoint_id) AS switched,
+        observability.call_tokens(b.usage, b.physical_input) AS tokens
+    FROM batch b
+    WHERE b.request_id IS NOT NULL
 ), bucketed AS (
     -- The monitor's windows reach back an hour of minutes and a day of hours; a record older than its width's keep
     -- (a spill replayed after an outage) is not rolled into it. PruneMonitor deletes on the same bounds.
-    SELECT c.endpoint_id, c.error_kind, c.attempt_count, c.latency_ms, c.first_token_ms, c.tokens, w AS width,
+    SELECT c.endpoint_id, c.error_kind, c.switched, c.latency_ms, c.first_token_ms, c.tokens, w AS width,
         date_bin(make_interval(secs => w), c.at, '1970-01-01T00:00:00Z'::timestamptz) AS bucket
     FROM calls c CROSS JOIN unnest(ARRAY[60, 3600]::int[]) AS w
     WHERE c.at >= now() - CASE w WHEN 60 THEN interval '2 hours' ELSE interval '48 hours' END
 ), counted AS (
     INSERT INTO observability.monitor_counts AS m (width,bucket,endpoint_id,error_kind,calls,switched,tokens)
-    SELECT width, bucket, endpoint_id, error_kind, count(*), count(*) FILTER (WHERE attempt_count > 1), sum(tokens)
+    SELECT width, bucket, endpoint_id, error_kind, count(*), count(*) FILTER (WHERE switched), sum(tokens)
     FROM bucketed
     GROUP BY width, bucket, endpoint_id, error_kind
     ORDER BY width, bucket, endpoint_id, error_kind
@@ -113,16 +116,19 @@ WITH batch AS (
     ON CONFLICT (site_id,hour,bin) DO UPDATE SET calls=f.calls+excluded.calls
     RETURNING 1
 ), plugin_runs AS (
-    INSERT INTO observability.plugin_hourly AS p (hour,plugin,currency,calls,failures,uses,ms,timed,price)
+    -- A successful run without a price is one whose charge the gateway could not tell apart (docs/domains/observability.md「监控汇总」).
+    INSERT INTO observability.plugin_hourly AS p (hour,plugin,currency,calls,failures,uses,ms,timed,price,unpriced)
     SELECT date_trunc('hour',c.at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', r->>'plugin', c.currency, count(*),
         count(*) FILTER (WHERE NOT (r->>'ok')::boolean), coalesce(sum((r->>'uses')::numeric),0),
-        coalesce(sum((r->>'ms')::numeric),0), count(r->'ms'), coalesce(sum((r->>'price_nano')::numeric),0)
+        coalesce(sum((r->>'ms')::numeric),0), count(r->'ms'), coalesce(sum((r->>'price_nano')::numeric),0),
+        count(*) FILTER (WHERE (r->>'ok')::boolean AND NOT r ? 'price_nano')
     FROM calls c CROSS JOIN LATERAL jsonb_array_elements(c.plugins) AS r
     GROUP BY 1, 2, 3
     ORDER BY 1, 2, 3
     ON CONFLICT (hour,plugin,currency) DO UPDATE SET
         calls=p.calls+excluded.calls, failures=p.failures+excluded.failures, uses=p.uses+excluded.uses,
-        ms=p.ms+excluded.ms, timed=p.timed+excluded.timed, price=p.price+excluded.price
+        ms=p.ms+excluded.ms, timed=p.timed+excluded.timed, price=p.price+excluded.price,
+        unpriced=p.unpriced+excluded.unpriced
     RETURNING 1
 )
 SELECT count(*)::int FROM batch;

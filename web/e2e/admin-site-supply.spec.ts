@@ -92,15 +92,17 @@ test.describe("site brand, workspace and login limits", () => {
   });
 
   test("an account's workspace limit can be overridden and cleared back to the site limit", async ({ page }) => {
+    // The account's drawer has the three limits, each with its change; the workspaces' is the third.
     const state = await open(page, `/accounts/${acct(1)}`);
-    await press(page, "settings.workspaceLimit.edit").click();
+    const edit = page.getByRole("button", { name: zhText("users.account.editLimit") }).nth(2);
+    await edit.click();
     await dialog(page).getByLabel(words("settings.workspaceLimit.field")).fill("12");
     await send(page, "raise workspace limit");
     await expect(done(page)).toBeVisible();
     expect(state.accounts.get(acct(1))?.workspace_limit).toEqual({ max_workspaces: 12, effective: 12 });
     await close(page);
 
-    await press(page, "settings.workspaceLimit.edit").click();
+    await edit.click();
     await dialog(page).getByLabel(words("settings.workspaceLimit.field")).fill("");
     await send(page, "inherit site limit");
     await expect(done(page)).toBeVisible();
@@ -113,8 +115,8 @@ test.describe("site brand, workspace and login limits", () => {
     state.permissions = ["users.view"];
     signedInAs(state, "mfa");
     await page.goto(`/accounts/${acct(1)}`);
-    await expect(page.getByText(zhText("settings.workspaceLimit.title.account"))).toBeVisible();
-    await expect(press(page, "settings.workspaceLimit.edit")).toHaveCount(0);
+    await expect(page.getByRole("dialog").getByText(zhText("settings.workspaceLimit.field"))).toBeVisible();
+    await expect(page.getByRole("button", { name: zhText("users.account.editLimit") })).toHaveCount(0);
   });
 });
 

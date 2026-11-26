@@ -69,7 +69,18 @@ export default function ByModelTab() {
               detail={(row) => (
                 <ModelLines served={lines.endpointsOf(row.id)} view={views.get(row.id)} onOpen={setOpened} />
               )}
-              columns={columns(t, lines, views)}
+              columns={columns(
+                {
+                  model: t("upstream.byModel.col.model"),
+                  lines: t("upstream.byModel.col.lines"),
+                  cost: t("upstream.byModel.col.cost"),
+                  sale: t("upstream.byModel.col.sale"),
+                  margin: t("upstream.byModel.col.margin"),
+                  cheapest: t("upstream.byModel.col.cheapest"),
+                },
+                lines,
+                views,
+              )}
             />
             <Text size="sm" tone="muted">
               {t("upstream.byModel.foot")}
@@ -127,46 +138,46 @@ function PerMillion({ schedule }: { schedule: Schedule | undefined }) {
   );
 }
 
-type T = ReturnType<typeof useTranslation>["t"];
+type Headers = Record<"model" | "lines" | "cost" | "sale" | "margin" | "cheapest", string>;
 
-function columns(t: T, lines: Lines, views: Map<string, ModelView>) {
+function columns(headers: Headers, lines: Lines, views: Map<string, ModelView>) {
   const live = (id: string) => lines.endpointsOf(id).filter(({ endpoint, line }) => endpoint.enabled && line?.usable);
   return [
     {
       key: "model",
-      header: t("upstream.byModel.col.model"),
+      header: headers.model,
       cell: (row: Model) => <Code>{row.slug}</Code>,
     },
     {
       key: "lines",
-      header: t("upstream.byModel.col.lines"),
+      header: headers.lines,
       from: "md" as const,
       sort: (row: Model) => live(row.id).length,
       cell: (row: Model) => `${live(row.id).length} / ${lines.endpointsOf(row.id).length}`,
     },
     {
       key: "cost",
-      header: t("upstream.byModel.col.cost"),
+      header: headers.cost,
       align: "end" as const,
       cell: (row: Model) => <PerMillion schedule={views.get(row.id)?.cheapest?.cost} />,
     },
     {
       key: "sale",
-      header: t("upstream.byModel.col.sale"),
+      header: headers.sale,
       align: "end" as const,
       from: "lg" as const,
       cell: (row: Model) => <PerMillion schedule={views.get(row.id)?.sale} />,
     },
     {
       key: "margin",
-      header: t("upstream.byModel.col.margin"),
+      header: headers.margin,
       align: "end" as const,
       sort: (row: Model) => margin(views.get(row.id)),
       cell: (row: Model) => <Margin value={margin(views.get(row.id))} />,
     },
     {
       key: "cheapest",
-      header: t("upstream.byModel.col.cheapest"),
+      header: headers.cheapest,
       from: "md" as const,
       cell: (row: Model) => <Cheapest view={views.get(row.id)} served={lines.endpointsOf(row.id)} />,
     },

@@ -33,7 +33,7 @@ func (a adminAPI) CreateCloudSupplier(ctx context.Context, request adminapi.Crea
 		return nil, cloudProblem(err)
 	}
 	claim, err := idempotencyClaim(ctx, "createCloudSupplier", request.Params.IdempotencyKey,
-		[]any{r.Kind, r.Name, r.Origin, r.Regions, r.Currency.String(), r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
+		[]any{r.Kind, r.Name, r.Origin, r.Regions, r.Deployments, r.Currency.String(), r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +127,11 @@ func cloudRequest(b *adminapi.CloudSupplierCreate) (suppliers.CloudRequest, erro
 	if b.Regions != nil {
 		r.Regions = *b.Regions
 	}
+	if b.Deployments != nil {
+		for _, d := range *b.Deployments {
+			r.Deployments = append(r.Deployments, suppliers.Deployment{Name: d.Name, Model: textValue(d.Model)})
+		}
+	}
 	if b.Origin != nil {
 		origin, err := suppliers.NormalizeOrigin(*b.Origin)
 		if err != nil {
@@ -165,6 +170,8 @@ func cloudProblem(err error) error {
 		return invalidField("/origin", "only azure takes an origin, and it requires one")
 	case errors.Is(err, suppliers.ErrCloudRegions):
 		return invalidField("/regions", "vertex and bedrock require regions, and azure takes none")
+	case errors.Is(err, suppliers.ErrCloudDeployments):
+		return invalidField("/deployments", "azure requires its deployments, and the others take none")
 	case errors.Is(err, suppliers.ErrDirectName):
 		return invalidField("/name", "1 to 200 characters")
 	case errors.Is(err, suppliers.ErrNotCloud):

@@ -3,8 +3,8 @@ import { can, useSession } from "@axiom/app";
 import {
   ActionButton,
   Cluster,
+  DrawerFacts,
   DrawerSection,
-  FactList,
   LinkButton,
   SidePanel,
   Stack,
@@ -68,7 +68,7 @@ export function EndpointDrawer({
         ) : undefined
       }
     >
-      <FactList
+      <DrawerFacts
         rows={[
           [
             t("upstream.endpoint.format"),
@@ -111,6 +111,7 @@ function CostSection({ supplier, endpoint }: { supplier: Supplier; endpoint: End
 
 function PriceLines({ plan }: { plan: Cost }) {
   const { t } = useTranslation();
+  const words = t as unknown as T;
   if (plan.cost_state !== "known" || plan.lines.length === 0) {
     return (
       <Text tone="warn">
@@ -120,13 +121,13 @@ function PriceLines({ plan }: { plan: Cost }) {
   }
   return (
     <>
-      <FactList
+      <DrawerFacts
         rows={plan.lines.map((line) => [
-          `${t(`upstream.item.${line.item}` as "upstream.item.input")}，${condition(t, line)}`,
+          `${words(`upstream.item.${line.item}`)}，${condition(words, line)}`,
           <Stack key="price" gap={4}>
             <PriceText line={line} currency={plan.settlement_currency} />
             <Text as="span" size="sm" tone="muted">
-              {factors(t, line)}
+              {factors(words, line)}
             </Text>
           </Stack>,
         ])}
@@ -137,11 +138,13 @@ function PriceLines({ plan }: { plan: Cost }) {
   );
 }
 
-type T = ReturnType<typeof useTranslation>["t"];
+// The drawer's words by a key made up at run time (an item, a unit, a factor): the catalog has every one of them, and a
+// key built from a value is more than the typed t can check.
+type T = (key: string, options?: Record<string, unknown>) => string;
 
 // The condition a price holds under, after its item: its unit, and the context tier or service tier it is for.
 function condition(t: T, line: CostLine) {
-  const parts: string[] = [t(`upstream.endpoint.per.${line.unit}` as "upstream.endpoint.per.token")];
+  const parts: string[] = [t(`upstream.endpoint.per.${line.unit}`)];
   if (line.above !== undefined) parts.push(t("upstream.endpoint.above", { count: line.above }));
   if (line.service_tier && line.service_tier !== "standard") {
     parts.push(t("upstream.endpoint.tier", { tier: t(`models.tier.${line.service_tier}`) }));
@@ -152,9 +155,7 @@ function condition(t: T, line: CostLine) {
 // What the price is the product of, written out: 模型倍率 1.5 × 分组倍率 0.7 × 每单位 1.00.
 function factors(t: T, line: CostLine) {
   return line.factors
-    .map((factor) =>
-      t(`upstream.endpoint.factor.${factor.kind}` as "upstream.endpoint.factor.scale", { value: factor.value }),
-    )
+    .map((factor) => t(`upstream.endpoint.factor.${factor.kind}`, { value: factor.value }))
     .join(" × ");
 }
 

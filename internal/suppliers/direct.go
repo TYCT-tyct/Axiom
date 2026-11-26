@@ -183,6 +183,15 @@ func (p *DirectPlan) resolve(currency string) error {
 	return nil
 }
 
+// takeStoreTurn makes the transactions that store a pasted key or cloud credential take turns until they commit, so
+// the skipStored each runs next sees what the one before stored; the unique constraint is only per supplier.
+func takeStoreTurn(ctx context.Context, tx pg.Tx) error {
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('suppliers.pasted_credentials'))`); err != nil {
+		return fmt.Errorf("wait for the credentials being stored: %w", err)
+	}
+	return nil
+}
+
 // skipStored marks the keys a credential holds now as duplicates.
 func (p *DirectPlan) skipStored(ctx context.Context, tx pg.Tx) error {
 	refs := make([]string, 0, len(p.keys))
@@ -254,9 +263,13 @@ func outcomeOf(o adapter.KeyOutcome) CheckOutcome {
 }
 
 // CreateDirect stores what the checks let in, in the caller's transaction (docs/domains/suppliers.md「直连接口」): when no
-// key passed, nothing, and Connected has no supplier. A key another transaction stored since PlanDirect read is a
-// duplicate here too. snap is the catalog the keys' model names are mapped by and the official prices come from.
+// key passed, nothing, and Connected has no supplier. A key another transaction stored since PlanDirect read, or is
+// storing now, is a duplicate here too. snap is the catalog the keys' model names are mapped by and the official
+// prices come from.
 func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, p *DirectPlan) (Connected, error) {
+	if err := takeStoreTurn(ctx, tx); err != nil {
+		return Connected{}, err
+	}
 	if err := p.skipStored(ctx, tx); err != nil {
 		return Connected{}, err
 	}

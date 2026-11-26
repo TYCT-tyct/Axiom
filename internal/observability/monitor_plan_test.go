@@ -91,7 +91,6 @@ func TestMonitorAndDashboardPlansReadTheirWindow(t *testing.T) {
 	money := []any{site, first, until, "USD"}
 	reads = append(reads,
 		read{"site tokens", siteUsageTokensSQL, "usage_hourly_site_hour", usage, 400},
-		read{"site spenders", siteSpendersSQL, "usage_hourly_site_hour", append(money, adminTop), 400},
 		read{"site models", siteModelsSQL, "usage_hourly_site_hour", append(money, []string{"m1", "m2"}), 400},
 		read{"site first tokens", siteFirstOutputSQL, "first_token_hourly_pkey", usage, 100},
 		read{

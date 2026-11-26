@@ -3,12 +3,22 @@ import { useErrors } from "@axiom/app";
 import { ChoiceCards, Field, SegmentedControl, Select, Text, TextArea, TextLink } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem } from "../change";
 import { suppliersQuery } from "../queries";
 import { ConnectDialog } from "./connect";
-import { Checks, KeysField, LimitFields, readKeys, readLimits, readRegions, validRegion } from "./key-fields";
+import {
+  Checks,
+  KeysField,
+  LimitFields,
+  readDeployments,
+  readKeys,
+  readLimits,
+  readRegions,
+  validRegion,
+} from "./key-fields";
 import { CloudCredentialFields, readCloudCredential } from "./supplier-dialogs";
 import { modeOf } from "./upstream";
 
@@ -16,7 +26,7 @@ type Way = "relay" | "key" | "cloud";
 type Provider = AdminSchemas["DirectProvider"];
 type Cloud = AdminSchemas["CloudProvider"];
 type Check = AdminSchemas["CredentialCheck"];
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 
 // Where a built-in provider answers, as the page says it (docs/domains/suppliers-direct.md); its format and price list
 // come with it, so only the keys are asked for.
@@ -272,15 +282,22 @@ function readCloud(provider: Cloud, values: Record<string, string>, t: T): Cloud
   if (isProblem(credential)) return credential;
   const limits = readLimits(values, t);
   if (isProblem(limits)) return limits;
-  if (provider === "azure") {
-    const at = (values.origin ?? "").trim().replace(/\/+$/, "");
-    return origin.test(at) && /\.azure\.com$/.test(at)
-      ? { provider, name, origin: at, credential, ...limits }
-      : { problem: t("upstream.addDialog.problems.resource") };
-  }
+  const where = provider === "azure" ? readAzure(values, t) : readRegionsOf(values, t);
+  return isProblem(where) ? where : { provider, name, credential, ...where, ...limits };
+}
+
+// Where an Azure OpenAI resource serves: its address and the deployments named, which it does not list to its key.
+function readAzure(values: Record<string, string>, t: T) {
+  const at = (values.origin ?? "").trim().replace(/\/+$/, "");
+  if (!origin.test(at) || !/\.azure\.com$/.test(at)) return { problem: t("upstream.addDialog.problems.resource") };
+  const deployments = readDeployments(values);
+  return deployments ? { origin: at, deployments } : { problem: t("upstream.addDialog.problems.deployments") };
+}
+
+function readRegionsOf(values: Record<string, string>, t: T) {
   const regions = readRegions(values);
   return regions.length > 0 && regions.length <= 20 && regions.every(validRegion)
-    ? { provider, name, credential, regions, ...limits }
+    ? { regions }
     : { problem: t("upstream.addDialog.problems.regions") };
 }
 
@@ -354,6 +371,17 @@ function CloudFields({
         />
       ) : null}
       <CloudCredentialFields provider={provider} error={error} />
+      {provider === "azure" ? (
+        <TextArea
+          label={t("upstream.addDialog.deployments")}
+          hint={t("upstream.addDialog.deploymentsHint")}
+          name="deployments"
+          rows={3}
+          placeholder={t("upstream.addDialog.deploymentsPlaceholder")}
+          spellCheck={false}
+          error={errors.field(error, "deployments")}
+        />
+      ) : null}
       {provider === "azure" ? null : (
         <TextArea
           label={t("upstream.addDialog.regions")}

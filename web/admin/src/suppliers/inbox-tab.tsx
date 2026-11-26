@@ -13,6 +13,7 @@ import {
 } from "@axiom/ui";
 import { useInfiniteQuery, useQueries } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
 import { type ReactElement, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
@@ -123,7 +124,7 @@ function useDetails(items: readonly Item[]) {
   return new Map(details.flatMap((detail) => (detail.data ? [[detail.data.supplier.id, detail.data] as const] : [])));
 }
 
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 type Format = ReturnType<typeof useFormat>;
 
 // An item in words (adInbox): what happened, what it means, and the channel it happened at.

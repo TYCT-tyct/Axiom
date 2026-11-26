@@ -304,7 +304,11 @@ export default {
     resource: "Resource address",
     resourcePlaceholder: "https://name.openai.azure.com",
     azureKey: "Key",
-    azureHint: "The models deployed are read from it.",
+    azureHint: "Azure does not list the deployments to the resource's key; name them below.",
+    deployments: "Deployments",
+    deploymentsHint:
+      "One deployment name a line; where the name is not the model's, add the model after a space, such as prod-4o gpt-4o.",
+    deploymentsPlaceholder: "prod-4o gpt-4o",
     regions: "Regions",
     regionsHint:
       "Each region is limited on its own. One a line, such as us-east5; when one is full, the next takes over.",
@@ -326,6 +330,7 @@ export default {
       azureKey: "Paste the whole key",
       regions: "Give at least one region, in lower-case letters, digits and hyphens",
       group: "Choose a group",
+      deployments: "Name at least one deployment, in letters, digits, dots, underscores and hyphens",
       number: "A whole number above 0",
     },
     added: "{{count}} keys added",

@@ -113,7 +113,7 @@ export default function MonitorPage() {
               title={t("empty.title")}
               action={
                 <ActionButton asChild>
-                  <Link to="/suppliers" search={{ status: undefined }}>
+                  <Link to="/suppliers" search={{}}>
                     {t("empty.action")}
                   </Link>
                 </ActionButton>

@@ -50,7 +50,7 @@ export default function Audit() {
               </EmptyState>
             }
           >
-            {() => <AuditTable rows={rows} current={selected} onOpen={(entry) => select(entry.id)} />}
+            {() => <AuditTable rows={rows} selected={selected} onOpen={(entry) => select(entry.id)} />}
           </DataState>
           <LoadMore list={audit} />
         </Card>
@@ -146,11 +146,11 @@ function Action({ entry }: { entry: Entry }) {
 
 function AuditTable({
   rows,
-  current,
+  selected,
   onOpen,
 }: {
   rows: Entry[];
-  current: string | undefined;
+  selected: string | undefined;
   onOpen: (entry: Entry) => void;
 }) {
   const { t } = useTranslation();
@@ -161,7 +161,7 @@ function AuditTable({
       rows={rows}
       rowKey={(entry) => entry.id ?? ""}
       onOpen={onOpen}
-      current={current}
+      selected={selected}
       columns={[
         {
           key: "at",

@@ -76,7 +76,7 @@ function useRows(monitor: Monitor, health: Health, supplier: (id: string) => str
           key,
           end,
           title: t("health.concurrency", { count: cause.count }),
-          link: <Link to="/suppliers" search={{ status: undefined }} />,
+          link: <Link to="/suppliers" search={{}} />,
         };
     }
   };

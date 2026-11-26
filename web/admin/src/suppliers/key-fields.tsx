@@ -1,13 +1,14 @@
 import type { AdminSchemas } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Field, Stack, Tag, Text, TextArea } from "@axiom/ui";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Problem } from "../change";
 import { Code } from "../parts";
 import { pastedKeys, serviceAccount } from "./upstream";
 
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 type Check = AdminSchemas["CredentialCheck"];
 
 // The keys box (adA_upkNew's keys): one key a line, counted as they are pasted, with the repeats it will skip. Each key
@@ -116,6 +117,19 @@ export function readKeys(values: Record<string, string>, t: T): string[] | Probl
 // The regions typed, one a line, in the platform's own spelling.
 export function readRegions(values: Record<string, string>) {
   return [...new Set((values.regions ?? "").split(/[\s,，]+/).filter(Boolean))];
+}
+
+// An Azure resource's deployments, one a line: its name, and after a space the model it deploys when the name is not
+// the model's; none when a line is not a deployment's name, or when there are none or more than a request takes.
+export function readDeployments(values: Record<string, string>) {
+  const lines = (values.deployments ?? "").split("\n").map((line) => line.trim().split(/\s+/).filter(Boolean));
+  const named = lines.filter((words) => words.length > 0);
+  const valid = named.every(
+    ([name, model, ...rest]) =>
+      /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(name ?? "") && rest.length === 0 && (model ?? "").length <= 200,
+  );
+  if (!valid || named.length === 0 || named.length > 100) return null;
+  return named.map(([name = "", model]) => (model ? { name, model } : { name }));
 }
 
 export const validRegion = (region: string) => /^[a-z0-9][a-z0-9-]{0,39}$/.test(region);

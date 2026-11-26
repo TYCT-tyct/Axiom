@@ -87,7 +87,7 @@ function useMoneyCells(
       value: current.cost ? format.rounded(current.cost) : none,
       note: compare(spent, "%"),
       trend: spark((day) => units(day.cost)),
-      link: <Link to="/suppliers" search={{ status: undefined }} />,
+      link: <Link to="/suppliers" search={{}} />,
     },
     {
       key: "margin",

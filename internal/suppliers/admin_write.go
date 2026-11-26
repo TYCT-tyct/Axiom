@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/big"
@@ -14,11 +15,15 @@ import (
 	"axiom/internal/suppliers/internal/store"
 )
 
+// ErrUnitValueFixed is a unit value for a supplier that is not a relay: a provider's own API and a cloud platform are
+// billed in money, and the value of 1 they are made with is what their official prices are costed at.
+var ErrUnitValueFixed = errors.New("suppliers: only a relay's unit value is confirmed; the others' is 1")
+
 // originPattern is the origin a supplier is connected at: https, a host in lower case, a port if it is not the default.
 var unitValue = regexp.MustCompile(`^(0|[1-9][0-9]{0,17})(\.[0-9]{1,15})?$`)
 
-// ConfirmUnitValue records what one unit of the supplier's balance is worth, in its settlement currency. A later value
-// applies from now: the earlier ones stay, and what was costed keeps its own.
+// ConfirmUnitValue records what one unit of a relay's balance is worth, in its settlement currency. A later value
+// applies from now: the earlier ones stay, and what was costed keeps its own. Any other supplier's is fixed at 1.
 func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, value, reason string) (Supplier, error) {
 	if !unitValue.MatchString(value) {
 		return Supplier{}, ErrUnitValue
@@ -29,6 +34,11 @@ func (a *Admin) ConfirmUnitValue(ctx context.Context, tx pg.Tx, actor audit.Acto
 	row, err := a.locked(ctx, tx, id)
 	if err != nil {
 		return Supplier{}, err
+	}
+	if s, err := a.view(ctx, tx, id, EveryOwner); err != nil {
+		return Supplier{}, err
+	} else if s.Mode != relayMode {
+		return Supplier{}, ErrUnitValueFixed
 	}
 	if err := store.New().InsertUnitValue(ctx, tx, store.InsertUnitValueParams{SupplierID: id, Value: value, Actor: actor.String(), Reason: reason}); err != nil {
 		return Supplier{}, fmt.Errorf("keep the unit value: %w", err)

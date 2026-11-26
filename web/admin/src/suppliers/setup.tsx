@@ -1,5 +1,6 @@
 import { can, useSession } from "@axiom/app";
 import { ActionButton, Card, StepList } from "@axiom/ui";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLines } from "../lines";
@@ -8,7 +9,7 @@ import { UnitValueDialog } from "./dialogs";
 import { type Step, steps } from "./steps";
 import { modeOf } from "./upstream";
 
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 
 // 接入检查 (adSupParts' setup): the steps from a new channel to one that takes traffic, in the words of its way in, shown
 // until every one is done. The step to do now carries its action where the page has one.

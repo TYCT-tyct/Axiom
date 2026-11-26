@@ -8,7 +8,9 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 )
 
 func TestHistogramPercentile(t *testing.T) {
@@ -214,7 +216,7 @@ func TestSiteUsageAndPluginStats(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	checkSiteUsage(t, usage, big)
+	checkSiteUsage(t, usage)
 	checkPluginStats(t, stats)
 	var listed []CallSummary
 	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
@@ -229,15 +231,11 @@ func TestSiteUsageAndPluginStats(t *testing.T) {
 	}
 }
 
-// checkSiteUsage checks the three settled calls of the window: big made two of them, and the call of an earlier hour
-// is left out.
-func checkSiteUsage(t *testing.T, usage SiteUsage, big uuid.UUID) {
+// checkSiteUsage checks the three settled calls of the window, and the call of an earlier hour is left out.
+func checkSiteUsage(t *testing.T, usage SiteUsage) {
 	t.Helper()
 	if want := (Tokens{Input: 300, CacheRead: 60, CacheWrite: 15, Output: 30}); usage.Tokens != want || usage.ActiveAccounts != 2 {
 		t.Errorf("usage = %+v and %d accounts, want %+v and 2", usage.Tokens, usage.ActiveAccounts, want)
-	}
-	if len(usage.Spenders) != 2 || usage.Spenders[0].Account != big || usage.Spenders[0].Spend != "10000000" {
-		t.Errorf("spenders = %+v, want %s first with 10000000", usage.Spenders, big)
 	}
 	if m := usage.Models["claude-opus"]; m.Tokens != 405 || m.Spend != "15000000" || len(usage.Models) != 1 {
 		t.Errorf("models = %+v", usage.Models)
@@ -247,7 +245,8 @@ func checkSiteUsage(t *testing.T, usage SiteUsage, big uuid.UUID) {
 	}
 }
 
-// checkPluginStats checks a web search that ran, one that failed and a parse of three pages in the window's first hour.
+// checkPluginStats checks a web search that ran, one that failed and a parse of three pages in the window's first hour
+// whose charge is not known apart from the call's other per-use items, so the parser's revenue is unknown, not zero.
 func checkPluginStats(t *testing.T, stats []PluginStat) {
 	t.Helper()
 	hour := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
@@ -256,9 +255,129 @@ func checkPluginStats(t *testing.T, stats []PluginStat) {
 	}
 	want := []PluginStat{
 		{Plugin: PluginWeb, Calls: 2, Failures: 1, Uses: 1, MeanMS: 300, Timed: 2, Price: "5000000", Hours: hours(2)},
-		{Plugin: PluginFileParser, Calls: 1, Uses: 3, MeanMS: 1000, Timed: 1, Price: "0", Hours: hours(1)},
+		{Plugin: PluginFileParser, Calls: 1, Uses: 3, MeanMS: 1000, Timed: 1, Price: "", Hours: hours(1)},
 	}
 	if fmt.Sprint(stats) != fmt.Sprint(want) {
 		t.Errorf("stats = %+v, want %+v", stats, want)
+	}
+}
+
+// ruleTokens is catalog.Usage's own count of a call's tokens: its InputTotal plus its OutputTotal. A negative physical
+// is a prompt total the upstream did not report.
+func ruleTokens(t *testing.T, counts map[catalog.Item]int64, physical int64) int64 {
+	t.Helper()
+	u, err := catalog.NewUsage(counts, catalog.ServiceTierStandard, nil)
+	if err == nil && physical >= 0 {
+		u, err = u.WithPhysicalInput(physical)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return u.InputTotal() + u.OutputTotal()
+}
+
+// storedTokens is what observability.call_tokens counts of the usage as the call log stores it.
+func storedTokens(t *testing.T, db *pg.DB, counts map[catalog.Item]int64, physical int64) int64 {
+	t.Helper()
+	named := make(map[string]int64, len(counts))
+	for item, n := range counts {
+		named[item.String()] = n
+	}
+	stored, err := jsonx.MarshalCanonical(named)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) error {
+		return tx.QueryRow(t.Context(), `SELECT observability.call_tokens($1::jsonb, $2)::bigint`, stored, physical).Scan(&got)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestCallTokensFollowTheUsageRule: the rollups' count of a call's tokens is catalog.Usage's InputTotal plus
+// OutputTotal for every billing item, as the call log stores the usage, with a prompt total and without one.
+func TestCallTokensFollowTheUsageRule(t *testing.T) {
+	t.Parallel()
+	db := openDB(t)
+	for it := range catalog.NumItems {
+		for _, physical := range []int64{-1, 1000} {
+			counts := map[catalog.Item]int64{catalog.ItemOutput: 1}
+			counts[it] += 7
+			if got, want := storedTokens(t, db, counts, physical), ruleTokens(t, counts, physical); got != want {
+				t.Errorf("%s with prompt %d: %d tokens, want %d", it, physical, got, want)
+			}
+		}
+	}
+}
+
+// switchCalls are three settled calls of site at at: a key retry on one endpoint with an overlapping cache, a switch
+// between two endpoints with a disjoint cache, and a key retry with no prompt total. want is the usage rule's tokens.
+func switchCalls(t *testing.T, site uuid.UUID, at time.Time) (records []CallRecord, want int64) {
+	t.Helper()
+	for i, c := range []struct {
+		usage    map[catalog.Item]int64
+		physical int64
+		retry    bool // its second attempt went to the first attempt's endpoint
+	}{
+		{map[catalog.Item]int64{catalog.ItemCacheRead: 80, catalog.ItemCacheWrite: 80}, 100, true},
+		{map[catalog.Item]int64{catalog.ItemInput: 50, catalog.ItemCacheRead: 20, catalog.ItemCacheWrite: 30, catalog.ItemOutput: 10}, 100, false},
+		{map[catalog.Item]int64{catalog.ItemInput: 5, catalog.ItemCacheRead: 3, catalog.ItemOutput: 2}, -1, true},
+	} {
+		r := record(uuid.NewV7(), at.Add(time.Duration(i)*time.Second))
+		r.Site, r.ErrorKind, r.Usage = site, "", c.usage
+		if c.physical >= 0 {
+			r.PhysicalInput = &c.physical
+		}
+		if c.retry {
+			r.Attempts[1].Endpoint = r.Attempts[0].Endpoint
+		}
+		records = append(records, r)
+		want += ruleTokens(t, c.usage, c.physical)
+	}
+	return records, want
+}
+
+// TestMonitorSwitchesAndTokens: a retry with another key on the same endpoint is not a switch, a call's tokens count
+// its prompt once by the rule billing prices with, and a row journaled before observability 00051, which names no call
+// and whose failure the old journal could not mark, stays out of the monitor while usage_hourly still counts it.
+func TestMonitorSwitchesAndTokens(t *testing.T) {
+	t.Parallel()
+	db, database := openDBWithURL(t)
+	site := uuid.NewV7()
+	at := time.Now().Add(-5 * time.Minute).UTC()
+	records, want := switchCalls(t, site, at)
+	if want != 220 {
+		t.Fatalf("the usage rule counts %d tokens, want 220", want)
+	}
+	keep(t, db, records...)
+	if err := pgtest.Run(t.Context(), database.Superuser, fmt.Sprintf(`INSERT INTO observability.usage_journal
+		(site_id, account_id, workspace_id, key_id, model, at, currency, success, usage, physical_input, price_nano)
+		VALUES ('%s', uuidv7(), uuidv7(), uuidv7(), 'claude-opus', '%s', 'USD', false, '{}', -1, 0)`,
+		site, at.Format(time.RFC3339Nano))); err != nil {
+		t.Fatal(err)
+	}
+	for usageBatch(t, db, 10) {
+	}
+	for _, width := range []time.Duration{MonitorMinute, MonitorHour} {
+		m := readMonitor(t, db, width)
+		got := fmt.Sprint(m.Calls, m.Failures, m.Switched, m.Tokens, m.Total.Count())
+		if wanted := fmt.Sprint(3, 0, 1, want, 3); got != wanted {
+			t.Errorf("%s window: calls, failures, switched, tokens and completions %s, want %s", width, got, wanted)
+		}
+	}
+	var usage SiteUsage
+	var requests int64
+	if err := db.ReadTx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		if usage, err = ReadSiteUsage(t.Context(), tx, site, "USD", at.Add(-time.Hour), at.Add(time.Hour), []string{"claude-opus"}); err != nil {
+			return err
+		}
+		return tx.QueryRow(t.Context(), `SELECT sum(requests)::bigint FROM observability.usage_hourly WHERE site_id = $1`, site).Scan(&requests)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := usage.Models["claude-opus"].Tokens; got != want || requests != 4 {
+		t.Errorf("the model's tokens = %d over %d requests, want %d over 4", got, requests, want)
 	}
 }

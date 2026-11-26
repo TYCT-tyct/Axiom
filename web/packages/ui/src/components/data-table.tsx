@@ -79,8 +79,8 @@ function Cell<Row>({
 // its header. Given the count of every row (total) and what a row is called (unit), it says how many it lists, as
 // "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once. Given onOpen, a row
 // opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
-// button a keyboard reaches, which is the first column's text, so that column holds text and no control. current names
-// the row whose detail is open. Given detail, a row opens in place instead (the admin's 按模型, .admv): onOpen toggles
+// button a keyboard reaches, which is the first column's text, so that column holds text and no control. selected is
+// the key of the row whose detail is open. Given detail, a row opens in place instead (the admin's 按模型, .admv): onOpen toggles
 // it, the row named by expanded shows detail in a full-width row under it, and its button says it is expanded.
 export function DataTable<Row>({
   label,
@@ -92,7 +92,7 @@ export function DataTable<Row>({
   unit,
   flash,
   onOpen,
-  current,
+  selected,
   detail,
   expanded,
 }: {
@@ -105,7 +105,7 @@ export function DataTable<Row>({
   unit?: string;
   flash?: Key;
   onOpen?: (row: Row) => void;
-  current?: Key;
+  selected?: Key | null;
   detail?: (row: Row) => ReactNode;
   expanded?: Key;
 }) {
@@ -152,7 +152,7 @@ export function DataTable<Row>({
               lit={lit}
               onLit={() => setLit(undefined)}
               onOpen={onOpen}
-              current={current}
+              selected={selected}
               detail={detail}
               expanded={expanded}
             />
@@ -171,7 +171,7 @@ function BodyRow<Item>({
   lit,
   onLit,
   onOpen,
-  current,
+  selected,
   detail,
   expanded,
 }: {
@@ -181,7 +181,7 @@ function BodyRow<Item>({
   lit?: Key;
   onLit: () => void;
   onOpen?: (row: Item) => void;
-  current?: Key;
+  selected?: Key | null;
   detail?: (row: Item) => ReactNode;
   expanded?: Key;
 }) {
@@ -192,7 +192,7 @@ function BodyRow<Item>({
         flash={lit !== undefined && lit === id}
         onFlashEnd={onLit}
         onOpen={onOpen && (() => onOpen(row))}
-        current={(current !== undefined && current === id) || open}
+        selected={selected === id || open}
       >
         {columns.map((column, at) => (
           <Cell

@@ -3889,6 +3889,15 @@ type CloudCredentialReplace struct {
 	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
 }
 
+// CloudDeployment defines model for CloudDeployment.
+type CloudDeployment struct {
+	// Model The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name.
+	Model *string `json:"model,omitempty"`
+
+	// Name The deployment's name in the resource, which its calls' path names.
+	Name string `json:"name"`
+}
+
 // CloudProvider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
 type CloudProvider string
 
@@ -3899,6 +3908,9 @@ type CloudRegion = string
 type CloudSupplierCreate struct {
 	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
 	Credential *CloudCredentialInput `json:"credential,omitempty"`
+
+	// Deployments Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once.
+	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
 
 	// MaxConcurrency The calls each region has in flight at once.
 	MaxConcurrency int    `json:"max_concurrency"`
@@ -5116,7 +5128,7 @@ type MonitorBucket struct {
 	FirstTokenMsP50 *int      `json:"first_token_ms_p50,omitempty"`
 	FirstTokenMsP95 *int      `json:"first_token_ms_p95,omitempty"`
 
-	// Tokens Input, cached and output tokens the calls reported.
+	// Tokens The tokens of the calls: each prompt once, cached tokens included, and the output.
 	Tokens int64 `json:"tokens"`
 }
 
@@ -5647,7 +5659,7 @@ type OperationsMonitor struct {
 	Lines        []MonitorLine      `json:"lines"`
 	Since        time.Time          `json:"since"`
 
-	// SwitchedCalls Calls that moved to another endpoint after an attempt failed.
+	// SwitchedCalls Calls whose attempts went to more than one endpoint. A retry with another key on the same endpoint is not a switch.
 	SwitchedCalls int64 `json:"switched_calls"`
 	Tokens        int64 `json:"tokens"`
 
@@ -5713,7 +5725,7 @@ type OperationsOverview struct {
 	TopAccounts *[]OverviewAccount `json:"top_accounts,omitempty"`
 	TopModels   *[]OverviewModel   `json:"top_models,omitempty"`
 
-	// TopSpenders The accounts whose settled calls were charged the most in the window, most first.
+	// TopSpenders The ten accounts whose settled calls were charged the most in the window, most first, by the ledger's charge as `revenue` counts it, so a corrected charge moves both alike.
 	TopSpenders      *[]OverviewSpender `json:"top_spenders,omitempty"`
 	UnknownCostCalls *int64             `json:"unknown_cost_calls,omitempty"`
 	Until            *time.Time         `json:"until,omitempty"`
@@ -6005,10 +6017,10 @@ type OverviewModel struct {
 	Errors *int64  `json:"errors,omitempty"`
 	Model  *string `json:"model,omitempty"`
 
-	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	// Revenue What the model's settled calls were charged when they were recorded, over the hours that start in the window. A later correction of a charge moves the ledger's `revenue` and `top_spenders`, not this.
 	Revenue *Money `json:"revenue,omitempty"`
 
-	// Tokens Input, cached and output tokens the model's calls reported.
+	// Tokens The tokens of the model's calls: each prompt once, cached tokens included, and the output.
 	Tokens *int64 `json:"tokens,omitempty"`
 }
 
@@ -6317,7 +6329,7 @@ type PluginStat struct {
 	// Plugin A plugin, by the ID a request names it with.
 	Plugin AdminPlugin `json:"plugin"`
 
-	// Revenue What the calls were charged for the plugin.
+	// Revenue What the calls were charged for the plugin. Absent when it is unknown: a successful run's charge could not be told apart from its call's other per-use items, such as a second plugin's.
 	Revenue *Money `json:"revenue,omitempty"`
 
 	// Uses Searches run, or pages parsed.

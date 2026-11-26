@@ -152,7 +152,7 @@ function Dashboard() {
 function emptyAction(label: string) {
   return (
     <ActionButton asChild variant="pri">
-      <Link to="/suppliers" search={{ status: undefined }}>
+      <Link to="/suppliers" search={{}}>
         {label}
       </Link>
     </ActionButton>

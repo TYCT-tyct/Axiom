@@ -17,7 +17,7 @@ async function open(page: Page, path: string) {
   return state;
 }
 
-const dialog = (page: Page) => page.getByRole("dialog");
+const dialog = (page: Page) => page.getByRole("dialog").last();
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
 
 // The reason every change asks for, and the button that sends it.
@@ -26,33 +26,24 @@ async function send(page: Page, reason = "because the owner asked") {
   await dialog(page).locator("button[type=submit]").click();
 }
 
-const close = (page: Page) =>
-  dialog(page)
-    .getByRole("button", { name: zhText("change.close") })
-    .last()
-    .click();
-const done = (page: Page) => dialog(page).getByText(zhText("change.done"));
-
 test.describe("account state", () => {
   test("the account page pauses calls, disables sign-in and moves the tier", async ({ page }) => {
     const state = await open(page, `/accounts/${acct(1)}`);
     await press(page, "users.account.suspend").click();
+    // what the change does is shown before it is made, and a switch is its own inverse
+    await expect(dialog(page).getByText(zhText("users.account.callsSuspended"))).toBeVisible();
     await send(page);
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    expect(state.accounts.get(acct(1))?.calls_suspended).toBe(true);
+    await expect.poll(() => state.accounts.get(acct(1))?.calls_suspended).toBe(true);
     await expect(page.getByText(zhText("users.account.callsSuspended")).first()).toBeVisible();
 
-    await press(page, "users.account.resume").click();
-    await send(page);
-    await close(page);
-    expect(state.accounts.get(acct(1))?.calls_suspended).toBe(false);
-    await expect(page.getByText(zhText("users.account.callsActive")).first()).toBeVisible();
+    // the toast's undo sends the opposite state, with the reason marked as the undo's
+    await page.getByRole("button", { name: zhText("change.undo") }).click();
+    await expect.poll(() => state.accounts.get(acct(1))?.calls_suspended).toBe(false);
+    await expect(page.getByText(zhText("change.undone"))).toBeVisible();
 
     await press(page, "users.account.disableSignIn").click();
     await send(page);
-    await close(page);
-    expect(state.accounts.get(acct(1))?.sign_in_disabled).toBe(true);
+    await expect.poll(() => state.accounts.get(acct(1))?.sign_in_disabled).toBe(true);
     await expect(page.getByText(zhText("users.account.signInDisabled")).first()).toBeVisible();
 
     const tiers = page.waitForRequest((request) => new URL(request.url()).pathname.endsWith("/tiers"));
@@ -60,9 +51,7 @@ test.describe("account state", () => {
     expect(new URL((await tiers).url()).searchParams.get("site_id")).toBe(state.accounts.get(acct(1))?.site_id);
     await dialog(page).locator("select[name=tier_id]").selectOption({ label: "Friends" });
     await send(page);
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    expect(state.accounts.get(acct(1))?.tier.name).toBe("Friends");
+    await expect.poll(() => state.accounts.get(acct(1))?.tier.name).toBe("Friends");
     await expect(page.getByText("Friends").first()).toBeVisible();
   });
 

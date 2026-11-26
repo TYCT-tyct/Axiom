@@ -12,25 +12,30 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// TestCheckRegion: the resource's deployments that are up are its models, named by their deployments and known by
-// the models they deploy, asked for with the key in api-key; a key the resource refuses fails.
+// TestCheckRegion: the check is one request the resource answers on the version calls use, with the key in api-key,
+// so a resource that answers no retired version passes; it lists no models (a person names the deployments), and a key
+// the resource refuses fails. The fake answers as a current resource does: the models it can deploy, and not found on
+// a path or version it does not serve.
 func TestCheckRegion(t *testing.T) {
 	t.Parallel()
+	asked := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Api-Key") != "az-good-key-0042" {
+		asked++
+		switch {
+		case r.Header.Get("Api-Key") != "az-good-key-0042":
 			w.WriteHeader(http.StatusUnauthorized)
-			return
+		case r.Method != http.MethodGet || r.URL.Path != "/openai/models" || r.URL.Query().Get("api-version") != apiVersion:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"error":{"code":"404","message":"Resource not found"}}`) //nolint:errcheck // a test server
+		default:
+			_, _ = io.WriteString(w, `{"data":[{"id":"gpt-4o-2024-08-06","status":"succeeded"}],"object":"list"}`) //nolint:errcheck // a test server
 		}
-		if r.URL.Path != "/openai/deployments" || r.URL.Query().Get("api-version") != listVersion {
-			t.Errorf("asked %s", r.URL)
-		}
-		_, _ = io.WriteString(w, `{"data":[{"id":"prod-4o","model":"gpt-4o","status":"succeeded"},{"id":"new","model":"gpt-5","status":"creating"}],"object":"list"}`) //nolint:errcheck // a test server
 	}))
 	t.Cleanup(server.Close)
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
 	got := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-good-key-0042"), at)
-	if got.Outcome != adapter.KeyPassed || len(got.Models) != 1 || got.Models[0] != (adapter.CloudModel{Name: "prod-4o", Known: "gpt-4o"}) {
-		t.Errorf("the check is %+v", got)
+	if got.Outcome != adapter.KeyPassed || got.Models != nil || asked != 1 {
+		t.Errorf("the check is %+v after %d requests", got, asked)
 	}
 	refused := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-bad-key-0001"), at)
 	if refused.Outcome != adapter.KeyFailed || refused.Cause != adapter.CauseRejected {

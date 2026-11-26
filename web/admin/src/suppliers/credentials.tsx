@@ -1,6 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { DataTable, PaceBar, Stack, Tag, Text, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { useLines } from "../lines";
 import { suppliersQuery } from "../queries";
@@ -93,7 +94,7 @@ export function CredentialTable({
       total={total}
       rowKey={(row) => row.id}
       onOpen={onOpen}
-      current={current}
+      selected={current}
       columns={credentialColumns(t, format, (row) => suppliers.get(row.supplier_id ?? ""), lineOf, across)}
     />
   );
@@ -118,7 +119,7 @@ function Account({ credential, supplier }: { credential: Credential; supplier?: 
 }
 
 function credentialColumns(
-  t: ReturnType<typeof useTranslation>["t"],
+  t: TFunction<"admin">,
   format: ReturnType<typeof useFormat>,
   supplier: (row: Credential) => Supplier | undefined,
   lineOf: (credential: Credential) => string,

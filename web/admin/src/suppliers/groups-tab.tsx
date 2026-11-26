@@ -1,6 +1,7 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
 import { Card, DataTable, EmptyState, LinkButton, MetricStrip, Note, Switch, Tag, Text, useFormat } from "@axiom/ui";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLines } from "../lines";
@@ -145,7 +146,7 @@ function GroupDialogs({ detail, open, onClose }: { detail: SupplierView; open: O
 }
 
 type Columns = {
-  t: ReturnType<typeof useTranslation>["t"];
+  t: TFunction<"admin">;
   format: ReturnType<typeof useFormat>;
   traffic: ReturnType<typeof useTraffic>;
   credentials: readonly Credential[];

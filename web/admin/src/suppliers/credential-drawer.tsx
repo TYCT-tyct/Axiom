@@ -3,9 +3,9 @@ import { can, useSession } from "@axiom/app";
 import {
   ActionButton,
   Cluster,
-  FactList,
-  PaceBar,
+  DrawerFacts,
   type PanelSteps,
+  QuotaMeter,
   SettingRow,
   SidePanel,
   Switch,
@@ -14,6 +14,7 @@ import {
   useFormat,
 } from "@axiom/ui";
 import { Link } from "@tanstack/react-router";
+import type { TFunction } from "i18next";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Code } from "../parts";
@@ -109,7 +110,7 @@ function Opened({
   }
 }
 
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 
 function takes(t: T, credential: Credential, line: string, mates: number) {
   if (credential.status === "disabled") return t("upstream.credential.takesOff");
@@ -160,25 +161,21 @@ function Meters({ credential }: { credential: Credential }) {
   const rpm = credential.requests_per_minute;
   return (
     <>
-      <SettingRow
-        title={t("upstream.credential.concurrency")}
-        detail={used >= credential.max_concurrency ? t("upstream.credential.full") : undefined}
-      >
-        <Cluster gap={8}>
-          <PaceBar label={t("upstream.credential.concurrency")} value={used} max={credential.max_concurrency} />
-          <Text as="span" numeric>{`${used} / ${credential.max_concurrency}`}</Text>
-        </Cluster>
-      </SettingRow>
-      <SettingRow title={t("upstream.credential.minute")}>
-        {rpm === undefined ? (
-          <Text as="span" numeric>{`${minute} / ${t("upstream.credential.noCeiling")}`}</Text>
-        ) : (
-          <Cluster gap={8}>
-            <PaceBar label={t("upstream.credential.minute")} value={minute} max={rpm} />
-            <Text as="span" numeric>{`${minute} / ${rpm}`}</Text>
-          </Cluster>
-        )}
-      </SettingRow>
+      <QuotaMeter
+        label={t("upstream.credential.concurrency")}
+        used={used}
+        of={credential.max_concurrency}
+        share={used / credential.max_concurrency}
+        over={used >= credential.max_concurrency}
+        note={used >= credential.max_concurrency ? t("upstream.credential.full") : undefined}
+      />
+      <QuotaMeter
+        label={t("upstream.credential.minute")}
+        used={minute}
+        of={rpm ?? t("upstream.credential.noCeiling")}
+        share={rpm ? minute / rpm : 0}
+        over={rpm !== undefined && minute >= rpm}
+      />
     </>
   );
 }
@@ -198,7 +195,7 @@ function Facts({
   const format = useFormat();
   const own = ownFacts(t, supplier, credential, mates);
   return (
-    <FactList
+    <DrawerFacts
       rows={[
         [
           t("upstream.credential.channel"),

@@ -150,7 +150,9 @@ function ChannelTable({
           header: t("upstream.channels.col.status"),
           cell: (row) => <SupplierState supplier={row} brief />,
         },
-        ...(traffic ? trafficColumns(t, of) : []),
+        ...(traffic
+          ? trafficColumns({ rate: t("upstream.channels.col.rate"), share: t("upstream.channels.col.share") }, of)
+          : []),
         {
           key: "balance",
           header: t("upstream.channels.col.balance"),
@@ -170,18 +172,18 @@ function ChannelTable({
 }
 
 // The last day's success and share of traffic, for a session that may read the monitor.
-function trafficColumns(t: ReturnType<typeof useTranslation>["t"], of: (supplier: Supplier) => Traffic | undefined) {
+function trafficColumns(headers: { rate: string; share: string }, of: (supplier: Supplier) => Traffic | undefined) {
   return [
     {
       key: "rate",
-      header: t("upstream.channels.col.rate"),
+      header: headers.rate,
       from: "lg" as const,
       sort: (row: Supplier) => of(row)?.rate,
       cell: (row: Supplier) => <Rate rate={of(row)?.rate} />,
     },
     {
       key: "share",
-      header: t("upstream.channels.col.share"),
+      header: headers.share,
       align: "end" as const,
       from: "md" as const,
       sort: (row: Supplier) => of(row)?.share,

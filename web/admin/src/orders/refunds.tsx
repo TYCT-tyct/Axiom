@@ -1,128 +1,26 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
-import { LoadMore, useSession } from "@axiom/app";
-import {
-  ActionButton,
-  Card,
-  Cluster,
-  DataState,
-  EmptyState,
-  Facts,
-  Mono,
-  Stack,
-  Table,
-  Td,
-  Text,
-  useFormat,
-} from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { ActionButton, Cluster, Facts, Text, useFormat } from "@axiom/ui";
 import type { TFunction } from "i18next";
-import { type ReactNode, useState } from "react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
-import { Code, Head, State, SubLine } from "../parts";
-import { paymentRefundsQuery } from "../queries";
+import { Code } from "../parts";
 import { approvalOutcome, type RefundApprovalOutcome } from "./refund-approval";
-import { refundTone, shortId } from "./states";
+import { shortId } from "./states";
 
 type Refund = AdminSchemas["PaymentRefund"];
-type Decision = { kind: "approve" | "reject"; refund: Refund };
+export type Decision = { kind: "approve" | "reject"; refund: Refund };
 
-// The refunds frozen for a decision, above the orders: a frozen refund holds a payer's money until an operator releases
-// or rejects it, and above the site's limit it waits for a second operator.
-export function RefundQueue({ siteId }: { siteId: AdminSchemas["SiteId"] }) {
-  const { t } = useTranslation();
-  const session = useSession();
-  const refunds = useInfiniteQuery(paymentRefundsQuery(siteId, "frozen"));
-  const rows = refunds.data?.pages.flatMap((page) => page.data ?? []) ?? [];
-  const [decision, setDecision] = useState<Decision | null>(null);
-  return (
-    <Card title={t("orders.refund.title")} lede={t("orders.refund.description")} layout="flush">
-      <DataState
-        query={refunds}
-        isEmpty={() => rows.length === 0}
-        empty={<EmptyState title={t("orders.refund.emptyTitle")}>{t("orders.refund.emptyBody")}</EmptyState>}
-      >
-        {() => (
-          <Table label={t("orders.refund.title")}>
-            <Head
-              cols={[
-                t("orders.refund.col.refund"),
-                t("orders.refund.col.account"),
-                [t("orders.refund.col.credits"), { align: "end" }],
-                [t("orders.refund.col.amount"), { align: "end" }],
-                [t("orders.refund.col.reason"), { main: true }],
-                t("orders.refund.col.state"),
-              ]}
-              action
-            />
-            <tbody>
-              {rows.map((refund, index) => (
-                <RefundRow
-                  key={refund.id ?? index}
-                  refund={refund}
-                  self={refund.requested_by !== undefined && refund.requested_by === session.user.id}
-                  firstBySelf={refund.first_approved_by !== undefined && refund.first_approved_by === session.user.id}
-                  onDecide={(kind) => setDecision({ kind, refund })}
-                />
-              ))}
-            </tbody>
-          </Table>
-        )}
-      </DataState>
-      <LoadMore list={refunds} />
-      {decision ? <RefundDecision {...decision} onClose={() => setDecision(null)} /> : null}
-    </Card>
-  );
-}
-
-type RefundRowProps = {
+export type RefundActionProps = {
   refund: Refund;
   self: boolean;
   firstBySelf: boolean;
   onDecide: (kind: Decision["kind"]) => void;
 };
 
-function RefundRow({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const credits = refund.credits ? format.money(refund.credits) : "—";
-  return (
-    <tr>
-      <Td>
-        <Code title={refund.id}>{shortId(refund.id)}</Code>
-        <SubLine>{refund.created_at ? format.dateTime(new Date(refund.created_at)) : "—"}</SubLine>
-        <SubLine>
-          {t("orders.refund.col.order")} <Mono title={refund.order_id}>{shortId(refund.order_id)}</Mono>
-        </SubLine>
-        {refund.via === "offline" ? <SubLine>{t("orders.refund.viaOffline")}</SubLine> : null}
-      </Td>
-      <Td>
-        <Code title={refund.account_id}>{shortId(refund.account_id)}</Code>
-      </Td>
-      <Td align="end">{credits}</Td>
-      <Td align="end">{refund.amount ? format.pay(refund.amount) : "—"}</Td>
-      <Td main>
-        {refund.reason ?? "—"}
-        <SubLine>
-          <Mono title={refund.requested_by ?? refund.requested_by_agent}>
-            {refund.requested_by ?? refund.requested_by_agent ?? ""}
-          </Mono>
-        </SubLine>
-      </Td>
-      <Td>
-        <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
-        {refund.provider_ref ? <SubLine>{refund.provider_ref}</SubLine> : null}
-      </Td>
-      <Td actions>
-        <RefundActions refund={refund} self={self} firstBySelf={firstBySelf} onDecide={onDecide} />
-      </Td>
-    </tr>
-  );
-}
-
 // A refund frozen without a releasing approver waits for one here. The requester and the operator whose first approval
 // is already recorded see why they cannot release it; the approver sees which of the two approvals the click records.
-export function RefundActions({ refund, self, firstBySelf, onDecide }: RefundRowProps) {
+export function RefundActions({ refund, self, firstBySelf, onDecide }: RefundActionProps) {
   const { t } = useTranslation();
   if (refund.state !== "frozen" || refund.approved_by) {
     return null;
@@ -146,7 +44,7 @@ export function RefundActions({ refund, self, firstBySelf, onDecide }: RefundRow
   );
 }
 
-function refundStateText(t: TFunction, refund: Refund): string {
+export function refundStateText(t: TFunction, refund: Refund): string {
   switch (refund.state) {
     case "frozen":
       if (refund.approved_by) {
@@ -166,7 +64,7 @@ function refundStateText(t: TFunction, refund: Refund): string {
   }
 }
 
-function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => void }) {
+export function RefundDecision({ kind, refund, onClose }: Decision & { onClose: () => void }) {
   const { t } = useTranslation();
   const approve = kind === "approve";
   const first = approve && refund.second_required === true && refund.first_approved_by === undefined;
@@ -264,39 +162,4 @@ function RefundFacts({ refund }: { refund: Refund }) {
     ]);
   }
   return <Facts title={t("orders.refund.review")} rows={rows} />;
-}
-
-// The per-order refund list in the orders table, where the wider columns have room for it.
-export function Refunds({ refunds }: { refunds: Refund[] | undefined }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  if (refunds === undefined) {
-    return (
-      <Text as="span" size="sm" tone="faint">
-        {t("orders.refundsUnavailable")}
-      </Text>
-    );
-  }
-  if (refunds.length === 0) {
-    return (
-      <Text as="span" size="sm" tone="faint">
-        {t("orders.noRefunds")}
-      </Text>
-    );
-  }
-  return (
-    <Stack gap={4}>
-      {refunds.map((refund) => (
-        <Cluster key={refund.id}>
-          <State tone={refundTone(refund)}>{refundStateText(t, refund)}</State>
-          <Text as="span" size="sm" numeric>
-            {refund.credits ? format.money(refund.credits) : "—"}
-          </Text>
-          <Text as="span" size="sm" tone="faint" numeric>
-            {refund.amount ? format.pay(refund.amount) : "—"}
-          </Text>
-        </Cluster>
-      ))}
-    </Stack>
-  );
 }

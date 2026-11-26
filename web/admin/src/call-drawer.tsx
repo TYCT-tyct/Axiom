@@ -4,8 +4,8 @@ import {
   CopyButton,
   DataState,
   Disclosure,
+  DrawerFacts,
   DrawerSection,
-  FactList,
   Id,
   Mono,
   type PanelSteps,
@@ -64,7 +64,7 @@ function Traced({ call, data }: { call: Summary; data: AdminSchemas["AdminCallTr
         <Timeline label={t("calls.drawer.route")} steps={steps} />
       </DrawerSection>
       <DrawerSection title={t("calls.drawer.fee")}>
-        <FactList
+        <DrawerFacts
           rows={[
             [t("calls.drawer.charged"), call.price ? format.money(call.price) : missing],
             [t("calls.drawer.paid"), data.cost ? format.money(data.cost) : missing],
@@ -90,7 +90,7 @@ function Summary({ call, note = false }: { call: Summary; note?: boolean }) {
   const failed = Boolean(call.error_kind);
   return (
     <DrawerSection title={t("calls.drawer.request")}>
-      <FactList
+      <DrawerFacts
         rows={[
           [
             t("calls.col.result"),
@@ -124,7 +124,7 @@ function PluginRuns({ call }: { call: Summary }) {
   const format = useFormat();
   if (!call.plugins?.length) return null;
   return (
-    <FactList
+    <DrawerFacts
       rows={call.plugins.map((run) => [
         t(`calls.plugin.${run.plugin}`),
         <span key={run.plugin}>

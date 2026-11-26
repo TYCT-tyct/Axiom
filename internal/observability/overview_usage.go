@@ -10,13 +10,12 @@ import (
 )
 
 // SiteUsage is what the hourly rollups say of one site over a window, for the operations dashboard: the settled calls'
-// tokens, the accounts that called, what the most charged accounts and the given models were charged, and the time to
+// tokens, the accounts that called, what the given models were charged when their calls were recorded, and the time to
 // first token. The rollups are by hour, so the window is the hours that start in it (FirstHour); everything else on
 // the dashboard reads the exact window (docs/domains/observability.md「监控汇总」).
 type SiteUsage struct {
 	Tokens         Tokens
 	ActiveAccounts int64
-	Spenders       []AccountSpend      // most charged first, at most adminTop
 	Models         map[string]ModelUse // the models asked for that had calls
 	FirstToken     Histogram
 	Days           map[time.Time]*UsageDay // by the UTC day's start
@@ -25,13 +24,9 @@ type SiteUsage struct {
 // Tokens are the settled calls' tokens by kind; Input leaves the cached ones out.
 type Tokens struct{ Input, CacheRead, CacheWrite, Output int64 }
 
-// AccountSpend is what one account's settled calls were charged, as decimal billionths of the currency asked for.
-type AccountSpend struct {
-	Account uuid.UUID
-	Spend   string
-}
-
-// ModelUse is one model's tokens of every kind, and what its calls were charged in the currency asked for.
+// ModelUse is one model's tokens (each call's prompt once, then its output: the rule of catalog.Usage's InputTotal and
+// OutputTotal), and what its calls were charged in the currency asked for as the call log recorded it: a later
+// correction of a charge moves the ledger, not this.
 type ModelUse struct {
 	Tokens int64
 	Spend  string
@@ -65,11 +60,9 @@ const siteUsageTokensSQL = `SELECT grouping(day)::int, coalesce(day, '0001-01-01
      date_trunc('day', hour AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS day` + siteUsageWhere + `) u
  GROUP BY GROUPING SETS ((day), ())`
 
-const siteSpendersSQL = `SELECT account_id, sum(spend)::text` + siteUsageWhere + ` AND currency = $4
- GROUP BY account_id ORDER BY sum(spend) DESC, account_id LIMIT $5`
-
+// A row from before observability 00051 has no tokens and counts its kinds, an overlapping cache twice (docs/domains/observability.md「监控汇总」).
 const siteModelsSQL = `SELECT model,
- (coalesce(sum(input), 0) + coalesce(sum(cache_read), 0) + coalesce(sum(cache_write), 0) + coalesce(sum(output), 0))::bigint,
+ coalesce(sum(coalesce(tokens, coalesce(input, 0) + coalesce(cache_read, 0) + coalesce(cache_write, 0) + coalesce(output, 0))), 0)::bigint,
  coalesce(sum(spend) FILTER (WHERE currency = $4), 0)::text` + siteUsageWhere + ` AND model = ANY($5::text[])
  GROUP BY model`
 
@@ -84,22 +77,6 @@ func ReadSiteUsage(ctx context.Context, tx pg.Tx, site uuid.UUID, currency strin
 	first := FirstHour(since)
 	u := SiteUsage{Models: map[string]ModelUse{}, Days: map[time.Time]*UsageDay{}}
 	if err := u.readTokens(ctx, tx, site, first, until); err != nil {
-		return SiteUsage{}, err
-	}
-	spenders, err := tx.Query(ctx, siteSpendersSQL, site, first, until, currency, adminTop)
-	if err != nil {
-		return SiteUsage{}, fmt.Errorf("observability: read the top spenders: %w", err)
-	}
-	for spenders.Next() {
-		var s AccountSpend
-		if err := spenders.Scan(&s.Account, &s.Spend); err != nil {
-			spenders.Close()
-			return SiteUsage{}, err
-		}
-		u.Spenders = append(u.Spenders, s)
-	}
-	spenders.Close()
-	if err := spenders.Err(); err != nil {
 		return SiteUsage{}, err
 	}
 	rows, err := tx.Query(ctx, siteModelsSQL, site, first, until, currency, models)

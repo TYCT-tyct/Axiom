@@ -2,6 +2,7 @@ import type { AdminSchemas } from "@axiom/api";
 import { describe, expect, it } from "vitest";
 import { costShare, modelView, tokenPrice } from "./by-model";
 import { categoryOf, mismatch } from "./inbox";
+import { readDeployments } from "./key-fields";
 import { byFamily, credentialName, pastedKeys, serviceAccount, trafficOf } from "./upstream";
 
 type Row = AdminSchemas["PricingPreviewRow"];
@@ -121,4 +122,15 @@ it("groups the known names by family, the largest first, each model once", () =>
     { family: "claude", names: ["b"], models: ["m2"] },
     { family: "none", names: ["d"], models: ["m3"] },
   ]);
+});
+
+describe("Azure deployments", () => {
+  it.each([
+    ["prod-4o gpt-4o\n\nmini", [{ name: "prod-4o", model: "gpt-4o" }, { name: "mini" }]],
+    ["", null],
+    ["bad name here", null],
+    ["-leading", null],
+  ])("reads %j", (text, deployments) => {
+    expect(readDeployments({ deployments: text })).toEqual(deployments);
+  });
 });

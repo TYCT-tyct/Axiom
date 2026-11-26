@@ -45,12 +45,38 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 	if r.Currency, err = platform.ParseCurrency(s.SettlementCurrency); err != nil {
 		return nil, fmt.Errorf("the supplier's settlement currency: %w", err)
 	}
-	p, err := planCredential(c, s.Kind, s.Origin, r.Input, regions)
+	var named []adapter.CloudModel
+	if c.Named() {
+		if named, err = servedNames(ctx, tx, supplier); err != nil {
+			return nil, err
+		}
+	}
+	p, err := planCredential(c, s.Kind, s.Origin, r.Input, regions, named)
 	if err != nil {
 		return nil, err
 	}
 	p.r, p.supplier = r, supplier
 	return p, p.skipStored(ctx, tx)
+}
+
+// servedNames is the models a person named for a supplier, as its credential serving now serves them: what a new
+// credential of a platform that lists none serves.
+func servedNames(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]adapter.CloudModel, error) {
+	rows, err := store.New().ServedNames(ctx, tx, supplier)
+	if err != nil || len(rows) == 0 {
+		return nil, err
+	}
+	calls := map[string]string{}
+	if rows[0].CallNames != nil {
+		if err := jsonx.Unmarshal(rows[0].CallNames, &calls); err != nil {
+			return nil, fmt.Errorf("the credential's call names: %w", err)
+		}
+	}
+	named := make([]adapter.CloudModel, len(rows[0].AllowedModels))
+	for i, name := range rows[0].AllowedModels {
+		named[i] = adapter.CloudModel{Name: name, Call: calls[name]}
+	}
+	return named, nil
 }
 
 // replaceable is the platform of a supplier whose credential can be replaced with r's limits for a new region.
@@ -87,11 +113,15 @@ func servedRegions(ctx context.Context, tx pg.Tx, supplier uuid.UUID) ([]string,
 }
 
 // ReplaceCloud puts the new credential in place in the caller's transaction, under the supplier's lock: each region
-// that passed is the supplier's from then on, re-sealed in the region's own row with that row's limits, or a new row
-// with the limits given; every other region is erased. When no region passed nothing changes and Connected has no
-// supplier. Calls in flight end with the credential they hold. The models a new region lists get endpoints.
+// that passed is the supplier's from then on, re-sealed in the row made for the credential or in a new one, at the
+// limits the region has now (a region not served now takes those given); every other region is erased. When no region
+// passed nothing changes and Connected has no supplier. Calls in flight end with the credential they hold. The models a
+// region lists get endpoints, and the line's endpoints it lists by another name are served by it (mapLine).
 func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, p *CloudPlan) (Connected, error) {
 	if _, err := a.locked(ctx, tx, p.supplier); err != nil {
+		return Connected{}, err
+	}
+	if err := takeStoreTurn(ctx, tx); err != nil {
 		return Connected{}, err
 	}
 	if err := p.skipStored(ctx, tx); err != nil {
@@ -105,11 +135,14 @@ func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err != nil {
 		return Connected{}, err
 	}
-	erased, err := a.replaceRegions(ctx, tx, q, group, p)
-	if err != nil {
+	if err := p.refreshLine(ctx, tx, q, group, snap); err != nil {
 		return Connected{}, err
 	}
-	if err := p.refreshLine(ctx, tx, q, group, snap); err != nil {
+	if err := p.mapLine(ctx, tx, q, group, snap); err != nil {
+		return Connected{}, err
+	}
+	erased, err := a.replaceRegions(ctx, tx, q, group, p)
+	if err != nil {
 		return Connected{}, err
 	}
 	detail := cloudAudit(p)
@@ -128,7 +161,7 @@ func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 }
 
 // refreshLine puts the new credential's account on the supplier and gives the line an endpoint for each model a
-// region now lists that has none.
+// region now lists that has none; a platform whose models a person named serves the ones it serves now.
 func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UUID, snap *catalog.Snapshot) error {
 	account, err := jsonx.MarshalCanonical(p.cred.Account)
 	if err != nil {
@@ -137,13 +170,16 @@ func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries,
 	if err := q.SetCloudAccount(ctx, tx, store.SetCloudAccountParams{CloudAccount: account, ID: p.supplier}); err != nil {
 		return fmt.Errorf("set the cloud account: %w", err)
 	}
-	served, err := q.LineEndpointModels(ctx, tx, group)
+	if p.cloud.Named() {
+		return nil // the models a person named are the line's already, mapped by the models they named
+	}
+	served, err := q.LineEndpoints(ctx, tx, group)
 	if err != nil {
 		return fmt.Errorf("read the line's endpoints: %w", err)
 	}
 	has := make(map[catalog.ModelID]bool, len(served))
 	for _, m := range served {
-		has[catalog.ModelID(m)] = true
+		has[catalog.ModelID(m.ModelID)] = true
 	}
 	_, _, err = insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has)
 	return err
@@ -211,16 +247,16 @@ func (p *CloudPlan) eraseReplaced(ctx context.Context, tx pg.Tx, q *store.Querie
 	return erased, nil
 }
 
-// storeRegion stores region i of a replacement: sealed again in the row made for the same credential, or in a new row
-// with the limits of the one it replaces, or those given.
+// storeRegion stores region i of a replacement: sealed again in the row made for the same credential, or in a new row.
+// A region served now keeps its limits, whichever row serves it from then on; one not served now takes those given.
 func (a *Admin) storeRegion(ctx context.Context, tx pg.Tx, q *store.Queries, group uuid.UUID, p *CloudPlan, i int, byRef, serving map[string]store.LockCloudCredentialsRow) error {
 	c := &p.Checks[i]
 	concurrency, perMinute := p.r.limits()
+	if row, ok := serving[c.Region]; ok {
+		concurrency, perMinute = row.MaxConcurrency, row.RequestsPerMinute
+	}
 	row, ok := byRef[p.regions[i].ref]
 	if !ok {
-		if row, ok := serving[c.Region]; ok {
-			concurrency, perMinute = row.MaxConcurrency, row.RequestsPerMinute
-		}
 		c.Credential = uuid.NewV7()
 		return a.insertRegion(ctx, tx, q, p.supplier, group, p, i, concurrency, perMinute)
 	}
@@ -228,7 +264,7 @@ func (a *Admin) storeRegion(ctx context.Context, tx pg.Tx, q *store.Queries, gro
 	if err := a.resealRegion(ctx, tx, q, p, i); err != nil || row.Status != "erased" {
 		return err
 	}
-	// a region served again is a new one, which takes the limits given
+	// the row serves its region again, at the region's limits
 	if _, err := q.SetCredentialLimits(ctx, tx, store.SetCredentialLimitsParams{
 		SupplierID: p.supplier, ID: c.Credential, MaxConcurrency: concurrency, RequestsPerMinute: perMinute,
 	}); err != nil {

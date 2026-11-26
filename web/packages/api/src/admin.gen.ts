@@ -2196,7 +2196,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a cloud platform's model service with its credential
-         * @description Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned; what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the resource is one credential, and the deployments it lists are its models. Costs are the catalog's official reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
+         * @description Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned; what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the resource is one credential, and the deployments named are its models. Costs are the catalog's official reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
          *
          *     201 with the supplier when the credential passed in at least one region; a region that failed is not stored. When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
          */
@@ -2217,7 +2217,7 @@ export interface paths {
         get?: never;
         /**
          * Replace a cloud supplier's credential, or the regions it serves from
-         * @description Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes in at least one, seals it in place of the old one in the same change: the regions that passed are the supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and a region that failed or was left out is erased. Calls in flight end with the credential they hold. When it passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409 for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the regions, never the credential.
+         * @description Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes in at least one, seals it in place of the old one in the same change: the regions that passed are the supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and a region that failed or was left out is erased. Azure OpenAI's new key serves the deployments named when the supplier was connected. Calls in flight end with the credential they hold. When it passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409 for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the regions, never the credential.
          */
         put: operations["replaceSupplierCloudCredential"];
         post?: never;
@@ -4311,7 +4311,7 @@ export interface components {
             new_users?: number;
             /** @description The median time to the first token of the window's calls. */
             first_token_ms_p50?: number;
-            /** @description The accounts whose settled calls were charged the most in the window, most first. */
+            /** @description The ten accounts whose settled calls were charged the most in the window, most first, by the ledger's charge as `revenue` counts it, so a corrected charge moves both alike. */
             top_spenders?: components["schemas"]["OverviewSpender"][];
             /** @description Each UTC day the window touches, oldest first, for the trend lines. */
             days?: components["schemas"]["OverviewDay"][];
@@ -4432,9 +4432,10 @@ export interface components {
             errors?: number;
             /**
              * Format: int64
-             * @description Input, cached and output tokens the model's calls reported.
+             * @description The tokens of the model's calls: each prompt once, cached tokens included, and the output.
              */
             tokens?: number;
+            /** @description What the model's settled calls were charged when they were recorded, over the hours that start in the window. A later correction of a charge moves the ledger's `revenue` and `top_spenders`, not this. */
             revenue?: components["schemas"]["Money"];
         };
         /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits. */
@@ -6604,6 +6605,12 @@ export interface components {
         };
         /** @description A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1. */
         CloudRegion: string;
+        CloudDeployment: {
+            /** @description The deployment's name in the resource, which its calls' path names. */
+            name: string;
+            /** @description The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name. */
+            model?: string;
+        };
         CloudSupplierCreate: {
             provider: components["schemas"]["CloudProvider"];
             name: string;
@@ -6612,6 +6619,8 @@ export interface components {
             credential: components["schemas"]["CloudCredentialInput"];
             /** @description Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400). */
             regions?: components["schemas"]["CloudRegion"][];
+            /** @description Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once. */
+            deployments?: components["schemas"]["CloudDeployment"][];
             /** @description The currency the platform bills in, fixed once connected; absent is USD. */
             settlement_currency?: string;
             /** @description The calls each region has in flight at once. */
@@ -7140,7 +7149,7 @@ export interface components {
             failures: number;
             /**
              * Format: int64
-             * @description Input, cached and output tokens the calls reported.
+             * @description The tokens of the calls: each prompt once, cached tokens included, and the output.
              */
             tokens: number;
             first_token_ms_p50?: number;
@@ -7188,7 +7197,7 @@ export interface components {
             tokens: number;
             /**
              * Format: int64
-             * @description Calls that moved to another endpoint after an attempt failed.
+             * @description Calls whose attempts went to more than one endpoint. A retry with another key on the same endpoint is not a switch.
              */
             switched_calls: number;
             first_token_ms: components["schemas"]["MonitorPercentiles"];
@@ -7271,7 +7280,7 @@ export interface components {
             uses: number;
             /** @description Absent when it never ran. */
             mean_ms?: number;
-            /** @description What the calls were charged for the plugin. */
+            /** @description What the calls were charged for the plugin. Absent when it is unknown: a successful run's charge could not be told apart from its call's other per-use items, such as a second plugin's. */
             revenue?: components["schemas"]["Money"];
             /** @description What the plugin's backends cost the platform, at the costs set in its settings. */
             cost?: components["schemas"]["Money"];

@@ -2,6 +2,7 @@ import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
 import { ActionButton, Card, RowList, Text, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
@@ -78,7 +79,7 @@ function Runs({ detail }: { detail: SupplierView }) {
 }
 
 // A run's differences in words, Axiom's own names and values only (listSupplierSyncRuns never carries the supplier's).
-function describe(t: ReturnType<typeof useTranslation>["t"], run: Run) {
+function describe(t: TFunction<"admin">, run: Run) {
   return run.events
     .map((event) =>
       t(`upstream.sync.event.${event.kind}` as "upstream.sync.event.ratio_changed", {

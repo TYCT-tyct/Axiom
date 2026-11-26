@@ -51,7 +51,8 @@ test("the two tabs of settings are the pages that left the settings", async ({ p
   await expect(page).toHaveURL(/\/plugins\/file$/);
   await expect(page.getByText("parser.example.com")).toBeVisible();
   await page.goto("/settings");
-  await expect(h1(page, words("nav.settings"))).toBeVisible();
+  await expect(page).toHaveURL(/\/settings\/site$/);
+  await expect(h1(page, words("shell.nav.site"))).toBeVisible();
   await expect(page.getByText(words("settings.search.title"))).toHaveCount(0);
 });
 

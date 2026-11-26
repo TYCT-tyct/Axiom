@@ -1,6 +1,7 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { Field, SegmentedControl, Select, Text, TextArea } from "@axiom/ui";
+import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem } from "../change";
@@ -277,7 +278,7 @@ function replaceCloud(supplier: Supplier, body: AdminSchemas["CloudCredentialRep
   );
 }
 
-type T = ReturnType<typeof useTranslation>["t"];
+type T = TFunction<"admin">;
 type CloudCredential = AdminSchemas["CloudCredentialInput"];
 
 // The credential each platform takes: a service account's key, an access key, or a resource's key.

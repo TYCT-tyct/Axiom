@@ -29,10 +29,11 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 
 - **`vertex`**：服务账号 JSON。RS256 签 JWT，只向 Google 的令牌服务换令牌（不读 JSON 的 `token_uri`），到期前 5 分钟换新。Anthropic 模型走 `rawPredict`、`streamRawPredict`，Gemini 走 OpenAI 兼容的 Chat。检测换令牌后读区域。
 - **`bedrock`**：访问密钥，SigV4 签名。Messages 走 `InvokeModel`、`InvokeModelWithResponseStream`，事件流边读边转成 SSE。检测列本区域的 Anthropic 模型和推理配置（key 要有列表权限），AWS 以 403 `UnrecognizedClientException` 拒绝 key。
-- **`azure`**：资源地址和 key，没有区域。检测列部署，部署即模型，Chat 带 `api-version`。
+- **`azure`**：资源地址、key 和部署（`deployments`，名字和所部署的模型），没有区域。检测是一次 `GET /openai/models`，与调用同一个 `api-version`，不收费；Chat 发到部署的路径。
 - **区域**：一个区域一条凭证（`region`），各有上限和检测，满了换下一条；别的供应商已存的同一凭证同一区域是重复；区域不服务是 `region_unavailable`，其余判定同直连接口。
-- **模型**：Bedrock、Azure 用检测列出的，去掉 `anthropic.` 和版本后缀或按部署的模型映射，只能经推理配置调用的记进 `call_names`；Vertex 没有按项目列模型的免费接口，按目录在售的 Anthropic、Google 模型和官方名生成。
-- **换凭证**（`replaceSupplierCloudCredential`）：给定区域（默认现有的）至少一个通过才在一个事务里换：通过的各成新行，沿用该区域原上限，新区域用给的；同一凭证回原行；其余擦除。
+- **模型**：Bedrock 用检测列出的，去掉 `anthropic.` 和版本后缀映射，只能经推理配置调用的记进 `call_names`；Azure 是填的部署，按填的模型（没填按部署名）映射；Vertex 没有按项目列模型的免费接口，按目录在售的 Anthropic、Google 模型和官方名生成。一条线路一个模型一个端点；某个区域把它列成另一个名字时，这个区域的凭证也服务这个端点，`call_names` 记它自己的名字。
+- **换凭证**（`replaceSupplierCloudCredential`）：给定区域（默认现有的）至少一个通过才在一个事务里换：现有区域沿用该区域现在的上限（换回原来的凭证、回到它的旧行也一样），新区域用给的；同一凭证回原行，其余成新行；未通过和没给的区域擦除。Azure 的新 key 服务原来填的部署。
+- **同一凭证只存一份**：建直连、建云平台和换云凭证在写入事务里依次进行（事务级咨询锁），写前再找一次重复，所以同时贴同一把 key 或同一凭证的两个请求，后一个得到 `duplicate`。
 
 ## 决策与理由
 
@@ -42,7 +43,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 | 供应商带接入方式 `mode`：`relay` 登录中转站或号池，分组是线路；`direct` 贴 key 直连，一条线路；`cloud` 云平台凭证，一条线路 | 线路、凭证、端点、成本计划和路由三种方式共用，不同的只有 key 怎么来、成本从哪来；`kind` 仍是适配器名（`openai`、`compatible`、`vertex`……） |
 | 直连接口（OpenAI、Anthropic、Google、Moonshot、其他兼容接口）和云平台（Vertex AI、Bedrock、Azure OpenAI）作为平台货源 | 待定：改变了产品需求里「官方 API 暂不接入」，进入第一版要负责人在 #948 确认；接入的操作已实现 |
 | 没有余额的供应商：`balance_native` 留空，按 `mode` 判断，`mode` 不是 `relay` 的不看余额，`Funds.Unbounded` 让任何成本上界都付得起；厂商以余额不足拒绝时照常暂停 | 写一个假余额（如 BYOK 的 1）会让成本上界大于它的请求被路由滤掉，后台也会显示一个不存在的余额；`mode` 是新列（迁移 00053），创建后不变，云平台沿用 |
-| 直连接口的 `native_unit` 是 `usd`，含义是「结算币种的钱」，单位价值恒为 1 | 成本计划直接是结算币种的官方价，不需要换算；契约的枚举只有 `quota`、`usd`，人民币结算的直连接口（Moonshot）读这一列会误以为是美元，要页面按 `mode` 看待 |
+| 直连接口的 `native_unit` 是 `usd`，含义是「结算币种的钱」，单位价值恒为 1（云平台同样），`confirmSupplierUnitValue` 对两者回 409 | 成本计划直接是结算币种的官方价，不需要换算；契约的枚举只有 `quota`、`usd`，人民币结算的直连接口（Moonshot）读这一列会误以为是美元，要页面按 `mode` 看待 |
 | 直连接口的 `upstream_account` 是新生成的 UUID | 没有可登录的账号；表要求非空且 `(origin, upstream_account)` 唯一，随机值让同一家可以接多个账户 |
 | 直连接口建好即 `active`，不停在 `connecting` | key 已逐把检测、模型已读出，没有同步会把它从 `connecting` 移走；契约写的「等质量检测」在中转站也还没有准入检测，统一的准入另行设计 |
 | 直连 key 各算各的每分钟窗口；`upstream_key_ref` 是 key 的 SHA-256 前 128 位 | 贴多把 key 就是为了多份额度；摘要能找出重复而不保存或比较原文，与 CPA 相同 |
@@ -51,6 +52,8 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 | 只有 OpenAI 的直连端点声明 Responses，其余 OpenAI 族只声明 Chat | 兼容接口多数没有 Responses；网关会把 Responses 请求转成 Chat |
 | 贴进来的 key 和云凭证只写不读（契约里 `writeOnly`），接口只回末四位和不是秘密的部分（项目、服务账号、资源地址）；幂等指纹不含原文 | 与 BYOK、商户密钥同一规则：明文只在 `credentials` 的密文里，不进响应、日志、审计和幂等记录 |
 | 云平台一个区域一条凭证，并发和每分钟上限按区域设；换凭证时所有区域一起换 | 复用挑凭证：一个区域满了自然换到下一个，不另造区域调度 |
+| Azure 的部署由人填，检测只证明地址和 key 对得上 | 现行的数据面版本都不向资源 key 列部署（列部署在 Azure 资源管理器，要 Entra ID 令牌），能列的旧版本已停用；部署名错了，质量检测在接流量前就会发现。不选「对第一个部署发一次最小调用」：要花钱，o 系列不认 `max_tokens`、非 Chat 部署会误判 key 不能用 |
+| 同时写同一凭证用事务级咨询锁排队，不加跨供应商的唯一索引 | 凭证行里没有接入方式（BYOK 也是 `direct`，直连行 `source` 为空），按供应商建的唯一索引只能加新列；而重复的判定本来就跨所有凭证（含 CPA 列出的 key），锁让后到的得到 `duplicate` 而不是写入报错 |
 
 ## 待定问题
 

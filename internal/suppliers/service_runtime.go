@@ -167,7 +167,9 @@ type Load struct {
 	InFlight, LastMinute int64
 }
 
-// CredentialLoad reads this node's load on a credential of supplier.
+// CredentialLoad reads this node's load on a credential of supplier. A credential this node loaded counts its minute
+// where runtimeOf put it, under the account it draws on; of one it did not load, only a relay's has a count here, under
+// supplier, the account all its keys draw on.
 func (s *Service) CredentialLoad(credential, supplier uuid.UUID) Load {
 	s.runtimeMu.Lock()
 	rt := s.runtime[credential]
@@ -176,6 +178,7 @@ func (s *Service) CredentialLoad(credential, supplier uuid.UUID) Load {
 	var load Load
 	if rt != nil {
 		load.InFlight = int64(rt.inflight.Load())
+		minute = rt.requests
 	}
 	if minute != nil {
 		load.LastMinute = minute.count(s.now())

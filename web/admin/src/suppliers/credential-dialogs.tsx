@@ -1,4 +1,5 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { credentialName, usableCredential } from "./upstream";
@@ -70,7 +71,7 @@ export function EnableDialog({
 }
 
 // A check in words: whether the supplier took the credential, and why not.
-export function checkText(t: ReturnType<typeof useTranslation>["t"], check: Check) {
+export function checkText(t: TFunction<"admin">, check: Check) {
   const cause = check.cause ? t(`upstream.cause.${check.cause}`) : "";
   return check.outcome === "passed" || check.outcome === "duplicate"
     ? t(`upstream.testOne.${check.outcome}`)

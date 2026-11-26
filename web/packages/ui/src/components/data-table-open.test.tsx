@@ -35,7 +35,7 @@ it("opens a row from its first cell or from the row, but not from a control insi
             { key: "control", header: "control", cell: (row) => <button type="button">{row.id}</button> },
           ]}
           onOpen={(row) => opened(row.id)}
-          current="b"
+          selected="b"
         />
       </I18nextProvider>,
     ),

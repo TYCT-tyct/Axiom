@@ -6,8 +6,8 @@ import {
   Card,
   DataState,
   DataTable,
+  DrawerFacts,
   EmptyState,
-  FactList,
   Grid,
   Metric,
   PageHead,
@@ -131,7 +131,7 @@ function PluginCard({ stat }: { stat: Stat }) {
           current={points.length - 1}
           zero
         />
-        <FactList
+        <DrawerFacts
           rows={[
             [
               t("plugins.failures"),
@@ -187,7 +187,7 @@ function Recent() {
             </EmptyState>
           }
         >
-          {() => <RecentTable rows={rows} current={selected} onOpen={(call) => select(call.id)} />}
+          {() => <RecentTable rows={rows} selected={selected} onOpen={(call) => select(call.id)} />}
         </DataState>
         <LoadMore list={calls} />
       </Card>
@@ -205,11 +205,11 @@ function Runs({ call, cell }: { call: Call; cell: (run: Run) => string | undefin
 
 function RecentTable({
   rows,
-  current,
+  selected,
   onOpen,
 }: {
   rows: Call[];
-  current: string | undefined;
+  selected: string | undefined;
   onOpen: (call: Call) => void;
 }) {
   const { t } = useTranslation();
@@ -221,7 +221,7 @@ function RecentTable({
       rows={rows}
       rowKey={(call) => call.id ?? ""}
       onOpen={onOpen}
-      current={current}
+      selected={selected}
       columns={[at, plugin, how, account, { ...model, from: "lg" }, time, fee]}
     />
   );
