@@ -183,7 +183,8 @@ func (s *chatInputItems) item(o requestObject) error {
 		if err != nil {
 			return err
 		}
-		s.out = append(s.out, requestObject{"role": jsonValue("tool"), "tool_call_id": o.take("call_id"), "content": v})
+		id, _ := unsignedID(o.take("call_id"))
+		s.out = append(s.out, requestObject{"role": jsonValue("tool"), "tool_call_id": id, "content": v})
 	case `"reasoning"`:
 		return reasoningSummary(o, &s.reasoning)
 	default:
@@ -216,9 +217,13 @@ func (s *chatInputItems) message(o requestObject) error {
 
 // call adds a function call, or a custom tool's with its input wrapped as customFunction declares it.
 func (s *chatInputItems) call(o requestObject, arguments jsontext.Value) {
+	id, signature := unsignedID(o.take("call_id"))
 	call := requestObject{
-		"id": o.take("call_id"), "type": jsonValue("function"),
+		"id": id, "type": jsonValue("function"),
 		"function": jsonValue(requestObject{"name": o.take("name"), "arguments": arguments}),
+	}
+	if signature != "" {
+		call["extra_content"] = googleExtra(signature)
 	}
 	if len(s.out) == 0 || string(s.out[len(s.out)-1]["role"]) != `"assistant"` {
 		s.out = append(s.out, requestObject{"role": jsonValue("assistant"), "content": jsonValue("")})
