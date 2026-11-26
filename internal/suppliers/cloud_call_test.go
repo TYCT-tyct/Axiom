@@ -112,7 +112,9 @@ func checkCountUnsent(w *world, asked func() int) {
 	defer a.Done()
 	resp, f := a.Send(w.t.Context(), Call{Format: protocol.Messages, Count: true, Body: []byte(`{}`)})
 	if resp != nil {
-		_ = resp.Body.Close() //nolint:errcheck // a count here is never answered
+		if err := resp.Body.Close(); err != nil {
+			w.t.Error(err)
+		}
 	}
 	if f == nil || f.Executed != NotExecuted || f.Scope != ScopeRequest || asked() != 1 {
 		w.t.Errorf("a count on a cloud platform: %+v, %d requests sent", f, asked())

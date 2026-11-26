@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"cmp"
-	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"errors"
 	"fmt"
 	"io"
@@ -85,15 +84,15 @@ var geminiStatuses = map[int]string{
 }
 
 type chatError struct {
-	Message  string         `json:"message"`
-	Type     string         `json:"type"`
-	Code     jsontext.Value `json:"code"`
-	Metadata jsontext.Value `json:"metadata"`
+	Message  string    `json:"message"`
+	Type     string    `json:"type"`
+	Code     jsonx.Raw `json:"code"`
+	Metadata jsonx.Raw `json:"metadata"`
 }
 
 // geminiError is Google's error object: the status as code and its google.rpc name, with the message; Axiom's own
 // error type rides in details as ErrorInfo's reason, as Google puts a machine-readable cause.
-func geminiError(status int, e chatError) jsontext.Value {
+func geminiError(status int, e chatError) jsonx.Raw {
 	name := geminiStatuses[status]
 	if name == "" {
 		name = map[bool]string{true: "INTERNAL", false: "INVALID_ARGUMENT"}[status >= 500]
@@ -134,7 +133,7 @@ type chatReplyMessage struct {
 			Name      string `json:"name"`
 			Arguments string `json:"arguments"`
 		} `json:"function"`
-		ExtraContent jsontext.Value `json:"extra_content"`
+		ExtraContent jsonx.Raw `json:"extra_content"`
 	} `json:"tool_calls"`
 }
 
@@ -216,21 +215,21 @@ func (g *GeminiReply) flushCalls() []geminiPart {
 
 // geminiArgs is a call's arguments as Gemini's args object; arguments that are not one, which a model can write when it
 // was cut off, are kept as text under arguments rather than lost.
-func geminiArgs(arguments string) jsontext.Value {
-	v := jsontext.Value(strings.TrimSpace(arguments))
+func geminiArgs(arguments string) jsonx.Raw {
+	v := jsonx.Raw(strings.TrimSpace(arguments))
 	switch {
 	case len(v) == 0:
-		return jsontext.Value("{}")
+		return jsonx.Raw("{}")
 	case v[0] == '{' && jsonx.Validate(v) == nil:
 		return v
 	}
 	return jsonValue(map[string]string{"arguments": arguments})
 }
 
-func geminiResponseOf(c chatReply, parts []geminiPart, finish string) jsontext.Value {
+func geminiResponseOf(c chatReply, parts []geminiPart, finish string) jsonx.Raw {
 	out := requestObject{"modelVersion": jsonValue(c.Model), "responseId": jsonValue(c.ID)}
 	if len(parts) > 0 || finish != "" {
-		candidate := requestObject{"index": jsontext.Value("0")}
+		candidate := requestObject{"index": jsonx.Raw("0")}
 		if len(parts) > 0 {
 			candidate["content"] = jsonValue(geminiContent{Role: "model", Parts: parts})
 		}
@@ -390,18 +389,24 @@ func (s *chatFromGemini) event(data []byte) error {
 			return err
 		}
 	}
-	if cand.FinishReason != "" {
-		reason, ok := geminiFinish[cand.FinishReason]
-		if !ok {
-			s.fail(502, "Gemini stopped the reply: "+cand.FinishReason)
-			return nil
-		}
-		if reason == "stop" && s.calls > 0 {
-			reason = "tool_calls"
-		}
+	s.finishWith(cand.FinishReason)
+	return nil
+}
+
+// finishWith records Gemini's finish reason as Chat's, or ends the stream for one Chat has no word for.
+func (s *chatFromGemini) finishWith(gemini string) {
+	if gemini == "" {
+		return
+	}
+	reason, ok := geminiFinish[gemini]
+	switch {
+	case !ok:
+		s.fail(502, "Gemini stopped the reply: "+gemini)
+	case reason == "stop" && s.calls > 0:
+		s.finish = "tool_calls"
+	default:
 		s.finish = reason
 	}
-	return nil
 }
 
 func (s *chatFromGemini) parts(parts []geminiPart) error {
@@ -432,14 +437,14 @@ func (s *chatFromGemini) parts(parts []geminiPart) error {
 		default:
 			continue // a part holding only a signature, which Chat's text needs no carrier for
 		}
-		s.chunk(requestObject{"index": jsontext.Value("0"), "delta": jsonValue(delta), "finish_reason": jsontext.Value("null")}, nil)
+		s.chunk(requestObject{"index": jsonx.Raw("0"), "delta": jsonValue(delta), "finish_reason": jsonx.Raw("null")}, nil)
 	}
 	return nil
 }
 
-func cmpOrValue(v jsontext.Value) jsontext.Value {
+func cmpOrValue(v jsonx.Raw) jsonx.Raw {
 	if isNull(v) {
-		return jsontext.Value("{}")
+		return jsonx.Raw("{}")
 	}
 	return v
 }
@@ -447,7 +452,7 @@ func cmpOrValue(v jsontext.Value) jsontext.Value {
 // chunk appends one Chat chunk with the choices given, and usage when it is the usage chunk.
 func (s *chatFromGemini) chunk(choice requestObject, usage *chatUsageCounts) {
 	c := requestObject{"id": jsonValue(cmp.Or(s.id, "gemini")), "object": jsonValue("chat.completion.chunk"),
-		"created": jsontext.Value("0"), "model": jsonValue(s.model), "choices": jsontext.Value("[]")}
+		"created": jsonx.Raw("0"), "model": jsonValue(s.model), "choices": jsonx.Raw("[]")}
 	if choice != nil {
 		c["choices"] = jsonValue([]requestObject{choice})
 	}
@@ -463,7 +468,7 @@ func (s *chatFromGemini) end() {
 		return
 	}
 	s.finished = true
-	s.chunk(requestObject{"index": jsontext.Value("0"), "delta": jsontext.Value("{}"), "finish_reason": jsonValue(s.finish)}, nil)
+	s.chunk(requestObject{"index": jsonx.Raw("0"), "delta": jsonx.Raw("{}"), "finish_reason": jsonValue(s.finish)}, nil)
 	if s.usage != nil {
 		u := s.usage.chat()
 		s.chunk(nil, &u)

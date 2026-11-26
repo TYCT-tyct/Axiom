@@ -37,15 +37,7 @@ func TestThoughtSignaturesRoundTrip(t *testing.T) {
 			if got.err != nil || !strings.Contains(string(got.out), c.replied) {
 				t.Fatalf("reply %v, want the call's ID to carry the signature:\n%s", got.err, got.out)
 			}
-			up, err := prepareNativeChat(c.client, chatBody(c.history), "up", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			body := string(up.Body)
-			if !strings.Contains(body, `"extra_content":{"google":{"thought_signature":"`+signature+`"}}`) ||
-				strings.Contains(body, "_axts_") || strings.Count(body, `"call_1"`) != 2 {
-				t.Fatalf("the Chat request does not hand the signature back on the call's own ID:\n%s", body)
-			}
+			checkSignatureHandedBack(t, c.client, c.history, signature)
 		})
 	}
 	t.Run("chat", func(t *testing.T) {
@@ -59,4 +51,18 @@ func TestThoughtSignaturesRoundTrip(t *testing.T) {
 			t.Fatalf("stream %v:\n%s", got.err, got.out)
 		}
 	})
+}
+
+// checkSignatureHandedBack: the next request, converted to Chat, carries the signature on the call's own ID.
+func checkSignatureHandedBack(t *testing.T, client protocol.Format, history, signature string) {
+	t.Helper()
+	up, err := prepareNativeChat(client, chatBody(history), "up", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := string(up.Body)
+	if !strings.Contains(body, `"extra_content":{"google":{"thought_signature":"`+signature+`"}}`) ||
+		strings.Contains(body, "_axts_") || strings.Count(body, `"call_1"`) != 2 {
+		t.Fatalf("the Chat request does not hand the signature back on the call's own ID:\n%s", body)
+	}
 }

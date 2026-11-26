@@ -2,7 +2,6 @@ package protocol
 
 import (
 	"cmp"
-	"encoding/json/jsontext" //nolint:depguard // as in canon.go: strings are kept as written
 	"fmt"
 	"maps"
 	"slices"
@@ -20,30 +19,30 @@ import (
 // geminiRequest is a generateContent body. What it holds besides these members is refused by name: a member we do not
 // convert would change the answer without the client knowing.
 type geminiRequest struct {
-	Contents          []geminiContent           `json:"contents"`
-	SystemInstruction *geminiContent            `json:"systemInstruction,omitempty"`
-	Tools             []geminiTool              `json:"tools,omitempty"`
-	ToolConfig        *geminiToolConfig         `json:"toolConfig,omitempty"`
-	GenerationConfig  map[string]jsontext.Value `json:"generationConfig,omitempty"`
-	SafetySettings    jsontext.Value            `json:"safetySettings,omitzero"` // read and ignored: Chat has no counterpart, and the provider's own policy applies
-	Unknown           map[string]jsontext.Value `json:",embed"`
+	Contents          []geminiContent      `json:"contents"`
+	SystemInstruction *geminiContent       `json:"systemInstruction,omitempty"`
+	Tools             []geminiTool         `json:"tools,omitempty"`
+	ToolConfig        *geminiToolConfig    `json:"toolConfig,omitempty"`
+	GenerationConfig  map[string]jsonx.Raw `json:"generationConfig,omitempty"`
+	SafetySettings    jsonx.Raw            `json:"safetySettings,omitzero"` // read and ignored: Chat has no counterpart, and the provider's own policy applies
+	Unknown           map[string]jsonx.Raw `json:",embed"`
 }
 
 type geminiContent struct {
-	Role    string                    `json:"role,omitempty"`
-	Parts   []geminiPart              `json:"parts"`
-	Unknown map[string]jsontext.Value `json:",embed"`
+	Role    string               `json:"role,omitempty"`
+	Parts   []geminiPart         `json:"parts"`
+	Unknown map[string]jsonx.Raw `json:",embed"`
 }
 
 type geminiPart struct {
-	Text             *string                   `json:"text,omitempty"`
-	Thought          bool                      `json:"thought,omitzero"`
-	ThoughtSignature string                    `json:"thoughtSignature,omitempty"`
-	InlineData       *geminiBlob               `json:"inlineData,omitempty"`
-	FileData         *geminiFile               `json:"fileData,omitempty"`
-	FunctionCall     *geminiCall               `json:"functionCall,omitempty"`
-	FunctionResponse *geminiResult             `json:"functionResponse,omitempty"`
-	Unknown          map[string]jsontext.Value `json:",embed"`
+	Text             *string              `json:"text,omitempty"`
+	Thought          bool                 `json:"thought,omitzero"`
+	ThoughtSignature string               `json:"thoughtSignature,omitempty"`
+	InlineData       *geminiBlob          `json:"inlineData,omitempty"`
+	FileData         *geminiFile          `json:"fileData,omitempty"`
+	FunctionCall     *geminiCall          `json:"functionCall,omitempty"`
+	FunctionResponse *geminiResult        `json:"functionResponse,omitempty"`
+	Unknown          map[string]jsonx.Raw `json:",embed"`
 }
 
 type geminiBlob struct {
@@ -57,27 +56,27 @@ type geminiFile struct {
 }
 
 type geminiCall struct {
-	ID   string         `json:"id,omitempty"`
-	Name string         `json:"name"`
-	Args jsontext.Value `json:"args,omitzero"`
+	ID   string    `json:"id,omitempty"`
+	Name string    `json:"name"`
+	Args jsonx.Raw `json:"args,omitzero"`
 }
 
 type geminiResult struct {
-	ID       string         `json:"id,omitempty"`
-	Name     string         `json:"name"`
-	Response jsontext.Value `json:"response"`
+	ID       string    `json:"id,omitempty"`
+	Name     string    `json:"name"`
+	Response jsonx.Raw `json:"response"`
 }
 
 type geminiTool struct {
-	FunctionDeclarations []geminiFunction          `json:"functionDeclarations,omitempty"`
-	Unknown              map[string]jsontext.Value `json:",embed"` // googleSearch, codeExecution, urlContext: Google runs them
+	FunctionDeclarations []geminiFunction     `json:"functionDeclarations,omitempty"`
+	Unknown              map[string]jsonx.Raw `json:",embed"` // googleSearch, codeExecution, urlContext: Google runs them
 }
 
 type geminiFunction struct {
-	Name                 string         `json:"name"`
-	Description          string         `json:"description,omitempty"`
-	Parameters           jsontext.Value `json:"parameters,omitzero"` // OpenAPI's subset, types in capitals
-	ParametersJSONSchema jsontext.Value `json:"parametersJsonSchema,omitzero"`
+	Name                 string    `json:"name"`
+	Description          string    `json:"description,omitempty"`
+	Parameters           jsonx.Raw `json:"parameters,omitzero"` // OpenAPI's subset, types in capitals
+	ParametersJSONSchema jsonx.Raw `json:"parametersJsonSchema,omitzero"`
 }
 
 type geminiToolConfig struct {
@@ -121,7 +120,7 @@ func GeminiToChat(body []byte, model string, stream bool) ([]byte, GeminiOptions
 	// Gemini has no priority tier a client could ask for: the call is the standard one, as the Messages conversion's is.
 	dst := requestObject{"model": jsonValue(model), "stream": jsonValue(stream), "service_tier": jsonValue("default")}
 	if stream {
-		dst["stream_options"] = jsontext.Value(`{"include_usage":true}`)
+		dst["stream_options"] = jsonx.Raw(`{"include_usage":true}`)
 	}
 	var messages []requestObject
 	if g.SystemInstruction != nil {
@@ -146,7 +145,7 @@ func GeminiToChat(body []byte, model string, stream bool) ([]byte, GeminiOptions
 	return jsonValue(dst), opts, nil
 }
 
-func unknownMember(where string, members map[string]jsontext.Value) error {
+func unknownMember(where string, members map[string]jsonx.Raw) error {
 	if len(members) == 0 {
 		return nil
 	}
@@ -154,7 +153,7 @@ func unknownMember(where string, members map[string]jsontext.Value) error {
 }
 
 // chatContent is a system instruction's text as Chat content.
-func (c *geminiContent) chatContent() (jsontext.Value, error) {
+func (c *geminiContent) chatContent() (jsonx.Raw, error) {
 	var parts []requestObject
 	for _, p := range c.Parts {
 		if p.Text == nil || p.Thought || p.InlineData != nil || p.FileData != nil || p.FunctionCall != nil || p.FunctionResponse != nil {
@@ -204,7 +203,7 @@ func geminiModelTurn(out []requestObject, c geminiContent, at int, pending map[s
 			id := cmp.Or(p.FunctionCall.ID, "call_"+strconv.Itoa(at)+"_"+strconv.Itoa(j))
 			args := p.FunctionCall.Args
 			if isNull(args) {
-				args = jsontext.Value("{}")
+				args = jsonx.Raw("{}")
 			}
 			call := requestObject{"id": jsonValue(id), "type": jsonValue("function"),
 				"function": jsonValue(requestObject{"name": jsonValue(p.FunctionCall.Name), "arguments": jsonValue(string(args))})}
@@ -289,7 +288,7 @@ func geminiResultMessage(r *geminiResult, pending map[string][]string) (requestO
 	pending[r.Name] = slices.Delete(queue, at, at+1)
 	content := r.Response
 	if isNull(content) {
-		content = jsontext.Value("{}")
+		content = jsonx.Raw("{}")
 	}
 	return requestObject{"role": jsonValue("tool"), "tool_call_id": jsonValue(id), "content": jsonValue(string(content))}, nil
 }
@@ -303,26 +302,16 @@ func (g *geminiRequest) chatTools(dst requestObject) error {
 			return fmt.Errorf("%w: the Gemini %s tool runs only on Google's side and is not supported", ErrInvalid, slices.Min(slices.Collect(maps.Keys(t.Unknown))))
 		}
 		for _, f := range t.FunctionDeclarations {
-			params := f.ParametersJSONSchema
-			if isNull(params) && !isNull(f.Parameters) {
-				var err error
-				if params, err = jsonSchemaOf(f.Parameters); err != nil {
-					return err
-				}
+			tool, err := chatFunction(f)
+			if err != nil {
+				return err
 			}
-			if isNull(params) {
-				params = jsontext.Value(`{"type":"object","properties":{}}`)
-			}
-			fn := requestObject{"name": jsonValue(f.Name), "parameters": params}
-			if f.Description != "" {
-				fn["description"] = jsonValue(f.Description)
-			}
-			tools = append(tools, requestObject{"type": jsonValue("function"), "function": jsonValue(fn)})
+			tools = append(tools, tool)
 		}
 	}
-	if g.ToolConfig != nil && g.ToolConfig.FunctionCallingConfig != nil && g.ToolConfig.FunctionCallingConfig.Mode != "" {
+	if cfg := g.ToolConfig; cfg != nil && cfg.FunctionCallingConfig != nil && cfg.FunctionCallingConfig.Mode != "" {
 		var err error
-		if tools, err = geminiChoice(g.ToolConfig.FunctionCallingConfig.Mode, g.ToolConfig.FunctionCallingConfig.AllowedFunctionNames, tools, dst); err != nil {
+		if tools, err = geminiChoice(cfg.FunctionCallingConfig.Mode, cfg.FunctionCallingConfig.AllowedFunctionNames, tools, dst); err != nil {
 			return err
 		}
 	}
@@ -330,6 +319,25 @@ func (g *geminiRequest) chatTools(dst requestObject) error {
 		dst["tools"] = jsonValue(tools)
 	}
 	return nil
+}
+
+// chatFunction is a function declaration as a Chat tool, its parameters in JSON Schema.
+func chatFunction(f geminiFunction) (requestObject, error) {
+	params := f.ParametersJSONSchema
+	if isNull(params) && !isNull(f.Parameters) {
+		var err error
+		if params, err = jsonSchemaOf(f.Parameters); err != nil {
+			return nil, err
+		}
+	}
+	if isNull(params) {
+		params = jsonx.Raw(`{"type":"object","properties":{}}`)
+	}
+	fn := requestObject{"name": jsonValue(f.Name), "parameters": params}
+	if f.Description != "" {
+		fn["description"] = jsonValue(f.Description)
+	}
+	return requestObject{"type": jsonValue("function"), "function": jsonValue(fn)}, nil
 }
 
 // geminiChoice writes the calling mode as Chat's tool choice. ANY with allowed names keeps only those tools, as the
@@ -356,7 +364,7 @@ func geminiChoice(mode string, allowed []string, tools []requestObject, dst requ
 }
 
 // geminiGeneration converts generationConfig: the settings both sides share, the reply's format, and thinking.
-func geminiGeneration(config map[string]jsontext.Value, dst requestObject) (GeminiOptions, error) {
+func geminiGeneration(config map[string]jsonx.Raw, dst requestObject) (GeminiOptions, error) {
 	var opts GeminiOptions
 	config = maps.Clone(config)
 	for _, s := range geminiSettings {
@@ -386,7 +394,7 @@ func geminiGeneration(config map[string]jsontext.Value, dst requestObject) (Gemi
 	return opts, unknownMember("generationConfig", config)
 }
 
-func geminiFormat(config map[string]jsontext.Value, dst requestObject) error {
+func geminiFormat(config map[string]jsonx.Raw, dst requestObject) error {
 	mime, schema, jsonSchema := config["responseMimeType"], config["responseSchema"], config["responseJsonSchema"]
 	delete(config, "responseMimeType")
 	delete(config, "responseSchema")
@@ -407,7 +415,7 @@ func geminiFormat(config map[string]jsontext.Value, dst requestObject) error {
 		}
 	}
 	if isNull(jsonSchema) {
-		dst["response_format"] = jsontext.Value(`{"type":"json_object"}`)
+		dst["response_format"] = jsonx.Raw(`{"type":"json_object"}`)
 		return nil
 	}
 	dst["response_format"] = jsonValue(requestObject{"type": jsonValue("json_schema"),
@@ -417,12 +425,12 @@ func geminiFormat(config map[string]jsontext.Value, dst requestObject) error {
 
 // geminiThinking converts thinkingConfig: a budget of 0 turns thinking off, -1 leaves it to the model, a positive one
 // is OpenRouter's reasoning budget, and a level is the effort. Whether thoughts come back is the reply's business.
-func geminiThinking(v jsontext.Value, dst requestObject) (GeminiOptions, error) {
+func geminiThinking(v jsonx.Raw, dst requestObject) (GeminiOptions, error) {
 	var t struct {
-		IncludeThoughts bool                      `json:"includeThoughts"`
-		ThinkingBudget  *int64                    `json:"thinkingBudget"`
-		ThinkingLevel   string                    `json:"thinkingLevel"`
-		Unknown         map[string]jsontext.Value `json:",embed"`
+		IncludeThoughts bool                 `json:"includeThoughts"`
+		ThinkingBudget  *int64               `json:"thinkingBudget"`
+		ThinkingLevel   string               `json:"thinkingLevel"`
+		Unknown         map[string]jsonx.Raw `json:",embed"`
 	}
 	if err := jsonx.Unmarshal(v, &t); err != nil {
 		return GeminiOptions{}, invaliderr(err)
@@ -442,60 +450,4 @@ func geminiThinking(v jsontext.Value, dst requestObject) (GeminiOptions, error) 
 		return GeminiOptions{}, fmt.Errorf("%w: thinkingBudget %d is not valid", ErrInvalid, *t.ThinkingBudget)
 	}
 	return GeminiOptions{Thoughts: t.IncludeThoughts}, nil
-}
-
-// jsonSchemaOf turns a schema in Gemini's OpenAPI subset into JSON Schema: types in capitals become lower case, and
-// nullable becomes the null type beside the other; the rest is the same keyword.
-func jsonSchemaOf(v jsontext.Value) (jsontext.Value, error) {
-	var s map[string]jsontext.Value
-	if err := jsonx.Unmarshal(v, &s); err != nil {
-		return nil, fmt.Errorf("%w: a Gemini schema is not an object", ErrInvalid)
-	}
-	out := requestObject{}
-	for k, v := range s {
-		switch k {
-		case "type":
-			out[k] = jsontext.Value(strings.ToLower(string(v)))
-		case "nullable", "propertyOrdering":
-		case "items":
-			inner, err := jsonSchemaOf(v)
-			if err != nil {
-				return nil, err
-			}
-			out[k] = inner
-		case "properties":
-			var props map[string]jsontext.Value
-			if err := jsonx.Unmarshal(v, &props); err != nil {
-				return nil, fmt.Errorf("%w: Gemini schema properties are not an object", ErrInvalid)
-			}
-			converted := requestObject{}
-			for name, p := range props {
-				inner, err := jsonSchemaOf(p)
-				if err != nil {
-					return nil, err
-				}
-				converted[name] = inner
-			}
-			out[k] = jsonValue(converted)
-		case "anyOf":
-			var alts []jsontext.Value
-			if err := jsonx.Unmarshal(v, &alts); err != nil {
-				return nil, fmt.Errorf("%w: a Gemini schema's anyOf is not a list", ErrInvalid)
-			}
-			for i, a := range alts {
-				inner, err := jsonSchemaOf(a)
-				if err != nil {
-					return nil, err
-				}
-				alts[i] = inner
-			}
-			out[k] = jsonValue(alts)
-		default:
-			out[k] = v
-		}
-	}
-	if string(s["nullable"]) == "true" && !isNull(out["type"]) {
-		out["type"] = jsonValue([]jsontext.Value{out["type"], jsonValue("null")})
-	}
-	return jsonValue(out), nil
 }

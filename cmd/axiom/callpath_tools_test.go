@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json/v2" //nolint:depguard // decodes the node's own responses and what it sent; jsonx guards input from outside
 	"os"
 	"path/filepath"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 )
 
@@ -101,7 +101,11 @@ func (w *callWorld) toolUpstreams() []toolUpstream {
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	defer samples.Close() //nolint:errcheck // read only
+	defer func() {
+		if err := samples.Close(); err != nil {
+			w.t.Error(err)
+		}
+	}()
 	read := func(name string) string {
 		b, err := samples.ReadFile(name)
 		if err != nil {
@@ -240,7 +244,7 @@ func messagesConversation(calls []fnCall) string {
 }
 
 func quote(s string) string {
-	b, err := json.Marshal(s)
+	b, err := jsonx.MarshalCanonical(s)
 	if err != nil {
 		panic(err) // a string always marshals
 	}
@@ -250,10 +254,10 @@ func quote(s string) string {
 // canonicalJSON is the JSON text with its whitespace and member order normalized, or the text itself when it is none.
 func canonicalJSON(text string) string {
 	var v any
-	if err := json.Unmarshal([]byte(text), &v); err != nil {
+	if err := jsonx.Unmarshal([]byte(text), &v); err != nil {
 		return text
 	}
-	b, err := json.Marshal(v, json.Deterministic(true))
+	b, err := jsonx.MarshalCanonical(v)
 	if err != nil {
 		return text
 	}
@@ -265,7 +269,7 @@ func canonicalArgs(input map[string]any) string {
 	if input == nil {
 		return "{}"
 	}
-	b, err := json.Marshal(input, json.Deterministic(true))
+	b, err := jsonx.MarshalCanonical(input)
 	if err != nil {
 		panic(err) // decoded JSON always marshals
 	}

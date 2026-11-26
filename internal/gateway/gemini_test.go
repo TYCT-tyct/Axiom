@@ -49,14 +49,20 @@ func TestGeminiPaths(t *testing.T) {
 			if resp.StatusCode != c.status || !strings.HasPrefix(resp.Header.Get("Content-Type"), c.contentType) {
 				t.Fatalf("%d %s: %s", resp.StatusCode, resp.Header.Get("Content-Type"), got)
 			}
-			for _, want := range c.want {
-				if !strings.Contains(got, want) {
-					t.Errorf("the answer lacks %s:\n%s", want, got)
-				}
-			}
-			if strings.Contains(got, `"choices"`) || strings.Contains(got, "[DONE]") {
-				t.Errorf("Chat's shape leaked:\n%s", got)
-			}
+			checkGeminiAnswer(t, got, c.want)
 		})
+	}
+}
+
+// checkGeminiAnswer: the answer holds what it must, and nothing of Chat's shape.
+func checkGeminiAnswer(t *testing.T, got string, want []string) {
+	t.Helper()
+	for _, w := range want {
+		if !strings.Contains(got, w) {
+			t.Errorf("the answer lacks %s:\n%s", w, got)
+		}
+	}
+	if strings.Contains(got, `"choices"`) || strings.Contains(got, "[DONE]") {
+		t.Errorf("Chat's shape leaked:\n%s", got)
 	}
 }

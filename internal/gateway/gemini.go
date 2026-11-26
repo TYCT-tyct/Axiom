@@ -2,10 +2,12 @@ package gateway
 
 import (
 	"bytes"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
 
+	"axiom/internal/platform/httpserver"
 	"axiom/internal/protocol"
 )
 
@@ -33,7 +35,11 @@ func (h *Handler) geminiRoutes() {
 func (h *Handler) gemini(w http.ResponseWriter, r *http.Request) {
 	in := &geminiInbound{}
 	gw := &geminiWriter{ResponseWriter: w, in: in, writeFor: h.Limits.cfg.WriteTimeout}
-	defer gw.finish()
+	defer func() {
+		if err := gw.finish(); err != nil { // the client may be gone; nothing more can be told
+			h.Logger.Debug("a Gemini answer was not written whole", "request_id", httpserver.RequestID(r.Context()), "err", err)
+		}
+	}()
 	geminiKey(r)
 	action := r.PathValue("action")
 	at := strings.LastIndexByte(action, ':')
@@ -180,43 +186,52 @@ func (g *geminiWriter) drain() error {
 		}
 		event := g.pending[:end]
 		g.pending = g.pending[end+2:]
-		var data []byte
-		for line := range bytes.SplitSeq(event, []byte("\n")) {
-			switch {
-			case bytes.HasPrefix(line, []byte(":")):
-				if _, err := g.ResponseWriter.Write(append(bytes.Clone(line), "\n\n"...)); err != nil {
-					return err
-				}
-			case bytes.HasPrefix(line, []byte("data:")):
-				data = append(data, bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))...)
-			}
-		}
-		if data == nil {
-			continue
-		}
-		out, err := g.replyOf().Event(data)
-		if err != nil {
+		if err := g.event(event); err != nil {
 			return err
-		}
-		if out != nil {
-			if _, err := g.ResponseWriter.Write(append(append([]byte("data: "), out...), "\n\n"...)); err != nil {
-				return err
-			}
 		}
 	}
 }
 
-// finish writes a whole body in Gemini's shape, now that the call path has written all of it.
-func (g *geminiWriter) finish() {
+// event writes one Chat event as Gemini's.
+func (g *geminiWriter) event(event []byte) error {
+	var data []byte
+	for line := range bytes.SplitSeq(event, []byte("\n")) {
+		switch {
+		case bytes.HasPrefix(line, []byte(":")):
+			if _, err := g.ResponseWriter.Write(append(bytes.Clone(line), "\n\n"...)); err != nil {
+				return err
+			}
+		case bytes.HasPrefix(line, []byte("data:")):
+			data = append(data, bytes.TrimPrefix(bytes.TrimPrefix(line, []byte("data:")), []byte(" "))...)
+		}
+	}
+	if data == nil {
+		return nil
+	}
+	out, err := g.replyOf().Event(data)
+	if err != nil || out == nil {
+		return err
+	}
+	_, err = g.ResponseWriter.Write(append(append([]byte("data: "), out...), "\n\n"...))
+	return err
+}
+
+// finish writes a whole body in Gemini's shape, now that the call path has written all of it, within one write's
+// deadline: the call path's last one may have passed while it wrote into the buffer.
+func (g *geminiWriter) finish() error {
 	if g.stream || g.status == 0 {
-		return
+		return nil
 	}
 	body, err := g.replyOf().Body(g.status, g.pending)
 	if err != nil {
 		body = protocol.GeminiErrorBody(g.status, g.pending)
 	}
-	_ = http.NewResponseController(g.ResponseWriter).SetWriteDeadline(time.Now().Add(g.writeFor)) //nolint:errcheck // a writer without deadlines is written to as it is
+	err = http.NewResponseController(g.ResponseWriter).SetWriteDeadline(time.Now().Add(g.writeFor))
+	if err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return err
+	}
 	g.Header().Set("Content-Type", "application/json")
 	g.ResponseWriter.WriteHeader(g.status)
-	g.ResponseWriter.Write(body) //nolint:errcheck,gosec // the client may be gone; nothing more can be told
+	_, err = g.ResponseWriter.Write(body)
+	return err
 }

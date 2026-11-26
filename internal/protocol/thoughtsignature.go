@@ -2,8 +2,9 @@ package protocol
 
 import (
 	"encoding/base64"
-	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"strings"
+
+	"axiom/internal/platform/jsonx"
 )
 
 // Gemini binds its thinking to a function call with a thought signature, and refuses a later turn whose call comes back
@@ -39,13 +40,13 @@ func splitSignature(id string) (own, signature string) {
 }
 
 // googleExtra is the extra_content a Chat tool call carries a signature in.
-func googleExtra(signature string) jsontext.Value {
+func googleExtra(signature string) jsonx.Raw {
 	return jsonValue(map[string]any{"google": map[string]string{"thought_signature": signature}})
 }
 
 // unsignedID takes the carried signature out of a converted request's call or result ID, a JSON string, and returns
 // the ID the upstream knows the call by with the signature; an ID that is not a string is left for the checks after.
-func unsignedID(id jsontext.Value) (jsontext.Value, string) {
+func unsignedID(id jsonx.Raw) (jsonx.Raw, string) {
 	s, err := requestString(id)
 	if err != nil {
 		return id, ""

@@ -177,8 +177,10 @@ func (h *Handler) askCount(r *http.Request, conn Conn, model string, body []byte
 	if f != nil {
 		return 0, false
 	}
-	defer resp.Body.Close() //nolint:errcheck // the answer is read or given up on; nothing to learn from the close
 	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxCountReply+1))
+	if closeErr := resp.Body.Close(); err == nil {
+		err = closeErr
+	}
 	var count struct {
 		InputTokens *int64 `json:"input_tokens"`
 	}

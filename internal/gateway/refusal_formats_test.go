@@ -69,44 +69,48 @@ func TestEveryFormatRefusesInItsOwnShape(t *testing.T) {
 		for _, c := range refusals {
 			t.Run(f.name+"/"+c.name, func(t *testing.T) {
 				resp, body := c.send(f.send)
-				id := resp.Header.Get("X-Request-ID")
-				if resp.StatusCode != c.status || id == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
-					t.Fatalf("%d, request ID %q: %s", resp.StatusCode, id, body)
-				}
-				var got struct {
-					Type      string `json:"type"`
-					RequestID string `json:"request_id"`
-					Error     struct {
-						Type      string `json:"type"`
-						Message   string `json:"message"`
-						Code      int    `json:"code"`
-						Status    string `json:"status"`
-						ErrorType string `json:"error_type"`
-						Metadata  struct {
-							ErrorType string `json:"error_type"`
-						} `json:"metadata"`
-						Details []struct {
-							Reason string `json:"reason"`
-						} `json:"details"`
-					} `json:"error"`
-				}
-				if err := jsonx.Unmarshal([]byte(body), &got); err != nil || got.Error.Message == "" {
-					t.Fatalf("not an error object (%v): %s", err, body)
-				}
-				e := got.Error
-				var ok bool
-				switch f.name {
-				case "messages":
-					ok = got.Type == "error" && e.Type != "" && e.ErrorType == c.errorType && got.RequestID == id
-				case "gemini":
-					ok = e.Code == c.status && e.Status == c.google && len(e.Details) == 1 && e.Details[0].Reason == c.errorType
-				default:
-					ok = e.Code == c.status && e.Type != "" && e.Metadata.ErrorType == c.errorType
-				}
-				if !ok {
-					t.Errorf("not %s's shape for %s (request %s): %s", f.name, c.errorType, id, body)
-				}
+				checkRefusalShape(t, f.name, c.errorType, c.google, c.status, resp, body)
 			})
 		}
+	}
+}
+
+// checkRefusalShape: the refusal has the status, the request ID and the format's own error shape with the error type.
+func checkRefusalShape(t *testing.T, format, errorType, google string, status int, resp reply, body string) {
+	t.Helper()
+	id := resp.Header.Get("X-Request-ID")
+	if resp.StatusCode != status || id == "" || !strings.HasPrefix(resp.Header.Get("Content-Type"), "application/json") {
+		t.Fatalf("%d, request ID %q: %s", resp.StatusCode, id, body)
+	}
+	var got struct {
+		Type      string `json:"type"`
+		RequestID string `json:"request_id"`
+		Error     struct {
+			Type      string `json:"type"`
+			Message   string `json:"message"`
+			Code      int    `json:"code"`
+			Status    string `json:"status"`
+			ErrorType string `json:"error_type"`
+			Metadata  struct {
+				ErrorType string `json:"error_type"`
+			} `json:"metadata"`
+			Details []struct {
+				Reason string `json:"reason"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	if err := jsonx.Unmarshal([]byte(body), &got); err != nil || got.Error.Message == "" {
+		t.Fatalf("not an error object (%v): %s", err, body)
+	}
+	e := got.Error
+	ok := e.Code == status && e.Type != "" && e.Metadata.ErrorType == errorType
+	switch format {
+	case "messages":
+		ok = got.Type == "error" && e.Type != "" && e.ErrorType == errorType && got.RequestID == id
+	case "gemini":
+		ok = e.Code == status && e.Status == google && len(e.Details) == 1 && e.Details[0].Reason == errorType
+	}
+	if !ok {
+		t.Errorf("not %s's shape for %s (request %s): %s", format, errorType, id, body)
 	}
 }

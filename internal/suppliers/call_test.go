@@ -267,7 +267,9 @@ func TestACountGoesToItsOwnPathAndRestsNothing(t *testing.T) {
 	defer cancel()
 	resp, f := a.Send(ctx, Call{Format: protocol.Messages, Count: true, Body: []byte(`{}`)})
 	if resp != nil {
-		_ = resp.Body.Close() //nolint:errcheck // the answer is a failure
+		if err := resp.Body.Close(); err != nil {
+			t.Error(err)
+		}
 	}
 	if f == nil || f.Scope != adapter.ScopeCredential {
 		t.Fatalf("a 429: %+v", f)

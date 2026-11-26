@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"fmt"
 	"strings"
 
@@ -19,7 +18,7 @@ func ChatToGemini(body []byte) ([]byte, error) {
 	if err := c.checkShape(); err != nil {
 		return nil, err
 	}
-	g := geminiRequest{GenerationConfig: map[string]jsontext.Value{}}
+	g := geminiRequest{GenerationConfig: map[string]jsonx.Raw{}}
 	if err := c.geminiContents(&g); err != nil {
 		return nil, err
 	}
@@ -45,14 +44,9 @@ func (c *canon) geminiContents(g *geminiRequest) error {
 			if !leading {
 				return &NotSupported{Reason: "Gemini takes system instructions only before the conversation"}
 			}
-			parts, err := geminiTextParts(m.Parts)
-			if err != nil {
+			if err := g.instruct(m); err != nil {
 				return err
 			}
-			if g.SystemInstruction == nil {
-				g.SystemInstruction = &geminiContent{}
-			}
-			g.SystemInstruction.Parts = append(g.SystemInstruction.Parts, parts...)
 			continue
 		}
 		leading = false
@@ -66,6 +60,19 @@ func (c *canon) geminiContents(g *geminiRequest) error {
 			g.Contents = append(g.Contents, geminiContent{Role: role, Parts: parts})
 		}
 	}
+	return nil
+}
+
+// instruct adds a system message's text to the system instruction.
+func (g *geminiRequest) instruct(m canonMessage) error {
+	parts, err := geminiTextParts(m.Parts)
+	if err != nil {
+		return err
+	}
+	if g.SystemInstruction == nil {
+		g.SystemInstruction = &geminiContent{}
+	}
+	g.SystemInstruction.Parts = append(g.SystemInstruction.Parts, parts...)
 	return nil
 }
 
@@ -158,7 +165,7 @@ func geminiResultPart(id, name string, parts []canonPart) (geminiPart, error) {
 	for _, t := range texts {
 		text.WriteString(*t.Text)
 	}
-	response := jsontext.Value(strings.TrimSpace(text.String()))
+	response := jsonx.Raw(strings.TrimSpace(text.String()))
 	if len(response) == 0 || response[0] != '{' || jsonx.Validate(response) != nil {
 		response = jsonValue(map[string]string{"result": text.String()})
 	}
@@ -257,8 +264,8 @@ func (c *canon) geminiChoice(g *geminiRequest) error {
 
 // geminiGeneration writes the settings, the reply's format and thinking; a member Gemini has no counterpart for is
 // refused unless it is Chat's default or one only Axiom reads (identities, caching keys, the usage it always asks for).
-func (c *canon) geminiGeneration(config map[string]jsontext.Value) error {
-	chat := map[string]jsontext.Value{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
+func (c *canon) geminiGeneration(config map[string]jsonx.Raw) error {
+	chat := map[string]jsonx.Raw{"temperature": c.Temperature, "top_p": c.TopP, "stop": c.Stop}
 	for name, v := range c.Unknown {
 		chat[name] = v
 	}
@@ -272,7 +279,7 @@ func (c *canon) geminiGeneration(config map[string]jsontext.Value) error {
 			continue
 		}
 		if s.chat == "stop" && v.Kind() == '"' {
-			v = jsonValue([]jsontext.Value{v})
+			v = jsonValue([]jsonx.Raw{v})
 		}
 		config[s.gemini] = v
 	}
@@ -290,7 +297,7 @@ func (c *canon) geminiGeneration(config map[string]jsontext.Value) error {
 	return c.geminiThinking(config)
 }
 
-func (c *canon) geminiFormat(config map[string]jsontext.Value) error {
+func (c *canon) geminiFormat(config map[string]jsonx.Raw) error {
 	f := c.ResponseFormat
 	switch {
 	case f == nil || f.Type == "text":
@@ -306,7 +313,7 @@ func (c *canon) geminiFormat(config map[string]jsontext.Value) error {
 
 // geminiThinking is geminiThinking of gemini.go the other way: effort none or reasoning disabled is a budget of 0, a
 // reasoning budget is the thinking budget, any other effort the level; thoughts come back unless the client hid them.
-func (c *canon) geminiThinking(config map[string]jsontext.Value) error {
+func (c *canon) geminiThinking(config map[string]jsonx.Raw) error {
 	t := requestObject{}
 	effort := ""
 	if c.ReasoningEffort != nil {
@@ -322,15 +329,15 @@ func (c *canon) geminiThinking(config map[string]jsontext.Value) error {
 			effort = *r.Effort
 		}
 		if r.Exclude == nil || !*r.Exclude {
-			t["includeThoughts"] = jsontext.Value("true")
+			t["includeThoughts"] = jsonx.Raw("true")
 		}
 	} else if effort != "" && effort != "none" {
-		t["includeThoughts"] = jsontext.Value("true")
+		t["includeThoughts"] = jsonx.Raw("true")
 	}
 	switch effort {
 	case "":
 	case "none":
-		t = requestObject{"thinkingBudget": jsontext.Value("0")}
+		t = requestObject{"thinkingBudget": jsonx.Raw("0")}
 	case "minimal", "low", "medium", "high":
 		t["thinkingLevel"] = jsonValue(effort)
 	default:

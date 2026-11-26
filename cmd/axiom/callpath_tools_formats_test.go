@@ -1,10 +1,11 @@
 package main
 
 import (
-	"encoding/json/v2" //nolint:depguard // decodes the node's own responses and what it sent; jsonx guards input from outside
 	"fmt"
 	"slices"
 	"testing"
+
+	"axiom/internal/platform/jsonx"
 )
 
 // How each format of TestToolCallsRoundTrip carries function calls in a streamed event, a whole answer and a request.
@@ -27,7 +28,7 @@ func chatToolEvent(s *toolStream, data []byte) error {
 			FinishReason *string `json:"finish_reason"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(data, &e); err != nil {
+	if err := jsonx.Unmarshal(data, &e); err != nil {
 		return err
 	}
 	for _, c := range e.Choices {
@@ -56,7 +57,7 @@ func chatToolAnswer(body []byte) (calls []fnCall, stop string, err error) {
 			FinishReason string `json:"finish_reason"`
 		} `json:"choices"`
 	}
-	if err := json.Unmarshal(body, &b); err != nil {
+	if err := jsonx.Unmarshal(body, &b); err != nil {
 		return nil, "", err
 	}
 	if len(b.Choices) != 1 {
@@ -85,7 +86,7 @@ func responsesToolEvent(s *toolStream, data []byte) error {
 			Status string `json:"status"`
 		} `json:"response"`
 	}
-	if err := json.Unmarshal(data, &e); err != nil {
+	if err := jsonx.Unmarshal(data, &e); err != nil {
 		return err
 	}
 	switch e.Type {
@@ -104,7 +105,7 @@ func responsesToolAnswer(body []byte) (calls []fnCall, stop string, err error) {
 		Status string          `json:"status"`
 		Output []responsesItem `json:"output"`
 	}
-	if err := json.Unmarshal(body, &b); err != nil {
+	if err := jsonx.Unmarshal(body, &b); err != nil {
 		return nil, "", err
 	}
 	for _, o := range b.Output {
@@ -135,7 +136,7 @@ func messagesToolEvent(s *toolStream, data []byte) error {
 			StopReason  string `json:"stop_reason"`
 		} `json:"delta"`
 	}
-	if err := json.Unmarshal(data, &e); err != nil {
+	if err := jsonx.Unmarshal(data, &e); err != nil {
 		return err
 	}
 	switch {
@@ -154,7 +155,7 @@ func messagesToolAnswer(body []byte) (calls []fnCall, stop string, err error) {
 		StopReason string          `json:"stop_reason"`
 		Content    []messagesBlock `json:"content"`
 	}
-	if err := json.Unmarshal(body, &b); err != nil {
+	if err := jsonx.Unmarshal(body, &b); err != nil {
 		return nil, "", err
 	}
 	for _, c := range b.Content {
@@ -170,7 +171,7 @@ func messagesToolAnswer(body []byte) (calls []fnCall, stop string, err error) {
 
 func decodeSent(t *testing.T, body []byte, v any) {
 	t.Helper()
-	if err := json.Unmarshal(body, v); err != nil {
+	if err := jsonx.Unmarshal(body, v); err != nil {
 		t.Fatalf("the upstream was sent no JSON: %v: %s", err, body)
 	}
 }
@@ -267,12 +268,12 @@ func messagesBlocks(t *testing.T, content any) []messagesBlock {
 	if _, ok := content.([]any); !ok {
 		return nil
 	}
-	raw, err := json.Marshal(content)
+	raw, err := jsonx.MarshalCanonical(content)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var blocks []messagesBlock
-	if err := json.Unmarshal(raw, &blocks); err != nil {
+	if err := jsonx.Unmarshal(raw, &blocks); err != nil {
 		t.Fatalf("the upstream was sent content that is no blocks: %v: %s", err, raw)
 	}
 	return blocks
