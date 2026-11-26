@@ -91,6 +91,11 @@ paths:
         in: query
         schema:
           $ref: '#/components/schemas/SiteId'
+      - name: plugin
+        in: query
+        description: Only calls that used this plugin.
+        schema:
+          $ref: '#/components/schemas/AdminPlugin'
       responses:
         '200':
           description: Result
@@ -295,6 +300,60 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/reports/monitor:
+    get:
+      operationId: getOperationsMonitor
+      tags: [Reports]
+      summary: The platform's calls over the last hour or day, minute by minute or hour by hour
+      description: >-
+        What the operations monitor draws, over every site's calls that started in the window: calls, failures and
+        tokens per bucket (a minute for `1h`, an hour for `24h`), time to first token and to completion as
+        percentiles, how completion times spread, why calls failed, how many switched to another endpoint after a
+        failure, and each line's calls.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: window, in: query, required: false, schema: {$ref: "#/components/schemas/MonitorWindow"}}
+      responses:
+        "200":
+          description: The window.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/OperationsMonitor"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/reports/plugins:
+    get:
+      operationId: getPluginStats
+      tags: [Reports]
+      summary: How the web search and file parser plugins were used over a window
+      description: >-
+        For each plugin, over every site's calls that started in the window: how many calls used it, how many of its
+        runs failed (the call went on without it), its mean time, how many searches or pages it ran, what the calls
+        were charged for it and what it cost the platform, in the site's accounting currency, and its calls by hour.
+        The window defaults to the last 24 hours and is at most 31 days. The calls themselves are `listAdminCalls`
+        with `plugin`.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: since, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: until, in: query, required: false, schema: {type: string, format: date-time}}
+      responses:
+        "200":
+          description: The plugins.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/PluginStats"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/audit:
     get:
@@ -2186,6 +2245,33 @@ paths:
         default: {$ref: "#/components/responses/Failure"}
 
   /api/admin/v1/announcements:
+    get:
+      operationId: listAdminAnnouncements
+      tags: [Sites]
+      summary: Every announcement published, with where each stands
+      description: >-
+        The announcements of every site, or of the one given, newest first by `starts_at`, withdrawn ones included,
+        each with its state: `scheduled` before `starts_at`, `showing` while users see it, `ended` after `ends_at`,
+        `withdrawn` once taken down. The state filter is exact.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: site_id, in: query, required: false, schema: {$ref: "#/components/schemas/SiteId"}}
+        - {name: state, in: query, required: false, schema: {$ref: "#/components/schemas/AnnouncementState"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of announcements.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/AdminAnnouncementList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
     post:
       operationId: publishAnnouncement
       tags: [Sites]
@@ -3910,6 +3996,7 @@ paths:
       x-axiom-permission: suppliers.view
       parameters:
         - {name: status, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierStatus"}}
+        - {name: mode, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierMode"}}
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -4544,6 +4631,840 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/direct:
+    post:
+      operationId: createDirectSupplier
+      tags: [Suppliers]
+      summary: Connect a provider's own API with pasted keys
+      description: >-
+        Connects a direct API (`mode` `direct`, one line): a provider whose address and call format are built in
+        (`openai`, `anthropic`, `google`, `moonshot`), or `compatible`, any other API speaking one of the call formats
+        at the origin given. Each key is checked with one request the provider does not charge for (its model list)
+        before it is kept; a key that passes is sealed and stored as its own credential with the limits given, and no
+        key text is ever returned, only its last four characters. A direct API has no balance to read and no unit value
+        to confirm: its costs are the catalog's official reference prices in the settlement currency (`source`
+        `price_list`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take
+        traffic.
+
+
+        201 with the supplier when at least one key passed. When none did, nothing is stored and the answer is 200 with
+        the checks and no `supplier`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/DirectSupplierCreate"}
+      responses:
+        "201":
+          description: Connected, with the check of each key.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierConnected"}
+        "200":
+          description: No key passed; nothing was stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierConnected"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/cloud:
+    post:
+      operationId: createCloudSupplier
+      tags: [Suppliers]
+      summary: Connect a cloud platform's model service with its credential
+      description: >-
+        Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's
+        address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned;
+        what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region
+        chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute
+        ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the
+        resource is one credential, and the deployments it lists are its models. Costs are the catalog's official
+        reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts
+        `connecting`, and its endpoints wait for the quality check before they take traffic.
+
+
+        201 with the supplier when the credential passed in at least one region; a region that failed is not stored.
+        When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CloudSupplierCreate"}
+      responses:
+        "201":
+          description: Connected, with the check of each region.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierConnected"}
+        "200":
+          description: The credential passed in no region; nothing was stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierConnected"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/cloud-credential:
+    put:
+      operationId: replaceSupplierCloudCredential
+      tags: [Suppliers]
+      summary: Replace a cloud supplier's credential, or the regions it serves from
+      description: >-
+        Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes
+        in at least one, seals it in place of the old one in the same change: the regions that passed are the
+        supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and
+        a region that failed or was left out is erased. Calls in flight end with the credential they hold. When it
+        passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409
+        for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit
+        entry names the regions, never the credential.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CloudCredentialReplace"}
+      responses:
+        "200":
+          description: The supplier as changed with the check of each region, or only the checks when nothing changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierConnected"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection:
+    post:
+      operationId: connectSupplierGroup
+      tags: [Suppliers]
+      summary: Connect a relay's group with a key made for it or pasted
+      description: >-
+        Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated
+        key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals
+        it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the
+        person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another
+        group, or one the supplier does not list, is 422 pointing at `/key`. Either way the credential starts `active`
+        with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group
+        that already has a credential is 409: it is paused and resumed with `selectSupplierGroup`, keeping its key.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: group_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/GroupConnection"}
+      responses:
+        "201":
+          description: Connected.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/GroupConnected"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/key-identifications:
+    post:
+      operationId: identifySupplierKey
+      tags: [Suppliers]
+      summary: Find out which of a relay's groups a pasted key belongs to
+      description: >-
+        Asks the supplier which of its keys this is, through its management login, and says the group the supplier
+        lists it under. It stores nothing and the key is never returned, only its last four characters. A key the
+        supplier does not list answers 200 with no `group_id`. Only for `mode` `relay`: 409 for another supplier.
+
+
+        Limits: 10 a minute per session, because each is a request to a third party.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      x-axiom-safe: true
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/KeyIdentificationRequest"}
+      responses:
+        "200":
+          description: What the supplier says of the key.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/KeyIdentification"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/sync-runs:
+    get:
+      operationId: listSupplierSyncRuns
+      tags: [Suppliers]
+      summary: What each sync of a supplier found changed
+      description: >-
+        The sync's commits that changed something, newest first, each with the differences it recorded against the
+        one before (the supplier's sync events). A sync that found nothing new writes no event and is not listed;
+        when each task last succeeded is `SupplierDetail.sync_tasks`. The texts are Axiom's names, values and
+        fingerprints, never text the supplier wrote.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of runs.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierSyncRunList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/sync-requests:
+    post:
+      operationId: requestSupplierSync
+      tags: [Suppliers]
+      summary: Have a supplier synced now
+      description: >-
+        Makes every task of the supplier due now, as replacing its login does, without clearing a halted task or a
+        backoff: the next scan, within 15 seconds, queues it. The answer is the tasks as scheduled; `listSupplierSyncRuns`
+        shows what the run changed. A supplier that is not synced (`paused`, `needs_attention`, `removed`) is 409.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "202":
+          description: Due now.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierSyncTaskList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/reconciliation:
+    get:
+      operationId: getSupplierReconciliation
+      tags: [Suppliers]
+      summary: What a supplier charged against what Axiom estimated, by day
+      description: >-
+        For each UTC day, newest first: what Axiom's cost plans put the day's attempts at, and what the supplier's own
+        charge records of the day add up to, both in the supplier's unit, with the counts the per-charge matching
+        reached. Only a supplier whose adapter reads charge records has days; one that has none answers an empty
+        list.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: days
+          in: query
+          required: false
+          description: How many days back from today, today included.
+          schema: {type: integer, minimum: 1, maximum: 31, default: 7}
+      responses:
+        "200":
+          description: The days.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierReconciliation"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/models:
+    get:
+      operationId: listSupplierModels
+      tags: [Suppliers]
+      summary: A supplier's upstream model names, sorted into piles
+      description: >-
+        Every name the supplier's groups list, by group and name, in one of four piles: `review`, a name the catalog
+        does not recognise and no alias covers (the supplier's part of `listPendingMappings`), with the closest model
+        when one is close; `listed`, a name of a model on sale, which has or will get an endpoint; `known`, a name of a
+        draft model, which the intake rule `known` takes; `outdated`, a name the intake leaves alone: a retired
+        model's, a dated snapshot of a model that is not on sale, or a fine-tune (`ft:`). How many each pile has is
+        `SupplierDetail.model_counts`.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - {name: pile, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierModelPile"}}
+        - {name: group_id, in: query, required: false, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of names.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierModelList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/intake-rule:
+    put:
+      operationId: setSupplierIntakeRule
+      tags: [Suppliers]
+      summary: Choose which of a supplier's models become endpoints
+      description: >-
+        The rule the sync's projection applies to the supplier's names, in place of the fixed choice: `listed` takes a
+        name of a model on sale, as every supplier did before; `known` also takes a name of a draft model, whose
+        endpoint waits until the model is listed; `names` takes a name of a model on sale that matches one of
+        `include` and none of `exclude`. A group a person never chose is selected when the rule takes one of its names;
+        a person's choice of a group is never changed. The change applies from the next catalog sync; endpoints the
+        rule no longer takes become cost unknown and leave routing, as a delisted model's do. As of `rev`: 409
+        `stale_revision` when the rule changed since it was read.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierIntakeRuleUpdate"}
+      responses:
+        "200":
+          description: The rule as changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierIntakeRule"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost:
+    get:
+      operationId: getSupplierEndpointCost
+      tags: [Suppliers]
+      summary: What an endpoint costs, as price lines with where each came from
+      description: >-
+        The endpoint's current cost plan, one line per metering item, condition and service tier, each with its price
+        per unit in the supplier's own unit (a relay) and in the settlement currency, and the factors it was derived
+        from, so the page can write out "model ratio × group ratio × unit value". `source` says where the plan came
+        from. An endpoint the upstream charges per request while Axiom sells it by the token has a break-even.
+        An endpoint whose cost is unknown has no lines.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: endpoint_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+      responses:
+        "200":
+          description: The cost.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/EndpointCost"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/keys:
+    post:
+      operationId: addSupplierKeys
+      tags: [Suppliers]
+      summary: Add pasted keys to a supplier, checking each
+      description: >-
+        Checks each key with one request the supplier does not charge for and stores the ones that pass, each as its
+        own credential with the limits given, sealed on arrival; the key texts are never returned, only their last four
+        characters. A key repeated in the request or already stored is `duplicate`, and one whose check was
+        inconclusive is not stored either, so it can be sent again. A relay's keys are for one group (`group_id`,
+        required there): a key the supplier lists under another group fails with `wrong_group`. A direct API's keys
+        are for its one line and take no `group_id`. Not for a cloud supplier, whose credential is replaced whole
+        (409). At most 100 keys a request.
+
+
+        201 when at least one key was stored; 200 when none was, and nothing changed.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierKeysAdd"}
+      responses:
+        "201":
+          description: The check of each key, in the order sent.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialCheckList"}
+        "200":
+          description: No key was stored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialCheckList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests:
+    post:
+      operationId: testSupplierCredential
+      tags: [Suppliers]
+      summary: Check one credential against the supplier
+      description: >-
+        One request the supplier does not charge for, with this credential (for a cloud credential, in its region).
+        `passed` puts a `rejected` credential back to `active`; `failed` with `credential_rejected` marks it `rejected`,
+        and routing stops picking it; any other outcome changes nothing. A `disabled` or `erased`
+        credential is not tested (409).
+
+
+        Limits: 10 a minute per session, shared with `testSupplierCredentials`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "201":
+          description: What the check found.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialCheck"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled:
+    put:
+      operationId: setSupplierCredentialEnabled
+      tags: [Suppliers]
+      summary: Stop or resume picking one credential
+      description: >-
+        A person's switch: `false` makes the credential `disabled`, so routing stops picking it while calls in flight
+        end with it; `true` makes it `active` again. The sync never sets or clears it. A `rejected` credential stays
+        `rejected` when enabled, until a check passes; an `erased` one is 409. Already as asked: nothing changes and
+        nothing is audited.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialEnabledUpdate"}
+      responses:
+        "200":
+          description: The credential as changed.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal:
+    post:
+      operationId: removeSupplierCredential
+      tags: [Suppliers]
+      summary: Erase one credential
+      description: >-
+        Clears the sealed key and makes the credential `erased`, at once and for good; the row stays, because calls
+        made with it point at it. Calls in flight end with the key they hold. Axiom does not revoke the key at the
+        supplier. A key the sync made for a relay's group is made again by the next sync unless the group is
+        unselected, so this is for pasted keys and cloud regions. Sending it again returns the credential as it is.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - name: credential_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The credential, `erased`.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredential"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-credentials:
+    get:
+      operationId: listSupplierCredentials
+      tags: [Suppliers]
+      summary: Every supplier's credentials
+      description: >-
+        The credentials of all suppliers, newest first, with what the node that answered holds against each limit now
+        (`in_flight`, `requests_last_minute`). The filters are exact.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - {name: supplier_id, in: query, required: false, schema: {$ref: "#/components/schemas/Uuid"}}
+        - {name: status, in: query, required: false, schema: {$ref: "#/components/schemas/CredentialStatus"}}
+        - {name: mode, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierMode"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of credentials.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierCredentialList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-credentials/tests:
+    post:
+      operationId: testSupplierCredentials
+      tags: [Suppliers]
+      summary: Check every credential, of one supplier or of all
+      description: >-
+        `testSupplierCredential` for each credential that is not `disabled` or `erased`, of the supplier given or of
+        every supplier, at most 200 in one request (more is 422: test them by supplier), with the same effect on each.
+        The answer has one check per credential tested and how many were skipped as disabled.
+
+
+        Limits: counts as one test of the 10 a minute per session that `testSupplierCredential` has.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/CredentialTestsRequest"}
+      responses:
+        "201":
+          description: The check of each credential.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/CredentialCheckList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        "429": {$ref: "#/components/responses/TooManyRequests"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-credentials/invalid-removals:
+    post:
+      operationId: removeInvalidSupplierCredentials
+      tags: [Suppliers]
+      summary: Erase the credentials a supplier refused
+      description: >-
+        `removeSupplierCredential` for each credential named that is still `rejected` when the change runs, in one
+        transaction; one that is no longer `rejected` (a check passed since the page was read) is kept and listed in
+        `kept`, so only what the person saw refused is erased. Unknown IDs are listed in `kept` too. At most 500.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/InvalidCredentialsRemoval"}
+      responses:
+        "200":
+          description: What was erased and what was kept.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/InvalidCredentialsRemoved"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-inbox:
+    get:
+      operationId: listSupplierInbox
+      tags: [Suppliers]
+      summary: What across the suppliers waits for a person's decision
+      description: >-
+        One queue across every supplier, most recently seen first: a balance that will not last, a group ratio that
+        changed, a supplier charging more than Axiom estimated, a group that appeared, a model not on sale that users
+        keep asking for and a supplier could serve, a key the supplier refused, and an upstream name no model matches.
+        An item is made by what the sync, the reconciliation and the call log observe and stays while the condition
+        does; it leaves the queue when the condition ends. An ignored item is hidden until a later observation finds
+        the condition still there. `getSupplierInboxSummary` counts them.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      parameters:
+        - {name: kind, in: query, required: false, schema: {$ref: "#/components/schemas/SupplierInboxKind"}}
+        - {name: supplier_id, in: query, required: false, schema: {$ref: "#/components/schemas/Uuid"}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of items.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierInboxList"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-inbox/summary:
+    get:
+      operationId: getSupplierInboxSummary
+      tags: [Suppliers]
+      summary: How many items wait in the suppliers' queue, by kind
+      description: The items `listSupplierInbox` lists without filters, counted. Ignored items are not counted.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.view
+      responses:
+        "200":
+          description: The counts.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierInboxSummary"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/supplier-inbox/{item_id}/ignore:
+    post:
+      operationId: ignoreSupplierInboxItem
+      tags: [Suppliers]
+      summary: Hide an item of the suppliers' queue until it is seen again
+      description: >-
+        Hides the item from the queue. The next observation that still finds the condition (the next sync, the next
+        reconciliation, the next day of refused calls) shows it again, with `ignored_at` cleared; an item whose
+        condition ended is gone either way. Ignoring an ignored item returns it as it is.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: item_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReasonRequest"}
+      responses:
+        "200":
+          description: The item, ignored.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SupplierInboxItem"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/authors:
     get:
       operationId: listAuthors
@@ -4614,6 +5535,7 @@ paths:
         - {name: status, in: query, required: false, schema: {$ref: "#/components/schemas/ModelStatus"}}
         - {name: author, in: query, required: false, schema: {$ref: "#/components/schemas/AuthorSlug"}}
         - {name: slug_prefix, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 200}}
+        - {name: family, in: query, required: false, schema: {$ref: "#/components/schemas/ModelFamily"}}
         - $ref: "#/components/parameters/Cursor"
         - $ref: "#/components/parameters/Limit"
       responses:
@@ -4892,6 +5814,120 @@ paths:
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/{model_id}/family:
+    put:
+      operationId: setModelFamily
+      tags: [Catalog]
+      summary: Put a model in a family, or take it out
+      description: >-
+        The family groups the models a person lists together, such as an author's `gpt-6.1` or `claude-sonnet`: the
+        supplier's `known` pile is sorted by it, and `putModelsOnSale` lists a family at once. It is a label of the
+        catalog, never part of a name and never used to resolve one. null takes the model out of its family. As of
+        `rev`.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - name: model_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelFamilyUpdate"}
+      responses:
+        "200":
+          description: The model as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Model"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/listings:
+    post:
+      operationId: putModelsOnSale
+      tags: [Catalog]
+      summary: Put several draft models on sale at once
+      description: >-
+        `setModelStatus` to `listed` for each model named, as of the `rev` the page read, each in its own transaction
+        through the same review gate: a model that passes is listed, one that changed since is `stale`, one that fails
+        the gate is `not_ready` (`setModelStatus` on it says what is missing), and one that is not a draft is
+        `not_draft`. One outcome per model, in the order sent. Sale prices follow the site's pricing rules, as for a
+        model listed alone. At most 200.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelListingRequest"}
+      responses:
+        "200":
+          description: The outcome for each model.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ModelListingResult"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/models/imports:
+    post:
+      operationId: importModels
+      tags: [Catalog]
+      summary: Add the models a public price list has and the catalog does not
+      description: >-
+        Reads the dataset's current entries (the same read the daily dataset sync makes) and adds a draft model for
+        each entry the catalog's internal recognition does not know: its standard ID and names as the entry gives
+        them, its family from the entry's name, the dataset as its price source and the entry's price as its
+        reference price. A draft is seen by the platform only, so a person reviews and corrects it before
+        `setModelStatus` or `putModelsOnSale` lists it. An entry the catalog cannot use as it is (the reasons the
+        dataset sync holds an entry for) is not added and is counted as held. Running it again adds only what is still
+        missing.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: catalog.manage
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ModelImportRequest"}
+      responses:
+        "201":
+          description: What the import added.
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ModelImport"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/pricing/exchange-rates:
@@ -5466,6 +6502,63 @@ paths:
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
         "404": {$ref: "#/components/responses/NotFound"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/subscriptions:
+    get:
+      operationId: listPlatformSubscriptions
+      tags: [Users]
+      summary: Every account's subscriptions
+      description: >-
+        The subscriptions of every account on the platform, each with its current window, newest first or, with
+        `sort=ends_at`, the soonest to end first. The filters are exact; `ends_before` keeps the ones ending before
+        that instant. One account's subscriptions are also `listSubscriptions`.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: users.view
+      parameters:
+        - {name: state, in: query, required: false, schema: {$ref: "#/components/schemas/SubscriptionStanding"}}
+        - {name: plan_id, in: query, required: false, schema: {$ref: "#/components/schemas/Uuid"}}
+        - {name: account_id, in: query, required: false, schema: {$ref: "#/components/schemas/AccountId"}}
+        - {name: ends_before, in: query, required: false, schema: {type: string, format: date-time}}
+        - {name: sort, in: query, required: false, schema: {type: string, enum: [created_at, ends_at], default: created_at}}
+        - $ref: "#/components/parameters/Cursor"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of subscriptions.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionPage"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/subscriptions/summary:
+    get:
+      operationId: getSubscriptionSummary
+      tags: [Reports]
+      summary: The site's subscriptions counted, with what they sold for in a month
+      description: >-
+        Of the site the request was made on: how many subscriptions are active, how many of them end within 7 days,
+        what subscriptions sold for in the UTC month (default: the current one) and in the month before, in the site's
+        accounting currency, and for each plan how many active subscriptions it has and their share of all active
+        ones.
+      security:
+        - session: []
+      x-axiom-level: mfa
+      x-axiom-permission: sites.manage
+      parameters:
+        - {name: month, in: query, required: false, schema: {type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'}}
+      responses:
+        "200":
+          description: The counts.
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SubscriptionSummary"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
         default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/operations/credentials:
     get:
@@ -6118,6 +7211,10 @@ components:
           type: integer
         price:
           $ref: '#/components/schemas/Money'
+        plugins:
+          type: array
+          description: The plugins the call used; absent when it used none.
+          items: {$ref: '#/components/schemas/AdminCallPlugin'}
     AdminCallList:
       type: object
       additionalProperties: false
@@ -7340,6 +8437,18 @@ components:
             settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete.
         retention:
           $ref: '#/components/schemas/OperationsRetention'
+        tokens: {$ref: '#/components/schemas/OverviewTokens'}
+        active_accounts: {type: integer, format: int64, description: "Distinct accounts with a call in the window."}
+        new_users: {type: integer, format: int64, description: "Users who signed up in the window."}
+        first_token_ms_p50: {type: integer, minimum: 0, description: "The median time to the first token of the window's calls."}
+        top_spenders:
+          type: array
+          description: The accounts whose settled calls were charged the most in the window, most first.
+          items: {$ref: '#/components/schemas/OverviewSpender'}
+        days:
+          type: array
+          description: Each UTC day the window touches, oldest first, for the trend lines.
+          items: {$ref: '#/components/schemas/OverviewDay'}
         cash:
           type: array
           items:
@@ -7524,6 +8633,8 @@ components:
         model: {type: string}
         calls: {type: integer, format: int64}
         errors: {type: integer, format: int64}
+        tokens: {type: integer, format: int64, description: "Input, cached and output tokens the model's calls reported."}
+        revenue: {$ref: '#/components/schemas/Money'}
     CashAmount:
       type: object
       required: [amount, currency]
@@ -9340,6 +10451,19 @@ components:
         low_balance_threshold: {$ref: "#/components/schemas/Decimal"}
         unit_value: {$ref: "#/components/schemas/Decimal"}
         unit_value_hint: {$ref: "#/components/schemas/Decimal"}
+        mode:
+          allOf: [{$ref: "#/components/schemas/SupplierMode"}]
+          description: Absent from a server of an earlier release, which had only `relay`.
+        api_format:
+          allOf: [{$ref: "#/components/schemas/ApiFormat"}]
+          description: The call format of a `compatible` direct API.
+        cloud_account: {$ref: "#/components/schemas/CloudAccount"}
+        balance_days:
+          type: integer
+          minimum: 0
+          description: >-
+            About how many days the balance lasts at the mean spend of the last 7 days; absent for a supplier without a
+            balance (direct, cloud) or without spend to go by.
     SupplierList:
       type: object
       required: [data, next_cursor]
@@ -9460,6 +10584,13 @@ components:
             the other fields: `ratio`, `key_state`, and the endpoints the group serves.
           additionalProperties: true
         pool: {$ref: "#/components/schemas/SupplierPool"}
+        model_count: {type: integer, minimum: 0, description: "The models the supplier lists in the group."}
+        description: {type: string, description: "The supplier's own description of the group, as its adapter read it (new-api's `desc`)."}
+        previous_ratio:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: The ratio before the last change of it; absent when it never changed.
+        ratio_changed_at: {type: string, format: date-time, description: "When the sync saw the ratio change last."}
+        first_seen_at: {type: string, format: date-time, description: "When the sync first saw the group."}
     SupplierPool:
       type: object
       description: What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
@@ -9493,9 +10624,7 @@ components:
         id: {$ref: "#/components/schemas/Uuid"}
         group_id: {$ref: "#/components/schemas/Uuid"}
         upstream_key_ref: {type: string}
-        status:
-          type: string
-          enum: [binding, active, upstream_disabled, quota_exhausted, expired, disabled, erased]
+        status: {$ref: "#/components/schemas/CredentialStatus"}
         cooldown_until: {type: string, format: date-time}
         expires_at: {type: string, format: date-time}
         max_concurrency: {type: integer, minimum: 1}
@@ -9504,6 +10633,25 @@ components:
           minimum: 1
           maximum: 100000
           description: "The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling."
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        key_source:
+          type: string
+          enum: [made, bound, pasted]
+          description: "Whether the sync made the key, a person bound one the supplier lists, or a person pasted its text."
+        last4: {type: string, description: "The last four characters of a pasted key; never more of it."}
+        region: {$ref: "#/components/schemas/CloudRegion"}
+        created_at: {type: string, format: date-time}
+        in_flight:
+          type: integer
+          minimum: 0
+          description: The calls holding the credential now, as the node that answered counts them.
+        requests_last_minute:
+          type: integer
+          minimum: 0
+          description: >-
+            The upstream account's requests in the rolling minute, as the node that answered counted them: the count
+            `requests_per_minute` is compared with.
+        last_check: {$ref: "#/components/schemas/CredentialCheck"}
     CredentialLimits:
       type: object
       required: [max_concurrency, reason]
@@ -9585,6 +10733,11 @@ components:
         unbound_keys:
           type: array
           items: {$ref: "#/components/schemas/UpstreamKey"}
+        intake_rule: {$ref: "#/components/schemas/SupplierIntakeRule"}
+        sync_tasks:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierSyncTask"}
+        model_counts: {$ref: "#/components/schemas/SupplierModelCounts"}
     BindKey:
       type: object
       required: [group_id, upstream_key_ref, reason]
@@ -9906,6 +11059,11 @@ components:
         version_basis: {$ref: "#/components/schemas/VersionBasis"}
         price_source: {$ref: "#/components/schemas/PriceSource"}
         rev: {type: integer, format: int64, minimum: 0}
+        family: {$ref: "#/components/schemas/ModelFamily"}
+        billing_units:
+          type: array
+          description: The units the model's current reference prices charge in, from the items they price; derived, never stored.
+          items: {$ref: "#/components/schemas/BillingUnit"}
     ModelList:
       type: object
       required: [data, next_cursor]
@@ -9932,6 +11090,11 @@ components:
         prices:
           type: array
           items: {$ref: "#/components/schemas/ReferencePrice"}
+        family: {$ref: "#/components/schemas/ModelFamily"}
+        billing_units:
+          type: array
+          description: The units the model's current reference prices charge in, from the items they price; derived, never stored.
+          items: {$ref: "#/components/schemas/BillingUnit"}
     ModelCreate:
       type: object
       required: [slug, version_basis, price_source, spec, reason]
@@ -10256,3 +11419,976 @@ components:
         data:
           type: array
           items: {$ref: "#/components/schemas/PricingPreviewRow"}
+    SupplierMode:
+      type: string
+      enum: [relay, direct, cloud]
+      description: >-
+        How Axiom reaches the supplier. `relay`: a relay or a pool Axiom logs in to, whose groups are its lines.
+        `direct`: a provider's own API, or a compatible one, reached with pasted keys; one line. `cloud`: a cloud
+        platform's model service reached with its credential; one line, one credential per region.
+    DirectProvider:
+      type: string
+      enum: [openai, anthropic, google, moonshot, compatible]
+      description: >-
+        A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the
+        format given. It is the supplier's `kind`.
+    CloudProvider:
+      type: string
+      enum: [vertex, bedrock, azure]
+      description: "`vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`."
+    ApiFormat:
+      type: string
+      enum: [openai, anthropic, gemini]
+      description: >-
+        The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's
+        Messages, or Gemini's generateContent. The paths follow from it.
+    CloudAccount:
+      type: object
+      description: What is not secret about a cloud supplier's credential; the credential itself is never returned.
+      properties:
+        project_id: {type: string, description: "Vertex AI: the project the service account belongs to."}
+        client_email: {type: string, description: "Vertex AI: the service account."}
+        access_key_last4: {type: string, description: "Bedrock: the last four characters of the access key ID."}
+        key_last4: {type: string, description: "Azure OpenAI: the last four characters of the resource's key."}
+    DirectSupplierCreate:
+      type: object
+      required: [provider, name, keys, max_concurrency, reason]
+      properties:
+        provider: {$ref: "#/components/schemas/DirectProvider"}
+        name: {type: string, minLength: 1, maxLength: 200}
+        origin:
+          type: string
+          pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
+          maxLength: 255
+          description: >-
+            Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path.
+            A built-in provider's origin is its own, so giving one is a 400.
+        format:
+          allOf: [{$ref: "#/components/schemas/ApiFormat"}]
+          description: Only for `compatible`, where it is required; a built-in provider's format is its own (400).
+        settlement_currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: >-
+            The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states.
+            Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or
+            CNY for `moonshot`).
+        keys:
+          type: array
+          minItems: 1
+          maxItems: 100
+          writeOnly: true
+          description: The keys, one per item, sealed on arrival and never returned.
+          items: {type: string, minLength: 8, maxLength: 4096}
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: The calls each key has in flight at once.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none.
+        reason: {$ref: "#/components/schemas/Reason"}
+    CloudCredentialInput:
+      type: object
+      writeOnly: true
+      description: >-
+        The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`,
+        `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a
+        400.
+      properties:
+        service_account_json:
+          type: string
+          maxLength: 16384
+          description: The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`.
+        access_key_id: {type: string, minLength: 16, maxLength: 128}
+        secret_access_key: {type: string, minLength: 1, maxLength: 256}
+        api_key: {type: string, minLength: 1, maxLength: 4096}
+    CloudRegion:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]{0,39}$'
+      description: A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
+    CloudSupplierCreate:
+      type: object
+      required: [provider, name, credential, max_concurrency, reason]
+      properties:
+        provider: {$ref: "#/components/schemas/CloudProvider"}
+        name: {type: string, minLength: 1, maxLength: 200}
+        origin:
+          type: string
+          pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
+          maxLength: 255
+          description: "Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com."
+        credential: {$ref: "#/components/schemas/CloudCredentialInput"}
+        regions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400).
+          items: {$ref: "#/components/schemas/CloudRegion"}
+        settlement_currency:
+          type: string
+          pattern: '^[A-Z]{3}$'
+          description: The currency the platform bills in, fixed once connected; absent is USD.
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: The calls each region has in flight at once.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: Each region's rolling-minute ceiling; absent for none.
+        reason: {$ref: "#/components/schemas/Reason"}
+    CloudCredentialReplace:
+      type: object
+      required: [credential, reason]
+      properties:
+        credential: {$ref: "#/components/schemas/CloudCredentialInput"}
+        regions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: The regions to serve from now on; absent keeps the current ones. Not for `azure` (400).
+          items: {$ref: "#/components/schemas/CloudRegion"}
+        max_concurrency:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+          description: For a region added here; absent is 4. A region kept keeps its limits.
+        requests_per_minute:
+          type: integer
+          minimum: 1
+          maximum: 100000
+          description: For a region added here; absent for none.
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierConnected:
+      type: object
+      required: [checks]
+      properties:
+        supplier:
+          allOf: [{$ref: "#/components/schemas/Supplier"}]
+          description: The supplier as connected or changed; absent when nothing passed and nothing was stored.
+        checks:
+          type: array
+          description: One check per key sent or per region, in the order sent.
+          items: {$ref: "#/components/schemas/CredentialCheck"}
+    CredentialCheckOutcome:
+      type: string
+      enum: [passed, failed, inconclusive, duplicate]
+      description: >-
+        `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential
+        refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored
+        credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not
+        checked.
+    CredentialCheckCause:
+      type: string
+      enum: [credential_rejected, not_permitted, quota_exhausted, wrong_group, region_unavailable, rate_limited, timeout, transport, upstream_error, unknown]
+      description: >-
+        Why a check did not pass. `credential_rejected`: refused as not valid (401); `not_permitted`: valid but not
+        allowed (403), which is inconclusive, because it can be a region block; `quota_exhausted`: the key's own quota
+        is used up; `wrong_group`: the relay lists the key under another group; `region_unavailable`: the region does
+        not serve the account's models; the rest say nothing about the credential.
+    CredentialCheck:
+      type: object
+      required: [outcome]
+      properties:
+        index: {type: integer, minimum: 0, description: "The position of the key in the request's `keys`, for a pasted key."}
+        credential_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The credential the key was stored as, or the one tested; absent when nothing was stored.
+        last4: {type: string, description: "The last four characters of the key; never more of it."}
+        region: {$ref: "#/components/schemas/CloudRegion"}
+        outcome: {$ref: "#/components/schemas/CredentialCheckOutcome"}
+        cause: {$ref: "#/components/schemas/CredentialCheckCause"}
+        upstream_status: {type: integer, minimum: 0, description: "The supplier's HTTP status; 0 when it answered nothing."}
+        checked_at: {type: string, format: date-time}
+    CredentialCheckList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/CredentialCheck"}
+        skipped:
+          type: integer
+          minimum: 0
+          description: "`testSupplierCredentials`: the credentials left out as `disabled`."
+    CredentialStatus:
+      type: string
+      enum: [binding, active, upstream_disabled, quota_exhausted, expired, disabled, rejected, erased]
+      description: >-
+        `SupplierCredential.status`: `rejected` is a credential the supplier refused as not valid, which routing never
+        picks until a check passes; `disabled` a person stopped it.
+    GroupConnection:
+      type: object
+      required: [key_source, reason]
+      properties:
+        key_source:
+          type: string
+          enum: [make, paste]
+          description: "`make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there."
+        key:
+          type: string
+          minLength: 8
+          maxLength: 4096
+          writeOnly: true
+          description: Required with `paste`, refused with `make` (400); sealed on arrival and never returned.
+        reason: {$ref: "#/components/schemas/Reason"}
+    GroupConnected:
+      type: object
+      required: [group, credential]
+      properties:
+        group: {$ref: "#/components/schemas/SupplierGroup"}
+        credential: {$ref: "#/components/schemas/SupplierCredential"}
+    KeyIdentificationRequest:
+      type: object
+      required: [key]
+      properties:
+        key: {type: string, minLength: 8, maxLength: 4096, writeOnly: true}
+    KeyIdentification:
+      type: object
+      required: [last4]
+      properties:
+        last4: {type: string, description: "The last four characters of the key; never more of it."}
+        group_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The group the supplier lists the key under; absent when it does not list the key.
+        upstream_key_ref: {type: string, description: "The supplier's own ID of the key."}
+        status: {type: string, enum: [active, disabled, quota_exhausted, expired], description: "The key's status at the supplier."}
+        credential_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The credential Axiom already stores for this key, if any.
+    SupplierKeysAdd:
+      type: object
+      required: [keys, max_concurrency, reason]
+      properties:
+        group_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: Required for a relay, refused for a direct API (400).
+        keys:
+          type: array
+          minItems: 1
+          maxItems: 100
+          writeOnly: true
+          description: The keys, one per item, sealed on arrival and never returned.
+          items: {type: string, minLength: 8, maxLength: 4096}
+        max_concurrency: {type: integer, minimum: 1, maximum: 2147483647, description: "The calls each key has in flight at once."}
+        requests_per_minute: {type: integer, minimum: 1, maximum: 100000, description: "Each key's rolling-minute ceiling; absent for none."}
+        reason: {$ref: "#/components/schemas/Reason"}
+    CredentialEnabledUpdate:
+      type: object
+      required: [enabled, reason]
+      properties:
+        enabled: {type: boolean}
+        reason: {$ref: "#/components/schemas/Reason"}
+    CredentialTestsRequest:
+      type: object
+      required: [reason]
+      properties:
+        supplier_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The supplier whose credentials to test; absent tests every supplier's.
+        reason: {$ref: "#/components/schemas/Reason"}
+    InvalidCredentialsRemoval:
+      type: object
+      required: [credential_ids, reason]
+      properties:
+        credential_ids:
+          type: array
+          minItems: 1
+          maxItems: 500
+          description: The `rejected` credentials the person saw and confirmed.
+          items: {$ref: "#/components/schemas/Uuid"}
+        reason: {$ref: "#/components/schemas/Reason"}
+    InvalidCredentialsRemoved:
+      type: object
+      required: [removed, kept]
+      properties:
+        removed:
+          type: array
+          description: The credentials erased.
+          items: {$ref: "#/components/schemas/Uuid"}
+        kept:
+          type: array
+          description: The credentials named that were not `rejected` any more, or that do not exist.
+          items: {$ref: "#/components/schemas/Uuid"}
+    SupplierCredentialList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierCredential"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SyncTask:
+      type: string
+      enum: [balance, catalog, keys, charges]
+      description: "What a task reads: the balance and where it is drawn from; the groups, ratios, models and prices; the keys; the charge records."
+    SupplierSyncTask:
+      type: object
+      required: [task, failures, halted]
+      properties:
+        task: {$ref: "#/components/schemas/SyncTask"}
+        due_at: {type: string, format: date-time, description: "Not before this; absent when due now."}
+        last_ok_at: {type: string, format: date-time, description: "The last time it succeeded; absent when it never has."}
+        failures: {type: integer, minimum: 0, description: "Failures in a row; the task backs off after them."}
+        halted:
+          type: boolean
+          description: "True when the supplier's answer was not understood: only this task stopped, until a person acts."
+    SupplierSyncTaskList:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierSyncTask"}
+    SyncEventKind:
+      type: string
+      enum:
+        - group_added
+        - group_removed
+        - ratio_changed
+        - model_added
+        - model_removed
+        - plan_changed
+        - key_changed
+        - balance_low
+        - needs_attention
+        - task_halted
+        - group_changed
+        - model_changed
+        - funding_changed
+        - balance_crossed
+        - balance_recovered
+      description: >-
+        What one difference is: a group or a model the supplier lists that appeared or left; a group's ratio, facts or
+        formats; a model's formats or limits; a new cost plan of an endpoint; a key's status; the balance crossing the
+        alert line or zero; where calls are paid from; the supplier needing a person; a task stopping.
+    SupplierSyncEvent:
+      type: object
+      required: [kind, subject]
+      properties:
+        kind: {$ref: "#/components/schemas/SyncEventKind"}
+        subject:
+          type: string
+          description: "What changed: a group's ref, `group/model` for a model or a cost plan, a key's ref; empty for the supplier itself."
+        group_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The group the subject is in, when Axiom still has it.
+        old: {type: string, description: "The value before, as the sync recorded it: a ratio, a status, a fingerprint, a balance."}
+        new: {type: string, description: "The value after, in the same terms."}
+        why: {type: string, description: "A short reason of Axiom's, never the supplier's text."}
+    SupplierSyncRun:
+      type: object
+      required: [version, at, events]
+      properties:
+        version:
+          type: integer
+          format: int64
+          minimum: 1
+          description: The version of the supplier's sync state the run committed.
+        at: {type: string, format: date-time}
+        events:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierSyncEvent"}
+    SupplierSyncRunList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierSyncRun"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SupplierReconciliationDay:
+      type: object
+      required: [date, estimated_native, charged_native, charges, matched, held, charged_above, charged_below]
+      properties:
+        date: {type: string, format: date, description: "The UTC day."}
+        estimated_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: What Axiom's cost plans put the day's attempts that reached the supplier at, in the supplier's unit.
+        charged_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: What the supplier's charge records of the day add up to, in its unit.
+        difference_bp:
+          type: integer
+          description: (charged − estimated) / estimated, in basis points, rounded half away from zero; absent when nothing was estimated.
+        charges: {type: integer, format: int64, minimum: 0, description: "The day's charge records."}
+        matched: {type: integer, format: int64, minimum: 0, description: "Charges matched to one attempt."}
+        held: {type: integer, format: int64, minimum: 0, description: "Charges no attempt claimed within the grace, held for a person."}
+        charged_above: {type: integer, format: int64, minimum: 0, description: "Matched charges above the estimate by more than the tolerance."}
+        charged_below: {type: integer, format: int64, minimum: 0, description: "Matched charges below the estimate by more than the tolerance."}
+        unmatched_attempts:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Attempts with a reconciliation key that no charge claimed within the grace.
+    SupplierReconciliation:
+      type: object
+      required: [supplier_id, native_unit, days]
+      properties:
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        native_unit: {type: string, enum: [quota, usd], description: "The unit the amounts are in."}
+        unit_value:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: What one unit is worth in the settlement currency now, for showing the amounts as money; absent until confirmed.
+        settlement_currency: {type: string, pattern: '^[A-Z]{3}$'}
+        days:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierReconciliationDay"}
+    SupplierInboxKind:
+      type: string
+      enum: [low_balance, ratio_changed, cost_mismatch, group_added, unlisted_model_called, key_invalid, unknown_model]
+      description: >-
+        `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a
+        selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from
+        the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a
+        group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this
+        supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name
+        no model matches (`listPendingMappings`).
+    SupplierInboxItem:
+      type: object
+      required: [id, kind, supplier_id, first_seen_at, last_seen_at]
+      description: One item; the members beyond the first are present for the kinds that have them.
+      properties:
+        id: {$ref: "#/components/schemas/Uuid"}
+        kind: {$ref: "#/components/schemas/SupplierInboxKind"}
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        first_seen_at: {type: string, format: date-time}
+        last_seen_at: {type: string, format: date-time}
+        ignored_at: {type: string, format: date-time, description: "When a person ignored it; absent while it shows."}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        credential_id: {$ref: "#/components/schemas/Uuid"}
+        model_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_name: {type: string}
+        balance_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: "`low_balance`: the balance, in the supplier's unit."
+        balance_days: {type: integer, minimum: 0, description: "`low_balance`: about how many days it lasts."}
+        previous_ratio:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: "`ratio_changed`: the ratio before."
+        ratio:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: "`ratio_changed`, `group_added`: the ratio now."
+        date: {type: string, format: date, description: "`cost_mismatch`: the UTC day."}
+        estimated_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: "`cost_mismatch`: what Axiom estimated."
+        charged_native:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: "`cost_mismatch`: what the supplier charged."
+        calls: {type: integer, format: int64, minimum: 0, description: "`unlisted_model_called`: refused calls in the last 24 hours."}
+        accounts: {type: integer, format: int64, minimum: 0, description: "`unlisted_model_called`: the accounts they came from."}
+    SupplierInboxList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierInboxItem"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SupplierInboxSummary:
+      type: object
+      required: [total, kinds]
+      properties:
+        total: {type: integer, format: int64, minimum: 0}
+        kinds:
+          type: object
+          description: The items of each kind; a kind with none is 0.
+          required: [low_balance, ratio_changed, cost_mismatch, group_added, unlisted_model_called, key_invalid, unknown_model]
+          properties:
+            low_balance: {type: integer, format: int64, minimum: 0}
+            ratio_changed: {type: integer, format: int64, minimum: 0}
+            cost_mismatch: {type: integer, format: int64, minimum: 0}
+            group_added: {type: integer, format: int64, minimum: 0}
+            unlisted_model_called: {type: integer, format: int64, minimum: 0}
+            key_invalid: {type: integer, format: int64, minimum: 0}
+            unknown_model: {type: integer, format: int64, minimum: 0}
+    SupplierIntakeMode:
+      type: string
+      enum: [listed, known, names]
+      description: See `setSupplierIntakeRule`.
+    NamePattern:
+      type: string
+      minLength: 1
+      maxLength: 200
+      description: An upstream model name where `*` stands for any run of characters; it matches the whole name, ignoring case.
+    SupplierIntakeRule:
+      type: object
+      required: [mode, include, exclude, rev]
+      properties:
+        mode: {$ref: "#/components/schemas/SupplierIntakeMode"}
+        include:
+          type: array
+          description: "`names`: a name is taken when it matches one of these. Empty in the other modes."
+          items: {$ref: "#/components/schemas/NamePattern"}
+        exclude:
+          type: array
+          description: "`names`: a name matching one of these is never taken. Empty in the other modes."
+          items: {$ref: "#/components/schemas/NamePattern"}
+        rev:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The revision a change must be decided against; 0 is the default rule `listed`, never written.
+    SupplierIntakeRuleUpdate:
+      type: object
+      required: [mode, rev, reason]
+      properties:
+        mode: {$ref: "#/components/schemas/SupplierIntakeMode"}
+        include:
+          type: array
+          maxItems: 50
+          description: Required and not empty with `names`; refused with another mode (422).
+          items: {$ref: "#/components/schemas/NamePattern"}
+        exclude:
+          type: array
+          maxItems: 50
+          description: Only with `names` (422 with another mode); absent is empty.
+          items: {$ref: "#/components/schemas/NamePattern"}
+        rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierModelPile:
+      type: string
+      enum: [review, listed, known, outdated]
+      description: See `listSupplierModels`.
+    SupplierModel:
+      type: object
+      required: [group_id, upstream_name, formats, pile, first_seen_at]
+      properties:
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        upstream_name: {type: string}
+        formats:
+          type: array
+          items: {$ref: "#/components/schemas/ModelFormat"}
+        pile: {$ref: "#/components/schemas/SupplierModelPile"}
+        first_seen_at: {type: string, format: date-time}
+        model_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The model the name resolves to; absent in `review`.
+        model_slug: {$ref: "#/components/schemas/ModelSlug"}
+        model_status: {$ref: "#/components/schemas/ModelStatus"}
+        family: {$ref: "#/components/schemas/ModelFamily"}
+        endpoint_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The endpoint made for the name, when there is one.
+        suggested_model_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: "`review`: the model whose name is closest, as a suggestion for `mapSupplierModel`; absent when none is close."
+        suggested_model_slug: {$ref: "#/components/schemas/ModelSlug"}
+    SupplierModelList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierModel"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SupplierModelCounts:
+      type: object
+      required: [review, listed, known, outdated]
+      description: How many names each pile of `listSupplierModels` has.
+      properties:
+        review: {type: integer, format: int64, minimum: 0}
+        listed: {type: integer, format: int64, minimum: 0}
+        known: {type: integer, format: int64, minimum: 0}
+        outdated: {type: integer, format: int64, minimum: 0}
+    MeteringItem:
+      type: string
+      enum:
+        - input
+        - cache_read
+        - cache_write
+        - cache_write_1h
+        - output
+        - reasoning
+        - audio_in
+        - audio_out
+        - image_in
+        - image_out
+        - image_in_piece
+        - image_out_piece
+        - audio_in_second
+        - audio_out_second
+        - character_in
+        - request
+        - web_search
+        - code_execution
+        - file_search
+        - file_parse
+      description: A billing item of the catalog's table (docs/domains/catalog.md「计费项与用量」), each with one unit.
+    MeteringUnit:
+      type: string
+      enum: [token, image, second, character, request, use, page]
+      description: What one unit of an item is; follows from the item.
+    CostSource:
+      type: string
+      enum: [read, confirmed, price_list, bill]
+      description: >-
+        Where an endpoint's cost plan came from. `read`: the supplier's own prices and ratios, as the sync read them.
+        `confirmed`: a base price a person confirmed, times the group's ratio, for a supplier that shows none.
+        `price_list`: the catalog's official reference price, for a direct or cloud supplier. `bill`: the cloud
+        platform's bill.
+    CostFactorKind:
+      type: string
+      enum: [model_ratio, completion_ratio, cache_ratio, cache_write_ratio, group_ratio, scale, unit_value, base_price, official_price, exchange_rate]
+      description: >-
+        One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the
+        group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the
+        exchange rate into the settlement currency.
+    CostFactor:
+      type: object
+      required: [kind, value]
+      properties:
+        kind: {$ref: "#/components/schemas/CostFactorKind"}
+        value: {$ref: "#/components/schemas/Decimal"}
+    CostLine:
+      type: object
+      required: [item, unit, factors]
+      description: One price of the plan. The line's price applies to its item under its condition and service tier.
+      properties:
+        item: {$ref: "#/components/schemas/MeteringItem"}
+        unit: {$ref: "#/components/schemas/MeteringUnit"}
+        service_tier: {$ref: "#/components/schemas/ServiceTier"}
+        above:
+          type: integer
+          format: int64
+          minimum: 0
+          description: The condition of a context tier, `ContextTier.above`; absent for the base price.
+        native_price:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: Per unit, in the supplier's own unit (`Supplier.native_unit`); absent for a supplier billed in money.
+        price:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: Per unit, in the settlement currency; absent while the supplier's unit value is not confirmed.
+        factors:
+          type: array
+          description: What the price is the product of, in order, so the page can write it out.
+          items: {$ref: "#/components/schemas/CostFactor"}
+    CostBreakEven:
+      type: object
+      required: [request_price, tokens]
+      description: For an endpoint the upstream charges per request while the model is sold by the token.
+      properties:
+        request_price:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: What one request costs, in the settlement currency.
+        tokens:
+          type: integer
+          format: int64
+          minimum: 0
+          description: >-
+            The fewest tokens a request needs for the platform's sale price to cover `request_price`, at the input and
+            output mix of the last 24 hours; a request with fewer loses money.
+        mean_tokens_24h: {type: integer, format: int64, minimum: 0, description: "The mean tokens of a request in the last 24 hours."}
+        requests_24h: {type: integer, format: int64, minimum: 0}
+    EndpointCost:
+      type: object
+      required: [endpoint_id, cost_state, settlement_currency, lines]
+      properties:
+        endpoint_id: {$ref: "#/components/schemas/Uuid"}
+        cost_state: {type: string, enum: [known, unknown, conflict]}
+        source: {$ref: "#/components/schemas/CostSource"}
+        settlement_currency: {type: string, pattern: '^[A-Z]{3}$'}
+        unit_value:
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+          description: The unit value the prices were converted with; absent for a supplier billed in money or not yet confirmed.
+        plan_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The version of the cost plan, which an attempt's cost row names.
+        lines:
+          type: array
+          items: {$ref: "#/components/schemas/CostLine"}
+        break_even: {$ref: "#/components/schemas/CostBreakEven"}
+    ModelFamily:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9.-]{0,63}$'
+      description: A family of models within its author, such as gpt-6.1 or claude-sonnet.
+    BillingUnit:
+      type: string
+      enum: [token, image, second, character, request, use, page]
+    ModelFamilyUpdate:
+      type: object
+      required: [family, rev, reason]
+      properties:
+        family:
+          allOf: [{$ref: "#/components/schemas/ModelFamily"}]
+          nullable: true
+          description: The family; null takes the model out of its family.
+        rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelListingRequest:
+      type: object
+      required: [models, reason]
+      properties:
+        models:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            type: object
+            required: [id, rev]
+            properties:
+              id: {$ref: "#/components/schemas/Uuid"}
+              rev: {type: integer, format: int64, minimum: 0}
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelListingResult:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            required: [model_id, outcome]
+            properties:
+              model_id: {$ref: "#/components/schemas/Uuid"}
+              outcome: {type: string, enum: [listed, stale, not_ready, not_draft]}
+              model:
+                allOf: [{$ref: "#/components/schemas/ModelSummary"}]
+                description: The model as listed; present with `listed`.
+    ModelImportRequest:
+      type: object
+      required: [source, reason]
+      properties:
+        source:
+          type: string
+          enum: [litellm, openrouter]
+          description: The public price list to import from, one of the catalog's datasets.
+        reason: {$ref: "#/components/schemas/Reason"}
+    ModelImport:
+      type: object
+      required: [source, added, known, held]
+      properties:
+        source: {type: string, enum: [litellm, openrouter]}
+        added: {type: integer, minimum: 0, description: "Draft models added; `listModels` with `status=draft` lists them."}
+        known: {type: integer, minimum: 0, description: "Entries the catalog already knew, left as they are."}
+        held: {type: integer, minimum: 0, description: "Entries not added because the catalog cannot use them as they are."}
+        held_names:
+          type: array
+          maxItems: 200
+          description: The names of the first held entries, for a person to add by hand.
+          items: {type: string}
+    MonitorWindow:
+      type: string
+      enum: [1h, 24h]
+      default: 1h
+    MonitorPercentiles:
+      type: object
+      description: Milliseconds; absent when no call in the window had the measure.
+      properties:
+        p50: {type: integer, minimum: 0}
+        p90: {type: integer, minimum: 0}
+        p95: {type: integer, minimum: 0}
+        p99: {type: integer, minimum: 0}
+    MonitorBucket:
+      type: object
+      required: [at, calls, failures, tokens]
+      properties:
+        at: {type: string, format: date-time, description: "The bucket's start."}
+        calls: {type: integer, format: int64, minimum: 0}
+        failures: {type: integer, format: int64, minimum: 0}
+        tokens: {type: integer, format: int64, minimum: 0, description: "Input, cached and output tokens the calls reported."}
+        first_token_ms_p50: {type: integer, minimum: 0}
+        first_token_ms_p95: {type: integer, minimum: 0}
+    MonitorFailureCause:
+      type: object
+      required: [error_kind, upstream, calls]
+      properties:
+        error_kind: {type: string, description: "The call log's `error_kind`, as `listAdminCalls` filters by it."}
+        upstream: {type: boolean, description: "True when the failure was the supplier's side: its endpoint, key, group or itself."}
+        calls: {type: integer, format: int64, minimum: 0}
+    MonitorDurationBin:
+      type: object
+      required: [calls]
+      properties:
+        below_ms: {type: integer, minimum: 1, description: "The bin's upper bound; absent for the last, open bin."}
+        calls: {type: integer, format: int64, minimum: 0}
+    MonitorLine:
+      type: object
+      required: [supplier_id, group_id, calls, failures]
+      description: One line, a supplier's group, by the calls whose last attempt went to it.
+      properties:
+        supplier_id: {$ref: "#/components/schemas/Uuid"}
+        group_id: {$ref: "#/components/schemas/Uuid"}
+        calls: {type: integer, format: int64, minimum: 0}
+        failures: {type: integer, format: int64, minimum: 0}
+        first_token_ms_p50: {type: integer, minimum: 0}
+    OperationsMonitor:
+      type: object
+      required: [window, since, until, bucket_seconds, buckets, calls, failures, tokens, switched_calls, first_token_ms, total_ms, durations, failure_causes, lines]
+      properties:
+        window: {$ref: "#/components/schemas/MonitorWindow"}
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        bucket_seconds: {type: integer, enum: [60, 3600]}
+        buckets:
+          type: array
+          description: Every bucket of the window, oldest first, empty ones included.
+          items: {$ref: "#/components/schemas/MonitorBucket"}
+        calls: {type: integer, format: int64, minimum: 0}
+        failures: {type: integer, format: int64, minimum: 0}
+        tokens: {type: integer, format: int64, minimum: 0}
+        switched_calls:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Calls that moved to another endpoint after an attempt failed.
+        first_token_ms: {$ref: "#/components/schemas/MonitorPercentiles"}
+        total_ms: {$ref: "#/components/schemas/MonitorPercentiles"}
+        durations:
+          type: array
+          description: How the completed calls' total times spread, by bin, shortest first.
+          items: {$ref: "#/components/schemas/MonitorDurationBin"}
+        failure_causes:
+          type: array
+          description: The failed calls by cause, most first.
+          items: {$ref: "#/components/schemas/MonitorFailureCause"}
+        lines:
+          type: array
+          items: {$ref: "#/components/schemas/MonitorLine"}
+    OverviewTokens:
+      type: object
+      additionalProperties: false
+      required: [input, cache_read, cache_write, output]
+      description: The tokens the window's calls reported, by kind; `input` excludes the cached ones.
+      properties:
+        input: {type: integer, format: int64, minimum: 0}
+        cache_read: {type: integer, format: int64, minimum: 0}
+        cache_write: {type: integer, format: int64, minimum: 0}
+        output: {type: integer, format: int64, minimum: 0}
+    OverviewSpender:
+      type: object
+      additionalProperties: false
+      required: [account_id, spend]
+      properties:
+        account_id: {$ref: "#/components/schemas/AccountId"}
+        spend:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: What the account's settled calls of the window were charged.
+    OverviewDay:
+      type: object
+      additionalProperties: false
+      required: [date, calls, errors, revenue, cost]
+      description: One UTC day of the window, with the measures the overview has for the whole of it.
+      properties:
+        date: {type: string, format: date}
+        calls: {type: integer, format: int64}
+        errors: {type: integer, format: int64}
+        revenue: {$ref: "#/components/schemas/Money"}
+        cost: {$ref: "#/components/schemas/Money"}
+        tokens: {$ref: "#/components/schemas/OverviewTokens"}
+        active_accounts: {type: integer, format: int64}
+        new_users: {type: integer, format: int64}
+        first_token_ms_p50: {type: integer, minimum: 0}
+    AdminPlugin:
+      type: string
+      enum: [web, file-parser]
+      description: A plugin, by the ID a request names it with.
+    AdminCallPlugin:
+      type: object
+      additionalProperties: false
+      required: [plugin, ok]
+      properties:
+        plugin: {$ref: "#/components/schemas/AdminPlugin"}
+        ok: {type: boolean, description: "False when the plugin's run failed and the call went on without it."}
+        engine: {type: string, description: "The search engine's or parser's name in the settings."}
+        uses: {type: integer, minimum: 0, description: "Searches run, or pages parsed."}
+        ms: {type: integer, minimum: 0}
+        price:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: What the call was charged for the plugin.
+    PluginHour:
+      type: object
+      required: [at, calls]
+      properties:
+        at: {type: string, format: date-time}
+        calls: {type: integer, format: int64, minimum: 0}
+    PluginStat:
+      type: object
+      required: [plugin, calls, failures, uses, hours]
+      properties:
+        plugin: {$ref: "#/components/schemas/AdminPlugin"}
+        calls: {type: integer, format: int64, minimum: 0, description: "Calls that used the plugin."}
+        failures: {type: integer, format: int64, minimum: 0}
+        uses: {type: integer, format: int64, minimum: 0, description: "Searches run, or pages parsed."}
+        mean_ms: {type: integer, minimum: 0, description: "Absent when it never ran."}
+        revenue:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: What the calls were charged for the plugin.
+        cost:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: What the plugin's backends cost the platform, at the costs set in its settings.
+        hours:
+          type: array
+          description: Every hour of the window, oldest first.
+          items: {$ref: "#/components/schemas/PluginHour"}
+    PluginStats:
+      type: object
+      required: [since, until, plugins]
+      properties:
+        since: {type: string, format: date-time}
+        until: {type: string, format: date-time}
+        plugins:
+          type: array
+          items: {$ref: "#/components/schemas/PluginStat"}
+    SubscriptionPage:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/Subscription"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
+    SubscriptionPlanShare:
+      type: object
+      required: [plan_id, active, share_bp]
+      properties:
+        plan_id: {$ref: "#/components/schemas/Uuid"}
+        active: {type: integer, format: int64, minimum: 0}
+        share_bp: {type: integer, minimum: 0, maximum: 10000, description: "Its share of all active subscriptions, in basis points."}
+    SubscriptionSummary:
+      type: object
+      required: [month, active, ending_within_7_days, revenue, previous_revenue, plans]
+      properties:
+        month: {type: string, pattern: '^[0-9]{4}-(0[1-9]|1[0-2])$'}
+        active: {type: integer, format: int64, minimum: 0}
+        ending_within_7_days: {type: integer, format: int64, minimum: 0}
+        revenue:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: What the subscriptions sold in the month were paid, in the site's accounting currency; a gift is not revenue.
+        previous_revenue:
+          allOf: [{$ref: "#/components/schemas/Money"}]
+          description: The same for the month before.
+        plans:
+          type: array
+          items: {$ref: "#/components/schemas/SubscriptionPlanShare"}
+    AnnouncementState:
+      type: string
+      enum: [scheduled, showing, ended, withdrawn]
+    AdminAnnouncement:
+      type: object
+      additionalProperties: false
+      required: [id, site_id, title, body, starts_at, ends_at, state]
+      properties:
+        id: {$ref: "#/components/schemas/AnnouncementId"}
+        site_id: {$ref: "#/components/schemas/SiteId"}
+        title: {type: string, maxLength: 200}
+        body: {type: string, maxLength: 20000}
+        starts_at: {type: string, format: date-time}
+        ends_at: {type: string, format: date-time}
+        state: {$ref: "#/components/schemas/AnnouncementState"}
+        withdrawn_at: {type: string, format: date-time}
+    AdminAnnouncementList:
+      type: object
+      required: [data, next_cursor]
+      properties:
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/AdminAnnouncement"}
+        next_cursor: {type: string, nullable: true, description: "Null on the last page."}
