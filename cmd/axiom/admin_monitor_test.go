@@ -143,7 +143,9 @@ func TestAdminOperationsOverviewDashboard(t *testing.T) {
 	site := uuid.UUID(main.ID).String()
 	big, small := uuid.NewV7(), uuid.NewV7()
 	today := time.Now().UTC().Truncate(24 * time.Hour)
-	since, until := today.Add(-12*time.Hour), today.Add(12*time.Hour)
+	// The window runs to the end of today: the users and the ledger rows are written at the moment the test runs, which
+	// may be any time of the UTC day.
+	since, until := today.Add(-12*time.Hour), today.Add(24*time.Hour-time.Second)
 	at := func(d time.Duration) string { return today.Add(d).Format(time.RFC3339) }
 	f.run(
 		fmt.Sprintf(`INSERT INTO observability.call_log
