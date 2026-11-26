@@ -9,7 +9,7 @@ import { AccountSubscriptions } from "../account-subscriptions";
 import { GrantButton } from "../credit-dialog";
 import { State } from "../parts";
 import { accountQuery } from "../queries";
-import { type IdDrawer, PendingDrawer, RowDrawer } from "../row-drawer";
+import { type IdDrawer, RowDrawer } from "../row-drawer";
 
 type Account = AdminSchemas["AccountDetail"];
 
@@ -23,9 +23,9 @@ export function AccountDrawer({ id, keys, select }: IdDrawer) {
   const account = query.data;
   if (!account) {
     return (
-      <PendingDrawer title={t("users.account.title")} select={select}>
+      <RowDrawer title={t("users.account.title")} keys={keys} selected={id} select={select}>
         <DataState query={query}>{() => null}</DataState>
-      </PendingDrawer>
+      </RowDrawer>
     );
   }
   return (

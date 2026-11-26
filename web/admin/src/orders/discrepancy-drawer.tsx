@@ -7,7 +7,7 @@ import { ChangeDialog } from "../change";
 import { discrepancyQuery } from "../finance-queries";
 import { formatJSON } from "../lossless";
 import { Code, State } from "../parts";
-import { type IdDrawer, PendingDrawer, RowDrawer } from "../row-drawer";
+import { type IdDrawer, RowDrawer } from "../row-drawer";
 import { shortId } from "./states";
 
 type Row = AdminSchemas["PaymentDiscrepancy"];
@@ -29,7 +29,7 @@ export function DiscrepancyDrawer({ id, keys, select }: IdDrawer) {
   const row = query.data;
   if (!row?.id) {
     return (
-      <PendingDrawer title={t("discrepancies.detailTitle")} select={select}>
+      <RowDrawer title={t("discrepancies.detailTitle")} keys={keys} selected={id} select={select}>
         <DataState
           query={query}
           isEmpty={(data) => !data.id}
@@ -37,7 +37,7 @@ export function DiscrepancyDrawer({ id, keys, select }: IdDrawer) {
         >
           {() => null}
         </DataState>
-      </PendingDrawer>
+      </RowDrawer>
     );
   }
   return (

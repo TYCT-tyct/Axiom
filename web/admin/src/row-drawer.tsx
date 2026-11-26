@@ -28,7 +28,8 @@ export type IdDrawer = { id: string; keys: readonly string[]; select: Select };
 
 // RowDrawer is a list row's detail over the list (the admin's adPanel): the previous and next rows of the list as it
 // stands, "2 / 6", J and K, and Esc to close. keys are the rows' keys in the order they are listed; a row outside them
-// (a link to one the list has not loaded) opens without them.
+// (a link to one the list has not loaded) opens without them. A drawer whose row is still being read is this same drawer with
+// a placeholder title, so stepping to a row not read yet keeps the one drawer open rather than closing and opening it.
 export function RowDrawer({
   title,
   subtitle,
@@ -74,16 +75,6 @@ export function RowDrawer({
       }
       footer={footer}
     >
-      {children}
-    </SidePanel>
-  );
-}
-
-// PendingDrawer is the drawer of a row that is read by its ID while it is read, and when it cannot be: what answers in its
-// place (loading, not found, failed) is the children's. It has no steps, as it is not among the list's rows.
-export function PendingDrawer({ title, select, children }: { title: string; select: Select; children: ReactNode }) {
-  return (
-    <SidePanel drawer title={title} onClose={() => void select(undefined)}>
       {children}
     </SidePanel>
   );
