@@ -110,6 +110,7 @@ function GroupTable({ detail }: { detail: SupplierView }) {
   return (
     <Card
       layout="flush"
+      foot={t("upstream.groups.foot")}
       title={t("upstream.groups.title")}
       lede={t("upstream.groups.lede")}
       actions={
@@ -127,9 +128,6 @@ function GroupTable({ detail }: { detail: SupplierView }) {
       ) : (
         <DataTable label={t("upstream.groups.title")} rows={groups} rowKey={(group) => group.id} columns={columns} />
       )}
-      <Text size="sm" tone="muted">
-        {t("upstream.groups.foot")}
-      </Text>
       <GroupDialogs detail={detail} open={open} onClose={() => setOpen(null)} />
     </Card>
   );

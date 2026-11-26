@@ -58,7 +58,7 @@ export default function KeysTab({ credential }: { credential: string | undefined
         <ModeFilter search={t("upstream.keys.search")} values={filters} onChange={setFilters} count={count} />
         <TestAll />
       </Cluster>
-      <Card layout="flush">
+      <Card layout="flush" foot={<Foot rows={rows} />}>
         <BuiltState
           query={list}
           isEmpty={() => shown.length === 0}
@@ -74,7 +74,6 @@ export default function KeysTab({ credential }: { credential: string | undefined
                 onOpen={(row) => open(row.id)}
                 current={credential}
               />
-              <Foot rows={rows} />
             </>
           )}
         </BuiltState>
@@ -122,7 +121,7 @@ function Foot({ rows }: { rows: readonly Credential[] }) {
   const [open, setOpen] = useState(false);
   const rejected = rows.filter((row) => row.status === "rejected");
   return (
-    <Cluster justify="between">
+    <>
       <Text size="sm" tone={rejected.length > 0 ? "warn" : "muted"}>
         {rejected.length > 0 ? t("upstream.keys.deadFoot", { count: rejected.length }) : t("upstream.keys.foot")}
       </Text>
@@ -132,7 +131,7 @@ function Foot({ rows }: { rows: readonly Credential[] }) {
         </ActionButton>
       ) : null}
       {open ? <PurgeDialog rejected={rejected} onClose={() => setOpen(false)} /> : null}
-    </Cluster>
+    </>
   );
 }
 
