@@ -15,8 +15,9 @@ import (
 
 // Funds pairs one synced native balance with the supplier's live refusal state. Copies keep the balance they were
 // built with, but a refusal stops all of them at once, including routes frozen before it happened. Unbounded is a
-// supplier with no balance to read (a provider's own API, docs/domains/suppliers.md「直连接口」): what its calls cost is
-// billed to its keys' accounts, which a refusal still stops.
+// supplier with no balance to read (a provider's own API whose type reads none, docs/domains/suppliers.md「直连接口」):
+// what its calls cost is billed to its keys' accounts, which a refusal still stops. A platform API whose type reads
+// each key's balance has the richest key's as its Balance (wallets.go).
 type Funds struct {
 	Balance   platform.Exact
 	Unbounded bool

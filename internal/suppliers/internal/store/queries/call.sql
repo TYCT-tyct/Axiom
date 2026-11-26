@@ -17,6 +17,7 @@ SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.quantizati
     coalesce(s.balance_native, 0)::text AS balance_native, s.balance_observed_at, s.settlement_currency, s.status, s.byok_fallback, s.mode, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute, c.region, coalesce(c.call_names ->> e.upstream_name, e.upstream_name)::text AS call_name, c.settings,
+    coalesce(c.balance_native::text, '')::text AS key_balance, c.balance_observed_at AS key_balance_observed_at, g.ratio::text AS line_ratio,
     cs.id AS cost_schedule_id, cs.schedule
 FROM suppliers.endpoints e
 JOIN suppliers.suppliers s ON s.id = e.supplier_id

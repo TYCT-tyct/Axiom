@@ -3,11 +3,13 @@ package direct
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 	"time"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
@@ -54,6 +56,33 @@ func (a *Adapter) CheckKey(ctx context.Context, c adapter.Client, f adapter.Fami
 		return adapter.KeyCheck{Cause: adapter.CauseTransport}
 	}
 	return checked(resp)
+}
+
+// errNoBalance is ReadBalance's for a provider that tells no balance; its type does not say Balance, so it is not asked.
+var errNoBalance = errors.New("direct: the provider tells no balance")
+
+// ReadBalance implements adapter.Balancer: one GET of the provider's balance, which it does not charge for, with the key
+// as a Chat call takes it. An answer other than 200, or one Read cannot read, is an error that holds no part of it.
+func (a *Adapter) ReadBalance(ctx context.Context, c adapter.Client, key secret.Secret, s adapter.Settings, currency platform.Currency) (adapter.Money, error) {
+	if a.p.Balance == nil {
+		return adapter.Money{}, errNoBalance
+	}
+	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+	h := http.Header{"Accept": {"application/json"}}
+	quirks{a.p}.Authorize(h, protocol.Chat, key.Reveal(), s)
+	resp, err := c.Do(ctx, adapter.Request{Method: http.MethodGet, Path: a.p.Balance.Path, Header: h})
+	if err != nil {
+		return adapter.Money{}, fmt.Errorf("direct: read the balance: %w", err)
+	}
+	if resp.Status != http.StatusOK {
+		return adapter.Money{}, fmt.Errorf("direct: the balance answered %d", resp.Status)
+	}
+	m, err := a.p.Balance.Read(resp.Body, currency)
+	if err != nil {
+		return adapter.Money{}, fmt.Errorf("direct: read the balance's answer: %w", err)
+	}
+	return m, nil
 }
 
 // checked reads the answer to a check.

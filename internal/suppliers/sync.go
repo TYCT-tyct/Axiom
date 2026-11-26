@@ -1,12 +1,14 @@
 package suppliers
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 	"time"
 	"uuid"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
@@ -31,10 +33,14 @@ type SyncConfig struct {
 	Clock func() time.Time
 	// SweepEvery is how often the suppliers that are due are looked for; zero is 15 seconds.
 	SweepEvery time.Duration
+	// Rates are the platform's exchange rates, which a key's balance told in another currency than its price entry's
+	// is converted at; nil is none, and such a balance is not stored.
+	Rates func(context.Context, pg.Tx) ([]platform.ExchangeRate, error)
 }
 
 // RegisterSync makes the node sync the suppliers: it adds the workers and the periodic sweep to the queue, which then
-// runs a round of the engine for each supplier that is due, one node at a time for each (README「调度」).
+// runs a round of the engine for each supplier that is due, one node at a time for each (README「调度」), and keeps the
+// platform's direct and cloud lines up to date: their keys listed again and the lines projected again (relist.go).
 func RegisterSync(cfg SyncConfig) error {
 	if cfg.Registry == nil {
 		r, err := registry.Default()
@@ -50,6 +56,9 @@ func RegisterSync(cfg SyncConfig) error {
 		cfg.SweepEvery = 15 * time.Second
 	}
 	if err := RegisterSyncAlerts(cfg); err != nil {
+		return err
+	}
+	if err := registerLines(cfg); err != nil {
 		return err
 	}
 	host, err := os.Hostname()

@@ -12,6 +12,7 @@ import (
 	"slices"
 
 	"axiom/internal/catalog"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -31,6 +32,16 @@ type Provider struct {
 	Responses bool
 	// Models is the path its model list is read at; empty is the root's /models.
 	Models string
+	// Balance is how it tells a key's own balance; nil for a provider that does not. It is what makes the type's
+	// description say Balance.
+	Balance *Balance
+}
+
+// Balance is a provider's balance of one key: a GET of Path, which it does not charge for, with the key as for Chat,
+// whose answer Read reads. currency is the price entry's, for an answer that names none or more than one.
+type Balance struct {
+	Path string
+	Read func(body []byte, currency platform.Currency) (adapter.Money, error)
 }
 
 // Anthropic is a provider's Anthropic-compatible API: Messages at Root + /v1/messages, for the models it names. A name
@@ -54,13 +65,14 @@ type Adapter struct {
 }
 
 var (
-	_ adapter.Adapter = (*Adapter)(nil)
-	_ adapter.Direct  = (*Adapter)(nil)
+	_ adapter.Adapter  = (*Adapter)(nil)
+	_ adapter.Direct   = (*Adapter)(nil)
+	_ adapter.Balancer = (*Adapter)(nil)
 )
 
 // New is the adapter of the provider.
 func New(p Provider) *Adapter {
-	p.Type.Mode = adapter.ModeDirect
+	p.Type.Mode, p.Type.Balance = adapter.ModeDirect, p.Balance != nil
 	if len(p.Type.Forms) == 0 {
 		p.Type.Forms = []adapter.Form{Keys}
 	}

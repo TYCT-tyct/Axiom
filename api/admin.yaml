@@ -4709,6 +4709,49 @@ paths:
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
+  /api/admin/v1/suppliers/{supplier_id}/cost-ratio:
+    put:
+      operationId: setSupplierCostRatio
+      tags: [Suppliers]
+      summary: Set the ratio a direct or cloud supplier's line costs its type's prices at
+      description: >-
+        For keys bought below the type's prices (a discount, committed use, credit given with a top-up): every endpoint
+        of the line with a price is costed at the type's price times the ratio from then on, in the same change
+        (docs/domains/suppliers-direct.md「成本与线路倍率」). Attempts already begun are costed by the plan they began
+        with. Only for a platform supplier of `mode` `direct` or `cloud`: 409 for a relay, whose ratio its sync reads.
+        The ratio is above 0 and at most 10, with at most 6 decimals (422 otherwise). The audit entry has the ratio
+        before and after.
+      security:
+        - session: []
+          csrf: []
+      x-axiom-level: mfa
+      x-axiom-permission: suppliers.manage
+      parameters:
+        - name: supplier_id
+          in: path
+          required: true
+          schema: {$ref: "#/components/schemas/Uuid"}
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/SupplierCostRatioUpdate"}
+      responses:
+        "200":
+          description: The supplier as changed
+          headers:
+            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Supplier"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+        "401": {$ref: "#/components/responses/Unauthenticated"}
+        "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
+        "409": {$ref: "#/components/responses/Conflict"}
+        "422": {$ref: "#/components/responses/Unprocessable"}
+        default: {$ref: "#/components/responses/Failure"}
   /api/admin/v1/suppliers/{supplier_id}/cloud-credential:
     put:
       operationId: replaceSupplierCloudCredential
@@ -11576,6 +11619,18 @@ components:
           minimum: 1
           maximum: 100000
           description: Each key's or region's rolling-minute ceiling; absent for none.
+        cost_ratio:
+          description: >-
+            The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1.
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
+        reason: {$ref: "#/components/schemas/Reason"}
+    SupplierCostRatioUpdate:
+      type: object
+      required: [ratio, reason]
+      properties:
+        ratio:
+          description: Above 0 and at most 10, with at most 6 decimals.
+          allOf: [{$ref: "#/components/schemas/Decimal"}]
         reason: {$ref: "#/components/schemas/Reason"}
     CloudRegion:
       type: string

@@ -198,6 +198,9 @@ type endpoint struct {
 	ownerSite, ownerAccount uuid.UUID
 	poolLow                 bool
 	byok, byokFallback      bool
+	// wallets says each key of the platform supplier is a wallet of its own, whose balance its type reads: the funds are
+	// the keys', not the supplier's.
+	wallets bool
 }
 
 type credential struct {
@@ -210,7 +213,10 @@ type credential struct {
 	max                             int32
 	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
 	expires                         *time.Time
-	rt                              *credRuntime
+	// funds is what a key that is a wallet can pay, in the plan's terms: its balance as last read times the line's
+	// ratio, rounded down; zero for one never read. nil for any other credential.
+	funds *platform.Exact
+	rt    *credRuntime
 }
 
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
@@ -266,6 +272,7 @@ func (s *Service) Reload(ctx context.Context) error {
 			delete(next.endpoints, id)
 		}
 	}
+	s.fundWallets(next)
 	s.schedules.Store(&schedules) // first: the snapshot must never name a schedule the map lacks
 	s.applyShares(next)
 	s.snap.Store(next)
@@ -283,7 +290,7 @@ func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule
 	if err != nil {
 		return err
 	}
-	c, err := s.credentialOf(r)
+	c, err := s.credentialOf(r, ep.wallets)
 	if err != nil {
 		return err
 	}
@@ -375,11 +382,12 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if err != nil {
 		return nil, fmt.Errorf("endpoint %s: its supplier's native balance: %w", r.EndpointID, err)
 	}
+	wallets := r.OwnerScope == "platform" && registry.TypeOf(a).Balance
 	ep := &endpoint{
 		id: r.EndpointID, supplier: r.SupplierID, schedule: r.CostScheduleID, model: r.ModelID, upstream: r.UpstreamName, codename: *r.Codename,
 		formats: formats, quantization: quantization, origin: r.Origin, quirks: a.Calls(), currency: currency, unitValue: value, unitValueID: r.UnitValueID,
-		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode),
-		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback,
+		nativeUnit: r.NativeUnit, ownerScope: r.OwnerScope, funds: s.fundsOf(r.SupplierID, balance, r.BalanceObservedAt, r.Mode != relayMode && !wallets),
+		poolLow: r.PoolLow.Bool, byok: r.Status == "byok", byokFallback: r.ByokFallback, wallets: wallets,
 	}
 	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
 	next.endpoints[r.EndpointID] = ep
@@ -420,7 +428,8 @@ func upstreamAccount(r store.ListRoutableRow) uuid.UUID {
 	return r.CredentialID
 }
 
-func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
+// credentialOf is the row's credential; wallet says it is a key whose own balance is its funds.
+func (s *Service) credentialOf(r store.ListRoutableRow, wallet bool) (*credential, error) {
 	if r.KeyVersion == nil {
 		return nil, fmt.Errorf("credential %s is active without a key", r.CredentialID)
 	}
@@ -436,12 +445,19 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &credential{
+	c := &credential{
 		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, settings: settings,
 		max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
 		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
 		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, upstreamAccount(r), r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
-	}, nil
+	}
+	if wallet {
+		if c.funds, err = walletFunds(r); err != nil {
+			return nil, err
+		}
+		c.recover(r.KeyBalanceObservedAt)
+	}
+	return c, nil
 }
 
 // settingsOf is a credential's settings, which must be ones its type could have written: a call never goes out with a
@@ -507,9 +523,15 @@ func (s *Service) availableCredentials(ep *endpoint) int {
 	now := s.now()
 	n := 0
 	for _, c := range ep.creds {
-		if (c.expires == nil || now.Before(*c.expires)) && now.UnixNano() >= c.rt.restUnix.Load() {
+		if c.available(now) {
 			n++
 		}
 	}
 	return n
+}
+
+// available says the credential may be picked at now: it has not expired, is not resting, and is not a wallet the
+// provider refused for want of funds since its balance was last read.
+func (c *credential) available(now time.Time) bool {
+	return (c.expires == nil || now.Before(*c.expires)) && now.UnixNano() >= c.rt.restUnix.Load() && c.rt.broke.Load() == 0
 }

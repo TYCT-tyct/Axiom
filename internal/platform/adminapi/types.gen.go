@@ -7824,6 +7824,15 @@ type SupplierConnected struct {
 	Supplier *Supplier `json:"supplier,omitempty"`
 }
 
+// SupplierCostRatioUpdate defines model for SupplierCostRatioUpdate.
+type SupplierCostRatioUpdate struct {
+	// Ratio Above 0 and at most 10, with at most 6 decimals.
+	Ratio Decimal `json:"ratio"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
 	Kind string `json:"kind"`
@@ -8504,6 +8513,9 @@ type TotpSetup struct {
 
 // TypedSupplierCreate defines model for TypedSupplierCreate.
 type TypedSupplierCreate struct {
+	// CostRatio The line's ratio, as `setSupplierCostRatio` takes it: the type's prices times it are the costs. Absent is 1.
+	CostRatio *Decimal `json:"cost_ratio,omitempty"`
+
 	// Deployments For a type with `deployments` (Azure OpenAI), which the platform does not list to its key.
 	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
 
@@ -9580,6 +9592,12 @@ type ReplaceSupplierCloudCredentialParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetSupplierCostRatioParams defines parameters for SetSupplierCostRatio.
+type SetSupplierCostRatioParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // BindSupplierKeyParams defines parameters for BindSupplierKey.
 type BindSupplierKeyParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -10038,6 +10056,9 @@ type TestSupplierEndpointJSONRequestBody = EndpointTestRequest
 
 // ReplaceSupplierCloudCredentialJSONRequestBody defines body for ReplaceSupplierCloudCredential for application/json ContentType.
 type ReplaceSupplierCloudCredentialJSONRequestBody = CloudCredentialReplace
+
+// SetSupplierCostRatioJSONRequestBody defines body for SetSupplierCostRatio for application/json ContentType.
+type SetSupplierCostRatioJSONRequestBody = SupplierCostRatioUpdate
 
 // BindSupplierKeyJSONRequestBody defines body for BindSupplierKey for application/json ContentType.
 type BindSupplierKeyJSONRequestBody = BindKey

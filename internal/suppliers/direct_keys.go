@@ -80,7 +80,7 @@ func (r *DirectRequest) connectedAt(reg *registry.Registry, s Supplier) error {
 
 // AddDirectKeys stores the keys of a connected direct API that passed their checks, in the caller's transaction: each
 // its own credential on the line with the plan's limits and the models it lists, and an endpoint, at the official
-// price, for each model a key now lists that the line has none for. A key another transaction stored since
+// price times the line's ratio, for each model a key now lists that the line has none for. A key another transaction stored since
 // PlanDirectKeys read is a duplicate here too. The checks are in the order of the keys.
 func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, snap *catalog.Snapshot, supplier uuid.UUID, p *DirectPlan) ([]KeyCheck, error) {
 	if _, err := a.locked(ctx, tx, supplier); err != nil {
@@ -93,7 +93,7 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 		return p.Checks, nil
 	}
 	q := store.New()
-	group, err := lineOf(ctx, tx, q, supplier)
+	group, ratio, err := lineOf(ctx, tx, q, supplier)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (a *Admin) AddDirectKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, 
 	for _, e := range served {
 		has[catalog.ModelID(e.ModelID)] = true
 	}
-	if _, _, err := insertLineModels(ctx, tx, q, supplier, group, snap, p.r.Currency, p.offer(), has); err != nil {
+	if _, _, err := insertLineModels(ctx, tx, q, supplier, group, snap, p.r.Currency, p.offer(), has, ratio); err != nil {
 		return nil, err
 	}
 	if err := a.insertDirectKeys(ctx, tx, q, supplier, group, snap, p); err != nil {

@@ -17,6 +17,19 @@ import (
 
 type missingExchange struct{ from, to string }
 
+// exchangeBases is the platform's current exchange rates as the bases other modules convert at.
+func exchangeBases(ctx context.Context, tx pg.Tx) ([]platform.ExchangeRate, error) {
+	rates, err := billing.ExchangeRates(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	basis := make([]platform.ExchangeRate, len(rates))
+	for i, r := range rates {
+		basis[i] = r.Basis()
+	}
+	return basis, nil
+}
+
 // exchangeRates is read once per routing build. A failed read returns an error, leaving the old snapshot's age intact.
 func exchangeRates(d callDeps) func(context.Context) ([]platform.ExchangeRate, error) {
 	meter := d.meter
@@ -29,17 +42,13 @@ func exchangeRates(d callDeps) func(context.Context) ([]platform.ExchangeRate, e
 	}
 	missing := map[uuid.UUID]missingExchange{}
 	return func(ctx context.Context) ([]platform.ExchangeRate, error) {
-		var rates []billing.BillingExchangeRate
+		var basis []platform.ExchangeRate
 		err := d.db.ReadTx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-			rates, err = billing.ExchangeRates(ctx, tx)
+			basis, err = exchangeBases(ctx, tx)
 			return err
 		})
 		if err != nil {
 			return nil, err
-		}
-		basis := make([]platform.ExchangeRate, len(rates))
-		for i, r := range rates {
-			basis[i] = r.Basis()
 		}
 		// The alert serves the log and the metric only: not reading what it needs must not cost the build its rates.
 		if next, ok := d.missingNow(ctx, basis); ok {

@@ -5,6 +5,10 @@
 package vendors
 
 import (
+	"errors"
+
+	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/direct"
 )
@@ -48,6 +52,7 @@ var rows = []direct.Provider{
 			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
 		},
 		Anthropic: &direct.Anthropic{Root: "/anthropic", Models: []string{"kimi-k3.1-pro", "kimi-k3.1-pro-highspeed", "kimi-k3"}},
+		Balance:   &direct.Balance{Path: "/v1/users/me/balance", Read: moonshotBalance},
 	},
 	{
 		Type: adapter.Type{
@@ -60,6 +65,7 @@ var rows = []direct.Provider{
 			Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic}, Forms: keyForm, Lists: true,
 		},
 		Anthropic: &direct.Anthropic{Root: "/anthropic", Models: []string{"deepseek-flash", "deepseek-v4-pro"}},
+		Balance:   &direct.Balance{Path: "/user/balance", Read: deepseekBalance},
 	},
 	{
 		Type: adapter.Type{
@@ -103,6 +109,44 @@ var rows = []direct.Provider{
 			Families: []adapter.Family{adapter.FamilyOpenAI}, Forms: keyForm, Lists: true,
 		},
 	},
+}
+
+// deepseekBalance reads DeepSeek's {"balance_infos":[{"currency","total_balance"}]}, one entry a currency the account
+// holds: the price entry's when it holds that one, else the first.
+func deepseekBalance(body []byte, currency platform.Currency) (adapter.Money, error) {
+	var b struct {
+		Infos []struct {
+			Currency string `json:"currency"`
+			Total    string `json:"total_balance"`
+		} `json:"balance_infos"`
+	}
+	if err := jsonx.Unmarshal(body, &b); err != nil {
+		return adapter.Money{}, err
+	}
+	if len(b.Infos) == 0 {
+		return adapter.Money{}, errors.New("no balance in the answer")
+	}
+	info := b.Infos[0]
+	for _, i := range b.Infos {
+		if i.Currency == currency.String() {
+			info = i
+		}
+	}
+	return adapter.ParseMoney(info.Total, info.Currency)
+}
+
+// moonshotBalance reads Kimi's {"data":{"available_balance":…}}, a JSON number in the price entry's currency, which the
+// answer does not name. The number's text is read as it is, so no digit is lost to a float.
+func moonshotBalance(body []byte, currency platform.Currency) (adapter.Money, error) {
+	var b struct {
+		Data struct {
+			Available jsonx.Raw `json:"available_balance"`
+		} `json:"data"`
+	}
+	if err := jsonx.Unmarshal(body, &b); err != nil {
+		return adapter.Money{}, err
+	}
+	return adapter.ParseMoney(string(b.Data.Available), currency.String())
 }
 
 // New is an adapter for each row.

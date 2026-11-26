@@ -333,7 +333,7 @@ func startSync(ctx context.Context, db, retentionDB *pg.DB, cfg nodeSettings, co
 		return nil, nil, nil, err
 	}
 	if err := suppliers.RegisterSync(suppliers.SyncConfig{
-		DB: db, Scope: pg.PlatformScope(), Keys: console.master, Egress: exit, Queue: queue, Logger: logger,
+		DB: db, Scope: pg.PlatformScope(), Keys: console.master, Egress: exit, Queue: queue, Logger: logger, Rates: exchangeBases,
 	}); err != nil {
 		return nil, nil, nil, err
 	}

@@ -9,6 +9,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 
+	"axiom/internal/platform"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -95,4 +96,42 @@ func row(t *testing.T, kind adapter.Kind) adapter.Adapter {
 	}
 	t.Fatalf("no row %s", kind)
 	return nil
+}
+
+// TestBalanceRowsReadTheirKeysWallet: the rows that say Balance (DeepSeek and Kimi, no other) read a key's balance at
+// the provider's path with a bearer token, exactly as the provider's answer gives it: DeepSeek's in the entry's
+// currency among those the account holds, Kimi's number in the entry's currency, which its answer does not name. The
+// samples follow each provider's documented example answer; they are not recorded against a live account.
+func TestBalanceRowsReadTheirKeysWallet(t *testing.T) {
+	t.Parallel()
+	cases := map[adapter.Kind]struct{ path, entry, amount, currency string }{
+		"deepseek": {"/user/balance", "CNY", "110", "CNY"},
+		"moonshot": {"/v1/users/me/balance", "USD", "49.58894", "USD"},
+	}
+	for _, a := range vendors.New() {
+		tc, reads := cases[a.Kind()]
+		if a.(adapter.Described).Type().Balance != reads {
+			t.Errorf("%s: says Balance %v", a.Kind(), !reads)
+		}
+		if !reads {
+			continue
+		}
+		body, err := os.ReadFile(filepath.Join("testdata", string(a.Kind())+"-balance.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, err := platform.ParseCurrency(tc.entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c := &listClient{body: body}
+		got, err := a.(adapter.Balancer).ReadBalance(t.Context(), c, secret.New("sk-test-key"), nil, entry)
+		want, wantErr := adapter.ParseMoney(tc.amount, tc.currency)
+		if err != nil || wantErr != nil || got.Amount.Cmp(want.Amount) != 0 || got.Currency != want.Currency {
+			t.Errorf("%s: %+v (%v), want %s %s", a.Kind(), got, err, tc.amount, tc.currency)
+		}
+		if r := c.sent[0]; r.Path != tc.path || r.Header.Get("Authorization") != "Bearer sk-test-key" {
+			t.Errorf("%s: asked %s with %q", a.Kind(), r.Path, r.Header.Get("Authorization"))
+		}
+	}
 }

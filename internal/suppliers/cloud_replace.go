@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"uuid"
 
@@ -131,10 +132,11 @@ func (a *Admin) ReplaceCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 		return Connected{Checks: p.Checks}, nil
 	}
 	q := store.New()
-	group, err := lineOf(ctx, tx, q, p.supplier)
+	group, ratio, err := lineOf(ctx, tx, q, p.supplier)
 	if err != nil {
 		return Connected{}, err
 	}
+	p.ratio = ratio
 	if err := p.refreshLine(ctx, tx, q, group, snap); err != nil {
 		return Connected{}, err
 	}
@@ -181,7 +183,7 @@ func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries,
 	for _, m := range served {
 		has[catalog.ModelID(m.ModelID)] = true
 	}
-	_, _, err = insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has)
+	_, _, err = insertLineModels(ctx, tx, q, p.supplier, group, snap, p.r.Currency, p.offer(snap), has, p.ratio)
 	return err
 }
 
@@ -290,14 +292,18 @@ func (a *Admin) resealRegion(ctx context.Context, tx pg.Tx, q *store.Queries, p 
 	return nil
 }
 
-// lineOf is a direct or cloud supplier's one line.
-func lineOf(ctx context.Context, tx pg.Tx, q *store.Queries, supplier uuid.UUID) (uuid.UUID, error) {
+// lineOf is a direct or cloud supplier's one line, and its ratio.
+func lineOf(ctx context.Context, tx pg.Tx, q *store.Queries, supplier uuid.UUID) (uuid.UUID, *big.Rat, error) {
 	groups, err := q.ListGroupsOf(ctx, tx, supplier)
 	if err != nil {
-		return uuid.UUID{}, fmt.Errorf("read the line: %w", err)
+		return uuid.UUID{}, nil, fmt.Errorf("read the line: %w", err)
 	}
 	if len(groups) != 1 {
-		return uuid.UUID{}, fmt.Errorf("%w: the supplier has %d lines", ErrNoGroup, len(groups))
+		return uuid.UUID{}, nil, fmt.Errorf("%w: the supplier has %d lines", ErrNoGroup, len(groups))
 	}
-	return groups[0].ID, nil
+	ratio, ok := new(big.Rat).SetString(groups[0].Ratio)
+	if !ok {
+		return uuid.UUID{}, nil, fmt.Errorf("the line's ratio %q is not a number", groups[0].Ratio)
+	}
+	return groups[0].ID, ratio, nil
 }
