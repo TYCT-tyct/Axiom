@@ -355,12 +355,8 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	if !ok {
 		return nil, fmt.Errorf("endpoint %s: no adapter of kind %q", r.EndpointID, r.Kind)
 	}
-	if _, known := schedules[r.CostScheduleID]; !known {
-		sched, err := catalog.ParseSchedule(r.Schedule)
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %s: its cost schedule %s: %w", r.EndpointID, r.CostScheduleID, err)
-		}
-		schedules[r.CostScheduleID] = &sched
+	if err := parseSchedule(schedules, r); err != nil {
+		return nil, err
 	}
 	formats, err := store.ParseFormats(r.Formats)
 	if err != nil {
@@ -392,6 +388,19 @@ func (s *Service) endpointOf(next *snapshot, schedules map[uuid.UUID]*catalog.Sc
 	ep.ownerSite, ep.ownerAccount = owner(r.SiteID), owner(r.AccountID)
 	next.endpoints[r.EndpointID] = ep
 	return ep, nil
+}
+
+// parseSchedule reads the endpoint's cost schedule into schedules, once a schedule.
+func parseSchedule(schedules map[uuid.UUID]*catalog.Schedule, r store.ListRoutableRow) error {
+	if _, known := schedules[r.CostScheduleID]; known {
+		return nil
+	}
+	sched, err := catalog.ParseSchedule(r.Schedule)
+	if err != nil {
+		return fmt.Errorf("endpoint %s: its cost schedule %s: %w", r.EndpointID, r.CostScheduleID, err)
+	}
+	schedules[r.CostScheduleID] = &sched
+	return nil
 }
 
 // owner is the tenant a nullable column names, the zero id for an endpoint of the platform's own.

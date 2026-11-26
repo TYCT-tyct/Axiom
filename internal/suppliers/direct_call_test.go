@@ -175,7 +175,7 @@ func TestADirectCallSendsTheKeysOwnNameAndSettings(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-			model, organization = body.Model, r.Header.Get("OpenAI-Organization")
+			model, organization = body.Model, r.Header.Get("Openai-Organization")
 		}))
 		t.Cleanup(server.Close)
 		w.pointAt(server.URL)

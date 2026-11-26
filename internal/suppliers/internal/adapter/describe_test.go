@@ -32,8 +32,13 @@ func TestReadTakesOneFormWhole(t *testing.T) {
 		secrets  map[string]string
 		settings adapter.Settings
 	}{
-		{"the default form", "", map[string]string{"access_key_id": "AKIAFAKE00000001", "secret_access_key": "s", "api_version": "2026"}, "",
-			map[string]string{"access_key_id": "AKIAFAKE00000001", "secret_access_key": "s"}, adapter.Settings{"form": "access_key", "api_version": "2026"}},
+		{
+			"the default form", "",
+			map[string]string{"access_key_id": "AKIAFAKE00000001", "secret_access_key": "s", "api_version": "2026"},
+			"",
+			map[string]string{"access_key_id": "AKIAFAKE00000001", "secret_access_key": "s"},
+			adapter.Settings{"form": "access_key", "api_version": "2026"},
+		},
 		{"another form", "api_key", map[string]string{"api_key": "k"}, "", map[string]string{"api_key": "k"}, adapter.Settings{"form": "api_key"}},
 		{"half of one form", "", map[string]string{"access_key_id": "AKIAFAKE00000001"}, "secret_access_key", nil, nil},
 		{"a field of another form", "api_key", map[string]string{"api_key": "k", "secret_access_key": "s"}, "secret_access_key", nil, nil},

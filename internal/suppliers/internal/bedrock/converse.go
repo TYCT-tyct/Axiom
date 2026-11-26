@@ -76,8 +76,8 @@ type chatTool struct {
 type converseRequest struct {
 	Messages        []converseMessage `json:"messages"`
 	System          []textBlock       `json:"system,omitzero"`
-	InferenceConfig *inferenceConfig  `json:"inferenceConfig,omitzero"`
-	ToolConfig      *toolConfig       `json:"toolConfig,omitzero"`
+	InferenceConfig inferenceConfig   `json:"inferenceConfig,omitzero"`
+	ToolConfig      toolConfig        `json:"toolConfig,omitzero"`
 }
 
 type converseMessage struct {
@@ -128,8 +128,8 @@ type inferenceConfig struct {
 }
 
 type toolConfig struct {
-	Tools      []tool      `json:"tools"`
-	ToolChoice *toolChoice `json:"toolChoice,omitzero"`
+	Tools      []tool     `json:"tools"`
+	ToolChoice toolChoice `json:"toolChoice,omitzero"`
 }
 
 type tool struct {
@@ -269,25 +269,33 @@ func userBlocks(content jsonx.Raw) ([]block, error) {
 	}
 	var blocks []block
 	for _, p := range parts {
-		switch {
-		case p.Type == "text" && p.Text != nil && p.ImageURL == nil:
-			if *p.Text != "" {
-				blocks = append(blocks, block{Text: p.Text})
-			}
-		case p.Type == "image_url" && p.ImageURL != nil && p.Text == nil:
-			img, err := imageOf(p.ImageURL.URL)
-			if err != nil {
-				return nil, err
-			}
-			blocks = append(blocks, block{Image: img})
-		default:
-			return nil, errUnconvertible
+		b, err := userBlock(p)
+		if err != nil {
+			return nil, err
+		}
+		if b != (block{}) {
+			blocks = append(blocks, b)
 		}
 	}
 	if len(blocks) == 0 {
 		return nil, errUnconvertible
 	}
 	return blocks, nil
+}
+
+// userBlock is one part of a user message's content; none for an empty text.
+func userBlock(p chatPart) (block, error) {
+	switch {
+	case p.Type == "text" && p.Text != nil && p.ImageURL == nil:
+		if *p.Text == "" {
+			return block{}, nil
+		}
+		return block{Text: p.Text}, nil
+	case p.Type == "image_url" && p.ImageURL != nil && p.Text == nil:
+		img, err := imageOf(p.ImageURL.URL)
+		return block{Image: img}, err
+	}
+	return block{}, errUnconvertible
 }
 
 // imageFormats are Converse's image formats by media type.
@@ -321,12 +329,15 @@ func textsOf(content jsonx.Raw) ([]textBlock, error) {
 	return texts, nil
 }
 
+// absent says a member is missing or null.
+func absent(v jsonx.Raw) bool { return len(v) == 0 || v.Kind() == 'n' }
+
 // partsOf is a content as parts: a string is one text part, none or null no part.
 func partsOf(content jsonx.Raw) ([]chatPart, error) {
-	switch content.Kind() {
-	case 0, 'n':
+	if absent(content) {
 		return nil, nil
-	case '"':
+	}
+	if content.Kind() == '"' {
 		var s string
 		if jsonx.Unmarshal(content, &s) != nil {
 			return nil, errUnconvertible
@@ -354,84 +365,81 @@ func toolUseOf(c chatCall) (*toolUse, error) {
 	return &toolUse{ToolUseID: c.ID, Name: c.Function.Name, Input: input}, nil
 }
 
-// inference is the sampling: max_completion_tokens before the max_tokens it replaces, and stop as stop sequences.
-func inference(in chatRequest) (*inferenceConfig, error) {
+// inference is the sampling: max_completion_tokens before the max_tokens it replaces, and stop, one string or several,
+// as stop sequences.
+func inference(in chatRequest) (inferenceConfig, error) {
 	c := inferenceConfig{MaxTokens: in.MaxCompletionTokens, Temperature: in.Temperature, TopP: in.TopP}
 	if c.MaxTokens == nil {
 		c.MaxTokens = in.MaxTokens
 	}
-	switch in.Stop.Kind() {
-	case 0, 'n':
-	case '"':
-		var s string
-		if jsonx.Unmarshal(in.Stop, &s) != nil {
-			return nil, errUnconvertible
-		}
-		c.StopSequences = []string{s}
-	default:
-		if jsonx.Unmarshal(in.Stop, &c.StopSequences) != nil {
-			return nil, errUnconvertible
-		}
+	if absent(in.Stop) {
+		return c, nil
 	}
-	if c.MaxTokens == nil && c.Temperature == nil && c.TopP == nil && c.StopSequences == nil {
-		return nil, nil
-	}
-	return &c, nil
-}
-
-// tools is the functions the model may call and the choice among them. Converse has no choice of none and no strict
-// schema, so both are refused; a function without parameters takes none.
-func tools(fns []chatTool, choice jsonx.Raw) (*toolConfig, error) {
-	tc, err := toolChoiceOf(choice)
-	if err != nil || len(fns) == 0 && tc == nil {
-		return nil, err
-	}
-	if len(fns) == 0 {
-		return nil, errUnconvertible
-	}
-	c := &toolConfig{Tools: make([]tool, len(fns)), ToolChoice: tc}
-	for i, f := range fns {
-		if f.Type != "function" || f.Function.Name == "" || f.Function.Strict {
-			return nil, errUnconvertible
+	if in.Stop.Kind() == '"' {
+		c.StopSequences = make([]string, 1)
+		if jsonx.Unmarshal(in.Stop, &c.StopSequences[0]) != nil {
+			return c, errUnconvertible
 		}
-		spec := &c.Tools[i].ToolSpec
-		spec.Name, spec.Description, spec.InputSchema.JSON = f.Function.Name, f.Function.Description, f.Function.Parameters
-		switch f.Function.Parameters.Kind() {
-		case 0, 'n':
-			spec.InputSchema.JSON = noParameters
-		case '{':
-		default:
-			return nil, errUnconvertible
-		}
+		return c, nil
+	}
+	if jsonx.Unmarshal(in.Stop, &c.StopSequences) != nil {
+		return c, errUnconvertible
 	}
 	return c, nil
 }
 
-// toolChoiceOf is Chat's tool_choice as Converse's: auto, required as any, or one function by name; nil for none
-// given.
-func toolChoiceOf(choice jsonx.Raw) (*toolChoice, error) {
-	switch choice.Kind() {
-	case 0, 'n':
-		return nil, nil
-	case '"':
+// tools is the functions the model may call and the choice among them. Converse has no choice of none and no strict
+// schema, so both are refused; a function without parameters takes none.
+func tools(fns []chatTool, choice jsonx.Raw) (toolConfig, error) {
+	tc, err := toolChoiceOf(choice)
+	switch {
+	case err != nil:
+		return toolConfig{}, err
+	case len(fns) == 0 && tc != (toolChoice{}):
+		return toolConfig{}, errUnconvertible
+	case len(fns) == 0:
+		return toolConfig{}, nil
+	}
+	c := toolConfig{Tools: make([]tool, len(fns)), ToolChoice: tc}
+	for i, f := range fns {
+		params := f.Function.Parameters
+		if f.Type != "function" || f.Function.Name == "" || f.Function.Strict || !absent(params) && params.Kind() != '{' {
+			return toolConfig{}, errUnconvertible
+		}
+		if absent(params) {
+			params = noParameters
+		}
+		spec := &c.Tools[i].ToolSpec
+		spec.Name, spec.Description, spec.InputSchema.JSON = f.Function.Name, f.Function.Description, params
+	}
+	return c, nil
+}
+
+// toolChoiceOf is Chat's tool_choice as Converse's: auto, required as any, or one function by name; the zero choice
+// for none given.
+func toolChoiceOf(choice jsonx.Raw) (toolChoice, error) {
+	if absent(choice) {
+		return toolChoice{}, nil
+	}
+	if choice.Kind() == '"' {
 		var s string
 		if jsonx.Unmarshal(choice, &s) != nil {
-			return nil, errUnconvertible
+			return toolChoice{}, errUnconvertible
 		}
 		switch s {
 		case "auto":
-			return &toolChoice{Auto: &struct{}{}}, nil
+			return toolChoice{Auto: &struct{}{}}, nil
 		case "required":
-			return &toolChoice{Any: &struct{}{}}, nil
+			return toolChoice{Any: &struct{}{}}, nil
 		}
-		return nil, errUnconvertible
+		return toolChoice{}, errUnconvertible
 	}
 	var fn struct {
 		Type     string `json:"type"`
 		Function named  `json:"function"`
 	}
 	if jsonx.UnmarshalKnown(choice, &fn) != nil || fn.Type != "function" || fn.Function.Name == "" {
-		return nil, errUnconvertible
+		return toolChoice{}, errUnconvertible
 	}
-	return &toolChoice{Tool: &fn.Function}, nil
+	return toolChoice{Tool: &fn.Function}, nil
 }

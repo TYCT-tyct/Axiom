@@ -131,11 +131,8 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	if !ok || !direct {
 		return nil, ErrNoType
 	}
-	if n := len([]rune(strings.TrimSpace(r.Name))); n == 0 || n > 200 {
-		return nil, ErrDirectName
-	}
-	if r.MaxConcurrency < 1 || r.RequestsPerMinute != nil && (*r.RequestsPerMinute < 1 || *r.RequestsPerMinute > MaxRequestsPerMinute) {
-		return nil, ErrLimits
+	if err := r.checkShape(); err != nil {
+		return nil, err
 	}
 	t := d.Type()
 	_, secrets, settings, err := t.Read("", r.Fields)
@@ -154,6 +151,17 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 		return nil, err
 	}
 	return p, p.paste(r.Keys)
+}
+
+// checkShape refuses a name or limits no supplier may have, before the type is asked anything.
+func (r *DirectRequest) checkShape() error {
+	if n := len([]rune(strings.TrimSpace(r.Name))); n == 0 || n > 200 {
+		return ErrDirectName
+	}
+	if r.MaxConcurrency < 1 || r.RequestsPerMinute != nil && (*r.RequestsPerMinute < 1 || *r.RequestsPerMinute > MaxRequestsPerMinute) {
+		return ErrLimits
+	}
+	return nil
 }
 
 // paste is a check for each key, in order; one that came earlier in the list is a duplicate.

@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -94,13 +95,16 @@ func TestChatBecomesConverse(t *testing.T) {
 	}
 }
 
-// converseResponse is a 2xx answer of Bedrock's to a call at action, as the outbound client returns it.
-func converseResponse(action, contentType string, body []byte) *http.Response {
+// answered is what Answer makes of a 2xx answer of Bedrock's to a call at action, as the outbound client returns it,
+// read a byte at a time as from a slow connection: the body and its media type.
+func answered(action, contentType string, body []byte) ([]byte, string, error) {
 	u := &url.URL{Scheme: "https", Host: "bedrock-runtime.us-east-1.amazonaws.com", Path: "/model/amazon.nova-pro-v1:0/" + action}
-	return &http.Response{
+	resp := quirks{}.Answer(&http.Response{
 		StatusCode: http.StatusOK, Request: &http.Request{Method: http.MethodPost, URL: u}, Body: io.NopCloser(bytes.NewReader(body)),
 		Header: http.Header{"Content-Type": {contentType}, "X-Amzn-Requestid": {"req-1"}, "Date": {"Thu, 26 Nov 2026 08:00:00 GMT"}},
-	}
+	})
+	got, err := io.ReadAll(iotest.OneByteReader(resp.Body))
+	return got, resp.Header.Get("Content-Type"), errors.Join(err, resp.Body.Close())
 }
 
 // TestConverseAnswerBecomesChat: Converse's whole answer becomes Chat's, its text the content, its tool uses the
@@ -134,17 +138,16 @@ func TestConverseAnswerBecomesChat(t *testing.T) {
 			"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"prompt_tokens_details":{"cached_tokens":0}}}`,
 		},
 	} {
-		resp := quirks{}.Answer(converseResponse("converse", "application/json", []byte(tc.answer)))
-		got, err := io.ReadAll(resp.Body)
-		if err != nil || string(got) != canonical(t, tc.want) || resp.Header.Get("Content-Type") != "application/json" {
+		got, media, err := answered("converse", "application/json", []byte(tc.answer))
+		if err != nil || string(got) != canonical(t, tc.want) || media != "application/json" {
 			t.Errorf("%s: %s (%v)", tc.name, got, err)
 		}
 	}
 	invoked := `{"type":"message","content":[{"type":"text","text":"Hi"}]}`
-	if got, err := io.ReadAll(quirks{}.Answer(converseResponse("invoke", "application/json", []byte(invoked))).Body); err != nil || string(got) != invoked {
+	if got, _, err := answered("invoke", "application/json", []byte(invoked)); err != nil || string(got) != invoked {
 		t.Errorf("InvokeModel's answer became %s (%v)", got, err)
 	}
-	if _, err := io.ReadAll(quirks{}.Answer(converseResponse("converse", "application/json", []byte(`{"output":`))).Body); err == nil {
+	if _, _, err := answered("converse", "application/json", []byte(`{"output":`)); err == nil {
 		t.Error("an answer cut short read as one")
 	}
 }
@@ -193,11 +196,9 @@ func TestConverseStreamBecomesChatSSE(t *testing.T) {
 			`{"error":{"type":"overloaded_error","message":"Bedrock ended the stream: throttlingException"}}`)},
 		{"cut before its stop", opening, chunks},
 	} {
-		resp := quirks{}.Answer(converseResponse("converse-stream", eventStream, bytes.Join(tc.stream, nil)))
-		resp.Body = io.NopCloser(iotest.OneByteReader(resp.Body))
-		got, err := io.ReadAll(resp.Body)
+		got, media, err := answered("converse-stream", eventStream, bytes.Join(tc.stream, nil))
 		events := strings.SplitAfter(string(got), "\n\n")
-		if err != nil || len(events) != len(tc.want)+1 || events[len(tc.want)] != "" || resp.Header.Get("Content-Type") != "text/event-stream" {
+		if err != nil || len(events) != len(tc.want)+1 || events[len(tc.want)] != "" || media != "text/event-stream" {
 			t.Errorf("%s: the SSE is %q (%v)", tc.name, got, err)
 			continue
 		}

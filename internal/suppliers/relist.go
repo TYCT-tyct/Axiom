@@ -51,17 +51,20 @@ func (reprojectArgs) Kind() string { return "suppliers.reproject" }
 
 // InsertOpts implements river.JobArgsWithInsertOpts: one at a time, on the syncs queue, not retried (the next period
 // is the retry).
-func (relistArgs) InsertOpts() river.InsertOpts { return lineJobOpts() }
-
-// InsertOpts implements river.JobArgsWithInsertOpts.
-func (reprojectArgs) InsertOpts() river.InsertOpts { return lineJobOpts() }
-
-func lineJobOpts() river.InsertOpts {
-	return river.InsertOpts{Queue: pg.QueueSyncs, MaxAttempts: 1, UniqueOpts: river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
-		rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
-		rivertype.JobStateScheduled,
-	}}}
+func (relistArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: pg.QueueSyncs, MaxAttempts: 1, UniqueOpts: lineJobUnique}
 }
+
+// InsertOpts implements river.JobArgsWithInsertOpts, as relistArgs'.
+func (reprojectArgs) InsertOpts() river.InsertOpts {
+	return river.InsertOpts{Queue: pg.QueueSyncs, MaxAttempts: 1, UniqueOpts: lineJobUnique}
+}
+
+// lineJobUnique keeps one job of a kind with the same arguments in the queue until it ends.
+var lineJobUnique = river.UniqueOpts{ByArgs: true, ByState: []rivertype.JobState{
+	rivertype.JobStateAvailable, rivertype.JobStatePending, rivertype.JobStateRunning, rivertype.JobStateRetryable,
+	rivertype.JobStateScheduled,
+}}
 
 // lines is the re-list and re-projection of one node.
 type lines struct {

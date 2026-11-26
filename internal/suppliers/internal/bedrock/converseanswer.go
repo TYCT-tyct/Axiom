@@ -238,11 +238,7 @@ func (c *chatEvents) event(eventType string, payload []byte, out *bytes.Buffer) 
 		call.Function.Name = e.Start.ToolUse.Name
 		choice.Delta.ToolCalls = []chatReplyCall{call}
 	case "contentBlockDelta":
-		delta, err := c.delta(e)
-		if delta == nil {
-			return err
-		}
-		choice.Delta = delta
+		return c.delta(e, out)
 	case "messageStop":
 		choice.FinishReason = finishOf(e.StopReason)
 		c.stopped = true
@@ -257,26 +253,28 @@ func (c *chatEvents) event(eventType string, payload []byte, out *bytes.Buffer) 
 	return c.write(out, chatAnswer{Head: c.head, Choices: []chatChoice{choice}})
 }
 
-// delta is the chunk's delta for a content block's: its text, a piece of a tool call's input or of the reasoning; nil
-// for one Chat has no member for (a reasoning signature, a citation), and with an error for the input of a tool call
-// that never started.
-func (c *chatEvents) delta(e converseEvent) (*chatReply, error) {
-	d := e.Delta
-	switch {
+// delta writes the chunk of a content block's delta: its text, a piece of a tool call's input or of the reasoning;
+// none for one Chat has no member for (a reasoning signature, a citation). The input of a tool call that never started
+// is an error.
+func (c *chatEvents) delta(e converseEvent, out *bytes.Buffer) error {
+	var reply chatReply
+	switch d := e.Delta; {
 	case d.Text != nil:
-		return &chatReply{Content: d.Text}, nil
+		reply.Content = d.Text
 	case d.ToolUse != nil:
 		i, started := c.tools[e.ContentBlockIndex]
 		if !started {
-			return nil, errFraming
+			return errFraming
 		}
 		call := chatReplyCall{Index: &i}
 		call.Function.Arguments = d.ToolUse.Input
-		return &chatReply{ToolCalls: []chatReplyCall{call}}, nil
+		reply.ToolCalls = []chatReplyCall{call}
 	case d.ReasoningContent != nil && d.ReasoningContent.Text != nil:
-		return &chatReply{ReasoningContent: *d.ReasoningContent.Text}, nil
+		reply.ReasoningContent = *d.ReasoningContent.Text
+	default:
+		return nil
 	}
-	return nil, nil
+	return c.write(out, chatAnswer{Head: c.head, Choices: []chatChoice{{Delta: &reply}}})
 }
 
 func (*chatEvents) write(out *bytes.Buffer, chunk chatAnswer) error {

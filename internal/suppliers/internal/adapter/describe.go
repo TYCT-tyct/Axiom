@@ -273,20 +273,8 @@ func (t Type) Read(form string, values map[string]string) (Form, map[string]stri
 		}
 	}
 	for _, field := range fields {
-		kind, _ := FieldKindOf(field.Name)
-		if kind == FieldKeys || kind == FieldRegions || kind == FieldDeployments {
-			continue // the request's own members, checked where they are read
-		}
-		v := strings.TrimSpace(values[field.Name])
-		if err := field.check(v); err != nil {
+		if err := field.read(values, secrets, settings); err != nil {
 			return Form{}, nil, nil, err
-		}
-		switch {
-		case v == "":
-		case kind == FieldText:
-			settings[field.Name] = v
-		default:
-			secrets[field.Name] = v
 		}
 	}
 	if len(t.Forms) > 1 {
@@ -320,6 +308,27 @@ func (t Type) Valid(s Settings) bool {
 		delete(values, field.Name)
 	}
 	return len(values) == 0
+}
+
+// read checks the field's value among values and puts it in secrets or settings by its kind. Keys, regions and
+// deployments are the request's own members, checked where they are read.
+func (f Field) read(values, secrets map[string]string, settings Settings) error {
+	kind, _ := FieldKindOf(f.Name)
+	if kind == FieldKeys || kind == FieldRegions || kind == FieldDeployments {
+		return nil
+	}
+	v := strings.TrimSpace(values[f.Name])
+	if err := f.check(v); err != nil {
+		return err
+	}
+	switch {
+	case v == "":
+	case kind == FieldText:
+		settings[f.Name] = v
+	default:
+		secrets[f.Name] = v
+	}
+	return nil
 }
 
 func (f Field) check(v string) error {

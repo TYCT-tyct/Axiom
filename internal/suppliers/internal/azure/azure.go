@@ -149,7 +149,7 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 			return nil, cloud.BadBody()
 		}
 		target = c.Origin + "/openai/v1/responses"
-	default:
+	case protocol.Messages, protocol.Rerank, protocol.Completions:
 		return nil, cloud.BadBody()
 	}
 	req, f := cloud.Post(ctx, target, body, c.Header)

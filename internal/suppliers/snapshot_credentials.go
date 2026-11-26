@@ -55,17 +55,12 @@ func (s *Service) credentialOf(r store.ListRoutableRow, wallet bool) (*credentia
 }
 
 // settingsOf is a credential's settings, which must be ones its type could have written: a call never goes out with a
-// setting its type does not send, so a supplier with such a row is left out.
+// setting its type does not send, so a supplier with such a row is left out. A relay's type has no form, so its keys
+// have none.
 func (s *Service) settingsOf(r store.ListRoutableRow) (adapter.Settings, error) {
 	settings := settingsOf(r.Settings)
 	if r.Settings != nil && settings == nil {
 		return nil, fmt.Errorf("credential %s: its settings are not an object of strings", r.CredentialID)
-	}
-	if r.Mode == relayMode {
-		if settings != nil {
-			return nil, fmt.Errorf("credential %s: a relay's key has no settings", r.CredentialID)
-		}
-		return nil, nil
 	}
 	a, _ := s.registry.Get(adapter.Kind(r.Kind)) // endpointOf has refused a kind without an adapter
 	if !registry.TypeOf(a).Valid(settings) {

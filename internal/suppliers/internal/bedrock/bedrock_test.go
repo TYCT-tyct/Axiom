@@ -70,7 +70,7 @@ func TestEventStreamBecomesSSE(t *testing.T) {
 	}
 }
 
-var example = secret.New(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`)
+var example = secret.New(`{"access_key_id":"FAKEBEDROCKKEY0001","secret_access_key":"fake/secret+key"}`)
 
 // TestSign: a stream goes to InvokeModelWithResponseStream of the region, the body without its model and stream, with
 // Bedrock's version and the client's beta features, signed for bedrock in the region with an access key, or carrying
@@ -78,7 +78,7 @@ var example = secret.New(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access
 func TestSign(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
-	const signed = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20261126/eu-central-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date, Signature="
+	const signed = "AWS4-HMAC-SHA256 Credential=FAKEBEDROCKKEY0001/20261126/eu-central-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date, Signature="
 	for _, tc := range []struct {
 		key                           secret.Secret
 		body, url, want, accept, auth string
@@ -216,13 +216,21 @@ func TestReadCredential(t *testing.T) {
 		want    adapter.CloudCredential
 		field   string
 	}{
-		{"access_key", map[string]string{"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
-			adapter.CloudCredential{Key: example, Identity: "AKIAIOSFODNN7EXAMPLE", Last4: "MPLE", Account: adapter.CloudAccount{AccessKeyLast4: "MPLE"}}, ""},
-		{"api_key", map[string]string{"api_key": testAPIKey},
-			adapter.CloudCredential{Key: exampleAPIKey, Identity: testAPIKey, Last4: "6789", Account: adapter.CloudAccount{KeyLast4: "6789"}}, ""},
+		{
+			"access_key",
+			map[string]string{"access_key_id": "FAKEBEDROCKKEY0001", "secret_access_key": "fake/secret+key"},
+			adapter.CloudCredential{Key: example, Identity: "FAKEBEDROCKKEY0001", Last4: "0001", Account: adapter.CloudAccount{AccessKeyLast4: "0001"}},
+			"",
+		},
+		{
+			"api_key",
+			map[string]string{"api_key": testAPIKey},
+			adapter.CloudCredential{Key: exampleAPIKey, Identity: testAPIKey, Last4: "6789", Account: adapter.CloudAccount{KeyLast4: "6789"}},
+			"",
+		},
 		{"api_key", map[string]string{"api_key": "bedrock-test key-0123456789"}, adapter.CloudCredential{}, "api_key"},
 		{"api_key", map[string]string{"api_key": "short-key"}, adapter.CloudCredential{}, "api_key"},
-		{"access_key", map[string]string{"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "a b"}, adapter.CloudCredential{}, "secret_access_key"},
+		{"access_key", map[string]string{"access_key_id": "FAKEBEDROCKKEY0001", "secret_access_key": "a b"}, adapter.CloudCredential{}, "secret_access_key"},
 	} {
 		got, err := New().ReadCredential(tc.form, tc.secrets)
 		var fieldErr *adapter.FieldError

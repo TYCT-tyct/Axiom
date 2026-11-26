@@ -85,11 +85,11 @@ func parseRegistry(source string) (entries []entry, imports map[string]entry, er
 		imports[strings.Trim(spec.Path.Value, `"`)] = entry{firstLine: line, lastLine: fset.Position(spec.End()).Line}
 	}
 	for _, name := range []string{"adapters", "tables"} {
-		list, err := registryList(file, name)
+		list, found, err := registryList(file, name)
 		if err != nil {
 			return nil, nil, err
 		}
-		if list != nil {
+		if found {
 			if entries, err = listEntries(fset, list, entries); err != nil {
 				return nil, nil, err
 			}
@@ -120,7 +120,7 @@ func listEntries(fset *token.FileSet, list *ast.CompositeLit, entries []entry) (
 
 // registryList finds the composite literal that `var <name>` is initialised with: adapters, one package's adapter a
 // line, or tables, one package's table of adapters a line. Both are entries of pkg.New().
-func registryList(file *ast.File, name string) (*ast.CompositeLit, error) {
+func registryList(file *ast.File, name string) (*ast.CompositeLit, bool, error) {
 	for _, decl := range file.Decls {
 		gen, ok := decl.(*ast.GenDecl)
 		if !ok || gen.Tok != token.VAR {
@@ -130,16 +130,16 @@ func registryList(file *ast.File, name string) (*ast.CompositeLit, error) {
 			v, ok := spec.(*ast.ValueSpec)
 			if ok && len(v.Names) == 1 && v.Names[0].Name == name && len(v.Values) == 1 {
 				if list, ok := v.Values[0].(*ast.CompositeLit); ok {
-					return list, nil
+					return list, true, nil
 				}
-				return nil, fmt.Errorf("%s is not initialised with a composite literal", name)
+				return nil, false, fmt.Errorf("%s is not initialised with a composite literal", name)
 			}
 		}
 	}
 	if name == "adapters" {
-		return nil, errors.New("the registry has no `var adapters = ...`")
+		return nil, false, errors.New("the registry has no `var adapters = ...`")
 	}
-	return nil, nil // a registry without tables
+	return nil, false, nil // a registry without tables
 }
 
 func adapterEntry(fset *token.FileSet, element ast.Expr) (entry, error) {

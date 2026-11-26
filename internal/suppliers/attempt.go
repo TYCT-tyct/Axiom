@@ -423,45 +423,6 @@ func transportFailure(wrote bool) *Failure {
 	return &Failure{Scope: adapter.ScopeEndpoint, Cause: adapter.Transport{}}
 }
 
-// rest pauses the whole supplier on a balance refusal, and an individual credential until its stated reset or
-// configured cooldown, or a key that is its own wallet until a read of its balance shows funds. Other faults are for
-// routing and quality.
-func (a *Attempt) rest(f Failure) {
-	if _, low := f.Cause.(adapter.SupplierBalanceLow); low && f.Scope == adapter.ScopeSupplier {
-		a.ep.funds.rest(a.s.now())
-		return
-	}
-	if f.Scope != adapter.ScopeCredential {
-		return
-	}
-	now := a.s.now()
-	until := now.Add(a.s.cfg.CredentialCooldown)
-	switch c := f.Cause.(type) {
-	case adapter.CredentialQuotaExhausted:
-		if a.cred.funds != nil { // a wallet out of funds rests until a read shows some
-			a.cred.rt.broke.Store(now.UnixNano())
-			return
-		}
-		until = now.Add(a.s.cfg.QuotaCooldown)
-		if c.ResetAt.After(now) {
-			until = c.ResetAt
-		}
-	case adapter.RateLimited:
-		until = now.Add(max(c.RetryAfter, time.Second))
-	case adapter.CredentialRejected, adapter.Overloaded, adapter.UpstreamError, adapter.SupplierBalanceLow, adapter.NotPermitted,
-		adapter.ContextTooLong, adapter.BadRequest, adapter.ContentRejected, adapter.ModelNotFound, adapter.Unknown, adapter.Transport:
-	}
-	if _, refused := f.Cause.(adapter.CredentialRejected); refused {
-		a.s.reportRejected(a.ep.supplier, a.cred)
-	}
-	for {
-		cur := a.cred.rt.restUnix.Load()
-		if until.UnixNano() <= cur || a.cred.rt.restUnix.CompareAndSwap(cur, until.UnixNano()) {
-			return
-		}
-	}
-}
-
 // reportRejected asks the worker to mark a key the provider refused. A credential has at most one report in flight: the
 // call path stays free of the database, and a revoked key found by a thousand requests writes its row once. The mark is
 // cleared when the write ends, so a write that failed is tried again and a key that a test restored can be marked again.

@@ -60,7 +60,7 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 		body, stream, err = cloud.Rewrite(c.Body, []string{"model", "stream"}, add...)
 	case protocol.Chat:
 		body, stream, err = converse(c.Body)
-	default:
+	case protocol.Responses, protocol.Embeddings, protocol.Rerank, protocol.Completions:
 		return nil, cloud.BadBody()
 	}
 	if err != nil {
