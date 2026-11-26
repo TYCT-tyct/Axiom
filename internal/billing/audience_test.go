@@ -275,11 +275,11 @@ func TestDefaultAudiencePreservesLegacyCandidate(t *testing.T) {
 	rules := []Rule{{ID: uuid.NewV7(), RuleInput: rule(Selector{Kind: "all"}, Method{Kind: "fixed", Schedule: jsonx.Raw(fixedUS)})}}
 	costs := []PriceCost{priceCost(t, model.ID, "0.0000005")}
 	snap := &catalog.Snapshot{}
-	legacy, err := proposePrice(defaultPricePolicy(), rules, model, snap, usd, costs, fallbacks{})
+	legacy, err := proposePrice(defaultPricePolicy(), rules, nil, model, snap, usd, costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	all, err := proposeAudiencePrice(Selector{Kind: "all"}, defaultPricePolicy(), rules, model, snap, usd, costs, fallbacks{})
+	all, err := proposeAudiencePrice(Selector{Kind: "all"}, defaultPricePolicy(), rules, nil, model, snap, usd, costs, fallbacks{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -298,5 +298,51 @@ func TestAudienceAvailabilityRequiresASelectablePrice(t *testing.T) {
 	})}
 	if table.Available() {
 		t.Fatal("a safe layer hidden behind a blocked, more specific target made the node ready")
+	}
+}
+
+// TestDefaultMultiplierScalesThePriceForAll: a tier's default multiplier is what everyone pays times it, also for a
+// model a more specific rule prices for everyone, and the preview of the tier shows what serving charges it.
+func TestDefaultMultiplierScalesThePriceForAll(t *testing.T) {
+	t.Parallel()
+	f := newPrices(t)
+	tier := accounts.TierID(uuid.UUID{15: 1})
+	multiplier := "1.2"
+	scaled := rule(Selector{Kind: "all"}, Method{Kind: "default_multiplier", Multiplier: &multiplier})
+	scaled.Audience = Selector{Kind: "tier", ID: tierID}
+	for _, in := range []RuleInput{scaled, rule(Selector{Kind: "model", ID: f.model.String()}, faced("2"))} {
+		if _, err := f.create(in); err != nil {
+			t.Fatal(err)
+		}
+	}
+	f.refresh()
+	var preview map[catalog.ModelID]Publication
+	if err := f.tx(func(tx pg.Tx) error {
+		rules, err := Rules(t.Context(), tx, f.site)
+		if err != nil {
+			return err
+		}
+		rules = slices.DeleteFunc(rules, func(r Rule) bool { return !r.Audience.Prices(accounts.AccountID{}, tier) })
+		preview, err = PreviewPrices(t.Context(), tx, f.site, usd, f.catalog.snapshot(), rules, []catalog.ModelID{f.model}, f.costs)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	previewed, err := catalog.ParseSchedule(preview[f.model].Schedule)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []struct {
+		name string
+		got  catalog.Schedule
+		want string
+	}{
+		{"everyone", f.published().For(Audience{}).Schedule, "0.000002"},
+		{"the tier", f.published().For(Audience{Tier: tier}).Schedule, "0.0000024"},
+		{"the tier's preview", previewed, "0.0000024"},
+	} {
+		if rate, ok := c.got.BaseRate(catalog.ItemInput); !ok || rate.String() != c.want {
+			t.Errorf("%s pays %v a token of input, want %s", c.name, rate, c.want)
+		}
 	}
 }

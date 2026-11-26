@@ -41,7 +41,7 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	}
 	// Reconcile previous selectors too: an edit may have moved the rule to a different audience.
 	for audience, rules := range grouped {
-		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, previous[audience], rates); err != nil {
+		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, grouped[Selector{Kind: "all"}], previous[audience], rates); err != nil {
 			return nil, err
 		}
 	}
@@ -74,13 +74,13 @@ func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][
 	return grouped, previous
 }
 
-func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules []Rule, previous map[catalog.ModelID]ReadPublicationsRow, rates []platform.ExchangeRate) error {
+func refreshAudience(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platform.Currency, snap *catalog.Snapshot, costs map[catalog.ModelID][]PriceCost, defaults fallbacks, policy PricePolicy, audience Selector, rules, everyone []Rule, previous map[catalog.ModelID]ReadPublicationsRow, rates []platform.ExchangeRate) error {
 	for m := range snap.Models() {
 		old := previous[m.ID]
 		if audience.Kind != "all" && old.CandidateID == uuid.Nil() && !slices.ContainsFunc(rules, func(r Rule) bool { return r.Enabled && pricesModel(r.Target, m) }) {
 			continue
 		}
-		p, err := proposeAudiencePrice(audience, policy, rules, m, snap, currency, costs[m.ID], defaults, rates...)
+		p, err := proposeAudiencePrice(audience, policy, rules, everyone, m, snap, currency, costs[m.ID], defaults, rates...)
 		if err != nil {
 			return err
 		}
