@@ -3,6 +3,7 @@ package suppliers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 	"time"
@@ -111,27 +112,36 @@ func TestADisabledOrErasedKeyLeavesRouting(t *testing.T) {
 }
 
 // TestCredentialLoadIsThisNodesCount: the calls holding a credential and its account's requests in the rolling minute,
-// as this node counted them; a credential this node never loaded holds nothing.
+// as this node counted them, whether the account is the relay's or the key's own (a direct API's); a credential this
+// node never loaded holds nothing.
 func TestCredentialLoadIsThisNodesCount(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t, 4)
-	a, err := w.svc.Acquire(w.endpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 1, LastMinute: 1}) {
-		t.Errorf("holding a call: %+v", got)
-	}
-	a.Done()
-	if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 0, LastMinute: 1}) {
-		t.Errorf("after the call: %+v", got)
-	}
-	w.clock.advance(61 * time.Second)
-	if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{}) {
-		t.Errorf("a minute later: %+v", got)
-	}
-	if got := w.svc.CredentialLoad(uuid.NewV7(), uuid.NewV7()); got != (Load{}) {
-		t.Errorf("a credential never loaded: %+v", got)
+	for _, direct := range []bool{false, true} {
+		t.Run(fmt.Sprintf("direct=%t", direct), func(t *testing.T) {
+			t.Parallel()
+			w := newWorldWith(t, 4, fakeKind{}, messagesAPI)
+			if direct {
+				w.asDirect(string(messagesAPI.Kind()))
+			}
+			a, err := w.svc.Acquire(w.endpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 1, LastMinute: 1}) {
+				t.Errorf("holding a call: %+v", got)
+			}
+			a.Done()
+			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{InFlight: 0, LastMinute: 1}) {
+				t.Errorf("after the call: %+v", got)
+			}
+			w.clock.advance(61 * time.Second)
+			if got := w.svc.CredentialLoad(w.credential, w.supplier); got != (Load{}) {
+				t.Errorf("a minute later: %+v", got)
+			}
+			if got := w.svc.CredentialLoad(uuid.NewV7(), uuid.NewV7()); got != (Load{}) {
+				t.Errorf("a credential never loaded: %+v", got)
+			}
+		})
 	}
 }
 
