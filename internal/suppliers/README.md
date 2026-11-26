@@ -78,6 +78,7 @@ type CallWrites struct{}                                       // 上面的写�
 func Reconcile / AssignToLostRequest / AssignUnattributed(ctx, tx, ...)
 func RegisterReconcile(ReconcileJobConfig) error
 func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投影可调用端点的成本，不解密、不依赖本节点注册表
+func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uuid.UUID]Line, error) // 端点所属的供应商和分组；查不到的不在结果里
 ```
 
 `Failure.Cause` 的 13 种原因都以同名类型别名导出，`NotExecuted` 是 `Failure.Executed` 唯一需要比较的取值。

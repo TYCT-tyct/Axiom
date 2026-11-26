@@ -6,17 +6,27 @@ SELECT id, site_id, account_id, source, amount, expires_at, created_at, coalesce
     merchant_id, coalesce(offline_channel, '')::text AS offline_channel, rate_id
 FROM billing.credit_batches WHERE id = @id;
 
--- name: PlatformCallMoney :one
+-- name: PlatformCallMoney :many
 -- One site's calls admitted in a window: what they were charged and, where it is known, what the supplier cost. The
 -- amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
--- time axis is the call's, the same as the call log's (README.md「运营看板」).
+-- time axis is the call's, the same as the call log's (README.md「运营看板」). One row per UTC day, and the window's
+-- total (total = 1), which the empty grouping set gives even when nothing settled.
 SELECT
+    grouping(day)::int AS total,
+    coalesce(day, '0001-01-01T00:00:00'::timestamp)::timestamp AS day,
     coalesce(sum(charged::numeric), 0)::text AS revenue,
     coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0)::text AS cost,
     count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
-FROM billing.reservations
-WHERE site_id = @site_id AND created_at >= @since AND created_at < @until
-    AND state IN ('settled', 'cleanup_settled');
+FROM (
+    -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects a
+    -- group per row and sorts the window instead of hashing its few days.
+    SELECT charged, profit, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
+    FROM billing.reservations
+    WHERE site_id = @site_id AND created_at >= @since AND created_at < @until
+        AND state IN ('settled', 'cleanup_settled')
+) r
+GROUP BY GROUPING SETS ((day), ())
+ORDER BY total DESC, day;
 
 -- name: PlatformCash :many
 -- The cash that moved for one site in a window, by payment currency: paid credits in, refunds and chargebacks out,

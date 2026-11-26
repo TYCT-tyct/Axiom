@@ -9,6 +9,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgtype"
 	"uuid"
 )
 
@@ -160,14 +161,23 @@ func (q *Queries) ListPaidBatches(ctx context.Context, db DBTX, arg ListPaidBatc
 	return items, nil
 }
 
-const platformCallMoney = `-- name: PlatformCallMoney :one
+const platformCallMoney = `-- name: PlatformCallMoney :many
 SELECT
+    grouping(day)::int AS total,
+    coalesce(day, '0001-01-01T00:00:00'::timestamp)::timestamp AS day,
     coalesce(sum(charged::numeric), 0)::text AS revenue,
     coalesce(sum(charged::numeric - profit::numeric) FILTER (WHERE profit IS NOT NULL), 0)::text AS cost,
     count(*) FILTER (WHERE profit IS NULL)::bigint AS unknown_cost_calls
-FROM billing.reservations
-WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
-    AND state IN ('settled', 'cleanup_settled')
+FROM (
+    -- The day is the expression reservations_created_day keeps statistics of: without them the planner expects a
+    -- group per row and sorts the window instead of hashing its few days.
+    SELECT charged, profit, date_trunc('day', created_at AT TIME ZONE 'UTC') AS day
+    FROM billing.reservations
+    WHERE site_id = $1 AND created_at >= $2 AND created_at < $3
+        AND state IN ('settled', 'cleanup_settled')
+) r
+GROUP BY GROUPING SETS ((day), ())
+ORDER BY total DESC, day
 `
 
 type PlatformCallMoneyParams struct {
@@ -177,6 +187,8 @@ type PlatformCallMoneyParams struct {
 }
 
 type PlatformCallMoneyRow struct {
+	Total            int32
+	Day              pgtype.Timestamp
 	Revenue          string
 	Cost             string
 	UnknownCostCalls int64
@@ -184,12 +196,32 @@ type PlatformCallMoneyRow struct {
 
 // One site's calls admitted in a window: what they were charged and, where it is known, what the supplier cost. The
 // amount is the reservation's, so a correction restates the call's own window rather than adding a second event; the
-// time axis is the call's, the same as the call log's (README.md「运营看板」).
-func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) (PlatformCallMoneyRow, error) {
-	row := db.QueryRow(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
-	var i PlatformCallMoneyRow
-	err := row.Scan(&i.Revenue, &i.Cost, &i.UnknownCostCalls)
-	return i, err
+// time axis is the call's, the same as the call log's (README.md「运营看板」). One row per UTC day, and the window's
+// total (total = 1), which the empty grouping set gives even when nothing settled.
+func (q *Queries) PlatformCallMoney(ctx context.Context, db DBTX, arg PlatformCallMoneyParams) ([]PlatformCallMoneyRow, error) {
+	rows, err := db.Query(ctx, platformCallMoney, arg.SiteID, arg.Since, arg.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PlatformCallMoneyRow
+	for rows.Next() {
+		var i PlatformCallMoneyRow
+		if err := rows.Scan(
+			&i.Total,
+			&i.Day,
+			&i.Revenue,
+			&i.Cost,
+			&i.UnknownCostCalls,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const platformCash = `-- name: PlatformCash :many

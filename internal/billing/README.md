@@ -12,7 +12,7 @@
 | 计量 | `Reservation.Bind(entry) *Meter`、`Meter.Observe(Progress) MeterStep`、`Meter.Extended`、`Meter.Complete`、`Meter.OutputCap` | 只归所有者 goroutine，`Observe` 不分配 |
 | 持有者 | `Start`、`(*Billing).Heartbeat`、`Reap`、`Alive`、`Run`、`ErrReaped` | 见[持有者与截止时间](#持有者与截止时间) |
 | 准入 | `(*Billing).ReserveMany(ctx, tx, []ReserveRequest) ([]*Hold, [][]int, []error, error)`、`Admitted`、`*Insufficient` | 同一账户一批，一个事务、一把余额行锁 |
-| 追加与结算 | `Extend`/`ExtendIn`、`Settle`/`SettleIn`、`SettleBatch`、`RunBatch`、`SettleOrphan`/`SettleOrphanIn`、`Cleanup`、`Outcome`、`AttemptResult`、`Final`、`BatchWorkError` | `*In` 在调用方事务里，返回的 `after` 提交后才执行 |
+| 追加与结算 | `Extend`/`ExtendIn`、`Settle`/`SettleIn`、`SettleBatch`、`RunBatch`、`SettleOrphan`/`SettleOrphanIn`、`Cleanup`、`Outcome`、`AttemptResult`、`Final`（`ServerToolItems`）、`BatchWorkError` | `*In` 在调用方事务里，返回的 `after` 提交后才执行 |
 | 额度 | `OpenBalance`、`AddCredit`、`CreditPaid`、`CreditRedeem`、`CreditsFor`、`ReadCredit`、`ReadCredits`、`TopUpRate`、`MinorUnits` | 写入要平台范围事务（审计） |
 | 退款与拒付 | `PrepareRefund`、`FreezeRefund`、`QuoteRefund`、`SettleRefund`、`ReleaseRefund`、`RefundRecordedAt`、`ChargeBack`、`ReverseChargeBack` | 重复调用由 payments 的订单行挡住，失败须回滚整个事务 |
 | 套餐 | `CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans`、`CreditSubscription`、`RequestSubscriptionRefund`/`ApproveSubscriptionRefund`、`Subscriptions`、`ListAllSubscriptions`、`ReadSubscriptionSummary`、`RegisterSubscriptions` | 见[订阅套餐](#订阅套餐) |

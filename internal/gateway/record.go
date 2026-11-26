@@ -289,6 +289,7 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	}
 	rec := recordOf(t, route, o, f, end)
 	rec.BillingPending = pending
+	rec.Plugins = pluginPrices(t.call, f, pending)
 	switch {
 	case t.call.record != nil:
 		err = t.call.record.Commit(rec)
@@ -301,6 +302,67 @@ func (x *Executor) log(ctx context.Context, t trail, o billing.Outcome, f billin
 	if err != nil {
 		x.Logger.ErrorContext(ctx, "a call's record could not be kept", "request_id", t.call.ID.String(), "err", err)
 	}
+}
+
+// pluginPrices is the call's plugin runs with what the call was charged for each. The settlement reports the per-use
+// items' sale price as one sum, so a successful run is given it only when it is the call's one successful run and the
+// billed per-use items are exactly the ones it added (addToolUsage): an item the upstream ran itself, or a second
+// plugin, would be mixed into the sum. A failed run was charged nothing; a settlement not written yet is unknown.
+func pluginPrices(c *Call, f billing.Final, pending bool) []observability.PluginRun {
+	if len(c.plugins) == 0 {
+		return nil
+	}
+	runs := slices.Clone(c.plugins)
+	succeeded := -1
+	for i, r := range runs {
+		runs[i].PriceNano = -1
+		if !r.OK {
+			runs[i].PriceNano = 0
+			continue
+		}
+		if succeeded >= 0 {
+			return runs // two runs share the one sum
+		}
+		succeeded = i
+	}
+	if succeeded < 0 || pending || !billedAlone(f, addedBy(c, runs[succeeded])) {
+		return runs
+	}
+	runs[succeeded].PriceNano = 0
+	if f.ServerToolCost != nil {
+		runs[succeeded].PriceNano = f.ServerToolCost.CeilAmount()
+	}
+	return runs
+}
+
+// addedBy is the per-use items a successful run added to the call's bill (addToolUsage).
+func addedBy(c *Call, r observability.PluginRun) (added [catalog.NumItems]int64) {
+	switch {
+	case r.Plugin == observability.PluginWeb:
+		added[catalog.ItemWebSearch] = r.Uses
+	case c.Request.FileBilling:
+		added[catalog.ItemFileParse] = c.Request.FilePages
+	default:
+		added[catalog.ItemWebSearch] = c.Request.FileParses
+	}
+	return added
+}
+
+// billedAlone reports whether the settlement billed exactly the added per-use items and no other.
+func billedAlone(f billing.Final, added [catalog.NumItems]int64) bool {
+	for it := range catalog.NumItems {
+		if !billing.ServerToolItems.Has(it) {
+			continue
+		}
+		var billed int64
+		for _, seg := range f.Segments {
+			billed += seg.Usage.Count(it)
+		}
+		if billed != added[it] {
+			return false
+		}
+	}
+	return true
 }
 
 // noConsent is the agreement version of a record whose account owner had accepted no legal document: the call log

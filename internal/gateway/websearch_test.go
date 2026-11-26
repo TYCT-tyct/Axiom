@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"uuid"
 
 	"axiom/internal/catalog"
+	"axiom/internal/observability"
 	"axiom/internal/platform"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/protocol"
@@ -76,6 +78,9 @@ func TestWebPluginSearchesInjectsAndAnnotates(t *testing.T) {
 		usage := h.settlements[0].outcome.Attempts[0].Segments[0].Usage
 		if got := usage.Count(catalog.ItemWebSearch); got != 1 {
 			t.Fatalf("settled web searches = %d, want 1", got)
+		}
+		if runs := h.call.plugins; len(runs) != 1 || fmt.Sprint(runs[0].Plugin, runs[0].OK, runs[0].Uses, runs[0].Engine) != fmt.Sprint(observability.PluginWeb, true, 1, "test") {
+			t.Fatalf("plugin runs = %+v, want one successful search on the test engine", runs)
 		}
 	})
 }
@@ -147,6 +152,9 @@ func TestWebPluginSearchFailureSearchesNothingElse(t *testing.T) {
 		}
 		if n := len(h.settlements[0].outcome.Attempts); n != 0 {
 			t.Fatalf("a failed search settled %d attempts, want none: %+v", n, h.settlements[0].outcome)
+		}
+		if runs := h.call.plugins; len(runs) != 1 || runs[0].OK || runs[0].Uses != 0 {
+			t.Fatalf("plugin runs = %+v, want one failed search", runs)
 		}
 	})
 }

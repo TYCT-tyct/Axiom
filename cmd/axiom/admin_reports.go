@@ -30,11 +30,15 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	var overview observability.AdminOverview
 	var money billing.PlatformReport
 	var targets operations.Expected
+	var usage dashboardUsage
 	err = a.db.ReadTx(ctx, call.scope, func(tx pg.Tx) error {
 		if overview, err = observability.ReadAdminOverview(ctx, tx, site, w.Since, w.Until); err != nil {
 			return err
 		}
 		if money, err = billing.ReadPlatformReport(ctx, tx, site, call.site.Currency, w.Since, w.Until); err != nil {
+			return err
+		}
+		if usage, err = readDashboardUsage(ctx, tx, call.site, overview, w.Since, w.Until); err != nil {
 			return err
 		}
 		targets, err = operations.ExpectedFor(ctx, tx, site, call.site.Currency, w.Since, w.Until)
@@ -46,14 +50,7 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	accountsBody, modelsBody, cashBody := overviewRanks(overview, money)
 	callsComplete := overview.Coverage.Covers(w.Since, w.Until)
 	margin := grossMarginBasisPoints(money.Revenue, money.Cost, money.UnknownCost)
-	retention := retentionBasisPoints(money.Retention.Retained, money.Retention.Cohort)
-	retentionBody := map[string]any{
-		"month": money.Retention.Month.Format("2006-01"), "cohort": money.Retention.Cohort,
-		"retained": money.Retention.Retained,
-	}
-	if retention != nil {
-		retentionBody["rate"] = *retention
-	}
+	retention, retentionBody := retentionOf(money.Retention)
 	body := map[string]any{
 		"site_id": call.site.ID.TypeID(), "since": w.Since, "until": w.Until,
 		"calls": overview.Calls, "errors": overview.Errors,
@@ -77,7 +74,18 @@ func (a adminAPI) GetOperationsOverview(ctx context.Context, r adminapi.GetOpera
 	if overview.Coverage.Known {
 		body["calls_available_since"] = overview.Coverage.Since
 	}
+	usage.addTo(body, modelsBody, overview, money, call.site.Currency.String(), w.Since, w.Until)
 	return adminJSON[adminapi.GetOperationsOverview200JSONResponse](body)
+}
+
+// retentionOf is the month's retention rate, nil without a cohort, and its body.
+func retentionOf(r billing.Retention) (*int64, map[string]any) {
+	rate := retentionBasisPoints(r.Retained, r.Cohort)
+	body := map[string]any{"month": r.Month.Format("2006-01"), "cohort": r.Cohort, "retained": r.Retained}
+	if rate != nil {
+		body["rate"] = *rate
+	}
+	return rate, body
 }
 
 // overviewRanks shapes the dashboard's top accounts, top models and cash rows.

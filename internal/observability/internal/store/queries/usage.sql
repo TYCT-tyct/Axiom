@@ -2,7 +2,8 @@
 -- The expression and ordering match call_log_admin_time; the scalar bound also prunes old partitions.
 WITH batch AS MATERIALIZED (
     SELECT c.id, c.at, c.site_id, c.account_id, c.workspace_id, c.key_id, c.model, c.currency,
-        c.error_kind = '' AS success, c.usage, c.physical_input, c.price_nano, c.billing_pending
+        c.error_kind = '' AS success, c.usage, c.physical_input, c.price_nano, c.billing_pending,
+        c.endpoint_id, c.error_kind, c.attempt_count, c.latency_ms, c.first_token_ms, c.plugins
     FROM observability.call_log c
     WHERE c.at >= @after_at::timestamptz
         AND (c.at AT TIME ZONE 'UTC',c.id) > (timezone('UTC', @after_at::timestamptz),(@after_id::text)::uuid)
@@ -13,9 +14,11 @@ WITH batch AS MATERIALIZED (
     LIMIT @batch_size::int
 ), enqueued AS (
     INSERT INTO observability.usage_journal
-        (site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano)
-    SELECT site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano
-    FROM batch WHERE NOT billing_pending
+        (site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano,
+        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins)
+    SELECT site_id,account_id,workspace_id,key_id,model,at,currency,success,usage,physical_input,price_nano,
+        billing_pending,endpoint_id,error_kind,attempt_count,latency_ms,first_token_ms,plugins
+    FROM batch
     RETURNING 1
 ), last_row AS (
     SELECT at,id FROM batch ORDER BY at DESC,id DESC LIMIT 1
@@ -52,6 +55,7 @@ WITH batch AS (
         coalesce(sum(physical_input::numeric) FILTER (WHERE usage ? 'cache_read' AND physical_input >= 0),0),
         sum(price_nano::numeric)
     FROM batch
+    WHERE NOT billing_pending -- a pending call's usage and price were never known (README「写入」)
     GROUP BY site_id,account_id,date_trunc('hour',at AT TIME ZONE 'UTC'),workspace_id,key_id,model,currency
     ORDER BY account_id,date_trunc('hour',at AT TIME ZONE 'UTC'),site_id,workspace_id,key_id,model,currency
     ON CONFLICT (account_id,hour,site_id,workspace_id,key_id,model,currency) DO UPDATE SET
@@ -64,8 +68,73 @@ WITH batch AS (
         cache_rate_read=h.cache_rate_read+excluded.cache_rate_read,cache_rate_input=h.cache_rate_input+excluded.cache_rate_input,
         spend=h.spend+excluded.spend
     RETURNING 1
+), calls AS (
+    SELECT at, site_id, endpoint_id, error_kind, attempt_count, latency_ms, first_token_ms, currency, plugins,
+        coalesce((usage->>'input')::numeric,0) + coalesce((usage->>'audio_in')::numeric,0)
+            + coalesce((usage->>'image_in')::numeric,0) + coalesce((usage->>'cache_read')::numeric,0)
+            + coalesce((usage->>'cache_write')::numeric,0) + coalesce((usage->>'cache_write_1h')::numeric,0)
+            + coalesce((usage->>'output')::numeric,0) + coalesce((usage->>'reasoning')::numeric,0)
+            + coalesce((usage->>'audio_out')::numeric,0) + coalesce((usage->>'image_out')::numeric,0) AS tokens
+    FROM batch
+), bucketed AS (
+    -- The monitor's windows reach back an hour of minutes and a day of hours; a record older than its width's keep
+    -- (a spill replayed after an outage) is not rolled into it. PruneMonitor deletes on the same bounds.
+    SELECT c.endpoint_id, c.error_kind, c.attempt_count, c.latency_ms, c.first_token_ms, c.tokens, w AS width,
+        date_bin(make_interval(secs => w), c.at, '1970-01-01T00:00:00Z'::timestamptz) AS bucket
+    FROM calls c CROSS JOIN unnest(ARRAY[60, 3600]::int[]) AS w
+    WHERE c.at >= now() - CASE w WHEN 60 THEN interval '2 hours' ELSE interval '48 hours' END
+), counted AS (
+    INSERT INTO observability.monitor_counts AS m (width,bucket,endpoint_id,error_kind,calls,switched,tokens)
+    SELECT width, bucket, endpoint_id, error_kind, count(*), count(*) FILTER (WHERE attempt_count > 1), sum(tokens)
+    FROM bucketed
+    GROUP BY width, bucket, endpoint_id, error_kind
+    ORDER BY width, bucket, endpoint_id, error_kind
+    ON CONFLICT (width,bucket,endpoint_id,error_kind) DO UPDATE SET
+        calls=m.calls+excluded.calls, switched=m.switched+excluded.switched, tokens=m.tokens+excluded.tokens
+    RETURNING 1
+), timed AS (
+    -- Measure 1 is the time to first token of a call that had one, 2 the total time of a call that succeeded.
+    INSERT INTO observability.monitor_latency AS m (width,bucket,measure,endpoint_id,bin,calls)
+    SELECT b.width, b.bucket, v.measure, b.endpoint_id, width_bucket(v.ms, @bounds::int[])::smallint, count(*)
+    FROM bucketed b CROSS JOIN LATERAL (VALUES (1::smallint, b.first_token_ms, b.first_token_ms > 0),
+        (2::smallint, b.latency_ms, b.error_kind = '')) AS v(measure, ms, kept)
+    WHERE v.kept
+    GROUP BY 1, 2, 3, 4, 5
+    ORDER BY 1, 2, 3, 4, 5
+    ON CONFLICT (width,bucket,measure,endpoint_id,bin) DO UPDATE SET calls=m.calls+excluded.calls
+    RETURNING 1
+), first_tokens AS (
+    INSERT INTO observability.first_token_hourly AS f (site_id,hour,bin,calls)
+    SELECT site_id, date_trunc('hour',at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',
+        width_bucket(first_token_ms, @bounds::int[])::smallint, count(*)
+    FROM calls WHERE first_token_ms > 0
+    GROUP BY 1, 2, 3
+    ORDER BY 1, 2, 3
+    ON CONFLICT (site_id,hour,bin) DO UPDATE SET calls=f.calls+excluded.calls
+    RETURNING 1
+), plugin_runs AS (
+    INSERT INTO observability.plugin_hourly AS p (hour,plugin,currency,calls,failures,uses,ms,timed,price)
+    SELECT date_trunc('hour',c.at AT TIME ZONE 'UTC') AT TIME ZONE 'UTC', r->>'plugin', c.currency, count(*),
+        count(*) FILTER (WHERE NOT (r->>'ok')::boolean), coalesce(sum((r->>'uses')::numeric),0),
+        coalesce(sum((r->>'ms')::numeric),0), count(r->'ms'), coalesce(sum((r->>'price_nano')::numeric),0)
+    FROM calls c CROSS JOIN LATERAL jsonb_array_elements(c.plugins) AS r
+    GROUP BY 1, 2, 3
+    ORDER BY 1, 2, 3
+    ON CONFLICT (hour,plugin,currency) DO UPDATE SET
+        calls=p.calls+excluded.calls, failures=p.failures+excluded.failures, uses=p.uses+excluded.uses,
+        ms=p.ms+excluded.ms, timed=p.timed+excluded.timed, price=p.price+excluded.price
+    RETURNING 1
 )
 SELECT count(*)::int FROM batch;
+
+-- name: PruneMonitor :exec
+-- The monitor's minute rows older than two hours and hour rows older than two days answer no window.
+DELETE FROM observability.monitor_counts
+WHERE (width = 60 AND bucket < now() - interval '2 hours') OR (width = 3600 AND bucket < now() - interval '48 hours');
+
+-- name: PruneMonitorLatency :exec
+DELETE FROM observability.monitor_latency
+WHERE (width = 60 AND bucket < now() - interval '2 hours') OR (width = 3600 AND bucket < now() - interval '48 hours');
 
 -- name: ReadUsageStatistics :many
 WITH selected AS (

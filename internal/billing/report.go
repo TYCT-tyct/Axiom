@@ -38,6 +38,14 @@ type PlatformReport struct {
 	PaidUsers      int64            // distinct accounts with a paid top-up in the window
 	MonthlyRevenue string           // accounting currency, billionths, in decimal text: the credit paid top-ups granted
 	Retention      Retention        // the UTC month the window ends in, and its cohort and returners
+	Days           []DayMoney       // the UTC days of the window that had settled calls, oldest first; they add up to the window
+}
+
+// DayMoney is the calls admitted on one UTC day of a report's window, in the terms of the report's own figures.
+type DayMoney struct {
+	Day           time.Time // the day's start
+	Revenue, Cost string
+	UnknownCost   int64
 }
 
 // ReadPlatformReport reads the site's calls, cash and paid top-ups over [since, until) in tx, which must hold the
@@ -52,9 +60,14 @@ func ReadPlatformReport(ctx context.Context, tx pg.Tx, site uuid.UUID, currency 
 	if !until.After(since) {
 		return PlatformReport{}, fmt.Errorf("billing: the report window ends before it starts")
 	}
-	calls, err := queries.PlatformCallMoney(ctx, tx, PlatformCallMoneyParams{SiteID: site, Since: since, Until: until})
+	days, err := queries.PlatformCallMoney(ctx, tx, PlatformCallMoneyParams{SiteID: site, Since: since, Until: until})
 	if err != nil {
 		return PlatformReport{}, fmt.Errorf("billing: read the calls over the window: %w", err)
+	}
+	calls := days[0] // the window's total, which the query always returns first
+	byDay := make([]DayMoney, len(days)-1)
+	for i, d := range days[1:] {
+		byDay[i] = DayMoney{Day: d.Day.Time.UTC(), Revenue: d.Revenue, Cost: d.Cost, UnknownCost: d.UnknownCostCalls}
 	}
 	rows, err := queries.PlatformCash(ctx, tx, PlatformCashParams{SiteID: site, Since: since, Until: until})
 	if err != nil {
@@ -84,7 +97,7 @@ func ReadPlatformReport(ctx context.Context, tx pg.Tx, site uuid.UUID, currency 
 	return PlatformReport{
 		Revenue: calls.Revenue, Cost: calls.Cost, UnknownCost: calls.UnknownCostCalls, Cash: amounts,
 		PaidUsers: paid.PaidUsers, MonthlyRevenue: paid.MonthlyRevenue,
-		Retention: Retention{Month: month, Cohort: paid.Cohort, Retained: paid.Retained},
+		Retention: Retention{Month: month, Cohort: paid.Cohort, Retained: paid.Retained}, Days: byDay,
 	}, nil
 }
 
