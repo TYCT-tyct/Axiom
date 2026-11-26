@@ -182,9 +182,13 @@ func (a *Admin) storeKey(ctx context.Context, tx pg.Tx, supplier, group uuid.UUI
 	return a.credential(ctx, tx, supplier, id)
 }
 
-// statusColumn is an HTTP status as the check_status column holds it.
+// statusColumn is an HTTP status as the check_status column holds it; anything outside the three-digit range is no
+// status and is stored as 0.
 func statusColumn(status int) int32 {
-	return int32(status) //nolint:gosec // an HTTP status is three digits
+	if status < 0 || status > 999 {
+		return 0
+	}
+	return int32(status)
 }
 
 // credential reads one credential of the supplier.
