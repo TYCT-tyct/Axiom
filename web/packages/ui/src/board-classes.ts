@@ -5,6 +5,8 @@ export const board = {
   board: "board",
   ax: "ax",
   ov: "ov",
+  // The frame a board shell draws its page in (.ax .fr), where a board dialog (@axiom/boards/ds) mounts its overlay.
+  fr: "fr",
   // Buttons (.btn pri/sec/gho/dan/sm).
   btn: "btn",
   pri: "pri",

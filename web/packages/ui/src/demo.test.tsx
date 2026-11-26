@@ -26,7 +26,7 @@ it("renders a demo of every primitive and every icon", () => {
   for (const name of Object.keys(demos)) {
     expect(html).toContain(`data-demo="${name}"`);
   }
-  expect(glyphNames).toHaveLength(27);
+  expect(glyphNames).toHaveLength(41);
   for (const name of glyphNames) {
     expect(html).toContain(`_${name}_`);
   }

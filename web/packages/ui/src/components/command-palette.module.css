@@ -1,0 +1,216 @@
+/* The board's command palette (.kov/.kpn/.kin/.klst/.kit/.kft, and .adkh for the source headings in admin_style.css),
+   on a native modal dialog. */
+@layer base {
+  .root {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--t1);
+  }
+}
+
+.root {
+  position: fixed;
+  font-family: var(--family-ui);
+}
+
+.root:not([open]) {
+  display: none;
+}
+
+.root[open] {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 88px;
+}
+
+.root::backdrop {
+  background: var(--scrim);
+  animation: fade 250ms ease-out;
+}
+
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: 640px;
+  max-width: calc(100% - 32px);
+  max-height: min(560px, calc(100dvh - 120px));
+  overflow: hidden;
+  border-radius: var(--r16);
+  background: var(--pop);
+  box-shadow: var(--shPop);
+  animation: rise 250ms ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+.field {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 12px;
+  height: 56px;
+  padding: 0 14px 0 18px;
+  box-shadow: inset 0 calc(var(--bw) * -1) 0 var(--line);
+  color: var(--t3);
+}
+
+.input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  color: var(--t1);
+  font: inherit;
+  font-size: var(--fs16);
+}
+
+.input::placeholder {
+  color: var(--t3);
+}
+
+.key,
+.enter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border-radius: var(--r6);
+  background: var(--hover);
+  color: var(--t2);
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+}
+
+.list {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.heading {
+  padding: 10px 10px 4px;
+  color: var(--t3);
+  font-size: var(--fs12);
+}
+
+.option {
+  --icon-hover: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: var(--r8);
+  color: var(--t2);
+  font-size: var(--fs14);
+  cursor: pointer;
+}
+
+.option[aria-selected="true"] {
+  --icon-hover: 1;
+  background: var(--selected);
+  color: var(--t1);
+}
+
+.name {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--t1);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.meta {
+  margin-left: auto;
+  color: var(--t3);
+  font-size: var(--fs12);
+  white-space: nowrap;
+}
+
+.enter {
+  margin-left: 12px;
+  opacity: 0;
+  transition: opacity 250ms ease-out;
+}
+
+.name + .enter {
+  margin-left: auto;
+}
+
+.option[aria-selected="true"] .enter {
+  opacity: 1;
+}
+
+.empty {
+  padding: 28px 12px;
+  color: var(--t2);
+  font-size: var(--fs14);
+  text-align: center;
+}
+
+.foot {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 16px;
+  height: 40px;
+  padding: 0 16px;
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+  color: var(--t3);
+  font-size: var(--fs12);
+}
+
+.foot span {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* A phone gives the palette the whole screen, and has no keys to list. */
+@media (max-width: 599px) {
+  .root[open] {
+    align-items: stretch;
+    padding-top: 0;
+  }
+
+  .panel {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+
+  .option {
+    height: 44px;
+  }
+
+  .foot {
+    display: none;
+  }
+}

@@ -21,6 +21,7 @@ import redeem from "./redeem";
 import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
+import shell from "./shell";
 import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
@@ -55,25 +56,8 @@ export const initial = {
     legalDocs: "Legal documents",
     retention: "Log retention",
     rateLimits: "Rate limits",
-    more: "More",
   },
-  navSections: {
-    overview: "Operations overview",
-    users: "Users and accounts",
-    supply: "Suppliers and lines",
-    catalog: "Model catalog",
-    pricing: "Pricing and plans",
-    routing: "Routing and sources",
-    payments: "Payments and reconciliation",
-    operations: "Operations and approvals",
-    alerts: "Alerts",
-    site: "Sites",
-    platform: "Platform settings",
-    calls: "Call records",
-    audit: "Audit log",
-    security: "Sign-in and security",
-  },
-  shell: { collapse: "Collapse", expand: "Expand" },
+  shell,
   calls,
   audit,
   sourceClasses,

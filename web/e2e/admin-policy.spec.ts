@@ -4,7 +4,7 @@ import { close, dialog, done, open, send } from "./admin-page.ts";
 import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
 import { freeze } from "./design/stage.ts";
-import { words } from "./words.ts";
+import { words, zhText } from "./words.ts";
 
 test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
@@ -85,8 +85,8 @@ test("the announcements list follows successful publishes and accepts a withdraw
   await close(page);
   await expect(page.getByText("Planned maintenance")).toBeVisible();
 
-  await page.getByRole("link", { name: words("nav.alertEvents") }).click();
-  await page.getByRole("link", { name: words("nav.announcements") }).click();
+  await page.getByRole("link", { name: zhText("shell.nav.ops") }).click();
+  await page.getByRole("link", { name: words("shell.nav.announcements") }).click();
   await expect(page.getByText("Planned maintenance")).toBeVisible();
   await page.getByRole("button", { name: words("announcements.withdrawById") }).click();
   await dialog(page).locator("[name=id]").fill("ann_00000000000000000000000001");
@@ -131,7 +131,7 @@ test("retention preserves zero and rate limits distinguish zero from inheritance
   await expect(page.getByText(words("logRetention.keepAll"))).toBeVisible();
   await snapshot(page, "retention");
 
-  await page.getByRole("link", { name: words("nav.rateLimits") }).click();
+  await page.getByRole("link", { name: words("shell.nav.rateLimits") }).click();
   await page.getByLabel(words("rateLimits.target")).selectOption("account");
   await page.getByLabel(words("rateLimits.id")).fill(acct(1));
   await page.getByRole("button", { name: words("rateLimits.lookup") }).click();
