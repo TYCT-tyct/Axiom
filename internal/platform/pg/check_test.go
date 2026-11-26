@@ -2,8 +2,8 @@ package pg_test
 
 import (
 	"context"
-	"net"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -173,7 +173,11 @@ func TestConnectionFailuresAreRedacted(t *testing.T) {
 	refused.User, refused.Path = url.UserPassword("planted-user", "planted-password"), "/planted-db"
 	unresolved, unreachable := *refused, *refused
 	unresolved.Host = "planted-host..invalid" // the empty label fails before any query: some resolvers answer every name
-	unreachable.Host = freeAddr(t)
+	// A Unix socket in a directory of the test's own, which nothing listens on: a TCP port found free a moment earlier
+	// may be taken by another process by the time the connection is made (#790). The query's host replaces the URL's.
+	socket := unreachable.Query()
+	socket.Set("host", filepath.Join(t.TempDir(), "planted-socket"))
+	unreachable.RawQuery = socket.Encode()
 	failures := []struct {
 		name string
 		url  *url.URL
@@ -196,20 +200,6 @@ func TestConnectionFailuresAreRedacted(t *testing.T) {
 			}
 		}
 	}
-}
-
-// freeAddr returns an address nothing listens on right now.
-func freeAddr(t *testing.T) string {
-	t.Helper()
-	l, err := new(net.ListenConfig).Listen(t.Context(), "tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	if err := l.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return addr
 }
 
 // TestMigrateWaitsSecondsForLocks: a run held up by another run's lock gives up within seconds instead of queueing
