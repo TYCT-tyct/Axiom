@@ -364,7 +364,41 @@ function approveRefund({
   });
 }
 
+// Every account's subscriptions, newest first, narrowed the way the contract's filters say.
+function listPlatformSubscriptions({ query, state }: Ctx<"/api/admin/v1/subscriptions", "get">) {
+  const wanted = query.get("state");
+  const account = query.get("account_id");
+  const data = [...subscriptionsOf(state).subscriptions.values()]
+    .flat()
+    .filter((sub) => (!wanted || sub.state === wanted) && (!account || sub.account_id === account))
+    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
+  return ok({ data, next_cursor: null });
+}
+
+// The site's counts: what is active, what ends within 7 days, and the month's sales, which the mock fixes.
+function subscriptionSummary({ state }: Ctx<"/api/admin/v1/subscriptions/summary", "get">) {
+  const store = subscriptionsOf(state);
+  const active = [...store.subscriptions.values()].flat().filter((sub) => sub.state === "active");
+  const soon = active.filter((sub) => Date.parse(sub.ends_at) - Date.now() <= 7 * 86_400_000).length;
+  return ok({
+    month: new Date().toISOString().slice(0, 7),
+    active: active.length,
+    ending_within_7_days: soon,
+    revenue: { amount: nanos("30"), currency: "USD" },
+    previous_revenue: { amount: nanos("20"), currency: "USD" },
+    plans: store.plans.map((plan) => ({
+      plan_id: plan.id,
+      active: active.filter((sub) => sub.plan_id === plan.id).length,
+      share_bp: active.length
+        ? Math.round((active.filter((sub) => sub.plan_id === plan.id).length / active.length) * 10_000)
+        : 0,
+    })),
+  });
+}
+
 export const subscriptionHandlers: Handler<AdminState>[] = [
+  route("get", `${base}/subscriptions`, reads("users.view"), listPlatformSubscriptions),
+  route("get", `${base}/subscriptions/summary`, reads("sites.manage"), subscriptionSummary),
   route("get", `${base}/subscription-plans`, reads("pricing.view"), listPlans),
   route("post", `${base}/subscription-plans`, changes("pricing.manage"), createPlan),
   route("put", `${base}/subscription-plans/{plan_id}`, changes("pricing.manage"), updatePlan),
