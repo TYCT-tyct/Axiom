@@ -33,3 +33,12 @@ export function readCredit(values: Record<string, string>, currency: string, wor
   const paid = values.currency ?? currency;
   return { source: "offline_payment", payment: { amount: { amount, currency: paid }, channel }, expires_at };
 }
+
+// shownBalance is the balance after a gift or a payment in the account's own currency of the amount as typed, or nothing
+// while it is not an amount. It adds as integers, in the contract's billionths, so no digit is lost.
+export function shownBalance(balance: AdminSchemas["Money"], typed: string): AdminSchemas["Money"] | undefined {
+  const added = parseMoney(typed);
+  return added === null
+    ? undefined
+    : { currency: balance.currency, amount: (BigInt(balance.amount) + BigInt(added)).toString() };
+}

@@ -41,6 +41,23 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
+// A screen whose dialog opens from a drawer: a row of the list is pressed, then the buttons (a button's name may be
+// followed by what it names, as a grant's is by its role).
+const inDrawer = (name: string, path: string, row: RegExp | number, ...buttons: string[]): Scene =>
+  scene(
+    name,
+    (p) => goto(p, path),
+    async (p) => {
+      await (typeof row === "number" ? p.getByRole("row").nth(row) : p.getByRole("row", { name: row })).click();
+      for (const button of buttons) {
+        await p
+          .getByRole("button", { name: new RegExp(words(button).source.slice(2, -2)) })
+          .first()
+          .click();
+      }
+    },
+  );
+
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
 // on), so the suspended page and each of its two dialogs are in every width, scheme and language. The dialogs that
 // change presets open with it off: while it is on their buttons are disabled.
@@ -171,14 +188,16 @@ const scenes: Scene[] = [
   dialog("price-policy", "pricing", "pricePolicy.edit"),
   view("exchange-rates", "exchange-rates"),
   dialog("exchange-rate-history", "exchange-rates", "exchangeRates.history"),
-  view("payment-discrepancies", "payment-discrepancies"),
-  view("payment-discrepancy", `payment-discrepancies/${uuid(33, 1)}`),
-  dialog("platform-grant", `accounts/${acct(1)}`, "platformGrants.revoke"),
+  view("payment-discrepancies", "orders/discrepancies"),
+  inDrawer("payment-discrepancy", "orders/discrepancies", 1),
+  inDrawer("platform-grant", "users/roles", /user1@example\.com/, "platformGrants.revoke"),
+  view("subscriptions", "subscriptions"),
+  inDrawer("subscription", "subscriptions", 1),
   pricingPreview,
   ...audienceScenes,
-  view("subscription-plans", "subscription-plans"),
-  dialog("subscription-plan-new", "subscription-plans", "subscriptions.new"),
-  dialog("subscription-plan-edit", "subscription-plans", "subscriptions.editNamed"),
+  view("subscription-plans", "subscriptions/plans"),
+  dialog("subscription-plan-new", "subscriptions/plans", "subscriptions.new"),
+  dialog("subscription-plan-edit", "subscriptions/plans", "subscriptions.editNamed"),
   view("settings", "settings"),
   view("alert-events", "alert-events"),
   view("alert-configuration", "alert-configuration"),
@@ -212,15 +231,23 @@ const scenes: Scene[] = [
   dialog("operations-agent-limits", "operations-limits", "operations.limits.agent.edit"),
   dialog("operations-envelope-edit", "operations-limits", "operations.limits.envelope.editNamed"),
   dialog("operations-agent-stop", "operations-limits", "operations.limits.stop.open"),
-  dialog("refund-approve", "orders", "orders.refund.approve"),
-  dialog("refund-reject", "orders", "orders.refund.reject"),
+  inDrawer("refund-approve", "orders/refunds", 1, "orders.refund.approve"),
+  inDrawer("refund-reject", "orders/refunds", 1, "orders.refund.reject"),
   dialog("account-suspend", `accounts/${acct(1)}`, "users.account.suspend"),
   dialog("account-sign-in", `accounts/${acct(1)}`, "users.account.disableSignIn"),
   dialog("account-tier", `accounts/${acct(1)}`, "users.account.changeTier"),
   dialog("account-subscription-grant", `accounts/${acct(1)}`, "subscriptions.account.grant"),
-  dialog("account-subscription-refund", `accounts/${acct(1)}`, "subscriptions.account.refundRequest"),
-  dialog("account-subscription-refund-approve", `accounts/${acct(1)}`, "subscriptions.account.refundApprove"),
-  dialog("account-workspace-limit", `accounts/${acct(1)}`, "settings.workspaceLimit.edit"),
+  inDrawer("account-subscription-refund", "subscriptions", 1, "subscriptions.account.refundRequest"),
+  inDrawer("account-subscription-refund-approve", "subscriptions", 1, "subscriptions.account.refundApprove"),
+  scene(
+    "account-workspace-limit",
+    (p) => goto(p, `accounts/${acct(1)}`),
+    (p) =>
+      p
+        .getByRole("button", { name: words("users.account.editLimit") })
+        .nth(2)
+        .click(),
+  ),
   dialog("supplier-connect", "suppliers", "suppliers.connect.open"),
   connectDetails,
   dialog("supplier-unit", supplier(2), "suppliers.unit.open"),

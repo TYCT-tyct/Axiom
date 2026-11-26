@@ -14,6 +14,8 @@ import { words, zhText } from "./words.ts";
 test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
+// An account's drawer is named by its owner.
+const drawerOf = (page: Page, email: string) => page.getByRole("dialog").first().getByRole("heading", { name: email });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
 // The settings dialog says itself whether the save took, since a node of the release before may drop the price switch.
 const saved = (page: Page) => dialog(page).getByText(zhText("settings.saved"));
@@ -30,10 +32,11 @@ test.describe("users and credit", () => {
       (account as { key_limits?: unknown }).key_limits = undefined;
     }
     await page.goto(`/accounts/${acct(1)}`);
-    await expect(h1(page, "user1@example.com")).toBeVisible();
+    await expect(drawerOf(page, "user1@example.com")).toBeVisible();
     await expect(page.getByText("$12.00").first()).toBeVisible();
-    await expect(page.getByText(zhText("settings.keyLimits.unavailable"))).toBeVisible();
-    await expect(press(page, "settings.keyLimits.edit")).toHaveCount(0);
+    // The two key limits say they are not there; the workspace limit still has its change.
+    await expect(page.getByText(zhText("users.account.unavailable"))).toHaveCount(2);
+    await expect(press(page, "users.account.editLimit")).toHaveCount(1);
   });
 
   test("users are found by the start of the email and paged by cursor", async ({ page }) => {
@@ -41,12 +44,10 @@ test.describe("users and credit", () => {
     await expect(page.getByRole("row")).toHaveCount(51);
     await page.getByRole("button", { name: "加载更多" }).click();
     await expect(page.getByRole("row")).toHaveCount(61);
-    await page.getByLabel(zhText("users.searchLabel")).fill("USER1");
-    await page.getByRole("button", { name: zhText("filter.apply") }).click();
-    expect(new URL(page.url()).searchParams.get("q")).toBe("USER1");
+    await page.getByRole("searchbox", { name: zhText("users.search") }).fill("USER1");
+    await expect.poll(() => new URL(page.url()).searchParams.get("q")).toBe("USER1");
     await expect(page.getByRole("row")).toHaveCount(12);
-    await page.getByLabel(zhText("users.searchLabel")).fill("nobody");
-    await page.getByRole("button", { name: zhText("filter.apply") }).click();
+    await page.getByRole("searchbox", { name: zhText("users.search") }).fill("nobody");
     await expect(page.getByRole("heading", { name: zhText("users.noMatch.title") })).toBeVisible();
   });
 
@@ -55,7 +56,7 @@ test.describe("users and credit", () => {
   }) => {
     const state = await open(page, `/accounts/${acct(1)}`);
     await expect(page.getByText(words("settings.keyLimits.from.account")).first()).toBeVisible();
-    await press(page, "settings.keyLimits.edit").click();
+    await press(page, "users.account.editLimit").click();
     await dialog(page).getByLabel(words("settings.keyLimits.field.max_keys")).fill("0");
     await send(page);
     await expect(dialog(page).getByRole("alert")).toHaveText(
@@ -74,7 +75,7 @@ test.describe("users and credit", () => {
 
   test("credit is added with a reason and a key, and the same key again does it once", async ({ page }) => {
     const state = await open(page, `/accounts/${acct(1)}`);
-    await expect(h1(page, "user1@example.com")).toBeVisible();
+    await expect(drawerOf(page, "user1@example.com")).toBeVisible();
     await expect(page.getByText("$12.00").first()).toBeVisible();
 
     await press(page, "users.credit.open").click();
@@ -82,6 +83,9 @@ test.describe("users and credit", () => {
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByRole("alert")).toHaveText(/金额/);
     await dialog(page).getByLabel(words("users.credit.amount")).fill("2.5");
+    // the balance it will leave is shown while the amount is typed, and the grant says it cannot be undone
+    await expect(dialog(page).getByText("$14.50")).toBeVisible();
+    await expect(dialog(page).getByText(zhText("users.credit.final"))).toBeVisible();
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.reasonMissing"));
     expect(state.log.filter((line) => line.startsWith("POST"))).toEqual([]);
@@ -94,7 +98,7 @@ test.describe("users and credit", () => {
     await dialog(page).locator("button[type=submit]").click();
     await expect(done(page)).toBeVisible();
     await expect(dialog(page).getByText(zhText("change.replayed"))).toBeVisible();
-    await expect(dialog(page).getByText("$14.50")).toBeVisible();
+    await expect(dialog(page).getByText("$14.50").first()).toBeVisible();
     // the same key reached the server twice and the credit was added once
     const posts = state.log.filter((line) => line.startsWith("POST /accounts"));
     expect(posts).toHaveLength(2);
@@ -133,7 +137,7 @@ test.describe("users and credit", () => {
     state.level = "none";
     await send(page);
     await expect(h1(page, "登录")).toBeVisible();
-    expect(new URL(page.url()).searchParams.get("next")).toBe(`/accounts/${acct(1)}`);
+    expect(new URL(page.url()).searchParams.get("next")).toBe(`/users/accounts?selected=${acct(1)}`);
     expect(keys).toHaveLength(1);
 
     // Signing in with a second factor returns to the page the person was on.
@@ -143,8 +147,9 @@ test.describe("users and credit", () => {
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
-    await expect(h1(page, "user1@example.com")).toBeVisible();
-    expect(new URL(page.url()).pathname).toBe(`/accounts/${acct(1)}`);
+    await expect(drawerOf(page, "user1@example.com")).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/users/accounts");
+    expect(new URL(page.url()).searchParams.get("selected")).toBe(acct(1));
 
     // A new dialog makes a new key: the first one went with the page that held it.
     await press(page, "users.credit.open").click();
@@ -161,7 +166,7 @@ test.describe("users and credit", () => {
     state.permissions = ["users.view"];
     signedInAs(state, "mfa");
     await page.goto(`/accounts/${acct(1)}`);
-    await expect(h1(page, "user1@example.com")).toBeVisible();
+    await expect(drawerOf(page, "user1@example.com")).toBeVisible();
     await expect(press(page, "users.credit.open")).toHaveCount(0);
   });
 });

@@ -1,7 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { uuid } from "./admin-data.ts";
 import { close, dialog, done, open, send } from "./admin-page.ts";
-import { acct } from "./admin-scenes.ts";
 import { apps } from "./apps.ts";
 import { freeze } from "./design/stage.ts";
 import { words, zhText } from "./words.ts";
@@ -11,15 +10,17 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 test("a payment investigation reads exact amounts and saves its outcome without a funds operation", async ({
   page,
 }) => {
+  // The old address leads to the tab, and a row opens the record in a drawer.
   const state = await open(page, "/payment-discrepancies");
-  await page.getByRole("link", { name: words("discrepancies.open") }).click();
-  await expect(page.getByText("9007199254740993", { exact: true })).toBeVisible();
+  await expect.poll(() => new URL(page.url()).pathname).toBe("/orders/discrepancies");
+  await page.getByRole("row").nth(1).click();
+  await expect(page.getByText("9007199254740993", { exact: true }).first()).toBeVisible();
   await page.getByRole("button", { name: words("discrepancies.investigate") }).click();
   await send(page, "Gateway reported a different amount; no manual credit was issued.");
   await expect(done(page)).toBeVisible();
   await close(page);
   await expect(page.getByText("Gateway reported a different amount; no manual credit was issued.")).toBeVisible();
-  await expect(page.getByText(words("discrepancies.state.resolved"))).toBeVisible();
+  await expect(page.getByRole("dialog").getByText(words("discrepancies.state.resolved"))).toBeVisible();
   expect(state.log.filter((entry) => entry.startsWith("POST "))).toEqual([
     `POST /payments/discrepancies/${uuid(33, 1)}/investigate`,
   ]);
@@ -97,40 +98,43 @@ test("selling policy saves an explicit zero fee and keeps read-only sessions rea
 
 test("an authorised admin can revoke and restore an existing platform grant", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const state = await open(page, `/accounts/${acct(1)}`);
-  const roles = page.getByRole("region", { name: words("platformGrants.title") });
-  const support = roles.getByRole("row").filter({ hasText: "support" });
-  await support.getByRole("button", { name: words("platformGrants.revoke") }).click();
+  const state = await open(page, "/users/roles");
+  await page.getByRole("row", { name: /user1@example\.com/ }).click();
+  const revoke = page.getByRole("button", { name: `${zhText("platformGrants.revoke")}: support` });
+  const restore = page.getByRole("button", { name: `${zhText("platformGrants.restore")}: support` });
+  const status = (text: string) => page.getByRole("dialog").first().getByText(text, { exact: true }).first();
+  await revoke.click();
   if (process.env.AXIOM_ADMIN_SHOTS) {
     await freeze(page);
     await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/platform-grants-phone.png` });
   }
+  // what the change does is shown before it is made
+  await expect(dialog(page).getByText(zhText("platformGrants.active"), { exact: true })).toBeVisible();
   state.dropReplies = 1;
   await send(page, "end the support assignment");
   await expect(dialog(page).getByRole("alert")).toContainText(zhText("change.unknown"));
   await close(page);
-  await expect(support.getByText(words("platformGrants.revoked"))).toBeVisible();
+  await expect(status(zhText("platformGrants.revoked"))).toBeVisible();
 
-  await support.getByRole("button", { name: words("platformGrants.restore") }).click();
+  // sending the lost request again is the same change: the toast says it was already done
+  await restore.click();
   await dialog(page)
-    .getByRole("button", { name: words("change.resend") })
+    .getByRole("button", { name: zhText("change.resend") })
     .click();
-  await expect(dialog(page).getByText(words("change.replayed"))).toBeVisible();
-  await expect(dialog(page).getByText(words("platformGrants.revoked"), { exact: true })).toBeVisible();
-  await close(page);
+  await expect(page.getByText(zhText("change.replayedToast"))).toBeVisible();
   expect(state.stored.size).toBe(1);
 
-  await support.getByRole("button", { name: words("platformGrants.restore") }).click();
+  await restore.click();
   await send(page, "resume the support assignment");
-  await expect(done(page)).toBeVisible();
-  await close(page);
-  await expect(support.getByText(words("platformGrants.active"))).toBeVisible();
+  await expect(status(zhText("platformGrants.active"))).toBeVisible();
   expect(state.stored.size).toBe(2);
 
+  // without platform_grants.manage the roles are not read at all
   state.permissions = ["users.view"];
   state.log.length = 0;
-  await page.reload();
-  await expect(page.getByRole("heading", { level: 1, name: "user1@example.com" })).toBeVisible();
-  await expect(roles).toHaveCount(0);
+  await page.goto("/users");
+  await page.getByRole("row", { name: /user1@example\.com/ }).click();
+  await expect(page.getByRole("dialog").getByRole("heading", { name: "user1@example.com" })).toBeVisible();
+  await expect(page.getByRole("dialog").getByText(zhText("users.tabs.roles"))).toHaveCount(0);
   expect(state.log.some((entry) => entry.includes("/platform-grants"))).toBe(false);
 });

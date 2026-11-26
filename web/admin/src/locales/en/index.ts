@@ -153,6 +153,8 @@ export const initial = {
     noAccounts: { title: "No account called in this window", body: "Widen the time range." },
     noModels: { title: "No model was called in this window", body: "Widen the time range." },
   },
+  list: { noMatch: { title: "No record matches", body: "Try another word, or clear the filter." } },
+  drawer: { previous: "Previous", next: "Next" },
   filter: { apply: "Filter", reset: "Clear" },
   change: {
     reason: "Reason",
@@ -241,12 +243,9 @@ export const initial = {
     leave: "Leave",
     stay: "Stay",
   },
-  users,
-  orders,
   mappings,
   models,
   pricing,
-  redeem,
   approvals,
 } satisfies Messages<
   Omit<
@@ -265,6 +264,9 @@ export const initial = {
     | "legalDocs"
     | "rateLimits"
     | "logRetention"
+    | "users"
+    | "orders"
+    | "redeem"
   >
 >;
 
@@ -284,4 +286,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   legalDocs,
   rateLimits,
   logRetention,
+  users,
+  orders,
+  redeem,
 }) satisfies Messages<typeof zh>;

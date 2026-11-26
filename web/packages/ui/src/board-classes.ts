@@ -23,6 +23,8 @@ export const board = {
   // Tables (.qtw/.qtbl).
   qtw: "qtw",
   qtbl: "qtbl",
+  // A table whose rows open something (.qtbl.hov), the open one marked tr.on.
+  hov: "hov",
   r: "r",
   mut: "mut",
   mono: "mono",

@@ -31,6 +31,16 @@ export { Dialog, type PanelSteps, SidePanel } from "./components/dialog";
 export { type DiffRow, DiffRows } from "./components/diff-rows";
 export { Disclosure } from "./components/disclosure";
 export { DocumentText, type TextBlock } from "./components/document-text";
+export {
+  DrawerFacts,
+  DrawerSection,
+  Figure,
+  QuotaMeter,
+  SideBySide,
+  Tally,
+  type TallyRow,
+  Tick,
+} from "./components/drawer-parts";
 export { Facts } from "./components/facts";
 export { Field, Select, TextArea } from "./components/field";
 export { Fieldset } from "./components/fieldset";
@@ -81,6 +91,7 @@ export { Stat } from "./components/stat";
 export { DataState, EmptyState, ForbiddenState, NotFoundState, PageFailedState } from "./components/states";
 export { Switch } from "./components/switch";
 export { type SortOrder, Table, Td, Th, Tr } from "./components/table";
+export { TableToolbar } from "./components/table-toolbar";
 // Badge is the name pages were written with for a Tag (#747).
 export { Tag as Badge, Tag } from "./components/tag";
 export { Text } from "./components/text";

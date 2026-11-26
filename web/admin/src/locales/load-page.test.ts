@@ -8,6 +8,7 @@ import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
 import zh, { initial as initialZh } from "./zh";
 
+// Importing every page that carries its own words takes a few seconds on a loaded machine: more than the default 5.
 it("loads complete deferred copy before returning a page and preserves both languages", async () => {
   await i18next.init({
     lng: "en",
@@ -27,9 +28,11 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(i18next.exists("operations.credentials.title")).toBe(false);
   expect(await loadTranslatedPage(Promise.resolve(opsPage))).toBe(opsPage);
   for (const page of [
-    import("../pages/payment-discrepancies"),
+    import("../pages/orders"),
+    import("../pages/redeem-codes"),
     import("../pages/exchange-rates"),
-    import("../pages/account"),
+    import("../pages/users"),
+    import("../pages/subscriptions"),
     import("../pages/pricing"),
     import("../pages/alert-events"),
     import("../pages/alert-configuration"),
@@ -46,4 +49,4 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(i18next.t("settings.title")).toBe(zh.settings.title);
   expect(await loadTranslatedPage(Promise.resolve(page))).toBe(page);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
-});
+}, 30_000);

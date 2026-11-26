@@ -27,7 +27,7 @@ type CardProps = {
 const bounds = [{ name: "max_workspaces", min: 1, max: 1_000 }] as const;
 const [{ min, max }] = bounds;
 
-export function WorkspaceLimitUnavailable({ level }: { level: Level }) {
+function WorkspaceLimitUnavailable({ level }: { level: Level }) {
   const { t } = useTranslation();
   return (
     <Facts
@@ -39,7 +39,7 @@ export function WorkspaceLimitUnavailable({ level }: { level: Level }) {
 
 // WorkspaceLimitCard shows the active workspace ceiling for a site or account and whether it is set at this level or
 // inherited from the level above.
-export function WorkspaceLimitCard(props: CardProps) {
+function WorkspaceLimitCard(props: CardProps) {
   const { level, view, editable } = props;
   const { t } = useTranslation();
   const format = useFormat();
@@ -71,7 +71,7 @@ export function WorkspaceLimitCard(props: CardProps) {
   );
 }
 
-function EditWorkspaceLimit({
+export function EditWorkspaceLimit({
   operation,
   level,
   view,

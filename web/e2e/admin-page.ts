@@ -18,7 +18,8 @@ export async function open(
   return state;
 }
 
-export const dialog = (page: Page) => page.getByRole("dialog");
+// The change dialog, which sits in the drawer it was opened from: the innermost dialog is the last in the page.
+export const dialog = (page: Page) => page.getByRole("dialog").last();
 
 // The reason every change asks for, and the button that sends it.
 export async function send(page: Page, reason = "because the owner asked") {

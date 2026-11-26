@@ -72,13 +72,12 @@ test.describe("business targets", () => {
     expect(retention.searchParams.get("until")).toBe(paid.searchParams.get("until"));
 
     await link("monthlyRevenue").click();
-    await page.waitForURL(/\/orders\?/);
+    await page.waitForURL(/\/orders\/batches\?/);
     const landed = new URL(page.url());
-    expect(landed.searchParams.get("paid")).toBe("batches");
+    expect(landed.pathname).toBe("/orders/batches");
     expect(landed.searchParams.get("since")).toBe(revenue.searchParams.get("since"));
     expect(landed.searchParams.get("until")).toBe(revenue.searchParams.get("until"));
-    // Exact: the URL changes before the overview unmounts, and its notes contain the title as a substring.
-    await expect(page.getByText(zhText("orders.paidBatches.title"), { exact: true })).toBeVisible();
+    await expect(page.getByRole("table", { name: zhText("orders.paidBatches.title") })).toBeVisible();
     await expect(page.getByText("bank transfer")).toBeVisible();
   });
 

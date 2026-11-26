@@ -147,6 +147,8 @@ export const initial = {
     noAccounts: { title: "该时段没有账户调用", body: "扩大时间范围试试。" },
     noModels: { title: "该时段没有模型被调用", body: "扩大时间范围试试。" },
   },
+  list: { noMatch: { title: "没有符合条件的记录", body: "换一个关键词，或者清除筛选。" } },
+  drawer: { previous: "上一条", next: "下一条" },
   filter: { apply: "筛选", reset: "清除" },
   change: {
     reason: "理由",
@@ -229,12 +231,9 @@ export const initial = {
     leave: "离开",
     stay: "留下",
   },
-  users,
-  orders,
   mappings,
   models,
   pricing,
-  redeem,
   approvals,
 };
 
@@ -254,4 +253,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   legalDocs,
   rateLimits,
   logRetention,
+  users,
+  orders,
+  redeem,
 });

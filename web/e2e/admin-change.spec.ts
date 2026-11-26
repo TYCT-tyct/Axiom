@@ -19,7 +19,7 @@ async function open(page: Page, path: string, over: Parameters<typeof mockAdmin>
   return state;
 }
 
-const dialog = (page: Page) => page.getByRole("dialog");
+const dialog = (page: Page) => page.getByRole("dialog").last();
 const alert = (page: Page) => dialog(page).getByRole("alert");
 const submit = (page: Page) => dialog(page).locator("button[type=submit]");
 const press = (page: Page, key: string) => page.getByRole("button", { name: words(key) }).first();
@@ -145,7 +145,8 @@ test.describe("a grant whose answer is lost", () => {
       .getByRole("button", { name: zhText("change.close") })
       .last()
       .click();
-    await expect(dialog(page)).toHaveCount(0);
+    // only the account's drawer is left
+    await expect(page.getByRole("dialog")).toHaveCount(1);
     // the page fetched the account again, which here shows the one grant (it cannot prove a try was not done)
     await expect(page.getByText("$14.50").first()).toBeVisible();
     expect(sent).toHaveLength(2);
@@ -181,7 +182,7 @@ test.describe("a grant left unsettled", () => {
   test("is offered again after the dialog is closed, and sending it adds the credit once", async ({ page }) => {
     const { state, sent } = await lose(page);
     await cancel(page).click();
-    await expect(dialog(page)).toHaveCount(0);
+    await expect(page.getByRole("dialog")).toHaveCount(1);
     await expectOffered(page);
     // the page shows the old balance and the first try may still be committing: it is no proof, and nothing is sent
     expect(sent).toHaveLength(1);
@@ -227,7 +228,7 @@ test.describe("a grant left unsettled", () => {
     await page.getByRole("button", { name: "登录", exact: true }).click();
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
-    await expect(page).toHaveURL(new RegExp(`/accounts/${acct(1)}$`));
+    await expect(page).toHaveURL(new RegExp(`/users/accounts\\?selected=${acct(1)}$`));
     await expectOffered(page);
 
     await resend(page).click();

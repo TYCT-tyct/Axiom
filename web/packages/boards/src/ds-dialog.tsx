@@ -15,6 +15,19 @@ const tabStops = (panel: HTMLElement) =>
     (el) => el.tabIndex >= 0 && !el.matches(":disabled") && el.getClientRects().length > 0,
   );
 
+// The native modal dialog that is open, a drawer, if any: it is in the top layer and makes the rest of the page inert, so a
+// board dialog opened from inside it (a change made from a drawer) has to sit in it to be reachable, and the drawer's own
+// parts are what goes inert behind it.
+export function openedModal() {
+  return Array.from(document.querySelectorAll<HTMLDialogElement>("dialog[open]")).find((dialog) => {
+    try {
+      return dialog.matches(":modal");
+    } catch {
+      return false;
+    }
+  });
+}
+
 function trapTab(event: KeyboardEvent, dialog: HTMLElement) {
   const targets = tabStops(dialog);
   const active = document.activeElement as HTMLElement;
@@ -43,7 +56,7 @@ function useDialogFocus(onClose: () => void) {
     const trigger = document.activeElement;
     let background: Element[] = [];
     const attach = () => {
-      const frame = document.querySelector(".ax .fr") ?? document.body;
+      const frame = openedModal() ?? document.querySelector(".ax .fr") ?? document.body;
       if (frame === host.parentElement) return;
       for (const el of background) el.removeAttribute("inert");
       frame.append(host);

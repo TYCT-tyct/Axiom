@@ -12,16 +12,18 @@ export function Table({
   label,
   fixed = false,
   widths,
+  openable = false,
 }: {
   children: ReactNode;
   label: string;
   fixed?: boolean;
   widths?: readonly (number | undefined)[];
+  openable?: boolean;
 }) {
   return (
     // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need focus to scroll a table region.
     <section className={classes(board.qtw, s.box)} aria-label={label} tabIndex={0}>
-      <table aria-label={label} className={classes(board.qtbl, s.table, fixed && s.fixed)}>
+      <table aria-label={label} className={classes(board.qtbl, s.table, fixed && s.fixed, openable && board.hov)}>
         {fixed && widths ? (
           <colgroup>
             {widths.map((width, i) => (
@@ -58,22 +60,43 @@ const column = ({ align, shrink, main, actions, from }: Column) =>
   );
 
 // Tr is a body row. flash lights it once after an edit changed it; onFlashEnd says the light has gone, so the caller
-// can flash it again later.
+// can flash it again later. A row with onOpen opens what it lists (the admin's data-row): a press on it or Enter while
+// it has focus, except a press on a control inside it, which does its own thing. selected marks the row whose drawer is
+// open.
 export function Tr({
   children,
   flash = false,
   onFlashEnd,
+  onOpen,
+  selected = false,
 }: {
   children: ReactNode;
   flash?: boolean;
   onFlashEnd?: () => void;
+  onOpen?: () => void;
+  selected?: boolean;
 }) {
   return (
-    <tr className={flash ? s.flash : undefined} onAnimationEnd={flash ? onFlashEnd : undefined}>
+    <tr
+      className={classes(flash && s.flash, selected && board.on)}
+      onAnimationEnd={flash ? onFlashEnd : undefined}
+      tabIndex={onOpen ? 0 : undefined}
+      aria-selected={onOpen ? selected : undefined}
+      onClick={onOpen && ((event) => !onControl(event.target) && onOpen())}
+      onKeyDown={
+        onOpen &&
+        ((event) => {
+          if (event.key === "Enter" && event.target === event.currentTarget) onOpen();
+        })
+      }
+    >
       {children}
     </tr>
   );
 }
+
+const onControl = (target: EventTarget) =>
+  target instanceof Element && target.closest("a, button, input, select, label");
 
 // A sortable header (the admin's adsort) is a button in the cell, and the cell says the order: the arrow points down
 // while the column is off or high to low, up when low to high, and turns to the accent once the column sorts.

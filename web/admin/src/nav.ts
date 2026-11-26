@@ -35,15 +35,35 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
   {
     key: "people",
     entries: [
-      { key: "users", to: "/users", icon: "team", permission: "users.view", also: [{ to: "/accounts" }] },
-      // 订阅管理 (subs) has no page yet; F6 adds it, and /subscription-plans moves under it.
+      {
+        key: "users",
+        to: "/users",
+        icon: "team",
+        permission: "users.view",
+        also: [
+          { to: "/users/accounts", label: "accounts" },
+          { to: "/users/roles", label: "roles" },
+        ],
+      },
+      {
+        key: "subs",
+        to: "/subscriptions",
+        icon: "subs",
+        permission: "users.view",
+        also: [{ to: "/subscriptions/plans", label: "subscriptionPlans" }],
+      },
       {
         key: "orders",
         to: "/orders",
         icon: "wallet",
         permission: "sites.manage",
         pending: "payments",
-        also: [{ to: "/payment-discrepancies", label: "discrepancies" }],
+        also: [
+          { to: "/orders/cash", label: "cash" },
+          { to: "/orders/batches", label: "batches" },
+          { to: "/orders/refunds", label: "refunds" },
+          { to: "/orders/discrepancies", label: "discrepancies" },
+        ],
       },
       { key: "redeem", to: "/redeem-codes", icon: "ticket", permission: "sites.manage" },
     ],
@@ -72,10 +92,7 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
         to: "/pricing",
         icon: "classify",
         permission: "pricing.view",
-        also: [
-          { to: "/exchange-rates", label: "exchangeRates" },
-          { to: "/subscription-plans", label: "subscriptionPlans" },
-        ],
+        also: [{ to: "/exchange-rates", label: "exchangeRates" }],
       },
       // 插件 (plugins) has no page yet; F9 adds it.
     ],
