@@ -41,12 +41,22 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
-// A list whose first row is opened into its drawer.
-const rowDrawer = (name: string, path: string): Scene =>
+// A list whose row is opened into its drawer, by the button its first cell holds, then the buttons in the drawer (a
+// button's name may be followed by what it names, as a grant's is by its role). row counts the header as 0.
+const inDrawer = (name: string, path: string, row: RegExp | number, ...buttons: string[]): Scene =>
   scene(
     name,
     (p) => goto(p, path),
-    (p) => p.locator("tbody tr").first().locator("td").first().getByRole("button").click(),
+    async (p) => {
+      const line = typeof row === "number" ? p.getByRole("row").nth(row) : p.getByRole("row", { name: row });
+      await line.locator("td").first().getByRole("button").click();
+      for (const button of buttons) {
+        await p
+          .getByRole("button", { name: new RegExp(words(button).source.slice(2, -2)) })
+          .first()
+          .click();
+      }
+    },
   );
 
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
@@ -184,9 +194,9 @@ const scenes: Scene[] = [
   view("orders", "orders"),
   view("account", `accounts/${acct(1)}`),
   view("calls", "calls"),
-  rowDrawer("call", "calls"),
+  inDrawer("call", "calls", 1),
   view("audit", "audit"),
-  rowDrawer("audit-entry", "audit"),
+  inDrawer("audit-entry", "audit", 1),
   view("plugins", "plugins"),
   view("plugins-web", "plugins/web"),
   view("plugins-file", "plugins/file"),
@@ -205,14 +215,16 @@ const scenes: Scene[] = [
   dialog("price-policy", "pricing?tab=policy", "pricePolicy.edit"),
   view("exchange-rates", "pricing?tab=rates"),
   dialog("exchange-rate-history", "pricing?tab=rates", "exchangeRates.history"),
-  view("payment-discrepancies", "payment-discrepancies"),
-  view("payment-discrepancy", `payment-discrepancies/${uuid(33, 1)}`),
-  dialog("platform-grant", `accounts/${acct(1)}`, "platformGrants.revoke"),
+  view("payment-discrepancies", "orders/discrepancies"),
+  inDrawer("payment-discrepancy", "orders/discrepancies", 1),
+  inDrawer("platform-grant", "users/roles", /user1@example\.com/, "platformGrants.revoke"),
+  view("subscriptions", "subscriptions"),
+  inDrawer("subscription", "subscriptions", 1),
   pricingPreview,
   ...audienceScenes,
-  view("subscription-plans", "subscription-plans"),
-  dialog("subscription-plan-new", "subscription-plans", "subscriptions.new"),
-  dialog("subscription-plan-edit", "subscription-plans", "subscriptions.editNamed"),
+  view("subscription-plans", "subscriptions/plans"),
+  dialog("subscription-plan-new", "subscriptions/plans", "subscriptions.new"),
+  dialog("subscription-plan-edit", "subscriptions/plans", "subscriptions.editNamed"),
   view("settings", "settings/site"),
   view("settings-sign-in", "settings/sign-in"),
   view("settings-registration", "settings/registration"),
@@ -253,15 +265,23 @@ const scenes: Scene[] = [
   dialog("operations-credential-revoke", "settings/agent", "operations.credentials.revokeNamed"),
   dialog("operations-cap-edit", "settings/agent", "operations.limits.cap.editNamed"),
   dialog("operations-agent-stop", "settings/agent", "operations.limits.stop.open"),
-  dialog("refund-approve", "orders", "orders.refund.approve"),
-  dialog("refund-reject", "orders", "orders.refund.reject"),
+  inDrawer("refund-approve", "orders/refunds", 1, "orders.refund.approve"),
+  inDrawer("refund-reject", "orders/refunds", 1, "orders.refund.reject"),
   dialog("account-suspend", `accounts/${acct(1)}`, "users.account.suspend"),
   dialog("account-sign-in", `accounts/${acct(1)}`, "users.account.disableSignIn"),
   dialog("account-tier", `accounts/${acct(1)}`, "users.account.changeTier"),
   dialog("account-subscription-grant", `accounts/${acct(1)}`, "subscriptions.account.grant"),
-  dialog("account-subscription-refund", `accounts/${acct(1)}`, "subscriptions.account.refundRequest"),
-  dialog("account-subscription-refund-approve", `accounts/${acct(1)}`, "subscriptions.account.refundApprove"),
-  dialog("account-workspace-limit", `accounts/${acct(1)}`, "settings.workspaceLimit.edit"),
+  inDrawer("account-subscription-refund", "subscriptions", 1, "subscriptions.account.refundRequest"),
+  inDrawer("account-subscription-refund-approve", "subscriptions", 1, "subscriptions.account.refundApprove"),
+  scene(
+    "account-workspace-limit",
+    (p) => goto(p, `accounts/${acct(1)}`),
+    (p) =>
+      p
+        .getByRole("button", { name: words("users.account.editLimit") })
+        .nth(2)
+        .click(),
+  ),
   dialog("supplier-connect", "suppliers", "suppliers.connect.open"),
   connectDetails,
   dialog("supplier-unit", supplier(2), "suppliers.unit.open"),

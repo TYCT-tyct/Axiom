@@ -41,16 +41,31 @@ const shellPage = <S extends Record<string, unknown> = Record<never, never>>(
   path: string,
   load: () => Promise<{ default: () => ReactNode }>,
   validateSearch?: (search: Record<string, unknown>) => S,
-) => createRoute({ getParentRoute: () => app, path, validateSearch, component: lazyRouteComponent(load) });
-
-// A page that has moved: its old address takes the visitor to where it is now, and is never shown.
-type Moved = { to: string; search?: Record<string, string> };
-const movedPage = (path: string, to: (params: Record<string, string | undefined>) => Moved) =>
+  beforeLoad?: (search: S) => void,
+) =>
   createRoute({
     getParentRoute: () => app,
     path,
-    beforeLoad: ({ params }) => {
-      throw redirect({ ...to(params), replace: true } as never);
+    validateSearch,
+    beforeLoad: beforeLoad && (({ search }) => beforeLoad(search as S)),
+    component: lazyRouteComponent(load),
+  });
+
+// A page that has moved: its old address takes the visitor to where it is now, and is never shown. An address the design
+// folded into a tab of a page keeps what it was asked for (its search), so a link, a bookmark and the dashboard's
+// drill-downs still arrive.
+type Moved = { to: string; search?: Record<string, unknown> };
+const movedPage = <S extends Record<string, unknown> = Record<never, never>>(
+  path: string,
+  to: (params: Record<string, string | undefined>, search: S) => Moved,
+  validateSearch?: (search: Record<string, unknown>) => S,
+) =>
+  createRoute({
+    getParentRoute: () => app,
+    path,
+    validateSearch,
+    beforeLoad: ({ params, search }) => {
+      throw redirect({ ...to(params, search as S), replace: true } as never);
     },
   });
 
@@ -60,6 +75,20 @@ const text = (value: unknown) => (typeof value === "string" && value.trim() !== 
 // A settings page, which the palette reaches with the row to flash named in the address (settings-drafts.tsx).
 const settingsPage = (path: string, load: () => Promise<{ default: () => ReactNode }>) =>
   shellPage(path, load, (search) => ({ setting: text(search.setting) }));
+
+const users = () => loadTranslatedPage(import("./pages/users"));
+const usersSearch = (search: Record<string, unknown>) => ({ q: text(search.q), selected: text(search.selected) });
+const subscriptions = () => loadTranslatedPage(import("./pages/subscriptions"));
+const orders = () => loadTranslatedPage(import("./pages/orders"));
+const ordersWindow = (search: Record<string, unknown>) => ({
+  since: text(search.since),
+  until: text(search.until),
+  selected: text(search.selected),
+});
+const withInactive = (search: Record<string, unknown>) => ({
+  include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
+});
+const discrepancyState = (value: unknown) => (value === "open" || value === "resolved" ? value : undefined);
 
 const routeTree = root.addChildren([
   guestPage("/sign-in", () => import("./auth/sign-in")),
@@ -85,15 +114,17 @@ const routeTree = root.addChildren([
       }),
     ),
     shellPage("/approvals/$approvalId", () => import("./pages/approval")),
-    shellPage(
-      "/users",
-      () => import("./pages/users"),
-      (search) => ({ q: text(search.q) }),
-    ),
-    shellPage("/accounts/$accountId", () => loadTranslatedPage(import("./pages/account"))),
+    shellPage("/users", users, usersSearch),
+    shellPage("/users/accounts", users, usersSearch),
+    shellPage("/users/roles", users, usersSearch),
+    movedPage("/accounts/$accountId", ({ accountId }) => ({ to: "/users/accounts", search: { selected: accountId } })),
+    shellPage("/subscriptions", subscriptions, usersSearch),
+    shellPage("/subscriptions/plans", subscriptions, withInactive),
+    movedPage("/subscription-plans", (_, search) => ({ to: "/subscriptions/plans", search }), withInactive),
+    // The dashboard's drill-downs from before the tabs, /orders?cash=1 and /orders?paid=batches, with their window.
     shellPage(
       "/orders",
-      () => import("./pages/orders"),
+      orders,
       (search) => ({
         account_id: text(search.account_id),
         user_id: text(search.user_id),
@@ -103,12 +134,34 @@ const routeTree = root.addChildren([
         paid: text(search.paid),
         since: text(search.since),
         until: text(search.until),
+        selected: text(search.selected),
       }),
+      ({ cash, paid, since, until }) => {
+        if (cash || paid === "batches") {
+          throw redirect({ to: cash ? "/orders/cash" : "/orders/batches", search: { since, until } });
+        }
+      },
     ),
+    shellPage("/orders/cash", orders, ordersWindow),
+    shellPage("/orders/batches", orders, ordersWindow),
+    shellPage("/orders/refunds", orders, ordersWindow),
+    shellPage("/orders/discrepancies", orders, (search) => ({
+      state: discrepancyState(search.state),
+      selected: text(search.selected),
+    })),
+    movedPage(
+      "/payment-discrepancies",
+      (_, search) => ({ to: "/orders/discrepancies", search }),
+      (search) => ({ state: discrepancyState(search.state) }),
+    ),
+    movedPage("/payment-discrepancies/$discrepancyId", ({ discrepancyId }) => ({
+      to: "/orders/discrepancies",
+      search: { selected: discrepancyId },
+    })),
     shellPage(
       "/redeem-codes",
-      () => import("./pages/redeem-codes"),
-      (search) => ({ state: redeemState(search.state), note: text(search.note) }),
+      () => loadTranslatedPage(import("./pages/redeem-codes")),
+      (search) => ({ state: redeemState(search.state), note: text(search.note), selected: text(search.selected) }),
     ),
     shellPage(
       "/calls",
@@ -179,19 +232,6 @@ const routeTree = root.addChildren([
     movedPage("/routing-presets", () => ({ to: "/routing" })),
     movedPage("/source-classes", () => ({ to: "/routing", search: { tab: "sources" } })),
     movedPage("/exchange-rates", () => ({ to: "/pricing", search: { tab: "rates" } })),
-    shellPage(
-      "/payment-discrepancies",
-      () => loadTranslatedPage(import("./pages/payment-discrepancies")),
-      (search) => ({ state: search.state === "open" || search.state === "resolved" ? search.state : undefined }),
-    ),
-    shellPage("/payment-discrepancies/$discrepancyId", () => loadTranslatedPage(import("./pages/payment-discrepancy"))),
-    shellPage(
-      "/subscription-plans",
-      () => loadTranslatedPage(import("./pages/subscription-plans")),
-      (search) => ({
-        include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
-      }),
-    ),
     shellPage("/plugins", () => loadTranslatedPage(import("./pages/plugins"))),
     shellPage("/plugins/web", () => loadTranslatedPage(import("./pages/plugins"))),
     shellPage("/plugins/file", () => loadTranslatedPage(import("./pages/plugins"))),

@@ -1,11 +1,8 @@
 export default {
-  title: "Platform roles",
-  description: "Platform grants apply to the admin. Workspace roles are managed separately within each workspace.",
+  changed: "Platform role {{role}} of {{email}} changed",
   empty: "No platform grants",
-  role: "Role",
   active: "Active",
   revoked: "Revoked",
-  status: "Status",
   revoke: "Revoke role",
   restore: "Restore role",
   revokeIntro: "Revoke the {{role}} platform grant for {{email}}. The user may lose admin permissions.",

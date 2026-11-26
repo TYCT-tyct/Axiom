@@ -18,7 +18,7 @@ export async function open(
   return state;
 }
 
-// The change's dialog, which a page may hold a drawer under.
+// The change's dialog, which sits in the drawer it was opened from when there is one.
 export const dialog = (page: Page) => page.locator("dialog.nkdlg");
 
 // The reason every change asks for, and the button that sends it.

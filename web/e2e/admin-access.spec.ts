@@ -347,7 +347,11 @@ test.describe("the four states of a view of data", () => {
   test("an address of something that is not there names the page so and offers home, not a retry", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
-    for (const path of [`/accounts/${acct(999)}`, `/suppliers/${uuid(2, 999)}`]) {
+    // An account is a drawer over the users: the drawer says so, and the list stays.
+    await page.goto(`/accounts/${acct(999)}`);
+    await expect(page.getByRole("dialog").getByRole("heading", { name: "找不到要查看的内容" })).toBeVisible();
+    await expect(page.getByRole("dialog").getByRole("button", { name: "重试" })).toHaveCount(0);
+    for (const path of [`/suppliers/${uuid(2, 999)}`]) {
       await page.goto(path);
       await expect(h1(page, "找不到要查看的内容")).toBeVisible();
       await expect(page).toHaveTitle("找不到要查看的内容 · Axiom");

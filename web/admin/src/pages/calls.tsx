@@ -181,7 +181,7 @@ export default function Calls() {
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
           <CoverageNotice coverage={coverage} availableSince={availableSince} />
           <DataState query={calls} isEmpty={() => rows.length === 0} empty={<CallEmpty kind={emptyKind} />}>
-            {() => <CallsTable rows={rows} current={selected} onOpen={(call) => select(call.id)} />}
+            {() => <CallsTable rows={rows} selected={selected} onOpen={(call) => select(call.id)} />}
           </DataState>
           <LoadMore list={calls} />
         </Card>
@@ -351,11 +351,11 @@ function PluginTags({ call }: { call: Call }) {
 
 function CallsTable({
   rows,
-  current,
+  selected,
   onOpen,
 }: {
   rows: Call[];
-  current: string | undefined;
+  selected: string | undefined;
   onOpen: (call: Call) => void;
 }) {
   const { t } = useTranslation();
@@ -367,7 +367,7 @@ function CallsTable({
       rows={rows}
       rowKey={(call) => call.id ?? ""}
       onOpen={onOpen}
-      current={current}
+      selected={selected}
       columns={[
         at,
         id,

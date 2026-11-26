@@ -1,5 +1,7 @@
+import { openedModal } from "@axiom/boards/ds";
 import { Toast } from "@axiom/ui";
 import { useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 
 // The admin's one-line feedback after a change (this.say in admin_core.js): a change made from a dialog that has since
 // closed says how it went here, with its undo when it has one. One toast shows at a time, the latest; a new one replaces
@@ -34,7 +36,7 @@ const subscribe = (watcher: () => void) => {
 export function Toasts() {
   const said = useSyncExternalStore(subscribe, () => showing);
   if (!said) return null;
-  return (
+  const toast = (
     <Toast
       key={said.id}
       message={said.message}
@@ -44,4 +46,8 @@ export function Toasts() {
       onDismiss={() => dismiss(said.id)}
     />
   );
+  // A drawer that is open makes the rest of the page inert, a toast under it included, so the toast, with the undo of a
+  // change made from the drawer, is shown inside it to be pressed.
+  const modal = openedModal();
+  return modal ? createPortal(toast, modal) : toast;
 }

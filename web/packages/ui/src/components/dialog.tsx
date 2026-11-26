@@ -38,6 +38,7 @@ function ModalShell({
   title,
   subtitle,
   look,
+  drawer = false,
   dismissible = true,
   onClose,
   onKeyDown,
@@ -48,6 +49,8 @@ function ModalShell({
   title: string;
   subtitle?: string;
   look: Look;
+  // A drawer is a page's detail kept in its address, which the page leaves open as a navigation resolves (focusPage).
+  drawer?: boolean;
   dismissible?: boolean;
   onClose: () => void;
   onKeyDown?: (event: KeyboardEvent<HTMLDialogElement>) => void;
@@ -95,6 +98,7 @@ function ModalShell({
         onKeyDown={onKeyDown}
         className={classes(look.root, s.root, leaving === "out" && look.out)}
         data-leaving={leaving ? "" : undefined}
+        data-drawer={drawer ? "" : undefined}
       >
         <div className={look.head}>
           <div>
@@ -203,6 +207,7 @@ export function SidePanel({
       title={title}
       subtitle={subtitle}
       look={drawer ? drawerLook(wide) : boardLook(true)}
+      drawer={drawer}
       dismissible={dismissible}
       onClose={onClose}
       onKeyDown={(event) => {

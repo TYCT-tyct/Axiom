@@ -1,16 +1,27 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Field, Mono, Select, Text, useFormat } from "@axiom/ui";
+import { DiffRows, Field, Mono, parseMoney, Select, Text, useFormat } from "@axiom/ui";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "./change";
-import { paymentCurrencies, readCredit } from "./credit-read";
-import { Time } from "./parts";
+import { paymentCurrencies, readCredit, shownBalance } from "./credit-read";
+import { NewButton, Time } from "./parts";
+
+// The button that gives an account credit, shown to a session that holds credits.grant.
+export function GrantButton({ account }: { account: AdminSchemas["AccountDetail"] }) {
+  const { t } = useTranslation();
+  return (
+    <NewButton permission="credits.grant" label={t("users.credit.open")}>
+      {(close) => <CreditDialog account={account} onClose={close} />}
+    </NewButton>
+  );
+}
 
 // Adds credit to an account: a gift of an amount in the account's currency, or money the administrator received
 // offline, in the currency it was paid in, which the server converts at the reference rate in force; optionally when
-// what is left of it stops counting. The money limit of one grant is the server's to check.
-export function CreditDialog({ account, onClose }: { account: AdminSchemas["AccountDetail"]; onClose: () => void }) {
+// what is left of it stops counting. The money limit of one grant is the server's to check. Nothing takes credit back,
+// so the dialog says it cannot be undone, and shows the balance it will leave while the amount is typed.
+function CreditDialog({ account, onClose }: { account: AdminSchemas["AccountDetail"]; onClose: () => void }) {
   const { t } = useTranslation();
   const currency = account.balance.balance.currency;
   const words = {
@@ -23,8 +34,9 @@ export function CreditDialog({ account, onClose }: { account: AdminSchemas["Acco
       operation={`credit-grant:${account.id}`}
       title={t("users.credit.title", { email: account.owner.email })}
       intro={<p>{t("users.credit.intro")}</p>}
+      warn={t("users.credit.final")}
       action={t("users.credit.submit")}
-      fields={(error) => <CreditFields currency={currency} error={error} />}
+      fields={(error) => <CreditFields balance={account.balance.balance} error={error} />}
       read={(values) => readCredit(values, currency, words)}
       send={(grant, { reason, key }) =>
         unwrapChange(
@@ -40,11 +52,12 @@ export function CreditDialog({ account, onClose }: { account: AdminSchemas["Acco
   );
 }
 
-function CreditFields({ currency, error }: { currency: string; error: unknown }) {
+function CreditFields({ balance, error }: { balance: AdminSchemas["Money"]; error: unknown }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const [source, setSource] = useState("gift");
-  const [paidIn, setPaidIn] = useState(currency);
+  const [paidIn, setPaidIn] = useState(balance.currency);
+  const [typed, setTyped] = useState("");
   const offline = source === "offline_payment";
   return (
     <>
@@ -58,39 +71,21 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
         <option value="gift">{t("users.credit.gift")}</option>
         <option value="offline_payment">{t("users.credit.offline")}</option>
       </Select>
-      {offline ? (
-        <Select
-          label={t("users.credit.currency")}
-          name="currency"
-          value={paidIn}
-          onChange={(event) => setPaidIn(event.target.value)}
-          error={errors.field(error, "payment/amount/currency")}
-        >
-          {paymentCurrencies.map((code) => (
-            <option key={code} value={code}>
-              {code}
-            </option>
-          ))}
-        </Select>
-      ) : null}
+      {offline ? <PaidCurrency value={paidIn} onChange={setPaidIn} error={error} /> : null}
       <Field
-        label={t(offline ? "users.credit.paid" : "users.credit.amount", { currency: offline ? paidIn : currency })}
+        label={t(offline ? "users.credit.paid" : "users.credit.amount", {
+          currency: offline ? paidIn : balance.currency,
+        })}
         hint={t(offline ? "users.credit.paidHint" : "users.credit.amountHint")}
         name="amount"
         inputMode="decimal"
         autoComplete="off"
+        value={typed}
+        onChange={(event) => setTyped(event.target.value)}
         error={errors.field(error, offline ? "payment/amount" : "amount")}
       />
-      {offline ? (
-        <Field
-          label={t("users.credit.channel")}
-          hint={t("users.credit.channelHint")}
-          name="channel"
-          maxLength={200}
-          autoComplete="off"
-          error={errors.field(error, "payment/channel")}
-        />
-      ) : null}
+      <BalancePreview balance={balance} typed={typed} paidIn={offline ? paidIn : balance.currency} />
+      {offline ? <OfflineChannel error={error} /> : null}
       <Field
         label={t("users.credit.expires")}
         hint={t("users.credit.expiresHint")}
@@ -98,6 +93,66 @@ function CreditFields({ currency, error }: { currency: string; error: unknown })
         type="datetime-local"
       />
     </>
+  );
+}
+
+// What an offline payment was paid in, and where it was received: the two things a gift does not have.
+function PaidCurrency({ value, onChange, error }: { value: string; onChange: (code: string) => void; error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <Select
+      label={t("users.credit.currency")}
+      name="currency"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      error={errors.field(error, "payment/amount/currency")}
+    >
+      {paymentCurrencies.map((code) => (
+        <option key={code} value={code}>
+          {code}
+        </option>
+      ))}
+    </Select>
+  );
+}
+
+function OfflineChannel({ error }: { error: unknown }) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <Field
+      label={t("users.credit.channel")}
+      hint={t("users.credit.channelHint")}
+      name="channel"
+      maxLength={200}
+      autoComplete="off"
+      error={errors.field(error, "payment/channel")}
+    />
+  );
+}
+
+// The balance the grant leaves, from the amount as typed: a gift, or a payment in the account's own currency, adds what
+// it says. A payment in another currency is converted by the server at the rate in force, so only the balance now is
+// known and the page says so.
+function BalancePreview({ balance, typed, paidIn }: { balance: AdminSchemas["Money"]; typed: string; paidIn: string }) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  if (parseMoney(typed) === null) {
+    return <Text tone="muted">{t("users.credit.balanceNow", { balance: format.money(balance) })}</Text>;
+  }
+  if (paidIn !== balance.currency) {
+    return <Text tone="muted">{t("users.credit.converted")}</Text>;
+  }
+  const after = shownBalance(balance, typed);
+  return (
+    <DiffRows
+      rows={
+        after
+          ? [{ label: t("users.credit.balanceLabel"), before: format.money(balance), after: format.money(after) }]
+          : []
+      }
+    />
   );
 }
 

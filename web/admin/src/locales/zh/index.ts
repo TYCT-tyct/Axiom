@@ -81,6 +81,7 @@ export const initial = {
       saved: "这个月的目标已保存。",
     },
   },
+  list: { noMatch: { title: "没有符合条件的记录", body: "换一个关键词，或者清除筛选。" } },
   filter: { apply: "筛选", reset: "清除" },
   change: {
     reason: "理由",
@@ -149,12 +150,9 @@ export const initial = {
     default: "默认值",
     noLimit: "不限",
   },
-  users,
-  orders,
   mappings,
   models,
   pricing,
-  redeem,
   approvals,
 };
 
@@ -180,4 +178,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   auditEvents,
   calls,
   audit,
+  users,
+  orders,
+  redeem,
 });

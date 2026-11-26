@@ -3,11 +3,13 @@ import { LoadingState, NotFoundState, PageFailedState } from "./states";
 
 // focusPage moves focus to the page after a navigation, so a screen reader announces the new page instead of staying
 // on the link or the menu button; the first load leaves focus where the browser puts it. Pass it to the router's
-// onResolved event. A drawer still open makes the page inert, where focus() does nothing, and closing it later hands
-// focus back to the menu button: so it is closed first, whichever of the two events came first.
+// onResolved event. A dialog still open makes the page inert, where focus() does nothing, and closing it later hands
+// focus back to the menu button: so it is closed first, whichever of the two events came first. A drawer is the page's
+// own, kept in its address: the one open as a navigation resolves belongs to the page it arrived at (a visitor who signed
+// in on the way to an account's drawer), and stays.
 export function focusPage({ fromLocation, pathChanged }: { fromLocation?: unknown; pathChanged: boolean }) {
   if (fromLocation && pathChanged) {
-    for (const dialog of document.querySelectorAll("dialog[open]")) {
+    for (const dialog of document.querySelectorAll("dialog[open]:not([data-drawer])")) {
       (dialog as HTMLDialogElement).close();
     }
     document.getElementById("main")?.focus();

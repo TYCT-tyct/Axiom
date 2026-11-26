@@ -63,8 +63,8 @@ function Cell<Row>({ column, row, open }: { column: Column<Row>; row: Row; open?
 // its header. Given the count of every row (total) and what a row is called (unit), it says how many it lists, as
 // "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once. Given onOpen, a row
 // opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
-// button a keyboard reaches, which is the first column's text, so that column holds text and no control. current names
-// the row whose detail is open.
+// button a keyboard reaches, which is the first column's text, so that column holds text and no control. selected is
+// the key of the row whose detail is open.
 export function DataTable<Row>({
   label,
   columns,
@@ -75,7 +75,7 @@ export function DataTable<Row>({
   unit,
   flash,
   onOpen,
-  current,
+  selected,
 }: {
   label: string;
   columns: readonly Column<Row>[];
@@ -86,7 +86,7 @@ export function DataTable<Row>({
   unit?: string;
   flash?: Key;
   onOpen?: (row: Row) => void;
-  current?: Key;
+  selected?: Key | null;
 }) {
   const format = useFormat();
   const [sorting, setSorting] = useState<Sorting>(null);
@@ -130,7 +130,7 @@ export function DataTable<Row>({
                 flash={lit !== undefined && lit === key}
                 onFlashEnd={() => setLit(undefined)}
                 onOpen={onOpen && (() => onOpen(row))}
-                current={current !== undefined && current === key}
+                selected={selected === key}
               >
                 {columns.map((column, at) => (
                   <Cell

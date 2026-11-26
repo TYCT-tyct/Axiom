@@ -101,7 +101,7 @@ export function KeyLimitsCard({
   );
 }
 
-function KeyLimitsDialog({
+export function KeyLimitsDialog({
   operation,
   level,
   view,

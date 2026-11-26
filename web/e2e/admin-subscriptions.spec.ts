@@ -13,8 +13,10 @@ test.describe("subscription plans", () => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
 
+    // The old address leads to the plans tab of 订阅管理.
     await page.goto("/subscription-plans");
-    await expect(page.getByRole("heading", { level: 1, name: zhText("subscriptions.title") })).toBeVisible();
+    expect(new URL(page.url()).pathname).toBe("/subscriptions/plans");
+    await expect(page.getByRole("heading", { level: 1, name: zhText("shell.nav.subs") })).toBeVisible();
     await expect(page.getByText("Pro Monthly")).toBeVisible();
     await expect(page.getByText("Legacy Starter")).toHaveCount(0);
 
@@ -71,7 +73,7 @@ test.describe("subscription plans", () => {
     state.permissions = ["pricing.view"];
     signedInAs(state, "mfa");
 
-    await page.goto("/subscription-plans");
+    await page.goto("/subscriptions/plans");
     await expect(page.getByRole("heading", { name: zhText("subscriptions.empty.title") })).toBeVisible();
     await expect(page.getByRole("button", { name: zhText("subscriptions.new") })).toHaveCount(0);
   });
@@ -89,7 +91,7 @@ test.describe("account subscriptions", () => {
 
     // Grant renewal via offline payment.
     await page.getByRole("button", { name: zhText("subscriptions.account.grant") }).click();
-    const grant = page.getByRole("dialog");
+    const grant = page.getByRole("dialog").last();
     await grant.locator("select[name=source]").selectOption("offline_payment");
     await grant.locator("input[name=amount]").fill("29");
     await grant.locator("input[name=channel]").fill("Wire #4421");
@@ -100,10 +102,21 @@ test.describe("account subscriptions", () => {
       .getByRole("button", { name: zhText("change.close") })
       .last()
       .click();
+  });
+
+  // A subscription refund takes two people: it is applied for and approved from the subscription's drawer.
+  test("applies for a subscription refund and approves another operator's, from the subscription's drawer", async ({
+    page,
+  }) => {
+    const state = await mockAdmin(page);
+    signedInAs(state, "mfa");
+
+    await page.goto("/subscriptions");
+    await page.getByRole("row", { name: /Pro Monthly/ }).click();
 
     // Request refund (202 proposal).
     await page.getByRole("button", { name: zhText("subscriptions.account.refundRequest") }).click();
-    const request = page.getByRole("dialog");
+    const request = page.getByRole("dialog").last();
     await request.locator("input[name=grant_id]").fill(paidGrantId);
     await request.locator("input[name=credits]").fill("12.5");
     await request.getByLabel(words("change.reason")).fill("customer downgraded mid-term");
@@ -116,7 +129,7 @@ test.describe("account subscriptions", () => {
 
     // Approving own proposal is refused (409 second-person rule).
     await page.getByRole("button", { name: zhText("subscriptions.account.refundApprove") }).click();
-    const approve = page.getByRole("dialog");
+    const approve = page.getByRole("dialog").last();
     await approve.locator("input[name=refund_id]").fill(pendingRefundSelfId);
     await approve.getByLabel(words("change.reason")).fill("self approval check");
     await approve.locator("button[type=submit]").click();
@@ -141,6 +154,8 @@ test.describe("account subscriptions", () => {
     await page.goto(`/accounts/${acct(1)}`);
     await expect(page.getByText("Pro Monthly")).toBeVisible();
     await expect(page.getByRole("button", { name: zhText("subscriptions.account.grant") })).toHaveCount(0);
+    await page.goto("/subscriptions");
+    await page.getByRole("row", { name: /Pro Monthly/ }).click();
     await expect(page.getByRole("button", { name: zhText("subscriptions.account.refundRequest") })).toHaveCount(0);
     await expect(page.getByRole("button", { name: zhText("subscriptions.account.refundApprove") })).toHaveCount(0);
   });

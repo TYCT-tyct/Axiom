@@ -3,8 +3,8 @@ import { can, useSession } from "@axiom/app";
 import {
   CopyButton,
   DataState,
+  DrawerFacts,
   DrawerSection,
-  FactList,
   Id,
   Mono,
   type PanelSteps,
@@ -43,7 +43,7 @@ export function AuditDrawer({ entry, steps, onClose }: { entry: Entry; steps?: P
       footer={entry.id ? <CopyButton text={entry.id} label={t("audit.copyId")} /> : undefined}
     >
       <DrawerSection title={t("audit.drawer.what")}>
-        <FactList
+        <DrawerFacts
           rows={[
             [t("audit.actionId"), <Mono key="action">{entry.action ?? missing}</Mono>],
             [t("audit.module"), entry.module ? <Mono>{entry.module}</Mono> : missing],
