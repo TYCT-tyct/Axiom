@@ -60,21 +60,6 @@ async function stopClock(page: Page) {
   await page.clock.runFor(1000);
 }
 
-// How much the solid's middle oscillates across 12 samples 35 ms apart, as the summed second differences: the solid's
-// own turning drifts its middle smoothly, which they cancel, while a shake (420 ms, three cycles, a quarter cycle per
-// sample) reverses direction at every other sample. Summed first differences counted the drift too: a train measured
-// 60 px of quiet drift against 52.5 px with the shake (train 44822730292).
-async function sway(page: Page) {
-  const middles: number[] = [];
-  for (let i = 0; i < 12; i++) {
-    await page.clock.runFor(35);
-    middles.push((await solid(page)).cx);
-  }
-  return middles
-    .slice(2)
-    .reduce((total, x, i) => total + Math.abs(x - 2 * (middles[i + 1] ?? x) + (middles[i] ?? x)), 0);
-}
-
 test("the sea's sharks form the step's solid, which keeps turning, and the old stage does not draw", async ({
   page,
 }) => {
@@ -127,22 +112,45 @@ test("the solid melts across steps: envelope to key on sign-in, padlock to key o
   expect(key.w).toBeGreaterThan(key.h * 1.5);
 });
 
-// The shake is read from the solid's middle on a 7.5 px character grid while the solid turns, and on CI's runners the
-// quiet turning alone now reaches what the shake adds, so the case fails whatever the code does (#908). It comes back
-// when it asserts that the solid hears the refusal instead of reading pixels.
-test.fixme("a refused password shakes the solid", async ({ page }) => {
-  await page.clock.install();
+// What the solid (login-ui.js's Morph, the design's engine as it is) is told, read at the engine's own door as its code
+// defines it: the class is wrapped as the page defines it, so neither the engine's code nor the page's changes.
+type Morph = { hear(heard: { type?: string }): void };
+type Seen = { refusals: number };
+function watchSolid() {
+  const seen: Seen = { refusals: 0 };
+  (window as unknown as { solidSeen: Seen }).solidSeen = seen;
+  let engine: { prototype: Morph } | undefined;
+  Object.defineProperty(window, "AxiomLoginMorph", {
+    configurable: true,
+    get: () => engine,
+    set(value: { prototype: Morph }) {
+      const { hear } = value.prototype;
+      value.prototype.hear = function (this: Morph, heard) {
+        if (heard?.type === "bad") seen.refusals++;
+        return hear.call(this, heard);
+      };
+      engine = value;
+    },
+  });
+}
+const solidSeen = (page: Page) => page.evaluate(() => (window as unknown as { solidSeen: Seen }).solidSeen);
+
+// A refused answer shakes the solid, as the engine's code does on hearing it. The page's part is to tell the solid of
+// the refusal, once: read from the canvas instead, the shake is a few pixels on a 7.5 px grid under a turning solid,
+// which no threshold tells apart from the turning on a busy machine (#908).
+test("a refused password is told to the solid once", async ({ page }) => {
+  await page.addInitScript(watchSolid);
   await mockConsole(page);
   await page.goto(signInPage);
+  // the solid is on the sea: a refusal before its code is in has nothing to shake, and is not kept for it
+  await expect(stageCanvas(page)).toBeAttached();
   await page.getByLabel("邮箱").fill(knownEmail);
   await page.getByRole("button", { name: "继续", exact: true }).click();
   await page.getByLabel("密码", { exact: true }).fill("not the password");
-  await stopClock(page);
-  const still = await sway(page);
+  expect((await solidSeen(page)).refusals).toBe(0);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await expect(page.getByRole("alert")).toBeVisible();
-  const shaken = await sway(page);
-  expect(shaken).toBeGreaterThan(still + 12);
+  expect((await solidSeen(page)).refusals).toBe(1);
 });
 
 test("the solid disperses back into sharks after 20 s idle and re-forms", async ({ page }) => {
