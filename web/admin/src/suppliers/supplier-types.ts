@@ -10,12 +10,7 @@ export type SupplierType = AdminSchemas["SupplierType"];
 type TypeField = AdminSchemas["SupplierTypeField"];
 type T = TFunction<"admin">;
 
-const typeGroups = [
-  "official",
-  "domestic",
-  "cloud",
-  "relay",
-] as const satisfies readonly SupplierType["group"][];
+const typeGroups = ["official", "domestic", "cloud", "relay"] as const satisfies readonly SupplierType["group"][];
 
 // The Gemini format is not sent yet (suppliers-direct.md「决策与理由」), so a type whose family a person chooses offers
 // OpenAI's or Anthropic's.

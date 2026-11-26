@@ -285,6 +285,9 @@ func (t Type) Read(form string, values map[string]string) (Form, map[string]stri
 
 // Valid reports whether stored settings are ones the type could have written: what Reload checks before a call uses them.
 func (t Type) Valid(s Settings) bool {
+	if len(t.Forms) == 0 { // a type without a form of its own, as a relay's, writes no settings
+		return len(s) == 0
+	}
 	values := map[string]string{}
 	for k, v := range s {
 		if k != FormKey {

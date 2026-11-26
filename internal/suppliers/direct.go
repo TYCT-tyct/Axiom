@@ -169,6 +169,9 @@ func (p *DirectPlan) paste(keys []string) error {
 // resolve fills in what the request leaves to the type: a type with price entries is connected at one, whose address,
 // family and currency are its own and may not be given; any other API's must be.
 func (p *DirectPlan) resolve(t adapter.Type) error {
+	if len(t.Entries) == 0 && adapter.Family(p.r.Family) == adapter.FamilyGemini {
+		return ErrDirectGemini // a family the gateway does not send yet, not one the type refuses
+	}
 	family, ok := adapter.FamilyOf(t, adapter.Family(p.r.Family))
 	if !ok {
 		return ErrDirectFormat
@@ -188,9 +191,6 @@ func (p *DirectPlan) resolve(t adapter.Type) error {
 	}
 	if p.r.Origin == "" || p.r.Entry != "" {
 		return ErrTypeOrigin
-	}
-	if family == adapter.FamilyGemini {
-		return ErrDirectGemini
 	}
 	if p.r.Currency == (platform.Currency{}) {
 		return ErrDirectCurrency

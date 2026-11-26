@@ -273,7 +273,8 @@ func TestReplaceSupplierCloudCredential(t *testing.T) {
 
 // TestAzureServesTheDeploymentsNamed: an Azure OpenAI resource is checked with one request on the generally available
 // version (the fake answers no other) and serves the deployments named, each once, known by the model named for it:
-// the catalog's is an endpoint at its official price, the other waits to be mapped. A new key of the resource serves
+// the catalog's is an endpoint, whose cost stays unknown because its maker is not OpenAI (Azure sells other makers'
+// models at prices of its own), and the other waits to be mapped. A new key of the resource serves
 // the same deployments, and the line is as it was.
 func TestAzureServesTheDeploymentsNamed(t *testing.T) {
 	t.Parallel()
@@ -289,12 +290,12 @@ func TestAzureServesTheDeploymentsNamed(t *testing.T) {
 	line := `SELECT (SELECT string_agg(upstream_name || ' ' || (model_id IS NULL)::text, ',' ORDER BY upstream_name) FROM suppliers.supplier_models WHERE supplier_id = '` + id + `') || ' / ' ||
 		(SELECT string_agg(e.upstream_name || ' ' || e.cost_state, ',') FROM suppliers.endpoints e WHERE e.supplier_id = '` + id + `') || ' / ' ||
 		(SELECT string_agg(hint || ' ' || array_to_string(allowed_models, ','), ';') FROM suppliers.credentials WHERE status = 'active' AND supplier_id = '` + id + `')`
-	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct known / 0042 prod-direct,prod-other" {
+	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct unknown / 0042 prod-direct,prod-other" {
 		t.Errorf("the models, endpoints and credential are %q", got)
 	}
 	replace := `{"fields":{"api_key":"az-good-key-0043"},"reason":"a new key"}`
 	expectAdmin(t, "a new key", f.change(f.s, http.MethodPut, "/suppliers/"+id+"/cloud-credential", replace, newKey()), http.StatusOK, "")
-	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct known / 0043 prod-direct,prod-other" {
+	if got := f.text(line); got != "prod-direct false,prod-other true / prod-direct unknown / 0043 prod-direct,prod-other" {
 		t.Errorf("after a new key, the models, endpoints and credential are %q", got)
 	}
 }
