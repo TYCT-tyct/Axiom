@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,8 +27,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 	}{
 		{"unauthorized", []int{401}, false},
 		{"rate limited", []int{429}, false},
-		{"internal error", []int{500}, false},
-		{"unavailable", []int{503}, false},
+		{"unavailable", []int{503}, false}, // a 500 is TestFailoverIsTheSameInEveryFormat's
 		{"credential then endpoint", []int{401, 429}, false},
 		{"credentials of the group all rest", []int{401, 401}, false},
 		{"all fail", []int{401, 429, 503}, true},
@@ -49,7 +51,7 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 				}
 				w.checkSettled(r, 0)
 			} else {
-				w.checkFailureSuccess(r, count)
+				w.checkFailureSuccess(r, count, "Hello!")
 			}
 			w.checkFailedAttempts(r, tc.statuses, count, charged)
 			if tc.statuses[0] == http.StatusUnauthorized {
@@ -59,15 +61,257 @@ func TestANodeFallsOverUpstreamFailures(t *testing.T) {
 	}
 }
 
+// clientFormat is how a client asks the Claude model of the samples: the path, a request for a whole reply, and the
+// marks of a reply that ended, whole and streamed, and of a stream that ended in an error.
+type clientFormat struct {
+	name, path, body          string
+	whole, streamEnd, failure string
+}
+
+var clientFormats = []clientFormat{
+	{
+		"Chat", "/v1/chat/completions", `{"model":"claude-opus-5-5","max_tokens":256,"messages":[{"role":"user","content":"Hello"}]}`,
+		`"finish_reason":"stop"`, "data: [DONE]", `"finish_reason":"error"`,
+	},
+	{
+		"Responses", "/v1/responses", `{"model":"claude-opus-5-5","max_output_tokens":256,"input":"Hello"}`,
+		`"status":"completed"`, "event: response.completed", "event: response.failed",
+	},
+	{"Messages", "/v1/messages", messagesCall, `"stop_reason":"end_turn"`, "event: message_stop", "event: error"},
+}
+
+func (f clientFormat) request(streamed bool) string {
+	if streamed {
+		return `{"stream":true,` + f.body[1:]
+	}
+	return f.body
+}
+
+// TestFailoverIsTheSameInEveryFormat: how the node meets an upstream failure does not depend on how the client asked.
+// A server error and a stall before the response headers move to the other endpoint; so does a stream that broke off
+// after its first content when none of it reached the client, which is a whole reply's case, since that is written once,
+// at the end (internal/gateway/README.md I4). A stream whose content the client already has is not retried: it ends
+// where it broke, in the format's error, and is charged for what it used (docs/domains/billing.md「免单规则」).
+func TestFailoverIsTheSameInEveryFormat(t *testing.T) {
+	t.Parallel()
+	for _, f := range clientFormats {
+		for _, streamed := range []bool{false, true} {
+			for _, tc := range []struct {
+				name   string
+				status int // the first call's answer, if it answers
+				brk    breakOff
+				flag   string // the cost flag of the attempt that failed
+			}{
+				{"server error", http.StatusInternalServerError, answers, "no_usage"},
+				{"stall before the headers", 0, stalls, "no_usage"},
+				{"cut after the first content", 0, cutsAfterContent, "unpriced"},
+			} {
+				t.Run(fmt.Sprintf("%s streamed %v %s", f.name, streamed, tc.name), func(t *testing.T) {
+					t.Parallel()
+					w := newCallWorld(t)
+					w.seedFailover()
+					w.limits = testGatewayConfig()
+					w.limits.HeaderWait = time.Second
+					w.supplier.mu.Lock()
+					if tc.status != 0 {
+						w.supplier.failures = []int{tc.status}
+					} else {
+						w.supplier.breaks = []breakOff{tc.brk}
+					}
+					w.supplier.mu.Unlock()
+					w.price()
+					n := w.start()
+					waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
+					r := w.call(n, f.path, w.richKey, f.request(streamed))
+					if streamed && tc.brk == cutsAfterContent {
+						w.checkBrokenStream(r, f)
+						return
+					}
+					answer := f.whole
+					if streamed {
+						answer = f.streamEnd
+					}
+					w.checkFailureSuccess(r, 2, answer)
+					w.checkFailedFirst(r, tc.flag)
+				})
+			}
+		}
+	}
+}
+
+// checkBrokenStream: a stream that broke after its first content reached the client ends in the format's error with a
+// status of 200, after one upstream call, and is charged for the usage the stream reported, its output estimated.
+func (w *callWorld) checkBrokenStream(r reply, f clientFormat) {
+	w.t.Helper()
+	w.served(r, "a stream that broke off")
+	if body := string(r.body); !strings.Contains(body, "Hello") || !strings.Contains(body, f.failure) {
+		w.t.Errorf("the broken stream does not end in %s after the content it had: %s", f.failure, body)
+	}
+	if got := len(w.supplier.sent()); got != 1 {
+		w.t.Errorf("upstream calls = %d, want 1: content the client has is never retried", got)
+	}
+	w.checkBooked(r, booking{charge: brokenCharge, cost: brokenCost, ref: "relay-1", upstream: "up-claude", input: 25, output: brokenOutput, estimated: true})
+	w.checkAttemptLedger(r.header.Get("X-Generation-Id"))
+}
+
+// checkFailedFirst: the first attempt failed with nothing delivered, so it is the supplier's cost at an estimate, and the
+// user pays for the other endpoint's answer alone.
+func (w *callWorld) checkFailedFirst(r reply, flag string) {
+	w.t.Helper()
+	id := r.header.Get("X-Generation-Id")
+	if got := len(w.supplier.sent()); got != 2 {
+		w.t.Errorf("upstream calls = %d, want 2", got)
+	}
+	if got := w.query(`SELECT cost_flag || ' ' || (estimated_native > 0)::text FROM suppliers.attempt_costs
+		WHERE request_id::text = $1 AND attempt_seq = 1`, id); got != flag+" true" {
+		w.t.Errorf("the failed attempt's cost is %q, want %s and estimated above zero", got, flag)
+	}
+	w.checkFailureTransition(id, 1, 0)
+	w.checkAttemptLedger(id)
+	if got := w.query(`SELECT balance::text || ' ' || reserved::text FROM billing.balances
+		WHERE account_id = (SELECT account_id FROM accounts.users WHERE email = 'rich@example.com')`); got != fmt.Sprintf("%d 0", 10_000_000_000-messagesCharge) {
+		w.t.Errorf("account balance/reserved = %s, want %d 0", got, 10_000_000_000-messagesCharge)
+	}
+}
+
+// TestAClientThatLeavesMidStreamCancelsTheUpstream: a client that leaves after the first content ends the call. The
+// node cancels the upstream request (a new-api relay passes the cancel on, docs/domains/billing.md「客户端断开」), tries
+// no other endpoint, and charges what was used, which a cancel never waives.
+func TestAClientThatLeavesMidStreamCancelsTheUpstream(t *testing.T) {
+	t.Parallel()
+	for _, f := range clientFormats {
+		t.Run(f.name, func(t *testing.T) {
+			t.Parallel()
+			w := newCallWorld(t)
+			w.seedFailover()
+			w.supplier.mu.Lock()
+			w.supplier.breaks, w.supplier.gone = []breakOff{waitsAfterContent}, make(chan struct{})
+			w.supplier.mu.Unlock()
+			w.price()
+			n := w.start()
+			waitUntil(t, 15*time.Second, func() bool { return n.ready(t) })
+			id := w.leaveAfterContent(n, f)
+			select {
+			case <-w.supplier.gone:
+			case <-time.After(10 * time.Second):
+				t.Fatal("the upstream request was not cancelled after the client left")
+			}
+			waitUntil(t, 10*time.Second, func() bool {
+				return w.query("SELECT state FROM billing.reservations WHERE request_id::text = $1", id) == "settled"
+			})
+			r := reply{header: http.Header{"X-Generation-Id": {id}}}
+			w.checkBooked(r, booking{charge: brokenCharge, cost: brokenCost, ref: "relay-1", upstream: "up-claude", input: 25, output: brokenOutput, estimated: true})
+			if got := w.query("SELECT finish_reason || ' ' || free_of_charge::text FROM observability.call_log WHERE id::text = $1", id); got != "cancelled false" {
+				t.Errorf("the call log's finish and waiver are %q, want cancelled and charged", got)
+			}
+			if got := len(w.supplier.sent()); got != 1 {
+				t.Errorf("upstream calls = %d, want 1", got)
+			}
+		})
+	}
+}
+
+// leaveAfterContent streams a call, reads it up to its first text and leaves, and returns the call's id.
+func (w *callWorld) leaveAfterContent(n runningNode, f clientFormat) string {
+	w.t.Helper()
+	ctx, cancel := context.WithCancel(w.t.Context())
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://"+n.Public+f.path, strings.NewReader(f.request(true)))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	req.Host = "api.main.example"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+w.richKey)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // the client leaves
+	lines := bufio.NewScanner(resp.Body)
+	for lines.Scan() && !strings.Contains(lines.Text(), "Hello") {
+	}
+	if !strings.Contains(lines.Text(), "Hello") {
+		w.t.Fatalf("the stream ended before its first text: %v", lines.Err())
+	}
+	return resp.Header.Get("X-Generation-Id")
+}
+
+// What a stream that broke after its first text is charged: the 25 tokens of input the upstream reported, and the output
+// estimated from the five bytes of text it delivered.
+const (
+	brokenOutput = 2
+	brokenCharge = 25*4_500 + brokenOutput*22_500
+	brokenCost   = 25*10 + brokenOutput*40
+)
+
+// takeBreak is how the call being answered breaks off, if it does.
+func (f *fakeSupplier) takeBreak() breakOff {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.breaks) == 0 {
+		return answers
+	}
+	brk := f.breaks[0]
+	f.breaks = f.breaks[1:]
+	return brk
+}
+
+// breakOff is how a call to the fake supplier fails after it was received: not at all; by stalling before the response
+// headers until the node gives up; or after the stream's first text, by cutting the connection or by holding it until
+// the node cancels the request.
+type breakOff int
+
+const (
+	answers breakOff = iota
+	stalls
+	cutsAfterContent
+	waitsAfterContent
+)
+
+// breakOff fails the call as brk says. A hold the node never cancels ends with the test.
+func (f *fakeSupplier) breakOff(t *testing.T, w http.ResponseWriter, r *http.Request, brk breakOff, stream string) {
+	if brk == stalls {
+		<-r.Context().Done()
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	if _, err := io.WriteString(w, firstText(t, stream)); err != nil {
+		t.Errorf("the fake supplier could not answer: %v", err)
+	}
+	if err := http.NewResponseController(w).Flush(); err != nil {
+		t.Errorf("the fake supplier could not flush: %v", err)
+	}
+	if brk == cutsAfterContent {
+		panic(http.ErrAbortHandler) // the server drops the connection before the chunked body ends
+	}
+	select {
+	case <-r.Context().Done():
+		close(f.gone)
+	case <-t.Context().Done():
+	}
+}
+
+// firstText is a recorded stream up to the end of its first text event.
+func firstText(t *testing.T, stream string) string {
+	t.Helper()
+	start := strings.Index(stream, "event: content_block_delta")
+	if start < 0 {
+		t.Fatal("the recorded stream has no text event")
+	}
+	end := strings.Index(stream[start:], "\n\n")
+	return stream[:start+end+2]
+}
+
 // failedNative is what an attempt that failed with no usage is estimated at: the request's input at the guessed bytes per
 // token, priced at the fixture's input rate. A refusal before execution (401) costs nothing.
 const failedNative = "0.0005"
 
-func (w *callWorld) checkFailureSuccess(r reply, count int) {
+func (w *callWorld) checkFailureSuccess(r reply, count int, answer string) {
 	w.t.Helper()
 	w.served(r, "after upstream failures")
-	if !strings.Contains(string(r.body), "Hello!") {
-		w.t.Errorf("the successful attempt delivered no recorded content: %s", r.body)
+	if !strings.Contains(string(r.body), answer) {
+		w.t.Errorf("the successful attempt delivered no recorded content (%s): %s", answer, r.body)
 	}
 	w.checkBooked(r, booking{
 		attempts: count, charge: messagesCharge, cost: w.attemptCost(r),

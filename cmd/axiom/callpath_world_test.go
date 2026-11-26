@@ -21,6 +21,7 @@ import (
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/gateway"
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/egress"
 	"axiom/internal/platform/egresstest"
@@ -76,9 +77,11 @@ type fakeSupplier struct {
 	mu          sync.Mutex
 	replies     map[string]string // what a path answers with instead, until answer clears it
 	seen        []supplied
-	retryAfter  string // optional Retry-After on failed replies
-	failureBody string // optional classified rejection body
-	failures    []int  // HTTP statuses consumed before the recorded successful replies
+	retryAfter  string        // optional Retry-After on failed replies
+	failureBody string        // optional classified rejection body
+	failures    []int         // HTTP statuses consumed before the recorded successful replies
+	breaks      []breakOff    // how the next calls break off, consumed one a call (callpath_failures_test.go)
+	gone        chan struct{} // closed when a call that waits after its first content sees the node cancel it
 }
 
 type supplied struct{ path, auth, body string }
@@ -107,6 +110,10 @@ func newFakeSupplier(t *testing.T) *fakeSupplier {
 		}
 		n, reply, status, retryAfter := f.record(supplied{r.URL.Path, r.Header.Get("Authorization"), string(body)})
 		w.Header().Set("X-Oneapi-Request-Id", "relay-"+strconv.Itoa(n))
+		if brk := f.takeBreak(); brk != answers {
+			f.breakOff(t, w, r, brk, reply)
+			return
+		}
 		if status != 0 {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", retryAfter)
@@ -181,6 +188,7 @@ func (f *fakeSupplier) sent() []supplied {
 type callWorld struct {
 	commandLine
 	bound          func([]*listening)        // lets the journey set its domains before startup reads them
+	limits         gateway.Config            // the gateway's limits; testGatewayConfig when zero
 	trusted        []*x509.Certificate       // test servers the node's outbound client trusts besides the loopback supplier
 	routes         map[string]netip.AddrPort // public addresses the node's outbound client reaches at a test server
 	supplier       *fakeSupplier
@@ -418,8 +426,12 @@ func (w *callWorld) start(extra ...string) runningNode {
 	if bound == nil {
 		bound = func([]*listening) {}
 	}
+	limits := w.limits
+	if limits == (gateway.Config{}) {
+		limits = testGatewayConfig()
+	}
 	go func() {
-		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil, testGatewayConfig(), bound)
+		done <- serveWith(ctx, environ, slog.New(slog.NewJSONHandler(nodeLog{w.t, logs}, nil)), loopback, startRecorder, nil, limits, bound)
 	}()
 	budget := awaitRecord(w.t, logs, done, "database connection budget")
 	if budget.Nodes != 2 {
