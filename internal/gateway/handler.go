@@ -111,6 +111,7 @@ func NewHandler(d Deps) (*Handler, error) {
 		h.modelRoutes(prefix)
 		h.auxRoutes(prefix)
 	}
+	h.geminiRoutes()
 	return h, nil
 }
 
@@ -164,6 +165,11 @@ func (h *Handler) ipSlot(w http.ResponseWriter, r *http.Request, format protocol
 // slots, read the body, resolve the model, admit. On any failure the call's holds are given back; the one exception
 // is a lost admission, whose reservation may exist, so its settlement keeps them until it is done.
 func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol.Format, compact bool) (*Call, error) {
+	return h.acceptAs(w, r, format, compact, nil)
+}
+
+// acceptAs is accept for a call that came by a Gemini path, whose body is converted once read (gemini.go).
+func (h *Handler) acceptAs(w http.ResponseWriter, r *http.Request, format protocol.Format, compact bool, gemini *geminiInbound) (*Call, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return nil, errUpgrade
 	}
@@ -175,7 +181,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
+	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r), gemini: gemini}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()
@@ -275,6 +281,11 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request, c *Call) error {
 	body, err := h.readBody(w, r, c)
 	if err != nil {
 		return err
+	}
+	if c.gemini != nil {
+		if body, err = h.geminiBody(c, body); err != nil {
+			return err
+		}
 	}
 	sessionBody := body // default expansion must not move a client cache key beyond the session prefix
 	body, req, err := h.expandPreset(c, body)

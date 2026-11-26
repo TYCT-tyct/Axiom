@@ -20,9 +20,11 @@
 | Anthropic Messages | `POST /v1/messages`、`/v1/messages/count_tokens` | Claude Code |
 | Embeddings、Rerank | `POST /v1/embeddings`、`/v1/rerank` | RAG |
 | 旧版补全 | `POST /v1/completions` | 旧 SDK |
+| Gemini | `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent?alt=sse`、`:countTokens` | Gemini SDK、Gemini CLI |
 | 模型列表 | `GET /v1/models`、`/v1/models/{model}` | 所有客户端 |
 
 - **前缀**：所有路径同时以 `/v1` 和 `/api/v1` 提供，只挂在公开监听上，在控制台和网站之前截走（不经控制台的压缩和 404）；路由快照可用前节点不报就绪（[运维](operations.md#部署与节点管理)）。调用路径上的 WebSocket 升级回 400 `invalid_request`。
+- **Gemini**：key 取 `x-goog-api-key`、`?key=` 或 bearer；请求在入口换成 Chat 调用（`protocol.GeminiToChat`，按标准档），路由、预留、计费同 Chat，回复、用量和拒绝（含流中错误）在出口写成 Gemini 的形状，错误是 `{"error":{code,message,status}}`，统一错误类型在 `details` 的 `ErrorInfo.reason`。不转换的成员（`cachedContent`、Google 自己的工具、多候选等）点名 400，`safetySettings` 忽略。`countTokens` 同 `count_tokens` 的估算，回 `{"totalTokens":n}`。
 - **直接格式**（embeddings、rerank）：上游回一份 JSON，`stream:true` 回 400；只路由到 `formats` 写了该格式的端点，不做转换。
 - **旧版补全**：只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转；上游一律流式并强制 `stream_options.include_usage:true`，非流式由网关按序聚合每个 choice 的 `text` 和四个 `logprobs` 数组。`prompt` 的数组是一次请求里的多份补全：输入按整批（含 `suffix`）预留、暂估、分档，上下文按最长一份（含 `suffix`）检查，输出按 `n × prompt 数 × 上限` 一次预留、不分段（[计费](billing.md#预留与结算)）。`best_of > 1` 准入前 400；超过报价上限的 `max_tokens` 按上限发；`max_tokens: 0` 是零输出，只带结束原因的空 choice 是正常回答。`echo` 回显算交付文字（决定提交点和空响应）而不算生成输出，无用量时只按回显之后的文字暂估输出，token 数组按每 token 4 字节估。
 - **格式声明**：适配器推不出的格式由管理接口模型映射的 `formats` 声明（省略不改、`[]` 清除、未知 422），与适配器格式取并集，同步不覆盖。

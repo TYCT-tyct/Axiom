@@ -68,6 +68,10 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 
 手动预算 = `max(min(上限 × 比例, 128000), 1024)`；显式预算须为正，manual 目标还须 ≥1024 且小于输出上限。预算换档按与有效上限（请求的，否则 `Target.MaxOutput`，都没有则 `NotSupported`）之比取最近档，同距取低。反向到 Chat 用同样比例；有非空 `output_config.effort` 时以它为准。
 
+## Gemini
+
+Gemini 不是路由用的格式，在边缘与 Chat 互换，两个方向读同一组结构和表（`gemini.go`）：客户端用 `GeminiToChat` 和 `GeminiReply`（流按事件、整份按 `Body`、错误按 `GeminiErrorBody`），上游用 `ChatToGemini` 和 `ChatFromGemini`（把 `streamGenerateContent?alt=sse` 读成 Chat 流）。没有 ID 的调用按位置编号，结果按 ID 否则按同名最早未答的配对；思考签名在 Chat 一侧放 `extra_content.google.thought_signature`，转往 Gemini 时缺签名的首个调用写官方的跳过值；`thoughtsTokenCount` 计入输出和推理。Gemini 表达不了的成员两个方向都点名拒绝。
+
 ## 读 SSE
 
 `sse.Reader` 按 WHATWG 的解析规则：

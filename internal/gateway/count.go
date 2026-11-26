@@ -48,6 +48,11 @@ func (h *Handler) countTokens(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
+	return h.countAs(w, r, protocol.Messages, nil)
+}
+
+// countAs is count for a request of format, converted from Gemini's when gemini is set.
+func (h *Handler) countAs(w http.ResponseWriter, r *http.Request, format protocol.Format, gemini *geminiInbound) (int64, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return 0, errUpgrade
 	}
@@ -55,7 +60,7 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	c := &Call{caller: caller, site: site, Format: protocol.Messages}
+	c := &Call{caller: caller, site: site, Format: format, gemini: gemini}
 	defer c.Done()
 	slot, err := h.Limits.InFlight.Acquire(accountKey(caller), 0)
 	if err != nil {
@@ -65,6 +70,11 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) (int64, error) {
 	body, err := h.readBody(w, r, c)
 	if err != nil {
 		return 0, err
+	}
+	if gemini != nil {
+		if body, err = h.geminiBody(c, body); err != nil {
+			return 0, err
+		}
 	}
 	body, req, err := h.expandPreset(c, body)
 	if err != nil {
