@@ -213,6 +213,9 @@ func (s *chatMessageBlocks) flush() {
 		return
 	}
 	msg := requestObject{"role": jsonValue(s.role), "content": jsonValue(s.parts)}
+	if len(s.parts) == 0 {
+		msg["content"] = jsonValue("") // Chat refuses an empty array of parts; a turn of calls or reasoning has no text
+	}
 	if len(s.calls) > 0 {
 		msg["tool_calls"] = jsonValue(s.calls)
 	}
