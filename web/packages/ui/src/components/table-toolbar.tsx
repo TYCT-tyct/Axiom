@@ -1,8 +1,8 @@
 import { type ReactNode, useEffect, useRef } from "react";
 import { board } from "../board-classes";
 import { classes } from "../classes";
-import { useFormat } from "../format";
 import { Icon } from "./icon";
+import { ListCount } from "./list-count";
 import { SegmentedControl } from "./segmented-control";
 import s from "./table-toolbar.module.css";
 
@@ -41,7 +41,6 @@ export function TableToolbar<V extends string>({
   unit: string;
   children?: ReactNode;
 }) {
-  const format = useFormat();
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => {
     const jump = (event: KeyboardEvent) => {
@@ -53,7 +52,6 @@ export function TableToolbar<V extends string>({
     document.addEventListener("keydown", jump);
     return () => document.removeEventListener("keydown", jump);
   }, []);
-  const count = shown === total ? format.number(total) : `${format.number(shown)} / ${format.number(total)}`;
   return (
     <search aria-label={label} className={s.root}>
       <label className={s.search}>
@@ -78,9 +76,7 @@ export function TableToolbar<V extends string>({
         <kbd>{"/"}</kbd>
       </label>
       {filter ? <Filter {...filter} /> : null}
-      <span className={s.count} role="status">
-        {`${count} ${unit}`}
-      </span>
+      <ListCount shown={shown} total={total} unit={unit} />
       {children}
     </search>
   );

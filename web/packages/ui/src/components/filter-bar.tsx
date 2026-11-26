@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
-import { useFormat } from "../format";
+import { classes } from "../classes";
 import { ActionButton } from "./action-button";
 import { Field, Select } from "./field";
 import s from "./filter-bar.module.css";
+import { ListCount } from "./list-count";
 import { SegmentedControl } from "./segmented-control";
 
 type Option = { value: string; label: string };
@@ -41,7 +42,6 @@ export function FilterBar<K extends string>({
   count?: { shown: number; total: number; unit: string };
 }) {
   const { t } = useTranslation("common");
-  const format = useFormat();
   const active = filters.some((filter) => values[filter.key] !== filter.initial);
   return (
     <search aria-label={label} className={s.root}>
@@ -72,15 +72,9 @@ export function FilterBar<K extends string>({
           )}
         </div>
       ))}
-      {count ? (
-        <span className={s.count} role="status">
-          {count.shown === count.total
-            ? ""
-            : `${format.number(count.shown)} / ${format.number(count.total)} ${count.unit}`}
-        </span>
-      ) : null}
+      {count ? <ListCount {...count} whileFiltered /> : null}
       {active ? (
-        <div className={s.clear}>
+        <div className={classes(s.clear, count && s.afterCount)}>
           <ActionButton variant="gho" icon="close" onClick={onClear}>
             {t("filters.clear")}
           </ActionButton>
