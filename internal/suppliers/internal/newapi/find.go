@@ -22,27 +22,9 @@ const maxFound = 5
 // mask is the text's is a candidate, and reading its text (KeySecret) confirms it whole, compared in constant time.
 func (m *manager) FindKey(ctx context.Context, text secret.Secret) (adapter.KeyState, bool, error) {
 	plain := strings.TrimPrefix(text.Reveal(), "sk-")
-	mask := []byte(maskKey(plain))
-	var candidates []adapter.KeyState
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
-		}
-		tokens, _, err := m.keyPage(ctx, page)
-		if err != nil {
-			return adapter.KeyState{}, false, err
-		}
-		for _, t := range tokens {
-			if subtle.ConstantTimeCompare([]byte(t.masked), mask) == 1 {
-				candidates = append(candidates, t.state)
-			}
-		}
-		if len(tokens) < keyPageSize {
-			break
-		}
-	}
-	if len(candidates) > maxFound {
-		return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d keys share the text's mask", adapter.ErrUnrecognised, maxFound)
+	candidates, err := m.masked(ctx, []byte(maskKey(plain)))
+	if err != nil {
+		return adapter.KeyState{}, false, err
 	}
 	want := []byte("sk-" + plain)
 	for _, c := range candidates {
@@ -55,6 +37,32 @@ func (m *manager) FindKey(ctx context.Context, text secret.Secret) (adapter.KeyS
 		}
 	}
 	return adapter.KeyState{}, false, nil
+}
+
+// masked is every key of the account's listing whose mask is mask; more than maxFound is no answer.
+func (m *manager) masked(ctx context.Context, mask []byte) ([]adapter.KeyState, error) {
+	var candidates []adapter.KeyState
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return nil, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
+		}
+		tokens, _, err := m.keyPage(ctx, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tokens {
+			if subtle.ConstantTimeCompare([]byte(t.masked), mask) == 1 {
+				candidates = append(candidates, t.state)
+			}
+		}
+		if len(tokens) < keyPageSize {
+			break
+		}
+	}
+	if len(candidates) > maxFound {
+		return nil, fmt.Errorf("%w: more than %d keys share the text's mask", adapter.ErrUnrecognised, maxFound)
+	}
+	return candidates, nil
 }
 
 // maskKey is new-api's MaskTokenKey (model/token.go), which its listing shows each key as: the key without "sk-", its
