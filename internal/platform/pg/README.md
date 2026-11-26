@@ -59,6 +59,18 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 - `platform.migration_checksums` 与版本行同事务记录 SHA-256，执行前核对全部历史，改过、改名、删掉即停止；CI 用 `just migrations <base>` 检查。
 - 取得锁后、执行任何待执行迁移前，Axiom 的 schema（各模块与 `river`）里有 `indisvalid = false` 的索引即停止，错误列出每个索引的 `DROP INDEX CONCURRENTLY <名字>;`：中断的 `CREATE INDEX CONCURRENTLY` 会留下同名的无效索引，重跑时 `IF NOT EXISTS` 会跳过它并把迁移记为完成。失败的那次迁移还没有记录，按提示以 `axiom_owner` 删掉后重跑 `axiom migrate`，由它重建。
 
+## 在线迁移
+
+首次生产部署之后，每个迁移都在有数据、有流量的库上执行。`lock_timeout` 只限制等锁，拿到锁之后的扫描和改写不受限，持锁期间挡住业务的读写。规则：
+
+- **短事务扩展**：事务内的迁移只做改目录的变更：建新表，加可空列或常量默认值的列，加 `NOT VALID` 约束；不在同一事务里改已有表的数据或扫全表。
+- **分批回填**：回填已有表放在 `-- +goose NO TRANSACTION` 的迁移或任务里，按主键区间分批、每批单独提交，条件只选还没回填的行，中断后重跑从剩下的继续。全部回填后再用新迁移收紧：先加 `CHECK (列 IS NOT NULL) NOT VALID` 并验证，`SET NOT NULL` 就不再扫表。
+- **独立验证**：外键和 `CHECK` 先以 `NOT VALID` 加上，`VALIDATE CONSTRAINT` 放在之后的迁移：它只取 `SHARE UPDATE EXCLUSIVE`，不挡读写；同一事务里接着验证，会一直持有加约束时的强锁。
+- **并发索引**：已有表的索引用 `CREATE INDEX CONCURRENTLY IF NOT EXISTS`，放在 `NO TRANSACTION` 迁移里，中断后重跑跳过已建好的；中断留下的无效索引由上节的检查拦下。分区表先 `CREATE INDEX … ON ONLY` 父表，再在每个分区并发建索引并 `ATTACH PARTITION`。唯一约束先并发建唯一索引，再 `ADD CONSTRAINT … UNIQUE USING INDEX`。
+- 有数据的库升级前，在接近生产规模的数据上演练并计时。
+
+`just migrations <base>`（`scripts/migration_safety.py`）拒绝新增迁移里的：已有表上不带 `CONCURRENTLY` 的 `CREATE INDEX`（`ON ONLY` 除外）、没有 `NO TRANSACTION` 的 `CONCURRENTLY`、已有表上不带 `NOT VALID` 的外键或 `CHECK`、与加约束同一事务的 `VALIDATE CONSTRAINT`、事务内对已有表的 `UPDATE` 或 `INSERT … SELECT`。已有表指同一文件没有创建的表；函数体和 `DO` 块不检查。确属小表的语句在前一行写 `-- migration-safety: <为什么有界>`，由评审核对。检查只看相对基础提交新增的文件：已合并的迁移不能再改，所以基础提交就是起点，发布时不需要移动。在此之前合并、不符合规则的迁移（各模块 `00049` 之后的现有文件）在首次生产部署时面对的是空库，不在有数据的库上执行。
+
 ## 验证
 
 复现实验：`flock /tmp/axiom-remote-check.lock python3 internal/platform/pg/testdata/compare-scope.py --output scope-comparison.json`。JSON 保留完整计划，计时只作证据，不作 CI 门槛。
