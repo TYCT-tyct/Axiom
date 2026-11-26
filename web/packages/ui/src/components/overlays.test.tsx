@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { createInstance } from "i18next";
-import { act, type ReactElement } from "react";
+import { act, type ReactElement, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, beforeAll, expect, it, vi } from "vitest";
@@ -101,5 +101,55 @@ it("SidePanel renders .nkdlg.side with live-save status and closes cleanly", asy
   // The way out (.out) comes first; the dialog closes when it has played, at once without animations.
   await act(async () => (dialog.querySelector('button[aria-label="关闭"]') as HTMLButtonElement).click());
   expect(dialog.className).toContain("out");
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+// A drawer opened from a list walks it: the counter and the buttons follow the row, the keys step unless a field holds
+// focus, neither end steps past itself, and Escape still closes.
+it("SidePanel drawer steps through its list by buttons and keys, and closes on Escape", async () => {
+  const rows = ["a", "b", "c"];
+  const onClose = vi.fn();
+  function Walk() {
+    const [at, setAt] = useState(1);
+    return (
+      <SidePanel
+        drawer
+        title={rows[at] ?? ""}
+        onClose={onClose}
+        steps={{
+          index: at,
+          count: rows.length,
+          onStep: (by) => setAt(at + by),
+          previousLabel: "prev",
+          nextLabel: "next",
+        }}
+      >
+        <input aria-label="note" />
+      </SidePanel>
+    );
+  }
+  const box = mount(<Walk />);
+  const dialog = box.querySelector("dialog") as HTMLDialogElement;
+  const title = () => dialog.querySelector("h2")?.textContent;
+  const button = (name: string) => dialog.querySelector(`button[aria-label="${name}"]`) as HTMLButtonElement;
+  const press = (key: string, target: Element = dialog) =>
+    act(() => target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })));
+  expect(dialog.className).not.toContain("nkdlg");
+  expect(dialog.textContent).toContain("2 / 3");
+  act(() => button("next").click());
+  expect(title()).toBe("c");
+  expect(button("next").getAttribute("aria-disabled")).toBe("true");
+  act(() => button("next").click());
+  press("j");
+  press("ArrowDown");
+  expect(title()).toBe("c");
+  press("k");
+  expect(title()).toBe("b");
+  press("ArrowUp");
+  expect(title()).toBe("a");
+  expect(dialog.textContent).toContain("1 / 3");
+  press("j", dialog.querySelector("input") as HTMLInputElement);
+  expect(title()).toBe("a");
+  await act(async () => dialog.dispatchEvent(new Event("cancel", { cancelable: true })));
   expect(onClose).toHaveBeenCalledTimes(1);
 });

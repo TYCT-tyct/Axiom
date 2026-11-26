@@ -1,4 +1,107 @@
-/* Wrapping supplement for long detail text on top of .qrow/.qrl/.qrc (AxApp/regions.css). */
+/* Wrapping supplement for long detail text on top of .qrow/.qrl/.qrc (AxApp/regions.css), and a row edited in place
+   (.adrow, .admod, .adrst, .adflash in admin_style.css). */
 .detail {
   overflow-wrap: anywhere;
+}
+
+.root {
+  position: relative;
+}
+
+.words {
+  flex: 1;
+}
+
+.words > .detail {
+  max-width: 560px;
+}
+
+.title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.mark {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accentSolid);
+  opacity: 0;
+  transform: scale(0.4);
+  transition:
+    opacity 250ms ease-out,
+    transform 250ms ease-out;
+}
+
+.dirty .mark {
+  opacity: 1;
+  transform: none;
+}
+
+.reset {
+  all: unset;
+  position: relative;
+  font-size: var(--fs12);
+  font-weight: 400;
+  color: var(--t2);
+  text-decoration: underline;
+  text-decoration-color: var(--line3);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 250ms ease-out,
+    color 250ms ease-out;
+}
+
+.dirty .reset {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.reset:hover {
+  color: var(--t1);
+}
+
+.reset:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r4);
+}
+
+/* Reached from search: the row lights in the accent wash, holds, and fades (adFlash). */
+.flash::before {
+  content: "";
+  position: absolute;
+  inset: 0 -12px;
+  border-radius: var(--r8);
+  background: var(--accentWash);
+  animation: flash 1600ms ease-out both;
+  pointer-events: none;
+}
+
+.flash > * {
+  position: relative;
+}
+
+@keyframes flash {
+  0%,
+  55% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0;
+  }
+}
+
+@media (max-width: 599px) {
+  .reset::before {
+    content: "";
+    position: absolute;
+    inset: min(0px, calc((100% - 44px) / 2));
+  }
 }
