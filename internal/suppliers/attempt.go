@@ -75,7 +75,8 @@ func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt 
 }
 
 // wire is the path and, for Anthropic's format, the version header every system takes the same way. The key goes in
-// Authorization: Bearer, which new-api and sub2api both accept on all three.
+// Authorization: Bearer, which new-api and sub2api both accept on all three; a provider's own API says otherwise
+// (adapter.Wire).
 var wire = map[protocol.Format]struct {
 	path    string
 	version string
@@ -86,6 +87,15 @@ var wire = map[protocol.Format]struct {
 	protocol.Embeddings:  {path: "/v1/embeddings"},
 	protocol.Rerank:      {path: "/v1/rerank"},
 	protocol.Completions: {path: "/v1/completions"},
+}
+
+// relayWire is how every relay takes a call: at the format's path, with the key as a bearer token.
+type relayWire struct{}
+
+func (relayWire) Path(_ protocol.Format, path string) string { return path }
+
+func (relayWire) Authorize(h http.Header, _ protocol.Format, key string) {
+	h.Set("Authorization", "Bearer "+key)
 }
 
 // compactPaths are the formats' compaction endpoints: the one call the supplier answers whole, whose path is not the
@@ -171,15 +181,15 @@ func (c *Capacity) Full() bool {
 }
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
-// count of attempts it was found with.
+// count of attempts it was found with. Each credential is held to its upstream account's rolling minute: a relay's
+// credentials share one, so it is counted once, and a pasted key's is its own.
 func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, bestN int32) {
-	if len(ep.creds) == 0 {
-		return nil, 0
-	}
-	used := ep.creds[0].rt.requests.count(now)
-	var bestLoad float64
+	var (
+		bestLoad float64
+		minute   accountMinute
+	)
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || (c.perMinute != 0 && used >= int64(c.perMinute)) {
+		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || minute.full(c, now) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -195,6 +205,23 @@ func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, 
 		}
 	}
 	return best, bestN
+}
+
+// accountMinute is the rolling minute of the upstream account last looked at, read once for all of its credentials.
+type accountMinute struct {
+	account *minuteRuntime
+	used    int64
+}
+
+// full reports whether the credential's account has used its ceiling this minute; a credential with none never is.
+func (m *accountMinute) full(c *credential, now time.Time) bool {
+	if c.perMinute == 0 {
+		return false
+	}
+	if c.rt.requests != m.account {
+		m.account, m.used = c.rt.requests, c.rt.requests.count(now)
+	}
+	return m.used >= int64(c.perMinute)
 }
 
 // NotExecuted is the Executed of a failure after which the supplier is known not to have run the request; any other
@@ -276,12 +303,16 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 			return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 		}
 	}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+path, bytes.NewReader(call.Body))
+	wire, own := a.ep.quirks.(adapter.Wire)
+	if !own {
+		wire = relayWire{}
+	}
+	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	maps.Copy(req.Header, call.Header)
-	req.Header.Set("Authorization", "Bearer "+a.cred.key.Reveal())
+	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal())
 	req.Header.Set("Content-Type", "application/json")
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)

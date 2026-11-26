@@ -22,6 +22,9 @@ type Supplier struct {
 	BalanceNative, LowBalanceThreshold  string
 	BalanceObservedAt                   *time.Time
 	UnitValue                           string
+	// Mode is how Axiom reaches it: relay, direct or cloud. APIFormat is the family a compatible direct API speaks,
+	// empty for every other.
+	Mode, APIFormat string
 }
 
 func supplierOf(r store.GetSupplierViewRow) Supplier {
@@ -30,7 +33,7 @@ func supplierOf(r store.GetSupplierViewRow) Supplier {
 		Generation: deref(r.Generation), DetectedVersion: deref(r.DetectedVersion), NativeUnit: r.NativeUnit,
 		SettlementCurrency: r.SettlementCurrency, Status: Status(r.Status), StatusReason: deref(r.StatusReason),
 		BalanceNative: r.BalanceNative, LowBalanceThreshold: r.LowBalanceThreshold, BalanceObservedAt: r.BalanceObservedAt,
-		UnitValue: r.UnitValue,
+		UnitValue: r.UnitValue, Mode: r.Mode, APIFormat: deref(r.ApiFormat),
 	}
 }
 

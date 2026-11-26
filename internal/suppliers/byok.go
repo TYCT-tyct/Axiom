@@ -149,13 +149,8 @@ func byokInput(r ByokRequest, models []ByokModel) (name, origin, key string, err
 		return "", "", "", ErrByokProvider
 	}
 	key = strings.TrimSpace(r.Key)
-	if len(key) < 8 || len(key) > 4096 {
+	if !bearerToken(key) {
 		return "", "", "", ErrByokKey
-	}
-	for _, c := range key {
-		if c <= ' ' || c == unicode.ReplacementChar {
-			return "", "", "", ErrByokKey
-		}
 	}
 	if len(models) == 0 {
 		return "", "", "", ErrByokModels
@@ -234,6 +229,15 @@ func insertByokModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group
 		}
 	}
 	return nil
+}
+
+// bearerToken reports whether a trimmed key could be a provider's bearer token: 8 to 4096 bytes, with no space, control
+// byte or invalid UTF-8 in it.
+func bearerToken(key string) bool {
+	if len(key) < 8 || len(key) > 4096 {
+		return false
+	}
+	return !strings.ContainsFunc(key, func(c rune) bool { return c <= ' ' || c == unicode.ReplacementChar })
 }
 
 // hintOf is the last four characters of a key, which is what the console shows after the key is saved.

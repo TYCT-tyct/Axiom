@@ -10,9 +10,10 @@
 internal/suppliers/            公开接口：Service（调用面）、RecordAttempts 等写入、Admin（管理接口）、BYOK、
                                CheckAdapters、RegisterSync、RegisterReconcile、PriceCosts
 internal/suppliers/internal/
-  adapter/      契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、Pool、UsageQueue
+  adapter/      契约：Adapter、Manager、CallQuirks、Failure、CallPolicy、Client、BucketSpec，可选 Onboarding、KeyMaker、Pool、UsageQueue、Direct、Wire
   registry/     唯一同时引用所有适配器的文件，一个内置适配器一行，另加声明式目录
-  newapi/ sub2api/ cpa/ openai/   内置适配器（testdata/ 是脱敏样本）
+  newapi/ sub2api/ cpa/   中转站和号池的内置适配器（testdata/ 是脱敏样本）
+  openai/ anthropic/ google/ moonshot/ compatible/   直连接口，共用 direct/
   declared/     声明式适配器
   client/       适配器唯一的出站入口：egress 加限速桶（进程内 Limiter、数据库 SharedLimiter）
   collector/    CPA 用量队列的常驻采集器
@@ -30,7 +31,7 @@ schema `suppliers`，版本表 `platform.goose_suppliers`，迁移只增不改�
 
 | 表 | 键与约束 |
 |---|---|
-| `suppliers` | `UNIQUE (origin, upstream_account)`；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
+| `suppliers` | `UNIQUE (origin, upstream_account)`；`mode`（relay、direct、cloud）和 `api_format` 创建后不变；归属列与 `owner_scope` 由 CHECK 保持一致；余额、倍率、阈值是有限 `numeric`；`status_reason` 至多 200 字符 |
 | `supplier_logins` | PK `supplier_id`；信封加密的登录，`version` 供比较后再写 |
 | `supplier_groups` | `UNIQUE (supplier_id, upstream_ref)`；代号全局唯一、设定后不变；`key_error` 与 `key_retry_at` 同空同有；`pool_*` 号池读数 |
 | `credentials` | `UNIQUE (supplier_id, upstream_key_ref)`；`erased` 不能还有密文；RPM 1 到 100,000 或空；`id` 由调用方生成（加密位置要先知道行 ID） |
@@ -91,7 +92,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 
 ## 并发与速率
 
-- **窗口**：每个上游账号固定 61 个一秒桶，按首次准入起的单调秒索引，每个桶带自己的秒标记、过期读作 0。`Acquire` 先比较交换占并发位，再在账号锁里读时钟、汇总 [now-60, now] 并加一；失败就还回并发位换一把 key。所以任意滚动 60 秒不超过所选凭证的上限，边界上最多少放行不到一秒；时钟回拨不重开旧桶；成功计入的请求不退。一秒的计数饱和在 100,000（`MaxRequestsPerMinute`），不会溢出。
+- **窗口**：每个上游账号（中转站是供应商，直连和云平台是凭证）固定 61 个一秒桶，按首次准入起的单调秒索引，每个桶带自己的秒标记、过期读作 0。`Acquire` 先比较交换占并发位，再在账号锁里读时钟、汇总 [now-60, now] 并加一；失败就还回并发位换一把 key。所以任意滚动 60 秒不超过所选凭证的上限，边界上最多少放行不到一秒；时钟回拨不重开旧桶；成功计入的请求不退。一秒的计数饱和在 100,000（`MaxRequestsPerMinute`），不会溢出。
 - **容量视图**：`Capacity` 用与 `Acquire` 相同的 `leastBusy` 判断，一次原子读、一次凭证扫描、每端点一次账号窗口的加锁读，不写不占；真正占位仍以 `Acquire` 为准，两个调用抢一个空位只有一个成功。
 - **静态份额**：`Config.Nodes` 接入 `platform.nodes` 的存活成员，`SyncShares` 每秒在后台重算。按节点 ID 排序，额度 C 分成 `C/N`，前 `C%N` 个各加一；C < N 时只有前 C 个各得 1，有限 RPM 分得 0 即不可选。份额变化时，每个节点先发布按新旧列表逐项取小的份额，等本节点在途和 RPM 用量都降到目标后才确认；新成员在之前有份额的成员都确认包含它之前份额为 0。交接比较完整的带启动身份的成员列表，不只比较人数。
 - **失联与退出**：注册表按 30 秒判失联。准入期限是自己心跳剩余寿命减 5 秒、至多 25 秒，过期即停止本节点准入并以加入者重新进入。离开节点的成员视图继续约束有限 RPM：失联按最后心跳 30 秒再保留 61 秒，优雅退出按退出时刻保留 61 秒（`platform.credential_share_departures`）。心跳失联不证明上游已停止失联节点发出的请求。
@@ -126,7 +127,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | 5xx 不会被当成"未执行" | `Classify` 先排除 5xx；`adaptertest` |
 | 供应商只在自己的范围内可见、可写；子表、分组、凭证、别名、端点属于同一供应商 | 策略和复合外键；测试逐范围、逐表 |
 | 身份和凭证发往的地址不能改 | 按列授权；`client.New` 只接受裸 origin |
-| 没有余额、没确认单位价值、没有成本计划或停用的端点不进路由 | `ListRoutable`；写入侧拿到计划才置 `known` |
+| 没有余额（`mode` 是 relay 时）、没确认单位价值、没有成本计划或停用的端点不进路由 | `ListRoutable`；写入侧拿到计划才置 `known` |
 | 人停用的端点不被同步重开 | 投影的 UPDATE 不含 `enabled` |
 | 一家读不出不拖垮其余；`Reload` 持续失败时不无限期沿用旧端点 | 按供应商排除；`MaxStale` |
 | 一个凭证不超过并发位和滚动 60 秒上限 | `Acquire` 的比较交换和账号锁内的读钟计数 |
@@ -140,7 +141,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 | 多节点合计不超过对方的限速 | `SharedLimiter` 一个事务内按键序 `INSERT … ON CONFLICT DO UPDATE` 占全部桶，全取或全不取；桶名去重；429 封桶对所有节点生效 |
 | 退出信号不取消在跑的同步 | `pg.Queue.Start` 与启动 context 脱钩，只有 `Stop` 的期限取消 |
 | 移除后库里没有这家的密文，做过的尝试仍能结算 | `Admin.Remove` 一个事务；`erased` 的 CHECK |
-| 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`（平台范围）；`just adapters-removable` 对 new-api、sub2api、cpa、openai |
+| 正常供应商一定有注册的适配器；删任一适配器其余照常编译 | `CheckAdapters`（平台范围）；`just adapters-removable` 对注册表的每一个 |
 | 检测成本行不被对账判 | `reconcile.judge` 见 `test` 即返回 |
 
 ## 管理接口
@@ -151,6 +152,7 @@ func PriceCosts(ctx context.Context, tx pg.Tx) ([]PriceCost, error) // 从库投
 |---|---|
 | `NormalizeOrigin`、`CheckOrigin`（只在执行改动的幂等回调里）、`Detect` | `ErrBadOrigin`、`ErrAddressRefused`、`ErrUnreachable` |
 | `Connect` | `ErrNoAdapter`、`*LoginError`（只带字段名）、`ErrSupplierExists` |
+| `PlanDirect`、`CheckDirect`、`CreateDirect`（直连接口，规则见[领域文档](../../docs/domains/suppliers.md#直连接口)） | `ErrDirectProvider`、`ErrDirectOrigin`、`ErrDirectFormat`、`ErrDirectGemini`、`ErrDirectCurrency`、`ErrDirectName`、`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
 | `SetStatus`、`Remove`、`ReplaceLogin` | `ErrStatusLocked`、`ErrNoSupplier` |
 | `ConfirmUnitValue` | `ErrUnitValue` |
 | `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound` |

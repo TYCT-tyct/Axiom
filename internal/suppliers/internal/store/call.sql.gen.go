@@ -394,7 +394,7 @@ JOIN suppliers.suppliers s ON s.id=e.supplier_id
 JOIN suppliers.supplier_groups g ON g.id=e.supplier_group_id AND g.selected AND g.present
 JOIN LATERAL (SELECT u.id,u.value FROM suppliers.unit_values u WHERE u.supplier_id=s.id AND u.currency=s.settlement_currency AND u.native_unit=s.native_unit ORDER BY u.id DESC LIMIT 1) v ON true
 JOIN suppliers.cost_schedules cs ON cs.id=e.cost_schedule_id
-WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND s.balance_native>0
+WHERE e.enabled AND e.cost_state='known' AND s.status IN ('active','low_balance') AND (s.balance_native>0 OR s.mode<>'relay')
 AND EXISTS (SELECT 1 FROM suppliers.credentials c WHERE c.supplier_group_id=e.supplier_group_id AND c.status='active' AND c.ciphertext IS NOT NULL
     AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models)))
 ORDER BY e.id
@@ -439,7 +439,7 @@ func (q *Queries) ListPriceCosts(ctx context.Context, db DBTX) ([]ListPriceCosts
 
 const listRoutable = `-- name: ListRoutable :many
 SELECT e.id AS endpoint_id, e.upstream_name, e.model_id, e.formats, e.quantization, e.supplier_id, g.codename, g.pool_low, s.kind, s.origin, s.native_unit, s.owner_scope, s.site_id, s.account_id,
-    s.balance_native::text AS balance_native, s.balance_observed_at, s.settlement_currency, s.status, s.byok_fallback, v.id AS unit_value_id, v.value::text AS unit_value,
+    coalesce(s.balance_native, 0)::text AS balance_native, s.balance_observed_at, s.settlement_currency, s.status, s.byok_fallback, s.mode, v.id AS unit_value_id, v.value::text AS unit_value,
     c.id AS credential_id, c.ciphertext, c.nonce, c.wrapped_dek, c.key_version, c.max_concurrency, c.expires_at,
     c.requests_per_minute,
     cs.id AS cost_schedule_id, cs.schedule
@@ -450,7 +450,8 @@ JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id AND g.selected AN
 JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active' AND c.ciphertext IS NOT NULL
     AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models))
 JOIN suppliers.cost_schedules cs ON cs.id = e.cost_schedule_id
-WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance', 'byok') AND s.balance_native > 0
+WHERE e.enabled AND e.cost_state = 'known' AND s.status IN ('active', 'low_balance', 'byok')
+    AND (s.balance_native > 0 OR s.mode <> 'relay')
 ORDER BY e.id, c.id
 `
 
@@ -474,6 +475,7 @@ type ListRoutableRow struct {
 	SettlementCurrency string
 	Status             string
 	ByokFallback       bool
+	Mode               string
 	UnitValueID        uuid.UUID
 	UnitValue          string
 	CredentialID       uuid.UUID
@@ -488,8 +490,8 @@ type ListRoutableRow struct {
 	Schedule           []byte
 }
 
-// Every credential that can serve an endpoint: the supplier in use with a balance above zero and a unit value
-// confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
+// Every credential that can serve an endpoint: the supplier in use with a balance above zero, or one with no balance to
+// read (any mode but a relay's), and a unit value confirmed, the group chosen, the endpoint enabled with a cost known, and a key that is bound. A supplier whose balance
 // was never read is out, as one without a confirmed unit value is. The unit value is the latest confirmed for this
 // currency and native unit. Expiry and cooldown are judged by the clock when a credential is picked. upstream_name is the model's name at the supplier, as a
 // call must send it; model_id is the catalog model the snapshot of routing names it by.
@@ -522,6 +524,7 @@ func (q *Queries) ListRoutable(ctx context.Context, db DBTX) ([]ListRoutableRow,
 			&i.SettlementCurrency,
 			&i.Status,
 			&i.ByokFallback,
+			&i.Mode,
 			&i.UnitValueID,
 			&i.UnitValue,
 			&i.CredentialID,
