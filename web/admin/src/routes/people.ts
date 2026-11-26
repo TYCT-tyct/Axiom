@@ -24,6 +24,7 @@ export const peopleRoutes = [
   shellPage("/users", users, usersSearch),
   shellPage("/users/accounts", users, usersSearch),
   shellPage("/users/roles", users, usersSearch),
+  shellPage("/users/tiers", users, usersSearch),
   movedPage("/accounts/$accountId", ({ accountId }) => ({ to: "/users/accounts", search: { selected: accountId } })),
   shellPage("/subscriptions", subscriptions, usersSearch),
   shellPage("/subscriptions/plans", subscriptions, withInactive),
