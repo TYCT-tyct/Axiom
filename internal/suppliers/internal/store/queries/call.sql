@@ -124,8 +124,13 @@ VALUES (@charge_record_id, @revision, @payload)
 ON CONFLICT (charge_record_id, revision) DO NOTHING;
 
 -- name: DelistEndpoint :execrows
-UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
-WHERE id = @id AND cost_state = 'known' AND cost_schedule_id = @cost_schedule_id;
+-- The endpoint is delisted while it is still costed at the estimate the charge found too low: the schedule the attempt
+-- was priced by, or a later version at the same prices, which the sync makes when only the factors change.
+UPDATE suppliers.endpoints e SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
+WHERE e.id = @id AND e.cost_state = 'known' AND EXISTS (
+    SELECT 1 FROM suppliers.cost_schedules cur JOIN suppliers.cost_schedules was ON was.id = @cost_schedule_id
+    WHERE cur.id = e.cost_schedule_id
+      AND (cur.id = was.id OR (cur.schedule = was.schedule AND cur.native_unit = was.native_unit)));
 
 -- name: ListUnmatchedAttempts :many
 -- One batch of the attempts waiting past the grace, in a fixed order, after the position of the last one given before.

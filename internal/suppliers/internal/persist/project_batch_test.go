@@ -59,7 +59,7 @@ func setRowCost(ctx context.Context, db store.DBTX, r store.EnsureCostSchedulePa
 	if err != nil {
 		return err
 	}
-	return q.SetProjectedEndpointCost(ctx, db, store.SetProjectedEndpointCostParams{ID: r.EndpointID, CostScheduleID: &id})
+	return q.SetProjectedEndpointCost(ctx, db, store.SetProjectedEndpointCostParams{ID: r.EndpointID, CostScheduleID: id})
 }
 
 func projectionDB(t testing.TB) (*pg.DB, uuid.UUID) {
