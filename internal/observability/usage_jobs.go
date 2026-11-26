@@ -41,6 +41,9 @@ const usageBatchSize = 1000
 func (w *usageWorker) work(ctx context.Context, _ *river.Job[usageArgs]) error {
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := w.db.Tx(ctx, w.scope, func(tx pg.Tx) error { return pruneMonitor(ctx, tx) }); err != nil {
+		return err
+	}
 	// Each committed batch survives a later failure. Both time and batch count bound a turn on the archive queue.
 	for range 100 {
 		var more bool
@@ -81,6 +84,14 @@ func rollupUsageBatch(ctx context.Context, tx pg.Tx, size int32) (bool, error) {
 		// Backfill must not consume the capacity reserved for live arrivals.
 		consumeSize += backfill.Enqueued
 	}
-	n, err := store.New().ConsumeUsageJournal(ctx, tx, consumeSize)
+	n, err := store.New().ConsumeUsageJournal(ctx, tx, store.ConsumeUsageJournalParams{BatchSize: consumeSize, Bounds: latencyBounds[:]})
 	return !done || n == consumeSize, err
+}
+
+// pruneMonitor deletes the monitor's rows that no window reaches any more, once a turn: the rollup only adds to them.
+func pruneMonitor(ctx context.Context, tx pg.Tx) error {
+	if err := store.New().PruneMonitor(ctx, tx); err != nil {
+		return err
+	}
+	return store.New().PruneMonitorLatency(ctx, tx)
 }

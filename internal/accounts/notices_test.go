@@ -11,6 +11,7 @@ import (
 
 	"axiom/internal/accounts"
 	axmail "axiom/internal/platform/mail"
+	"axiom/internal/platform/page"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/pgtest"
 )
@@ -393,5 +394,79 @@ func TestSpendAnomalyNoticeHonoursPreferenceAndDeduplicates(t *testing.T) {
 	record("incident-3")
 	if got := texts(t, db, platform, `SELECT count(*)::text FROM accounts.user_notices WHERE kind='spend_anomaly'`); got[0] != "2" {
 		t.Fatalf("enabled reminder: %v", got)
+	}
+}
+
+// allAnnouncements reads every page of q.
+func allAnnouncements(t *testing.T, db *pg.DB, q accounts.AnnouncementQuery) []accounts.AdminAnnouncement {
+	t.Helper()
+	var all []accounts.AdminAnnouncement
+	for {
+		var rows []accounts.AdminAnnouncement
+		var next *page.Cursor
+		if err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) (err error) {
+			rows, next, err = accounts.ListAllAnnouncements(t.Context(), tx, q)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		all = append(all, rows...)
+		if next == nil {
+			return all
+		}
+		q.After = next
+	}
+}
+
+// TestAdminAnnouncementsListEveryStateAndPage: the admin's list has every site's announcements newest first, with the
+// state of each at the database's clock, a withdrawn one included; the state and site filters are exact and the
+// pages neither skip nor repeat.
+func TestAdminAnnouncementsListEveryStateAndPage(t *testing.T) {
+	t.Parallel()
+	db, _ := open(t)
+	now := time.Now().UTC()
+	// Each title is the state the announcement should be in.
+	publish := func(site uuid.UUID, title string, starts, ends time.Duration) accounts.AnnouncementID {
+		a := accounts.Announcement{ID: accounts.AnnouncementID(uuid.NewV7()), Site: site, Title: title, Body: "x", StartsAt: now.Add(starts), EndsAt: now.Add(ends)}
+		noticeTx(t, db, func(tx pg.Tx) error { return accounts.PublishAnnouncement(t.Context(), tx, a) })
+		return a.ID
+	}
+	publish(s1, "scheduled", time.Hour, 2*time.Hour)
+	publish(s1, "showing", -time.Hour, time.Hour)
+	publish(s1, "ended", -2*time.Hour, -time.Hour)
+	withdrawn := publish(s1, "withdrawn", -3*time.Hour, time.Hour)
+	publish(s2, "showing", -4*time.Hour, time.Hour)
+	noticeTx(t, db, func(tx pg.Tx) error { return accounts.WithdrawAnnouncement(t.Context(), tx, withdrawn) })
+	list := func(q accounts.AnnouncementQuery) []accounts.AdminAnnouncement { return allAnnouncements(t, db, q) }
+	all := list(accounts.AnnouncementQuery{Limit: 2})
+	if len(all) != 5 {
+		t.Fatalf("every announcement: %+v", all)
+	}
+	for i, a := range all {
+		if i > 0 && !a.StartsAt.Before(all[i-1].StartsAt) {
+			t.Fatalf("not newest first: %+v", all)
+		}
+		if a.State != a.Title || (a.State == "withdrawn") != (a.WithdrawnAt != nil) {
+			t.Errorf("%q: state %s, withdrawn at %v", a.Title, a.State, a.WithdrawnAt)
+		}
+	}
+	for _, c := range []struct {
+		q    accounts.AnnouncementQuery
+		want int
+	}{
+		{accounts.AnnouncementQuery{State: "showing", Limit: 10}, 2},
+		{accounts.AnnouncementQuery{State: "withdrawn", Limit: 10}, 1},
+		{accounts.AnnouncementQuery{Site: &s2, Limit: 10}, 1},
+		{accounts.AnnouncementQuery{Site: &s1, State: "showing", Limit: 10}, 1},
+	} {
+		if got := list(c.q); len(got) != c.want {
+			t.Errorf("%+v: %d announcements, want %d", c.q, len(got), c.want)
+		}
+	}
+	if err := db.ReadTx(t.Context(), platform, func(tx pg.Tx) error {
+		_, _, err := accounts.ListAllAnnouncements(t.Context(), tx, accounts.AnnouncementQuery{State: "draft", Limit: 1})
+		return err
+	}); !errors.Is(err, accounts.ErrAnnouncementState) {
+		t.Fatalf("an unknown state: %v", err)
 	}
 }

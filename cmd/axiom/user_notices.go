@@ -94,6 +94,44 @@ func (c consoleAPI) ListAnnouncements(ctx context.Context, _ consoleapi.ListAnno
 	return adminJSON[consoleapi.ListAnnouncements200JSONResponse](map[string]any{"data": items})
 }
 
+// ListAdminAnnouncements lists every announcement, or one site's, newest first, with where each stands.
+func (a adminAPI) ListAdminAnnouncements(ctx context.Context, r adminapi.ListAdminAnnouncementsRequestObject) (adminapi.ListAdminAnnouncementsResponseObject, error) {
+	p := r.Params
+	q := accounts.AnnouncementQuery{Limit: pageSize(p.Limit)}
+	var err error
+	if q.Site, err = parseFilterID(p.SiteId, accounts.ParseSiteID, "site_id", "not a site ID"); err != nil {
+		return nil, err
+	}
+	if p.State != nil {
+		q.State = string(*p.State)
+	}
+	if q.After, err = pageCursorOf(p.Cursor); err != nil {
+		return nil, err
+	}
+	var rows []accounts.AdminAnnouncement
+	var next *string
+	err = a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) error {
+		found, cursor, err := accounts.ListAllAnnouncements(ctx, tx, q)
+		if cursor != nil {
+			v := cursor.String()
+			next = &v
+		}
+		rows = found
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	data := make([]adminapi.AdminAnnouncement, len(rows))
+	for i, n := range rows {
+		data[i] = adminapi.AdminAnnouncement{
+			Id: n.ID.TypeID(), SiteId: accounts.SiteID(n.Site).TypeID(), Title: n.Title, Body: n.Body,
+			StartsAt: n.StartsAt, EndsAt: n.EndsAt, State: adminapi.AnnouncementState(n.State), WithdrawnAt: n.WithdrawnAt,
+		}
+	}
+	return adminapi.ListAdminAnnouncements200JSONResponse{Data: data, NextCursor: next}, nil
+}
+
 func (a adminAPI) PublishAnnouncement(ctx context.Context, r adminapi.PublishAnnouncementRequestObject) (adminapi.PublishAnnouncementResponseObject, error) {
 	site, _, err := a.siteOf(r.Body.SiteId)
 	if err != nil {

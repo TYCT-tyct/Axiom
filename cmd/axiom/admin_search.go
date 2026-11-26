@@ -36,7 +36,26 @@ func summaryBody(c observability.CallSummary) (adminapi.AdminCallSummary, error)
 	if !c.Pending {
 		body["price"] = map[string]string{"amount": strconv.FormatInt(c.PriceNano, 10), "currency": c.Currency}
 	}
+	if len(c.Plugins) > 0 {
+		body["plugins"] = pluginRunsBody(c.Plugins, c.Currency)
+	}
 	return adminJSON[adminapi.AdminCallSummary](body)
+}
+
+// pluginRunsBody is what the call's plugins did; a price that cannot be told apart from the call's other per-use
+// items is left out rather than shown as zero.
+func pluginRunsBody(runs []observability.PluginRun, currency string) []map[string]any {
+	out := make([]map[string]any, len(runs))
+	for i, p := range runs {
+		out[i] = map[string]any{"plugin": p.Plugin, "ok": p.OK, "uses": p.Uses, "ms": p.Duration.Milliseconds()}
+		if p.Engine != "" {
+			out[i]["engine"] = p.Engine
+		}
+		if p.PriceNano >= 0 {
+			out[i]["price"] = map[string]string{"amount": strconv.FormatInt(p.PriceNano, 10), "currency": currency}
+		}
+	}
+	return out
 }
 
 // adminCallFilters adds the call list's optional exact filters: the dashboard's drill-down links carry the same
@@ -59,6 +78,14 @@ func adminCallFilters(q *observability.AdminQuery, p adminapi.ListAdminCallsPara
 	}
 	if p.Status != nil {
 		q.Status = string(*p.Status)
+	}
+	if p.Plugin != nil {
+		switch *p.Plugin {
+		case adminapi.Web, adminapi.FileParser:
+			q.Plugin = string(*p.Plugin)
+		default:
+			return invalidField("plugin", "choose web or file-parser")
+		}
 	}
 	if p.SiteId != nil {
 		id, err := accounts.ParseSiteID(*p.SiteId)
@@ -128,7 +155,7 @@ func (a adminAPI) GetAdminCallTrace(ctx context.Context, r adminapi.GetAdminCall
 	if err != nil {
 		return nil, err
 	}
-	summary, err := summaryBody(observability.CallSummary{ID: c.ID, Site: c.Site, Account: c.Account, At: c.At, Model: c.Model, ErrorKind: c.ErrorKind, LatencyMS: int(c.Latency.Milliseconds()), PriceNano: c.PriceNano, Currency: c.Currency.String(), Pending: c.BillingPending})
+	summary, err := summaryBody(observability.CallSummary{ID: c.ID, Site: c.Site, Account: c.Account, At: c.At, Model: c.Model, ErrorKind: c.ErrorKind, LatencyMS: int(c.Latency.Milliseconds()), PriceNano: c.PriceNano, Currency: c.Currency.String(), Pending: c.BillingPending, Plugins: c.Plugins})
 	if err != nil {
 		return nil, err
 	}

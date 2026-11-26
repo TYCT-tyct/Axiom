@@ -75,6 +75,9 @@ func traceCall(r store.GetCallTraceRow) (CallRecord, error) {
 	if c.Usage, err = traceUsage(r.Usage); err != nil {
 		return CallRecord{}, err
 	}
+	if c.Plugins, err = readPluginRuns([]byte(r.Plugins)); err != nil {
+		return CallRecord{}, err
+	}
 	if c.ServiceTier, err = catalog.ParseServiceTier(r.ServiceTier); err != nil {
 		return CallRecord{}, fmt.Errorf("service tier: %w", err)
 	}

@@ -7,9 +7,11 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"axiom/internal/accounts"
 	"axiom/internal/fileparse"
+	"axiom/internal/observability"
 	"axiom/internal/protocol"
 	"axiom/internal/routing"
 )
@@ -63,7 +65,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 	if !h.Memory.Charge(work) {
 		return nil, req, ErrOverloaded
 	}
-	count := &parseCount{countPages: fileBilling && req.File.Engine == protocol.FileEngineMistralOCR}
+	count := &parseCount{countPages: fileBilling && req.File.Engine == protocol.FileEngineMistralOCR, began: time.Now()}
 	newBody, files, err := protocol.RewriteFiles(req.Format, body, count.parse(ctx, h, c))
 	if err != nil {
 		h.Memory.Refund(work)
@@ -86,6 +88,7 @@ func (h *Handler) parseFiles(ctx context.Context, c *Call, body []byte, req prot
 		return body, req, nil // the plugin asked, but the request carries no file content to parse
 	}
 	parsed.File, parsed.FileParses, parsed.FilePages, parsed.FileBilling = file, count.n, count.pages, fileBilling
+	c.plugins = append(c.plugins, count.run(file.Engine))
 	parsed.Web = web
 	restoreServer(&parsed, req)
 	c.files = annotations(files)
@@ -108,6 +111,17 @@ type parseCount struct {
 	n          int64
 	pages      int64
 	countPages bool
+	began      time.Time
+}
+
+// run is the call log's record of the parse, which succeeded: a parse that fails refuses the call before admission.
+// A free engine counts no pages, so its use is the files it read.
+func (p *parseCount) run(engine string) observability.PluginRun {
+	uses := p.n
+	if p.countPages {
+		uses = p.pages
+	}
+	return observability.PluginRun{Plugin: observability.PluginFileParser, OK: true, Engine: engine, Uses: uses, Duration: time.Since(p.began)}
 }
 
 // parse returns the parse function RewriteFiles calls for each file.
