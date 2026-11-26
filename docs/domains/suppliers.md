@@ -8,7 +8,7 @@
 - 中转站多数基于 new-api、sub2api，约一成是自研系统；我们通常只有普通用户账号。
 - 自研系统先看能不能用声明式适配器接；不能的单独写 Go 适配器。以后不再接入的，适配可以干净地移除。
 - 号池一般是自建的 sub2api、new-api、CPA 等系统；除非必要，不自己写号池模块，但要预留。
-- 官方 API：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口贴 key 直连，Vertex AI、Bedrock、Azure OpenAI 贴凭证接入；作为平台货源进入第一版待负责人在 #948 确认，产品需求仍写「预留，暂不接入」。规则见[直连接口与云平台](suppliers-direct.md)。账户自带 key（BYOK）用同一个 OpenAI 适配，只服务账户自己的 key（见[账户](accounts.md#自带的供应商-keybyok)）。
+- 官方 API：OpenAI、Anthropic、Google、Moonshot 和其他兼容接口贴 key 直连，Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，都是第一版的平台货源（[产品需求的「范围」](../product.md#范围)）。规则见[直连接口与云平台](suppliers-direct.md)。账户自带 key（BYOK）用同一个 OpenAI 适配，只服务账户自己的 key（见[账户](accounts.md#自带的供应商-keybyok)）。
 - 接入、同步、变化处理尽量自动，人只处理例外。
 
 ## 设计

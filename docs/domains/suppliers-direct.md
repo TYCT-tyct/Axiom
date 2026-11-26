@@ -42,7 +42,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 |---|---|
 | 直连接口每家一个适配器包、共用 `direct` 包，OpenAI 的同时服务 BYOK | 注册表一包一行才能单独移除；同一个 `kind` 只能有一个适配器 |
 | 供应商带接入方式 `mode`：`relay` 登录中转站或号池，分组是线路；`direct` 贴 key 直连，一条线路；`cloud` 云平台凭证，一条线路 | 线路、凭证、端点、成本计划和路由三种方式共用，不同的只有 key 怎么来、成本从哪来；`kind` 仍是适配器名（`openai`、`compatible`、`vertex`……） |
-| 直连接口（OpenAI、Anthropic、Google、Moonshot、其他兼容接口）和云平台（Vertex AI、Bedrock、Azure OpenAI）作为平台货源 | 待定：改变了产品需求里「官方 API 暂不接入」，进入第一版要负责人在 #948 确认；接入的操作已实现 |
+| 直连接口（OpenAI、Anthropic、Google、Moonshot、其他兼容接口）和云平台（Vertex AI、Bedrock、Azure OpenAI）作为平台货源 | 负责人在 #948 定的第一版范围：官方模型不只经中转站，也能直接接，成本按官方价、没有余额要读 |
 | 没有余额的供应商：`balance_native` 留空，按 `mode` 判断，`mode` 不是 `relay` 的不看余额，`Funds.Unbounded` 让任何成本上界都付得起；厂商以余额不足拒绝时照常暂停 | 写一个假余额（如 BYOK 的 1）会让成本上界大于它的请求被路由滤掉，后台也会显示一个不存在的余额；`mode` 是新列（迁移 00053），创建后不变，云平台沿用 |
 | 直连接口的 `native_unit` 是 `usd`，含义是「结算币种的钱」，单位价值恒为 1（云平台同样），`confirmSupplierUnitValue` 对两者回 409 | 成本计划直接是结算币种的官方价，不需要换算；契约的枚举只有 `quota`、`usd`，人民币结算的直连接口（Moonshot）读这一列会误以为是美元，要页面按 `mode` 看待 |
 | 直连接口的 `upstream_account` 是新生成的 UUID | 没有可登录的账号；表要求非空且 `(origin, upstream_account)` 唯一，随机值让同一家可以接多个账户 |
@@ -58,6 +58,5 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入（`createCloudSupplier`），
 
 ## 待定问题
 
-- 直连接口和云平台进入第一版（#948），等负责人确认。
 - 云平台只对过文档和假上游，真实账号待实测（#497）。
 - 直连接口的模型清单之后多久重读、人工映射后谁补端点，未定。
