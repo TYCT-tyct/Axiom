@@ -20,12 +20,14 @@ import (
 // catalog does not know.
 const (
 	directModel = "claude-direct-1"
+	// directAlias is another name the catalog maps to directModel; a key that starts sk-good-alias lists it alone.
+	directAlias = "claude-direct-one"
 	directSpec  = `{"items":["input","output"],"tiers":[],"context_length":128000,"max_output_tokens":4096,"streams":true,"abilities":[]}`
 )
 
 // fakeProvider is an API that speaks Anthropic's formats over TLS on loopback. Its model list, of models, lets in a key
-// that starts sk-good, refuses one that starts sk-refused, and fails with a 503 for any other; it answers /v1/messages
-// with stream.
+// that starts sk-good, refuses one that starts sk-refused, and fails with a 503 for any other; one that starts
+// sk-good-alias is listed directAlias alone. It answers /v1/messages with stream.
 type fakeProvider struct {
 	server *httptest.Server
 	stream string
@@ -36,7 +38,10 @@ type fakeProvider struct {
 func newFakeProvider(t *testing.T, stream string, models ...string) *fakeProvider {
 	t.Helper()
 	p := &fakeProvider{stream: stream}
-	list := `{"data":[{"id":"` + strings.Join(models, `","type":"model"},{"id":"`) + `","type":"model"}],"has_more":false}`
+	listOf := func(models ...string) string {
+		return `{"data":[{"id":"` + strings.Join(models, `","type":"model"},{"id":"`) + `","type":"model"}],"has_more":false}`
+	}
+	list, alias := listOf(models...), listOf(directAlias)
 	p.server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -51,6 +56,8 @@ func newFakeProvider(t *testing.T, stream string, models ...string) *fakeProvide
 			w.WriteHeader(http.StatusUnauthorized)
 		case !strings.HasPrefix(key, "sk-good"):
 			w.WriteHeader(http.StatusServiceUnavailable)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/models" && strings.HasPrefix(key, "sk-good-alias"):
+			_, _ = io.WriteString(w, alias) //nolint:errcheck // a test server
 		case r.Method == http.MethodGet && r.URL.Path == "/v1/models":
 			_, _ = io.WriteString(w, list) //nolint:errcheck // a test server
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/messages":
@@ -80,7 +87,7 @@ func newDirectFixture(t *testing.T) (catalogFixture, *fakeProvider) {
 	f := catalogFixture{node, node.owner()}
 	f.saveAuthor("anthropic")
 	m := f.send(http.MethodPost, "/models", `{"slug":"anthropic/`+directModel+`","version_basis":"dated","price_source":"manual","spec":`+directSpec+`,"reason":"a model"}`, http.StatusCreated)
-	m = f.publish(f.addName(f.addName(m, "anthropic/"+directModel), directModel), usd, nil)
+	m = f.publish(f.addName(f.addName(f.addName(m, "anthropic/"+directModel), directModel), directAlias), usd, nil)
 	expectAdmin(t, "listing the model", f.setStatus(m, "listed"), http.StatusOK, "")
 	return f, p
 }
@@ -180,6 +187,33 @@ func (f catalogFixture) checkDirectRows(id string) {
 	if got := f.text(`SELECT string_agg(upstream_name || ' ' || (model_id IS NULL)::text, ',' ORDER BY upstream_name) FROM suppliers.supplier_models WHERE supplier_id = '` + id + `'`); got != directModel+" false,mystery-model true" {
 		f.t.Errorf("the line's names are %q, want the unknown one waiting for a person", got)
 	}
+}
+
+// directRouted is each pairing ListRoutable makes on the supplier's line: the endpoint's name, the last four characters
+// of an active credential that allows it, and the name its calls send.
+func (f catalogFixture) directRouted(id string) string {
+	f.t.Helper()
+	return f.text(`SELECT coalesce(string_agg(e.upstream_name || ' ' || c.hint || ' ' || coalesce(c.call_names ->> e.upstream_name, e.upstream_name), ',' ORDER BY c.hint), 'none')
+		FROM suppliers.endpoints e JOIN suppliers.credentials c ON c.supplier_group_id = e.supplier_group_id AND c.status = 'active'
+			AND (c.allowed_models IS NULL OR e.upstream_name = ANY(c.allowed_models))
+		WHERE e.supplier_id = '` + id + `'`)
+}
+
+// TestDirectKeysServeTheLinesEndpoint: a key that lists the line's model only by another name than its endpoint's
+// serves the endpoint, calling it by the name the key lists, whether it is connected with the key that named the
+// endpoint or added after it; with the first key disabled, the model still has a line.
+func TestDirectKeysServeTheLinesEndpoint(t *testing.T) {
+	t.Parallel()
+	f, p := newDirectFixture(t)
+	var made adminapi.SupplierConnected
+	decode(t, f.change(f.s, http.MethodPost, "/suppliers/direct", directBody(p.server.URL, "sk-good-key-0001", "sk-good-alias-0002"), newKey()), &made)
+	id := made.Supplier.Id
+	expectSame(t, "both keys connected at once", f.directRouted(id), directModel+" 0001 "+directModel+","+directModel+" 0002 "+directAlias)
+	expectAdmin(t, "add", f.change(f.s, http.MethodPost, "/suppliers/"+id+"/keys", `{"keys":["sk-good-alias-0003"],"max_concurrency":1,"reason":"more keys"}`, newKey()),
+		http.StatusCreated, "")
+	f.run("UPDATE suppliers.credentials SET status = 'disabled' WHERE hint IN ('0001', '0002') AND supplier_id = '" + id + "'")
+	expectSame(t, "the key added, the others disabled", f.directRouted(id), directModel+" 0003 "+directAlias)
+	expectSame(t, "the line's endpoints", f.text(`SELECT count(*)::text FROM suppliers.endpoints WHERE supplier_id = '`+id+`'`), "1")
 }
 
 // TestCreateDirectSupplierNothingPassed:when no key passes, nothing is stored and the answer is 200 with the checks.

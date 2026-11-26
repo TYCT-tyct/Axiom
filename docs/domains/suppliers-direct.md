@@ -18,11 +18,11 @@
 
 - **顺序**：先在只读事务里核对请求、在请求内和已存凭证里找重复（`PlanDirect`），再在事务外逐把检测（`CheckDirect`，同时最多 16 把），最后在幂等事务里写（`CreateDirect`），写前再找一次重复。同一幂等键的重发直接得到第一次的回答，不再问厂商；指纹只含 key 的个数和末四位。
 - **检测**：每把 key 经出站客户端 `GET` 一次模型清单（厂商不收费），10 秒。200 且是清单为通过；401 和 Google 的 400 `API_KEY_INVALID` 为失败（`credential_rejected`）；403（可能是地区封锁）、429、超时、5xx、读不懂的回答都不可判定，不存，可以重贴。Messages 族用 `x-api-key` 和 `anthropic-version`，其余用 Bearer。没有一把通过时什么都不写。
-- **写什么**：供应商 `active`、`native_unit='usd'`、`balance_native` 为空、单位价值 1；一个选中的分组（`upstream_ref` 是 origin）；通过的每把 key 一条 `active` 凭证，封存原文，`upstream_key_ref` 是 SHA-256 前 128 位、`hint` 是末四位，带请求的并发和每分钟上限，`allowed_models` 是这把 key 自己列出的名字。清单里每个名字写进 `supplier_models`：目录映射到上架模型的，按模型自己的计费项定格式（同 BYOK 的规则）建端点；同一模型两个名字的取法同投影。目录认不出的留作待映射。审计 `supplier.direct_connect` 只记末四位和各自结果。
+- **写什么**：供应商 `active`、`native_unit='usd'`、`balance_native` 为空、单位价值 1；一个选中的分组（`upstream_ref` 是 origin）；通过的每把 key 一条 `active` 凭证，封存原文，`upstream_key_ref` 是 SHA-256 前 128 位、`hint` 是末四位，带请求的并发和每分钟上限，`allowed_models` 是这把 key 自己列出的名字。清单里每个名字写进 `supplier_models`：目录映射到上架模型的，按模型自己的计费项定格式（同 BYOK 的规则）建端点；同一模型两个名字的取法同投影。目录认不出的留作待映射。端点先写、凭证后存：某把 key 把线路已有端点的模型列成另一个名字时，它也服务这个端点，`allowed_models` 加上端点的名字，`call_names` 记它自己的名字（同云平台的区域），否则路由按端点名配不上它。审计 `supplier.direct_connect` 只记末四位和各自结果。
 - **成本**：端点的成本计划就是目录在结算币种下的官方参考价（`basis='published'`，指纹 `price_list:<参考价 id>`），原生金额即结算币种金额，单位价值 1；目录没有这个币种的参考价，端点成本未知、不进路由。调用面不取请求号（`ChargeRef` 为空）。
 - **调用**：按格式走厂商的路径和鉴权头（`adapter.Wire`）；401 和 Google 的无效 key 是凭证被拒，OpenAI 的 `insufficient_quota` 是这把 key 额度用尽，只歇这把；403 不标 key。
 - **之后**：模型清单只在接入和加 key 时读；单把检测由它自己的操作做，暂停、恢复、移除与中转站相同，换登录回 `ErrNoAdapter`。
-- **加 key**：`addSupplierKeys` 不带 `group_id`（带了 400），按供应商自己的地址、格式和结算币种走与接入相同的三步（`PlanDirectKeys`、`CheckDirect`、`AddDirectKeys`）：重复的不检测，通过的每把一条凭证，挂在这条线路上，带请求的上限和它自己列出的模型；它列出、线路还没有端点的目录模型补一个官方价的端点，已有的不动。审计 `credential.paste`。云供应商的凭证只能整份替换，加 key 是 409。
+- **加 key**：`addSupplierKeys` 不带 `group_id`（带了 400），按供应商自己的地址、格式和结算币种走与接入相同的三步（`PlanDirectKeys`、`CheckDirect`、`AddDirectKeys`）：重复的不检测，通过的每把一条凭证，挂在这条线路上，带请求的上限和它自己列出的模型；它列出、线路还没有端点的目录模型补一个官方价的端点，已有的不动，按另一个名字列出的同接入时一样由它服务。审计 `credential.paste`。云供应商的凭证只能整份替换，加 key 是 409。
 
 ### 云平台
 

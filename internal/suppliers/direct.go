@@ -270,8 +270,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err := p.recheck(ctx, tx); err != nil {
 		return Connected{}, err
 	}
-	passed := slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed })
-	if !passed {
+	if !slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed }) {
 		return Connected{Checks: p.Checks}, nil
 	}
 	q := store.New()
@@ -290,9 +289,6 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err != nil {
 		return Connected{}, err
 	}
-	if err := a.insertDirectKeys(ctx, tx, q, id, group, p); err != nil {
-		return Connected{}, err
-	}
 	if err := q.InsertUnitValue(ctx, tx, store.InsertUnitValueParams{
 		SupplierID: id, Value: "1", Actor: "direct", Reason: "a direct API's costs are its official prices in the settlement currency",
 	}); err != nil {
@@ -300,6 +296,9 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	}
 	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(), nil)
 	if err != nil {
+		return Connected{}, err
+	}
+	if err := a.insertDirectKeys(ctx, tx, q, id, group, snap, p); err != nil {
 		return Connected{}, err
 	}
 	if err := a.record(ctx, tx, actor, "supplier.direct_connect", id, p.r.Reason, directAudit(p, models, priced)); err != nil {
@@ -325,21 +324,29 @@ func insertLine(ctx context.Context, tx pg.Tx, q *store.Queries, id uuid.UUID, k
 	return group, nil
 }
 
-// insertDirectKeys seals each key that passed at its own credential, with the request's limits and the models the key
-// itself lists: keys of one line take turns, and one key is never sent a model its account was not shown.
-func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, p *DirectPlan) error {
+// insertDirectKeys seals each key that passed at its own credential, with the request's limits and what it lists on the
+// written line (lineServes): keys of one line take turns, and one key is never sent a model its account was not shown.
+func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, p *DirectPlan) error {
+	line, err := lineNames(ctx, tx, q, group, snap, p.offer())
+	if err != nil {
+		return err
+	}
 	for i := range p.Checks {
 		c, k := &p.Checks[i], p.keys[i]
 		if c.Outcome != CheckPassed {
 			continue
 		}
 		c.Credential = uuid.NewV7()
+		allowed, calls, err := lineServes(k.models, nil, line)
+		if err != nil {
+			return err
+		}
 		sealed := a.keys.Seal(k.key, keyAt(c.Credential))
 		keyVersion := int64(sealed.KeyVersion)
 		if err := q.InsertDirectCredential(ctx, tx, store.InsertDirectCredentialParams{
 			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: k.ref,
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &keyVersion,
-			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: k.models, Hint: &c.Last4,
+			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: allowed, CallNames: calls, Hint: &c.Last4,
 		}); err != nil {
 			return fmt.Errorf("store key %d: %w", c.Index, err)
 		}
@@ -406,11 +413,7 @@ func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group
 // mapLineName maps one name of the offer into row: the model on sale it stands for, and the formats the line serves
 // that model in. It reports whether an endpoint can serve the name; one the catalog does not map keeps no model.
 func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.UpsertProjectedModelParams) (syncer.Mapping, bool) {
-	known := name
-	if o.known != nil {
-		known = o.known(name)
-	}
-	m := syncer.MapUpstream(snap, nil, known)
+	m := syncer.MapUpstream(snap, nil, o.knownAs(name))
 	model, ok := snap.Model(m.Model)
 	if !m.Mapped || !ok {
 		return m, false
