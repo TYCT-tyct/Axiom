@@ -26,8 +26,8 @@ export default {
   kind: {
     email: "邮件",
     webhook: "Webhook",
-    feishu: "飞书机器人",
-    wecom: "企业微信机器人",
+    feishu: "Feishu / Lark 机器人",
+    wecom: "WeCom 机器人",
     telegram: "Telegram",
   },
   destination: {
@@ -38,7 +38,7 @@ export default {
     telegram: "会话 ID 或 @频道",
   },
   add: "添加渠道",
-  addIntro: "添加后发一条测试。开了签名校验的飞书机器人要先设签名密钥，Telegram 机器人要先设令牌，才能送达。",
+  addIntro: "添加后发一条测试。开了签名校验的 Feishu 机器人要先设签名密钥，Telegram 机器人要先设令牌，才能送达。",
   channelId: "渠道 ID",
   channelKind: "类型",
   invalidChannel: "请填一个还没用过的渠道 ID 和目标地址。",
@@ -48,6 +48,6 @@ export default {
   botSecretIntro: "新值立即替换旧值，加密保存，之后不再显示。",
   token: "机器人令牌",
   invalidBotSecret: "长度需为 1 到 512 字节。",
-  invalidToken: "请填 BotFather 给的令牌，形如 123456:ABC…",
+  invalidToken: "请填 BotFather 给的令牌，例如 123456:ABC…",
   links: "通知里的链接打开 {{origin}}。",
 };

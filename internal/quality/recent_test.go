@@ -28,8 +28,10 @@ func TestRecentWindows(t *testing.T) {
 	observe(now.Add(-20*time.Minute), 5, false)
 	observe(now, 5, true)
 	observe(now.Add(-30*time.Minute), 1, false) // its minute's bucket now holds the current minute
-	m.Observe(t.Context(), Observation{Endpoint: id, Ended: now,
-		Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.RateLimited{}}})
+	m.Observe(t.Context(), Observation{
+		Endpoint: id, Ended: now,
+		Failure: &suppliers.Failure{Scope: suppliers.ScopeEndpoint, Cause: suppliers.RateLimited{}},
+	})
 
 	for _, tc := range []struct {
 		name  string

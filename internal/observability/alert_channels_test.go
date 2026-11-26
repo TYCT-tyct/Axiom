@@ -35,9 +35,9 @@ import (
 var botHosts = []string{"open.feishu.cn", "qyapi.weixin.qq.com", "api.telegram.org"}
 
 const (
-	feishuSecret = "feishu-signing-secret"
-	botToken     = "123456:ABCdefGHIjklMNOpqrSTUvwxYZ012345678"
-	adminOrigin  = "https://admin.example"
+	feishuSigning = "feishu-signing-secret"
+	telegramBot   = "123456:ABCdefGHIjklMNOpqrSTUvwxYZ012345678"
+	adminOrigin   = "https://admin.example"
 )
 
 // botPost is one request the fake bots took: where it went and what it said.
@@ -63,7 +63,7 @@ func newFakeBots(t *testing.T) *fakeBots {
 		if err := jsonx.Unmarshal(raw, &body); err != nil {
 			t.Error(err)
 		}
-		host := strings.Split(r.Host, ":")[0]
+		host, _, _ := strings.Cut(r.Host, ":")
 		f.mu.Lock()
 		f.posts = append(f.posts, botPost{host, r.URL.RequestURI(), body})
 		f.mu.Unlock()
@@ -152,8 +152,10 @@ func raiseNotices(t *testing.T, db *pg.DB, ch string, approval uuid.UUID, now ti
 		if _, err := SendAlertTest(t.Context(), tx, ch, now); err != nil {
 			return err
 		}
-		return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "operations.approval_pending", Key: approval.String(),
-			Severity: "warning", Fields: approvalNotice})
+		return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{
+			Kind: "operations.approval_pending", Key: approval.String(),
+			Severity: "warning", Fields: approvalNotice,
+		})
 	})
 	alertCycle(t, db, now)
 }
@@ -234,7 +236,7 @@ type botCase struct {
 
 func feishuSigned(t *testing.T, p botPost) {
 	stamp, _ := p.body["timestamp"].(string)
-	mac := hmac.New(sha256.New, []byte(stamp+"\n"+feishuSecret))
+	mac := hmac.New(sha256.New, []byte(stamp+"\n"+feishuSigning))
 	if p.path != "/open-apis/bot/v2/hook/abc" || p.body["msg_type"] != "text" || stamp != "1795683600" ||
 		p.body["sign"] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
 		t.Errorf("feishu post: %+v", p)
@@ -248,7 +250,7 @@ func TestBotChannelsDeliverTestsAndApprovals(t *testing.T) {
 	wecom := AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k1"}
 	feishu := AlertChannel{ID: "fs", FeishuURL: "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}
 	for _, tc := range []botCase{
-		{"feishu signed", feishu, feishuSecret, false, feishuSigned},
+		{"feishu signed", feishu, feishuSigning, false, feishuSigned},
 		{"feishu unsigned", feishu, "", false, func(t *testing.T, p botPost) {
 			if _, signed := p.body["sign"]; signed {
 				t.Errorf("signed without a secret: %+v", p)
@@ -259,8 +261,8 @@ func TestBotChannelsDeliverTestsAndApprovals(t *testing.T) {
 				t.Errorf("wecom post: %+v", p)
 			}
 		}},
-		{"telegram", AlertChannel{ID: "tg", TelegramChatID: "-1001234"}, botToken, false, func(t *testing.T, p botPost) {
-			if p.path != "/bot"+botToken+"/sendMessage" || p.body["chat_id"] != "-1001234" {
+		{"telegram", AlertChannel{ID: "tg", TelegramChatID: "-1001234"}, telegramBot, false, func(t *testing.T, p botPost) {
+			if p.path != "/bot"+telegramBot+"/sendMessage" || p.body["chat_id"] != "-1001234" {
 				t.Errorf("telegram post: %+v", p)
 			}
 		}},

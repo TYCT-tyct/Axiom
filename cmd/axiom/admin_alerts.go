@@ -67,8 +67,11 @@ func (a adminAPI) checkAlertDestinations(ctx context.Context, body *adminapi.Ale
 			return err
 		}
 		host, err := observability.AlertChannelHost(ch)
-		if err != nil || host == "" {
-			continue // the configuration's own validation refuses it, or it is mail
+		if err != nil {
+			return err
+		}
+		if host == "" {
+			continue // mail connects to no host of its own
 		}
 		if err = a.exit.Check(check, host); err != nil {
 			return observability.ErrAlertConfiguration
