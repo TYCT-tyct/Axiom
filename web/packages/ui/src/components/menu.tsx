@@ -14,7 +14,8 @@ type MenuItem = {
   checked?: boolean;
 };
 
-const moves: Record<string, (at: number, n: number) => number> = {
+// The keys that move through a list of options, and where each moves from `at` among `n`.
+export const moves: Record<string, (at: number, n: number) => number> = {
   ArrowDown: (at, n) => (at + 1) % n,
   ArrowUp: (at, n) => (at - 1 + n) % n,
   Home: () => 0,

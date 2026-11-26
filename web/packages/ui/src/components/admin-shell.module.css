@@ -1,0 +1,624 @@
+/* The admin board's frame (adShell in admin_core.js, .gbar/.sbar/.otabs from the console board and the .ad rules in
+   admin_style.css). The document scrolls: the bar sticks to the top, the sidebar sticks under it and scrolls itself,
+   the phone's entries stick to the bottom. The root is the board's frame (.ax .fr), where a board dialog mounts its
+   overlay; it clips instead of hiding its overflow, which would make it the scroller the sticky parts stick in. */
+.root {
+  font-family: var(--family-ui);
+  color: var(--t1);
+  background: var(--page);
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+  overflow: clip;
+}
+
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 56;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 56px;
+  padding: 0 16px 0 20px;
+  background: var(--page);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding-right: 8px;
+  border-radius: var(--r8);
+  color: var(--t1);
+}
+
+.mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--r6);
+  background: var(--priBg);
+  color: var(--priFg);
+  font-size: var(--fs12);
+  font-weight: 500;
+}
+
+.search {
+  display: flex;
+  flex: 0 1 320px;
+  align-items: center;
+  gap: 10px;
+  height: 34px;
+  margin: 0 auto 0 24px;
+  padding: 0 6px 0 12px;
+  border: 0;
+  border-radius: var(--r8);
+  background: var(--panel);
+  box-shadow: var(--sh1);
+  color: var(--t3);
+  font: inherit;
+  cursor: pointer;
+  transition: box-shadow 250ms ease-out;
+}
+
+.search:hover {
+  --icon-hover: 1;
+  box-shadow: var(--shPop);
+}
+
+.hint,
+.short {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--fs14);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.short {
+  display: none;
+}
+
+.kbd {
+  padding: 0 6px;
+  border-radius: var(--r6);
+  background: var(--hover);
+  font-family: var(--family-mono);
+  font-size: var(--fs12);
+  line-height: 20px;
+  color: var(--t2);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.tools {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.iconButton,
+.avatar {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r8);
+  background: none;
+  color: var(--t2);
+  cursor: pointer;
+  transition:
+    background-color 250ms ease-out,
+    color 250ms ease-out;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--rPill);
+}
+
+.iconButton:hover,
+.iconButton[aria-expanded="true"] {
+  --icon-hover: 1;
+  background: var(--selected);
+  color: var(--t1);
+}
+
+.search:focus-visible,
+.iconButton:focus-visible,
+.avatar:focus-visible,
+.logo:focus-visible,
+.entry:focus-visible,
+.tab:focus-visible,
+.item:focus-visible,
+.alert:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: -2px;
+}
+
+/* The bell's mark: there are unresolved alerts. */
+.ping {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--rPill);
+  background: var(--bad);
+  opacity: 0;
+  transform: scale(0.4);
+  transition:
+    opacity 250ms ease-out,
+    transform 250ms ease-out;
+}
+
+.ping[data-on] {
+  opacity: 1;
+  transform: none;
+}
+
+/* The bar's menus, inside the board's popover panel (.pm). */
+.menu {
+  display: flex;
+  flex-direction: column;
+  min-width: 240px;
+  max-width: calc(100vw - 32px);
+}
+
+.menu[data-wide] {
+  width: 300px;
+}
+
+.menuHead {
+  display: block;
+  padding: 8px 10px 6px;
+  color: var(--t3);
+  font-size: var(--fs12);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--r8);
+  background: none;
+  color: var(--t1);
+  font: inherit;
+  font-size: var(--fs14);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 250ms ease-out;
+}
+
+.item:hover,
+.alert:hover {
+  --icon-hover: 1;
+  background: var(--hover);
+}
+
+.item svg {
+  color: var(--t2);
+}
+
+.quiet {
+  color: var(--t2);
+}
+
+.rule {
+  display: block;
+  height: var(--bw);
+  margin: 6px -6px;
+  background: var(--line);
+}
+
+.alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-height: 48px;
+  padding: 8px 10px;
+  border-radius: var(--r8);
+  color: var(--t1);
+  transition: background-color 250ms ease-out;
+}
+
+.tone {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-top: 6px;
+  border-radius: var(--rPill);
+  background: var(--warn);
+}
+
+.tone[data-severe] {
+  background: var(--bad);
+}
+
+.alertText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.alertText b {
+  font-size: var(--fs14);
+  font-weight: 500;
+  line-height: 20px;
+  overflow-wrap: anywhere;
+}
+
+.alertText span {
+  color: var(--t2);
+  font-size: var(--fs12);
+  line-height: 16px;
+  overflow-wrap: anywhere;
+}
+
+.none {
+  padding: 8px 10px 12px;
+  color: var(--t2);
+  font-size: var(--fs14);
+}
+
+.who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.themes {
+  padding: 2px 6px 6px;
+}
+
+/* The sidebar and the page. */
+.body {
+  display: grid;
+  flex: 1 0 auto;
+  grid-template-columns: 240px minmax(0, 1fr);
+  transition: grid-template-columns 250ms ease-out;
+}
+
+.root[data-rail] .body {
+  grid-template-columns: 68px minmax(0, 1fr);
+}
+
+.sidebar {
+  position: sticky;
+  top: 56px;
+  display: flex;
+  flex-direction: column;
+  height: calc(100dvh - 56px);
+  padding: 4px 12px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  transition: padding 250ms ease-out;
+}
+
+/* The rail's names show beside it, outside its box: it is short enough not to scroll. */
+.root[data-rail] .sidebar {
+  padding: 4px 14px 12px;
+  overflow: visible;
+}
+
+.nav {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 12px;
+  animation: nav-in 250ms ease-out;
+}
+
+@keyframes nav-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+.main {
+  min-width: 0;
+}
+
+.main:focus {
+  outline: none;
+}
+
+.entry {
+  --cut: var(--page);
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--r8);
+  background: none;
+  color: var(--t2);
+  font: inherit;
+  font-size: var(--fs14);
+  cursor: pointer;
+  transition:
+    background-color 250ms ease-out,
+    color 250ms ease-out;
+}
+
+.entry:hover {
+  --icon-hover: 1;
+  --cut: var(--hover);
+  background: var(--hover);
+  color: var(--t1);
+}
+
+.entry[aria-current="page"] {
+  --cut: var(--selected);
+  background: var(--selected);
+  color: var(--t1);
+}
+
+.label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: opacity 250ms ease-out;
+}
+
+.count {
+  flex: none;
+  min-width: 20px;
+  height: 20px;
+  margin-left: auto;
+  padding: 0 6px;
+  box-sizing: border-box;
+  border-radius: var(--r6);
+  background: var(--selected);
+  color: var(--t1);
+  font-size: var(--fs12);
+  line-height: 20px;
+  text-align: center;
+  transition: opacity 250ms ease-out;
+}
+
+.entry[aria-current="page"] .count {
+  background: var(--line2);
+}
+
+.tipCount {
+  display: block;
+  opacity: 0.7;
+}
+
+.chevron {
+  display: inline-flex;
+  margin-left: auto;
+  color: var(--t3);
+  transition: transform 250ms ease-out;
+}
+
+.entry:hover .chevron {
+  transform: translateX(2px);
+}
+
+.foot {
+  margin-top: auto;
+  padding-top: 12px;
+}
+
+.back {
+  color: var(--t2);
+}
+
+.backArrow {
+  display: inline-flex;
+  justify-content: center;
+  width: 20px;
+  transition: transform 250ms ease-out;
+}
+
+.back:hover .backArrow {
+  transform: translateX(-2px);
+}
+
+.fold {
+  flex: none;
+  width: 100%;
+  margin-top: 12px;
+  text-align: left;
+}
+
+.fold svg {
+  transition: transform 250ms ease-out;
+}
+
+/* The more sheet's tiles: three to a row. */
+.tile {
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  height: auto;
+  min-height: 64px;
+  padding: 12px 4px;
+  border-radius: var(--r12);
+  font-size: var(--fs12);
+}
+
+.tile .label {
+  white-space: normal;
+  text-align: center;
+}
+
+.entry.tile .count {
+  position: absolute;
+  top: 6px;
+  left: calc(50% + 8px);
+  min-width: 16px;
+  height: 16px;
+  margin: 0;
+  padding: 0 4px;
+  line-height: 16px;
+}
+
+/* The icon rail: the names become hover labels, a count becomes a cyan dot, a group's name a thin line. */
+.root[data-rail] .label {
+  position: absolute;
+  top: 50%;
+  left: calc(100% + 10px);
+  z-index: 5;
+  padding: 5px 9px;
+  overflow: visible;
+  border-radius: var(--r8);
+  background: var(--priBg);
+  color: var(--priFg);
+  font-size: var(--fs12);
+  line-height: 16px;
+  pointer-events: none;
+  opacity: 0;
+  transform: translate(-4px, -50%);
+  transition:
+    opacity 250ms ease-out,
+    transform 250ms ease-out;
+}
+
+.root[data-rail] .entry:hover .label,
+.root[data-rail] .entry:focus-visible .label {
+  opacity: 1;
+  transform: translate(0, -50%);
+}
+
+.root[data-rail] .count {
+  position: absolute;
+  top: 5px;
+  left: 25px;
+  width: 6px;
+  min-width: 0;
+  height: 6px;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--rPill);
+  background: var(--accentSolid);
+  color: transparent;
+}
+
+.root[data-rail] .chevron {
+  display: none;
+}
+
+.root[data-rail] .fold svg {
+  transform: scaleX(-1);
+}
+
+/* The phone: its bottom entries over the page, glass like the console's. */
+.tabs {
+  position: sticky;
+  bottom: 0;
+  z-index: 9;
+  display: grid;
+  grid-auto-columns: minmax(0, 1fr);
+  grid-auto-flow: column;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  background: var(--glass);
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+  backdrop-filter: blur(18px) saturate(1.4);
+}
+
+.tab {
+  --cut: var(--glass);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  min-height: 52px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--r8);
+  background: none;
+  color: var(--t2);
+  font: inherit;
+  font-size: var(--fs12);
+  cursor: pointer;
+  transition: color 250ms ease-out;
+}
+
+.tab[aria-current="page"],
+.tab[data-on] {
+  color: var(--t1);
+}
+
+.tabCount {
+  position: absolute;
+  top: 4px;
+  left: calc(50% + 6px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: var(--r6);
+  background: var(--t1);
+  color: var(--page);
+  font-size: var(--fs12);
+  font-style: normal;
+  line-height: 16px;
+  text-align: center;
+}
+
+@media (max-width: 1099px) {
+  .search {
+    flex-basis: 240px;
+  }
+
+  .hint {
+    display: none;
+  }
+
+  .short {
+    display: block;
+  }
+}
+
+@media (max-width: 599px) {
+  .bar {
+    height: 52px;
+    padding: 0 8px 0 16px;
+  }
+
+  .body {
+    display: block;
+  }
+
+  .iconButton,
+  .avatar {
+    width: 44px;
+    height: 44px;
+  }
+
+  .logo {
+    min-height: 44px;
+  }
+
+  .item,
+  .alert {
+    min-height: 44px;
+  }
+}

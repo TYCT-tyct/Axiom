@@ -120,6 +120,6 @@ test.describe("calls and audit", () => {
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(0);
     const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.getByRole("link", { name: zhText("nav.calls") })).toBeInViewport();
+    await expect(nav.getByRole("link", { name: zhText("shell.nav.calls") })).toBeInViewport();
   });
 });

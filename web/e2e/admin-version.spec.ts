@@ -65,7 +65,7 @@ for (const storage of ["available", "blocked"] as const) {
 
     // A deployment removed the chunk of a page this build knows.
     await page.route(/\/assets\/calls-[\w-]+\.js$/, (route) => route.fulfill({ status: 404 }));
-    const calls = page.getByRole("navigation").getByRole("link", { name: words("nav.calls") });
+    const calls = page.getByRole("navigation").getByRole("link", { name: words("shell.nav.calls") });
     const preloaded = page.waitForResponse(/\/assets\/calls-/);
     await calls.hover();
     await preloaded;

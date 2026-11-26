@@ -9,6 +9,7 @@ import s from "./glyph.module.css";
 // sits beside it, or the control that holds it has an aria-label.
 //
 // more, warn and updown have hover motions on the board but no drawing there; they are drawn here on the same grid.
+// ticket through report are the admin board's (admin_icons.json), on the same grid and with the same parts.
 //
 // Each part is [data-p, shape, geometry]: a rect as "x y width height rx", a circle as "cx cy r", a path as its d, a
 // group as its parts.
@@ -146,6 +147,78 @@ const icons = {
     ["a2 cut", "p", "M10 7.75v3.5M10 13.6v.01"],
   ],
   updown: [["a1 nf", "p", "m6.5 7.5 3.5-3.5 3.5 3.5M6.5 12.5l3.5 3.5 3.5-3.5"]],
+  ticket: [
+    [
+      "a1",
+      "p",
+      "M3 6.5A1.5 1.5 0 0 1 4.5 5h11A1.5 1.5 0 0 1 17 6.5v1.75a1.75 1.75 0 0 0 0 3.5v1.75a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 13.5v-1.75a1.75 1.75 0 0 0 0-3.5z",
+    ],
+    ["a2 cut nf", "p", "M12 8v.5M12 11.5v.5"],
+  ],
+  subs: [
+    ["a1 nf", "p", "M15.6 8.4A5.9 5.9 0 0 0 5 7.1M4.4 11.6A5.9 5.9 0 0 0 15 12.9"],
+    ["a2 nf", "p", "M4.75 3.9v3.4h3.4M15.25 16.1v-3.4h-3.4"],
+  ],
+  speak: [
+    ["a1", "p", "M3.5 8.25v3.5h2.75l6.25 3.5V4.75l-6.25 3.5z"],
+    ["a2 nf", "p", "M15 7.75a3.25 3.25 0 0 1 0 4.5M6.6 11.75l.9 4.25h2"],
+  ],
+  plugin: [
+    ["a1", "r", "3.5 3.5 5.5 5.5 1.5"],
+    ["a1", "r", "3.5 11 5.5 5.5 1.5"],
+    ["a1", "r", "11 11 5.5 5.5 1.5"],
+    ["a2 sig nf", "p", "M13.75 3.5v5.5M11 6.25h5.5"],
+  ],
+  cloud: [["a1", "p", "M6.25 15.5h7.5a3.25 3.25 0 0 0 .62-6.44A4.5 4.5 0 0 0 5.63 8.1a3.75 3.75 0 0 0 .62 7.4z"]],
+  classify: [
+    ["a1", "p", "M3.25 3.25h6.5l7 7-6.5 6.5-7-7z"],
+    ["a2 cut", "c", "7 7 1.1"],
+  ],
+  mkey: [
+    [
+      "a1",
+      "g",
+      [
+        ["", "c", "6.75 8 3.25"],
+        ["", "p", "M10 8h6.5M14 8v2.25"],
+      ],
+    ],
+    ["a2 nf", "p", "M3.5 15.75h13"],
+  ],
+  mail: [
+    ["a1", "r", "3 4.75 14 10.5 2.25"],
+    ["a2 nf cut", "p", "m3.75 6 6.25 4.75L16.25 6"],
+  ],
+  user: [
+    ["a1", "c", "10 7 3.25"],
+    ["a2", "p", "M3.75 17c0-3.3 2.8-5.25 6.25-5.25S16.25 13.7 16.25 17z"],
+  ],
+  spaces: [
+    ["a1", "r", "3 3 10 10 2.25"],
+    ["a2 nf", "p", "M7 17h7.75A2.25 2.25 0 0 0 17 14.75V7"],
+  ],
+  bell: [
+    ["a1", "p", "M5.5 13.5V9.25a4.5 4.5 0 0 1 9 0v4.25l1.25 1.5H4.25z"],
+    ["a2 nf", "p", "M8.25 17a1.9 1.9 0 0 0 3.5 0"],
+  ],
+  help: [
+    ["a1", "c", "10 10 7"],
+    ["a2 nf cut", "p", "M8 8a2 2 0 0 1 3.9.6c0 1.4-1.9 1.7-1.9 3"],
+    ["a3 cut", "c", "10 14.1 .55"],
+  ],
+  link: [
+    ["a1 nf", "p", "M8.5 11.5a3 3 0 0 0 4.25 0l2.5-2.5a3 3 0 0 0-4.25-4.25l-1 1"],
+    ["a2 nf", "p", "M11.5 8.5a3 3 0 0 0-4.25 0l-2.5 2.5a3 3 0 0 0 4.25 4.25l1-1"],
+  ],
+  report: [
+    [
+      "a1",
+      "p",
+      "M4 4.75A1.75 1.75 0 0 1 5.75 3h8.5A1.75 1.75 0 0 1 16 4.75v7.5A1.75 1.75 0 0 1 14.25 14H9l-3.5 3v-3h0A1.5 1.5 0 0 1 4 12.5z",
+    ],
+    ["a2 cut", "p", "M10 6.25v3.5"],
+    ["a3 cut", "c", "10 11.6 .55"],
+  ],
 } satisfies Record<string, readonly Part[]>;
 
 // draw turns a table of parts into SVG elements; a part without a role has no data-p.

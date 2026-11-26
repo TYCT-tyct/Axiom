@@ -17,7 +17,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, Navigate, useNavigate, useSearch } from "@tanstack/react-router";
 import { Fragment, type ReactNode, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { nav } from "../nav";
+import { pages } from "../nav";
 import {
   callsDrill,
   type OverviewRange,
@@ -43,7 +43,7 @@ import { TargetNote, TargetsAction } from "../targets-view";
 export default function Home() {
   const session = useSession();
   if (!can(session, "sites.manage")) {
-    const first = nav.find((item) => item.to !== "/" && can(session, item.permission));
+    const first = pages.find((item) => item.to !== "/" && can(session, item.permission));
     if (first) {
       return <Navigate to={first.to} replace />;
     }

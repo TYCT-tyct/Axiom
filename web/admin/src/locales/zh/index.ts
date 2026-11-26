@@ -19,6 +19,7 @@ import redeem from "./redeem";
 import logRetention from "./retention";
 import routingPresets from "./routing-presets";
 import settings from "./settings";
+import shell from "./shell";
 import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
@@ -54,25 +55,8 @@ export const initial = {
     legalDocs: "法律文档",
     retention: "记录保留",
     rateLimits: "请求限流",
-    more: "更多",
   },
-  navSections: {
-    overview: "运营概览",
-    users: "用户与账户",
-    supply: "供应商与线路",
-    catalog: "模型目录",
-    pricing: "定价与套餐",
-    routing: "路由与来源",
-    payments: "支付与对账",
-    operations: "运营与审批",
-    alerts: "告警",
-    site: "站点",
-    platform: "平台设置",
-    calls: "调用记录",
-    audit: "审计日志",
-    security: "登录与安全",
-  },
-  shell: { collapse: "收起", expand: "展开" },
+  shell,
   calls,
   audit,
   sourceClasses,

@@ -178,10 +178,14 @@ test.describe("signing in", () => {
   test("a session that ends while a page is open sends the user to sign in and back to that page", async ({ page }) => {
     const state = await mockAdmin(page);
     signedInAs(state, "mfa");
+    // The shell's last count (the refunds, asked once the account's site is known) has its answer, so the next request
+    // is the one the click makes.
+    const counted = page.waitForResponse("**/api/admin/v1/payments/refunds?*");
     await page.goto("/users");
     await expect(page.getByText("user1@example.com")).toBeVisible();
+    await counted;
     state.level = "none";
-    await page.getByRole("link", { name: zhText("nav.suppliers") }).click();
+    await page.getByRole("link", { name: zhText("shell.nav.suppliers") }).click();
     await expect(h1(page, "登录")).toBeVisible();
     state.mfaEnabled = true;
     await signIn(page, mfaEmail);
@@ -200,24 +204,19 @@ test.describe("permissions", () => {
     await page.goto("/");
     await expect(h1(page, zhText("nav.models"))).toBeVisible();
     const nav = page.getByRole("navigation", { name: "主导航" });
-    await expect(nav.getByRole("link")).toHaveText([
-      zhText("nav.models"),
-      zhText("nav.pricing"),
-      zhText("nav.exchangeRates"),
-      zhText("nav.subscriptionPlans"),
-    ]);
-    await expect(nav.getByRole("group")).toHaveCount(2);
-    await expect(nav.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    const pricingGroup = nav.getByRole("group", { name: "定价与套餐" });
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.pricing") })).toHaveAttribute("href", "/pricing");
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.exchangeRates") })).toHaveAttribute(
-      "href",
-      "/exchange-rates",
+    await expect(nav.getByRole("link")).toHaveText([zhText("shell.nav.models"), zhText("shell.nav.pricing")]);
+    // The other groups have nothing this session may open, and the settings need sites.manage.
+    await expect(nav.getByRole("group")).toHaveCount(1);
+    const supply = nav.getByRole("group", { name: zhText("shell.groups.supply") });
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute("href", "/models");
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute(
+      "aria-current",
+      "page",
     );
-    await expect(pricingGroup.getByRole("link", { name: zhText("nav.subscriptionPlans") })).toHaveAttribute(
-      "href",
-      "/subscription-plans",
-    );
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.pricing") })).toHaveAttribute("href", "/pricing");
+    await expect(page.getByRole("link", { name: zhText("shell.nav.settings") })).toHaveCount(0);
+    // Nor may it see alerts, so there is no bell.
+    await expect(page.getByRole("button", { name: zhText("shell.alerts") })).toHaveCount(0);
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);
       await page.screenshot({ path: `${process.env.AXIOM_ADMIN_SHOTS}/nav-desktop.png` });
@@ -234,11 +233,17 @@ test.describe("permissions", () => {
     signedInAs(state, "mfa");
     await page.goto("/models");
     const tabs = page.getByRole("navigation", { name: "主导航" });
-    await expect(tabs.getByRole("link")).toHaveText([zhText("nav.calls")]);
-    const more = tabs.getByRole("button", { name: zhText("nav.more") });
+    // The first four of 仪表盘, 监控, 审批, 用户 and 记录 the session may open: only 记录 here.
+    await expect(tabs.getByRole("link")).toHaveText([zhText("shell.tabs.calls")]);
+    const more = tabs.getByRole("button", { name: zhText("shell.more") });
     await more.click();
-    await expect(page.getByRole("group", { name: "模型目录" }).getByRole("link")).toHaveAttribute("href", "/models");
-    const pricing = page.getByRole("group", { name: "定价与套餐" }).getByRole("link", { name: zhText("nav.pricing") });
+    const sheet = page.getByRole("dialog", { name: zhText("shell.more") });
+    const supply = sheet.getByRole("group", { name: zhText("shell.groups.supply") });
+    await expect(supply.getByRole("link", { name: zhText("shell.nav.models") })).toHaveAttribute("href", "/models");
+    await expect(sheet.getByRole("group", { name: zhText("shell.groups.records") }).getByRole("link")).toHaveText([
+      zhText("shell.nav.calls"),
+    ]);
+    const pricing = supply.getByRole("link", { name: zhText("shell.nav.pricing") });
     await expect(pricing).toBeVisible();
     if (process.env.AXIOM_ADMIN_SHOTS) {
       await freeze(page);
@@ -306,7 +311,7 @@ test.describe("the four states of a view of data", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(words("state.loading"));
     session.release();
     await page
-      .getByRole("link", { name: zhText("nav.models") })
+      .getByRole("link", { name: zhText("shell.nav.models") })
       .first()
       .waitFor();
 
@@ -326,11 +331,11 @@ test.describe("the four states of a view of data", () => {
     signedInAs(state, "mfa");
     await page.goto("/users");
     await expect(page.getByRole("heading", { name: zhText("users.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.suppliers") }).click();
+    await page.getByRole("link", { name: zhText("shell.nav.suppliers") }).click();
     await expect(page.getByRole("heading", { name: zhText("suppliers.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.mappings") }).click();
+    await page.goto("/mappings");
     await expect(page.getByRole("heading", { name: zhText("mappings.empty.title") })).toBeVisible();
-    await page.getByRole("link", { name: zhText("nav.pricing") }).click();
+    await page.getByRole("link", { name: zhText("shell.nav.pricing") }).click();
     await expect(page.getByRole("heading", { name: zhText("pricing.empty.title") })).toBeVisible();
   });
 

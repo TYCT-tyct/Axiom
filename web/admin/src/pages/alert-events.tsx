@@ -12,6 +12,7 @@ import {
   Td,
   Text,
   useFormat,
+  useUrlParams,
 } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { useState } from "react";
@@ -27,10 +28,14 @@ export const messages = { zh: { alertEvents: zh }, en: { alertEvents: en } };
 type Event = AdminSchemas["AlertEvent"];
 type Receipt = AdminSchemas["AlertReceipt"];
 
+// The open event is in the address, so the shell's bell opens one (?event=<id>) and Back closes it.
+const selection = { event: "" };
+
 export default function AlertEvents() {
   const { t } = useTranslation();
   const query = useInfiniteQuery(alertEventsQuery);
-  const [selected, setSelected] = useState<string>();
+  const [{ event: selected }, setUrl] = useUrlParams(selection);
+  const setSelected = (id: string | undefined) => setUrl({ event: id }, id ? "push" : "replace");
   const [resolving, setResolving] = useState<string>();
   const rows = query.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const event = query.isSuccess && selected ? rows.find((row) => row.id === selected) : undefined;
