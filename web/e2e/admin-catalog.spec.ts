@@ -358,7 +358,7 @@ test("the admin works in English too: credit is added and the result is read in 
   await dialog(page)
     .getByLabel(/^Amount/)
     .fill("5");
-  await dialog(page).getByLabel("Reason").fill("goodwill");
+  await dialog(page).getByLabel("Reason", { exact: true }).fill("goodwill");
   await dialog(page).locator("button[type=submit]").click();
   await expect(dialog(page).getByText("Done.")).toBeVisible();
   await expect(dialog(page).getByText(/Balance now/)).toBeVisible();

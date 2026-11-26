@@ -1,9 +1,11 @@
 import createClient from "openapi-fetch";
-import type { components as adminComponents, paths as adminPaths } from "./admin.gen";
+import type { components as adminComponents, operations as adminOperations, paths as adminPaths } from "./admin.gen";
 import type { components, paths } from "./console.gen";
 
 export type Schemas = components["schemas"];
 export type AdminSchemas = adminComponents["schemas"];
+// The admin API's operations by operationId, for code that names the operation a write goes through.
+export type AdminOperation = keyof adminOperations;
 export type ErrorCode = Schemas["ErrorCode"];
 
 // How long a call may take, body included, before it counts as having no response. A console call answers in well

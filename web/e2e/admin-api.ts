@@ -442,8 +442,12 @@ const handlers: Handler<AdminState>[] = [
     }),
   ),
   route("get", `${base}/sites/{site_id}/registration`, reads("sites.manage"), ({ params, state }) =>
-    ofSite(state, params.site_id, { policy: registration, defaults: registration }),
+    ofSite(state, params.site_id, { policy: state.registration ?? registration, defaults: registration }),
   ),
+  route("put", `${base}/sites/{site_id}/registration`, changes("sites.manage"), ({ body, params, state }) => {
+    if (params.site_id === state.siteId) state.registration = body.policy;
+    return ofSite(state, params.site_id, { policy: body.policy, defaults: registration });
+  }),
   route("get", `${base}/sites/{site_id}/sign-in`, reads("sites.manage"), ({ params, state }) =>
     ofSite(state, params.site_id, {
       login_domain: "login.example.com",
