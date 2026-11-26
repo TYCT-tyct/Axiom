@@ -12,7 +12,10 @@ type credRuntime struct {
 	inflight                        atomic.Int32
 	restUnix                        atomic.Int64 // unix nanoseconds until which the credential is not picked
 	reporting                       atomic.Bool  // a rejection is queued or being written; reset when the write ends
-	requests                        *minuteRuntime
+	// broke is when the provider refused a key that is its own wallet for want of funds, in unix nanoseconds; 0 for
+	// never, or for a balance read since that shows some (credentialOf clears it).
+	broke    atomic.Int64
+	requests *minuteRuntime
 }
 
 // minuteRuntime is the requests one upstream account made in the rolling minute, as this node counted them. It is a

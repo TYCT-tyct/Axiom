@@ -7,15 +7,18 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"uuid"
 )
 
 const insertDirectCredential = `-- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings)
+    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings, balance_native,
+    balance_observed_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-    'active', $9, $10, $11, $12, $13, $14)
+    'active', $9, $10, $11, $12, $13, $14,
+    $15::text::numeric, $16)
 `
 
 type InsertDirectCredentialParams struct {
@@ -33,6 +36,8 @@ type InsertDirectCredentialParams struct {
 	CallNames         []byte
 	Hint              *string
 	Settings          []byte
+	BalanceNative     *string
+	BalanceObservedAt *time.Time
 }
 
 func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg InsertDirectCredentialParams) error {
@@ -51,6 +56,8 @@ func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg Inser
 		arg.CallNames,
 		arg.Hint,
 		arg.Settings,
+		arg.BalanceNative,
+		arg.BalanceObservedAt,
 	)
 	return err
 }
@@ -120,6 +127,165 @@ func (q *Queries) LineEndpointsOf(ctx context.Context, db DBTX, supplierGroupID 
 		return nil, err
 	}
 	return items, nil
+}
+
+const lineNames = `-- name: LineNames :many
+SELECT upstream_name, model_id FROM suppliers.supplier_models
+WHERE supplier_group_id = $1 AND present
+ORDER BY upstream_name
+`
+
+type LineNamesRow struct {
+	UpstreamName string
+	ModelID      *uuid.UUID
+}
+
+// Every name the line lists, and the model the catalog has mapped it to; none for one waiting for a mapping.
+func (q *Queries) LineNames(ctx context.Context, db DBTX, supplierGroupID uuid.UUID) ([]LineNamesRow, error) {
+	rows, err := db.Query(ctx, lineNames, supplierGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LineNamesRow
+	for rows.Next() {
+		var i LineNamesRow
+		if err := rows.Scan(&i.UpstreamName, &i.ModelID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLineKeys = `-- name: ListLineKeys :many
+SELECT id, settings FROM suppliers.credentials
+WHERE supplier_id = $1 AND status = 'active' AND ciphertext IS NOT NULL
+ORDER BY id
+`
+
+type ListLineKeysRow struct {
+	ID       uuid.UUID
+	Settings []byte
+}
+
+// The keys of a direct supplier that are in service and hold a key, with their settings.
+func (q *Queries) ListLineKeys(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListLineKeysRow, error) {
+	rows, err := db.Query(ctx, listLineKeys, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLineKeysRow
+	for rows.Next() {
+		var i ListLineKeysRow
+		if err := rows.Scan(&i.ID, &i.Settings); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPastedLines = `-- name: ListPastedLines :many
+SELECT s.id, s.kind, s.mode, s.origin, s.settlement_currency, s.api_format, g.id AS group_id, g.ratio::text AS ratio
+FROM suppliers.suppliers s
+JOIN suppliers.supplier_groups g ON g.supplier_id = s.id
+WHERE s.owner_scope = 'platform' AND s.mode IN ('direct', 'cloud') AND s.status = 'active'
+ORDER BY s.id
+`
+
+type ListPastedLinesRow struct {
+	ID                 uuid.UUID
+	Kind               string
+	Mode               string
+	Origin             string
+	SettlementCurrency string
+	ApiFormat          *string
+	GroupID            uuid.UUID
+	Ratio              string
+}
+
+// The platform's direct and cloud suppliers in service, each with its one line: what the periodic re-list and
+// re-projection go over (docs/domains/suppliers-direct.md「模型重读与余额」). An account's own key is never one of them.
+func (q *Queries) ListPastedLines(ctx context.Context, db DBTX) ([]ListPastedLinesRow, error) {
+	rows, err := db.Query(ctx, listPastedLines)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPastedLinesRow
+	for rows.Next() {
+		var i ListPastedLinesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Mode,
+			&i.Origin,
+			&i.SettlementCurrency,
+			&i.ApiFormat,
+			&i.GroupID,
+			&i.Ratio,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setKeyBalance = `-- name: SetKeyBalance :exec
+UPDATE suppliers.credentials SET balance_native = $1::numeric, balance_observed_at = $2
+WHERE id = $3 AND supplier_id = $4
+`
+
+type SetKeyBalanceParams struct {
+	BalanceNative string
+	ObservedAt    *time.Time
+	ID            uuid.UUID
+	SupplierID    uuid.UUID
+}
+
+func (q *Queries) SetKeyBalance(ctx context.Context, db DBTX, arg SetKeyBalanceParams) error {
+	_, err := db.Exec(ctx, setKeyBalance,
+		arg.BalanceNative,
+		arg.ObservedAt,
+		arg.ID,
+		arg.SupplierID,
+	)
+	return err
+}
+
+const setKeyModels = `-- name: SetKeyModels :exec
+UPDATE suppliers.credentials SET allowed_models = $1, call_names = $2
+WHERE id = $3 AND supplier_id = $4
+`
+
+type SetKeyModelsParams struct {
+	AllowedModels []string
+	CallNames     []byte
+	ID            uuid.UUID
+	SupplierID    uuid.UUID
+}
+
+// What a re-listed key serves: the names its listing gave, and the line's endpoints it lists by another name.
+func (q *Queries) SetKeyModels(ctx context.Context, db DBTX, arg SetKeyModelsParams) error {
+	_, err := db.Exec(ctx, setKeyModels,
+		arg.AllowedModels,
+		arg.CallNames,
+		arg.ID,
+		arg.SupplierID,
+	)
+	return err
 }
 
 const setLineRatio = `-- name: SetLineRatio :exec

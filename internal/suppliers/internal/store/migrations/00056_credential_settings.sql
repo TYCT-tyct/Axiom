@@ -8,4 +8,13 @@
 ALTER TABLE suppliers.credentials
     ADD COLUMN settings jsonb CONSTRAINT credentials_settings_check CHECK (jsonb_typeof(settings) = 'object');
 
-GRANT UPDATE (settings) ON TABLE suppliers.credentials TO axiom_app;
+-- A pasted key's own balance, for a type that reads one (docs/domains/suppliers-direct.md「模型重读与余额」): each key is
+-- a wallet of its own. The amount is in the currency of the price entry its supplier is connected at, and observed_at
+-- is when it was read; both NULL for a key whose balance was never read, and for every other credential.
+ALTER TABLE suppliers.credentials
+    ADD COLUMN balance_native numeric
+        CONSTRAINT credentials_balance_native_check CHECK (balance_native <> ALL (ARRAY['NaN'::numeric, 'Infinity'::numeric, '-Infinity'::numeric])),
+    ADD COLUMN balance_observed_at timestamptz,
+    ADD CONSTRAINT credentials_balance_observed_check CHECK ((balance_native IS NULL) = (balance_observed_at IS NULL));
+
+GRANT UPDATE (settings, balance_native, balance_observed_at) ON TABLE suppliers.credentials TO axiom_app;

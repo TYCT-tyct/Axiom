@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -47,10 +48,12 @@ type (
 // CloudRequest is a cloud platform to connect, or the limits of a replacement's new regions. Origin is as
 // NormalizeOrigin returns it and only for a platform whose address a person gives; Regions only for one that serves by
 // region; Deployments only for one whose models a person names, and not for a replacement, which keeps them; a zero
-// Currency is USD. Input is plaintext and is only sealed.
+// Currency is USD. Ratio is the line's ratio, empty for 1, and not for a replacement. Input is plaintext and is only
+// sealed.
 type CloudRequest struct {
 	Kind, Name, Origin string
 	Entry, Form        string
+	Ratio              string
 	Fields             map[string]string
 	Regions            []string
 	Deployments        []Deployment
@@ -72,6 +75,7 @@ type CloudPlan struct {
 	origin   string
 	cred     adapter.CloudCredential
 	settings adapter.Settings
+	ratio    *big.Rat  // the line's: the request's for a new one, the supplier's for a replacement
 	supplier uuid.UUID // the supplier a replacement is for; zero for a new one
 	Checks   []KeyCheck
 	regions  []cloudRegion // one for each of Checks
@@ -133,11 +137,15 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 	if t.Has(adapter.FieldDeployments) != (len(r.Deployments) > 0) {
 		return nil, ErrCloudDeployments
 	}
+	ratio, err := connectRatio(r.Ratio)
+	if err != nil {
+		return nil, err
+	}
 	p, err := planCredential(c, r.Kind, origin, r, r.Regions, deployed(r.Deployments))
 	if err != nil {
 		return nil, err
 	}
-	p.r = r
+	p.r, p.ratio = r, ratio
 	return p, p.skipStored(ctx, tx)
 }
 
@@ -290,11 +298,11 @@ func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, sn
 	if err != nil {
 		return Connected{}, fmt.Errorf("connect the cloud platform: %w", err)
 	}
-	group, err := insertLine(ctx, tx, q, id, p.kind, p.origin)
+	group, err := insertLine(ctx, tx, q, id, p.kind, p.origin, p.ratio)
 	if err != nil {
 		return Connected{}, err
 	}
-	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(snap), nil)
+	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(snap), nil, p.ratio)
 	if err != nil {
 		return Connected{}, err
 	}
@@ -306,6 +314,7 @@ func (a *Admin) CreateCloud(ctx context.Context, tx pg.Tx, actor audit.Actor, sn
 	}
 	detail := cloudAudit(p)
 	detail["origin"], detail["settlement_currency"], detail["models"], detail["priced_endpoints"] = p.origin, p.r.Currency.String(), models, priced
+	detail["ratio"] = ratioText(p.ratio)
 	if err := a.record(ctx, tx, actor, "supplier.cloud_connect", id, p.r.Reason, detail); err != nil {
 		return Connected{}, err
 	}
@@ -434,7 +443,7 @@ func (p *CloudPlan) offer(snap *catalog.Snapshot) lineOffer {
 		r := p.regions[i]
 		if !r.listed && !offered {
 			offered = true
-			names = append(names, p.offered(snap, known)...)
+			names = append(names, offeredBy(p.cloud, snap, known)...)
 		}
 		for _, m := range r.models {
 			names = append(names, m.Name)
@@ -456,16 +465,16 @@ func (p *CloudPlan) offer(snap *catalog.Snapshot) lineOffer {
 	}
 }
 
-// offered is the name the platform gives each model on sale it serves, from the name the model's vendor knows it by,
+// offeredBy is the name the platform gives each model on sale it serves, from the name the model's vendor knows it by,
 // which is put in known.
-func (p *CloudPlan) offered(snap *catalog.Snapshot, known map[string]string) []string {
+func offeredBy(c adapter.Cloud, snap *catalog.Snapshot, known map[string]string) []string {
 	var names []string
 	for m := range snap.Models() {
 		official, ok := snap.OfficialName(m.ID)
-		if !ok || len(p.cloud.Formats(m)) == 0 {
+		if !ok || len(c.Formats(m)) == 0 {
 			continue
 		}
-		if name, ok := p.cloud.Offer(m, official); ok {
+		if name, ok := c.Offer(m, official); ok {
 			names, known[name] = append(names, name), official
 		}
 	}

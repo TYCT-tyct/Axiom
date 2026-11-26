@@ -54,12 +54,13 @@ func (quirks) Classify(status int, h http.Header, body []byte) adapter.Failure {
 }
 
 // keyFailure is a refusal that is the key's alone: not valid (a 401, or Google's 400 that says so), or its own
-// allowance used up (OpenAI's insufficient_quota). The provider refused both before running the request.
+// allowance or balance used up (OpenAI's insufficient_quota, a 402 such as DeepSeek's insufficient balance). The
+// provider refused each before running the request.
 func keyFailure(status int, body []byte, e errorBody) (adapter.Failure, bool) {
 	switch {
 	case status == http.StatusUnauthorized, status == http.StatusBadRequest && bytes.Contains(body, invalidKey):
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialRejected{}}, true
-	case status == http.StatusTooManyRequests && e.Error.Code == "insufficient_quota":
+	case status == http.StatusPaymentRequired, status == http.StatusTooManyRequests && e.Error.Code == "insufficient_quota":
 		return adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeCredential, Cause: adapter.CredentialQuotaExhausted{}}, true
 	}
 	return adapter.Failure{}, false

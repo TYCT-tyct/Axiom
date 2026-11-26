@@ -125,9 +125,24 @@ type Attempt struct {
 // minute admits another request, by compare and swap on its in-flight count, in memory. It returns ErrNoEndpoint,
 // ErrSupplierResting or ErrNoSlot when there is none, and gateway moves on to its next entry: that is not an attempt.
 // The slot is held until Done.
-func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false, uuid.UUID{}) }
+func (s *Service) Acquire(id EndpointID) (*Attempt, error) { return s.acquire(id, false, pick{}) }
 
-func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt, error) {
+// AcquireWithin is Acquire for a request whose native cost is at most bound, in the plan's terms (the gateway's
+// reserved cost): it passes over a key that is its own wallet (a type that reads balances) whose last balance read
+// cannot pay the request at the type's price, bound ÷ the line's ratio, since the provider charges its own price. When
+// no key can, it is ErrNoSlot, as for keys at their limits. Any other credential is picked as by Acquire.
+func (s *Service) AcquireWithin(id EndpointID, bound platform.Exact) (*Attempt, error) {
+	return s.acquire(id, false, pick{bound: &bound})
+}
+
+// pick is what a credential is chosen by beside its load: one to pass over while another can serve, and the request's
+// cost bound, which a key that is its own wallet must be able to pay; nil for none.
+type pick struct {
+	avoid uuid.UUID
+	bound *platform.Exact
+}
+
+func (s *Service) acquire(id EndpointID, probe bool, p pick) (*Attempt, error) {
 	for range 8 { // another caller may take the slot or the window's last request between looking and swapping
 		snap := s.snap.Load()
 		ep, ok := snap.endpoints[id]
@@ -144,7 +159,7 @@ func (s *Service) acquire(id EndpointID, probe bool, avoid uuid.UUID) (*Attempt,
 			ep.funds.state.mu.Unlock()
 		}
 		now := s.now() // the credential may have rested or expired since the last look
-		best, n := leastBusy(ep, now, avoid)
+		best, n := leastBusy(ep, now, p)
 		if best == nil {
 			return nil, ErrNoSlot
 		}
@@ -178,20 +193,20 @@ func (c *Capacity) Full() bool {
 	if !ok {
 		return false
 	}
-	best, _ := leastBusy(ep, c.s.now(), uuid.UUID{})
+	best, _ := leastBusy(ep, c.s.now(), pick{})
 	return best == nil
 }
 
 // leastBusy is the credential with the lowest share of its limit in use among those that may be picked now, with the
 // count of attempts it was found with. Each credential is held to its upstream account's rolling minute: a relay's
 // credentials share one, so it is counted once, and a pasted key's is its own.
-func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, bestN int32) {
+func leastBusy(ep *endpoint, now time.Time, p pick) (best *credential, bestN int32) {
 	var (
 		bestLoad float64
 		minute   accountMinute
 	)
 	for _, c := range ep.creds {
-		if (c.expires != nil && !now.Before(*c.expires)) || now.UnixNano() < c.rt.restUnix.Load() || minute.full(c, now) {
+		if !c.available(now) || p.bound != nil && c.funds != nil && c.funds.Cmp(*p.bound) < 0 || minute.full(c, now) {
 			continue
 		}
 		n := c.rt.inflight.Load()
@@ -199,7 +214,7 @@ func leastBusy(ep *endpoint, now time.Time, avoid uuid.UUID) (best *credential, 
 			continue
 		}
 		load := float64(n) / float64(c.max)
-		if c.id == avoid {
+		if c.id == p.avoid {
 			load += 2
 		} // Every admissible load is below one; an alternative always wins over the previous key.
 		if best == nil || load < bestLoad {
@@ -409,7 +424,8 @@ func transportFailure(wrote bool) *Failure {
 }
 
 // rest pauses the whole supplier on a balance refusal, and an individual credential until its stated reset or
-// configured cooldown. Other faults are for routing and quality.
+// configured cooldown, or a key that is its own wallet until a read of its balance shows funds. Other faults are for
+// routing and quality.
 func (a *Attempt) rest(f Failure) {
 	if _, low := f.Cause.(adapter.SupplierBalanceLow); low && f.Scope == adapter.ScopeSupplier {
 		a.ep.funds.rest(a.s.now())
@@ -422,6 +438,10 @@ func (a *Attempt) rest(f Failure) {
 	until := now.Add(a.s.cfg.CredentialCooldown)
 	switch c := f.Cause.(type) {
 	case adapter.CredentialQuotaExhausted:
+		if a.cred.funds != nil { // a wallet out of funds rests until a read shows some
+			a.cred.rt.broke.Store(now.UnixNano())
+			return
+		}
 		until = now.Add(a.s.cfg.QuotaCooldown)
 		if c.ResetAt.After(now) {
 			until = c.ResetAt

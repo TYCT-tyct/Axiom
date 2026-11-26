@@ -550,6 +550,9 @@ type ServerInterface interface {
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
 	ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierCloudCredentialParams)
+	// SetSupplierCostRatio Set the ratio a direct or cloud supplier's line costs its type's prices at
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/cost-ratio)
+	SetSupplierCostRatio(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierCostRatioParams)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid, params BindSupplierKeyParams)
@@ -8477,6 +8480,60 @@ func (siw *ServerInterfaceWrapper) ReplaceSupplierCloudCredential(w http.Respons
 	handler.ServeHTTP(w, r)
 }
 
+// SetSupplierCostRatio operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierCostRatio(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierCostRatioParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierCostRatio(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // BindSupplierKey operation middleware
 func (siw *ServerInterfaceWrapper) BindSupplierKey(w http.ResponseWriter, r *http.Request) {
 
@@ -10225,6 +10282,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/model-mappings", wrapper.MapSupplierModel)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/supplier-types", wrapper.ListSupplierTypes)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-types/{kind}/suppliers", wrapper.CreateTypedSupplier)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/cost-ratio", wrapper.SetSupplierCostRatio)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/cloud-credential", wrapper.ReplaceSupplierCloudCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection", wrapper.ConnectSupplierGroup)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/key-identifications", wrapper.IdentifySupplierKey)
@@ -28965,6 +29023,141 @@ func (response ReplaceSupplierCloudCredentialdefaultJSONResponse) VisitReplaceSu
 	return err
 }
 
+type SetSupplierCostRatioRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     SetSupplierCostRatioParams
+	Body       *SetSupplierCostRatioJSONRequestBody
+}
+
+type SetSupplierCostRatioResponseObject interface {
+	VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierCostRatio200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierCostRatio200JSONResponse struct {
+	Body    Supplier
+	Headers SetSupplierCostRatio200ResponseHeaders
+}
+
+func (response SetSupplierCostRatio200JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierCostRatio400JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierCostRatio401JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierCostRatio403JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierCostRatio404JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierCostRatio409JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatio422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetSupplierCostRatio422JSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCostRatiodefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierCostRatiodefaultJSONResponse) VisitSetSupplierCostRatioResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type BindSupplierKeyRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     BindSupplierKeyParams
@@ -32738,6 +32931,9 @@ type StrictServerInterface interface {
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
 	ReplaceSupplierCloudCredential(ctx context.Context, request ReplaceSupplierCloudCredentialRequestObject) (ReplaceSupplierCloudCredentialResponseObject, error)
+	// SetSupplierCostRatio Set the ratio a direct or cloud supplier's line costs its type's prices at
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/cost-ratio)
+	SetSupplierCostRatio(ctx context.Context, request SetSupplierCostRatioRequestObject) (SetSupplierCostRatioResponseObject, error)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(ctx context.Context, request BindSupplierKeyRequestObject) (BindSupplierKeyResponseObject, error)
@@ -38139,6 +38335,40 @@ func (sh *strictHandler) ReplaceSupplierCloudCredential(w http.ResponseWriter, r
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(ReplaceSupplierCloudCredentialResponseObject); ok {
 		if err := validResponse.VisitReplaceSupplierCloudCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierCostRatio operation middleware
+func (sh *strictHandler) SetSupplierCostRatio(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierCostRatioParams) {
+	var request SetSupplierCostRatioRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body SetSupplierCostRatioJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierCostRatio(ctx, request.(SetSupplierCostRatioRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierCostRatio")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierCostRatioResponseObject); ok {
+		if err := validResponse.VisitSetSupplierCostRatioResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

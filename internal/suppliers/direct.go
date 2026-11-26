@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math/big"
 	"slices"
 	"strings"
 	"sync"
@@ -28,8 +29,8 @@ import (
 // Direct APIs (docs/domains/suppliers.md「直连接口」): a provider's own API, or one that speaks its formats, reached with
 // keys a person pastes in. A direct supplier is the rows every supplier has, made in one transaction like an account's
 // own key: one selected group (its one line), a credential per key that passed its check, an endpoint per model the
-// keys list that the catalog has on sale, and the catalog's official price as each endpoint's cost. It has no login,
-// no balance and no sync.
+// keys list that the catalog has on sale, and the catalog's official price times the line's ratio as each endpoint's
+// cost. It has no login and no sync, and no balance but its keys' own, for a type that reads them (wallets.go).
 
 // The ways a direct API or a cloud platform is refused before anything is asked of the provider.
 var (
@@ -46,6 +47,9 @@ var (
 	ErrDirectCurrency = errors.New("suppliers: an API without a built-in price list needs a settlement currency")
 	// ErrDirectName is a name outside 1 to 200 characters.
 	ErrDirectName = errors.New("suppliers: a name is 1 to 200 characters")
+	// ErrBalanceCurrency is a key whose provider tells its balance in another currency than the price entry's: its
+	// wallet is the other price list's.
+	ErrBalanceCurrency = errors.New("suppliers: a key's balance is in another currency than its price entry's")
 )
 
 // KeyError is a pasted key that is not a plausible bearer token. Index is its position in the request; the key itself is
@@ -58,9 +62,10 @@ func (e *KeyError) Error() string {
 
 // DirectRequest is a direct API to connect. Entry is the price entry of a type with them, empty for its first; Origin is
 // as NormalizeOrigin returns it, and it, Family and Currency are only for a type without entries. Fields are the keys'
-// settings, by the type's field names. Keys are plaintext and are only sealed.
+// settings, by the type's field names. Keys are plaintext and are only sealed. Ratio is the line's ratio, empty for 1.
 type DirectRequest struct {
 	Kind, Name, Entry, Origin, Family string
+	Ratio                             string
 	Currency                          platform.Currency
 	Fields                            map[string]string
 	Keys                              []string
@@ -70,11 +75,13 @@ type DirectRequest struct {
 }
 
 // pastedKey is what a plan holds of one pasted key beside its check: the text, which is only sealed, the ref it is
-// stored and found by, and the models its check listed.
+// stored and found by, the models its check listed, and for a type that reads balances, the balance read with it
+// (nil when none was read).
 type pastedKey struct {
-	key    secret.Secret
-	ref    string
-	models []string
+	key     secret.Secret
+	ref     string
+	models  []string
+	balance *adapter.Money
 }
 
 // DirectPlan is a direct API about to be connected: the request as checked, and each key's check once CheckDirect has
@@ -85,6 +92,7 @@ type DirectPlan struct {
 	origin   string
 	direct   adapter.Direct
 	settings adapter.Settings
+	ratio    *big.Rat // the line's, for a new supplier
 	Checks   []KeyCheck
 	keys     []pastedKey // one for each of Checks
 }
@@ -140,7 +148,11 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	if len(secrets) > 0 { // a direct API's secrets are its keys
 		return nil, &adapter.FieldError{Field: "fields", Reason: "holds no secret for a direct API: its keys are the keys"}
 	}
-	p := &DirectPlan{r: r, direct: d, settings: settings}
+	ratio, err := connectRatio(r.Ratio)
+	if err != nil {
+		return nil, err
+	}
+	p := &DirectPlan{r: r, direct: d, settings: settings, ratio: ratio}
 	if err := p.resolve(t); err != nil {
 		return nil, err
 	}
@@ -232,7 +244,10 @@ func (p *DirectPlan) skipStored(ctx context.Context, tx pg.Tx) error {
 const checkParallel = 16
 
 // CheckDirect asks the provider about every key that is not a duplicate, a few at once, through the outbound client,
-// which refuses private and internal addresses; an address it refuses fails the whole request. It writes nothing.
+// which refuses private and internal addresses; an address it refuses fails the whole request. A type that reads
+// balances reads each passed key's too: a balance in another currency than the price entry's is ErrBalanceCurrency for
+// the whole request, since the keys' wallet is not the price list's, and one that does not read is left unread. It
+// writes nothing.
 func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 	if len(p.direct.Type().Entries) == 0 {
 		if err := a.CheckOrigin(ctx, p.origin); err != nil {
@@ -252,13 +267,30 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			got := p.direct.CheckKey(ctx, c, p.family, p.keys[i].key, p.settings)
-			p.Checks[i] = checkOf(got, p.Checks[i], a.now()) // each goroutine writes only its own elements
-			p.keys[i].models = got.Models
+			a.checkPasted(ctx, c, p, i) // each goroutine writes only its own elements
 		})
 	}
 	wg.Wait()
+	for _, k := range p.keys {
+		if k.balance != nil && k.balance.Currency != p.r.Currency {
+			return ErrBalanceCurrency
+		}
+	}
 	return nil
+}
+
+// checkPasted checks key i of the plan and, for a type that reads balances, reads the balance of one that passed.
+func (a *Admin) checkPasted(ctx context.Context, c adapter.Client, p *DirectPlan, i int) {
+	got := p.direct.CheckKey(ctx, c, p.family, p.keys[i].key, p.settings)
+	p.Checks[i] = checkOf(got, p.Checks[i], a.now())
+	p.keys[i].models = got.Models
+	b, reads := p.direct.(adapter.Balancer)
+	if !reads || !p.direct.Type().Balance || got.Outcome != adapter.KeyPassed {
+		return
+	}
+	if m, err := b.ReadBalance(ctx, c, p.keys[i].key, p.settings, p.r.Currency); err == nil { // else unread until the re-list
+		p.keys[i].balance = &m
+	}
 }
 
 // checkOf is what an adapter's answer to a check makes of the check c, at now.
@@ -301,7 +333,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err != nil {
 		return Connected{}, fmt.Errorf("connect the direct API: %w", err)
 	}
-	group, err := insertLine(ctx, tx, q, id, p.r.Kind, p.origin)
+	group, err := insertLine(ctx, tx, q, id, p.r.Kind, p.origin, p.ratio)
 	if err != nil {
 		return Connected{}, err
 	}
@@ -310,7 +342,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	}); err != nil {
 		return Connected{}, fmt.Errorf("set the direct API's unit value: %w", err)
 	}
-	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(), nil)
+	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(), nil, p.ratio)
 	if err != nil {
 		return Connected{}, err
 	}
@@ -327,9 +359,9 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	return Connected{Supplier: &s, Checks: p.Checks}, nil
 }
 
-// insertLine makes a direct API's one line: a group, selected, with its codename.
-func insertLine(ctx context.Context, tx pg.Tx, q *store.Queries, id uuid.UUID, kind, origin string) (uuid.UUID, error) {
-	group, err := q.InsertGroup(ctx, tx, store.InsertGroupParams{SupplierID: id, UpstreamRef: origin, Name: kind, Ratio: "1"})
+// insertLine makes a direct API's one line: a group at the ratio, selected, with its codename.
+func insertLine(ctx context.Context, tx pg.Tx, q *store.Queries, id uuid.UUID, kind, origin string, ratio *big.Rat) (uuid.UUID, error) {
+	group, err := q.InsertGroup(ctx, tx, store.InsertGroupParams{SupplierID: id, UpstreamRef: origin, Name: kind, Ratio: ratioText(ratio)})
 	if err != nil {
 		return uuid.UUID{}, fmt.Errorf("make the direct API's line: %w", err)
 	}
@@ -359,12 +391,16 @@ func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries
 		}
 		sealed := a.keys.Seal(k.key, keyAt(c.Credential))
 		keyVersion := int64(sealed.KeyVersion)
-		if err := q.InsertDirectCredential(ctx, tx, store.InsertDirectCredentialParams{
+		row := store.InsertDirectCredentialParams{
 			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: k.ref,
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &keyVersion,
 			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: allowed, CallNames: calls, Hint: &c.Last4,
 			Settings: settingsColumn(p.settings),
-		}); err != nil {
+		}
+		if k.balance != nil {
+			row.BalanceNative, row.BalanceObservedAt = new(exactText(k.balance.Amount)), &c.CheckedAt
+		}
+		if err := q.InsertDirectCredential(ctx, tx, row); err != nil {
 			return fmt.Errorf("store key %d: %w", c.Index, err)
 		}
 	}
@@ -398,11 +434,11 @@ func (p *DirectPlan) offer() lineOffer {
 
 // insertLineModels writes every name of the offer on the line. A name the catalog maps to a model on sale gets an
 // endpoint in the formats the line serves the model in, costed at the model's official price in the settlement
-// currency (cost_schedules basis published: the provider's own published price); a name with no such price keeps an
-// endpoint whose cost is unknown, out of routing. A name the catalog does not map waits for a person, as a relay's
-// does. Two names of one model are one endpoint: the name that is evidence of the version, else the first. A model in
-// served has an endpoint already and keeps it.
-func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, o lineOffer, served map[catalog.ModelID]bool) (models, priced int, err error) {
+// currency times the line's ratio (cost_schedules basis published: the provider's own published price); a name with no
+// such price keeps an endpoint whose cost is unknown, out of routing. A name the catalog does not map waits for a
+// person, as a relay's does. Two names of one model are one endpoint: the name that is evidence of the version, else
+// the first. A model in served has an endpoint already and keeps it.
+func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, o lineOffer, served map[catalog.ModelID]bool, ratio *big.Rat) (models, priced int, err error) {
 	fallback, err := store.FormatNames(o.unmapped)
 	if err != nil {
 		return 0, 0, err
@@ -424,7 +460,7 @@ func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group
 	for _, model := range slices.SortedFunc(maps.Keys(endpoints), func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }) {
 		name := endpoints[model]
 		m, _ := snap.Model(model) // mapLineName mapped the name to a model of the snapshot
-		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats, o.prices(m))
+		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats, o.prices(m), ratio)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -454,9 +490,9 @@ func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.Up
 }
 
 // insertDirectEndpoint makes one endpoint and, when the catalog's official price in the currency is the line's own price
-// (priced) and the catalog has one, its cost schedule; it reports whether it priced it. An endpoint left unpriced has an
-// unknown cost and is not routed.
-func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, model catalog.ModelID, name string, formats []string, priced bool) (bool, error) {
+// (priced) and the catalog has one, its cost schedule at the line's ratio; it reports whether it priced it. An endpoint
+// left unpriced has an unknown cost and is not routed.
+func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, model catalog.ModelID, name string, formats []string, priced bool, ratio *big.Rat) (bool, error) {
 	endpoint, err := q.InsertEndpoint(ctx, tx, store.InsertEndpointParams{
 		SupplierID: id, SupplierGroupID: group, ModelID: uuid.UUID(model), UpstreamName: name, Formats: formats,
 	})
@@ -467,19 +503,8 @@ func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, g
 	if !ok || !priced {
 		return false, nil
 	}
-	schedule, err := ref.Schedule.MarshalJSON()
-	if err != nil {
+	if err := priceEndpoint(ctx, tx, q, id, endpoint, ref, ratio); err != nil {
 		return false, fmt.Errorf("price the endpoint for %s: %w", name, err)
-	}
-	cost, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
-		SupplierID: id, EndpointID: endpoint, NativeUnit: "usd", Schedule: schedule, Basis: "published",
-		Fingerprint: "price_list:" + ref.ID.String(),
-	})
-	if err != nil {
-		return false, fmt.Errorf("price the endpoint for %s: %w", name, err)
-	}
-	if err := q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: endpoint, CostScheduleID: &cost}); err != nil {
-		return false, fmt.Errorf("put the endpoint for %s in service: %w", name, err)
 	}
 	return true, nil
 }
@@ -513,7 +538,7 @@ func directAudit(p *DirectPlan, models, priced int) map[string]any {
 	}
 	detail := map[string]any{
 		"kind": p.r.Kind, "origin": p.origin, "settlement_currency": p.r.Currency.String(), "max_concurrency": p.r.MaxConcurrency,
-		"keys": outcomes, "models": models, "priced_endpoints": priced,
+		"keys": outcomes, "models": models, "priced_endpoints": priced, "ratio": ratioText(p.ratio),
 	}
 	if p.r.Family != "" {
 		detail["api_format"] = p.r.Family

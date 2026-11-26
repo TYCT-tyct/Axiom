@@ -68,6 +68,7 @@ func (a adminAPI) planDirect(ctx context.Context, r suppliers.DirectRequest) (*s
 func directRequest(kind string, b *adminapi.TypedSupplierCreate) (suppliers.DirectRequest, error) {
 	r := suppliers.DirectRequest{
 		Kind: kind, Name: b.Name, Fields: fieldsOf(b.Fields), MaxConcurrency: int32(b.MaxConcurrency), Reason: b.Reason, //nolint:gosec // the schema bounds it to 2³¹-1
+		Ratio: textValue(b.CostRatio),
 	}
 	switch {
 	case b.Regions != nil:
@@ -100,7 +101,7 @@ func directIdentity(r suppliers.DirectRequest) []any {
 	for i, k := range r.Keys {
 		tails[i] = suppliers.Last4(k)
 	}
-	return []any{r.Kind, r.Name, r.Entry, r.Origin, r.Family, r.Currency.String(), r.Fields, tails, r.MaxConcurrency, r.RequestsPerMinute, r.Reason}
+	return []any{r.Kind, r.Name, r.Entry, r.Origin, r.Family, r.Currency.String(), r.Fields, tails, r.MaxConcurrency, r.RequestsPerMinute, r.Ratio, r.Reason}
 }
 
 // connectedBody is the API's view of what the keys, or a cloud credential's regions, came to: a pasted key's check has
@@ -133,6 +134,7 @@ func directProblem(err error) error {
 		{suppliers.ErrDirectFormat, true, "/format", "only compatible takes a format, and it requires one of its families"},
 		{suppliers.ErrDirectGemini, false, "/format", "Gemini's own format is not served yet; openai and anthropic are"},
 		{suppliers.ErrDirectCurrency, true, "/settlement_currency", "required for compatible"},
+		{suppliers.ErrBalanceCurrency, false, "/entry", "a key's balance is in another currency than the entry's prices; connect it at the entry of its currency"},
 	} {
 		switch {
 		case !errors.Is(err, m.err):
