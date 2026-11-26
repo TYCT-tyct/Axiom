@@ -1,12 +1,12 @@
-package billing
+package main
 
 import (
 	"bytes"
 	"os"
 	"strings"
 	"testing"
-	"time"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform"
 	"axiom/internal/protocol"
 )
@@ -19,12 +19,13 @@ const tokenPrices = `{"v":1,"currency":"USD","rates":{"input":"0.000000001","cac
 	"output":"0.000000007","reasoning":"0.000000008","audio_out":"0.000000009","image_out":"0.00000001"}}`
 
 // TestTokenItemsArePricedByTheirOwnItem: for each format, the usage an upstream reports, read by the relay the gateway
-// runs and settled by billing, charges cache reads and writes, reasoning and the image and audio splits each at its
-// own item's price, and the plain input and output only for what is left of the totals.
+// runs and priced by the schedule's Cost, which settlement charges with, prices cache reads and writes, reasoning and
+// the image and audio splits each at its own item's price, and the plain input and output only for what is left of the
+// totals. It lives here because billing may not import protocol (just modules).
 func TestTokenItemsArePricedByTheirOwnItem(t *testing.T) {
 	t.Parallel()
 	recorded := func(path string) string {
-		b, err := os.ReadFile("../protocol/testdata/" + path)
+		b, err := os.ReadFile("../../internal/protocol/testdata/" + path)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -91,19 +92,14 @@ data: {"type":"message_stop"}
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			u := relayedUsage(t, c.format, c.stream)
-			b := newBank(t, 1_000_000, 0, Config{HolderTTL: time.Minute, ReapGrace: time.Minute, Lifetime: time.Hour})
-			entry := metered(t)
-			entry.Price, entry.MaxOutput = mustSchedule(t, tokenPrices), 1000
-			h := b.holdOn(entry, 10_000)
-			segments := make([]Segment, len(u.Segments))
-			for i, s := range u.Segments {
-				segments[i] = Segment{Usage: s.Usage, Reported: s.Reported}
+			schedule, err := catalog.ParseSchedule([]byte(tokenPrices))
+			if err != nil {
+				t.Fatal(err)
 			}
-			f, err := b.billing.Settle(t.Context(), h, outcome(Committed, FinishStop, segments...))
-			if err != nil || f.Estimated || f.Charged != platform.AmountExact(c.charge) {
-				t.Errorf("Settle = %+v, %v; want %d billionths, not estimated", f, err, c.charge)
+			cost, missing, err := schedule.Cost(u.Segments[0].Usage)
+			if err != nil || missing != 0 || cost.Cmp(platform.AmountExact(c.charge)) != 0 {
+				t.Errorf("Cost = %s, missing %v, %v; want %d billionths", cost.AppendDecimal(nil), missing, err, c.charge)
 			}
-			b.balanced()
 		})
 	}
 }
