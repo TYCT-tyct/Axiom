@@ -2238,7 +2238,7 @@ export interface paths {
         put?: never;
         /**
          * Connect a relay's group with a key made for it or pasted
-         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, or one the supplier does not list, is 422 pointing at `/key`. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409: it is paused and resumed with `selectSupplierGroup`, keeping its key.
+         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, one the supplier does not list, or one it lists as disabled, expired or out of quota, is 422 pointing at `/key`, and a pasted key keeps the model limits and expiry the supplier lists for it. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409, before any key is made: it is paused and resumed with `selectSupplierGroup`, keeping its key.
          */
         post: operations["connectSupplierGroup"];
         delete?: never;
@@ -2258,7 +2258,7 @@ export interface paths {
         put?: never;
         /**
          * Find out which of a relay's groups a pasted key belongs to
-         * @description Asks the supplier which of its keys this is, through its management login, and says the group the supplier lists it under. It stores nothing and the key is never returned, only its last four characters. A key the supplier does not list answers 200 with no `group_id`. Only for `mode` `relay`: 409 for another supplier.
+         * @description Asks the supplier which of its keys this is, through its management login, and says the group the supplier lists it under. It stores nothing and the key is never returned, only its last four characters; nor is it sent to the supplier: the adapter reads the account's list of keys and compares there. A key the supplier does not list answers 200 with no `group_id`. Only for `mode` `relay`: 409 for another supplier.
          *
          *     Limits: 10 a minute per session, because each is a request to a third party.
          */

@@ -76,6 +76,8 @@ func keyProblem(err error, pointer string) error {
 		return unprocessableFields(pointer, "the supplier does not list this key")
 	case errors.Is(err, suppliers.ErrWrongGroup):
 		return unprocessableFields(pointer, "the supplier lists this key under another group")
+	case errors.Is(err, suppliers.ErrKeyUnusable):
+		return unprocessableFields(pointer, "the supplier lists this key as disabled, expired or out of quota")
 	}
 	return err
 }
@@ -154,17 +156,21 @@ func connectionKey(b *adminapi.GroupConnection) (secret.Secret, string, error) {
 }
 
 // groupKey asks the supplier for the key a group is connected with: one it makes now, or which of its keys the pasted
-// text is, which must be listed.
+// text is, which must be listed, usable, and is stored with what the supplier lets it call.
 func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, source adminapi.GroupConnectionKeySource, text secret.Secret) (suppliers.GroupKey, error) {
 	if source == adminapi.Make {
 		made, err := a.suppliers.MakeKey(ctx, a.reach(ctx), supplier, group)
 		return suppliers.GroupKey{Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text}, err
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
-	if err == nil && !listed {
+	switch {
+	case err != nil:
+	case !listed:
 		err = suppliers.ErrKeyNotListed
+	case found.Status != string(adminapi.KeyIdentificationStatusActive):
+		err = suppliers.ErrKeyUnusable
 	}
-	return suppliers.GroupKey{Source: "pasted", Ref: found.Ref, GroupRef: found.GroupRef, Text: text}, err
+	return suppliers.GroupKey{Source: "pasted", Ref: found.Ref, GroupRef: found.GroupRef, Text: text, Policy: found.Policy}, err
 }
 
 // IdentifySupplierKey asks the supplier which of its keys a pasted text is, and stores nothing: 10 a minute per session,
@@ -313,7 +319,7 @@ func (a adminAPI) checkPasted(ctx context.Context, supplier, group uuid.UUID, ke
 	var passed []suppliers.PastedKey
 	seen := make(map[string]bool, len(keys))
 	for i, k := range keys {
-		check, ref, err := a.checkOnePasted(ctx, supplier, groupRef, texts[i], seen[k])
+		check, found, err := a.checkOnePasted(ctx, supplier, groupRef, texts[i], seen[k])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -321,44 +327,44 @@ func (a adminAPI) checkPasted(ctx context.Context, supplier, group uuid.UUID, ke
 		check.Index, check.Last4 = i, last4(k)
 		checks[i] = check
 		if check.Outcome == suppliers.CheckPassed {
-			passed = append(passed, suppliers.PastedKey{Ref: ref, Text: texts[i], Check: check})
+			passed = append(passed, suppliers.PastedKey{Ref: found.Ref, Text: texts[i], Policy: found.Policy, Check: check})
 		}
 	}
 	return checks, passed, nil
 }
 
-// checkOnePasted is one key's check, and the supplier's ref of it. An error is the whole request's: the supplier cannot
-// be asked at all.
-func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupRef string, text secret.Secret, repeated bool) (suppliers.KeyCheck, string, error) {
+// checkOnePasted is one key's check, and which of the supplier's keys it is. An error is the whole request's: the
+// supplier cannot be asked at all.
+func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupRef string, text secret.Secret, repeated bool) (suppliers.KeyCheck, suppliers.FoundKey, error) {
 	if repeated {
-		return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, suppliers.FoundKey{}, nil
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
 	switch {
 	case errors.Is(err, suppliers.ErrSupplierUnanswered):
-		return suppliers.KeyCheck{Outcome: suppliers.CheckInconclusive, Cause: suppliers.CauseUpstreamError}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckInconclusive, Cause: suppliers.CauseUpstreamError}, suppliers.FoundKey{}, nil
 	case err != nil:
-		return suppliers.KeyCheck{}, "", err
+		return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 	case listed && found.GroupRef != groupRef:
-		return suppliers.KeyCheck{Outcome: suppliers.CheckFailed, Cause: suppliers.CauseWrongGroup}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckFailed, Cause: suppliers.CauseWrongGroup}, suppliers.FoundKey{}, nil
 	case listed:
 		var stored bool
 		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 			_, stored, err = a.suppliers.CredentialByRef(ctx, tx, supplier, found.Ref)
 			return err
 		}); err != nil {
-			return suppliers.KeyCheck{}, "", err
+			return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 		}
 		if stored {
-			return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, "", nil
+			return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, suppliers.FoundKey{}, nil
 		}
 	}
 	check, err := a.suppliers.CheckKey(ctx, a.reach(ctx), supplier, text)
 	if err != nil {
-		return suppliers.KeyCheck{}, "", err
+		return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 	}
 	if !listed && check.Outcome == suppliers.CheckPassed {
 		check.Outcome, check.Cause = suppliers.CheckFailed, suppliers.CauseWrongGroup
 	}
-	return check, found.Ref, nil
+	return check, found, nil
 }

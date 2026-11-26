@@ -35,6 +35,9 @@ var (
 	ErrKeyNotListed = errors.New("suppliers: the supplier does not list that key")
 	// ErrWrongGroup is a pasted key the supplier lists under another group.
 	ErrWrongGroup = errors.New("suppliers: the supplier lists that key under another group")
+	// ErrKeyUnusable is a pasted key the supplier lists as disabled, expired or out of quota: a group connected with it
+	// would show a key in use that every call is refused with.
+	ErrKeyUnusable = errors.New("suppliers: the supplier lists that key as not usable")
 	// ErrSupplierRefused is a supplier that refused the login Axiom has for it: the sync has stopped it too.
 	ErrSupplierRefused = errors.New("suppliers: the supplier refused the login")
 	// ErrSupplierUnanswered is a supplier that did not answer, answered in a form the adapter does not know, or whose
@@ -64,7 +67,9 @@ type MadeKey struct {
 }
 
 // MakeKey makes a dedicated key for one of a relay's groups, named as the sync names the keys it makes, and reads its
-// text. A key whose answer was lost is adopted by that name by the sync's next listing, not made twice.
+// text. A key whose answer was lost is adopted by that name by the sync's next listing, not made twice. A group the
+// supplier no longer lists (ErrGroupGone) or one that has a credential already (ErrGroupHasKey) is refused before the
+// supplier is asked: the key would be live there and stored nowhere. ConnectGroup checks both again under the lock.
 func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (MadeKey, error) {
 	sup, ref, err := a.groupToReach(ctx, r, supplier, group)
 	if err != nil {
@@ -90,10 +95,27 @@ func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID)
 }
 
 // FoundKey is which of the supplier's keys a pasted text is: its ID there, the ref of the group it is listed under,
-// and the status the supplier gives it.
+// the status the supplier gives it, and what the supplier lets it call.
 type FoundKey struct {
 	Ref, GroupRef string
 	Status        string
+	Policy        KeyPolicy
+}
+
+// KeyPolicy is what the supplier lets a key call, as its listing says: Models nil is every model and an empty list
+// none; ExpiresAt nil is never. A key stored with it keeps it until the sync's next complete listing says otherwise.
+type KeyPolicy struct {
+	Models    []string
+	ExpiresAt *time.Time
+}
+
+// policyOf is a listed key's policy. A listing that says none cannot prove any permission, so it permits nothing, as the
+// sync reads it (persist.projectKeyPolicies).
+func policyOf(p *adapter.KeyPolicy) KeyPolicy {
+	if p == nil {
+		return KeyPolicy{Models: []string{}}
+	}
+	return KeyPolicy{Models: p.Models, ExpiresAt: p.ExpiresAt}
 }
 
 // FindKey asks the supplier which of its keys text is. found is false when the supplier lists no such key.
@@ -114,7 +136,7 @@ func (a *Admin) FindKey(ctx context.Context, r Reach, supplier uuid.UUID, text s
 	if err != nil || !found {
 		return FoundKey{}, false, keyError(err)
 	}
-	return FoundKey{Ref: string(k.Ref), GroupRef: k.GroupRef, Status: upstreamStatus(k.Status)}, true, nil
+	return FoundKey{Ref: string(k.Ref), GroupRef: k.GroupRef, Status: upstreamStatus(k.Status), Policy: policyOf(k.Policy)}, true, nil
 }
 
 // upstreamStatus is a key's status at the supplier as the contract names it.
@@ -189,7 +211,8 @@ func (a *Admin) supplierToReach(ctx context.Context, r Reach, supplier uuid.UUID
 	return reachable{id: supplier, origin: row.Origin, apiFormat: deref(row.ApiFormat), adapter: ad}, nil
 }
 
-// groupToReach is supplierToReach for a group of the supplier, with the group's ref there.
+// groupToReach is supplierToReach for a group of the supplier that a key can be made for, with the group's ref there:
+// one the supplier still lists and that has no credential.
 func (a *Admin) groupToReach(ctx context.Context, r Reach, supplier, group uuid.UUID) (reachable, string, error) {
 	sup, err := a.supplierToReach(ctx, r, supplier)
 	if err != nil {
@@ -198,8 +221,21 @@ func (a *Admin) groupToReach(ctx context.Context, r Reach, supplier, group uuid.
 	var ref string
 	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
 		g, err := a.group(ctx, tx, supplier, group)
+		if err != nil {
+			return err
+		}
+		if !g.Present {
+			return ErrGroupGone
+		}
+		has, err := store.New().GroupHasCredential(ctx, tx, group)
+		switch {
+		case err != nil:
+			return fmt.Errorf("read the group's keys: %w", err)
+		case has:
+			return ErrGroupHasKey
+		}
 		ref = g.UpstreamRef
-		return err
+		return nil
 	})
 	return sup, ref, err
 }

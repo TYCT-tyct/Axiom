@@ -30,19 +30,21 @@ func expectSame(t *testing.T, what string, got, want any) {
 	}
 }
 
-// fakeRelay is a new-api the tests run: its tokens by ID, which its management API makes, searches and reveals, and its
-// call API accepts while they are active.
+// fakeRelay is a new-api the tests run: its tokens by ID, which its management API makes, lists masked, searches by
+// name and reveals, and its call API accepts while they are active. It keeps every management request it was sent.
 type fakeRelay struct {
 	mu      sync.Mutex
 	tokens  map[int64]*relayToken
 	next    int64
 	creates int
 	refuse  bool // every key is refused at the call API
+	asked   []string
 }
 
 type relayToken struct {
 	Name, Group, Key string
 	Status           int
+	Limits           string // the models the token may call, comma separated; empty for any
 }
 
 func newFakeRelay(t *testing.T) (*fakeRelay, string) {
@@ -55,10 +57,32 @@ func newFakeRelay(t *testing.T) (*fakeRelay, string) {
 
 // add is a token the relay lists, as a person made it there.
 func (r *fakeRelay) add(group, key string) {
+	r.addToken(relayToken{Group: group, Key: key, Status: 1})
+}
+
+// addToken is a token with its status and model limits as a person set them there.
+func (r *fakeRelay) addToken(t relayToken) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.tokens[r.next] = &relayToken{Name: "by hand", Group: group, Key: key, Status: 1}
+	t.Name = "by hand"
+	r.tokens[r.next] = &t
 	r.next++
+}
+
+// expectUnsent fails the test when a management request carried any of texts, or the part of it a listing shows:
+// new-api logs every request's path and query.
+func (r *fakeRelay) expectUnsent(t *testing.T, texts ...string) {
+	t.Helper()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, text := range texts {
+		plain := strings.TrimPrefix(text, "sk-")
+		for _, asked := range r.asked {
+			if strings.Contains(asked, plain) || strings.Contains(asked, maskedToken(plain)) {
+				t.Errorf("the relay was sent %q", asked)
+			}
+		}
+	}
 }
 
 // setRefuse makes the call API refuse every key, or accept the active ones again.
@@ -79,6 +103,9 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
+	if req.URL.Path != "/v1/models" {
+		r.asked = append(r.asked, req.Method+" "+req.URL.String())
+	}
 	switch {
 	case req.URL.Path == "/v1/models":
 		r.models(w, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
@@ -86,6 +113,8 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	case req.Method == http.MethodPost && req.URL.Path == "/api/token/":
 		r.create(w, req)
+	case req.Method == http.MethodGet && req.URL.Path == "/api/token/":
+		r.list(w, req.URL.Query().Get("p"), req.URL.Query().Get("page_size"))
 	case req.URL.Path == "/api/token/search":
 		r.search(w, req.URL.Query().Get("keyword"), req.URL.Query().Get("token"))
 	case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/key"):
@@ -133,6 +162,28 @@ func (r *fakeRelay) search(w http.ResponseWriter, name, key string) {
 	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"items":[%s]}}`, strings.Join(items, ",")) //nolint:errcheck // a test server
 }
 
+// list is a page of the tokens by ID, each key masked as new-api masks it, with its model limits.
+func (r *fakeRelay) list(w http.ResponseWriter, page, size string) {
+	p, _ := strconv.Atoi(page) //nolint:errcheck // no page is the first
+	n, _ := strconv.Atoi(size) //nolint:errcheck // no size is none
+	p = max(p, 1)
+	var items []string
+	for id := int64(1); id < r.next; id++ {
+		t, ok := r.tokens[id]
+		if !ok || int(id) <= (p-1)*n || int(id) > p*n {
+			continue
+		}
+		items = append(items, fmt.Sprintf(`{"id":%d,"name":%q,"group":%q,"status":%d,"key":%q,"expired_time":-1,"model_limits_enabled":%t,"model_limits":%q}`,
+			id, t.Name, t.Group, t.Status, maskedToken(strings.TrimPrefix(t.Key, "sk-")), t.Limits != "", t.Limits))
+	}
+	_, _ = fmt.Fprintf(w, `{"success":true,"data":{"page":%d,"page_size":%d,"total":%d,"items":[%s]}}`, p, n, len(r.tokens), strings.Join(items, ",")) //nolint:errcheck // a test server
+}
+
+// maskedToken is a key as new-api's listing shows it (model/token.go MaskTokenKey), for a key longer than eight.
+func maskedToken(key string) string {
+	return key[:4] + "**********" + key[len(key)-4:]
+}
+
 func (r *fakeRelay) reveal(w http.ResponseWriter, ref string) {
 	id, _ := strconv.ParseInt(ref, 10, 64) //nolint:errcheck // a ref that is no number is no token
 	t, ok := r.tokens[id]
@@ -177,6 +228,7 @@ func TestConnectSupplierGroupRefusals(t *testing.T) {
 	t.Parallel()
 	f := newRelayFixture(t)
 	f.relay.add("default", "sk-pasted-default-0099")
+	f.relay.addToken(relayToken{Group: "premium", Key: "sk-pasted-disabled-0098", Status: 2})
 	for _, c := range []struct {
 		name, group, body string
 		status            int
@@ -186,22 +238,24 @@ func TestConnectSupplierGroupRefusals(t *testing.T) {
 		{"paste without a key", f.def, `{"key_source":"paste","reason":"r"}`, http.StatusBadRequest, codeInvalidRequest},
 		{"a key of another group", f.premium, `{"key_source":"paste","key":"sk-pasted-default-0099","reason":"r"}`, http.StatusUnprocessableEntity, codeUnprocessable},
 		{"a key the supplier does not list", f.premium, `{"key_source":"paste","key":"sk-nobody-knows-it","reason":"r"}`, http.StatusUnprocessableEntity, codeUnprocessable},
+		{"a key the supplier disabled", f.premium, `{"key_source":"paste","key":"sk-pasted-disabled-0098","reason":"r"}`, http.StatusUnprocessableEntity, codeUnprocessable},
 		{"no such group", uuid.NewV7().String(), `{"key_source":"make","reason":"r"}`, http.StatusNotFound, codeNotFound},
 	} {
 		expectAdmin(t, c.name, f.change(f.s, http.MethodPost, f.path("/groups/"+c.group+"/connection"), c.body, newKey()), c.status, c.code)
 	}
 	expectSame(t, "credentials stored", f.text("SELECT count(*)::text FROM suppliers.credentials"), "0")
+	f.relay.expectUnsent(t, "sk-pasted-default-0099", "sk-nobody-knows-it", "sk-pasted-disabled-0098")
 }
 
 // TestConnectSupplierGroup: a group gets a key made for it at the supplier under the sync's name for it, or a pasted one
-// the supplier lists under it; either way it is selected and its credential is active. A replay answers the first result
-// without asking the supplier again, a group that has a key already is a conflict, and the pasted key is nowhere but
-// sealed.
+// the supplier lists under it; either way it is selected and its credential is active, and a pasted key can call only
+// what the supplier lets it. A replay answers the first result without asking the supplier again, a group that has a
+// key already is a conflict before a key is made at the supplier, and the pasted key is nowhere but sealed.
 func TestConnectSupplierGroup(t *testing.T) {
 	t.Parallel()
 	f := newRelayFixture(t)
 	pasted := "sk-pasted-premium-0042"
-	f.relay.add("premium", pasted)
+	f.relay.addToken(relayToken{Group: "premium", Key: pasted, Status: 1, Limits: "gpt-a,gpt-b"})
 	key := newKey()
 	body := `{"key_source":"make","reason":"first line"}`
 	rec := f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), body, key)
@@ -215,10 +269,15 @@ func TestConnectSupplierGroup(t *testing.T) {
 	expectSame(t, "replayed", []any{replay.Code, replay.Header().Get("Idempotency-Replayed"), creates, strings.HasPrefix(name, "axiom-")},
 		[]any{http.StatusCreated, "true", 1, true})
 	expectAdmin(t, "a group with a key", f.change(f.s, http.MethodPost, f.path("/groups/"+f.def+"/connection"), `{"key_source":"make","reason":"r"}`, newKey()), http.StatusConflict, codeConflict)
+	creates, _ = f.relay.made()
+	expectSame(t, "keys made at the supplier", creates, 1)
 
 	connected := f.connectGroup(f.premium, `{"key_source":"paste","key":"`+pasted+`","reason":"r"}`)
 	expectSame(t, "pasted", []any{valueOf(connected.Credential.Last4), valueOf(connected.Credential.KeySource), connected.Credential.UpstreamKeyRef},
 		[]any{"0042", adminapi.SupplierCredentialKeySource("pasted"), "1"})
+	expectSame(t, "what each key may call", f.text(`SELECT string_agg(source || ':' || coalesce(allowed_models::text, 'any'), ' ' ORDER BY source) FROM suppliers.credentials`),
+		"made:any pasted:{gpt-a,gpt-b}")
+	f.relay.expectUnsent(t, pasted)
 	expectSame(t, "where the pasted text is", f.text(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE detail::text LIKE '%pasted-premium%') ||
 		'/' || (SELECT count(*) FROM platform.idempotency WHERE response::text LIKE '%pasted-premium%') ||
@@ -243,6 +302,7 @@ func TestIdentifySupplierKey(t *testing.T) {
 		f.do(http.MethodPost, f.path("/key-identifications"), `{"key":"sk-nobody-has-this"}`, as(f.s))
 	}
 	expectAdmin(t, "the eleventh", f.do(http.MethodPost, f.path("/key-identifications"), `{"key":"sk-nobody-has-this"}`, as(f.s)), http.StatusTooManyRequests, codeRateLimited)
+	f.relay.expectUnsent(t, "sk-identify-me-7777", "sk-nobody-has-this")
 }
 
 // sendSafe sends a request that changes nothing and reads the answer.
@@ -271,7 +331,7 @@ func outcomes(list adminapi.CredentialCheckList) []string {
 func TestAddSupplierKeys(t *testing.T) {
 	t.Parallel()
 	f := newRelayFixture(t)
-	f.relay.add("default", "sk-good-default-1111")
+	f.relay.addToken(relayToken{Group: "default", Key: "sk-good-default-1111", Status: 1, Limits: "gpt-a"})
 	f.relay.add("premium", "sk-good-premium-2222")
 	keys := `["sk-good-default-1111","sk-good-default-1111","sk-good-premium-2222","sk-unknown-key-3333"]`
 	body := `{"group_id":"` + f.def + `","keys":` + keys + `,"max_concurrency":2,"requests_per_minute":60,"reason":"more keys"}`
@@ -283,6 +343,8 @@ func TestAddSupplierKeys(t *testing.T) {
 	expectSame(t, "the checks", outcomes(checks), []string{"0 passed", "1 duplicate", "2 failed/wrong_group", "3 failed/credential_rejected"})
 	expectSame(t, "the key's text in the answer", strings.Contains(rec.Body.String(), "good-default"), false)
 	expectSame(t, "the stored key", f.text(`SELECT max_concurrency || '/' || requests_per_minute || '/' || source || '/' || hint FROM suppliers.credentials WHERE id = '`+valueOf(checks.Data[0].CredentialId)+`'`), "2/60/pasted/1111")
+	expectSame(t, "what the stored key may call", f.text(`SELECT allowed_models::text FROM suppliers.credentials`), "{gpt-a}")
+	f.relay.expectUnsent(t, "sk-good-default-1111", "sk-good-premium-2222", "sk-unknown-key-3333")
 	replay := f.change(f.s, http.MethodPost, f.path("/keys"), body, key)
 	expectSame(t, "replay", []any{replay.Code, replay.Header().Get("Idempotency-Replayed"), f.text("SELECT count(*)::text FROM suppliers.credentials")},
 		[]any{http.StatusCreated, "true", "1"})

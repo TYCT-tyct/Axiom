@@ -71,12 +71,14 @@ func (*Admin) Credentials(ctx context.Context, tx pg.Tx, q CredentialQuery) (pag
 }
 
 // GroupKey is the key a group is connected with: one Axiom made at the supplier (Source made) or one a person pasted
-// that the supplier lists under the group (Source pasted). Ref is the supplier's ID of it; Text is only sealed.
+// that the supplier lists under the group (Source pasted). Ref is the supplier's ID of it; Text is only sealed; Policy
+// is what the supplier lets it call, which a key Axiom made is not limited in.
 type GroupKey struct {
 	Source   string
 	Ref      string
 	GroupRef string
 	Text     secret.Secret
+	Policy   KeyPolicy
 }
 
 // ConnectGroup selects a group that has no credential yet and gives it the key, in one change: the credential starts
@@ -89,7 +91,7 @@ func (a *Admin) ConnectGroup(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 		return Group{}, Credential{}, err
 	}
 	c, err := a.storeKey(ctx, tx, supplier, group, storedKey{
-		source: key.Source, ref: key.Ref, text: key.Text, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
+		source: key.Source, ref: key.Ref, text: key.Text, policy: key.Policy, limits: Limits{MaxConcurrency: defaultMaxConcurrency},
 	})
 	if err != nil {
 		return Group{}, Credential{}, err
@@ -142,10 +144,11 @@ func (a *Admin) connectable(ctx context.Context, tx pg.Tx, supplier, group uuid.
 	return row, nil
 }
 
-// storedKey is a key to store as a credential of a group, sealed to its row.
+// storedKey is a key to store as a credential of a group, sealed to its row, with what the supplier lets it call.
 type storedKey struct {
 	source, ref string
 	text        secret.Secret
+	policy      KeyPolicy
 	limits      Limits
 	check       *KeyCheck
 }
@@ -163,6 +166,7 @@ func (a *Admin) storeKey(ctx context.Context, tx pg.Tx, supplier, group uuid.UUI
 		ID: id, SupplierID: supplier, SupplierGroupID: group, UpstreamKeyRef: k.ref, Ciphertext: sealed.Ciphertext,
 		Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &version,
 		MaxConcurrency: concurrency, RequestsPerMinute: perMinute, Source: &k.source,
+		AllowedModels: k.policy.Models, ExpiresAt: k.policy.ExpiresAt,
 	}
 	if k.source == "pasted" {
 		last4 := hintOf(k.text.Reveal())
@@ -212,11 +216,13 @@ func (*Admin) CredentialByRef(ctx context.Context, tx pg.Tx, supplier uuid.UUID,
 	return ids[0], true, nil
 }
 
-// PastedKey is a pasted key that passed its check, to be stored under the ref the supplier lists it by.
+// PastedKey is a pasted key that passed its check, to be stored under the ref the supplier lists it by, with what the
+// supplier lets it call.
 type PastedKey struct {
-	Ref   string
-	Text  secret.Secret
-	Check KeyCheck
+	Ref    string
+	Text   secret.Secret
+	Policy KeyPolicy
+	Check  KeyCheck
 }
 
 // AddKeys stores pasted keys of one group, each as its own credential with the limits given. A key whose ref is stored
@@ -235,7 +241,7 @@ func (a *Admin) AddKeys(ctx context.Context, tx pg.Tx, actor audit.Actor, suppli
 	var stored []string
 	for i, k := range keys {
 		check := k.Check
-		c, err := a.storeKey(ctx, tx, supplier, group, storedKey{source: "pasted", ref: k.Ref, text: k.Text, limits: limits, check: &check})
+		c, err := a.storeKey(ctx, tx, supplier, group, storedKey{source: "pasted", ref: k.Ref, text: k.Text, policy: k.Policy, limits: limits, check: &check})
 		switch {
 		case errors.Is(err, ErrKeyBound):
 			check.Outcome, check.Cause = CheckDuplicate, ""
