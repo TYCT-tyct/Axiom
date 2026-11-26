@@ -27,11 +27,37 @@ function writeSeen(at: string) {
   }
 }
 
+// ReadFailed says why the list could not be read: a refusal of the permission, a node without announcements, or a
+// failure worth another try.
+function ReadFailed({ status, retry }: { status: number | undefined; retry: () => void }) {
+  const { t } = useTranslation();
+  const { t: common } = useTranslation("common");
+  return (
+    <div role="alert">
+      <p>
+        {status === 403
+          ? common("state.forbiddenTitle")
+          : t(status === 404 ? "announcements.unavailable" : "announcements.error")}
+      </p>
+      {status !== 403 && (
+        <button type="button" onClick={retry}>
+          {t("announcements.retry")}
+        </button>
+      )}
+    </div>
+  );
+}
+
+// instant is a timestamp as milliseconds, 0 when absent: they are compared as instants, not as text, since the API may
+// write the same instant with another offset.
+function instant(at: string | undefined) {
+  return Date.parse(at ?? "") || 0;
+}
+
 // General site information, separate from mandatory account notices. The list is read with the page so the entry can
 // say how many began after the newest one this browser opened.
 export function Announcements() {
   const { t } = useTranslation();
-  const { t: common } = useTranslation("common");
   const [seen, setSeen] = useState(readSeen);
   const query = useQuery({
     queryKey: [accountKey, "announcements"],
@@ -42,9 +68,9 @@ export function Announcements() {
   });
   const status = query.error instanceof ApiError ? query.error.status : undefined;
   const items = query.isSuccess ? query.data.data : undefined;
-  // Timestamps are compared as instants, not as text: the API may write the same instant with another offset.
-  const newest = Math.max(0, ...(items ?? []).map((item) => Date.parse(item.starts_at ?? "") || 0));
-  const unread = (items ?? []).filter((item) => (Date.parse(item.starts_at ?? "") || 0) > (Date.parse(seen) || 0)).length;
+  const starts = (items ?? []).map((item) => instant(item.starts_at));
+  const newest = Math.max(0, ...starts);
+  const unread = starts.filter((at) => at > instant(seen)).length;
   function opened(open: boolean) {
     if (!open || newest === 0) return;
     const at = new Date(newest).toISOString();
@@ -56,25 +82,10 @@ export function Announcements() {
       <details data-announcements onToggle={(event) => opened(event.currentTarget.open)}>
         <summary>
           {t("announcements.title")}
-          {unread > 0 ? (
-            <span data-unread> {t("announcements.unread", { count: unread })}</span>
-          ) : null}
+          {unread > 0 ? <span data-unread> {t("announcements.unread", { count: unread })}</span> : null}
         </summary>
         {query.isPending && <p role="status">{t("announcements.loading")}</p>}
-        {query.isError && (
-          <div role="alert">
-            <p>
-              {status === 403
-                ? common("state.forbiddenTitle")
-                : t(status === 404 ? "announcements.unavailable" : "announcements.error")}
-            </p>
-            {status !== 403 && (
-              <button type="button" onClick={() => query.refetch()}>
-                {t("announcements.retry")}
-              </button>
-            )}
-          </div>
-        )}
+        {query.isError && <ReadFailed status={status} retry={() => query.refetch()} />}
         {query.isSuccess && items === undefined && <p>{t("announcements.unavailable")}</p>}
         {items?.length === 0 && <p>{t("announcements.empty")}</p>}
         {items?.map((item, index) => (

@@ -5,6 +5,19 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 
+// providerKeyBody is the key as typed, or null when its name or the key is missing.
+function providerKeyBody(values: Record<string, string>): Schemas["ProviderKeyCreate"] | null {
+  const name = (values.name ?? "").trim();
+  const key = (values.key ?? "").trim();
+  return name && key ? { name, key, provider: "openai", fallback: values.fallback === "on" } : null;
+}
+
+// fieldReason is why the server refused the field: a refused key names the field it is about, such as a provider this
+// node cannot call, and the page puts the reason beside it as the server wrote it.
+function fieldReason(error: unknown, name: string) {
+  return error instanceof ApiError ? error.fields.find(({ pointer }) => pointer === `/${name}`)?.message : undefined;
+}
+
 // AddProviderKeyDialog saves one key. The key is a password field and is never read back: the list shows only its last
 // four characters after saving.
 export function AddProviderKeyDialog({ onClose }: { onClose: () => void }) {
@@ -20,38 +33,28 @@ export function AddProviderKeyDialog({ onClose }: { onClose: () => void }) {
       onClose();
     },
   });
-  // A refused key names the field it is about and why, such as a provider this node cannot call; the reason goes beside
-  // the field it names, as the server wrote it.
-  const reason = (name: string) =>
-    create.error instanceof ApiError ? create.error.fields.find(({ pointer }) => pointer === `/${name}`)?.message : undefined;
+  const reason = (name: string) => fieldReason(create.error, name);
   return (
     <Dialog title={t("providerKeys.add")} onClose={onClose}>
       <form
         onSubmit={(event) => {
           event.preventDefault();
           const values = readForm(event.currentTarget);
-          const name = (values.name ?? "").trim();
-          const key = (values.key ?? "").trim();
-          if (!name || !key) {
-            setError(t("providerKeys.required"));
-            return;
-          }
-          setError(null);
-          create.mutate({ name, key, provider: "openai", fallback: values.fallback === "on" });
+          const body = providerKeyBody(values);
+          setError(body ? null : t("providerKeys.required"));
+          if (body) create.mutate(body);
         }}
       >
         <Stack>
           {create.isError ? <FormError>{errors.message(create.error)}</FormError> : null}
           {error ? <FormError>{error}</FormError> : null}
-          <TextField
-            label={t("providerKeys.name")}
-            name="name"
-            required
-            maxLength={200}
-            autoFocus
-            error={reason("name")}
-          />
-          <SelectField label={t("providerKeys.provider")} name="provider" defaultValue="openai" error={reason("provider")}>
+          <TextField label={t("providerKeys.name")} name="name" required maxLength={200} autoFocus />
+          <SelectField
+            label={t("providerKeys.provider")}
+            name="provider"
+            defaultValue="openai"
+            error={reason("provider")}
+          >
             <option value="openai">{t("providerKeys.openai")}</option>
           </SelectField>
           <TextField

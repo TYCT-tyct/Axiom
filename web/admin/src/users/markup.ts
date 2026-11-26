@@ -1,4 +1,4 @@
-import type { AdminSchemas } from "@axiom/api";
+import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 
 type Rule = AdminSchemas["PricingRule"];
 
@@ -51,4 +51,26 @@ export function markupInput(tier: AdminSchemas["TierId"], multiplier: string): A
     method: { kind: "default_multiplier", multiplier },
     constraints: {},
   };
+}
+
+// saveMarkup writes the tier's rule: a new one when it has none, else the one there is as of the revision read.
+export function saveMarkup(
+  rule: Rule | undefined,
+  input: AdminSchemas["PricingRuleInput"],
+  reason: string,
+  key: string,
+) {
+  const header = { "Idempotency-Key": key };
+  if (rule === undefined) {
+    return unwrapChange(
+      adminApi.POST("/api/admin/v1/pricing/rules", { params: { header }, body: { rule: input, reason } }),
+    );
+  }
+  const path = { rule_id: rule.id };
+  return unwrapChange(
+    adminApi.PUT("/api/admin/v1/pricing/rules/{rule_id}", {
+      params: { path, header },
+      body: { rev: rule.rev, rule: input, reason },
+    }),
+  );
 }

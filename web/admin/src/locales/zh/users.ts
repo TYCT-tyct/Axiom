@@ -25,6 +25,7 @@ export default {
     enableIntro: "启用后可以再把账户调进这个等级或设为默认。",
     saved: "已保存“{{name}}”。",
     samePrice: "与全部账户同价",
+    unknown: "—",
     ownRule: "有单独的定价规则",
     pays: "多付 {{percent}}%",
     setMarkup: "设置价格",

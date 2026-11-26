@@ -14,7 +14,12 @@ import { RolesTab } from "../users/roles-tab";
 import { TiersTab } from "../users/tiers-tab";
 import { UsersTab } from "../users/users-tab";
 
-const tabs = { "/users": UsersTab, "/users/accounts": AccountsTab, "/users/roles": RolesTab, "/users/tiers": TiersTab } as const;
+const tabs = {
+  "/users": UsersTab,
+  "/users/accounts": AccountsTab,
+  "/users/roles": RolesTab,
+  "/users/tiers": TiersTab,
+} as const;
 type Tab = keyof typeof tabs;
 
 // 用户管理: the people who signed up, the accounts they own, the platform roles that let some of them into the admin, and

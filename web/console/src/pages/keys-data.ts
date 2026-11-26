@@ -176,8 +176,9 @@ export function keyRow(key: Key, { format, t, language, now, today }: RowContext
   const management = key.kind === "management";
   const used = management ? undefined : usedMoney(key);
   const share = limitShare(used, key.spend_limit);
-  const state = expired(key, now) ? t("keys.expired") : key.disabled ? t("keys.board.disabled") : "";
-  const notes = [maskedKey(key), management ? t("keys.board.managementKey") : "", state].filter(Boolean);
+  const notes = [maskedKey(key), management ? t("keys.board.managementKey") : "", keyState(key, now, t)].filter(
+    Boolean,
+  );
   return {
     ...drawn,
     key: key.id,
@@ -187,13 +188,21 @@ export function keyRow(key: Key, { format, t, language, now, today }: RowContext
     f8: share >= barWarn ? "qpace w" : "qpace ",
     f9: `width: ${Math.min(100, Math.round(share * 100))}%;`,
     f11: used ? format.money(used) : "",
-    f13: management ? issueCeiling(key, format, t) : key.spend_limit ? ` / ${format.money(key.spend_limit)}${period(key, t)}` : t("keys.noLimit"),
+    f13: management ? issueCeiling(key, format, t) : spendLimit(key, format, t),
     f18: spendPoints(key.daily_spend, today),
     f34: key.models ? t("keys.board.modelCount", { count: key.models.length }) : t("keys.board.allModels"),
     f35: key.ip_allow ? "qlim ok" : "qlim warn",
     f60: key.ip_allow ? t("keys.board.ipRestricted") : t("keys.board.anyIp"),
     f62: key.last_used_at ? relativeTime(key.last_used_at, now, language, t) : t("keys.board.neverUsed"),
   };
+}
+
+function keyState(key: Key, now: number, t: TFunction) {
+  return expired(key, now) ? t("keys.expired") : key.disabled ? t("keys.board.disabled") : "";
+}
+
+function spendLimit(key: Key, format: Format, t: TFunction) {
+  return key.spend_limit ? ` / ${format.money(key.spend_limit)}${period(key, t)}` : t("keys.noLimit");
 }
 
 function issueCeiling(key: Key, format: Format, t: TFunction) {

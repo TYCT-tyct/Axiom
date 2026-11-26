@@ -7,7 +7,7 @@ import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { NewButton } from "../parts";
 import { rulesQuery, tiersQuery } from "../queries";
-import { markupInput, markupRule, multiplierOf, percentOf } from "./markup";
+import { markupInput, markupRule, multiplierOf, percentOf, saveMarkup } from "./markup";
 
 type Tier = AdminSchemas["TierRef"];
 type Rule = AdminSchemas["PricingRule"];
@@ -19,7 +19,6 @@ type Dialog = { kind: "rename" | "state" | "default" | "markup"; tier: Tier };
 export function TiersTab() {
   const { t } = useTranslation();
   const session = useSession();
-  const manage = can(session, "sites.manage");
   const pricing = can(session, "pricing.manage");
   const tiers = useQuery(tiersQuery());
   const rules = useQuery({ ...rulesQuery, enabled: can(session, "pricing.view") });
@@ -56,30 +55,7 @@ export function TiersTab() {
                   key: "actions",
                   width: 360,
                   header: t("users.tiers.actions"),
-                  cell: (tier) => (
-                    <Cluster gap={8}>
-                      {manage ? (
-                        <ActionButton onClick={() => setDialog({ kind: "rename", tier })}>
-                          {t("users.tiers.rename")}
-                        </ActionButton>
-                      ) : null}
-                      {manage && !tier.default && !tier.disabled ? (
-                        <ActionButton onClick={() => setDialog({ kind: "default", tier })}>
-                          {t("users.tiers.makeDefault")}
-                        </ActionButton>
-                      ) : null}
-                      {manage && !tier.default ? (
-                        <ActionButton onClick={() => setDialog({ kind: "state", tier })}>
-                          {tier.disabled ? t("users.tiers.enable") : t("users.tiers.disable")}
-                        </ActionButton>
-                      ) : null}
-                      {pricing && rules.data ? (
-                        <ActionButton onClick={() => setDialog({ kind: "markup", tier })}>
-                          {t("users.tiers.setMarkup")}
-                        </ActionButton>
-                      ) : null}
-                    </Cluster>
-                  ),
+                  cell: (tier) => <TierActions tier={tier} markup={pricing && rules.isSuccess} open={setDialog} />,
                 },
               ]}
             />
@@ -88,6 +64,34 @@ export function TiersTab() {
       </Card>
       {dialog ? <TierDialog dialog={dialog} rules={rules.data?.data ?? []} onClose={() => setDialog(null)} /> : null}
     </>
+  );
+}
+
+// TierActions are what can be done to one tier: the default tier is never retired, and a retired one never becomes the
+// default.
+function TierActions({ tier, markup, open }: { tier: Tier; markup: boolean; open: (dialog: Dialog) => void }) {
+  const { t } = useTranslation();
+  const manage = can(useSession(), "sites.manage");
+  const actions: { kind: Dialog["kind"]; label: string; shown: boolean }[] = [
+    { kind: "rename", label: t("users.tiers.rename"), shown: manage },
+    { kind: "default", label: t("users.tiers.makeDefault"), shown: manage && !tier.default && !tier.disabled },
+    {
+      kind: "state",
+      label: tier.disabled ? t("users.tiers.enable") : t("users.tiers.disable"),
+      shown: manage && !tier.default,
+    },
+    { kind: "markup", label: t("users.tiers.setMarkup"), shown: markup },
+  ];
+  return (
+    <Cluster gap={8}>
+      {actions
+        .filter((action) => action.shown)
+        .map((action) => (
+          <ActionButton key={action.kind} onClick={() => open({ kind: action.kind, tier })}>
+            {action.label}
+          </ActionButton>
+        ))}
+    </Cluster>
   );
 }
 
@@ -106,9 +110,9 @@ function TierName({ tier }: { tier: Tier }) {
 // nothing when the rules cannot be read.
 function Markup({ rules, tier }: { rules: Rule[] | undefined; tier: Tier }) {
   const { t } = useTranslation();
-  if (!rules) return <Text tone="faint">—</Text>;
+  if (!rules) return <Text tone="faint">{t("users.tiers.unknown")}</Text>;
   const rule = markupRule(rules, tier.id);
-  if (!rule || !rule.enabled) return <Text tone="muted">{t("users.tiers.samePrice")}</Text>;
+  if (!rule?.enabled) return <Text tone="muted">{t("users.tiers.samePrice")}</Text>;
   if (rule.method.kind !== "default_multiplier" || !rule.method.multiplier) {
     return <Text tone="muted">{t("users.tiers.ownRule")}</Text>;
   }
@@ -160,7 +164,10 @@ function NameDialog({ tier, onClose }: { tier?: Tier; onClose: () => void }) {
               }),
             )
           : unwrapChange(
-              adminApi.POST("/api/admin/v1/tiers", { params: { header: { "Idempotency-Key": key } }, body: { name, reason } }),
+              adminApi.POST("/api/admin/v1/tiers", {
+                params: { header: { "Idempotency-Key": key } },
+                body: { name, reason },
+              }),
             )
       }
       toast={(saved) => t("users.tiers.saved", { name: saved.name })}
@@ -249,21 +256,7 @@ function MarkupDialog({ tier, rule, onClose }: { tier: Tier; rule: Rule | undefi
         const multiplier = multiplierOf(values.percent ?? "");
         return multiplier ? markupInput(tier.id, multiplier) : { problem: t("users.tiers.percentInvalid") };
       }}
-      send={(input, { reason, key }) =>
-        rule
-          ? unwrapChange(
-              adminApi.PUT("/api/admin/v1/pricing/rules/{rule_id}", {
-                params: { path: { rule_id: rule.id }, header: { "Idempotency-Key": key } },
-                body: { rev: rule.rev, rule: input, reason },
-              }),
-            )
-          : unwrapChange(
-              adminApi.POST("/api/admin/v1/pricing/rules", {
-                params: { header: { "Idempotency-Key": key } },
-                body: { rule: input, reason },
-              }),
-            )
-      }
+      send={(input, { reason, key }) => saveMarkup(rule, input, reason, key)}
       toast={(saved) =>
         t("users.tiers.markupDone", {
           name: tier.name,
