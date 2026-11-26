@@ -64,16 +64,10 @@ func TestEpusdtDocumentedSignatures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			notice, err := ch.Verify(t.Context(), Callback{Method: http.MethodGet, RawQuery: tc.query})
-			if !tc.valid {
-				if err == nil {
-					t.Fatal("tampered callback verified")
-				}
-				return
+			if (err == nil) != tc.valid {
+				t.Fatalf("verified %t, want %t: %v", err == nil, tc.valid, err)
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !notice.Success || notice.Order != "ORD202605230001" || notice.Paid.Minor != 10000 {
+			if tc.valid && (!notice.Success || notice.Order != "ORD202605230001" || notice.Paid.Minor != 10000) {
 				t.Fatalf("%+v", notice)
 			}
 		})
