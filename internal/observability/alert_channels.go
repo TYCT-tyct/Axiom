@@ -128,9 +128,9 @@ func noticeText(d alertDelivery, origin string) string {
 		phase = "resolved"
 	}
 	var b strings.Builder
-	if d.kind == "operations.approval_pending" && phase == "firing" {
-		var f map[string]string
-		_ = jsonx.Unmarshal(d.fields, &f) //nolint:errcheck // the fields were encoded from this map; a failure leaves them out
+	var f map[string]string
+	// The fields were encoded from such a map; should they not read back, the approval is told as any other incident.
+	if d.kind == "operations.approval_pending" && phase == "firing" && jsonx.Unmarshal(d.fields, &f) == nil {
 		b.WriteString("Axiom approval needed\nTool: " + f["tool"] + "\nTarget: " + f["target"] + "\nExpires: " + f["expires_at"])
 		if origin != "" {
 			b.WriteString("\nDecide: " + origin + "/approvals/" + d.key)
@@ -232,8 +232,10 @@ func (w *webhookWorker) sendBot(ctx context.Context, k *channelKind, d alertDeli
 	if err != nil {
 		return errors.New("bot: request failed")
 	}
-	defer resp.Body.Close() //nolint:errcheck // the answer has been read
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if closed := resp.Body.Close(); err == nil {
+		err = closed
+	}
 	if err != nil {
 		return errors.New("bot: answer unreadable")
 	}

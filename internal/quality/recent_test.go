@@ -49,13 +49,22 @@ func TestRecentWindows(t *testing.T) {
 					t.Errorf("uptime %v: %v %v, want %v %v", UptimeWindows[i], r.Uptime[i], r.UptimeKnown[i], tc.share[i], tc.known[i])
 				}
 			}
-			// Ten answers of 100 tokens over 1 to 5 s, twice: the median speed is 100/3, the one 90% reached is 20.
-			if tc.speed && (!near(r.Throughput[0], 100.0/3) || r.Throughput[2] != 20 || r.Latency[0] != time.Second) {
-				t.Errorf("thirty minutes: %+v", r)
-			}
-			if !tc.speed && (r.Throughput != [4]float64{} || r.Latency != [4]time.Duration{}) {
-				t.Errorf("stale percentiles: %+v", r)
-			}
+			assertRecentSpeeds(t, r, tc.speed)
 		})
+	}
+}
+
+// assertRecentSpeeds: ten answers of 100 tokens over 1 to 5 s, twice, have the median speed 100/3 and the speed 90%
+// reached 20, with a first token after 1 s; without recent answers there are none.
+func assertRecentSpeeds(t *testing.T, r Recent, measured bool) {
+	t.Helper()
+	if !measured {
+		if r.Latency != [4]time.Duration{} || r.Throughput != [4]float64{} {
+			t.Errorf("stale percentiles: %+v", r)
+		}
+		return
+	}
+	if !near(r.Throughput[0], 100.0/3) || r.Throughput[2] != 20 || r.Latency[0] != time.Second {
+		t.Errorf("thirty minutes: %+v", r)
 	}
 }

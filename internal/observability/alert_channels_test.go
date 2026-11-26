@@ -143,11 +143,24 @@ func configureBot(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel
 	})
 }
 
-// deliverAll freezes every pending notification as dispatch does and works each one's post at its last attempt, so a
-// failure is recorded at once; it returns the receipts' states by rule.
-func deliverAll(t *testing.T, db *pg.DB, worker *webhookWorker, now time.Time) map[string]string {
+var approvalNotice = map[string]string{"tool": "refund_create", "target": "order:ord_1", "expires_at": "2026-11-26T09:30:00Z"}
+
+// raiseNotices queues ch's self-test and raises a pending approval, then lets evaluation make their receipts.
+func raiseNotices(t *testing.T, db *pg.DB, ch string, approval uuid.UUID, now time.Time) {
 	t.Helper()
-	states := map[string]string{}
+	alertTx(t, db, func(tx pg.Tx) error {
+		if _, err := SendAlertTest(t.Context(), tx, ch, now); err != nil {
+			return err
+		}
+		return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "operations.approval_pending", Key: approval.String(),
+			Severity: "warning", Fields: approvalNotice})
+	})
+	alertCycle(t, db, now)
+}
+
+// freezePending freezes every pending notification as dispatch does, and returns their receipts.
+func freezePending(t *testing.T, db *pg.DB, now time.Time) []uuid.UUID {
+	t.Helper()
 	var ids []uuid.UUID
 	alertTx(t, db, func(tx pg.Tx) error {
 		deliveries, err := pendingAlertDeliveries(t.Context(), tx, now)
@@ -163,12 +176,20 @@ func deliverAll(t *testing.T, db *pg.DB, worker *webhookWorker, now time.Time) m
 		}
 		return err
 	})
-	for _, id := range ids {
+	return ids
+}
+
+// deliverAll works each pending notification's post at its last attempt, so a failure is recorded at once, and returns
+// the receipts' states by rule.
+func deliverAll(t *testing.T, db *pg.DB, worker *webhookWorker, now time.Time) map[string]string {
+	t.Helper()
+	for _, id := range freezePending(t, db, now) {
 		job := &river.Job[webhookArgs]{JobRow: &rivertype.JobRow{Attempt: 5, MaxAttempts: 5}, Args: webhookArgs{Receipt: id}}
 		if err := worker.work(t.Context(), job); err != nil {
 			t.Fatal(err)
 		}
 	}
+	states := map[string]string{}
 	alertTx(t, db, func(tx pg.Tx) error {
 		rows, err := tx.Query(t.Context(), `SELECT rule_id,state FROM observability.alert_receipts`)
 		if err != nil {
@@ -202,33 +223,38 @@ func botText(p botPost) string {
 	return ""
 }
 
+// botCase is one channel the bot test delivers on: its secret, whether egress refuses it, and what its API must take.
+type botCase struct {
+	name   string
+	ch     AlertChannel
+	secret string
+	refuse bool
+	check  func(t *testing.T, p botPost)
+}
+
+func feishuSigned(t *testing.T, p botPost) {
+	stamp, _ := p.body["timestamp"].(string)
+	mac := hmac.New(sha256.New, []byte(stamp+"\n"+feishuSecret))
+	if p.path != "/open-apis/bot/v2/hook/abc" || p.body["msg_type"] != "text" || stamp != "1795683600" ||
+		p.body["sign"] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
+		t.Errorf("feishu post: %+v", p)
+	}
+}
+
 // TestBotChannelsDeliverTestsAndApprovals: each bot channel's self-test and an approval reach its API as that API
 // takes them (address, signature, token, chat), the approval with its request and the admin link that decides it; the
 // secret is never part of the configuration read back; and a target egress refuses fails the receipt, not the alert.
 func TestBotChannelsDeliverTestsAndApprovals(t *testing.T) {
-	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
-	approval := uuid.NewV7()
-	for _, tc := range []struct {
-		name   string
-		ch     AlertChannel
-		secret string
-		refuse bool
-		check  func(t *testing.T, p botPost)
-	}{
-		{"feishu signed", AlertChannel{ID: "fs", FeishuURL: "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}, feishuSecret, false, func(t *testing.T, p botPost) {
-			stamp, _ := p.body["timestamp"].(string)
-			mac := hmac.New(sha256.New, []byte(stamp+"\n"+feishuSecret))
-			if p.path != "/open-apis/bot/v2/hook/abc" || p.body["msg_type"] != "text" || stamp != "1795683600" ||
-				p.body["sign"] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
-				t.Errorf("feishu post: %+v", p)
-			}
-		}},
-		{"feishu unsigned", AlertChannel{ID: "fs", FeishuURL: "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}, "", false, func(t *testing.T, p botPost) {
+	wecom := AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k1"}
+	feishu := AlertChannel{ID: "fs", FeishuURL: "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}
+	for _, tc := range []botCase{
+		{"feishu signed", feishu, feishuSecret, false, feishuSigned},
+		{"feishu unsigned", feishu, "", false, func(t *testing.T, p botPost) {
 			if _, signed := p.body["sign"]; signed {
 				t.Errorf("signed without a secret: %+v", p)
 			}
 		}},
-		{"wecom", AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k1"}, "", false, func(t *testing.T, p botPost) {
+		{"wecom", wecom, "", false, func(t *testing.T, p botPost) {
 			if p.path != "/cgi-bin/webhook/send?key=k1" || p.body["msgtype"] != "text" {
 				t.Errorf("wecom post: %+v", p)
 			}
@@ -238,67 +264,73 @@ func TestBotChannelsDeliverTestsAndApprovals(t *testing.T) {
 				t.Errorf("telegram post: %+v", p)
 			}
 		}},
-		{"refused", AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k1"}, "", true, nil},
+		{"refused", wecom, "", true, nil},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			db := openDB(t)
-			keys := webhookTestKeys(t)
-			bots := newFakeBots(t)
-			configureBot(t, db, keys, tc.ch, tc.secret, now)
-			alertTx(t, db, func(tx pg.Tx) error {
-				if _, err := SendAlertTest(t.Context(), tx, tc.ch.ID, now); err != nil {
-					return err
-				}
-				return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{Kind: "operations.approval_pending", Key: approval.String(), Severity: "warning",
-					Fields: map[string]string{"tool": "refund_create", "target": "order:ord_1", "expires_at": "2026-11-26T09:30:00Z"}})
-			})
-			alertCycle(t, db, now)
-			worker := &webhookWorker{alertWorker: &alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}, keys: keys, exit: bots.exit(t, tc.refuse)}
-			states := deliverAll(t, db, worker, now)
-			want := "delivered"
-			if tc.refuse {
-				want = "failed"
-			}
-			if states["test"] != want || states["approvals"] != want {
-				t.Fatalf("receipts %v, want %s", states, want)
-			}
-			events := alertCycle(t, db, now)
-			if tc.refuse {
-				if len(bots.sent()) != 0 || len(events) == 0 {
-					t.Fatalf("refused target: posts %v, events %v", bots.sent(), events)
-				}
-				return
-			}
-			posts := bots.sent()
-			if len(posts) != 2 {
-				t.Fatalf("posts: %+v", posts)
-			}
-			var texts []string
-			for _, p := range posts {
-				tc.check(t, p)
-				texts = append(texts, botText(p))
-			}
-			all := strings.Join(texts, "\n")
-			for _, want := range []string{"Axiom alert test", "Tool: refund_create", "Target: order:ord_1", "Decide: " + adminOrigin + "/approvals/" + approval.String()} {
-				if !strings.Contains(all, want) {
-					t.Errorf("messages lack %q: %q", want, all)
-				}
-			}
-			alertTx(t, db, func(tx pg.Tx) error {
-				c, err := GetAlertConfiguration(t.Context(), tx)
-				raw, _ := jsonx.MarshalCanonical(c) //nolint:errcheck // a test reading its own value
-				if tc.secret != "" && strings.Contains(string(raw), tc.secret) {
-					t.Error("the configuration returned the secret")
-				}
-				return err
-			})
-		})
+		t.Run(tc.name, func(t *testing.T) { deliverBotCase(t, tc) })
 	}
 }
 
-// TestChannelKindsCheckTheirDestinationAndSecret: a channel names exactly one valid destination, the bots only their
-// official hosts, and each kind takes only its own secret.
-func TestChannelKindsCheckTheirDestinationAndSecret(t *testing.T) {
+func deliverBotCase(t *testing.T, tc botCase) {
+	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	approval := uuid.NewV7()
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	bots := newFakeBots(t)
+	configureBot(t, db, keys, tc.ch, tc.secret, now)
+	raiseNotices(t, db, tc.ch.ID, approval, now)
+	worker := &webhookWorker{alertWorker: &alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}, keys: keys, exit: bots.exit(t, tc.refuse)}
+	states := deliverAll(t, db, worker, now)
+	want := map[bool]string{false: "delivered", true: "failed"}[tc.refuse]
+	if states["test"] != want || states["approvals"] != want {
+		t.Fatalf("receipts %v, want %s", states, want)
+	}
+	if tc.refuse {
+		if events := alertCycle(t, db, now); len(bots.sent()) != 0 || len(events) == 0 {
+			t.Fatalf("refused target: posts %v, events %v", bots.sent(), events)
+		}
+		return
+	}
+	assertBotPosts(t, bots.sent(), tc.check, approval)
+	assertSecretHidden(t, db, tc.secret)
+}
+
+// assertBotPosts checks the two posts, the self-test and the approval, against their API and their text.
+func assertBotPosts(t *testing.T, posts []botPost, check func(*testing.T, botPost), approval uuid.UUID) {
+	t.Helper()
+	if len(posts) != 2 {
+		t.Fatalf("posts: %+v", posts)
+	}
+	var texts []string
+	for _, p := range posts {
+		check(t, p)
+		texts = append(texts, botText(p))
+	}
+	all := strings.Join(texts, "\n")
+	for _, want := range []string{"Axiom alert test", "Tool: refund_create", "Target: order:ord_1", "Decide: " + adminOrigin + "/approvals/" + approval.String()} {
+		if !strings.Contains(all, want) {
+			t.Errorf("messages lack %q: %q", want, all)
+		}
+	}
+}
+
+func assertSecretHidden(t *testing.T, db *pg.DB, value string) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		raw, err := jsonx.MarshalCanonical(c)
+		if value != "" && strings.Contains(string(raw), value) {
+			t.Error("the configuration returned the secret")
+		}
+		return err
+	})
+}
+
+// TestChannelKindsRefuseInvalidDestinations: a channel names exactly one valid destination, the bots only their
+// official hosts.
+func TestChannelKindsRefuseInvalidDestinations(t *testing.T) {
 	for _, ch := range []AlertChannel{
 		{ID: "x"},
 		{ID: "x", WebhookURL: "http://receiver.example/hook"},
@@ -315,29 +347,39 @@ func TestChannelKindsCheckTheirDestinationAndSecret(t *testing.T) {
 			t.Errorf("invalid channel accepted: %+v", ch)
 		}
 	}
+}
+
+// TestChannelKindsTakeOnlyTheirSecret: a webhook takes 32 to 512 bytes, a Telegram bot only a token's shape, and a
+// WeCom bot none at all.
+func TestChannelKindsTakeOnlyTheirSecret(t *testing.T) {
 	db := openDB(t)
 	keys := webhookTestKeys(t)
 	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
-		ch     AlertChannel
-		values []string
+		ch    AlertChannel
+		value string
 	}{
-		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, []string{strings.Repeat("s", 31), strings.Repeat("s", 513), strings.Repeat("界", 256)}},
-		{AlertChannel{ID: "tg", TelegramChatID: "@axiom_ops"}, []string{"not-a-token", strings.Repeat("s", 40)}},
-		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a"}, []string{strings.Repeat("s", 40)}},
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("s", 31)},
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("s", 513)},
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("界", 256)},
+		{AlertChannel{ID: "tg", TelegramChatID: "@axiom_ops"}, "not-a-token"},
+		{AlertChannel{ID: "tg", TelegramChatID: "@axiom_ops"}, strings.Repeat("s", 40)},
+		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a"}, strings.Repeat("s", 40)},
 	} {
 		configureBot(t, db, keys, tc.ch, "", now)
-		for _, value := range tc.values {
-			err := db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
-				c, err := GetAlertConfiguration(t.Context(), tx)
-				if err == nil {
-					_, err = RotateAlertWebhookSecret(t.Context(), tx, keys, tc.ch.ID, c.Rev, secret.New(value), now)
-				}
-				return err
-			})
-			if !errors.Is(err, ErrAlertConfiguration) {
-				t.Errorf("%s took the secret %q: %v", tc.ch.ID, value, err)
-			}
+		if err := rotateSecret(t, db, keys, tc.ch.ID, tc.value, now); !errors.Is(err, ErrAlertConfiguration) {
+			t.Errorf("%s took the secret %q: %v", tc.ch.ID, tc.value, err)
 		}
 	}
+}
+
+func rotateSecret(t *testing.T, db *pg.DB, keys *secret.Keyring, channel, value string, now time.Time) error {
+	t.Helper()
+	return db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err == nil {
+			_, err = RotateAlertWebhookSecret(t.Context(), tx, keys, channel, c.Rev, secret.New(value), now)
+		}
+		return err
+	})
 }

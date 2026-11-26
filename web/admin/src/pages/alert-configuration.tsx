@@ -55,6 +55,16 @@ const kinds = {
 } as const satisfies Record<string, { field: keyof Channel; secret?: "rotate" | "botSecret" | "botToken" }>;
 type Kind = keyof typeof kinds;
 
+// putConfiguration replaces the rules and channels, every form of this page sending the whole configuration it read.
+const putConfiguration = (body: ConfigInput, { key, reason }: { key: string; reason: string }) =>
+  unwrapChange(
+    adminApi.PUT("/api/admin/v1/alerts/configuration", {
+      params: { header: { "Idempotency-Key": key } },
+      body: { ...body, reason },
+      bodySerializer: formatJSON,
+    }),
+  );
+
 // kindOf is the channel's kind and destination: the first destination member it sets.
 function kindOf(channel: Channel): [Kind, string] | undefined {
   for (const [kind, { field }] of Object.entries(kinds) as [Kind, (typeof kinds)[Kind]][]) {
@@ -169,13 +179,7 @@ function useSpendDrafts(view: Config) {
       setAlertConfiguration: (values, { reason, key }) => {
         const body = { rev: view.rev ?? 1, rules: view.rules ?? [], channels: view.channels ?? [] } as ConfigInput;
         if (spend) body.spend_detection = spendOf(spend, values);
-        return unwrapChange(
-          adminApi.PUT("/api/admin/v1/alerts/configuration", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-            bodySerializer: formatJSON,
-          }),
-        );
+        return putConfiguration(body, { key, reason });
       },
     },
   });
@@ -210,22 +214,7 @@ function Configuration({ view }: { view: Config }) {
         >
           <Rules rules={view.rules ?? []} />
         </SettingsCard>
-        <SettingsCard
-          scope="platform"
-          title={t("alertConfig.channels")}
-          actions={
-            <ActionButton size="sm" icon="plus" onClick={() => setEdit({ kind: "add" })}>
-              {t("alertConfig.add")}
-            </ActionButton>
-          }
-        >
-          <Channels channels={view.channels ?? []} edit={setEdit} />
-          {view.admin_origin ? (
-            <Text size="sm" tone="faint">
-              {t("alertConfig.links", { origin: view.admin_origin })}
-            </Text>
-          ) : null}
-        </SettingsCard>
+        <ChannelsCard view={view} edit={setEdit} />
         {spend ? (
           <SettingsCard scope="platform" title={t("alertConfig.spend")}>
             <SwitchSetting drafts={drafts} setting="alerts.spendOn" />
@@ -278,6 +267,28 @@ function Rules({ rules }: { rules: Rule[] }) {
         </SettingRow>
       ))}
     </>
+  );
+}
+
+function ChannelsCard({ view, edit }: { view: Config; edit: (value: Edit) => void }) {
+  const { t } = useTranslation();
+  return (
+    <SettingsCard
+      scope="platform"
+      title={t("alertConfig.channels")}
+      actions={
+        <ActionButton size="sm" icon="plus" onClick={() => edit({ kind: "add" })}>
+          {t("alertConfig.add")}
+        </ActionButton>
+      }
+    >
+      <Channels channels={view.channels ?? []} edit={edit} />
+      {view.admin_origin ? (
+        <Text size="sm" tone="faint">
+          {t("alertConfig.links", { origin: view.admin_origin })}
+        </Text>
+      ) : null}
+    </SettingsCard>
   );
 }
 
@@ -372,15 +383,7 @@ function AddChannel({ live, onClose }: { live: Config; onClose: () => void }) {
           ...(view.spend_detection ? { spend_detection: view.spend_detection } : {}),
         } as ConfigInput;
       }}
-      send={(values, { key, reason }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/alerts/configuration", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...values, reason },
-            bodySerializer: formatJSON,
-          }),
-        )
-      }
+      send={putConfiguration}
       done={() => <p>{t("alertConfig.added")}</p>}
       reload={reload}
       onClose={onClose}
@@ -419,15 +422,7 @@ function Replace({ live, onClose }: { live: Config; onClose: () => void }) {
         </Stack>
       )}
       read={(values) => readConfiguration(view, values) ?? { problem: t("alertConfig.invalid") }}
-      send={(values, { key, reason }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/alerts/configuration", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...values, reason },
-            bodySerializer: formatJSON,
-          }),
-        )
-      }
+      send={putConfiguration}
       done={() => <p>{t("alertConfig.saved")}</p>}
       reload={reload}
       onClose={onClose}
