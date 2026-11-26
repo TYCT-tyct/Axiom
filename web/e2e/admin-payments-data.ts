@@ -112,9 +112,26 @@ function paidBatches(people: Schemas["UserSummary"][], fallbackUser: Schemas["Us
   ] satisfies Schemas["PaidBatch"][];
 }
 
+// The payments part of the mocked admin's state: the channels, orders, paid batches, frozen refunds and redeem codes.
+export type PaymentState = {
+  merchants: Schemas["Merchant"][];
+  orders: Schemas["PaymentOrder"][];
+  paidBatches: Schemas["PaidBatch"][];
+  refunds: Schemas["PaymentRefund"][];
+  redeemCodes: Schemas["RedeemCode"][];
+};
+
+export const noPayments = (): PaymentState => ({
+  merchants: [],
+  orders: [],
+  paidBatches: [],
+  refunds: [],
+  redeemCodes: [],
+});
+
 // The payment fixtures of a populated site: one channel, its orders, its paid batches, the refunds frozen on them,
 // and its redeem codes. The caller passes one fallback user for an empty people list; a populated fixture always has its owner first.
-export function paymentData(people: Schemas["UserSummary"][], fallbackUser: Schemas["UserSummary"]) {
+export function paymentData(people: Schemas["UserSummary"][], fallbackUser: Schemas["UserSummary"]): PaymentState {
   const fallback = people[0] ?? fallbackUser;
   const orders = range(60).map((n) => anOrder(n, people[(n - 1) % Math.max(people.length, 1)] ?? fallback));
   const refunds = range(3).map((n) =>

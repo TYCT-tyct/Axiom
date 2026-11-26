@@ -1,6 +1,6 @@
 import { callRoute } from "./admin-call-route.ts";
 import { long, nano, pad, range, type Schemas, siteId, tierId, usd, usualTargets, uuid } from "./admin-fixtures.ts";
-import { anOrder, aRefund, paymentData } from "./admin-payments-data.ts";
+import { anOrder, aRefund, noPayments, type PaymentState, paymentData } from "./admin-payments-data.ts";
 import { allPermissions } from "./admin-permissions.ts";
 import type { AuthState } from "./mock.ts";
 import { accountId, authState, userId } from "./mock-auth.ts";
@@ -12,43 +12,39 @@ import { accountId, authState, userId } from "./mock-auth.ts";
 export type { Schemas } from "./admin-fixtures.ts";
 export { uuid } from "./admin-fixtures.ts";
 
-export type AdminState = AuthState & {
-  siteId: Schemas["SiteId"];
-  targets: Map<string, Schemas["OperationsTargets"]>;
-  // A node from before the commercial metrics, used to prove both mixed-version directions.
-  oldTargetRead?: boolean;
-  oldTargetWrite?: boolean;
-  paidUsers: number;
-  monthlyRevenue: Schemas["Money"];
-  retention: Schemas["OperationsRetention"];
-  settings: Schemas["SiteSettingsView"];
-  keyLimits: Schemas["KeyLimitsView"];
-  // The registration policy as last saved; until then the one admin-api.ts starts from.
-  registration?: Schemas["RegistrationPolicy"];
-  logo: Schemas["SiteLogoView"];
-  // The public brand's name and logo address; the server gives the logo as a path, the settings preview as a data URL.
-  brandName?: string;
-  logoUrl?: string;
-  tiers: Schemas["TierRef"][];
-  users: Schemas["UserSummary"][];
-  accounts: Map<string, Schemas["AccountDetail"]>;
-  calls: Schemas["AdminCallSummary"][];
-  traces: Map<string, Schemas["AdminCallTrace"]>;
-  merchants: Schemas["Merchant"][];
-  orders: Schemas["PaymentOrder"][];
-  paidBatches: Schemas["PaidBatch"][];
-  refunds: Schemas["PaymentRefund"][];
-  redeemCodes: Schemas["RedeemCode"][];
-  audit: Schemas["AuditEntry"][];
-  auditEntries: Map<string, Schemas["AuditEntry"]>;
-  suppliers: Schemas["SupplierDetail"][];
-  // how many times a supplier that is connecting has been read, to settle it after the first
-  reads: Map<string, number>;
-  pending: Schemas["PendingMapping"][];
-  authors: Schemas["Author"][];
-  models: Schemas["Model"][];
-  rules: Schemas["PricingRule"][];
-};
+export type AdminState = AuthState &
+  PaymentState & {
+    siteId: Schemas["SiteId"];
+    targets: Map<string, Schemas["OperationsTargets"]>;
+    // A node from before the commercial metrics, used to prove both mixed-version directions.
+    oldTargetRead?: boolean;
+    oldTargetWrite?: boolean;
+    paidUsers: number;
+    monthlyRevenue: Schemas["Money"];
+    retention: Schemas["OperationsRetention"];
+    settings: Schemas["SiteSettingsView"];
+    keyLimits: Schemas["KeyLimitsView"];
+    // The registration policy as last saved; until then the one admin-api.ts starts from.
+    registration?: Schemas["RegistrationPolicy"];
+    logo: Schemas["SiteLogoView"];
+    // The public brand's name and logo address; the server gives the logo as a path, the settings preview as a data URL.
+    brandName?: string;
+    logoUrl?: string;
+    tiers: Schemas["TierRef"][];
+    users: Schemas["UserSummary"][];
+    accounts: Map<string, Schemas["AccountDetail"]>;
+    calls: Schemas["AdminCallSummary"][];
+    traces: Map<string, Schemas["AdminCallTrace"]>;
+    audit: Schemas["AuditEntry"][];
+    auditEntries: Map<string, Schemas["AuditEntry"]>;
+    suppliers: Schemas["SupplierDetail"][];
+    // how many times a supplier that is connecting has been read, to settle it after the first
+    reads: Map<string, number>;
+    pending: Schemas["PendingMapping"][];
+    authors: Schemas["Author"][];
+    models: Schemas["Model"][];
+    rules: Schemas["PricingRule"][];
+  };
 
 const tiers: Schemas["TierRef"][] = [
   { id: tierId(1), name: "Standard" },
@@ -417,11 +413,7 @@ export function emptyState(): AdminState {
     users: [],
     calls: [],
     traces: new Map(),
-    merchants: [],
-    orders: [],
-    paidBatches: [],
-    refunds: [],
-    redeemCodes: [],
+    ...noPayments(),
     audit: [],
     auditEntries: new Map(),
     suppliers: [],

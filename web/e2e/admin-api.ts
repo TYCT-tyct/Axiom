@@ -9,6 +9,7 @@ import { listPaidBatches } from "./admin-paid-batches-api.ts";
 import { pluginHandlers, startPlugins } from "./admin-plugins-api.ts";
 import { policyHandlers, startPolicies } from "./admin-policies-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
+import { listRedeemCodes } from "./admin-redeem-api.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
 import { routingHandlers, startRouting } from "./admin-routing.ts";
 import { siteExtraHandlers, startSiteExtras } from "./admin-site-api.ts";
@@ -309,21 +310,6 @@ function listPaymentRefunds({ query, state }: Ctx<"/api/admin/v1/payments/refund
     query,
   );
   return page ? ok(page) : fail(400, "invalid_request");
-}
-
-// The site's redeem codes, narrowed by state and by the start of their note as the server does, ignoring case.
-function listRedeemCodes({ query, state }: Ctx<"/api/admin/v1/payments/redeem-codes", "get">) {
-  if (query.get("site_id") !== state.siteId) {
-    return fail(404, "not_found");
-  }
-  const wanted = query.get("state");
-  const note = (query.get("note") ?? "").toLowerCase();
-  const codes = state.redeemCodes.filter(
-    (code) => (!wanted || code.state === wanted) && code.note.toLowerCase().startsWith(note),
-  );
-  const page = paged(codes, query);
-  // The list's cursor is absent on the last page, not null.
-  return page ? ok({ data: page.data, next_cursor: page.next_cursor ?? undefined }) : fail(400, "invalid_request");
 }
 
 // A decision changes the refund the page already has: a second person's approval, or a withdrawal that returns the

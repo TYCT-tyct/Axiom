@@ -15,32 +15,41 @@ import { credentialName, type Mode, modeOf } from "./upstream";
 type Credential = AdminSchemas["SupplierCredential"];
 type Supplier = AdminSchemas["Supplier"];
 
+// The rows that hold what was typed in a key's name, its channel or its line, ignoring case.
+function matching(
+  rows: readonly Credential[],
+  typed: string,
+  suppliers: ReadonlyMap<string, Supplier>,
+  lineOf: (row: Credential) => string,
+) {
+  const q = typed.trim().toLowerCase();
+  return rows.filter((row) =>
+    [credentialName(row), suppliers.get(row.supplier_id ?? "")?.name ?? "", lineOf(row)].some((word) =>
+      word.toLowerCase().includes(q),
+    ),
+  );
+}
+
 // 全部 Key (adPg_upkeys): every credential of every supplier, found by name, channel or line and narrowed to a way in,
-// with how full each is now. 全部检测 checks them all; the ones the supplier refused can be erased together.
+// with how full each is now. 全部检测 checks them all; the ones the supplier refused can be erased together. The tab
+// waits for its first load whole, as the strip drawn from the list would otherwise push the filter and the table down
+// (docs/frontend.md「工程要求」); a narrowed list keeps the rows it had until the new ones arrive.
 export default function KeysTab({ credential }: { credential: string | undefined }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const [filters, setFilters] = useState<ModeFilters>({ q: "", mode: "all" });
-  // A narrowed list keeps the rows it had until the new ones arrive, so only the first load is pending.
   const list = useInfiniteQuery({
     ...credentialsListQuery({ mode: filters.mode === "all" ? undefined : filters.mode }),
     placeholderData: keepPreviousData,
   });
   const { suppliers, lineOf } = useSuppliers();
   const rows = list.data?.pages.flatMap((page) => page.data) ?? [];
-  const typed = filters.q.trim().toLowerCase();
-  const shown = rows.filter((row) =>
-    [credentialName(row), suppliers.get(row.supplier_id ?? "")?.name ?? "", lineOf(row)].some((word) =>
-      word.toLowerCase().includes(typed),
-    ),
-  );
+  const shown = matching(rows, filters.q, suppliers, lineOf);
   const open = (id: string | undefined, replace = false) =>
     void navigate({ to: "/suppliers", search: { tab: "keys", credential: id }, replace });
   const count = { shown: shown.length, total: rows.length };
   const index = shown.findIndex((row) => row.id === credential);
   const opened = shown[index];
-  // The strip is drawn from the list, so the tab waits for it whole: a strip arriving above the filter and the table
-  // would push them down (docs/frontend.md「工程要求」).
   if (list.isPending) return <LoadingState />;
   return (
     <>
