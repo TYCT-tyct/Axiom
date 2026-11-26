@@ -126,7 +126,7 @@
 
 ### 错误
 
-- **外壳**：Messages 用 Anthropic 的；其余用 OpenAI 的 `error` 对象（`message`、`type`、`param`、`code`），`type` 用下面 Messages `type` 的词，`param` 缺省为空串，`code` 是与状态行相同的数字。统一的 `error_type` 在 Chat 的 `error.metadata.error_type`、Messages 的 `error.error_type`、Responses `response.failed` 的顶层；Responses 流开始前出错用 Chat 外壳，原生事件用字符串 `code`。
+- **外壳**：Messages 用 Anthropic 的；其余用 OpenAI 的 `error` 对象（`message`、`type`、`param`、`code`），`type` 用下面 Messages `type` 的词，`param` 缺省为空串，`code` 是与状态行相同的数字。统一的 `error_type` 在 Chat 的 `error.metadata.error_type`、Messages 的 `error.error_type`、Responses `response.failed` 的顶层；Responses 流开始前出错用 Chat 外壳，原生事件用字符串 `code`；Gemini 路径用 Google 的（见「路径与格式」）。请求 ID 在每个回答的 `X-Request-ID` 头，Messages 的错误体另带顶层 `request_id`，同 Anthropic。
 - **上游拒绝请求本身时给原话**（Claude Code 靠它恢复）：交出 `message`、`type`、`param`，上游 code 放 `metadata.provider_code`（Responses 原生流在 `response.error.code`），先去掉网址、本站的凭证、形似凭证的串（`sk-`、`ak-`、`Bearer`、`api_key=`）、供应商域名及其各级上级域名、new-api 的 `(request id: …)` 和 new-api/one-api/sub2api 的名字；每项最多 2 KiB，流内超长的整项省略；中转软件自己的 `type` 和 code 不传。原话只进这次回复，不进日志和表。
 - **其余错误**（本站的、上游 429 和 5xx）用统一说法。非法 JSON 回 400 “Invalid request: invalid JSON request body”，类型错的值用 JSON 指针指出。
 - **Messages 的 `type`**：400 `invalid_request_error`、401 `authentication_error`、402 和预算 403 `billing_error`、其余 403 `permission_error`、404 `not_found_error`、408 `timeout_error`、413 `request_too_large`、429 `rate_limit_error`、502 和 `billing_unavailable` `api_error`、其余 503 `overloaded_error`。

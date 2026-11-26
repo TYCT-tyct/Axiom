@@ -131,6 +131,9 @@ func writeRefusal(w http.ResponseWriter, f protocol.Format, r *Refusal) {
 	if f == protocol.Messages {
 		detail["type"], detail["message"] = typ, message
 		body = map[string]any{"type": "error", "error": detail}
+		if id := w.Header().Get("X-Request-ID"); id != "" { // Anthropic's errors name the request in the body
+			body["request_id"] = id
+		}
 	} else {
 		body = map[string]any{"error": map[string]any{"message": message, "type": typ, "param": "", "code": r.Status, "metadata": detail}}
 	}
