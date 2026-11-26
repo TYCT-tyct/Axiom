@@ -44,13 +44,21 @@ const routeTree = root.addChildren([
   app.addChildren([
     shellPage(
       "/",
-      () => import("./pages/home"),
+      () => loadTranslatedPage(import("./pages/home")),
       (search) => ({ range: overviewRange(search.range) }),
+    ),
+    shellPage(
+      "/monitor",
+      () => loadTranslatedPage(import("./pages/monitor")),
+      (search) => ({ window: search.window === "24h" ? ("24h" as const) : ("1h" as const) }),
     ),
     shellPage(
       "/approvals",
       () => import("./pages/approvals"),
-      (search) => ({ state: approvalState(search.state) }),
+      (search) => ({
+        state: approvalState(search.state),
+        view: search.view === "done" ? ("done" as const) : undefined,
+      }),
     ),
     shellPage("/approvals/$approvalId", () => import("./pages/approval")),
     shellPage("/operations-credentials", () => loadTranslatedPage(import("./pages/operations-credentials"))),

@@ -150,6 +150,7 @@ function moneyFormats(locale: string) {
   // A payment's minor unit is the currency's, not always two digits (JPY, KWD), and is resolved once per currency.
   const payDigits = new Map<string, number>();
   const payFormats = new Map<string, Intl.NumberFormat>();
+  const roundedFormats = new Map<string, Intl.NumberFormat>();
   return {
     // A price in the currency a payment method is paid in, in that currency's minor units (cents, fen, or none): the
     // payment contract's PayAmount, not the site's billionths. The fraction digits are the currency's own.
@@ -186,6 +187,21 @@ function moneyFormats(locale: string) {
       }
       return format.format(decimalOf(amount) as `${number}`);
     },
+    // An amount for a figure that is read, not reconciled: rounded to two decimals, from the digits and not through a
+    // floating point number. The exact amount is what `money` shows.
+    rounded: ({ amount, currency }: Money) => {
+      let format = roundedFormats.get(currency);
+      if (!format) {
+        format = new Intl.NumberFormat(locale, {
+          style: "currency",
+          currency,
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        roundedFormats.set(currency, format);
+      }
+      return format.format(decimalOf(amount) as `${number}`);
+    },
   };
 }
 
@@ -193,6 +209,8 @@ function build(language: Language, timeZone: string | undefined) {
   const locale = locales[language];
   const numbers = once(() => ({
     integers: new Intl.NumberFormat(locale),
+    // A large count in the language's own units, "1.2亿" or "1.2B", for a figure whose digits would not fit.
+    compacts: new Intl.NumberFormat(locale, { notation: "compact", maximumFractionDigits: 1 }),
     // An exact decimal in text, such as a ratio or a supplier's own balance: grouped for the language, every digit kept.
     decimals: new Intl.NumberFormat(locale, { maximumFractionDigits: 100 }),
     // A change is a signed share: "+12.5%", "-3%", and a bare "0%" when nothing moved.
@@ -212,6 +230,7 @@ function build(language: Language, timeZone: string | undefined) {
   };
   return {
     number: (value: number | bigint) => numbers().integers.format(value),
+    compact: (value: number) => numbers().compacts.format(value),
     percent: (ratio: number) => numbers().shares.format(ratio),
     day: (value: Date) => at().days.format(value),
     dayFull: (value: Date) => at().daysFull.format(value),

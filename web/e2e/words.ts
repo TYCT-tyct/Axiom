@@ -1,5 +1,13 @@
+import enDashboard from "../admin/src/locales/en/dashboard.ts";
+import enGoals from "../admin/src/locales/en/goals.ts";
 import en from "../admin/src/locales/en/index.ts";
+import enMonitor from "../admin/src/locales/en/monitor.ts";
+import enOps from "../admin/src/locales/en/ops.ts";
+import zhDashboard from "../admin/src/locales/zh/dashboard.ts";
+import zhGoals from "../admin/src/locales/zh/goals.ts";
 import zh from "../admin/src/locales/zh/index.ts";
+import zhMonitor from "../admin/src/locales/zh/monitor.ts";
+import zhOps from "../admin/src/locales/zh/ops.ts";
 import uiEn from "../packages/ui/src/locales/en.ts";
 import uiZh from "../packages/ui/src/locales/zh.ts";
 
@@ -17,14 +25,27 @@ function find(tree: Tree, path: string) {
   return typeof node === "string" ? node : undefined;
 }
 
+// The operations pages keep their words in namespaces of their own (locales/load-page.ts); a key names one as
+// "dashboard:title".
+const namespaces: Record<string, { zh: Tree; en: Tree }> = {
+  dashboard: { zh: zhDashboard as Tree, en: enDashboard as Tree },
+  goals: { zh: zhGoals as Tree, en: enGoals as Tree },
+  monitor: { zh: zhMonitor as Tree, en: enMonitor as Tree },
+  ops: { zh: zhOps as Tree, en: enOps as Tree },
+};
+
 // A key belongs to the app's own translations or to the design system's, so both are searched.
 function lookup(path: string): { zh: string; en: string } {
-  for (const catalog of [
-    { zh: zh as Tree, en: en as Tree },
-    { zh: uiZh as Tree, en: uiEn as Tree },
-  ]) {
-    const zhText = find(catalog.zh, path);
-    const enText = find(catalog.en, path);
+  const [namespace, key] = path.includes(":") ? path.split(":") : [undefined, path];
+  const catalogs = namespace
+    ? [namespaces[namespace]]
+    : [
+        { zh: zh as Tree, en: en as Tree },
+        { zh: uiZh as Tree, en: uiEn as Tree },
+      ];
+  for (const catalog of catalogs) {
+    const zhText = catalog && key ? find(catalog.zh, key) : undefined;
+    const enText = catalog && key ? find(catalog.en, key) : undefined;
     if (zhText !== undefined && enText !== undefined) {
       return { zh: zhText, en: enText };
     }

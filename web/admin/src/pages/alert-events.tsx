@@ -15,15 +15,20 @@ import {
   useUrlParams,
 } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import en from "../locales/en/alert-events";
+import enMonitor from "../locales/en/monitor";
 import zh from "../locales/zh/alert-events";
+import zhMonitor from "../locales/zh/monitor";
+import { MonitorTabs } from "../monitor-tabs";
 import { Code, Facts, Head, Json, PageBody, State, Time } from "../parts";
 import { alertEventsQuery } from "../policy-queries";
 
 export const messages = { zh: { alertEvents: zh }, en: { alertEvents: en } };
+export const namespaces = { monitor: { zh: zhMonitor, en: enMonitor } };
 
 type Event = AdminSchemas["AlertEvent"];
 type Receipt = AdminSchemas["AlertReceipt"];
@@ -33,6 +38,7 @@ const selection = { event: "" };
 
 export default function AlertEvents() {
   const { t } = useTranslation();
+  const { t: monitor } = useTranslation("monitor");
   const query = useInfiniteQuery(alertEventsQuery);
   const [{ event: selected }, setUrl] = useUrlParams(selection);
   const setSelected = (id: string | undefined) => setUrl({ event: id }, id ? "push" : "replace");
@@ -41,8 +47,17 @@ export default function AlertEvents() {
   const event = query.isSuccess && selected ? rows.find((row) => row.id === selected) : undefined;
   return (
     <>
-      <PageHead title={t("nav.alertEvents")} lede={t("alertEvents.description")} />
       <PageBody>
+        <PageHead
+          title={monitor("title")}
+          actions={
+            <ActionButton asChild size="sm">
+              <Link to="/alert-configuration">{monitor("rules")}</Link>
+            </ActionButton>
+          }
+        />
+        <MonitorTabs current="alerts" />
+        <Text tone="muted">{t("alertEvents.description")}</Text>
         <Card layout="flush">
           <DataState
             query={query}

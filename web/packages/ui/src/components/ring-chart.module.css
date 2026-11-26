@@ -74,6 +74,18 @@
   --sw: var(--bad);
 }
 
+.ok {
+  --sw: var(--ok);
+}
+
+.warn {
+  --sw: var(--warn);
+}
+
+.track {
+  --sw: var(--hover);
+}
+
 .centre {
   position: absolute;
   inset: 0;
@@ -164,5 +176,33 @@ button.row {
   from {
     transform: rotate(-40deg);
     opacity: 0;
+  }
+}
+
+/* A ring with words of its own beside it (.adhlb): wider apart, the words taking the rest of the row, and under the ring
+   on a phone. */
+.beside {
+  gap: 24px;
+}
+
+.aside {
+  flex: 1;
+  min-width: 0;
+  margin-right: -12px;
+}
+
+@media (max-width: 767px) {
+  .beside {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .beside .ring {
+    align-self: center;
+  }
+
+  .aside {
+    margin: 0 -12px;
   }
 }

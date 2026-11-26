@@ -1,0 +1,144 @@
+/* The admin's .adprop (admin_style.css) and its fold (.adout): the card's padding, header, meta line, two columns and
+   footer; once leaving, the row it sits in shrinks to nothing (a grid row from 1fr to 0fr) while it fades. */
+.fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition:
+    grid-template-rows 250ms var(--ease),
+    opacity 200ms var(--ease),
+    margin 250ms var(--ease),
+    transform 250ms var(--ease);
+}
+
+.leaving {
+  grid-template-rows: 0fr;
+  margin-bottom: -16px;
+  opacity: 0;
+  transform: scale(0.985);
+}
+
+.card {
+  min-height: 0;
+  margin: 0;
+  padding: 20px 24px 16px;
+  overflow: hidden;
+  transition: padding 250ms var(--ease);
+}
+
+.leaving .card {
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.head > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.head h2 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+}
+
+.kind {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--hover);
+  font-size: var(--fs12);
+  color: var(--t2);
+}
+
+.expiry {
+  flex: none;
+  font-size: var(--fs12);
+  line-height: 24px;
+  color: var(--t2);
+  white-space: nowrap;
+}
+
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+  margin-top: 8px;
+  font-size: var(--fs12);
+  color: var(--t2);
+}
+
+.body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  margin-top: 16px;
+}
+
+.body p {
+  margin: 0;
+  font-size: var(--fs14);
+  line-height: 22px;
+}
+
+.foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 16px;
+  box-shadow: inset 0 var(--bw) 0 var(--line);
+}
+
+.note {
+  margin-right: auto;
+  font-size: var(--fs12);
+  color: var(--t2);
+}
+
+@media (max-width: 1099px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+@media (max-width: 767px) {
+  .card {
+    padding: 16px;
+  }
+
+  .head {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .foot {
+    flex-wrap: wrap;
+  }
+
+  .foot > * {
+    flex: 1;
+    justify-content: center;
+    min-height: 44px;
+  }
+
+  .foot > .note {
+    flex-basis: 100%;
+    min-height: 0;
+  }
+}

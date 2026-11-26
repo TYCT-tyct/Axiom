@@ -1,23 +1,12 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ActionButton, Cluster, DataState, Dialog, Field, MonthField, moneyInput, Text, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Dialog, Field, MonthField, moneyInput, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "./change";
 import { targetsQuery } from "./queries";
-import {
-  type CountComparison,
-  formatTargetRate,
-  legacyTargetMetrics,
-  type MoneyComparison,
-  type RateComparison,
-  readTargets,
-  type TargetMetric,
-  type TargetTone,
-  targetMonth,
-  targetTone,
-} from "./targets";
+import { formatTargetRate, legacyTargetMetrics, readTargets, type TargetMetric, targetMonth } from "./targets";
 
 // TargetsAction is the month picker and the button that opens the editor. The month is a UTC calendar month, the
 // period a target covers; the dashboard prorates it over any window that touches it. The picker says both: its month
@@ -226,108 +215,4 @@ function CommercialTargetFields({ view, currency, error }: TargetFieldProps) {
       />
     </>
   );
-}
-// TargetNote shows one figure's target and gap under its value. An absent comparison is a metric without a target; an
-// absent gap is a comparison withheld because the actual side is incomplete (the call log, or supplier cost with calls
-// whose cost is unknown).
-export function TargetNote({
-  metric,
-  comparison,
-  costUnknown = false,
-}: {
-  metric: TargetMetric;
-  comparison?: CountComparison | MoneyComparison | RateComparison;
-  costUnknown?: boolean;
-}) {
-  const { t } = useTranslation();
-  if (comparison === undefined) {
-    return (
-      <Text as="span" tone="faint">
-        {t("overview.targets.none")}
-      </Text>
-    );
-  }
-  const { target, gap } = comparison;
-  const money = isMoneyMetric(metric);
-  const incomplete: Partial<Record<TargetMetric, string>> = {
-    cost: costUnknown ? t("overview.targets.costIncomplete") : undefined,
-    gross_margin: t("overview.targets.marginIncomplete"),
-    retention: t("overview.targets.retentionIncomplete"),
-  };
-  return (
-    <TargetLine
-      metric={metric}
-      target={money && typeof target === "object" ? target.amount : String(target)}
-      gap={gap === undefined ? undefined : typeof gap === "object" ? gap.amount : String(gap)}
-      currency={money && typeof target === "object" ? target.currency : undefined}
-      incomplete={incomplete[metric]}
-    />
-  );
-}
-
-const isMoneyMetric = (metric: TargetMetric) =>
-  metric === "revenue" || metric === "cost" || metric === "monthly_revenue";
-
-function targetText(
-  metric: TargetMetric,
-  value: string,
-  currency: string | undefined,
-  format: ReturnType<typeof useFormat>,
-): string {
-  if (isMoneyMetric(metric)) {
-    return format.money({ amount: value, currency: currency ?? "" });
-  }
-  if (metric === "gross_margin" || metric === "retention") {
-    return formatTargetRate(Number(value));
-  }
-  return format.number(Number(value));
-}
-
-function TargetLine({
-  metric,
-  target,
-  gap,
-  currency,
-  incomplete,
-}: {
-  metric: TargetMetric;
-  target: string;
-  gap?: string;
-  currency?: string;
-  incomplete?: string;
-}) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  const value = targetText(metric, target, currency, format);
-  if (gap === undefined) {
-    return (
-      <span>
-        {t("overview.targets.target", { value })}
-        {" · "}
-        <Text as="span" tone="faint">
-          {incomplete ?? t("overview.targets.incomplete")}
-        </Text>
-      </span>
-    );
-  }
-  const sign = gap.startsWith("-") ? -1 : gap === "0" ? 0 : 1;
-  const tone = targetTone(metric, sign);
-  const absolute = gap.startsWith("-") ? gap.slice(1) : gap;
-  const amount = targetText(metric, absolute, currency, format);
-  return (
-    <span>
-      {t("overview.targets.target", { value })}
-      {" · "}
-      <Text as="span" tone={textToneOf(tone)}>
-        {tone === "at" ? t("overview.targets.at") : t(`overview.targets.${tone}`, { amount })}
-      </Text>
-    </span>
-  );
-}
-
-function textToneOf(tone: TargetTone): "ok" | "faint" | "bad" {
-  if (tone === "ahead" || tone === "under") {
-    return "ok";
-  }
-  return tone === "at" ? "faint" : "bad";
 }

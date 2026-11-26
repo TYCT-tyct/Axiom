@@ -1,26 +1,51 @@
 // The dashboard's ranges and the links each figure opens: one place for the window arithmetic and for the filters the
 // call list and the order list understand, so a figure and its drill-down cannot disagree.
 
-export const overviewRanges = ["24h", "7d", "30d"] as const;
+export const overviewRanges = ["today", "7d", "month"] as const;
 export type OverviewRange = (typeof overviewRanges)[number];
 
-// A range in the address is one of the three, and anything else is the default.
+// A range in the address is one of the three; the rolling ranges of the earlier dashboard land on the nearest one, and
+// anything else is today.
 export function overviewRange(value: unknown): OverviewRange {
-  return overviewRanges.includes(value as OverviewRange) ? (value as OverviewRange) : "24h";
+  if (value === "24h") {
+    return "today";
+  }
+  if (value === "30d") {
+    return "month";
+  }
+  return overviewRanges.includes(value as OverviewRange) ? (value as OverviewRange) : "today";
 }
-
-const span: Record<OverviewRange, number> = {
-  "24h": 24 * 60 * 60 * 1000,
-  "7d": 7 * 24 * 60 * 60 * 1000,
-  "30d": 30 * 24 * 60 * 60 * 1000,
-};
 
 export type Window = { since: string; until: string };
 
-// overviewWindow is the range as the API takes it, ending now. The page computes it once per visit, so the figures and
-// every link they open describe the same window.
-export function overviewWindow(range: OverviewRange, now: Date): Window {
-  return { since: new Date(now.getTime() - span[range]).toISOString(), until: now.toISOString() };
+const day = 24 * 60 * 60 * 1000;
+const dayStart = (at: Date) => Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate());
+const iso = (since: number, until: number): Window => ({
+  since: new Date(since).toISOString(),
+  until: new Date(until).toISOString(),
+});
+
+// What the dashboard asks the API for. The figures cover `current`, which ends at the visit and begins on a UTC day
+// boundary, the grid the API's days and the targets' months are on: today, the last 7 UTC days, or the UTC month so far.
+// `previous` is the same stretch before it, as far into itself as `current` is into its own (the same hours of
+// yesterday, the 7 days before, the same days of last month), so a half-gone day is compared with half a day.
+// `trend` is what the trend lines and the charts draw: a single day has no trend, so today is drawn over the last 7 days.
+export type OverviewWindows = { current: Window; previous: Window; trend: Window };
+
+export function overviewWindows(range: OverviewRange, now: Date): OverviewWindows {
+  const at = now.getTime();
+  const today = dayStart(now);
+  if (range === "month") {
+    const from = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+    const before = Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
+    const current = iso(from, at);
+    return { current, previous: iso(before, Math.min(before + (at - from), from)), trend: current };
+  }
+  const week = iso(today - 6 * day, at);
+  if (range === "7d") {
+    return { current: week, previous: iso(today - 13 * day, at - 7 * day), trend: week };
+  }
+  return { current: iso(today, at), previous: iso(today - day, at - day), trend: week };
 }
 
 // The call list takes a window and, since #318, the site, model and result filters the figures drill into. The site is
@@ -56,10 +81,6 @@ export type OrderDrill = Window & { cash?: "1"; paid?: "batches" };
 // cash view; the old page wrote and read cash=1, so that spelling stays the contract.
 export function cashView(value: unknown): "1" | undefined {
   return value === "1" || value === 1 || value === '"1"' ? "1" : undefined;
-}
-
-export function ordersDrill(window: Window): OrderDrill {
-  return { ...window, cash: "1" };
 }
 
 export function paidOrdersDrill(window: Window): OrderDrill {

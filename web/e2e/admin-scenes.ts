@@ -180,6 +180,7 @@ const scenes: Scene[] = [
   dialog("subscription-plan-new", "subscription-plans", "subscriptions.new"),
   dialog("subscription-plan-edit", "subscription-plans", "subscriptions.editNamed"),
   view("settings", "settings"),
+  view("monitor", "monitor"),
   view("alert-events", "alert-events"),
   view("alert-configuration", "alert-configuration"),
   view("announcements", "announcements"),

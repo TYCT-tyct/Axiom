@@ -2,8 +2,22 @@ import { type Key, type ReactNode, useState } from "react";
 import { classes } from "../classes";
 import s from "./ring-chart.module.css";
 
-// The colour of a part: the data colour in its three steps, a category colour (--c0…--c4, a model's own), grey, red.
-export type Swatch = "data" | "data2" | "data3" | "c0" | "c1" | "c2" | "c3" | "c4" | "muted" | "bad";
+// The colour of a part: the data colour in its three steps, a category colour (--c0…--c4, a model's own), grey, red; the
+// status colours of a score (ok, warn, bad), and the track the rest of a score is drawn on.
+export type Swatch =
+  | "data"
+  | "data2"
+  | "data3"
+  | "c0"
+  | "c1"
+  | "c2"
+  | "c3"
+  | "c4"
+  | "muted"
+  | "bad"
+  | "ok"
+  | "warn"
+  | "track";
 
 export type RingPart = {
   key: Key;
@@ -72,7 +86,9 @@ function Row({
 // RingChart is a whole split into parts (the admin's adRing, with the model mix's list beside it): a thick ring, a
 // figure in its middle, and a row per part. The ring and the list point at each other: a pointer on a row, or focus on
 // it, thickens its part of the ring, and a pointer on a part lights its row. With onSelect a row is a button that opens
-// the part. The ring is a picture whose label says every part and its share.
+// the part. The ring is a picture whose label says every part and its share. With an aside it stands beside that instead
+// of the list of parts, for a figure with words of its own (the health score and what was taken off it); its label is then
+// the one given.
 export function RingChart({
   label,
   parts,
@@ -80,6 +96,7 @@ export function RingChart({
   centreLabel,
   size = 132,
   onSelect,
+  aside,
 }: {
   label: string;
   parts: readonly RingPart[];
@@ -87,13 +104,15 @@ export function RingChart({
   centreLabel?: string;
   size?: number;
   onSelect?: (key: Key) => void;
+  aside?: ReactNode;
 }) {
   const [hot, setHot] = useState<number | null>(null);
   const arcs = arcsOf(parts);
-  const summary = `${label}: ${parts.map((part) => `${part.label} ${part.share}`).join(", ")}`;
+  const summary =
+    aside === undefined ? `${label}: ${parts.map((part) => `${part.label} ${part.share}`).join(", ")}` : label;
   const lighting = (i: number): Lighting => ({ onPointerEnter: () => setHot(i), onPointerLeave: () => setHot(null) });
   return (
-    <div className={s.root}>
+    <div className={classes(s.root, aside !== undefined && s.beside)}>
       <div
         role="img"
         aria-label={summary}
@@ -123,17 +142,21 @@ export function RingChart({
           </div>
         ) : null}
       </div>
-      <ul className={s.list}>
-        {parts.map((part, i) => (
-          <Row
-            key={part.key}
-            part={part}
-            lit={hot === i}
-            lighting={{ ...lighting(i), onFocus: () => setHot(i), onBlur: () => setHot(null) }}
-            onSelect={onSelect}
-          />
-        ))}
-      </ul>
+      {aside !== undefined ? (
+        <div className={s.aside}>{aside}</div>
+      ) : (
+        <ul className={s.list}>
+          {parts.map((part, i) => (
+            <Row
+              key={part.key}
+              part={part}
+              lit={hot === i}
+              lighting={{ ...lighting(i), onFocus: () => setHot(i), onBlur: () => setHot(null) }}
+              onSelect={onSelect}
+            />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }

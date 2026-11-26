@@ -16,20 +16,70 @@ const credit = `/approvals/${uuid(17, 1)}`;
 const approvePath = `**/api/admin/v1/operations/approvals/${uuid(17, 1)}/approve`;
 
 test.describe("operations approvals", () => {
-  test("lists every approval, narrows by state from the address, and opens one", async ({ page }) => {
-    await open(page, "/approvals");
-    const list = page.getByRole("table", { name: zhText("approvals.list") });
-    await expect(list.getByRole("row")).toHaveCount(9);
-    // A target by its name before its ID, and a waiting one by the time it has left.
-    const first = list.getByRole("row").nth(1);
-    await expect(first).toContainText("Northwind");
-    await expect(first.getByText(words("approvals.expiresIn_other"))).toBeVisible();
-    await page.getByLabel(zhText("approvals.filters.state")).selectOption("pending");
-    await page.getByRole("button", { name: zhText("filter.apply") }).click();
-    expect(new URL(page.url()).searchParams.get("state")).toBe("pending");
-    await expect(list.getByRole("row")).toHaveCount(5);
-    await list.getByRole("link", { name: zhText("approvals.risk.gift") }).click();
-    await expect(page.getByRole("heading", { level: 1, name: zhText("approvals.risk.gift") })).toBeVisible();
+  test("lists what waits as cards that carry their reason, change and limit, and the decided ones as a table", async ({
+    page,
+  }) => {
+    const state = await open(page, "/approvals");
+    const cards = page.locator("section[aria-labelledby]");
+    await expect(cards).toHaveCount(4);
+    // Everything a decision needs is on the card: who and what, why (the agent's words and the server's grounds), what it
+    // changes, and how far the day's limit is.
+    const gift = page.getByRole("region", { name: /Northwind/ });
+    await expect(gift).toContainText(zhText("approvals.risk.gift"));
+    await expect(gift.getByText(words("approvals.expiresIn_other"))).toBeVisible();
+    await expect(gift.getByText(approvalsOf(state)[0]?.agent_reason ?? "")).toBeVisible();
+    await expect(gift.getByText(zhText("approvals.why.always.gift"))).toBeVisible();
+    await expect(gift.getByText(zhText("approvals.board.diff.amount"))).toBeVisible();
+    await expect(gift).toContainText("25.00");
+    await expect(gift.getByText(/今日已批/)).toBeVisible();
+    // A top-up says the caps it went over, and a sale price what it was and what it will be.
+    const topUp = page.getByRole("region", { name: /Relay One/ });
+    await expect(topUp.getByText(words("approvals.why.single"))).toContainText("10.00");
+    const price = page.getByRole("region", { name: /Claude Opus 5.5/ });
+    await expect(price.getByText(zhText("models.item.input"))).toBeVisible();
+    await expect(price).toContainText("4.5 USD");
+
+    await page.getByText(zhText("approvals.board.done"), { exact: true }).click();
+    expect(new URL(page.url()).searchParams.get("view")).toBe("done");
+    const table = page.getByRole("table", { name: zhText("approvals.board.done") });
+    await expect(table.getByRole("row")).toHaveCount(5);
+    await table.getByRole("link").first().click();
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    expect(new URL(page.url()).pathname).toMatch(/^\/approvals\/[0-9a-f-]+$/);
+  });
+
+  test("an address that names a state lands on the decided ones narrowed to it", async ({ page }) => {
+    await open(page, "/approvals?state=expired");
+    const table = page.getByRole("table", { name: zhText("approvals.board.done") });
+    await expect(table.getByRole("row")).toHaveCount(2);
+  });
+
+  test("deciding a card says what was done and folds the card away", async ({ page }) => {
+    const state = await open(page, "/approvals");
+    const gift = page.getByRole("region", { name: /Northwind/ });
+    await gift.getByRole("button", { name: zhText("approvals.approve") }).click();
+    await dialog(page).getByLabel(words("change.reason")).fill("checked the incident and the account");
+    await dialog(page).locator("button[type=submit]").click();
+    await expect(page.getByText(zhText("approvals.done.gift"))).toBeVisible();
+    await expect(gift).toHaveCount(0);
+    expect(approvalsOf(state)[0]?.state).toBe("approved");
+    expect(approvalsOf(state)[0]?.decision_reason).toBe("checked the incident and the account");
+    await expect(page.locator("section[aria-labelledby]")).toHaveCount(3);
+
+    const topUp = page.getByRole("region", { name: /Relay One/ });
+    await topUp.getByRole("button", { name: zhText("approvals.reject") }).click();
+    await send(page, "the balance is fine");
+    await expect(topUp).toHaveCount(0);
+    expect(approvalsOf(state)[1]?.state).toBe("rejected");
+  });
+
+  test("a card whose time ran out is not offered for a decision", async ({ page }) => {
+    const state = await mockAdmin(page, "usual");
+    signedInAs(state, "mfa");
+    const first = approvalsOf(state)[0];
+    if (first) first.expires_at = new Date(Date.now() - 60_000).toISOString();
+    await page.goto("/approvals");
+    await expect(page.locator("section[aria-labelledby]")).toHaveCount(3);
   });
 
   test("an approved credit grant says it was given, and the page offers no second decision", async ({ page }) => {

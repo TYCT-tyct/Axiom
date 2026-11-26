@@ -40,6 +40,15 @@ it("loads complete deferred copy before returning a page and preserves both lang
   ]) {
     await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
   }
+  // A page's namespaces are loaded beside the catalog and leave it as it is.
+  const namespaced = {
+    default: () => null,
+    namespaces: { ops: { zh: { lines: { title: "线路" } }, en: { lines: { title: "Lines" } } } },
+  };
+  expect(i18next.hasResourceBundle("en", "ops")).toBe(false);
+  expect(await loadTranslatedPage(Promise.resolve(namespaced))).toBe(namespaced);
+  expect(i18next.getFixedT("zh", "ops")("lines.title")).toBe("线路");
+  expect(i18next.getFixedT("en", "ops")("lines.title")).toBe("Lines");
   expect(i18next.getResourceBundle("en", "admin")).toEqual(en);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
   await i18next.changeLanguage("zh");
