@@ -238,7 +238,7 @@ const scenes: Scene[] = [
   dialog("exchange-rate-history", "pricing?tab=rates", "exchangeRates.history"),
   view("payment-discrepancies", "orders/discrepancies"),
   inDrawer("payment-discrepancy", "orders/discrepancies", 1),
-  inDrawer("platform-grant", "users/roles", /user1@example\.com/, "platformGrants.revoke"),
+  inDrawer("platform-grant", "users/roles", 1, "platformGrants.revoke"),
   view("subscriptions", "subscriptions"),
   inDrawer("subscription", "subscriptions", 1),
   pricingPreview,
