@@ -12,6 +12,7 @@ import (
 
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/persist"
 	"axiom/internal/suppliers/internal/registry"
 )
 
@@ -234,4 +235,22 @@ func deref64(p *int64) any {
 		return nil
 	}
 	return *p
+}
+
+// TestACallsRefusalIsInTheQueueAtOnce: a key the supplier refused in a call is marked rejected and is in the supplier's
+// queue in the same write, whatever its mode: no sync reads a direct API's or a cloud supplier's keys again.
+func TestACallsRefusalIsInTheQueueAtOnce(t *testing.T) {
+	t.Parallel()
+	w := newWorldWith(t, 4, fakeKind{}, messagesAPI)
+	w.asDirect("messagesapi")
+	var status string
+	var queued int
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		if err := persist.RejectCredential(ctx, tx, w.supplier, w.credential, w.clock.now()); err != nil {
+			return err
+		}
+		return tx.QueryRow(ctx, `SELECT (SELECT status FROM suppliers.credentials WHERE id = $1),
+			(SELECT count(*)::int FROM suppliers.inbox_items WHERE kind = 'key_invalid' AND subject = $1::text)`, w.credential).Scan(&status, &queued)
+	})
+	same(t, "the refused key", []any{"rejected", 1}, []any{status, queued})
 }

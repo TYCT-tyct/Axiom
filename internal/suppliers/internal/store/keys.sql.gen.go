@@ -217,10 +217,11 @@ func (q *Queries) GroupHasCredential(ctx context.Context, db DBTX, groupID uuid.
 
 const insertSealedCredential = `-- name: InsertSealedCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, hint, source, checked_at, check_outcome, check_status)
+    key_version, status, max_concurrency, requests_per_minute, hint, source, checked_at, check_outcome, check_status,
+    allowed_models, expires_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
     'active', $9, $10, $11, $12, $13,
-    $14, $15)
+    $14, $15, $16, $17)
 `
 
 type InsertSealedCredentialParams struct {
@@ -239,9 +240,12 @@ type InsertSealedCredentialParams struct {
 	CheckedAt         *time.Time
 	CheckOutcome      *string
 	CheckStatus       *int32
+	AllowedModels     []string
+	ExpiresAt         *time.Time
 }
 
-// A key a person gave or Axiom made at their asking, sealed to this row: active, with what its check found.
+// A key a person gave or Axiom made at their asking, sealed to this row: active, with what its check found and what the
+// supplier's listing lets it call (allowed_models NULL is every model).
 func (q *Queries) InsertSealedCredential(ctx context.Context, db DBTX, arg InsertSealedCredentialParams) error {
 	_, err := db.Exec(ctx, insertSealedCredential,
 		arg.ID,
@@ -259,6 +263,8 @@ func (q *Queries) InsertSealedCredential(ctx context.Context, db DBTX, arg Inser
 		arg.CheckedAt,
 		arg.CheckOutcome,
 		arg.CheckStatus,
+		arg.AllowedModels,
+		arg.ExpiresAt,
 	)
 	return err
 }

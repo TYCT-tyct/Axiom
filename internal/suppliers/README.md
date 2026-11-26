@@ -154,7 +154,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 |---|---|
 | `NormalizeOrigin`、`CheckOrigin`（只在幂等回调里）、`Detect` | `ErrBadOrigin`、`ErrAddressRefused`、`ErrUnreachable` |
 | `Connect` | `ErrNoAdapter`、`*LoginError`（只带字段名）、`ErrSupplierExists` |
-| `PlanDirect`、`CheckDirect`、`CreateDirect`（直连接口） | `ErrDirectProvider`、`ErrDirectOrigin`、`ErrDirectFormat`、`ErrDirectGemini`、`ErrDirectCurrency`、`ErrDirectName`、`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
+| `PlanDirect`、`PlanDirectKeys`、`CheckDirect`、`CreateDirect`、`AddDirectKeys` | `ErrDirect`：`Provider`、`Origin`、`Format`、`Gemini`、`Currency`、`Name`，`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
 | `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud`（云平台） | `ErrCloudProvider`、`ErrCloudOrigin`、`ErrCloudRegions`、`ErrCloudDeployments`、`*CredentialError`、`ErrNotCloud` |
 | `SetStatus`、`Remove`、`ReplaceLogin`、`ConfirmUnitValue` | `ErrStatusLocked`、`ErrNoSupplier`、`ErrUnitValue`、`ErrUnitValueFixed` |
 | `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound` |
@@ -164,4 +164,4 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `Suppliers`、`Supplier`、`PendingMappings`、`TopUpBasis`、`SupplierModels`、`EndpointCost`、`EndpointTraffic`（只读） | `ErrNoSupplier`、`ErrNoSupplierEndpoint` |
 | `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
-| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem` | `ErrStatusLocked`、`ErrNotSynced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

@@ -3,105 +3,78 @@ package newapi
 import (
 	"context"
 	"crypto/subtle"
-	"errors"
 	"fmt"
-	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 
-	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 )
 
 var _ adapter.KeyFinder = (*manager)(nil)
 
-// maxFound is how many keys a search by text may answer before it is taken as not an answer: the search matches with
-// LIKE, so a text with a wildcard in it matches more than its own key, and each candidate costs a read of its text.
+// maxFound is how many of the account's keys may share the text's mask before the answer is taken as not one: each is
+// read whole in the critical bucket, which allows five reads in twenty minutes. Two keys share a mask about once in 62⁸.
 const maxFound = 5
 
-// FindKey implements adapter.KeyFinder by new-api's search of the account's keys by their text (controller/token.go
-// SearchTokens, its `token` parameter; model/token.go SearchUserTokens strips "sk-" and matches with LIKE), then reads
-// the text of each key it answers and keeps the one that is the same whole. The search answers masked keys, so the
-// read is what confirms it.
+// FindKey implements adapter.KeyFinder without sending the text, or any part of it, to new-api: its search takes the
+// text in the query string, and new-api logs every request's path and query (middleware/logger.go). The account's own
+// listing is read instead, page by page (controller/token.go GetAllTokens); it masks each key (maskKey), so a key whose
+// mask is the text's is a candidate, and reading its text (KeySecret) confirms it whole, compared in constant time.
 func (m *manager) FindKey(ctx context.Context, text secret.Secret) (adapter.KeyState, bool, error) {
 	plain := strings.TrimPrefix(text.Reveal(), "sk-")
-	query := url.Values{"token": {plain}, "page_size": {strconv.Itoa(maxFound + 1)}}
-	items, err := m.searchKeys(ctx, "/api/token/search?"+query.Encode())
+	candidates, err := m.masked(ctx, []byte(maskKey(plain)))
 	if err != nil {
 		return adapter.KeyState{}, false, err
 	}
-	if len(items) > maxFound {
-		return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d keys match the text", adapter.ErrUnrecognised, maxFound)
-	}
 	want := []byte("sk-" + plain)
-	for _, item := range items {
-		status, ok := keyStatus[item.Status]
-		if !ok || item.ID <= 0 {
-			return adapter.KeyState{}, false, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
-		}
-		ref := adapter.KeyRef(strconv.FormatInt(item.ID, 10))
-		found, err := m.KeySecret(ctx, ref)
+	for _, c := range candidates {
+		found, err := m.KeySecret(ctx, c.Ref)
 		if err != nil {
 			return adapter.KeyState{}, false, err
 		}
 		if subtle.ConstantTimeCompare([]byte(found.Reveal()), want) == 1 {
-			return adapter.KeyState{Ref: ref, GroupRef: item.Group, Name: item.Name, Status: status}, true, nil
+			return c, true, nil
 		}
 	}
 	return adapter.KeyState{}, false, nil
 }
 
-// foundKey is one key a search answered.
-type foundKey struct {
-	ID     int64  `json:"id"`
-	Name   string `json:"name"`
-	Group  string `json:"group"`
-	Status int    `json:"status"`
-}
-
-// searchKeys sends the search. Its path holds the key's text, which an error of the request could quote, so an error
-// passes on only the kinds a caller acts on and never the request's own words.
-func (m *manager) searchKeys(ctx context.Context, path string) ([]foundKey, error) {
-	resp, err := m.api.send(ctx, http.MethodGet, path, global, nil)
-	if err != nil {
-		return nil, searchError(err)
+// masked is every key of the account's listing whose mask is mask; more than maxFound is no answer.
+func (m *manager) masked(ctx context.Context, mask []byte) ([]adapter.KeyState, error) {
+	var candidates []adapter.KeyState
+	for page := 1; ; page++ {
+		if page > maxPages {
+			return nil, fmt.Errorf("%w: more than %d pages of keys", adapter.ErrUnrecognised, maxPages)
+		}
+		tokens, _, err := m.keyPage(ctx, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, t := range tokens {
+			if subtle.ConstantTimeCompare([]byte(t.masked), mask) == 1 {
+				candidates = append(candidates, t.state)
+			}
+		}
+		if len(tokens) < keyPageSize {
+			break
+		}
 	}
-	return foundKeys(resp)
+	if len(candidates) > maxFound {
+		return nil, fmt.Errorf("%w: more than %d keys share the text's mask", adapter.ErrUnrecognised, maxFound)
+	}
+	return candidates, nil
 }
 
-// searchError is an error of the search's request with only the kind a caller acts on.
-func searchError(err error) error {
-	var blocked adapter.Blocked
+// maskKey is new-api's MaskTokenKey (model/token.go), which its listing shows each key as: the key without "sk-", its
+// first and last four characters around ten stars, or less of it when it is short.
+func maskKey(key string) string {
 	switch {
-	case errors.As(err, &blocked):
-		return blocked
-	case errors.Is(err, adapter.ErrBucketsFull):
-		return adapter.ErrBucketsFull
+	case key == "":
+		return ""
+	case len(key) <= 4:
+		return strings.Repeat("*", len(key))
+	case len(key) <= 8:
+		return key[:2] + "****" + key[len(key)-2:]
 	}
-	return errors.New("new-api: the search of the keys was not answered")
-}
-
-// foundKeys reads the search's answer.
-func foundKeys(resp adapter.Response) ([]foundKey, error) {
-	var env envelope
-	parsed := jsonx.Unmarshal(resp.Body, &env) == nil
-	switch {
-	case resp.Status == http.StatusUnauthorized || resp.Status == http.StatusForbidden:
-		return nil, authError(env, parsed)
-	case resp.Status >= http.StatusInternalServerError:
-		return nil, fmt.Errorf("%w: status %d", errServer, resp.Status)
-	case resp.Status != http.StatusOK || !parsed || !env.Success:
-		return nil, fmt.Errorf("%w: search the keys: status %d", adapter.ErrUnrecognised, resp.Status)
-	}
-	var found struct {
-		Data *struct {
-			Items []foundKey `json:"items"`
-		} `json:"data"`
-	}
-	if err := jsonx.Unmarshal(resp.Body, &found); err != nil || found.Data == nil || found.Data.Items == nil {
-		return nil, errMissing("list of keys that match")
-	}
-	return found.Data.Items, nil
+	return key[:4] + "**********" + key[len(key)-4:]
 }

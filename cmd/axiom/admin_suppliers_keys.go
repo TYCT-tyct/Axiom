@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"errors"
+	"net/http"
 	"slices"
 	"strconv"
 	"time"
 	"unicode"
 	"uuid"
 
+	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/idem"
 	"axiom/internal/platform/pg"
@@ -76,6 +78,8 @@ func keyProblem(err error, pointer string) error {
 		return unprocessableFields(pointer, "the supplier does not list this key")
 	case errors.Is(err, suppliers.ErrWrongGroup):
 		return unprocessableFields(pointer, "the supplier lists this key under another group")
+	case errors.Is(err, suppliers.ErrKeyUnusable):
+		return unprocessableFields(pointer, "the supplier lists this key as disabled, expired or out of quota")
 	}
 	return err
 }
@@ -154,17 +158,21 @@ func connectionKey(b *adminapi.GroupConnection) (secret.Secret, string, error) {
 }
 
 // groupKey asks the supplier for the key a group is connected with: one it makes now, or which of its keys the pasted
-// text is, which must be listed.
+// text is, which must be listed, usable, and is stored with what the supplier lets it call.
 func (a adminAPI) groupKey(ctx context.Context, supplier, group uuid.UUID, source adminapi.GroupConnectionKeySource, text secret.Secret) (suppliers.GroupKey, error) {
 	if source == adminapi.Make {
 		made, err := a.suppliers.MakeKey(ctx, a.reach(ctx), supplier, group)
 		return suppliers.GroupKey{Source: "made", Ref: made.Ref, GroupRef: made.GroupRef, Text: made.Text}, err
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
-	if err == nil && !listed {
+	switch {
+	case err != nil:
+	case !listed:
 		err = suppliers.ErrKeyNotListed
+	case found.Status != string(adminapi.KeyIdentificationStatusActive):
+		err = suppliers.ErrKeyUnusable
 	}
-	return suppliers.GroupKey{Source: "pasted", Ref: found.Ref, GroupRef: found.GroupRef, Text: text}, err
+	return suppliers.GroupKey{Source: "pasted", Ref: found.Ref, GroupRef: found.GroupRef, Text: text, Policy: found.Policy}, err
 }
 
 // IdentifySupplierKey asks the supplier which of its keys a pasted text is, and stores nothing: 10 a minute per session,
@@ -224,11 +232,22 @@ func (a adminAPI) groupByRef(ctx context.Context, tx pg.Tx, supplier uuid.UUID, 
 	return uuid.UUID{}, err
 }
 
-// AddSupplierKeys checks pasted keys of one of a relay's groups and stores the ones that pass.
+// AddSupplierKeys checks pasted keys and stores the ones that pass: a relay's for one of its groups, a direct API's for
+// its one line. A cloud supplier's credential is replaced whole (409).
 func (a adminAPI) AddSupplierKeys(ctx context.Context, request adminapi.AddSupplierKeysRequestObject) (adminapi.AddSupplierKeysResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
 		return nil, err
+	}
+	var mode string
+	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+		mode, err = a.suppliers.Mode(ctx, tx, supplier)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if mode != "relay" {
+		return a.addDirectKeys(ctx, request, supplier)
 	}
 	b := request.Body
 	group, texts, tails, err := pastedKeysOf(b)
@@ -256,21 +275,76 @@ func (a adminAPI) AddSupplierKeys(ctx context.Context, request adminapi.AddSuppl
 		for _, s := range stored {
 			checks[s.Index] = s
 		}
-		list := adminapi.CredentialCheckList{Data: make([]adminapi.CredentialCheck, len(checks))}
-		for i, c := range checks {
-			list.Data[i] = keyCheckBody(c, true)
-		}
-		return list, nil
+		return checkListBody(checks), nil
 	})
 	if err != nil {
 		return nil, err
 	}
+	return a.keysAdded(ctx, body, replayed), nil
+}
+
+// addDirectKeys is AddSupplierKeys for a direct API: its keys take no group, are checked at the provider's model list
+// as a new direct API's are, and each that passes is a credential of the line with the models it lists.
+func (a adminAPI) addDirectKeys(ctx context.Context, request adminapi.AddSupplierKeysRequestObject, supplier uuid.UUID) (adminapi.AddSupplierKeysResponseObject, error) {
+	b := request.Body
+	switch {
+	case b.GroupId != nil:
+		return nil, invalidField("/group_id", "refused for a direct API")
+	case b.Keys == nil || len(*b.Keys) == 0:
+		return nil, invalidField("/keys", "at least one key is required")
+	}
+	tails := make([]string, len(*b.Keys))
+	for i, k := range *b.Keys {
+		tails[i] = suppliers.Last4(k)
+	}
+	claim, err := idempotencyClaim(ctx, "addSupplierKeys", request.Params.IdempotencyKey,
+		[]any{request.SupplierId, "", tails, b.MaxConcurrency, b.RequestsPerMinute, b.Reason})
+	if err != nil {
+		return nil, err
+	}
+	limits := suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
+	defer cancel()
+	var plan *suppliers.DirectPlan
+	var snap *catalog.Snapshot
+	body, replayed, err := probed(ctx, a, claim, func(ctx context.Context) (err error) {
+		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
+			plan, err = a.suppliers.PlanDirectKeys(ctx, tx, supplier, *b.Keys, limits, b.Reason)
+			return err
+		}); err != nil {
+			return directProblem(err)
+		}
+		if snap, err = a.catalog.Current(); err != nil {
+			return &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
+		}
+		return directProblem(a.suppliers.CheckDirect(ctx, plan))
+	}, func(tx pg.Tx) (adminapi.CredentialCheckList, error) {
+		checks, err := a.suppliers.AddDirectKeys(ctx, tx, actor(ctx), snap, supplier, plan)
+		return checkListBody(checks), err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return a.keysAdded(ctx, body, replayed), nil
+}
+
+// checkListBody is the API's view of the checks of pasted keys, in the order sent.
+func checkListBody(checks []suppliers.KeyCheck) adminapi.CredentialCheckList {
+	list := adminapi.CredentialCheckList{Data: make([]adminapi.CredentialCheck, len(checks))}
+	for i, c := range checks {
+		list.Data[i] = keyCheckBody(c, true)
+	}
+	return list
+}
+
+// keysAdded answers 201 when a key was stored, after this node has put it in its routing, and 200 when none was.
+func (a adminAPI) keysAdded(ctx context.Context, body adminapi.CredentialCheckList, replayed bool) adminapi.AddSupplierKeysResponseObject {
 	headers := adminapi.AddSupplierKeys201ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}
 	if !slices.ContainsFunc(body.Data, func(c adminapi.CredentialCheck) bool { return c.CredentialId != nil }) {
-		return adminapi.AddSupplierKeys200JSONResponse{Body: body, Headers: adminapi.AddSupplierKeys200ResponseHeaders(headers)}, nil
+		return adminapi.AddSupplierKeys200JSONResponse{Body: body, Headers: adminapi.AddSupplierKeys200ResponseHeaders(headers)}
 	}
 	a.leaveRouting(ctx, replayed)
-	return adminapi.AddSupplierKeys201JSONResponse{Body: body, Headers: headers}, nil
+	return adminapi.AddSupplierKeys201JSONResponse{Body: body, Headers: headers}
 }
 
 // pastedKeysOf reads the group and the keys a request pastes, with each key's last four characters.
@@ -313,7 +387,7 @@ func (a adminAPI) checkPasted(ctx context.Context, supplier, group uuid.UUID, ke
 	var passed []suppliers.PastedKey
 	seen := make(map[string]bool, len(keys))
 	for i, k := range keys {
-		check, ref, err := a.checkOnePasted(ctx, supplier, groupRef, texts[i], seen[k])
+		check, found, err := a.checkOnePasted(ctx, supplier, groupRef, texts[i], seen[k])
 		if err != nil {
 			return nil, nil, err
 		}
@@ -321,44 +395,44 @@ func (a adminAPI) checkPasted(ctx context.Context, supplier, group uuid.UUID, ke
 		check.Index, check.Last4 = i, last4(k)
 		checks[i] = check
 		if check.Outcome == suppliers.CheckPassed {
-			passed = append(passed, suppliers.PastedKey{Ref: ref, Text: texts[i], Check: check})
+			passed = append(passed, suppliers.PastedKey{Ref: found.Ref, Text: texts[i], Policy: found.Policy, Check: check})
 		}
 	}
 	return checks, passed, nil
 }
 
-// checkOnePasted is one key's check, and the supplier's ref of it. An error is the whole request's: the supplier cannot
-// be asked at all.
-func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupRef string, text secret.Secret, repeated bool) (suppliers.KeyCheck, string, error) {
+// checkOnePasted is one key's check, and which of the supplier's keys it is. An error is the whole request's: the
+// supplier cannot be asked at all.
+func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupRef string, text secret.Secret, repeated bool) (suppliers.KeyCheck, suppliers.FoundKey, error) {
 	if repeated {
-		return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, suppliers.FoundKey{}, nil
 	}
 	found, listed, err := a.suppliers.FindKey(ctx, a.reach(ctx), supplier, text)
 	switch {
 	case errors.Is(err, suppliers.ErrSupplierUnanswered):
-		return suppliers.KeyCheck{Outcome: suppliers.CheckInconclusive, Cause: suppliers.CauseUpstreamError}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckInconclusive, Cause: suppliers.CauseUpstreamError}, suppliers.FoundKey{}, nil
 	case err != nil:
-		return suppliers.KeyCheck{}, "", err
+		return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 	case listed && found.GroupRef != groupRef:
-		return suppliers.KeyCheck{Outcome: suppliers.CheckFailed, Cause: suppliers.CauseWrongGroup}, "", nil
+		return suppliers.KeyCheck{Outcome: suppliers.CheckFailed, Cause: suppliers.CauseWrongGroup}, suppliers.FoundKey{}, nil
 	case listed:
 		var stored bool
 		if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 			_, stored, err = a.suppliers.CredentialByRef(ctx, tx, supplier, found.Ref)
 			return err
 		}); err != nil {
-			return suppliers.KeyCheck{}, "", err
+			return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 		}
 		if stored {
-			return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, "", nil
+			return suppliers.KeyCheck{Outcome: suppliers.CheckDuplicate}, suppliers.FoundKey{}, nil
 		}
 	}
 	check, err := a.suppliers.CheckKey(ctx, a.reach(ctx), supplier, text)
 	if err != nil {
-		return suppliers.KeyCheck{}, "", err
+		return suppliers.KeyCheck{}, suppliers.FoundKey{}, err
 	}
 	if !listed && check.Outcome == suppliers.CheckPassed {
 		check.Outcome, check.Cause = suppliers.CheckFailed, suppliers.CauseWrongGroup
 	}
-	return check, found.Ref, nil
+	return check, found, nil
 }
