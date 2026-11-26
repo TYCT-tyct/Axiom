@@ -3979,14 +3979,14 @@ type CostBreakEven struct {
 
 // CostFactor defines model for CostFactor.
 type CostFactor struct {
-	// Kind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
+	// Kind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
 	Kind CostFactorKind `json:"kind"`
 
 	// Value An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 	Value Decimal `json:"value"`
 }
 
-// CostFactorKind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
+// CostFactorKind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
 type CostFactorKind string
 
 // CostLine One price of the plan. The line's price applies to its item under its condition and service tier.

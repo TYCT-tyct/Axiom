@@ -5,7 +5,6 @@ package sub2api
 import (
 	"math/big"
 	"net/http"
-	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -141,7 +140,7 @@ func (r *liveRun) checkCharge(t *testing.T, c *relay, got adapter.Charge, ok boo
 }
 
 // plaza checks the model plaza in both of its states and records them: the one setting of a supplier whose
-// administrator changes what an ordinary user sees of prices, and the adapter prices the models from it.
+// administrator changes what an ordinary user sees of prices, which the adapter does not take for costs.
 func (r *liveRun) plaza(t *testing.T) {
 	on := r.record("model_plaza_0225", "/api/v1/model-plaza", r.session)
 	r.setModelPlaza(false)
@@ -180,21 +179,14 @@ func checkPlazaPrices(t *testing.T, on adaptertest.Answer) {
 	}
 }
 
-// checkOfferCosts compares what the offer prices a call of the fake upstream's usage at with what sub2api charged for it
-// (the relays' want, read back from its usage log by the charges subtest): the published price times the group's
-// multiplier.
+// checkOfferCosts checks that the offer takes no published price for a cost: a channel may bill a model under another
+// name, which an ordinary user cannot read (docs/domains/suppliers.md「决策与理由」).
 func (r *liveRun) checkOfferCosts(t *testing.T) {
-	offer := r.offered(t, r.m)
-	for _, c := range r.relays {
-		model := offer[c.group].Models[slices.IndexFunc(offer[c.group].Models, func(m adapter.Model) bool { return m.UpstreamName == c.model })]
-		u, err := catalog.NewUsage(map[catalog.Item]int64{catalog.ItemInput: adaptertest.UpstreamInputTokens, catalog.ItemOutput: adaptertest.UpstreamOutputTokens}, catalog.ServiceTierStandard, nil)
-		if err != nil || model.Cost == nil {
-			t.Fatalf("%s/%s: cost %v, %v; want the plaza's price", c.group, c.model, model.Cost, err)
-		}
-		total, missing, err := model.Cost.Cost(u)
-		want, _ := new(big.Rat).SetString(c.want)
-		if err != nil || missing != 0 || total.Rat().Cmp(want) != 0 {
-			t.Errorf("%s/%s: the offer prices the call at %s (missing %v, %v), sub2api charged %s", c.group, c.model, total.Rat().FloatString(10), missing, err, c.want)
+	for name, g := range r.offered(t, r.m) {
+		for _, model := range g.Models {
+			if model.Cost != nil {
+				t.Errorf("%s/%s has the published price %v as its cost", name, model.UpstreamName, model.Cost)
+			}
 		}
 	}
 }

@@ -7022,7 +7022,7 @@ export interface components {
          */
         CostSource: "read" | "confirmed" | "price_list" | "bill";
         /**
-         * @description One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a base price (one the supplier published, as sub2api's model plaza does, or one a person confirmed), the official price, or the exchange rate into the settlement currency.
+         * @description One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
          * @enum {string}
          */
         CostFactorKind: "model_ratio" | "completion_ratio" | "cache_ratio" | "cache_write_ratio" | "group_ratio" | "scale" | "unit_value" | "base_price" | "official_price" | "exchange_rate";

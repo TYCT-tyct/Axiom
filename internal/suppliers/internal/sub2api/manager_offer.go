@@ -70,11 +70,10 @@ func decodeOffer(raw adapter.Listing) offerProgress {
 	return p
 }
 
-// Offer reads the groups, their multipliers and, from one of our keys in each group, the models it lists, and last the
-// prices the model plaza publishes (prices.go), once a pass so a pass's groups are priced alike. A site with the plaza
-// off, its default, shows an ordinary user no prices: the cost of a model then stays unknown until a person confirms a
-// base price (adapter.ScaleSchedule drafts the figure). It is read from the position in from, as far as the panel
-// bucket allows; what it read is in the position it answers with.
+// Offer reads the groups, their multipliers and, from one of our keys in each group, the models it lists. Prices are
+// not read: sub2api shows none to an ordinary user in a default installation, so the cost of a model stays unknown
+// until a person confirms a base price (adapter.ScaleSchedule drafts the figure). It is read from the position in from,
+// as far as the panel bucket allows; what it read is in the position it answers with.
 func (m *manager) Offer(ctx context.Context, from adapter.Listing) (adapter.Page[adapter.Group], error) {
 	p, err := m.offerStart(ctx, from)
 	if err != nil {
@@ -107,11 +106,7 @@ func (m *manager) offerPage(ctx context.Context, p *offerProgress) (page adapter
 	if p.Next < len(p.Groups) {
 		return m.groupStep(ctx, p)
 	}
-	prices, err := m.plazaPrices(ctx)
-	if err != nil {
-		return stopped(err, *p)
-	}
-	return adapter.Page[adapter.Group]{Items: p.offer(prices), Done: true}, false, nil
+	return adapter.Page[adapter.Group]{Items: p.offer(), Done: true}, false, nil
 }
 
 func (m *manager) keyPageStep(ctx context.Context, p *offerProgress) (page adapter.Page[adapter.Group], more bool, err error) {
@@ -180,8 +175,7 @@ func (m *manager) startOffer(ctx context.Context, groups []groupDTO) (offerProgr
 	return offerProgress{V: 1, Groups: groups, Overrides: overrides, Page: 1, Keys: map[string]number{}}, nil
 }
 
-// offer is the groups the pass built, each model priced from prices (by group id, then model) when the plaza does.
-func (p offerProgress) offer(prices map[string]map[string]basePrice) []adapter.Group {
+func (p offerProgress) offer() []adapter.Group {
 	out := make([]adapter.Group, 0, len(p.Built))
 	for _, b := range p.Built {
 		g := adapter.Group{
@@ -190,9 +184,7 @@ func (p offerProgress) offer(prices map[string]map[string]basePrice) []adapter.G
 		if !b.ModelsUnread {
 			formats := quirks{}.Formats(b.Facts)
 			for _, n := range b.Models {
-				base, ok := prices[b.Ref][n]
-				m := adapter.Model{UpstreamName: n, Formats: append([]protocol.Format(nil), formats...)}
-				g.Models = append(g.Models, priced(m, base, ok, b.Ratio))
+				g.Models = append(g.Models, adapter.Model{UpstreamName: n, Formats: append([]protocol.Format(nil), formats...)})
 			}
 		}
 		out = append(out, g)

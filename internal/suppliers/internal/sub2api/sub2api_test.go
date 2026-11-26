@@ -31,7 +31,6 @@ func panel(t testing.TB) map[string]adapter.Response {
 		"GET /api/v1/keys/2":                    fixture(t, "key_2"),
 		"GET /v1/sub2api/billing":               fixture(t, "billing"),
 		"GET /api/v1/settings/public":           fixture(t, "settings_public"),
-		"GET /api/v1/model-plaza":               fixture(t, "model_plaza_off"),
 	}
 }
 
@@ -98,6 +97,34 @@ func TestOfferReadsGroupsModelsAndMultipliers(t *testing.T) {
 	}
 	if named.Models[0].Cost != nil {
 		t.Error("a price was invented for a model the supplier shows none for")
+	}
+}
+
+// TestPublishedPricesAreNotCosts: a channel may map a model to another and bill the other's price, while the model
+// plaza prices the name it shows, and an ordinary user can read no channel's mapping. So a price the plaza publishes,
+// here for every model of the group, is not taken for a cost: the cost stays for a person to confirm.
+func TestPublishedPricesAreNotCosts(t *testing.T) {
+	t.Parallel()
+	plaza := fixture(t, "model_plaza_0225")
+	plaza.Body = []byte(strings.ReplaceAll(string(plaza.Body), `"claude-opus-5-5"`, `"claude-fable-5"`))
+	srv := offerServer(t)
+	answer := srv.answer
+	srv.answer = func(r adapter.Request) (adapter.Response, error) {
+		if r.Path == "/api/v1/model-plaza" {
+			return plaza, nil
+		}
+		return answer(r)
+	}
+	offer, err := readOffer(t, manager0(t, srv, login(t, epoch.Add(24*time.Hour))))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range offer {
+		for _, m := range g.Models {
+			if m.Cost != nil {
+				t.Errorf("%s/%s has the published price %v as its cost", g.Name, m.UpstreamName, m.Cost)
+			}
+		}
 	}
 }
 
