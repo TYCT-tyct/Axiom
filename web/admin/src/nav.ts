@@ -1,4 +1,4 @@
-import type { GlyphName } from "../../packages/ui/src/components/glyph";
+import type { GlyphName } from "@axiom/ui";
 import type shell from "./locales/zh/shell";
 
 // The admin's navigation as the admin board draws it (adNavDef, adSetDef and adPhoneTabs in admin_core.js; the table in

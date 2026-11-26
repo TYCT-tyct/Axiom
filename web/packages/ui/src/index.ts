@@ -3,6 +3,14 @@
 export { boardMedia, pressBoardButton, useBoardMedia } from "./board-interaction";
 export { brandPreview, useBrandStyle } from "./brand";
 export { ActionButton, Button, SubmitButton } from "./components/action-button";
+export {
+  AdminShell,
+  type AdminShellText,
+  type ShellEntry,
+  type ShellGroup,
+  type ShellLink,
+  searchKeys,
+} from "./components/admin-shell";
 export { Announcement } from "./components/announcement";
 export { focusPage, PageHeader, routerDefaults } from "./components/app-shell";
 export { AuthPage } from "./components/auth-page";
@@ -15,6 +23,7 @@ export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
 export { ChipField } from "./components/chip-field";
 export { CodeBlock } from "./components/code-block";
+export { CommandPalette, type PaletteItem, type PaletteSection } from "./components/command-palette";
 export { CopyButton } from "./components/copy-button";
 export { DataTable } from "./components/data-table";
 export { Delta } from "./components/delta";
@@ -27,7 +36,7 @@ export { Field, Select, TextArea } from "./components/field";
 export { Fieldset } from "./components/fieldset";
 export { type Filter, FilterBar, filterDefaults } from "./components/filter-bar";
 export { CheckField, FormError, MonthField, SelectField, TextAreaField, TextField } from "./components/form";
-export { Glyph } from "./components/glyph";
+export { Glyph, type GlyphName } from "./components/glyph";
 export { Icon } from "./components/icon";
 export { Id, IdLink, IdText } from "./components/id";
 export { ImageBox } from "./components/image-box";
@@ -48,7 +57,6 @@ export {
   type PublicModel,
 } from "./components/models";
 export { Mono } from "./components/mono";
-export { NavGroup } from "./components/nav-group";
 export { Note } from "./components/note";
 export { Notice } from "./components/notice";
 export { NumberField } from "./components/number-field";

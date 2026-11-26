@@ -1,19 +1,19 @@
 import "@axiom/boards/AxApp/regions.css";
 import { can, Gate, NewVersionNotice, SignOutError, useSession, useSignOut } from "@axiom/app";
 import { useWaiting } from "@axiom/app/tanstack";
-import { BoardShell } from "@axiom/ui";
-import { Link, Outlet, useLocation } from "@tanstack/react-router";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import {
   AdminShell,
   type AdminShellText,
+  BoardShell,
+  CommandPalette,
   type ShellEntry,
   type ShellGroup,
   type ShellLink,
   searchKeys,
-} from "../../packages/ui/src/components/admin-shell";
-import { CommandPalette } from "../../packages/ui/src/components/command-palette";
+} from "@axiom/ui";
+import { Link, Outlet, useLocation } from "@tanstack/react-router";
+import { type ReactNode, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { useAdminBrand } from "./brand";
 import { groups, type NavEntry, phoneTabs, settingsEntry, settingsGroups } from "./nav";
 import { usePaletteSections } from "./palette";

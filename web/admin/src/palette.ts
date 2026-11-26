@@ -1,10 +1,9 @@
 import { can, useSession } from "@axiom/app";
+import type { PaletteItem, PaletteSection, ShellEntry, ShellGroup } from "@axiom/ui";
 import { usePreferences } from "@axiom/ui";
 import { useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { ShellEntry, ShellGroup } from "../../packages/ui/src/components/admin-shell";
-import type { PaletteItem, PaletteSection } from "../../packages/ui/src/components/command-palette";
 import { groups, settingsGroups } from "./nav";
 
 type Navigation = { main: ShellGroup[]; settings?: { entry: ShellEntry; groups: ShellGroup[] } };
