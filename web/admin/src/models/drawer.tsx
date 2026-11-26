@@ -21,7 +21,7 @@ type Opened = { id: string; kind: Open } | null;
 
 // ModelDrawer is a model's detail over the catalog (adP_model in admin_pages_a.js): its facts, spec, names, reference
 // prices and the lines it runs on, with what can be done to it in the foot. Stepping walks the rows the catalog has
-// read. The family is shown, and set, only where the model library's backend is (library).
+// read.
 export function ModelDrawer({
   id,
   index,
@@ -29,7 +29,6 @@ export function ModelDrawer({
   slug,
   authors,
   lines,
-  library,
   onStep,
   onClose,
 }: {
@@ -39,7 +38,6 @@ export function ModelDrawer({
   slug: string | undefined;
   authors: ReadonlyMap<string, string>;
   lines: Lines;
-  library: boolean;
   onStep: (by: -1 | 1) => void;
   onClose: () => void;
 }) {
@@ -77,7 +75,7 @@ export function ModelDrawer({
               <ModelFacts
                 model={data}
                 authors={authors}
-                onFamily={library ? (manage ? () => setOpened({ id, kind: "family" }) : null) : undefined}
+                onFamily={manage ? () => setOpened({ id, kind: "family" }) : null}
               />
               <SpecPanel model={data} />
               <NamesPanel model={data} />
@@ -116,8 +114,7 @@ function Actions({ model, onOpen }: { model: Model; onOpen: (open: Open) => void
   );
 }
 
-// The facts of a model. Its family is shown where the library's backend is or the model has one, and can be set when
-// onFamily is given: undefined says there is no library, null that the person may not change it.
+// The facts of a model, with its family, which can be set when onFamily is given (null: the person may not change it).
 function ModelFacts({
   model,
   authors,
@@ -125,26 +122,21 @@ function ModelFacts({
 }: {
   model: Model;
   authors: ReadonlyMap<string, string>;
-  onFamily: (() => void) | null | undefined;
+  onFamily: (() => void) | null;
 }) {
   const { t } = useTranslation();
-  const family = onFamily !== undefined || model.family !== undefined;
   return (
     <Facts
       rows={[
         [t("models.col.status"), <ModelState key="status" status={model.status} />],
         [t("models.col.author"), authors.get(model.author) ?? model.author],
-        ...(family
-          ? [
-              [
-                t("models.family.label"),
-                <Cluster key="family" gap={8}>
-                  {model.family ? <Code>{model.family}</Code> : t("models.family.none")}
-                  {onFamily ? <LinkButton onClick={onFamily}>{t("models.family.set")}</LinkButton> : null}
-                </Cluster>,
-              ] as const,
-            ]
-          : []),
+        [
+          t("models.family.label"),
+          <Cluster key="family" gap={8}>
+            {model.family ? <Code>{model.family}</Code> : t("models.family.none")}
+            {onFamily ? <LinkButton onClick={onFamily}>{t("models.family.set")}</LinkButton> : null}
+          </Cluster>,
+        ],
         [t("models.col.basis"), t(`models.basis.${model.version_basis}`)],
         [t("models.col.source"), t(`models.source.${model.price_source}`)],
         [t("models.detail.rev"), model.rev],

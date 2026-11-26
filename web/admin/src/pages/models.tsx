@@ -10,7 +10,6 @@ import { modelStatus, modelStatuses } from "../models/catalog";
 import { CatalogTable } from "../models/catalog-table";
 import { DraftDialog } from "../models/draft-dialog";
 import { ModelDrawer } from "../models/drawer";
-import { useModelLibrary } from "../models/library";
 import { ImportDialog } from "../models/library-dialogs";
 import { ChoiceFilter, FilterBar, NewButton, text } from "../parts";
 import { authorsQuery, type ModelFilters, modelsQuery } from "../queries";
@@ -23,7 +22,6 @@ type Search = { status?: string; author?: string; q?: string; model?: string };
 export default function Models() {
   const { t } = useTranslation();
   const search = useSearch({ from: "/app/models" });
-  const library = useModelLibrary();
   const tab: "catalog" | "authors" = search.tab ?? "catalog";
   const tabs = useTabs(
     "/models",
@@ -43,7 +41,7 @@ export default function Models() {
       actions={
         tab === "catalog" && manage ? (
           <Cluster>
-            {library ? <ImportButton /> : null}
+            <ImportButton />
             <NewButton permission="catalog.manage" label={t("models.draft.open")}>
               {(close) => <DraftDialog onClose={close} />}
             </NewButton>
@@ -51,7 +49,7 @@ export default function Models() {
         ) : undefined
       }
     >
-      {tab === "authors" ? <Authors /> : <Catalog search={search} library={library} />}
+      {tab === "authors" ? <Authors /> : <Catalog search={search} />}
     </TabbedPage>
   );
 }
@@ -67,7 +65,7 @@ function ImportButton() {
   );
 }
 
-function Catalog({ search, library }: { search: Search; library: boolean }) {
+function Catalog({ search }: { search: Search }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const filters: ModelFilters = { status: modelStatus(search.status), author: search.author, slug_prefix: search.q };
@@ -105,7 +103,6 @@ function Catalog({ search, library }: { search: Search; library: boolean }) {
           slug={rows[index]?.slug}
           authors={names}
           lines={lines}
-          library={library}
           onStep={(by) => selected(rows[index + by]?.id, true)}
           onClose={() => selected(undefined)}
         />
