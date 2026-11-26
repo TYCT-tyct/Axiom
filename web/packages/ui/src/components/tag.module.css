@@ -1,4 +1,47 @@
-/* Gap when Tag shows an icon beside its words; all tag look comes from .qtag in AxApp/regions.css. */
+/* The tag's shape is the board's .qtag (AxApp/regions.css); its colours are the admin's round-five status tags
+   (admin_style.css .qsd.adst and .qtag ok/warn/fail): opaque tints from tokens.css, not the board's translucent ones. */
+.neutral {
+  background: var(--hover);
+  color: var(--t2);
+}
+
+.ok {
+  --tagDot: var(--ok);
+  background: var(--adOkBg);
+  color: var(--t1);
+}
+
+.warn {
+  --tagDot: var(--warn);
+  background: var(--adWarnBg);
+  color: var(--adWarnT);
+}
+
+.bad {
+  --tagDot: var(--bad);
+  background: var(--adBadBg);
+  color: var(--adBadT);
+}
+
+.accent {
+  --tagDot: var(--accentSolid);
+  background: var(--accentWash);
+  color: var(--accentT);
+}
+
+.dotted {
+  gap: 6px;
+  padding-left: 7px;
+}
+
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--tagDot, var(--line3));
+}
+
 .withIcon {
   gap: 4px;
 }

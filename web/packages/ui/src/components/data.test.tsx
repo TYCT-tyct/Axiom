@@ -7,9 +7,15 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import en from "../locales/en";
 import zh from "../locales/zh";
 import { BarChart, LineChart } from "./chart";
+import { DataTable } from "./data-table";
+import { Delta } from "./delta";
 import { type Filter, FilterBar, filterDefaults } from "./filter-bar";
 import { ListDetail } from "./list-detail";
 import { Metric } from "./metric";
+import { PaceBar } from "./pace-bar";
+import { RingChart } from "./ring-chart";
+import { Sparkline } from "./sparkline";
+import { Tooltip } from "./tooltip";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -346,4 +352,194 @@ it.each([
     expect(host.textContent).toContain(part);
   }
   expect(host.querySelector("em") === null).toBe(delta === undefined);
+});
+
+// --- DataTable ------------------------------------------------------------------------------------------------------
+
+type Use = { id: string; name: string; used: number | null };
+const uses: Use[] = [
+  { id: "a", name: "alpha", used: 2 },
+  { id: "b", name: "beta", used: 9 },
+  { id: "c", name: "gamma", used: null },
+  { id: "d", name: "delta", used: 5 },
+];
+const usesTable = (extra: { rows?: Use[]; total?: number; flash?: string } = {}) =>
+  render(
+    <DataTable<Use>
+      label="uses"
+      rows={extra.rows ?? uses}
+      rowKey={(row) => row.id}
+      columns={[
+        { key: "name", header: "name", cell: (row) => row.name },
+        { key: "used", header: "used", align: "end", cell: (row) => row.used ?? "-", sort: (row) => row.used },
+      ]}
+      total={extra.total}
+      unit="rows"
+      flash={extra.flash}
+    />,
+  );
+const order = () => [...host.querySelectorAll("tbody tr")].map((tr) => tr.firstElementChild?.textContent);
+const header = (n: number) => host.querySelectorAll("th")[n];
+
+it("steps a numeric column through high to low, low to high and off, saying the order on its header", () => {
+  usesTable();
+  expect(header(0)?.hasAttribute("aria-sort")).toBe(false);
+  expect(header(0)?.querySelector("button")).toBeNull();
+  const steps = [
+    { sort: "descending", rows: ["beta", "delta", "alpha", "gamma"] },
+    { sort: "ascending", rows: ["gamma", "alpha", "delta", "beta"] },
+    { sort: "none", rows: ["alpha", "beta", "gamma", "delta"] },
+  ];
+  expect(header(1)?.getAttribute("aria-sort")).toBe("none");
+  for (const step of steps) {
+    act(() => header(1)?.querySelector("button")?.click());
+    expect(header(1)?.getAttribute("aria-sort")).toBe(step.sort);
+    expect(order()).toEqual(step.rows);
+  }
+});
+
+it.each([
+  { case: "every row", rows: uses, total: 4, count: "4 rows" },
+  { case: "a filtered few", rows: uses.slice(0, 3), total: 10, count: "3 / 10 rows" },
+])("says how many rows it lists: $case", ({ rows, total, count }) => {
+  usesTable({ rows, total });
+  expect(text('[role="status"]')).toBe(count);
+});
+
+it("lights a row an edit changed once, and lets the light go when it has played", () => {
+  usesTable({ flash: "b" });
+  const lit = () => [...host.querySelectorAll("tbody tr")].map((tr) => tr.className.includes("flash"));
+  expect(lit()).toEqual([false, true, false, false]);
+  // jsdom has no AnimationEvent, so React listens for the prefixed name a browser without it would send.
+  act(() => {
+    host
+      .querySelectorAll("tbody tr")[1]
+      ?.firstElementChild?.dispatchEvent(new Event("webkitAnimationEnd", { bubbles: true }));
+  });
+  expect(lit()).toEqual([false, false, false, false]);
+});
+
+// --- RingChart ------------------------------------------------------------------------------------------------------
+
+const point = (target: Element | null | undefined, type: "pointerover" | "pointerout") =>
+  act(() => {
+    target?.dispatchEvent(new MouseEvent(type, { bubbles: true, relatedTarget: document.body }));
+  });
+
+it("links the ring and its list both ways, and says every part in its label", () => {
+  const picked = vi.fn();
+  render(
+    <RingChart
+      label="mix"
+      centre="61%"
+      centreLabel="top"
+      onSelect={picked}
+      parts={[
+        { key: "a", label: "alpha", value: 50, share: "50%", colour: "data" },
+        { key: "b", label: "beta", value: 30, share: "30%", colour: "data3" },
+        { key: "c", label: "gamma", value: 20, share: "20%", colour: "data2" },
+      ]}
+    />,
+  );
+  expect(host.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("mix: alpha 50%, beta 30%, gamma 20%");
+  const arcs = () => [...host.querySelectorAll("circle")].map((c) => (c.getAttribute("class") ?? "").includes("hot"));
+  const rows = () => [...host.querySelectorAll("li > *")].map((r) => r.className.includes("lit"));
+  point(host.querySelectorAll("li")[1], "pointerover");
+  expect(arcs()).toEqual([false, true, false]);
+  point(host.querySelectorAll("li")[1], "pointerout");
+  expect(arcs()).toEqual([false, false, false]);
+  point(host.querySelectorAll("circle")[2], "pointerover");
+  expect(rows()).toEqual([false, false, true]);
+  point(host.querySelectorAll("circle")[2], "pointerout");
+  act(() => host.querySelectorAll("button")[0]?.focus());
+  expect(arcs()).toEqual([true, false, false]);
+  act(() => host.querySelectorAll("button")[0]?.click());
+  expect(picked).toHaveBeenCalledWith("a");
+});
+
+// --- Tooltip --------------------------------------------------------------------------------------------------------
+
+const tip = () => host.querySelector('[role="tooltip"]');
+
+it("shows a truncated cell's full text when it takes focus, and hides it on Esc", () => {
+  const full = "a model name far too long for its column";
+  render(<Tooltip text={full} />);
+  const cell = host.querySelector<HTMLElement>("[tabindex]");
+  expect(cell?.textContent).toBe(full);
+  expect(tip()).toBeNull();
+  act(() => cell?.focus());
+  expect(tip()?.textContent).toBe(full);
+  press(cell, "Escape");
+  expect(tip()).toBeNull();
+});
+
+it("describes what it wraps, after a pointer rests on it", () => {
+  vi.useFakeTimers();
+  render(
+    <Tooltip text="spread over the days">
+      <b>{"mark"}</b>
+    </Tooltip>,
+  );
+  const trigger = host.querySelector<HTMLElement>("[tabindex]");
+  point(trigger, "pointerover");
+  expect(tip()).toBeNull();
+  act(() => vi.advanceTimersByTime(400));
+  expect(trigger?.getAttribute("aria-describedby")).toBe(tip()?.id);
+  point(trigger, "pointerout");
+  expect(tip()).toBeNull();
+  vi.useRealTimers();
+});
+
+// --- small displays -------------------------------------------------------------------------------------------------
+
+it.each([
+  { used: 4, max: 5, warn: false },
+  { used: 5, max: 5, warn: true },
+  { used: 7, max: 5, warn: true },
+])("turns a pace bar to the warning colour at its limit: $used of $max", ({ used, max, warn }) => {
+  render(<PaceBar label="concurrency" value={used} max={max} />);
+  const bar = host.querySelector('[role="progressbar"]');
+  expect(bar?.getAttribute("aria-valuenow")).toBe(String(Math.min(used, max)));
+  expect(bar?.firstElementChild?.className.includes("warn")).toBe(warn);
+});
+
+it.each([
+  { value: 3.9, tone: "good" as const, reads: "+3.9%" },
+  { value: -0.4, tone: "bad" as const, reads: "−0.4%" },
+  { value: 2, tone: undefined, reads: "+2%" },
+])("writes the sign of a move $value in words as well as the arrow", ({ value, tone, reads }) => {
+  render(<Delta value={value} tone={tone} />);
+  expect(`${host.querySelector("svg")?.getAttribute("aria-label")}${host.textContent}`).toBe(reads);
+  expect(host.querySelector("em")?.className.includes(tone ?? "none")).toBe(tone !== undefined);
+});
+
+it("ends a sparkline in a dot at the latest value, and draws a flat rule for none", () => {
+  render(<Sparkline values={[1, 3, 2]} />);
+  const dot = host.querySelector("circle");
+  expect([dot?.getAttribute("cx"), dot?.getAttribute("cy")]).toEqual(["92.0", "12.0"]);
+  render(<Sparkline values={[]} label="calls" />);
+  expect(host.querySelector("circle")).toBeNull();
+  expect(host.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("calls");
+});
+
+it("names the current slot and the baseline on the chart's axes", () => {
+  const points = Array.from({ length: 10 }, (_, n) => ({ at: at(n + 1), values: { a: n } }));
+  render(
+    <BarChart
+      label="u"
+      empty="-"
+      series={series}
+      points={points}
+      unit="count"
+      step="day"
+      timeZone="UTC"
+      current={9}
+      zero
+    />,
+  );
+  const yAxis = [...host.querySelectorAll("figure > div > div:first-child span")].map((span) => span.textContent);
+  expect(yAxis[0]).toBe("0");
+  const xAxis = [...host.querySelectorAll("figure > div[aria-hidden] span")];
+  expect(xAxis.at(-1)?.textContent).toBe("11月10日");
+  expect(xAxis.at(-1)?.className.includes("now")).toBe(true);
 });
