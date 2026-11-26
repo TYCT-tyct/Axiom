@@ -86,7 +86,9 @@ export function useLines(): Lines {
   // Every group read, taken in or not: a page that reports on traffic can meet a group taken out since, and names it
   // with its group so it is still told apart from the supplier's other lines.
   const anyGroup = new Map(
-    read.flatMap(({ supplier, groups }) => groups.map((group) => [group.id, `${supplier.name}/${group.name}`] as const)),
+    read.flatMap(({ supplier, groups }) =>
+      groups.map((group) => [group.id, `${supplier.name}/${group.name}`] as const),
+    ),
   );
   return {
     all,

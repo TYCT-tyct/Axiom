@@ -35,85 +35,84 @@ export default function InboxTab() {
   const [kind, setKind] = useState<"all" | Category>("all");
   const items = inbox.data?.pages.flatMap((page) => page.data) ?? [];
   const shown = kind === "all" ? items : items.filter((item) => categoryOf[item.kind] === kind);
+  // The dialogs sit above the list: the last item dealt with empties it, and its dialog still says how it went.
+  const [open, setOpen] = useState<Open | null>(null);
   return (
-    <BuiltState
-      query={inbox}
-      isEmpty={() => items.length === 0}
-      empty={<EmptyState title={t("upstream.inbox.empty.title")}>{t("upstream.inbox.empty.body")}</EmptyState>}
-    >
-      {() => (
-        <>
-          <Cluster justify="between">
-            <SegmentedControl
-              label={t("upstream.inbox.filter")}
-              value={kind}
-              options={(["all", ...categories] as const).map((value) => ({
-                value,
-                label: t(`upstream.inbox.kinds.${value}`),
-              }))}
-              onChange={setKind}
-            />
-            <Text as="span" size="sm" tone="faint" numeric>
-              {t("upstream.inbox.count", { count: shown.length })}
-            </Text>
-          </Cluster>
-          <Card layout="rows">
-            {shown.length > 0 ? (
-              <Items items={shown} />
-            ) : (
-              <EmptyState compact title={t("upstream.inbox.noneOfKind.title")}>
-                {t("upstream.inbox.noneOfKind.body")}
-              </EmptyState>
-            )}
-          </Card>
-          <LoadMore list={inbox} />
-        </>
-      )}
-    </BuiltState>
+    <>
+      <BuiltState
+        query={inbox}
+        isEmpty={() => items.length === 0}
+        empty={<EmptyState title={t("upstream.inbox.empty.title")}>{t("upstream.inbox.empty.body")}</EmptyState>}
+      >
+        {() => (
+          <>
+            <Cluster justify="between">
+              <SegmentedControl
+                label={t("upstream.inbox.filter")}
+                value={kind}
+                options={(["all", ...categories] as const).map((value) => ({
+                  value,
+                  label: t(`upstream.inbox.kinds.${value}`),
+                }))}
+                onChange={setKind}
+              />
+              <Text as="span" size="sm" tone="faint" numeric>
+                {t("upstream.inbox.count", { count: shown.length })}
+              </Text>
+            </Cluster>
+            <Card layout="rows">
+              {shown.length > 0 ? (
+                <Items items={shown} onOpen={setOpen} />
+              ) : (
+                <EmptyState compact title={t("upstream.inbox.noneOfKind.title")}>
+                  {t("upstream.inbox.noneOfKind.body")}
+                </EmptyState>
+              )}
+            </Card>
+            <LoadMore list={inbox} />
+          </>
+        )}
+      </BuiltState>
+      {open?.kind === "ignore" ? <IgnoreDialog item={open.item} onClose={() => setOpen(null)} /> : null}
+      {open?.kind === "map" ? <MapDialog unmatched={open.unmatched} onClose={() => setOpen(null)} /> : null}
+    </>
   );
 }
 
 type Open = { kind: "ignore"; item: Item } | { kind: "map"; unmatched: Unmatched };
 
-function Items({ items }: { items: Item[] }) {
+function Items({ items, onOpen: setOpen }: { items: Item[]; onOpen: (open: Open) => void }) {
   const { t } = useTranslation();
   const format = useFormat();
   const manage = can(useSession(), "suppliers.manage");
   const details = useDetails(items);
-  const [open, setOpen] = useState<Open | null>(null);
   return (
-    <>
-      <RowList
-        label={t("upstream.tabs.inbox")}
-        alignTop
-        items={items.map((item) => {
-          const words = wordsOf(t, format, item, details.get(item.supplier_id));
-          return {
-            key: item.id,
-            tone: toneOf[item.kind],
-            title: words.title,
-            sub: `${words.body}。${words.supplier}，${format.dateTimeMinute(new Date(item.last_seen_at))}`,
-            end: (
-              <Cluster gap={12}>
-                <Act
-                  item={item}
-                  detail={details.get(item.supplier_id)}
-                  manage={manage}
-                  onMap={(unmatched) => setOpen({ kind: "map", unmatched })}
-                />
-                {manage ? (
-                  <LinkButton onClick={() => setOpen({ kind: "ignore", item })}>
-                    {t("upstream.inbox.ignore")}
-                  </LinkButton>
-                ) : null}
-              </Cluster>
-            ),
-          };
-        })}
-      />
-      {open?.kind === "ignore" ? <IgnoreDialog item={open.item} onClose={() => setOpen(null)} /> : null}
-      {open?.kind === "map" ? <MapDialog unmatched={open.unmatched} onClose={() => setOpen(null)} /> : null}
-    </>
+    <RowList
+      label={t("upstream.tabs.inbox")}
+      alignTop
+      items={items.map((item) => {
+        const words = wordsOf(t, format, item, details.get(item.supplier_id));
+        return {
+          key: item.id,
+          tone: toneOf[item.kind],
+          title: words.title,
+          sub: `${words.body}。${words.supplier}，${format.dateTimeMinute(new Date(item.last_seen_at))}`,
+          end: (
+            <Cluster gap={12}>
+              <Act
+                item={item}
+                detail={details.get(item.supplier_id)}
+                manage={manage}
+                onMap={(unmatched) => setOpen({ kind: "map", unmatched })}
+              />
+              {manage ? (
+                <LinkButton onClick={() => setOpen({ kind: "ignore", item })}>{t("upstream.inbox.ignore")}</LinkButton>
+              ) : null}
+            </Cluster>
+          ),
+        };
+      })}
+    />
   );
 }
 

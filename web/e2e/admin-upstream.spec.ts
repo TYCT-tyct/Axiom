@@ -140,7 +140,7 @@ test.describe("suppliers", () => {
     await page.goto("/suppliers");
     await expect(page.getByRole("row")).toHaveCount(6);
     await expect(press(page, "upstream.add")).toHaveCount(0);
-    await page.getByLabel(zhText("upstream.channels.search")).fill("paused");
+    await page.getByRole("searchbox", { name: zhText("upstream.channels.search") }).fill("paused");
     await expect(page.getByRole("row")).toHaveCount(2);
     await page.getByRole("button", { name: /Paused Site/ }).click();
     await expect(h1(page, "Paused Site")).toBeVisible();

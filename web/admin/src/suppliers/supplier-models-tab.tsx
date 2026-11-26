@@ -27,7 +27,7 @@ import { MapDialog, type Unmatched } from "./map-dialog";
 import type { Open } from "./open";
 import { BuiltState } from "./parts";
 import { supplierModelsQuery } from "./queries";
-import { byFamily } from "./upstream";
+import { byFamily, modeOf } from "./upstream";
 
 type Mode = AdminSchemas["SupplierIntakeMode"];
 const rules = ["listed", "known", "names"] as const satisfies readonly Mode[];
@@ -39,7 +39,7 @@ export default function SupplierModelsTab({ detail, endpoint }: { detail: Suppli
   const manage = can(useSession(), "suppliers.manage") && detail.supplier.status !== "removed";
   return (
     <>
-      {detail.intake_rule ? <Rule detail={detail} manage={manage} /> : null}
+      {detail.intake_rule && modeOf(detail.supplier) === "relay" ? <Rule detail={detail} manage={manage} /> : null}
       <Review detail={detail} manage={manage} />
       <Piles detail={detail} manage={manage} endpoint={endpoint} />
     </>

@@ -29,35 +29,42 @@ export function Setup({ detail }: { detail: SupplierView }) {
     hasUnitValue: supplier.unit_value !== undefined,
     regionless: supplier.kind === "azure",
   });
-  if (supplier.status === "removed" || all.every((step) => step.done)) return null;
+  // The dialog that does the last step outlives the checklist it was opened from, which goes once every step is done:
+  // it sits beside the card, in the same place either way, so it keeps what it showed.
+  const dialog = unit ? <UnitValueDialog supplier={supplier} onClose={() => setUnit(false)} /> : null;
+  const hidden = supplier.status === "removed" || all.every((step) => step.done);
   const lines = detail.groups
     .filter((group) => group.selected)
     .map((group) => byGroup.get(group.id)?.name ?? group.name)
     .join("、");
   const note = (step: Step) => noteOf(t, step, detail, lines);
   return (
-    <Card
-      layout="rows"
-      title={t("upstream.detail.setup")}
-      lede={t("upstream.detail.setupNote", { count: all.length, done: all.filter((step) => step.done).length })}
-    >
-      <StepList
-        label={t("upstream.detail.setup")}
-        steps={all.map((step) => ({
-          key: step.key,
-          title: titleOf(t, step, mode),
-          detail: note(step),
-          done: step.done,
-          action:
-            step.key === "unit" && manage ? (
-              <ActionButton variant="pri" size="sm" onClick={() => setUnit(true)}>
-                {t("upstream.steps.unit.action")}
-              </ActionButton>
-            ) : undefined,
-        }))}
-      />
-      {unit ? <UnitValueDialog supplier={supplier} onClose={() => setUnit(false)} /> : null}
-    </Card>
+    <>
+      {hidden ? null : (
+        <Card
+          layout="rows"
+          title={t("upstream.detail.setup")}
+          lede={t("upstream.detail.setupNote", { count: all.length, done: all.filter((step) => step.done).length })}
+        >
+          <StepList
+            label={t("upstream.detail.setup")}
+            steps={all.map((step) => ({
+              key: step.key,
+              title: titleOf(t, step, mode),
+              detail: note(step),
+              done: step.done,
+              action:
+                step.key === "unit" && manage ? (
+                  <ActionButton variant="pri" size="sm" onClick={() => setUnit(true)}>
+                    {t("upstream.steps.unit.action")}
+                  </ActionButton>
+                ) : undefined,
+            }))}
+          />
+        </Card>
+      )}
+      {dialog}
+    </>
   );
 }
 
