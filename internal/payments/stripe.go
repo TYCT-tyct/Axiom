@@ -354,6 +354,9 @@ func (*stripeChannel) Ack(ok bool) (int, []byte) {
 	return http.StatusInternalServerError, []byte("{\"retry\":true}")
 }
 
+// testConfig lets the admin test a saved merchant with the same read-only balance query that saving runs.
+func (c *stripeChannel) testConfig(ctx context.Context) error { return c.probe(ctx) }
+
 func (c *stripeChannel) probe(ctx context.Context) error {
 	ctx, cancel := stripeDeadline(ctx)
 	defer cancel()

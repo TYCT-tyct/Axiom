@@ -1,6 +1,7 @@
 package payments
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -175,8 +176,13 @@ func TestStripeQueryCloseAndProbe(t *testing.T) {
 	if err := c.Close(t.Context(), OrderID(uuid.NewV7()), "cs_expired"); err != nil {
 		t.Fatalf("closing an expired session = %v", err)
 	}
-	if err := c.probe(t.Context()); err != nil || !probed {
-		t.Fatalf("probe = %v, probed=%t", err, probed)
+	// The admin's merchant test runs the same authenticated, read-only balance query as saving.
+	tester, ok := Channel(c).(interface{ testConfig(context.Context) error })
+	if !ok {
+		t.Fatal("the admin cannot test a Stripe merchant")
+	}
+	if err := tester.testConfig(t.Context()); err != nil || !probed {
+		t.Fatalf("test = %v, probed=%t", err, probed)
 	}
 	if err := c.Close(t.Context(), OrderID(uuid.NewV7()), ""); err == nil {
 		t.Fatal("close without a session succeeded")
