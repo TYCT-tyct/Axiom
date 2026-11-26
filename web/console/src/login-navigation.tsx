@@ -10,7 +10,7 @@ import { Link, useRouter, useRouterState } from "@tanstack/react-router";
 import { type ReactNode, useCallback, useMemo } from "react";
 
 // Renders a real <a href> via TanStack Router's Link, passing validated guest search parameters and dropping invite
-// when moving between sign-in pages (router.tsx guestSearch).
+// when moving between sign-in pages (routes/auth.tsx guestSearch).
 function ConsoleLoginLink({ to, search, ...props }: LoginLinkProps) {
   return <Link to={to} search={{ next: search?.next, invite: search?.invite }} {...props} />;
 }
