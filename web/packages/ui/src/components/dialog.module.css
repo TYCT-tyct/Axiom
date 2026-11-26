@@ -94,6 +94,10 @@
   justify-content: space-between;
   gap: 16px;
   padding: 22px 24px 12px;
+  /* A title as long as the contract allows (a 254-character email) scrolls in the head rather than pushing the actions
+     out of the drawer. The sheet's height is not definite, so the cap is the window's. */
+  max-height: 40dvh;
+  overflow-y: auto;
 }
 
 .drawerHead > div:first-child {
@@ -122,9 +126,11 @@
   padding: 0 24px 24px;
 }
 
+/* The actions wrap onto a second line when a phone has no room for them all on one. */
 .drawerFoot {
   display: flex;
   flex: none;
+  flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 24px;
