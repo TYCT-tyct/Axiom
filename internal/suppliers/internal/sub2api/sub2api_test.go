@@ -100,6 +100,35 @@ func TestOfferReadsGroupsModelsAndMultipliers(t *testing.T) {
 	}
 }
 
+// TestClaudeCodeOnlyGroupsAreNotSold: a group open only to Claude Code's client is listed with that fact, so a person
+// sees why it is not sold, and serves no format, so it gets no key and no endpoint.
+func TestClaudeCodeOnlyGroupsAreNotSold(t *testing.T) {
+	t.Parallel()
+	srv := offerServer(t)
+	answer := srv.answer
+	srv.answer = func(r adapter.Request) (adapter.Response, error) {
+		resp, err := answer(r)
+		if r.Path == "/api/v1/groups/available" {
+			resp.Body = []byte(strings.Replace(string(resp.Body), `"claude_code_only": false`, `"claude_code_only": true`, 1))
+		}
+		return resp, err
+	}
+	offer, err := readOffer(t, manager0(t, srv, login(t, epoch.Add(24*time.Hour))))
+	if err != nil || len(offer) != 2 {
+		t.Fatalf("Offer = %+v, %v", offer, err)
+	}
+	only, other := offer[0], offer[1]
+	if only.Name != "claude-mock" {
+		only, other = other, only
+	}
+	if !strings.Contains(string(only.Facts), `"claude_code_only":true`) || only.NeedsKey || len(New().Calls().Formats(only.Facts)) != 0 {
+		t.Errorf("claude-mock: facts %s, needs a key %v; want it marked and not sold", only.Facts, only.NeedsKey)
+	}
+	if strings.Contains(string(other.Facts), "claude_code_only") {
+		t.Errorf("the other group's facts %s name a restriction it does not have", other.Facts)
+	}
+}
+
 // offerServer answers as a supplier whose default group's key has an empty wallet (it cannot list models and has no
 // billing view) and whose other key is billed at 1.5.
 func offerServer(t testing.TB) *server {
@@ -281,6 +310,7 @@ func TestFormatsServeOnlyWhatCanBeSold(t *testing.T) {
 		`{"platform":"anthropic","status":"active","subscription_type":"standard","peak_rate_enabled":true}`: nil,
 		`{"platform":"gemini","status":"active","subscription_type":"standard"}`:                             nil,
 		`{"platform":"openai","status":"inactive","subscription_type":"standard"}`:                           nil,
+		`{"platform":"anthropic","status":"active","subscription_type":"standard","claude_code_only":true}`:  nil,
 	} {
 		if got := q.Formats(adapter.GroupFacts(facts)); !slices.Equal(got, want) {
 			t.Errorf("Formats(%s) = %v, want %v", facts, got, want)

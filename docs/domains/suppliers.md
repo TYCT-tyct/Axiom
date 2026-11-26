@@ -227,7 +227,7 @@
 - **桶**：登录 5/分、刷新 7/分（按 IP），面板 60/分、用量 15/分、号池 30/分（按账号），是对方默认的四分之一。
 - **读取**：有生效订阅即资金来源不是钱包；每个分组用一把可用的 key 读模型和含高峰的倍率，key 余额为 0 读不了时保留上次的模型。key 没有模型级限制，到期读 `expires_at`。普通用户看不到价格，成本计划为空，直到人确认底价，按目录官方价乘分组倍率生成（与售价同一取整）。报文里的数字只接受 JSON 数字。
 - **建 key**：带 `Idempotency-Key: <name>`；403 `GROUP_NOT_ALLOWED` 是分组不可用，其他 403 是无权限，404 分组不在，400/409 拒绝。
-- **调用面**：`anthropic` 分组服务 Messages，`openai` 分组服务 Responses 和 Chat；订阅、高峰和其他平台的分组不服务。对账键是 `client:` 加 `X-Client-Request-Id`；不传递取消（对方读完上游并全额扣费）。
+- **调用面**：`anthropic` 分组服务 Messages，`openai` 分组服务 Responses 和 Chat；订阅、高峰、只许 Claude Code 客户端（`claude_code_only`，事实里标出）和其他平台的分组不服务。对账键是 `client:` 加 `X-Client-Request-Id`；不传递取消（对方读完上游并全额扣费）。
 - **扣费扫描**：同一套水位（重叠 5 分钟、滞后 30 秒、每天补扫 24 小时）；接口只认日期，所以按 key 逐把读，每页 200 条。只有记录写了的计费项算已报告；非 token 计费带未知用量；`billing_type` 不是 0 的不是钱包。
 
 ### CPA（CLIProxyAPI）
@@ -303,6 +303,7 @@ Go 适配器加常驻采集器，不在声明式里：它的用量队列读一�
 | new-api 没写 `billing_source` 的扣费记录算钱包 | 对方只在计费会话选了钱包或订阅时写这一项（`service/log_info_generate.go` 的 `appendBillingInfo`）。没写的是订阅出现（提交 ddeacccc0）之前的版本，那时只有钱包；或没有计费会话的旧路径，它从钱包扣（`service/quota.go` 的 `postConsumeQuotaWithResult`）；或违规费、异步任务的记录，跟着请求的来源，而订阅只在账号有生效订阅时才用，读余额时已标为不是钱包。当成非钱包会让这些记录停掉整个供应商 |
 | new-api 价格表被隐藏时成本未知，不改读 `/api/ratio_config` | 那份配置只有运营者写下的倍率：多数模型的补全倍率写在 new-api 代码里（`setting/ratio_setting/model_ratio.go` 的 `getHardcodedCompletionModelRatio`，有的锁定、盖过配置），不在这份配置里，照它算会把输出价算低几倍；它是给同版本 new-api 之间同步倍率用的，默认也关着 |
 | 每遍扣费扫描至多一天 | new-api 允许站点把普通用户的日志查询范围限到 1 天；按最严的设置切，不用探测每个站点 |
+| sub2api 只许 Claude Code 的分组不卖 | 对方按 User-Agent `claude-cli/x.y.z` 放行，其他请求改走降级分组（另一个价）或被拒；Axiom 不转发也不伪造客户端身份 |
 
 ## 待定问题
 
