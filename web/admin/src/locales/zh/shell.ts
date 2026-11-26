@@ -1,7 +1,7 @@
 // The admin shell's words: the navigation in the admin board's names (ADMIN_HOWTO「导航怎么分」), the top bar and ⌘K.
 export default {
   groups: { run: "运行", people: "用户与收入", supply: "渠道与模型", records: "内容与记录" },
-  settingsGroups: { site: "站点", limits: "额度与限制", services: "服务", running: "运行" },
+  settingsGroups: { site: "站点", access: "登录与注册", limits: "额度与限制", services: "服务", running: "运行" },
   nav: {
     overview: "仪表盘",
     ops: "运维监控",
@@ -19,6 +19,12 @@ export default {
     settings: "系统设置",
     site: "站点与品牌",
     legal: "法律文档",
+    signIn: "登录方式",
+    registration: "注册",
+    sessions: "会话与登录保护",
+    keysAndWorkspaces: "Key 与工作区",
+    payments: "充值与商户",
+    mail: "邮件",
     rateLimits: "请求限流",
     gateway: "网关",
     alertRules: "告警规则",
@@ -31,7 +37,6 @@ export default {
     sourceClasses: "来源类别",
     exchangeRates: "汇率",
     subscriptionPlans: "套餐",
-    operationsLimits: "资金与执行上限",
   },
   navigation: "主导航",
   settingsNavigation: "设置导航",

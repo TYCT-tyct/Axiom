@@ -7,7 +7,13 @@ import { useBlocker, useSearch } from "@tanstack/react-router";
 import { type ReactNode, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Context, type Problem } from "./change";
-import { type OperationOf, type SettingKey, settingKeys, settingsRegistry } from "./settings-registry";
+import {
+  type OperationOf,
+  type SettingEntry,
+  type SettingKey,
+  settingKeys,
+  settingsRegistry,
+} from "./settings-registry";
 import { say } from "./toasts";
 
 // A settings page edits its rows in place and submits them together (admin_set.js): a row that differs from what is
@@ -38,6 +44,11 @@ type Options<K extends SettingKey> = {
   check?: (key: K, value: SettingValue) => boolean;
   // How a value reads in the before and after, where the plain words of a value would not do (a mode's name).
   show?: (key: K, value: SettingValue) => string | undefined;
+  // What is wrong across rows, which no row's own check can see (a minimum above its maximum), with every row's value
+  // as the submit would send it; undefined when nothing is. The dialog says it and sends nothing.
+  verify?: (values: Values<K>) => string | undefined;
+  // One line on what could go wrong with the drafts as they stand, shown in the submit dialog (adA_submit's warn).
+  warn?: (values: Values<K>, changed: readonly K[]) => string | undefined;
 };
 
 type Draft = { value: SettingValue; base: SettingValue };
@@ -163,9 +174,13 @@ export function useSettingDrafts<K extends SettingKey>(options: Options<K>) {
   const names = (of: K[]) => new Intl.ListFormat(i18n.language).format(of.map(label));
   const failed = (key: K) => outcomes[operationOf(key)]?.ok === false;
 
+  // Every row's value as a submit would send it: the drafts in place of what is saved.
+  const now = () => Object.fromEntries(Object.keys(saved).map((key) => [key, value(key as K)])) as Values<K>;
   const plan = (): Plan<K> | Problem => {
     const moved = changed.filter((key) => !same(drafts.draftOf(key)?.base, saved[key]));
     if (moved.length) return { problem: t("drafts.moved", { names: names(moved) }) };
+    const across = options.verify?.(now());
+    if (across) return { problem: across };
     return planOf(changed, saved, value, options.writes as Writes<K>);
   };
   const told = async (step: Step<K>, outcome: Outcome) => {
@@ -205,6 +220,7 @@ export function useSettingDrafts<K extends SettingKey>(options: Options<K>) {
     plan,
     run: (submit: Plan<K>, { reason }: Context) => runPlan(submit, reason, told),
     undo: (done: Plan<K>, context: Context) => undoPlan(done, context, live.current),
+    warning: () => options.warn?.(now(), changed),
     scope: options.scope,
   };
 }
@@ -266,6 +282,7 @@ function SubmitDialog<K extends SettingKey>({ drafts, onClose }: { drafts: Setti
       title={t("drafts.title", { count })}
       intro={<p>{t("drafts.intro")}</p>}
       diff={drafts.diff()}
+      warn={drafts.warning()}
       action={t("drafts.action")}
       fields={() => <Outcomes drafts={drafts} />}
       read={drafts.plan}
@@ -350,7 +367,7 @@ export function DraftRow<K extends SettingKey>({
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
-  const { detail } = settingsRegistry[setting] as { detail?: (typeof settingsRegistry)[K]["detail"] };
+  const { detail } = settingsRegistry[setting] as SettingEntry;
   const error = drafts.failure(setting);
   const name = drafts.label(setting);
   return (

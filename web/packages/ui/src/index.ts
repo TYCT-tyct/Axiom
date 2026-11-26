@@ -73,7 +73,9 @@ export { QrMatrix } from "./components/qr-matrix";
 export { ReasonPicks } from "./components/reason-picks";
 export { RingChart, type RingPart, type Swatch } from "./components/ring-chart";
 export { ScrollArea } from "./components/scroll-area";
+export { SecretField } from "./components/secret-field";
 export { SegmentedControl } from "./components/segmented-control";
+export { SelectBox } from "./components/select-box";
 export { SettingRow } from "./components/setting-row";
 export { type Shortcut, ShortcutList } from "./components/shortcut-list";
 export { Sparkline } from "./components/sparkline";
@@ -84,6 +86,7 @@ export { type SortOrder, Table, Td, Th, Tr } from "./components/table";
 // Badge is the name pages were written with for a Tag (#747).
 export { Tag as Badge, Tag } from "./components/tag";
 export { Text } from "./components/text";
+export { TextBox } from "./components/text-box";
 export { TextLink } from "./components/text-link";
 export { Timeline, type TimelineStep } from "./components/timeline";
 export { Toast } from "./components/toast";

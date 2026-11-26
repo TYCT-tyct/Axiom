@@ -37,15 +37,19 @@ test("alert settings replace the rules, test a channel, and rotate a write-only 
   const rules = dialog(page).getByLabel(words("alertConfig.rules"), { exact: true });
   const original = await rules.inputValue();
   await rules.fill(original.replace('"threshold": 2', '"threshold": 4'));
-  const spend = dialog(page).getByLabel(words("alertConfig.spend"), { exact: true });
-  await spend.fill((await spend.inputValue()).replace("1000000000", "9007199254740993"));
+  await send(page, "increase the threshold");
+  await expect(done(page)).toBeVisible();
+  await close(page);
+
+  // The spend floor is an int64 that a float would round: it goes back as the digits that were typed.
+  await page.getByLabel(words("setting.alerts.spendMin")).fill("9007199.254740993");
+  await page.getByRole("button", { name: new RegExp(zhText("drafts.review")) }).click();
   const write = page.waitForRequest(
     (request) => request.method() === "PUT" && request.url().endsWith("/alerts/configuration"),
   );
-  await send(page, "increase the threshold");
-  expect((await write).postData()).toMatch(/"min_spend_nano": 9007199254740993[,\n]/);
-  await expect(done(page)).toBeVisible();
-  await close(page);
+  await send(page, "raise the spend floor");
+  expect((await write).postData()).toMatch(/"min_spend_nano": 9007199254740993[,\n}]/);
+  await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
 
   await page
     .getByRole("button", { name: words("alertConfig.testChannel") })
@@ -122,13 +126,12 @@ test("the legal page reads history and publishes a version in the chosen languag
 });
 
 test("retention preserves zero and rate limits distinguish zero from inheritance", async ({ page }) => {
-  const state = await open(page, "/retention");
-  await page.getByRole("button", { name: words("logRetention.edit") }).click();
-  await dialog(page).locator("[name=hot_days]").fill("0");
+  const state = await open(page, "/settings/gateway");
+  await page.getByLabel(words("setting.gateway.hotDays")).fill("0");
+  await page.getByRole("button", { name: new RegExp(zhText("drafts.review")) }).click();
   await send(page, "keep all hot partitions");
-  await expect(done(page)).toBeVisible();
-  await close(page);
-  await expect(page.getByText(words("logRetention.keepAll"))).toBeVisible();
+  await expect(page.getByText(words("drafts.submitted_other"))).toBeVisible();
+  await expect(page.getByLabel(words("setting.gateway.hotDays"))).toHaveValue("0");
   await snapshot(page, "retention");
 
   await page.getByRole("link", { name: words("shell.nav.rateLimits") }).click();
@@ -139,16 +142,17 @@ test("retention preserves zero and rate limits distinguish zero from inheritance
   const requests = dialog(page).locator("[name=requests]");
   await requests.fill("0");
   await send(page, "remove the account cap");
-  await expect(done(page)).toBeVisible();
-  await close(page);
+  // the change says so in a toast, with an undo, and the dialog is gone
+  await expect(page.getByText(words("rateLimits.saved"))).toBeVisible();
+  await expect(page.getByRole("button", { name: words("change.undo") })).toBeVisible();
+  await expect(dialog(page)).toHaveCount(0);
   await expect(page.getByText(words("rateLimits.unlimited")).first()).toBeVisible();
 
   await page.getByRole("button", { name: words("rateLimits.edit") }).click();
   await expect(requests).toHaveValue("0");
   await requests.fill("");
   await send(page, "inherit the tier cap");
-  await expect(done(page)).toBeVisible();
-  await close(page);
+  await expect(dialog(page)).toHaveCount(0);
   await expect(page.getByText(words("rateLimits.inherits"), { exact: true })).toBeVisible();
   await snapshot(page, "rate-limits");
   expect(state.log.filter((entry) => entry.startsWith("PUT /rate-limits/"))).toHaveLength(2);

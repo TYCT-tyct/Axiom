@@ -3,9 +3,7 @@ import type zh from "../zh/operations";
 
 export default {
   credentials: {
-    title: "Operations credentials",
-    description:
-      "Issue, rotate and revoke credentials for the operations agent. New tokens are shown only once on creation or rotation.",
+    cardLede: "One credential per agent, which decides what it can read and propose",
     unavailableTitle: "Operations credentials are not available on this node",
     unavailableBody: "This node does not serve the operations credentials API yet.",
     listTitle: "Credentials",
@@ -77,12 +75,8 @@ export default {
     saved: "I saved it",
   },
   limits: {
-    title: "Money & execution limits",
-    description:
-      "Manage autonomous and hard money caps, agent rate ceilings, price change envelopes and the emergency stop.",
     unavailable: "This setting is not available on this node.",
     rev: "Rev {{rev}}",
-    defaultRev: "Default",
     cap: {
       title: "Money cap policies",
       description:
@@ -138,40 +132,9 @@ export default {
       repairAction: "Repair counters",
       repaired: "Recomputed counters and resumed {{scope}} · {{category}}.",
     },
-    agent: {
-      title: "Agent execution limits",
-      description: "Per-credential request, money-write and alert rate ceilings on each core node.",
-      edit: "Edit execution limits",
-      editTitle: "Edit agent execution limits",
-      editIntro: "Enter whole numbers within the server ceilings; saved against revision.",
-      saveAction: "Save limits",
-      saved: "Saved agent execution limits (rev {{rev}}).",
-      requestsPerMinute: "Requests per minute",
-      moneyWritesPerMinute: "Money writes per minute",
-      moneyWritesPerHour: "Money writes per hour",
-      alertsPerHour: "Alerts per hour",
-      updatedAt: "Updated",
-      ceiling: "max {{max}}",
-      rangeHint: "Between 1 and {{max}}.",
-      invalid: "Each limit must be a whole number between 1 and its allowed maximum.",
-    },
     envelope: {
-      title: "Price change envelopes",
-      description:
-        "Bound autonomous sale price publications by minimum margin, per-model daily movement and daily counts.",
       new: "New site envelope",
-      edit: "Edit",
-      editNamed: "Edit price envelope {{siteId}}",
-      emptyTitle: "No price envelopes configured",
       emptyBody: "Without a price envelope, the agent cannot publish site sale prices autonomously.",
-      col: {
-        site: "Site",
-        minMargin: "Min margin",
-        modelDaily: "Model daily move",
-        dailyChanges: "Daily changes",
-        dailyModels: "Daily models",
-        updated: "Updated",
-      },
       createTitle: "New site price envelope",
       editTitle: "Edit price envelope ({{siteId}})",
       dialogIntro: "Margins and movements are entered in basis points (bps): 100 bps = 1%.",

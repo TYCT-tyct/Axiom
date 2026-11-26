@@ -1,10 +1,11 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import { Card, ChipField, DataState, NumberField, SegmentedControl, Switch } from "@axiom/ui";
+import { DataState } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { Facts } from "./parts";
 import { siteRegistrationQuery } from "./queries";
-import { DraftRow, type SettingDrafts, SettingsSubmit, type SettingValue, useSettingDrafts } from "./settings-drafts";
+import { ChipSetting, ChoiceSetting, NumberSetting, SettingsCard, SwitchSetting } from "./setting-rows";
+import { type SettingDrafts, SettingsSubmit, type SettingValue, useSettingDrafts } from "./settings-drafts";
 
 type Policy = AdminSchemas["RegistrationPolicy"];
 type View = AdminSchemas["RegistrationPolicyView"];
@@ -81,7 +82,6 @@ function policyOf(values: Record<Key, SettingValue>): Policy {
     domain_deny: [...(values["registration.deny"] as readonly string[])],
   };
 }
-
 function RegistrationRows({ siteId, view }: { siteId: AdminSchemas["SiteId"]; view: View }) {
   const { t } = useTranslation();
   const drafts = useSettingDrafts<Key>({
@@ -89,6 +89,10 @@ function RegistrationRows({ siteId, view }: { siteId: AdminSchemas["SiteId"]; vi
     saved: savedOf(view),
     check: validRegistrationValue,
     show: (key, value) => (key === "registration.mode" ? t(`settings.registration.modes.${value as Mode}`) : undefined),
+    warn: (values) =>
+      values["registration.mode"] === "open" && values["registration.humanCheck"] !== true
+        ? t("settings.registration.openWarn")
+        : undefined,
     writes: {
       updateSiteRegistration: (values, { reason, key }) =>
         unwrapChange(
@@ -101,79 +105,55 @@ function RegistrationRows({ siteId, view }: { siteId: AdminSchemas["SiteId"]; vi
   });
   return (
     <>
-      <Card title={t("settings.registration.title")} lede={t("settings.registration.intro")} layout="rows">
-        <DraftRow drafts={drafts} setting="registration.mode">
-          <SegmentedControl
-            label={drafts.label("registration.mode")}
-            value={drafts.value("registration.mode") as Mode}
-            options={modes.map((mode) => ({ value: mode, label: t(`settings.registration.modes.${mode}`) }))}
-            onChange={(mode) => drafts.set("registration.mode", mode)}
-          />
-        </DraftRow>
-        <DraftRow drafts={drafts} setting="registration.humanCheck">
-          <Switch
-            label={drafts.label("registration.humanCheck")}
-            checked={drafts.value("registration.humanCheck") === true}
-            onChange={(on) => drafts.set("registration.humanCheck", on)}
-          />
-        </DraftRow>
-        <NumberRow
+      <SettingsCard scope="site" title={t("settings.pages.registration.entry")}>
+        <ChoiceSetting
           drafts={drafts}
-          setting="registration.bits"
-          disabled={drafts.value("registration.humanCheck") !== true}
+          setting="registration.mode"
+          options={modes.map((mode) => ({ value: mode, label: t(`settings.registration.modes.${mode}`) }))}
         />
-        <NumberRow drafts={drafts} setting="registration.burst" />
-        <NumberRow drafts={drafts} setting="registration.perHour" />
-        <DomainRow drafts={drafts} setting="registration.allow" />
-        <DomainRow drafts={drafts} setting="registration.deny" />
-      </Card>
+        <SwitchSetting drafts={drafts} setting="registration.humanCheck" />
+        <RegistrationNumber drafts={drafts} setting="registration.bits" unit={t("unit.bits")} />
+      </SettingsCard>
+      <SettingsCard
+        scope="site"
+        title={t("settings.pages.registration.domains")}
+        lede={t("settings.pages.registration.domainsLede")}
+      >
+        <RegistrationNumber drafts={drafts} setting="registration.burst" unit={t("unit.count")} />
+        <RegistrationNumber drafts={drafts} setting="registration.perHour" unit={t("unit.count")} />
+        <ChipSetting
+          drafts={drafts}
+          setting="registration.allow"
+          placeholder={t("settings.registration.domainPlaceholder")}
+        />
+        <ChipSetting
+          drafts={drafts}
+          setting="registration.deny"
+          placeholder={t("settings.registration.denyPlaceholder")}
+        />
+      </SettingsCard>
       <SettingsSubmit drafts={drafts} />
     </>
   );
 }
 
-function NumberRow({
+function RegistrationNumber({
   drafts,
   setting,
-  disabled,
+  unit,
 }: {
   drafts: SettingDrafts<Key>;
   setting: NumberKey;
-  disabled?: boolean;
+  unit: string;
 }) {
   return (
-    <DraftRow drafts={drafts} setting={setting}>
-      <NumberField
-        label={drafts.label(setting)}
-        value={drafts.value(setting) as string}
-        onChange={(value) => drafts.set(setting, value)}
-        min={bounds[setting].min}
-        max={bounds[setting].max}
-        invalid={drafts.invalid(setting)}
-        disabled={disabled}
-      />
-    </DraftRow>
-  );
-}
-
-function DomainRow({
-  drafts,
-  setting,
-}: {
-  drafts: SettingDrafts<Key>;
-  setting: "registration.allow" | "registration.deny";
-}) {
-  const { t } = useTranslation();
-  return (
-    <DraftRow drafts={drafts} setting={setting}>
-      <ChipField
-        label={drafts.label(setting)}
-        values={drafts.value(setting) as readonly string[]}
-        onChange={(values) => drafts.set(setting, values)}
-        removeLabel={(value) => t("drafts.remove", { value })}
-        placeholder={t("settings.registration.domainPlaceholder")}
-        mono
-      />
-    </DraftRow>
+    <NumberSetting
+      drafts={drafts}
+      setting={setting}
+      unit={unit}
+      min={bounds[setting].min}
+      max={bounds[setting].max}
+      disabled={setting === "registration.bits" && drafts.value("registration.humanCheck") !== true}
+    />
   );
 }

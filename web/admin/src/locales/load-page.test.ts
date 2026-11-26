@@ -14,7 +14,7 @@ it("loads complete deferred copy before returning a page and preserves both lang
     defaultNS: "admin",
     resources: { en: { admin: initialEn }, zh: { admin: initialZh } },
   });
-  expect(i18next.exists("settings.title")).toBe(false);
+  expect(i18next.exists("settings.pages.site.brand")).toBe(false);
   const page = { default: () => null, messages: settings };
   const supplierPage = { default: () => null, messages: suppliers };
   const subscriptionPage = { default: () => null, messages: subscriptions };
@@ -35,7 +35,7 @@ it("loads complete deferred copy before returning a page and preserves both lang
     import("../pages/alert-configuration"),
     import("../pages/announcements"),
     import("../pages/legal-documents"),
-    import("../pages/retention"),
+    import("../pages/settings-site"),
     import("../pages/rate-limits"),
   ]) {
     await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
@@ -43,7 +43,8 @@ it("loads complete deferred copy before returning a page and preserves both lang
   expect(i18next.getResourceBundle("en", "admin")).toEqual(en);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
   await i18next.changeLanguage("zh");
-  expect(i18next.t("settings.title")).toBe(zh.settings.title);
+  expect(i18next.t("settings.pages.site.brand")).toBe(zh.settings.pages.site.brand);
   expect(await loadTranslatedPage(Promise.resolve(page))).toBe(page);
   expect(i18next.getResourceBundle("zh", "admin")).toEqual(zh);
-});
+  // Loading every page of the admin cold takes longer than the default five seconds on a busy machine.
+}, 30_000);

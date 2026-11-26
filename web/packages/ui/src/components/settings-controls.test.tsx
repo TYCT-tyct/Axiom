@@ -4,10 +4,14 @@
 import { act, type ReactNode, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { Card } from "./card";
 import { ChipField } from "./chip-field";
 import { NumberField } from "./number-field";
 import { ReasonPicks } from "./reason-picks";
+import { SecretField } from "./secret-field";
+import { SelectBox } from "./select-box";
 import { SettingRow } from "./setting-row";
+import { TextBox } from "./text-box";
 import { UnsavedBar } from "./unsaved-bar";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -170,4 +174,83 @@ it("UnsavedBar submits on Cmd+S only while open, enabled and under no dialog", (
   render(bar(true, true));
   expect(save()).toBe(true);
   expect(submit).toHaveBeenCalledTimes(1);
+});
+
+function HeldSecret({ isSet }: { isSet: boolean }) {
+  const [value, setValue] = useState("");
+  return (
+    <SecretField
+      label="password"
+      isSet={isSet}
+      value={value}
+      onChange={setValue}
+      setLabel="set"
+      unsetLabel="not set"
+      replaceLabel="replace"
+      placeholder="new secret"
+    />
+  );
+}
+
+// A saved secret is never shown, only that there is one; replacing opens a password box that takes focus and closes
+// again when left empty, and keeps what was typed when left with text.
+it("SecretField says whether a secret is set, and opens a password box to replace it", () => {
+  render(<HeldSecret isSet />);
+  expect(host.textContent).toContain("set");
+  expect(host.querySelector("input")).toBeNull();
+  act(() => button("replace")?.click());
+  const input = host.querySelector("input") as HTMLInputElement;
+  expect([input.type, input.placeholder, document.activeElement === input]).toEqual(["password", "new secret", true]);
+  act(() => input.blur());
+  expect(host.querySelector("input")).toBeNull();
+  act(() => button("replace")?.click());
+  const again = host.querySelector("input") as HTMLInputElement;
+  act(() => {
+    Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set?.call(again, "s3cret");
+    again.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  act(() => again.blur());
+  expect((host.querySelector("input") as HTMLInputElement).value).toBe("s3cret");
+});
+
+// The colour box draws its swatch from what is typed, through a custom property rather than an inline colour.
+it("TextBox draws a swatch and names itself for a reader", () => {
+  render(<TextBox label="brand colour" value="#00a2c7" onChange={() => {}} swatch="#00a2c7" invalid />);
+  const input = host.querySelector("input") as HTMLInputElement;
+  expect([input.getAttribute("aria-label"), input.getAttribute("aria-invalid")]).toEqual(["brand colour", "true"]);
+  expect((host.querySelector("i") as HTMLElement).style.getPropertyValue("--c")).toBe("#00a2c7");
+});
+
+// A choice of more than three options is a native select, which reads and writes the option's value.
+it("SelectBox chooses among options by value", () => {
+  const picked = vi.fn();
+  render(
+    <SelectBox
+      label="order"
+      value="a"
+      options={[
+        { value: "a", label: "first" },
+        { value: "b", label: "second" },
+      ]}
+      onChange={picked}
+    />,
+  );
+  const select = host.querySelector("select") as HTMLSelectElement;
+  expect([select.getAttribute("aria-label"), select.value]).toEqual(["order", "a"]);
+  act(() => {
+    select.value = "b";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  expect(picked).toHaveBeenCalledWith("b");
+});
+
+// A card's scope is read in its header and names how far a change made in it reaches.
+it("Card shows its scope in the header", () => {
+  render(
+    <Card title="Brand" scope={{ label: "This site", tip: "Only this site" }}>
+      <i />
+    </Card>,
+  );
+  expect(host.querySelector("h2")?.textContent).toBe("Brand");
+  expect(host.textContent).toContain("This site");
 });

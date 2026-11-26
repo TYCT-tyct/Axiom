@@ -7,7 +7,6 @@ import {
   DataState,
   EmptyState,
   Id,
-  PageHead,
   Stack,
   Table,
   Tag,
@@ -24,9 +23,9 @@ import {
   type RevealedSecret,
   RevokeCredentialDialog,
   RotateCredentialDialog,
-} from "../operations-credential-dialogs";
-import { operationsCredentialsQuery } from "../operations-queries";
-import { Actions, Code, Head, PageBody, State, SubLine } from "../parts";
+} from "./operations-credential-dialogs";
+import { operationsCredentialsQuery } from "./operations-queries";
+import { Code, Head, State, SubLine } from "./parts";
 
 type Credential = AdminSchemas["OperationsCredential"];
 type Open =
@@ -41,8 +40,9 @@ function statusOf(credential: Credential): "active" | "revoked" | "expired" {
   }
   return Date.parse(credential.expires_at) <= Date.now() ? "expired" : "active";
 }
-
-export default function OperationsCredentialsPage() {
+// CredentialsCard is the operations credentials of the agent page: each one's scope and expiry, with rotate and revoke.
+// A secret is shown once, when it is made or rotated, and has no undo.
+export function CredentialsCard() {
   const { t } = useTranslation();
   const query = useInfiniteQuery(operationsCredentialsQuery);
   const [open, setOpen] = useState<Open>(null);
@@ -50,41 +50,38 @@ export default function OperationsCredentialsPage() {
 
   if (query.error instanceof ApiError && query.error.status === 404) {
     return (
-      <>
-        <PageHead title={t("operations.credentials.title")} lede={t("operations.credentials.description")} />
-        <PageBody>
-          <Card title={t("operations.credentials.unavailableTitle")}>
-            <Text tone="muted">{t("operations.credentials.unavailableBody")}</Text>
-          </Card>
-        </PageBody>
-      </>
+      <Card title={t("operations.credentials.unavailableTitle")}>
+        <Text tone="muted">{t("operations.credentials.unavailableBody")}</Text>
+      </Card>
     );
   }
 
   return (
     <>
-      <PageHead title={t("operations.credentials.title")} lede={t("operations.credentials.description")} />
-      <PageBody>
-        <Actions>
-          <ActionButton variant="pri" icon="plus" onClick={() => setOpen({ kind: "create" })}>
+      <Card
+        layout="flush"
+        title={t("operations.credentials.listTitle")}
+        lede={t("operations.credentials.cardLede")}
+        scope={{ label: t("scope.platform"), tip: t("scope.platformTip") }}
+        actions={
+          <ActionButton size="sm" icon="plus" onClick={() => setOpen({ kind: "create" })}>
             {t("operations.credentials.new")}
           </ActionButton>
-        </Actions>
-        <Card layout="flush" title={t("operations.credentials.listTitle")}>
-          <DataState
-            query={query}
-            isEmpty={() => rows.length === 0}
-            empty={
-              <EmptyState title={t("operations.credentials.emptyTitle")}>
-                {t("operations.credentials.emptyBody")}
-              </EmptyState>
-            }
-          >
-            {() => <CredentialsTable credentials={rows} onOpen={setOpen} />}
-          </DataState>
-        </Card>
+        }
+      >
+        <DataState
+          query={query}
+          isEmpty={() => rows.length === 0}
+          empty={
+            <EmptyState title={t("operations.credentials.emptyTitle")}>
+              {t("operations.credentials.emptyBody")}
+            </EmptyState>
+          }
+        >
+          {() => <CredentialsTable credentials={rows} onOpen={setOpen} />}
+        </DataState>
         <LoadMore list={query} />
-      </PageBody>
+      </Card>
       <OpenCredentialDialog open={open} setOpen={setOpen} />
     </>
   );
@@ -207,5 +204,3 @@ function CredentialActions({ credential, onOpen }: { credential: Credential; onO
     </Cluster>
   );
 }
-
-export { default as messages } from "../locales/operations";

@@ -1,16 +1,5 @@
 import { type AdminSchemas, ApiError, adminApi, unwrapChange } from "@axiom/api";
-import {
-  ActionButton,
-  Card,
-  Cluster,
-  DataState,
-  EmptyState,
-  Mono,
-  SettingRow,
-  Stack,
-  Text,
-  useFormat,
-} from "@axiom/ui";
+import { ActionButton, Cluster, DataState, EmptyState, Mono, SettingRow, Stack, Text, useFormat } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -19,6 +8,7 @@ import { MerchantFields } from "./merchant-form";
 import { Facts, NewButton, State } from "./parts";
 import { formatPercent, readMerchant } from "./payment-read";
 import { merchantsQuery } from "./queries";
+import { SettingsCard } from "./setting-rows";
 
 type Merchant = AdminSchemas["Merchant"];
 
@@ -29,8 +19,8 @@ export function MerchantsCard({ siteId, currency }: { siteId: AdminSchemas["Site
     return <MerchantsUnavailable />;
   }
   return (
-    <Card
-      layout="rows"
+    <SettingsCard
+      scope="site"
       title={t("settings.payments.merchants")}
       actions={
         <NewButton permission="sites.manage" label={t("settings.payments.add")}>
@@ -55,7 +45,7 @@ export function MerchantsCard({ siteId, currency }: { siteId: AdminSchemas["Site
           </>
         )}
       </DataState>
-    </Card>
+    </SettingsCard>
   );
 }
 
@@ -309,6 +299,13 @@ function DisableDialog({ merchant, onClose }: { merchant: Merchant; onClose: () 
       operation={`merchant-disable:${merchant.id}`}
       title={t("settings.payments.disable")}
       intro={<p>{t("settings.payments.disableIntro", { name: merchant.name ?? merchant.id })}</p>}
+      diff={[
+        {
+          label: merchant.name ?? merchant.id ?? "",
+          before: t("settings.payments.enabled"),
+          after: t("settings.payments.disabled"),
+        },
+      ]}
       action={t("settings.payments.disable")}
       danger
       read={() => ({})}

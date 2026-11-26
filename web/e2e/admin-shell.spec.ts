@@ -35,7 +35,7 @@ test("the bell opens an unresolved alert, and the settings swap the sidebar unti
   await page.keyboard.press("Escape");
 
   await page.getByRole("link", { name: zhText("shell.nav.settings") }).click();
-  await expect(page).toHaveURL(/\/settings$/);
+  await expect(page).toHaveURL(/\/settings\/site$/);
   const settings = page.getByRole("navigation", { name: zhText("shell.settingsNavigation") });
   await expect(settings.getByRole("link", { name: zhText("shell.nav.site") })).toHaveAttribute("aria-current", "page");
   await settings.getByRole("link", { name: zhText("shell.nav.rateLimits") }).click();

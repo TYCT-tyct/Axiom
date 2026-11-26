@@ -1,0 +1,42 @@
+/* A setting's text (.adinp, .mono, .adcol in admin_style.css): the number box of NumberField with the text left aligned,
+   a width of its own and, for a colour, the swatch. */
+.root {
+  composes: root from "./number-field.module.css";
+  width: var(--w);
+  max-width: 100%;
+}
+
+.invalid {
+  composes: invalid from "./number-field.module.css";
+}
+
+.input {
+  composes: input from "./number-field.module.css";
+  font-variant-numeric: normal;
+  text-align: left;
+  text-overflow: ellipsis;
+}
+
+.mono .input {
+  font-family: "Axiom Mono", "Axiom CJK", monospace;
+}
+
+.swatch {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-left: 12px;
+  border-radius: var(--r4);
+  background: var(--c);
+  box-shadow: inset 0 0 0 1px var(--line2);
+}
+
+.swatch + .input {
+  padding-left: 8px;
+}
+
+@media (max-width: 599px) {
+  .root {
+    width: auto;
+  }
+}

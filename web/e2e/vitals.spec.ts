@@ -394,9 +394,15 @@ const dialogs: [Suite, string][] = [
     consoleSuite,
     name,
   ]),
-  ...["credit", "supplier-connect", "supplier-pause", "mapping", "price-publish", "rule-new", "settings-edit"].map(
-    (name): [Suite, string] => [adminSuite, name],
-  ),
+  ...[
+    "credit",
+    "supplier-connect",
+    "supplier-pause",
+    "mapping",
+    "price-publish",
+    "rule-new",
+    "operations-cap-edit",
+  ].map((name): [Suite, string] => [adminSuite, name]),
 ];
 
 async function slowPage(browser: Browser, suite: Suite, sceneName: string) {

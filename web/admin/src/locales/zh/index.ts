@@ -16,8 +16,8 @@ import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
 import redeem from "./redeem";
-import logRetention from "./retention";
 import routingPresets from "./routing-presets";
+import settingWords from "./setting-words";
 import settings from "./settings";
 import shell from "./shell";
 import sourceClasses from "./source-classes";
@@ -32,8 +32,6 @@ export const initial = {
   nav: {
     overview: "运营看板",
     approvals: "运营审批",
-    operationsCredentials: "运营凭证",
-    operationsLimits: "资金与执行上限",
     users: "用户",
     orders: "订单与退款",
     discrepancies: "支付差异",
@@ -46,15 +44,10 @@ export const initial = {
     pricing: "定价",
     exchangeRates: "汇率",
     subscriptionPlans: "订阅套餐",
-    settings: "站点设置",
     sourceClasses: "来源类别",
     routingPresets: "路由预设",
     alertEvents: "告警事件",
-    alertConfig: "告警规则与渠道",
     announcements: "公告",
-    legalDocs: "法律文档",
-    retention: "记录保留",
-    rateLimits: "请求限流",
   },
   shell,
   calls,
@@ -178,26 +171,6 @@ export const initial = {
     reused:
       "这个请求的标识已经用于另一份内容，第一次提交可能已经生效，这里不会再发送。关闭后看到的数据可能还不包含它，不能据此判断要不要重做。",
   },
-  // The words of the settings in the registry (settings-registry.ts), here and not with their page, so the palette finds
-  // them before any settings page is opened.
-  setting: {
-    registration: {
-      mode: "谁可以注册",
-      modeDetail: "关掉之后，已有的账号不受影响。开放注册需要能发信的节点。",
-      humanCheck: "注册时做人机验证",
-      humanCheckDetail: "浏览器先解一道和本站、邮箱绑定的小题，服务器才保存注册请求，拦住批量注册。",
-      bits: "验证难度",
-      bitsDetail: "12 到 24 位，越高浏览器算得越久。",
-      burst: "同一个邮箱域名，一次最多注册",
-      burstDetail: "1 到 10,000。",
-      perHour: "同一个邮箱域名，每小时最多注册",
-      perHourDetail: "1 到 100,000。",
-      allow: "只允许这些邮箱域名",
-      allowDetail: "留空表示不限制。一项包含它的子域名。",
-      deny: "不允许的邮箱域名",
-      denyDetail: "和允许的冲突时，以这里为准。常见的一次性邮箱可以加在这里。",
-    },
-  },
   // A settings page's changes that are not yet submitted (settings-drafts.tsx).
   drafts: {
     pending_one: "{{count}} 项修改还没提交",
@@ -228,6 +201,12 @@ export const initial = {
     leaveBody: "离开这一页，没提交的修改会丢掉。",
     leave: "离开",
     stay: "留下",
+    secretSet: "已设置",
+    secretUnset: "未设置",
+    secretReplace: "更换",
+    secretNew: "新的密钥",
+    default: "默认值",
+    noLimit: "不限",
   },
   users,
   orders,
@@ -239,7 +218,7 @@ export const initial = {
 };
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, {
+export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   operations,
   settings,
   subscriptions,
@@ -253,5 +232,4 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   announcements,
   legalDocs,
   rateLimits,
-  logRetention,
 });

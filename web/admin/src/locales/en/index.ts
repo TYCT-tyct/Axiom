@@ -18,8 +18,8 @@ import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
 import redeem from "./redeem";
-import logRetention from "./retention";
 import routingPresets from "./routing-presets";
+import settingWords from "./setting-words";
 import settings from "./settings";
 import shell from "./shell";
 import sourceClasses from "./source-classes";
@@ -33,8 +33,6 @@ export const initial = {
   nav: {
     overview: "Overview",
     approvals: "Approvals",
-    operationsCredentials: "Operations credentials",
-    operationsLimits: "Money & execution limits",
     users: "Users",
     orders: "Orders",
     discrepancies: "Payment discrepancies",
@@ -47,15 +45,10 @@ export const initial = {
     pricing: "Pricing",
     exchangeRates: "Exchange rates",
     subscriptionPlans: "Subscription plans",
-    settings: "Site settings",
     sourceClasses: "Source classes",
     routingPresets: "Routing presets",
     alertEvents: "Alert events",
-    alertConfig: "Alert rules and channels",
     announcements: "Announcements",
-    legalDocs: "Legal documents",
-    retention: "Log retention",
-    rateLimits: "Rate limits",
   },
   shell,
   calls,
@@ -190,25 +183,6 @@ export const initial = {
     reused:
       "This request’s key was already used for different content, so the first attempt may have been made; nothing more is sent from here. The data you see after closing may not include it yet, so it can’t tell you whether to do it again.",
   },
-  setting: {
-    registration: {
-      mode: "Who can sign up",
-      modeDetail: "Closing it leaves existing accounts as they are. Open registration needs a node that can send mail.",
-      humanCheck: "Human check at sign-up",
-      humanCheckDetail:
-        "The browser first solves a small puzzle bound to this site and the email before the server keeps the sign-up, which stops bulk sign-ups.",
-      bits: "Check difficulty",
-      bitsDetail: "12 to 24 bits; the higher, the longer the browser works.",
-      burst: "Sign-ups per email domain at once",
-      burstDetail: "1 to 10,000.",
-      perHour: "Sign-ups per email domain per hour",
-      perHourDetail: "1 to 100,000.",
-      allow: "Only these email domains",
-      allowDetail: "Empty means any domain. An entry covers its subdomains.",
-      deny: "Email domains not allowed",
-      denyDetail: "Wins over the allowed ones. Common throwaway mail domains belong here.",
-    },
-  },
   drafts: {
     pending_one: "{{count}} change not submitted",
     pending_other: "{{count}} changes not submitted",
@@ -240,6 +214,12 @@ export const initial = {
     leaveBody: "If you leave this page, the changes you haven’t submitted are lost.",
     leave: "Leave",
     stay: "Stay",
+    secretSet: "Set",
+    secretUnset: "Not set",
+    secretReplace: "Replace",
+    secretNew: "New secret",
+    default: "Default",
+    noLimit: "No limit",
   },
   users,
   orders,
@@ -252,6 +232,9 @@ export const initial = {
   Omit<
     typeof zh,
     | "operations"
+    | "setting"
+    | "scope"
+    | "unit"
     | "settings"
     | "subscriptions"
     | "suppliers"
@@ -264,12 +247,11 @@ export const initial = {
     | "announcements"
     | "legalDocs"
     | "rateLimits"
-    | "logRetention"
   >
 >;
 
 // The complete catalog is for types and tooling; the app imports only initial.
-export default /* @__PURE__ */ Object.assign({}, initial, {
+export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   operations,
   settings,
   subscriptions,
@@ -283,5 +265,4 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   announcements,
   legalDocs,
   rateLimits,
-  logRetention,
 }) satisfies Messages<typeof zh>;

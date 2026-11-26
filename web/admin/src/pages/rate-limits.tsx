@@ -20,18 +20,23 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import en from "../locales/en/rate-limits";
+import settingWords from "../locales/settings";
 import zh from "../locales/zh/rate-limits";
 import { Code, Facts, PageBody } from "../parts";
 import { type RateTarget, rateLimitQuery, rateTargets } from "../policy-queries";
 
-export const messages = { zh: { rateLimits: zh }, en: { rateLimits: en } };
+// The scope label of the card is a word of the settings.
+export const messages = {
+  zh: { rateLimits: zh, scope: settingWords.zh.scope },
+  en: { rateLimits: en, scope: settingWords.en.scope },
+};
 
 export default function RateLimits() {
   const { t } = useTranslation();
   const allowed = can(useSession(), "sites.manage");
   return (
     <>
-      <PageHead title={t("nav.rateLimits")} lede={t("rateLimits.description")} />
+      <PageHead title={t("shell.nav.rateLimits")} lede={t("rateLimits.description")} />
       <PageBody>{allowed ? <Lookup /> : <ForbiddenState />}</PageBody>
     </>
   );
@@ -49,7 +54,11 @@ function Lookup() {
   const [invalid, setInvalid] = useState(false);
   return (
     <>
-      <Card>
+      <Card
+        title={t("rateLimits.cardTitle")}
+        lede={t("rateLimits.cardLede")}
+        scope={{ label: t("scope.platform"), tip: t("scope.platformTip") }}
+      >
         <form
           onSubmit={(event) => {
             event.preventDefault();
@@ -135,6 +144,14 @@ function Current({ path, view }: { path: RateTarget; view: AdminSchemas["RateLim
   );
 }
 
+const put = (path: RateTarget, requests: number | null, { key, reason }: { key: string; reason: string }) =>
+  unwrapChange(
+    adminApi.PUT("/api/admin/v1/rate-limits/{target}/{id}", {
+      params: { path, header: { "Idempotency-Key": key } },
+      body: { requests, reason },
+    }),
+  );
+
 function Edit({ path, own, onClose }: { path: RateTarget; own?: number | null; onClose: () => void }) {
   const { t } = useTranslation();
   const errors = useErrors();
@@ -160,15 +177,11 @@ function Edit({ path, own, onClose }: { path: RateTarget; own?: number | null; o
         const value = Number(raw);
         return /^\d+$/.test(raw) && value <= 1_000_000_000 ? value : { problem: t("rateLimits.invalid") };
       }}
-      send={(requests, { key, reason }) =>
-        unwrapChange(
-          adminApi.PUT("/api/admin/v1/rate-limits/{target}/{id}", {
-            params: { path, header: { "Idempotency-Key": key } },
-            body: { requests, reason },
-          }),
-        )
-      }
+      send={(requests, { key, reason }) => put(path, requests, { key, reason })}
       done={() => <p>{t("rateLimits.saved")}</p>}
+      toast={() => t("rateLimits.saved")}
+      // the inverse of a limit is the one it replaced
+      undo={(_, context) => put(path, own ?? null, context)}
       onClose={onClose}
     />
   );
