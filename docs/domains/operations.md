@@ -256,7 +256,7 @@ agent 不接触 GitHub，调服务端提 Issue 工具：只收白名单字段（
 | 目标按月设、按重叠时长折算，比率取结束月；后四项目标单独存表、共享版本 | 同一个目标在任何窗口都能对照；旧节点读目标不按指标过滤 |
 | PostgreSQL 健康检查的启动期 2 分钟，生产入口最长等 5 分钟 | 崩溃恢复可能超过一分钟 |
 | 看板新增的 token、活跃账户、新用户、首字时间、消费榜、按天序列和模型的 token 与收入，都是 `getOperationsOverview` 的可选字段 | 同一窗口、同一口径，一次请求画完一页；旧节点不返回，页面显示不可用，不另开接口 |
-| 订阅汇总（`getSubscriptionSummary`）按发起请求的站点、按 UTC 月给数量和收入；全平台订阅列表（`listPlatformSubscriptions`）不分站点，权限 `users.view` | 收入要一个币种，所以按站点，权限与看板同为 `sites.manage`；列表只是读账户的订阅，与 `listSubscriptions` 同一权限 |
+| 订阅汇总（`getSubscriptionSummary`）按发起请求的站点、按 UTC 月给数量和收入；收入是当月售出的付费授予扣去渠道手续费、按各自锁定的汇率折成站点币种的值，赠送不算，之后的退款不改写已过的月；全平台订阅列表（`listPlatformSubscriptions`）不分站点，权限 `users.view` | 收入要一个币种，所以按站点，权限与看板同为 `sites.manage`；取账本冲减套餐负债的同一个值，汇总与账本对得上，过去的月份不随退款变动；列表只是读账户的订阅，与 `listSubscriptions` 同一权限 |
 
 ## 待定问题
 

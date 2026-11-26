@@ -15,7 +15,7 @@
 | 追加与结算 | `Extend`/`ExtendIn`、`Settle`/`SettleIn`、`SettleBatch`、`RunBatch`、`SettleOrphan`/`SettleOrphanIn`、`Cleanup`、`Outcome`、`AttemptResult`、`Final`、`BatchWorkError` | `*In` 在调用方事务里，返回的 `after` 提交后才执行 |
 | 额度 | `OpenBalance`、`AddCredit`、`CreditPaid`、`CreditRedeem`、`CreditsFor`、`ReadCredit`、`ReadCredits`、`TopUpRate`、`MinorUnits` | 写入要平台范围事务（审计） |
 | 退款与拒付 | `PrepareRefund`、`FreezeRefund`、`QuoteRefund`、`SettleRefund`、`ReleaseRefund`、`RefundRecordedAt`、`ChargeBack`、`ReverseChargeBack` | 重复调用由 payments 的订单行挡住，失败须回滚整个事务 |
-| 套餐 | `CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans`、`CreditSubscription`、`RequestSubscriptionRefund`/`ApproveSubscriptionRefund`、`Subscriptions`、`RegisterSubscriptions` | 见[订阅套餐](#订阅套餐) |
+| 套餐 | `CreatePlan`/`UpdatePlan`/`ReadPlan`/`Plans`、`CreditSubscription`、`RequestSubscriptionRefund`/`ApproveSubscriptionRefund`、`Subscriptions`、`ListAllSubscriptions`、`ReadSubscriptionSummary`、`RegisterSubscriptions` | 见[订阅套餐](#订阅套餐) |
 | 只读 | `ReadBalance`、`ReadFunds`、`KeysUsed`、`ReadKeyUsage(s)`、`ReadBudgetUsage`、`KeyDailySpend`、`ReadCreditBatches`、`ListStatement`、`ListStatementDaily`、`NewChargeReader`（`ReadCharges`、`SettledFinals`）、`LedgerOf`、`ReadPlatformReport`、`ListCashMovements`、`MerchantCash`、`MerchantBatches` | 账户范围、不加锁；`LedgerOf` 含供应商成本，只在运营或管理处理器里用平台范围调用 |
 | 分配缓存 | `AdvanceCreditBatches(ctx, db, scope, account, pages)` | 写：按页在自己的短事务里锁余额行、推进重放并保存位置；不能在已持有该账户余额行锁的事务里调用 |
 | 定价 | `Rules`、`CreateRule`、`UpdateRule`、`Sell`、`PreviewPrices`、`RefreshPrices`、`PublishedPrices`、`PublishPrice`、`SetPricePolicy`、`PriceMove`、`ByokFee`、`SegmentPolicy`、`DefaultSegments` | 见[定价规则](#定价规则) |
@@ -75,6 +75,7 @@
 
 - `reservations.funding`、`subscription_id`、`window_seq` 记住来源；结算、释放、清理、校正都按它们回到原窗口。`Admitted.Preference` 是账户生效的计费偏好。
 - 不变量（另见[领域文档](../../docs/domains/billing.md#订阅套餐)）：⑥退款的 `refunded_value` 不超过付费额度、`refunded_windows` 不超过窗口数，收回窗口 `voided_at` 非空且不参与准入；⑦同一退款 ID 重放返回同一行、不再记账；余额行的 `reserved` 只含钱包来源，每个窗口的 `reserved` 是对应套餐预留之和。
+- 管理读：两种排序各有索引（`00050`）；汇总收入的口径见[运营的决策表](../../docs/domains/operations.md#决策与理由)，占比按最大余数取整、合计恰为 10000。
 
 ## 兜底价
 
