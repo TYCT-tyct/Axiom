@@ -7,6 +7,7 @@ import (
 
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
+	"axiom/internal/quality"
 )
 
 // PublicEndpoint is one endpoint of a public model: the group's public identity, the limits and abilities it serves,
@@ -22,6 +23,11 @@ type PublicEndpoint struct {
 	Quantization  string
 	Verified      bool
 	Pricing       catalog.ScheduleView
+	// SourceClass is the slug of the source class quality recognized; Score the product score, 0 to 100 with the
+	// official direct run at 100, and 0 while it is not measured; Recent its uptime, time to first token and speed.
+	SourceClass string
+	Score       float64
+	Recent      quality.Recent
 }
 
 // PublicModel is one model of the public models and prices page: what a visitor may see of the catalog, at the sale
@@ -51,6 +57,9 @@ type publicEndpoint struct {
 	abilities     []string // nil when the endpoint was built without per-format specs
 	quantization  string
 	verified      bool
+	class         string
+	score         float64
+	recent        quality.Recent
 }
 
 // Public is the models the last build serves, at a's published price, sorted by author and public ID. A model with no
@@ -108,6 +117,7 @@ func publicEndpointsOfSold(entry *orModel, sold billing.Sold, abilities []string
 		endpoints = append(endpoints, PublicEndpoint{
 			Name: e.name, ContextLength: e.contextLength, MaxOutput: e.maxOutput, Streams: e.streams,
 			Abilities: endpointAbilities, Quantization: e.quantization, Verified: e.verified, Pricing: endpointPrice.View(),
+			SourceClass: e.class, Score: e.score, Recent: e.recent,
 		})
 	}
 	return endpoints

@@ -45,8 +45,14 @@ func (w *sampleWindow) add(v float64, at time.Time) {
 // percentiles returns the four percentiles of the samples newer than the window, and false while fewer than minSamples
 // of them are, which is what makes a percentile unknown rather than zero. The caller holds the endpoint's lock.
 func (w *sampleWindow) percentiles(now time.Time) ([4]float64, bool) {
+	return w.ranks(now, percentileWindow, [4]int{50, 75, 90, 99})
+}
+
+// ranks returns the given percentiles of the samples newer than span, and false while fewer than minSamples of them
+// are. A span longer than percentileWindow reads the same bounded ring, so a busy endpoint's is its latest samples'.
+func (w *sampleWindow) ranks(now time.Time, span time.Duration, ps [4]int) ([4]float64, bool) {
 	var live [percentileSamples]float64
-	cutoff := now.Add(-percentileWindow).UnixNano()
+	cutoff := now.Add(-span).UnixNano()
 	n := 0
 	for i := range w.n {
 		if w.times[i] >= cutoff {
@@ -59,7 +65,7 @@ func (w *sampleWindow) percentiles(now time.Time) ([4]float64, bool) {
 	}
 	slices.Sort(live[:n])
 	var out [4]float64
-	for i, p := range [...]int{50, 75, 90, 99} {
+	for i, p := range ps {
 		out[i] = live[nearestRank(p, n)]
 	}
 	return out, true

@@ -239,10 +239,19 @@ func publicEndpointsOf(endpoints []routing.Endpoint) []publicEndpoint {
 		page[i] = publicEndpoint{
 			id: uuid.UUID(e.ID), name: e.Codename, contextLength: context, maxOutput: maxOutput,
 			streams: e.Streams, abilities: abilities, quantization: string(e.Quantization), verified: e.Verified,
+			class: string(e.Class), score: measuredScore(e), recent: e.Recent,
 		}
 	}
 	slices.SortFunc(page, func(a, b publicEndpoint) int { return strings.Compare(a.name, b.name) })
 	return page
+}
+
+// measuredScore is e's product score, 0 when no run counts for it: a score without confidence is not one to show.
+func measuredScore(e routing.Endpoint) float64 {
+	if e.ScoreConfidence <= 0 {
+		return 0
+	}
+	return e.Score
 }
 
 // publicID is the name the model is served and fetched under: its standard ID, the slug without the internal version

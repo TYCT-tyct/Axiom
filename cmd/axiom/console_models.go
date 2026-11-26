@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"math"
 	"slices"
 	"strings"
 
@@ -49,6 +50,12 @@ func (c consoleAPI) publicModels(params consoleapi.ListPublicModelsParams, audie
 		models = c.models.Public(audience)
 	}
 	list := consoleapi.PublicModelList{Data: make([]consoleapi.PublicModel, 0, len(models))}
+	classes := map[string]consoleapi.SourceClassName{}
+	if c.classes != nil {
+		for _, n := range c.classes.SourceClassNames() {
+			classes[n.Slug] = consoleapi.SourceClassName{Slug: n.Slug, Name: n.Name, NameZh: n.NameZh}
+		}
+	}
 	for _, m := range models {
 		if params.Q != nil && !modelMatches(*params.Q, m) {
 			continue
@@ -59,7 +66,7 @@ func (c consoleAPI) publicModels(params consoleapi.ListPublicModelsParams, audie
 		if params.Ability != nil && !slices.Contains(m.Abilities, string(*params.Ability)) {
 			continue
 		}
-		list.Data = append(list.Data, publicModelBody(m, c.search, prices))
+		list.Data = append(list.Data, publicModelBody(m, c.search, prices, classes))
 	}
 	return list
 }
@@ -69,7 +76,9 @@ func modelMatches(q string, m gateway.PublicModel) bool {
 	return q == "" || strings.Contains(strings.ToLower(m.ID), q) || strings.Contains(strings.ToLower(m.Name), q)
 }
 
-func publicModelBody(m gateway.PublicModel, engines []websearch.Engine, prices bool) consoleapi.PublicModel {
+// publicModelBody writes m in the contract's shape; classes names the source classes by slug, and an endpoint of a
+// class no longer among them is published without one.
+func publicModelBody(m gateway.PublicModel, engines []websearch.Engine, prices bool, classes map[string]consoleapi.SourceClassName) consoleapi.PublicModel {
 	abilities := modelAbilities(m.Abilities)
 	var pricing *consoleapi.ModelPricing
 	if prices {
@@ -100,6 +109,7 @@ func publicModelBody(m gateway.PublicModel, engines []websearch.Engine, prices b
 			quantization := e.Quantization
 			endpoints[i].Quantization = &quantization
 		}
+		endpointRecord(&endpoints[i], e, classes)
 	}
 	return consoleapi.PublicModel{
 		Id: m.ID, Name: m.Name, Author: m.Author,
@@ -107,6 +117,29 @@ func publicModelBody(m gateway.PublicModel, engines []websearch.Engine, prices b
 		Abilities: abilities,
 		Pricing:   pricing,
 		Endpoints: &endpoints,
+	}
+}
+
+// endpointRecord adds what quality measured of e: its source class, product score, uptime and recent speeds, each
+// left out while it is not known rather than sent as zero.
+func endpointRecord(out *consoleapi.PublicEndpoint, e gateway.PublicEndpoint, classes map[string]consoleapi.SourceClassName) {
+	if class, ok := classes[e.SourceClass]; ok {
+		out.SourceClass = &class
+	}
+	if e.Score > 0 {
+		score := math.Round(e.Score*10) / 10
+		out.QualityScore = &score
+	}
+	for i, field := range []**consoleapi.EndpointUptime{&out.UptimeLast5m, &out.UptimeLast30m, &out.UptimeLast1d} {
+		if percent, ok := e.Recent.Percent(i); ok {
+			*field = &percent
+		}
+	}
+	if p, ok := e.Recent.LatencyMS(); ok {
+		out.LatencyLast30m = &consoleapi.EndpointPercentiles{P50: p[0], P75: p[1], P90: p[2], P99: p[3]}
+	}
+	if p, ok := e.Recent.Speeds(); ok {
+		out.ThroughputLast30m = &consoleapi.EndpointPercentiles{P50: p[0], P75: p[1], P90: p[2], P99: p[3]}
 	}
 }
 

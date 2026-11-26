@@ -104,8 +104,11 @@ type Measures struct {
 	// than minSamples samples are that recent. They are copied here so routing reads them without a lock.
 	LatencyPercentiles    [4]time.Duration
 	ThroughputPercentiles [4]float64
-	Quality               float64 // 0 to 1: reliability and the measured time to first token and speed
-	Confidence            float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
+	// Recent is the record the public endpoints view shows: uptime over three windows, and the time to first token and
+	// speed over thirty minutes. Routing does not rank by it.
+	Recent     Recent
+	Quality    float64 // 0 to 1: reliability and the measured time to first token and speed
+	Confidence float64 // 0 to 1: 0 when nothing was counted; decays after the last counted outcome
 	// ToolErrorRate is the share of answers with client tool calls that had at least one call whose arguments were not
 	// one JSON text, as a moving average; 0 while it is not measured, as Latency is (docs/domains/quality.md「线上观测」).
 	ToolErrorRate float64
@@ -239,7 +242,8 @@ type State struct {
 	// The rolling windows the percentile preferences read, fed by the same samples as latency and speed.
 	latencyWindow sampleWindow
 	speedWindow   sampleWindow
-	samples       int // counted outcomes, capped at scoreSamples: the confidence's evidence
+	outcomes      outcomes // the counted outcomes by minute and hour, for Recent's uptime
+	samples       int      // counted outcomes, capped at scoreSamples: the confidence's evidence
 	sampled       time.Time
 	verify        verification                      // the last fingerprint check and its schedule
 	verifying     bool                              // a verification generation is in flight
@@ -374,6 +378,7 @@ func (e *State) count(v verdict, at time.Time) {
 	case uncounted:
 		return
 	}
+	e.outcomes.add(v == success, at)
 	if e.samples < scoreSamples {
 		e.samples++
 	}
@@ -430,6 +435,7 @@ func (e *State) measures(now time.Time, verifyMaxAge time.Duration) Measures {
 	if v, ok := e.speedWindow.percentiles(now); ok {
 		out.ThroughputPercentiles = v
 	}
+	out.Recent = e.recent(now)
 	out.Verified = e.verify.verified(now, verifyMaxAge)
 	out.VerifyConfidence = e.verify.confidence(now, verifyMaxAge)
 	if !e.verify.checked.IsZero() {

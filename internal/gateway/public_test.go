@@ -52,8 +52,8 @@ func TestPublicModelsAreTheServedCatalogAtTheAudiencePrice(t *testing.T) {
 		// serves and the price this audience pays. The model's context and max output stay the catalog's values; an
 		// endpoint may offer more.
 		Endpoints: []PublicEndpoint{
-			{Name: "alpha-1", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing},
-			{Name: "alpha-2", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing},
+			{Name: "alpha-1", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing, SourceClass: "official"},
+			{Name: "alpha-2", ContextLength: 1_000_000, MaxOutput: 1000, Streams: true, Abilities: []string{}, Verified: true, Pricing: wantPricing, SourceClass: "official"},
 		},
 	}
 	if diff := cmp.Diff(want, got[0], comparePrices); diff != "" {
