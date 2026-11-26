@@ -3889,6 +3889,15 @@ type CloudCredentialReplace struct {
 	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
 }
 
+// CloudDeployment defines model for CloudDeployment.
+type CloudDeployment struct {
+	// Model The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name.
+	Model *string `json:"model,omitempty"`
+
+	// Name The deployment's name in the resource, which its calls' path names.
+	Name string `json:"name"`
+}
+
 // CloudProvider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
 type CloudProvider string
 
@@ -3899,6 +3908,9 @@ type CloudRegion = string
 type CloudSupplierCreate struct {
 	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
 	Credential *CloudCredentialInput `json:"credential,omitempty"`
+
+	// Deployments Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once.
+	Deployments *[]CloudDeployment `json:"deployments,omitempty"`
 
 	// MaxConcurrency The calls each region has in flight at once.
 	MaxConcurrency int    `json:"max_concurrency"`

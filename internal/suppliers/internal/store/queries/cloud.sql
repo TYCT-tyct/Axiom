@@ -41,6 +41,12 @@ SELECT DISTINCT upstream_key_ref FROM suppliers.credentials
 WHERE upstream_key_ref = ANY(@refs::text[]) AND status <> 'erased' AND supplier_id <> @supplier_id
 ORDER BY upstream_key_ref;
 
--- name: LineEndpointModels :many
--- The models the line has an endpoint for already.
-SELECT model_id FROM suppliers.endpoints WHERE supplier_group_id = @supplier_group_id ORDER BY model_id;
+-- name: LineEndpoints :many
+-- The models the line has an endpoint for already, and the name each endpoint is stored by.
+SELECT model_id, upstream_name FROM suppliers.endpoints WHERE supplier_group_id = @supplier_group_id ORDER BY model_id;
+
+-- name: ServedNames :many
+-- The names the supplier's credential serving now was stored with and how its calls name them: what a replacement
+-- keeps for a platform whose models a person named. A platform without regions has one such row.
+SELECT allowed_models, call_names FROM suppliers.credentials
+WHERE supplier_id = @supplier_id AND status <> 'erased' ORDER BY id DESC LIMIT 1;

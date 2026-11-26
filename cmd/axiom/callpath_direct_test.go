@@ -74,11 +74,29 @@ func TestADirectSupplierServesAtTheOfficialPrice(t *testing.T) {
 func (w *callWorld) connectDirect(provider *fakeProvider) string {
 	w.t.Helper()
 	ctx := w.t.Context()
+	admin, snap := w.directAdmin(provider)
+	plan := w.checkedDirect(admin, provider)
+	var made suppliers.Connected
+	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
+		made, err = admin.CreateDirect(ctx, tx, audit.System("callpath.test"), snap, plan)
+		return err
+	}); err != nil {
+		w.t.Fatal(err)
+	}
+	if made.Supplier == nil {
+		w.t.Fatalf("the key did not pass: %+v", made.Checks)
+	}
+	return made.Supplier.ID.String()
+}
+
+// directAdmin is the suppliers module's admin side reaching the provider, and the world's catalog as it is now.
+func (w *callWorld) directAdmin(provider *fakeProvider) (*suppliers.Admin, *catalog.Snapshot) {
+	w.t.Helper()
 	cat, err := catalog.Open(w.db, pg.PlatformScope(), catalog.Config{MaxStale: time.Hour})
 	if err != nil {
 		w.t.Fatal(err)
 	}
-	if err := cat.Refresh(ctx); err != nil {
+	if err := cat.Refresh(w.t.Context()); err != nil {
 		w.t.Fatal(err)
 	}
 	snap, err := cat.Current()
@@ -91,6 +109,14 @@ func (w *callWorld) connectDirect(provider *fakeProvider) string {
 	if err != nil {
 		w.t.Fatal(err)
 	}
+	return admin, snap
+}
+
+// checkedDirect is the provider as a compatible Anthropic API with one key, planned and checked as the admin handler
+// does before it stores anything.
+func (w *callWorld) checkedDirect(admin *suppliers.Admin, provider *fakeProvider) *suppliers.DirectPlan {
+	w.t.Helper()
+	ctx := w.t.Context()
 	origin, err := suppliers.NormalizeOrigin(provider.server.URL)
 	if err != nil {
 		w.t.Fatal(err)
@@ -113,15 +139,5 @@ func (w *callWorld) connectDirect(provider *fakeProvider) string {
 	if err := admin.CheckDirect(ctx, plan); err != nil {
 		w.t.Fatal(err)
 	}
-	var made suppliers.Connected
-	if err := w.db.Tx(ctx, pg.PlatformScope(), func(tx pg.Tx) (err error) {
-		made, err = admin.CreateDirect(ctx, tx, audit.System("callpath.test"), snap, plan)
-		return err
-	}); err != nil {
-		w.t.Fatal(err)
-	}
-	if made.Supplier == nil {
-		w.t.Fatalf("the key did not pass: %+v", made.Checks)
-	}
-	return made.Supplier.ID.String()
+	return plan
 }

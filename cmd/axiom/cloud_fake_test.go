@@ -38,16 +38,19 @@ var cloudHosts = []string{
 	"bedrock-runtime.us-east-1.amazonaws.com", "harbor.openai.azure.com",
 }
 
-// The fake's credentials: a key that starts as these do passes, any other is refused.
+// The fake's credentials: a key that starts as these do passes, any other is refused. Bedrock lists another version
+// of the catalog's model to cloudOtherVersionKeyID, and only that.
 const (
-	cloudKeyID       = "AKIAFAKEHARBOR0001"
+	cloudKeyID             = "AKIAFAKEHARBOR0001"
+	cloudOtherVersionKeyID = "AKIAFAKEHARBOR0003"
 	cloudResourceKey = "az-good-key-0042"
 	cloudGrant       = "fake-grant-1"
 )
 
 // fakeCloud is Vertex AI, Bedrock and Azure OpenAI over TLS on loopback. Each lists or serves the models named, takes
 // the credentials above and refuses every other, and refuses all of them once refuse is set; Bedrock's us-west-2 is a
-// region the key may not use. It streams the Messages sample (in Bedrock's event-stream framing on Bedrock) and the
+// region the key may not use, and Azure OpenAI answers only the generally available version, as a resource does once
+// the older ones are retired. It streams the Messages sample (in Bedrock's event-stream framing on Bedrock) and the
 // Chat sample.
 type fakeCloud struct {
 	server         *httptest.Server
@@ -181,6 +184,9 @@ func (c *fakeCloud) bedrockList(w http.ResponseWriter, r *http.Request, host str
 	case strings.Contains(host, "us-west-2"):
 		w.Header().Set("X-Amzn-Errortype", "AccessDeniedException:http://internal.amazon.com/coral/com.amazon.coral.service/")
 		w.WriteHeader(http.StatusForbidden)
+	case r.URL.Path == "/foundation-models" && strings.Contains(r.Header.Get("Authorization"), "Credential="+cloudOtherVersionKeyID+"/"):
+		_, _ = io.WriteString(w, `{"modelSummaries":[`+ //nolint:errcheck // a test server
+			`{"modelId":"anthropic.claude-direct-1-v2:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}}]}`)
 	case r.URL.Path == "/foundation-models":
 		_, _ = io.WriteString(w, `{"modelSummaries":[`+ //nolint:errcheck // a test server
 			`{"modelId":"anthropic.claude-direct-1-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}},`+
@@ -204,11 +210,12 @@ func (c *fakeCloud) invoke(w http.ResponseWriter) {
 
 func (c *fakeCloud) azure(w http.ResponseWriter, r *http.Request) {
 	switch {
-	case c.refuse.Load() || r.Header.Get("Api-Key") != cloudResourceKey:
+	case c.refuse.Load() || !strings.HasPrefix(r.Header.Get("Api-Key"), cloudResourceKey[:len(cloudResourceKey)-4]):
 		w.WriteHeader(http.StatusUnauthorized)
-	case r.URL.Path == "/openai/deployments":
-		_, _ = io.WriteString(w, `{"data":[{"id":"prod-astra","model":"gpt-6-astra","status":"succeeded"},`+ //nolint:errcheck // a test server
-			`{"id":"prod-direct","model":"claude-direct-1","status":"succeeded"}],"object":"list"}`)
+	case r.URL.Query().Get("api-version") != "2024-10-21":
+		http.NotFound(w, r) // a version the resource no longer serves
+	case r.URL.Path == "/openai/models":
+		_, _ = io.WriteString(w, `{"data":[{"id":"gpt-6-astra","status":"succeeded"}],"object":"list"}`) //nolint:errcheck // a test server
 	case strings.HasSuffix(r.URL.Path, "/chat/completions"):
 		w.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(w, c.chat) //nolint:errcheck // a test server

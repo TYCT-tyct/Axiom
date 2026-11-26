@@ -155,7 +155,7 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `NormalizeOrigin`、`CheckOrigin`（只在幂等回调里）、`Detect` | `ErrBadOrigin`、`ErrAddressRefused`、`ErrUnreachable` |
 | `Connect` | `ErrNoAdapter`、`*LoginError`（只带字段名）、`ErrSupplierExists` |
 | `PlanDirect`、`CheckDirect`、`CreateDirect`（直连接口） | `ErrDirectProvider`、`ErrDirectOrigin`、`ErrDirectFormat`、`ErrDirectGemini`、`ErrDirectCurrency`、`ErrDirectName`、`*KeyError`、`ErrLimits`、`ErrAddressRefused` |
-| `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud`（[云平台](../../docs/domains/suppliers-direct.md#云平台)） | `ErrCloudProvider`、`ErrCloudOrigin`、`ErrCloudRegions`、`*CredentialError`、`ErrNotCloud` |
+| `PlanCloud`、`CheckCloud`、`CreateCloud`、`PlanCloudReplace`、`ReplaceCloud`（云平台） | `ErrCloudProvider`、`ErrCloudOrigin`、`ErrCloudRegions`、`ErrCloudDeployments`、`*CredentialError`、`ErrNotCloud` |
 | `SetStatus`、`Remove`、`ReplaceLogin` | `ErrStatusLocked`、`ErrNoSupplier` |
 | `ConfirmUnitValue` | `ErrUnitValue` |
 | `SelectGroup`、`BindKey` | `ErrNoGroup`、`ErrGroupGone`、`ErrGroupNotSelected`、`ErrKeyBound` |
