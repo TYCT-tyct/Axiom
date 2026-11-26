@@ -45,12 +45,8 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 	if err := m.api.get(ctx, "/api/status", global, &status); err != nil {
 		return adapter.Account{}, err
 	}
-	var subs struct {
-		Data *struct {
-			Subscriptions []struct{} `json:"subscriptions"`
-		} `json:"data"`
-	}
-	if err := m.api.get(ctx, "/api/subscription/self", global, &subs); err != nil {
+	subscribed, err := m.subscribed(ctx)
+	if err != nil {
 		return adapter.Account{}, err
 	}
 	switch {
@@ -58,11 +54,9 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 		return adapter.Account{}, errMissing("integer quota")
 	case !status.Data.QuotaPerUnit.isNumber():
 		return adapter.Account{}, errMissing("quota_per_unit")
-	case subs.Data == nil || subs.Data.Subscriptions == nil:
-		return adapter.Account{}, errMissing("list of subscriptions")
 	}
 	funding := adapter.FundingWallet
-	if len(subs.Data.Subscriptions) > 0 {
+	if subscribed {
 		funding = adapter.FundingOther
 	}
 	return adapter.Account{
@@ -70,6 +64,23 @@ func (m *manager) Account(ctx context.Context) (adapter.Account, error) {
 		Funding:  funding,
 		UnitHint: "quota_per_unit=" + string(status.Data.QuotaPerUnit),
 	}, nil
+}
+
+// subscribed reports whether the account has an active subscription (the "subscriptions" of /api/subscription/self;
+// "all_subscriptions" holds the expired ones too).
+func (m *manager) subscribed(ctx context.Context) (bool, error) {
+	var subs struct {
+		Data *struct {
+			Subscriptions []struct{} `json:"subscriptions"`
+		} `json:"data"`
+	}
+	if err := m.api.get(ctx, "/api/subscription/self", global, &subs); err != nil {
+		return false, err
+	}
+	if subs.Data == nil || subs.Data.Subscriptions == nil {
+		return false, errMissing("list of subscriptions")
+	}
+	return len(subs.Data.Subscriptions) > 0, nil
 }
 
 // isInteger reports whether the number is written as an integer, as new-api's quota is.

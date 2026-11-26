@@ -79,6 +79,9 @@ func (m *manager) Charges(ctx context.Context, scan adapter.ScanState) (adapter.
 	if err != nil {
 		return adapter.ChargePage{}, scan, err
 	}
+	if err := m.fundUnstated(ctx, page, charges); err != nil {
+		return adapter.ChargePage{}, scan, err
+	}
 	if s.Pass.Page == 1 {
 		s.Pass.Pages = (*page.Data.Total + logPageSize - 1) / logPageSize
 	}
@@ -170,15 +173,43 @@ func reported(o otherInfo) (set catalog.ItemSet) {
 	return set
 }
 
-// funding is where the charge was drawn from, per the record's billing source. A record without one was drawn from the
-// wallet: new-api writes the source only where a billing session chose between wallet and subscription
-// (service/log_info_generate.go appendBillingInfo); its releases before subscriptions (commit ddeacccc0) had only the
-// wallet, and its path without a session draws from the wallet (service/quota.go postConsumeQuotaWithResult). Fees and
-// task records it writes without a source follow the request's source, a subscription only for an account that has an
-// active one, which the account read reports as not the wallet (docs/domains/suppliers.md「决策与理由」).
+// funding is where the charge was drawn from, per the record's billing source; a record without one is taken for the
+// wallet here, and fundUnstated corrects that for an account with an active subscription.
 func funding(o otherInfo) adapter.Funding {
 	if o.BillingSource == "wallet" || o.BillingSource == "" {
 		return adapter.FundingWallet
 	}
 	return adapter.FundingOther
+}
+
+// fundUnstated decides where the records of the page that state no billing source were drawn from. new-api writes the
+// source only where a billing session chose between wallet and subscription (service/log_info_generate.go
+// appendBillingInfo). A record without it is from a release before subscriptions (commit ddeacccc0), which had only
+// the wallet, from its path without a session, which draws on the wallet, or a fee it takes after the request (a
+// violation fee, service/violation_fee.go) from whatever the request drew on, a subscription included
+// (service/quota.go postConsumeQuotaWithResult). Such a record names no request it followed, so it is a wallet charge
+// only while the account has no active subscription; with one it is not, which stops the supplier rather than letting
+// it route as if it were paid from the wallet (docs/domains/suppliers.md「决策与理由」). The subscriptions are read
+// only for a page that has such a record.
+func (m *manager) fundUnstated(ctx context.Context, page logPage, charges []adapter.Charge) error {
+	unstated := map[adapter.ChargeRef]bool{}
+	for _, it := range page.Data.Items {
+		var other otherInfo
+		if *it.Type == 2 && jsonx.Unmarshal([]byte(*it.Other), &other) == nil && other.BillingSource == "" {
+			unstated[adapter.ChargeRef(it.RequestID)] = true
+		}
+	}
+	if len(unstated) == 0 {
+		return nil
+	}
+	subscribed, err := m.subscribed(ctx)
+	if err != nil || !subscribed {
+		return err
+	}
+	for i := range charges {
+		if unstated[charges[i].Ref] {
+			charges[i].Funding = adapter.FundingOther
+		}
+	}
+	return nil
 }
