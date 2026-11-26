@@ -282,7 +282,61 @@ function mapModel({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{supplie
   } as const;
 }
 
+// 上游's queue, as far as the mock has it: each name waiting to be mapped is an unknown_model item, with an ID that
+// stays the item's while the queue changes around it; an ignored one is hidden until the state is made again.
+const ignored = new WeakMap<AdminState, Set<string>>();
+const itemId = (row: Schemas["PendingMapping"]) =>
+  uuid(
+    12,
+    [...`${row.group_id}/${row.upstream_name}`].reduce((sum, c, at) => (sum * 31 + c.charCodeAt(0) + at) % 1e9, 7),
+  );
+
+function inboxOf(state: AdminState): Schemas["SupplierInboxItem"][] {
+  const hidden = ignored.get(state) ?? new Set<string>();
+  return state.pending
+    .map((row) => ({
+      id: itemId(row),
+      kind: "unknown_model" as const,
+      supplier_id: row.supplier_id,
+      group_id: row.group_id,
+      upstream_name: row.upstream_name,
+      first_seen_at: "2026-11-20T08:00:00Z",
+      last_seen_at: "2026-11-25T08:00:00Z",
+    }))
+    .filter((item) => !hidden.has(item.id));
+}
+
+function listInbox({ query, state }: Ctx<"/api/admin/v1/supplier-inbox", "get">) {
+  const page = paged(inboxOf(state), query);
+  return page ? ({ status: 200, json: page } as const) : fail(400, "invalid_request");
+}
+
+function inboxSummary({ state }: Ctx<"/api/admin/v1/supplier-inbox/summary", "get">) {
+  const total = inboxOf(state).length;
+  const none = {
+    low_balance: 0,
+    ratio_changed: 0,
+    cost_mismatch: 0,
+    group_added: 0,
+    unlisted_model_called: 0,
+    key_invalid: 0,
+  };
+  return ok({ total, kinds: { ...none, unknown_model: total } });
+}
+
+function ignoreItem({ params, state }: Ctx<"/api/admin/v1/supplier-inbox/{item_id}/ignore", "post">) {
+  const item = inboxOf(state).find((one) => one.id === params.item_id);
+  if (!item) {
+    return fail(404, "not_found");
+  }
+  ignored.set(state, (ignored.get(state) ?? new Set()).add(item.id));
+  return ok({ ...item, ignored_at: "2026-11-26T08:00:00Z" });
+}
+
 export const supplyHandlers: Handler<AdminState>[] = [
+  route("get", `${base}/supplier-inbox`, reads("suppliers.view"), listInbox),
+  route("get", `${base}/supplier-inbox/summary`, reads("suppliers.view"), inboxSummary),
+  route("post", `${base}/supplier-inbox/{item_id}/ignore`, changes("suppliers.manage"), ignoreItem),
   route("get", `${base}/suppliers`, reads("suppliers.view"), listSuppliers),
   route("post", `${base}/suppliers`, changes("suppliers.manage"), createSupplier),
   route("post", `${base}/suppliers/detections`, safe("suppliers.manage"), detect),

@@ -1,121 +1,60 @@
-import type { AdminSchemas } from "@axiom/api";
-import { LoadMore } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, Icon, PageHead, Table, Td, Text } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
+import { useSearch } from "@tanstack/react-router";
+import { lazy, Suspense } from "react";
 import { useTranslation } from "react-i18next";
-import { Actions, ChoiceFilter, Code, FilterBar, Head, NewButton, PageBody } from "../parts";
-import { suppliersQuery } from "../queries";
-import { ConnectDialog } from "../suppliers/connect";
-import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
-import { supplierStatus, supplierStatuses } from "../suppliers/statuses";
+import { NewButton } from "../parts";
+import { inboxSummaryQuery } from "../queries";
+import { Lazily } from "../suppliers/tabs";
+import { TabbedPage, useTabs } from "../tabbed-page";
 
-export default function Suppliers() {
+// Each view is its own chunk, loaded when its tab opens: the page stays within a page's budget with four of them.
+const Channels = lazy(() => import("../suppliers/channels-tab"));
+const ByModel = lazy(() => import("../suppliers/by-model-tab"));
+const Inbox = lazy(() => import("../suppliers/inbox-tab"));
+const Keys = lazy(() => import("../suppliers/keys-tab"));
+const AddUpstream = lazy(() => import("../suppliers/add-dialog"));
+
+// 上游 (adPg_suppliers in admin_pages_f.js): what is connected, seen four ways. The channels, a row per model with the
+// lines that serve it, what wants a decision from every channel, and every key across them. Each opens a channel, whose
+// page holds its groups, models, keys and sync (pages/supplier.tsx).
+export default function Upstream() {
   const { t } = useTranslation();
-  const { status } = useSearch({ from: "/app/suppliers" });
-  const suppliers = useInfiniteQuery(suppliersQuery(status));
-  const rows = suppliers.data?.pages.flatMap((page) => page.data) ?? [];
-  return (
-    <>
-      <PageHead title={t("nav.suppliers")} lede={t("suppliers.description")} />
-      <PageBody>
-        <Actions>
-          <NewButton permission="suppliers.manage" label={t("suppliers.connect.open")}>
-            {(close) => <ConnectDialog onClose={close} />}
-          </NewButton>
-        </Actions>
-        <Filter status={status} />
-        <Card layout="flush">
-          <DataState
-            query={suppliers}
-            isEmpty={() => rows.length === 0}
-            empty={
-              <EmptyState title={status ? t("suppliers.noMatch.title") : t("suppliers.empty.title")}>
-                {status ? t("suppliers.noMatch.body") : t("suppliers.empty.body")}
-              </EmptyState>
-            }
-          >
-            {() => <SuppliersTable rows={rows} />}
-          </DataState>
-          <LoadMore list={suppliers} />
-        </Card>
-      </PageBody>
-    </>
+  const search = useSearch({ from: "/app/suppliers" });
+  const tab: "channels" | "models" | "inbox" | "keys" = search.tab ?? "channels";
+  const inbox = useQuery(inboxSummaryQuery);
+  const tabs = useTabs(
+    "/suppliers",
+    [
+      { key: "channels", label: t("upstream.tabs.channels") },
+      { key: "models", label: t("upstream.tabs.models") },
+      { key: "inbox", label: t("upstream.tabs.inbox"), count: inbox.data?.total || undefined },
+      { key: "keys", label: t("upstream.tabs.keys") },
+    ],
+    tab,
   );
-}
-
-function Filter({ status }: { status: AdminSchemas["SupplierStatus"] | undefined }) {
-  const { t } = useTranslation();
-  const navigate = useNavigate();
   return (
-    <FilterBar
-      values={{ status }}
-      onApply={(values) =>
-        navigate({
-          to: "/suppliers",
-          search: { status: supplierStatus(values.status) },
-        })
+    <TabbedPage
+      title={t("upstream.title")}
+      lede={t(`upstream.lede.${tab}`)}
+      label={t("upstream.tabs.label")}
+      tabs={tabs}
+      actions={
+        <NewButton permission="suppliers.manage" label={t("upstream.add")}>
+          {(close) => (
+            <Suspense fallback={null}>
+              <AddUpstream onClose={close} />
+            </Suspense>
+          )}
+        </NewButton>
       }
     >
-      <ChoiceFilter
-        label={t("suppliers.col.status")}
-        name="status"
-        value={status}
-        any={t("suppliers.anyStatus")}
-        options={supplierStatuses.map((value) => ({ value, label: t(`suppliers.state.${value}`) }))}
-      />
-    </FilterBar>
-  );
-}
-
-function SuppliersTable({ rows }: { rows: AdminSchemas["Supplier"][] }) {
-  const { t } = useTranslation();
-  return (
-    <Table label={t("nav.suppliers")}>
-      <Head
-        cols={[
-          [t("suppliers.col.name"), { main: true }],
-          t("suppliers.col.status"),
-          t("suppliers.col.balance"),
-          t("suppliers.col.unit"),
-        ]}
-        action
-      />
-      <tbody>
-        {rows.map((supplier) => (
-          <tr key={supplier.id}>
-            <Td main>
-              <Text>{supplier.name}</Text>
-              <Text size="sm" tone="faint">
-                <Code>{supplier.origin}</Code>
-                {" · "}
-                {supplier.kind}
-              </Text>
-            </Td>
-            <Td main>
-              <SupplierState supplier={supplier} brief />
-            </Td>
-            <Td>
-              <NativeBalance supplier={supplier} />
-            </Td>
-            <Td>
-              <UnitValue supplier={supplier} />
-            </Td>
-            <Td actions>
-              <ActionButton variant="gho" size="sm" square asChild>
-                <Link
-                  to="/suppliers/$supplierId"
-                  params={{ supplierId: supplier.id }}
-                  aria-label={t("suppliers.open", { name: supplier.name })}
-                >
-                  <Icon name="right" />
-                </Link>
-              </ActionButton>
-            </Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+      <Lazily>
+        {tab === "channels" ? <Channels /> : null}
+        {tab === "models" ? <ByModel /> : null}
+        {tab === "inbox" ? <Inbox /> : null}
+        {tab === "keys" ? <Keys credential={search.credential} /> : null}
+      </Lazily>
+    </TabbedPage>
   );
 }
 

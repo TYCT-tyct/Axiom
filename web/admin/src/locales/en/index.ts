@@ -9,7 +9,6 @@ import auditEvents from "./audit-events";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
-import mappings from "./mappings";
 import me from "./me";
 import models from "./models";
 import operations from "./operations";
@@ -28,6 +27,8 @@ import shell from "./shell";
 import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
+import upstream from "./upstream";
+import channel from "./upstream-channel";
 import users from "./users";
 
 export const initial = {
@@ -40,8 +41,6 @@ export const initial = {
     redeemCodes: "Redeem codes",
     calls: "Calls",
     audit: "Audit log",
-    suppliers: "Suppliers",
-    mappings: "Unmapped models",
     models: "Models",
     pricing: "Pricing",
     subscriptionPlans: "Subscription plans",
@@ -159,7 +158,6 @@ export const initial = {
   },
   users,
   orders,
-  mappings,
   models,
   pricing,
   redeem,
@@ -174,6 +172,7 @@ export const initial = {
     | "settings"
     | "subscriptions"
     | "suppliers"
+    | "upstream"
     | "discrepancies"
     | "exchangeRates"
     | "platformGrants"
@@ -199,6 +198,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   settings,
   subscriptions,
   suppliers,
+  upstream: /* @__PURE__ */ Object.assign({}, upstream, channel),
   sourceClasses,
   routingPresets,
   discrepancies,

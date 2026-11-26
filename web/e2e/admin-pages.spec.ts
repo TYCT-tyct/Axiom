@@ -15,6 +15,11 @@ test.use({ baseURL: apps[2].url, timezoneId: "Asia/Shanghai" });
 
 const h1 = (page: Page, name: string | RegExp) => page.getByRole("heading", { level: 1, name });
 const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { name: words(key) }).nth(nth);
+// A channel's endpoints are its pile of models on sale and taken, folded on the models tab until opened.
+async function endpointsOf(page: Page, supplier: number) {
+  await page.goto(`/suppliers/${uuid(2, supplier)}?tab=models`);
+  await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
+}
 
 test.describe("users and credit", () => {
   test("an account from a server of the release before, without key limits, still shows with the card marked unavailable", async ({
@@ -234,138 +239,6 @@ test.describe("site settings", () => {
   });
 });
 
-test.describe("suppliers", () => {
-  test("the longest status reason the contract allows takes two lines in the list and is whole on the title", async ({
-    page,
-  }) => {
-    await open(page, "/suppliers", "worst");
-    const reason = page.locator("p[title]").filter({ hasText: "The supplier rejected the login." }).first();
-    await expect(reason).toBeVisible();
-    const title = (await reason.getAttribute("title")) ?? "";
-    expect(title).toHaveLength(200);
-    const lines = await reason.evaluate(
-      (p) => p.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(p).lineHeight),
-    );
-    expect(lines).toBeLessThanOrEqual(2);
-  });
-
-  test("a supplier is connected in two steps and settles into the setup checklist", async ({ page }) => {
-    const state = await open(page, "/suppliers");
-    await press(page, "suppliers.connect.open").click();
-    await dialog(page).getByLabel(words("suppliers.connect.origin")).fill("https://shop.unknown.example");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.connect.unrecognised"));
-    expect(state.log).toContain("POST /suppliers/detections");
-
-    await dialog(page).getByLabel(words("suppliers.connect.origin")).fill("https://api.example.cn");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(dialog(page).getByText(/识别为 newapi/)).toBeVisible();
-    await dialog(page).getByLabel(words("suppliers.connect.name")).fill("Example CN 2");
-    await dialog(page).getByLabel(words("suppliers.connect.account")).fill("ops@example.cn");
-    await dialog(page).getByLabel(words("suppliers.connect.currency")).fill("cny");
-    await dialog(page).getByLabel(words("suppliers.login.access_token")).fill("pat-secret-value");
-    await send(page, "second source");
-    await expect(done(page)).toBeVisible();
-    // the login is sent once, as typed, and nothing of it comes back
-    const created = state.suppliers[0]?.supplier;
-    expect(created).toMatchObject({ name: "Example CN 2", settlement_currency: "CNY", status: "connecting" });
-    expect(JSON.stringify(created)).not.toContain("pat-secret-value");
-
-    await dialog(page)
-      .getByRole("link", { name: zhText("suppliers.connect.view") })
-      .click();
-    await expect(h1(page, "Example CN 2")).toBeVisible();
-    // the page asks again until the sync has settled it
-    await expect(page.getByText(zhText("suppliers.steps.groups.title"))).toBeVisible({ timeout: 15_000 });
-    await expect(page.getByRole("button", { name: words("suppliers.group.select.action") })).toHaveCount(2);
-  });
-
-  test("groups are chosen, a key is bound and the unit value confirmed", async ({ page }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 2)}`);
-    await expect(h1(page, "Example US")).toBeVisible();
-    await expect(page.getByText(zhText("suppliers.unit.unconfirmed")).first()).toBeVisible();
-
-    await press(page, "suppliers.unit.open").click();
-    await dialog(page).getByLabel(words("suppliers.unit.value")).fill("0");
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.unit.invalid"));
-    await dialog(page).getByLabel(words("suppliers.unit.value")).fill("1");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    expect(state.suppliers[1]?.supplier.unit_value).toBe("1");
-
-    await press(page, "suppliers.group.select.action").click();
-    await send(page, "use the vip group");
-    await expect(dialog(page).getByText("Code vip-2")).toBeVisible();
-    await close(page);
-
-    await press(page, "suppliers.bind.action").click();
-    await dialog(page).getByLabel(words("suppliers.bind.group")).selectOption({ index: 1 });
-    await send(page);
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    await expect(page.getByText("key-2-b").first()).toBeVisible();
-    expect(state.suppliers[1]?.credentials).toHaveLength(2);
-  });
-
-  test("pausing and resuming move the supplier, and a risky removal asks for its name", async ({ page }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
-    await press(page, "suppliers.status.paused.action").click();
-    await send(page);
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    await expect(page.getByText(zhText("suppliers.state.paused")).first()).toBeVisible();
-    await press(page, "suppliers.status.active.action").click();
-    await send(page);
-    await close(page);
-    expect(state.suppliers[0]?.supplier.status).toBe("active");
-
-    await press(page, "suppliers.remove.open").click();
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("change.confirmMismatch"));
-    await dialog(page)
-      .getByLabel(/输入“Supplier 1”以确认/)
-      .fill("Supplier 1");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
-    await close(page);
-    await expect(page.getByText(zhText("suppliers.state.removed")).first()).toBeVisible({ timeout: 15_000 });
-    // a removed supplier offers no more changes
-    await expect(press(page, "suppliers.remove.open")).toHaveCount(0);
-  });
-
-  test("a supplier that needs attention says why and takes a new login", async ({ page }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 3)}`);
-    await expect(page.getByText("The supplier rejected the login (401).").first()).toBeVisible();
-    await press(page, "suppliers.login.open").click();
-    await dialog(page).getByLabel(words("suppliers.login.access_token")).fill("fresh-token");
-    await send(page, "rotated");
-    await expect(done(page)).toBeVisible();
-    expect(state.suppliers[2]?.supplier.status).toBe("connecting");
-    await close(page);
-    await expect(page.getByText(zhText("suppliers.state.active")).first()).toBeVisible({ timeout: 15_000 });
-  });
-
-  test("the list filters by state and an operator who may only view cannot connect or change", async ({ page }) => {
-    const state = await mockAdmin(page);
-    state.permissions = ["suppliers.view"];
-    signedInAs(state, "mfa");
-    await page.goto("/suppliers");
-    await expect(page.getByRole("row")).toHaveCount(6);
-    await expect(press(page, "suppliers.connect.open")).toHaveCount(0);
-    await page.getByLabel(zhText("suppliers.col.status")).selectOption("paused");
-    await page.getByRole("button", { name: zhText("filter.apply") }).click();
-    await expect(page.getByRole("row")).toHaveCount(2);
-    await page.getByRole("link", { name: /打开 Paused Site/ }).click();
-    await expect(h1(page, "Paused Site")).toBeVisible();
-    await expect(press(page, "suppliers.unit.open")).toHaveCount(0);
-    await expect(press(page, "suppliers.remove.open")).toHaveCount(0);
-    await expect(page.getByText("gpt-test-mini").first()).toBeVisible();
-    await expect(page.getByRole("button", { name: words("suppliers.test.title") })).toHaveCount(0);
-  });
-});
-
 test.describe("endpoint tests", () => {
   const verdict = (page: Page, outcome: string) =>
     dialog(page).getByText(zhText(`suppliers.test.outcome.${outcome}.title`), { exact: true });
@@ -420,7 +293,8 @@ test.describe("endpoint tests", () => {
     page,
   }) => {
     await holdTimeouts(page);
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    const state = await open(page, "/suppliers");
+    await endpointsOf(page, 1);
     await expect(page.getByText("unpriced-model")).toBeVisible();
     // six endpoints, of which the switched-off one and the one with no known cost cannot be called
     await expect(testButtons(page)).toHaveCount(4);
@@ -454,7 +328,8 @@ test.describe("endpoint tests", () => {
 
   test("a test that outlasts its own limit is reported unknown and resent as it was", async ({ page }) => {
     await holdTimeouts(page);
-    await open(page, `/suppliers/${uuid(2, 1)}`);
+    await open(page, "/suppliers");
+    await endpointsOf(page, 1);
     await testButtons(page).nth(1).click();
     const held = await holdTest(page);
     await send(page);
@@ -467,7 +342,8 @@ test.describe("endpoint tests", () => {
 
   test("on a phone, two groups' endpoints of the same model are told apart before paying for one", async ({ page }) => {
     await page.setViewportSize({ width: 360, height: 800 });
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    const state = await open(page, "/suppliers");
+    await endpointsOf(page, 1);
     const vip = page.getByRole("button", { name: "测试 gpt-test-mini（分组 vip-2）" });
     await expect(page.getByRole("button", { name: "测试 gpt-test-mini（分组 Maple）" })).toBeVisible();
     await expect(vip).toBeVisible();
@@ -494,15 +370,17 @@ test.describe("endpoint tests", () => {
     const detail: Partial<(typeof state.suppliers)[number]> | undefined = state.suppliers[0];
     delete detail?.endpoints;
     await page.goto(`/suppliers/${uuid(2, 1)}`);
+    await expect(page.getByRole("heading", { name: zhText("upstream.groups.title") })).toBeVisible();
+    await endpointsOf(page, 1);
     await expect(page.getByText(zhText("suppliers.endpoints.unavailable.empty.title"))).toBeVisible();
-    await expect(page.getByRole("heading", { name: zhText("suppliers.groups.title") })).toBeVisible();
     await expect(testButtons(page)).toHaveCount(0);
   });
 
   test("a failed and an inconclusive test name the cause, and a lost answer is replayed, not paid twice", async ({
     page,
   }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    const state = await open(page, "/suppliers");
+    await endpointsOf(page, 1);
     await testButtons(page).nth(0).click();
     await send(page);
     await expect(verdict(page, "failed")).toBeVisible();
@@ -523,7 +401,8 @@ test.describe("endpoint tests", () => {
   });
 
   test("a refusal says why nothing was paid for and what to check", async ({ page }) => {
-    await open(page, `/suppliers/${uuid(2, 1)}`);
+    await open(page, "/suppliers");
+    await endpointsOf(page, 1);
     await testButtons(page).nth(1).click();
     await page.route(
       "**/suppliers/endpoint-tests",
@@ -534,24 +413,5 @@ test.describe("endpoint tests", () => {
     await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.test.refused.conflict"));
     // refused before anything was done: the form is open again for another try
     await expect(dialog(page).getByLabel(words("suppliers.test.format"))).toBeEnabled();
-  });
-});
-
-test.describe("names waiting to be mapped", () => {
-  test("a name is mapped to a model and leaves the queue", async ({ page }) => {
-    const state = await open(page, "/mappings");
-    const before = state.pending.length;
-    await expect(page.getByText("vendor-model-1-preview")).toBeVisible();
-    await press(page, "mappings.map").click();
-    await send(page);
-    await expect(dialog(page).getByRole("alert")).toHaveText(zhText("mappings.dialog.modelMissing"));
-    await dialog(page).getByLabel(words("mappings.dialog.model")).fill("openai/model-1");
-    await expect(dialog(page).getByText(/已选中/)).toBeVisible();
-    await dialog(page).getByLabel(words("mappings.dialog.scope")).selectOption("supplier");
-    await dialog(page).locator("button[type=submit]").click();
-    await expect(done(page)).toBeVisible();
-    expect(state.pending).toHaveLength(before - 1);
-    await close(page);
-    await expect(page.getByText("vendor-model-1-preview")).toHaveCount(0);
   });
 });

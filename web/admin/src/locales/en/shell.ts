@@ -48,7 +48,9 @@ export default {
   also: {
     alerts: "Alerts",
     discrepancies: "Payment discrepancies",
-    mappings: "To review",
+    inbox: "To do",
+    upstreamModels: "By model",
+    upstreamKeys: "All keys",
     modelAuthors: "Authors",
     routingDefaults: "Defaults and limits",
     pricingRules: "Pricing rules",

@@ -110,7 +110,21 @@ const pricingPreview: Scene = {
   },
 };
 
-const supplier = (n: number) => `suppliers/${uuid(2, n)}`;
+const supplier = (n: number, tab?: string) => `suppliers/${uuid(2, n)}${tab ? `?tab=${tab}` : ""}`;
+
+// A channel's endpoints are its pile of models on sale, folded on the models tab until opened.
+const openListed = (p: Page) => p.getByText(words("upstream.models.listed"), { exact: true }).click();
+
+// A dialog opened from a channel's endpoints, after the pile that holds them is opened.
+const endpointDialog = (name: string, n: number, button: string) =>
+  scene(
+    name,
+    (p) => goto(p, supplier(n, "models")),
+    async (p) => {
+      await openListed(p);
+      await press(p, button);
+    },
+  );
 const model = (n: number) => `models?model=${uuid(5, n)}`;
 
 // The connect dialog's second step: an address the probe recognises.
@@ -118,7 +132,7 @@ const connectDetails = scene(
   "supplier-connect-details",
   (p) => goto(p, "suppliers"),
   async (p) => {
-    await press(p, "suppliers.connect.open");
+    await press(p, "upstream.add");
     await p.getByRole("dialog").locator("input[name=origin]").fill("https://api.example.cn");
     await p.getByRole("dialog").locator("button[type=submit]").click();
     await p.getByRole("dialog").locator("input[name=upstream_account]").waitFor();
@@ -129,8 +143,9 @@ const connectDetails = scene(
 // with the worst it passes it under a 200-character upstream name (admin-data.ts, admin-supply.ts).
 const testResult = scene(
   "supplier-test-result",
-  (p) => goto(p, supplier(1)),
+  (p) => goto(p, supplier(1, "models")),
   async (p) => {
+    await openListed(p);
     await press(p, "suppliers.test.title");
     const form = p.getByRole("dialog");
     await form.getByLabel(words("change.reason")).fill("check the endpoint after the key rotation");
@@ -195,7 +210,13 @@ const scenes: Scene[] = [
   view("supplier", supplier(1)),
   view("supplier-setup", supplier(2)),
   view("supplier-attention", supplier(3)),
-  view("mappings", "mappings"),
+  view("upstream-models", "suppliers?tab=models"),
+  view("upstream-inbox", "suppliers?tab=inbox"),
+  view("upstream-keys", "suppliers?tab=keys"),
+  view("supplier-models", supplier(1, "models")),
+  view("supplier-keys", supplier(1, "keys")),
+  view("supplier-sync", supplier(1, "sync")),
+  view("supplier-settings", supplier(1, "settings")),
   view("models", "models"),
   view("model", model(1)),
   view("model-draft", model(3)),
@@ -262,19 +283,18 @@ const scenes: Scene[] = [
   dialog("account-subscription-refund", `accounts/${acct(1)}`, "subscriptions.account.refundRequest"),
   dialog("account-subscription-refund-approve", `accounts/${acct(1)}`, "subscriptions.account.refundApprove"),
   dialog("account-workspace-limit", `accounts/${acct(1)}`, "settings.workspaceLimit.edit"),
-  dialog("supplier-connect", "suppliers", "suppliers.connect.open"),
+  dialog("supplier-connect", "suppliers", "upstream.add"),
   connectDetails,
-  dialog("supplier-unit", supplier(2), "suppliers.unit.open"),
-  dialog("supplier-login", supplier(1), "suppliers.login.open"),
-  dialog("supplier-remove", supplier(4), "suppliers.remove.open"),
-  dialog("supplier-pause", supplier(2), "suppliers.status.paused.action"),
-  dialog("supplier-group", supplier(1), "suppliers.group.unselect.action"),
-  dialog("supplier-bind", supplier(1), "suppliers.bind.action"),
-  dialog("supplier-credential-limits", supplier(1), "suppliers.credentialLimits.title"),
-  dialog("supplier-endpoint-disable", supplier(1), "suppliers.endpointEnabled.disable.title"),
-  dialog("supplier-test", supplier(1), "suppliers.test.title"),
+  dialog("supplier-unit", supplier(2, "settings"), "suppliers.unit.open"),
+  dialog("supplier-login", supplier(1, "settings"), "suppliers.login.open"),
+  dialog("supplier-remove", supplier(4, "settings"), "suppliers.remove.open"),
+  dialog("supplier-pause", supplier(2), "upstream.detail.pause"),
+  dialog("supplier-bind", supplier(1, "keys"), "suppliers.bind.action"),
+  dialog("supplier-test-all", supplier(1, "keys"), "upstream.keys.testAll"),
+  endpointDialog("supplier-endpoint-disable", 1, "suppliers.endpointEnabled.disable.title"),
+  endpointDialog("supplier-test", 1, "suppliers.test.title"),
   testResult,
-  dialog("mapping", "mappings", "mappings.map"),
+  dialog("mapping", "suppliers?tab=inbox", "upstream.inbox.item.unknown_model.act"),
   dialog("model-draft-new", "models", "models.draft.open"),
   dialog("author", "models?tab=authors", "models.authors.add"),
   dialog("model-spec", model(1), "models.spec.edit"),

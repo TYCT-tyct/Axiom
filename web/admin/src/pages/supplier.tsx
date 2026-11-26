@@ -1,167 +1,112 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { ActionButton, Card, DataState, Icon, PageHead, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, DataState, Icon, Tag } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
-import { Link, useParams } from "@tanstack/react-router";
-import { useState } from "react";
+import { Link, useParams, useSearch } from "@tanstack/react-router";
+import { lazy, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Actions, Facts, PageBody, Time } from "../parts";
 import { type SupplierView, supplierQuery } from "../queries";
-import { Checklist } from "../suppliers/checklist";
-import {
-  BindKeyDialog,
-  CredentialLimitsDialog,
-  EndpointEnabledDialog,
-  QuantizationDialog,
-  RemoveDialog,
-  ReplaceLoginDialog,
-  SelectGroupDialog,
-  StatusDialog,
-  UnitValueDialog,
-} from "../suppliers/dialogs";
-import { EndpointTestDialog } from "../suppliers/endpoint-test-dialog";
-import { Credentials, Endpoints, Groups, UnboundKeys } from "../suppliers/lists";
-import type { Open } from "../suppliers/open";
-import { NativeBalance, SupplierState, UnitValue } from "../suppliers/parts";
+import { StatusDialog } from "../suppliers/dialogs";
+import { Lazily } from "../suppliers/tabs";
+import { modeOf } from "../suppliers/upstream";
+import { TabbedPage, useTabs } from "../tabbed-page";
 
-type Detail = SupplierView;
+// Each tab is its own chunk, loaded when it opens.
+const Groups = lazy(() => import("../suppliers/groups-tab"));
+const Models = lazy(() => import("../suppliers/supplier-models-tab"));
+const Keys = lazy(() => import("../suppliers/supplier-keys-tab"));
+const Sync = lazy(() => import("../suppliers/sync-tab"));
+const Settings = lazy(() => import("../suppliers/settings-tab"));
 
+type Tab = "groups" | "models" | "keys" | "sync" | "settings";
+
+// One channel (adPg_supplier in admin_pages_f.js): its groups (a direct API's or a cloud platform's one line), its
+// models in four piles, its keys, what the sync found, and its settings. Pausing it sits beside the title.
 export default function SupplierPage() {
-  const { t } = useTranslation();
   const { supplierId } = useParams({ from: "/app/suppliers/$supplierId" });
   const detail = useQuery(supplierQuery(supplierId));
   return (
     <DataState query={detail} page>
-      {(data) => (
-        <>
-          <PageHead title={data.supplier.name} lede={t("suppliers.detail.description")} />
-          <PageBody>
-            <Body detail={data} />
-          </PageBody>
-        </>
-      )}
+      {(data) => <Channel detail={data} />}
     </DataState>
   );
 }
 
-function Body({ detail }: { detail: Detail }) {
+const tones = {
+  connecting: "warn",
+  active: "ok",
+  low_balance: "warn",
+  needs_attention: "bad",
+  paused: "neutral",
+  removing: "neutral",
+  removed: "neutral",
+} as const satisfies Record<AdminSchemas["SupplierStatus"], "ok" | "warn" | "bad" | "neutral">;
+
+function Channel({ detail }: { detail: SupplierView }) {
   const { t } = useTranslation();
-  const format = useFormat();
+  const search = useSearch({ from: "/app/suppliers/$supplierId" });
+  const { supplier } = detail;
+  const relay = modeOf(supplier) === "relay";
+  const tab: Tab = search.tab ?? "groups";
+  const tabs = useTabs(
+    "/suppliers/$supplierId",
+    [
+      { key: "groups", label: t(relay ? "upstream.detail.tabs.groups" : "upstream.detail.tabs.lines") },
+      { key: "models", label: t("upstream.detail.tabs.models") },
+      { key: "keys", label: t("upstream.detail.tabs.keys") },
+      { key: "sync", label: t("upstream.detail.tabs.sync") },
+      { key: "settings", label: t("upstream.detail.tabs.settings") },
+    ],
+    tab,
+    { supplierId: supplier.id },
+  );
+  return (
+    <TabbedPage
+      title={supplier.name}
+      tag={
+        <Tag tone={tones[supplier.status]} dot>
+          {t(`suppliers.state.${supplier.status}`)}
+        </Tag>
+      }
+      lede={`${supplier.kind}　${supplier.origin}`}
+      label={t("upstream.detail.tabs.label")}
+      tabs={tabs}
+      actions={<Actions supplier={supplier} />}
+    >
+      <Lazily>
+        {tab === "groups" ? <Groups detail={detail} /> : null}
+        {tab === "models" ? <Models detail={detail} endpoint={search.endpoint} /> : null}
+        {tab === "keys" ? <Keys detail={detail} credential={search.credential} /> : null}
+        {tab === "sync" ? <Sync detail={detail} /> : null}
+        {tab === "settings" ? <Settings detail={detail} /> : null}
+      </Lazily>
+    </TabbedPage>
+  );
+}
+
+// Back to the list, and 暂停接流量 or 恢复接流量 for a session that may change suppliers.
+function Actions({ supplier }: { supplier: AdminSchemas["Supplier"] }) {
+  const { t } = useTranslation();
   const manage = can(useSession(), "suppliers.manage");
-  const [open, setOpen] = useState<Open | null>(null);
-  const { supplier } = detail;
-  const done = supplier.status === "removed";
-  const act = manage && !done ? setOpen : undefined;
+  const [open, setOpen] = useState<"paused" | "active" | null>(null);
+  const pausable = supplier.status === "active" || supplier.status === "low_balance";
   return (
-    <>
-      <Actions>
-        <ActionButton asChild>
-          <Link to="/suppliers">
-            <Icon name="left" />
-            {t("suppliers.detail.back")}
-          </Link>
-        </ActionButton>
-        {act ? <SupplierActions supplier={supplier} onOpen={act} /> : null}
-      </Actions>
-      <Checklist detail={detail} onOpen={act} />
-      <Facts
-        title={t("suppliers.detail.facts")}
-        rows={[
-          [t("suppliers.col.status"), <SupplierState key="state" supplier={supplier} />],
-          [t("suppliers.detail.origin"), supplier.origin],
-          [t("suppliers.detail.account"), supplier.upstream_account],
-          [
-            t("suppliers.detail.kind"),
-            [supplier.kind, supplier.generation, supplier.detected_version].filter(Boolean).join(" · "),
-          ],
-          [t("suppliers.col.balance"), <NativeBalance key="balance" supplier={supplier} />],
-          [t("suppliers.detail.observed"), <Time key="observed" at={supplier.balance_observed_at} />],
-          [
-            t("suppliers.detail.lowLine"),
-            supplier.low_balance_threshold ? format.decimal(supplier.low_balance_threshold) : "—",
-          ],
-          [t("suppliers.col.unit"), <UnitValue key="unit" supplier={supplier} />],
-          [t("suppliers.detail.currency"), supplier.settlement_currency],
-        ]}
-      />
-      <Card layout="flush" title={t("suppliers.groups.title")}>
-        <Groups groups={detail.groups} onOpen={act} />
-      </Card>
-      <Card layout="flush" title={t("suppliers.credentials.title")}>
-        <Credentials credentials={detail.credentials} groups={detail.groups} onOpen={act} />
-      </Card>
-      <Card layout="flush" title={t("suppliers.endpoints.title")}>
-        <Endpoints endpoints={detail.endpoints} groups={detail.groups} onOpen={act} />
-      </Card>
-      <Card layout="flush" title={t("suppliers.unbound.title")}>
-        <UnboundKeys keys={detail.unbound_keys} onOpen={act} />
-      </Card>
-      <Dialogs detail={detail} open={open} onClose={() => setOpen(null)} />
-    </>
+    <Cluster>
+      <ActionButton asChild>
+        <Link to="/suppliers">
+          <Icon name="left" />
+          {t("upstream.detail.back")}
+        </Link>
+      </ActionButton>
+      {manage && pausable ? (
+        <ActionButton onClick={() => setOpen("paused")}>{t("upstream.detail.pause")}</ActionButton>
+      ) : null}
+      {manage && supplier.status === "paused" ? (
+        <ActionButton onClick={() => setOpen("active")}>{t("upstream.detail.resume")}</ActionButton>
+      ) : null}
+      {open ? <StatusDialog supplier={supplier} to={open} onClose={() => setOpen(null)} /> : null}
+    </Cluster>
   );
-}
-
-function SupplierActions({ supplier, onOpen }: { supplier: AdminSchemas["Supplier"]; onOpen: (open: Open) => void }) {
-  const { t } = useTranslation();
-  const { status } = supplier;
-  const pausable = status === "active" || status === "low_balance";
-  const removable = status !== "removing" && status !== "removed";
-  return (
-    <>
-      {pausable ? (
-        <ActionButton onClick={() => onOpen({ kind: "pause" })}>{t("suppliers.status.paused.action")}</ActionButton>
-      ) : null}
-      {status === "paused" ? (
-        <ActionButton onClick={() => onOpen({ kind: "resume" })}>{t("suppliers.status.active.action")}</ActionButton>
-      ) : null}
-      <ActionButton onClick={() => onOpen({ kind: "unit" })}>{t("suppliers.unit.open")}</ActionButton>
-      <ActionButton onClick={() => onOpen({ kind: "login" })}>{t("suppliers.login.open")}</ActionButton>
-      {removable ? (
-        <ActionButton variant="dan" icon="trash" onClick={() => onOpen({ kind: "remove" })}>
-          {t("suppliers.remove.open")}
-        </ActionButton>
-      ) : null}
-    </>
-  );
-}
-
-function Dialogs({ detail, open, onClose }: { detail: Detail; open: Open | null; onClose: () => void }) {
-  const { supplier } = detail;
-  switch (open?.kind) {
-    case "pause":
-      return <StatusDialog supplier={supplier} to="paused" onClose={onClose} />;
-    case "resume":
-      return <StatusDialog supplier={supplier} to="active" onClose={onClose} />;
-    case "remove":
-      return <RemoveDialog supplier={supplier} onClose={onClose} />;
-    case "login":
-      return <ReplaceLoginDialog supplier={supplier} onClose={onClose} />;
-    case "unit":
-      return <UnitValueDialog supplier={supplier} onClose={onClose} />;
-    case "group":
-      return <SelectGroupDialog supplier={supplier} group={open.group} onClose={onClose} />;
-    case "bind":
-      return (
-        <BindKeyDialog
-          supplier={supplier}
-          upstreamKey={open.key}
-          groups={detail.groups.filter((group) => group.selected)}
-          onClose={onClose}
-        />
-      );
-    case "credentialLimits":
-      return <CredentialLimitsDialog supplier={supplier} credential={open.credential} onClose={onClose} />;
-    case "test":
-      return <EndpointTestDialog endpoint={open.endpoint} group={open.group} onClose={onClose} />;
-    case "endpointEnabled":
-      return (
-        <EndpointEnabledDialog supplier={supplier} endpoint={open.endpoint} group={open.group} onClose={onClose} />
-      );
-    case "quantization":
-      return <QuantizationDialog supplier={supplier} endpoint={open.endpoint} onClose={onClose} />;
-    default:
-      return null;
-  }
 }
 
 export { default as messages } from "../locales/suppliers";

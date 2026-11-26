@@ -120,7 +120,8 @@ test.describe("site brand, workspace and login limits", () => {
 
 test.describe("supplier endpoint toggle and credential limits", () => {
   test("disabling and enabling an endpoint updates routing state through ChangeDialog", async ({ page }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
+    const state = await open(page, `/suppliers/${uuid(2, 1)}?tab=models`);
+    await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
     await page.getByRole("button", { name: "停用端点 gpt-test-mini（分组 Maple）" }).click();
     await send(page, "temporarily take endpoint out of rotation");
     await expect(done(page)).toBeVisible();
@@ -135,9 +136,11 @@ test.describe("supplier endpoint toggle and credential limits", () => {
   });
 
   test("credential concurrency and RPM ceiling validate bounds, save and clear RPM", async ({ page }) => {
-    const state = await open(page, `/suppliers/${uuid(2, 1)}`);
-    await expect(page.getByText("600").first()).toBeVisible();
-    await press(page, "suppliers.credentialLimits.title").click();
+    const state = await open(page, `/suppliers/${uuid(2, 1)}?tab=keys`);
+    // the key's drawer holds its limits
+    await page.getByRole("button", { name: "key-1-a" }).click();
+    await expect(page.getByText(/ \/ 600$/).first()).toBeVisible();
+    await press(page, "upstream.credential.limits").click();
     await dialog(page).getByLabel(words("suppliers.credentials.concurrency")).fill("0");
     await send(page);
     await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.credentialLimits.invalidConcurrency"));
@@ -148,14 +151,14 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(done(page)).toBeVisible();
     expect(state.suppliers[0]?.credentials[0]).toMatchObject({ max_concurrency: 16, requests_per_minute: 1200 });
     await close(page);
-    await expect(page.getByText("1,200").first()).toBeVisible();
+    await expect(page.getByText(/ \/ 1200$/).first()).toBeVisible();
 
-    await press(page, "suppliers.credentialLimits.title").click();
+    await press(page, "upstream.credential.limits").click();
     await dialog(page).getByLabel(words("suppliers.credentials.rpm")).fill("");
     await send(page, "remove rpm ceiling");
     await expect(done(page)).toBeVisible();
     expect(state.suppliers[0]?.credentials[0]?.requests_per_minute).toBeUndefined();
     await close(page);
-    await expect(page.getByText(zhText("suppliers.credentials.rpmUnlimited")).first()).toBeVisible();
+    await expect(page.getByText(new RegExp(` / ${zhText("upstream.credential.noCeiling")}$`)).first()).toBeVisible();
   });
 });

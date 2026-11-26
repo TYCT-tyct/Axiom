@@ -7,7 +7,6 @@ import auditEvents from "./audit-events";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
-import mappings from "./mappings";
 import me from "./me";
 import models from "./models";
 import operations from "./operations";
@@ -26,6 +25,8 @@ import shell from "./shell";
 import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
+import upstream from "./upstream";
+import channel from "./upstream-channel";
 import users from "./users";
 
 // The admin's messages in Chinese, the source every other language follows.
@@ -39,8 +40,6 @@ export const initial = {
     redeemCodes: "兑换码",
     calls: "调用记录",
     audit: "审计日志",
-    suppliers: "供应商",
-    mappings: "待映射模型",
     models: "模型",
     pricing: "定价",
     subscriptionPlans: "订阅套餐",
@@ -151,7 +150,6 @@ export const initial = {
   },
   users,
   orders,
-  mappings,
   models,
   pricing,
   redeem,
@@ -164,6 +162,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   settings,
   subscriptions,
   suppliers,
+  upstream: /* @__PURE__ */ Object.assign({}, upstream, channel),
   sourceClasses,
   routingPresets,
   discrepancies,

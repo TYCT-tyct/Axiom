@@ -1,7 +1,32 @@
 import type { AdminSchemas } from "@axiom/api";
-import { Stack, Text, useFormat } from "@axiom/ui";
+import { can, useSession } from "@axiom/app";
+import { DataState, FilterBar, type PanelSteps, Stack, StatusDot, Tag, Text, useFormat } from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
+import type { ComponentProps } from "react";
 import { useTranslation } from "react-i18next";
+import { monitorQuery, notBuilt } from "../monitor-queries";
 import { State } from "../parts";
+import { type Mode, modes, trafficOf } from "./upstream";
+
+// How a supplier is reached, as a quiet tag: 中转站, 直连接口, 云平台.
+export function ModeTag({ mode }: { mode: Mode }) {
+  const { t } = useTranslation();
+  return <Tag>{t(`upstream.mode.${mode}`)}</Tag>;
+}
+
+// BuiltState is DataState for a section whose operation a node of an earlier release does not have: there it is left
+// out, saying nothing, and it appears once the node answers.
+export function BuiltState<T>(props: ComponentProps<typeof DataState<T>>) {
+  return notBuilt(props.query.error) ? null : <DataState {...props} />;
+}
+
+// What the last day's calls say of each supplier and line, for a session that may read the operations monitor; none
+// for one that may not, or before the monitor answers.
+export function useTraffic() {
+  const allowed = can(useSession(), "sites.manage");
+  const monitor = useQuery({ ...monitorQuery("24h"), enabled: allowed });
+  return monitor.data ? trafficOf(monitor.data.lines ?? []) : undefined;
+}
 
 const tones = {
   connecting: "neutral",
@@ -65,4 +90,62 @@ export function UnitValue({ supplier }: { supplier: AdminSchemas["Supplier"] }) 
       })}
     </>
   );
+}
+
+// A share of calls that did not fail, as the board writes it beside its dot; under 99% is one to watch.
+export function Rate({ rate }: { rate: number | undefined }) {
+  if (rate === undefined) return <>{"—"}</>;
+  return <StatusDot tone={rate < 0.99 ? "warn" : "ok"}>{`${(rate * 100).toFixed(2)}%`}</StatusDot>;
+}
+
+export type ModeFilters = { q: string; mode: "all" | Mode };
+
+// The row above a list of channels or keys: a search box, and the ways in to narrow it to (中转站, 直连接口, 云平台).
+export function ModeFilter({
+  search,
+  values,
+  onChange,
+}: {
+  search: string;
+  values: ModeFilters;
+  onChange: (values: ModeFilters) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <FilterBar
+      label={search}
+      filters={[
+        { key: "q", kind: "search", label: search, initial: "" },
+        {
+          key: "mode",
+          kind: "segmented",
+          label: t("upstream.channels.filter"),
+          initial: "all",
+          options: [
+            { value: "all", label: t("upstream.all") },
+            ...modes.map((mode) => ({ value: mode, label: t(`upstream.mode.${mode}`) })),
+          ],
+        },
+      ]}
+      values={values}
+      onChange={(key, value) => onChange({ ...values, [key]: value })}
+      onClear={() => onChange({ q: "", mode: "all" })}
+    />
+  );
+}
+
+// The steps of a drawer over a list (PanelSteps): the row before or after the open one, by its ID.
+export function stepsOf<Row extends { id: string }>(
+  t: (key: "drawerSteps.previous" | "drawerSteps.next") => string,
+  index: number,
+  rows: readonly Row[],
+  go: (id: string | undefined) => void,
+): PanelSteps {
+  return {
+    index,
+    count: rows.length,
+    onStep: (by) => go(rows[index + by]?.id),
+    previousLabel: t("drawerSteps.previous"),
+    nextLabel: t("drawerSteps.next"),
+  };
 }

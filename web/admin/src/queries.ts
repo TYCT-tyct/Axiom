@@ -263,6 +263,12 @@ export const pendingMappingsQuery = (supplierId?: string) =>
     getNextPageParam: nextCursor,
   });
 
+// 上游's queue counted, for the sidebar's count and the tab's (getSupplierInboxSummary).
+export const inboxSummaryQuery = queryOptions({
+  queryKey: [accountKey, "supplier-inbox", "summary"],
+  queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/supplier-inbox/summary`, { signal })),
+});
+
 export const authorsQuery = queryOptions({
   queryKey: [accountKey, "authors"],
   queryFn: ({ signal }) => unwrap(adminApi.GET(`${base}/authors`, { signal })),

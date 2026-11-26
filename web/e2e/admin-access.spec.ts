@@ -191,7 +191,7 @@ test.describe("signing in", () => {
     await signIn(page, mfaEmail);
     await page.getByLabel("验证码或恢复码").fill("123456");
     await page.getByRole("button", { name: "验证" }).click();
-    await expect(h1(page, zhText("nav.suppliers"))).toBeVisible();
+    await expect(h1(page, zhText("upstream.title"))).toBeVisible();
     expect(new URL(page.url()).pathname).toBe("/suppliers");
   });
 });
@@ -335,9 +335,9 @@ test.describe("the four states of a view of data", () => {
     await page.goto("/users");
     await expect(page.getByRole("heading", { name: zhText("users.empty.title") })).toBeVisible();
     await page.getByRole("link", { name: zhText("shell.nav.suppliers") }).click();
-    await expect(page.getByRole("heading", { name: zhText("suppliers.empty.title") })).toBeVisible();
+    await expect(page.getByRole("heading", { name: zhText("upstream.channels.empty.title") })).toBeVisible();
     await page.goto("/mappings");
-    await expect(page.getByRole("heading", { name: zhText("mappings.empty.title") })).toBeVisible();
+    await expect(page.getByRole("heading", { name: zhText("upstream.inbox.empty.title") })).toBeVisible();
     await page.getByRole("link", { name: zhText("shell.nav.pricing") }).click();
     await expect(page.getByRole("heading", { name: zhText("pricing.sale.empty") })).toBeVisible();
     await page.getByRole("tab", { name: zhText("pricing.tabs.rules") }).click();

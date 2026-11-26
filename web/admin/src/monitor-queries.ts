@@ -11,7 +11,7 @@ export function notBuilt(error: unknown): boolean {
   return error instanceof ApiError && (error.status === 501 || error.status === 404);
 }
 
-const retry = (failures: number, error: unknown) => failures < 2 && !notBuilt(error) && isTransient(error);
+export const retry = (failures: number, error: unknown) => failures < 2 && !notBuilt(error) && isTransient(error);
 
 export type MonitorWindow = AdminSchemas["MonitorWindow"];
 

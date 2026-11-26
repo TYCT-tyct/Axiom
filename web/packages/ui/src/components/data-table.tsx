@@ -49,11 +49,27 @@ function countText(format: ReturnType<typeof useFormat>, listed: number, total: 
 }
 
 // A cell of a row. The first of a row that opens holds a button, which is how a keyboard opens it.
-function Cell<Row>({ column, row, open }: { column: Column<Row>; row: Row; open?: () => void }) {
+function Cell<Row>({
+  column,
+  row,
+  open,
+  expanded,
+}: {
+  column: Column<Row>;
+  row: Row;
+  open?: () => void;
+  expanded?: boolean;
+}) {
   const content = column.cell(row);
   return (
     <Td align={column.align === "end" ? "end" : undefined} muted={column.muted} from={column.from}>
-      {open ? <RowButton onClick={open}>{content}</RowButton> : content}
+      {open ? (
+        <RowButton onClick={open} expanded={expanded}>
+          {content}
+        </RowButton>
+      ) : (
+        content
+      )}
     </Td>
   );
 }
@@ -64,7 +80,8 @@ function Cell<Row>({ column, row, open }: { column: Column<Row>; row: Row; open?
 // "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once. Given onOpen, a row
 // opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
 // button a keyboard reaches, which is the first column's text, so that column holds text and no control. current names
-// the row whose detail is open.
+// the row whose detail is open. Given detail, a row opens in place instead (the admin's 按模型, .admv): onOpen toggles
+// it, the row named by expanded shows detail in a full-width row under it, and its button says it is expanded.
 export function DataTable<Row>({
   label,
   columns,
@@ -76,6 +93,8 @@ export function DataTable<Row>({
   flash,
   onOpen,
   current,
+  detail,
+  expanded,
 }: {
   label: string;
   columns: readonly Column<Row>[];
@@ -87,6 +106,8 @@ export function DataTable<Row>({
   flash?: Key;
   onOpen?: (row: Row) => void;
   current?: Key;
+  detail?: (row: Row) => ReactNode;
+  expanded?: Key;
 }) {
   const format = useFormat();
   const [sorting, setSorting] = useState<Sorting>(null);
@@ -122,29 +143,72 @@ export function DataTable<Row>({
           </tr>
         </thead>
         <tbody>
-          {shown.map((row) => {
-            const key = rowKey(row);
-            return (
-              <Tr
-                key={key}
-                flash={lit !== undefined && lit === key}
-                onFlashEnd={() => setLit(undefined)}
-                onOpen={onOpen && (() => onOpen(row))}
-                current={current !== undefined && current === key}
-              >
-                {columns.map((column, at) => (
-                  <Cell
-                    key={column.key}
-                    column={column}
-                    row={row}
-                    open={onOpen && at === 0 ? () => onOpen(row) : undefined}
-                  />
-                ))}
-              </Tr>
-            );
-          })}
+          {shown.map((row) => (
+            <BodyRow
+              key={rowKey(row)}
+              row={row}
+              id={rowKey(row)}
+              columns={columns}
+              lit={lit}
+              onLit={() => setLit(undefined)}
+              onOpen={onOpen}
+              current={current}
+              detail={detail}
+              expanded={expanded}
+            />
+          ))}
         </tbody>
       </Table>
+    </>
+  );
+}
+
+// A body row, and under it, when it is the one opened in place, its detail across the table.
+function BodyRow<Item>({
+  row,
+  id,
+  columns,
+  lit,
+  onLit,
+  onOpen,
+  current,
+  detail,
+  expanded,
+}: {
+  row: Item;
+  id: Key;
+  columns: readonly Column<Item>[];
+  lit?: Key;
+  onLit: () => void;
+  onOpen?: (row: Item) => void;
+  current?: Key;
+  detail?: (row: Item) => ReactNode;
+  expanded?: Key;
+}) {
+  const open = detail !== undefined && expanded === id;
+  return (
+    <>
+      <Tr
+        flash={lit !== undefined && lit === id}
+        onFlashEnd={onLit}
+        onOpen={onOpen && (() => onOpen(row))}
+        current={(current !== undefined && current === id) || open}
+      >
+        {columns.map((column, at) => (
+          <Cell
+            key={column.key}
+            column={column}
+            row={row}
+            open={onOpen && at === 0 ? () => onOpen(row) : undefined}
+            expanded={detail ? open : undefined}
+          />
+        ))}
+      </Tr>
+      {open ? (
+        <tr className={s.detail}>
+          <td colSpan={columns.length}>{detail(row)}</td>
+        </tr>
+      ) : null}
     </>
   );
 }

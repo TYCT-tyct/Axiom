@@ -17,7 +17,6 @@ import { paymentOrderState } from "./orders/states";
 import { callStatus, cashView, overviewRange } from "./overview";
 import { callPlugin } from "./plugins";
 import { redeemState } from "./redeem";
-import { supplierStatus } from "./suppliers/statuses";
 import { tabOf } from "./tab-of";
 
 const root = createRootRoute({ component: Outlet });
@@ -144,14 +143,22 @@ const routeTree = root.addChildren([
     shellPage(
       "/suppliers",
       () => loadTranslatedPage(import("./pages/suppliers")),
-      (search) => ({ status: supplierStatus(search.status) }),
+      (search) => ({
+        tab: tabOf(search.tab, ["models", "inbox", "keys"] as const),
+        credential: text(search.credential),
+      }),
     ),
-    shellPage("/suppliers/$supplierId", () => loadTranslatedPage(import("./pages/supplier"))),
     shellPage(
-      "/mappings",
-      () => import("./pages/mappings"),
-      (search) => ({ supplier: text(search.supplier) }),
+      "/suppliers/$supplierId",
+      () => loadTranslatedPage(import("./pages/supplier")),
+      (search) => ({
+        tab: tabOf(search.tab, ["models", "keys", "sync", "settings"] as const),
+        endpoint: text(search.endpoint),
+        credential: text(search.credential),
+      }),
     ),
+    // The queue of unmapped names became 上游's 待处理.
+    movedPage("/mappings", () => ({ to: "/suppliers", search: { tab: "inbox" } })),
     shellPage(
       "/models",
       () => import("./pages/models"),

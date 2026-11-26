@@ -17,6 +17,13 @@
   color: var(--t1);
 }
 
+.named {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .lede {
   max-width: 720px;
   margin: 6px 0 0;

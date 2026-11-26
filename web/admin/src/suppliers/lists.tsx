@@ -1,13 +1,13 @@
 import type { AdminSchemas } from "@axiom/api";
-import { ActionButton, Cluster, EmptyState, Table, Tag, Td, Text, useFormat } from "@axiom/ui";
+import { ActionButton, Cluster, EmptyState, Table, Tag, Td } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
-import { Code, Head, State, Time } from "../parts";
+import { Code, Head, State } from "../parts";
 import { endpointState, testFormats } from "./endpoint-test";
 import type { Open } from "./open";
 
 type OnOpen = ((open: Open) => void) | undefined;
 
-function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoints" | "endpoints.unavailable" }) {
+function Empty({ what }: { what: "unbound" | "endpoints" | "endpoints.unavailable" }) {
   const { t } = useTranslation();
   return (
     <EmptyState compact title={t(`suppliers.${what}.empty.title`)}>
@@ -20,185 +20,6 @@ function Empty({ what }: { what: "groups" | "credentials" | "unbound" | "endpoin
 function groupName(groups: AdminSchemas["SupplierGroup"][], id: string) {
   const group = groups.find((candidate) => candidate.id === id);
   return group?.codename ?? group?.name ?? id;
-}
-
-// The groups the supplier lists, with the ratio it charges for each and how the key Axiom uses for it stands. The sync
-// puts a group with a priced model in use and makes its key; a person can stop using one or turn it back on.
-export function Groups({ groups, onOpen }: { groups: AdminSchemas["SupplierGroup"][]; onOpen: OnOpen }) {
-  const { t } = useTranslation();
-  if (groups.length === 0) {
-    return <Empty what="groups" />;
-  }
-  return (
-    <Table label={t("suppliers.groups.title")}>
-      <Head
-        cols={[
-          [t("suppliers.groups.name"), { main: true }],
-          t("suppliers.groups.ratio"),
-          t("suppliers.groups.codename"),
-          t("suppliers.col.status"),
-        ]}
-        action={onOpen !== undefined}
-      />
-      <tbody>
-        {groups.map((group) => (
-          <GroupRow key={group.id} group={group} onOpen={onOpen} />
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-function GroupRow({ group, onOpen }: { group: AdminSchemas["SupplierGroup"]; onOpen: OnOpen }) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <tr>
-      <Td main>
-        <Text>{group.name}</Text>
-        <Text size="sm" tone="faint">
-          <Code>{group.upstream_ref}</Code>
-        </Text>
-        {group.key_state === "failed" && group.key_reason ? (
-          <Text size="sm" tone="bad">
-            {t(`suppliers.groups.keyReason.${group.key_reason}`)}
-          </Text>
-        ) : null}
-      </Td>
-      <Td align="end">{`×${format.decimal(group.ratio)}`}</Td>
-      <Td>{group.codename ? <Code>{group.codename}</Code> : "—"}</Td>
-      <Td>
-        <Cluster gap={4}>
-          <State tone={group.selected ? "good" : "neutral"}>
-            {group.selected ? t("suppliers.groups.selected") : t("suppliers.groups.notSelected")}
-          </State>
-          {group.present ? null : <State tone="warn">{t("suppliers.groups.gone")}</State>}
-          {group.key_state ? (
-            <State tone={keyTones[group.key_state]}>{t(`suppliers.groups.key.${group.key_state}`)}</State>
-          ) : null}
-        </Cluster>
-      </Td>
-      {onOpen ? (
-        <Td actions>
-          <ActionButton size="sm" onClick={() => onOpen({ kind: "group", group })}>
-            {group.selected ? t("suppliers.group.unselect.action") : t("suppliers.group.select.action")}
-          </ActionButton>
-        </Td>
-      ) : null}
-    </tr>
-  );
-}
-
-const keyTones = {
-  pending: "neutral",
-  ready: "good",
-  failed: "bad",
-  unavailable: "neutral",
-} as const satisfies Record<
-  NonNullable<AdminSchemas["SupplierGroup"]["key_state"]>,
-  "neutral" | "good" | "warn" | "bad"
->;
-
-const credentialTones = {
-  binding: "neutral",
-  active: "good",
-  upstream_disabled: "warn",
-  quota_exhausted: "warn",
-  expired: "bad",
-  disabled: "warn",
-  rejected: "bad",
-  erased: "neutral",
-} as const satisfies Record<AdminSchemas["SupplierCredential"]["status"], "neutral" | "good" | "warn" | "bad">;
-
-// The keys Axiom uses for groups, made by the sync or bound by a person: what each group's calls are sent with.
-export function Credentials({
-  credentials,
-  groups,
-  onOpen,
-}: {
-  credentials: AdminSchemas["SupplierCredential"][];
-  groups: AdminSchemas["SupplierGroup"][];
-  onOpen: OnOpen;
-}) {
-  const { t } = useTranslation();
-  if (credentials.length === 0) {
-    return <Empty what="credentials" />;
-  }
-  return (
-    <Table label={t("suppliers.credentials.title")}>
-      <Head
-        cols={[
-          [t("suppliers.credentials.key"), { main: true }],
-          t("suppliers.credentials.group"),
-          t("suppliers.col.status"),
-          t("suppliers.credentials.until"),
-          [t("suppliers.credentials.concurrency"), { align: "end" }],
-          [t("suppliers.credentials.rpm"), { align: "end" }],
-        ]}
-        action={onOpen !== undefined}
-      />
-      <tbody>
-        {credentials.map((credential) => (
-          <CredentialRow
-            key={credential.id}
-            credential={credential}
-            group={groupName(groups, credential.group_id)}
-            onOpen={onOpen}
-          />
-        ))}
-      </tbody>
-    </Table>
-  );
-}
-
-function CredentialRow({
-  credential,
-  group,
-  onOpen,
-}: {
-  credential: AdminSchemas["SupplierCredential"];
-  group: string;
-  onOpen: OnOpen;
-}) {
-  const { t } = useTranslation();
-  const format = useFormat();
-  return (
-    <tr>
-      <Td main>
-        <Code>{credential.upstream_key_ref}</Code>
-      </Td>
-      <Td>{group}</Td>
-      <Td>
-        <State tone={credentialTones[credential.status]}>{t(`suppliers.credentials.state.${credential.status}`)}</State>
-      </Td>
-      <Td>
-        {credential.cooldown_until ? (
-          <>
-            {t("suppliers.credentials.cooldown")} <Time at={credential.cooldown_until} />
-          </>
-        ) : (
-          <Time at={credential.expires_at} />
-        )}
-      </Td>
-      <Td align="end">{format.number(credential.max_concurrency)}</Td>
-      <Td align="end">
-        {credential.requests_per_minute === undefined
-          ? t("suppliers.credentials.rpmUnlimited")
-          : format.number(credential.requests_per_minute)}
-      </Td>
-      {onOpen ? (
-        <Td actions>
-          <ActionButton
-            size="sm"
-            aria-label={t("suppliers.credentialLimits.title", { key: credential.upstream_key_ref })}
-            onClick={() => onOpen({ kind: "credentialLimits", credential })}
-          >
-            {t("suppliers.credentialLimits.open")}
-          </ActionButton>
-        </Td>
-      ) : null}
-    </tr>
-  );
 }
 
 // The keys the supplier lists that Axiom has not bound to a group, which a person can bind.
@@ -254,10 +75,12 @@ export function Endpoints({
   endpoints,
   groups,
   onOpen,
+  onShow,
 }: {
   endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
   groups: AdminSchemas["SupplierGroup"][];
   onOpen: OnOpen;
+  onShow: (endpoint: AdminSchemas["SupplierEndpoint"]) => void;
 }) {
   const { t } = useTranslation();
   if (endpoints === undefined) {
@@ -276,7 +99,7 @@ export function Endpoints({
           t("suppliers.endpoints.quantization"),
           t("suppliers.col.status"),
         ]}
-        action={onOpen !== undefined}
+        action
       />
       <tbody>
         {endpoints.map((endpoint) => (
@@ -285,6 +108,7 @@ export function Endpoints({
             endpoint={endpoint}
             group={groupName(groups, endpoint.group_id)}
             onOpen={onOpen}
+            onShow={() => onShow(endpoint)}
           />
         ))}
       </tbody>
@@ -296,10 +120,12 @@ function EndpointRow({
   endpoint,
   group,
   onOpen,
+  onShow,
 }: {
   endpoint: AdminSchemas["SupplierEndpoint"];
   group: string;
   onOpen: OnOpen;
+  onShow: () => void;
 }) {
   const { t } = useTranslation();
   const state = endpointState(endpoint);
@@ -320,42 +146,62 @@ function EndpointRow({
       <Td>
         <State tone={endpointTones[state]}>{t(`suppliers.endpoints.state.${state}`)}</State>
       </Td>
-      {onOpen ? (
-        <Td actions>
-          <Cluster gap={4} justify="end">
-            {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
-              <ActionButton
-                size="sm"
-                aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
-                onClick={() => onOpen({ kind: "test", endpoint, group })}
-              >
-                {t("suppliers.test.open")}
-              </ActionButton>
-            ) : null}
-            <ActionButton
-              size="sm"
-              aria-label={t(
-                endpoint.enabled ? "suppliers.endpointEnabled.disable.title" : "suppliers.endpointEnabled.enable.title",
-                { name: endpoint.upstream_name, group },
-              )}
-              onClick={() => onOpen({ kind: "endpointEnabled", endpoint, group })}
-            >
-              {t(
-                endpoint.enabled
-                  ? "suppliers.endpointEnabled.disable.action"
-                  : "suppliers.endpointEnabled.enable.action",
-              )}
-            </ActionButton>
-            <ActionButton
-              size="sm"
-              aria-label={t("suppliers.quantization.title", { name: endpoint.upstream_name })}
-              onClick={() => onOpen({ kind: "quantization", endpoint })}
-            >
-              {t("suppliers.quantization.open")}
-            </ActionButton>
-          </Cluster>
-        </Td>
-      ) : null}
+      <Td actions>
+        <Cluster gap={4} justify="end">
+          <ActionButton
+            size="sm"
+            aria-label={t("upstream.endpoint.open", { name: endpoint.upstream_name })}
+            onClick={onShow}
+          >
+            {t("upstream.byModel.details")}
+          </ActionButton>
+          {onOpen ? <EndpointChanges endpoint={endpoint} group={group} state={state} onOpen={onOpen} /> : null}
+        </Cluster>
+      </Td>
     </tr>
+  );
+}
+
+function EndpointChanges({
+  endpoint,
+  group,
+  state,
+  onOpen,
+}: {
+  endpoint: AdminSchemas["SupplierEndpoint"];
+  group: string;
+  state: ReturnType<typeof endpointState>;
+  onOpen: (open: Open) => void;
+}) {
+  const { t } = useTranslation();
+  return (
+    <>
+      {state === "ready" && testFormats(endpoint.formats).length > 0 ? (
+        <ActionButton
+          size="sm"
+          aria-label={t("suppliers.test.title", { name: endpoint.upstream_name, group })}
+          onClick={() => onOpen({ kind: "test", endpoint, group })}
+        >
+          {t("suppliers.test.open")}
+        </ActionButton>
+      ) : null}
+      <ActionButton
+        size="sm"
+        aria-label={t(
+          endpoint.enabled ? "suppliers.endpointEnabled.disable.title" : "suppliers.endpointEnabled.enable.title",
+          { name: endpoint.upstream_name, group },
+        )}
+        onClick={() => onOpen({ kind: "endpointEnabled", endpoint, group })}
+      >
+        {t(endpoint.enabled ? "suppliers.endpointEnabled.disable.action" : "suppliers.endpointEnabled.enable.action")}
+      </ActionButton>
+      <ActionButton
+        size="sm"
+        aria-label={t("suppliers.quantization.title", { name: endpoint.upstream_name })}
+        onClick={() => onOpen({ kind: "quantization", endpoint })}
+      >
+        {t("suppliers.quantization.open")}
+      </ActionButton>
+    </>
   );
 }

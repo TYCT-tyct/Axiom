@@ -35,7 +35,9 @@ export default {
   also: {
     alerts: "告警",
     discrepancies: "支付差异",
-    mappings: "待处理",
+    inbox: "待处理",
+    upstreamModels: "按模型",
+    upstreamKeys: "全部 Key",
     modelAuthors: "作者",
     routingDefaults: "默认与上限",
     pricingRules: "价格规则",
