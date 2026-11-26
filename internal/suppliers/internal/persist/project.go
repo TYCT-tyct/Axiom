@@ -37,6 +37,7 @@ type projector struct {
 	now        time.Time
 	aliases    map[aliasKey]alias // the supplier's aliases, by the group they hold in
 	plans      map[string]store.PlanVersion
+	rule       intakeRule                              // which mapped names become endpoints
 	offerRead  bool                                    // this commit holds a complete offer listing
 	groupRows  map[string]store.ListProjectedGroupsRow // what the tables held before the listing was applied
 }
@@ -76,9 +77,13 @@ func projectListing(ctx context.Context, tx pg.Tx, id uuid.UUID, st syncer.State
 	return p.writes.Apply(ctx, tx)
 }
 
-// read reads the supplier's aliases and the schedules of the plans in force, which the writes below compare and copy.
+// read reads the supplier's aliases, its intake rule and the schedules of the plans in force, which the writes below
+// compare and copy.
 func (p *projector) read(ctx context.Context) (err error) {
 	if p.aliases, err = p.readAliases(ctx); err != nil {
+		return err
+	}
+	if p.rule, err = p.readIntakeRule(ctx); err != nil {
 		return err
 	}
 	p.plans, err = p.readPlans(ctx)
@@ -271,7 +276,8 @@ func (p *projector) endpoints(ctx context.Context, groups map[string]uuid.UUID, 
 	return nil
 }
 
-// autoSelect puts a group in use when it has an endpoint with a cost plan and no person has ever chosen it. A group with
+// autoSelect puts a group in use when it has an endpoint with a cost plan the intake rule takes and no person has ever
+// chosen it. A group with
 // a codename has been chosen, selected or not, and is left alone: the sync never undoes a person's choice. The codename
 // is made here, once, and never changes; the database enforces both parts.
 func (p *projector) autoSelect(groups map[string]uuid.UUID, states map[nameKey]nameState) {
@@ -295,7 +301,7 @@ func (p *projector) hasPricedEndpoint(g syncer.GroupSnap, group uuid.UUID, state
 		if m.Plan == "" || len(m.Formats) == 0 {
 			continue
 		}
-		if states[nameKey{group: group, name: m.Name}].model == (catalog.ModelID{}) {
+		if state := states[nameKey{group: group, name: m.Name}]; state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
 			continue
 		}
 		if v, ok := p.plans[syncer.PlanKey(g.Ref, m.Name)]; ok && v.Fingerprint == m.Plan {
@@ -384,7 +390,7 @@ func ours(found *string) bool {
 	if found == nil {
 		return true
 	}
-	for _, why := range [...]syncer.Reason{syncer.Unmapped, syncer.NotListed, syncer.NoFormat, syncer.CostUnknown, syncer.Gone} {
+	for _, why := range [...]syncer.Reason{syncer.Unmapped, syncer.NotListed, syncer.NoFormat, syncer.CostUnknown, syncer.Gone, syncer.NotTaken} {
 		if *found == string(why) {
 			return true
 		}

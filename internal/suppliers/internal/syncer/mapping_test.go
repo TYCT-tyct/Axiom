@@ -25,6 +25,8 @@ func (names) Model(id catalog.ModelID) (catalog.Model, bool) {
 		return catalog.Model{ID: id, Status: catalog.StatusListed}, true
 	case 2:
 		return catalog.Model{ID: id, Status: catalog.StatusRetired}, true
+	case 4:
+		return catalog.Model{ID: id, Status: catalog.StatusDraft}, true
 	}
 	return catalog.Model{}, false
 }
@@ -62,6 +64,31 @@ func TestMapUpstream(t *testing.T) {
 			t.Parallel()
 			if got := MapUpstream(c, tc.alias, tc.name); got != tc.want {
 				t.Errorf("MapUpstream(%q) = %+v, want %+v", tc.name, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestMapUpstreamDrafts: the intake rule `known` maps a draft's name as well, and nothing else that MapUpstream refuses;
+// without it a draft's name is not mapped.
+func TestMapUpstreamDrafts(t *testing.T) {
+	t.Parallel()
+	c := names{"draft-x": {id(4), true}, "gpt-3": {id(2), true}, "listed": {id(1), true}}
+	for name, tc := range map[string]struct {
+		name   string
+		drafts bool
+		want   Mapping
+	}{
+		"a draft with known":  {"draft-x", true, Mapping{Model: id(4), Mapped: true}},
+		"a draft without":     {"draft-x", false, Mapping{Why: NotListed}},
+		"a retired model":     {"gpt-3", true, Mapping{Why: NotListed}},
+		"a listed model":      {"listed", true, Mapping{Model: id(1), Mapped: true}},
+		"a name nobody knows": {"mystery", true, Mapping{Why: Unmapped}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			if got := MapUpstreamDrafts(c, nil, tc.name, tc.drafts); got != tc.want {
+				t.Errorf("MapUpstreamDrafts(%q, %t) = %+v, want %+v", tc.name, tc.drafts, got, tc.want)
 			}
 		})
 	}

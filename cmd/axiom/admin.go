@@ -44,12 +44,14 @@ type adminAPI struct {
 	instance       string
 	paymentSignals *payments.SignalState
 	// suppliers is what the admin does with suppliers; calls is the node's call path, which a test generation goes
-	// through, and detections and tests limit how often a session may ask a third party's site what it runs and may
-	// make it generate.
-	suppliers  *suppliers.Admin
-	calls      *suppliers.Service
-	detections *windowLimiter
-	tests      *windowLimiter
+	// through, and detections, tests, identifications and credentialTests limit how often a session may ask a third
+	// party's site what it runs, make it generate, ask which key a text is, and check keys.
+	suppliers       *suppliers.Admin
+	calls           *suppliers.Service
+	detections      *windowLimiter
+	tests           *windowLimiter
+	identifications *windowLimiter
+	credentialTests *windowLimiter
 	// router is the node's call path routing, whose snapshot a check of a preset's rules is judged against; routes
 	// builds that snapshot, and a committed change of what it is built from rebuilds it (refreshAfterCommit).
 	router *routing.Router
@@ -58,8 +60,9 @@ type adminAPI struct {
 	health *quality.Monitor
 }
 
-// detectionsPerMinute is how many times a session may run detectSupplier in a minute; testsPerMinute is the same for
-// testSupplierEndpoint, whose every request is a real generation the platform pays for.
+// detectionsPerMinute is how many times a session may run detectSupplier in a minute, and identifySupplierKey;
+// testsPerMinute is the same for testSupplierEndpoint, whose every request is a real generation the platform pays for,
+// and for testSupplierCredential and testSupplierCredentials together.
 const (
 	detectionsPerMinute = 10
 	testsPerMinute      = 10
@@ -69,8 +72,10 @@ const (
 func newAdminAPI(version string, a *accounts.Service, c *catalog.Catalog, s *suppliers.Admin, calls *suppliers.Service, db *pg.DB, logger *slog.Logger) adminAPI {
 	return adminAPI{
 		version: version, accounts: a, catalog: c, suppliers: s, calls: calls, db: db, logger: logger,
-		detections: newWindowLimiter(detectionsPerMinute, time.Minute, time.Now),
-		tests:      newWindowLimiter(testsPerMinute, time.Minute, time.Now),
+		detections:      newWindowLimiter(detectionsPerMinute, time.Now),
+		tests:           newWindowLimiter(testsPerMinute, time.Now),
+		identifications: newWindowLimiter(detectionsPerMinute, time.Now),
+		credentialTests: newWindowLimiter(testsPerMinute, time.Now),
 	}
 }
 

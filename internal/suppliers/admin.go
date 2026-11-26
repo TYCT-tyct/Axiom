@@ -215,8 +215,7 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Own
 		return Detail{}, fmt.Errorf("read the credentials: %w", err)
 	}
 	for _, c := range creds {
-		d.Credentials = append(d.Credentials, credentialOf(
-			c.ID, c.SupplierGroupID, c.UpstreamKeyRef, c.Status, c.CooldownUntil, c.ExpiresAt, c.MaxConcurrency, c.RequestsPerMinute))
+		d.Credentials = append(d.Credentials, credentialOf(credentialFacts(c)))
 	}
 	applyKeyStates(d.Groups, d.Credentials)
 	endpoints, err := q.ListEndpointsOf(ctx, tx, id)
@@ -393,15 +392,24 @@ func (a *Admin) SetEndpointEnabled(ctx context.Context, tx pg.Tx, actor audit.Ac
 
 // lockedEndpoint is an endpoint of the supplier, whose row is locked for a change as locked locks it.
 func (a *Admin) lockedEndpoint(ctx context.Context, tx pg.Tx, supplierID, endpointID uuid.UUID) (store.GetEndpointOfRow, error) {
-	if _, err := a.locked(ctx, tx, supplierID); err != nil {
-		return store.GetEndpointOfRow{}, err
+	return lockedChild(ctx, a, tx, supplierID, ErrNoSupplierEndpoint, "the endpoint", func() ([]store.GetEndpointOfRow, error) {
+		return store.New().GetEndpointOf(ctx, tx, store.GetEndpointOfParams{SupplierID: supplierID, ID: endpointID})
+	})
+}
+
+// lockedChild is a row of the supplier that read finds, after the supplier's row is locked for a change; none is
+// missing.
+func lockedChild[T any](ctx context.Context, a *Admin, tx pg.Tx, supplier uuid.UUID, missing error, what string, read func() ([]T, error)) (T, error) {
+	var zero T
+	if _, err := a.locked(ctx, tx, supplier); err != nil {
+		return zero, err
 	}
-	rows, err := store.New().GetEndpointOf(ctx, tx, store.GetEndpointOfParams{SupplierID: supplierID, ID: endpointID})
+	rows, err := read()
 	if err != nil {
-		return store.GetEndpointOfRow{}, fmt.Errorf("read the endpoint: %w", err)
+		return zero, fmt.Errorf("read %s: %w", what, err)
 	}
 	if len(rows) == 0 {
-		return store.GetEndpointOfRow{}, ErrNoSupplierEndpoint
+		return zero, missing
 	}
 	return rows[0], nil
 }

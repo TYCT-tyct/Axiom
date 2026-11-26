@@ -227,16 +227,3 @@ func (q *Queries) SetByokCredentialStatus(ctx context.Context, db DBTX, arg SetB
 	_, err := db.Exec(ctx, setByokCredentialStatus, arg.Status, arg.SupplierID, arg.CredentialID)
 	return err
 }
-
-const setByokRejected = `-- name: SetByokRejected :exec
-UPDATE suppliers.credentials c SET status = 'rejected'
-FROM suppliers.suppliers s
-WHERE c.supplier_id = s.id AND s.status = 'byok' AND c.id = $1 AND c.status = 'active'
-`
-
-// The call path learned the provider refused this key. Addressed by credential, without a tenant: the caller holds an
-// id from the snapshot and has no account at hand.
-func (q *Queries) SetByokRejected(ctx context.Context, db DBTX, credentialID uuid.UUID) error {
-	_, err := db.Exec(ctx, setByokRejected, credentialID)
-	return err
-}

@@ -157,3 +157,27 @@ func (s *Service) runtimeOf(id, supplier uuid.UUID, max, perMinute int32) *credR
 	rt.configuredMax, rt.configuredMinute = max, perMinute
 	return rt
 }
+
+// Load is what one node holds against a credential's limits now: the calls holding it, and the requests of its upstream
+// account in the rolling minute, the count requests_per_minute is compared with. Both are this node's own counts in
+// memory (README.md「并发与速率」): every node counts its own, and a credential this node has not called holds nothing
+// here, which is 0 and true of this node.
+type Load struct {
+	InFlight, LastMinute int64
+}
+
+// CredentialLoad reads this node's load on a credential of supplier.
+func (s *Service) CredentialLoad(credential, supplier uuid.UUID) Load {
+	s.runtimeMu.Lock()
+	rt := s.runtime[credential]
+	minute := s.minutes[supplier]
+	s.runtimeMu.Unlock()
+	var load Load
+	if rt != nil {
+		load.InFlight = int64(rt.inflight.Load())
+	}
+	if minute != nil {
+		load.LastMinute = minute.count(s.now())
+	}
+	return load
+}

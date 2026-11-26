@@ -140,8 +140,9 @@ type Manager interface {
 	Offer(ctx context.Context, from Listing) (Page[Group], error)
 	// Keys reads the keys from the position in from, as far as the supplier's limits allow.
 	Keys(ctx context.Context, from Listing) (Page[KeyState], error)
-	// KeySecret reads a key's text from the supplier by its id there. Keys are never typed in, so the text always
-	// belongs to the key it is stored under.
+	// KeySecret reads a key's text from the supplier by its id there. A key a person pastes is stored under the id
+	// KeyFinder found for that very text, never under one a person typed, so the text always belongs to the key it is
+	// stored under.
 	KeySecret(ctx context.Context, ref KeyRef) (secret.Secret, error)
 	// Charges reads one page of the charge records, newest first, from the position in scan.
 	Charges(ctx context.Context, scan ScanState) (ChargePage, ScanState, error)
@@ -196,6 +197,19 @@ type KeyMaker interface {
 	// ErrKeyNotPermitted, ErrKeyGroupUnavailable and ErrKeyRefused; anything else is a failure of the task.
 	CreateKey(ctx context.Context, groupRef, name string) (KeyRef, error)
 }
+
+// KeyFinder is the optional half of a management side that can say which of the supplier's keys a text is: a key a
+// person pasted is stored under the id the supplier lists it by, in the group it lists it under, so its cost is the
+// group's and the sync keeps reading its status. FindKey confirms the text whole (a search that matches part of it is
+// not an answer) and answers found false when the supplier lists no key with this text. The text must not reach an
+// error: an error carries only the kinds a caller acts on (Blocked, ErrBucketsFull, ErrUnrecognised, ErrAuthRejected).
+type KeyFinder interface {
+	FindKey(ctx context.Context, text secret.Secret) (key KeyState, found bool, err error)
+}
+
+// ErrNoKeyFinder is the error of a management side that cannot say which key a text is: a pasted key cannot be put in
+// a group.
+var ErrNoKeyFinder = errors.New("adapter: the supplier's adapter cannot find a key by its text")
 
 // Listing is an adapter's own position in a paged listing, opaque to everyone else. It carries what the pass has read so
 // far, so that a listing a rate limit, an error or a restart stopped goes on where it stopped instead of from the start.

@@ -36,7 +36,8 @@ SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, 
 FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id AND g.id = @id;
 
 -- name: ListCredentialsOf :many
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
+    hint, source, checked_at, check_outcome, check_cause, check_status
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
 -- name: ListEndpointsOf :many
@@ -60,7 +61,8 @@ WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
-SELECT id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute
+SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
+    hint, source, checked_at, check_outcome, check_cause, check_status
 FROM suppliers.credentials WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: SetCredentialLimits :execrows
@@ -108,8 +110,8 @@ UPDATE suppliers.supplier_groups SET selected = @selected, codename = coalesce(c
 
 -- name: InsertBindingCredential :exec
 -- The key's text is read from the supplier by the sync, which seals it and moves the credential on.
-INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency)
-VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, 'binding', @max_concurrency);
+INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency, source)
+VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, 'binding', @max_concurrency, 'bound');
 
 -- name: InsertAlias :one
 INSERT INTO suppliers.supplier_aliases (supplier_id, supplier_group_id, upstream_name, model_id, formats, set_by)
