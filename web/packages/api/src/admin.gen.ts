@@ -4311,7 +4311,7 @@ export interface components {
             new_users?: number;
             /** @description The median time to the first token of the window's calls. */
             first_token_ms_p50?: number;
-            /** @description The accounts whose settled calls were charged the most in the window, most first. */
+            /** @description The ten accounts whose settled calls were charged the most in the window, most first, by the ledger's charge as `revenue` counts it, so a corrected charge moves both alike. */
             top_spenders?: components["schemas"]["OverviewSpender"][];
             /** @description Each UTC day the window touches, oldest first, for the trend lines. */
             days?: components["schemas"]["OverviewDay"][];
@@ -4432,9 +4432,10 @@ export interface components {
             errors?: number;
             /**
              * Format: int64
-             * @description Input, cached and output tokens the model's calls reported.
+             * @description The tokens of the model's calls: each prompt once, cached tokens included, and the output.
              */
             tokens?: number;
+            /** @description What the model's settled calls were charged when they were recorded, over the hours that start in the window. A later correction of a charge moves the ledger's `revenue` and `top_spenders`, not this. */
             revenue?: components["schemas"]["Money"];
         };
         /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits. */
@@ -7140,7 +7141,7 @@ export interface components {
             failures: number;
             /**
              * Format: int64
-             * @description Input, cached and output tokens the calls reported.
+             * @description The tokens of the calls: each prompt once, cached tokens included, and the output.
              */
             tokens: number;
             first_token_ms_p50?: number;
@@ -7188,7 +7189,7 @@ export interface components {
             tokens: number;
             /**
              * Format: int64
-             * @description Calls that moved to another endpoint after an attempt failed.
+             * @description Calls whose attempts went to more than one endpoint. A retry with another key on the same endpoint is not a switch.
              */
             switched_calls: number;
             first_token_ms: components["schemas"]["MonitorPercentiles"];
@@ -7271,7 +7272,7 @@ export interface components {
             uses: number;
             /** @description Absent when it never ran. */
             mean_ms?: number;
-            /** @description What the calls were charged for the plugin. */
+            /** @description What the calls were charged for the plugin. Absent when it is unknown: a successful run's charge could not be told apart from its call's other per-use items, such as a second plugin's. */
             revenue?: components["schemas"]["Money"];
             /** @description What the plugin's backends cost the platform, at the costs set in its settings. */
             cost?: components["schemas"]["Money"];

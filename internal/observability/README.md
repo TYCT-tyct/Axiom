@@ -93,7 +93,7 @@ schema `observability`，全部强制行级安全。
 | 用户只读脱敏的尝试与路由 | `OwnRoute` 只投影预设、原因计数、省略数量和标志。`TestOwnAttemptDetails` |
 | 归档确认后才删分区，迟到写入不丢 | 见「分区」。`TestRetentionKeepsPartitionsWhenTheArchiveFails`、`TestRetentionRearchivesAfterAWriteDuringAConfirmFailure` |
 | 账本、汇总和审计不随调用日志删除 | 保留任务只拼 `call_log_*` / `call_attempt_*` 的分区名 |
-| 每条已结算调用恰好累加进小时表一次，每条调用进监控汇总一次 | 迁移前的行只经回填、之后的只经触发器进 journal；journal 删除与各累加同一条 SQL。`TestUsageRollupRetryLateArrivalAndMoney`、`TestUsageBackfillDrainsLiveJournal`、`TestMonitorRollsUpEveryCall` |
+| 每条已结算调用恰好进小时表一次，带 `request_id` 的进监控汇总一次 | 迁移前的行只经回填、之后的经触发器进 journal，删除与各累加同一条 SQL。`TestUsageRollupRetryLateArrivalAndMoney`、`TestUsageBackfillDrainsLiveJournal`、`TestMonitorRollsUpEveryCall` |
 | 内容只有平台范围能读 | 四张内容表的策略只允许 `platform.in_platform_scope()`。`TestContentTablesArePlatformOnly` |
 | 正文只能被对应账户和 blob 打开 | 对象是 `version(1) ‖ nonce(12) ‖ AES-256-GCM`，AAD 是 `axiom/content/object/v1\0` 加账户、blob 和摘要；对象上限 64 MiB。`TestContentSealOpen`、`TestContentKeyIsBoundToItsAccount` |
 | 一个导出批准只能用一次，导出文件没有明文 | `approval_digest` 唯一、读正文前插入；tar.gz 只写进加密流。`TestContentExportRowsAndAudit`、`TestContentExportRoundTrip` |

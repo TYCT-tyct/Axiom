@@ -15,8 +15,10 @@ type PluginStat struct {
 	Uses            int64
 	MeanMS          int64 // over the timed runs; meaningless when Timed is 0
 	Timed           int64
-	Price           string       // what the runs were charged in the currency asked for, decimal billionths
-	Hours           []PluginHour // every hour of the window, oldest first
+	// Price is what the runs were charged in the currency asked for, in decimal billionths; empty when it is unknown
+	// because a successful run's charge could not be told apart from the call's other per-use items.
+	Price string
+	Hours []PluginHour // every hour of the window, oldest first
 }
 
 // PluginHour is the calls that ran the plugin in one hour.
@@ -28,7 +30,7 @@ type PluginHour struct {
 // Each hour's calls, and each plugin's totals over the window: grouping(hour) is 1 on a total.
 const pluginStatsSQL = `SELECT grouping(hour)::int, coalesce(hour, '0001-01-01T00:00:00Z'::timestamptz), plugin,
  sum(calls)::bigint, sum(failures)::bigint, sum(uses)::bigint, sum(ms)::bigint, sum(timed)::bigint,
- coalesce(sum(price) FILTER (WHERE currency = $3), 0)::text
+ coalesce(sum(price) FILTER (WHERE currency = $3), 0)::text, coalesce(sum(unpriced) FILTER (WHERE currency = $3), 0)::bigint
  FROM observability.plugin_hourly WHERE hour >= $1 AND hour < $2
  GROUP BY GROUPING SETS ((hour, plugin), (plugin))`
 
@@ -53,8 +55,8 @@ func ReadPluginStats(ctx context.Context, tx pg.Tx, since, until time.Time, curr
 		var total int
 		var at time.Time
 		var plugin, price string
-		var calls, failures, uses, ms, timed int64
-		if err := rows.Scan(&total, &at, &plugin, &calls, &failures, &uses, &ms, &timed, &price); err != nil {
+		var calls, failures, uses, ms, timed, unpriced int64
+		if err := rows.Scan(&total, &at, &plugin, &calls, &failures, &uses, &ms, &timed, &price, &unpriced); err != nil {
 			return nil, err
 		}
 		i, ok := index[plugin]
@@ -67,6 +69,9 @@ func ReadPluginStats(ctx context.Context, tx pg.Tx, since, until time.Time, curr
 			continue
 		}
 		s.Calls, s.Failures, s.Uses, s.Timed, s.Price = calls, failures, uses, timed, price
+		if unpriced > 0 {
+			s.Price = ""
+		}
 		if timed > 0 {
 			s.MeanMS = ms / timed
 		}

@@ -9,6 +9,7 @@ import (
 	"time"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/observability"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/suppliers"
@@ -34,26 +35,40 @@ func TestAdminOperationsMonitorAndPluginStats(t *testing.T) {
  (%[1]s, %[2]s, 1, '%[3]s', 16, 5), (%[1]s, %[2]s, 2, '%[3]s', 21, 4), (%[1]s, %[2]s, 2, '%[3]s', 40, 1)`, b.width, b.bucket, endpoint),
 		)
 	}
-	f.run(`INSERT INTO observability.plugin_hourly VALUES (date_trunc('hour', now()), 'web', 'USD', 3, 1, 2, 1500, 3, 5000000),
- (date_trunc('hour', now()), 'web', 'EUR', 1, 0, 1, 500, 1, 7)`)
+	f.run(`INSERT INTO observability.plugin_hourly VALUES (date_trunc('hour', now()), 'web', 'USD', 3, 1, 2, 1500, 3, 5000000, 0),
+ (date_trunc('hour', now()), 'web', 'EUR', 1, 0, 1, 500, 1, 7, 1),
+ (date_trunc('hour', now()), 'file-parser', 'USD', 1, 0, 3, 1000, 1, 0, 1)`)
 
 	checkMonitorAnswer(t, f, owner, "", 60, 60)
 	checkMonitorAnswer(t, f, owner, "?window=24h", 24, 3600)
 
-	rec := f.do(http.MethodGet, "/reports/plugins", "", as(owner))
-	expectAdmin(t, "plugins", rec, 200, "")
-	var stats adminapi.PluginStats
-	decode(t, rec, &stats)
-	plugins := make([]string, len(stats.Plugins))
-	for i, p := range stats.Plugins {
-		plugins[i] = fmt.Sprint(p.Plugin, p.Calls, p.Failures, p.Uses, valueOf(p.MeanMs), valueOf(p.Revenue), len(p.Hours))
-	}
-	// The EUR run counts in the totals and not in the USD site's revenue; the file parser never ran.
-	if want := []string{
-		fmt.Sprint(adminapi.Web, 4, 1, 3, 500, adminapi.Money{Amount: "5000000", Currency: "USD"}, 24),
-		fmt.Sprint(adminapi.FileParser, 0, 0, 0, 0, adminapi.Money{Amount: "0", Currency: "USD"}, 24),
-	}; !slices.Equal(plugins, want) {
-		t.Errorf("plugins = %v, want %v: %s", plugins, want, rec.Body)
+	// The EUR runs count in the totals and not in the USD site's revenue, so neither does the EUR run whose charge is
+	// unknown; the parse's is unknown in USD, so the parser has no revenue rather than zero. Two days ago neither ran.
+	day := time.Hour * 24
+	for _, c := range []struct {
+		query string
+		want  []string
+	}{
+		{"", []string{
+			fmt.Sprint(adminapi.Web, 4, 1, 3, 500, true, adminapi.Money{Amount: "5000000", Currency: "USD"}, 24),
+			fmt.Sprint(adminapi.FileParser, 1, 0, 3, 1000, false, adminapi.Money{}, 24),
+		}},
+		{"?since=" + url.QueryEscape(time.Now().Add(-2*day).Format(time.RFC3339)) + "&until=" + url.QueryEscape(time.Now().Add(-day-time.Hour).Format(time.RFC3339)), []string{
+			fmt.Sprint(adminapi.Web, 0, 0, 0, 0, true, adminapi.Money{Amount: "0", Currency: "USD"}, 23),
+			fmt.Sprint(adminapi.FileParser, 0, 0, 0, 0, true, adminapi.Money{Amount: "0", Currency: "USD"}, 23),
+		}},
+	} {
+		rec := f.do(http.MethodGet, "/reports/plugins"+c.query, "", as(owner))
+		expectAdmin(t, "plugins", rec, 200, "")
+		var stats adminapi.PluginStats
+		decode(t, rec, &stats)
+		plugins := make([]string, len(stats.Plugins))
+		for i, p := range stats.Plugins {
+			plugins[i] = fmt.Sprint(p.Plugin, p.Calls, p.Failures, p.Uses, valueOf(p.MeanMs), p.Revenue != nil, valueOf(p.Revenue), len(p.Hours))
+		}
+		if !slices.Equal(plugins, c.want) {
+			t.Errorf("plugins%s = %v, want %v: %s", c.query, plugins, c.want, rec.Body)
+		}
 	}
 
 	for _, c := range []struct {
@@ -142,6 +157,13 @@ func TestAdminOperationsOverviewDashboard(t *testing.T) {
  ('%[1]s', '%[3]s', '%[6]s', uuidv7(), uuidv7(), 'model-a', 'USD', 7, 7, 1, 1, 1, 1, 0, 0, 0, 1)`,
 			site, big, small, at(time.Hour), at(-2*time.Hour), at(-13*time.Hour)),
 		fmt.Sprintf(`INSERT INTO observability.first_token_hourly VALUES ('%s', '%s', 16, 3)`, site, at(time.Hour)),
+		// The ledger after a correction: big's 9000 of the rollup is now 600, so small spent the most.
+		`INSERT INTO billing.holders (id, expires_at) VALUES (uuidv7(), now() + interval '1 hour')`,
+		fmt.Sprintf(`INSERT INTO billing.reservations (request_id, site_id, account_id, workspace_id, key_id, holder_id,
+ workspace_window, key_window, segment, amount, state, deadline, charged, profit, created_at)
+ SELECT uuidv7(), '%s', v.account::uuid, uuidv7(), uuidv7(), (SELECT id FROM billing.holders ORDER BY id LIMIT 1), now(), now(),
+  1, 5, 'settled', now() + interval '1 hour', v.charged, 0, now()
+ FROM (VALUES ('%s', 600), ('%s', 1000)) v(account, charged)`, site, big, small),
 	)
 	rec := f.do(http.MethodGet, "/reports/overview?since="+url.QueryEscape(since.Format(time.RFC3339))+"&until="+url.QueryEscape(until.Format(time.RFC3339)), "", as(owner))
 	expectAdmin(t, "overview", rec, 200, "")
@@ -154,8 +176,10 @@ func TestAdminOperationsOverviewDashboard(t *testing.T) {
 	if got := fmt.Sprint(valueOf(o.NewUsers)); got != newUsers {
 		t.Errorf("new users = %s, want %s", got, newUsers)
 	}
+	// The spenders are the ledger's, like the revenue; the model's revenue is what its calls were charged when recorded.
+	wantPtr(t, rec, "revenue", o.Revenue, adminapi.Money{Amount: "1600", Currency: "USD"})
 	spenders := wantList(t, rec, "top spenders", o.TopSpenders, 2)
-	if got := spenders[0].Spend.Amount + "," + spenders[1].Spend.Amount; got != "9000,1000" {
+	if got := fmt.Sprintf("%v %s %s", spenders[0].AccountId == accounts.AccountID(small).TypeID(), spenders[0].Spend.Amount, spenders[1].Spend.Amount); got != "true 1000 600" {
 		t.Errorf("spenders = %s: %s", got, rec.Body)
 	}
 	models := wantList(t, rec, "top models", o.TopModels, 1)
@@ -166,8 +190,8 @@ func TestAdminOperationsOverviewDashboard(t *testing.T) {
 	for i, d := range days {
 		got[i] = fmt.Sprint(d.Date.String(), d.Calls, d.Errors, valueOf(d.FirstTokenMsP50), d.Revenue.Amount)
 	}
-	// No reservation settled, so the ledger's days are zero.
-	if want := []string{fmt.Sprint(today.Add(-24*time.Hour).Format(time.DateOnly), 1, 0, 0, "0"), fmt.Sprint(today.Format(time.DateOnly), 3, 1, 350, "0")}; !slices.Equal(got, want) {
+	// The calls settled today, so yesterday's ledger day is zero.
+	if want := []string{fmt.Sprint(today.Add(-24*time.Hour).Format(time.DateOnly), 1, 0, 0, "0"), fmt.Sprint(today.Format(time.DateOnly), 3, 1, 350, "1600")}; !slices.Equal(got, want) {
 		t.Errorf("days = %v, want %v", got, want)
 	}
 }
