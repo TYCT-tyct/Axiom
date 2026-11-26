@@ -58,20 +58,41 @@ const column = ({ align, shrink, main, actions, from }: Column) =>
   );
 
 // Tr is a body row. flash lights it once after an edit changed it; onFlashEnd says the light has gone, so the caller
-// can flash it again later.
+// can flash it again later. A row with onOpen takes a press anywhere on it unless the press is on a control of its own
+// (a keyboard uses the button in the row's first cell); current marks the row whose detail is open.
 export function Tr({
   children,
   flash = false,
   onFlashEnd,
+  onOpen,
+  current = false,
 }: {
   children: ReactNode;
   flash?: boolean;
   onFlashEnd?: () => void;
+  onOpen?: () => void;
+  current?: boolean;
 }) {
   return (
-    <tr className={flash ? s.flash : undefined} onAnimationEnd={flash ? onFlashEnd : undefined}>
+    <tr
+      className={classes(flash && s.flash, onOpen && s.open, onOpen && current && s.current)}
+      onAnimationEnd={flash ? onFlashEnd : undefined}
+      aria-selected={onOpen ? current : undefined}
+      onClick={
+        onOpen && ((event) => !(event.target as Element).closest("a, button, input, select, textarea") && onOpen())
+      }
+    >
       {children}
     </tr>
+  );
+}
+
+// RowButton is the text of a row's first cell as the button that opens the row, for a keyboard (the pointer has the row).
+export function RowButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+  return (
+    <button type="button" className={s.opener} onClick={onClick}>
+      {children}
+    </button>
   );
 }
 

@@ -7,7 +7,7 @@ type PolicyState = {
   alerts: Schemas["AlertEvent"][];
   config: Schemas["AlertConfiguration"];
   documents: Schemas["LegalDocument"][];
-  announcements: Map<string, Schemas["Announcement"]>;
+  announcements: Map<string, Schemas["AdminAnnouncement"]>;
   announcementCount: number;
   retention: Schemas["Retention"];
   rates: Map<string, number>;
@@ -136,18 +136,30 @@ function publishAnnouncement({ body, state }: Ctx<"/api/admin/v1/announcements",
   const current = policy(state);
   const { reason: _reason, ...content } = body;
   const id = `ann_${pad(++current.announcementCount)}`;
-  const row = { id, ...content };
-  current.announcements.set(id, row);
-  return created(row);
+  const now = Date.now();
+  const status =
+    Date.parse(content.starts_at) > now ? "scheduled" : Date.parse(content.ends_at) > now ? "showing" : "ended";
+  current.announcements.set(id, { id, ...content, state: status });
+  return created({ id, ...content });
+}
+
+function listAnnouncements({ query, state }: Ctx<"/api/admin/v1/announcements", "get">) {
+  const site = query.get("site_id");
+  const rows = [...policy(state).announcements.values()]
+    .filter((row) => !site || row.site_id === site)
+    .toSorted((a, b) => b.starts_at.localeCompare(a.starts_at));
+  return ok({ data: rows, next_cursor: null });
 }
 
 function withdrawAnnouncement({
   params,
   state,
 }: Ctx<"/api/admin/v1/announcements/{announcement_id}/withdraw", "post">) {
-  const id = params.announcement_id;
-  if (!id || !policy(state).announcements.delete(id)) return fail(404, "not_found");
-  return created({ id });
+  const row = policy(state).announcements.get(params.announcement_id ?? "");
+  if (!row) return fail(404, "not_found");
+  row.state = "withdrawn";
+  row.withdrawn_at = new Date().toISOString();
+  return created({ id: row.id });
 }
 
 function listDocuments({ params, query, state }: Ctx<"/api/admin/v1/sites/{site_id}/legal-documents", "get">) {
@@ -208,6 +220,7 @@ export const policyHandlers: Handler<AdminState>[] = [
     return created({ id: receipt });
   }),
   route("put", `${base}/alerts/channels/{channel_id}/secret`, changes(manage), rotate),
+  route("get", `${base}/announcements`, reads(manage), listAnnouncements),
   route("post", `${base}/announcements`, changes(manage), publishAnnouncement),
   route("post", `${base}/announcements/{announcement_id}/withdraw`, changes(manage), withdrawAnnouncement),
   route("get", `${base}/sites/{site_id}/legal-documents`, reads(manage), listDocuments),

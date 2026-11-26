@@ -71,6 +71,7 @@ export type AdminCallFilters = {
   site_id?: string;
   model?: string;
   status?: "ok" | "error";
+  plugin?: AdminSchemas["AdminPlugin"];
   since?: string;
   until?: string;
 };

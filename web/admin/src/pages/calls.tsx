@@ -1,27 +1,37 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, LoadMore, useSession } from "@axiom/app";
 import {
-  ActionButton,
   Card,
   DataState,
+  DataTable,
   EmptyState,
   Field,
-  Icon,
-  Id,
+  MetricStrip,
   Notice,
   PageHead,
-  Table,
-  Td,
+  type StripItem,
+  Tag,
   TextLink,
   useFormat,
 } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
+import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useCallColumns } from "../call-columns";
+import { CallDrawer } from "../call-drawer";
+import en from "../locales/en/calls";
+import zh from "../locales/zh/calls";
 import type { CallsEmptyKind } from "../overview";
-import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind } from "../overview";
-import { ChoiceFilter, FilterBar, Head, PageBody, State, Time, text, toInstant, toLocalInput } from "../parts";
-import { adminCallsQuery } from "../queries";
+import { callStatus, callsArchivedWhole, callsCoverage, callsEmptyKind, overviewWindow } from "../overview";
+import { usePanelSteps } from "../panel-steps";
+import { ChoiceFilter, FilterBar, PageBody, State, text, toInstant, toLocalInput } from "../parts";
+import { adminPlugins, callPlugin } from "../plugins";
+import { adminCallsQuery, overviewQuery } from "../queries";
+
+export const messages = { zh: { calls: zh }, en: { calls: en } };
+
+type Call = AdminSchemas["AdminCallSummary"];
 
 type CallFilters = {
   account_id?: string;
@@ -29,6 +39,7 @@ type CallFilters = {
   site_id?: string;
   model?: string;
   status?: "ok" | "error";
+  plugin?: AdminSchemas["AdminPlugin"];
   since?: string;
   until?: string;
 };
@@ -40,6 +51,7 @@ function narrowed(filters: CallFilters): boolean {
       filters.site_id ||
       filters.model ||
       filters.status ||
+      filters.plugin ||
       filters.since ||
       filters.until,
   );
@@ -63,6 +75,7 @@ function callSearch(values: Record<string, string>, site?: string) {
     site_id: site,
     model: text(values.model),
     status: callStatus(values.status),
+    plugin: callPlugin(values.plugin),
     since: toInstant(values.since),
     until: toInstant(values.until),
   };
@@ -117,8 +130,9 @@ function CoverageNotice({
   );
 }
 
-// The support view of calls: what a person asks about a bill, without costs, endpoints or routes. The operator's trace
-// is a separate page and permission, so this one never shows a field the support role may not read.
+// The list of calls and, over it, one call's detail (adPg_calls in admin_pages_c.js). Whoever may search calls reads the
+// summary of each; the lines a request went through and what it cost upstream are the operator's, and the drawer asks
+// for them only when the session may inspect.
 export default function Calls() {
   const { t } = useTranslation();
   const filters = useSearch({ from: "/app/calls" });
@@ -129,6 +143,7 @@ export default function Calls() {
       site_id: filters.site_id,
       model: filters.model,
       status: filters.status,
+      plugin: filters.plugin,
       since: filters.since,
       until: filters.until,
     }),
@@ -143,10 +158,14 @@ export default function Calls() {
     callsArchivedWhole(coverage, availableSince, page?.until),
     narrowed(filters),
   );
+  const [selected, select] = useState<string>();
+  const open = rows.find((call) => call.id === selected);
+  const steps = usePanelSteps(rows, selected ?? "", (call) => call.id, select);
   return (
     <>
-      <PageHead title={t("nav.calls")} lede={t("calls.description")} />
       <PageBody>
+        <PageHead title={t("shell.nav.calls")} lede={t("calls.description")} />
+        <Strip />
         <Filters filters={filters} />
         {filters.site_id ? (
           <Notice>
@@ -162,23 +181,86 @@ export default function Calls() {
           {unsupported ? <Notice>{t("calls.filters.unsupported")}</Notice> : null}
           <CoverageNotice coverage={coverage} availableSince={availableSince} />
           <DataState query={calls} isEmpty={() => rows.length === 0} empty={<CallEmpty kind={emptyKind} />}>
-            {() => <CallsTable rows={rows} />}
+            {() => <CallsTable rows={rows} current={selected} onOpen={(call) => select(call.id)} />}
           </DataState>
           <LoadMore list={calls} />
         </Card>
       </PageBody>
+      {open ? <CallDrawer call={open} steps={steps} onClose={() => select(undefined)} /> : null}
     </>
   );
 }
 
-function Filters({ filters }: { filters: CallFilters }) {
+// The four numbers over the list, from the dashboard's one request for the last 24 hours, so each reads the same as
+// there. A session that may not read the dashboard, a node that has not got it and a number the node does not give
+// leave their place out; nothing here is made up.
+function Strip() {
   const { t } = useTranslation();
+  const format = useFormat();
+  const allowed = can(useSession(), "sites.manage");
+  const [anchor] = useState(() => new Date());
+  const window = useMemo(() => overviewWindow("24h", anchor), [anchor]);
+  const overview = useQuery({ ...overviewQuery(window.since, window.until), enabled: allowed });
+  const data = overview.data;
+  if (!data) return null;
+  const items: StripItem[] = [];
+  if (data.calls !== undefined) {
+    items.push({
+      key: "requests",
+      label: t("calls.strip.requests"),
+      value: format.number(data.calls),
+      note: data.calls_incomplete ? t("calls.strip.incomplete") : t("calls.strip.requestsNote"),
+    });
+    if (data.errors !== undefined && data.calls > 0) {
+      items.push({
+        key: "failRate",
+        label: t("calls.strip.failRate"),
+        value: format.decimal(((data.errors / data.calls) * 100).toFixed(2)),
+        suffix: "%",
+        note: t("calls.strip.failRateNote", { count: data.errors }),
+        link: <Link to="/calls" search={{ status: "error" }} />,
+      });
+    }
+  }
+  if (data.first_token_ms_p50 !== undefined) {
+    items.push({
+      key: "firstToken",
+      label: t("calls.strip.firstToken"),
+      value: format.decimal((data.first_token_ms_p50 / 1000).toFixed(2)),
+      suffix: t("calls.strip.seconds"),
+      note: t("calls.strip.firstTokenNote"),
+    });
+  }
+  if (data.revenue !== undefined) {
+    items.push({
+      key: "revenue",
+      label: t("calls.strip.revenue"),
+      value: format.money(data.revenue),
+      note: t("calls.strip.revenueNote"),
+    });
+  }
+  return items.length ? <MetricStrip label={t("calls.strip.label")} items={items} /> : null;
+}
+
+function Filters({ filters }: { filters: CallFilters }) {
   const navigate = useNavigate();
   return (
     <FilterBar
       values={filters}
       onApply={(values) => navigate({ to: "/calls", search: callSearch(values, filters.site_id) })}
     >
+      <Searches filters={filters} />
+      <Choices filters={filters} />
+      <Window filters={filters} />
+    </FilterBar>
+  );
+}
+
+// What a call is found by: the account, the request and the model, each exact.
+function Searches({ filters }: { filters: CallFilters }) {
+  const { t } = useTranslation();
+  return (
+    <>
       <Field
         label={t("calls.filters.account")}
         hint={t("calls.filters.accountHint")}
@@ -205,6 +287,15 @@ function Filters({ filters }: { filters: CallFilters }) {
         autoComplete="off"
         spellCheck={false}
       />
+    </>
+  );
+}
+
+// How it went and what it used.
+function Choices({ filters }: { filters: CallFilters }) {
+  const { t } = useTranslation();
+  return (
+    <>
       <ChoiceFilter
         label={t("calls.filters.result")}
         name="status"
@@ -215,6 +306,22 @@ function Filters({ filters }: { filters: CallFilters }) {
           { value: "error", label: t("calls.filters.error") },
         ]}
       />
+      <ChoiceFilter
+        label={t("calls.filters.plugin")}
+        name="plugin"
+        value={filters.plugin}
+        any={t("calls.filters.anyPlugin")}
+        options={adminPlugins.map((plugin) => ({ value: plugin, label: t(`calls.plugin.${plugin}`) }))}
+      />
+    </>
+  );
+}
+
+// When it was made.
+function Window({ filters }: { filters: CallFilters }) {
+  const { t } = useTranslation();
+  return (
+    <>
       <Field
         label={t("calls.filters.since")}
         name="since"
@@ -227,70 +334,69 @@ function Filters({ filters }: { filters: CallFilters }) {
         type="datetime-local"
         defaultValue={toLocalInput(filters.until)}
       />
-    </FilterBar>
+    </>
   );
 }
 
-function CallsTable({ rows }: { rows: AdminSchemas["AdminCallSummary"][] }) {
+// A call's plugins, a tag for each, so the list shows which requests searched the web or read a file.
+function PluginTags({ call }: { call: Call }) {
   const { t } = useTranslation();
-  const inspect = can(useSession(), "calls.inspect");
-  return (
-    <Table label={t("nav.calls")}>
-      <Head
-        cols={[
-          t("calls.col.at"),
-          [t("calls.requestId"), { main: true }],
-          t("calls.col.account"),
-          t("calls.col.model"),
-          t("calls.col.result"),
-          [t("calls.col.latency"), { align: "end" }],
-          [t("calls.col.price"), { align: "end" }],
-        ]}
-        action={inspect}
-      />
-      <tbody>
-        {rows.map((call) => (
-          <CallRow key={call.id} call={call} inspect={inspect} />
-        ))}
-      </tbody>
-    </Table>
-  );
+  if (!call.plugins?.length) return "—";
+  return call.plugins.map((run) => (
+    <Tag key={run.plugin} tone={run.ok ? "neutral" : "bad"}>
+      {t(`calls.plugin.${run.plugin}`)}
+    </Tag>
+  ));
 }
 
-function CallRow({ call, inspect }: { call: AdminSchemas["AdminCallSummary"]; inspect: boolean }) {
+function CallsTable({
+  rows,
+  current,
+  onOpen,
+}: {
+  rows: Call[];
+  current: string | undefined;
+  onOpen: (call: Call) => void;
+}) {
   const { t } = useTranslation();
   const format = useFormat();
+  const { at, id, account, model } = useCallColumns();
   return (
-    <tr>
-      <Td shrink>
-        {inspect ? (
-          <TextLink>
-            <Link to="/calls/$callId" params={{ callId: call.id }}>
-              <Time at={call.at} />
-            </Link>
-          </TextLink>
-        ) : (
-          <Time at={call.at} />
-        )}
-      </Td>
-      <Td main>{call.id ? <Id value={call.id} /> : "—"}</Td>
-      <Td>{call.account_id ? <Id value={call.account_id} /> : "—"}</Td>
-      <Td>{call.model ?? "—"}</Td>
-      <Td>
-        <State tone={call.error_kind ? "bad" : "good"}>{call.error_kind ? t("calls.failed") : t("calls.ok")}</State>
-      </Td>
-      <Td align="end">{call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })}</Td>
-      <Td align="end">{call.price ? format.money(call.price) : "—"}</Td>
-      {inspect ? (
-        <Td actions>
-          <ActionButton asChild size="sm" variant="gho">
-            <Link to="/calls/$callId" params={{ callId: call.id }}>
-              {t("calls.trace")}
-              <Icon name="right" />
-            </Link>
-          </ActionButton>
-        </Td>
-      ) : null}
-    </tr>
+    <DataTable<Call>
+      label={t("shell.nav.calls")}
+      rows={rows}
+      rowKey={(call) => call.id ?? ""}
+      onOpen={onOpen}
+      current={current}
+      columns={[
+        at,
+        id,
+        account,
+        model,
+        { key: "plugins", header: t("calls.col.plugins"), from: "xl", cell: (call) => <PluginTags call={call} /> },
+        {
+          key: "latency",
+          header: t("calls.col.latency"),
+          align: "end",
+          from: "md",
+          sort: (call) => call.latency_ms,
+          cell: (call) => (call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })),
+        },
+        {
+          key: "price",
+          header: t("calls.col.price"),
+          align: "end",
+          from: "sm",
+          cell: (call) => (call.price ? format.money(call.price) : "—"),
+        },
+        {
+          key: "result",
+          header: t("calls.col.result"),
+          cell: (call) => (
+            <State tone={call.error_kind ? "bad" : "good"}>{call.error_kind ? t("calls.failed") : t("calls.ok")}</State>
+          ),
+        },
+      ]}
+    />
   );
 }

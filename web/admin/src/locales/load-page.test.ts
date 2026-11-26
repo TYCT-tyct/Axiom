@@ -40,6 +40,10 @@ it("loads complete deferred copy before returning a page and preserves both lang
     import("../pages/legal-documents"),
     import("../pages/settings-site"),
     import("../pages/rate-limits"),
+    import("../pages/calls"),
+    import("../pages/audit"),
+    import("../pages/plugins"),
+    import("../pages/me"),
   ]) {
     await loadTranslatedPage<{ messages: { zh: object; en: object } }>(page);
   }

@@ -99,6 +99,7 @@ function useShellText(): AdminShellText {
     help: t("shell.help"),
     shortcuts: t("shell.shortcuts"),
     account: t("shell.account"),
+    myLogin: t("shell.myLogin"),
     appearance: t("shell.appearance"),
     themes: { system: t("shell.themes.system"), light: t("shell.themes.light"), dark: t("shell.themes.dark") },
     signOut: t("shell.signOut"),
@@ -159,7 +160,7 @@ function Shell({ signOut, children }: { signOut: () => void; children: ReactNode
           ? { ...bell, allHref: "/alert-events", rulesHref: "/alert-configuration" }
           : undefined
       }
-      account={{ name: email.split("@")[0] ?? email, email }}
+      account={{ name: email.split("@")[0] ?? email, email, href: "/me" }}
       shortcuts={[
         { keys: searchKeys(), label: t("shell.keys.palette") },
         { keys: "↑ ↓", label: t("shell.keys.move") },

@@ -15,6 +15,7 @@ import { loadTranslatedPage } from "./locales/load-page";
 import { modelStatus } from "./models/catalog";
 import { paymentOrderState } from "./orders/states";
 import { callStatus, cashView, overviewRange } from "./overview";
+import { callPlugin } from "./plugins";
 import { redeemState } from "./redeem";
 import { supplierStatus } from "./suppliers/statuses";
 import { tabOf } from "./tab-of";
@@ -103,21 +104,21 @@ const routeTree = root.addChildren([
     ),
     shellPage(
       "/calls",
-      () => import("./pages/calls"),
+      () => loadTranslatedPage(import("./pages/calls")),
       (search) => ({
         account_id: text(search.account_id),
         request_id: text(search.request_id),
         site_id: text(search.site_id),
         model: text(search.model),
         status: callStatus(search.status),
+        plugin: callPlugin(search.plugin),
         since: text(search.since),
         until: text(search.until),
       }),
     ),
-    shellPage("/calls/$callId", () => import("./pages/call")),
     shellPage(
       "/audit",
-      () => import("./pages/audit"),
+      () => loadTranslatedPage(import("./pages/audit")),
       (search) => ({
         since: text(search.since),
         until: text(search.until),
@@ -132,7 +133,6 @@ const routeTree = root.addChildren([
         request_id: text(search.request_id),
       }),
     ),
-    shellPage("/audit/$entryId", () => import("./pages/audit-entry")),
     shellPage(
       "/suppliers",
       () => loadTranslatedPage(import("./pages/suppliers")),
@@ -184,6 +184,10 @@ const routeTree = root.addChildren([
         include_inactive: search.include_inactive === true || search.include_inactive === "true" ? true : undefined,
       }),
     ),
+    shellPage("/plugins", () => loadTranslatedPage(import("./pages/plugins"))),
+    shellPage("/plugins/web", () => loadTranslatedPage(import("./pages/plugins"))),
+    shellPage("/plugins/file", () => loadTranslatedPage(import("./pages/plugins"))),
+    shellPage("/me", () => loadTranslatedPage(import("./pages/me"))),
     shellPage("/alert-events", () => loadTranslatedPage(import("./pages/alert-events"))),
     settingsPage("/alert-configuration", () => loadTranslatedPage(import("./pages/alert-configuration"))),
     shellPage("/announcements", () => loadTranslatedPage(import("./pages/announcements"))),

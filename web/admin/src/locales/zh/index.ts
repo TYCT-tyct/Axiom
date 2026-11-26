@@ -3,15 +3,18 @@ import alertEvents from "./alert-events";
 import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
+import auditEvents from "./audit-events";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
 import mappings from "./mappings";
+import me from "./me";
 import models from "./models";
 import operations from "./operations";
 import orders from "./orders";
 import discrepancies from "./payment-discrepancies";
 import platformGrants from "./platform-grants";
+import plugins from "./plugins";
 import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
@@ -47,8 +50,7 @@ export const initial = {
     announcements: "公告",
   },
   shell,
-  calls,
-  audit,
+  drawerSteps: { previous: "上一条", next: "下一条" },
   signIn: { description: "管理后台只对运营人员开放，登录后还要完成两步验证。" },
   home: {
     title: "运营看板",
@@ -229,4 +231,9 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   announcements,
   legalDocs,
   rateLimits,
+  plugins,
+  me,
+  auditEvents,
+  calls,
+  audit,
 });

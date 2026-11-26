@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { callWindow } from "./audit-entry";
+import { callWindow } from "./audit-drawer";
 
 it("covers a call from a month before the audit entry", () => {
   const window = callWindow("2026-10-30T12:00:00.000Z");

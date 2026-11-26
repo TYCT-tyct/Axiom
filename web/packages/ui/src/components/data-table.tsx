@@ -1,7 +1,7 @@
 import { type Key, type ReactNode, useEffect, useState } from "react";
 import { useFormat } from "../format";
 import s from "./data-table.module.css";
-import { type SortOrder, Table, Td, Th, Tr } from "./table";
+import { RowButton, type SortOrder, Table, Td, Th, Tr } from "./table";
 
 type Column<Row> = {
   key: string;
@@ -12,6 +12,8 @@ type Column<Row> = {
   muted?: boolean;
   // A width in pixels, which only a fixed table keeps.
   width?: number;
+  // The width from which the column shows (the admin's adtx and phx: a phone keeps the two or three that matter).
+  from?: "sm" | "md" | "lg" | "xl" | "2xl";
   // The number a numeric column sorts by; a column with one gets a sort button. A row without a number sorts last
   // from high to low and first from low to high.
   sort?: (row: Row) => number | null | undefined;
@@ -41,10 +43,28 @@ function sorted<Row>(rows: readonly Row[], column: Column<Row> | undefined, sort
   });
 }
 
+// How many rows the table lists: "4" when it lists all of them, "3 / 10" while a filter hides some.
+function countText(format: ReturnType<typeof useFormat>, listed: number, total: number) {
+  return listed === total ? format.number(total) : `${format.number(listed)} / ${format.number(total)}`;
+}
+
+// A cell of a row. The first of a row that opens holds a button, which is how a keyboard opens it.
+function Cell<Row>({ column, row, open }: { column: Column<Row>; row: Row; open?: () => void }) {
+  const content = column.cell(row);
+  return (
+    <Td align={column.align === "end" ? "end" : undefined} muted={column.muted} from={column.from}>
+      {open ? <RowButton onClick={open}>{content}</RowButton> : content}
+    </Td>
+  );
+}
+
 // DataTable lists rows under named columns, from data: the Table with its columns described once. A long identifier
 // goes in the cell as an Id, in a fixed table with the column's width. A column with a sort number can be sorted from
 // its header. Given the count of every row (total) and what a row is called (unit), it says how many it lists, as
-// "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once.
+// "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once. Given onOpen, a row
+// opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
+// button a keyboard reaches, which is the first column's text, so that column holds text and no control. current names
+// the row whose detail is open.
 export function DataTable<Row>({
   label,
   columns,
@@ -54,6 +74,8 @@ export function DataTable<Row>({
   total,
   unit,
   flash,
+  onOpen,
+  current,
 }: {
   label: string;
   columns: readonly Column<Row>[];
@@ -63,23 +85,19 @@ export function DataTable<Row>({
   total?: number;
   unit?: string;
   flash?: Key;
+  onOpen?: (row: Row) => void;
+  current?: Key;
 }) {
   const format = useFormat();
   const [sorting, setSorting] = useState<Sorting>(null);
   const [lit, setLit] = useState(flash);
   useEffect(() => setLit(flash), [flash]);
-  const align = (column: Column<Row>) => (column.align === "end" ? "end" : undefined);
   const shown = sorted(
     rows,
     columns.find((column) => column.key === sorting?.key),
     sorting,
   );
-  const count =
-    total === undefined
-      ? undefined
-      : rows.length === total
-        ? format.number(total)
-        : `${format.number(rows.length)} / ${format.number(total)}`;
+  const count = total === undefined ? undefined : countText(format, rows.length, total);
   return (
     <>
       {count === undefined ? null : (
@@ -93,7 +111,8 @@ export function DataTable<Row>({
             {columns.map((column) => (
               <Th
                 key={column.key}
-                align={align(column)}
+                align={column.align === "end" ? "end" : undefined}
+                from={column.from}
                 sort={column.sort ? (sorting?.key === column.key ? sorting.order : "none") : undefined}
                 onSort={column.sort ? () => setSorting(nextSort(sorting, column.key)) : undefined}
               >
@@ -106,11 +125,20 @@ export function DataTable<Row>({
           {shown.map((row) => {
             const key = rowKey(row);
             return (
-              <Tr key={key} flash={lit !== undefined && lit === key} onFlashEnd={() => setLit(undefined)}>
-                {columns.map((column) => (
-                  <Td key={column.key} align={align(column)} muted={column.muted}>
-                    {column.cell(row)}
-                  </Td>
+              <Tr
+                key={key}
+                flash={lit !== undefined && lit === key}
+                onFlashEnd={() => setLit(undefined)}
+                onOpen={onOpen && (() => onOpen(row))}
+                current={current !== undefined && current === key}
+              >
+                {columns.map((column, at) => (
+                  <Cell
+                    key={column.key}
+                    column={column}
+                    row={row}
+                    open={onOpen && at === 0 ? () => onOpen(row) : undefined}
+                  />
                 ))}
               </Tr>
             );
