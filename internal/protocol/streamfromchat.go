@@ -3,6 +3,7 @@ package protocol
 import (
 	"encoding/json/jsontext" //nolint:depguard // as in canon.go
 	"fmt"
+	"slices"
 	"strconv"
 
 	"axiom/internal/catalog"
@@ -40,6 +41,7 @@ type chatToNative struct {
 type chatOutput struct {
 	kind, id, name  string
 	responseID      string
+	custom          bool   // a Responses custom tool's call, whose arguments wrap its input (customFunction)
 	text            []byte // JSON string contents, with escapes intact
 	sent            int
 	started, closed bool
@@ -249,6 +251,7 @@ func (s *chatToNative) addOutput(kind, id, name string) (int, error) {
 	item := chatOutput{kind: kind, id: id, name: name}
 	if s.client == Responses {
 		item.responseID = s.o.ID + "_" + strconv.Itoa(len(items))
+		item.custom = kind == "tool_use" && slices.Contains(s.o.CustomTools, name)
 	}
 	s.items = append(items, item)
 	return len(s.items) - 1, nil

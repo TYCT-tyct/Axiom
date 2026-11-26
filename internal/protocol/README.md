@@ -46,6 +46,7 @@ Chat 与 Messages、Responses 双向各一套映射；Messages 与 Responses 之
 - **两类错误**：形状错（名字、`text`、`arguments` 不是字符串，`detail` 不是 `auto`、`low`、`high`）为 `ErrInvalid`；目标表达不了（`canon` 没读的成员取非默认值、非函数工具、调用配不上）为 `*NotSupported`，gateway 换端点。不删约束凑合。
 - **规格没说不是 no**：`Target` 的 `Thinking`、`MidSystem`、`UntrustedSystemAfterTools`、`DefaultSamplingOnly`、`ForcedToolChoice` 等由 gateway 从 `catalog.Dialect` 填，零值是未设置；请求用到时未设置与否定一样 `*NotSupported`，`Reason` 给客户端，缺的键放 `Detail` 只进日志。只添东西的 `include`、缓存断点未设置按 no。
 - 控制字段按解码值比较，正文、签名、工具参数保留原字节。
+- **工具**：Responses 的 `custom`（自由格式）写成只收一个 `input` 字符串的函数，语法放进描述；历史里的 `custom_tool_call` 及其输出照此配对，回复按 `RelayOptions.CustomTools` 还原成 `custom_tool_call`，输入在结束时整段给出。Messages 的 `type:"custom"` 当函数。Anthropic 的服务端与带类型工具、OpenAI 的托管工具没有等价函数，按类型点名 `*NotSupported`。
 - **工具调用 ID**：Anthropic 只收 `^[a-zA-Z0-9_-]+$`；合规且不以 `axid_` 开头的原样，其余写成 `axid_` 加原字节的十六进制，两类不相交。
 - **旧版函数调用**（`legacy.go`）：`functions`、`function_call` 升级成 `tools`、`tool_choice`，旧调用分到 `call_legacy_<n>`，结果配同名中最早未配的调用；冲突为 `ErrInvalid`，配不上为 `NotSupported`。只用旧表示的客户端（`UsageContext.LegacyFunctions`）收回 `function_call` 形状。
 - **推理回放**：`reasoning_details` 先按类型和 `index` 合并（`mergeDetails`）；到 Messages 只回放带签名的 `anthropic-claude-v1`，到 Responses 只回放带密文的 `openai-responses-v1`。
