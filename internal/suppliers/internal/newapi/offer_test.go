@@ -86,8 +86,8 @@ func TestHiddenPricesLeaveTheCostUnknown(t *testing.T) {
 		answer  adapter.Response
 		refused bool
 	}{
-		{"only the root may read it", sample(t, "44-pricing-hidden"), false},
-		{"a release before that check", answer(403, `{"message":"pricing is disabled","success":false}`), false},
+		{"only the root may read it", sample(t, "43-pricing-off-pat-rc51"), false},
+		{"a release before that check", sample(t, "43-pricing-off-anon-rc51"), false},
 		{"an expired token", answer(401, `{"code":"ACCESS_TOKEN_EXPIRED","success":false}`), true},
 		{"a refused token", answer(403, `{"code":"AUTH_UNAUTHORIZED","success":false}`), true},
 		{"a page from a firewall", answer(403, `<html>denied</html>`), true},

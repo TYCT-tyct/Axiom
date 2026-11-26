@@ -1,4 +1,4 @@
-# 44-pricing-hidden
+# 43-pricing-off-pat-rc51
 GET /api/pricing
 > Authorization: Bearer <ALICE_PAT>
 < status: 403  (elapsed 0.01s)

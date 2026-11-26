@@ -84,7 +84,7 @@ func TestAuthFailuresNameACodeAndNothingElse(t *testing.T) {
 		want string
 	}{
 		{"an invalid token", sample(t, "53-err-self-bad-pat"), "AUTH_UNAUTHORIZED"},
-		{"a missing permission", sample(t, "83-pat-narrow-missing-scope"), "lacks the permission usage:read"},
+		{"a missing permission", sample(t, "83-pat-narrow-missing-scope-rc51"), "lacks the permission usage:read"},
 		{"an unlisted code", answer(401, `{"code":"PLANTED-CODE","message":"planted text","success":false}`), "unknown"},
 		{"not JSON", answer(403, "<html>planted</html>"), "unknown"},
 	}
