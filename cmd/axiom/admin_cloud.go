@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/http"
 
-	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
@@ -19,30 +18,32 @@ import (
 // newRegionConcurrency is the calls a region added by a replacement has at once when the request does not say.
 const newRegionConcurrency = 4
 
-// CreateCloudSupplier connects Vertex AI, Bedrock or Azure OpenAI with its credential.
-func (a adminAPI) CreateCloudSupplier(ctx context.Context, request adminapi.CreateCloudSupplierRequestObject) (adminapi.CreateCloudSupplierResponseObject, error) {
-	r, err := cloudRequest(request.Body)
+// createCloud connects a cloud platform with its credential.
+func (a adminAPI) createCloud(ctx context.Context, key, kind string, b *adminapi.TypedSupplierCreate) (adminapi.SupplierConnected, bool, error) {
+	r, err := cloudRequest(kind, b)
 	if err != nil {
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
 	var plan *suppliers.CloudPlan
 	if err := a.db.ReadTx(ctx, callOf(ctx).scope, func(tx pg.Tx) (err error) {
 		plan, err = a.suppliers.PlanCloud(ctx, tx, r)
 		return err
 	}); err != nil {
-		return nil, cloudProblem(err)
+		return adminapi.SupplierConnected{}, false, cloudProblem(err)
 	}
-	claim, err := idempotencyClaim(ctx, "createCloudSupplier", request.Params.IdempotencyKey,
-		[]any{r.Kind, r.Name, r.Origin, r.Regions, r.Deployments, r.Currency.String(), r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
+	claim, err := idempotencyClaim(ctx, "createTypedSupplier", key, []any{
+		r.Kind, r.Name, r.Entry, r.Origin, r.Form, r.Regions, r.Deployments, r.Currency.String(), plan.Settings(),
+		r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4,
+	})
 	if err != nil {
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
 	if err := a.checkSettlementCurrency(plan.Currency()); err != nil {
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
 	snap, err := a.catalog.Current()
 	if err != nil {
-		return nil, &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
+		return adminapi.SupplierConnected{}, false, &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
 	defer cancel()
@@ -52,14 +53,10 @@ func (a adminAPI) CreateCloudSupplier(ctx context.Context, request adminapi.Crea
 		made, err := a.suppliers.CreateCloud(ctx, tx, actor(ctx), snap, plan)
 		return connectedBody(made, false), err
 	})
-	if err != nil {
-		return nil, err
+	if err == nil && body.Supplier != nil {
+		a.leaveRouting(ctx, replay)
 	}
-	if body.Supplier == nil {
-		return adminapi.CreateCloudSupplier200JSONResponse{Body: body, Headers: adminapi.CreateCloudSupplier200ResponseHeaders{IdempotencyReplayed: replayedHeader(replay)}}, nil
-	}
-	a.leaveRouting(ctx, replay)
-	return adminapi.CreateCloudSupplier201JSONResponse{Body: body, Headers: adminapi.CreateCloudSupplier201ResponseHeaders{IdempotencyReplayed: replayedHeader(replay)}}, nil
+	return body, replay, err
 }
 
 // ReplaceSupplierCloudCredential checks a new credential in the regions given, or those the supplier serves from now,
@@ -70,11 +67,11 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 		return nil, err
 	}
 	b := request.Body
-	if b.Credential == nil {
-		return nil, invalidField("/credential", "required")
+	if b.Fields == nil {
+		return nil, invalidField("/fields", "required")
 	}
 	r := suppliers.CloudRequest{
-		Input: cloudInput(b.Credential), Reason: b.Reason,
+		Form: textValue(b.Form), Fields: *b.Fields, Reason: b.Reason,
 		Limits: suppliers.Limits{MaxConcurrency: newRegionConcurrency, RequestsPerMinute: b.RequestsPerMinute},
 	}
 	if b.Regions != nil {
@@ -91,7 +88,7 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 		return nil, cloudProblem(err)
 	}
 	claim, err := idempotencyClaim(ctx, "replaceSupplierCloudCredential", request.Params.IdempotencyKey,
-		[]any{request.SupplierId, r.Regions, r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
+		[]any{request.SupplierId, r.Form, r.Regions, plan.Settings(), r.Limits.MaxConcurrency, r.Limits.RequestsPerMinute, r.Reason, plan.Account(), plan.Checks[0].Last4})
 	if err != nil {
 		return nil, err
 	}
@@ -115,15 +112,21 @@ func (a adminAPI) ReplaceSupplierCloudCredential(ctx context.Context, request ad
 }
 
 // cloudRequest reads the body; what the contract's schema already refuses is not checked again.
-func cloudRequest(b *adminapi.CloudSupplierCreate) (suppliers.CloudRequest, error) {
+func cloudRequest(kind string, b *adminapi.TypedSupplierCreate) (suppliers.CloudRequest, error) {
 	r := suppliers.CloudRequest{
-		Kind: string(b.Provider), Name: b.Name, Reason: b.Reason,
+		Kind: kind, Name: b.Name, Form: textValue(b.Form), Fields: fieldsOf(b.Fields), Reason: b.Reason,
 		Limits: suppliers.Limits{MaxConcurrency: b.MaxConcurrency, RequestsPerMinute: b.RequestsPerMinute},
 	}
-	if b.Credential == nil {
-		return r, invalidField("/credential", "required")
+	switch {
+	case b.Keys != nil:
+		return r, invalidField("/keys", "a cloud platform's credential is its fields")
+	case b.Format != nil:
+		return r, invalidField("/format", "a cloud platform's call formats are its own")
 	}
-	r.Input = cloudInput(b.Credential)
+	var err error
+	if r.Entry, r.Origin, r.Currency, err = typedEntry(b); err != nil {
+		return r, err
+	}
 	if b.Regions != nil {
 		r.Regions = *b.Regions
 	}
@@ -132,42 +135,16 @@ func cloudRequest(b *adminapi.CloudSupplierCreate) (suppliers.CloudRequest, erro
 			r.Deployments = append(r.Deployments, suppliers.Deployment{Name: d.Name, Model: textValue(d.Model)})
 		}
 	}
-	if b.Origin != nil {
-		origin, err := suppliers.NormalizeOrigin(*b.Origin)
-		if err != nil {
-			return r, supplierProblem(err)
-		}
-		r.Origin = origin
-	}
-	if b.SettlementCurrency != nil {
-		currency, err := platform.ParseCurrency(*b.SettlementCurrency)
-		if err != nil {
-			return r, invalidField("/settlement_currency", "not a currency code")
-		}
-		r.Currency = currency
-	}
 	return r, nil
-}
-
-// cloudInput is the credential's members as the module reads them; an absent member is empty.
-func cloudInput(c *adminapi.CloudCredentialInput) suppliers.CloudInput {
-	return suppliers.CloudInput{
-		ServiceAccountJSON: textValue(c.ServiceAccountJson), AccessKeyID: textValue(c.AccessKeyId),
-		SecretAccessKey: textValue(c.SecretAccessKey), APIKey: textValue(c.ApiKey),
-	}
 }
 
 // cloudProblem maps the suppliers module's refusals of a cloud platform onto the contract, pointing at the member to
 // fix.
 func cloudProblem(err error) error {
-	if credErr, ok := errors.AsType[*suppliers.CredentialError](err); ok {
-		return invalidField("/credential/"+credErr.Member, credErr.Reason)
+	if mapped := typedProblem(err); mapped != nil {
+		return mapped
 	}
 	switch {
-	case errors.Is(err, suppliers.ErrCloudProvider):
-		return unprocessableFields("/provider", "this node has no adapter for that platform")
-	case errors.Is(err, suppliers.ErrCloudOrigin):
-		return invalidField("/origin", "only azure takes an origin, and it requires one")
 	case errors.Is(err, suppliers.ErrCloudRegions):
 		return invalidField("/regions", "vertex and bedrock require regions, and azure takes none")
 	case errors.Is(err, suppliers.ErrCloudDeployments):

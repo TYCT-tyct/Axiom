@@ -14,9 +14,10 @@ import (
 // Bedrock streams an answer in AWS's event-stream framing
 // (https://docs.aws.amazon.com/AmazonS3/latest/API/RESTSelectObjectAppendix.html, the same encoding): each message is
 // its total length, its headers' length and a CRC32 of those eight bytes, then the headers, the payload and a CRC32 of
-// all before it. A chunk event's payload is {"bytes": base64 of one of Anthropic's stream events}; an exception
-// message names its type in a header and ends the stream. sse turns them into Anthropic's SSE as they are read, one
-// message at a time, so nothing is held back.
+// all before it. InvokeModel's chunk event's payload is {"bytes": base64 of one of Anthropic's stream events};
+// ConverseStream's events are each of a type of its own with the event as the payload (converseanswer.go). An
+// exception message names its type in a header and ends the stream. sse turns them into the call format's SSE as they
+// are read, one message at a time, so nothing is held back.
 
 const (
 	// prelude is the total length, the headers' length and their CRC.
@@ -31,16 +32,31 @@ var (
 	errStreamFailed = io.EOF
 )
 
-// sse reads an event stream as Anthropic's SSE.
+// sse reads an event stream as the SSE its events write.
 type sse struct {
-	src io.ReadCloser
-	r   *bufio.Reader
-	buf []byte       // the message being read, kept for the next
-	out bytes.Buffer // SSE not read yet
-	err error
+	src    io.ReadCloser
+	r      *bufio.Reader
+	events events
+	buf    []byte       // the message being read, kept for the next
+	out    bytes.Buffer // SSE not read yet
+	err    error
 }
 
-func newSSE(src io.ReadCloser) *sse { return &sse{src: src, r: bufio.NewReader(src)} }
+// events writes one call format's SSE for the messages of an event stream.
+type events interface {
+	// event writes what an event of the type says; an error is a payload that does not read.
+	event(eventType string, payload []byte, out *bytes.Buffer) error
+	// failed writes the format's error for an exception Bedrock ended the stream with. Only the exception's type is
+	// said: its message is Bedrock's words, which can quote the request.
+	failed(exception string, out *bytes.Buffer)
+	// end writes what follows the last message of a stream that ended between messages.
+	end(out *bytes.Buffer)
+}
+
+// newSSE reads InvokeModel's event stream as Anthropic's SSE.
+func newSSE(src io.ReadCloser) *sse {
+	return &sse{src: src, r: bufio.NewReader(src), events: anthropicEvents{}}
+}
 
 // Read implements io.Reader.
 func (s *sse) Read(p []byte) (int, error) {
@@ -62,6 +78,7 @@ func (s *sse) next() error {
 	var head [prelude]byte
 	if _, err := io.ReadFull(s.r, head[:]); err != nil {
 		if errors.Is(err, io.EOF) {
+			s.events.end(&s.out)
 			return io.EOF
 		}
 		return errFraming
@@ -75,14 +92,14 @@ func (s *sse) next() error {
 		return errFraming
 	}
 	payload := m[prelude+headers : len(m)-4]
-	switch {
-	case h.messageType == "event" && h.eventType == "chunk":
-		return s.chunk(payload)
-	case h.messageType == "exception" || h.messageType == "error":
-		s.failed(h.exceptionType)
+	switch h.messageType {
+	case "event":
+		return s.events.event(h.eventType, payload, &s.out)
+	case "exception", "error":
+		s.events.failed(h.exceptionType, &s.out)
 		return errStreamFailed
 	}
-	return nil // an event of another type carries no event of Anthropic's
+	return nil
 }
 
 // message reads the rest of the message whose prelude is head, checked against its lengths and CRCs: the whole
@@ -103,9 +120,15 @@ func (s *sse) message(head [prelude]byte) ([]byte, uint32, bool) {
 	return m, headers, crc32.ChecksumIEEE(m[:total-4]) == binary.BigEndian.Uint32(m[total-4:])
 }
 
-// chunk writes the Anthropic event a chunk carries as one SSE event named by its type. A line break inside the JSON,
-// which Bedrock does not send, would still be its own data line, as SSE joins them.
-func (s *sse) chunk(payload []byte) error {
+// anthropicEvents writes InvokeModel's events as Anthropic's SSE.
+type anthropicEvents struct{}
+
+// event writes the Anthropic event a chunk carries as one SSE event named by its type; an event of another type carries
+// none. A line break inside the JSON, which Bedrock does not send, would still be its own data line, as SSE joins them.
+func (anthropicEvents) event(eventType string, payload []byte, out *bytes.Buffer) error {
+	if eventType != "chunk" {
+		return nil
+	}
 	var c struct {
 		Bytes []byte `json:"bytes"`
 	}
@@ -118,19 +141,27 @@ func (s *sse) chunk(payload []byte) error {
 	if jsonx.Unmarshal(c.Bytes, &event) != nil || event.Type == "" {
 		return errFraming
 	}
-	s.out.WriteString("event: " + event.Type + "\n")
+	out.WriteString("event: " + event.Type + "\n")
 	for line := range bytes.Lines(c.Bytes) {
-		s.out.WriteString("data: ")
-		s.out.Write(bytes.TrimRight(line, "\r\n"))
-		s.out.WriteByte('\n')
+		out.WriteString("data: ")
+		out.Write(bytes.TrimRight(line, "\r\n"))
+		out.WriteByte('\n')
 	}
-	s.out.WriteByte('\n')
+	out.WriteByte('\n')
 	return nil
 }
 
-// failed writes Anthropic's error event for an exception Bedrock ended the stream with. Only the exception's type is
-// said: its message is Bedrock's words, which can quote the request.
-func (s *sse) failed(exception string) {
+// failed writes Anthropic's error event.
+func (anthropicEvents) failed(exception string, out *bytes.Buffer) {
+	out.WriteString("event: error\ndata: {\"type\":\"error\"," + errorMember(exception) + "}\n\n")
+}
+
+// end writes nothing: Anthropic's stream ends with its own message_stop.
+func (anthropicEvents) end(*bytes.Buffer) {}
+
+// errorMember is the error member of Anthropic's error event and of a Chat chunk for an exception: a type both formats
+// know, and the exception's type.
+func errorMember(exception string) string {
 	kind := "api_error"
 	switch exception {
 	case "throttlingException", "serviceUnavailableException":
@@ -138,7 +169,7 @@ func (s *sse) failed(exception string) {
 	case "validationException":
 		kind = "invalid_request_error"
 	}
-	s.out.WriteString(`event: error` + "\n" + `data: {"type":"error","error":{"type":"` + kind + `","message":"Bedrock ended the stream: ` + safe(exception) + `"}}` + "\n\n")
+	return `"error":{"type":"` + kind + `","message":"Bedrock ended the stream: ` + safe(exception) + `"}`
 }
 
 // safe is an exception's type as it may go in a JSON string: letters only.

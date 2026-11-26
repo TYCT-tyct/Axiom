@@ -385,6 +385,7 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 	}
 	var key secret.Secret
 	var last4, region string
+	var settings adapter.Settings
 	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
 		rows, err := store.New().GetCredentialOf(ctx, tx, store.GetCredentialOfParams{SupplierID: supplier, ID: credential})
 		if err != nil {
@@ -396,35 +397,32 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 		if status := rows[0].Status; status == "disabled" || status == "erased" || status == "binding" {
 			return fmt.Errorf("%w: the credential is %s", ErrStatusLocked, status)
 		}
-		last4, region = deref(rows[0].Hint), deref(rows[0].Region)
+		last4, region, settings = deref(rows[0].Hint), deref(rows[0].Region), settingsOf(rows[0].Settings)
 		key, err = a.openKey(ctx, tx, credential)
 		return err
 	})
 	if err != nil {
 		return KeyCheck{}, err
 	}
-	check := a.checkStored(ctx, sup, region, key)
+	check := a.checkStored(ctx, sup, region, key, settings)
 	check.Credential, check.Last4 = credential, last4
 	return check, nil
 }
 
 // checkStored is one check of a stored credential the way its supplier is reached: a cloud credential in its region, a
 // direct API's key at the provider's model list with the provider's own header, a relay's key at /v1/models.
-func (a *Admin) checkStored(ctx context.Context, sup reachable, region string, key secret.Secret) KeyCheck {
+func (a *Admin) checkStored(ctx context.Context, sup reachable, region string, key secret.Secret, s adapter.Settings) KeyCheck {
 	switch ad := sup.adapter.(type) {
 	case adapter.Cloud:
-		got := ad.CheckRegion(ctx, a.egress, sup.origin, region, key, a.now())
+		got := ad.CheckRegion(ctx, a.egress, sup.origin, region, key, s, a.now())
 		return checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, KeyCheck{Region: region}, a.now())
 	case adapter.Direct:
 		c, err := client.New(sup.origin, a.egress, client.NewLimiter(nil, a.now), a.now)
 		if err != nil {
 			return KeyCheck{Outcome: CheckInconclusive, Cause: CauseUnknown, CheckedAt: a.now()}
 		}
-		family := ad.Family()
-		if family == "" {
-			family = adapter.Family(sup.apiFormat)
-		}
-		return checkOf(ad.CheckKey(ctx, c, family, key), KeyCheck{}, a.now())
+		family, _ := adapter.FamilyOf(ad.Type(), adapter.Family(sup.apiFormat))
+		return checkOf(ad.CheckKey(ctx, c, family, key, s), KeyCheck{}, a.now())
 	}
 	return a.checkKey(ctx, sup.adapter.Calls(), sup.origin, key)
 }

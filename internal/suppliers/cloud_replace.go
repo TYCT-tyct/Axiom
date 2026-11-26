@@ -37,7 +37,7 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 		return nil, err
 	}
 	regions := r.Regions
-	if regions == nil && c.Regional() {
+	if regions == nil && c.Type().Has(adapter.FieldRegions) {
 		if regions, err = servedRegions(ctx, tx, supplier); err != nil {
 			return nil, err
 		}
@@ -46,12 +46,12 @@ func (a *Admin) PlanCloudReplace(ctx context.Context, tx pg.Tx, supplier uuid.UU
 		return nil, fmt.Errorf("the supplier's settlement currency: %w", err)
 	}
 	var named []adapter.CloudModel
-	if c.Named() {
+	if c.Type().Has(adapter.FieldDeployments) {
 		if named, err = servedNames(ctx, tx, supplier); err != nil {
 			return nil, err
 		}
 	}
-	p, err := planCredential(c, s.Kind, s.Origin, r.Input, regions, named)
+	p, err := planCredential(c, s.Kind, s.Origin, r, regions, named)
 	if err != nil {
 		return nil, err
 	}
@@ -170,7 +170,7 @@ func (p *CloudPlan) refreshLine(ctx context.Context, tx pg.Tx, q *store.Queries,
 	if err := q.SetCloudAccount(ctx, tx, store.SetCloudAccountParams{CloudAccount: account, ID: p.supplier}); err != nil {
 		return fmt.Errorf("set the cloud account: %w", err)
 	}
-	if p.cloud.Named() {
+	if p.cloud.Type().Has(adapter.FieldDeployments) {
 		return nil // the models a person named are the line's already, mapped by the models they named
 	}
 	served, err := q.LineEndpoints(ctx, tx, group)

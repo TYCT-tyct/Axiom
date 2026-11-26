@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"hash/crc32"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -71,26 +73,32 @@ func TestEventStreamBecomesSSE(t *testing.T) {
 var example = secret.New(`{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`)
 
 // TestSign: a stream goes to InvokeModelWithResponseStream of the region, the body without its model and stream, with
-// Bedrock's version and the client's beta features, signed for bedrock in the region; one that does not stream goes to
-// InvokeModel.
+// Bedrock's version and the client's beta features, signed for bedrock in the region with an access key, or carrying
+// an API key as a bearer token; one that does not stream goes to InvokeModel.
 func TestSign(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
+	const signed = "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20261126/eu-central-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date, Signature="
 	for _, tc := range []struct {
-		body, url, want, accept string
+		key                           secret.Secret
+		body, url, want, accept, auth string
 	}{
 		{
-			`{"model":"anthropic.claude-x-v1:0","stream":true,"max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke-with-response-stream",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, eventStream,
+			example, `{"model":"anthropic.claude-x-v1:0","stream":true,"max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke-with-response-stream",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, eventStream, signed,
 		},
 		{
-			`{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
-			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json",
+			example, `{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json", signed,
+		},
+		{
+			exampleAPIKey, `{"model":"anthropic.claude-x-v1:0","max_tokens":8}`, "https://bedrock-runtime.eu-central-1.amazonaws.com/model/eu.anthropic.claude-x-v1:0/invoke",
+			`{"max_tokens":8,"anthropic_version":"bedrock-2023-05-31","anthropic_beta":["a-1","b-2"]}`, "application/json", "Bearer " + testAPIKey,
 		},
 	} {
 		req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
 			Format: protocol.Messages, Region: "eu-central-1", Model: "eu.anthropic.claude-x-v1:0", Body: []byte(tc.body),
-			Header: http.Header{"Anthropic-Beta": {"a-1, b-2"}}, Key: example, At: at,
+			Header: http.Header{"Anthropic-Beta": {"a-1, b-2"}}, Key: tc.key, At: at,
 		})
 		if f != nil {
 			t.Fatalf("%+v", f)
@@ -101,7 +109,7 @@ func TestSign(t *testing.T) {
 		}
 		auth := req.Header.Get("Authorization")
 		if req.URL.String() != strings.Replace(tc.url, "v1:0", "v1%3A0", 1) || string(body) != tc.want || req.Header.Get("Accept") != tc.accept ||
-			!strings.HasPrefix(auth, "AWS4-HMAC-SHA256 Credential=AKIAIOSFODNN7EXAMPLE/20261126/eu-central-1/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-date, Signature=") {
+			!strings.HasPrefix(auth, tc.auth) || (req.Header.Get("X-Amz-Date") == "") != strings.HasPrefix(tc.auth, "Bearer ") {
 			t.Errorf("sent %s %s, accept %s, %s", req.URL, body, req.Header.Get("Accept"), auth)
 		}
 	}
@@ -129,25 +137,34 @@ func TestClassify(t *testing.T) {
 }
 
 // fakeBedrock answers the control plane's listings: an on-demand model, one served only through profiles (a global
-// and a geography's), one served only through a profile the region lacks, and one that is retired.
+// and a geography's), one served only through a profile the region lacks, and one that is retired, of Anthropic's;
+// other providers' text models, one whose name cannot be told, and an embedding model. bearer is the API key every
+// request must carry; without one, each is signed with an access key.
 type fakeBedrock struct {
 	t      *testing.T
+	bearer string
 	status int
 	kind   string
 }
 
 func (f fakeBedrock) Do(r *http.Request) (*http.Response, error) {
-	if r.URL.Host != "bedrock.us-east-1.amazonaws.com" || !strings.Contains(r.Header.Get("Authorization"), "/us-east-1/bedrock/aws4_request") {
-		f.t.Errorf("asked %s with %q", r.URL, r.Header.Get("Authorization"))
+	auth := r.Header.Get("Authorization")
+	signed := strings.Contains(auth, "/us-east-1/bedrock/aws4_request") && f.bearer == ""
+	if r.URL.Host != "bedrock.us-east-1.amazonaws.com" || !signed && (f.bearer == "" || auth != "Bearer "+f.bearer) {
+		f.t.Errorf("asked %s with %q", r.URL, auth)
 	}
 	body := `{"inferenceProfileSummaries":[{"inferenceProfileId":"global.anthropic.claude-new-v1:0","status":"ACTIVE"},
-		{"inferenceProfileId":"us.anthropic.claude-new-v1:0","status":"ACTIVE"}]}`
+		{"inferenceProfileId":"us.anthropic.claude-new-v1:0","status":"ACTIVE"},{"inferenceProfileId":"us.meta.llama3-3-70b-instruct-v1:0","status":"ACTIVE"}]}`
 	if r.URL.Path == "/foundation-models" {
 		body = `{"modelSummaries":[
 		{"modelId":"anthropic.claude-old-20240620-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}},
 		{"modelId":"anthropic.claude-new-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["INFERENCE_PROFILE"],"modelLifecycle":{"status":"ACTIVE"}},
 		{"modelId":"anthropic.claude-elsewhere-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["INFERENCE_PROFILE"],"modelLifecycle":{"status":"ACTIVE"}},
-		{"modelId":"anthropic.claude-gone-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"LEGACY"}}]}`
+		{"modelId":"anthropic.claude-gone-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"LEGACY"}},
+		{"modelId":"amazon.nova-pro-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}},
+		{"modelId":"meta.llama3-3-70b-instruct-v1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["INFERENCE_PROFILE"],"modelLifecycle":{"status":"ACTIVE"}},
+		{"modelId":"openai.gpt-oss-120b-1:0","outputModalities":["TEXT"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}},
+		{"modelId":"amazon.titan-embed-text-v2:0","outputModalities":["EMBEDDING"],"inferenceTypesSupported":["ON_DEMAND"],"modelLifecycle":{"status":"ACTIVE"}}]}`
 	}
 	status := http.StatusOK
 	if f.status != 0 {
@@ -156,21 +173,70 @@ func (f fakeBedrock) Do(r *http.Request) (*http.Response, error) {
 	return &http.Response{StatusCode: status, Header: http.Header{"X-Amzn-Errortype": {f.kind}}, Body: io.NopCloser(strings.NewReader(body))}, nil
 }
 
-// TestCheckRegion: the region's models are its on-demand ones by their IDs and its profile-only ones through the
-// geography's profile, each known by Anthropic's name; a key AWS does not know fails as refused.
+// TestCheckRegion: with either form of credential, the region's text models of every provider are its on-demand ones
+// by their IDs and its profile-only ones through the geography's profile, each known by its vendor's name, or by its
+// ID when that name cannot be told; a key AWS does not know fails as refused.
 func TestCheckRegion(t *testing.T) {
 	t.Parallel()
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
-	got := New().CheckRegion(t.Context(), fakeBedrock{t: t}, origin, "us-east-1", example, at)
 	want := []adapter.CloudModel{
 		{Name: "anthropic.claude-old-20240620-v1:0", Known: "claude-old-20240620"},
 		{Name: "anthropic.claude-new-v1:0", Call: "us.anthropic.claude-new-v1:0", Known: "claude-new"},
+		{Name: "amazon.nova-pro-v1:0", Known: "nova-pro"},
+		{Name: "meta.llama3-3-70b-instruct-v1:0", Call: "us.meta.llama3-3-70b-instruct-v1:0", Known: "llama3-3-70b-instruct"},
+		{Name: "openai.gpt-oss-120b-1:0"},
 	}
-	if got.Outcome != adapter.KeyPassed || len(got.Models) != 2 || got.Models[0] != want[0] || got.Models[1] != want[1] {
-		t.Errorf("the check is %+v", got)
+	for name, tc := range map[string]struct {
+		key    secret.Secret
+		bearer string
+	}{"an access key": {example, ""}, "an API key": {exampleAPIKey, testAPIKey}} {
+		got := New().CheckRegion(t.Context(), fakeBedrock{t: t, bearer: tc.bearer}, origin, "us-east-1", tc.key, nil, at)
+		if got.Outcome != adapter.KeyPassed || !slices.Equal(got.Models, want) {
+			t.Errorf("%s: the check is %+v", name, got)
+		}
 	}
-	refused := New().CheckRegion(t.Context(), fakeBedrock{t: t, status: 403, kind: "UnrecognizedClientException"}, origin, "us-east-1", example, at)
+	refused := New().CheckRegion(t.Context(), fakeBedrock{t: t, status: 403, kind: "UnrecognizedClientException"}, origin, "us-east-1", example, nil, at)
 	if refused.Outcome != adapter.KeyFailed || refused.Cause != adapter.CauseRejected || refused.Status != 403 {
 		t.Errorf("a key AWS does not know: %+v", refused)
+	}
+}
+
+// testAPIKey is a made-up Bedrock API key, of no account and not of the real ones' form.
+const testAPIKey = "bedrock-test-api-key-0123456789"
+
+var exampleAPIKey = secret.New(`{"api_key":"` + testAPIKey + `"}`)
+
+// TestReadCredential: an access key seals as it always has, so stored ones still open; an API key seals alone and is
+// told apart by that; each is known by itself and shown by its last four; a key with a space or too short is refused.
+func TestReadCredential(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		form    string
+		secrets map[string]string
+		want    adapter.CloudCredential
+		field   string
+	}{
+		{"access_key", map[string]string{"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"},
+			adapter.CloudCredential{Key: example, Identity: "AKIAIOSFODNN7EXAMPLE", Last4: "MPLE", Account: adapter.CloudAccount{AccessKeyLast4: "MPLE"}}, ""},
+		{"api_key", map[string]string{"api_key": testAPIKey},
+			adapter.CloudCredential{Key: exampleAPIKey, Identity: testAPIKey, Last4: "6789", Account: adapter.CloudAccount{KeyLast4: "6789"}}, ""},
+		{"api_key", map[string]string{"api_key": "bedrock-test key-0123456789"}, adapter.CloudCredential{}, "api_key"},
+		{"api_key", map[string]string{"api_key": "short-key"}, adapter.CloudCredential{}, "api_key"},
+		{"access_key", map[string]string{"access_key_id": "AKIAIOSFODNN7EXAMPLE", "secret_access_key": "a b"}, adapter.CloudCredential{}, "secret_access_key"},
+	} {
+		got, err := New().ReadCredential(tc.form, tc.secrets)
+		var fieldErr *adapter.FieldError
+		if tc.field != "" {
+			if !errors.As(err, &fieldErr) || fieldErr.Field != tc.field {
+				t.Errorf("%v: %v, want the field %s refused", tc.secrets, err, tc.field)
+			}
+			continue
+		}
+		if err != nil || got.Key.Reveal() != tc.want.Key.Reveal() || got.Identity != tc.want.Identity || got.Last4 != tc.want.Last4 || got.Account != tc.want.Account {
+			t.Errorf("%s: read %+v (%v), sealed %s", tc.form, got, err, got.Key.Reveal())
+		}
+		if _, ok := credentialOf(got.Key); !ok {
+			t.Errorf("%s: the sealed key does not open", tc.form)
+		}
 	}
 }

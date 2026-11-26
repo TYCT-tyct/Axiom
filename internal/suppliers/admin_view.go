@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -111,6 +112,8 @@ type Credential struct {
 	LastCheck *KeyCheck
 	// Region is the cloud region the credential serves from; empty for every other.
 	Region string
+	// Settings is what is not secret about a direct or cloud credential, by its type's field names; nil for none.
+	Settings adapter.Settings
 }
 
 // credentialFacts is one credential row as the tables hold it. Every read of a credential for the admin selects these
@@ -132,6 +135,7 @@ type credentialFacts struct {
 	CheckCause        *string
 	CheckStatus       *int32
 	Region            *string
+	Settings          []byte
 }
 
 // credentialOf is a credential as the admin shows it.
@@ -140,7 +144,7 @@ func credentialOf(f credentialFacts) Credential {
 		ID: f.ID, Supplier: f.SupplierID, Group: f.SupplierGroupID, UpstreamKeyRef: f.UpstreamKeyRef, Status: f.Status,
 		CooldownUntil: f.CooldownUntil, ExpiresAt: f.ExpiresAt, MaxConcurrency: int(f.MaxConcurrency),
 		RequestsPerMinute: limited(f.RequestsPerMinute), Source: deref(f.Source), Last4: deref(f.Hint), CreatedAt: createdAt(f.ID),
-		Region: deref(f.Region),
+		Region: deref(f.Region), Settings: settingsOf(f.Settings),
 	}
 	if f.CheckedAt != nil && f.CheckOutcome != nil && f.CheckStatus != nil {
 		c.LastCheck = &KeyCheck{
@@ -149,6 +153,31 @@ func credentialOf(f credentialFacts) Credential {
 		}
 	}
 	return c
+}
+
+// settingsOf reads a credential's settings column; a column the database's CHECK let in is an object of strings, and
+// anything else reads as none.
+func settingsOf(b []byte) adapter.Settings {
+	if b == nil {
+		return nil
+	}
+	var s adapter.Settings
+	if jsonx.Unmarshal(b, &s) != nil {
+		return nil
+	}
+	return s
+}
+
+// settingsColumn is settings as the column stores them: NULL for none.
+func settingsColumn(s adapter.Settings) []byte {
+	if len(s) == 0 {
+		return nil
+	}
+	b, err := jsonx.MarshalCanonical(s)
+	if err != nil {
+		panic("suppliers: a map of strings does not marshal: " + err.Error())
+	}
+	return b
 }
 
 // createdAt is when a UUIDv7 was made: its first 48 bits are the Unix time in milliseconds. Another version has none.

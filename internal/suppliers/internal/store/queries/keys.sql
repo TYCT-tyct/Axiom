@@ -5,7 +5,7 @@
 -- Newest first: an ID is a UUIDv7. Only the platform's own suppliers: an account's key is its own (BYOK). The mode
 -- filter is the supplier's own mode (relay, direct, cloud).
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region, c.settings
 FROM suppliers.credentials c
 JOIN suppliers.suppliers s ON s.id = c.supplier_id
 WHERE s.owner_scope = 'platform'
@@ -20,7 +20,7 @@ LIMIT @page_size::int;
 -- One credential of one supplier, held for a change of its status until the transaction ends: a check's answer and a
 -- person's switch must not cross.
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region, c.settings
 FROM suppliers.credentials c WHERE c.supplier_id = @supplier_id AND c.id = @id FOR UPDATE;
 
 -- name: SetCredentialStatusOf :exec

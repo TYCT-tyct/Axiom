@@ -12,7 +12,7 @@
 |---|---|
 | `kind` | 适配器名，存在 `suppliers.kind`，创建后不变 |
 | `mode` | `relay`（登录中转站或号池）、`direct`（贴 key）、`cloud`（云平台凭证） |
-| `vendor` | 厂商标识，也决定图标；只卖一家模型的类型就是目录作者的 slug（`openai`、`deepseek`、`moonshotai`），云平台和聚合商是它自己的标识（`aws`、`siliconflow`） |
+| `vendor` | 厂商标识，也决定图标；只卖一家模型的类型就是目录作者的 slug（`openai`、`deepseek`、`moonshotai`），云平台和聚合商是它自己的标识（`aws`、`azure`） |
 | `serves` | 能卖哪些目录作者的模型；空表示任何作者（聚合商、兼容接口、中转站） |
 | `name`、`group` | 显示名（厂商的品牌名，不翻译）；分组：官方 API、国内厂商、云平台、中转站 |
 | `entries` | 价目入口：每个有自己的 ID、地址和价目表币种，地址和币种是一个值；同一地址可以有两个入口（DeepSeek 的人民币价和美元价）；请求选入口的 ID，从不另给币种；第一个是默认；没有入口的类型由人填地址和结算币种（兼容接口、Azure） |
@@ -38,24 +38,20 @@
 | `google` | Google Gemini | `generativelanguage.googleapis.com`（USD） | `/v1beta/openai` | — | — |
 | `moonshot` | Kimi | `api.moonshot.cn`（CNY）、`api.moonshot.ai`（USD） | `/v1` | `/anthropic` | `/v1/users/me/balance` |
 | `deepseek` | DeepSeek | `api.deepseek.com`（CNY，或同址 USD） | `/v1` | `/anthropic` | `/user/balance` |
-| `zhipu` | 智谱 GLM | `open.bigmodel.cn`（CNY）、`api.z.ai`（USD） | `/api/paas/v4` | `/api/anthropic` | — |
-| `bailian` | 阿里云百炼 | `dashscope.aliyuncs.com`（CNY）、`dashscope-intl.aliyuncs.com`（USD） | `/compatible-mode/v1` | `/apps/anthropic` | — |
 | `ark` | 火山方舟 | `ark.cn-beijing.volces.com`（CNY） | `/api/v3` | — | — |
 | `qianfan` | 百度千帆 | `qianfan.baidubce.com`（CNY） | `/v2` | — | — |
-| `minimax` | MiniMax | `api.minimaxi.com`（CNY）、`api.minimax.io`（USD） | `/v1` | `/anthropic` | — |
-| `hunyuan` | 腾讯混元 | `api.hunyuan.cloud.tencent.com`（CNY） | `/v1` | — | — |
+| `minimax` | MiniMax | `api.minimax.cn`（CNY）、`api.minimax.io`（USD） | `/v1` | `/anthropic` | — |
 | `xai` | xAI | `api.x.ai`（USD） | `/v1`，含 Responses | — | — |
 | `mistral` | Mistral | `api.mistral.ai`（USD） | `/v1` | — | — |
-| `openrouter` | OpenRouter | `openrouter.ai`（USD） | `/api/v1` | — | — |
-| `perplexity` | Perplexity | `api.perplexity.ai`（USD） | 空（`/chat/completions`） | — | — |
 
-- **检测用的清单**：缺省是前缀加 `/models`。OpenRouter 的 `/api/v1/models` 对无效 key 也回 200，改用要鉴权的 `/api/v1/models/user`。Perplexity 的 `/models` 是 404，用 `/v1/models`，录制样本证明它校验 key；证明不了就声明这一行不列模型：模型按目录在售的该作者模型生成（同 Vertex），key 只在加入时用一次输出上限 1 的最小生成检测，定期重读跳过它，重读永远不发收费的请求。
-- **不在这一批**：硅基流动没有机器可读的价目表，又卖多家的模型，按原厂官方价算会算错，这一批不收这一行（见「待定问题」）。
+- **检测用的清单**：缺省是前缀加 `/models`，必须是要鉴权的请求：无效的 key 得到 401 才判得了 key。xAI 对无效 key 回 400，检测判为不可判定，不会放过坏 key。不能免费列模型的类型（`lists` 为假）不做定期重读，模型来自目录，key 只在加入时用一次输出上限 1 的最小生成检测，重读永远不发收费的请求。
+- **没有模型清单的不收**：智谱、百炼的文档没有 OpenAI 格式的模型清单，腾讯混元原平台已停服、迁往 TokenHub；检测读不到清单就判不了 key，这一批不收这三行。
+- **不在这一批**：聚合商（硅基流动、OpenRouter）卖多家的模型，价不是目录里的原厂官方价，要读它们自己的价目才能定成本；Perplexity 的模型清单接口未经证实会校验 key。三者这一批不收（见「待定问题」）。
 
-- **两个调用族**：有 Anthropic 前缀的行同时说两族，`families` 是 `openai` 和 `anthropic`。Messages 按模型声明，不按厂商：行里列出厂商的 Anthropic 兼容接口服务的模型名（如百炼文档列出的那几个，`*` 只用于厂商写明全部模型都服务的），名单里的生成模型端点同时声明 Chat 和 Messages，其余只有 Chat，Messages 请求由网关转换。Messages 发到 `<地址><Anthropic 前缀>/v1/messages`，用 `x-api-key`，与 Chat 同一把 key、同一个价；网关对 Messages 请求优先选原生的 Messages，Claude Code 这类客户端不必经过转换。Anthropic 前缀与 OpenAI 前缀在同一地址下，凭证只发往供应商自己的地址这一条不变。
+- **两个调用族**：有 Anthropic 前缀的行同时说两族，`families` 是 `openai` 和 `anthropic`。Messages 按模型声明，不按厂商：行里列出厂商的 Anthropic 兼容接口服务的模型名（按厂商文档列出的名字，如 Kimi、DeepSeek、MiniMax 的；`*` 只用于厂商写明全部模型都服务的），名单里的生成模型端点同时声明 Chat 和 Messages，其余只有 Chat，Messages 请求由网关转换。Messages 发到 `<地址><Anthropic 前缀>/v1/messages`，用 `x-api-key`，与 Chat 同一把 key、同一个价；网关对 Messages 请求优先选原生的 Messages，Claude Code 这类客户端不必经过转换。Anthropic 前缀与 OpenAI 前缀在同一地址下，凭证只发往供应商自己的地址这一条不变。
 - **差异只用声明**：厂商的差异是行里的类型化字段或这一行声明的小钩子（模型清单路径、余额读法、额外的请求头），不是可配置的改写。请求体层面的差异（推理字段、`max_completion_tokens`、`stream_options`）由协议层按模型规格处理；某家确实要不同的写法，先录一份样本证明，再作为端点的类型化事实交给协议层，不在供应商一侧改请求体。每一行带一组录制的请求和回答样本，覆盖它声明的差异。
 - **币种跟着价目入口**：结算币种就是所选价目入口的币种，内置类型不能另选：同一模型的人民币价和美元价不是汇率关系（[目录基线的「币种」](catalog.md#目录基线)），另选币种就是用错价目表。只有人填地址的类型（`compatible`、Azure）给结算币种。供应商之间币种不同时，按已有的汇率换算记账（`Credits`）。读得到余额的入口在接入时核对：余额接口报的币种与入口不同，是 422。
-- **聚合商按自己的价**：OpenRouter 卖多家的模型，成本用它自己的每模型价（`/api/v1/models` 的 `pricing`，美元），接入和每次重读时读，乘线路倍率；它没给价的模型成本未知、不进路由。不拿原厂官方价乘一个倍率去凑。
+- **聚合商按自己的价**：卖多家模型的类型，成本只能用它自己的每模型价乘线路倍率，读不到价的模型成本未知、不进路由；不拿原厂官方价乘一个倍率去凑。
 
 ### 凭证：形式、字段和设置
 
@@ -151,7 +147,7 @@ Vertex AI、Bedrock、Azure OpenAI 贴凭证接入，`mode='cloud'`，其余同�
 ## 待定问题
 
 - Vertex 的 API key 只能调 Gemini 的 `generateContent`，不能调 Claude 的 `rawPredict`，也不能调 OpenAI 兼容的 Chat：这种形式要等网关能发 Gemini 原生格式才能开，开之前描述里不列它。
-- 硅基流动和 Bedrock 上第三方模型的价从哪来（硅基流动的价目页、AWS 的 Price List 接口，或人确认基础价），定下之前前者不收、后者成本未知。
+- 聚合商（硅基流动、OpenRouter 的 `/api/v1/models` 带价）和 Bedrock 上第三方模型的价从哪来（各自的价目、AWS 的 Price List 接口，或人确认基础价），定下之前前者不收、后者成本未知；Perplexity 等它的清单接口证实会校验 key；智谱、百炼的清单接口和腾讯 TokenHub 待查证后再加。
 - 同一钱包的几把 key 各读一次余额、各自比较，若厂商的余额接口给出账户标识，可以合成一个钱包少读几次；看录制样本再定。
 - 每把 key 的花费上限、new-api 的任务类渠道（Midjourney、Suno、视频）不在这一版。
 - 各厂商的路径、Anthropic 兼容接口支持哪些模型、余额接口的报文，以录制样本为准；云平台和各厂商的真实账号待实测（#497）。

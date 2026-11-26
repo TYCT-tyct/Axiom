@@ -13,9 +13,11 @@ import (
 	"uuid"
 
 	"axiom/internal/platform"
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/cloud"
 	"axiom/internal/suppliers/internal/persist"
 )
 
@@ -94,7 +96,7 @@ type relayWire struct{}
 
 func (relayWire) Path(_ protocol.Format, path string) string { return path }
 
-func (relayWire) Authorize(h http.Header, _ protocol.Format, key string) {
+func (relayWire) Authorize(h http.Header, _ protocol.Format, key string, _ adapter.Settings) {
 	h.Set("Authorization", "Bearer "+key)
 }
 
@@ -310,7 +312,7 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 	if cloud {
 		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
 			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
-			Header: call.Header, Key: a.cred.key, At: a.s.now(),
+			Header: call.Header, Key: a.cred.key, Settings: a.cred.settings, At: a.s.now(),
 		})
 	} else {
 		req, f = a.request(ctx, call)
@@ -357,17 +359,35 @@ func (a *Attempt) request(ctx context.Context, call Call) (*http.Request, *Failu
 	if !own {
 		wire = relayWire{}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
+	body, err := a.namedBody(call.Body)
+	if err != nil {
+		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
 	maps.Copy(req.Header, call.Header)
-	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal())
+	wire.Authorize(req.Header, call.Format, a.cred.key.Reveal(), a.cred.settings)
 	req.Header.Set("Content-Type", "application/json")
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)
 	}
 	return req, nil
+}
+
+// namedBody is the body with the model as the credential's calls name it: the gateway writes the endpoint's name, and a
+// key that lists the model under a name of its own (call_names) may not know that one. Only then is the body rewritten.
+func (a *Attempt) namedBody(body []byte) ([]byte, error) {
+	if a.cred.call == a.ep.upstream {
+		return body, nil
+	}
+	model, err := jsonx.MarshalCanonical(a.cred.call)
+	if err != nil {
+		return nil, err
+	}
+	out, _, err := cloud.Rewrite(body, nil, cloud.Member{Name: "model", Value: model})
+	return out, err
 }
 
 func (a *Attempt) noteResponse(status int, h http.Header) {

@@ -34,17 +34,16 @@ type models struct {
 // CheckKey implements adapter.Direct: one GET of the model list, which no provider charges for. Only a 401, or
 // Google's 400 that says the key is not valid, fails the key: a 403 may be a region block, and a rate limit, a timeout
 // or a 5xx says nothing about it. The response body is read for the names only; nothing of it is kept besides them.
-func (a *Adapter) CheckKey(ctx context.Context, c adapter.Client, f adapter.Family, key secret.Secret) adapter.KeyCheck {
+func (a *Adapter) CheckKey(ctx context.Context, c adapter.Client, f adapter.Family, key secret.Secret, s adapter.Settings) adapter.KeyCheck {
 	ctx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 	h := http.Header{"Accept": {"application/json"}}
-	path := quirks{a.p}.Path(protocol.Chat, "/v1/models")
-	format := protocol.Chat
+	path, format := a.p.Models, protocol.Chat
 	if f == adapter.FamilyAnthropic {
 		path, format = "/v1/models?limit=1000", protocol.Messages
 		h.Set("Anthropic-Version", "2023-06-01")
 	}
-	quirks{a.p}.Authorize(h, format, key.Reveal())
+	quirks{a.p}.Authorize(h, format, key.Reveal(), s)
 	resp, err := c.Do(ctx, adapter.Request{Method: http.MethodGet, Path: path, Header: h})
 	switch {
 	case errors.Is(err, adapter.ErrBucketsFull):

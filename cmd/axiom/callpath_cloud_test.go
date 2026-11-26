@@ -43,20 +43,20 @@ func TestCloudSuppliersServeAtTheOfficialPrice(t *testing.T) {
 	for _, tc := range []cloudCall{
 		{
 			"vertex",
-			suppliers.CloudRequest{Kind: "vertex", Input: suppliers.CloudInput{ServiceAccountJSON: serviceAccountKey()}, Regions: []string{"us-east5"}},
+			suppliers.CloudRequest{Kind: "vertex", Fields: map[string]string{"service_account_json": serviceAccountKey()}, Regions: []string{"us-east5"}},
 			"/v1/messages", messagesCall, "us-east5-aiplatform.googleapis.com/v1/projects/harbor-prod/locations/us-east5/publishers/anthropic/models/claude-opus-5-5@20261101:streamRawPredict",
 			"Bearer " + cloudGrant, messagesCharge, directCost, "0.0003", false,
 		},
 		{
 			"bedrock",
-			suppliers.CloudRequest{Kind: "bedrock", Input: suppliers.CloudInput{AccessKeyID: cloudKeyID, SecretAccessKey: "fake/secret+key"}, Regions: []string{"us-east-1"}},
+			suppliers.CloudRequest{Kind: "bedrock", Fields: map[string]string{"access_key_id": cloudKeyID, "secret_access_key": "fake/secret+key"}, Regions: []string{"us-east-1"}},
 			"/v1/messages", messagesCall, "bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-opus-5-5-v1%3A0/invoke-with-response-stream",
 			"AWS4-HMAC-SHA256 Credential=" + cloudKeyID + "/", messagesCharge, directCost, "0.0003", true,
 		},
 		{
 			"azure",
 			suppliers.CloudRequest{
-				Kind: "azure", Origin: "https://harbor.openai.azure.com", Input: suppliers.CloudInput{APIKey: cloudResourceKey},
+				Kind: "azure", Origin: "https://harbor.openai.azure.com", Fields: map[string]string{"api_key": cloudResourceKey},
 				Deployments: []suppliers.Deployment{{Name: "prod-astra", Model: "gpt-6-astra"}},
 			},
 			"/v1/chat/completions", `{"model":"gpt-6-astra","messages":[{"role":"user","content":"Hello"}]}`,

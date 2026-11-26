@@ -48,11 +48,19 @@ func New() *Adapter { return &Adapter{tokens: newTokens(exchangeAt)} }
 // Kind implements adapter.Adapter.
 func (*Adapter) Kind() adapter.Kind { return Kind }
 
-// Origin implements adapter.Cloud.
-func (*Adapter) Origin() string { return origin }
-
-// Regional implements adapter.Cloud.
-func (*Adapter) Regional() bool { return true }
+// Type implements adapter.Described. A service account is the one form: Vertex AI's API keys reach only Gemini's
+// generateContent, which the gateway does not send (docs/domains/suppliers-direct.md「待定问题」).
+func (*Adapter) Type() adapter.Type {
+	return adapter.Type{
+		Kind: Kind, Mode: adapter.ModeCloud, Name: "Vertex AI", Vendor: "google-cloud", Serves: []string{"anthropic", "google"},
+		Group: adapter.GroupCloud, Entries: []adapter.PriceEntry{{ID: "global", Origin: origin, Currency: "USD"}},
+		Families: []adapter.Family{adapter.FamilyAnthropic, adapter.FamilyOpenAI},
+		Forms: []adapter.Form{{Name: "service_account", Fields: []adapter.Field{
+			{Name: "service_account_json", Required: true, Max: 16384},
+		}}},
+		Fields: []adapter.Field{{Name: "regions", Required: true}},
+	}
+}
 
 // serviceAccount is what is kept of a service account's JSON key: what signs a token and what names the project. The
 // rest of the file (its token_uri among it) is not read: tokens are asked of Google's one token service, never of an
@@ -66,24 +74,21 @@ type serviceAccount struct {
 
 // ReadCredential implements adapter.Cloud: the JSON key with its project, account and private key, which must be an
 // RSA key. What is sealed is those four members alone.
-func (*Adapter) ReadCredential(in adapter.CloudInput) (adapter.CloudCredential, error) {
+func (*Adapter) ReadCredential(_ string, secrets map[string]string) (adapter.CloudCredential, error) {
 	const member = "service_account_json"
-	if in.AccessKeyID != "" || in.SecretAccessKey != "" || in.APIKey != "" {
-		return adapter.CloudCredential{}, &adapter.CredentialFormError{Member: "service_account_json", Reason: "is the only member Vertex AI takes"}
-	}
 	var sa serviceAccount
-	if err := jsonx.Unmarshal([]byte(in.ServiceAccountJSON), &sa); err != nil {
-		return adapter.CloudCredential{}, &adapter.CredentialFormError{Member: member, Reason: "is not a service account's JSON key"}
+	if err := jsonx.Unmarshal([]byte(secrets[member]), &sa); err != nil {
+		return adapter.CloudCredential{}, &adapter.FieldError{Field: member, Reason: "is not a service account's JSON key"}
 	}
 	if sa.ProjectID == "" || sa.ClientEmail == "" || sa.PrivateKeyID == "" || !strings.Contains(sa.ClientEmail, "@") {
-		return adapter.CloudCredential{}, &adapter.CredentialFormError{Member: member, Reason: "needs project_id, client_email and private_key_id"}
+		return adapter.CloudCredential{}, &adapter.FieldError{Field: member, Reason: "needs project_id, client_email and private_key_id"}
 	}
 	if _, err := privateKey(sa.PrivateKey); err != nil {
-		return adapter.CloudCredential{}, &adapter.CredentialFormError{Member: member, Reason: "has no RSA private_key"}
+		return adapter.CloudCredential{}, &adapter.FieldError{Field: member, Reason: "has no RSA private_key"}
 	}
 	sealed, err := jsonx.MarshalCanonical(sa)
 	if err != nil {
-		return adapter.CloudCredential{}, &adapter.CredentialFormError{Member: member, Reason: "is not a service account's JSON key"}
+		return adapter.CloudCredential{}, &adapter.FieldError{Field: member, Reason: "is not a service account's JSON key"}
 	}
 	return adapter.CloudCredential{
 		Key: secret.New(string(sealed)), Identity: sa.ClientEmail + "\x00" + sa.PrivateKeyID, Last4: last4(sa.PrivateKeyID),
@@ -138,7 +143,7 @@ func base(project, region string) string {
 // region is read with it (locations.get), which is not charged for. A refused exchange fails the credential in every
 // region; a region the project cannot use (400 or 404) fails as region_unavailable. Vertex AI lists no models of the
 // project, so a check has none and the catalog's are offered (Offer).
-func (a *Adapter) CheckRegion(ctx context.Context, d adapter.Doer, _, region string, key secret.Secret, at time.Time) adapter.CloudCheck {
+func (a *Adapter) CheckRegion(ctx context.Context, d adapter.Doer, _, region string, key secret.Secret, _ adapter.Settings, at time.Time) adapter.CloudCheck {
 	ctx, cancel := cloud.Checked(ctx)
 	defer cancel()
 	acct, err := a.tokens.get(ctx, d, key, at)

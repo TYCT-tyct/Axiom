@@ -2163,29 +2163,27 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/admin/v1/suppliers/direct": {
+    "/api/admin/v1/supplier-types": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        get?: never;
-        put?: never;
         /**
-         * Connect a provider's own API with pasted keys
-         * @description Connects a direct API (`mode` `direct`, one line): a provider whose address and call format are built in (`openai`, `anthropic`, `google`, `moonshot`), or `compatible`, any other API speaking one of the call formats at the origin given. Each key is checked with one request the provider does not charge for (its model list) before it is kept; a key that passes is sealed and stored as its own credential with the limits given, and no key text is ever returned, only its last four characters. A direct API has no balance to read and no unit value to confirm: its costs are the catalog's official reference prices in the settlement currency (`source` `price_list`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
-         *
-         *     201 with the supplier when at least one key passed. When none did, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         * The channel types this node can connect
+         * @description Every channel type the node's registry carries, as its adapter describes it, ordered by group and name: what a request to connect one is checked against (docs/domains/suppliers-direct.md). Each price entry carries how many listed catalog models of the type's makers have a reference price in the entry's currency; a type all of whose entries have none has nothing to sell yet.
          */
-        post: operations["createDirectSupplier"];
+        get: operations["listSupplierTypes"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/admin/v1/suppliers/cloud": {
+    "/api/admin/v1/supplier-types/{kind}/suppliers": {
         parameters: {
             query?: never;
             header?: never;
@@ -2195,12 +2193,12 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Connect a cloud platform's model service with its credential
-         * @description Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned; what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the resource is one credential, and the deployments named are its models. Costs are the catalog's official reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
+         * Connect a provider's own API or a cloud platform of the type with its keys or credential
+         * @description Connects a supplier of a `direct` or `cloud` channel type (`listSupplierTypes`). A direct API's keys are checked each with one request the provider does not charge for before it is kept, and each one that passes is its own credential; a cloud platform's credential is checked in each region named (or once, for one without regions) and each region that passes is its own credential. Nothing secret is ever returned, only last four characters. A type with price entries is connected at the entry named (`entry`, absent for its first), whose price list's currency is the settlement currency; a type without them takes `origin` and `settlement_currency`. The costs are the type's prices times the line's ratio (`price_list`). An unknown kind, or one of a relay, is 404.
          *
-         *     201 with the supplier when the credential passed in at least one region; a region that failed is not stored. When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         *     201 with the supplier when at least one key or region passed. When none did, nothing is stored and the answer is 200 with the checks and no `supplier`.
          */
-        post: operations["createCloudSupplier"];
+        post: operations["createTypedSupplier"];
         delete?: never;
         options?: never;
         head?: never;
@@ -6013,6 +6011,10 @@ export interface components {
             /** @description The last four characters of a pasted key; never more of it. */
             last4?: string;
             region?: components["schemas"]["CloudRegion"];
+            /** @description What is not secret about a direct or cloud credential, by the type's field names. */
+            settings?: {
+                [key: string]: string;
+            };
             /** Format: date-time */
             created_at?: string;
             /** @description The calls holding the credential now, as the node that answered counts them. */
@@ -6553,17 +6555,7 @@ export interface components {
          */
         SupplierMode: "relay" | "direct" | "cloud";
         /**
-         * @description A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
-         * @enum {string}
-         */
-        DirectProvider: "openai" | "anthropic" | "google" | "moonshot" | "compatible";
-        /**
-         * @description `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
-         * @enum {string}
-         */
-        CloudProvider: "vertex" | "bedrock" | "azure";
-        /**
-         * @description The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The paths follow from it.
+         * @description A call family: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The one a `compatible` direct API speaks is its supplier's, and the paths follow from it.
          * @enum {string}
          */
         ApiFormat: "openai" | "anthropic" | "gemini";
@@ -6578,30 +6570,86 @@ export interface components {
             /** @description Azure OpenAI: the last four characters of the resource's key. */
             key_last4?: string;
         };
-        DirectSupplierCreate: {
-            provider: components["schemas"]["DirectProvider"];
+        SupplierTypeList: {
+            data: components["schemas"]["SupplierType"][];
+        };
+        /** @description A channel type as its adapter describes it. A relay's type has no fields: it is connected by detection and a login (`detectSupplier`, `createSupplier`). */
+        SupplierType: {
+            /** @description The adapter's name, the supplier's `kind`. */
+            kind: string;
+            mode: components["schemas"]["SupplierMode"];
+            /** @description The maker's slug, which also picks the icon; absent for a type of no one maker. */
+            vendor?: string;
+            /** @description The catalog authors whose models the type sells at their official prices; empty for any. */
+            serves?: string[];
+            /** @description The brand's own name, not translated. */
             name: string;
-            /** @description Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path. A built-in provider's origin is its own, so giving one is a 400. */
+            /** @enum {string} */
+            group: "official" | "domestic" | "cloud" | "relay";
+            /** @description The price lists the type is connected at, the default first; empty for a type whose address and settlement currency a person gives. */
+            entries: components["schemas"]["SupplierTypeEntry"][];
+            /** @description The call families the type speaks; for one without entries, the one a person chooses. */
+            families: components["schemas"]["ApiFormat"][];
+            /** @description The shapes the credential may take, the default first; empty for a relay. */
+            forms: components["schemas"]["SupplierTypeForm"][];
+            /** @description Asked whatever the form, in order. */
+            fields: components["schemas"]["SupplierTypeField"][];
+            /** @description A free, authenticated request lists the models a key serves. Without it the models come from the catalog, a key is checked once with the smallest generation, and the models are never re-listed. */
+            lists_models: boolean;
+            /** @description Each key's balance is read, and a key that cannot pay is not chosen. */
+            reads_balance: boolean;
+        };
+        SupplierTypeEntry: {
+            id: string;
+            origin: string;
+            /** @description The price list's currency: the settlement currency. */
+            currency: string;
+            /** @description Listed catalog models of the type's makers with a reference price in the currency; absent for a type that sells any maker's models. */
+            models?: number;
+        };
+        SupplierTypeForm: {
+            name: string;
+            fields: components["schemas"]["SupplierTypeField"][];
+        };
+        SupplierTypeField: {
+            /** @description One of a fixed vocabulary, which the page has words for. */
+            name: string;
+            /**
+             * @description `keys` (one a line, each its own credential) are the request's `keys`; `regions` and `deployments` its own members; the others are its `fields`. Only `text` is a setting, shown again; the rest are secret.
+             * @enum {string}
+             */
+            kind: "keys" | "secret" | "json" | "text" | "regions" | "deployments";
+            required: boolean;
+            pattern?: string;
+            max_length?: number;
+        };
+        TypedSupplierCreate: {
+            name: string;
+            /** @description The price entry to connect at; absent for the first. Only for a type with entries (400). */
+            entry?: string;
+            /** @description Required for a type without price entries, refused for the others (400). */
             origin?: string;
-            /** @description Only for `compatible`, where it is required; a built-in provider's format is its own (400). */
+            /** @description Only for a type whose family a person chooses (`compatible`), where it is required. */
             format?: components["schemas"]["ApiFormat"];
-            /** @description The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states. Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or CNY for `moonshot`). */
+            /** @description Only for a type without price entries, where it is required for a direct API and absent is USD for a cloud platform. A type with entries settles in its entry's currency (400 when given). */
             settlement_currency?: string;
-            /** @description The keys, one per item, sealed on arrival and never returned. */
-            keys: string[];
-            /** @description The calls each key has in flight at once. */
+            /** @description The credential's form; absent for the type's first. */
+            form?: string;
+            /** @description The form's and the type's fields other than keys, regions and deployments, by name: secrets, sealed on arrival and never returned, and settings, which the credential view shows. A field the type does not ask for is a 400. */
+            fields?: {
+                [key: string]: string;
+            };
+            /** @description For a type whose form has `keys`: the keys, one per item, sealed on arrival and never returned. */
+            keys?: string[];
+            /** @description For a type with `regions`, each checked and limited on its own. */
+            regions?: components["schemas"]["CloudRegion"][];
+            /** @description For a type with `deployments` (Azure OpenAI), which the platform does not list to its key. */
+            deployments?: components["schemas"]["CloudDeployment"][];
+            /** @description The calls each key or region has in flight at once. */
             max_concurrency: number;
-            /** @description Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none. */
+            /** @description Each key's or region's rolling-minute ceiling; absent for none. */
             requests_per_minute?: number;
             reason: components["schemas"]["Reason"];
-        };
-        /** @description The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400. */
-        CloudCredentialInput: {
-            /** @description The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`. */
-            service_account_json?: string;
-            access_key_id?: string;
-            secret_access_key?: string;
-            api_key?: string;
         };
         /** @description A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1. */
         CloudRegion: string;
@@ -6611,26 +6659,13 @@ export interface components {
             /** @description The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name. */
             model?: string;
         };
-        CloudSupplierCreate: {
-            provider: components["schemas"]["CloudProvider"];
-            name: string;
-            /** @description Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com. */
-            origin?: string;
-            credential: components["schemas"]["CloudCredentialInput"];
-            /** @description Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400). */
-            regions?: components["schemas"]["CloudRegion"][];
-            /** @description Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI does not list to the resource's key. Each one's calls go to its path; the quality check calls each before it takes traffic. A deployment named twice is named once. */
-            deployments?: components["schemas"]["CloudDeployment"][];
-            /** @description The currency the platform bills in, fixed once connected; absent is USD. */
-            settlement_currency?: string;
-            /** @description The calls each region has in flight at once. */
-            max_concurrency: number;
-            /** @description Each region's rolling-minute ceiling; absent for none. */
-            requests_per_minute?: number;
-            reason: components["schemas"]["Reason"];
-        };
         CloudCredentialReplace: {
-            credential: components["schemas"]["CloudCredentialInput"];
+            /** @description The new credential's form; absent for the type's first. */
+            form?: string;
+            /** @description The new credential's fields by name, as `TypedSupplierCreate.fields`. */
+            fields?: {
+                [key: string]: string;
+            };
             /** @description The regions to serve from now on; absent keeps the current ones. Not for `azure` (400). */
             regions?: components["schemas"]["CloudRegion"][];
             /** @description For a region added here; absent is 4. A region kept keeps its limits. */
@@ -6715,6 +6750,10 @@ export interface components {
         SupplierKeysAdd: {
             /** @description Required for a relay, refused for a direct API (400). */
             group_id?: components["schemas"]["Uuid"];
+            /** @description For a direct API: the settings of these keys by name, as the type's text fields (`TypedSupplierCreate.fields`); refused for a relay (400). */
+            fields?: {
+                [key: string]: string;
+            };
             /** @description The keys, one per item, sealed on arrival and never returned. */
             keys: string[];
             /** @description The calls each key has in flight at once. */
@@ -11741,67 +11780,48 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
-    createDirectSupplier: {
+    listSupplierTypes: {
         parameters: {
             query?: never;
-            header: {
-                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
-                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
-            };
+            header?: never;
             path?: never;
             cookie?: never;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DirectSupplierCreate"];
-            };
-        };
+        requestBody?: never;
         responses: {
-            /** @description No key passed; nothing was stored. */
+            /** @description The types. */
             200: {
                 headers: {
-                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["SupplierConnected"];
+                    "application/json": components["schemas"]["SupplierTypeList"];
                 };
             };
-            /** @description Connected, with the check of each key. */
-            201: {
-                headers: {
-                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SupplierConnected"];
-                };
-            };
-            400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
-            409: components["responses"]["Conflict"];
-            422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
     };
-    createCloudSupplier: {
+    createTypedSupplier: {
         parameters: {
             query?: never;
             header: {
                 /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
                 "Idempotency-Key": components["parameters"]["IdempotencyKey"];
             };
-            path?: never;
+            path: {
+                kind: string;
+            };
             cookie?: never;
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["CloudSupplierCreate"];
+                "application/json": components["schemas"]["TypedSupplierCreate"];
             };
         };
         responses: {
-            /** @description The credential passed in no region; nothing was stored. */
+            /** @description Nothing passed; nothing was stored. */
             200: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -11811,7 +11831,7 @@ export interface operations {
                     "application/json": components["schemas"]["SupplierConnected"];
                 };
             };
-            /** @description Connected, with the check of each region. */
+            /** @description Connected, with the check of each key or region. */
             201: {
                 headers: {
                     "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
@@ -11824,6 +11844,7 @@ export interface operations {
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];

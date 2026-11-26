@@ -4631,97 +4631,72 @@ paths:
         "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         default: {$ref: "#/components/responses/Failure"}
-  /api/admin/v1/suppliers/direct:
-    post:
-      operationId: createDirectSupplier
+  /api/admin/v1/supplier-types:
+    get:
+      operationId: listSupplierTypes
       tags: [Suppliers]
-      summary: Connect a provider's own API with pasted keys
+      summary: The channel types this node can connect
       description: >-
-        Connects a direct API (`mode` `direct`, one line): a provider whose address and call format are built in
-        (`openai`, `anthropic`, `google`, `moonshot`), or `compatible`, any other API speaking one of the call formats
-        at the origin given. Each key is checked with one request the provider does not charge for (its model list)
-        before it is kept; a key that passes is sealed and stored as its own credential with the limits given, and no
-        key text is ever returned, only its last four characters. A direct API has no balance to read and no unit value
-        to confirm: its costs are the catalog's official reference prices in the settlement currency (`source`
-        `price_list`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take
-        traffic.
-
-
-        201 with the supplier when at least one key passed. When none did, nothing is stored and the answer is 200 with
-        the checks and no `supplier`.
+        Every channel type the node's registry carries, as its adapter describes it, ordered by group and name: what a
+        request to connect one is checked against (docs/domains/suppliers-direct.md). Each price entry carries how many
+        listed catalog models of the type's makers have a reference price in the entry's currency; a type all of whose
+        entries have none has nothing to sell yet.
       security:
         - session: []
-          csrf: []
       x-axiom-level: mfa
-      x-axiom-permission: suppliers.manage
-      parameters:
-        - $ref: "#/components/parameters/IdempotencyKey"
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema: {$ref: "#/components/schemas/DirectSupplierCreate"}
+      x-axiom-permission: suppliers.view
       responses:
-        "201":
-          description: Connected, with the check of each key.
-          headers:
-            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/SupplierConnected"}
         "200":
-          description: No key passed; nothing was stored.
-          headers:
-            Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
+          description: The types.
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/SupplierConnected"}
-        "400": {$ref: "#/components/responses/BadRequest"}
+              schema: {$ref: "#/components/schemas/SupplierTypeList"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
-        "409": {$ref: "#/components/responses/Conflict"}
-        "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
-  /api/admin/v1/suppliers/cloud:
+  /api/admin/v1/supplier-types/{kind}/suppliers:
     post:
-      operationId: createCloudSupplier
+      operationId: createTypedSupplier
       tags: [Suppliers]
-      summary: Connect a cloud platform's model service with its credential
+      summary: Connect a provider's own API or a cloud platform of the type with its keys or credential
       description: >-
-        Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's
-        address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned;
-        what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region
-        chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute
-        ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the
-        resource is one credential, and the deployments named are its models. Costs are the catalog's official
-        reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts
-        `connecting`, and its endpoints wait for the quality check before they take traffic.
+        Connects a supplier of a `direct` or `cloud` channel type (`listSupplierTypes`). A direct API's keys are checked
+        each with one request the provider does not charge for before it is kept, and each one that passes is its own
+        credential; a cloud platform's credential is checked in each region named (or once, for one without regions)
+        and each region that passes is its own credential. Nothing secret is ever returned, only last four characters.
+        A type with price entries is connected at the entry named (`entry`, absent for its first), whose price list's
+        currency is the settlement currency; a type without them takes `origin` and `settlement_currency`. The costs are
+        the type's prices times the line's ratio (`price_list`). An unknown kind, or one of a relay, is 404.
 
 
-        201 with the supplier when the credential passed in at least one region; a region that failed is not stored.
-        When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
+        201 with the supplier when at least one key or region passed. When none did, nothing is stored and the answer
+        is 200 with the checks and no `supplier`.
       security:
         - session: []
           csrf: []
       x-axiom-level: mfa
       x-axiom-permission: suppliers.manage
       parameters:
+        - name: kind
+          in: path
+          required: true
+          schema: {type: string, pattern: '^[a-z][a-z0-9]*$', maxLength: 40}
         - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/CloudSupplierCreate"}
+            schema: {$ref: "#/components/schemas/TypedSupplierCreate"}
       responses:
         "201":
-          description: Connected, with the check of each region.
+          description: Connected, with the check of each key or region.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
             application/json:
               schema: {$ref: "#/components/schemas/SupplierConnected"}
         "200":
-          description: The credential passed in no region; nothing was stored.
+          description: Nothing passed; nothing was stored.
           headers:
             Idempotency-Replayed: {$ref: "#/components/headers/IdempotencyReplayed"}
           content:
@@ -4730,6 +4705,7 @@ paths:
         "400": {$ref: "#/components/responses/BadRequest"}
         "401": {$ref: "#/components/responses/Unauthenticated"}
         "403": {$ref: "#/components/responses/Forbidden"}
+        "404": {$ref: "#/components/responses/NotFound"}
         "409": {$ref: "#/components/responses/Conflict"}
         "422": {$ref: "#/components/responses/Unprocessable"}
         default: {$ref: "#/components/responses/Failure"}
@@ -10652,6 +10628,10 @@ components:
           description: "Whether the sync made the key, a person bound one the supplier lists, or a person pasted its text."
         last4: {type: string, description: "The last four characters of a pasted key; never more of it."}
         region: {$ref: "#/components/schemas/CloudRegion"}
+        settings:
+          type: object
+          description: What is not secret about a direct or cloud credential, by the type's field names.
+          additionalProperties: {type: string}
         created_at: {type: string, format: date-time}
         in_flight:
           type: integer
@@ -11438,22 +11418,12 @@ components:
         How Axiom reaches the supplier. `relay`: a relay or a pool Axiom logs in to, whose groups are its lines.
         `direct`: a provider's own API, or a compatible one, reached with pasted keys; one line. `cloud`: a cloud
         platform's model service reached with its credential; one line, one credential per region.
-    DirectProvider:
-      type: string
-      enum: [openai, anthropic, google, moonshot, compatible]
-      description: >-
-        A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the
-        format given. It is the supplier's `kind`.
-    CloudProvider:
-      type: string
-      enum: [vertex, bedrock, azure]
-      description: "`vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`."
     ApiFormat:
       type: string
       enum: [openai, anthropic, gemini]
       description: >-
-        The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's
-        Messages, or Gemini's generateContent. The paths follow from it.
+        A call family: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The
+        one a `compatible` direct API speaks is its supplier's, and the paths follow from it.
     CloudAccount:
       type: object
       description: What is not secret about a cloud supplier's credential; the credential itself is never returned.
@@ -11462,62 +11432,151 @@ components:
         client_email: {type: string, description: "Vertex AI: the service account."}
         access_key_last4: {type: string, description: "Bedrock: the last four characters of the access key ID."}
         key_last4: {type: string, description: "Azure OpenAI: the last four characters of the resource's key."}
-    DirectSupplierCreate:
+    SupplierTypeList:
       type: object
-      required: [provider, name, keys, max_concurrency, reason]
+      required: [data]
       properties:
-        provider: {$ref: "#/components/schemas/DirectProvider"}
+        data:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierType"}
+    SupplierType:
+      type: object
+      description: >-
+        A channel type as its adapter describes it. A relay's type has no fields: it is connected by detection and a
+        login (`detectSupplier`, `createSupplier`).
+      required: [kind, mode, name, group, entries, families, forms, fields, lists_models, reads_balance]
+      properties:
+        kind: {type: string, pattern: '^[a-z][a-z0-9]*$', description: "The adapter's name, the supplier's `kind`."}
+        mode: {$ref: "#/components/schemas/SupplierMode"}
+        vendor: {type: string, description: "The maker's slug, which also picks the icon; absent for a type of no one maker."}
+        serves:
+          type: array
+          description: The catalog authors whose models the type sells at their official prices; empty for any.
+          items: {type: string}
+        name: {type: string, description: "The brand's own name, not translated."}
+        group: {type: string, enum: [official, domestic, cloud, relay]}
+        entries:
+          type: array
+          description: >-
+            The price lists the type is connected at, the default first; empty for a type whose address and settlement
+            currency a person gives.
+          items: {$ref: "#/components/schemas/SupplierTypeEntry"}
+        families:
+          type: array
+          description: The call families the type speaks; for one without entries, the one a person chooses.
+          items: {$ref: "#/components/schemas/ApiFormat"}
+        forms:
+          type: array
+          description: The shapes the credential may take, the default first; empty for a relay.
+          items: {$ref: "#/components/schemas/SupplierTypeForm"}
+        fields:
+          type: array
+          description: Asked whatever the form, in order.
+          items: {$ref: "#/components/schemas/SupplierTypeField"}
+        lists_models:
+          type: boolean
+          description: >-
+            A free, authenticated request lists the models a key serves. Without it the models come from the catalog, a
+            key is checked once with the smallest generation, and the models are never re-listed.
+        reads_balance: {type: boolean, description: "Each key's balance is read, and a key that cannot pay is not chosen."}
+    SupplierTypeEntry:
+      type: object
+      required: [id, origin, currency]
+      properties:
+        id: {type: string, pattern: '^[a-z][a-z0-9-]{0,31}$'}
+        origin: {type: string}
+        currency: {type: string, pattern: '^[A-Z]{3}$', description: "The price list's currency: the settlement currency."}
+        models:
+          type: integer
+          minimum: 0
+          description: >-
+            Listed catalog models of the type's makers with a reference price in the currency; absent for a type that
+            sells any maker's models.
+    SupplierTypeForm:
+      type: object
+      required: [name, fields]
+      properties:
+        name: {type: string}
+        fields:
+          type: array
+          items: {$ref: "#/components/schemas/SupplierTypeField"}
+    SupplierTypeField:
+      type: object
+      required: [name, kind, required]
+      properties:
+        name: {type: string, description: "One of a fixed vocabulary, which the page has words for."}
+        kind:
+          type: string
+          enum: [keys, secret, json, text, regions, deployments]
+          description: >-
+            `keys` (one a line, each its own credential) are the request's `keys`; `regions` and `deployments` its own
+            members; the others are its `fields`. Only `text` is a setting, shown again; the rest are secret.
+        required: {type: boolean}
+        pattern: {type: string}
+        max_length: {type: integer, minimum: 1}
+    TypedSupplierCreate:
+      type: object
+      required: [name, max_concurrency, reason]
+      properties:
         name: {type: string, minLength: 1, maxLength: 200}
+        entry:
+          type: string
+          pattern: '^[a-z][a-z0-9-]{0,31}$'
+          description: The price entry to connect at; absent for the first. Only for a type with entries (400).
         origin:
           type: string
           pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
           maxLength: 255
-          description: >-
-            Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path.
-            A built-in provider's origin is its own, so giving one is a 400.
+          description: Required for a type without price entries, refused for the others (400).
         format:
           allOf: [{$ref: "#/components/schemas/ApiFormat"}]
-          description: Only for `compatible`, where it is required; a built-in provider's format is its own (400).
+          description: Only for a type whose family a person chooses (`compatible`), where it is required.
         settlement_currency:
           type: string
           pattern: '^[A-Z]{3}$'
           description: >-
-            The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states.
-            Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or
-            CNY for `moonshot`).
+            Only for a type without price entries, where it is required for a direct API and absent is USD for a cloud
+            platform. A type with entries settles in its entry's currency (400 when given).
+        form: {type: string, maxLength: 40, description: "The credential's form; absent for the type's first."}
+        fields:
+          type: object
+          writeOnly: true
+          maxProperties: 16
+          description: >-
+            The form's and the type's fields other than keys, regions and deployments, by name: secrets, sealed on
+            arrival and never returned, and settings, which the credential view shows. A field the type does not ask
+            for is a 400.
+          additionalProperties: {type: string, maxLength: 16384}
         keys:
           type: array
           minItems: 1
           maxItems: 100
           writeOnly: true
-          description: The keys, one per item, sealed on arrival and never returned.
+          description: "For a type whose form has `keys`: the keys, one per item, sealed on arrival and never returned."
           items: {type: string, minLength: 8, maxLength: 4096}
+        regions:
+          type: array
+          minItems: 1
+          maxItems: 20
+          description: For a type with `regions`, each checked and limited on its own.
+          items: {$ref: "#/components/schemas/CloudRegion"}
+        deployments:
+          type: array
+          minItems: 1
+          maxItems: 100
+          description: For a type with `deployments` (Azure OpenAI), which the platform does not list to its key.
+          items: {$ref: "#/components/schemas/CloudDeployment"}
         max_concurrency:
           type: integer
           minimum: 1
           maximum: 2147483647
-          description: The calls each key has in flight at once.
+          description: The calls each key or region has in flight at once.
         requests_per_minute:
           type: integer
           minimum: 1
           maximum: 100000
-          description: Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none.
+          description: Each key's or region's rolling-minute ceiling; absent for none.
         reason: {$ref: "#/components/schemas/Reason"}
-    CloudCredentialInput:
-      type: object
-      writeOnly: true
-      description: >-
-        The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`,
-        `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a
-        400.
-      properties:
-        service_account_json:
-          type: string
-          maxLength: 16384
-          description: The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`.
-        access_key_id: {type: string, minLength: 16, maxLength: 128}
-        secret_access_key: {type: string, minLength: 1, maxLength: 256}
-        api_key: {type: string, minLength: 1, maxLength: 4096}
     CloudRegion:
       type: string
       pattern: '^[a-z0-9][a-z0-9-]{0,39}$'
@@ -11535,53 +11594,17 @@ components:
           minLength: 1
           maxLength: 200
           description: The model it deploys, as OpenAI names it, such as gpt-4o; absent is the deployment's name.
-    CloudSupplierCreate:
-      type: object
-      required: [provider, name, credential, max_concurrency, reason]
-      properties:
-        provider: {$ref: "#/components/schemas/CloudProvider"}
-        name: {type: string, minLength: 1, maxLength: 200}
-        origin:
-          type: string
-          pattern: '^https://[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$'
-          maxLength: 255
-          description: "Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com."
-        credential: {$ref: "#/components/schemas/CloudCredentialInput"}
-        regions:
-          type: array
-          minItems: 1
-          maxItems: 20
-          description: Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400).
-          items: {$ref: "#/components/schemas/CloudRegion"}
-        deployments:
-          type: array
-          minItems: 1
-          maxItems: 100
-          description: >-
-            Required for `azure`, not for the others (400): the resource's deployments to serve, which Azure OpenAI
-            does not list to the resource's key. Each one's calls go to its path; the quality check calls each before
-            it takes traffic. A deployment named twice is named once.
-          items: {$ref: "#/components/schemas/CloudDeployment"}
-        settlement_currency:
-          type: string
-          pattern: '^[A-Z]{3}$'
-          description: The currency the platform bills in, fixed once connected; absent is USD.
-        max_concurrency:
-          type: integer
-          minimum: 1
-          maximum: 2147483647
-          description: The calls each region has in flight at once.
-        requests_per_minute:
-          type: integer
-          minimum: 1
-          maximum: 100000
-          description: Each region's rolling-minute ceiling; absent for none.
-        reason: {$ref: "#/components/schemas/Reason"}
     CloudCredentialReplace:
       type: object
-      required: [credential, reason]
+      required: [reason]
       properties:
-        credential: {$ref: "#/components/schemas/CloudCredentialInput"}
+        form: {type: string, maxLength: 40, description: "The new credential's form; absent for the type's first."}
+        fields:
+          type: object
+          writeOnly: true
+          maxProperties: 16
+          description: The new credential's fields by name, as `TypedSupplierCreate.fields`.
+          additionalProperties: {type: string, maxLength: 16384}
         regions:
           type: array
           minItems: 1
@@ -11703,6 +11726,13 @@ components:
         group_id:
           allOf: [{$ref: "#/components/schemas/Uuid"}]
           description: Required for a relay, refused for a direct API (400).
+        fields:
+          type: object
+          maxProperties: 16
+          description: >-
+            For a direct API: the settings of these keys by name, as the type's text fields (`TypedSupplierCreate.fields`);
+            refused for a relay (400).
+          additionalProperties: {type: string, maxLength: 200}
         keys:
           type: array
           minItems: 1

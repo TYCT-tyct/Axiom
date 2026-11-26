@@ -12,12 +12,20 @@ RETURNING id;
 
 -- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint)
+    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
-    'active', @max_concurrency, sqlc.narg(requests_per_minute), @allowed_models, sqlc.narg(call_names), @hint);
+    'active', @max_concurrency, sqlc.narg(requests_per_minute), @allowed_models, sqlc.narg(call_names), @hint, sqlc.narg(settings));
 
 -- name: StoredKeyRefs :many
 -- The pasted keys already stored as a credential that is not erased, by the reference a pasted key is stored under.
 SELECT DISTINCT upstream_key_ref FROM suppliers.credentials
 WHERE upstream_key_ref = ANY(@refs::text[]) AND status <> 'erased'
 ORDER BY upstream_key_ref;
+
+-- name: SetLineRatio :exec
+-- A direct or cloud line's ratio, which a person sets (docs/domains/suppliers-direct.md「成本与线路倍率」).
+UPDATE suppliers.supplier_groups SET ratio = @ratio WHERE id = @id AND supplier_id = @supplier_id;
+
+-- name: LineEndpointsOf :many
+-- Every endpoint of a line, to be priced at the line's ratio.
+SELECT id, model_id, upstream_name FROM suppliers.endpoints WHERE supplier_group_id = @supplier_group_id ORDER BY id;

@@ -1,0 +1,87 @@
+/* The type picker of 添加上游账号: the query over a list of types under their groups' headings, after the command
+   palette's options (command-palette.module.css), in a dialog's width. */
+.root {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.list {
+  max-height: min(420px, calc(100dvh - 280px));
+  margin: 0 -8px;
+  padding: 0 8px 4px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+
+.heading {
+  padding: 10px 10px 4px;
+  color: var(--t3);
+  font-size: var(--fs12);
+}
+
+.option,
+.chosen {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: var(--r8);
+}
+
+.option {
+  cursor: pointer;
+}
+
+.option[aria-selected="true"] {
+  background: var(--selected);
+}
+
+.chosen {
+  padding: 0;
+}
+
+.text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.name {
+  color: var(--t1);
+  font-size: var(--fs14);
+  overflow-wrap: anywhere;
+}
+
+.line {
+  color: var(--t2);
+  font-size: var(--fs12);
+  overflow-wrap: anywhere;
+}
+
+.count {
+  flex: none;
+  color: var(--t3);
+  font-size: var(--fs12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* A type with nothing to sell yet: its name and mark fade; the line says why. */
+.option[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.option[aria-disabled="true"] .name,
+.option[aria-disabled="true"] > :first-child {
+  color: var(--t3);
+}
+
+.empty {
+  padding: 24px 12px;
+  color: var(--t2);
+  font-size: var(--fs14);
+  text-align: center;
+}

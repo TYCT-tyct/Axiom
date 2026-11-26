@@ -17,6 +17,7 @@ import (
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
 	"axiom/internal/platform/secret"
+	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
 )
@@ -28,10 +29,6 @@ import (
 
 // The ways a cloud platform is refused before anything is asked of it.
 var (
-	// ErrCloudProvider is a kind this node has no cloud platform adapter for.
-	ErrCloudProvider = errors.New("suppliers: no cloud platform of that kind")
-	// ErrCloudOrigin is an address given for a platform whose address is its own, or none for one whose is not.
-	ErrCloudOrigin = errors.New("suppliers: a platform with an address of its own takes none, and Azure OpenAI needs one")
 	// ErrCloudRegions is regions given to a platform without them, none to one with them, or one that is not a region.
 	ErrCloudRegions = errors.New("suppliers: Vertex AI and Bedrock need regions, and Azure OpenAI takes none")
 	// ErrCloudDeployments is deployments named for a platform that lists its models, or none for one that does not.
@@ -41,12 +38,10 @@ var (
 )
 
 type (
-	// CloudInput is what a person pasted (CloudCredentialInput in the contract).
-	CloudInput = adapter.CloudInput
 	// CloudAccount is what is not secret about a cloud credential.
 	CloudAccount = adapter.CloudAccount
-	// CredentialError is a credential that cannot be one of the platform, by the member at fault.
-	CredentialError = adapter.CredentialFormError
+	// FieldError is a field of a direct or cloud type filled in wrong, by its name.
+	FieldError = adapter.FieldError
 )
 
 // CloudRequest is a cloud platform to connect, or the limits of a replacement's new regions. Origin is as
@@ -55,7 +50,8 @@ type (
 // Currency is USD. Input is plaintext and is only sealed.
 type CloudRequest struct {
 	Kind, Name, Origin string
-	Input              CloudInput
+	Entry, Form        string
+	Fields             map[string]string
 	Regions            []string
 	Deployments        []Deployment
 	Currency           platform.Currency
@@ -75,6 +71,7 @@ type CloudPlan struct {
 	kind     string
 	origin   string
 	cred     adapter.CloudCredential
+	settings adapter.Settings
 	supplier uuid.UUID // the supplier a replacement is for; zero for a new one
 	Checks   []KeyCheck
 	regions  []cloudRegion // one for each of Checks
@@ -93,6 +90,9 @@ type cloudRegion struct {
 
 // Account is what is not secret about the credential.
 func (p *CloudPlan) Account() CloudAccount { return p.cred.Account }
+
+// Settings is what is not secret about the credential, as each region's row will store it.
+func (p *CloudPlan) Settings() Settings { return p.settings }
 
 // Currency is the settlement currency the supplier will have.
 func (p *CloudPlan) Currency() platform.Currency { return p.r.Currency }
@@ -116,7 +116,7 @@ func (a *Admin) cloudOf(kind string) (adapter.Cloud, bool) {
 func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*CloudPlan, error) {
 	c, ok := a.cloudOf(r.Kind)
 	if !ok {
-		return nil, ErrCloudProvider
+		return nil, ErrNoType
 	}
 	if n := len([]rune(strings.TrimSpace(r.Name))); n == 0 || n > 200 {
 		return nil, ErrDirectName
@@ -124,29 +124,42 @@ func (a *Admin) PlanCloud(ctx context.Context, tx pg.Tx, r CloudRequest) (*Cloud
 	if !r.Limits.valid() {
 		return nil, ErrLimits
 	}
-	origin := c.Origin()
-	if (origin == "") == (r.Origin == "") {
-		return nil, ErrCloudOrigin
+	t := c.Type()
+	origin, currency, err := cloudEntry(t, r)
+	if err != nil {
+		return nil, err
 	}
-	if origin == "" {
-		origin = r.Origin
-	}
-	if r.Currency == (platform.Currency{}) {
-		usd, err := platform.ParseCurrency("USD")
-		if err != nil {
-			return nil, err
-		}
-		r.Currency = usd
-	}
-	if c.Named() != (len(r.Deployments) > 0) {
+	r.Currency = currency
+	if t.Has(adapter.FieldDeployments) != (len(r.Deployments) > 0) {
 		return nil, ErrCloudDeployments
 	}
-	p, err := planCredential(c, r.Kind, origin, r.Input, r.Regions, deployed(r.Deployments))
+	p, err := planCredential(c, r.Kind, origin, r, r.Regions, deployed(r.Deployments))
 	if err != nil {
 		return nil, err
 	}
 	p.r = r
 	return p, p.skipStored(ctx, tx)
+}
+
+// cloudEntry is the address and settlement currency a request connects a platform at: its price entry's, or for one
+// without entries the address given and the currency given, USD when none is.
+func cloudEntry(t adapter.Type, r CloudRequest) (string, platform.Currency, error) {
+	if len(t.Entries) > 0 {
+		e, ok := t.Entry(r.Entry)
+		if !ok || r.Origin != "" || r.Currency != (platform.Currency{}) {
+			return "", platform.Currency{}, ErrTypeOrigin
+		}
+		currency, err := platform.ParseCurrency(e.Currency)
+		return e.Origin, currency, err
+	}
+	if r.Origin == "" || r.Entry != "" {
+		return "", platform.Currency{}, ErrTypeOrigin
+	}
+	if r.Currency == (platform.Currency{}) {
+		usd, err := platform.ParseCurrency("USD")
+		return r.Origin, usd, err
+	}
+	return r.Origin, r.Currency, nil
 }
 
 // deployed is the models deployments name, each name once: the first naming it says its model.
@@ -165,18 +178,23 @@ func deployed(ds []Deployment) []adapter.CloudModel {
 // planCredential reads the credential and lays out a check for each region, in order; a region named earlier is a
 // duplicate. A platform without regions has one check, of no region. named is the models a person named, which every
 // region serves; nil for a platform whose check lists them or whose catalog offers them.
-func planCredential(c adapter.Cloud, kind, origin string, in CloudInput, regions []string, named []adapter.CloudModel) (*CloudPlan, error) {
-	if c.Regional() != (len(regions) > 0) {
+func planCredential(c adapter.Cloud, kind, origin string, r CloudRequest, regions []string, named []adapter.CloudModel) (*CloudPlan, error) {
+	t := c.Type()
+	if t.Has(adapter.FieldRegions) != (len(regions) > 0) {
 		return nil, ErrCloudRegions
 	}
-	cred, err := c.ReadCredential(in)
+	form, secrets, settings, err := t.Read(r.Form, r.Fields)
 	if err != nil {
 		return nil, err
 	}
-	if !c.Regional() {
+	cred, err := c.ReadCredential(form.Name, secrets)
+	if err != nil {
+		return nil, err
+	}
+	if !t.Has(adapter.FieldRegions) {
 		regions = []string{""}
 	}
-	p := &CloudPlan{cloud: c, kind: kind, origin: origin, cred: cred}
+	p := &CloudPlan{cloud: c, kind: kind, origin: origin, cred: cred, settings: settings}
 	seen := map[string]bool{}
 	for _, at := range regions {
 		if at != "" && !region.MatchString(at) {
@@ -217,7 +235,7 @@ func (p *CloudPlan) skipStored(ctx context.Context, tx pg.Tx) error {
 // which refuses private and internal addresses; an address a person gave that it refuses fails the whole request. It
 // writes nothing.
 func (a *Admin) CheckCloud(ctx context.Context, p *CloudPlan) error {
-	if p.cloud.Origin() == "" {
+	if len(p.cloud.Type().Entries) == 0 {
 		if err := a.CheckOrigin(ctx, p.origin); err != nil {
 			return err
 		}
@@ -231,7 +249,7 @@ func (a *Admin) CheckCloud(ctx context.Context, p *CloudPlan) error {
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			got := p.cloud.CheckRegion(ctx, a.egress, p.origin, p.Checks[i].Region, p.cred.Key, a.now())
+			got := p.cloud.CheckRegion(ctx, a.egress, p.origin, p.Checks[i].Region, p.cred.Key, p.settings, a.now())
 			p.Checks[i] = checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, p.Checks[i], a.now())
 			if got.Models != nil { // a platform whose models are named lists none
 				p.regions[i].models, p.regions[i].listed = got.Models, true // each goroutine writes only its own
@@ -363,6 +381,7 @@ func (a *Admin) insertRegion(ctx context.Context, tx pg.Tx, q *store.Queries, id
 		Ciphertext: s.sealed.Ciphertext, Nonce: s.sealed.Nonce, WrappedDek: s.sealed.WrappedDEK, KeyVersion: &s.keyVersion,
 		MaxConcurrency: concurrency, RequestsPerMinute: perMinute, AllowedModels: s.allowed, CallNames: s.callNames,
 		Hint: &c.Last4, Region: regionColumn(c.Region), CheckedAt: &c.CheckedAt, CheckStatus: &status,
+		Settings: settingsColumn(p.settings),
 	}); err != nil {
 		return fmt.Errorf("store the region %q: %w", c.Region, err)
 	}
@@ -426,7 +445,8 @@ func (p *CloudPlan) offer(snap *catalog.Snapshot) lineOffer {
 	}
 	slices.Sort(names)
 	return lineOffer{
-		names: slices.Compact(names), formats: p.cloud.Formats, unmapped: p.cloud.Unmapped(),
+		names: slices.Compact(names), formats: func(m catalog.Model, _ string) []protocol.Format { return p.cloud.Formats(m) }, unmapped: p.cloud.Unmapped(),
+		serves: p.cloud.Type().Serves,
 		known: func(name string) string {
 			if k, ok := known[name]; ok {
 				return k

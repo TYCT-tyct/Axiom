@@ -112,6 +112,9 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	if c.Supplier != (uuid.UUID{}) {
 		body.SupplierId = new(c.Supplier.String())
 	}
+	if len(c.Settings) > 0 {
+		body.Settings = new(map[string]string(c.Settings))
+	}
 	if c.Source != "" {
 		body.KeySource = new(adminapi.SupplierCredentialKeySource(c.Source))
 	}

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/secret"
 	"axiom/internal/protocol"
 	"axiom/internal/suppliers/internal/adapter"
@@ -33,27 +34,50 @@ func TestCheckRegion(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	at := time.Date(2026, 11, 26, 8, 0, 0, 0, time.UTC)
-	got := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-good-key-0042"), at)
+	got := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-good-key-0042"), nil, at)
 	if got.Outcome != adapter.KeyPassed || got.Models != nil || asked != 1 {
 		t.Errorf("the check is %+v after %d requests", got, asked)
 	}
-	refused := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-bad-key-0001"), at)
+	refused := New().CheckRegion(t.Context(), server.Client(), server.URL, "", secret.New("az-bad-key-0001"), nil, at)
 	if refused.Outcome != adapter.KeyFailed || refused.Cause != adapter.CauseRejected {
 		t.Errorf("a refused key: %+v", refused)
 	}
 }
 
-// TestSign: Chat goes to the deployment's path with the api-version, as it is, the key in api-key.
+// TestSign: Chat and embeddings go to the deployment's path with the credential's api-version (the default when it
+// has none), as they are; Responses go to the resource's v1 path with the deployment as the body's model. The key goes
+// in api-key, and a format Azure OpenAI does not serve is not signed.
 func TestSign(t *testing.T) {
 	t.Parallel()
-	req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
-		Format: protocol.Chat, Origin: "https://harbor.openai.azure.com", Model: "prod-4o", Body: []byte(`{"model":"prod-4o"}`), Key: secret.New("az-good-key-0042"),
-	})
-	if f != nil {
-		t.Fatal(f)
-	}
-	if req.URL.String() != "https://harbor.openai.azure.com/openai/deployments/prod-4o/chat/completions?api-version="+apiVersion || req.Header.Get("Api-Key") != "az-good-key-0042" {
-		t.Errorf("sent %s with %v", req.URL, req.Header)
+	const origin = "https://harbor.openai.azure.com"
+	for _, tc := range []struct {
+		format   protocol.Format
+		settings adapter.Settings
+		url      string
+		model    string
+	}{
+		{protocol.Chat, nil, origin + "/openai/deployments/prod-4o/chat/completions?api-version=" + apiVersion, "gpt-4o"},
+		{protocol.Chat, adapter.Settings{"api_version": "2025-04-01-preview"}, origin + "/openai/deployments/prod-4o/chat/completions?api-version=2025-04-01-preview", "gpt-4o"},
+		{protocol.Embeddings, nil, origin + "/openai/deployments/prod-4o/embeddings?api-version=" + apiVersion, "gpt-4o"},
+		{protocol.Responses, nil, origin + "/openai/v1/responses", "prod-4o"},
+	} {
+		req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
+			Format: tc.format, Origin: origin, Model: "prod-4o", Body: []byte(`{"model":"gpt-4o","input":"hi"}`),
+			Key: secret.New("az-good-key-0042"), Settings: tc.settings,
+		})
+		if f != nil {
+			t.Fatalf("%v: %v", tc.format, f)
+		}
+		var body struct {
+			Model string `json:"model"`
+		}
+		raw, err := io.ReadAll(req.Body)
+		if err == nil {
+			err = jsonx.Unmarshal(raw, &body)
+		}
+		if err != nil || req.URL.String() != tc.url || body.Model != tc.model || req.Header.Get("Api-Key") != "az-good-key-0042" {
+			t.Errorf("%v: sent %s model %q with %v (%v)", tc.format, req.URL, body.Model, req.Header, err)
+		}
 	}
 	if _, f := (quirks{}).Sign(t.Context(), nil, adapter.SignedCall{Format: protocol.Messages}); f == nil {
 		t.Error("Messages was signed for Azure OpenAI")

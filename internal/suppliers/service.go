@@ -205,6 +205,7 @@ type credential struct {
 	key                             secret.Secret
 	region                          string // the cloud region it serves from; empty for every other
 	call                            string // the endpoint's model as this credential's calls name it
+	settings                        adapter.Settings
 	configuredMax, configuredMinute int32
 	max                             int32
 	perMinute                       int32 // account RPM ceiling for selecting this credential, 0 for none
@@ -431,11 +432,36 @@ func (s *Service) credentialOf(r store.ListRoutableRow) (*credential, error) {
 	if err != nil {
 		return nil, fmt.Errorf("credential %s: its key does not open: %w", r.CredentialID, err)
 	}
+	settings, err := s.settingsOf(r)
+	if err != nil {
+		return nil, err
+	}
 	return &credential{
-		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
+		id: r.CredentialID, key: key, region: deref(r.Region), call: r.CallName, settings: settings,
+		max: r.MaxConcurrency, perMinute: ceiling(r.RequestsPerMinute),
 		configuredMax: r.MaxConcurrency, configuredMinute: ceiling(r.RequestsPerMinute),
 		expires: r.ExpiresAt, rt: s.runtimeOf(r.CredentialID, upstreamAccount(r), r.MaxConcurrency, ceiling(r.RequestsPerMinute)),
 	}, nil
+}
+
+// settingsOf is a credential's settings, which must be ones its type could have written: a call never goes out with a
+// setting its type does not send, so a supplier with such a row is left out.
+func (s *Service) settingsOf(r store.ListRoutableRow) (adapter.Settings, error) {
+	settings := settingsOf(r.Settings)
+	if r.Settings != nil && settings == nil {
+		return nil, fmt.Errorf("credential %s: its settings are not an object of strings", r.CredentialID)
+	}
+	if r.Mode == relayMode {
+		if settings != nil {
+			return nil, fmt.Errorf("credential %s: a relay's key has no settings", r.CredentialID)
+		}
+		return nil, nil
+	}
+	a, _ := s.registry.Get(adapter.Kind(r.Kind)) // endpointOf has refused a kind without an adapter
+	if !registry.TypeOf(a).Valid(settings) {
+		return nil, fmt.Errorf("credential %s: its settings are not ones its type %s writes", r.CredentialID, r.Kind)
+	}
+	return settings, nil
 }
 
 // SetMeasuredCancels records what quality measured for an endpoint: whether the supplier stops generating when the

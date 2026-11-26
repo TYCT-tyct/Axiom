@@ -1,83 +1,73 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { ChoiceCards, Field, SegmentedControl, Select, Text, TextArea, TextLink } from "@axiom/ui";
+import {
+  ActionButton,
+  Cluster,
+  DataState,
+  Dialog,
+  Field,
+  SegmentedControl,
+  Select,
+  Stack,
+  Text,
+  TextLink,
+} from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useAllSuppliers } from "../all-suppliers";
 import { ChangeDialog, isProblem, type Problem } from "../change";
 import { ConnectDialog } from "./connect";
-import {
-  Checks,
-  KeysField,
-  LimitFields,
-  readDeployments,
-  readKeys,
-  readLimits,
-  readRegions,
-  validRegion,
-} from "./key-fields";
-import { CloudCredentialFields, readCloudCredential } from "./supplier-dialogs";
+import { Checks, LimitFields, readLimits } from "./key-fields";
+import { supplierTypesQuery } from "./queries";
+import { choosableFamilies, formLabel, formOf, readFields, type SupplierType } from "./supplier-types";
+import { TypeFields } from "./type-fields";
+import { ChosenType, TypePicker } from "./type-picker";
 import { modeOf } from "./upstream";
 
-type Way = "relay" | "key" | "cloud";
-type Provider = AdminSchemas["DirectProvider"];
-type Cloud = AdminSchemas["CloudProvider"];
 type Check = AdminSchemas["CredentialCheck"];
 type T = TFunction<"admin">;
 
-// Where a built-in provider answers, as the page says it (docs/domains/suppliers-direct.md); its format and price list
-// come with it, so only the keys are asked for.
-const origins: Record<Exclude<Provider, "compatible">, string> = {
-  openai: "https://api.openai.com",
-  anthropic: "https://api.anthropic.com",
-  google: "https://generativelanguage.googleapis.com",
-  moonshot: "https://api.moonshot.cn",
-};
-const providers = ["openai", "anthropic", "google", "moonshot", "compatible"] as const satisfies readonly Provider[];
-const clouds = ["vertex", "bedrock", "azure"] as const satisfies readonly Cloud[];
-// The Gemini format is not sent yet (suppliers-direct.md「决策与理由」), so a compatible API is OpenAI's or Anthropic's.
-const formats = ["openai", "anthropic"] as const satisfies readonly AdminSchemas["ApiFormat"][];
 const origin = /^https:\/\/[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?(:[0-9]{1,5})?$/;
 
 // What a way of adding ends in: what each key or region came to, and the supplier, when one was stored.
 type Added = { checks: Check[]; supplierId?: string };
 
-// 添加上游账号 (adA_upkNew): one dialog for every way in, chosen by the cards at its top. A relay is connected by
-// signing in to it (connect.tsx, unchanged); keys are pasted for a provider's own API, new or connected already; a cloud
-// platform takes its credential. Every key and region is checked before it is kept, and what each came to is listed;
-// closing the result opens the supplier that was made.
+// 添加上游账号 (adA_upkNew): first the channel type, from the types the node's registry describes; then a relay is
+// connected by signing in to it (connect.tsx, unchanged), and a direct API or a cloud platform takes the fields its
+// descriptor asks for, as a new supplier or, for a direct API, as more keys of one connected already. Every key and
+// region is checked before it is kept, and what each came to is listed; closing the result opens the supplier made.
 export default function AddUpstream({ onClose }: { onClose: () => void }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const [way, setWay] = useState<Way>("relay");
+  const types = useQuery(supplierTypesQuery);
+  const [type, setType] = useState<SupplierType>();
   const [made, setMade] = useState<string>();
   const close = () => {
     onClose();
     if (made) void navigate({ to: "/suppliers/$supplierId", params: { supplierId: made } });
   };
-  const cards = (
-    <ChoiceCards
-      label={t("upstream.addDialog.ways")}
-      value={way}
-      onChange={setWay}
-      choices={[
-        { value: "relay", icon: "link", ...words(t, "relay") },
-        { value: "key", icon: "keys", ...words(t, "key") },
-        { value: "cloud", icon: "cloud", ...words(t, "cloud") },
-      ]}
-    />
-  );
-  if (way === "relay") return <ConnectDialog header={cards} onClose={onClose} />;
-  const Form = way === "key" ? KeysWay : CloudWay;
-  return <Form key={way} cards={cards} onMade={setMade} onClose={close} />;
+  if (!type) {
+    return (
+      <Dialog title={t("upstream.add")} onClose={onClose}>
+        <Stack>
+          <Text tone="muted">{t("upstream.addDialog.lede")}</Text>
+          <DataState query={types} compact>
+            {(list) => <TypePicker types={list.data} onPick={setType} />}
+          </DataState>
+          <Cluster justify="end">
+            <ActionButton onClick={onClose}>{t("cancel", { ns: "common" })}</ActionButton>
+          </Cluster>
+        </Stack>
+      </Dialog>
+    );
+  }
+  const header = <ChosenType type={type} onChange={() => setType(undefined)} />;
+  if (type.mode === "relay") return <ConnectDialog header={header} onClose={onClose} />;
+  return <TypedDialog key={type.kind} type={type} header={header} onMade={setMade} onClose={close} />;
 }
-
-const words = (t: T, way: Way) => ({
-  title: t(`upstream.addDialog.${way}.title`),
-  detail: t(`upstream.addDialog.${way}.detail`),
-});
 
 function Result({ added }: { added: Added }) {
   const { t } = useTranslation();
@@ -98,144 +88,123 @@ function Result({ added }: { added: Added }) {
   );
 }
 
-type WayProps = { cards: React.ReactNode; onMade: (id: string) => void; onClose: () => void };
+// What the person chose outside the fields' values: the supplier to add keys to ("" for a new one), the price entry
+// and the credential's form.
+type Choice = { to: string; entry: string; form: string };
 
-type DirectInput =
+type Typed =
   | { to: string; body: Omit<AdminSchemas["SupplierKeysAdd"], "reason"> }
-  | { to: null; body: Omit<AdminSchemas["DirectSupplierCreate"], "reason"> };
+  | { to: null; body: Omit<AdminSchemas["TypedSupplierCreate"], "reason"> };
 
-// 贴 Key: to a direct API connected already, or to a new one of a built-in provider (only its keys asked for) or any
-// other compatible API (its name, address, format and currency too).
-function KeysWay({ cards, onMade, onClose }: WayProps) {
+// A direct API or a cloud platform of the type chosen, drawn from its descriptor (suppliers-direct.md「后台的「添加上游
+// 账号」」). A direct API's keys may go to a supplier of the type connected already, with the type's settings.
+function TypedDialog({
+  type,
+  header,
+  onMade,
+  onClose,
+}: {
+  type: SupplierType;
+  header: ReactNode;
+  onMade: (id: string) => void;
+  onClose: () => void;
+}) {
   const { t } = useTranslation();
-  const direct = useAllSuppliers().suppliers.filter((s) => modeOf(s) === "direct");
-  const [to, setTo] = useState("");
-  const [provider, setProvider] = useState<Provider>("openai");
-  const read = (values: Record<string, string>): DirectInput | Problem => {
-    const keys = readKeys(values, t);
-    const limits = readLimits(values, t);
-    if (isProblem(keys)) return keys;
-    if (isProblem(limits)) return limits;
-    if (to !== "") return { to, body: { keys, ...limits } };
-    return readNewDirect(values, provider, t, { keys, ...limits });
-  };
+  const direct = type.mode === "direct";
+  const connected = useAllSuppliers(direct).suppliers.filter((s) => modeOf(s) === "direct" && s.kind === type.kind);
+  const [choice, setChoice] = useState<Choice>({
+    to: "",
+    entry: type.entries[0]?.id ?? "",
+    form: type.forms[0]?.name ?? "",
+  });
+  const choose = (next: Partial<Choice>) => setChoice((was) => ({ ...was, ...next }));
   return (
     <ChangeDialog
-      operation="supplier-direct"
-      {...wayHead(t, cards)}
+      operation={`supplier-type:${type.kind}`}
+      title={t("upstream.add")}
+      intro={
+        <>
+          {header}
+          <p>{t("upstream.addDialog.lede")}</p>
+        </>
+      }
+      action={t("upstream.addDialog.action")}
+      verdict
       fields={(error) => (
         <>
-          <Select label={t("upstream.addDialog.to")} name="to" value={to} onChange={(e) => setTo(e.target.value)}>
-            {direct.map((supplier) => (
-              <option key={supplier.id} value={supplier.id}>
-                {supplier.name}
-              </option>
-            ))}
-            <option value="">{t("upstream.addDialog.newApi")}</option>
-          </Select>
-          {to === "" ? <NewDirectFields provider={provider} onProvider={setProvider} error={error} /> : null}
-          <KeysField error={error} />
-          <LimitFields error={error} />
+          {connected.length > 0 ? (
+            <Select
+              label={t("upstream.addDialog.to")}
+              name="to"
+              value={choice.to}
+              onChange={(event) => choose({ to: event.target.value })}
+            >
+              {connected.map((supplier) => (
+                <option key={supplier.id} value={supplier.id}>
+                  {supplier.name}
+                </option>
+              ))}
+              <option value="">{t("upstream.addDialog.newApi")}</option>
+            </Select>
+          ) : null}
+          {choice.to === "" ? (
+            <NewFields type={type} choice={choice} onChoose={choose} error={error} />
+          ) : (
+            <>
+              <TypeFields fields={keysAndSettings(type)} error={error} />
+              <LimitFields error={error} />
+            </>
+          )}
         </>
       )}
-      read={read}
-      send={(input, { reason, key }) => sendDirect(input, reason, key, onMade)}
+      read={(values) => readTyped(type, choice, values, t)}
+      send={(input, { reason, key }) => sendTyped(type, input, reason, key, onMade)}
       done={(added) => <Result added={added} />}
       onClose={onClose}
     />
   );
 }
 
-function readNewDirect(
-  values: Record<string, string>,
-  provider: Provider,
-  t: T,
-  keys: { keys: string[]; max_concurrency: number; requests_per_minute?: number },
-): DirectInput | Problem {
-  const p = (name: "name" | "origin" | "currency") => ({ problem: t(`upstream.addDialog.problems.${name}`) });
-  if (provider !== "compatible") {
-    const name = t("upstream.addDialog.officialName", { provider: t(`upstream.addDialog.providers.${provider}`) });
-    return { to: null, body: { provider, name, ...keys } };
-  }
-  const name = (values.name ?? "").trim();
-  const at = (values.origin ?? "").trim().replace(/\/+$/, "");
-  const currency = (values.settlement_currency ?? "").trim().toUpperCase();
-  if (!name) return p("name");
-  if (!origin.test(at)) return p("origin");
-  if (!/^[A-Z]{3}$/.test(currency)) return p("currency");
-  const format = values.format === "anthropic" ? "anthropic" : "openai";
-  return { to: null, body: { provider, name, origin: at, format, settlement_currency: currency, ...keys } };
-}
+// What more keys of a direct API connected already take: the keys, and the type's settings for them.
+const keysAndSettings = (type: SupplierType) =>
+  [...(formOf(type)?.fields ?? []), ...type.fields].filter((field) => field.kind === "keys" || field.kind === "text");
 
-async function sendDirect(input: DirectInput, reason: string, key: string, onMade: (id: string) => void) {
-  const header = { "Idempotency-Key": key };
-  if (input.to !== null) {
-    const sent = await unwrapChange(
-      adminApi.POST("/api/admin/v1/suppliers/{supplier_id}/keys", {
-        params: { path: { supplier_id: input.to }, header },
-        body: { ...input.body, reason },
-      }),
-    );
-    return { ...sent, data: { checks: sent.data.data, supplierId: input.to } };
-  }
-  const sent = await unwrapChange(
-    adminApi.POST("/api/admin/v1/suppliers/direct", { params: { header }, body: { ...input.body, reason } }),
-  );
-  return connected(sent, onMade);
-}
+const askedOf = (type: SupplierType, form: string) => [...(formOf(type, form)?.fields ?? []), ...type.fields];
 
-// A new supplier's answer: what each key or region came to, and the supplier, which closing the result opens.
-function connected<S extends { data: AdminSchemas["SupplierConnected"] }>(sent: S, onMade: (id: string) => void) {
-  if (sent.data.supplier) onMade(sent.data.supplier.id);
-  return { ...sent, data: { checks: sent.data.checks, supplierId: sent.data.supplier?.id } };
-}
-
-// What both ways of pasting share at the top of their dialog: the cards, the line under them and the button.
-function wayHead(t: T, cards: React.ReactNode) {
-  return {
-    title: t("upstream.add"),
-    intro: (
-      <>
-        {cards}
-        <p>{t("upstream.addDialog.lede")}</p>
-      </>
-    ),
-    action: t("upstream.addDialog.action"),
-    verdict: true,
-  };
-}
-
-function NewDirectFields({
-  provider,
-  onProvider,
+// A new supplier's fields, in the descriptor's order: where it is connected (an entry, or the address, format and
+// currency a person gives), the credential's form and fields, the type's fields, the limits and the name.
+function NewFields({
+  type,
+  choice,
+  onChoose,
   error,
 }: {
-  provider: Provider;
-  onProvider: (provider: Provider) => void;
+  type: SupplierType;
+  choice: Choice;
+  onChoose: (next: Partial<Choice>) => void;
   error: unknown;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
+  const entry = type.entries.find((e) => e.id === choice.entry);
+  const families = choosableFamilies(type);
   return (
     <>
-      <Select
-        label={t("upstream.addDialog.provider")}
-        hint={provider === "compatible" ? undefined : t("upstream.addDialog.builtIn", { origin: origins[provider] })}
-        name="provider"
-        value={provider}
-        onChange={(event) => onProvider(event.target.value as Provider)}
-        options={providers.map((value) => ({ value, label: t(`upstream.addDialog.providers.${value}`) }))}
-      />
-      {provider === "compatible" ? (
+      {type.entries.length > 1 ? (
+        <Select
+          label={t("upstream.types.entry")}
+          hint={entry?.models === undefined ? undefined : t("upstream.types.entryModels", { count: entry.models })}
+          name="entry"
+          value={choice.entry}
+          onChange={(event) => onChoose({ entry: event.target.value })}
+          options={type.entries.map((e) => ({
+            value: e.id,
+            label: t("upstream.types.entryOption", { origin: e.origin, currency: e.currency }),
+          }))}
+        />
+      ) : null}
+      {type.entries.length === 0 ? (
         <>
-          <Field
-            label={t("upstream.addDialog.name")}
-            placeholder={t("upstream.addDialog.namePlaceholder")}
-            name="name"
-            maxLength={200}
-            autoComplete="off"
-            error={errors.field(error, "name")}
-          />
           <Field
             label={t("upstream.addDialog.origin")}
             hint={t("upstream.addDialog.originHint")}
@@ -248,12 +217,14 @@ function NewDirectFields({
             maxLength={255}
             error={errors.field(error, "origin")}
           />
-          <Select
-            label={t("upstream.addDialog.format")}
-            name="format"
-            defaultValue="openai"
-            options={formats.map((value) => ({ value, label: t(`upstream.addDialog.formats.${value}`) }))}
-          />
+          {type.mode === "direct" && families.length > 0 ? (
+            <Select
+              label={t("upstream.addDialog.format")}
+              name="format"
+              defaultValue={families[0]}
+              options={families.map((value) => ({ value, label: t(`upstream.addDialog.formats.${value}`) }))}
+            />
+          ) : null}
           <Field
             label={t("upstream.addDialog.currency")}
             hint={t("upstream.addDialog.currencyHint")}
@@ -267,131 +238,77 @@ function NewDirectFields({
           />
         </>
       ) : null}
-    </>
-  );
-}
-
-type CloudInput = Omit<AdminSchemas["CloudSupplierCreate"], "reason">;
-
-function readCloud(provider: Cloud, values: Record<string, string>, t: T): CloudInput | Problem {
-  const name = (values.name ?? "").trim();
-  if (!name) return { problem: t("upstream.addDialog.problems.name") };
-  const credential = readCloudCredential(provider, values, t);
-  if (isProblem(credential)) return credential;
-  const limits = readLimits(values, t);
-  if (isProblem(limits)) return limits;
-  const where = provider === "azure" ? readAzure(values, t) : readRegionsOf(values, t);
-  return isProblem(where) ? where : { provider, name, credential, ...where, ...limits };
-}
-
-// Where an Azure OpenAI resource serves: its address and the deployments named, which it does not list to its key.
-function readAzure(values: Record<string, string>, t: T) {
-  const at = (values.origin ?? "").trim().replace(/\/+$/, "");
-  if (!origin.test(at) || !/\.azure\.com$/.test(at)) return { problem: t("upstream.addDialog.problems.resource") };
-  const deployments = readDeployments(values);
-  return deployments ? { origin: at, deployments } : { problem: t("upstream.addDialog.problems.deployments") };
-}
-
-function readRegionsOf(values: Record<string, string>, t: T) {
-  const regions = readRegions(values);
-  return regions.length > 0 && regions.length <= 20 && regions.every(validRegion)
-    ? { regions }
-    : { problem: t("upstream.addDialog.problems.regions") };
-}
-
-// 云厂商: Vertex AI's service account key, Bedrock's access key, or an Azure OpenAI resource and its key; the first
-// two are checked and limited by each region chosen.
-function CloudWay({ cards, onMade, onClose }: WayProps) {
-  const { t } = useTranslation();
-  const [provider, setProvider] = useState<Cloud>("vertex");
-  const read = (values: Record<string, string>) => readCloud(provider, values, t);
-  return (
-    <ChangeDialog
-      operation="supplier-cloud"
-      {...wayHead(t, cards)}
-      fields={(error) => <CloudFields provider={provider} onProvider={setProvider} error={error} />}
-      read={read}
-      send={async (body, { reason, key }) => {
-        const sent = await unwrapChange(
-          adminApi.POST("/api/admin/v1/suppliers/cloud", {
-            params: { header: { "Idempotency-Key": key } },
-            body: { ...body, reason },
-          }),
-        );
-        return connected(sent, onMade);
-      }}
-      done={(added: Added) => <Result added={added} />}
-      onClose={onClose}
-    />
-  );
-}
-
-// A cloud platform's fields: which one, its name, an Azure resource's address, its credential, and the regions of
-// the two that serve by region.
-function CloudFields({
-  provider,
-  onProvider,
-  error,
-}: {
-  provider: Cloud;
-  onProvider: (provider: Cloud) => void;
-  error: unknown;
-}) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  return (
-    <>
-      <SegmentedControl
-        label={t("upstream.addDialog.cloudProvider")}
-        value={provider}
-        options={clouds.map((value) => ({ value, label: t(`upstream.addDialog.clouds.${value}`) }))}
-        onChange={onProvider}
-      />
+      {type.forms.length > 1 ? (
+        <SegmentedControl
+          label={t("upstream.types.form")}
+          value={choice.form}
+          options={type.forms.map((form) => ({ value: form.name, label: formLabel(t, form.name) }))}
+          onChange={(form) => onChoose({ form })}
+        />
+      ) : null}
+      <TypeFields key={choice.form} fields={askedOf(type, choice.form)} error={error} />
+      <LimitFields error={error} />
       <Field
         label={t("upstream.addDialog.name")}
         placeholder={t("upstream.addDialog.namePlaceholder")}
         name="name"
-        defaultValue={t(`upstream.addDialog.clouds.${provider}`)}
+        defaultValue={type.entries.length > 0 ? type.name : ""}
         maxLength={200}
         autoComplete="off"
         error={errors.field(error, "name")}
       />
-      {provider === "azure" ? (
-        <Field
-          label={t("upstream.addDialog.resource")}
-          name="origin"
-          type="url"
-          placeholder={t("upstream.addDialog.resourcePlaceholder")}
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={255}
-          error={errors.field(error, "origin")}
-        />
-      ) : null}
-      <CloudCredentialFields provider={provider} error={error} />
-      {provider === "azure" ? (
-        <TextArea
-          label={t("upstream.addDialog.deployments")}
-          hint={t("upstream.addDialog.deploymentsHint")}
-          name="deployments"
-          rows={3}
-          placeholder={t("upstream.addDialog.deploymentsPlaceholder")}
-          spellCheck={false}
-          error={errors.field(error, "deployments")}
-        />
-      ) : null}
-      {provider === "azure" ? null : (
-        <TextArea
-          label={t("upstream.addDialog.regions")}
-          hint={t("upstream.addDialog.regionsHint")}
-          name="regions"
-          rows={2}
-          defaultValue={provider === "vertex" ? "us-east5" : "us-east-1"}
-          spellCheck={false}
-          error={errors.field(error, "regions")}
-        />
-      )}
-      <LimitFields error={error} />
     </>
   );
+}
+
+function readTyped(type: SupplierType, choice: Choice, values: Record<string, string>, t: T): Typed | Problem {
+  const limits = readLimits(values, t);
+  if (isProblem(limits)) return limits;
+  if (choice.to !== "") {
+    const read = readFields(keysAndSettings(type), values, t);
+    if (isProblem(read)) return read;
+    return { to: choice.to, body: { keys: read.keys ?? [], fields: read.fields, ...limits } };
+  }
+  const where = readWhere(type, choice, values, t);
+  if (isProblem(where)) return where;
+  const read = readFields(askedOf(type, choice.form), values, t);
+  if (isProblem(read)) return read;
+  const name = (values.name ?? "").trim();
+  if (!name) return { problem: t("upstream.addDialog.problems.name") };
+  const form = type.forms.length > 1 ? choice.form : undefined;
+  return { to: null, body: { name, ...where, form, ...read, ...limits } };
+}
+
+// Where a new supplier is connected: the entry chosen, or for a type without entries the address, the currency and,
+// for a direct API, the family a person chooses.
+function readWhere(type: SupplierType, choice: Choice, values: Record<string, string>, t: T) {
+  if (type.entries.length > 0) return { entry: choice.entry };
+  const at = (values.origin ?? "").trim().replace(/\/+$/, "");
+  const currency = (values.settlement_currency ?? "").trim().toUpperCase();
+  if (!origin.test(at)) return { problem: t("upstream.addDialog.problems.origin") };
+  if (!/^[A-Z]{3}$/.test(currency)) return { problem: t("upstream.addDialog.problems.currency") };
+  const families = choosableFamilies(type);
+  const format = type.mode === "direct" ? (families.find((f) => f === values.format) ?? families[0]) : undefined;
+  return { origin: at, settlement_currency: currency, format };
+}
+
+async function sendTyped(type: SupplierType, input: Typed, reason: string, key: string, onMade: (id: string) => void) {
+  const header = { "Idempotency-Key": key };
+  if (input.to !== null) {
+    const sent = await unwrapChange(
+      adminApi.POST("/api/admin/v1/suppliers/{supplier_id}/keys", {
+        params: { path: { supplier_id: input.to }, header },
+        body: { ...input.body, reason },
+      }),
+    );
+    return { ...sent, data: { checks: sent.data.data, supplierId: input.to } };
+  }
+  const sent = await unwrapChange(
+    adminApi.POST("/api/admin/v1/supplier-types/{kind}/suppliers", {
+      params: { path: { kind: type.kind }, header },
+      body: { ...input.body, reason },
+    }),
+  );
+  if (sent.data.supplier) onMade(sent.data.supplier.id);
+  return { ...sent, data: { checks: sent.data.checks, supplierId: sent.data.supplier?.id } };
 }

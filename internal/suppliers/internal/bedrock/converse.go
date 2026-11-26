@@ -1,0 +1,436 @@
+package bedrock
+
+import (
+	"encoding/json/jsontext" //nolint:depguard // tool inputs and schemas are carried as written, never built into a tree
+	"errors"
+	"strings"
+
+	"axiom/internal/platform/jsonx"
+)
+
+// A model on Bedrock that is not Anthropic's is called through Converse
+// (https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html), which the gateway reaches in
+// Chat: converse turns a Chat Completions body into Converse's, and converseanswer.go turns the answer back. A Chat
+// member Converse has no word for is refused, not dropped: a body that would lose a parameter is not sent.
+
+// errUnconvertible is a Chat body Converse cannot say.
+var errUnconvertible = errors.New("bedrock: the Chat body has no Converse form")
+
+// chatRequest is a Chat Completions body as far as Converse can say it; jsonx.UnmarshalKnown refuses any other member,
+// at any depth.
+type chatRequest struct {
+	Messages            []chatMessage  `json:"messages"`
+	MaxTokens           *int64         `json:"max_tokens"`
+	MaxCompletionTokens *int64         `json:"max_completion_tokens"`
+	Temperature         *float64       `json:"temperature"`
+	TopP                *float64       `json:"top_p"`
+	Stop                jsontext.Value `json:"stop"`
+	Stream              bool           `json:"stream"`
+	Tools               []chatTool     `json:"tools"`
+	ToolChoice          jsontext.Value `json:"tool_choice"`
+	ParallelToolCalls   *bool          `json:"parallel_tool_calls"`
+	// Read and not sent: the model is in the path, a Converse stream always ends with its usage, and the identifiers
+	// are the gateway's opaque ones, which Converse has no member for and which change no answer.
+	Model            jsontext.Value `json:"model"`
+	StreamOptions    jsontext.Value `json:"stream_options"`
+	User             jsontext.Value `json:"user"`
+	SafetyIdentifier jsontext.Value `json:"safety_identifier"`
+	PromptCacheKey   jsontext.Value `json:"prompt_cache_key"`
+}
+
+type chatMessage struct {
+	Role       string         `json:"role"`
+	Content    jsontext.Value `json:"content"`
+	ToolCalls  []chatCall     `json:"tool_calls"`
+	ToolCallID string         `json:"tool_call_id"`
+}
+
+type chatCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"`
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+type chatPart struct {
+	Type     string  `json:"type"`
+	Text     *string `json:"text"`
+	ImageURL *struct {
+		URL    string `json:"url"`
+		Detail string `json:"detail"`
+	} `json:"image_url"`
+}
+
+type chatTool struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Parameters  jsontext.Value `json:"parameters"`
+		Strict      bool           `json:"strict"`
+	} `json:"function"`
+}
+
+// converseRequest is Converse's body.
+type converseRequest struct {
+	Messages        []converseMessage `json:"messages"`
+	System          []textBlock       `json:"system,omitzero"`
+	InferenceConfig *inferenceConfig  `json:"inferenceConfig,omitzero"`
+	ToolConfig      *toolConfig       `json:"toolConfig,omitzero"`
+}
+
+type converseMessage struct {
+	Role    string  `json:"role"`
+	Content []block `json:"content"`
+}
+
+// block is a content block, one member set; the answer's blocks are read into it too.
+type block struct {
+	Text             *string     `json:"text,omitzero"`
+	Image            *image      `json:"image,omitzero"`
+	ToolUse          *toolUse    `json:"toolUse,omitzero"`
+	ToolResult       *toolResult `json:"toolResult,omitzero"`
+	ReasoningContent *struct {
+		ReasoningText *struct {
+			Text string `json:"text"`
+		} `json:"reasoningText"`
+	} `json:"reasoningContent,omitzero"`
+}
+
+type textBlock struct {
+	Text string `json:"text"`
+}
+
+type image struct {
+	Format string `json:"format"`
+	Source struct {
+		Bytes string `json:"bytes"`
+	} `json:"source"`
+}
+
+type toolUse struct {
+	ToolUseID string         `json:"toolUseId"`
+	Name      string         `json:"name"`
+	Input     jsontext.Value `json:"input"`
+}
+
+type toolResult struct {
+	ToolUseID string      `json:"toolUseId"`
+	Content   []textBlock `json:"content"`
+}
+
+type inferenceConfig struct {
+	MaxTokens     *int64   `json:"maxTokens,omitzero"`
+	Temperature   *float64 `json:"temperature,omitzero"`
+	TopP          *float64 `json:"topP,omitzero"`
+	StopSequences []string `json:"stopSequences,omitzero"`
+}
+
+type toolConfig struct {
+	Tools      []tool      `json:"tools"`
+	ToolChoice *toolChoice `json:"toolChoice,omitzero"`
+}
+
+type tool struct {
+	ToolSpec toolSpec `json:"toolSpec"`
+}
+
+type toolSpec struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitzero"`
+	InputSchema struct {
+		JSON jsontext.Value `json:"json"`
+	} `json:"inputSchema"`
+}
+
+type toolChoice struct {
+	Auto *struct{} `json:"auto,omitzero"`
+	Any  *struct{} `json:"any,omitzero"`
+	Tool *named    `json:"tool,omitzero"`
+}
+
+type named struct {
+	Name string `json:"name"`
+}
+
+// noParameters is the schema of a function that declares none: Converse requires one.
+var noParameters = jsontext.Value(`{"type":"object","properties":{}}`)
+
+// converse is the Converse body of a Chat body, and whether it asks for a stream. parallel_tool_calls may only be
+// true: Converse cannot hold a model to one call at a time.
+func converse(body []byte) ([]byte, bool, error) {
+	var in chatRequest
+	if jsonx.UnmarshalKnown(body, &in) != nil || in.ParallelToolCalls != nil && !*in.ParallelToolCalls {
+		return nil, false, errUnconvertible
+	}
+	var out converseRequest
+	var err error
+	if out.System, out.Messages, err = conversation(in.Messages); err != nil {
+		return nil, false, err
+	}
+	if out.InferenceConfig, err = inference(in); err != nil {
+		return nil, false, err
+	}
+	if out.ToolConfig, err = tools(in.Tools, in.ToolChoice); err != nil {
+		return nil, false, err
+	}
+	b, err := jsonx.MarshalCanonical(out)
+	return b, in.Stream, err
+}
+
+// conversation is the system prompt and the turns: the system and developer messages that lead are the system prompt,
+// and a later one, which has no place in Converse, is refused. A tool's result is the user's turn, and the messages of
+// one role in a row are one turn, as Converse has turns alternate.
+func conversation(messages []chatMessage) ([]textBlock, []converseMessage, error) {
+	var system []textBlock
+	var turns []converseMessage
+	for _, m := range messages {
+		if m.Role == "system" || m.Role == "developer" {
+			if len(turns) > 0 {
+				return nil, nil, errUnconvertible
+			}
+			texts, err := textsOf(m.Content)
+			if err != nil {
+				return nil, nil, err
+			}
+			system = append(system, texts...)
+			continue
+		}
+		role, blocks, err := turn(m)
+		if err != nil {
+			return nil, nil, err
+		}
+		if n := len(turns); n > 0 && turns[n-1].Role == role {
+			turns[n-1].Content = append(turns[n-1].Content, blocks...)
+			continue
+		}
+		turns = append(turns, converseMessage{Role: role, Content: blocks})
+	}
+	if len(turns) == 0 {
+		return nil, nil, errUnconvertible
+	}
+	return system, turns, nil
+}
+
+// turn is a message's role in Converse and its blocks. An empty text is left out, which Converse refuses; a message
+// left with no block is refused.
+func turn(m chatMessage) (string, []block, error) {
+	switch {
+	case m.Role == "user" && m.ToolCalls == nil && m.ToolCallID == "":
+		blocks, err := userBlocks(m.Content)
+		return "user", blocks, err
+	case m.Role == "tool" && m.ToolCalls == nil && m.ToolCallID != "":
+		texts, err := textsOf(m.Content)
+		if err != nil {
+			return "", nil, err
+		}
+		return "user", []block{{ToolResult: &toolResult{ToolUseID: m.ToolCallID, Content: texts}}}, nil
+	case m.Role == "assistant" && m.ToolCallID == "":
+		blocks, err := assistantBlocks(m)
+		return "assistant", blocks, err
+	}
+	return "", nil, errUnconvertible
+}
+
+// assistantBlocks is what the assistant said, then the calls it made.
+func assistantBlocks(m chatMessage) ([]block, error) {
+	texts, err := textsOf(m.Content)
+	if err != nil {
+		return nil, err
+	}
+	var blocks []block
+	for _, t := range texts {
+		if t.Text != "" {
+			blocks = append(blocks, block{Text: &t.Text})
+		}
+	}
+	for _, c := range m.ToolCalls {
+		use, err := toolUseOf(c)
+		if err != nil {
+			return nil, err
+		}
+		blocks = append(blocks, block{ToolUse: use})
+	}
+	if len(blocks) == 0 {
+		return nil, errUnconvertible
+	}
+	return blocks, nil
+}
+
+// userBlocks is a user message's content: text, and images given inline as a data URL, which Converse takes as bytes;
+// an image by address, which Bedrock does not fetch, is refused.
+func userBlocks(content jsontext.Value) ([]block, error) {
+	parts, err := partsOf(content)
+	if err != nil {
+		return nil, err
+	}
+	var blocks []block
+	for _, p := range parts {
+		switch {
+		case p.Type == "text" && p.Text != nil && p.ImageURL == nil:
+			if *p.Text != "" {
+				blocks = append(blocks, block{Text: p.Text})
+			}
+		case p.Type == "image_url" && p.ImageURL != nil && p.Text == nil:
+			img, err := imageOf(p.ImageURL.URL)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block{Image: img})
+		default:
+			return nil, errUnconvertible
+		}
+	}
+	if len(blocks) == 0 {
+		return nil, errUnconvertible
+	}
+	return blocks, nil
+}
+
+// imageFormats are Converse's image formats by media type.
+var imageFormats = map[string]string{"image/png": "png", "image/jpeg": "jpeg", "image/gif": "gif", "image/webp": "webp"}
+
+// imageOf is the image a base64 data URL holds.
+func imageOf(url string) (*image, error) {
+	media, data, ok := strings.Cut(strings.TrimPrefix(url, "data:"), ";base64,")
+	format := imageFormats[media]
+	if !ok || format == "" || !strings.HasPrefix(url, "data:") {
+		return nil, errUnconvertible
+	}
+	img := &image{Format: format}
+	img.Source.Bytes = data
+	return img, nil
+}
+
+// textsOf is a content that may only be text: a string, or text parts.
+func textsOf(content jsontext.Value) ([]textBlock, error) {
+	parts, err := partsOf(content)
+	if err != nil {
+		return nil, err
+	}
+	texts := make([]textBlock, 0, len(parts))
+	for _, p := range parts {
+		if p.Type != "text" || p.Text == nil || p.ImageURL != nil {
+			return nil, errUnconvertible
+		}
+		texts = append(texts, textBlock{Text: *p.Text})
+	}
+	return texts, nil
+}
+
+// partsOf is a content as parts: a string is one text part, none or null no part.
+func partsOf(content jsontext.Value) ([]chatPart, error) {
+	switch content.Kind() {
+	case 0, 'n':
+		return nil, nil
+	case '"':
+		var s string
+		if jsonx.Unmarshal(content, &s) != nil {
+			return nil, errUnconvertible
+		}
+		return []chatPart{{Type: "text", Text: &s}}, nil
+	}
+	var parts []chatPart
+	if jsonx.UnmarshalKnown(content, &parts) != nil {
+		return nil, errUnconvertible
+	}
+	return parts, nil
+}
+
+// toolUseOf is a call the assistant made: its arguments, a JSON object as a string, are the input.
+func toolUseOf(c chatCall) (*toolUse, error) {
+	input := jsontext.Value(`{}`)
+	if c.Function.Arguments != "" {
+		if jsonx.Unmarshal([]byte(c.Function.Arguments), &input) != nil {
+			return nil, errUnconvertible
+		}
+	}
+	if c.Type != "function" || c.ID == "" || c.Function.Name == "" || input.Kind() != '{' {
+		return nil, errUnconvertible
+	}
+	return &toolUse{ToolUseID: c.ID, Name: c.Function.Name, Input: input}, nil
+}
+
+// inference is the sampling: max_completion_tokens before the max_tokens it replaces, and stop as stop sequences.
+func inference(in chatRequest) (*inferenceConfig, error) {
+	c := inferenceConfig{MaxTokens: in.MaxCompletionTokens, Temperature: in.Temperature, TopP: in.TopP}
+	if c.MaxTokens == nil {
+		c.MaxTokens = in.MaxTokens
+	}
+	switch in.Stop.Kind() {
+	case 0, 'n':
+	case '"':
+		var s string
+		if jsonx.Unmarshal(in.Stop, &s) != nil {
+			return nil, errUnconvertible
+		}
+		c.StopSequences = []string{s}
+	default:
+		if jsonx.Unmarshal(in.Stop, &c.StopSequences) != nil {
+			return nil, errUnconvertible
+		}
+	}
+	if c.MaxTokens == nil && c.Temperature == nil && c.TopP == nil && c.StopSequences == nil {
+		return nil, nil
+	}
+	return &c, nil
+}
+
+// tools is the functions the model may call and the choice among them. Converse has no choice of none and no strict
+// schema, so both are refused; a function without parameters takes none.
+func tools(fns []chatTool, choice jsontext.Value) (*toolConfig, error) {
+	tc, err := toolChoiceOf(choice)
+	if err != nil || len(fns) == 0 && tc == nil {
+		return nil, err
+	}
+	if len(fns) == 0 {
+		return nil, errUnconvertible
+	}
+	c := &toolConfig{Tools: make([]tool, len(fns)), ToolChoice: tc}
+	for i, f := range fns {
+		if f.Type != "function" || f.Function.Name == "" || f.Function.Strict {
+			return nil, errUnconvertible
+		}
+		spec := &c.Tools[i].ToolSpec
+		spec.Name, spec.Description, spec.InputSchema.JSON = f.Function.Name, f.Function.Description, f.Function.Parameters
+		switch f.Function.Parameters.Kind() {
+		case 0, 'n':
+			spec.InputSchema.JSON = noParameters
+		case '{':
+		default:
+			return nil, errUnconvertible
+		}
+	}
+	return c, nil
+}
+
+// toolChoiceOf is Chat's tool_choice as Converse's: auto, required as any, or one function by name; nil for none
+// given.
+func toolChoiceOf(choice jsontext.Value) (*toolChoice, error) {
+	switch choice.Kind() {
+	case 0, 'n':
+		return nil, nil
+	case '"':
+		var s string
+		if jsonx.Unmarshal(choice, &s) != nil {
+			return nil, errUnconvertible
+		}
+		switch s {
+		case "auto":
+			return &toolChoice{Auto: &struct{}{}}, nil
+		case "required":
+			return &toolChoice{Any: &struct{}{}}, nil
+		}
+		return nil, errUnconvertible
+	}
+	var fn struct {
+		Type     string `json:"type"`
+		Function named  `json:"function"`
+	}
+	if jsonx.UnmarshalKnown(choice, &fn) != nil || fn.Type != "function" || fn.Function.Name == "" {
+		return nil, errUnconvertible
+	}
+	return &toolChoice{Tool: &fn.Function}, nil
+}

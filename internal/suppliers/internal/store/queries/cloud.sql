@@ -13,10 +13,10 @@ RETURNING id;
 -- A region that passed its check, at its first check's answer.
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
     key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, source, region,
-    checked_at, check_outcome, check_status)
+    checked_at, check_outcome, check_status, settings)
 VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @nonce, @wrapped_dek, @key_version,
     'active', @max_concurrency, sqlc.narg(requests_per_minute), sqlc.narg(allowed_models), sqlc.narg(call_names), @hint,
-    'pasted', sqlc.narg(region), @checked_at, 'passed', @check_status);
+    'pasted', sqlc.narg(region), @checked_at, 'passed', @check_status, sqlc.narg(settings));
 
 -- name: LockCloudCredentials :many
 -- A cloud supplier's credentials, erased ones too, held until the replacement commits.
@@ -27,7 +27,7 @@ WHERE supplier_id = @supplier_id ORDER BY id FOR UPDATE;
 -- A region of a replacement that passed with the credential this row was made for: sealed again, as the check found it.
 UPDATE suppliers.credentials
 SET ciphertext = @ciphertext, nonce = @nonce, wrapped_dek = @wrapped_dek, key_version = @key_version, status = 'active',
-    allowed_models = sqlc.narg(allowed_models), call_names = sqlc.narg(call_names), checked_at = @checked_at,
+    allowed_models = sqlc.narg(allowed_models), call_names = sqlc.narg(call_names), settings = sqlc.narg(settings), checked_at = @checked_at,
     check_outcome = 'passed', check_cause = NULL, check_status = @check_status
 WHERE supplier_id = @supplier_id AND id = @id;
 

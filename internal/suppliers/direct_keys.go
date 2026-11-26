@@ -11,6 +11,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers/internal/adapter"
+	"axiom/internal/suppliers/internal/registry"
 	"axiom/internal/suppliers/internal/store"
 )
 
@@ -27,7 +28,7 @@ func (a *Admin) Mode(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (string,
 // own address, call format and settlement currency: a key sent twice, or one any credential holds now, is a duplicate
 // and is not checked. A supplier of another mode is ErrStatusLocked: a cloud supplier's credential is replaced whole.
 // Nothing is asked of the provider and nothing is written.
-func (a *Admin) PlanDirectKeys(ctx context.Context, tx pg.Tx, supplier uuid.UUID, keys []string, limits Limits, reason string) (*DirectPlan, error) {
+func (a *Admin) PlanDirectKeys(ctx context.Context, tx pg.Tx, supplier uuid.UUID, keys []string, fields map[string]string, limits Limits, reason string) (*DirectPlan, error) {
 	s, err := a.view(ctx, tx, supplier, PlatformOwned)
 	if err != nil {
 		return nil, err
@@ -38,24 +39,43 @@ func (a *Admin) PlanDirectKeys(ctx context.Context, tx pg.Tx, supplier uuid.UUID
 	if !limits.valid() {
 		return nil, ErrLimits
 	}
-	currency, err := platform.ParseCurrency(s.SettlementCurrency)
-	if err != nil {
-		return nil, fmt.Errorf("read the settlement currency: %w", err)
-	}
 	concurrency, perMinute := limits.columns()
 	r := DirectRequest{
-		Kind: s.Kind, Name: s.Name, Currency: currency, Keys: keys, MaxConcurrency: concurrency, RequestsPerMinute: perMinute, Reason: reason,
+		Kind: s.Kind, Name: s.Name, Fields: fields, Keys: keys, MaxConcurrency: concurrency, RequestsPerMinute: perMinute, Reason: reason,
 	}
-	if d, ok := a.registry.Get(adapter.Kind(s.Kind)); ok {
-		if d, ok := d.(adapter.Direct); ok && d.Origin() == "" {
-			r.Origin, r.Family = s.Origin, s.APIFormat
-		}
+	if err := r.connectedAt(a.registry, s); err != nil {
+		return nil, err
 	}
 	p, err := a.planDirect(r)
 	if err != nil {
 		return nil, err
 	}
 	return p, p.skipStored(ctx, tx)
+}
+
+// connectedAt points r at what the supplier was connected at: its price entry, or the address, family and currency a
+// person gave a type without entries. A supplier whose entry its type no longer has takes no more keys.
+func (r *DirectRequest) connectedAt(reg *registry.Registry, s Supplier) error {
+	ad, _ := reg.Get(adapter.Kind(s.Kind))
+	d, ok := ad.(adapter.Direct)
+	if !ok {
+		return ErrNoType
+	}
+	t := d.Type()
+	if len(t.Entries) > 0 {
+		e, ok := t.EntryAt(s.Origin, s.SettlementCurrency)
+		if !ok {
+			return ErrTypeOrigin
+		}
+		r.Entry = e.ID
+		return nil
+	}
+	currency, err := platform.ParseCurrency(s.SettlementCurrency)
+	if err != nil {
+		return fmt.Errorf("read the settlement currency: %w", err)
+	}
+	r.Origin, r.Family, r.Currency = s.Origin, s.APIFormat, currency
+	return nil
 }
 
 // AddDirectKeys stores the keys of a connected direct API that passed their checks, in the caller's transaction: each

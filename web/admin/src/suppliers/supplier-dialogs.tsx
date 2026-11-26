@@ -1,22 +1,16 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
-import { Field, SegmentedControl, Select, Text, TextArea } from "@axiom/ui";
-import type { TFunction } from "i18next";
+import { DataState, Field, SegmentedControl, Select, Text } from "@axiom/ui";
+import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem } from "../change";
 import { Code } from "../parts";
-import {
-  Checks,
-  KeysField,
-  LimitFields,
-  readKeys,
-  readLimits,
-  readRegions,
-  ServiceAccountField,
-  validRegion,
-} from "./key-fields";
-import { modeOf, serviceAccount } from "./upstream";
+import { Checks, KeysField, LimitFields, readKeys, readLimits } from "./key-fields";
+import { supplierTypesQuery } from "./queries";
+import { formLabel, formOf, readFields, type SupplierType } from "./supplier-types";
+import { TypeFields } from "./type-fields";
+import { modeOf } from "./upstream";
 
 type Supplier = AdminSchemas["Supplier"];
 type Group = AdminSchemas["SupplierGroup"];
@@ -228,17 +222,20 @@ export function AddKeysDialog({
   );
 }
 
-// 更换凭证 (replaceSupplierCloudCredential): the new credential is checked in each region given, or in the ones the
-// supplier has now, and takes the old one's place only where it passes. Like the first, it is never shown back.
+// 更换凭证 (replaceSupplierCloudCredential): the new credential, in a form of the supplier's type (listSupplierTypes,
+// by its kind), is checked in each region given, or in the ones the supplier has now, and takes the old one's place
+// only where it passes. Like the first, it is never shown back.
 export function ReplaceCloudDialog({ supplier, onClose }: { supplier: Supplier; onClose: () => void }) {
   const { t } = useTranslation();
-  const provider = supplier.kind as AdminSchemas["CloudProvider"];
-  const read = (values: Record<string, string>) => {
-    const credential = readCloudCredential(provider, values, t);
-    if (isProblem(credential)) return credential;
-    const regions = readRegions(values);
-    if (regions.some((region) => !validRegion(region))) return { problem: t("upstream.addDialog.problems.regions") };
-    return { credential, regions: provider === "azure" || regions.length === 0 ? undefined : regions };
+  const types = useQuery(supplierTypesQuery);
+  const type = types.data?.data.find((described) => described.kind === supplier.kind);
+  const [form, setForm] = useState<string>();
+  const read = (values: Record<string, string>): Omit<AdminSchemas["CloudCredentialReplace"], "reason"> | Problem => {
+    if (!type) return { problem: t("upstream.replaceCloud.unknown") };
+    const asked = readFields(replaced(type, form), values, t);
+    if (isProblem(asked)) return asked;
+    const chosen = type.forms.length > 1 ? formOf(type, form)?.name : undefined;
+    return { form: chosen, fields: asked.fields, regions: asked.regions };
   };
   return (
     <ChangeDialog
@@ -248,18 +245,30 @@ export function ReplaceCloudDialog({ supplier, onClose }: { supplier: Supplier; 
       action={t("upstream.replaceCloud.action")}
       verdict
       fields={(error) => (
-        <>
-          <CloudCredentialFields provider={provider} error={error} />
-          {provider === "azure" ? null : (
-            <TextArea
-              label={t("upstream.addDialog.regions")}
-              hint={t("upstream.replaceCloud.regionsHint")}
-              name="regions"
-              rows={2}
-              spellCheck={false}
-            />
-          )}
-        </>
+        <DataState query={types} compact>
+          {() =>
+            type ? (
+              <>
+                {type.forms.length > 1 ? (
+                  <SegmentedControl
+                    label={t("upstream.types.form")}
+                    value={formOf(type, form)?.name ?? ""}
+                    options={type.forms.map((f) => ({ value: f.name, label: formLabel(t, f.name) }))}
+                    onChange={setForm}
+                  />
+                ) : null}
+                <TypeFields
+                  key={form}
+                  fields={replaced(type, form)}
+                  error={error}
+                  regionsHint={t("upstream.replaceCloud.regionsHint")}
+                />
+              </>
+            ) : (
+              <Text tone="muted">{t("upstream.replaceCloud.unknown")}</Text>
+            )
+          }
+        </DataState>
       )}
       read={read}
       send={(body, { reason, key: k }) => replaceCloud(supplier, { ...body, reason }, k)}
@@ -269,83 +278,18 @@ export function ReplaceCloudDialog({ supplier, onClose }: { supplier: Supplier; 
   );
 }
 
+// What a new credential is asked for: the form's fields and the type's, but not the deployments, which stay, and the
+// regions only optionally, since none given keeps the ones the supplier has.
+const replaced = (type: SupplierType, form?: string) =>
+  [...(formOf(type, form)?.fields ?? []), ...type.fields]
+    .filter((field) => field.kind !== "deployments")
+    .map((field) => (field.kind === "regions" ? { ...field, required: false } : field));
+
 function replaceCloud(supplier: Supplier, body: AdminSchemas["CloudCredentialReplace"], k: string) {
   return unwrapChange(
     adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/cloud-credential", {
       params: { path: { supplier_id: supplier.id }, header: key(k) },
       body,
     }),
-  );
-}
-
-type T = TFunction<"admin">;
-type CloudCredential = AdminSchemas["CloudCredentialInput"];
-
-// The credential each platform takes: a service account's key, an access key, or a resource's key.
-export function readCloudCredential(
-  provider: AdminSchemas["CloudProvider"],
-  values: Record<string, string>,
-  t: T,
-): CloudCredential | Problem {
-  const p = (name: string) => ({
-    problem: t(`upstream.addDialog.problems.${name}` as "upstream.addDialog.problems.json"),
-  });
-  if (provider === "vertex") {
-    const json = values.service_account_json ?? "";
-    return serviceAccount(json) ? { service_account_json: json } : p("json");
-  }
-  if (provider === "bedrock") {
-    const id = (values.access_key_id ?? "").trim();
-    const secret = values.secret_access_key ?? "";
-    if (id.length < 16) return p("accessKeyId");
-    return secret.length < 20 ? p("secretKey") : { access_key_id: id, secret_access_key: secret };
-  }
-  const apiKey = (values.api_key ?? "").trim();
-  return apiKey.length < 16 ? p("azureKey") : { api_key: apiKey };
-}
-
-// The fields of each platform's credential; every secret is a password box, never filled back.
-export function CloudCredentialFields({
-  provider,
-  error,
-}: {
-  provider: AdminSchemas["CloudProvider"];
-  error?: unknown;
-}) {
-  const { t } = useTranslation();
-  const errors = useErrors();
-  const secret = { type: "password", autoComplete: "off", spellCheck: false } as const;
-  if (provider === "vertex") return <ServiceAccountField error={error} />;
-  if (provider === "bedrock") {
-    return (
-      <>
-        <Field
-          label={t("upstream.addDialog.accessKeyId")}
-          name="access_key_id"
-          placeholder="AKIA"
-          autoComplete="off"
-          spellCheck={false}
-          maxLength={128}
-          error={errors.field(error, "credential/access_key_id")}
-        />
-        <Field
-          label={t("upstream.addDialog.secretKey")}
-          name="secret_access_key"
-          maxLength={256}
-          error={errors.field(error, "credential/secret_access_key")}
-          {...secret}
-        />
-      </>
-    );
-  }
-  return (
-    <Field
-      label={t("upstream.addDialog.azureKey")}
-      hint={t("upstream.addDialog.azureHint")}
-      name="api_key"
-      maxLength={4096}
-      error={errors.field(error, "credential/api_key")}
-      {...secret}
-    />
   );
 }

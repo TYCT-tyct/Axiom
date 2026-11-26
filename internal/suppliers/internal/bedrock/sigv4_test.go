@@ -6,10 +6,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"axiom/internal/protocol"
 )
 
 // awsExample is the access key every one of AWS's published signing examples uses.
-var awsExample = keys{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"} //nolint:gosec // AWS's published example, no account's
+var awsExample = credential{AccessKeyID: "AKIDEXAMPLE", SecretAccessKey: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"} //nolint:gosec // AWS's published example, no account's
 
 // TestSignatureMatchesAWSVectors: requests signed as AWS's own examples have them come out with the published
 // signatures: the get-vanilla, post-vanilla and get-vanilla-query-order-key-case cases of the Signature Version 4 test
@@ -59,7 +61,7 @@ func TestSignatureMatchesAWSVectors(t *testing.T) {
 // encodes again, as a service other than S3 signs it.
 func TestSignedPathEncodesTheModelTwice(t *testing.T) {
 	t.Parallel()
-	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, invokeURL("us-east-1", "anthropic.claude-x-v1:0", false), strings.NewReader("{}"))
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, runtimeURL("us-east-1", "anthropic.claude-x-v1:0", protocol.Messages, false), strings.NewReader("{}"))
 	if err != nil {
 		t.Fatal(err)
 	}

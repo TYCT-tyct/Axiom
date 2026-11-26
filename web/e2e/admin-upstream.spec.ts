@@ -20,7 +20,7 @@ test.describe("suppliers", () => {
     // A direct API listed after the first page of suppliers (50) is still one to add keys to, and the queue's tab, which
     // does not page the suppliers itself, opens the same dialog.
     const suppliers = Array.from({ length: 55 }, (_, i) => ({
-      supplier: aSupplier(i + 1, i === 54 ? { name: "Far Direct", mode: "direct" } : {}),
+      supplier: aSupplier(i + 1, i === 54 ? { name: "Far Direct", mode: "direct", kind: "openai" } : {}),
       groups: [],
       credentials: [],
       unbound_keys: [],
@@ -28,9 +28,11 @@ test.describe("suppliers", () => {
     }));
     await open(page, "/suppliers?tab=inbox", "usual", { suppliers });
     await press(page, "upstream.add").click();
+    // the search finds the one type by its kind, as the families in other types' lines also say OpenAI
     await dialog(page)
-      .getByRole("button", { name: /贴 Key/ })
-      .click();
+      .getByRole("combobox", { name: words("upstream.types.search") })
+      .fill("openai");
+    await dialog(page).getByRole("option").click();
     await expect(
       dialog(page).getByLabel(words("upstream.addDialog.to")).locator("option", { hasText: "Far Direct" }),
     ).toHaveCount(1);
@@ -53,8 +55,9 @@ test.describe("suppliers", () => {
   test("a supplier is connected in two steps and settles into the setup checklist", async ({ page }) => {
     const state = await open(page, "/suppliers");
     await press(page, "upstream.add").click();
-    // the relay's way is the one chosen first, of the three
-    await expect(dialog(page).getByRole("button", { name: /中转站/, pressed: true })).toBeVisible();
+    await dialog(page)
+      .getByRole("option", { name: /New API/ })
+      .click();
     await dialog(page).getByLabel(words("suppliers.connect.origin")).fill("https://shop.unknown.example");
     await dialog(page).locator("button[type=submit]").click();
     await expect(dialog(page).getByRole("alert")).toHaveText(zhText("suppliers.connect.unrecognised"));

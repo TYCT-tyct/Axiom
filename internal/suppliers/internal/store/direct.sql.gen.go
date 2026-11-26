@@ -13,9 +13,9 @@ import (
 
 const insertDirectCredential = `-- name: InsertDirectCredential :exec
 INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, ciphertext, nonce, wrapped_dek,
-    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint)
+    key_version, status, max_concurrency, requests_per_minute, allowed_models, call_names, hint, settings)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
-    'active', $9, $10, $11, $12, $13)
+    'active', $9, $10, $11, $12, $13, $14)
 `
 
 type InsertDirectCredentialParams struct {
@@ -32,6 +32,7 @@ type InsertDirectCredentialParams struct {
 	AllowedModels     []string
 	CallNames         []byte
 	Hint              *string
+	Settings          []byte
 }
 
 func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg InsertDirectCredentialParams) error {
@@ -49,6 +50,7 @@ func (q *Queries) InsertDirectCredential(ctx context.Context, db DBTX, arg Inser
 		arg.AllowedModels,
 		arg.CallNames,
 		arg.Hint,
+		arg.Settings,
 	)
 	return err
 }
@@ -87,6 +89,53 @@ func (q *Queries) InsertDirectSupplier(ctx context.Context, db DBTX, arg InsertD
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const lineEndpointsOf = `-- name: LineEndpointsOf :many
+SELECT id, model_id, upstream_name FROM suppliers.endpoints WHERE supplier_group_id = $1 ORDER BY id
+`
+
+type LineEndpointsOfRow struct {
+	ID           uuid.UUID
+	ModelID      uuid.UUID
+	UpstreamName string
+}
+
+// Every endpoint of a line, to be priced at the line's ratio.
+func (q *Queries) LineEndpointsOf(ctx context.Context, db DBTX, supplierGroupID uuid.UUID) ([]LineEndpointsOfRow, error) {
+	rows, err := db.Query(ctx, lineEndpointsOf, supplierGroupID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LineEndpointsOfRow
+	for rows.Next() {
+		var i LineEndpointsOfRow
+		if err := rows.Scan(&i.ID, &i.ModelID, &i.UpstreamName); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setLineRatio = `-- name: SetLineRatio :exec
+UPDATE suppliers.supplier_groups SET ratio = $1 WHERE id = $2 AND supplier_id = $3
+`
+
+type SetLineRatioParams struct {
+	Ratio      string
+	ID         uuid.UUID
+	SupplierID uuid.UUID
+}
+
+// A direct or cloud line's ratio, which a person sets (docs/domains/suppliers-direct.md「成本与线路倍率」).
+func (q *Queries) SetLineRatio(ctx context.Context, db DBTX, arg SetLineRatioParams) error {
+	_, err := db.Exec(ctx, setLineRatio, arg.Ratio, arg.ID, arg.SupplierID)
+	return err
 }
 
 const storedKeyRefs = `-- name: StoredKeyRefs :many

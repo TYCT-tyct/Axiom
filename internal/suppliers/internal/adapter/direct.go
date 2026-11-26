@@ -3,6 +3,7 @@ package adapter
 import (
 	"context"
 	"net/http"
+	"slices"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/secret"
@@ -24,18 +25,24 @@ const (
 // what can be asked is whether a key works and which models it lists. The sync never opens such an adapter, so its Open
 // is never reached.
 type Direct interface {
-	// Family is the formats the provider speaks; empty for an API whose family a person gives.
-	Family() Family
-	// Origin is the provider's own address; empty for an API whose address a person gives.
-	Origin() string
-	// Currency is the currency of the provider's official price list; empty when a person says it.
-	Currency() string
+	// Type describes the provider's API: its price entries, the families it speaks and the fields a key comes with. A
+	// type without price entries takes its address, family and currency from the person connecting it (compatible).
+	Described
 	// CheckKey asks the API, with one request the provider does not charge for, whether key works and which models it
-	// lists. f is the family the API speaks.
-	CheckKey(ctx context.Context, c Client, f Family, key secret.Secret) KeyCheck
-	// Formats is what an endpoint of the catalog model m serves at an API of family f, from the model's own abilities;
-	// none when the API cannot serve it.
-	Formats(f Family, m catalog.Model) []protocol.Format
+	// lists. f is the family the API speaks; s are the key's settings.
+	CheckKey(ctx context.Context, c Client, f Family, key secret.Secret, s Settings) KeyCheck
+	// Formats is what an endpoint of the catalog model m, listed as name, serves at an API of family f, from the
+	// model's own abilities; none when the API cannot serve it.
+	Formats(f Family, m catalog.Model, name string) []protocol.Format
+}
+
+// FamilyOf is the family an API of the type speaks: its own, or for a type whose family a person chooses, chosen,
+// which must be one of the choices. False when chosen is given for a type with its own, or is not a choice.
+func FamilyOf(t Type, chosen Family) (Family, bool) {
+	if len(t.Entries) > 0 {
+		return t.Families[0], chosen == ""
+	}
+	return chosen, chosen != "" && slices.Contains(t.Families, chosen)
 }
 
 // KeyOutcome is what a check found of a key.
@@ -79,6 +86,6 @@ type KeyCheck struct {
 type Wire interface {
 	// Path is where a call in format f goes, given the path every relay serves it at.
 	Path(f protocol.Format, path string) string
-	// Authorize puts the key on a call in format f.
-	Authorize(h http.Header, f protocol.Format, key string)
+	// Authorize puts the key, and the settings the type sends with it, on a call in format f.
+	Authorize(h http.Header, f protocol.Format, key string, s Settings)
 }

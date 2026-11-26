@@ -18,14 +18,51 @@ import (
 
 // The providers of these tests are made here, not taken from the providers' packages, so that taking one of those out
 // leaves this package building (just adapters-removable). They are each kind there is: one with Responses, one of
-// Anthropic's family, one under a root of its own, and one whose family is the supplier's.
+// Anthropic's family, one under a root of its own, one with an Anthropic-compatible API for some of its models, and one
+// whose family is the supplier's.
 var (
-	openaiAPI     = direct.New(direct.Provider{Kind: "openai", Family: adapter.FamilyOpenAI, Origin: "https://api.openai.example", Responses: true})
-	anthropicAPI  = direct.New(direct.Provider{Kind: "anthropic", Family: adapter.FamilyAnthropic, Origin: "https://api.anthropic.example"})
-	googleAPI     = direct.New(direct.Provider{Kind: "google", Family: adapter.FamilyOpenAI, Origin: "https://google.example", Root: "/v1beta/openai"})
-	compatibleAPI = direct.New(direct.Provider{Kind: "compatible"})
-	providers     = []*direct.Adapter{openaiAPI, anthropicAPI, googleAPI, compatibleAPI}
+	openaiAPI = direct.New(direct.Provider{Type: entryType("openai", adapter.FamilyOpenAI, adapter.Field{
+		Name: "organization", Header: "OpenAI-Organization",
+	}), Responses: true})
+	anthropicAPI = direct.New(direct.Provider{Type: entryType("anthropic", adapter.FamilyAnthropic)})
+	googleAPI    = direct.New(direct.Provider{Type: entryType("google", adapter.FamilyOpenAI), Root: "/v1beta/openai"})
+	bothAPI      = direct.New(direct.Provider{
+		Type: entryType("both", adapter.FamilyOpenAI, adapter.FamilyAnthropic), Root: "/compatible-mode/v1",
+		Anthropic: &direct.Anthropic{Root: "/apps/anthropic", Models: []string{"served"}},
+	})
+	compatibleAPI = direct.New(direct.Provider{Type: adapter.Type{
+		Kind: "compatible", Name: "compatible", Group: adapter.GroupOfficial, Lists: true,
+		Families: []adapter.Family{adapter.FamilyOpenAI, adapter.FamilyAnthropic},
+	}})
+	providers = []*direct.Adapter{openaiAPI, anthropicAPI, googleAPI, bothAPI, compatibleAPI}
 )
+
+// entryType is a type at one address of its own, speaking the families (the first its own) with the fields.
+func entryType(kind string, families ...any) adapter.Type {
+	t := adapter.Type{
+		Kind: adapter.Kind(kind), Name: kind, Group: adapter.GroupOfficial, Lists: true,
+		Entries: []adapter.PriceEntry{{ID: "global", Origin: "https://" + kind + ".example", Currency: "USD"}},
+	}
+	for _, f := range families {
+		switch f := f.(type) {
+		case adapter.Family:
+			t.Families = append(t.Families, f)
+		case adapter.Field:
+			t.Fields = append(t.Fields, f)
+		}
+	}
+	return t
+}
+
+// TestProviderTypesAreValid: each provider's description is one the registry would start with.
+func TestProviderTypesAreValid(t *testing.T) {
+	t.Parallel()
+	for _, a := range providers {
+		if err := a.Type().Check(); err != nil {
+			t.Errorf("%s: %v", a.Kind(), err)
+		}
+	}
+}
 
 // TestProvidersKeepTheAdapterContract: every provider passes the suite every adapter does.
 func TestProvidersKeepTheAdapterContract(t *testing.T) {
@@ -63,7 +100,7 @@ func TestCheckKeyAsksTheModelList(t *testing.T) {
 		{compatibleAPI, adapter.FamilyAnthropic, "/v1/models?limit=1000", "X-Api-Key", "sk-test-key", "2023-06-01"},
 	} {
 		c := &fakeClient{resp: adapter.Response{Status: http.StatusOK, Body: []byte(`{"data":[]}`)}}
-		tc.a.CheckKey(t.Context(), c, tc.family, secret.New("sk-test-key"))
+		tc.a.CheckKey(t.Context(), c, tc.family, secret.New("sk-test-key"), nil)
 		if len(c.sent) != 1 {
 			t.Fatalf("%s: %d requests, want one", tc.a.Kind(), len(c.sent))
 		}
@@ -111,15 +148,16 @@ func TestCheckKeyJudgesOnlyWhatSaysSomethingOfTheKey(t *testing.T) {
 		{"a timeout", adapter.Response{}, fmt.Errorf("send: %w", context.DeadlineExceeded), adapter.KeyCheck{Cause: adapter.CauseTimeout}},
 		{"no answer", adapter.Response{}, errors.New("connection refused"), adapter.KeyCheck{Cause: adapter.CauseTransport}},
 	} {
-		got := openaiAPI.CheckKey(t.Context(), &fakeClient{resp: tc.resp, err: tc.err}, adapter.FamilyOpenAI, secret.New("sk-test-key"))
+		got := openaiAPI.CheckKey(t.Context(), &fakeClient{resp: tc.resp, err: tc.err}, adapter.FamilyOpenAI, secret.New("sk-test-key"), nil)
 		if diff := cmp.Diff(tc.want, got); diff != "" {
 			t.Errorf("%s (-want +got):\n%s", tc.name, diff)
 		}
 	}
 }
 
-// TestWireIsTheProvidersOwn: a call goes to the path the provider serves the format at, with the key the way the format
-// takes it.
+// TestWireIsTheProvidersOwn: a call goes to the path the provider serves the format at, Messages under its
+// Anthropic-compatible root, with the key the way the format takes it; a setting the type sends in a header goes with
+// it, and one it does not is not sent.
 func TestWireIsTheProvidersOwn(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
@@ -127,13 +165,18 @@ func TestWireIsTheProvidersOwn(t *testing.T) {
 		format       protocol.Format
 		path, header string
 		value        string
+		settings     adapter.Settings
+		headers      int
 	}{
-		{openaiAPI, protocol.Responses, "/v1/responses", "Authorization", "Bearer k"},
-		{googleAPI, protocol.Chat, "/v1beta/openai/chat/completions", "Authorization", "Bearer k"},
-		{googleAPI, protocol.Embeddings, "/v1beta/openai/embeddings", "Authorization", "Bearer k"},
-		{anthropicAPI, protocol.Messages, "/v1/messages", "X-Api-Key", "k"},
-		{compatibleAPI, protocol.Messages, "/v1/messages", "X-Api-Key", "k"},
-		{compatibleAPI, protocol.Chat, "/v1/chat/completions", "Authorization", "Bearer k"},
+		{openaiAPI, protocol.Responses, "/v1/responses", "Authorization", "Bearer k", nil, 1},
+		{openaiAPI, protocol.Chat, "/v1/chat/completions", "Openai-Organization", "org-a", adapter.Settings{"organization": "org-a"}, 2},
+		{googleAPI, protocol.Chat, "/v1beta/openai/chat/completions", "Authorization", "Bearer k", adapter.Settings{"project": "p"}, 1},
+		{googleAPI, protocol.Embeddings, "/v1beta/openai/embeddings", "Authorization", "Bearer k", nil, 1},
+		{bothAPI, protocol.Chat, "/compatible-mode/v1/chat/completions", "Authorization", "Bearer k", nil, 1},
+		{bothAPI, protocol.Messages, "/apps/anthropic/v1/messages", "X-Api-Key", "k", nil, 1},
+		{anthropicAPI, protocol.Messages, "/v1/messages", "X-Api-Key", "k", nil, 1},
+		{compatibleAPI, protocol.Messages, "/v1/messages", "X-Api-Key", "k", nil, 1},
+		{compatibleAPI, protocol.Chat, "/v1/chat/completions", "Authorization", "Bearer k", nil, 1},
 	} {
 		w, ok := tc.a.Calls().(adapter.Wire)
 		if !ok {
@@ -144,8 +187,8 @@ func TestWireIsTheProvidersOwn(t *testing.T) {
 			protocol.Embeddings: "/v1/embeddings", protocol.Messages: "/v1/messages",
 		}
 		h := http.Header{}
-		w.Authorize(h, tc.format, "k")
-		if got := w.Path(tc.format, defaults[tc.format]); got != tc.path || h.Get(tc.header) != tc.value || len(h) != 1 {
+		w.Authorize(h, tc.format, "k", tc.settings)
+		if got := w.Path(tc.format, defaults[tc.format]); got != tc.path || h.Get(tc.header) != tc.value || len(h) != tc.headers {
 			t.Errorf("%s %v: %s with %v, want %s with %s", tc.a.Kind(), tc.format, got, h, tc.path, tc.header)
 		}
 	}

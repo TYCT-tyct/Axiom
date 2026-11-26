@@ -6,48 +6,43 @@ import (
 	"net/http"
 	"strconv"
 
-	"axiom/internal/platform"
 	"axiom/internal/platform/adminapi"
 	"axiom/internal/platform/pg"
 	"axiom/internal/suppliers"
 )
 
-// CreateDirectSupplier connects a provider's own API with pasted keys (docs/domains/suppliers.md「直连接口」). The keys
-// are checked before the idempotency transaction, which must not hold a connection while a provider answers; a replay
+// createDirect connects a provider's own API with pasted keys (docs/domains/suppliers-direct.md「接入」). The keys are
+// checked before the idempotency transaction, which must not hold a connection while a provider answers; a replay
 // answers from its claim before any key is sent anywhere again. The keys are not in the fingerprint, only how many
 // there are and their last four characters, which the answer shows anyway.
-func (a adminAPI) CreateDirectSupplier(ctx context.Context, request adminapi.CreateDirectSupplierRequestObject) (adminapi.CreateDirectSupplierResponseObject, error) {
-	r, err := directRequest(request.Body)
+func (a adminAPI) createDirect(ctx context.Context, key, kind string, b *adminapi.TypedSupplierCreate) (adminapi.SupplierConnected, bool, error) {
+	r, err := directRequest(kind, b)
 	if err != nil {
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
-	claim, err := idempotencyClaim(ctx, "createDirectSupplier", request.Params.IdempotencyKey, directIdentity(r))
+	claim, err := idempotencyClaim(ctx, "createTypedSupplier", key, directIdentity(r))
 	if err != nil {
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
 	if body, found, err := replayed[adminapi.SupplierConnected](ctx, a.db, claim); err != nil || found {
-		return directAnswer(body, true), err
+		return body, true, err
 	}
 	plan, err := a.planDirect(ctx, r)
 	if err != nil {
 		// The first request under this key may have committed between the replay check and the checks.
 		if body, found, replayErr := replayed[adminapi.SupplierConnected](ctx, a.db, claim); replayErr == nil && found {
-			return directAnswer(body, true), nil
+			return body, true, nil
 		}
-		return nil, err
+		return adminapi.SupplierConnected{}, false, err
 	}
 	snap, err := a.catalog.Current()
 	if err != nil {
-		return nil, &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
+		return adminapi.SupplierConnected{}, false, &apiError{status: http.StatusServiceUnavailable, code: codeUnavailable, message: "the catalog is not ready"}
 	}
-	body, replay, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.SupplierConnected, error) {
+	return idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.SupplierConnected, error) {
 		made, err := a.suppliers.CreateDirect(ctx, tx, actor(ctx), snap, plan)
 		return connectedBody(made, true), err
 	})
-	if err != nil {
-		return nil, err
-	}
-	return directAnswer(body, replay), nil
 }
 
 // planDirect checks the request against the provider and the keys already stored, then has the provider check each
@@ -70,29 +65,27 @@ func (a adminAPI) planDirect(ctx context.Context, r suppliers.DirectRequest) (*s
 }
 
 // directRequest reads the body; what the contract's schema already refuses is not checked again.
-func directRequest(b *adminapi.DirectSupplierCreate) (suppliers.DirectRequest, error) {
+func directRequest(kind string, b *adminapi.TypedSupplierCreate) (suppliers.DirectRequest, error) {
 	r := suppliers.DirectRequest{
-		Kind: string(b.Provider), Name: b.Name, MaxConcurrency: int32(b.MaxConcurrency), Reason: b.Reason, //nolint:gosec // the schema bounds it to 2³¹-1
+		Kind: kind, Name: b.Name, Fields: fieldsOf(b.Fields), MaxConcurrency: int32(b.MaxConcurrency), Reason: b.Reason, //nolint:gosec // the schema bounds it to 2³¹-1
+	}
+	switch {
+	case b.Regions != nil:
+		return r, invalidField("/regions", "a direct API has no regions")
+	case b.Deployments != nil:
+		return r, invalidField("/deployments", "a direct API has no deployments")
+	case b.Form != nil && *b.Form != "api_key":
+		return r, invalidField("/form", "a direct API's credential is its keys")
+	}
+	var err error
+	if r.Entry, r.Origin, r.Currency, err = typedEntry(b); err != nil {
+		return r, err
 	}
 	if b.Keys != nil {
 		r.Keys = *b.Keys
 	}
-	if b.Origin != nil {
-		origin, err := suppliers.NormalizeOrigin(*b.Origin)
-		if err != nil {
-			return r, supplierProblem(err)
-		}
-		r.Origin = origin
-	}
 	if b.Format != nil {
 		r.Family = string(*b.Format)
-	}
-	if b.SettlementCurrency != nil {
-		currency, err := platform.ParseCurrency(*b.SettlementCurrency)
-		if err != nil {
-			return r, invalidField("/settlement_currency", "not a currency code")
-		}
-		r.Currency = currency
 	}
 	if b.RequestsPerMinute != nil {
 		rpm := int32(*b.RequestsPerMinute) //nolint:gosec // the schema bounds it to 100000
@@ -107,15 +100,7 @@ func directIdentity(r suppliers.DirectRequest) []any {
 	for i, k := range r.Keys {
 		tails[i] = suppliers.Last4(k)
 	}
-	return []any{r.Kind, r.Name, r.Origin, r.Family, r.Currency.String(), tails, r.MaxConcurrency, r.RequestsPerMinute, r.Reason}
-}
-
-// directAnswer is 201 when a supplier was connected and 200 when no key passed.
-func directAnswer(body adminapi.SupplierConnected, replay bool) adminapi.CreateDirectSupplierResponseObject {
-	if body.Supplier == nil {
-		return adminapi.CreateDirectSupplier200JSONResponse{Body: body, Headers: adminapi.CreateDirectSupplier200ResponseHeaders{IdempotencyReplayed: replayedHeader(replay)}}
-	}
-	return adminapi.CreateDirectSupplier201JSONResponse{Body: body, Headers: adminapi.CreateDirectSupplier201ResponseHeaders{IdempotencyReplayed: replayedHeader(replay)}}
+	return []any{r.Kind, r.Name, r.Entry, r.Origin, r.Family, r.Currency.String(), r.Fields, tails, r.MaxConcurrency, r.RequestsPerMinute, r.Reason}
 }
 
 // connectedBody is the API's view of what the keys, or a cloud credential's regions, came to: a pasted key's check has
@@ -137,17 +122,17 @@ func directProblem(err error) error {
 	if keyErr, ok := errors.AsType[*suppliers.KeyError](err); ok {
 		return invalidField("/keys/"+strconv.Itoa(keyErr.Index), "not a key a provider would accept")
 	}
+	if mapped := typedProblem(err); mapped != nil {
+		return mapped
+	}
 	for _, m := range []struct {
 		err             error
 		bad             bool // 400 rather than 422
 		pointer, reason string
 	}{
-		{suppliers.ErrDirectProvider, false, "/provider", "this node has no adapter for that provider"},
-		{suppliers.ErrDirectOrigin, true, "/origin", "only compatible takes an origin, and it requires one"},
-		{suppliers.ErrDirectFormat, true, "/format", "only compatible takes a format, and it requires one"},
+		{suppliers.ErrDirectFormat, true, "/format", "only compatible takes a format, and it requires one of its families"},
 		{suppliers.ErrDirectGemini, false, "/format", "Gemini's own format is not served yet; openai and anthropic are"},
 		{suppliers.ErrDirectCurrency, true, "/settlement_currency", "required for compatible"},
-		{suppliers.ErrDirectName, true, "/name", "1 to 200 characters"},
 	} {
 		switch {
 		case !errors.Is(err, m.err):

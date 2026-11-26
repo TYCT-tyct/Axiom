@@ -31,17 +31,18 @@ import (
 // keys list that the catalog has on sale, and the catalog's official price as each endpoint's cost. It has no login,
 // no balance and no sync.
 
-// The ways a direct API is refused before anything is asked of the provider.
+// The ways a direct API or a cloud platform is refused before anything is asked of the provider.
 var (
-	// ErrDirectProvider is a kind this node has no direct API adapter for.
-	ErrDirectProvider = errors.New("suppliers: no direct API of that kind")
-	// ErrDirectOrigin is an address given for a provider whose address is its own, or none for one whose is not.
-	ErrDirectOrigin = errors.New("suppliers: a built-in provider's address is its own, and any other API needs one")
+	// ErrNoType is a kind this node has no direct or cloud adapter for: a relay's, or none.
+	ErrNoType = errors.New("suppliers: no direct or cloud channel type of that kind")
+	// ErrTypeOrigin is a price entry that is not the type's, or an address or settlement currency given for a type with
+	// price entries; or none given for a type without them.
+	ErrTypeOrigin = errors.New("suppliers: a type with price entries is connected at one of them, and any other needs an address")
 	// ErrDirectFormat is a family given for a provider whose family is its own, or none for one whose is not.
 	ErrDirectFormat = errors.New("suppliers: a built-in provider's call format is its own, and any other API needs one")
 	// ErrDirectGemini is an API that speaks only Gemini's generateContent, which the gateway does not send yet.
 	ErrDirectGemini = errors.New("suppliers: Gemini's own call format is not served yet")
-	// ErrDirectCurrency is an API with no official price list of Axiom's knowing and no settlement currency given.
+	// ErrDirectCurrency is an API with no price entries and no settlement currency given.
 	ErrDirectCurrency = errors.New("suppliers: an API without a built-in price list needs a settlement currency")
 	// ErrDirectName is a name outside 1 to 200 characters.
 	ErrDirectName = errors.New("suppliers: a name is 1 to 200 characters")
@@ -55,15 +56,17 @@ func (e *KeyError) Error() string {
 	return fmt.Sprintf("suppliers: key %d is not a bearer token", e.Index)
 }
 
-// DirectRequest is a direct API to connect. Origin is as NormalizeOrigin returns it and only for an API whose address
-// is not built in, as Family is; a zero Currency is the provider's own. Keys are plaintext and are only sealed.
+// DirectRequest is a direct API to connect. Entry is the price entry of a type with them, empty for its first; Origin is
+// as NormalizeOrigin returns it, and it, Family and Currency are only for a type without entries. Fields are the keys'
+// settings, by the type's field names. Keys are plaintext and are only sealed.
 type DirectRequest struct {
-	Kind, Name, Origin, Family string
-	Currency                   platform.Currency
-	Keys                       []string
-	MaxConcurrency             int32
-	RequestsPerMinute          *int32
-	Reason                     string
+	Kind, Name, Entry, Origin, Family string
+	Currency                          platform.Currency
+	Fields                            map[string]string
+	Keys                              []string
+	MaxConcurrency                    int32
+	RequestsPerMinute                 *int32
+	Reason                            string
 }
 
 // pastedKey is what a plan holds of one pasted key beside its check: the text, which is only sealed, the ref it is
@@ -77,12 +80,13 @@ type pastedKey struct {
 // DirectPlan is a direct API about to be connected: the request as checked, and each key's check once CheckDirect has
 // asked the provider. It is made by PlanDirect and holds the keys' texts in memory only.
 type DirectPlan struct {
-	r      DirectRequest
-	family adapter.Family
-	origin string
-	direct adapter.Direct
-	Checks []KeyCheck
-	keys   []pastedKey // one for each of Checks
+	r        DirectRequest
+	family   adapter.Family
+	origin   string
+	direct   adapter.Direct
+	settings adapter.Settings
+	Checks   []KeyCheck
+	keys     []pastedKey // one for each of Checks
 }
 
 // Currency is the settlement currency the supplier will have: the request's, or the provider's own.
@@ -120,7 +124,7 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	ad, ok := a.registry.Get(adapter.Kind(r.Kind))
 	d, direct := ad.(adapter.Direct)
 	if !ok || !direct {
-		return nil, ErrDirectProvider
+		return nil, ErrNoType
 	}
 	if n := len([]rune(strings.TrimSpace(r.Name))); n == 0 || n > 200 {
 		return nil, ErrDirectName
@@ -128,8 +132,16 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	if r.MaxConcurrency < 1 || r.RequestsPerMinute != nil && (*r.RequestsPerMinute < 1 || *r.RequestsPerMinute > MaxRequestsPerMinute) {
 		return nil, ErrLimits
 	}
-	p := &DirectPlan{r: r, family: d.Family(), origin: d.Origin(), direct: d}
-	if err := p.resolve(d.Currency()); err != nil {
+	t := d.Type()
+	_, secrets, settings, err := t.Read("", r.Fields)
+	if err != nil {
+		return nil, err
+	}
+	if len(secrets) > 0 { // a direct API's secrets are its keys
+		return nil, &adapter.FieldError{Field: "fields", Reason: "holds no secret for a direct API: its keys are the keys"}
+	}
+	p := &DirectPlan{r: r, direct: d, settings: settings}
+	if err := p.resolve(t); err != nil {
 		return nil, err
 	}
 	return p, p.paste(r.Keys)
@@ -154,32 +166,36 @@ func (p *DirectPlan) paste(keys []string) error {
 	return nil
 }
 
-// resolve fills in what the request leaves to the provider: a built-in provider's address, family and currency are its
-// own and may not be given; any other API's must be.
-func (p *DirectPlan) resolve(currency string) error {
-	if (p.origin == "") == (p.r.Origin == "") {
-		return ErrDirectOrigin
-	}
-	if (p.family == "") == (p.r.Family == "") {
+// resolve fills in what the request leaves to the type: a type with price entries is connected at one, whose address,
+// family and currency are its own and may not be given; any other API's must be.
+func (p *DirectPlan) resolve(t adapter.Type) error {
+	family, ok := adapter.FamilyOf(t, adapter.Family(p.r.Family))
+	if !ok {
 		return ErrDirectFormat
 	}
-	if p.origin == "" {
-		p.origin, p.family = p.r.Origin, adapter.Family(p.r.Family)
+	p.family = family
+	if len(t.Entries) > 0 {
+		e, ok := t.Entry(p.r.Entry)
+		if !ok || p.r.Origin != "" || p.r.Currency != (platform.Currency{}) {
+			return ErrTypeOrigin
+		}
+		currency, err := platform.ParseCurrency(e.Currency)
+		if err != nil {
+			return err
+		}
+		p.origin, p.r.Currency = e.Origin, currency
+		return nil
 	}
-	switch p.family {
-	case adapter.FamilyOpenAI, adapter.FamilyAnthropic:
-	case adapter.FamilyGemini:
+	if p.r.Origin == "" || p.r.Entry != "" {
+		return ErrTypeOrigin
+	}
+	if family == adapter.FamilyGemini {
 		return ErrDirectGemini
-	default:
-		return ErrDirectFormat
 	}
 	if p.r.Currency == (platform.Currency{}) {
-		parsed, err := platform.ParseCurrency(currency)
-		if err != nil {
-			return ErrDirectCurrency
-		}
-		p.r.Currency = parsed
+		return ErrDirectCurrency
 	}
+	p.origin = p.r.Origin
 	return nil
 }
 
@@ -218,7 +234,7 @@ const checkParallel = 16
 // CheckDirect asks the provider about every key that is not a duplicate, a few at once, through the outbound client,
 // which refuses private and internal addresses; an address it refuses fails the whole request. It writes nothing.
 func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
-	if p.r.Origin != "" {
+	if len(p.direct.Type().Entries) == 0 {
 		if err := a.CheckOrigin(ctx, p.origin); err != nil {
 			return err
 		}
@@ -236,7 +252,7 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			got := p.direct.CheckKey(ctx, c, p.family, p.keys[i].key)
+			got := p.direct.CheckKey(ctx, c, p.family, p.keys[i].key, p.settings)
 			p.Checks[i] = checkOf(got, p.Checks[i], a.now()) // each goroutine writes only its own elements
 			p.keys[i].models = got.Models
 		})
@@ -275,8 +291,8 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	}
 	q := store.New()
 	var family *string
-	if p.r.Family != "" {
-		family = &p.r.Family
+	if len(p.direct.Type().Entries) == 0 {
+		family = new(string(p.family))
 	}
 	id, err := q.InsertDirectSupplier(ctx, tx, store.InsertDirectSupplierParams{
 		Name: strings.TrimSpace(p.r.Name), Kind: p.r.Kind, Origin: p.origin, UpstreamAccount: uuid.NewV7().String(),
@@ -347,6 +363,7 @@ func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries
 			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: k.ref,
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &keyVersion,
 			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: allowed, CallNames: calls, Hint: &c.Last4,
+			Settings: settingsColumn(p.settings),
 		}); err != nil {
 			return fmt.Errorf("store key %d: %w", c.Index, err)
 		}
@@ -355,20 +372,27 @@ func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries
 }
 
 // lineOffer is what a connection lists on a line of one: each name, the name the catalog knows it by (known; nil for
-// the name itself), the formats an endpoint of a catalog model serves there, and what a name the catalog does not map
-// yet is listed as speaking.
+// the name itself), the formats an endpoint of a catalog model serves there, what a name the catalog does not map yet
+// is listed as speaking, and the catalog authors whose official prices are the line's own prices (serves; empty for
+// any): a model of another author is sold there at a price of the platform's, which the catalog does not hold.
 type lineOffer struct {
 	names    []string
 	known    func(name string) string
-	formats  func(catalog.Model) []protocol.Format
+	formats  func(m catalog.Model, name string) []protocol.Format
 	unmapped []protocol.Format
+	serves   []string
+}
+
+// prices says the catalog's reference price of m is the line's own.
+func (o lineOffer) prices(m catalog.Model) bool {
+	return len(o.serves) == 0 || slices.Contains(o.serves, m.Author)
 }
 
 // offer is what the passed keys list.
 func (p *DirectPlan) offer() lineOffer {
 	return lineOffer{
-		names: p.names(), formats: func(m catalog.Model) []protocol.Format { return p.direct.Formats(p.family, m) },
-		unmapped: familyFormats(p.family),
+		names: p.names(), formats: func(m catalog.Model, name string) []protocol.Format { return p.direct.Formats(p.family, m, name) },
+		unmapped: familyFormats(p.family), serves: p.direct.Type().Serves,
 	}
 }
 
@@ -399,7 +423,8 @@ func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group
 	}
 	for _, model := range slices.SortedFunc(maps.Keys(endpoints), func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }) {
 		name := endpoints[model]
-		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats)
+		m, _ := snap.Model(model) // mapLineName mapped the name to a model of the snapshot
+		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats, o.prices(m))
 		if err != nil {
 			return 0, 0, err
 		}
@@ -420,7 +445,7 @@ func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.Up
 	}
 	mapped := uuid.UUID(m.Model)
 	row.ModelID = &mapped
-	formats, err := store.FormatNames(o.formats(model))
+	formats, err := store.FormatNames(o.formats(model, name))
 	if err != nil || len(formats) == 0 {
 		return m, false
 	}
@@ -428,9 +453,10 @@ func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.Up
 	return m, true
 }
 
-// insertDirectEndpoint makes one endpoint and, when the catalog has the model's official price in the currency, its
-// cost schedule; it reports whether it priced it.
-func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, model catalog.ModelID, name string, formats []string) (bool, error) {
+// insertDirectEndpoint makes one endpoint and, when the catalog's official price in the currency is the line's own price
+// (priced) and the catalog has one, its cost schedule; it reports whether it priced it. An endpoint left unpriced has an
+// unknown cost and is not routed.
+func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, model catalog.ModelID, name string, formats []string, priced bool) (bool, error) {
 	endpoint, err := q.InsertEndpoint(ctx, tx, store.InsertEndpointParams{
 		SupplierID: id, SupplierGroupID: group, ModelID: uuid.UUID(model), UpstreamName: name, Formats: formats,
 	})
@@ -438,7 +464,7 @@ func insertDirectEndpoint(ctx context.Context, tx pg.Tx, q *store.Queries, id, g
 		return false, fmt.Errorf("make the endpoint for %s: %w", name, err)
 	}
 	ref, ok := snap.ReferencePrice(model, currency.String())
-	if !ok {
+	if !ok || !priced {
 		return false, nil
 	}
 	schedule, err := ref.Schedule.MarshalJSON()
