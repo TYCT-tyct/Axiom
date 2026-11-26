@@ -69,8 +69,14 @@ func supplierBody(s suppliers.Supplier) adminapi.Supplier {
 		format = &f
 	}
 	mode := adminapi.SupplierMode(s.Mode)
+	var account *adminapi.CloudAccount
+	if c := s.CloudAccount; c != nil {
+		account = &adminapi.CloudAccount{
+			ProjectId: text(c.ProjectID), ClientEmail: text(c.ClientEmail), AccessKeyLast4: text(c.AccessKeyLast4), KeyLast4: text(c.KeyLast4),
+		}
+	}
 	return adminapi.Supplier{
-		Mode: &mode, ApiFormat: format,
+		Mode: &mode, ApiFormat: format, CloudAccount: account,
 		Id: s.ID.String(), Name: s.Name, Kind: s.Kind, Origin: s.Origin, UpstreamAccount: s.UpstreamAccount,
 		Generation: text(s.Generation), DetectedVersion: text(s.DetectedVersion),
 		NativeUnit: adminapi.SupplierNativeUnit(s.NativeUnit), SettlementCurrency: s.SettlementCurrency,
@@ -101,7 +107,7 @@ func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	body := adminapi.SupplierCredential{
 		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.CredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
-		RequestsPerMinute: c.RequestsPerMinute, Last4: text(c.Last4),
+		RequestsPerMinute: c.RequestsPerMinute, Last4: text(c.Last4), Region: text(c.Region),
 	}
 	if c.Supplier != (uuid.UUID{}) {
 		body.SupplierId = new(c.Supplier.String())

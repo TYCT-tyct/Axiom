@@ -28,6 +28,7 @@
 | 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
 | 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
 | 供应商：适配器、接入流程、管理操作、调用面、供应商别名与待映射、凭证、同步、号池、各适配器、对账 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
+| 直连接口与云平台：官方 API 贴 key 直连、Vertex AI/Bedrock/Azure OpenAI 凭证、签名与成本 | [domains/suppliers-direct.md](domains/suppliers-direct.md) | 改动直连或云平台的接入、签名、凭证之前 |
 | 供应商的公开接口与不变量：表、调用面、并发与速率、检测、管理接口 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 端点评估在调用路径上的代码接口：判定表、`Observe`、健康度与实测的延迟和吞吐 | [internal/quality/README.md](../internal/quality/README.md) | 实现或调用 `quality` 之前，或改动尝试的结束路径之前 |

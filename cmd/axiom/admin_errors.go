@@ -110,10 +110,6 @@ var adminRefusals = []refusal{
 	{suppliers.ErrNoInboxItem, http.StatusNotFound, codeNotFound, "no such resource"},
 }
 
-// errNotImplemented answers an operation the contract has and whose handler has not landed (#948): the admin_pending_*
-// files hold those, and the change that lands the last of them removes this too.
-var errNotImplemented = &apiError{status: http.StatusNotImplemented, code: codeNotImplemented, message: "this operation has no handler yet"}
-
 // unprocessable is a request that is well formed but that a rule refuses; message says which.
 func unprocessable(message string) *apiError {
 	return &apiError{status: http.StatusUnprocessableEntity, code: codeUnprocessable, message: message}

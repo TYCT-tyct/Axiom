@@ -58,7 +58,7 @@ func (q *Queries) CredentialByRef(ctx context.Context, db DBTX, arg CredentialBy
 const credentialsPage = `-- name: CredentialsPage :many
 
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
 FROM suppliers.credentials c
 JOIN suppliers.suppliers s ON s.id = c.supplier_id
 WHERE s.owner_scope = 'platform'
@@ -94,6 +94,7 @@ type CredentialsPageRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // The credentials as the admin's upstream pages manage them (internal/suppliers/README.md「管理接口」): listed across
@@ -131,6 +132,7 @@ func (q *Queries) CredentialsPage(ctx context.Context, db DBTX, arg CredentialsP
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -263,7 +265,7 @@ func (q *Queries) InsertSealedCredential(ctx context.Context, db DBTX, arg Inser
 
 const lockCredentialOf = `-- name: LockCredentialOf :many
 SELECT c.id, c.supplier_id, c.supplier_group_id, c.upstream_key_ref, c.status, c.cooldown_until, c.expires_at,
-    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status
+    c.max_concurrency, c.requests_per_minute, c.hint, c.source, c.checked_at, c.check_outcome, c.check_cause, c.check_status, c.region
 FROM suppliers.credentials c WHERE c.supplier_id = $1 AND c.id = $2 FOR UPDATE
 `
 
@@ -288,6 +290,7 @@ type LockCredentialOfRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // One credential of one supplier, held for a change of its status until the transaction ends: a check's answer and a
@@ -317,6 +320,7 @@ func (q *Queries) LockCredentialOf(ctx context.Context, db DBTX, arg LockCredent
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}

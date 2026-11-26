@@ -9,7 +9,7 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
-    s.mode, s.api_format
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s
 WHERE (@every_owner::boolean OR s.owner_scope = 'platform')
     AND (sqlc.narg(status)::text IS NULL OR s.status = sqlc.narg(status))
@@ -22,7 +22,7 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
-    s.mode, s.api_format
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s WHERE s.id = @id AND (@every_owner::boolean OR s.owner_scope = 'platform');
 
 -- name: ListGroupsOf :many
@@ -39,7 +39,7 @@ FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id AND g.id = @
 
 -- name: ListCredentialsOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = @supplier_id ORDER BY id;
 
 -- name: ListEndpointsOf :many
@@ -64,7 +64,7 @@ WHERE supplier_id = @supplier_id AND id = @id;
 -- name: GetCredentialOf :many
 -- One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = @supplier_id AND id = @id;
 
 -- name: SetCredentialLimits :execrows

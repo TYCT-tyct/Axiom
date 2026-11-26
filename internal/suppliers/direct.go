@@ -66,28 +66,12 @@ type DirectRequest struct {
 	Reason                     string
 }
 
-// The outcomes of a key's check, as the admin API names them.
-const (
-	DirectKeyPassed       = "passed"
-	DirectKeyFailed       = "failed"
-	DirectKeyInconclusive = "inconclusive"
-	DirectKeyDuplicate    = "duplicate"
-)
-
-// DirectKeyCheck is what one pasted key came to. Credential is the credential it was stored as, the zero ID when it was not;
-// Status is the provider's HTTP status, 0 when it answered nothing; CheckedAt is zero for a key that was not checked.
-// The key itself is never in it.
-type DirectKeyCheck struct {
-	Index      int
-	Last4      string
-	Outcome    string
-	Cause      string
-	Status     int
-	Credential uuid.UUID
-	CheckedAt  time.Time
-	key        secret.Secret
-	ref        string
-	models     []string
+// pastedKey is what a plan holds of one pasted key beside its check: the text, which is only sealed, the ref it is
+// stored and found by, and the models its check listed.
+type pastedKey struct {
+	key    secret.Secret
+	ref    string
+	models []string
 }
 
 // DirectPlan is a direct API about to be connected: the request as checked, and each key's check once CheckDirect has
@@ -97,7 +81,8 @@ type DirectPlan struct {
 	family adapter.Family
 	origin string
 	direct adapter.Direct
-	Checks []DirectKeyCheck
+	Checks []KeyCheck
+	keys   []pastedKey // one for each of Checks
 }
 
 // Currency is the settlement currency the supplier will have: the request's, or the provider's own.
@@ -110,7 +95,7 @@ func Last4(key string) string { return hintOf(strings.TrimSpace(key)) }
 // and every key's check in the order sent.
 type Connected struct {
 	Supplier *Supplier
-	Checks   []DirectKeyCheck
+	Checks   []KeyCheck
 }
 
 // keyRef is what a pasted key is stored and found by: the first 128 bits of its SHA-256, as a key CPA lists is. It
@@ -147,31 +132,26 @@ func (a *Admin) planDirect(r DirectRequest) (*DirectPlan, error) {
 	if err := p.resolve(d.Currency()); err != nil {
 		return nil, err
 	}
-	checks, err := pastedKeys(r.Keys)
-	if err != nil {
-		return nil, err
-	}
-	p.Checks = checks
-	return p, nil
+	return p, p.paste(r.Keys)
 }
 
-// pastedKeys is a check for each key, in order; one that came earlier in the list is a duplicate.
-func pastedKeys(keys []string) ([]DirectKeyCheck, error) {
-	checks := make([]DirectKeyCheck, 0, len(keys))
+// paste is a check for each key, in order; one that came earlier in the list is a duplicate.
+func (p *DirectPlan) paste(keys []string) error {
+	p.Checks, p.keys = make([]KeyCheck, 0, len(keys)), make([]pastedKey, 0, len(keys))
 	seen := map[string]bool{}
 	for i, raw := range keys {
 		key := strings.TrimSpace(raw)
 		if !bearerToken(key) {
-			return nil, &KeyError{Index: i}
+			return &KeyError{Index: i}
 		}
-		c := DirectKeyCheck{Index: i, Last4: Last4(key), key: secret.New(key), ref: keyRef(key)}
-		if seen[c.ref] {
-			c.Outcome = DirectKeyDuplicate
+		c, k := KeyCheck{Index: i, Last4: Last4(key)}, pastedKey{key: secret.New(key), ref: keyRef(key)}
+		if seen[k.ref] {
+			c.Outcome = CheckDuplicate
 		}
-		seen[c.ref] = true
-		checks = append(checks, c)
+		seen[k.ref] = true
+		p.Checks, p.keys = append(p.Checks, c), append(p.keys, k)
 	}
-	return checks, nil
+	return nil
 }
 
 // resolve fills in what the request leaves to the provider: a built-in provider's address, family and currency are its
@@ -205,18 +185,18 @@ func (p *DirectPlan) resolve(currency string) error {
 
 // skipStored marks the keys a credential holds now as duplicates.
 func (p *DirectPlan) skipStored(ctx context.Context, tx pg.Tx) error {
-	refs := make([]string, 0, len(p.Checks))
-	for _, c := range p.Checks {
-		refs = append(refs, c.ref)
+	refs := make([]string, 0, len(p.keys))
+	for _, k := range p.keys {
+		refs = append(refs, k.ref)
 	}
 	stored, err := store.New().StoredKeyRefs(ctx, tx, refs)
 	if err != nil {
 		return fmt.Errorf("read the keys already stored: %w", err)
 	}
 	for i := range p.Checks {
-		if _, found := slices.BinarySearch(stored, p.Checks[i].ref); found {
-			p.Checks[i].Outcome, p.Checks[i].Cause, p.Checks[i].Status = DirectKeyDuplicate, "", 0
-			p.Checks[i].CheckedAt, p.Checks[i].models = time.Time{}, nil
+		if _, found := slices.BinarySearch(stored, p.keys[i].ref); found {
+			p.Checks[i] = KeyCheck{Index: p.Checks[i].Index, Last4: p.Checks[i].Last4, Outcome: CheckDuplicate}
+			p.keys[i].models = nil
 		}
 	}
 	return nil
@@ -241,31 +221,36 @@ func (a *Admin) CheckDirect(ctx context.Context, p *DirectPlan) error {
 	var wg sync.WaitGroup
 	slots := make(chan struct{}, checkParallel)
 	for i := range p.Checks {
-		if p.Checks[i].Outcome == DirectKeyDuplicate {
+		if p.Checks[i].Outcome == CheckDuplicate {
 			continue
 		}
 		slots <- struct{}{}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			check := &p.Checks[i] // each goroutine writes only its own element
-			got := p.direct.CheckKey(ctx, c, p.family, check.key)
-			check.Outcome, check.Cause, check.Status, check.CheckedAt = outcomeOf(got.Outcome), string(got.Cause), got.Status, a.now()
-			check.models = got.Models
+			got := p.direct.CheckKey(ctx, c, p.family, p.keys[i].key)
+			p.Checks[i] = checkOf(got, p.Checks[i], a.now()) // each goroutine writes only its own elements
+			p.keys[i].models = got.Models
 		})
 	}
 	wg.Wait()
 	return nil
 }
 
-func outcomeOf(o adapter.KeyOutcome) string {
+// checkOf is what an adapter's answer to a check makes of the check c, at now.
+func checkOf(got adapter.KeyCheck, c KeyCheck, now time.Time) KeyCheck {
+	c.Outcome, c.Cause, c.UpstreamStatus, c.CheckedAt = outcomeOf(got.Outcome), CheckCause(got.Cause), got.Status, now
+	return c
+}
+
+func outcomeOf(o adapter.KeyOutcome) CheckOutcome {
 	switch o {
 	case adapter.KeyPassed:
-		return DirectKeyPassed
+		return CheckPassed
 	case adapter.KeyFailed:
-		return DirectKeyFailed
+		return CheckFailed
 	case adapter.KeyInconclusive:
 	}
-	return DirectKeyInconclusive
+	return CheckInconclusive
 }
 
 // CreateDirect stores what the checks let in, in the caller's transaction (docs/domains/suppliers.md「直连接口」): when no
@@ -275,7 +260,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	if err := p.skipStored(ctx, tx); err != nil {
 		return Connected{}, err
 	}
-	passed := slices.ContainsFunc(p.Checks, func(c DirectKeyCheck) bool { return c.Outcome == DirectKeyPassed })
+	passed := slices.ContainsFunc(p.Checks, func(c KeyCheck) bool { return c.Outcome == CheckPassed })
 	if !passed {
 		return Connected{Checks: p.Checks}, nil
 	}
@@ -303,7 +288,7 @@ func (a *Admin) CreateDirect(ctx context.Context, tx pg.Tx, actor audit.Actor, s
 	}); err != nil {
 		return Connected{}, fmt.Errorf("set the direct API's unit value: %w", err)
 	}
-	models, priced, err := insertDirectModels(ctx, tx, q, id, group, snap, p)
+	models, priced, err := insertLineModels(ctx, tx, q, id, group, snap, p.r.Currency, p.offer(), nil)
 	if err != nil {
 		return Connected{}, err
 	}
@@ -334,17 +319,17 @@ func insertLine(ctx context.Context, tx pg.Tx, q *store.Queries, id uuid.UUID, k
 // itself lists: keys of one line take turns, and one key is never sent a model its account was not shown.
 func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, p *DirectPlan) error {
 	for i := range p.Checks {
-		c := &p.Checks[i]
-		if c.Outcome != DirectKeyPassed {
+		c, k := &p.Checks[i], p.keys[i]
+		if c.Outcome != CheckPassed {
 			continue
 		}
 		c.Credential = uuid.NewV7()
-		sealed := a.keys.Seal(c.key, secret.Location{Table: "suppliers.credentials", RowID: c.Credential.String(), Purpose: "key"})
+		sealed := a.keys.Seal(k.key, keyAt(c.Credential))
 		keyVersion := int64(sealed.KeyVersion)
 		if err := q.InsertDirectCredential(ctx, tx, store.InsertDirectCredentialParams{
-			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: c.ref,
+			ID: c.Credential, SupplierID: id, SupplierGroupID: group, UpstreamKeyRef: k.ref,
 			Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK, KeyVersion: &keyVersion,
-			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: c.models, Hint: &c.Last4,
+			MaxConcurrency: p.r.MaxConcurrency, RequestsPerMinute: p.r.RequestsPerMinute, AllowedModels: k.models, Hint: &c.Last4,
 		}); err != nil {
 			return fmt.Errorf("store key %d: %w", c.Index, err)
 		}
@@ -352,24 +337,42 @@ func (a *Admin) insertDirectKeys(ctx context.Context, tx pg.Tx, q *store.Queries
 	return nil
 }
 
-// insertDirectModels writes every name the passed keys list on the line. A name the catalog maps to a model on sale
-// gets an endpoint in the formats the API serves the model in, costed at the model's official price in the settlement
+// lineOffer is what a connection lists on a line of one: each name, the name the catalog knows it by (known; nil for
+// the name itself), the formats an endpoint of a catalog model serves there, and what a name the catalog does not map
+// yet is listed as speaking.
+type lineOffer struct {
+	names    []string
+	known    func(name string) string
+	formats  func(catalog.Model) []protocol.Format
+	unmapped []protocol.Format
+}
+
+// offer is what the passed keys list.
+func (p *DirectPlan) offer() lineOffer {
+	return lineOffer{
+		names: p.names(), formats: func(m catalog.Model) []protocol.Format { return p.direct.Formats(p.family, m) },
+		unmapped: familyFormats(p.family),
+	}
+}
+
+// insertLineModels writes every name of the offer on the line. A name the catalog maps to a model on sale gets an
+// endpoint in the formats the line serves the model in, costed at the model's official price in the settlement
 // currency (cost_schedules basis published: the provider's own published price); a name with no such price keeps an
 // endpoint whose cost is unknown, out of routing. A name the catalog does not map waits for a person, as a relay's
-// does. Two names of one model are one endpoint: the name that is evidence of the version, else the first.
-func insertDirectModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, p *DirectPlan) (models, priced int, err error) {
-	fallback, err := store.FormatNames(familyFormats(p.family))
+// does. Two names of one model are one endpoint: the name that is evidence of the version, else the first. A model in
+// served has an endpoint already and keeps it.
+func insertLineModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, group uuid.UUID, snap *catalog.Snapshot, currency platform.Currency, o lineOffer, served map[catalog.ModelID]bool) (models, priced int, err error) {
+	fallback, err := store.FormatNames(o.unmapped)
 	if err != nil {
 		return 0, 0, err
 	}
 	endpoints := map[catalog.ModelID]string{}
 	exact := map[catalog.ModelID]bool{}
-	names := directNames(p.Checks)
-	rows := make(map[string]store.UpsertProjectedModelParams, len(names))
-	for _, name := range names {
+	rows := make(map[string]store.UpsertProjectedModelParams, len(o.names))
+	for _, name := range o.names {
 		row := store.UpsertProjectedModelParams{SupplierID: id, SupplierGroupID: group, UpstreamName: name, Formats: fallback}
-		m, serves := mapDirectName(snap, p, name, &row)
-		if _, taken := endpoints[m.Model]; serves && (!taken || !m.Unverified && !exact[m.Model]) {
+		m, serves := mapLineName(snap, o, name, &row)
+		if _, taken := endpoints[m.Model]; serves && !served[m.Model] && (!taken || !m.Unverified && !exact[m.Model]) {
 			endpoints[m.Model], exact[m.Model] = name, !m.Unverified
 		}
 		rows[name] = row
@@ -379,7 +382,7 @@ func insertDirectModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, gro
 	}
 	for _, model := range slices.SortedFunc(maps.Keys(endpoints), func(a, b catalog.ModelID) int { return uuid.UUID(a).Compare(uuid.UUID(b)) }) {
 		name := endpoints[model]
-		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, p.r.Currency, model, name, rows[name].Formats)
+		ok, err := insertDirectEndpoint(ctx, tx, q, id, group, snap, currency, model, name, rows[name].Formats)
 		if err != nil {
 			return 0, 0, err
 		}
@@ -387,20 +390,24 @@ func insertDirectModels(ctx context.Context, tx pg.Tx, q *store.Queries, id, gro
 			priced++
 		}
 	}
-	return len(names), priced, nil
+	return len(o.names), priced, nil
 }
 
-// mapDirectName maps one name of the list into row: the model on sale it stands for, and the formats the API serves
+// mapLineName maps one name of the offer into row: the model on sale it stands for, and the formats the line serves
 // that model in. It reports whether an endpoint can serve the name; one the catalog does not map keeps no model.
-func mapDirectName(snap *catalog.Snapshot, p *DirectPlan, name string, row *store.UpsertProjectedModelParams) (syncer.Mapping, bool) {
-	m := syncer.MapUpstream(snap, nil, name)
+func mapLineName(snap *catalog.Snapshot, o lineOffer, name string, row *store.UpsertProjectedModelParams) (syncer.Mapping, bool) {
+	known := name
+	if o.known != nil {
+		known = o.known(name)
+	}
+	m := syncer.MapUpstream(snap, nil, known)
 	model, ok := snap.Model(m.Model)
 	if !m.Mapped || !ok {
 		return m, false
 	}
 	mapped := uuid.UUID(m.Model)
 	row.ModelID = &mapped
-	formats, err := store.FormatNames(p.direct.Formats(p.family, model))
+	formats, err := store.FormatNames(o.formats(model))
 	if err != nil || len(formats) == 0 {
 		return m, false
 	}
@@ -446,12 +453,12 @@ func familyFormats(f adapter.Family) []protocol.Format {
 	return []protocol.Format{protocol.Chat}
 }
 
-// directNames is every name a passed key listed, sorted and once each.
-func directNames(checks []DirectKeyCheck) []string {
+// names is every name a passed key listed, sorted and once each.
+func (p *DirectPlan) names() []string {
 	var names []string
-	for _, c := range checks {
-		if c.Outcome == DirectKeyPassed {
-			names = append(names, c.models...)
+	for i, c := range p.Checks {
+		if c.Outcome == CheckPassed {
+			names = append(names, p.keys[i].models...)
 		}
 	}
 	slices.Sort(names)

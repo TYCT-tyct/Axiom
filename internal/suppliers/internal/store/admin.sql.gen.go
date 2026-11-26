@@ -90,7 +90,7 @@ func (q *Queries) EraseCredentialsOf(ctx context.Context, db DBTX, supplierID uu
 
 const getCredentialOf = `-- name: GetCredentialOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = $1 AND id = $2
 `
 
@@ -115,6 +115,7 @@ type GetCredentialOfRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 // One credential of one supplier: a credential of another supplier is not this one, and is no credential of the request.
@@ -143,6 +144,7 @@ func (q *Queries) GetCredentialOf(ctx context.Context, db DBTX, arg GetCredentia
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -279,7 +281,7 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
-    s.mode, s.api_format
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s WHERE s.id = $1 AND ($2::boolean OR s.owner_scope = 'platform')
 `
 
@@ -306,6 +308,7 @@ type GetSupplierViewRow struct {
 	UnitValue           string
 	Mode                string
 	ApiFormat           *string
+	CloudAccount        []byte
 }
 
 func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierViewParams) ([]GetSupplierViewRow, error) {
@@ -335,6 +338,7 @@ func (q *Queries) GetSupplierView(ctx context.Context, db DBTX, arg GetSupplierV
 			&i.UnitValue,
 			&i.Mode,
 			&i.ApiFormat,
+			&i.CloudAccount,
 		); err != nil {
 			return nil, err
 		}
@@ -449,7 +453,7 @@ func (q *Queries) InsertUnitValue(ctx context.Context, db DBTX, arg InsertUnitVa
 
 const listCredentialsOf = `-- name: ListCredentialsOf :many
 SELECT id, supplier_id, supplier_group_id, upstream_key_ref, status, cooldown_until, expires_at, max_concurrency, requests_per_minute,
-    hint, source, checked_at, check_outcome, check_cause, check_status
+    hint, source, checked_at, check_outcome, check_cause, check_status, region
 FROM suppliers.credentials WHERE supplier_id = $1 ORDER BY id
 `
 
@@ -469,6 +473,7 @@ type ListCredentialsOfRow struct {
 	CheckOutcome      *string
 	CheckCause        *string
 	CheckStatus       *int32
+	Region            *string
 }
 
 func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]ListCredentialsOfRow, error) {
@@ -496,6 +501,7 @@ func (q *Queries) ListCredentialsOf(ctx context.Context, db DBTX, supplierID uui
 			&i.CheckOutcome,
 			&i.CheckCause,
 			&i.CheckStatus,
+			&i.Region,
 		); err != nil {
 			return nil, err
 		}
@@ -623,7 +629,7 @@ SELECT s.id, s.name, s.kind, s.origin, s.upstream_account, s.generation, s.detec
     s.settlement_currency, s.status, s.status_reason, coalesce(s.balance_native::text, '')::text AS balance_native, s.balance_observed_at,
     coalesce(s.low_balance_threshold::text, '')::text AS low_balance_threshold,
     coalesce((SELECT u.value::text FROM suppliers.unit_values u WHERE u.supplier_id = s.id AND u.currency = s.settlement_currency AND u.native_unit = s.native_unit ORDER BY u.id DESC LIMIT 1), '')::text AS unit_value,
-    s.mode, s.api_format
+    s.mode, s.api_format, s.cloud_account
 FROM suppliers.suppliers s
 WHERE ($1::boolean OR s.owner_scope = 'platform')
     AND ($2::text IS NULL OR s.status = $2)
@@ -657,6 +663,7 @@ type ListSuppliersPageRow struct {
 	UnitValue           string
 	Mode                string
 	ApiFormat           *string
+	CloudAccount        []byte
 }
 
 // What the admin API reads and writes of suppliers, in the platform scope (internal/suppliers/README.md「管理接口」).
@@ -696,6 +703,7 @@ func (q *Queries) ListSuppliersPage(ctx context.Context, db DBTX, arg ListSuppli
 			&i.UnitValue,
 			&i.Mode,
 			&i.ApiFormat,
+			&i.CloudAccount,
 		); err != nil {
 			return nil, err
 		}

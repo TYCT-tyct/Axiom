@@ -155,9 +155,10 @@ func keyError(err error) error {
 
 // reachable is a supplier as a request to it needs it.
 type reachable struct {
-	id      uuid.UUID
-	origin  string
-	adapter adapter.Adapter
+	id        uuid.UUID
+	origin    string
+	apiFormat string // the family a compatible direct API speaks; empty for every other
+	adapter   adapter.Adapter
 }
 
 // supplierToReach reads a platform supplier that a request can be sent to: one Axiom logs in to, in use or paused,
@@ -185,7 +186,7 @@ func (a *Admin) supplierToReach(ctx context.Context, r Reach, supplier uuid.UUID
 	if !ok {
 		return reachable{}, ErrNoAdapter
 	}
-	return reachable{id: supplier, origin: row.Origin, adapter: ad}, nil
+	return reachable{id: supplier, origin: row.Origin, apiFormat: deref(row.ApiFormat), adapter: ad}, nil
 }
 
 // groupToReach is supplierToReach for a group of the supplier, with the group's ref there.
@@ -243,25 +244,30 @@ const (
 // CheckCause is why a check did not pass (CredentialCheckCause in the contract); empty when it passed.
 type CheckCause string
 
-// The causes a check of a relay's key can find.
+// The causes a check can find.
 const (
-	CauseRejected      CheckCause = "credential_rejected"
-	CauseNotPermitted  CheckCause = "not_permitted"
-	CauseQuota         CheckCause = "quota_exhausted"
-	CauseWrongGroup    CheckCause = "wrong_group"
-	CauseRateLimited   CheckCause = "rate_limited"
-	CauseTimeout       CheckCause = "timeout"
-	CauseTransport     CheckCause = "transport"
-	CauseUpstreamError CheckCause = "upstream_error"
-	CauseUnknown       CheckCause = "unknown"
+	CauseRejected          CheckCause = "credential_rejected"
+	CauseNotPermitted      CheckCause = "not_permitted"
+	CauseQuota             CheckCause = "quota_exhausted"
+	CauseWrongGroup        CheckCause = "wrong_group"
+	CauseRegionUnavailable CheckCause = "region_unavailable"
+	CauseRateLimited       CheckCause = "rate_limited"
+	CauseTimeout           CheckCause = "timeout"
+	CauseTransport         CheckCause = "transport"
+	CauseUpstreamError     CheckCause = "upstream_error"
+	CauseUnknown           CheckCause = "unknown"
 )
 
-// KeyCheck is one key's check. Credential is the credential tested or stored, zero when nothing was stored; Index is the
-// key's place in a request of pasted keys.
+// KeyCheck is one check of a credential: a relay's key, a key pasted for a direct API, or a cloud credential in one
+// region (CredentialCheck in the contract). Credential is the credential tested or stored, zero when nothing was
+// stored; Index is the key's place in a request of pasted keys; Region is the cloud region checked, empty for any other;
+// UpstreamStatus is the supplier's HTTP status, 0 when it answered nothing; CheckedAt is zero for a key that was not
+// sent (a duplicate). The key itself is never in it.
 type KeyCheck struct {
 	Index          int
 	Credential     uuid.UUID
 	Last4          string
+	Region         string
 	Outcome        CheckOutcome
 	Cause          CheckCause
 	UpstreamStatus int
@@ -342,7 +348,7 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 		return KeyCheck{}, err
 	}
 	var key secret.Secret
-	var last4 string
+	var last4, region string
 	err = r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) error {
 		rows, err := store.New().GetCredentialOf(ctx, tx, store.GetCredentialOfParams{SupplierID: supplier, ID: credential})
 		if err != nil {
@@ -354,16 +360,37 @@ func (a *Admin) CheckCredential(ctx context.Context, r Reach, supplier, credenti
 		if status := rows[0].Status; status == "disabled" || status == "erased" || status == "binding" {
 			return fmt.Errorf("%w: the credential is %s", ErrStatusLocked, status)
 		}
-		last4 = deref(rows[0].Hint)
+		last4, region = deref(rows[0].Hint), deref(rows[0].Region)
 		key, err = a.openKey(ctx, tx, credential)
 		return err
 	})
 	if err != nil {
 		return KeyCheck{}, err
 	}
-	check := a.checkKey(ctx, sup.adapter.Calls(), sup.origin, key)
+	check := a.checkStored(ctx, sup, region, key)
 	check.Credential, check.Last4 = credential, last4
 	return check, nil
+}
+
+// checkStored is one check of a stored credential the way its supplier is reached: a cloud credential in its region, a
+// direct API's key at the provider's model list with the provider's own header, a relay's key at /v1/models.
+func (a *Admin) checkStored(ctx context.Context, sup reachable, region string, key secret.Secret) KeyCheck {
+	switch ad := sup.adapter.(type) {
+	case adapter.Cloud:
+		got := ad.CheckRegion(ctx, a.egress, sup.origin, region, key, a.now())
+		return checkOf(adapter.KeyCheck{Outcome: got.Outcome, Cause: got.Cause, Status: got.Status}, KeyCheck{Region: region}, a.now())
+	case adapter.Direct:
+		c, err := client.New(sup.origin, a.egress, client.NewLimiter(nil, a.now), a.now)
+		if err != nil {
+			return KeyCheck{Outcome: CheckInconclusive, Cause: CauseUnknown, CheckedAt: a.now()}
+		}
+		family := ad.Family()
+		if family == "" {
+			family = adapter.Family(sup.apiFormat)
+		}
+		return checkOf(ad.CheckKey(ctx, c, family, key), KeyCheck{}, a.now())
+	}
+	return a.checkKey(ctx, sup.adapter.Calls(), sup.origin, key)
 }
 
 // openKey opens a credential's sealed key for one request. The caller sends it in one header and keeps it nowhere.

@@ -284,19 +284,69 @@ func (a *Attempt) Done() AttemptReceipt {
 
 // Send posts the call to the supplier. A response in the 2xx range is returned for the caller to read and close.
 // Anything else comes back as a Failure. The supplier's request id is taken from the response headers of any answer,
-// failed or not, because it is what the charge will be matched by.
+// failed or not, because it is what the charge will be matched by. A cloud platform's adapter makes the request itself
+// (adapter.Signer), from the credential's region and the model as it names it, and gives its answer in the format's
+// framing; a failure to sign is the call's before anything was sent.
 //
 // Whether the supplier ran a request that failed is decided in two places. A failure before the request was fully
 // written is NotExecuted whatever its cause. After it, the adapter's Classify says: only an answer by which the
 // supplier states it refused before running the request is NotExecuted, and a timeout, a reset or a 5xx is not.
 // Neither suppliers nor egress retries a POST.
 func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure) {
+	resp, f := a.send(ctx, call)
+	if f != nil {
+		a.rest(*f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
+	}
+	return resp, f
+}
+
+// send is Send without resting what a failure says is at fault.
+func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure) {
+	signer, cloud := a.ep.quirks.(adapter.Signer)
+	var (
+		req *http.Request
+		f   *Failure
+	)
+	if cloud {
+		req, f = signer.Sign(ctx, a.s.cfg.Egress, adapter.SignedCall{
+			Format: call.Format, Origin: a.ep.origin, Region: a.cred.region, Model: a.cred.call, Body: call.Body,
+			Header: call.Header, Key: a.cred.key, At: a.s.now(),
+		})
+	} else {
+		req, f = a.request(ctx, call)
+	}
+	if f != nil {
+		return nil, f
+	}
+	var wrote atomic.Bool
+	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
+	resp, err := a.s.cfg.Egress.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
+	if err != nil {
+		return nil, transportFailure(wrote.Load())
+	}
+	a.noteResponse(resp.StatusCode, resp.Header)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		if cloud {
+			resp = signer.Answer(resp)
+		}
+		return resp, nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
+	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
+	failure := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
+	if failure.Scope == adapter.ScopeRequest {
+		failure.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
+	}
+	return nil, &failure
+}
+
+// request is the call as a relay or a provider's own API takes it: at the format's path under the origin, with the key
+// in the header the format takes there.
+func (a *Attempt) request(ctx context.Context, call Call) (*http.Request, *Failure) {
 	w, ok := wire[call.Format]
 	if !ok {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
-	var wrote atomic.Bool
-	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
 	path := w.path
 	if call.Compact {
 		if path, ok = compactPaths[call.Format]; !ok {
@@ -307,7 +357,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if !own {
 		wire = relayWire{}
 	}
-	req, err := http.NewRequestWithContext(httptrace.WithClientTrace(ctx, trace), http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.ep.origin+wire.Path(call.Format, path), bytes.NewReader(call.Body))
 	if err != nil {
 		return nil, &Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeRequest, Cause: adapter.BadRequest{}}
 	}
@@ -317,22 +367,7 @@ func (a *Attempt) Send(ctx context.Context, call Call) (*http.Response, *Failure
 	if w.version != "" && req.Header.Get("Anthropic-Version") == "" {
 		req.Header.Set("Anthropic-Version", w.version)
 	}
-	resp, err := a.s.cfg.Egress.Do(req)
-	if err != nil {
-		return nil, transportFailure(wrote.Load())
-	}
-	a.noteResponse(resp.StatusCode, resp.Header)
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		return resp, nil
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody)) //nolint:errcheck // a body that fails to read is classified by what was read
-	_ = resp.Body.Close()                                          //nolint:errcheck // nothing more to learn
-	f := a.ep.quirks.Classify(resp.StatusCode, resp.Header, body)
-	if f.Scope == adapter.ScopeRequest {
-		f.Rejection = rejectionOf(body, a.ep.origin, a.cred.key.Reveal())
-	}
-	a.rest(f) //nolint:contextcheck // the rejection worker outlives the request; its own timeout bounds the write
-	return nil, &f
+	return req, nil
 }
 
 func (a *Attempt) noteResponse(status int, h http.Header) {
