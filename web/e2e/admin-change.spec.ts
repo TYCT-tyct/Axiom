@@ -240,7 +240,7 @@ test.describe("a grant left unsettled", () => {
 test("a spec saved by another operator meanwhile is not overwritten: the save is refused until the form is reloaded", async ({
   page,
 }) => {
-  const path = `/models/${uuid(5, 1)}`;
+  const path = `/models?model=${uuid(5, 1)}`;
   await page.clock.install();
   const state = await open(page, path);
   const other = await page.context().newPage();

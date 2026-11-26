@@ -41,20 +41,15 @@ export const initial = {
     audit: "Audit log",
     suppliers: "Suppliers",
     mappings: "Unmapped models",
-    models: "Model catalog",
+    models: "Models",
     pricing: "Pricing",
-    exchangeRates: "Exchange rates",
     subscriptionPlans: "Subscription plans",
-    sourceClasses: "Source classes",
-    routingPresets: "Routing presets",
     alertEvents: "Alert events",
     announcements: "Announcements",
   },
   shell,
   calls,
   audit,
-  sourceClasses,
-  routingPresets,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
   home: {
     title: "Operations",
@@ -247,6 +242,8 @@ export const initial = {
     | "announcements"
     | "legalDocs"
     | "rateLimits"
+    | "sourceClasses"
+    | "routingPresets"
   >
 >;
 
@@ -256,6 +253,8 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   settings,
   subscriptions,
   suppliers,
+  sourceClasses,
+  routingPresets,
   discrepancies,
   exchangeRates,
   platformGrants,

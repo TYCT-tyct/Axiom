@@ -62,8 +62,8 @@ test("⌘K lists the recent pages first and finds a page's tab by name", async (
   await expect(options).toHaveCount(1);
   await page.keyboard.press("Enter");
   await expect(palette).toHaveCount(0);
-  await expect(page).toHaveURL(/\/exchange-rates$/);
-  await expect(h1(page, words("nav.exchangeRates"))).toBeVisible();
+  await expect(page).toHaveURL(/\/pricing\?tab=rates$/);
+  await expect(h1(page, words("nav.pricing"))).toBeVisible();
   // The tab's route belongs to its page's entry.
   await expect(entry(page, "pricing")).toHaveAttribute("aria-current", "page");
 

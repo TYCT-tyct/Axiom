@@ -50,6 +50,7 @@ function useDialogFocus(onClose: () => void) {
       background = Array.from(frame.children).filter((el) => el !== host && !el.hasAttribute("inert"));
       for (const el of background) el.setAttribute("inert", "");
       const dialog = panel.current;
+      show(dialog);
       if (dialog) {
         const targets = tabStops(dialog);
         (targets.find((el) => el.matches("input, textarea, select")) ?? targets[0] ?? dialog).focus();
@@ -82,6 +83,15 @@ function useDialogFocus(onClose: () => void) {
     if (dialog?.isConnected && !host.closest("[inert]") && !dialog.contains(document.activeElement)) dialog.focus();
   });
   return { panel, host };
+}
+
+// The board's dialog is a plain element over the page, not in the top layer, so a modal <dialog> that is already open
+// (the admin's drawer) would paint over it and take its clicks. Over one, the dialog goes into the top layer itself,
+// above the drawer, which the browser then holds inert.
+function show(node: HTMLElement | null) {
+  if (!(node instanceof HTMLDialogElement) || node.open) return;
+  if (document.querySelector("dialog:modal")) node.showModal();
+  else node.open = true;
 }
 
 export function Dialog({
@@ -121,7 +131,8 @@ export function Dialog({
       values={{
         dialog: (node) => {
           panel.current = node as HTMLElement | null;
-          if (node instanceof HTMLDialogElement) node.open = true;
+          // Not yet in the document when it is first made: the host takes it there, and shows it (useDialogFocus).
+          if (node?.isConnected) show(node as HTMLElement);
         },
         titleId: id,
         close: onClose,

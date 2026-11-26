@@ -26,7 +26,8 @@ export function dialogScene(
     open: async (page) => {
       await goto(page);
       await open(page);
-      await page.getByRole("dialog").waitFor();
+      // a dialog a drawer holds open under it is no second screen
+      await page.getByRole("dialog").first().waitFor();
     },
   };
 }

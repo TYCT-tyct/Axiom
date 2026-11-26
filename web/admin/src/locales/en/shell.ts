@@ -47,6 +47,10 @@ export default {
   also: {
     discrepancies: "Payment discrepancies",
     mappings: "To review",
+    modelAuthors: "Authors",
+    routingDefaults: "Defaults and limits",
+    pricingRules: "Pricing rules",
+    pricingPolicy: "Pricing policy",
     sourceClasses: "Source classes",
     exchangeRates: "Exchange rates",
     subscriptionPlans: "Plans",

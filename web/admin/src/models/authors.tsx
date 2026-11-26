@@ -1,16 +1,16 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { can, useErrors, useSession } from "@axiom/app";
-import { ActionButton, Card, DataState, EmptyState, Field, Table, Td } from "@axiom/ui";
+import { ActionButton, Card, Cluster, DataState, DataTable, EmptyState, Field } from "@axiom/ui";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
-import { Code, Head } from "../parts";
+import { Code } from "../parts";
 import { authorsQuery } from "../queries";
 
 type Author = AdminSchemas["Author"];
 
-// The vendors whose models the catalog lists. A slug is the first part of a model's slug and never changes; only the
+// The authors of the models the catalog lists. A slug is the first part of a model's slug and never changes; only the
 // name shown for it can.
 export function Authors() {
   const { t } = useTranslation();
@@ -18,62 +18,60 @@ export function Authors() {
   const manage = can(useSession(), "catalog.manage");
   const [editing, setEditing] = useState<Author | "new" | null>(null);
   return (
-    <Card
-      layout="flush"
-      title={t("models.authors.title")}
-      actions={
-        manage ? (
-          <ActionButton size="sm" icon="plus" onClick={() => setEditing("new")}>
+    <>
+      {manage ? (
+        <Cluster justify="end">
+          <ActionButton variant="pri" icon="plus" onClick={() => setEditing("new")}>
             {t("models.authors.add")}
           </ActionButton>
-        ) : undefined
-      }
-    >
-      <DataState
-        query={authors}
-        compact
-        isEmpty={(data) => data.data.length === 0}
-        empty={<EmptyState compact title={t("models.authors.empty")} />}
-      >
-        {(data) => <AuthorsTable authors={data.data} onEdit={manage ? setEditing : undefined} />}
-      </DataState>
+        </Cluster>
+      ) : null}
+      <Card layout="flush">
+        <DataState
+          query={authors}
+          isEmpty={(data) => data.data.length === 0}
+          empty={<EmptyState title={t("models.authors.empty")} />}
+        >
+          {(data) => <AuthorsTable authors={data.data} onEdit={manage ? setEditing : undefined} />}
+        </DataState>
+      </Card>
       {editing ? (
         <AuthorDialog author={editing === "new" ? undefined : editing} onClose={() => setEditing(null)} />
       ) : null}
-    </Card>
+    </>
   );
 }
 
 function AuthorsTable({ authors, onEdit }: { authors: Author[]; onEdit: ((author: Author) => void) | undefined }) {
   const { t } = useTranslation();
   return (
-    <Table label={t("models.authors.title")}>
-      <Head
-        cols={[t("models.authors.slug"), [t("models.authors.name"), { main: true }]]}
-        action={onEdit !== undefined}
-      />
-      <tbody>
-        {authors.map((author) => (
-          <tr key={author.slug}>
-            <Td>
-              <Code>{author.slug}</Code>
-            </Td>
-            <Td main>{author.name}</Td>
-            {onEdit ? (
-              <Td actions>
-                <ActionButton
-                  variant="gho"
-                  size="sm"
-                  icon="pencil"
-                  aria-label={t("models.authors.rename", { name: author.name })}
-                  onClick={() => onEdit(author)}
-                />
-              </Td>
-            ) : null}
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <DataTable
+      label={t("models.authors.title")}
+      rows={authors}
+      rowKey={(author) => author.slug}
+      columns={[
+        { key: "name", header: t("models.authors.name"), cell: (author) => author.name },
+        { key: "slug", header: t("models.authors.slug"), cell: (author) => <Code>{author.slug}</Code> },
+        ...(onEdit
+          ? [
+              {
+                key: "edit",
+                header: "",
+                align: "end" as const,
+                cell: (author: Author) => (
+                  <ActionButton
+                    variant="gho"
+                    size="sm"
+                    icon="pencil"
+                    aria-label={t("models.authors.rename", { name: author.name })}
+                    onClick={() => onEdit(author)}
+                  />
+                ),
+              },
+            ]
+          : []),
+      ]}
+    />
   );
 }
 

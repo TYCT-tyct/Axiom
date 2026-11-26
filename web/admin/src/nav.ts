@@ -60,13 +60,22 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
         pending: "mappings",
         also: [{ to: "/mappings", label: "mappings" }],
       },
-      { key: "models", to: "/models", icon: "models", permission: "catalog.view" },
+      {
+        key: "models",
+        to: "/models",
+        icon: "models",
+        permission: "catalog.view",
+        also: [{ to: "/models?tab=authors", label: "modelAuthors" }],
+      },
       {
         key: "routing",
-        to: "/routing-presets",
+        to: "/routing",
         icon: "route",
         permission: "sites.manage",
-        also: [{ to: "/source-classes", label: "sourceClasses" }],
+        also: [
+          { to: "/routing?tab=defaults", label: "routingDefaults" },
+          { to: "/routing?tab=sources", label: "sourceClasses" },
+        ],
       },
       {
         key: "pricing",
@@ -74,7 +83,9 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
         icon: "classify",
         permission: "pricing.view",
         also: [
-          { to: "/exchange-rates", label: "exchangeRates" },
+          { to: "/pricing?tab=rules", label: "pricingRules" },
+          { to: "/pricing?tab=rates", label: "exchangeRates" },
+          { to: "/pricing?tab=policy", label: "pricingPolicy" },
           { to: "/subscription-plans", label: "subscriptionPlans" },
         ],
       },

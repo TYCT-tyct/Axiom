@@ -1,15 +1,15 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
-import { can, useSession } from "@axiom/app";
-import { ActionButton, Card, CheckField, DataState, Mono, Stack, Table, Td, Text } from "@axiom/ui";
-import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { type DiffRow, Mono, Stack, Text } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, useSnapshot } from "../change";
-import { Head, Json } from "../parts";
-import { publicationsQuery } from "../queries";
+import { rateItems } from "../models/catalog";
+import { showRate } from "../models/price-fields";
+import { Json } from "../parts";
+import { belowFloor, raises } from "./floor";
 import { publicationKey } from "./publication-key";
 
 type Publication = AdminSchemas["PricePublication"];
+type RateItem = (typeof rateItems)[number];
 type EndpointPrices = NonNullable<Publication["endpoints"]>;
 
 function EndpointPriceList({ label, prices }: { label: string; prices?: EndpointPrices }) {
@@ -33,7 +33,7 @@ function EndpointPriceList({ label, prices }: { label: string; prices?: Endpoint
   );
 }
 
-function PublicationAudience({ audience }: { audience: Publication["audience"] }) {
+export function PublicationAudience({ audience }: { audience: Publication["audience"] }) {
   const { t } = useTranslation();
   if (!audience) {
     return <>{t("pricing.publish.unavailable")}</>;
@@ -47,59 +47,6 @@ function PublicationAudience({ audience }: { audience: Publication["audience"] }
         </Text>
       ) : null}
     </>
-  );
-}
-
-export function Publications() {
-  const { t } = useTranslation();
-  const manage = can(useSession(), "pricing.manage");
-  const [editing, setEditing] = useState<string | null>(null);
-  const query = useQuery(publicationsQuery);
-  const current = query.data?.data?.find((p) => publicationKey(p) === editing);
-  return (
-    <Card layout="flush" title={t("pricing.publish.title")}>
-      <DataState query={query}>
-        {(data) =>
-          data.data ? (
-            <Table label={t("pricing.publish.title")}>
-              <Head
-                cols={[
-                  [t("pricing.publish.model"), { main: true }],
-                  t("pricing.rules.audience"),
-                  t("pricing.publish.version"),
-                  t("pricing.publish.state"),
-                ]}
-                action
-              />
-              <tbody>
-                {data.data.map((p) => (
-                  <tr key={publicationKey(p)}>
-                    <Td main>{p.model_id}</Td>
-                    <Td>
-                      <PublicationAudience audience={p.audience} />
-                    </Td>
-                    <Td>{p.current_id ?? t("pricing.publish.unavailable")}</Td>
-                    <Td>{p.status ? t(`pricing.publish.${p.status}`) : t("pricing.publish.unavailable")}</Td>
-                    <Td actions>
-                      {manage && p.schedule && p.model_id && p.candidate_id ? (
-                        <ActionButton size="sm" onClick={() => setEditing(publicationKey(p))}>
-                          {t("pricing.publish.action")}
-                        </ActionButton>
-                      ) : (
-                        p.problem
-                      )}
-                    </Td>
-                  </tr>
-                ))}
-              </tbody>
-            </Table>
-          ) : (
-            <Text tone="faint">{t("pricing.publish.unavailable")}</Text>
-          )
-        }
-      </DataState>
-      {current ? <PublishDialog live={current} onClose={() => setEditing(null)} /> : null}
-    </Card>
   );
 }
 
@@ -137,7 +84,25 @@ function Schedule({ label, value }: { label: string; value: unknown }) {
   );
 }
 
-function PublishDialog({ live, onClose }: { live: Publication; onClose: () => void }) {
+// What a publication changes at the model level, item by item as the contract gives it: the current price list's price
+// of each item against the one the proposal publishes, per million tokens (per use where an item is priced so).
+function priceDiff(price: Publication, name: (item: RateItem) => string): DiffRow[] {
+  const next = price.schedule;
+  if (!next) return [];
+  const was = price.current_schedule;
+  return rateItems.flatMap((item) => {
+    const after = next.rates[item];
+    const before = was?.rates[item];
+    if (after === undefined && before === undefined) return [];
+    const shown = (value: string | undefined) => (value === undefined ? undefined : showRate(item, value));
+    return [{ label: name(item), before: shown(before), after: shown(after) ?? "—" }];
+  });
+}
+
+// Publishing makes a price version current for every user at once. A price the rule asks below the site's floor is
+// published at the floor, which is what `schedule` is: there is no way to publish under it here. The person confirms by
+// typing the model's ID, as of the version they read.
+export function PublishDialog({ live, onClose }: { live: Publication; onClose: () => void }) {
   const { t } = useTranslation();
   const [price, reload] = useSnapshot(live);
   const model = price.model_id;
@@ -145,27 +110,31 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
   if (!model || !candidate) {
     return null;
   }
+  const atFloor = belowFloor(price);
   return (
     <ChangeDialog
       operation={`price-publication:${publicationKey(price)}`}
-      title={t("pricing.publish.action")}
+      title={atFloor ? t("pricing.publish.atFloor") : t("pricing.publish.action")}
       intro={
         <>
           <p>{t("pricing.publish.intro")}</p>
           <PublicationAudience audience={price.audience} />
         </>
       }
-      action={t("pricing.publish.action")}
+      diff={priceDiff(price, (item) => t(`models.item.${item}`))}
+      warn={
+        atFloor
+          ? t("pricing.publish.floorWarn")
+          : raises(price.schedule, price.current_schedule)
+            ? t("pricing.publish.raisesWarn")
+            : undefined
+      }
+      action={atFloor ? t("pricing.publish.atFloor") : t("pricing.publish.action")}
       confirm={price.model_id}
       reload={reload}
-      fields={() => (
-        <>
-          <PublishPrices price={price} />
-          <CheckField name="override" label={t("pricing.publish.override")} />
-        </>
-      )}
-      read={(values) => ({ override: values.override === "on" })}
-      send={(input, { reason, key }) =>
+      fields={() => <PublishPrices price={price} />}
+      read={() => null}
+      send={(_, { reason, key }) =>
         unwrapChange(
           adminApi.POST("/api/admin/v1/pricing/publications/{model_id}", {
             params: { path: { model_id: model }, header: { "Idempotency-Key": key } },
@@ -173,7 +142,7 @@ function PublishDialog({ live, onClose }: { live: Publication; onClose: () => vo
               candidate_id: candidate,
               current_id: price.current_id,
               confirmed: true,
-              override_floor: input.override,
+              override_floor: false,
               reason,
             },
           }),
