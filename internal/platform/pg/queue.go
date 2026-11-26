@@ -244,7 +244,9 @@ func (q *Queue) workDiscardedScan(ctx context.Context, _ *river.Job[discardedSca
 // claimed jobs that are past the retention period. The claim is a row keyed by job id, so a second scan, another node
 // or a restart reports nothing; if the transaction rolls back after a report, the next scan reports again (at least
 // once). River's cleaner does not delete discarded jobs, so an unclaimed job older than the retention is still claimed
-// and reported before this cleanup removes it.
+// and reported before this cleanup removes it. Scans run one at a time: a job claimed and deleted
+// in one transaction leaves no claim behind, so a concurrent scan whose snapshot still saw the job would find no
+// conflict and report it again (#914).
 func (q *Queue) scanDiscarded(ctx context.Context) error {
 	err := q.db.Tx(ctx, q.scope, func(tx Tx) error {
 		return q.scanDiscardedTx(ctx, tx)
@@ -256,6 +258,11 @@ func (q *Queue) scanDiscarded(ctx context.Context) error {
 }
 
 func (q *Queue) scanDiscardedTx(ctx context.Context, tx Tx) error {
+	// The lock serialises the scans of every node. It is a statement of its own: under READ COMMITTED the claim that
+	// follows then reads a snapshot taken after the scan before it committed.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('platform.discarded_jobs'))`); err != nil {
+		return fmt.Errorf("wait for another scan: %w", err)
+	}
 	rows, err := tx.Query(ctx, `INSERT INTO platform.discarded_jobs (job_id, kind, attempt)
 			SELECT id, kind, attempt FROM river.river_job WHERE state = 'discarded'
 			ON CONFLICT (job_id) DO NOTHING
