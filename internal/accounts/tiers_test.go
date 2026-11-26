@@ -106,9 +106,9 @@ func (x site) defaultTier(t *testing.T, site accounts.SiteID) accounts.TierID {
 
 // refusedAs reports whether err is want: any *SettingError when want is one, else errors.Is.
 func refusedAs(err, want error) bool {
-	var setting *accounts.SettingError
-	if errors.As(want, &setting) {
-		return errors.As(err, &setting)
+	if setting, ok := errors.AsType[*accounts.SettingError](want); ok && setting != nil {
+		got, ok := errors.AsType[*accounts.SettingError](err)
+		return ok && got != nil
 	}
 	return errors.Is(err, want)
 }
