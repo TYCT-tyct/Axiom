@@ -15,7 +15,7 @@ export function useCallColumns(): Record<"at" | "id" | "account" | "model", Colu
   const format = useFormat();
   return {
     at: { key: "at", header: t("calls.col.at"), cell: (call) => (call.at ? format.dateTime(new Date(call.at)) : "—") },
-    id: { key: "id", header: t("calls.col.id"), from: "md", cell: (call) => (call.id ? <Id value={call.id} /> : "—") },
+    id: { key: "id", header: t("calls.col.id"), from: "lg", cell: (call) => (call.id ? <Id value={call.id} /> : "—") },
     account: {
       key: "account",
       header: t("calls.col.account"),

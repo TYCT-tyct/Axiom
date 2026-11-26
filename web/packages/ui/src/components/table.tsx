@@ -6,28 +6,29 @@ import s from "./table.module.css";
 // A table scrolls sideways inside its own box (.qtw/.qtbl from AxApp/regions.css) when the window is too narrow, and
 // never widens the page. The box is a named region in the tab order, as keyboard users can only scroll what takes focus.
 // `fixed` lets a table whose columns are all known give each a width and truncate long values inside it; without it,
-// columns size from their widest content.
+// columns size from their widest content. A fixed table's column that shows only from a width (from) leaves its width
+// behind with it.
 export function Table({
   children,
   label,
   fixed = false,
-  widths,
+  cols,
 }: {
   children: ReactNode;
   label: string;
   fixed?: boolean;
-  widths?: readonly (number | undefined)[];
+  cols?: readonly { width?: number; from?: Column["from"] }[];
 }) {
   return (
     // biome-ignore lint/a11y/noNoninteractiveTabindex: Keyboard users need focus to scroll a table region.
     <section className={classes(board.qtw, s.box)} aria-label={label} tabIndex={0}>
       <table aria-label={label} className={classes(board.qtbl, s.table, fixed && s.fixed)}>
-        {fixed && widths ? (
+        {fixed && cols ? (
           <colgroup>
-            {widths.map((width, i) => (
+            {cols.map(({ width, from }, i) => (
               <col
                 key={i}
-                className={s.col}
+                className={classes(s.col, from && s[`from${from}`])}
                 style={width ? ({ "--w": `${width}px` } as Record<`--${string}`, string>) : undefined}
               />
             ))}

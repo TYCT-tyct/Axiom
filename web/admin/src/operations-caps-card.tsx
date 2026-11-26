@@ -83,9 +83,9 @@ function CapTable({ policies, onOpen }: { policies: CapPolicy[]; onOpen: (open: 
       <Head
         cols={[
           [t("operations.limits.cap.col.scope"), { main: true }],
-          [t("operations.limits.cap.col.autonomous"), { main: true }],
-          [t("operations.limits.cap.col.hard"), { main: true }],
-          t("operations.limits.cap.col.state"),
+          [t("operations.limits.cap.col.autonomous"), { main: true, from: "lg" }],
+          [t("operations.limits.cap.col.hard"), { main: true, from: "lg" }],
+          [t("operations.limits.cap.col.state"), { from: "sm" }],
         ]}
         action
       />
@@ -113,7 +113,7 @@ function CapRow({ policy, onOpen }: { policy: CapPolicy; onOpen: (open: CapOpen)
           {policy.scope === "platform" ? <SubLine>{scopeText}</SubLine> : <Id value={policy.scope} />}
         </Stack>
       </Td>
-      <Td main>
+      <Td main from="lg">
         <Text as="div">
           {t("operations.limits.cap.autoSummary", {
             single: money(limits.single_max),
@@ -128,7 +128,7 @@ function CapRow({ policy, onOpen }: { policy: CapPolicy; onOpen: (open: CapOpen)
           })}
         </SubLine>
       </Td>
-      <Td main>
+      <Td main from="lg">
         <Text as="div">
           {t("operations.limits.cap.hardSummary", {
             single: money(limits.hard_single_max),
@@ -137,7 +137,7 @@ function CapRow({ policy, onOpen }: { policy: CapPolicy; onOpen: (open: CapOpen)
           })}
         </Text>
       </Td>
-      <Td shrink>
+      <Td shrink from="sm">
         <State tone={policy.paused_at ? "warn" : "good"}>
           {t(policy.paused_at ? "operations.limits.cap.paused" : "operations.limits.cap.normal")}
         </State>

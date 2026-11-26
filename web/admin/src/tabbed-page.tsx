@@ -50,12 +50,10 @@ export function TabbedPage({
   children: ReactNode;
 }) {
   return (
-    <>
+    <PageBody>
       <PageHead title={title} lede={lede} actions={actions} tag={tag} />
-      <PageBody>
-        <PageTabs label={label} items={tabs} />
-        {children}
-      </PageBody>
-    </>
+      <PageTabs label={label} items={tabs} />
+      {children}
+    </PageBody>
   );
 }

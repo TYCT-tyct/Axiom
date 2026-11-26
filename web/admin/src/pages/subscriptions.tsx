@@ -18,20 +18,18 @@ export default function Subscriptions() {
   const showPlans = can(useSession(), "pricing.view");
   const current = path === plans && showPlans ? plans : "/subscriptions";
   return (
-    <>
+    <PageBody>
       <PageHead title={t("shell.nav.subs")} lede={current === plans ? t("subscriptions.plansLede") : undefined} />
-      <PageBody>
-        <RouteTabs
-          label={t("subscriptions.tabs.label")}
-          current={current}
-          tabs={[
-            { key: "/subscriptions", to: "/subscriptions", label: t("subscriptions.tabs.subs") },
-            ...(showPlans ? [{ key: plans, to: plans, label: t("subscriptions.tabs.plans") }] : []),
-          ]}
-        />
-        {current === plans ? <PlansTab /> : <SubsTab />}
-      </PageBody>
-    </>
+      <RouteTabs
+        label={t("subscriptions.tabs.label")}
+        current={current}
+        tabs={[
+          { key: "/subscriptions", to: "/subscriptions", label: t("subscriptions.tabs.subs") },
+          ...(showPlans ? [{ key: plans, to: plans, label: t("subscriptions.tabs.plans") }] : []),
+        ]}
+      />
+      {current === plans ? <PlansTab /> : <SubsTab />}
+    </PageBody>
   );
 }
 

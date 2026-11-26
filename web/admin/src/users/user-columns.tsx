@@ -1,8 +1,7 @@
 import { Avatar, Cluster } from "@axiom/ui";
 import type { TFunction } from "i18next";
 import type { Columns, Format } from "../list-table";
-import { shortId } from "../orders/states";
-import { Code, State } from "../parts";
+import { ShortId, State } from "../parts";
 import { signInOff, type User } from "./user-list";
 
 // The columns the users, accounts and roles tabs have in common, each with the words its tab gives the header.
@@ -24,18 +23,21 @@ export const personColumn = (t: TFunction, header: string, tag = false): Column 
 export const accountColumn = (t: TFunction): Column => ({
   key: "account",
   header: t("users.col.account"),
-  cell: (user) => <Code title={user.account_id}>{shortId(user.account_id)}</Code>,
+  from: "sm",
+  cell: (user) => <ShortId id={user.account_id} />,
 });
 
 export const tierColumn = (t: TFunction): Column => ({
   key: "tier",
   header: t("users.col.tier"),
+  from: "lg",
   cell: (user) => user.tier.name,
 });
 
 export const createdColumn = (t: TFunction, format: Format): Column => ({
   key: "created",
   header: t("users.col.created"),
+  from: "lg",
   muted: true,
   cell: (user) => format.dateTime(new Date(user.created_at)),
   sort: (user) => Date.parse(user.created_at),

@@ -195,6 +195,24 @@ it("shows Clear only while something is filtered, and reports each change", () =
   expect(onChange).toHaveBeenCalledWith("status", "all");
 });
 
+it.each([
+  { case: "every row", shown: 4, total: 4, count: "" },
+  { case: "a filtered few", shown: 3, total: 10, count: "3 / 10 rows" },
+])("counts the rows only while the filters hide some: $case", ({ shown, total, count }) => {
+  const values = { q: "", status: "all" };
+  render(
+    <FilterBar
+      label="Filters"
+      filters={filters}
+      values={values}
+      onChange={vi.fn()}
+      onClear={vi.fn()}
+      count={{ shown, total, unit: "rows" }}
+    />,
+  );
+  expect(text('[role="status"]')).toBe(count);
+});
+
 type Point = { at: Date; values: Record<string, number> };
 
 // --- Chart ----------------------------------------------------------------------------------------------------------
@@ -363,18 +381,16 @@ const uses: Use[] = [
   { id: "c", name: "gamma", used: null },
   { id: "d", name: "delta", used: 5 },
 ];
-const usesTable = (extra: { rows?: Use[]; total?: number; flash?: string } = {}) =>
+const usesTable = (extra: { flash?: string } = {}) =>
   render(
     <DataTable<Use>
       label="uses"
-      rows={extra.rows ?? uses}
+      rows={uses}
       rowKey={(row) => row.id}
       columns={[
         { key: "name", header: "name", cell: (row) => row.name },
         { key: "used", header: "used", align: "end", cell: (row) => row.used ?? "-", sort: (row) => row.used },
       ]}
-      total={extra.total}
-      unit="rows"
       flash={extra.flash}
     />,
   );
@@ -396,14 +412,6 @@ it("steps a numeric column through high to low, low to high and off, saying the 
     expect(header(1)?.getAttribute("aria-sort")).toBe(step.sort);
     expect(order()).toEqual(step.rows);
   }
-});
-
-it.each([
-  { case: "every row", rows: uses, total: 4, count: "4 rows" },
-  { case: "a filtered few", rows: uses.slice(0, 3), total: 10, count: "3 / 10 rows" },
-])("says how many rows it lists: $case", ({ rows, total, count }) => {
-  usesTable({ rows, total });
-  expect(text('[role="status"]')).toBe(count);
 });
 
 it("lights a row an edit changed once, and lets the light go when it has played", () => {

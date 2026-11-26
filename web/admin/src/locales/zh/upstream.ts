@@ -12,6 +12,7 @@ export default {
   },
   mode: { relay: "中转站", direct: "直连接口", cloud: "云平台" } satisfies Record<AdminSchemas["SupplierMode"], string>,
   all: "全部",
+  rows: "条",
   add: "添加上游账号",
   channels: {
     search: "搜索渠道或分组",

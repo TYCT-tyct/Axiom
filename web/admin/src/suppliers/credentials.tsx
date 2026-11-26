@@ -70,7 +70,6 @@ function Use({ label, used, ceiling }: { label: string; used: number; ceiling: n
 // ceilings it holds now, and where it stands; a row opens its drawer. The way in is a column only across suppliers.
 export function CredentialTable({
   rows,
-  total,
   suppliers,
   lineOf,
   across,
@@ -78,7 +77,6 @@ export function CredentialTable({
   current,
 }: {
   rows: readonly Credential[];
-  total: number;
   suppliers: ReadonlyMap<string, Supplier>;
   lineOf: (credential: Credential) => string;
   across: boolean;
@@ -91,7 +89,6 @@ export function CredentialTable({
     <DataTable
       label={t("upstream.tabs.keys")}
       rows={rows}
-      total={total}
       rowKey={(row) => row.id}
       onOpen={onOpen}
       selected={current}

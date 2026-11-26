@@ -14,6 +14,7 @@ export default {
   },
   mode: { relay: "Relay", direct: "Direct API", cloud: "Cloud" },
   all: "All",
+  rows: "rows",
   add: "Add an upstream account",
   channels: {
     search: "Search channels or groups",

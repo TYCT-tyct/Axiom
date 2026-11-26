@@ -185,6 +185,24 @@ function Toolbar({
   );
 }
 
+// A preset's name, the button that opens it, with its slug and what sets it apart: the system's, a default, disabled, a
+// currency.
+function PresetName({ row, isDefault, onOpen }: { row: Row; isDefault: boolean; onOpen: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <Cluster gap={8}>
+      <LinkButton label={t("routingPresets.open", { name: row.preset.name })} onClick={onOpen}>
+        {row.preset.name}
+      </LinkButton>
+      <Code>{row.preset.slug}</Code>
+      {row.preset.id === systemPreset ? <Tag>{t("routingPresets.system")}</Tag> : null}
+      {isDefault ? <Tag tone="accent">{t(`routingPresets.defaultTag.${row.layer.scope}`)}</Tag> : null}
+      {row.preset.disabled ? <Tag tone="warn">{t("routingPresets.disabled")}</Tag> : null}
+      {row.preset.currency ? <Tag>{row.preset.currency}</Tag> : null}
+    </Cluster>
+  );
+}
+
 function PresetsTable({
   rows,
   lines,
@@ -208,24 +226,11 @@ function PresetsTable({
           key: "name",
           width: 320,
           header: t("routingPresets.col.name"),
-          cell: (row) => (
-            <Cluster gap={8}>
-              <LinkButton
-                label={t("routingPresets.open", { name: row.preset.name })}
-                onClick={() => onOpen(row.preset.id)}
-              >
-                {row.preset.name}
-              </LinkButton>
-              <Code>{row.preset.slug}</Code>
-              {row.preset.id === systemPreset ? <Tag>{t("routingPresets.system")}</Tag> : null}
-              {defaultOf(row) ? <Tag tone="accent">{t(`routingPresets.defaultTag.${row.layer.scope}`)}</Tag> : null}
-              {row.preset.disabled ? <Tag tone="warn">{t("routingPresets.disabled")}</Tag> : null}
-              {row.preset.currency ? <Tag>{row.preset.currency}</Tag> : null}
-            </Cluster>
-          ),
+          cell: (row) => <PresetName row={row} isDefault={defaultOf(row)} onOpen={() => onOpen(row.preset.id)} />,
         },
         {
           key: "scope",
+          from: "lg",
           width: 100,
           header: t("routingPresets.col.scope"),
           cell: (row) => t(`routingPresets.scope.${row.layer.scope}`),
@@ -238,6 +243,7 @@ function PresetsTable({
         },
         {
           key: "version",
+          from: "lg",
           width: 90,
           header: t("routingPresets.col.version"),
           align: "end",
@@ -245,6 +251,7 @@ function PresetsTable({
         },
         {
           key: "keys",
+          from: "lg",
           width: 120,
           header: t("routingPresets.col.keys"),
           align: "end",

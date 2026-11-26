@@ -1,4 +1,4 @@
-import { expect, type Page, test } from "@playwright/test";
+import { expect, type Locator, type Page, test } from "@playwright/test";
 import { uuid } from "./admin-data.ts";
 import { open } from "./admin-page.ts";
 import { apps } from "./apps.ts";
@@ -85,3 +85,29 @@ test("a tablet folds the sidebar to an icon rail, with counts as dots, until it 
   await expect(page.getByRole("button", { name: zhText("shell.collapse") })).toHaveAttribute("aria-expanded", "true");
   await expect.poll(async () => (await dot.boundingBox())?.width).toBeGreaterThanOrEqual(20);
 });
+
+// Where a box's left and right edges sit, once it is on the page.
+async function edges(box: Locator) {
+  await expect(box).toBeVisible();
+  const at = await box.boundingBox();
+  return { left: at?.x, right: at && at.x + at.width };
+}
+
+// A page's head is the first thing in its body: its title starts at the content's left edge and its actions end at the
+// content's right edge, at every width. A head drawn beside the body sits in the body's margins instead, 40px out on a
+// desktop and against the screen's edge on a phone.
+for (const width of [1440, 820, 390]) {
+  test(`a page's head lines up with its content at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    for (const path of ["/", "/suppliers", "/users"]) {
+      await open(page, path);
+      const card = await edges(page.locator("main .qcard").first());
+      const title = await edges(page.getByRole("heading", { level: 1 }));
+      expect(title.left, path).toBe(card.left);
+      if (path === "/suppliers" && width >= 768) {
+        const add = await edges(page.getByRole("button", { name: zhText("upstream.add") }));
+        expect(add.right, path).toBe(card.right);
+      }
+    }
+  });
+}

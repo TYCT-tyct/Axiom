@@ -34,17 +34,15 @@ export default function Orders() {
   const owner = useQuery(accountQuery(useSession().account));
   const path = useLocation({ select: (location) => location.pathname.replace(/\/$/, "") }) as Path;
   return (
-    <>
+    <PageBody>
       <PageHead title={t("shell.nav.orders")} />
-      <PageBody>
-        <RouteTabs
-          label={t("orders.tabs.label")}
-          current={path}
-          tabs={(Object.keys(paths) as Path[]).map((key) => ({ key, to: key, label: t(`orders.tabs.${paths[key]}`) }))}
-        />
-        <DataState query={owner}>{(account) => <Current path={path} siteId={account.site_id} />}</DataState>
-      </PageBody>
-    </>
+      <RouteTabs
+        label={t("orders.tabs.label")}
+        current={path}
+        tabs={(Object.keys(paths) as Path[]).map((key) => ({ key, to: key, label: t(`orders.tabs.${paths[key]}`) }))}
+      />
+      <DataState query={owner}>{(account) => <Current path={path} siteId={account.site_id} />}</DataState>
+    </PageBody>
   );
 }
 

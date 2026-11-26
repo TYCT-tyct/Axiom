@@ -73,6 +73,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
         },
         {
           key: "audience",
+          from: "lg",
           width: 220,
           header: t("pricing.rules.audience"),
           cell: (rule) => <Audience rule={rule} />,
@@ -91,6 +92,7 @@ function RulesTable({ rules, onEdit }: { rules: Rule[]; onEdit: ((rule: Rule) =>
         },
         {
           key: "updated",
+          from: "lg",
           width: 170,
           header: t("pricing.rules.updated"),
           muted: true,

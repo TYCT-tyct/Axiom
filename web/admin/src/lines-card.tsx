@@ -94,7 +94,14 @@ function useColumns(monitor: Monitor, detailed: boolean) {
       bar(t("lines.shareBar", { name: name(row) }), monitor.calls > 0 ? (row.calls / monitor.calls) * 100 : 0, 100, 72),
   };
   return detailed
-    ? [line, count("calls"), count("failures"), rate, first, busyColumn]
+    ? [
+        line,
+        count("calls"),
+        { ...count("failures"), from: "sm" as const },
+        rate,
+        { ...first, from: "lg" as const },
+        { ...busyColumn, from: "lg" as const },
+      ]
     : [line, rate, first, shareColumn];
 }
 

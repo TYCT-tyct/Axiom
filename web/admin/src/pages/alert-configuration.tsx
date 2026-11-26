@@ -67,18 +67,16 @@ export default function AlertConfiguration() {
   const query = useQuery(alertConfigurationQuery);
   if (query.data === undefined || query.data.rev === undefined) {
     return (
-      <>
+      <PageBody>
         <PageHead title={t("shell.nav.alertRules")} lede={t("alertConfig.description")} />
-        <PageBody>
-          <DataState
-            query={query}
-            isEmpty={(view) => view.rev === undefined}
-            empty={<EmptyState title={t("alertConfig.unavailable")} />}
-          >
-            {() => null}
-          </DataState>
-        </PageBody>
-      </>
+        <DataState
+          query={query}
+          isEmpty={(view) => view.rev === undefined}
+          empty={<EmptyState title={t("alertConfig.unavailable")} />}
+        >
+          {() => null}
+        </DataState>
+      </PageBody>
     );
   }
   return <Configuration view={query.data} />;
@@ -169,16 +167,16 @@ function Configuration({ view }: { view: Config }) {
   const drafts = useSpendDrafts(view);
   return (
     <>
-      <PageHead
-        title={t("shell.nav.alertRules")}
-        lede={t("alertConfig.description")}
-        actions={
-          <ActionButton asChild>
-            <Link to="/alert-events">{t("alertConfig.seeEvents")}</Link>
-          </ActionButton>
-        }
-      />
       <PageBody>
+        <PageHead
+          title={t("shell.nav.alertRules")}
+          lede={t("alertConfig.description")}
+          actions={
+            <ActionButton asChild>
+              <Link to="/alert-events">{t("alertConfig.seeEvents")}</Link>
+            </ActionButton>
+          }
+        />
         <SettingsCard
           scope="platform"
           title={t("alertConfig.rules")}

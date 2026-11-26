@@ -26,8 +26,8 @@ export default function ApprovalPage() {
     <DataState query={query} page>
       {(approval) => (
         <>
-          <PageHead title={t(`approvals.risk.${approval.risk}`)} lede={t("approvals.description")} />
           <PageBody>
+            <PageHead title={t(`approvals.risk.${approval.risk}`)} lede={t("approvals.description")} />
             <Decide approval={approval} />
             <WhyAsked approval={approval} />
             <ApprovalFacts approval={approval} />

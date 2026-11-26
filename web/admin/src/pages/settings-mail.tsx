@@ -20,12 +20,10 @@ export default function MailSettings() {
   const query = useQuery(mailSettingsQuery);
   if (query.data === undefined) {
     return (
-      <>
+      <PageBody>
         <PageHead title={t("shell.nav.mail")} lede={t("settings.pages.mail.lede")} />
-        <PageBody>
-          <DataState query={query}>{() => null}</DataState>
-        </PageBody>
-      </>
+        <DataState query={query}>{() => null}</DataState>
+      </PageBody>
     );
   }
   return <Rows view={query.data} />;
@@ -94,16 +92,16 @@ function Rows({ view }: { view: Settings }) {
   };
   return (
     <>
-      <PageHead
-        title={t("shell.nav.mail")}
-        lede={t("settings.pages.mail.lede")}
-        actions={
-          <ActionButton icon="mail" onClick={test}>
-            {t("settings.mail.test")}
-          </ActionButton>
-        }
-      />
       <PageBody>
+        <PageHead
+          title={t("shell.nav.mail")}
+          lede={t("settings.pages.mail.lede")}
+          actions={
+            <ActionButton icon="mail" onClick={test}>
+              {t("settings.mail.test")}
+            </ActionButton>
+          }
+        />
         <SettingsCard
           scope="platform"
           title={t("settings.pages.mail.service")}

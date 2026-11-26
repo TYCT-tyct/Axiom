@@ -123,16 +123,16 @@ function Current({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; currenc
   const open = rows.find((code) => code.id === selected);
   return (
     <>
-      <PageHead
-        title={t("shell.nav.redeem")}
-        lede={t("redeem.description")}
-        actions={
-          <NewButton permission="sites.manage" label={t("redeem.generate")}>
-            {(close) => <GenerateDialog siteId={siteId} currency={currency} onClose={close} />}
-          </NewButton>
-        }
-      />
       <PageBody>
+        <PageHead
+          title={t("shell.nav.redeem")}
+          lede={t("redeem.description")}
+          actions={
+            <NewButton permission="sites.manage" label={t("redeem.generate")}>
+              {(close) => <GenerateDialog siteId={siteId} currency={currency} onClose={close} />}
+            </NewButton>
+          }
+        />
         <Strip rows={rows} more={Boolean(query.hasNextPage)} now={now} />
         <ListTable<RedeemCode, Filter>
           label={t("redeem.codes")}

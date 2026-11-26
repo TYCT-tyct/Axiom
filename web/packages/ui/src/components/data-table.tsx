@@ -1,5 +1,4 @@
 import { type Key, type ReactNode, useEffect, useState } from "react";
-import { useFormat } from "../format";
 import s from "./data-table.module.css";
 import { RowButton, type SortOrder, Table, Td, Th, Tr } from "./table";
 
@@ -43,11 +42,6 @@ function sorted<Row>(rows: readonly Row[], column: Column<Row> | undefined, sort
   });
 }
 
-// How many rows the table lists: "4" when it lists all of them, "3 / 10" while a filter hides some.
-function countText(format: ReturnType<typeof useFormat>, listed: number, total: number) {
-  return listed === total ? format.number(total) : `${format.number(listed)} / ${format.number(total)}`;
-}
-
 // A cell of a row. The first of a row that opens holds a button, which is how a keyboard opens it.
 function Cell<Row>({
   column,
@@ -76,9 +70,8 @@ function Cell<Row>({
 
 // DataTable lists rows under named columns, from data: the Table with its columns described once. A long identifier
 // goes in the cell as an Id, in a fixed table with the column's width. A column with a sort number can be sorted from
-// its header. Given the count of every row (total) and what a row is called (unit), it says how many it lists, as
-// "3 / 10" while a filter hides some. flash names a row an edit just changed, which lights once. Given onOpen, a row
-// opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
+// its header. How many rows a filter leaves is the filter row's to say (TableToolbar, FilterBar's count), not the
+// table's. flash names a row an edit just changed, which lights once. Given onOpen, a row opens its detail (the admin's data-kind rows): a press anywhere on it that is not on a control of its own, and the
 // button a keyboard reaches, which is the first column's text, so that column holds text and no control. selected is
 // the key of the row whose detail is open. Given detail, a row opens in place instead (the admin's 按模型, .admv): onOpen toggles
 // it, the row named by expanded shows detail in a full-width row under it, and its button says it is expanded.
@@ -88,8 +81,6 @@ export function DataTable<Row>({
   rows,
   rowKey,
   fixed = false,
-  total,
-  unit,
   flash,
   onOpen,
   selected,
@@ -101,15 +92,12 @@ export function DataTable<Row>({
   rows: readonly Row[];
   rowKey: (row: Row) => Key;
   fixed?: boolean;
-  total?: number;
-  unit?: string;
   flash?: Key;
   onOpen?: (row: Row) => void;
   selected?: Key | null;
   detail?: (row: Row) => ReactNode;
   expanded?: Key;
 }) {
-  const format = useFormat();
   const [sorting, setSorting] = useState<Sorting>(null);
   const [lit, setLit] = useState(flash);
   useEffect(() => setLit(flash), [flash]);
@@ -118,48 +106,40 @@ export function DataTable<Row>({
     columns.find((column) => column.key === sorting?.key),
     sorting,
   );
-  const count = total === undefined ? undefined : countText(format, rows.length, total);
   return (
-    <>
-      {count === undefined ? null : (
-        <p className={s.count} role="status">
-          {unit ? `${count} ${unit}` : count}
-        </p>
-      )}
-      <Table label={label} fixed={fixed} widths={columns.map((column) => column.width)}>
-        <thead>
-          <tr>
-            {columns.map((column) => (
-              <Th
-                key={column.key}
-                align={column.align === "end" ? "end" : undefined}
-                from={column.from}
-                sort={column.sort ? (sorting?.key === column.key ? sorting.order : "none") : undefined}
-                onSort={column.sort ? () => setSorting(nextSort(sorting, column.key)) : undefined}
-              >
-                {column.header}
-              </Th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {shown.map((row) => (
-            <BodyRow
-              key={rowKey(row)}
-              row={row}
-              id={rowKey(row)}
-              columns={columns}
-              lit={lit}
-              onLit={() => setLit(undefined)}
-              onOpen={onOpen}
-              selected={selected}
-              detail={detail}
-              expanded={expanded}
-            />
+    <Table label={label} fixed={fixed} cols={columns}>
+      <thead>
+        <tr>
+          {columns.map((column) => (
+            <Th
+              key={column.key}
+              align={column.align === "end" ? "end" : undefined}
+              from={column.from}
+              sort={column.sort ? (sorting?.key === column.key ? sorting.order : "none") : undefined}
+              onSort={column.sort ? () => setSorting(nextSort(sorting, column.key)) : undefined}
+            >
+              {column.header}
+            </Th>
           ))}
-        </tbody>
-      </Table>
-    </>
+        </tr>
+      </thead>
+      <tbody>
+        {shown.map((row) => (
+          <BodyRow
+            key={rowKey(row)}
+            row={row}
+            id={rowKey(row)}
+            columns={columns}
+            lit={lit}
+            onLit={() => setLit(undefined)}
+            onOpen={onOpen}
+            selected={selected}
+            detail={detail}
+            expanded={expanded}
+          />
+        ))}
+      </tbody>
+    </Table>
   );
 }
 

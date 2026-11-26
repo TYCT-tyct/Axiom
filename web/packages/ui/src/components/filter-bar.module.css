@@ -22,6 +22,23 @@
   margin-left: auto;
 }
 
+/* The admin's .adcnt: small and quiet at the row's end, on the line of the controls' middle. */
+.count {
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  margin-left: auto;
+  font-size: var(--fs12);
+  line-height: var(--lh12);
+  font-variant-numeric: tabular-nums;
+  color: var(--t3);
+  white-space: nowrap;
+}
+
+.count + .clear {
+  margin-left: 0;
+}
+
 @media (max-width: 767px) {
   .search {
     flex-basis: 100%;

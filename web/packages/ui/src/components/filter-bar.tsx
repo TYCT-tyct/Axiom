@@ -1,4 +1,5 @@
 import { useTranslation } from "react-i18next";
+import { useFormat } from "../format";
 import { ActionButton } from "./action-button";
 import { Field, Select } from "./field";
 import s from "./filter-bar.module.css";
@@ -22,21 +23,25 @@ export function filterDefaults<K extends string>(filters: readonly Filter<K>[]) 
 
 // FilterBar is the row of filters above a list. It holds no state: the values are the caller's, normally the address's
 // search params (useUrlParams), so a filtered list survives reload and Back. "Clear" shows only while something is
-// filtered and resets every filter at once.
+// filtered and resets every filter at once. Given the list's count, the row says "3 / 10 条" at its end while the
+// filters hide some of the list's rows (total), and nothing while they hide none.
 export function FilterBar<K extends string>({
   label,
   filters,
   values,
   onChange,
   onClear,
+  count,
 }: {
   label: string;
   filters: readonly Filter<K>[];
   values: Record<K, string>;
   onChange: (key: K, value: string) => void;
   onClear: () => void;
+  count?: { shown: number; total: number; unit: string };
 }) {
   const { t } = useTranslation("common");
+  const format = useFormat();
   const active = filters.some((filter) => values[filter.key] !== filter.initial);
   return (
     <search aria-label={label} className={s.root}>
@@ -67,6 +72,13 @@ export function FilterBar<K extends string>({
           )}
         </div>
       ))}
+      {count ? (
+        <span className={s.count} role="status">
+          {count.shown === count.total
+            ? ""
+            : `${format.number(count.shown)} / ${format.number(count.total)} ${count.unit}`}
+        </span>
+      ) : null}
       {active ? (
         <div className={s.clear}>
           <ActionButton variant="gho" icon="close" onClick={onClear}>

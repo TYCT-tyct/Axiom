@@ -378,7 +378,7 @@ function CallsTable({
           key: "latency",
           header: t("calls.col.latency"),
           align: "end",
-          from: "md",
+          from: "lg",
           sort: (call) => call.latency_ms,
           cell: (call) => (call.latency_ms === undefined ? "—" : t("calls.ms", { ms: format.number(call.latency_ms) })),
         },

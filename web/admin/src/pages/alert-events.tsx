@@ -92,9 +92,9 @@ function Events({ rows, select }: { rows: Event[]; select: (id: string) => void 
       <Head
         cols={[
           [t("alertEvents.kind"), { main: true }],
-          t("alertEvents.severityLabel"),
+          [t("alertEvents.severityLabel"), { from: "sm" }],
           t("alertEvents.status"),
-          t("alertEvents.fired"),
+          [t("alertEvents.fired"), { from: "sm" }],
         ]}
         action
       />
@@ -112,11 +112,11 @@ function Events({ rows, select }: { rows: Event[]; select: (id: string) => void 
                 <Text>{row.kind}</Text>
                 <Code>{row.key}</Code>
               </Td>
-              <Td>{knownSeverity ? t(`alertEvents.severity.${knownSeverity}`) : row.severity}</Td>
+              <Td from="sm">{knownSeverity ? t(`alertEvents.severity.${knownSeverity}`) : row.severity}</Td>
               <Td>
                 {row.state ? <State tone={eventTone[row.state]}>{t(`alertEvents.state.${row.state}`)}</State> : "—"}
               </Td>
-              <Td>
+              <Td from="sm">
                 <Time at={row.fired_at} />
               </Td>
               <Td actions>
