@@ -1,8 +1,8 @@
 import type { AdminSchemas } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
-import { useInfiniteQuery, useQueries } from "@tanstack/react-query";
-import { useEffect } from "react";
-import { supplierQuery, suppliersQuery } from "./queries";
+import { useQueries } from "@tanstack/react-query";
+import { useAllSuppliers } from "./all-suppliers";
+import { supplierQuery } from "./queries";
 
 type Supplier = AdminSchemas["Supplier"];
 type Group = AdminSchemas["SupplierGroup"];
@@ -69,12 +69,7 @@ export type Lines = {
 // supplier whose detail cannot be read gives no lines, and the page shows what it has rather than failing.
 export function useLines(): Lines {
   const allowed = can(useSession(), "suppliers.view");
-  const list = useInfiniteQuery({ ...suppliersQuery(), enabled: allowed });
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = list;
-  useEffect(() => {
-    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
-  const suppliers = list.data?.pages.flatMap((page) => page.data) ?? [];
+  const { suppliers, ready: listed } = useAllSuppliers(allowed);
   const details = useQueries({
     queries: suppliers.map((supplier) => ({ ...supplierQuery(supplier.id), enabled: allowed })),
   });
@@ -99,7 +94,7 @@ export function useLines(): Lines {
       endpoints
         .filter((endpoint) => endpoint.model_id === modelId)
         .map((endpoint) => ({ endpoint, line: byGroup.get(endpoint.group_id) })),
-    ready: allowed && !list.isPending && !hasNextPage && details.every((detail) => !detail.isPending),
+    ready: listed && details.every((detail) => !detail.isPending),
     allowed,
   };
 }

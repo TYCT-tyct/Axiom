@@ -1,6 +1,6 @@
 import { expect, type Page, test } from "@playwright/test";
 import { mockAdmin } from "./admin-api.ts";
-import { uuid } from "./admin-data.ts";
+import { aSupplier, uuid } from "./admin-data.ts";
 import { close, dialog, done, open, send } from "./admin-page.ts";
 import { apps } from "./apps.ts";
 import { signedInAs } from "./mock-auth.ts";
@@ -16,6 +16,26 @@ const press = (page: Page, key: string, nth = 0) => page.getByRole("button", { n
 const tab = (page: Page, key: string) => page.getByRole("tab", { name: zhText(key) }).click();
 
 test.describe("suppliers", () => {
+  test("adding keys offers every direct API, not only the first page's, from any tab", async ({ page }) => {
+    // A direct API listed after the first page of suppliers (50) is still one to add keys to, and the queue's tab, which
+    // does not page the suppliers itself, opens the same dialog.
+    const suppliers = Array.from({ length: 55 }, (_, i) => ({
+      supplier: aSupplier(i + 1, i === 54 ? { name: "Far Direct", mode: "direct" } : {}),
+      groups: [],
+      credentials: [],
+      unbound_keys: [],
+      endpoints: [],
+    }));
+    await open(page, "/suppliers?tab=inbox", "usual", { suppliers });
+    await press(page, "upstream.add").click();
+    await dialog(page)
+      .getByRole("button", { name: /贴 Key/ })
+      .click();
+    await expect(
+      dialog(page).getByLabel(words("upstream.addDialog.to")).locator("option", { hasText: "Far Direct" }),
+    ).toHaveCount(1);
+  });
+
   test("the longest status reason the contract allows takes two lines in the list and is whole on the title", async ({
     page,
   }) => {

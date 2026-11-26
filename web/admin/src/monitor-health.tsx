@@ -4,11 +4,11 @@ import { Card, RingChart, RowList, useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
+import { useAllSuppliers } from "./all-suppliers";
 import { type Cause, type Deduction, type Health, healthOf } from "./health";
 import { lineKey, useLineNames } from "./lines";
 import { credentialsQuery } from "./monitor-queries";
 import { alertEventsQuery } from "./policy-queries";
-import { suppliersQuery } from "./queries";
 
 type Monitor = AdminSchemas["OperationsMonitor"];
 
@@ -16,10 +16,9 @@ type Monitor = AdminSchemas["OperationsMonitor"];
 // alerts not yet resolved and the credentials at their ceiling. What the session may not read takes nothing off.
 function useHealth(monitor: Monitor): { health: Health; supplier: (id: string) => string | undefined } {
   const session = useSession();
-  const suppliers = useInfiniteQuery({ ...suppliersQuery(), enabled: can(session, "suppliers.view") });
+  const { suppliers: all } = useAllSuppliers(can(session, "suppliers.view"));
   const alerts = useInfiniteQuery({ ...alertEventsQuery, enabled: can(session, "sites.manage") });
   const credentials = useQuery({ ...credentialsQuery, enabled: can(session, "suppliers.view") });
-  const all = suppliers.data?.pages.flatMap((page) => page.data) ?? [];
   const health = healthOf({
     lines: monitor.lines.map((line) => ({
       supplier: line.supplier_id,

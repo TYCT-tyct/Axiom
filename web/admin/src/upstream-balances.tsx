@@ -1,9 +1,8 @@
 import { can, useSession } from "@axiom/app";
 import { Card, DataState, PaceBar, RowList, Text, useFormat } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { suppliersQuery } from "./queries";
+import { useAllSuppliers } from "./all-suppliers";
 
 // A balance counted in a month, the longest the bar shows (the board draws days over 30).
 const bar = 30;
@@ -19,8 +18,8 @@ export function BalancesCard() {
   const { t } = useTranslation("ops");
   const format = useFormat();
   const allowed = can(useSession(), "suppliers.view");
-  const query = useInfiniteQuery({ ...suppliersQuery(), enabled: allowed });
-  const all = (query.data?.pages.flatMap((page) => page.data) ?? []).filter((one) => !gone.has(one.status));
+  const { suppliers, query } = useAllSuppliers(allowed);
+  const all = suppliers.filter((one) => !gone.has(one.status));
   const readable = all.filter((one) => one.balance_native !== undefined);
   const unread = all.filter((one) => one.balance_native === undefined);
   if (!allowed) {

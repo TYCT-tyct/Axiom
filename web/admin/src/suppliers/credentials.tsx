@@ -1,10 +1,9 @@
 import type { AdminSchemas } from "@axiom/api";
 import { DataTable, PaceBar, Stack, Tag, Text, useFormat } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { useAllSuppliers } from "../all-suppliers";
 import { useLines } from "../lines";
-import { suppliersQuery } from "../queries";
 import { checkText } from "./credential-dialogs";
 import { ModeTag } from "./parts";
 import { credentialName, modeOf } from "./upstream";
@@ -181,8 +180,8 @@ function credentialColumns(
 // Every supplier, read once for naming the credentials: the list the lines read (useLines reads it to the end).
 export function useSuppliers() {
   const lines = useLines();
-  const list = useInfiniteQuery(suppliersQuery());
-  const suppliers = new Map((list.data?.pages.flatMap((page) => page.data) ?? []).map((s) => [s.id, s] as const));
+  const { suppliers: all } = useAllSuppliers();
+  const suppliers = new Map(all.map((s) => [s.id, s] as const));
   const lineOf = (credential: Credential) =>
     lines.byGroup.get(credential.group_id)?.name ?? suppliers.get(credential.supplier_id ?? "")?.name ?? "—";
   return { suppliers, lineOf };

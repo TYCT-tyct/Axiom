@@ -1,13 +1,12 @@
 import { type AdminSchemas, adminApi, unwrapChange } from "@axiom/api";
 import { useErrors } from "@axiom/app";
 import { ChoiceCards, Field, SegmentedControl, Select, Text, TextArea, TextLink } from "@axiom/ui";
-import { useInfiniteQuery } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useAllSuppliers } from "../all-suppliers";
 import { ChangeDialog, isProblem, type Problem } from "../change";
-import { suppliersQuery } from "../queries";
 import { ConnectDialog } from "./connect";
 import {
   Checks,
@@ -109,8 +108,7 @@ type DirectInput =
 // other compatible API (its name, address, format and currency too).
 function KeysWay({ cards, onMade, onClose }: WayProps) {
   const { t } = useTranslation();
-  const list = useInfiniteQuery(suppliersQuery());
-  const direct = (list.data?.pages.flatMap((page) => page.data) ?? []).filter((s) => modeOf(s) === "direct");
+  const direct = useAllSuppliers().suppliers.filter((s) => modeOf(s) === "direct");
   const [to, setTo] = useState("");
   const [provider, setProvider] = useState<Provider>("openai");
   const read = (values: Record<string, string>): DirectInput | Problem => {
