@@ -241,15 +241,14 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 			err = errors.Join(err, fmt.Errorf("release the migration lock: %w", closeErr))
 		}
 	}()
-	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
-	if err != nil {
-		return err
-	}
 	// One session and one lock carry the whole run: the history check, each module's pending migrations and the record
 	// of what they applied. The lock is taken on the only session this run can open, so a second run cannot commit a
 	// migration between the check and the execution, and losing the session fails the run instead of continuing
 	// without the lock.
-	if err := holdLock(ctx, db, locker); err != nil {
+	if err := holdLock(ctx, db); err != nil {
+		return err
+	}
+	if err := refuseInvalidIndexes(ctx, db, modules); err != nil {
 		return err
 	}
 	// Check every module's recorded history before any pending migration runs: a changed merged migration stops the run
@@ -275,7 +274,11 @@ func migrate(ctx context.Context, config *pgx.ConnConfig, connectTimeout time.Du
 
 // holdLock takes goose's session lock on the run's only session. The lock lives on the session, so returning the handle
 // to the pool keeps it; every later query uses that session, and db.Close ends it after the run.
-func holdLock(ctx context.Context, db *sql.DB, locker lock.SessionLocker) error {
+func holdLock(ctx context.Context, db *sql.DB) error {
+	locker, err := lock.NewPostgresSessionLocker(lock.WithLockTimeout(1, 5)) // retries every second, 5 times
+	if err != nil {
+		return err
+	}
 	lockConn, err := db.Conn(ctx)
 	if err != nil {
 		return fmt.Errorf("connect to hold the migration lock: %w", redactConnect(MigrateDatabaseURLVar, err))

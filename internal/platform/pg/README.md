@@ -57,6 +57,7 @@ InitPlan 的布尔参数按未知布尔值估计，避免原来的无列文本�
 
 - `axiom_owner` 持 goose 会话锁、带平台范围迁移；每个锁最多等约 5 秒。`AXIOM_MIGRATE_CONNECT_TIMEOUT` 默认 10 秒，`AXIOM_MIGRATE_TIMEOUT` 默认 30 分钟，到期按本次 `application_name` 终止会话。
 - `platform.migration_checksums` 与版本行同事务记录 SHA-256，执行前核对全部历史，改过、改名、删掉即停止；CI 用 `just migrations <base>` 检查。
+- 取得锁后、执行任何待执行迁移前，Axiom 的 schema（各模块与 `river`）里有 `indisvalid = false` 的索引即停止，错误列出每个索引的 `DROP INDEX CONCURRENTLY <名字>;`：中断的 `CREATE INDEX CONCURRENTLY` 会留下同名的无效索引，重跑时 `IF NOT EXISTS` 会跳过它并把迁移记为完成。失败的那次迁移还没有记录，按提示以 `axiom_owner` 删掉后重跑 `axiom migrate`，由它重建。
 
 ## 验证
 

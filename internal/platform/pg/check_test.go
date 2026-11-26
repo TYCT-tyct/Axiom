@@ -326,6 +326,50 @@ func TestMigrateResumesAfterAFailedRun(t *testing.T) {
 	}
 }
 
+// TestMigrateRefusesAnIndexAnInterruptedBuildLeft: a CREATE INDEX CONCURRENTLY that fails leaves an invalid index, which
+// the rerun's IF NOT EXISTS would skip; the rerun fails naming it until it is dropped, and then builds it. Not
+// parallel, for the reason TestMigrateRunsTakeTurns gives.
+func TestMigrateRefusesAnIndexAnInterruptedBuildLeft(t *testing.T) {
+	database := pgtest.New(t)
+	module := pg.Module{Name: "quality", Migrations: fstest.MapFS{
+		"00001_items.sql": {Data: []byte(`-- +goose Up
+CREATE TABLE quality.items (id int, k int);
+INSERT INTO quality.items VALUES (1, 1), (2, 1);
+`)},
+		"00002_items_k.sql": {Data: []byte(`-- +goose NO TRANSACTION
+-- +goose Up
+CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS items_k ON quality.items (k);
+`)},
+	}}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err == nil || !strings.Contains(err.Error(), "SQLSTATE 23505") {
+		t.Fatalf("the build over a duplicate: %v, want a unique violation", err)
+	}
+	const drop = "DROP INDEX CONCURRENTLY quality.items_k;"
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err == nil || !strings.Contains(err.Error(), drop) {
+		t.Fatalf("the rerun over the invalid index: %v, want it to say %s", err, drop)
+	}
+	if err := pgtest.Run(t.Context(), database.Superuser, "DELETE FROM quality.items WHERE id = 2", drop); err != nil {
+		t.Fatal(err)
+	}
+	if err := pg.Migrate(t.Context(), database.Migrator, module); err != nil {
+		t.Fatalf("the rerun after the drop: %v", err)
+	}
+	conn, err := pgx.Connect(t.Context(), database.Superuser)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := conn.Close(context.WithoutCancel(t.Context())); err != nil {
+			t.Error(err)
+		}
+	})
+	var valid bool
+	err = conn.QueryRow(t.Context(), "SELECT indisvalid FROM pg_index WHERE indexrelid = 'quality.items_k'::regclass").Scan(&valid)
+	if err != nil || !valid {
+		t.Errorf("the rebuilt index is valid = %t (%v), want true", valid, err)
+	}
+}
+
 // hold takes a lock in a transaction that stays open until the test ends.
 func hold(t *testing.T, databaseURL, take string, args ...any) {
 	t.Helper()
