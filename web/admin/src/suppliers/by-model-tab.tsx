@@ -52,7 +52,7 @@ export default function ByModelTab() {
   const [expanded, setExpanded] = useState<string>();
   const [opened, setOpened] = useState<Opened | null>(null);
   return (
-    <Card layout="flush">
+    <Card layout="flush" foot={t("upstream.byModel.foot")}>
       <DataState
         query={models}
         isEmpty={() => rows.length === 0}
@@ -82,9 +82,6 @@ export default function ByModelTab() {
                 views,
               )}
             />
-            <Text size="sm" tone="muted">
-              {t("upstream.byModel.foot")}
-            </Text>
           </>
         )}
       </DataState>
