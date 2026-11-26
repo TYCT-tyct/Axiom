@@ -3987,6 +3987,8 @@ components:
         - preset_in_use
         - preset_quota
         - presets_suspended
+        - code_reused
+        - email_unavailable
     SubscriptionCredit:
       type: string
       pattern: '^(0|[1-9][0-9]*)$'

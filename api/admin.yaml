@@ -8507,6 +8507,8 @@ components:
         - preset_in_use
         - preset_quota
         - presets_suspended
+        - code_reused
+        - email_unavailable
     OperationsOverview:
       type: object
       additionalProperties: false

@@ -1028,10 +1028,12 @@ func (e EndpointTestProblemScope) Valid() bool {
 const (
 	ErrorCodeAccountNotLinked      ErrorCode = "account_not_linked"
 	ErrorCodeCapExceeded           ErrorCode = "cap_exceeded"
+	ErrorCodeCodeReused            ErrorCode = "code_reused"
 	ErrorCodeConflict              ErrorCode = "conflict"
 	ErrorCodeConsentRequired       ErrorCode = "consent_required"
 	ErrorCodeEmailDomainNotAllowed ErrorCode = "email_domain_not_allowed"
 	ErrorCodeEmailTaken            ErrorCode = "email_taken"
+	ErrorCodeEmailUnavailable      ErrorCode = "email_unavailable"
 	ErrorCodeForbidden             ErrorCode = "forbidden"
 	ErrorCodeHumanCheckFailed      ErrorCode = "human_check_failed"
 	ErrorCodeIdempotencyKeyReused  ErrorCode = "idempotency_key_reused"
@@ -1077,6 +1079,8 @@ func (e ErrorCode) Valid() bool {
 		return true
 	case ErrorCodeCapExceeded:
 		return true
+	case ErrorCodeCodeReused:
+		return true
 	case ErrorCodeConflict:
 		return true
 	case ErrorCodeConsentRequired:
@@ -1084,6 +1088,8 @@ func (e ErrorCode) Valid() bool {
 	case ErrorCodeEmailDomainNotAllowed:
 		return true
 	case ErrorCodeEmailTaken:
+		return true
+	case ErrorCodeEmailUnavailable:
 		return true
 	case ErrorCodeForbidden:
 		return true
