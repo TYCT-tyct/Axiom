@@ -3,7 +3,7 @@ import { act, useState } from "react";
 import { expect, it, vi } from "vitest";
 import en from "./locales/en";
 import { SuspensionCard, usePresetsHold } from "./routing-suspension";
-import { renderInDom } from "./test-dom";
+import { renderInDom, typeInto } from "./test-dom";
 
 const sent = vi.hoisted(() => [] as unknown[]);
 
@@ -44,11 +44,11 @@ it("keeps the open dialog's target when a refetch shows the other state", async 
   expect(container.textContent).toContain("Suspended since");
   expect(document.body.textContent).toContain(en.routingPresets.suspension.suspendTitle);
   expect(document.body.textContent).not.toContain(en.routingPresets.suspension.resumeTitle);
-  const reason = document.querySelector<HTMLTextAreaElement>('textarea[name="reason"]');
+  const reason = document.querySelector<HTMLTextAreaElement>("dialog textarea");
   if (!reason) {
     throw new Error("no reason field");
   }
-  reason.value = "incident";
+  await typeInto(reason, "incident");
   const submit = [...document.querySelectorAll<HTMLButtonElement>("dialog button[type=submit]")].at(-1);
   await act(async () => submit?.click());
   expect(sent).toEqual([{ suspended: true, reason: "incident" }]);

@@ -1,9 +1,22 @@
-import { type Attempt, accountKey, failed, opened, readForm, type Sendable, useErrors, useSession } from "@axiom/app";
-import { Dialog, TextAreaField, TextField } from "@axiom/boards/ds";
+import {
+  type Attempt,
+  accountKey,
+  failed,
+  opened,
+  readForm,
+  refused,
+  type Sendable,
+  useErrors,
+  useSession,
+} from "@axiom/app";
+import { Dialog, TextField } from "@axiom/boards/ds";
 import { FormError, Stack, Tag, Text } from "@axiom/ui";
 import { useIsFetching, useMutation, useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { type DiffRow, DiffRows } from "../../packages/ui/src/components/diff-rows";
+import { ReasonPicks } from "../../packages/ui/src/components/reason-picks";
+import { say } from "./toasts";
 import { unsettled } from "./unsettled";
 
 // A change is one write of the admin API, which the person does for a reason that goes to the audit log, and which the
@@ -12,7 +25,9 @@ import { unsettled } from "./unsettled";
 // and afterwards what happened, including when the answer is the stored result of an earlier try. When it cannot be
 // known whether a try was done, the form locks and only that request is sent again, also after the dialog was closed
 // and opened again or the person signed in again (unsettled.ts); when the thing changed since it was read, nothing is
-// sent until the form is filled again from what is current.
+// sent until the form is filled again from what is current. The design's one write flow (adChange in admin_core.js)
+// adds what the change does before and after, a line on its risk, common reasons to pick, and for a change whose result
+// needs no reading a toast in place of the result, with an undo when the change has an inverse.
 
 // What a form says when it cannot make the request from what was typed.
 export type Problem = { problem: string };
@@ -20,7 +35,13 @@ export const isProblem = (value: unknown): value is Problem =>
   typeof value === "object" && value !== null && "problem" in value;
 
 type Sent<T> = { data: T; replayed: boolean };
-type Context = { reason: string; key: string };
+export type Context = { reason: string; key: string };
+// What a change answered, with the reason it was made for: a request sent again after the dialog was opened anew has no
+// form to read the reason from, and its undo needs it.
+type Made<T> = Sent<T> & { reason: string };
+
+// The common reasons under the reason box (adReasons), as keys of change.picks.
+const picks = ["routine", "request", "incident", "price", "risk"] as const;
 
 type Props<Input, Out> = {
   title: string;
@@ -28,6 +49,10 @@ type Props<Input, Out> = {
   // the thing it is made to ("credit-grant:" + the account's id).
   operation: string;
   intro?: ReactNode;
+  // What the change does to each field it changes, before it is made.
+  diff?: readonly DiffRow[];
+  // One line on what could go wrong, for a change with a risk the person should weigh.
+  warn?: ReactNode;
   action: string;
   danger?: boolean;
   // A name the person must type before a risky change is sent.
@@ -49,13 +74,19 @@ type Props<Input, Out> = {
   // For a change made as of a revision: fills the dialog again from what the page has now (useSnapshot), once the
   // server has said the revision it read is stale.
   reload?: () => void;
+  // Says the result in a toast and closes the dialog, in place of showing done: for a change whose result needs no
+  // reading. A result shown once, such as a secret, keeps to done.
+  toast?: (out: Out) => string;
+  // The change's inverse, offered in the toast for five seconds. It is sent at once, with a key of its own and the
+  // change's reason marked as the undo's, and no dialog: an answer that does not say it was done says it may have been.
+  undo?: (out: Out, context: Context) => Promise<unknown>;
 };
 
 type State = Attempt<unknown>["state"];
 
 // A request as it first went out: its key and body are fixed in it, so sending it again after a lost answer sends exactly
 // that, whatever the page has refreshed since.
-type Call<Out> = () => Promise<Sent<Out>>;
+type Call<Out> = () => Promise<Made<Out>>;
 
 const newKey = () => crypto.randomUUID();
 
@@ -63,7 +94,7 @@ const newKey = () => crypto.randomUUID();
 // response, is the same change and not a second one (attempt.ts). A try that is unsettled is held outside the dialog
 // and found again when it opens, as the request that must be settled before anything else is sent. A change that was
 // done refreshes everything the admin shows.
-function useChange<Out>(operation: string) {
+function useChange<Out>(operation: string, finish: (made: Made<Out>) => void) {
   const queryClient = useQueryClient();
   const { user, account } = useSession();
   const scope = `${user.id}/${account}/${operation}`;
@@ -92,9 +123,10 @@ function useChange<Out>(operation: string) {
         void refresh();
       }
     },
-    onSuccess: (_, { from }) => {
+    onSuccess: async (made, { from }) => {
       unsettled.drop(scope, from.key);
-      return refresh();
+      await refresh();
+      finish(made);
     },
   });
   const restart = () => {
@@ -130,7 +162,7 @@ type Change<Out> = ReturnType<typeof useChange<Out>>;
 export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
   const { done, onClose, title, reload, verdict, action, danger } = props;
   const { t } = useTranslation();
-  const change = useChange<Out>(props.operation);
+  const change = useChange<Out>(props.operation, useToastResult(props));
   const { attempt, mutation, lost } = change;
   const { state } = attempt;
   const form = useChangeForm(props, change);
@@ -182,7 +214,7 @@ export function ChangeDialog<Input, Out>(props: Props<Input, Out>) {
           }}
         >
           <Stack>
-            <ChangeBody {...props} change={change} problem={form.problem} />
+            <ChangeBody {...props} change={change} problem={form.problem} reason={form.reason} />
           </Stack>
         </form>
       )}
@@ -197,6 +229,9 @@ function useChangeForm<Input, Out>({ read, send, confirm, reload }: Props<Input,
   // Refill remounts the form so its fields take their new initial values.
   const [version, setVersion] = useState(0);
   const [problem, setProblem] = useState<FieldProblem>();
+  // The reason is held here rather than read from the form: a picked reason is put in the box from outside it, and the
+  // reason outlives a refill, which remounts the fields.
+  const [reason, setReason] = useState("");
   const refill = () => {
     reload?.();
     change.restart();
@@ -211,21 +246,21 @@ function useChangeForm<Input, Out>({ read, send, confirm, reload }: Props<Input,
     }
     if (attempt.state !== "editing") return;
     const values = readForm(element);
-    const reason = (values.reason ?? "").trim();
+    const said = reason.trim();
     const input = read(values);
     if (isProblem(input)) {
       setProblem({ message: input.problem });
-    } else if (!reason) {
+    } else if (!said) {
       setProblem({ message: t("change.reasonMissing"), field: "reason" });
     } else if (confirm !== undefined && values.confirm !== confirm) {
       setProblem({ message: t("change.confirmMismatch"), field: "confirm" });
     } else {
       setProblem(undefined);
       const { key } = attempt;
-      change.send(attempt, () => send(input, { reason, key }));
+      change.send(attempt, () => send(input, { reason: said, key }).then((sent) => ({ ...sent, reason: said })));
     }
   };
-  return { id, version, problem, refill, submit };
+  return { id, version, problem, refill, submit, reason: { value: reason, onChange: setReason } };
 }
 
 type Moves = {
@@ -267,15 +302,20 @@ function back({ state, lost, success, pending, restart, close }: Moves, labels: 
   return { label: labels.cancel, onClick: close };
 }
 
+type Reason = { value: string; onChange: (value: string) => void };
+
 function ChangeBody<Input, Out>({
   intro,
+  diff,
+  warn,
   fields,
   confirm,
   explain,
   waiting,
   change,
   problem,
-}: Props<Input, Out> & { change: Change<Out>; problem?: FieldProblem }) {
+  reason,
+}: Props<Input, Out> & { change: Change<Out>; problem?: FieldProblem; reason: Reason }) {
   const { t } = useTranslation();
   const errors = useErrors();
   const { attempt, mutation, lost } = change;
@@ -305,11 +345,13 @@ function ChangeBody<Input, Out>({
           <Stack gap={8}>{intro}</Stack>
         </Text>
       ) : null}
+      {diff?.length ? <DiffRows rows={diff} /> : null}
+      {warn ? <Text tone="warn">{warn}</Text> : null}
       {editing ? said : null}
       {/* A lost answer can only resend the request already fixed from these fields. */}
       <fieldset disabled={!editing || mutation.isPending}>
         <Stack>
-          <ChangeFields fields={fields} confirm={confirm} error={mutation.error} problem={problem} />
+          <ChangeFields fields={fields} confirm={confirm} error={mutation.error} problem={problem} reason={reason} />
         </Stack>
       </fieldset>
       {editing ? null : <div ref={notice}>{said}</div>}
@@ -323,20 +365,25 @@ function ChangeFields({
   confirm,
   error,
   problem,
+  reason,
 }: Pick<Props<unknown, unknown>, "fields" | "confirm"> & {
   error: unknown;
   problem?: FieldProblem;
+  reason: Reason;
 }) {
   const { t } = useTranslation();
   const errors = useErrors();
   return (
     <>
       {fields?.(error)}
-      <TextAreaField
+      <ReasonPicks
         label={t("change.reason")}
         hint={t("change.reasonHint")}
-        name="reason"
-        maxLength={1000}
+        placeholder={t("change.reasonPlaceholder")}
+        picksLabel={t("change.picksLabel")}
+        picks={picks.map((pick) => t(`change.picks.${pick}`))}
+        value={reason.value}
+        onChange={reason.onChange}
         error={problem?.field === "reason" ? problem.message : errors.field(error, "reason")}
       />
       {confirm === undefined ? null : (
@@ -406,4 +453,35 @@ function Result({ replayed, verdict, children }: { replayed: boolean; verdict?: 
       </Text>
     </Stack>
   );
+}
+
+// useToastResult is what a change with a toast does once it is done: says so, with the undo when there is one, and closes
+// the dialog. The undo goes out at once with a key of its own; it is not resent, so an answer that does not prove it
+// was refused says it may have been done, and the person checks the page rather than undoing again.
+function useToastResult<Input, Out>({ toast, undo, onClose }: Props<Input, Out>) {
+  const { t } = useTranslation();
+  const errors = useErrors();
+  const queryClient = useQueryClient();
+  const reverse = (made: Made<Out>, inverse: NonNullable<typeof undo>) => {
+    const context = { reason: t("change.undoReason", { reason: made.reason }), key: newKey() };
+    inverse(made.data, context)
+      .then(
+        () => say(t("change.undone")),
+        (error: unknown) =>
+          say(refused(error) ? t("change.undoRefused", { message: errors.message(error) }) : t("change.undoUnknown"), {
+            kind: "bad",
+          }),
+      )
+      // Whatever the undo's answer, the page then shows what the server holds.
+      .finally(() => queryClient.invalidateQueries({ queryKey: [accountKey] }));
+  };
+  return (made: Made<Out>) => {
+    if (!toast) return;
+    const message = made.replayed ? t("change.replayedToast") : toast(made.data);
+    say(message, {
+      kind: "ok",
+      action: undo ? { label: t("change.undo"), onClick: () => reverse(made, undo) } : undefined,
+    });
+    onClose();
+  };
 }

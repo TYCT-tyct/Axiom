@@ -23,6 +23,8 @@ export type AdminState = AuthState & {
   retention: Schemas["OperationsRetention"];
   settings: Schemas["SiteSettingsView"];
   keyLimits: Schemas["KeyLimitsView"];
+  // The registration policy as last saved; until then the one admin-api.ts starts from.
+  registration?: Schemas["RegistrationPolicy"];
   logo: Schemas["SiteLogoView"];
   // The public brand's name and logo address; the server gives the logo as a path, the settings preview as a data URL.
   brandName?: string;
