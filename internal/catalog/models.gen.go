@@ -31,6 +31,7 @@ type CatalogModel struct {
 	PriceSource  string
 	Spec         []byte
 	Rev          int64
+	Family       *string
 }
 
 type CatalogName struct {

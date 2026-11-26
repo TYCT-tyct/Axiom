@@ -216,6 +216,7 @@ type CreateModelRequest struct {
 	VersionBasis VersionBasis `json:"version_basis"`
 	PriceSource  PriceSource  `json:"price_source"`
 	Spec         jsonx.Raw    `json:"spec"`
+	Family       *string      `json:"family,omitempty"`
 }
 
 // CreateModel adds a draft model, visible only to the platform until it is listed.
@@ -223,6 +224,9 @@ func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result
 	_, err := parseSavedSpec(r.Spec)
 	if err != nil {
 		return Result{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if r.Family != nil && !family.MatchString(*r.Family) {
+		return Result{}, fmt.Errorf("%w: %q is not a family", ErrInvalid, *r.Family)
 	}
 	return c.apply(ctx, r.Op, "model.create", func(tx pg.Tx) (outcome, error) {
 		author, _, _ := strings.Cut(r.Slug, "/")
@@ -233,6 +237,7 @@ func (c *Catalog) CreateModel(ctx context.Context, r CreateModelRequest) (Result
 		}
 		row, err := New().InsertModel(ctx, tx, InsertModelParams{
 			Author: author, Slug: r.Slug, VersionBasis: string(r.VersionBasis), PriceSource: string(r.PriceSource), Spec: r.Spec,
+			Family: r.Family,
 		})
 		return outcome{targetKind: "model", subject: ModelID(row.ID).String(), after: summary(row)}, err
 	})

@@ -36,6 +36,7 @@ type adminAPI struct {
 	version        string
 	accounts       *accounts.Service
 	catalog        *catalog.Catalog
+	datasets       *catalog.Fetcher // reads the public price lists importModels takes drafts from; nil on a node without the price job
 	db             *pg.DB
 	logger         *slog.Logger
 	keys           *secret.Keyring

@@ -132,6 +132,7 @@ func (p consoleParts) listen(calls callNode, service *accounts.Service, cat *cat
 	adminAPI.keys, adminAPI.exit, adminAPI.smtp, adminAPI.search = p.master, exit, p.cfg.smtp, p.cfg.search
 	adminAPI.alerts, adminAPI.instance, adminAPI.paymentSignals = p.alerts, p.cfg.valkey.NodeID, p.paymentSignals
 	adminAPI.fileParser, adminAPI.router, adminAPI.routes, adminAPI.health = p.cfg.fileParser, calls.router, calls.routes, calls.health
+	adminAPI.datasets = p.datasets
 	admin := adminRoutes(adminAPI,
 		&guard{contract: p.adminContract, accounts: service, proxies: p.cfg.trustedProxies, logger: logger, admin: true}, p.frontend, logger)
 	ops := operationsRoutes(operationsAPI{admin: adminAPI, db: db},

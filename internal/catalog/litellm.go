@@ -91,10 +91,11 @@ func ParseLiteLLM(body []byte) ([]Entry, error) {
 			continue // sample_spec and the like describe the format
 		}
 		kind, known := litellmModes[mode]
-		if _, vendor := litellmProviders[provider]; !vendor || !known {
+		author, vendor := litellmProviders[provider]
+		if !vendor || !known {
 			continue
 		}
-		e := Entry{Key: key, Names: []string{strings.TrimPrefix(key, provider+"/")}, Text: kind&modeText != 0, Raw: table[key]}
+		e := Entry{Key: key, Author: author, Names: []string{strings.TrimPrefix(key, provider+"/")}, Text: kind&modeText != 0, Raw: table[key]}
 		e.Err = readLiteLLMPrices(&e.sheet, kind, fields)
 		entries = append(entries, e)
 	}

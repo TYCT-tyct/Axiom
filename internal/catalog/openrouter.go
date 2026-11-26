@@ -68,7 +68,8 @@ func ParseOpenRouter(body []byte) ([]Entry, error) {
 			// paid model in a dataset sync. Only the :free name identifies this entry.
 			names = []string{m.ID}
 		}
-		e := Entry{Key: m.ID, Names: names, Text: slices.Equal(m.Architecture.Output, []string{"text"}), Raw: evidence}
+		author, _, _ := strings.Cut(m.ID, "/")
+		e := Entry{Key: m.ID, Author: author, Names: names, Text: slices.Equal(m.Architecture.Output, []string{"text"}), Raw: evidence}
 		e.Err = readOpenRouterPrices(&e.sheet, m.Pricing)
 		entries = append(entries, e)
 	}
