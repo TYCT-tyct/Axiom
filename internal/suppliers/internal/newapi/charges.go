@@ -170,9 +170,14 @@ func reported(o otherInfo) (set catalog.ItemSet) {
 	return set
 }
 
-// funding is where the charge was drawn from, per the record's billing source.
+// funding is where the charge was drawn from, per the record's billing source. A record without one was drawn from the
+// wallet: new-api writes the source only where a billing session chose between wallet and subscription
+// (service/log_info_generate.go appendBillingInfo); its releases before subscriptions (commit ddeacccc0) had only the
+// wallet, and its path without a session draws from the wallet (service/quota.go postConsumeQuotaWithResult). Fees and
+// task records it writes without a source follow the request's source, a subscription only for an account that has an
+// active one, which the account read reports as not the wallet (docs/domains/suppliers.md「决策与理由」).
 func funding(o otherInfo) adapter.Funding {
-	if o.BillingSource == "wallet" {
+	if o.BillingSource == "wallet" || o.BillingSource == "" {
 		return adapter.FundingWallet
 	}
 	return adapter.FundingOther

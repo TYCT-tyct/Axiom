@@ -469,6 +469,16 @@ func TestUsageWithCachedTokensIsNotOfferedAsCorrection(t *testing.T) {
 	if charges, err := convert(subscription); err != nil || charges[0].Funding != adapter.FundingOther {
 		t.Error("a charge drawn on a subscription is taken for a wallet charge")
 	}
+	for _, other := range []string{
+		`{"violation_fee":true,"fee_quota":23,"group_ratio":1}`,      // a fee: written without a billing source
+		`{"model_ratio":0.075,"group_ratio":1,"completion_ratio":4}`, // before subscriptions
+	} {
+		unstated := clonePage(recordedPage(t))
+		unstated.Data.Items[0].Other = new(other)
+		if charges, err := convert(unstated); err != nil || charges[0].Funding != adapter.FundingWallet {
+			t.Errorf("a record without a billing source (%s): %+v, %v; want a wallet charge", other, charges, err)
+		}
+	}
 	consumed := clonePage(recordedPage(t))
 	consumed.Data.Items[0].Type = new(1)
 	if charges, err := convert(consumed); err != nil || len(charges) != 0 {
