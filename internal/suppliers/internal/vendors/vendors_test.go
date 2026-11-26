@@ -32,11 +32,7 @@ func (c *listClient) Do(_ context.Context, r adapter.Request) (adapter.Response,
 // not recorded against a live account.
 func TestEveryRowReachesItsProvider(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		kind              adapter.Kind
-		models, chat, msg string // msg is empty for a row without an Anthropic-compatible API
-		names             []string
-	}{
+	cases := []rowCase{
 		{"openai", "/v1/models", "/v1/chat/completions", "", []string{"model-id-0", "model-id-1"}},
 		{"google", "/v1beta/openai/models", "/v1beta/openai/chat/completions", "", []string{"gemini-2.5-flash", "text-embedding-004"}},
 		{"moonshot", "/v1/models", "/v1/chat/completions", "/anthropic/v1/messages", []string{"kimi-k3", "kimi-k3.1-pro"}},
@@ -57,31 +53,48 @@ func TestEveryRowReachesItsProvider(t *testing.T) {
 			if err := a.(adapter.Described).Type().Check(); err != nil {
 				t.Fatalf("type: %v", err)
 			}
-			body, err := os.ReadFile(filepath.Join("testdata", string(tc.kind)+"-models.json"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			c := &listClient{body: body}
-			got := a.(adapter.Direct).CheckKey(t.Context(), c, adapter.FamilyOpenAI, secret.New("sk-test-key"), nil)
-			if got.Outcome != adapter.KeyPassed {
-				t.Fatalf("check: %+v", got)
-			}
-			if diff := cmp.Diff(tc.names, got.Models); diff != "" {
-				t.Errorf("listed names (-want +got):\n%s", diff)
-			}
-			if r := c.sent[0]; r.Path != tc.models || r.Header.Get("Authorization") != "Bearer sk-test-key" {
-				t.Errorf("check asked %s with %q", r.Path, r.Header.Get("Authorization"))
-			}
-			wire := a.Calls().(adapter.Wire)
-			if got := wire.Path(protocol.Chat, "/v1/chat/completions"); got != tc.chat {
-				t.Errorf("chat path %s, want %s", got, tc.chat)
-			}
-			if tc.msg != "" {
-				if got := wire.Path(protocol.Messages, "/v1/messages"); got != tc.msg {
-					t.Errorf("messages path %s, want %s", got, tc.msg)
-				}
-			}
+			checkList(t, a, tc)
+			checkPaths(t, a, tc)
 		})
+	}
+}
+
+// rowCase is what one row is expected to do; msg is empty for a row without an Anthropic-compatible API.
+type rowCase struct {
+	kind              adapter.Kind
+	models, chat, msg string
+	names             []string
+}
+
+// checkList checks a key against the row's sample answer: the path and bearer token asked, and the names read.
+func checkList(t *testing.T, a adapter.Adapter, tc rowCase) {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("testdata", string(tc.kind)+"-models.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &listClient{body: body}
+	got := a.(adapter.Direct).CheckKey(t.Context(), c, adapter.FamilyOpenAI, secret.New("sk-test-key"), nil)
+	if got.Outcome != adapter.KeyPassed {
+		t.Fatalf("check: %+v", got)
+	}
+	if diff := cmp.Diff(tc.names, got.Models); diff != "" {
+		t.Errorf("listed names (-want +got):\n%s", diff)
+	}
+	if r := c.sent[0]; r.Path != tc.models || r.Header.Get("Authorization") != "Bearer sk-test-key" {
+		t.Errorf("check asked %s with %q", r.Path, r.Header.Get("Authorization"))
+	}
+}
+
+// checkPaths checks where Chat, and Messages for a row with an Anthropic-compatible API, are sent.
+func checkPaths(t *testing.T, a adapter.Adapter, tc rowCase) {
+	t.Helper()
+	wire := a.Calls().(adapter.Wire)
+	if got := wire.Path(protocol.Chat, "/v1/chat/completions"); got != tc.chat {
+		t.Errorf("chat path %s, want %s", got, tc.chat)
+	}
+	if got := wire.Path(protocol.Messages, "/v1/messages"); tc.msg != "" && got != tc.msg {
+		t.Errorf("messages path %s, want %s", got, tc.msg)
 	}
 }
 

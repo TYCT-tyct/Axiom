@@ -1,7 +1,6 @@
 package bedrock
 
 import (
-	"encoding/json/jsontext" //nolint:depguard // tool inputs and schemas are carried as written, never built into a tree
 	"errors"
 	"strings"
 
@@ -19,30 +18,30 @@ var errUnconvertible = errors.New("bedrock: the Chat body has no Converse form")
 // chatRequest is a Chat Completions body as far as Converse can say it; jsonx.UnmarshalKnown refuses any other member,
 // at any depth.
 type chatRequest struct {
-	Messages            []chatMessage  `json:"messages"`
-	MaxTokens           *int64         `json:"max_tokens"`
-	MaxCompletionTokens *int64         `json:"max_completion_tokens"`
-	Temperature         *float64       `json:"temperature"`
-	TopP                *float64       `json:"top_p"`
-	Stop                jsontext.Value `json:"stop"`
-	Stream              bool           `json:"stream"`
-	Tools               []chatTool     `json:"tools"`
-	ToolChoice          jsontext.Value `json:"tool_choice"`
-	ParallelToolCalls   *bool          `json:"parallel_tool_calls"`
+	Messages            []chatMessage `json:"messages"`
+	MaxTokens           *int64        `json:"max_tokens"`
+	MaxCompletionTokens *int64        `json:"max_completion_tokens"`
+	Temperature         *float64      `json:"temperature"`
+	TopP                *float64      `json:"top_p"`
+	Stop                jsonx.Raw     `json:"stop"`
+	Stream              bool          `json:"stream"`
+	Tools               []chatTool    `json:"tools"`
+	ToolChoice          jsonx.Raw     `json:"tool_choice"`
+	ParallelToolCalls   *bool         `json:"parallel_tool_calls"`
 	// Read and not sent: the model is in the path, a Converse stream always ends with its usage, and the identifiers
 	// are the gateway's opaque ones, which Converse has no member for and which change no answer.
-	Model            jsontext.Value `json:"model"`
-	StreamOptions    jsontext.Value `json:"stream_options"`
-	User             jsontext.Value `json:"user"`
-	SafetyIdentifier jsontext.Value `json:"safety_identifier"`
-	PromptCacheKey   jsontext.Value `json:"prompt_cache_key"`
+	Model            jsonx.Raw `json:"model"`
+	StreamOptions    jsonx.Raw `json:"stream_options"`
+	User             jsonx.Raw `json:"user"`
+	SafetyIdentifier jsonx.Raw `json:"safety_identifier"`
+	PromptCacheKey   jsonx.Raw `json:"prompt_cache_key"`
 }
 
 type chatMessage struct {
-	Role       string         `json:"role"`
-	Content    jsontext.Value `json:"content"`
-	ToolCalls  []chatCall     `json:"tool_calls"`
-	ToolCallID string         `json:"tool_call_id"`
+	Role       string     `json:"role"`
+	Content    jsonx.Raw  `json:"content"`
+	ToolCalls  []chatCall `json:"tool_calls"`
+	ToolCallID string     `json:"tool_call_id"`
 }
 
 type chatCall struct {
@@ -66,10 +65,10 @@ type chatPart struct {
 type chatTool struct {
 	Type     string `json:"type"`
 	Function struct {
-		Name        string         `json:"name"`
-		Description string         `json:"description"`
-		Parameters  jsontext.Value `json:"parameters"`
-		Strict      bool           `json:"strict"`
+		Name        string    `json:"name"`
+		Description string    `json:"description"`
+		Parameters  jsonx.Raw `json:"parameters"`
+		Strict      bool      `json:"strict"`
 	} `json:"function"`
 }
 
@@ -111,9 +110,9 @@ type image struct {
 }
 
 type toolUse struct {
-	ToolUseID string         `json:"toolUseId"`
-	Name      string         `json:"name"`
-	Input     jsontext.Value `json:"input"`
+	ToolUseID string    `json:"toolUseId"`
+	Name      string    `json:"name"`
+	Input     jsonx.Raw `json:"input"`
 }
 
 type toolResult struct {
@@ -141,7 +140,7 @@ type toolSpec struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitzero"`
 	InputSchema struct {
-		JSON jsontext.Value `json:"json"`
+		JSON jsonx.Raw `json:"json"`
 	} `json:"inputSchema"`
 }
 
@@ -156,7 +155,7 @@ type named struct {
 }
 
 // noParameters is the schema of a function that declares none: Converse requires one.
-var noParameters = jsontext.Value(`{"type":"object","properties":{}}`)
+var noParameters = jsonx.Raw(`{"type":"object","properties":{}}`)
 
 // converse is the Converse body of a Chat body, and whether it asks for a stream. parallel_tool_calls may only be
 // true: Converse cannot hold a model to one call at a time.
@@ -181,26 +180,28 @@ func converse(body []byte) ([]byte, bool, error) {
 }
 
 // conversation is the system prompt and the turns: the system and developer messages that lead are the system prompt,
-// and a later one, which has no place in Converse, is refused. A tool's result is the user's turn, and the messages of
-// one role in a row are one turn, as Converse has turns alternate.
+// and a later one, which has no place in Converse, is refused (turn).
 func conversation(messages []chatMessage) ([]textBlock, []converseMessage, error) {
 	var system []textBlock
-	var turns []converseMessage
-	for _, m := range messages {
-		if m.Role == "system" || m.Role == "developer" {
-			if len(turns) > 0 {
-				return nil, nil, errUnconvertible
-			}
-			texts, err := textsOf(m.Content)
-			if err != nil {
-				return nil, nil, err
-			}
-			system = append(system, texts...)
-			continue
-		}
-		role, blocks, err := turn(m)
+	for len(messages) > 0 && (messages[0].Role == "system" || messages[0].Role == "developer") {
+		texts, err := textsOf(messages[0].Content)
 		if err != nil {
 			return nil, nil, err
+		}
+		system, messages = append(system, texts...), messages[1:]
+	}
+	turns, err := turnsOf(messages)
+	return system, turns, err
+}
+
+// turnsOf is the messages as Converse's turns: a tool's result is the user's turn, and the messages of one role in a
+// row are one turn, as Converse has turns alternate.
+func turnsOf(messages []chatMessage) ([]converseMessage, error) {
+	var turns []converseMessage
+	for _, m := range messages {
+		role, blocks, err := turn(m)
+		if err != nil {
+			return nil, err
 		}
 		if n := len(turns); n > 0 && turns[n-1].Role == role {
 			turns[n-1].Content = append(turns[n-1].Content, blocks...)
@@ -209,9 +210,9 @@ func conversation(messages []chatMessage) ([]textBlock, []converseMessage, error
 		turns = append(turns, converseMessage{Role: role, Content: blocks})
 	}
 	if len(turns) == 0 {
-		return nil, nil, errUnconvertible
+		return nil, errUnconvertible
 	}
-	return system, turns, nil
+	return turns, nil
 }
 
 // turn is a message's role in Converse and its blocks. An empty text is left out, which Converse refuses; a message
@@ -261,7 +262,7 @@ func assistantBlocks(m chatMessage) ([]block, error) {
 
 // userBlocks is a user message's content: text, and images given inline as a data URL, which Converse takes as bytes;
 // an image by address, which Bedrock does not fetch, is refused.
-func userBlocks(content jsontext.Value) ([]block, error) {
+func userBlocks(content jsonx.Raw) ([]block, error) {
 	parts, err := partsOf(content)
 	if err != nil {
 		return nil, err
@@ -305,7 +306,7 @@ func imageOf(url string) (*image, error) {
 }
 
 // textsOf is a content that may only be text: a string, or text parts.
-func textsOf(content jsontext.Value) ([]textBlock, error) {
+func textsOf(content jsonx.Raw) ([]textBlock, error) {
 	parts, err := partsOf(content)
 	if err != nil {
 		return nil, err
@@ -321,7 +322,7 @@ func textsOf(content jsontext.Value) ([]textBlock, error) {
 }
 
 // partsOf is a content as parts: a string is one text part, none or null no part.
-func partsOf(content jsontext.Value) ([]chatPart, error) {
+func partsOf(content jsonx.Raw) ([]chatPart, error) {
 	switch content.Kind() {
 	case 0, 'n':
 		return nil, nil
@@ -341,7 +342,7 @@ func partsOf(content jsontext.Value) ([]chatPart, error) {
 
 // toolUseOf is a call the assistant made: its arguments, a JSON object as a string, are the input.
 func toolUseOf(c chatCall) (*toolUse, error) {
-	input := jsontext.Value(`{}`)
+	input := jsonx.Raw(`{}`)
 	if c.Function.Arguments != "" {
 		if jsonx.Unmarshal([]byte(c.Function.Arguments), &input) != nil {
 			return nil, errUnconvertible
@@ -380,7 +381,7 @@ func inference(in chatRequest) (*inferenceConfig, error) {
 
 // tools is the functions the model may call and the choice among them. Converse has no choice of none and no strict
 // schema, so both are refused; a function without parameters takes none.
-func tools(fns []chatTool, choice jsontext.Value) (*toolConfig, error) {
+func tools(fns []chatTool, choice jsonx.Raw) (*toolConfig, error) {
 	tc, err := toolChoiceOf(choice)
 	if err != nil || len(fns) == 0 && tc == nil {
 		return nil, err
@@ -408,7 +409,7 @@ func tools(fns []chatTool, choice jsontext.Value) (*toolConfig, error) {
 
 // toolChoiceOf is Chat's tool_choice as Converse's: auto, required as any, or one function by name; nil for none
 // given.
-func toolChoiceOf(choice jsontext.Value) (*toolChoice, error) {
+func toolChoiceOf(choice jsonx.Raw) (*toolChoice, error) {
 	switch choice.Kind() {
 	case 0, 'n':
 		return nil, nil

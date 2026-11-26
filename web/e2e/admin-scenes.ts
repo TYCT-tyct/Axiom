@@ -143,7 +143,10 @@ const connectDetails = scene(
   (p) => goto(p, "suppliers"),
   async (p) => {
     await press(p, "upstream.add");
-    await p.getByRole("dialog").getByRole("option", { name: /New API/ }).click();
+    await p
+      .getByRole("dialog")
+      .getByRole("option", { name: /New API/ })
+      .click();
     await p.getByRole("dialog").locator("input[name=origin]").fill("https://api.example.cn");
     await p.getByRole("dialog").locator("button[type=submit]").click();
     await p.getByRole("dialog").locator("input[name=upstream_account]").waitFor();

@@ -18,32 +18,14 @@ export function TypePicker({
   const { t } = useTranslation();
   const id = useId();
   const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
   const [query, setQuery] = useState("");
-  const [at, setAt] = useState(0);
   const sections = useMemo(() => findTypes(types, query), [types, query]);
   const rows = sections.flatMap((section) => section.types);
-  const active = Math.min(at, rows.length - 1);
-  useEffect(() => input.current?.focus(), []);
-  useEffect(() => {
-    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
-  });
   const choose = (type: SupplierType | undefined) => {
     if (type && !unsellable(type)) onPick(type);
   };
-  const keys = (event: KeyboardEvent<HTMLInputElement>) => {
-    const last = rows.length - 1;
-    const to = { ArrowDown: Math.min(active + 1, last), ArrowUp: Math.max(active - 1, 0), Home: 0, End: last }[
-      event.key
-    ];
-    if (to !== undefined && rows.length > 0) {
-      event.preventDefault();
-      setAt(to);
-    } else if (event.key === "Enter" && !event.nativeEvent.isComposing) {
-      event.preventDefault();
-      choose(rows[active]);
-    }
-  };
+  const cursor = useCursor(rows, choose);
+  useEffect(() => input.current?.focus(), []);
   return (
     <div className={s.root}>
       <Field
@@ -53,13 +35,13 @@ export function TypePicker({
         value={query}
         onChange={(event) => {
           setQuery(event.target.value);
-          setAt(0);
+          cursor.reset();
         }}
-        onKeyDown={keys}
+        onKeyDown={cursor.keys}
         role="combobox"
         aria-expanded="true"
         aria-controls={`${id}-list`}
-        aria-activedescendant={rows.length > 0 ? `${id}-${active}` : undefined}
+        aria-activedescendant={rows.length > 0 ? `${id}-${cursor.active}` : undefined}
         autoComplete="off"
         spellCheck={false}
       />
@@ -68,30 +50,80 @@ export function TypePicker({
           {t("upstream.types.empty", { query: query.trim() })}
         </p>
       ) : (
-        <div ref={list} id={`${id}-list`} role="listbox" aria-label={t("upstream.types.label")} className={s.list}>
-          {sections.map((section) => (
-            // biome-ignore lint/a11y/useSemanticElements: a listbox's options are grouped by role; a fieldset is a form's.
-            <div key={section.group} role="group" aria-labelledby={`${id}-${section.group}`}>
-              <div id={`${id}-${section.group}`} className={s.heading}>
-                {t(`upstream.types.groups.${section.group}`)}
-              </div>
-              {section.types.map((type) => {
-                const n = rows.indexOf(type);
-                return (
-                  <TypeOption
-                    key={type.kind}
-                    id={`${id}-${n}`}
-                    type={type}
-                    active={n === active}
-                    onHover={() => setAt(n)}
-                    onChoose={() => choose(type)}
-                  />
-                );
-              })}
-            </div>
-          ))}
-        </div>
+        <TypeList id={id} sections={sections} rows={rows} cursor={cursor} onChoose={choose} />
       )}
+    </div>
+  );
+}
+
+type Cursor = ReturnType<typeof useCursor>;
+
+// The active option of the list, moved by the query's keys; Enter takes it (not while an input method is composing).
+function useCursor(rows: readonly SupplierType[], choose: (type: SupplierType | undefined) => void) {
+  const [at, setAt] = useState(0);
+  const active = Math.min(at, rows.length - 1);
+  const keys = (event: KeyboardEvent<HTMLInputElement>) => {
+    const last = rows.length - 1;
+    const moves: Record<string, number> = {
+      ArrowDown: Math.min(active + 1, last),
+      ArrowUp: Math.max(active - 1, 0),
+      Home: 0,
+      End: last,
+    };
+    const to = moves[event.key];
+    if (to !== undefined && rows.length > 0) {
+      event.preventDefault();
+      setAt(to);
+    } else if (event.key === "Enter" && !event.nativeEvent.isComposing) {
+      event.preventDefault();
+      choose(rows[active]);
+    }
+  };
+  return { active, keys, moveTo: setAt, reset: () => setAt(0) };
+}
+
+// The options under their groups' headings; the active one is kept in view as it moves.
+function TypeList({
+  id,
+  sections,
+  rows,
+  cursor,
+  onChoose,
+}: {
+  id: string;
+  sections: ReturnType<typeof findTypes>;
+  rows: readonly SupplierType[];
+  cursor: Cursor;
+  onChoose: (type: SupplierType) => void;
+}) {
+  const { t } = useTranslation();
+  const list = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    list.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: "nearest" });
+  });
+  return (
+    <div ref={list} id={`${id}-list`} role="listbox" aria-label={t("upstream.types.label")} className={s.list}>
+      {sections.map((section) => (
+        // biome-ignore lint/a11y/useSemanticElements: a listbox's options are grouped by role; a fieldset is a form's.
+        <div key={section.group} role="group" aria-labelledby={`${id}-${section.group}`}>
+          <div id={`${id}-${section.group}`} className={s.heading}>
+            {t(`upstream.types.groups.${section.group}`)}
+          </div>
+          {section.types.map((type) => {
+            const n = rows.indexOf(type);
+            return (
+              <TypeOption
+                key={type.kind}
+                id={`${id}-${n}`}
+                type={type}
+                active={n === cursor.active}
+                onHover={() => cursor.moveTo(n)}
+                onChoose={() => onChoose(type)}
+              />
+            );
+          })}
+        </div>
+      ))}
     </div>
   );
 }
@@ -124,13 +156,22 @@ function TypeOption({
       onPointerMove={onHover}
       onClick={onChoose}
     >
+      <TypeLabel type={type} line={greyed ? t("upstream.types.noModels") : typeLine(type, t)} />
+      {count === undefined ? null : <span className={s.count}>{t("upstream.types.models", { count })}</span>}
+    </div>
+  );
+}
+
+// A type's mark, name and the line under it, in the list and over the fields it asks for.
+function TypeLabel({ type, line }: { type: SupplierType; line: string }) {
+  return (
+    <>
       <VendorIcon vendor={type.vendor} name={type.name} />
       <span className={s.text}>
         <span className={s.name}>{type.name}</span>
-        <span className={s.line}>{greyed ? t("upstream.types.noModels") : typeLine(type, t)}</span>
+        <span className={s.line}>{line}</span>
       </span>
-      {count === undefined ? null : <span className={s.count}>{t("upstream.types.models", { count })}</span>}
-    </div>
+    </>
   );
 }
 
@@ -139,11 +180,7 @@ export function ChosenType({ type, onChange }: { type: SupplierType; onChange: (
   const { t } = useTranslation();
   return (
     <div className={s.chosen}>
-      <VendorIcon vendor={type.vendor} name={type.name} />
-      <span className={s.text}>
-        <span className={s.name}>{type.name}</span>
-        <span className={s.line}>{typeLine(type, t)}</span>
-      </span>
+      <TypeLabel type={type} line={typeLine(type, t)} />
       <ActionButton size="sm" variant="gho" onClick={onChange}>
         {t("upstream.types.change")}
       </ActionButton>

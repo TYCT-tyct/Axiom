@@ -171,19 +171,48 @@ const keysAndSettings = (type: SupplierType) =>
 
 const askedOf = (type: SupplierType, form: string) => [...(formOf(type, form)?.fields ?? []), ...type.fields];
 
-// A new supplier's fields, in the descriptor's order: where it is connected (an entry, or the address, format and
-// currency a person gives), the credential's form and fields, the type's fields, the limits and the name.
-function NewFields({
-  type,
-  choice,
-  onChoose,
-  error,
-}: {
+type ChoiceProps = {
   type: SupplierType;
   choice: Choice;
   onChoose: (next: Partial<Choice>) => void;
   error: unknown;
-}) {
+};
+
+// A new supplier's fields, in the descriptor's order: where it is connected, the credential's form and fields, the
+// type's fields, the limits and the name.
+function NewFields(props: ChoiceProps) {
+  const { type, choice, onChoose, error } = props;
+  const { t } = useTranslation();
+  const errors = useErrors();
+  return (
+    <>
+      <WhereFields {...props} />
+      {type.forms.length > 1 ? (
+        <SegmentedControl
+          label={t("upstream.types.form")}
+          value={choice.form}
+          options={type.forms.map((form) => ({ value: form.name, label: formLabel(t, form.name) }))}
+          onChange={(form) => onChoose({ form })}
+        />
+      ) : null}
+      <TypeFields key={choice.form} fields={askedOf(type, choice.form)} error={error} />
+      <LimitFields error={error} />
+      <Field
+        label={t("upstream.addDialog.name")}
+        placeholder={t("upstream.addDialog.namePlaceholder")}
+        name="name"
+        defaultValue={type.entries.length > 0 ? type.name : ""}
+        maxLength={200}
+        autoComplete="off"
+        error={errors.field(error, "name")}
+      />
+    </>
+  );
+}
+
+// Where a new supplier is connected: a choice of price entry when the type has several, or, for a type without
+// entries, the address, the currency and (for a direct API) the family a person gives.
+function WhereFields({ type, choice, onChoose, error }: ChoiceProps) {
   const { t } = useTranslation();
   const errors = useErrors();
   const entry = type.entries.find((e) => e.id === choice.entry);
@@ -238,25 +267,6 @@ function NewFields({
           />
         </>
       ) : null}
-      {type.forms.length > 1 ? (
-        <SegmentedControl
-          label={t("upstream.types.form")}
-          value={choice.form}
-          options={type.forms.map((form) => ({ value: form.name, label: formLabel(t, form.name) }))}
-          onChange={(form) => onChoose({ form })}
-        />
-      ) : null}
-      <TypeFields key={choice.form} fields={askedOf(type, choice.form)} error={error} />
-      <LimitFields error={error} />
-      <Field
-        label={t("upstream.addDialog.name")}
-        placeholder={t("upstream.addDialog.namePlaceholder")}
-        name="name"
-        defaultValue={type.entries.length > 0 ? type.name : ""}
-        maxLength={200}
-        autoComplete="off"
-        error={errors.field(error, "name")}
-      />
     </>
   );
 }

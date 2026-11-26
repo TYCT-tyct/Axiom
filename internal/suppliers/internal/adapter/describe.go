@@ -126,7 +126,17 @@ func (t Type) Check() error {
 		return fmt.Errorf("group %q is not one of the picker's", t.Group)
 	case !slices.Contains([]Mode{ModeRelay, ModeDirect, ModeCloud}, t.Mode):
 		return fmt.Errorf("mode %q is not one", t.Mode)
+	case t.Mode != ModeRelay && len(t.Forms) == 0:
+		return errors.New("takes no credential")
 	}
+	if err := t.checkEntries(); err != nil {
+		return err
+	}
+	return t.checkForms()
+}
+
+// checkEntries checks the price entries and the families they are spoken in.
+func (t Type) checkEntries() error {
 	ids := map[string]bool{}
 	for _, e := range t.Entries {
 		if !entryID.MatchString(e.ID) || ids[e.ID] {
@@ -145,16 +155,18 @@ func (t Type) Check() error {
 			return fmt.Errorf("family %q is not one", f)
 		}
 	}
-	if t.Mode != ModeRelay && len(t.Forms) == 0 {
-		return errors.New("takes no credential")
-	}
+	return nil
+}
+
+// checkForms checks the type's fields and each form's, which together name a field once, and that each form has a
+// secret.
+func (t Type) checkForms() error {
 	seen := map[string]bool{}
 	if err := t.checkFields(t.Fields, seen); err != nil {
 		return err
 	}
 	for _, form := range t.Forms {
-		formSeen := maps.Clone(seen)
-		if err := t.checkFields(form.Fields, formSeen); err != nil {
+		if err := t.checkFields(form.Fields, maps.Clone(seen)); err != nil {
 			return fmt.Errorf("form %s: %w", form.Name, err)
 		}
 		if !slices.ContainsFunc(form.Fields, func(f Field) bool { k, _ := FieldKindOf(f.Name); return k != FieldText }) {

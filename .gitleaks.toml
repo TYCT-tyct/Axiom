@@ -90,3 +90,10 @@ targetRules = ["generic-api-key"]
 condition = "AND"
 paths = ['''^web/console/src/pages/usage-props\.ts$''']
 regexes = ['''^p\.chips\.keyOpts0\.length$''']
+
+# The Bedrock tests sign with a placeholder API key. It is not a credential and has no real key's form, but the
+# generic-api-key rule takes it for one, and it is already in a pushed commit of this branch, which cannot be rewritten.
+# Allow that exact string and nothing else.
+[[allowlists]]
+description = "placeholder Bedrock API key in the bedrock tests"
+regexes = ['''^bedrock-test-api-key-0123456789$''']

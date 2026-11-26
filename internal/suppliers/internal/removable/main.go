@@ -89,26 +89,33 @@ func parseRegistry(source string) (entries []entry, imports map[string]entry, er
 		if err != nil {
 			return nil, nil, err
 		}
-		if list == nil {
-			continue
-		}
-		last := fset.Position(list.Lbrace).Line
-		first := len(entries)
-		for _, element := range list.Elts {
-			e, err := adapterEntry(fset, element)
-			if err != nil {
+		if list != nil {
+			if entries, err = listEntries(fset, list, entries); err != nil {
 				return nil, nil, err
 			}
-			if e.firstLine <= last {
-				return nil, nil, fmt.Errorf("line %d: an adapter shares its line with another entry or the opening brace", e.firstLine)
-			}
-			entries, last = append(entries, e), e.lastLine
-		}
-		if end := fset.Position(list.Rbrace).Line; len(entries) > first && end <= last {
-			return nil, nil, fmt.Errorf("line %d: the closing brace shares a line with an entry", end)
 		}
 	}
 	return entries, imports, nil
+}
+
+// listEntries appends the entries of one list, each on lines of its own.
+func listEntries(fset *token.FileSet, list *ast.CompositeLit, entries []entry) ([]entry, error) {
+	last := fset.Position(list.Lbrace).Line
+	first := len(entries)
+	for _, element := range list.Elts {
+		e, err := adapterEntry(fset, element)
+		if err != nil {
+			return nil, err
+		}
+		if e.firstLine <= last {
+			return nil, fmt.Errorf("line %d: an adapter shares its line with another entry or the opening brace", e.firstLine)
+		}
+		entries, last = append(entries, e), e.lastLine
+	}
+	if end := fset.Position(list.Rbrace).Line; len(entries) > first && end <= last {
+		return nil, fmt.Errorf("line %d: the closing brace shares a line with an entry", end)
+	}
+	return entries, nil
 }
 
 // registryList finds the composite literal that `var <name>` is initialised with: adapters, one package's adapter a
