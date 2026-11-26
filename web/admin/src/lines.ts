@@ -53,6 +53,8 @@ export function linesOf(details: readonly Detail[]): Line[] {
 
 export type Lines = {
   all: Line[];
+  // The name of any group read, by its ID, whether or not it is a line now.
+  anyGroup: ReadonlyMap<string, string>;
   byGroup: ReadonlyMap<string, Line>;
   byCodename: ReadonlyMap<string, Line>;
   // The endpoints a model has, each with the line it runs on (absent when its group is not a line).
@@ -81,8 +83,14 @@ export function useLines(): Lines {
   const byGroup = new Map(all.map((line) => [line.groupId, line]));
   const byCodename = new Map(all.flatMap((line) => (line.codename ? [[line.codename, line] as const] : [])));
   const endpoints = read.flatMap((detail) => detail.endpoints ?? []);
+  // Every group read, taken in or not: a page that reports on traffic can meet a group taken out since, and names it
+  // with its group so it is still told apart from the supplier's other lines.
+  const anyGroup = new Map(
+    read.flatMap(({ supplier, groups }) => groups.map((group) => [group.id, `${supplier.name}/${group.name}`] as const)),
+  );
   return {
     all,
+    anyGroup,
     byGroup,
     byCodename,
     endpointsOf: (modelId) =>
@@ -99,9 +107,9 @@ type LineRef = Pick<AdminSchemas["MonitorLine"], "supplier_id" | "group_id">;
 export const lineKey = (line: LineRef) => `${line.supplier_id}:${line.group_id}`;
 
 // useLineNames names the lines a page shows by the one rule above (useLines), so a line is called the same on every page.
-// A session that may not read suppliers, or a line whose supplier has gone, is named by the first part of its group's ID,
-// which still tells two lines apart.
+// A group no longer taken in is named supplier/group; a session that may not read suppliers, or a line whose supplier
+// has gone, is named by the first part of its group's ID, which still tells two lines apart.
 export function useLineNames(): (line: LineRef) => string {
-  const { byGroup } = useLines();
-  return (line) => byGroup.get(line.group_id)?.name ?? line.group_id.slice(0, 8);
+  const { byGroup, anyGroup } = useLines();
+  return (line) => byGroup.get(line.group_id)?.name ?? anyGroup.get(line.group_id) ?? line.group_id.slice(0, 8);
 }

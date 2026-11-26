@@ -88,7 +88,7 @@ test.describe("the dashboard", () => {
     await open(page, "");
     const lines = card(page, "ops:lines.title");
     // A channel with two lines is named with its group, a channel with one by itself.
-    await expect(lines.getByRole("cell", { name: "Supplier 1/default" })).toBeVisible();
+    await expect(lines.getByRole("cell", { name: "Supplier 1", exact: true })).toBeVisible();
     await expect(lines.getByRole("cell", { name: "Supplier 1/vip-2" })).toBeVisible();
     await expect(lines.getByRole("cell", { name: "Example US" })).toBeVisible();
     await expect(lines.getByText("95.0%")).toBeVisible();
