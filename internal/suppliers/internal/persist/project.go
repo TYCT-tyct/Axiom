@@ -338,9 +338,10 @@ func (p *projector) endpoint(r store.ListProjectedEndpointsRow, desired map[mode
 	p.clearCost(r, why)
 }
 
-// setCost puts the endpoint's cost plan in force. The plan in force is named by the fingerprint of its schedule: a row
-// that already has this plan is left alone, and a new version of the plan replaces the old one, which stays in
-// cost_schedules because what a settled attempt was priced by must remain readable.
+// setCost puts the endpoint's cost plan in force. The plan in force is named by the fingerprint of its schedule and
+// factors: a row that already has this plan is left alone, and a new version of the plan replaces the old one, which
+// stays in cost_schedules because what a settled attempt was priced by must remain readable. A new version at the same
+// prices keeps reconciliation's verdict (the write compares the schedules): factors explain a price, they do not change it.
 func (p *projector) setCost(r store.ListProjectedEndpointsRow, d desiredEndpoint) {
 	if d.plan == nil {
 		p.clearCost(r, syncer.CostUnknown)
@@ -391,7 +392,7 @@ func (p *projector) makeEndpoint(key modelKey, d desiredEndpoint) {
 
 // ours reports whether the reason an endpoint carries is one the projection wrote: every reason it clears an endpoint
 // with, and nothing else. Any other is reconciliation's: it takes an endpoint down when the supplier's charges came out
-// above our estimate, and only a new estimate or a person lifts that. A reason left out here is one the projection can
+// above our estimate, and only a new price or a person lifts that. A reason left out here is one the projection can
 // write and never lift, so the endpoint would stay out of routing after its model came back.
 func ours(found *string) bool {
 	if found == nil {

@@ -369,21 +369,31 @@ func (q *Queries) ListProjectedModels(ctx context.Context, db DBTX, supplierID u
 }
 
 const setProjectedEndpointCost = `-- name: SetProjectedEndpointCost :exec
-UPDATE suppliers.endpoints
-SET cost_state = 'known', cost_schedule_id = $1, cost_state_reason = NULL
-WHERE id = $2
+UPDATE suppliers.endpoints e
+SET cost_schedule_id = v.id,
+    cost_state = CASE WHEN v.kept THEN e.cost_state ELSE 'known' END,
+    cost_state_reason = CASE WHEN v.kept THEN e.cost_state_reason END
+FROM (
+    SELECT nxt.id, coalesce(cur.cost_state_reason = 'under_estimated' AND was.schedule = nxt.schedule AND was.native_unit = nxt.native_unit, false) AS kept
+    FROM suppliers.endpoints cur
+    JOIN suppliers.cost_schedules nxt ON nxt.id = $2
+    LEFT JOIN suppliers.cost_schedules was ON was.id = cur.cost_schedule_id
+    WHERE cur.id = $1
+) v
+WHERE e.id = $1
 `
 
 type SetProjectedEndpointCostParams struct {
-	CostScheduleID *uuid.UUID
 	ID             uuid.UUID
+	CostScheduleID uuid.UUID
 }
 
-// Puts the endpoint's cost schedule in force. The caller decides when: a plan that is already in force is only written
-// back over a reason the projection itself wrote, so a verdict of reconciliation (an estimate the supplier's charges
-// exceeded) stands until a new estimate or a person lifts it.
+// Puts the endpoint's cost schedule in force, one row at a time as ProjectionWrites.Apply does in pages. The caller
+// decides when: a plan that is already in force is only written back over a reason the projection itself wrote, so a
+// verdict of reconciliation (an estimate the supplier's charges exceeded) stands until a new price or a person lifts
+// it; a new version at the same prices is taken up and keeps the verdict.
 func (q *Queries) SetProjectedEndpointCost(ctx context.Context, db DBTX, arg SetProjectedEndpointCostParams) error {
-	_, err := db.Exec(ctx, setProjectedEndpointCost, arg.CostScheduleID, arg.ID)
+	_, err := db.Exec(ctx, setProjectedEndpointCost, arg.ID, arg.CostScheduleID)
 	return err
 }
 

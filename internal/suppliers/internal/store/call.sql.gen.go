@@ -144,15 +144,20 @@ func (q *Queries) ChargeEvents(ctx context.Context, db DBTX, arg ChargeEventsPar
 }
 
 const delistEndpoint = `-- name: DelistEndpoint :execrows
-UPDATE suppliers.endpoints SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
-WHERE id = $1 AND cost_state = 'known' AND cost_schedule_id = $2
+UPDATE suppliers.endpoints e SET cost_state = 'unknown', cost_state_reason = 'under_estimated'
+WHERE e.id = $1 AND e.cost_state = 'known' AND EXISTS (
+    SELECT 1 FROM suppliers.cost_schedules cur JOIN suppliers.cost_schedules was ON was.id = $2
+    WHERE cur.id = e.cost_schedule_id
+      AND (cur.id = was.id OR (cur.schedule = was.schedule AND cur.native_unit = was.native_unit)))
 `
 
 type DelistEndpointParams struct {
 	ID             uuid.UUID
-	CostScheduleID *uuid.UUID
+	CostScheduleID uuid.UUID
 }
 
+// The endpoint is delisted while it is still costed at the estimate the charge found too low: the schedule the attempt
+// was priced by, or a later version at the same prices, which the sync makes when only the factors change.
 func (q *Queries) DelistEndpoint(ctx context.Context, db DBTX, arg DelistEndpointParams) (int64, error) {
 	result, err := db.Exec(ctx, delistEndpoint, arg.ID, arg.CostScheduleID)
 	if err != nil {

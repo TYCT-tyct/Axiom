@@ -218,7 +218,7 @@ func settleMatch(ctx context.Context, tx store.DBTX, q *store.Queries, cfg Confi
 	delisted := false
 	switch verdict {
 	case "under":
-		if n, err := q.DelistEndpoint(ctx, tx, store.DelistEndpointParams{ID: m.EndpointID, CostScheduleID: &m.CostScheduleID}); err != nil {
+		if n, err := q.DelistEndpoint(ctx, tx, store.DelistEndpointParams{ID: m.EndpointID, CostScheduleID: m.CostScheduleID}); err != nil {
 			return fmt.Errorf("delist endpoint: %w", err)
 		} else if n > 0 {
 			delisted = true

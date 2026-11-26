@@ -46,6 +46,33 @@ func TestALateChargeOnlyDelistsItsOwnCostSchedule(t *testing.T) {
 	}
 }
 
+// TestALateChargeDelistsTheSamePricesUnderNewFactors: a version of the plan that only explains the same prices another
+// way (the sync's fingerprint covers the factors) is the estimate the charge found too low, so the charge delists it.
+func TestALateChargeDelistsTheSamePricesUnderNewFactors(t *testing.T) {
+	t.Parallel()
+	w := newWorld(t, 1)
+	w.record(w.attempt(newRequest(), 1, newAPIRef))
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		q := store.New()
+		id, err := q.InsertCostSchedule(ctx, tx, store.InsertCostScheduleParams{
+			SupplierID: w.supplier, EndpointID: w.endpoint, NativeUnit: "quota",
+			Schedule: []byte(`{"v":1,"currency":"XXX","rates":{"output":"0.3","input":"0.075"}}`),
+			Basis:    "published", Fingerprint: "refactored",
+		})
+		if err != nil {
+			return err
+		}
+		return q.SetEndpointCost(ctx, tx, store.SetEndpointCostParams{ID: w.endpoint, CostScheduleID: &id})
+	})
+	w.ingest(w.charge(newAPIRef, "45", w.clock.now()))
+	if report := w.reconcile(w.clock.now()); len(report.Delisted) != 1 || len(report.UnderUnchanged) != 0 {
+		t.Errorf("delisted %v, unchanged %v: want the endpoint delisted", report.Delisted, report.UnderUnchanged)
+	}
+	if n := w.count("SELECT count(*) FROM suppliers.endpoints WHERE id = $1 AND cost_state = 'unknown' AND cost_state_reason = 'under_estimated'", w.endpoint); n != 1 {
+		t.Error("the endpoint is still routed at the estimate found too low")
+	}
+}
+
 func TestUnderestimatedChargesWarnWhenTheEndpointIsAlreadyUnknown(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)

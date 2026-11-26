@@ -279,9 +279,20 @@ WITH wanted(supplier_id, endpoint_id, native_unit, schedule, basis, fingerprint,
  UNION ALL
  SELECT c.id, c.endpoint_id FROM suppliers.cost_schedules c
  JOIN wanted w ON w.endpoint_id = c.endpoint_id AND w.fingerprint = c.fingerprint
+), verdicts AS (
+ -- A version at the prices reconciliation found too low only explains them another way: the endpoint takes it up and
+ -- stays out of routing (docs/domains/suppliers.md「同步与变化」).
+ SELECT s.id, s.endpoint_id,
+  coalesce(e.cost_state_reason = 'under_estimated' AND cur.schedule = w.schedule AND cur.native_unit = w.native_unit, false) AS kept
+ FROM schedules s
+ JOIN wanted w ON w.endpoint_id = s.endpoint_id
+ JOIN suppliers.endpoints e ON e.id = s.endpoint_id
+ LEFT JOIN suppliers.cost_schedules cur ON cur.id = e.cost_schedule_id
 )
-UPDATE suppliers.endpoints e SET cost_state = 'known', cost_schedule_id = s.id, cost_state_reason = NULL
-FROM schedules s WHERE e.id = s.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text", "text"}, func(r EnsureCostScheduleParams) []any {
+UPDATE suppliers.endpoints e SET cost_schedule_id = v.id,
+ cost_state = CASE WHEN v.kept THEN e.cost_state ELSE 'known' END,
+ cost_state_reason = CASE WHEN v.kept THEN e.cost_state_reason END
+FROM verdicts v WHERE e.id = v.endpoint_id`, []string{"uuid", "uuid", "text", "jsonb", "text", "text", "text"}, func(r EnsureCostScheduleParams) []any {
 		return []any{r.SupplierID, r.EndpointID, r.NativeUnit, string(r.Schedule), r.Basis, r.Fingerprint, r.Derivation}
 	}); err != nil {
 		return fmt.Errorf("project costs: %w", err)

@@ -158,8 +158,9 @@ func TestSupplierEndpointCostThroughTheAPI(t *testing.T) {
 	expectAdmin(t, "no permission", f.do(http.MethodGet, path, "", as(f.verified("nobody@example.com"))), http.StatusForbidden, codeForbidden)
 }
 
-// TestBreakEvenOf: the fewest tokens whose sale covers a request's price, at the mix of the last 24 hours, after what
-// the sale charges a request itself; all input without traffic, and none when no token of the mix is sold.
+// TestBreakEvenOf: the fewest tokens whose sale covers a request's price, at the mix of the last 24 hours, as billing
+// prices them: with what the sale charges a request itself and the context tier the length falls in; all input without
+// traffic, and none when no request is long enough.
 func TestBreakEvenOf(t *testing.T) {
 	t.Parallel()
 	price := func(s string) platform.UnitPrice {
@@ -176,6 +177,13 @@ func TestBreakEvenOf(t *testing.T) {
 		}
 		return s
 	}
+	longer := func(rates string, above int, tier string) catalog.Schedule {
+		s, err := catalog.ParseSchedule(fmt.Appendf(nil, `{"v":1,"currency":"USD","rates":{%s},"context_tiers":{"basis":["input"],"method":"whole","tiers":[{"above":%d,"rates":{%s}}]}}`, rates, above, tier))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
 	tokens := sale(`"input":"0.000001","output":"0.000004"`)
 	in, out := catalog.ItemInput, catalog.ItemOutput
 	for _, c := range []struct {
@@ -186,11 +194,11 @@ func TestBreakEvenOf(t *testing.T) {
 		traffic suppliers.Traffic
 		want    *adminapi.CostBreakEven
 	}{
-		// 0.01 at a mean of (3×1 + 1×4)/4 = 1.75 per million: 5714.28… tokens, so 5715.
+		// At 3 input to 1 output, shares rounded down: 5715 tokens are 4286 and 1428, 0.009998; 5716 are 4287 and 1429.
 		{
 			"the mix of the day", "0.01", 1, tokens,
 			suppliers.Traffic{Requests: 2, Units: map[catalog.Item]int64{in: 3000, out: 1000}},
-			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 5715, MeanTokens24h: new(int64(2000)), Requests24h: new(int64(2))},
+			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 5716, MeanTokens24h: new(int64(2000)), Requests24h: new(int64(2))},
 		},
 		{
 			"no traffic: all input", "0.01", 1, tokens,
@@ -208,6 +216,20 @@ func TestBreakEvenOf(t *testing.T) {
 			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 0, Requests24h: new(int64(0))},
 		},
 		{"no token is sold", "0.01", 1, sale(`"request":"0.001"`), suppliers.Traffic{Units: map[catalog.Item]int64{}}, nil},
+		// Above 10 tokens the whole request is at 0.002 a token: 10 tokens make 0.01, 20 make 0.04.
+		{
+			"a dearer context tier", "0.04", 1, longer(`"input":"0.001"`, 10, `"input":"0.002"`),
+			suppliers.Traffic{Units: map[catalog.Item]int64{}},
+			&adminapi.CostBreakEven{RequestPrice: "0.04", Tokens: 20, Requests24h: new(int64(0))},
+		},
+		// The base covers it at 5 tokens, before the cheaper tier begins.
+		{
+			"a cheaper context tier", "0.05", 1, longer(`"input":"0.01"`, 10, `"input":"0.0001"`),
+			suppliers.Traffic{Units: map[catalog.Item]int64{}},
+			&adminapi.CostBreakEven{RequestPrice: "0.05", Tokens: 5, Requests24h: new(int64(0))},
+		},
+		// 1000 at 10⁻¹⁰ a token needs 10¹³ tokens, more than any request has.
+		{"longer than any request", "1000", 1, sale(`"input":"0.0000000001"`), suppliers.Traffic{Units: map[catalog.Item]int64{}}, nil},
 	} {
 		got := breakEvenOf(price(c.request), big.NewRat(c.rate, 1), c.sale, c.traffic)
 		if diff := cmp.Diff(c.want, got); diff != "" {
