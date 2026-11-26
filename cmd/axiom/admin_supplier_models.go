@@ -8,6 +8,7 @@ import (
 	"strings"
 	"uuid"
 
+	"axiom/internal/accounts"
 	"axiom/internal/billing"
 	"axiom/internal/catalog"
 	"axiom/internal/platform"
@@ -193,7 +194,7 @@ func endpointCostBody(c suppliers.EndpointCost) adminapi.EndpointCost {
 		body.PlanId, body.Source = &plan, &source
 	}
 	for _, l := range c.Lines {
-		line := adminapi.CostLine{Item: adminapi.MeteringItem(l.Item.String()), Unit: meteringUnits[l.Item], Factors: []adminapi.CostFactor{}}
+		line := adminapi.CostLine{Item: adminapi.MeteringItem(l.Item.String()), Unit: meteringUnit(l.Item), Factors: []adminapi.CostFactor{}}
 		if l.ServiceTier != catalog.ServiceTierStandard {
 			tier := adminapi.ServiceTier(l.ServiceTier.String())
 			line.ServiceTier = &tier
@@ -227,24 +228,14 @@ var tokenItems = func() (items catalog.ItemSet) {
 // sells the model by the token. It sets none for any other, nor while the request's price, the sale price or a rate
 // between the two currencies is not known.
 func (a adminAPI) breakEven(ctx context.Context, tx pg.Tx, c suppliers.EndpointCost, body *adminapi.EndpointCost) error {
-	i := slices.IndexFunc(c.Lines, func(l suppliers.CostLine) bool {
-		return l.Item == catalog.ItemRequest && l.Base && l.ServiceTier == catalog.ServiceTierStandard && l.Price != nil
-	})
+	request, perRequest := requestPrice(c)
 	site, ok := a.accounts.MainSite()
-	if c.Schedule == nil || c.Schedule.Priced(tokenItems) || i < 0 || !ok {
+	if !perRequest || !ok {
 		return nil
 	}
-	sold, err := billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
-	if err != nil {
+	sale, ok, err := endpointSale(ctx, tx, site, c)
+	if err != nil || !ok {
 		return err
-	}
-	sale, ok := sold[c.Model]
-	if !ok {
-		return nil
-	}
-	schedule := sale.Schedule
-	if p, ok := sale.Endpoints[c.Endpoint]; ok {
-		schedule = p
 	}
 	rate, ok, err := settlementRate(ctx, tx, c.SettlementCurrency, site.Currency)
 	if err != nil || !ok {
@@ -254,8 +245,39 @@ func (a adminAPI) breakEven(ctx context.Context, tx pg.Tx, c suppliers.EndpointC
 	if err != nil {
 		return err
 	}
-	body.BreakEven = breakEvenOf(*c.Lines[i].Price, rate, schedule, traffic)
+	body.BreakEven = breakEvenOf(request, rate, sale, traffic)
 	return nil
+}
+
+// requestPrice is the price of one request of a plan that prices requests and no token, in the settlement currency.
+func requestPrice(c suppliers.EndpointCost) (platform.UnitPrice, bool) {
+	if c.Schedule == nil || c.Schedule.Priced(tokenItems) {
+		return platform.UnitPrice{}, false
+	}
+	i := slices.IndexFunc(c.Lines, func(l suppliers.CostLine) bool {
+		return l.Item == catalog.ItemRequest && l.Base && l.ServiceTier == catalog.ServiceTierStandard && l.Price != nil
+	})
+	if i < 0 {
+		return platform.UnitPrice{}, false
+	}
+	return *c.Lines[i].Price, true
+}
+
+// endpointSale is the price the site sells the endpoint's model at through the endpoint, as published; not ok when it is not
+// on sale.
+func endpointSale(ctx context.Context, tx pg.Tx, site accounts.Site, c suppliers.EndpointCost) (catalog.Schedule, bool, error) {
+	sold, err := billing.PublishedPrices(ctx, tx, uuid.UUID(site.ID))
+	if err != nil {
+		return catalog.Schedule{}, false, err
+	}
+	sale, ok := sold[c.Model]
+	if !ok {
+		return catalog.Schedule{}, false, nil
+	}
+	if p, ok := sale.Endpoints[c.Endpoint]; ok {
+		return p, true, nil
+	}
+	return sale.Schedule, true, nil
 }
 
 // settlementRate is what one unit of the settlement currency is in the site's currency now: 1 for the same currency,

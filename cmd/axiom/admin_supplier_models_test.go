@@ -139,8 +139,8 @@ func TestSupplierEndpointCostThroughTheAPI(t *testing.T) {
 	}
 	above := int64(200000)
 	want := adminapi.EndpointCost{
-		EndpointId: endpoint, CostState: "known", Source: ptr[adminapi.CostSource]("read"), SettlementCurrency: "USD",
-		UnitValue: ptr("0.000002"), PlanId: &plan,
+		EndpointId: endpoint, CostState: "known", Source: new(adminapi.CostSource("read")), SettlementCurrency: "USD",
+		UnitValue: new("0.000002"), PlanId: &plan,
 		Lines: []adminapi.CostLine{
 			line("input", nil, "0.75", "0.0000015"), line("output", nil, "3", "0.000006"),
 			line("input", &above, "1.5", "0.000003"), line("output", &above, "3", "0.000006"),
@@ -183,14 +183,26 @@ func TestBreakEvenOf(t *testing.T) {
 		want    *adminapi.CostBreakEven
 	}{
 		// 0.01 at a mean of (3×1 + 1×4)/4 = 1.75 per million: 5714.28… tokens, so 5715.
-		{"the mix of the day", "0.01", 1, tokens, suppliers.Traffic{Requests: 2, Units: map[catalog.Item]int64{in: 3000, out: 1000}},
-			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 5715, MeanTokens24h: ptr[int64](2000), Requests24h: ptr[int64](2)}},
-		{"no traffic: all input", "0.01", 1, tokens, suppliers.Traffic{Units: map[catalog.Item]int64{}},
-			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 10000, Requests24h: ptr[int64](0)}},
-		{"into the site's currency", "0.01", 7, tokens, suppliers.Traffic{Units: map[catalog.Item]int64{}},
-			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 70000, Requests24h: ptr[int64](0)}},
-		{"a sale's own request price covers it", "0.01", 1, sale(`"input":"0.000001","request":"0.02"`), suppliers.Traffic{Units: map[catalog.Item]int64{}},
-			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 0, Requests24h: ptr[int64](0)}},
+		{
+			"the mix of the day", "0.01", 1, tokens,
+			suppliers.Traffic{Requests: 2, Units: map[catalog.Item]int64{in: 3000, out: 1000}},
+			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 5715, MeanTokens24h: new(int64(2000)), Requests24h: new(int64(2))},
+		},
+		{
+			"no traffic: all input", "0.01", 1, tokens,
+			suppliers.Traffic{Units: map[catalog.Item]int64{}},
+			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 10000, Requests24h: new(int64(0))},
+		},
+		{
+			"into the site's currency", "0.01", 7, tokens,
+			suppliers.Traffic{Units: map[catalog.Item]int64{}},
+			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 70000, Requests24h: new(int64(0))},
+		},
+		{
+			"a sale's own request price covers it", "0.01", 1, sale(`"input":"0.000001","request":"0.02"`),
+			suppliers.Traffic{Units: map[catalog.Item]int64{}},
+			&adminapi.CostBreakEven{RequestPrice: "0.01", Tokens: 0, Requests24h: new(int64(0))},
+		},
 		{"no token is sold", "0.01", 1, sale(`"request":"0.001"`), suppliers.Traffic{Units: map[catalog.Item]int64{}}, nil},
 	} {
 		got := breakEvenOf(price(c.request), big.NewRat(c.rate, 1), c.sale, c.traffic)

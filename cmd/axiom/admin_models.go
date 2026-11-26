@@ -17,19 +17,23 @@ import (
 // The model library of the admin (#948): a model's family, listing a family at once, and drafts imported from a public
 // price list. They are the catalog's operations, through the same idempotent transactions as admin_catalog.go.
 
-// meteringUnits are the contract's MeteringUnit of each item: the catalog's unit, with a piece written as the image it
-// is and a use as the request, search or page it counts.
-var meteringUnits = [catalog.NumItems]adminapi.MeteringUnit{}
+// catalogUnits are the contract's MeteringUnit of each of the catalog's units, with a piece written as the image it is.
+var catalogUnits = map[catalog.Unit]adminapi.MeteringUnit{
+	catalog.UnitToken: adminapi.MeteringUnitToken, catalog.UnitUse: adminapi.MeteringUnitUse, catalog.UnitPiece: adminapi.MeteringUnitImage,
+	catalog.UnitSecond: adminapi.MeteringUnitSecond, catalog.UnitCharacter: adminapi.MeteringUnitCharacter,
+}
 
-func init() {
-	for it := range catalog.NumItems {
-		meteringUnits[it] = map[catalog.Unit]adminapi.MeteringUnit{
-			catalog.UnitToken: adminapi.MeteringUnitToken, catalog.UnitUse: adminapi.MeteringUnitUse, catalog.UnitPiece: adminapi.MeteringUnitImage,
-			catalog.UnitSecond: adminapi.MeteringUnitSecond, catalog.UnitCharacter: adminapi.MeteringUnitCharacter,
-		}[it.Unit()]
+// namedUses are the items whose use the contract names: a request and a page.
+var namedUses = map[catalog.Item]adminapi.MeteringUnit{
+	catalog.ItemRequest: adminapi.MeteringUnitRequest, catalog.ItemFileParse: adminapi.MeteringUnitPage,
+}
+
+// meteringUnit is the contract's MeteringUnit of an item: its catalog unit, or the use the contract names.
+func meteringUnit(it catalog.Item) adminapi.MeteringUnit {
+	if u, ok := namedUses[it]; ok {
+		return u
 	}
-	meteringUnits[catalog.ItemRequest] = adminapi.MeteringUnitRequest
-	meteringUnits[catalog.ItemFileParse] = adminapi.MeteringUnitPage
+	return catalogUnits[it.Unit()]
 }
 
 // billingUnits are the units a model's current reference prices charge in, in the contract's order: what the prices
@@ -50,7 +54,7 @@ func billingUnits(prices []catalog.PriceView) (*[]adminapi.BillingUnit, error) {
 	}
 	var units []adminapi.BillingUnit
 	for it := range catalog.NumItems {
-		if u := adminapi.BillingUnit(meteringUnits[it]); seen[it] && !slices.Contains(units, u) {
+		if u := adminapi.BillingUnit(meteringUnit(it)); seen[it] && !slices.Contains(units, u) {
 			units = append(units, u)
 		}
 	}
@@ -127,11 +131,8 @@ func (a adminAPI) PutModelsOnSale(ctx context.Context, request adminapi.PutModel
 		return nil, err
 	}
 	body, replayed, err := idempotently(ctx, a.db, "putModelsOnSale", request.Params.IdempotencyKey, b, func(tx pg.Tx) (adminapi.ModelListingResult, error) {
-		result := adminapi.ModelListingResult{Data: make([]struct {
-			Model   *adminapi.ModelSummary                 `json:"model,omitempty"`
-			ModelId adminapi.Uuid                          `json:"model_id"`
-			Outcome adminapi.ModelListingResultDataOutcome `json:"outcome"`
-		}, len(ids))}
+		var result adminapi.ModelListingResult
+		result.Data = slices.Grow(result.Data, len(ids))[:len(ids)]
 		for _, i := range order {
 			outcome, model, err := a.listOne(ctx, tx, op, ids[i], b.Models[i].Rev)
 			if errors.Is(err, catalog.ErrModelNotFound) {

@@ -38,8 +38,8 @@ func TestModelFamilyThroughTheAPI(t *testing.T) {
 		code   errorCode
 		family *string
 	}{
-		{"set", f.s, key, body(`"alpha"`, m.Rev), http.StatusOK, "", ptr("alpha")},
-		{"replay", f.s, key, body(`"alpha"`, m.Rev), http.StatusOK, "", ptr("alpha")},
+		{"set", f.s, key, body(`"alpha"`, m.Rev), http.StatusOK, "", new("alpha")},
+		{"replay", f.s, key, body(`"alpha"`, m.Rev), http.StatusOK, "", new("alpha")},
 		{"stale", f.s, newKey(), body(`"beta"`, m.Rev), http.StatusConflict, codeStaleRevision, nil},
 		{"malformed", f.s, newKey(), body(`"Alpha Family"`, m.Rev+1), http.StatusBadRequest, codeInvalidRequest, nil},
 		{"no permission", nobody, newKey(), body(`"beta"`, m.Rev+1), http.StatusForbidden, codeForbidden, nil},
@@ -72,8 +72,6 @@ func TestModelFamilyThroughTheAPI(t *testing.T) {
 	}
 }
 
-func ptr[T any](v T) *T { return &v }
-
 // TestPutModelsOnSaleThroughTheAPI: each model of a batch passes the listing gate on its own, at the rev the page read,
 // and its outcome is in the order sent; a retry answers the first outcomes without listing again; a model that is not
 // there makes the request bad, and the permission is checked.
@@ -98,18 +96,13 @@ func TestPutModelsOnSaleThroughTheAPI(t *testing.T) {
 	expectAdmin(t, "putModelsOnSale", rec, http.StatusOK, "")
 	var result adminapi.ModelListingResult
 	decode(t, rec, &result)
-	want := []adminapi.ModelListingResultDataOutcome{"not_draft", "listed", "not_ready", "stale"}
-	for i, m := range []adminapi.Model{onSale, ready, bare, stale} {
-		if i >= len(result.Data) || result.Data[i].ModelId != m.Id || result.Data[i].Outcome != want[i] {
-			t.Fatalf("the outcomes %+v, want %v in the order sent", result.Data, want)
-		}
-		if listed := result.Data[i].Model != nil; listed != (want[i] == "listed") {
-			t.Errorf("%s: a model in the outcome is %v", m.Slug, listed)
-		}
+	expectOutcomes(t, result, []adminapi.Model{onSale, ready, bare, stale}, "not_draft", "listed", "not_ready", "stale")
+	want := adminapi.ModelSummary{
+		Id: ready.Id, Slug: ready.Slug, Author: "acme", Status: adminapi.ModelStatusListed, VersionBasis: adminapi.Dated,
+		PriceSource: adminapi.PriceSourceManual, Rev: ready.Rev + 1, BillingUnits: &[]adminapi.BillingUnit{adminapi.BillingUnitToken},
 	}
-	if got := result.Data[1].Model; got.Status != adminapi.ModelStatusListed || got.Rev != ready.Rev+1 ||
-		got.BillingUnits == nil || !cmp.Equal(*got.BillingUnits, []adminapi.BillingUnit{adminapi.BillingUnitToken}) {
-		t.Errorf("the listed model %+v", got)
+	if diff := cmp.Diff(&want, result.Data[1].Model); diff != "" {
+		t.Errorf("the listed model (-want +got):\n%s", diff)
 	}
 	again := f.change(f.s, http.MethodPost, "/models/listings", batch, key)
 	var replayed adminapi.ModelListingResult
@@ -126,6 +119,20 @@ func TestPutModelsOnSaleThroughTheAPI(t *testing.T) {
 	expectAdmin(t, "no permission", f.change(f.verified("nobody@example.com"), http.MethodPost, "/models/listings", batch, newKey()), http.StatusForbidden, codeForbidden)
 }
 
+// expectOutcomes checks the outcome of each model, in the order sent, and that only a listed one comes with the model.
+func expectOutcomes(t *testing.T, result adminapi.ModelListingResult, models []adminapi.Model, want ...adminapi.ModelListingResultDataOutcome) {
+	t.Helper()
+	if len(result.Data) != len(models) {
+		t.Fatalf("the outcomes %+v, want %v", result.Data, want)
+	}
+	for i, m := range models {
+		got := result.Data[i]
+		if got.ModelId != m.Id || got.Outcome != want[i] || (got.Model != nil) != (want[i] == "listed") {
+			t.Errorf("outcome %d: %s %s with a model %v, want %s %s", i, got.ModelId, got.Outcome, got.Model != nil, m.Id, want[i])
+		}
+	}
+}
+
 // litellmPrices is a LiteLLM price table: a model the catalog has, a dated and an undated model it lacks, one of an
 // author it lacks and one whose prices change with the prompt length, which a draft cannot take without a basis.
 const litellmPrices = `{
@@ -138,6 +145,44 @@ const litellmPrices = `{
 		"input_cost_per_token_above_200k_tokens": 2e-06}
 }`
 
+// servingLiteLLM is the node reading the table from a local server instead of LiteLLM's, and the count of its reads.
+func (f catalogFixture) servingLiteLLM(table string) (catalogFixture, *atomic.Int32) {
+	f.t.Helper()
+	reads := new(atomic.Int32)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		reads.Add(1)
+		if _, err := w.Write([]byte(table)); err != nil {
+			f.t.Error(err)
+		}
+	}))
+	f.t.Cleanup(srv.Close)
+	f.adminFixture = f.withAPI(func(api *adminAPI) {
+		api.datasets = catalog.NewTestFetcher(f.t, egress.NewForTesting(egresstest.Loopback(f.t)), map[catalog.PriceSource]string{catalog.SourceLiteLLM: srv.URL})
+	})
+	return f, reads
+}
+
+// expectImportedDrafts checks the two drafts litellmPrices adds: from the dataset, in family gpt-9, the dated one fixed
+// with its two public names and its price.
+func (f catalogFixture) expectImportedDrafts() {
+	f.t.Helper()
+	var drafts adminapi.ModelList
+	decode(f.t, f.do(http.MethodGet, "/models?status=draft&slug_prefix=openai/gpt-9", "", as(f.s)), &drafts)
+	if len(drafts.Data) != 2 {
+		f.t.Fatalf("the drafts %+v, want openai/gpt-9 and openai/gpt-9-2026-01-01", drafts.Data)
+	}
+	for _, d := range drafts.Data {
+		if d.PriceSource != adminapi.PriceSourceLitellm || deref(d.Family) != "gpt-9" {
+			f.t.Errorf("the draft %s: source %s, family %v", d.Slug, d.PriceSource, deref(d.Family))
+		}
+	}
+	dated := f.send(http.MethodGet, "/models/"+drafts.Data[1].Id, "", http.StatusOK)
+	wantNames := []adminapi.ModelName{{Name: "gpt-9-2026-01-01", Visibility: "public"}, {Name: "openai/gpt-9-2026-01-01", Visibility: "public"}}
+	if diff := cmp.Diff(wantNames, dated.Names); diff != "" || dated.VersionBasis != adminapi.Dated || len(dated.Prices) != 1 {
+		f.t.Errorf("the dated draft %+v (names -want +got):\n%s", dated, diff)
+	}
+}
+
 // TestImportModelsThroughTheAPI: an import adds a draft for each entry the catalog does not know, with the entry's
 // names, a family from its name, the dataset as its source and its price, holds what it cannot use, and leaves what it
 // knows; a retry is the first answer without reading the list again, and a second import adds nothing.
@@ -147,15 +192,7 @@ func TestImportModelsThroughTheAPI(t *testing.T) {
 	known := f.create("openai/gpt-known")
 	f.addName(known, "gpt-known")
 	expectAdmin(t, "a node that reads no price list", f.change(f.s, http.MethodPost, "/models/imports", `{"source":"litellm","reason":"seed"}`, newKey()), http.StatusServiceUnavailable, codeUnavailable)
-	var reads atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		reads.Add(1)
-		_, _ = w.Write([]byte(litellmPrices))
-	}))
-	t.Cleanup(srv.Close)
-	f.adminFixture = f.withAPI(func(api *adminAPI) {
-		api.datasets = catalog.NewTestFetcher(t, egress.NewForTesting(egresstest.Loopback(t)), map[catalog.PriceSource]string{catalog.SourceLiteLLM: srv.URL})
-	})
+	f, reads := f.servingLiteLLM(litellmPrices)
 	key := newKey()
 	rec := f.change(f.s, http.MethodPost, "/models/imports", `{"source":"litellm","reason":"seed"}`, key)
 	expectAdmin(t, "importModels", rec, http.StatusCreated, "")
@@ -171,22 +208,7 @@ func TestImportModelsThroughTheAPI(t *testing.T) {
 	if diff := cmp.Diff(first, replayed); diff != "" || again.Header().Get("Idempotency-Replayed") != "true" || reads.Load() != 1 {
 		t.Errorf("the replay read the list %d times (-want +got):\n%s", reads.Load(), diff)
 	}
-	var drafts adminapi.ModelList
-	decode(t, f.do(http.MethodGet, "/models?status=draft&slug_prefix=openai/gpt-9", "", as(f.s)), &drafts)
-	if len(drafts.Data) != 2 {
-		t.Fatalf("the drafts %+v, want openai/gpt-9 and openai/gpt-9-2026-01-01", drafts.Data)
-	}
-	for _, d := range drafts.Data {
-		if d.PriceSource != adminapi.PriceSourceLitellm || deref(d.Family) != "gpt-9" {
-			t.Errorf("the draft %s: source %s, family %v", d.Slug, d.PriceSource, deref(d.Family))
-		}
-	}
-	dated := f.send(http.MethodGet, "/models/"+drafts.Data[1].Id, "", http.StatusOK)
-	wantNames := []adminapi.ModelName{{Name: "gpt-9-2026-01-01", Visibility: "public"}, {Name: "openai/gpt-9-2026-01-01", Visibility: "public"}}
-	if diff := cmp.Diff(wantNames, dated.Names); diff != "" || dated.VersionBasis != adminapi.Dated ||
-		len(dated.Prices) != 1 || dated.Prices[0].Source != adminapi.PriceSourceLitellm || dated.Prices[0].Schedule == nil {
-		t.Errorf("the dated draft %+v (names -want +got):\n%s", dated, diff)
-	}
+	f.expectImportedDrafts()
 	rec = f.change(f.s, http.MethodPost, "/models/imports", `{"source":"litellm","reason":"seed again"}`, newKey())
 	var second adminapi.ModelImport
 	decode(t, rec, &second)

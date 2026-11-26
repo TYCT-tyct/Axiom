@@ -73,23 +73,30 @@ func (c *Catalog) Import(ctx context.Context, tx pg.Tx, actor audit.Actor, reaso
 	im.bodySum = hex.EncodeToString(sum[:])
 	report := ImportReport{Source: f.Source}
 	for i := range entries {
-		e := &entries[i]
-		added, err := im.entry(ctx, e)
-		switch {
-		case errors.Is(err, errKnown):
-			report.Known++
-		case errors.As(err, new(heldEntry)):
-			report.Held++
-			if len(report.HeldNames) < maxHeldNames {
-				report.HeldNames = append(report.HeldNames, e.Key)
-			}
-		case err != nil:
-			return ImportReport{}, fmt.Errorf("import %s: %w", e.Key, err)
-		case added:
-			report.Added++
+		added, err := im.entry(ctx, &entries[i])
+		if err := report.count(entries[i].Key, added, err); err != nil {
+			return ImportReport{}, err
 		}
 	}
 	return report, nil
+}
+
+// count counts what came of one entry, and returns the error of a database that failed.
+func (r *ImportReport) count(key string, added bool, err error) error {
+	switch {
+	case errors.Is(err, errKnown):
+		r.Known++
+	case errors.As(err, new(heldEntry)):
+		r.Held++
+		if len(r.HeldNames) < maxHeldNames {
+			r.HeldNames = append(r.HeldNames, key)
+		}
+	case err != nil:
+		return fmt.Errorf("import %s: %w", key, err)
+	case added:
+		r.Added++
+	}
+	return nil
 }
 
 // importer is one import's state: what the catalog has, and the norms the import has taken so far, so two entries of
