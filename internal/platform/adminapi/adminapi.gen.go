@@ -70,6 +70,9 @@ type ServerInterface interface {
 	// SendAlertTest Queue a channel test with a delivery receipt
 	// (POST /api/admin/v1/alerts/tests)
 	SendAlertTest(w http.ResponseWriter, r *http.Request, params SendAlertTestParams)
+	// ListAdminAnnouncements Every announcement published, with where each stands
+	// (GET /api/admin/v1/announcements)
+	ListAdminAnnouncements(w http.ResponseWriter, r *http.Request, params ListAdminAnnouncementsParams)
 	// PublishAnnouncement Publish a plain text site announcement
 	// (POST /api/admin/v1/announcements)
 	PublishAnnouncement(w http.ResponseWriter, r *http.Request, params PublishAnnouncementParams)
@@ -118,9 +121,18 @@ type ServerInterface interface {
 	// CreateModel Draft a model
 	// (POST /api/admin/v1/models)
 	CreateModel(w http.ResponseWriter, r *http.Request, params CreateModelParams)
+	// ImportModels Add the models a public price list has and the catalog does not
+	// (POST /api/admin/v1/models/imports)
+	ImportModels(w http.ResponseWriter, r *http.Request, params ImportModelsParams)
+	// PutModelsOnSale Put several draft models on sale at once
+	// (POST /api/admin/v1/models/listings)
+	PutModelsOnSale(w http.ResponseWriter, r *http.Request, params PutModelsOnSaleParams)
 	// GetModel One model with its names and prices
 	// (GET /api/admin/v1/models/{model_id})
 	GetModel(w http.ResponseWriter, r *http.Request, modelId Uuid)
+	// SetModelFamily Put a model in a family, or take it out
+	// (PUT /api/admin/v1/models/{model_id}/family)
+	SetModelFamily(w http.ResponseWriter, r *http.Request, modelId Uuid, params SetModelFamilyParams)
 	// AddModelName Give a model another name
 	// (POST /api/admin/v1/models/{model_id}/names)
 	AddModelName(w http.ResponseWriter, r *http.Request, modelId Uuid, params AddModelNameParams)
@@ -277,9 +289,15 @@ type ServerInterface interface {
 	// SetRateLimit Replace an administrator's business rate limit
 	// (PUT /api/admin/v1/rate-limits/{target}/{id})
 	SetRateLimit(w http.ResponseWriter, r *http.Request, target string, id string, params SetRateLimitParams)
+	// GetOperationsMonitor The platform's calls over the last hour or day, minute by minute or hour by hour
+	// (GET /api/admin/v1/reports/monitor)
+	GetOperationsMonitor(w http.ResponseWriter, r *http.Request, params GetOperationsMonitorParams)
 	// GetOperationsOverview The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
 	// (GET /api/admin/v1/reports/overview)
 	GetOperationsOverview(w http.ResponseWriter, r *http.Request, params GetOperationsOverviewParams)
+	// GetPluginStats How the web search and file parser plugins were used over a window
+	// (GET /api/admin/v1/reports/plugins)
+	GetPluginStats(w http.ResponseWriter, r *http.Request, params GetPluginStatsParams)
 	// GetOperationsTargets The site's business targets for a UTC calendar month.
 	// (GET /api/admin/v1/reports/targets/{month})
 	GetOperationsTargets(w http.ResponseWriter, r *http.Request, month string)
@@ -484,27 +502,72 @@ type ServerInterface interface {
 	// UpdateSubscriptionPlan Change a subscription plan
 	// (PUT /api/admin/v1/subscription-plans/{plan_id})
 	UpdateSubscriptionPlan(w http.ResponseWriter, r *http.Request, planId Uuid, params UpdateSubscriptionPlanParams)
+	// ListPlatformSubscriptions Every account's subscriptions
+	// (GET /api/admin/v1/subscriptions)
+	ListPlatformSubscriptions(w http.ResponseWriter, r *http.Request, params ListPlatformSubscriptionsParams)
+	// GetSubscriptionSummary The site's subscriptions counted, with what they sold for in a month
+	// (GET /api/admin/v1/subscriptions/summary)
+	GetSubscriptionSummary(w http.ResponseWriter, r *http.Request, params GetSubscriptionSummaryParams)
+	// ListSupplierCredentials Every supplier's credentials
+	// (GET /api/admin/v1/supplier-credentials)
+	ListSupplierCredentials(w http.ResponseWriter, r *http.Request, params ListSupplierCredentialsParams)
+	// RemoveInvalidSupplierCredentials Erase the credentials a supplier refused
+	// (POST /api/admin/v1/supplier-credentials/invalid-removals)
+	RemoveInvalidSupplierCredentials(w http.ResponseWriter, r *http.Request, params RemoveInvalidSupplierCredentialsParams)
+	// TestSupplierCredentials Check every credential, of one supplier or of all
+	// (POST /api/admin/v1/supplier-credentials/tests)
+	TestSupplierCredentials(w http.ResponseWriter, r *http.Request, params TestSupplierCredentialsParams)
+	// ListSupplierInbox What across the suppliers waits for a person's decision
+	// (GET /api/admin/v1/supplier-inbox)
+	ListSupplierInbox(w http.ResponseWriter, r *http.Request, params ListSupplierInboxParams)
+	// GetSupplierInboxSummary How many items wait in the suppliers' queue, by kind
+	// (GET /api/admin/v1/supplier-inbox/summary)
+	GetSupplierInboxSummary(w http.ResponseWriter, r *http.Request)
+	// IgnoreSupplierInboxItem Hide an item of the suppliers' queue until it is seen again
+	// (POST /api/admin/v1/supplier-inbox/{item_id}/ignore)
+	IgnoreSupplierInboxItem(w http.ResponseWriter, r *http.Request, itemId Uuid, params IgnoreSupplierInboxItemParams)
 	// ListSuppliers Suppliers
 	// (GET /api/admin/v1/suppliers)
 	ListSuppliers(w http.ResponseWriter, r *http.Request, params ListSuppliersParams)
 	// CreateSupplier Connect a supplier
 	// (POST /api/admin/v1/suppliers)
 	CreateSupplier(w http.ResponseWriter, r *http.Request, params CreateSupplierParams)
+	// CreateCloudSupplier Connect a cloud platform's model service with its credential
+	// (POST /api/admin/v1/suppliers/cloud)
+	CreateCloudSupplier(w http.ResponseWriter, r *http.Request, params CreateCloudSupplierParams)
 	// DetectSupplier Find out what system a site runs
 	// (POST /api/admin/v1/suppliers/detections)
 	DetectSupplier(w http.ResponseWriter, r *http.Request)
+	// CreateDirectSupplier Connect a provider's own API with pasted keys
+	// (POST /api/admin/v1/suppliers/direct)
+	CreateDirectSupplier(w http.ResponseWriter, r *http.Request, params CreateDirectSupplierParams)
 	// TestSupplierEndpoint Test one of a supplier's endpoints with a real generation
 	// (POST /api/admin/v1/suppliers/endpoint-tests)
 	TestSupplierEndpoint(w http.ResponseWriter, r *http.Request, params TestSupplierEndpointParams)
 	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid)
+	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
+	ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierCloudCredentialParams)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid, params BindSupplierKeyParams)
+	// SetSupplierCredentialEnabled Stop or resume picking one credential
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled)
+	SetSupplierCredentialEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialEnabledParams)
 	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
 	SetSupplierCredentialLimits(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialLimitsParams)
+	// RemoveSupplierCredential Erase one credential
+	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal)
+	RemoveSupplierCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params RemoveSupplierCredentialParams)
+	// TestSupplierCredential Check one credential against the supplier
+	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests)
+	TestSupplierCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params TestSupplierCredentialParams)
+	// GetSupplierEndpointCost What an endpoint costs, as price lines with where each came from
+	// (GET /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost)
+	GetSupplierEndpointCost(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid)
 	// SetSupplierEndpointEnabled Turn an endpoint on or off for routing
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled)
 	SetSupplierEndpointEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid, params SetSupplierEndpointEnabledParams)
@@ -514,18 +577,42 @@ type ServerInterface interface {
 	// SelectSupplierGroup Choose whether a supplier's group is used
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/groups/{group_id})
 	SelectSupplierGroup(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params SelectSupplierGroupParams)
+	// ConnectSupplierGroup Connect a relay's group with a key made for it or pasted
+	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection)
+	ConnectSupplierGroup(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params ConnectSupplierGroupParams)
+	// SetSupplierIntakeRule Choose which of a supplier's models become endpoints
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/intake-rule)
+	SetSupplierIntakeRule(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierIntakeRuleParams)
+	// IdentifySupplierKey Find out which of a relay's groups a pasted key belongs to
+	// (POST /api/admin/v1/suppliers/{supplier_id}/key-identifications)
+	IdentifySupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid)
+	// AddSupplierKeys Add pasted keys to a supplier, checking each
+	// (POST /api/admin/v1/suppliers/{supplier_id}/keys)
+	AddSupplierKeys(w http.ResponseWriter, r *http.Request, supplierId Uuid, params AddSupplierKeysParams)
 	// ReplaceSupplierLogin Replace the login Axiom uses at a supplier
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/login)
 	ReplaceSupplierLogin(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierLoginParams)
 	// MapSupplierModel Map an upstream model name to a model
 	// (POST /api/admin/v1/suppliers/{supplier_id}/model-mappings)
 	MapSupplierModel(w http.ResponseWriter, r *http.Request, supplierId Uuid, params MapSupplierModelParams)
+	// ListSupplierModels A supplier's upstream model names, sorted into piles
+	// (GET /api/admin/v1/suppliers/{supplier_id}/models)
+	ListSupplierModels(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ListSupplierModelsParams)
+	// GetSupplierReconciliation What a supplier charged against what Axiom estimated, by day
+	// (GET /api/admin/v1/suppliers/{supplier_id}/reconciliation)
+	GetSupplierReconciliation(w http.ResponseWriter, r *http.Request, supplierId Uuid, params GetSupplierReconciliationParams)
 	// RemoveSupplier Remove a supplier
 	// (POST /api/admin/v1/suppliers/{supplier_id}/removal)
 	RemoveSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid, params RemoveSupplierParams)
 	// SetSupplierStatus Pause or resume a supplier
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/status)
 	SetSupplierStatus(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierStatusParams)
+	// RequestSupplierSync Have a supplier synced now
+	// (POST /api/admin/v1/suppliers/{supplier_id}/sync-requests)
+	RequestSupplierSync(w http.ResponseWriter, r *http.Request, supplierId Uuid, params RequestSupplierSyncParams)
+	// ListSupplierSyncRuns What each sync of a supplier found changed
+	// (GET /api/admin/v1/suppliers/{supplier_id}/sync-runs)
+	ListSupplierSyncRuns(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ListSupplierSyncRunsParams)
 	// ConfirmSupplierUnitValue Confirm what one unit of a supplier's balance is worth
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/unit-value)
 	ConfirmSupplierUnitValue(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ConfirmSupplierUnitValueParams)
@@ -1305,6 +1392,78 @@ func (siw *ServerInterfaceWrapper) SendAlertTest(w http.ResponseWriter, r *http.
 	handler.ServeHTTP(w, r)
 }
 
+// ListAdminAnnouncements operation middleware
+func (siw *ServerInterfaceWrapper) ListAdminAnnouncements(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListAdminAnnouncementsParams
+
+	// ------------- Optional query parameter "site_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site_id", r.URL.Query(), &params.SiteId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListAdminAnnouncements(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // PublishAnnouncement operation middleware
 func (siw *ServerInterfaceWrapper) PublishAnnouncement(w http.ResponseWriter, r *http.Request) {
 
@@ -1897,6 +2056,19 @@ func (siw *ServerInterfaceWrapper) ListAdminCalls(w http.ResponseWriter, r *http
 		return
 	}
 
+	// ------------- Optional query parameter "plugin" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "plugin", r.URL.Query(), &params.Plugin, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "plugin"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "plugin", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListAdminCalls(w, r, params)
 	}))
@@ -1978,6 +2150,19 @@ func (siw *ServerInterfaceWrapper) ListModels(w http.ResponseWriter, r *http.Req
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "slug_prefix"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "slug_prefix", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "family" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "family", r.URL.Query(), &params.Family, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "family"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "family", Err: err})
 		}
 		return
 	}
@@ -2064,6 +2249,96 @@ func (siw *ServerInterfaceWrapper) CreateModel(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ImportModels operation middleware
+func (siw *ServerInterfaceWrapper) ImportModels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ImportModelsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ImportModels(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// PutModelsOnSale operation middleware
+func (siw *ServerInterfaceWrapper) PutModelsOnSale(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params PutModelsOnSaleParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.PutModelsOnSale(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetModel operation middleware
 func (siw *ServerInterfaceWrapper) GetModel(w http.ResponseWriter, r *http.Request) {
 
@@ -2081,6 +2356,60 @@ func (siw *ServerInterfaceWrapper) GetModel(w http.ResponseWriter, r *http.Reque
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetModel(w, r, modelId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetModelFamily operation middleware
+func (siw *ServerInterfaceWrapper) SetModelFamily(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "model_id" -------------
+	var modelId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "model_id", r.PathValue("model_id"), &modelId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "model_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetModelFamilyParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetModelFamily(w, r, modelId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4647,6 +4976,39 @@ func (siw *ServerInterfaceWrapper) SetRateLimit(w http.ResponseWriter, r *http.R
 	handler.ServeHTTP(w, r)
 }
 
+// GetOperationsMonitor operation middleware
+func (siw *ServerInterfaceWrapper) GetOperationsMonitor(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetOperationsMonitorParams
+
+	// ------------- Optional query parameter "window" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "window", r.URL.Query(), &params.Window, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "window"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "window", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetOperationsMonitor(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // GetOperationsOverview operation middleware
 func (siw *ServerInterfaceWrapper) GetOperationsOverview(w http.ResponseWriter, r *http.Request) {
 
@@ -4684,6 +5046,52 @@ func (siw *ServerInterfaceWrapper) GetOperationsOverview(w http.ResponseWriter, 
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.GetOperationsOverview(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetPluginStats operation middleware
+func (siw *ServerInterfaceWrapper) GetPluginStats(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetPluginStatsParams
+
+	// ------------- Optional query parameter "since" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "since", r.URL.Query(), &params.Since, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "since"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "since", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "until" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "until", r.URL.Query(), &params.Until, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "until"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "until", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetPluginStats(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7286,6 +7694,465 @@ func (siw *ServerInterfaceWrapper) UpdateSubscriptionPlan(w http.ResponseWriter,
 	handler.ServeHTTP(w, r)
 }
 
+// ListPlatformSubscriptions operation middleware
+func (siw *ServerInterfaceWrapper) ListPlatformSubscriptions(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListPlatformSubscriptionsParams
+
+	// ------------- Optional query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "plan_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "plan_id", r.URL.Query(), &params.PlanId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "plan_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "plan_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "account_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "account_id", r.URL.Query(), &params.AccountId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "account_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "account_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "ends_before" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "ends_before", r.URL.Query(), &params.EndsBefore, runtime.BindQueryParameterOptions{Type: "string", Format: "date-time"})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "ends_before"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "ends_before", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "sort" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "sort", r.URL.Query(), &params.Sort, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "sort"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "sort", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListPlatformSubscriptions(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSubscriptionSummary operation middleware
+func (siw *ServerInterfaceWrapper) GetSubscriptionSummary(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSubscriptionSummaryParams
+
+	// ------------- Optional query parameter "month" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "month", r.URL.Query(), &params.Month, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "month"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "month", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSubscriptionSummary(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSupplierCredentials operation middleware
+func (siw *ServerInterfaceWrapper) ListSupplierCredentials(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSupplierCredentialsParams
+
+	// ------------- Optional query parameter "supplier_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "supplier_id", r.URL.Query(), &params.SupplierId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "supplier_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "mode" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "mode", r.URL.Query(), &params.Mode, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "mode"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "mode", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSupplierCredentials(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveInvalidSupplierCredentials operation middleware
+func (siw *ServerInterfaceWrapper) RemoveInvalidSupplierCredentials(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RemoveInvalidSupplierCredentialsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveInvalidSupplierCredentials(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TestSupplierCredentials operation middleware
+func (siw *ServerInterfaceWrapper) TestSupplierCredentials(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params TestSupplierCredentialsParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TestSupplierCredentials(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSupplierInbox operation middleware
+func (siw *ServerInterfaceWrapper) ListSupplierInbox(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSupplierInboxParams
+
+	// ------------- Optional query parameter "kind" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "kind", r.URL.Query(), &params.Kind, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "kind"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "kind", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "supplier_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "supplier_id", r.URL.Query(), &params.SupplierId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "supplier_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSupplierInbox(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSupplierInboxSummary operation middleware
+func (siw *ServerInterfaceWrapper) GetSupplierInboxSummary(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSupplierInboxSummary(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IgnoreSupplierInboxItem operation middleware
+func (siw *ServerInterfaceWrapper) IgnoreSupplierInboxItem(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "item_id" -------------
+	var itemId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "item_id", r.PathValue("item_id"), &itemId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "item_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params IgnoreSupplierInboxItemParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IgnoreSupplierInboxItem(w, r, itemId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ListSuppliers operation middleware
 func (siw *ServerInterfaceWrapper) ListSuppliers(w http.ResponseWriter, r *http.Request) {
 
@@ -7304,6 +8171,19 @@ func (siw *ServerInterfaceWrapper) ListSuppliers(w http.ResponseWriter, r *http.
 			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
 		} else {
 			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "mode" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "mode", r.URL.Query(), &params.Mode, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "mode"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "mode", Err: err})
 		}
 		return
 	}
@@ -7390,11 +8270,101 @@ func (siw *ServerInterfaceWrapper) CreateSupplier(w http.ResponseWriter, r *http
 	handler.ServeHTTP(w, r)
 }
 
+// CreateCloudSupplier operation middleware
+func (siw *ServerInterfaceWrapper) CreateCloudSupplier(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateCloudSupplierParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateCloudSupplier(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // DetectSupplier operation middleware
 func (siw *ServerInterfaceWrapper) DetectSupplier(w http.ResponseWriter, r *http.Request) {
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.DetectSupplier(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateDirectSupplier operation middleware
+func (siw *ServerInterfaceWrapper) CreateDirectSupplier(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateDirectSupplierParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateDirectSupplier(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7475,6 +8445,60 @@ func (siw *ServerInterfaceWrapper) GetSupplier(w http.ResponseWriter, r *http.Re
 	handler.ServeHTTP(w, r)
 }
 
+// ReplaceSupplierCloudCredential operation middleware
+func (siw *ServerInterfaceWrapper) ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ReplaceSupplierCloudCredentialParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ReplaceSupplierCloudCredential(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // BindSupplierKey operation middleware
 func (siw *ServerInterfaceWrapper) BindSupplierKey(w http.ResponseWriter, r *http.Request) {
 
@@ -7520,6 +8544,69 @@ func (siw *ServerInterfaceWrapper) BindSupplierKey(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.BindSupplierKey(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSupplierCredentialEnabled operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierCredentialEnabled(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "credential_id" -------------
+	var credentialId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credential_id", r.PathValue("credential_id"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credential_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierCredentialEnabledParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierCredentialEnabled(w, r, supplierId, credentialId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7583,6 +8670,167 @@ func (siw *ServerInterfaceWrapper) SetSupplierCredentialLimits(w http.ResponseWr
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetSupplierCredentialLimits(w, r, supplierId, credentialId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RemoveSupplierCredential operation middleware
+func (siw *ServerInterfaceWrapper) RemoveSupplierCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "credential_id" -------------
+	var credentialId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credential_id", r.PathValue("credential_id"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credential_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RemoveSupplierCredentialParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RemoveSupplierCredential(w, r, supplierId, credentialId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// TestSupplierCredential operation middleware
+func (siw *ServerInterfaceWrapper) TestSupplierCredential(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "credential_id" -------------
+	var credentialId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "credential_id", r.PathValue("credential_id"), &credentialId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "credential_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params TestSupplierCredentialParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.TestSupplierCredential(w, r, supplierId, credentialId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSupplierEndpointCost operation middleware
+func (siw *ServerInterfaceWrapper) GetSupplierEndpointCost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "endpoint_id" -------------
+	var endpointId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "endpoint_id", r.PathValue("endpoint_id"), &endpointId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "endpoint_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSupplierEndpointCost(w, r, supplierId, endpointId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7781,6 +9029,203 @@ func (siw *ServerInterfaceWrapper) SelectSupplierGroup(w http.ResponseWriter, r 
 	handler.ServeHTTP(w, r)
 }
 
+// ConnectSupplierGroup operation middleware
+func (siw *ServerInterfaceWrapper) ConnectSupplierGroup(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ConnectSupplierGroupParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ConnectSupplierGroup(w, r, supplierId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// SetSupplierIntakeRule operation middleware
+func (siw *ServerInterfaceWrapper) SetSupplierIntakeRule(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params SetSupplierIntakeRuleParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.SetSupplierIntakeRule(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// IdentifySupplierKey operation middleware
+func (siw *ServerInterfaceWrapper) IdentifySupplierKey(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.IdentifySupplierKey(w, r, supplierId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AddSupplierKeys operation middleware
+func (siw *ServerInterfaceWrapper) AddSupplierKeys(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AddSupplierKeysParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AddSupplierKeys(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ReplaceSupplierLogin operation middleware
 func (siw *ServerInterfaceWrapper) ReplaceSupplierLogin(w http.ResponseWriter, r *http.Request) {
 
@@ -7889,6 +9334,129 @@ func (siw *ServerInterfaceWrapper) MapSupplierModel(w http.ResponseWriter, r *ht
 	handler.ServeHTTP(w, r)
 }
 
+// ListSupplierModels operation middleware
+func (siw *ServerInterfaceWrapper) ListSupplierModels(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSupplierModelsParams
+
+	// ------------- Optional query parameter "pile" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "pile", r.URL.Query(), &params.Pile, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "pile"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pile", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "group_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "group_id", r.URL.Query(), &params.GroupId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "group_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSupplierModels(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// GetSupplierReconciliation operation middleware
+func (siw *ServerInterfaceWrapper) GetSupplierReconciliation(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params GetSupplierReconciliationParams
+
+	// ------------- Optional query parameter "days" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "days", r.URL.Query(), &params.Days, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "days"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "days", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.GetSupplierReconciliation(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // RemoveSupplier operation middleware
 func (siw *ServerInterfaceWrapper) RemoveSupplier(w http.ResponseWriter, r *http.Request) {
 
@@ -7988,6 +9556,115 @@ func (siw *ServerInterfaceWrapper) SetSupplierStatus(w http.ResponseWriter, r *h
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.SetSupplierStatus(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// RequestSupplierSync operation middleware
+func (siw *ServerInterfaceWrapper) RequestSupplierSync(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params RequestSupplierSyncParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "Idempotency-Key" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("Idempotency-Key")]; found {
+		var IdempotencyKey IdempotencyKey
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "Idempotency-Key", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "Idempotency-Key", valueList[0], &IdempotencyKey, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "Idempotency-Key", Err: err})
+			return
+		}
+
+		params.IdempotencyKey = IdempotencyKey
+
+	} else {
+		err := fmt.Errorf("Header parameter Idempotency-Key is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "Idempotency-Key", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.RequestSupplierSync(w, r, supplierId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListSupplierSyncRuns operation middleware
+func (siw *ServerInterfaceWrapper) ListSupplierSyncRuns(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "supplier_id" -------------
+	var supplierId Uuid
+
+	err = runtime.BindStyledParameterWithOptions("simple", "supplier_id", r.PathValue("supplier_id"), &supplierId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "supplier_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ListSupplierSyncRunsParams
+
+	// ------------- Optional query parameter "cursor" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "cursor", r.URL.Query(), &params.Cursor, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "cursor"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cursor", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "limit" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "limit", r.URL.Query(), &params.Limit, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "limit"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "limit", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListSupplierSyncRuns(w, r, supplierId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -8439,6 +10116,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/reports/targets/{month}", wrapper.GetOperationsTargets)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/reports/targets/{month}", wrapper.UpdateOperationsTargets)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/reports/targets/{month}/all", wrapper.ReplaceOperationsTargets)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/reports/monitor", wrapper.GetOperationsMonitor)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/reports/plugins", wrapper.GetPluginStats)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/audit", wrapper.ListAuditEntries)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/audit/{entry_id}", wrapper.GetAuditEntry)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/sites/{site_id}/system-settings", wrapper.GetSystemSettings)
@@ -8495,6 +10174,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/payments/redeem-codes/{code_id}/disable", wrapper.DisableRedeemCode)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/rate-limits/{target}/{id}", wrapper.GetRateLimit)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/rate-limits/{target}/{id}", wrapper.SetRateLimit)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/announcements", wrapper.ListAdminAnnouncements)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/announcements", wrapper.PublishAnnouncement)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/announcements/{announcement_id}/withdraw", wrapper.WithdrawAnnouncement)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/payments/discrepancies", wrapper.ListPaymentDiscrepancies)
@@ -8565,6 +10245,27 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits", wrapper.SetSupplierCredentialLimits)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pending-mappings", wrapper.ListPendingMappings)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/model-mappings", wrapper.MapSupplierModel)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/direct", wrapper.CreateDirectSupplier)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/cloud", wrapper.CreateCloudSupplier)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/cloud-credential", wrapper.ReplaceSupplierCloudCredential)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection", wrapper.ConnectSupplierGroup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/key-identifications", wrapper.IdentifySupplierKey)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/sync-runs", wrapper.ListSupplierSyncRuns)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/sync-requests", wrapper.RequestSupplierSync)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/reconciliation", wrapper.GetSupplierReconciliation)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/models", wrapper.ListSupplierModels)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/intake-rule", wrapper.SetSupplierIntakeRule)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost", wrapper.GetSupplierEndpointCost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/keys", wrapper.AddSupplierKeys)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests", wrapper.TestSupplierCredential)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled", wrapper.SetSupplierCredentialEnabled)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal", wrapper.RemoveSupplierCredential)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/supplier-credentials", wrapper.ListSupplierCredentials)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-credentials/tests", wrapper.TestSupplierCredentials)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-credentials/invalid-removals", wrapper.RemoveInvalidSupplierCredentials)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/supplier-inbox", wrapper.ListSupplierInbox)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/supplier-inbox/summary", wrapper.GetSupplierInboxSummary)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/supplier-inbox/{item_id}/ignore", wrapper.IgnoreSupplierInboxItem)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/authors", wrapper.ListAuthors)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/authors/{slug}", wrapper.SaveAuthor)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/models", wrapper.ListModels)
@@ -8575,6 +10276,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/status", wrapper.SetModelStatus)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/prices", wrapper.PublishReferencePrice)
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/price-source", wrapper.SelectPriceSource)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/admin/v1/models/{model_id}/family", wrapper.SetModelFamily)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/models/listings", wrapper.PutModelsOnSale)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/models/imports", wrapper.ImportModels)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates", wrapper.ListExchangeRates)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates", wrapper.SetExchangeRate)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/pricing/exchange-rates/{base}/{quote}", wrapper.ExchangeRateHistory)
@@ -8592,6 +10296,8 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/subscription-grants/{grant_id}/refunds", wrapper.RefundSubscriptionGrant)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/subscription-refunds/{refund_id}/approve", wrapper.ApproveSubscriptionRefund)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/accounts/{account_id}/subscriptions", wrapper.ListSubscriptions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/subscriptions", wrapper.ListPlatformSubscriptions)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/subscriptions/summary", wrapper.GetSubscriptionSummary)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/admin/v1/operations/credentials", wrapper.ListOperationsCredentials)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials", wrapper.CreateOperationsCredential)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/admin/v1/operations/credentials/{credential_id}/rotate", wrapper.RotateOperationsCredential)
@@ -10604,6 +12310,87 @@ func (response SendAlertTestdefaultJSONResponse) VisitSendAlertTestResponse(w ht
 	return err
 }
 
+type ListAdminAnnouncementsRequestObject struct {
+	Params ListAdminAnnouncementsParams
+}
+
+type ListAdminAnnouncementsResponseObject interface {
+	VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error
+}
+
+type ListAdminAnnouncements200JSONResponse AdminAnnouncementList
+
+func (response ListAdminAnnouncements200JSONResponse) VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAdminAnnouncements400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListAdminAnnouncements400JSONResponse) VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAdminAnnouncements401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListAdminAnnouncements401JSONResponse) VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAdminAnnouncements403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListAdminAnnouncements403JSONResponse) VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListAdminAnnouncementsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListAdminAnnouncementsdefaultJSONResponse) VisitListAdminAnnouncementsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type PublishAnnouncementRequestObject struct {
 	Params PublishAnnouncementParams
 	Body   *PublishAnnouncementJSONRequestBody
@@ -12189,6 +13976,204 @@ func (response CreateModeldefaultJSONResponse) VisitCreateModelResponse(w http.R
 	return err
 }
 
+type ImportModelsRequestObject struct {
+	Params ImportModelsParams
+	Body   *ImportModelsJSONRequestBody
+}
+
+type ImportModelsResponseObject interface {
+	VisitImportModelsResponse(w http.ResponseWriter) error
+}
+
+type ImportModels201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ImportModels201JSONResponse struct {
+	Body    ModelImport
+	Headers ImportModels201ResponseHeaders
+}
+
+func (response ImportModels201JSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportModels400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ImportModels400JSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportModels401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ImportModels401JSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportModels403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ImportModels403JSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportModels422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ImportModels422JSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ImportModelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ImportModelsdefaultJSONResponse) VisitImportModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutModelsOnSaleRequestObject struct {
+	Params PutModelsOnSaleParams
+	Body   *PutModelsOnSaleJSONRequestBody
+}
+
+type PutModelsOnSaleResponseObject interface {
+	VisitPutModelsOnSaleResponse(w http.ResponseWriter) error
+}
+
+type PutModelsOnSale200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type PutModelsOnSale200JSONResponse struct {
+	Body    ModelListingResult
+	Headers PutModelsOnSale200ResponseHeaders
+}
+
+func (response PutModelsOnSale200JSONResponse) VisitPutModelsOnSaleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutModelsOnSale400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response PutModelsOnSale400JSONResponse) VisitPutModelsOnSaleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutModelsOnSale401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response PutModelsOnSale401JSONResponse) VisitPutModelsOnSaleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutModelsOnSale403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response PutModelsOnSale403JSONResponse) VisitPutModelsOnSaleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type PutModelsOnSaledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response PutModelsOnSaledefaultJSONResponse) VisitPutModelsOnSaleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetModelRequestObject struct {
 	ModelId Uuid `json:"model_id"`
 }
@@ -12259,6 +14244,141 @@ type GetModeldefaultJSONResponse struct {
 }
 
 func (response GetModeldefaultJSONResponse) VisitGetModelResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamilyRequestObject struct {
+	ModelId Uuid `json:"model_id"`
+	Params  SetModelFamilyParams
+	Body    *SetModelFamilyJSONRequestBody
+}
+
+type SetModelFamilyResponseObject interface {
+	VisitSetModelFamilyResponse(w http.ResponseWriter) error
+}
+
+type SetModelFamily200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetModelFamily200JSONResponse struct {
+	Body    Model
+	Headers SetModelFamily200ResponseHeaders
+}
+
+func (response SetModelFamily200JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetModelFamily400JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetModelFamily401JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetModelFamily403JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetModelFamily404JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetModelFamily409JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamily422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetModelFamily422JSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetModelFamilydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetModelFamilydefaultJSONResponse) VisitSetModelFamilyResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -18052,6 +20172,87 @@ func (response SetRateLimitdefaultJSONResponse) VisitSetRateLimitResponse(w http
 	return err
 }
 
+type GetOperationsMonitorRequestObject struct {
+	Params GetOperationsMonitorParams
+}
+
+type GetOperationsMonitorResponseObject interface {
+	VisitGetOperationsMonitorResponse(w http.ResponseWriter) error
+}
+
+type GetOperationsMonitor200JSONResponse OperationsMonitor
+
+func (response GetOperationsMonitor200JSONResponse) VisitGetOperationsMonitorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsMonitor400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetOperationsMonitor400JSONResponse) VisitGetOperationsMonitorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsMonitor401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetOperationsMonitor401JSONResponse) VisitGetOperationsMonitorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsMonitor403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetOperationsMonitor403JSONResponse) VisitGetOperationsMonitorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetOperationsMonitordefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetOperationsMonitordefaultJSONResponse) VisitGetOperationsMonitorResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type GetOperationsOverviewRequestObject struct {
 	Params GetOperationsOverviewParams
 }
@@ -18136,6 +20337,87 @@ type GetOperationsOverviewdefaultJSONResponse struct {
 }
 
 func (response GetOperationsOverviewdefaultJSONResponse) VisitGetOperationsOverviewResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPluginStatsRequestObject struct {
+	Params GetPluginStatsParams
+}
+
+type GetPluginStatsResponseObject interface {
+	VisitGetPluginStatsResponse(w http.ResponseWriter) error
+}
+
+type GetPluginStats200JSONResponse PluginStats
+
+func (response GetPluginStats200JSONResponse) VisitGetPluginStatsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPluginStats400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetPluginStats400JSONResponse) VisitGetPluginStatsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPluginStats401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetPluginStats401JSONResponse) VisitGetPluginStatsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPluginStats403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetPluginStats403JSONResponse) VisitGetPluginStatsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetPluginStatsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetPluginStatsdefaultJSONResponse) VisitGetPluginStatsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -25094,6 +27376,730 @@ func (response UpdateSubscriptionPlandefaultJSONResponse) VisitUpdateSubscriptio
 	return err
 }
 
+type ListPlatformSubscriptionsRequestObject struct {
+	Params ListPlatformSubscriptionsParams
+}
+
+type ListPlatformSubscriptionsResponseObject interface {
+	VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error
+}
+
+type ListPlatformSubscriptions200JSONResponse SubscriptionPage
+
+func (response ListPlatformSubscriptions200JSONResponse) VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPlatformSubscriptions400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListPlatformSubscriptions400JSONResponse) VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPlatformSubscriptions401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListPlatformSubscriptions401JSONResponse) VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPlatformSubscriptions403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListPlatformSubscriptions403JSONResponse) VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListPlatformSubscriptionsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListPlatformSubscriptionsdefaultJSONResponse) VisitListPlatformSubscriptionsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSubscriptionSummaryRequestObject struct {
+	Params GetSubscriptionSummaryParams
+}
+
+type GetSubscriptionSummaryResponseObject interface {
+	VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error
+}
+
+type GetSubscriptionSummary200JSONResponse SubscriptionSummary
+
+func (response GetSubscriptionSummary200JSONResponse) VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSubscriptionSummary400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetSubscriptionSummary400JSONResponse) VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSubscriptionSummary401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSubscriptionSummary401JSONResponse) VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSubscriptionSummary403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSubscriptionSummary403JSONResponse) VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSubscriptionSummarydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSubscriptionSummarydefaultJSONResponse) VisitGetSubscriptionSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierCredentialsRequestObject struct {
+	Params ListSupplierCredentialsParams
+}
+
+type ListSupplierCredentialsResponseObject interface {
+	VisitListSupplierCredentialsResponse(w http.ResponseWriter) error
+}
+
+type ListSupplierCredentials200JSONResponse SupplierCredentialList
+
+func (response ListSupplierCredentials200JSONResponse) VisitListSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierCredentials400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSupplierCredentials400JSONResponse) VisitListSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierCredentials401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListSupplierCredentials401JSONResponse) VisitListSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierCredentials403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSupplierCredentials403JSONResponse) VisitListSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierCredentialsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSupplierCredentialsdefaultJSONResponse) VisitListSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveInvalidSupplierCredentialsRequestObject struct {
+	Params RemoveInvalidSupplierCredentialsParams
+	Body   *RemoveInvalidSupplierCredentialsJSONRequestBody
+}
+
+type RemoveInvalidSupplierCredentialsResponseObject interface {
+	VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error
+}
+
+type RemoveInvalidSupplierCredentials200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type RemoveInvalidSupplierCredentials200JSONResponse struct {
+	Body    InvalidCredentialsRemoved
+	Headers RemoveInvalidSupplierCredentials200ResponseHeaders
+}
+
+func (response RemoveInvalidSupplierCredentials200JSONResponse) VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveInvalidSupplierCredentials400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RemoveInvalidSupplierCredentials400JSONResponse) VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveInvalidSupplierCredentials401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RemoveInvalidSupplierCredentials401JSONResponse) VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveInvalidSupplierCredentials403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RemoveInvalidSupplierCredentials403JSONResponse) VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveInvalidSupplierCredentialsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RemoveInvalidSupplierCredentialsdefaultJSONResponse) VisitRemoveInvalidSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentialsRequestObject struct {
+	Params TestSupplierCredentialsParams
+	Body   *TestSupplierCredentialsJSONRequestBody
+}
+
+type TestSupplierCredentialsResponseObject interface {
+	VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error
+}
+
+type TestSupplierCredentials201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type TestSupplierCredentials201JSONResponse struct {
+	Body    CredentialCheckList
+	Headers TestSupplierCredentials201ResponseHeaders
+}
+
+func (response TestSupplierCredentials201JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response TestSupplierCredentials400JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response TestSupplierCredentials401JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response TestSupplierCredentials403JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response TestSupplierCredentials404JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response TestSupplierCredentials422JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentials429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response TestSupplierCredentials429JSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentialsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TestSupplierCredentialsdefaultJSONResponse) VisitTestSupplierCredentialsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierInboxRequestObject struct {
+	Params ListSupplierInboxParams
+}
+
+type ListSupplierInboxResponseObject interface {
+	VisitListSupplierInboxResponse(w http.ResponseWriter) error
+}
+
+type ListSupplierInbox200JSONResponse SupplierInboxList
+
+func (response ListSupplierInbox200JSONResponse) VisitListSupplierInboxResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierInbox400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSupplierInbox400JSONResponse) VisitListSupplierInboxResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierInbox401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListSupplierInbox401JSONResponse) VisitListSupplierInboxResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierInbox403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSupplierInbox403JSONResponse) VisitListSupplierInboxResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierInboxdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSupplierInboxdefaultJSONResponse) VisitListSupplierInboxResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierInboxSummaryRequestObject struct {
+}
+
+type GetSupplierInboxSummaryResponseObject interface {
+	VisitGetSupplierInboxSummaryResponse(w http.ResponseWriter) error
+}
+
+type GetSupplierInboxSummary200JSONResponse SupplierInboxSummary
+
+func (response GetSupplierInboxSummary200JSONResponse) VisitGetSupplierInboxSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierInboxSummary401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSupplierInboxSummary401JSONResponse) VisitGetSupplierInboxSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierInboxSummary403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSupplierInboxSummary403JSONResponse) VisitGetSupplierInboxSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierInboxSummarydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSupplierInboxSummarydefaultJSONResponse) VisitGetSupplierInboxSummaryResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItemRequestObject struct {
+	ItemId Uuid `json:"item_id"`
+	Params IgnoreSupplierInboxItemParams
+	Body   *IgnoreSupplierInboxItemJSONRequestBody
+}
+
+type IgnoreSupplierInboxItemResponseObject interface {
+	VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error
+}
+
+type IgnoreSupplierInboxItem200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type IgnoreSupplierInboxItem200JSONResponse struct {
+	Body    SupplierInboxItem
+	Headers IgnoreSupplierInboxItem200ResponseHeaders
+}
+
+func (response IgnoreSupplierInboxItem200JSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItem400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response IgnoreSupplierInboxItem400JSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItem401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response IgnoreSupplierInboxItem401JSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItem403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response IgnoreSupplierInboxItem403JSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItem404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response IgnoreSupplierInboxItem404JSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IgnoreSupplierInboxItemdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response IgnoreSupplierInboxItemdefaultJSONResponse) VisitIgnoreSupplierInboxItemResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ListSuppliersRequestObject struct {
 	Params ListSuppliersParams
 }
@@ -25295,6 +28301,150 @@ func (response CreateSupplierdefaultJSONResponse) VisitCreateSupplierResponse(w 
 	return err
 }
 
+type CreateCloudSupplierRequestObject struct {
+	Params CreateCloudSupplierParams
+	Body   *CreateCloudSupplierJSONRequestBody
+}
+
+type CreateCloudSupplierResponseObject interface {
+	VisitCreateCloudSupplierResponse(w http.ResponseWriter) error
+}
+
+type CreateCloudSupplier200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateCloudSupplier200JSONResponse struct {
+	Body    SupplierConnected
+	Headers CreateCloudSupplier200ResponseHeaders
+}
+
+func (response CreateCloudSupplier200JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateCloudSupplier201JSONResponse struct {
+	Body    SupplierConnected
+	Headers CreateCloudSupplier201ResponseHeaders
+}
+
+func (response CreateCloudSupplier201JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateCloudSupplier400JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CreateCloudSupplier401JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateCloudSupplier403JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateCloudSupplier409JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplier422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response CreateCloudSupplier422JSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateCloudSupplierdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateCloudSupplierdefaultJSONResponse) VisitCreateCloudSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type DetectSupplierRequestObject struct {
 	Body *DetectSupplierJSONRequestBody
 }
@@ -25394,6 +28544,150 @@ type DetectSupplierdefaultJSONResponse struct {
 }
 
 func (response DetectSupplierdefaultJSONResponse) VisitDetectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplierRequestObject struct {
+	Params CreateDirectSupplierParams
+	Body   *CreateDirectSupplierJSONRequestBody
+}
+
+type CreateDirectSupplierResponseObject interface {
+	VisitCreateDirectSupplierResponse(w http.ResponseWriter) error
+}
+
+type CreateDirectSupplier200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateDirectSupplier200JSONResponse struct {
+	Body    SupplierConnected
+	Headers CreateDirectSupplier200ResponseHeaders
+}
+
+func (response CreateDirectSupplier200JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type CreateDirectSupplier201JSONResponse struct {
+	Body    SupplierConnected
+	Headers CreateDirectSupplier201ResponseHeaders
+}
+
+func (response CreateDirectSupplier201JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response CreateDirectSupplier400JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response CreateDirectSupplier401JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response CreateDirectSupplier403JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier409JSONResponse struct{ ConflictJSONResponse }
+
+func (response CreateDirectSupplier409JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplier422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response CreateDirectSupplier422JSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type CreateDirectSupplierdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response CreateDirectSupplierdefaultJSONResponse) VisitCreateDirectSupplierResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -25621,6 +28915,141 @@ func (response GetSupplierdefaultJSONResponse) VisitGetSupplierResponse(w http.R
 	return err
 }
 
+type ReplaceSupplierCloudCredentialRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     ReplaceSupplierCloudCredentialParams
+	Body       *ReplaceSupplierCloudCredentialJSONRequestBody
+}
+
+type ReplaceSupplierCloudCredentialResponseObject interface {
+	VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error
+}
+
+type ReplaceSupplierCloudCredential200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ReplaceSupplierCloudCredential200JSONResponse struct {
+	Body    SupplierConnected
+	Headers ReplaceSupplierCloudCredential200ResponseHeaders
+}
+
+func (response ReplaceSupplierCloudCredential200JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ReplaceSupplierCloudCredential400JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ReplaceSupplierCloudCredential401JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ReplaceSupplierCloudCredential403JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ReplaceSupplierCloudCredential404JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ReplaceSupplierCloudCredential409JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredential422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ReplaceSupplierCloudCredential422JSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ReplaceSupplierCloudCredentialdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ReplaceSupplierCloudCredentialdefaultJSONResponse) VisitReplaceSupplierCloudCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type BindSupplierKeyRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     BindSupplierKeyParams
@@ -25745,6 +29174,128 @@ type BindSupplierKeydefaultJSONResponse struct {
 }
 
 func (response BindSupplierKeydefaultJSONResponse) VisitBindSupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabledRequestObject struct {
+	SupplierId   Uuid `json:"supplier_id"`
+	CredentialId Uuid `json:"credential_id"`
+	Params       SetSupplierCredentialEnabledParams
+	Body         *SetSupplierCredentialEnabledJSONRequestBody
+}
+
+type SetSupplierCredentialEnabledResponseObject interface {
+	VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierCredentialEnabled200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierCredentialEnabled200JSONResponse struct {
+	Body    SupplierCredential
+	Headers SetSupplierCredentialEnabled200ResponseHeaders
+}
+
+func (response SetSupplierCredentialEnabled200JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabled400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierCredentialEnabled400JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabled401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierCredentialEnabled401JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabled403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierCredentialEnabled403JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabled404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierCredentialEnabled404JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnabled409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierCredentialEnabled409JSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierCredentialEnableddefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierCredentialEnableddefaultJSONResponse) VisitSetSupplierCredentialEnabledResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -25881,6 +29432,347 @@ type SetSupplierCredentialLimitsdefaultJSONResponse struct {
 }
 
 func (response SetSupplierCredentialLimitsdefaultJSONResponse) VisitSetSupplierCredentialLimitsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredentialRequestObject struct {
+	SupplierId   Uuid `json:"supplier_id"`
+	CredentialId Uuid `json:"credential_id"`
+	Params       RemoveSupplierCredentialParams
+	Body         *RemoveSupplierCredentialJSONRequestBody
+}
+
+type RemoveSupplierCredentialResponseObject interface {
+	VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error
+}
+
+type RemoveSupplierCredential200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type RemoveSupplierCredential200JSONResponse struct {
+	Body    SupplierCredential
+	Headers RemoveSupplierCredential200ResponseHeaders
+}
+
+func (response RemoveSupplierCredential200JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredential400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RemoveSupplierCredential400JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredential401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RemoveSupplierCredential401JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredential403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RemoveSupplierCredential403JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredential404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RemoveSupplierCredential404JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredential409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RemoveSupplierCredential409JSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RemoveSupplierCredentialdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RemoveSupplierCredentialdefaultJSONResponse) VisitRemoveSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentialRequestObject struct {
+	SupplierId   Uuid `json:"supplier_id"`
+	CredentialId Uuid `json:"credential_id"`
+	Params       TestSupplierCredentialParams
+	Body         *TestSupplierCredentialJSONRequestBody
+}
+
+type TestSupplierCredentialResponseObject interface {
+	VisitTestSupplierCredentialResponse(w http.ResponseWriter) error
+}
+
+type TestSupplierCredential201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type TestSupplierCredential201JSONResponse struct {
+	Body    CredentialCheck
+	Headers TestSupplierCredential201ResponseHeaders
+}
+
+func (response TestSupplierCredential201JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response TestSupplierCredential400JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response TestSupplierCredential401JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response TestSupplierCredential403JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response TestSupplierCredential404JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential409JSONResponse struct{ ConflictJSONResponse }
+
+func (response TestSupplierCredential409JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredential429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response TestSupplierCredential429JSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type TestSupplierCredentialdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response TestSupplierCredentialdefaultJSONResponse) VisitTestSupplierCredentialResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierEndpointCostRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	EndpointId Uuid `json:"endpoint_id"`
+}
+
+type GetSupplierEndpointCostResponseObject interface {
+	VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error
+}
+
+type GetSupplierEndpointCost200JSONResponse EndpointCost
+
+func (response GetSupplierEndpointCost200JSONResponse) VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierEndpointCost401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSupplierEndpointCost401JSONResponse) VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierEndpointCost403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSupplierEndpointCost403JSONResponse) VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierEndpointCost404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSupplierEndpointCost404JSONResponse) VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierEndpointCostdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSupplierEndpointCostdefaultJSONResponse) VisitGetSupplierEndpointCostResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -26286,6 +30178,575 @@ func (response SelectSupplierGroupdefaultJSONResponse) VisitSelectSupplierGroupR
 	return err
 }
 
+type ConnectSupplierGroupRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	GroupId    Uuid `json:"group_id"`
+	Params     ConnectSupplierGroupParams
+	Body       *ConnectSupplierGroupJSONRequestBody
+}
+
+type ConnectSupplierGroupResponseObject interface {
+	VisitConnectSupplierGroupResponse(w http.ResponseWriter) error
+}
+
+type ConnectSupplierGroup201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type ConnectSupplierGroup201JSONResponse struct {
+	Body    GroupConnected
+	Headers ConnectSupplierGroup201ResponseHeaders
+}
+
+func (response ConnectSupplierGroup201JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ConnectSupplierGroup400JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ConnectSupplierGroup401JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ConnectSupplierGroup403JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ConnectSupplierGroup404JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup409JSONResponse struct{ ConflictJSONResponse }
+
+func (response ConnectSupplierGroup409JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroup422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response ConnectSupplierGroup422JSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ConnectSupplierGroupdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ConnectSupplierGroupdefaultJSONResponse) VisitConnectSupplierGroupResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRuleRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     SetSupplierIntakeRuleParams
+	Body       *SetSupplierIntakeRuleJSONRequestBody
+}
+
+type SetSupplierIntakeRuleResponseObject interface {
+	VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error
+}
+
+type SetSupplierIntakeRule200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type SetSupplierIntakeRule200JSONResponse struct {
+	Body    SupplierIntakeRule
+	Headers SetSupplierIntakeRule200ResponseHeaders
+}
+
+func (response SetSupplierIntakeRule200JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response SetSupplierIntakeRule400JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response SetSupplierIntakeRule401JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response SetSupplierIntakeRule403JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response SetSupplierIntakeRule404JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule409JSONResponse struct{ ConflictJSONResponse }
+
+func (response SetSupplierIntakeRule409JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRule422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response SetSupplierIntakeRule422JSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type SetSupplierIntakeRuledefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response SetSupplierIntakeRuledefaultJSONResponse) VisitSetSupplierIntakeRuleResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKeyRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Body       *IdentifySupplierKeyJSONRequestBody
+}
+
+type IdentifySupplierKeyResponseObject interface {
+	VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error
+}
+
+type IdentifySupplierKey200JSONResponse KeyIdentification
+
+func (response IdentifySupplierKey200JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response IdentifySupplierKey400JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response IdentifySupplierKey401JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response IdentifySupplierKey403JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response IdentifySupplierKey404JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey409JSONResponse struct{ ConflictJSONResponse }
+
+func (response IdentifySupplierKey409JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response IdentifySupplierKey422JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKey429JSONResponse struct{ TooManyRequestsJSONResponse }
+
+func (response IdentifySupplierKey429JSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Retry-After", fmt.Sprint(response.Headers.RetryAfter))
+	w.WriteHeader(429)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type IdentifySupplierKeydefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response IdentifySupplierKeydefaultJSONResponse) VisitIdentifySupplierKeyResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeysRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     AddSupplierKeysParams
+	Body       *AddSupplierKeysJSONRequestBody
+}
+
+type AddSupplierKeysResponseObject interface {
+	VisitAddSupplierKeysResponse(w http.ResponseWriter) error
+}
+
+type AddSupplierKeys200ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type AddSupplierKeys200JSONResponse struct {
+	Body    CredentialCheckList
+	Headers AddSupplierKeys200ResponseHeaders
+}
+
+func (response AddSupplierKeys200JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys201ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type AddSupplierKeys201JSONResponse struct {
+	Body    CredentialCheckList
+	Headers AddSupplierKeys201ResponseHeaders
+}
+
+func (response AddSupplierKeys201JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(201)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response AddSupplierKeys400JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response AddSupplierKeys401JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response AddSupplierKeys403JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response AddSupplierKeys404JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys409JSONResponse struct{ ConflictJSONResponse }
+
+func (response AddSupplierKeys409JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeys422JSONResponse struct{ UnprocessableJSONResponse }
+
+func (response AddSupplierKeys422JSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(422)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type AddSupplierKeysdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response AddSupplierKeysdefaultJSONResponse) VisitAddSupplierKeysResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type ReplaceSupplierLoginRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     ReplaceSupplierLoginParams
@@ -26528,6 +30989,198 @@ func (response MapSupplierModeldefaultJSONResponse) VisitMapSupplierModelRespons
 	return err
 }
 
+type ListSupplierModelsRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     ListSupplierModelsParams
+}
+
+type ListSupplierModelsResponseObject interface {
+	VisitListSupplierModelsResponse(w http.ResponseWriter) error
+}
+
+type ListSupplierModels200JSONResponse SupplierModelList
+
+func (response ListSupplierModels200JSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierModels400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSupplierModels400JSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierModels401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListSupplierModels401JSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierModels403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSupplierModels403JSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierModels404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListSupplierModels404JSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierModelsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSupplierModelsdefaultJSONResponse) VisitListSupplierModelsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliationRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     GetSupplierReconciliationParams
+}
+
+type GetSupplierReconciliationResponseObject interface {
+	VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error
+}
+
+type GetSupplierReconciliation200JSONResponse SupplierReconciliation
+
+func (response GetSupplierReconciliation200JSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliation400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response GetSupplierReconciliation400JSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliation401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response GetSupplierReconciliation401JSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliation403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response GetSupplierReconciliation403JSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliation404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response GetSupplierReconciliation404JSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type GetSupplierReconciliationdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response GetSupplierReconciliationdefaultJSONResponse) VisitGetSupplierReconciliationResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
 type RemoveSupplierRequestObject struct {
 	SupplierId Uuid `json:"supplier_id"`
 	Params     RemoveSupplierParams
@@ -26759,6 +31412,223 @@ type SetSupplierStatusdefaultJSONResponse struct {
 }
 
 func (response SetSupplierStatusdefaultJSONResponse) VisitSetSupplierStatusResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSyncRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     RequestSupplierSyncParams
+	Body       *RequestSupplierSyncJSONRequestBody
+}
+
+type RequestSupplierSyncResponseObject interface {
+	VisitRequestSupplierSyncResponse(w http.ResponseWriter) error
+}
+
+type RequestSupplierSync202ResponseHeaders struct {
+	IdempotencyReplayed *bool
+}
+
+type RequestSupplierSync202JSONResponse struct {
+	Body    SupplierSyncTaskList
+	Headers RequestSupplierSync202ResponseHeaders
+}
+
+func (response RequestSupplierSync202JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	if response.Headers.IdempotencyReplayed != nil {
+		w.Header().Set("Idempotency-Replayed", fmt.Sprint(*response.Headers.IdempotencyReplayed))
+	}
+	w.WriteHeader(202)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSync400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response RequestSupplierSync400JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSync401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response RequestSupplierSync401JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSync403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response RequestSupplierSync403JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSync404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response RequestSupplierSync404JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSync409JSONResponse struct{ ConflictJSONResponse }
+
+func (response RequestSupplierSync409JSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(409)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type RequestSupplierSyncdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response RequestSupplierSyncdefaultJSONResponse) VisitRequestSupplierSyncResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(response.StatusCode)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRunsRequestObject struct {
+	SupplierId Uuid `json:"supplier_id"`
+	Params     ListSupplierSyncRunsParams
+}
+
+type ListSupplierSyncRunsResponseObject interface {
+	VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error
+}
+
+type ListSupplierSyncRuns200JSONResponse SupplierSyncRunList
+
+func (response ListSupplierSyncRuns200JSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(200)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRuns400JSONResponse struct{ BadRequestJSONResponse }
+
+func (response ListSupplierSyncRuns400JSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(400)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRuns401JSONResponse struct{ UnauthenticatedJSONResponse }
+
+func (response ListSupplierSyncRuns401JSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(401)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRuns403JSONResponse struct{ ForbiddenJSONResponse }
+
+func (response ListSupplierSyncRuns403JSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(403)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRuns404JSONResponse struct{ NotFoundJSONResponse }
+
+func (response ListSupplierSyncRuns404JSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
+
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(response); err != nil {
+		return err
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(404)
+	_, err := buf.WriteTo(w)
+	return err
+}
+
+type ListSupplierSyncRunsdefaultJSONResponse struct {
+	Body       Error
+	StatusCode int
+}
+
+func (response ListSupplierSyncRunsdefaultJSONResponse) VisitListSupplierSyncRunsResponse(w http.ResponseWriter) error {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(response.Body); err != nil {
@@ -27473,6 +32343,9 @@ type StrictServerInterface interface {
 	// SendAlertTest Queue a channel test with a delivery receipt
 	// (POST /api/admin/v1/alerts/tests)
 	SendAlertTest(ctx context.Context, request SendAlertTestRequestObject) (SendAlertTestResponseObject, error)
+	// ListAdminAnnouncements Every announcement published, with where each stands
+	// (GET /api/admin/v1/announcements)
+	ListAdminAnnouncements(ctx context.Context, request ListAdminAnnouncementsRequestObject) (ListAdminAnnouncementsResponseObject, error)
 	// PublishAnnouncement Publish a plain text site announcement
 	// (POST /api/admin/v1/announcements)
 	PublishAnnouncement(ctx context.Context, request PublishAnnouncementRequestObject) (PublishAnnouncementResponseObject, error)
@@ -27521,9 +32394,18 @@ type StrictServerInterface interface {
 	// CreateModel Draft a model
 	// (POST /api/admin/v1/models)
 	CreateModel(ctx context.Context, request CreateModelRequestObject) (CreateModelResponseObject, error)
+	// ImportModels Add the models a public price list has and the catalog does not
+	// (POST /api/admin/v1/models/imports)
+	ImportModels(ctx context.Context, request ImportModelsRequestObject) (ImportModelsResponseObject, error)
+	// PutModelsOnSale Put several draft models on sale at once
+	// (POST /api/admin/v1/models/listings)
+	PutModelsOnSale(ctx context.Context, request PutModelsOnSaleRequestObject) (PutModelsOnSaleResponseObject, error)
 	// GetModel One model with its names and prices
 	// (GET /api/admin/v1/models/{model_id})
 	GetModel(ctx context.Context, request GetModelRequestObject) (GetModelResponseObject, error)
+	// SetModelFamily Put a model in a family, or take it out
+	// (PUT /api/admin/v1/models/{model_id}/family)
+	SetModelFamily(ctx context.Context, request SetModelFamilyRequestObject) (SetModelFamilyResponseObject, error)
 	// AddModelName Give a model another name
 	// (POST /api/admin/v1/models/{model_id}/names)
 	AddModelName(ctx context.Context, request AddModelNameRequestObject) (AddModelNameResponseObject, error)
@@ -27680,9 +32562,15 @@ type StrictServerInterface interface {
 	// SetRateLimit Replace an administrator's business rate limit
 	// (PUT /api/admin/v1/rate-limits/{target}/{id})
 	SetRateLimit(ctx context.Context, request SetRateLimitRequestObject) (SetRateLimitResponseObject, error)
+	// GetOperationsMonitor The platform's calls over the last hour or day, minute by minute or hour by hour
+	// (GET /api/admin/v1/reports/monitor)
+	GetOperationsMonitor(ctx context.Context, request GetOperationsMonitorRequestObject) (GetOperationsMonitorResponseObject, error)
 	// GetOperationsOverview The site's calls, errors, revenue, cost and cash over a window, with its busiest accounts and models.
 	// (GET /api/admin/v1/reports/overview)
 	GetOperationsOverview(ctx context.Context, request GetOperationsOverviewRequestObject) (GetOperationsOverviewResponseObject, error)
+	// GetPluginStats How the web search and file parser plugins were used over a window
+	// (GET /api/admin/v1/reports/plugins)
+	GetPluginStats(ctx context.Context, request GetPluginStatsRequestObject) (GetPluginStatsResponseObject, error)
 	// GetOperationsTargets The site's business targets for a UTC calendar month.
 	// (GET /api/admin/v1/reports/targets/{month})
 	GetOperationsTargets(ctx context.Context, request GetOperationsTargetsRequestObject) (GetOperationsTargetsResponseObject, error)
@@ -27887,27 +32775,72 @@ type StrictServerInterface interface {
 	// UpdateSubscriptionPlan Change a subscription plan
 	// (PUT /api/admin/v1/subscription-plans/{plan_id})
 	UpdateSubscriptionPlan(ctx context.Context, request UpdateSubscriptionPlanRequestObject) (UpdateSubscriptionPlanResponseObject, error)
+	// ListPlatformSubscriptions Every account's subscriptions
+	// (GET /api/admin/v1/subscriptions)
+	ListPlatformSubscriptions(ctx context.Context, request ListPlatformSubscriptionsRequestObject) (ListPlatformSubscriptionsResponseObject, error)
+	// GetSubscriptionSummary The site's subscriptions counted, with what they sold for in a month
+	// (GET /api/admin/v1/subscriptions/summary)
+	GetSubscriptionSummary(ctx context.Context, request GetSubscriptionSummaryRequestObject) (GetSubscriptionSummaryResponseObject, error)
+	// ListSupplierCredentials Every supplier's credentials
+	// (GET /api/admin/v1/supplier-credentials)
+	ListSupplierCredentials(ctx context.Context, request ListSupplierCredentialsRequestObject) (ListSupplierCredentialsResponseObject, error)
+	// RemoveInvalidSupplierCredentials Erase the credentials a supplier refused
+	// (POST /api/admin/v1/supplier-credentials/invalid-removals)
+	RemoveInvalidSupplierCredentials(ctx context.Context, request RemoveInvalidSupplierCredentialsRequestObject) (RemoveInvalidSupplierCredentialsResponseObject, error)
+	// TestSupplierCredentials Check every credential, of one supplier or of all
+	// (POST /api/admin/v1/supplier-credentials/tests)
+	TestSupplierCredentials(ctx context.Context, request TestSupplierCredentialsRequestObject) (TestSupplierCredentialsResponseObject, error)
+	// ListSupplierInbox What across the suppliers waits for a person's decision
+	// (GET /api/admin/v1/supplier-inbox)
+	ListSupplierInbox(ctx context.Context, request ListSupplierInboxRequestObject) (ListSupplierInboxResponseObject, error)
+	// GetSupplierInboxSummary How many items wait in the suppliers' queue, by kind
+	// (GET /api/admin/v1/supplier-inbox/summary)
+	GetSupplierInboxSummary(ctx context.Context, request GetSupplierInboxSummaryRequestObject) (GetSupplierInboxSummaryResponseObject, error)
+	// IgnoreSupplierInboxItem Hide an item of the suppliers' queue until it is seen again
+	// (POST /api/admin/v1/supplier-inbox/{item_id}/ignore)
+	IgnoreSupplierInboxItem(ctx context.Context, request IgnoreSupplierInboxItemRequestObject) (IgnoreSupplierInboxItemResponseObject, error)
 	// ListSuppliers Suppliers
 	// (GET /api/admin/v1/suppliers)
 	ListSuppliers(ctx context.Context, request ListSuppliersRequestObject) (ListSuppliersResponseObject, error)
 	// CreateSupplier Connect a supplier
 	// (POST /api/admin/v1/suppliers)
 	CreateSupplier(ctx context.Context, request CreateSupplierRequestObject) (CreateSupplierResponseObject, error)
+	// CreateCloudSupplier Connect a cloud platform's model service with its credential
+	// (POST /api/admin/v1/suppliers/cloud)
+	CreateCloudSupplier(ctx context.Context, request CreateCloudSupplierRequestObject) (CreateCloudSupplierResponseObject, error)
 	// DetectSupplier Find out what system a site runs
 	// (POST /api/admin/v1/suppliers/detections)
 	DetectSupplier(ctx context.Context, request DetectSupplierRequestObject) (DetectSupplierResponseObject, error)
+	// CreateDirectSupplier Connect a provider's own API with pasted keys
+	// (POST /api/admin/v1/suppliers/direct)
+	CreateDirectSupplier(ctx context.Context, request CreateDirectSupplierRequestObject) (CreateDirectSupplierResponseObject, error)
 	// TestSupplierEndpoint Test one of a supplier's endpoints with a real generation
 	// (POST /api/admin/v1/suppliers/endpoint-tests)
 	TestSupplierEndpoint(ctx context.Context, request TestSupplierEndpointRequestObject) (TestSupplierEndpointResponseObject, error)
 	// GetSupplier One supplier with its groups, keys and endpoints
 	// (GET /api/admin/v1/suppliers/{supplier_id})
 	GetSupplier(ctx context.Context, request GetSupplierRequestObject) (GetSupplierResponseObject, error)
+	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/cloud-credential)
+	ReplaceSupplierCloudCredential(ctx context.Context, request ReplaceSupplierCloudCredentialRequestObject) (ReplaceSupplierCloudCredentialResponseObject, error)
 	// BindSupplierKey Use one of the supplier's keys for a group
 	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials)
 	BindSupplierKey(ctx context.Context, request BindSupplierKeyRequestObject) (BindSupplierKeyResponseObject, error)
+	// SetSupplierCredentialEnabled Stop or resume picking one credential
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled)
+	SetSupplierCredentialEnabled(ctx context.Context, request SetSupplierCredentialEnabledRequestObject) (SetSupplierCredentialEnabledResponseObject, error)
 	// SetSupplierCredentialLimits Set a credential's concurrency and account RPM ceiling
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/limits)
 	SetSupplierCredentialLimits(ctx context.Context, request SetSupplierCredentialLimitsRequestObject) (SetSupplierCredentialLimitsResponseObject, error)
+	// RemoveSupplierCredential Erase one credential
+	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal)
+	RemoveSupplierCredential(ctx context.Context, request RemoveSupplierCredentialRequestObject) (RemoveSupplierCredentialResponseObject, error)
+	// TestSupplierCredential Check one credential against the supplier
+	// (POST /api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests)
+	TestSupplierCredential(ctx context.Context, request TestSupplierCredentialRequestObject) (TestSupplierCredentialResponseObject, error)
+	// GetSupplierEndpointCost What an endpoint costs, as price lines with where each came from
+	// (GET /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost)
+	GetSupplierEndpointCost(ctx context.Context, request GetSupplierEndpointCostRequestObject) (GetSupplierEndpointCostResponseObject, error)
 	// SetSupplierEndpointEnabled Turn an endpoint on or off for routing
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/enabled)
 	SetSupplierEndpointEnabled(ctx context.Context, request SetSupplierEndpointEnabledRequestObject) (SetSupplierEndpointEnabledResponseObject, error)
@@ -27917,18 +32850,42 @@ type StrictServerInterface interface {
 	// SelectSupplierGroup Choose whether a supplier's group is used
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/groups/{group_id})
 	SelectSupplierGroup(ctx context.Context, request SelectSupplierGroupRequestObject) (SelectSupplierGroupResponseObject, error)
+	// ConnectSupplierGroup Connect a relay's group with a key made for it or pasted
+	// (POST /api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection)
+	ConnectSupplierGroup(ctx context.Context, request ConnectSupplierGroupRequestObject) (ConnectSupplierGroupResponseObject, error)
+	// SetSupplierIntakeRule Choose which of a supplier's models become endpoints
+	// (PUT /api/admin/v1/suppliers/{supplier_id}/intake-rule)
+	SetSupplierIntakeRule(ctx context.Context, request SetSupplierIntakeRuleRequestObject) (SetSupplierIntakeRuleResponseObject, error)
+	// IdentifySupplierKey Find out which of a relay's groups a pasted key belongs to
+	// (POST /api/admin/v1/suppliers/{supplier_id}/key-identifications)
+	IdentifySupplierKey(ctx context.Context, request IdentifySupplierKeyRequestObject) (IdentifySupplierKeyResponseObject, error)
+	// AddSupplierKeys Add pasted keys to a supplier, checking each
+	// (POST /api/admin/v1/suppliers/{supplier_id}/keys)
+	AddSupplierKeys(ctx context.Context, request AddSupplierKeysRequestObject) (AddSupplierKeysResponseObject, error)
 	// ReplaceSupplierLogin Replace the login Axiom uses at a supplier
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/login)
 	ReplaceSupplierLogin(ctx context.Context, request ReplaceSupplierLoginRequestObject) (ReplaceSupplierLoginResponseObject, error)
 	// MapSupplierModel Map an upstream model name to a model
 	// (POST /api/admin/v1/suppliers/{supplier_id}/model-mappings)
 	MapSupplierModel(ctx context.Context, request MapSupplierModelRequestObject) (MapSupplierModelResponseObject, error)
+	// ListSupplierModels A supplier's upstream model names, sorted into piles
+	// (GET /api/admin/v1/suppliers/{supplier_id}/models)
+	ListSupplierModels(ctx context.Context, request ListSupplierModelsRequestObject) (ListSupplierModelsResponseObject, error)
+	// GetSupplierReconciliation What a supplier charged against what Axiom estimated, by day
+	// (GET /api/admin/v1/suppliers/{supplier_id}/reconciliation)
+	GetSupplierReconciliation(ctx context.Context, request GetSupplierReconciliationRequestObject) (GetSupplierReconciliationResponseObject, error)
 	// RemoveSupplier Remove a supplier
 	// (POST /api/admin/v1/suppliers/{supplier_id}/removal)
 	RemoveSupplier(ctx context.Context, request RemoveSupplierRequestObject) (RemoveSupplierResponseObject, error)
 	// SetSupplierStatus Pause or resume a supplier
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/status)
 	SetSupplierStatus(ctx context.Context, request SetSupplierStatusRequestObject) (SetSupplierStatusResponseObject, error)
+	// RequestSupplierSync Have a supplier synced now
+	// (POST /api/admin/v1/suppliers/{supplier_id}/sync-requests)
+	RequestSupplierSync(ctx context.Context, request RequestSupplierSyncRequestObject) (RequestSupplierSyncResponseObject, error)
+	// ListSupplierSyncRuns What each sync of a supplier found changed
+	// (GET /api/admin/v1/suppliers/{supplier_id}/sync-runs)
+	ListSupplierSyncRuns(ctx context.Context, request ListSupplierSyncRunsRequestObject) (ListSupplierSyncRunsResponseObject, error)
 	// ConfirmSupplierUnitValue Confirm what one unit of a supplier's balance is worth
 	// (PUT /api/admin/v1/suppliers/{supplier_id}/unit-value)
 	ConfirmSupplierUnitValue(ctx context.Context, request ConfirmSupplierUnitValueRequestObject) (ConfirmSupplierUnitValueResponseObject, error)
@@ -28501,6 +33458,32 @@ func (sh *strictHandler) SendAlertTest(w http.ResponseWriter, r *http.Request, p
 	}
 }
 
+// ListAdminAnnouncements operation middleware
+func (sh *strictHandler) ListAdminAnnouncements(w http.ResponseWriter, r *http.Request, params ListAdminAnnouncementsParams) {
+	var request ListAdminAnnouncementsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListAdminAnnouncements(ctx, request.(ListAdminAnnouncementsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListAdminAnnouncements")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListAdminAnnouncementsResponseObject); ok {
+		if err := validResponse.VisitListAdminAnnouncementsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // PublishAnnouncement operation middleware
 func (sh *strictHandler) PublishAnnouncement(w http.ResponseWriter, r *http.Request, params PublishAnnouncementParams) {
 	var request PublishAnnouncementRequestObject
@@ -28961,6 +33944,72 @@ func (sh *strictHandler) CreateModel(w http.ResponseWriter, r *http.Request, par
 	}
 }
 
+// ImportModels operation middleware
+func (sh *strictHandler) ImportModels(w http.ResponseWriter, r *http.Request, params ImportModelsParams) {
+	var request ImportModelsRequestObject
+
+	request.Params = params
+
+	var body ImportModelsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ImportModels(ctx, request.(ImportModelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ImportModels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ImportModelsResponseObject); ok {
+		if err := validResponse.VisitImportModelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// PutModelsOnSale operation middleware
+func (sh *strictHandler) PutModelsOnSale(w http.ResponseWriter, r *http.Request, params PutModelsOnSaleParams) {
+	var request PutModelsOnSaleRequestObject
+
+	request.Params = params
+
+	var body PutModelsOnSaleJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.PutModelsOnSale(ctx, request.(PutModelsOnSaleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "PutModelsOnSale")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(PutModelsOnSaleResponseObject); ok {
+		if err := validResponse.VisitPutModelsOnSaleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetModel operation middleware
 func (sh *strictHandler) GetModel(w http.ResponseWriter, r *http.Request, modelId Uuid) {
 	var request GetModelRequestObject
@@ -28980,6 +34029,40 @@ func (sh *strictHandler) GetModel(w http.ResponseWriter, r *http.Request, modelI
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetModelResponseObject); ok {
 		if err := validResponse.VisitGetModelResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetModelFamily operation middleware
+func (sh *strictHandler) SetModelFamily(w http.ResponseWriter, r *http.Request, modelId Uuid, params SetModelFamilyParams) {
+	var request SetModelFamilyRequestObject
+
+	request.ModelId = modelId
+	request.Params = params
+
+	var body SetModelFamilyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetModelFamily(ctx, request.(SetModelFamilyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetModelFamily")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetModelFamilyResponseObject); ok {
+		if err := validResponse.VisitSetModelFamilyResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -30570,6 +35653,32 @@ func (sh *strictHandler) SetRateLimit(w http.ResponseWriter, r *http.Request, ta
 	}
 }
 
+// GetOperationsMonitor operation middleware
+func (sh *strictHandler) GetOperationsMonitor(w http.ResponseWriter, r *http.Request, params GetOperationsMonitorParams) {
+	var request GetOperationsMonitorRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetOperationsMonitor(ctx, request.(GetOperationsMonitorRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetOperationsMonitor")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetOperationsMonitorResponseObject); ok {
+		if err := validResponse.VisitGetOperationsMonitorResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // GetOperationsOverview operation middleware
 func (sh *strictHandler) GetOperationsOverview(w http.ResponseWriter, r *http.Request, params GetOperationsOverviewParams) {
 	var request GetOperationsOverviewRequestObject
@@ -30589,6 +35698,32 @@ func (sh *strictHandler) GetOperationsOverview(w http.ResponseWriter, r *http.Re
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(GetOperationsOverviewResponseObject); ok {
 		if err := validResponse.VisitGetOperationsOverviewResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetPluginStats operation middleware
+func (sh *strictHandler) GetPluginStats(w http.ResponseWriter, r *http.Request, params GetPluginStatsParams) {
+	var request GetPluginStatsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetPluginStats(ctx, request.(GetPluginStatsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetPluginStats")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetPluginStatsResponseObject); ok {
+		if err := validResponse.VisitGetPluginStatsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -32627,6 +37762,234 @@ func (sh *strictHandler) UpdateSubscriptionPlan(w http.ResponseWriter, r *http.R
 	}
 }
 
+// ListPlatformSubscriptions operation middleware
+func (sh *strictHandler) ListPlatformSubscriptions(w http.ResponseWriter, r *http.Request, params ListPlatformSubscriptionsParams) {
+	var request ListPlatformSubscriptionsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListPlatformSubscriptions(ctx, request.(ListPlatformSubscriptionsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListPlatformSubscriptions")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListPlatformSubscriptionsResponseObject); ok {
+		if err := validResponse.VisitListPlatformSubscriptionsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSubscriptionSummary operation middleware
+func (sh *strictHandler) GetSubscriptionSummary(w http.ResponseWriter, r *http.Request, params GetSubscriptionSummaryParams) {
+	var request GetSubscriptionSummaryRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSubscriptionSummary(ctx, request.(GetSubscriptionSummaryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSubscriptionSummary")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSubscriptionSummaryResponseObject); ok {
+		if err := validResponse.VisitGetSubscriptionSummaryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSupplierCredentials operation middleware
+func (sh *strictHandler) ListSupplierCredentials(w http.ResponseWriter, r *http.Request, params ListSupplierCredentialsParams) {
+	var request ListSupplierCredentialsRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSupplierCredentials(ctx, request.(ListSupplierCredentialsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSupplierCredentials")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSupplierCredentialsResponseObject); ok {
+		if err := validResponse.VisitListSupplierCredentialsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveInvalidSupplierCredentials operation middleware
+func (sh *strictHandler) RemoveInvalidSupplierCredentials(w http.ResponseWriter, r *http.Request, params RemoveInvalidSupplierCredentialsParams) {
+	var request RemoveInvalidSupplierCredentialsRequestObject
+
+	request.Params = params
+
+	var body RemoveInvalidSupplierCredentialsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveInvalidSupplierCredentials(ctx, request.(RemoveInvalidSupplierCredentialsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveInvalidSupplierCredentials")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveInvalidSupplierCredentialsResponseObject); ok {
+		if err := validResponse.VisitRemoveInvalidSupplierCredentialsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TestSupplierCredentials operation middleware
+func (sh *strictHandler) TestSupplierCredentials(w http.ResponseWriter, r *http.Request, params TestSupplierCredentialsParams) {
+	var request TestSupplierCredentialsRequestObject
+
+	request.Params = params
+
+	var body TestSupplierCredentialsJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TestSupplierCredentials(ctx, request.(TestSupplierCredentialsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TestSupplierCredentials")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TestSupplierCredentialsResponseObject); ok {
+		if err := validResponse.VisitTestSupplierCredentialsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSupplierInbox operation middleware
+func (sh *strictHandler) ListSupplierInbox(w http.ResponseWriter, r *http.Request, params ListSupplierInboxParams) {
+	var request ListSupplierInboxRequestObject
+
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSupplierInbox(ctx, request.(ListSupplierInboxRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSupplierInbox")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSupplierInboxResponseObject); ok {
+		if err := validResponse.VisitListSupplierInboxResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSupplierInboxSummary operation middleware
+func (sh *strictHandler) GetSupplierInboxSummary(w http.ResponseWriter, r *http.Request) {
+	var request GetSupplierInboxSummaryRequestObject
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSupplierInboxSummary(ctx, request.(GetSupplierInboxSummaryRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSupplierInboxSummary")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSupplierInboxSummaryResponseObject); ok {
+		if err := validResponse.VisitGetSupplierInboxSummaryResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// IgnoreSupplierInboxItem operation middleware
+func (sh *strictHandler) IgnoreSupplierInboxItem(w http.ResponseWriter, r *http.Request, itemId Uuid, params IgnoreSupplierInboxItemParams) {
+	var request IgnoreSupplierInboxItemRequestObject
+
+	request.ItemId = itemId
+	request.Params = params
+
+	var body IgnoreSupplierInboxItemJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.IgnoreSupplierInboxItem(ctx, request.(IgnoreSupplierInboxItemRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "IgnoreSupplierInboxItem")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(IgnoreSupplierInboxItemResponseObject); ok {
+		if err := validResponse.VisitIgnoreSupplierInboxItemResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ListSuppliers operation middleware
 func (sh *strictHandler) ListSuppliers(w http.ResponseWriter, r *http.Request, params ListSuppliersParams) {
 	var request ListSuppliersRequestObject
@@ -32686,6 +38049,39 @@ func (sh *strictHandler) CreateSupplier(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
+// CreateCloudSupplier operation middleware
+func (sh *strictHandler) CreateCloudSupplier(w http.ResponseWriter, r *http.Request, params CreateCloudSupplierParams) {
+	var request CreateCloudSupplierRequestObject
+
+	request.Params = params
+
+	var body CreateCloudSupplierJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateCloudSupplier(ctx, request.(CreateCloudSupplierRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateCloudSupplier")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateCloudSupplierResponseObject); ok {
+		if err := validResponse.VisitCreateCloudSupplierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // DetectSupplier operation middleware
 func (sh *strictHandler) DetectSupplier(w http.ResponseWriter, r *http.Request) {
 	var request DetectSupplierRequestObject
@@ -32710,6 +38106,39 @@ func (sh *strictHandler) DetectSupplier(w http.ResponseWriter, r *http.Request) 
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(DetectSupplierResponseObject); ok {
 		if err := validResponse.VisitDetectSupplierResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// CreateDirectSupplier operation middleware
+func (sh *strictHandler) CreateDirectSupplier(w http.ResponseWriter, r *http.Request, params CreateDirectSupplierParams) {
+	var request CreateDirectSupplierRequestObject
+
+	request.Params = params
+
+	var body CreateDirectSupplierJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.CreateDirectSupplier(ctx, request.(CreateDirectSupplierRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "CreateDirectSupplier")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(CreateDirectSupplierResponseObject); ok {
+		if err := validResponse.VisitCreateDirectSupplierResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -32776,6 +38205,40 @@ func (sh *strictHandler) GetSupplier(w http.ResponseWriter, r *http.Request, sup
 	}
 }
 
+// ReplaceSupplierCloudCredential operation middleware
+func (sh *strictHandler) ReplaceSupplierCloudCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierCloudCredentialParams) {
+	var request ReplaceSupplierCloudCredentialRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body ReplaceSupplierCloudCredentialJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ReplaceSupplierCloudCredential(ctx, request.(ReplaceSupplierCloudCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ReplaceSupplierCloudCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ReplaceSupplierCloudCredentialResponseObject); ok {
+		if err := validResponse.VisitReplaceSupplierCloudCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // BindSupplierKey operation middleware
 func (sh *strictHandler) BindSupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid, params BindSupplierKeyParams) {
 	var request BindSupplierKeyRequestObject
@@ -32803,6 +38266,41 @@ func (sh *strictHandler) BindSupplierKey(w http.ResponseWriter, r *http.Request,
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(BindSupplierKeyResponseObject); ok {
 		if err := validResponse.VisitBindSupplierKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierCredentialEnabled operation middleware
+func (sh *strictHandler) SetSupplierCredentialEnabled(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params SetSupplierCredentialEnabledParams) {
+	var request SetSupplierCredentialEnabledRequestObject
+
+	request.SupplierId = supplierId
+	request.CredentialId = credentialId
+	request.Params = params
+
+	var body SetSupplierCredentialEnabledJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierCredentialEnabled(ctx, request.(SetSupplierCredentialEnabledRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierCredentialEnabled")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierCredentialEnabledResponseObject); ok {
+		if err := validResponse.VisitSetSupplierCredentialEnabledResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -32838,6 +38336,103 @@ func (sh *strictHandler) SetSupplierCredentialLimits(w http.ResponseWriter, r *h
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetSupplierCredentialLimitsResponseObject); ok {
 		if err := validResponse.VisitSetSupplierCredentialLimitsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RemoveSupplierCredential operation middleware
+func (sh *strictHandler) RemoveSupplierCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params RemoveSupplierCredentialParams) {
+	var request RemoveSupplierCredentialRequestObject
+
+	request.SupplierId = supplierId
+	request.CredentialId = credentialId
+	request.Params = params
+
+	var body RemoveSupplierCredentialJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RemoveSupplierCredential(ctx, request.(RemoveSupplierCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RemoveSupplierCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RemoveSupplierCredentialResponseObject); ok {
+		if err := validResponse.VisitRemoveSupplierCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// TestSupplierCredential operation middleware
+func (sh *strictHandler) TestSupplierCredential(w http.ResponseWriter, r *http.Request, supplierId Uuid, credentialId Uuid, params TestSupplierCredentialParams) {
+	var request TestSupplierCredentialRequestObject
+
+	request.SupplierId = supplierId
+	request.CredentialId = credentialId
+	request.Params = params
+
+	var body TestSupplierCredentialJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.TestSupplierCredential(ctx, request.(TestSupplierCredentialRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "TestSupplierCredential")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(TestSupplierCredentialResponseObject); ok {
+		if err := validResponse.VisitTestSupplierCredentialResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSupplierEndpointCost operation middleware
+func (sh *strictHandler) GetSupplierEndpointCost(w http.ResponseWriter, r *http.Request, supplierId Uuid, endpointId Uuid) {
+	var request GetSupplierEndpointCostRequestObject
+
+	request.SupplierId = supplierId
+	request.EndpointId = endpointId
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSupplierEndpointCost(ctx, request.(GetSupplierEndpointCostRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSupplierEndpointCost")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSupplierEndpointCostResponseObject); ok {
+		if err := validResponse.VisitGetSupplierEndpointCostResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {
@@ -32950,6 +38545,142 @@ func (sh *strictHandler) SelectSupplierGroup(w http.ResponseWriter, r *http.Requ
 	}
 }
 
+// ConnectSupplierGroup operation middleware
+func (sh *strictHandler) ConnectSupplierGroup(w http.ResponseWriter, r *http.Request, supplierId Uuid, groupId Uuid, params ConnectSupplierGroupParams) {
+	var request ConnectSupplierGroupRequestObject
+
+	request.SupplierId = supplierId
+	request.GroupId = groupId
+	request.Params = params
+
+	var body ConnectSupplierGroupJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ConnectSupplierGroup(ctx, request.(ConnectSupplierGroupRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ConnectSupplierGroup")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ConnectSupplierGroupResponseObject); ok {
+		if err := validResponse.VisitConnectSupplierGroupResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// SetSupplierIntakeRule operation middleware
+func (sh *strictHandler) SetSupplierIntakeRule(w http.ResponseWriter, r *http.Request, supplierId Uuid, params SetSupplierIntakeRuleParams) {
+	var request SetSupplierIntakeRuleRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body SetSupplierIntakeRuleJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.SetSupplierIntakeRule(ctx, request.(SetSupplierIntakeRuleRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "SetSupplierIntakeRule")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(SetSupplierIntakeRuleResponseObject); ok {
+		if err := validResponse.VisitSetSupplierIntakeRuleResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// IdentifySupplierKey operation middleware
+func (sh *strictHandler) IdentifySupplierKey(w http.ResponseWriter, r *http.Request, supplierId Uuid) {
+	var request IdentifySupplierKeyRequestObject
+
+	request.SupplierId = supplierId
+
+	var body IdentifySupplierKeyJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.IdentifySupplierKey(ctx, request.(IdentifySupplierKeyRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "IdentifySupplierKey")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(IdentifySupplierKeyResponseObject); ok {
+		if err := validResponse.VisitIdentifySupplierKeyResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// AddSupplierKeys operation middleware
+func (sh *strictHandler) AddSupplierKeys(w http.ResponseWriter, r *http.Request, supplierId Uuid, params AddSupplierKeysParams) {
+	var request AddSupplierKeysRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body AddSupplierKeysJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.AddSupplierKeys(ctx, request.(AddSupplierKeysRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "AddSupplierKeys")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(AddSupplierKeysResponseObject); ok {
+		if err := validResponse.VisitAddSupplierKeysResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // ReplaceSupplierLogin operation middleware
 func (sh *strictHandler) ReplaceSupplierLogin(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ReplaceSupplierLoginParams) {
 	var request ReplaceSupplierLoginRequestObject
@@ -33018,6 +38749,60 @@ func (sh *strictHandler) MapSupplierModel(w http.ResponseWriter, r *http.Request
 	}
 }
 
+// ListSupplierModels operation middleware
+func (sh *strictHandler) ListSupplierModels(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ListSupplierModelsParams) {
+	var request ListSupplierModelsRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSupplierModels(ctx, request.(ListSupplierModelsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSupplierModels")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSupplierModelsResponseObject); ok {
+		if err := validResponse.VisitListSupplierModelsResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// GetSupplierReconciliation operation middleware
+func (sh *strictHandler) GetSupplierReconciliation(w http.ResponseWriter, r *http.Request, supplierId Uuid, params GetSupplierReconciliationParams) {
+	var request GetSupplierReconciliationRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.GetSupplierReconciliation(ctx, request.(GetSupplierReconciliationRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "GetSupplierReconciliation")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(GetSupplierReconciliationResponseObject); ok {
+		if err := validResponse.VisitGetSupplierReconciliationResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
 // RemoveSupplier operation middleware
 func (sh *strictHandler) RemoveSupplier(w http.ResponseWriter, r *http.Request, supplierId Uuid, params RemoveSupplierParams) {
 	var request RemoveSupplierRequestObject
@@ -33079,6 +38864,67 @@ func (sh *strictHandler) SetSupplierStatus(w http.ResponseWriter, r *http.Reques
 		sh.options.ResponseErrorHandlerFunc(w, r, err)
 	} else if validResponse, ok := response.(SetSupplierStatusResponseObject); ok {
 		if err := validResponse.VisitSetSupplierStatusResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// RequestSupplierSync operation middleware
+func (sh *strictHandler) RequestSupplierSync(w http.ResponseWriter, r *http.Request, supplierId Uuid, params RequestSupplierSyncParams) {
+	var request RequestSupplierSyncRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	var body RequestSupplierSyncJSONRequestBody
+	if err := jsonx.Decode(r.Body, &body); err != nil {
+		sh.options.RequestErrorHandlerFunc(w, r, fmt.Errorf("can't decode JSON body: %w", err))
+		return
+	}
+	request.Body = &body
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.RequestSupplierSync(ctx, request.(RequestSupplierSyncRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "RequestSupplierSync")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(RequestSupplierSyncResponseObject); ok {
+		if err := validResponse.VisitRequestSupplierSyncResponse(w); err != nil {
+			sh.options.ResponseErrorHandlerFunc(w, r, err)
+		}
+	} else if response != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, fmt.Errorf("unexpected response type: %T", response))
+	}
+}
+
+// ListSupplierSyncRuns operation middleware
+func (sh *strictHandler) ListSupplierSyncRuns(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ListSupplierSyncRunsParams) {
+	var request ListSupplierSyncRunsRequestObject
+
+	request.SupplierId = supplierId
+	request.Params = params
+
+	handler := func(ctx context.Context, w http.ResponseWriter, r *http.Request, request interface{}) (interface{}, error) {
+		return sh.ssi.ListSupplierSyncRuns(ctx, request.(ListSupplierSyncRunsRequestObject))
+	}
+	for _, middleware := range sh.middlewares {
+		handler = middleware(handler, "ListSupplierSyncRuns")
+	}
+
+	response, err := handler(r.Context(), w, r, request)
+
+	if err != nil {
+		sh.options.ResponseErrorHandlerFunc(w, r, err)
+	} else if validResponse, ok := response.(ListSupplierSyncRunsResponseObject); ok {
+		if err := validResponse.VisitListSupplierSyncRunsResponse(w); err != nil {
 			sh.options.ResponseErrorHandlerFunc(w, r, err)
 		}
 	} else if response != nil {

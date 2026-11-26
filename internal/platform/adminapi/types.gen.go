@@ -67,6 +67,24 @@ func (e AdminCallStatus) Valid() bool {
 	}
 }
 
+// Defines values for AdminPlugin.
+const (
+	FileParser AdminPlugin = "file-parser"
+	Web        AdminPlugin = "web"
+)
+
+// Valid indicates whether the value is a known member of the AdminPlugin enum.
+func (e AdminPlugin) Valid() bool {
+	switch e {
+	case FileParser:
+		return true
+	case Web:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AlertConfigurationRequestRulesMinimumSeverity.
 const (
 	AlertConfigurationRequestRulesMinimumSeverityAlertCritical AlertConfigurationRequestRulesMinimumSeverity = "critical"
@@ -154,51 +172,96 @@ func (e AlertRuleMinimumSeverity) Valid() bool {
 	}
 }
 
+// Defines values for AnnouncementState.
+const (
+	Ended     AnnouncementState = "ended"
+	Scheduled AnnouncementState = "scheduled"
+	Showing   AnnouncementState = "showing"
+	Withdrawn AnnouncementState = "withdrawn"
+)
+
+// Valid indicates whether the value is a known member of the AnnouncementState enum.
+func (e AnnouncementState) Valid() bool {
+	switch e {
+	case Ended:
+		return true
+	case Scheduled:
+		return true
+	case Showing:
+		return true
+	case Withdrawn:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApiFormat.
+const (
+	ApiFormatAnthropic ApiFormat = "anthropic"
+	ApiFormatGemini    ApiFormat = "gemini"
+	ApiFormatOpenai    ApiFormat = "openai"
+)
+
+// Valid indicates whether the value is a known member of the ApiFormat enum.
+func (e ApiFormat) Valid() bool {
+	switch e {
+	case ApiFormatAnthropic:
+		return true
+	case ApiFormatGemini:
+		return true
+	case ApiFormatOpenai:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for BillingItem.
 const (
-	AudioIn       BillingItem = "audio_in"
-	AudioOut      BillingItem = "audio_out"
-	CacheRead     BillingItem = "cache_read"
-	CacheWrite    BillingItem = "cache_write"
-	CacheWrite1h  BillingItem = "cache_write_1h"
-	CodeExecution BillingItem = "code_execution"
-	FileSearch    BillingItem = "file_search"
-	ImageIn       BillingItem = "image_in"
-	ImageOut      BillingItem = "image_out"
-	Input         BillingItem = "input"
-	Output        BillingItem = "output"
-	Reasoning     BillingItem = "reasoning"
-	WebSearch     BillingItem = "web_search"
+	BillingItemAudioIn       BillingItem = "audio_in"
+	BillingItemAudioOut      BillingItem = "audio_out"
+	BillingItemCacheRead     BillingItem = "cache_read"
+	BillingItemCacheWrite    BillingItem = "cache_write"
+	BillingItemCacheWrite1h  BillingItem = "cache_write_1h"
+	BillingItemCodeExecution BillingItem = "code_execution"
+	BillingItemFileSearch    BillingItem = "file_search"
+	BillingItemImageIn       BillingItem = "image_in"
+	BillingItemImageOut      BillingItem = "image_out"
+	BillingItemInput         BillingItem = "input"
+	BillingItemOutput        BillingItem = "output"
+	BillingItemReasoning     BillingItem = "reasoning"
+	BillingItemWebSearch     BillingItem = "web_search"
 )
 
 // Valid indicates whether the value is a known member of the BillingItem enum.
 func (e BillingItem) Valid() bool {
 	switch e {
-	case AudioIn:
+	case BillingItemAudioIn:
 		return true
-	case AudioOut:
+	case BillingItemAudioOut:
 		return true
-	case CacheRead:
+	case BillingItemCacheRead:
 		return true
-	case CacheWrite:
+	case BillingItemCacheWrite:
 		return true
-	case CacheWrite1h:
+	case BillingItemCacheWrite1h:
 		return true
-	case CodeExecution:
+	case BillingItemCodeExecution:
 		return true
-	case FileSearch:
+	case BillingItemFileSearch:
 		return true
-	case ImageIn:
+	case BillingItemImageIn:
 		return true
-	case ImageOut:
+	case BillingItemImageOut:
 		return true
-	case Input:
+	case BillingItemInput:
 		return true
-	case Output:
+	case BillingItemOutput:
 		return true
-	case Reasoning:
+	case BillingItemReasoning:
 		return true
-	case WebSearch:
+	case BillingItemWebSearch:
 		return true
 	default:
 		return false
@@ -223,6 +286,39 @@ func (e BillingPreferenceName) Valid() bool {
 	case WalletFirst:
 		return true
 	case WalletOnly:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BillingUnit.
+const (
+	BillingUnitCharacter BillingUnit = "character"
+	BillingUnitImage     BillingUnit = "image"
+	BillingUnitPage      BillingUnit = "page"
+	BillingUnitRequest   BillingUnit = "request"
+	BillingUnitSecond    BillingUnit = "second"
+	BillingUnitToken     BillingUnit = "token"
+	BillingUnitUse       BillingUnit = "use"
+)
+
+// Valid indicates whether the value is a known member of the BillingUnit enum.
+func (e BillingUnit) Valid() bool {
+	switch e {
+	case BillingUnitCharacter:
+		return true
+	case BillingUnitImage:
+		return true
+	case BillingUnitPage:
+		return true
+	case BillingUnitRequest:
+		return true
+	case BillingUnitSecond:
+		return true
+	case BillingUnitToken:
+		return true
+	case BillingUnitUse:
 		return true
 	default:
 		return false
@@ -379,6 +475,27 @@ func (e CashMovementKind) Valid() bool {
 	}
 }
 
+// Defines values for CloudProvider.
+const (
+	Azure   CloudProvider = "azure"
+	Bedrock CloudProvider = "bedrock"
+	Vertex  CloudProvider = "vertex"
+)
+
+// Valid indicates whether the value is a known member of the CloudProvider enum.
+func (e CloudProvider) Valid() bool {
+	switch e {
+	case Azure:
+		return true
+	case Bedrock:
+		return true
+	case Vertex:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConfigTestResultStatus.
 const (
 	ConfigAccepted    ConfigTestResultStatus = "accepted"
@@ -421,6 +538,174 @@ func (e ContextTiersMethod) Valid() bool {
 	}
 }
 
+// Defines values for CostFactorKind.
+const (
+	CostFactorKindBasePrice       CostFactorKind = "base_price"
+	CostFactorKindCacheRatio      CostFactorKind = "cache_ratio"
+	CostFactorKindCacheWriteRatio CostFactorKind = "cache_write_ratio"
+	CostFactorKindCompletionRatio CostFactorKind = "completion_ratio"
+	CostFactorKindExchangeRate    CostFactorKind = "exchange_rate"
+	CostFactorKindGroupRatio      CostFactorKind = "group_ratio"
+	CostFactorKindModelRatio      CostFactorKind = "model_ratio"
+	CostFactorKindOfficialPrice   CostFactorKind = "official_price"
+	CostFactorKindScale           CostFactorKind = "scale"
+	CostFactorKindUnitValue       CostFactorKind = "unit_value"
+)
+
+// Valid indicates whether the value is a known member of the CostFactorKind enum.
+func (e CostFactorKind) Valid() bool {
+	switch e {
+	case CostFactorKindBasePrice:
+		return true
+	case CostFactorKindCacheRatio:
+		return true
+	case CostFactorKindCacheWriteRatio:
+		return true
+	case CostFactorKindCompletionRatio:
+		return true
+	case CostFactorKindExchangeRate:
+		return true
+	case CostFactorKindGroupRatio:
+		return true
+	case CostFactorKindModelRatio:
+		return true
+	case CostFactorKindOfficialPrice:
+		return true
+	case CostFactorKindScale:
+		return true
+	case CostFactorKindUnitValue:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CostSource.
+const (
+	Bill      CostSource = "bill"
+	Confirmed CostSource = "confirmed"
+	PriceList CostSource = "price_list"
+	Read      CostSource = "read"
+)
+
+// Valid indicates whether the value is a known member of the CostSource enum.
+func (e CostSource) Valid() bool {
+	switch e {
+	case Bill:
+		return true
+	case Confirmed:
+		return true
+	case PriceList:
+		return true
+	case Read:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialCheckCause.
+const (
+	CredentialCheckCauseCredentialRejected CredentialCheckCause = "credential_rejected"
+	CredentialCheckCauseNotPermitted       CredentialCheckCause = "not_permitted"
+	CredentialCheckCauseQuotaExhausted     CredentialCheckCause = "quota_exhausted"
+	CredentialCheckCauseRateLimited        CredentialCheckCause = "rate_limited"
+	CredentialCheckCauseRegionUnavailable  CredentialCheckCause = "region_unavailable"
+	CredentialCheckCauseTimeout            CredentialCheckCause = "timeout"
+	CredentialCheckCauseTransport          CredentialCheckCause = "transport"
+	CredentialCheckCauseUnknown            CredentialCheckCause = "unknown"
+	CredentialCheckCauseUpstreamError      CredentialCheckCause = "upstream_error"
+	CredentialCheckCauseWrongGroup         CredentialCheckCause = "wrong_group"
+)
+
+// Valid indicates whether the value is a known member of the CredentialCheckCause enum.
+func (e CredentialCheckCause) Valid() bool {
+	switch e {
+	case CredentialCheckCauseCredentialRejected:
+		return true
+	case CredentialCheckCauseNotPermitted:
+		return true
+	case CredentialCheckCauseQuotaExhausted:
+		return true
+	case CredentialCheckCauseRateLimited:
+		return true
+	case CredentialCheckCauseRegionUnavailable:
+		return true
+	case CredentialCheckCauseTimeout:
+		return true
+	case CredentialCheckCauseTransport:
+		return true
+	case CredentialCheckCauseUnknown:
+		return true
+	case CredentialCheckCauseUpstreamError:
+		return true
+	case CredentialCheckCauseWrongGroup:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialCheckOutcome.
+const (
+	CredentialCheckOutcomeDuplicate    CredentialCheckOutcome = "duplicate"
+	CredentialCheckOutcomeFailed       CredentialCheckOutcome = "failed"
+	CredentialCheckOutcomeInconclusive CredentialCheckOutcome = "inconclusive"
+	CredentialCheckOutcomePassed       CredentialCheckOutcome = "passed"
+)
+
+// Valid indicates whether the value is a known member of the CredentialCheckOutcome enum.
+func (e CredentialCheckOutcome) Valid() bool {
+	switch e {
+	case CredentialCheckOutcomeDuplicate:
+		return true
+	case CredentialCheckOutcomeFailed:
+		return true
+	case CredentialCheckOutcomeInconclusive:
+		return true
+	case CredentialCheckOutcomePassed:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CredentialStatus.
+const (
+	CredentialStatusActive           CredentialStatus = "active"
+	CredentialStatusBinding          CredentialStatus = "binding"
+	CredentialStatusDisabled         CredentialStatus = "disabled"
+	CredentialStatusErased           CredentialStatus = "erased"
+	CredentialStatusExpired          CredentialStatus = "expired"
+	CredentialStatusQuotaExhausted   CredentialStatus = "quota_exhausted"
+	CredentialStatusRejected         CredentialStatus = "rejected"
+	CredentialStatusUpstreamDisabled CredentialStatus = "upstream_disabled"
+)
+
+// Valid indicates whether the value is a known member of the CredentialStatus enum.
+func (e CredentialStatus) Valid() bool {
+	switch e {
+	case CredentialStatusActive:
+		return true
+	case CredentialStatusBinding:
+		return true
+	case CredentialStatusDisabled:
+		return true
+	case CredentialStatusErased:
+		return true
+	case CredentialStatusExpired:
+		return true
+	case CredentialStatusQuotaExhausted:
+		return true
+	case CredentialStatusRejected:
+		return true
+	case CredentialStatusUpstreamDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreditBatchSource.
 const (
 	CreditBatchGift   CreditBatchSource = "gift"
@@ -454,6 +739,33 @@ func (e CreditSource) Valid() bool {
 	case CreditSourceGift:
 		return true
 	case CreditSourceOfflinePayment:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DirectProvider.
+const (
+	DirectProviderAnthropic  DirectProvider = "anthropic"
+	DirectProviderCompatible DirectProvider = "compatible"
+	DirectProviderGoogle     DirectProvider = "google"
+	DirectProviderMoonshot   DirectProvider = "moonshot"
+	DirectProviderOpenai     DirectProvider = "openai"
+)
+
+// Valid indicates whether the value is a known member of the DirectProvider enum.
+func (e DirectProvider) Valid() bool {
+	switch e {
+	case DirectProviderAnthropic:
+		return true
+	case DirectProviderCompatible:
+		return true
+	case DirectProviderGoogle:
+		return true
+	case DirectProviderMoonshot:
+		return true
+	case DirectProviderOpenai:
 		return true
 	default:
 		return false
@@ -505,6 +817,27 @@ const (
 func (e EasyPaySettingsSignType) Valid() bool {
 	switch e {
 	case MD5:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for EndpointCostCostState.
+const (
+	EndpointCostCostStateConflict EndpointCostCostState = "conflict"
+	EndpointCostCostStateKnown    EndpointCostCostState = "known"
+	EndpointCostCostStateUnknown  EndpointCostCostState = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the EndpointCostCostState enum.
+func (e EndpointCostCostState) Valid() bool {
+	switch e {
+	case EndpointCostCostStateConflict:
+		return true
+	case EndpointCostCostStateKnown:
+		return true
+	case EndpointCostCostStateUnknown:
 		return true
 	default:
 		return false
@@ -829,6 +1162,48 @@ func (e ErrorCode) Valid() bool {
 	}
 }
 
+// Defines values for GroupConnectionKeySource.
+const (
+	Make  GroupConnectionKeySource = "make"
+	Paste GroupConnectionKeySource = "paste"
+)
+
+// Valid indicates whether the value is a known member of the GroupConnectionKeySource enum.
+func (e GroupConnectionKeySource) Valid() bool {
+	switch e {
+	case Make:
+		return true
+	case Paste:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KeyIdentificationStatus.
+const (
+	KeyIdentificationStatusActive         KeyIdentificationStatus = "active"
+	KeyIdentificationStatusDisabled       KeyIdentificationStatus = "disabled"
+	KeyIdentificationStatusExpired        KeyIdentificationStatus = "expired"
+	KeyIdentificationStatusQuotaExhausted KeyIdentificationStatus = "quota_exhausted"
+)
+
+// Valid indicates whether the value is a known member of the KeyIdentificationStatus enum.
+func (e KeyIdentificationStatus) Valid() bool {
+	switch e {
+	case KeyIdentificationStatusActive:
+		return true
+	case KeyIdentificationStatusDisabled:
+		return true
+	case KeyIdentificationStatusExpired:
+		return true
+	case KeyIdentificationStatusQuotaExhausted:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for LegalDocumentKind.
 const (
 	Privacy LegalDocumentKind = "privacy"
@@ -910,6 +1285,111 @@ func (e MailSettingsSource) Valid() bool {
 	}
 }
 
+// Defines values for MeteringItem.
+const (
+	MeteringItemAudioIn        MeteringItem = "audio_in"
+	MeteringItemAudioInSecond  MeteringItem = "audio_in_second"
+	MeteringItemAudioOut       MeteringItem = "audio_out"
+	MeteringItemAudioOutSecond MeteringItem = "audio_out_second"
+	MeteringItemCacheRead      MeteringItem = "cache_read"
+	MeteringItemCacheWrite     MeteringItem = "cache_write"
+	MeteringItemCacheWrite1h   MeteringItem = "cache_write_1h"
+	MeteringItemCharacterIn    MeteringItem = "character_in"
+	MeteringItemCodeExecution  MeteringItem = "code_execution"
+	MeteringItemFileParse      MeteringItem = "file_parse"
+	MeteringItemFileSearch     MeteringItem = "file_search"
+	MeteringItemImageIn        MeteringItem = "image_in"
+	MeteringItemImageInPiece   MeteringItem = "image_in_piece"
+	MeteringItemImageOut       MeteringItem = "image_out"
+	MeteringItemImageOutPiece  MeteringItem = "image_out_piece"
+	MeteringItemInput          MeteringItem = "input"
+	MeteringItemOutput         MeteringItem = "output"
+	MeteringItemReasoning      MeteringItem = "reasoning"
+	MeteringItemRequest        MeteringItem = "request"
+	MeteringItemWebSearch      MeteringItem = "web_search"
+)
+
+// Valid indicates whether the value is a known member of the MeteringItem enum.
+func (e MeteringItem) Valid() bool {
+	switch e {
+	case MeteringItemAudioIn:
+		return true
+	case MeteringItemAudioInSecond:
+		return true
+	case MeteringItemAudioOut:
+		return true
+	case MeteringItemAudioOutSecond:
+		return true
+	case MeteringItemCacheRead:
+		return true
+	case MeteringItemCacheWrite:
+		return true
+	case MeteringItemCacheWrite1h:
+		return true
+	case MeteringItemCharacterIn:
+		return true
+	case MeteringItemCodeExecution:
+		return true
+	case MeteringItemFileParse:
+		return true
+	case MeteringItemFileSearch:
+		return true
+	case MeteringItemImageIn:
+		return true
+	case MeteringItemImageInPiece:
+		return true
+	case MeteringItemImageOut:
+		return true
+	case MeteringItemImageOutPiece:
+		return true
+	case MeteringItemInput:
+		return true
+	case MeteringItemOutput:
+		return true
+	case MeteringItemReasoning:
+		return true
+	case MeteringItemRequest:
+		return true
+	case MeteringItemWebSearch:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for MeteringUnit.
+const (
+	MeteringUnitCharacter MeteringUnit = "character"
+	MeteringUnitImage     MeteringUnit = "image"
+	MeteringUnitPage      MeteringUnit = "page"
+	MeteringUnitRequest   MeteringUnit = "request"
+	MeteringUnitSecond    MeteringUnit = "second"
+	MeteringUnitToken     MeteringUnit = "token"
+	MeteringUnitUse       MeteringUnit = "use"
+)
+
+// Valid indicates whether the value is a known member of the MeteringUnit enum.
+func (e MeteringUnit) Valid() bool {
+	switch e {
+	case MeteringUnitCharacter:
+		return true
+	case MeteringUnitImage:
+		return true
+	case MeteringUnitPage:
+		return true
+	case MeteringUnitRequest:
+		return true
+	case MeteringUnitSecond:
+		return true
+	case MeteringUnitToken:
+		return true
+	case MeteringUnitUse:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ModelFormat.
 const (
 	ModelFormatChat        ModelFormat = "chat"
@@ -934,6 +1414,66 @@ func (e ModelFormat) Valid() bool {
 	case ModelFormatRerank:
 		return true
 	case ModelFormatResponses:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelImportSource.
+const (
+	ModelImportSourceLitellm    ModelImportSource = "litellm"
+	ModelImportSourceOpenrouter ModelImportSource = "openrouter"
+)
+
+// Valid indicates whether the value is a known member of the ModelImportSource enum.
+func (e ModelImportSource) Valid() bool {
+	switch e {
+	case ModelImportSourceLitellm:
+		return true
+	case ModelImportSourceOpenrouter:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelImportRequestSource.
+const (
+	ModelImportRequestSourceLitellm    ModelImportRequestSource = "litellm"
+	ModelImportRequestSourceOpenrouter ModelImportRequestSource = "openrouter"
+)
+
+// Valid indicates whether the value is a known member of the ModelImportRequestSource enum.
+func (e ModelImportRequestSource) Valid() bool {
+	switch e {
+	case ModelImportRequestSourceLitellm:
+		return true
+	case ModelImportRequestSourceOpenrouter:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ModelListingResultDataOutcome.
+const (
+	ModelListingResultDataOutcomeListed   ModelListingResultDataOutcome = "listed"
+	ModelListingResultDataOutcomeNotDraft ModelListingResultDataOutcome = "not_draft"
+	ModelListingResultDataOutcomeNotReady ModelListingResultDataOutcome = "not_ready"
+	ModelListingResultDataOutcomeStale    ModelListingResultDataOutcome = "stale"
+)
+
+// Valid indicates whether the value is a known member of the ModelListingResultDataOutcome enum.
+func (e ModelListingResultDataOutcome) Valid() bool {
+	switch e {
+	case ModelListingResultDataOutcomeListed:
+		return true
+	case ModelListingResultDataOutcomeNotDraft:
+		return true
+	case ModelListingResultDataOutcomeNotReady:
+		return true
+	case ModelListingResultDataOutcomeStale:
 		return true
 	default:
 		return false
@@ -997,6 +1537,24 @@ func (e ModelStatusUpdateStatus) Valid() bool {
 	}
 }
 
+// Defines values for MonitorWindow.
+const (
+	N1h  MonitorWindow = "1h"
+	N24h MonitorWindow = "24h"
+)
+
+// Valid indicates whether the value is a known member of the MonitorWindow enum.
+func (e MonitorWindow) Valid() bool {
+	switch e {
+	case N1h:
+		return true
+	case N24h:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for NameAddVisibility.
 const (
 	NameAddVisibilityInternal NameAddVisibility = "internal"
@@ -1017,19 +1575,19 @@ func (e NameAddVisibility) Valid() bool {
 
 // Defines values for OAuthProvider.
 const (
-	Github  OAuthProvider = "github"
-	Google  OAuthProvider = "google"
-	Linuxdo OAuthProvider = "linuxdo"
+	OAuthProviderGithub  OAuthProvider = "github"
+	OAuthProviderGoogle  OAuthProvider = "google"
+	OAuthProviderLinuxdo OAuthProvider = "linuxdo"
 )
 
 // Valid indicates whether the value is a known member of the OAuthProvider enum.
 func (e OAuthProvider) Valid() bool {
 	switch e {
-	case Github:
+	case OAuthProviderGithub:
 		return true
-	case Google:
+	case OAuthProviderGoogle:
 		return true
-	case Linuxdo:
+	case OAuthProviderLinuxdo:
 		return true
 	default:
 		return false
@@ -1234,6 +1792,24 @@ func (e OperationsModelStatusParamsStatus) Valid() bool {
 	case OperationsModelStatusParamsStatusListed:
 		return true
 	case OperationsModelStatusParamsStatusRetired:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for OperationsMonitorBucketSeconds.
+const (
+	N3600 OperationsMonitorBucketSeconds = 3600
+	N60   OperationsMonitorBucketSeconds = 60
+)
+
+// Valid indicates whether the value is a known member of the OperationsMonitorBucketSeconds enum.
+func (e OperationsMonitorBucketSeconds) Valid() bool {
+	switch e {
+	case N3600:
+		return true
+	case N60:
 		return true
 	default:
 		return false
@@ -2116,33 +2692,21 @@ func (e SupplierNativeUnit) Valid() bool {
 	}
 }
 
-// Defines values for SupplierCredentialStatus.
+// Defines values for SupplierCredentialKeySource.
 const (
-	SupplierCredentialStatusActive           SupplierCredentialStatus = "active"
-	SupplierCredentialStatusBinding          SupplierCredentialStatus = "binding"
-	SupplierCredentialStatusDisabled         SupplierCredentialStatus = "disabled"
-	SupplierCredentialStatusErased           SupplierCredentialStatus = "erased"
-	SupplierCredentialStatusExpired          SupplierCredentialStatus = "expired"
-	SupplierCredentialStatusQuotaExhausted   SupplierCredentialStatus = "quota_exhausted"
-	SupplierCredentialStatusUpstreamDisabled SupplierCredentialStatus = "upstream_disabled"
+	Bound  SupplierCredentialKeySource = "bound"
+	Made   SupplierCredentialKeySource = "made"
+	Pasted SupplierCredentialKeySource = "pasted"
 )
 
-// Valid indicates whether the value is a known member of the SupplierCredentialStatus enum.
-func (e SupplierCredentialStatus) Valid() bool {
+// Valid indicates whether the value is a known member of the SupplierCredentialKeySource enum.
+func (e SupplierCredentialKeySource) Valid() bool {
 	switch e {
-	case SupplierCredentialStatusActive:
+	case Bound:
 		return true
-	case SupplierCredentialStatusBinding:
+	case Made:
 		return true
-	case SupplierCredentialStatusDisabled:
-		return true
-	case SupplierCredentialStatusErased:
-		return true
-	case SupplierCredentialStatusExpired:
-		return true
-	case SupplierCredentialStatusQuotaExhausted:
-		return true
-	case SupplierCredentialStatusUpstreamDisabled:
+	case Pasted:
 		return true
 	default:
 		return false
@@ -2263,6 +2827,123 @@ func (e SupplierGroupKeyState) Valid() bool {
 	}
 }
 
+// Defines values for SupplierInboxKind.
+const (
+	SupplierInboxKindCostMismatch        SupplierInboxKind = "cost_mismatch"
+	SupplierInboxKindGroupAdded          SupplierInboxKind = "group_added"
+	SupplierInboxKindKeyInvalid          SupplierInboxKind = "key_invalid"
+	SupplierInboxKindLowBalance          SupplierInboxKind = "low_balance"
+	SupplierInboxKindRatioChanged        SupplierInboxKind = "ratio_changed"
+	SupplierInboxKindUnknownModel        SupplierInboxKind = "unknown_model"
+	SupplierInboxKindUnlistedModelCalled SupplierInboxKind = "unlisted_model_called"
+)
+
+// Valid indicates whether the value is a known member of the SupplierInboxKind enum.
+func (e SupplierInboxKind) Valid() bool {
+	switch e {
+	case SupplierInboxKindCostMismatch:
+		return true
+	case SupplierInboxKindGroupAdded:
+		return true
+	case SupplierInboxKindKeyInvalid:
+		return true
+	case SupplierInboxKindLowBalance:
+		return true
+	case SupplierInboxKindRatioChanged:
+		return true
+	case SupplierInboxKindUnknownModel:
+		return true
+	case SupplierInboxKindUnlistedModelCalled:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierIntakeMode.
+const (
+	SupplierIntakeModeKnown  SupplierIntakeMode = "known"
+	SupplierIntakeModeListed SupplierIntakeMode = "listed"
+	SupplierIntakeModeNames  SupplierIntakeMode = "names"
+)
+
+// Valid indicates whether the value is a known member of the SupplierIntakeMode enum.
+func (e SupplierIntakeMode) Valid() bool {
+	switch e {
+	case SupplierIntakeModeKnown:
+		return true
+	case SupplierIntakeModeListed:
+		return true
+	case SupplierIntakeModeNames:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierMode.
+const (
+	Cloud  SupplierMode = "cloud"
+	Direct SupplierMode = "direct"
+	Relay  SupplierMode = "relay"
+)
+
+// Valid indicates whether the value is a known member of the SupplierMode enum.
+func (e SupplierMode) Valid() bool {
+	switch e {
+	case Cloud:
+		return true
+	case Direct:
+		return true
+	case Relay:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierModelPile.
+const (
+	SupplierModelPileKnown    SupplierModelPile = "known"
+	SupplierModelPileListed   SupplierModelPile = "listed"
+	SupplierModelPileOutdated SupplierModelPile = "outdated"
+	SupplierModelPileReview   SupplierModelPile = "review"
+)
+
+// Valid indicates whether the value is a known member of the SupplierModelPile enum.
+func (e SupplierModelPile) Valid() bool {
+	switch e {
+	case SupplierModelPileKnown:
+		return true
+	case SupplierModelPileListed:
+		return true
+	case SupplierModelPileOutdated:
+		return true
+	case SupplierModelPileReview:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SupplierReconciliationNativeUnit.
+const (
+	SupplierReconciliationNativeUnitQuota SupplierReconciliationNativeUnit = "quota"
+	SupplierReconciliationNativeUnitUsd   SupplierReconciliationNativeUnit = "usd"
+)
+
+// Valid indicates whether the value is a known member of the SupplierReconciliationNativeUnit enum.
+func (e SupplierReconciliationNativeUnit) Valid() bool {
+	switch e {
+	case SupplierReconciliationNativeUnitQuota:
+		return true
+	case SupplierReconciliationNativeUnitUsd:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for SupplierStatus.
 const (
 	SupplierStatusActive         SupplierStatus = "active"
@@ -2308,6 +2989,87 @@ func (e SupplierStatusUpdateStatus) Valid() bool {
 	case SupplierStatusUpdateStatusActive:
 		return true
 	case SupplierStatusUpdateStatusPaused:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncEventKind.
+const (
+	SyncEventKindBalanceCrossed   SyncEventKind = "balance_crossed"
+	SyncEventKindBalanceLow       SyncEventKind = "balance_low"
+	SyncEventKindBalanceRecovered SyncEventKind = "balance_recovered"
+	SyncEventKindFundingChanged   SyncEventKind = "funding_changed"
+	SyncEventKindGroupAdded       SyncEventKind = "group_added"
+	SyncEventKindGroupChanged     SyncEventKind = "group_changed"
+	SyncEventKindGroupRemoved     SyncEventKind = "group_removed"
+	SyncEventKindKeyChanged       SyncEventKind = "key_changed"
+	SyncEventKindModelAdded       SyncEventKind = "model_added"
+	SyncEventKindModelChanged     SyncEventKind = "model_changed"
+	SyncEventKindModelRemoved     SyncEventKind = "model_removed"
+	SyncEventKindNeedsAttention   SyncEventKind = "needs_attention"
+	SyncEventKindPlanChanged      SyncEventKind = "plan_changed"
+	SyncEventKindRatioChanged     SyncEventKind = "ratio_changed"
+	SyncEventKindTaskHalted       SyncEventKind = "task_halted"
+)
+
+// Valid indicates whether the value is a known member of the SyncEventKind enum.
+func (e SyncEventKind) Valid() bool {
+	switch e {
+	case SyncEventKindBalanceCrossed:
+		return true
+	case SyncEventKindBalanceLow:
+		return true
+	case SyncEventKindBalanceRecovered:
+		return true
+	case SyncEventKindFundingChanged:
+		return true
+	case SyncEventKindGroupAdded:
+		return true
+	case SyncEventKindGroupChanged:
+		return true
+	case SyncEventKindGroupRemoved:
+		return true
+	case SyncEventKindKeyChanged:
+		return true
+	case SyncEventKindModelAdded:
+		return true
+	case SyncEventKindModelChanged:
+		return true
+	case SyncEventKindModelRemoved:
+		return true
+	case SyncEventKindNeedsAttention:
+		return true
+	case SyncEventKindPlanChanged:
+		return true
+	case SyncEventKindRatioChanged:
+		return true
+	case SyncEventKindTaskHalted:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncTask.
+const (
+	SyncTaskBalance SyncTask = "balance"
+	SyncTaskCatalog SyncTask = "catalog"
+	SyncTaskCharges SyncTask = "charges"
+	SyncTaskKeys    SyncTask = "keys"
+)
+
+// Valid indicates whether the value is a known member of the SyncTask enum.
+func (e SyncTask) Valid() bool {
+	switch e {
+	case SyncTaskBalance:
+		return true
+	case SyncTaskCatalog:
+		return true
+	case SyncTaskCharges:
+		return true
+	case SyncTaskKeys:
 		return true
 	default:
 		return false
@@ -2497,6 +3259,24 @@ func (e ReplaceOperationsTargetsParamsXAxiomTargetMetrics) Valid() bool {
 	}
 }
 
+// Defines values for ListPlatformSubscriptionsParamsSort.
+const (
+	CreatedAt ListPlatformSubscriptionsParamsSort = "created_at"
+	EndsAt    ListPlatformSubscriptionsParamsSort = "ends_at"
+)
+
+// Valid indicates whether the value is a known member of the ListPlatformSubscriptionsParamsSort enum.
+func (e ListPlatformSubscriptionsParamsSort) Valid() bool {
+	switch e {
+	case CreatedAt:
+		return true
+	case EndsAt:
+		return true
+	default:
+		return false
+	}
+}
+
 // AccountDetail defines model for AccountDetail.
 type AccountDetail struct {
 	// Balance An account's money in its site's accounting currency. `available` is `balance - reserved`; a call is admitted while `available - floor` covers its reservation, and `floor` is at most 0. `spent_this_month` is what calls settled for the current UTC calendar month.
@@ -2553,6 +3333,30 @@ type AccountTierChange struct {
 	TierId TierId `json:"tier_id"`
 }
 
+// AdminAnnouncement defines model for AdminAnnouncement.
+type AdminAnnouncement struct {
+	Body   string    `json:"body"`
+	EndsAt time.Time `json:"ends_at"`
+
+	// Id A site announcement's ID (TypeID).
+	Id AnnouncementId `json:"id"`
+
+	// SiteId A site's ID (TypeID).
+	SiteId      SiteId            `json:"site_id"`
+	StartsAt    time.Time         `json:"starts_at"`
+	State       AnnouncementState `json:"state"`
+	Title       string            `json:"title"`
+	WithdrawnAt *time.Time        `json:"withdrawn_at,omitempty"`
+}
+
+// AdminAnnouncementList defines model for AdminAnnouncementList.
+type AdminAnnouncementList struct {
+	Data []AdminAnnouncement `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
 // AdminAttempt defines model for AdminAttempt.
 type AdminAttempt struct {
 	Egress       *string    `json:"egress,omitempty"`
@@ -2587,6 +3391,25 @@ type AdminCallList struct {
 	Until        *time.Time       `json:"until,omitempty"`
 }
 
+// AdminCallPlugin defines model for AdminCallPlugin.
+type AdminCallPlugin struct {
+	// Engine The search engine's or parser's name in the settings.
+	Engine *string `json:"engine,omitempty"`
+	Ms     *int    `json:"ms,omitempty"`
+
+	// Ok False when the plugin's run failed and the call went on without it.
+	Ok bool `json:"ok"`
+
+	// Plugin A plugin, by the ID a request names it with.
+	Plugin AdminPlugin `json:"plugin"`
+
+	// Price What the call was charged for the plugin.
+	Price *Money `json:"price,omitempty"`
+
+	// Uses Searches run, or pages parsed.
+	Uses *int `json:"uses,omitempty"`
+}
+
 // AdminCallStatus The result of a call: `ok` when its error_kind is empty, `error` otherwise. An old node may leave the filter echo out of a list.
 type AdminCallStatus string
 
@@ -2599,6 +3422,9 @@ type AdminCallSummary struct {
 	Id        *string    `json:"id,omitempty"`
 	LatencyMs *int       `json:"latency_ms,omitempty"`
 	Model     *string    `json:"model,omitempty"`
+
+	// Plugins The plugins the call used; absent when it used none.
+	Plugins *[]AdminCallPlugin `json:"plugins,omitempty"`
 
 	// Price An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
 	Price *Money `json:"price,omitempty"`
@@ -2618,6 +3444,9 @@ type AdminCallTrace struct {
 	Route   *jsonx.Raw        `json:"route,omitempty"`
 	Summary *AdminCallSummary `json:"summary,omitempty"`
 }
+
+// AdminPlugin A plugin, by the ID a request names it with.
+type AdminPlugin string
 
 // AdminSite defines model for AdminSite.
 type AdminSite struct {
@@ -2807,6 +3636,12 @@ type AnnouncementResult struct {
 	Id *AnnouncementId `json:"id,omitempty"`
 }
 
+// AnnouncementState defines model for AnnouncementState.
+type AnnouncementState string
+
+// ApiFormat The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The paths follow from it.
+type ApiFormat string
+
 // AuditEntry defines model for AuditEntry.
 type AuditEntry struct {
 	// AccountId An account's ID (TypeID).
@@ -2885,6 +3720,9 @@ type BillingItem string
 
 // BillingPreferenceName Which source a call uses first. `subscription_first` uses the plan and falls back to the wallet; `wallet_first` the reverse; `subscription_only` and `wallet_only` do not fall back (docs/domains/billing.md「资金来源」).
 type BillingPreferenceName string
+
+// BillingUnit defines model for BillingUnit.
+type BillingUnit string
 
 // BindKey defines model for BindKey.
 type BindKey struct {
@@ -3008,6 +3846,83 @@ type CashMovementList struct {
 	NextCursor *string `json:"next_cursor"`
 }
 
+// CloudAccount What is not secret about a cloud supplier's credential; the credential itself is never returned.
+type CloudAccount struct {
+	// AccessKeyLast4 Bedrock: the last four characters of the access key ID.
+	AccessKeyLast4 *string `json:"access_key_last4,omitempty"`
+
+	// ClientEmail Vertex AI: the service account.
+	ClientEmail *string `json:"client_email,omitempty"`
+
+	// KeyLast4 Azure OpenAI: the last four characters of the resource's key.
+	KeyLast4 *string `json:"key_last4,omitempty"`
+
+	// ProjectId Vertex AI: the project the service account belongs to.
+	ProjectId *string `json:"project_id,omitempty"`
+}
+
+// CloudCredentialInput The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
+type CloudCredentialInput struct {
+	AccessKeyId     *string `json:"access_key_id,omitempty"`
+	ApiKey          *string `json:"api_key,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty"`
+
+	// ServiceAccountJson The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`.
+	ServiceAccountJson *string `json:"service_account_json,omitempty"`
+}
+
+// CloudCredentialReplace defines model for CloudCredentialReplace.
+type CloudCredentialReplace struct {
+	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
+	Credential *CloudCredentialInput `json:"credential,omitempty"`
+
+	// MaxConcurrency For a region added here; absent is 4. A region kept keeps its limits.
+	MaxConcurrency *int `json:"max_concurrency,omitempty"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Regions The regions to serve from now on; absent keeps the current ones. Not for `azure` (400).
+	Regions *[]CloudRegion `json:"regions,omitempty"`
+
+	// RequestsPerMinute For a region added here; absent for none.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+}
+
+// CloudProvider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
+type CloudProvider string
+
+// CloudRegion A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
+type CloudRegion = string
+
+// CloudSupplierCreate defines model for CloudSupplierCreate.
+type CloudSupplierCreate struct {
+	// Credential The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400.
+	Credential *CloudCredentialInput `json:"credential,omitempty"`
+
+	// MaxConcurrency The calls each region has in flight at once.
+	MaxConcurrency int    `json:"max_concurrency"`
+	Name           string `json:"name"`
+
+	// Origin Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com.
+	Origin *string `json:"origin,omitempty"`
+
+	// Provider `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
+	Provider CloudProvider `json:"provider"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Regions Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400).
+	Regions *[]CloudRegion `json:"regions,omitempty"`
+
+	// RequestsPerMinute Each region's rolling-minute ceiling; absent for none.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// SettlementCurrency The currency the platform bills in, fixed once connected; absent is USD.
+	SettlementCurrency *string `json:"settlement_currency,omitempty"`
+}
+
 // ConfigTestResult defines model for ConfigTestResult.
 type ConfigTestResult struct {
 	Status *ConfigTestResultStatus `json:"status,omitempty"`
@@ -3037,6 +3952,103 @@ type ContextTiers struct {
 // ContextTiersMethod defines model for ContextTiers.Method.
 type ContextTiersMethod string
 
+// CostBreakEven For an endpoint the upstream charges per request while the model is sold by the token.
+type CostBreakEven struct {
+	// MeanTokens24h The mean tokens of a request in the last 24 hours.
+	MeanTokens24h *int64 `json:"mean_tokens_24h,omitempty"`
+
+	// RequestPrice What one request costs, in the settlement currency.
+	RequestPrice Decimal `json:"request_price"`
+	Requests24h  *int64  `json:"requests_24h,omitempty"`
+
+	// Tokens The fewest tokens a request needs for the platform's sale price to cover `request_price`, at the input and output mix of the last 24 hours; a request with fewer loses money.
+	Tokens int64 `json:"tokens"`
+}
+
+// CostFactor defines model for CostFactor.
+type CostFactor struct {
+	// Kind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+	Kind CostFactorKind `json:"kind"`
+
+	// Value An exact decimal number in text, never a JSON number, so no digit is lost on the way.
+	Value Decimal `json:"value"`
+}
+
+// CostFactorKind One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+type CostFactorKind string
+
+// CostLine One price of the plan. The line's price applies to its item under its condition and service tier.
+type CostLine struct {
+	// Above The condition of a context tier, `ContextTier.above`; absent for the base price.
+	Above *int64 `json:"above,omitempty"`
+
+	// Factors What the price is the product of, in order, so the page can write it out.
+	Factors []CostFactor `json:"factors"`
+
+	// Item A billing item of the catalog's table (docs/domains/catalog.md「计费项与用量」), each with one unit.
+	Item MeteringItem `json:"item"`
+
+	// NativePrice Per unit, in the supplier's own unit (`Supplier.native_unit`); absent for a supplier billed in money.
+	NativePrice *Decimal `json:"native_price,omitempty"`
+
+	// Price Per unit, in the settlement currency; absent while the supplier's unit value is not confirmed.
+	Price       *Decimal     `json:"price,omitempty"`
+	ServiceTier *ServiceTier `json:"service_tier,omitempty"`
+
+	// Unit What one unit of an item is; follows from the item.
+	Unit MeteringUnit `json:"unit"`
+}
+
+// CostSource Where an endpoint's cost plan came from. `read`: the supplier's own prices and ratios, as the sync read them. `confirmed`: a base price a person confirmed, times the group's ratio, for a supplier that shows none. `price_list`: the catalog's official reference price, for a direct or cloud supplier. `bill`: the cloud platform's bill.
+type CostSource string
+
+// CredentialCheck defines model for CredentialCheck.
+type CredentialCheck struct {
+	// Cause Why a check did not pass. `credential_rejected`: refused as not valid (401); `not_permitted`: valid but not allowed (403), which is inconclusive, because it can be a region block; `quota_exhausted`: the key's own quota is used up; `wrong_group`: the relay lists the key under another group; `region_unavailable`: the region does not serve the account's models; the rest say nothing about the credential.
+	Cause     *CredentialCheckCause `json:"cause,omitempty"`
+	CheckedAt *time.Time            `json:"checked_at,omitempty"`
+
+	// CredentialId The credential the key was stored as, or the one tested; absent when nothing was stored.
+	CredentialId *Uuid `json:"credential_id,omitempty"`
+
+	// Index The position of the key in the request's `keys`, for a pasted key.
+	Index *int `json:"index,omitempty"`
+
+	// Last4 The last four characters of the key; never more of it.
+	Last4 *string `json:"last4,omitempty"`
+
+	// Outcome `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not checked.
+	Outcome CredentialCheckOutcome `json:"outcome"`
+
+	// Region A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
+	Region *CloudRegion `json:"region,omitempty"`
+
+	// UpstreamStatus The supplier's HTTP status; 0 when it answered nothing.
+	UpstreamStatus *int `json:"upstream_status,omitempty"`
+}
+
+// CredentialCheckCause Why a check did not pass. `credential_rejected`: refused as not valid (401); `not_permitted`: valid but not allowed (403), which is inconclusive, because it can be a region block; `quota_exhausted`: the key's own quota is used up; `wrong_group`: the relay lists the key under another group; `region_unavailable`: the region does not serve the account's models; the rest say nothing about the credential.
+type CredentialCheckCause string
+
+// CredentialCheckList defines model for CredentialCheckList.
+type CredentialCheckList struct {
+	Data []CredentialCheck `json:"data"`
+
+	// Skipped `testSupplierCredentials`: the credentials left out as `disabled`.
+	Skipped *int `json:"skipped,omitempty"`
+}
+
+// CredentialCheckOutcome `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not checked.
+type CredentialCheckOutcome string
+
+// CredentialEnabledUpdate defines model for CredentialEnabledUpdate.
+type CredentialEnabledUpdate struct {
+	Enabled bool `json:"enabled"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // CredentialLimits defines model for CredentialLimits.
 type CredentialLimits struct {
 	// MaxConcurrency The calls the key has in flight at once. A new binding starts at 4.
@@ -3047,6 +4059,18 @@ type CredentialLimits struct {
 
 	// RequestsPerMinute Stop selecting this credential when the shared upstream account's rolling-minute count reaches this; absent or null clears the ceiling. At most 100000.
 	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+}
+
+// CredentialStatus `SupplierCredential.status`: `rejected` is a credential the supplier refused as not valid, which routing never picks until a check passes; `disabled` a person stopped it.
+type CredentialStatus string
+
+// CredentialTestsRequest defines model for CredentialTestsRequest.
+type CredentialTestsRequest struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// SupplierId The supplier whose credentials to test; absent tests every supplier's.
+	SupplierId *Uuid `json:"supplier_id,omitempty"`
 }
 
 // CreditAmount An exact amount of credit in billionths of one unit of the site's currency, as text so a JSON number cannot round it (docs/domains/billing.md「钱的表示」).
@@ -3147,6 +4171,37 @@ type DetectionRequest struct {
 	Origin string `json:"origin"`
 }
 
+// DirectProvider A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
+type DirectProvider string
+
+// DirectSupplierCreate defines model for DirectSupplierCreate.
+type DirectSupplierCreate struct {
+	// Format Only for `compatible`, where it is required; a built-in provider's format is its own (400).
+	Format *ApiFormat `json:"format,omitempty"`
+
+	// Keys The keys, one per item, sealed on arrival and never returned.
+	Keys *[]string `json:"keys,omitempty"`
+
+	// MaxConcurrency The calls each key has in flight at once.
+	MaxConcurrency int    `json:"max_concurrency"`
+	Name           string `json:"name"`
+
+	// Origin Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path. A built-in provider's origin is its own, so giving one is a 400.
+	Origin *string `json:"origin,omitempty"`
+
+	// Provider A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
+	Provider DirectProvider `json:"provider"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// RequestsPerMinute Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// SettlementCurrency The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states. Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or CNY for `moonshot`).
+	SettlementCurrency *string `json:"settlement_currency,omitempty"`
+}
+
 // EasyPaySettings An `easypay` merchant account's settings (internal/payments/README.md「易支付配置与边界」).
 type EasyPaySettings struct {
 	// Cids The gateway's channel ID for each of the site's payment methods that has one.
@@ -3191,6 +4246,30 @@ type EffectiveKeyLimits struct {
 	CreationsPerHour int `json:"creations_per_hour"`
 	MaxKeys          int `json:"max_keys"`
 }
+
+// EndpointCost defines model for EndpointCost.
+type EndpointCost struct {
+	// BreakEven For an endpoint the upstream charges per request while the model is sold by the token.
+	BreakEven *CostBreakEven        `json:"break_even,omitempty"`
+	CostState EndpointCostCostState `json:"cost_state"`
+
+	// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	EndpointId Uuid       `json:"endpoint_id"`
+	Lines      []CostLine `json:"lines"`
+
+	// PlanId The version of the cost plan, which an attempt's cost row names.
+	PlanId             *Uuid  `json:"plan_id,omitempty"`
+	SettlementCurrency string `json:"settlement_currency"`
+
+	// Source Where an endpoint's cost plan came from. `read`: the supplier's own prices and ratios, as the sync read them. `confirmed`: a base price a person confirmed, times the group's ratio, for a supplier that shows none. `price_list`: the catalog's official reference price, for a direct or cloud supplier. `bill`: the cloud platform's bill.
+	Source *CostSource `json:"source,omitempty"`
+
+	// UnitValue The unit value the prices were converted with; absent for a supplier billed in money or not yet confirmed.
+	UnitValue *Decimal `json:"unit_value,omitempty"`
+}
+
+// EndpointCostCostState defines model for EndpointCost.CostState.
+type EndpointCostCostState string
 
 // EndpointEnabledUpdate defines model for EndpointEnabledUpdate.
 type EndpointEnabledUpdate struct {
@@ -3385,11 +4464,76 @@ type FileParserSettingsUpdate struct {
 	} `json:"settings"`
 }
 
+// GroupConnected defines model for GroupConnected.
+type GroupConnected struct {
+	Credential SupplierCredential `json:"credential"`
+	Group      SupplierGroup      `json:"group"`
+}
+
+// GroupConnection defines model for GroupConnection.
+type GroupConnection struct {
+	// Key Required with `paste`, refused with `make` (400); sealed on arrival and never returned.
+	Key *string `json:"key,omitempty"`
+
+	// KeySource `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+	KeySource GroupConnectionKeySource `json:"key_source"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// GroupConnectionKeySource `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+type GroupConnectionKeySource string
+
 // GroupSelection defines model for GroupSelection.
 type GroupSelection struct {
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason   Reason `json:"reason"`
 	Selected bool   `json:"selected"`
+}
+
+// InvalidCredentialsRemoval defines model for InvalidCredentialsRemoval.
+type InvalidCredentialsRemoval struct {
+	// CredentialIds The `rejected` credentials the person saw and confirmed.
+	CredentialIds []Uuid `json:"credential_ids"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// InvalidCredentialsRemoved defines model for InvalidCredentialsRemoved.
+type InvalidCredentialsRemoved struct {
+	// Kept The credentials named that were not `rejected` any more, or that do not exist.
+	Kept []Uuid `json:"kept"`
+
+	// Removed The credentials erased.
+	Removed []Uuid `json:"removed"`
+}
+
+// KeyIdentification defines model for KeyIdentification.
+type KeyIdentification struct {
+	// CredentialId The credential Axiom already stores for this key, if any.
+	CredentialId *Uuid `json:"credential_id,omitempty"`
+
+	// GroupId The group the supplier lists the key under; absent when it does not list the key.
+	GroupId *Uuid `json:"group_id,omitempty"`
+
+	// Last4 The last four characters of the key; never more of it.
+	Last4 string `json:"last4"`
+
+	// Status The key's status at the supplier.
+	Status *KeyIdentificationStatus `json:"status,omitempty"`
+
+	// UpstreamKeyRef The supplier's own ID of the key.
+	UpstreamKeyRef *string `json:"upstream_key_ref,omitempty"`
+}
+
+// KeyIdentificationStatus The key's status at the supplier.
+type KeyIdentificationStatus string
+
+// KeyIdentificationRequest defines model for KeyIdentificationRequest.
+type KeyIdentificationRequest struct {
+	Key *string `json:"key,omitempty"`
 }
 
 // KeyLimits Limits on the call keys of an account: how many it may hold that are not deleted (`max_keys`), and how many it may make in an hour, deleted ones too (`creations_per_hour`). A limit that is absent is not set, and the level above applies: the site's for an account, the default in code for a site. Each is from 1 to 10,000.
@@ -3712,6 +4856,12 @@ type MerchantUpdate struct {
 	Reason Reason `json:"reason"`
 }
 
+// MeteringItem A billing item of the catalog's table (docs/domains/catalog.md「计费项与用量」), each with one unit.
+type MeteringItem string
+
+// MeteringUnit What one unit of an item is; follows from the item.
+type MeteringUnit string
+
 // MfaRequest defines model for MfaRequest.
 type MfaRequest struct {
 	// Code A TOTP code (6 digits) or a recovery code (xxxx-xxxx-xxxx-xxxx, case and hyphens ignored). The server tells them apart by shape.
@@ -3721,6 +4871,12 @@ type MfaRequest struct {
 // Model defines model for Model.
 type Model struct {
 	Author AuthorSlug `json:"author"`
+
+	// BillingUnits The units the model's current reference prices charge in, from the items they price; derived, never stored.
+	BillingUnits *[]BillingUnit `json:"billing_units,omitempty"`
+
+	// Family A family of models within its author, such as gpt-6.1 or claude-sonnet.
+	Family *ModelFamily `json:"family,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id          Uuid             `json:"id"`
@@ -3759,8 +4915,52 @@ type ModelCreate struct {
 	VersionBasis VersionBasis `json:"version_basis"`
 }
 
+// ModelFamily A family of models within its author, such as gpt-6.1 or claude-sonnet.
+type ModelFamily = string
+
+// ModelFamilyUpdate defines model for ModelFamilyUpdate.
+type ModelFamilyUpdate struct {
+	// Family The family; null takes the model out of its family.
+	Family *ModelFamily `json:"family"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+	Rev    int64  `json:"rev"`
+}
+
 // ModelFormat defines model for ModelFormat.
 type ModelFormat string
+
+// ModelImport defines model for ModelImport.
+type ModelImport struct {
+	// Added Draft models added; `listModels` with `status=draft` lists them.
+	Added int `json:"added"`
+
+	// Held Entries not added because the catalog cannot use them as they are.
+	Held int `json:"held"`
+
+	// HeldNames The names of the first held entries, for a person to add by hand.
+	HeldNames *[]string `json:"held_names,omitempty"`
+
+	// Known Entries the catalog already knew, left as they are.
+	Known  int               `json:"known"`
+	Source ModelImportSource `json:"source"`
+}
+
+// ModelImportSource defines model for ModelImport.Source.
+type ModelImportSource string
+
+// ModelImportRequest defines model for ModelImportRequest.
+type ModelImportRequest struct {
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// Source The public price list to import from, one of the catalog's datasets.
+	Source ModelImportRequestSource `json:"source"`
+}
+
+// ModelImportRequestSource The public price list to import from, one of the catalog's datasets.
+type ModelImportRequestSource string
 
 // ModelList defines model for ModelList.
 type ModelList struct {
@@ -3769,6 +4969,33 @@ type ModelList struct {
 	// NextCursor Null on the last page.
 	NextCursor *string `json:"next_cursor"`
 }
+
+// ModelListingRequest defines model for ModelListingRequest.
+type ModelListingRequest struct {
+	Models []struct {
+		// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		Id  Uuid  `json:"id"`
+		Rev int64 `json:"rev"`
+	} `json:"models"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
+// ModelListingResult defines model for ModelListingResult.
+type ModelListingResult struct {
+	Data []struct {
+		// Model The model as listed; present with `listed`.
+		Model *ModelSummary `json:"model,omitempty"`
+
+		// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		ModelId Uuid                          `json:"model_id"`
+		Outcome ModelListingResultDataOutcome `json:"outcome"`
+	} `json:"data"`
+}
+
+// ModelListingResultDataOutcome defines model for ModelListingResult.Data.Outcome.
+type ModelListingResultDataOutcome string
 
 // ModelMapping defines model for ModelMapping.
 type ModelMapping struct {
@@ -3850,6 +5077,12 @@ type ModelStatusUpdateStatus string
 type ModelSummary struct {
 	Author AuthorSlug `json:"author"`
 
+	// BillingUnits The units the model's current reference prices charge in, from the items they price; derived, never stored.
+	BillingUnits *[]BillingUnit `json:"billing_units,omitempty"`
+
+	// Family A family of models within its author, such as gpt-6.1 or claude-sonnet.
+	Family *ModelFamily `json:"family,omitempty"`
+
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id          Uuid        `json:"id"`
 	PriceSource PriceSource `json:"price_source"`
@@ -3874,6 +5107,61 @@ type Money struct {
 	Currency string `json:"currency"`
 }
 
+// MonitorBucket defines model for MonitorBucket.
+type MonitorBucket struct {
+	// At The bucket's start.
+	At              time.Time `json:"at"`
+	Calls           int64     `json:"calls"`
+	Failures        int64     `json:"failures"`
+	FirstTokenMsP50 *int      `json:"first_token_ms_p50,omitempty"`
+	FirstTokenMsP95 *int      `json:"first_token_ms_p95,omitempty"`
+
+	// Tokens Input, cached and output tokens the calls reported.
+	Tokens int64 `json:"tokens"`
+}
+
+// MonitorDurationBin defines model for MonitorDurationBin.
+type MonitorDurationBin struct {
+	// BelowMs The bin's upper bound; absent for the last, open bin.
+	BelowMs *int  `json:"below_ms,omitempty"`
+	Calls   int64 `json:"calls"`
+}
+
+// MonitorFailureCause defines model for MonitorFailureCause.
+type MonitorFailureCause struct {
+	Calls int64 `json:"calls"`
+
+	// ErrorKind The call log's `error_kind`, as `listAdminCalls` filters by it.
+	ErrorKind string `json:"error_kind"`
+
+	// Upstream True when the failure was the supplier's side: its endpoint, key, group or itself.
+	Upstream bool `json:"upstream"`
+}
+
+// MonitorLine One line, a supplier's group, by the calls whose last attempt went to it.
+type MonitorLine struct {
+	Calls           int64 `json:"calls"`
+	Failures        int64 `json:"failures"`
+	FirstTokenMsP50 *int  `json:"first_token_ms_p50,omitempty"`
+
+	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GroupId Uuid `json:"group_id"`
+
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId Uuid `json:"supplier_id"`
+}
+
+// MonitorPercentiles Milliseconds; absent when no call in the window had the measure.
+type MonitorPercentiles struct {
+	P50 *int `json:"p50,omitempty"`
+	P90 *int `json:"p90,omitempty"`
+	P95 *int `json:"p95,omitempty"`
+	P99 *int `json:"p99,omitempty"`
+}
+
+// MonitorWindow defines model for MonitorWindow.
+type MonitorWindow string
+
 // NameAdd defines model for NameAdd.
 type NameAdd struct {
 	Name string `json:"name"`
@@ -3885,6 +5173,9 @@ type NameAdd struct {
 
 // NameAddVisibility defines model for NameAdd.Visibility.
 type NameAddVisibility string
+
+// NamePattern An upstream model name where `*` stands for any run of characters; it matches the whole name, ignoring case.
+type NamePattern = string
 
 // NotedPriceEvidence Evidence for a source other than `official`, in the words of the person who publishes the price; the server checks only that it is a non-empty object.
 type NotedPriceEvidence map[string]interface{}
@@ -4336,9 +5627,44 @@ type OperationsMoneyTarget struct {
 	Target Money `json:"target"`
 }
 
+// OperationsMonitor defines model for OperationsMonitor.
+type OperationsMonitor struct {
+	BucketSeconds OperationsMonitorBucketSeconds `json:"bucket_seconds"`
+
+	// Buckets Every bucket of the window, oldest first, empty ones included.
+	Buckets []MonitorBucket `json:"buckets"`
+	Calls   int64           `json:"calls"`
+
+	// Durations How the completed calls' total times spread, by bin, shortest first.
+	Durations []MonitorDurationBin `json:"durations"`
+
+	// FailureCauses The failed calls by cause, most first.
+	FailureCauses []MonitorFailureCause `json:"failure_causes"`
+	Failures      int64                 `json:"failures"`
+
+	// FirstTokenMs Milliseconds; absent when no call in the window had the measure.
+	FirstTokenMs MonitorPercentiles `json:"first_token_ms"`
+	Lines        []MonitorLine      `json:"lines"`
+	Since        time.Time          `json:"since"`
+
+	// SwitchedCalls Calls that moved to another endpoint after an attempt failed.
+	SwitchedCalls int64 `json:"switched_calls"`
+	Tokens        int64 `json:"tokens"`
+
+	// TotalMs Milliseconds; absent when no call in the window had the measure.
+	TotalMs MonitorPercentiles `json:"total_ms"`
+	Until   time.Time          `json:"until"`
+	Window  MonitorWindow      `json:"window"`
+}
+
+// OperationsMonitorBucketSeconds defines model for OperationsMonitor.BucketSeconds.
+type OperationsMonitorBucketSeconds int
+
 // OperationsOverview defines model for OperationsOverview.
 type OperationsOverview struct {
-	Calls *int64 `json:"calls,omitempty"`
+	// ActiveAccounts Distinct accounts with a call in the window.
+	ActiveAccounts *int64 `json:"active_accounts,omitempty"`
+	Calls          *int64 `json:"calls,omitempty"`
 
 	// CallsAvailableSince The first instant of the oldest monthly partition the log still has; calls before it were archived. Absent with `calls_incomplete` true when no monthly partition remains, so no window can be answered from the log.
 	CallsAvailableSince *time.Time `json:"calls_available_since,omitempty"`
@@ -4348,14 +5674,23 @@ type OperationsOverview struct {
 	Cash            *[]CashAmount `json:"cash,omitempty"`
 
 	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
-	Cost   *Money `json:"cost,omitempty"`
-	Errors *int64 `json:"errors,omitempty"`
+	Cost *Money `json:"cost,omitempty"`
+
+	// Days Each UTC day the window touches, oldest first, for the trend lines.
+	Days   *[]OverviewDay `json:"days,omitempty"`
+	Errors *int64         `json:"errors,omitempty"`
+
+	// FirstTokenMsP50 The median time to the first token of the window's calls.
+	FirstTokenMsP50 *int `json:"first_token_ms_p50,omitempty"`
 
 	// GrossMargin (revenue - cost) / revenue in basis points, rounded half away from zero. Absent when the window has no settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete.
 	GrossMargin *int `json:"gross_margin,omitempty"`
 
 	// MonthlyRevenue The credit paid top-ups granted in the window, in the site's accounting currency. It is not call revenue: a top-up is prepaid credit, recognized as call revenue when calls settle.
 	MonthlyRevenue *Money `json:"monthly_revenue,omitempty"`
+
+	// NewUsers Users who signed up in the window.
+	NewUsers *int64 `json:"new_users,omitempty"`
 
 	// PaidUsers Distinct accounts with a paid top-up in the window. An old node leaves it out, which the page shows as unavailable.
 	PaidUsers *int64 `json:"paid_users,omitempty"`
@@ -4371,11 +5706,17 @@ type OperationsOverview struct {
 	SiteId *SiteId `json:"site_id,omitempty"`
 
 	// Targets The monthly targets with `gap` = actual - target, in the metric's unit. Counts and money are prorated to the window; gross margin and retention are the target of the UTC month the window ends in, unchanged. An empty object means no monthly target covers the window. The calls and errors gaps are absent while `calls_incomplete`, because archived calls would make the actual side incomplete; paid users and monthly revenue come from credit batches and keep their gaps. The cost gap is absent while `unknown_cost_calls` is above zero: the cost total omits those calls, so a gap would state a conclusion the data does not support. A money target set in another currency than the site's accounting currency is absent. Gross margin and retention gaps are absent when their actual rate is unavailable. The whole field is absent on a node before targets existed, which the page shows as unavailable rather than as no target.
-	Targets          *OperationsTargetComparison `json:"targets,omitempty"`
-	TopAccounts      *[]OverviewAccount          `json:"top_accounts,omitempty"`
-	TopModels        *[]OverviewModel            `json:"top_models,omitempty"`
-	UnknownCostCalls *int64                      `json:"unknown_cost_calls,omitempty"`
-	Until            *time.Time                  `json:"until,omitempty"`
+	Targets *OperationsTargetComparison `json:"targets,omitempty"`
+
+	// Tokens The tokens the window's calls reported, by kind; `input` excludes the cached ones.
+	Tokens      *OverviewTokens    `json:"tokens,omitempty"`
+	TopAccounts *[]OverviewAccount `json:"top_accounts,omitempty"`
+	TopModels   *[]OverviewModel   `json:"top_models,omitempty"`
+
+	// TopSpenders The accounts whose settled calls were charged the most in the window, most first.
+	TopSpenders      *[]OverviewSpender `json:"top_spenders,omitempty"`
+	UnknownCostCalls *int64             `json:"unknown_cost_calls,omitempty"`
+	Until            *time.Time         `json:"until,omitempty"`
 }
 
 // OperationsPriceEnvelope How far the agent moves a site's sale prices without the owner, in basis points: every price it publishes keeps at least `min_margin_bps` of its price over its cost; one model's prices move at most `model_daily_change_bps` in a UTC day, up and down added together; a UTC day publishes at most `daily_changes` prices of at most `daily_models` models. Publications the owner approves count too.
@@ -4639,11 +5980,53 @@ type OverviewAccount struct {
 	Errors    *int64     `json:"errors,omitempty"`
 }
 
+// OverviewDay One UTC day of the window, with the measures the overview has for the whole of it.
+type OverviewDay struct {
+	ActiveAccounts *int64 `json:"active_accounts,omitempty"`
+	Calls          int64  `json:"calls"`
+
+	// Cost An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Cost            Money              `json:"cost"`
+	Date            openapi_types.Date `json:"date"`
+	Errors          int64              `json:"errors"`
+	FirstTokenMsP50 *int               `json:"first_token_ms_p50,omitempty"`
+	NewUsers        *int64             `json:"new_users,omitempty"`
+
+	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Revenue Money `json:"revenue"`
+
+	// Tokens The tokens the window's calls reported, by kind; `input` excludes the cached ones.
+	Tokens *OverviewTokens `json:"tokens,omitempty"`
+}
+
 // OverviewModel defines model for OverviewModel.
 type OverviewModel struct {
 	Calls  *int64  `json:"calls,omitempty"`
 	Errors *int64  `json:"errors,omitempty"`
 	Model  *string `json:"model,omitempty"`
+
+	// Revenue An exact amount of a site's accounting currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency (docs/domains/billing.md「钱的表示」). It is text because a JSON number would round above 2^53 (about 9 million units) in the browser. A report sums many stored amounts, so it can be wider than 64 bits; an amount that is written to the ledger must still fit 64 bits.
+	Revenue *Money `json:"revenue,omitempty"`
+
+	// Tokens Input, cached and output tokens the model's calls reported.
+	Tokens *int64 `json:"tokens,omitempty"`
+}
+
+// OverviewSpender defines model for OverviewSpender.
+type OverviewSpender struct {
+	// AccountId An account's ID (TypeID).
+	AccountId AccountId `json:"account_id"`
+
+	// Spend What the account's settled calls of the window were charged.
+	Spend Money `json:"spend"`
+}
+
+// OverviewTokens The tokens the window's calls reported, by kind; `input` excludes the cached ones.
+type OverviewTokens struct {
+	CacheRead  int64 `json:"cache_read"`
+	CacheWrite int64 `json:"cache_write"`
+	Input      int64 `json:"input"`
+	Output     int64 `json:"output"`
 }
 
 // PaidBatch A paid credit batch, the record behind the dashboard's paid users and monthly revenue. Its `created_at` is the time those figures count; an online batch uses the order's ID as its ID.
@@ -4908,6 +6291,44 @@ type PlatformGrantChange struct {
 // PlatformGrantList defines model for PlatformGrantList.
 type PlatformGrantList struct {
 	Data *[]PlatformGrant `json:"data,omitempty"`
+}
+
+// PluginHour defines model for PluginHour.
+type PluginHour struct {
+	At    time.Time `json:"at"`
+	Calls int64     `json:"calls"`
+}
+
+// PluginStat defines model for PluginStat.
+type PluginStat struct {
+	// Calls Calls that used the plugin.
+	Calls int64 `json:"calls"`
+
+	// Cost What the plugin's backends cost the platform, at the costs set in its settings.
+	Cost     *Money `json:"cost,omitempty"`
+	Failures int64  `json:"failures"`
+
+	// Hours Every hour of the window, oldest first.
+	Hours []PluginHour `json:"hours"`
+
+	// MeanMs Absent when it never ran.
+	MeanMs *int `json:"mean_ms,omitempty"`
+
+	// Plugin A plugin, by the ID a request names it with.
+	Plugin AdminPlugin `json:"plugin"`
+
+	// Revenue What the calls were charged for the plugin.
+	Revenue *Money `json:"revenue,omitempty"`
+
+	// Uses Searches run, or pages parsed.
+	Uses int64 `json:"uses"`
+}
+
+// PluginStats defines model for PluginStats.
+type PluginStats struct {
+	Plugins []PluginStat `json:"plugins"`
+	Since   time.Time    `json:"since"`
+	Until   time.Time    `json:"until"`
 }
 
 // PriceEndpointMap Per-endpoint prices, keyed by endpoint UUID.
@@ -6182,6 +7603,14 @@ type SubscriptionList struct {
 	Data []Subscription `json:"data"`
 }
 
+// SubscriptionPage defines model for SubscriptionPage.
+type SubscriptionPage struct {
+	Data []Subscription `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
 // SubscriptionPlan defines model for SubscriptionPlan.
 type SubscriptionPlan struct {
 	Active    bool      `json:"active"`
@@ -6231,6 +7660,17 @@ type SubscriptionPlanInput struct {
 // SubscriptionPlanList defines model for SubscriptionPlanList.
 type SubscriptionPlanList struct {
 	Data []SubscriptionPlan `json:"data"`
+}
+
+// SubscriptionPlanShare defines model for SubscriptionPlanShare.
+type SubscriptionPlanShare struct {
+	Active int64 `json:"active"`
+
+	// PlanId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	PlanId Uuid `json:"plan_id"`
+
+	// ShareBp Its share of all active subscriptions, in basis points.
+	ShareBp int `json:"share_bp"`
 }
 
 // SubscriptionPlanUpdate defines model for SubscriptionPlanUpdate.
@@ -6332,6 +7772,20 @@ type SubscriptionSource string
 // SubscriptionStanding `expired`: the term ended; `closed_at` is when what was left of it was written off.
 type SubscriptionStanding string
 
+// SubscriptionSummary defines model for SubscriptionSummary.
+type SubscriptionSummary struct {
+	Active            int64                   `json:"active"`
+	EndingWithin7Days int64                   `json:"ending_within_7_days"`
+	Month             string                  `json:"month"`
+	Plans             []SubscriptionPlanShare `json:"plans"`
+
+	// PreviousRevenue The same for the month before.
+	PreviousRevenue Money `json:"previous_revenue"`
+
+	// Revenue What the subscriptions sold in the month were paid, in the site's accounting currency; a gift is not revenue.
+	Revenue Money `json:"revenue"`
+}
+
 // SubscriptionWindow defines model for SubscriptionWindow.
 type SubscriptionWindow struct {
 	EndsAt time.Time `json:"ends_at"`
@@ -6361,10 +7815,19 @@ type SubscriptionWindow struct {
 
 // Supplier defines model for Supplier.
 type Supplier struct {
+	// ApiFormat The call format of a `compatible` direct API.
+	ApiFormat *ApiFormat `json:"api_format,omitempty"`
+
+	// BalanceDays About how many days the balance lasts at the mean spend of the last 7 days; absent for a supplier without a balance (direct, cloud) or without spend to go by.
+	BalanceDays *int `json:"balance_days,omitempty"`
+
 	// BalanceNative An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 	BalanceNative     *Decimal   `json:"balance_native,omitempty"`
 	BalanceObservedAt *time.Time `json:"balance_observed_at,omitempty"`
-	DetectedVersion   *string    `json:"detected_version,omitempty"`
+
+	// CloudAccount What is not secret about a cloud supplier's credential; the credential itself is never returned.
+	CloudAccount    *CloudAccount `json:"cloud_account,omitempty"`
+	DetectedVersion *string       `json:"detected_version,omitempty"`
 
 	// Generation The system's generation the adapter detected, such as 1.0.
 	Generation *string `json:"generation,omitempty"`
@@ -6377,7 +7840,10 @@ type Supplier struct {
 
 	// LowBalanceThreshold An exact decimal number in text, never a JSON number, so no digit is lost on the way.
 	LowBalanceThreshold *Decimal `json:"low_balance_threshold,omitempty"`
-	Name                string   `json:"name"`
+
+	// Mode Absent from a server of an earlier release, which had only `relay`.
+	Mode *SupplierMode `json:"mode,omitempty"`
+	Name string        `json:"name"`
 
 	// NativeUnit The unit the supplier counts its balance in.
 	NativeUnit SupplierNativeUnit `json:"native_unit"`
@@ -6403,6 +7869,15 @@ type Supplier struct {
 // SupplierNativeUnit The unit the supplier counts its balance in.
 type SupplierNativeUnit string
 
+// SupplierConnected defines model for SupplierConnected.
+type SupplierConnected struct {
+	// Checks One check per key sent or per region, in the order sent.
+	Checks []CredentialCheck `json:"checks"`
+
+	// Supplier The supplier as connected or changed; absent when nothing passed and nothing was stored.
+	Supplier *Supplier `json:"supplier,omitempty"`
+}
+
 // SupplierCreate defines model for SupplierCreate.
 type SupplierCreate struct {
 	Kind string `json:"kind"`
@@ -6423,30 +7898,65 @@ type SupplierCreate struct {
 // SupplierCredential defines model for SupplierCredential.
 type SupplierCredential struct {
 	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
 	ExpiresAt     *time.Time `json:"expires_at,omitempty"`
 
 	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	GroupId Uuid `json:"group_id"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
-	Id             Uuid `json:"id"`
-	MaxConcurrency int  `json:"max_concurrency"`
+	Id Uuid `json:"id"`
+
+	// InFlight The calls holding the credential now, as the node that answered counts them.
+	InFlight *int `json:"in_flight,omitempty"`
+
+	// KeySource Whether the sync made the key, a person bound one the supplier lists, or a person pasted its text.
+	KeySource *SupplierCredentialKeySource `json:"key_source,omitempty"`
+
+	// Last4 The last four characters of a pasted key; never more of it.
+	Last4          *string          `json:"last4,omitempty"`
+	LastCheck      *CredentialCheck `json:"last_check,omitempty"`
+	MaxConcurrency int              `json:"max_concurrency"`
+
+	// Region A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1.
+	Region *CloudRegion `json:"region,omitempty"`
+
+	// RequestsLastMinute The upstream account's requests in the rolling minute, as the node that answered counted them: the count `requests_per_minute` is compared with.
+	RequestsLastMinute *int `json:"requests_last_minute,omitempty"`
 
 	// RequestsPerMinute The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling.
-	RequestsPerMinute *int                     `json:"requests_per_minute,omitempty"`
-	Status            SupplierCredentialStatus `json:"status"`
-	UpstreamKeyRef    string                   `json:"upstream_key_ref"`
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+
+	// Status `SupplierCredential.status`: `rejected` is a credential the supplier refused as not valid, which routing never picks until a check passes; `disabled` a person stopped it.
+	Status CredentialStatus `json:"status"`
+
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId     *Uuid  `json:"supplier_id,omitempty"`
+	UpstreamKeyRef string `json:"upstream_key_ref"`
 }
 
-// SupplierCredentialStatus defines model for SupplierCredential.Status.
-type SupplierCredentialStatus string
+// SupplierCredentialKeySource Whether the sync made the key, a person bound one the supplier lists, or a person pasted its text.
+type SupplierCredentialKeySource string
+
+// SupplierCredentialList defines model for SupplierCredentialList.
+type SupplierCredentialList struct {
+	Data []SupplierCredential `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
 
 // SupplierDetail defines model for SupplierDetail.
 type SupplierDetail struct {
 	Credentials []SupplierCredential `json:"credentials"`
 	Endpoints   []SupplierEndpoint   `json:"endpoints"`
 	Groups      []SupplierGroup      `json:"groups"`
+	IntakeRule  *SupplierIntakeRule  `json:"intake_rule,omitempty"`
+
+	// ModelCounts How many names each pile of `listSupplierModels` has.
+	ModelCounts *SupplierModelCounts `json:"model_counts,omitempty"`
 	Supplier    Supplier             `json:"supplier"`
+	SyncTasks   *[]SupplierSyncTask  `json:"sync_tasks,omitempty"`
 	UnboundKeys []UpstreamKey        `json:"unbound_keys"`
 }
 
@@ -6483,8 +7993,14 @@ type SupplierGroup struct {
 	// Codename What users see in place of the group's name. Set when first selected, never changed.
 	Codename *string `json:"codename,omitempty"`
 
+	// Description The supplier's own description of the group, as its adapter read it (new-api's `desc`).
+	Description *string `json:"description,omitempty"`
+
 	// Facts What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription` and `peak`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves.
 	Facts *map[string]interface{} `json:"facts,omitempty"`
+
+	// FirstSeenAt When the sync first saw the group.
+	FirstSeenAt *time.Time `json:"first_seen_at,omitempty"`
 
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id Uuid `json:"id"`
@@ -6494,7 +8010,10 @@ type SupplierGroup struct {
 
 	// KeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
 	KeyState *SupplierGroupKeyState `json:"key_state,omitempty"`
-	Name     string                 `json:"name"`
+
+	// ModelCount The models the supplier lists in the group.
+	ModelCount *int   `json:"model_count,omitempty"`
+	Name       string `json:"name"`
 
 	// Pool What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
 	Pool *SupplierPool `json:"pool,omitempty"`
@@ -6502,9 +8021,15 @@ type SupplierGroup struct {
 	// Present False when the supplier no longer lists the group.
 	Present bool `json:"present"`
 
+	// PreviousRatio The ratio before the last change of it; absent when it never changed.
+	PreviousRatio *Decimal `json:"previous_ratio,omitempty"`
+
 	// Ratio An exact decimal number in text, never a JSON number, so no digit is lost on the way.
-	Ratio    Decimal `json:"ratio"`
-	Selected bool    `json:"selected"`
+	Ratio Decimal `json:"ratio"`
+
+	// RatioChangedAt When the sync saw the ratio change last.
+	RatioChangedAt *time.Time `json:"ratio_changed_at,omitempty"`
+	Selected       bool       `json:"selected"`
 
 	// UpstreamRef The supplier's own ID of the group.
 	UpstreamRef string `json:"upstream_ref"`
@@ -6515,6 +8040,138 @@ type SupplierGroupKeyReason string
 
 // SupplierGroupKeyState How the key Axiom uses for this group stands: `ready` when one is stored, `pending` while the sync will make one or is reading the text of one a person bound, `failed` when the last attempt did not work (see `key_reason`), `unavailable` when no key is needed because the group cannot be called. Absent from a server of an earlier release.
 type SupplierGroupKeyState string
+
+// SupplierInboxItem One item; the members beyond the first are present for the kinds that have them.
+type SupplierInboxItem struct {
+	// Accounts `unlisted_model_called`: the accounts they came from.
+	Accounts *int64 `json:"accounts,omitempty"`
+
+	// BalanceDays `low_balance`: about how many days it lasts.
+	BalanceDays *int `json:"balance_days,omitempty"`
+
+	// BalanceNative `low_balance`: the balance, in the supplier's unit.
+	BalanceNative *Decimal `json:"balance_native,omitempty"`
+
+	// Calls `unlisted_model_called`: refused calls in the last 24 hours.
+	Calls *int64 `json:"calls,omitempty"`
+
+	// ChargedNative `cost_mismatch`: what the supplier charged.
+	ChargedNative *Decimal `json:"charged_native,omitempty"`
+
+	// CredentialId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	CredentialId *Uuid `json:"credential_id,omitempty"`
+
+	// Date `cost_mismatch`: the UTC day.
+	Date *openapi_types.Date `json:"date,omitempty"`
+
+	// EstimatedNative `cost_mismatch`: what Axiom estimated.
+	EstimatedNative *Decimal  `json:"estimated_native,omitempty"`
+	FirstSeenAt     time.Time `json:"first_seen_at"`
+
+	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GroupId *Uuid `json:"group_id,omitempty"`
+
+	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	Id Uuid `json:"id"`
+
+	// IgnoredAt When a person ignored it; absent while it shows.
+	IgnoredAt *time.Time `json:"ignored_at,omitempty"`
+
+	// Kind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name no model matches (`listPendingMappings`).
+	Kind       SupplierInboxKind `json:"kind"`
+	LastSeenAt time.Time         `json:"last_seen_at"`
+
+	// ModelId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	ModelId *Uuid `json:"model_id,omitempty"`
+
+	// PreviousRatio `ratio_changed`: the ratio before.
+	PreviousRatio *Decimal `json:"previous_ratio,omitempty"`
+
+	// Ratio `ratio_changed`, `group_added`: the ratio now.
+	Ratio *Decimal `json:"ratio,omitempty"`
+
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId   Uuid    `json:"supplier_id"`
+	UpstreamName *string `json:"upstream_name,omitempty"`
+}
+
+// SupplierInboxKind `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name no model matches (`listPendingMappings`).
+type SupplierInboxKind string
+
+// SupplierInboxList defines model for SupplierInboxList.
+type SupplierInboxList struct {
+	Data []SupplierInboxItem `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// SupplierInboxSummary defines model for SupplierInboxSummary.
+type SupplierInboxSummary struct {
+	// Kinds The items of each kind; a kind with none is 0.
+	Kinds struct {
+		CostMismatch        int64 `json:"cost_mismatch"`
+		GroupAdded          int64 `json:"group_added"`
+		KeyInvalid          int64 `json:"key_invalid"`
+		LowBalance          int64 `json:"low_balance"`
+		RatioChanged        int64 `json:"ratio_changed"`
+		UnknownModel        int64 `json:"unknown_model"`
+		UnlistedModelCalled int64 `json:"unlisted_model_called"`
+	} `json:"kinds"`
+	Total int64 `json:"total"`
+}
+
+// SupplierIntakeMode See `setSupplierIntakeRule`.
+type SupplierIntakeMode string
+
+// SupplierIntakeRule defines model for SupplierIntakeRule.
+type SupplierIntakeRule struct {
+	// Exclude `names`: a name matching one of these is never taken. Empty in the other modes.
+	Exclude []NamePattern `json:"exclude"`
+
+	// Include `names`: a name is taken when it matches one of these. Empty in the other modes.
+	Include []NamePattern `json:"include"`
+
+	// Mode See `setSupplierIntakeRule`.
+	Mode SupplierIntakeMode `json:"mode"`
+
+	// Rev The revision a change must be decided against; 0 is the default rule `listed`, never written.
+	Rev int64 `json:"rev"`
+}
+
+// SupplierIntakeRuleUpdate defines model for SupplierIntakeRuleUpdate.
+type SupplierIntakeRuleUpdate struct {
+	// Exclude Only with `names` (422 with another mode); absent is empty.
+	Exclude *[]NamePattern `json:"exclude,omitempty"`
+
+	// Include Required and not empty with `names`; refused with another mode (422).
+	Include *[]NamePattern `json:"include,omitempty"`
+
+	// Mode See `setSupplierIntakeRule`.
+	Mode SupplierIntakeMode `json:"mode"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+	Rev    int64  `json:"rev"`
+}
+
+// SupplierKeysAdd defines model for SupplierKeysAdd.
+type SupplierKeysAdd struct {
+	// GroupId Required for a relay, refused for a direct API (400).
+	GroupId *Uuid `json:"group_id,omitempty"`
+
+	// Keys The keys, one per item, sealed on arrival and never returned.
+	Keys *[]string `json:"keys,omitempty"`
+
+	// MaxConcurrency The calls each key has in flight at once.
+	MaxConcurrency int `json:"max_concurrency"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+
+	// RequestsPerMinute Each key's rolling-minute ceiling; absent for none.
+	RequestsPerMinute *int `json:"requests_per_minute,omitempty"`
+}
 
 // SupplierList defines model for SupplierList.
 type SupplierList struct {
@@ -6544,6 +8201,61 @@ type SupplierLoginUpdate struct {
 	Reason Reason `json:"reason"`
 }
 
+// SupplierMode How Axiom reaches the supplier. `relay`: a relay or a pool Axiom logs in to, whose groups are its lines. `direct`: a provider's own API, or a compatible one, reached with pasted keys; one line. `cloud`: a cloud platform's model service reached with its credential; one line, one credential per region.
+type SupplierMode string
+
+// SupplierModel defines model for SupplierModel.
+type SupplierModel struct {
+	// EndpointId The endpoint made for the name, when there is one.
+	EndpointId *Uuid `json:"endpoint_id,omitempty"`
+
+	// Family A family of models within its author, such as gpt-6.1 or claude-sonnet.
+	Family      *ModelFamily  `json:"family,omitempty"`
+	FirstSeenAt time.Time     `json:"first_seen_at"`
+	Formats     []ModelFormat `json:"formats"`
+
+	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GroupId Uuid `json:"group_id"`
+
+	// ModelId The model the name resolves to; absent in `review`.
+	ModelId *Uuid `json:"model_id,omitempty"`
+
+	// ModelSlug `<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	ModelSlug *ModelSlug `json:"model_slug,omitempty"`
+
+	// ModelStatus `draft`: seen by the platform only; `listed`: on sale; `retired`: out of use for good.
+	ModelStatus *ModelStatus `json:"model_status,omitempty"`
+
+	// Pile See `listSupplierModels`.
+	Pile SupplierModelPile `json:"pile"`
+
+	// SuggestedModelId `review`: the model whose name is closest, as a suggestion for `mapSupplierModel`; absent when none is close.
+	SuggestedModelId *Uuid `json:"suggested_model_id,omitempty"`
+
+	// SuggestedModelSlug `<author>/<model>`, with optional `:free` and `@<version>` when the vendor gives one; lower case, as the catalog stores it.
+	SuggestedModelSlug *ModelSlug `json:"suggested_model_slug,omitempty"`
+	UpstreamName       string     `json:"upstream_name"`
+}
+
+// SupplierModelCounts How many names each pile of `listSupplierModels` has.
+type SupplierModelCounts struct {
+	Known    int64 `json:"known"`
+	Listed   int64 `json:"listed"`
+	Outdated int64 `json:"outdated"`
+	Review   int64 `json:"review"`
+}
+
+// SupplierModelList defines model for SupplierModelList.
+type SupplierModelList struct {
+	Data []SupplierModel `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// SupplierModelPile See `listSupplierModels`.
+type SupplierModelPile string
+
 // SupplierPool What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet.
 type SupplierPool struct {
 	// Accounts The accounts assigned to the group.
@@ -6568,6 +8280,57 @@ type SupplierPool struct {
 	Usable int `json:"usable"`
 }
 
+// SupplierReconciliation defines model for SupplierReconciliation.
+type SupplierReconciliation struct {
+	Days []SupplierReconciliationDay `json:"days"`
+
+	// NativeUnit The unit the amounts are in.
+	NativeUnit         SupplierReconciliationNativeUnit `json:"native_unit"`
+	SettlementCurrency *string                          `json:"settlement_currency,omitempty"`
+
+	// SupplierId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	SupplierId Uuid `json:"supplier_id"`
+
+	// UnitValue What one unit is worth in the settlement currency now, for showing the amounts as money; absent until confirmed.
+	UnitValue *Decimal `json:"unit_value,omitempty"`
+}
+
+// SupplierReconciliationNativeUnit The unit the amounts are in.
+type SupplierReconciliationNativeUnit string
+
+// SupplierReconciliationDay defines model for SupplierReconciliationDay.
+type SupplierReconciliationDay struct {
+	// ChargedAbove Matched charges above the estimate by more than the tolerance.
+	ChargedAbove int64 `json:"charged_above"`
+
+	// ChargedBelow Matched charges below the estimate by more than the tolerance.
+	ChargedBelow int64 `json:"charged_below"`
+
+	// ChargedNative What the supplier's charge records of the day add up to, in its unit.
+	ChargedNative Decimal `json:"charged_native"`
+
+	// Charges The day's charge records.
+	Charges int64 `json:"charges"`
+
+	// Date The UTC day.
+	Date openapi_types.Date `json:"date"`
+
+	// DifferenceBp (charged − estimated) / estimated, in basis points, rounded half away from zero; absent when nothing was estimated.
+	DifferenceBp *int `json:"difference_bp,omitempty"`
+
+	// EstimatedNative What Axiom's cost plans put the day's attempts that reached the supplier at, in the supplier's unit.
+	EstimatedNative Decimal `json:"estimated_native"`
+
+	// Held Charges no attempt claimed within the grace, held for a person.
+	Held int64 `json:"held"`
+
+	// Matched Charges matched to one attempt.
+	Matched int64 `json:"matched"`
+
+	// UnmatchedAttempts Attempts with a reconciliation key that no charge claimed within the grace.
+	UnmatchedAttempts *int64 `json:"unmatched_attempts,omitempty"`
+}
+
 // SupplierStatus `connecting`: not yet read; `active`: syncing, and routable while its balance is above zero; `low_balance`: syncing, balance under the alert line, routable on the same condition; `needs_attention`: polling stopped until a person acts, `status_reason` says why; `paused`: stopped on purpose; `removed`: see `removeSupplier`; `removing` is only what a removal of an earlier version left behind, and removing again ends it.
 type SupplierStatus string
 
@@ -6580,6 +8343,73 @@ type SupplierStatusUpdate struct {
 
 // SupplierStatusUpdateStatus defines model for SupplierStatusUpdate.Status.
 type SupplierStatusUpdateStatus string
+
+// SupplierSyncEvent defines model for SupplierSyncEvent.
+type SupplierSyncEvent struct {
+	// GroupId The group the subject is in, when Axiom still has it.
+	GroupId *Uuid `json:"group_id,omitempty"`
+
+	// Kind What one difference is: a group or a model the supplier lists that appeared or left; a group's ratio, facts or formats; a model's formats or limits; a new cost plan of an endpoint; a key's status; the balance crossing the alert line or zero; where calls are paid from; the supplier needing a person; a task stopping.
+	Kind SyncEventKind `json:"kind"`
+
+	// New The value after, in the same terms.
+	New *string `json:"new,omitempty"`
+
+	// Old The value before, as the sync recorded it: a ratio, a status, a fingerprint, a balance.
+	Old *string `json:"old,omitempty"`
+
+	// Subject What changed: a group's ref, `group/model` for a model or a cost plan, a key's ref; empty for the supplier itself.
+	Subject string `json:"subject"`
+
+	// Why A short reason of Axiom's, never the supplier's text.
+	Why *string `json:"why,omitempty"`
+}
+
+// SupplierSyncRun defines model for SupplierSyncRun.
+type SupplierSyncRun struct {
+	At     time.Time           `json:"at"`
+	Events []SupplierSyncEvent `json:"events"`
+
+	// Version The version of the supplier's sync state the run committed.
+	Version int64 `json:"version"`
+}
+
+// SupplierSyncRunList defines model for SupplierSyncRunList.
+type SupplierSyncRunList struct {
+	Data []SupplierSyncRun `json:"data"`
+
+	// NextCursor Null on the last page.
+	NextCursor *string `json:"next_cursor"`
+}
+
+// SupplierSyncTask defines model for SupplierSyncTask.
+type SupplierSyncTask struct {
+	// DueAt Not before this; absent when due now.
+	DueAt *time.Time `json:"due_at,omitempty"`
+
+	// Failures Failures in a row; the task backs off after them.
+	Failures int `json:"failures"`
+
+	// Halted True when the supplier's answer was not understood: only this task stopped, until a person acts.
+	Halted bool `json:"halted"`
+
+	// LastOkAt The last time it succeeded; absent when it never has.
+	LastOkAt *time.Time `json:"last_ok_at,omitempty"`
+
+	// Task What a task reads: the balance and where it is drawn from; the groups, ratios, models and prices; the keys; the charge records.
+	Task SyncTask `json:"task"`
+}
+
+// SupplierSyncTaskList defines model for SupplierSyncTaskList.
+type SupplierSyncTaskList struct {
+	Data []SupplierSyncTask `json:"data"`
+}
+
+// SyncEventKind What one difference is: a group or a model the supplier lists that appeared or left; a group's ratio, facts or formats; a model's formats or limits; a new cost plan of an endpoint; a key's status; the balance crossing the alert line or zero; where calls are paid from; the supplier needing a person; a task stopping.
+type SyncEventKind string
+
+// SyncTask What a task reads: the balance and where it is drawn from; the groups, ratios, models and prices; the keys; the charge records.
+type SyncTask string
 
 // SystemSettings defines model for SystemSettings.
 type SystemSettings struct {
@@ -6879,6 +8709,18 @@ type SendAlertTestParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListAdminAnnouncementsParams defines parameters for ListAdminAnnouncements.
+type ListAdminAnnouncementsParams struct {
+	SiteId *SiteId            `form:"site_id,omitempty" json:"site_id,omitempty"`
+	State  *AnnouncementState `form:"state,omitempty" json:"state,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // PublishAnnouncementParams defines parameters for PublishAnnouncement.
 type PublishAnnouncementParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -6933,6 +8775,9 @@ type ListAdminCallsParams struct {
 	Model     *string             `form:"model,omitempty" json:"model,omitempty"`
 	Status    *AdminCallStatus    `form:"status,omitempty" json:"status,omitempty"`
 	SiteId    *SiteId             `form:"site_id,omitempty" json:"site_id,omitempty"`
+
+	// Plugin Only calls that used this plugin.
+	Plugin *AdminPlugin `form:"plugin,omitempty" json:"plugin,omitempty"`
 }
 
 // ListModelsParams defines parameters for ListModels.
@@ -6940,6 +8785,7 @@ type ListModelsParams struct {
 	Status     *ModelStatus `form:"status,omitempty" json:"status,omitempty"`
 	Author     *AuthorSlug  `form:"author,omitempty" json:"author,omitempty"`
 	SlugPrefix *string      `form:"slug_prefix,omitempty" json:"slug_prefix,omitempty"`
+	Family     *ModelFamily `form:"family,omitempty" json:"family,omitempty"`
 
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -6950,6 +8796,24 @@ type ListModelsParams struct {
 
 // CreateModelParams defines parameters for CreateModel.
 type CreateModelParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ImportModelsParams defines parameters for ImportModels.
+type ImportModelsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// PutModelsOnSaleParams defines parameters for PutModelsOnSale.
+type PutModelsOnSaleParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetModelFamilyParams defines parameters for SetModelFamily.
+type SetModelFamilyParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -7280,8 +9144,19 @@ type SetRateLimitParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// GetOperationsMonitorParams defines parameters for GetOperationsMonitor.
+type GetOperationsMonitorParams struct {
+	Window *MonitorWindow `form:"window,omitempty" json:"window,omitempty"`
+}
+
 // GetOperationsOverviewParams defines parameters for GetOperationsOverview.
 type GetOperationsOverviewParams struct {
+	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
+	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
+}
+
+// GetPluginStatsParams defines parameters for GetPluginStats.
+type GetPluginStatsParams struct {
 	Since *time.Time `form:"since,omitempty" json:"since,omitempty"`
 	Until *time.Time `form:"until,omitempty" json:"until,omitempty"`
 }
@@ -7534,9 +9409,76 @@ type UpdateSubscriptionPlanParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListPlatformSubscriptionsParams defines parameters for ListPlatformSubscriptions.
+type ListPlatformSubscriptionsParams struct {
+	State      *SubscriptionStanding                `form:"state,omitempty" json:"state,omitempty"`
+	PlanId     *Uuid                                `form:"plan_id,omitempty" json:"plan_id,omitempty"`
+	AccountId  *AccountId                           `form:"account_id,omitempty" json:"account_id,omitempty"`
+	EndsBefore *time.Time                           `form:"ends_before,omitempty" json:"ends_before,omitempty"`
+	Sort       *ListPlatformSubscriptionsParamsSort `form:"sort,omitempty" json:"sort,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListPlatformSubscriptionsParamsSort defines parameters for ListPlatformSubscriptions.
+type ListPlatformSubscriptionsParamsSort string
+
+// GetSubscriptionSummaryParams defines parameters for GetSubscriptionSummary.
+type GetSubscriptionSummaryParams struct {
+	Month *string `form:"month,omitempty" json:"month,omitempty"`
+}
+
+// ListSupplierCredentialsParams defines parameters for ListSupplierCredentials.
+type ListSupplierCredentialsParams struct {
+	SupplierId *Uuid             `form:"supplier_id,omitempty" json:"supplier_id,omitempty"`
+	Status     *CredentialStatus `form:"status,omitempty" json:"status,omitempty"`
+	Mode       *SupplierMode     `form:"mode,omitempty" json:"mode,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// RemoveInvalidSupplierCredentialsParams defines parameters for RemoveInvalidSupplierCredentials.
+type RemoveInvalidSupplierCredentialsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// TestSupplierCredentialsParams defines parameters for TestSupplierCredentials.
+type TestSupplierCredentialsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ListSupplierInboxParams defines parameters for ListSupplierInbox.
+type ListSupplierInboxParams struct {
+	Kind       *SupplierInboxKind `form:"kind,omitempty" json:"kind,omitempty"`
+	SupplierId *Uuid              `form:"supplier_id,omitempty" json:"supplier_id,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// IgnoreSupplierInboxItemParams defines parameters for IgnoreSupplierInboxItem.
+type IgnoreSupplierInboxItemParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ListSuppliersParams defines parameters for ListSuppliers.
 type ListSuppliersParams struct {
 	Status *SupplierStatus `form:"status,omitempty" json:"status,omitempty"`
+	Mode   *SupplierMode   `form:"mode,omitempty" json:"mode,omitempty"`
 
 	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
 	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
@@ -7551,8 +9493,26 @@ type CreateSupplierParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// CreateCloudSupplierParams defines parameters for CreateCloudSupplier.
+type CreateCloudSupplierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// CreateDirectSupplierParams defines parameters for CreateDirectSupplier.
+type CreateDirectSupplierParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // TestSupplierEndpointParams defines parameters for TestSupplierEndpoint.
 type TestSupplierEndpointParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ReplaceSupplierCloudCredentialParams defines parameters for ReplaceSupplierCloudCredential.
+type ReplaceSupplierCloudCredentialParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -7563,8 +9523,26 @@ type BindSupplierKeyParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// SetSupplierCredentialEnabledParams defines parameters for SetSupplierCredentialEnabled.
+type SetSupplierCredentialEnabledParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // SetSupplierCredentialLimitsParams defines parameters for SetSupplierCredentialLimits.
 type SetSupplierCredentialLimitsParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RemoveSupplierCredentialParams defines parameters for RemoveSupplierCredential.
+type RemoveSupplierCredentialParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// TestSupplierCredentialParams defines parameters for TestSupplierCredential.
+type TestSupplierCredentialParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
@@ -7587,6 +9565,24 @@ type SelectSupplierGroupParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ConnectSupplierGroupParams defines parameters for ConnectSupplierGroup.
+type ConnectSupplierGroupParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// SetSupplierIntakeRuleParams defines parameters for SetSupplierIntakeRule.
+type SetSupplierIntakeRuleParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// AddSupplierKeysParams defines parameters for AddSupplierKeys.
+type AddSupplierKeysParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
 // ReplaceSupplierLoginParams defines parameters for ReplaceSupplierLogin.
 type ReplaceSupplierLoginParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -7599,6 +9595,24 @@ type MapSupplierModelParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
+// ListSupplierModelsParams defines parameters for ListSupplierModels.
+type ListSupplierModelsParams struct {
+	Pile    *SupplierModelPile `form:"pile,omitempty" json:"pile,omitempty"`
+	GroupId *Uuid              `form:"group_id,omitempty" json:"group_id,omitempty"`
+
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// GetSupplierReconciliationParams defines parameters for GetSupplierReconciliation.
+type GetSupplierReconciliationParams struct {
+	// Days How many days back from today, today included.
+	Days *int `form:"days,omitempty" json:"days,omitempty"`
+}
+
 // RemoveSupplierParams defines parameters for RemoveSupplier.
 type RemoveSupplierParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
@@ -7609,6 +9623,21 @@ type RemoveSupplierParams struct {
 type SetSupplierStatusParams struct {
 	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// RequestSupplierSyncParams defines parameters for RequestSupplierSync.
+type RequestSupplierSyncParams struct {
+	// IdempotencyKey A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// ListSupplierSyncRunsParams defines parameters for ListSupplierSyncRuns.
+type ListSupplierSyncRunsParams struct {
+	// Cursor Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit How many items a page holds at most.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
 // ConfirmSupplierUnitValueParams defines parameters for ConfirmSupplierUnitValue.
@@ -7706,6 +9735,15 @@ type SaveAuthorJSONRequestBody = AuthorSave
 
 // CreateModelJSONRequestBody defines body for CreateModel for application/json ContentType.
 type CreateModelJSONRequestBody = ModelCreate
+
+// ImportModelsJSONRequestBody defines body for ImportModels for application/json ContentType.
+type ImportModelsJSONRequestBody = ModelImportRequest
+
+// PutModelsOnSaleJSONRequestBody defines body for PutModelsOnSale for application/json ContentType.
+type PutModelsOnSaleJSONRequestBody = ModelListingRequest
+
+// SetModelFamilyJSONRequestBody defines body for SetModelFamily for application/json ContentType.
+type SetModelFamilyJSONRequestBody = ModelFamilyUpdate
 
 // AddModelNameJSONRequestBody defines body for AddModelName for application/json ContentType.
 type AddModelNameJSONRequestBody = NameAdd
@@ -7914,20 +9952,47 @@ type CreateSubscriptionPlanJSONRequestBody = SubscriptionPlanInput
 // UpdateSubscriptionPlanJSONRequestBody defines body for UpdateSubscriptionPlan for application/json ContentType.
 type UpdateSubscriptionPlanJSONRequestBody = SubscriptionPlanUpdate
 
+// RemoveInvalidSupplierCredentialsJSONRequestBody defines body for RemoveInvalidSupplierCredentials for application/json ContentType.
+type RemoveInvalidSupplierCredentialsJSONRequestBody = InvalidCredentialsRemoval
+
+// TestSupplierCredentialsJSONRequestBody defines body for TestSupplierCredentials for application/json ContentType.
+type TestSupplierCredentialsJSONRequestBody = CredentialTestsRequest
+
+// IgnoreSupplierInboxItemJSONRequestBody defines body for IgnoreSupplierInboxItem for application/json ContentType.
+type IgnoreSupplierInboxItemJSONRequestBody = ReasonRequest
+
 // CreateSupplierJSONRequestBody defines body for CreateSupplier for application/json ContentType.
 type CreateSupplierJSONRequestBody = SupplierCreate
+
+// CreateCloudSupplierJSONRequestBody defines body for CreateCloudSupplier for application/json ContentType.
+type CreateCloudSupplierJSONRequestBody = CloudSupplierCreate
 
 // DetectSupplierJSONRequestBody defines body for DetectSupplier for application/json ContentType.
 type DetectSupplierJSONRequestBody = DetectionRequest
 
+// CreateDirectSupplierJSONRequestBody defines body for CreateDirectSupplier for application/json ContentType.
+type CreateDirectSupplierJSONRequestBody = DirectSupplierCreate
+
 // TestSupplierEndpointJSONRequestBody defines body for TestSupplierEndpoint for application/json ContentType.
 type TestSupplierEndpointJSONRequestBody = EndpointTestRequest
+
+// ReplaceSupplierCloudCredentialJSONRequestBody defines body for ReplaceSupplierCloudCredential for application/json ContentType.
+type ReplaceSupplierCloudCredentialJSONRequestBody = CloudCredentialReplace
 
 // BindSupplierKeyJSONRequestBody defines body for BindSupplierKey for application/json ContentType.
 type BindSupplierKeyJSONRequestBody = BindKey
 
+// SetSupplierCredentialEnabledJSONRequestBody defines body for SetSupplierCredentialEnabled for application/json ContentType.
+type SetSupplierCredentialEnabledJSONRequestBody = CredentialEnabledUpdate
+
 // SetSupplierCredentialLimitsJSONRequestBody defines body for SetSupplierCredentialLimits for application/json ContentType.
 type SetSupplierCredentialLimitsJSONRequestBody = CredentialLimits
+
+// RemoveSupplierCredentialJSONRequestBody defines body for RemoveSupplierCredential for application/json ContentType.
+type RemoveSupplierCredentialJSONRequestBody = ReasonRequest
+
+// TestSupplierCredentialJSONRequestBody defines body for TestSupplierCredential for application/json ContentType.
+type TestSupplierCredentialJSONRequestBody = ReasonRequest
 
 // SetSupplierEndpointEnabledJSONRequestBody defines body for SetSupplierEndpointEnabled for application/json ContentType.
 type SetSupplierEndpointEnabledJSONRequestBody = EndpointEnabledUpdate
@@ -7937,6 +10002,18 @@ type SetSupplierEndpointQuantizationJSONRequestBody = EndpointQuantizationUpdate
 
 // SelectSupplierGroupJSONRequestBody defines body for SelectSupplierGroup for application/json ContentType.
 type SelectSupplierGroupJSONRequestBody = GroupSelection
+
+// ConnectSupplierGroupJSONRequestBody defines body for ConnectSupplierGroup for application/json ContentType.
+type ConnectSupplierGroupJSONRequestBody = GroupConnection
+
+// SetSupplierIntakeRuleJSONRequestBody defines body for SetSupplierIntakeRule for application/json ContentType.
+type SetSupplierIntakeRuleJSONRequestBody = SupplierIntakeRuleUpdate
+
+// IdentifySupplierKeyJSONRequestBody defines body for IdentifySupplierKey for application/json ContentType.
+type IdentifySupplierKeyJSONRequestBody = KeyIdentificationRequest
+
+// AddSupplierKeysJSONRequestBody defines body for AddSupplierKeys for application/json ContentType.
+type AddSupplierKeysJSONRequestBody = SupplierKeysAdd
 
 // ReplaceSupplierLoginJSONRequestBody defines body for ReplaceSupplierLogin for application/json ContentType.
 type ReplaceSupplierLoginJSONRequestBody = SupplierLoginUpdate
@@ -7949,6 +10026,9 @@ type RemoveSupplierJSONRequestBody = ReasonRequest
 
 // SetSupplierStatusJSONRequestBody defines body for SetSupplierStatus for application/json ContentType.
 type SetSupplierStatusJSONRequestBody = SupplierStatusUpdate
+
+// RequestSupplierSyncJSONRequestBody defines body for RequestSupplierSync for application/json ContentType.
+type RequestSupplierSyncJSONRequestBody = ReasonRequest
 
 // ConfirmSupplierUnitValueJSONRequestBody defines body for ConfirmSupplierUnitValue for application/json ContentType.
 type ConfirmSupplierUnitValueJSONRequestBody = UnitValueUpdate

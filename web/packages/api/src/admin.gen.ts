@@ -116,6 +116,46 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/reports/monitor": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The platform's calls over the last hour or day, minute by minute or hour by hour
+         * @description What the operations monitor draws, over every site's calls that started in the window: calls, failures and tokens per bucket (a minute for `1h`, an hour for `24h`), time to first token and to completion as percentiles, how completion times spread, why calls failed, how many switched to another endpoint after a failure, and each line's calls.
+         */
+        get: operations["getOperationsMonitor"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/reports/plugins": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How the web search and file parser plugins were used over a window
+         * @description For each plugin, over every site's calls that started in the window: how many calls used it, how many of its runs failed (the call went on without it), its mean time, how many searches or pages it ran, what the calls were charged for it and what it cost the platform, in the site's accounting currency, and its calls by hour. The window defaults to the last 24 hours and is at most 31 days. The calls themselves are `listAdminCalls` with `plugin`.
+         */
+        get: operations["getPluginStats"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/audit": {
         parameters: {
             query?: never;
@@ -881,7 +921,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /**
+         * Every announcement published, with where each stands
+         * @description The announcements of every site, or of the one given, newest first by `starts_at`, withdrawn ones included, each with its state: `scheduled` before `starts_at`, `showing` while users see it, `ended` after `ends_at`, `withdrawn` once taken down. The state filter is exact.
+         */
+        get: operations["listAdminAnnouncements"];
         put?: never;
         /** Publish a plain text site announcement */
         post: operations["publishAnnouncement"];
@@ -2119,6 +2163,438 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/admin/v1/suppliers/direct": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a provider's own API with pasted keys
+         * @description Connects a direct API (`mode` `direct`, one line): a provider whose address and call format are built in (`openai`, `anthropic`, `google`, `moonshot`), or `compatible`, any other API speaking one of the call formats at the origin given. Each key is checked with one request the provider does not charge for (its model list) before it is kept; a key that passes is sealed and stored as its own credential with the limits given, and no key text is ever returned, only its last four characters. A direct API has no balance to read and no unit value to confirm: its costs are the catalog's official reference prices in the settlement currency (`source` `price_list`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
+         *
+         *     201 with the supplier when at least one key passed. When none did, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         */
+        post: operations["createDirectSupplier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/cloud": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a cloud platform's model service with its credential
+         * @description Connects Vertex AI (a service account's JSON key), Bedrock (an access key) or Azure OpenAI (a resource's address and key) as one supplier in `mode` `cloud`. The credential is sealed on arrival and never returned; what is not secret about it is in `Supplier.cloud_account`. Vertex AI and Bedrock serve by region: each region chosen is checked on its own and becomes its own credential, so each has its own concurrency and per-minute ceiling and routing moves to another region when one is full. Azure OpenAI has no region to choose: the resource is one credential, and the deployments it lists are its models. Costs are the catalog's official reference prices (`source` `price_list`) until the platform's bill is read (`bill`). The supplier starts `connecting`, and its endpoints wait for the quality check before they take traffic.
+         *
+         *     201 with the supplier when the credential passed in at least one region; a region that failed is not stored. When it passed in none, nothing is stored and the answer is 200 with the checks and no `supplier`.
+         */
+        post: operations["createCloudSupplier"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/cloud-credential": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Replace a cloud supplier's credential, or the regions it serves from
+         * @description Checks the new credential in every region given (absent: the regions the supplier has now) and, when it passes in at least one, seals it in place of the old one in the same change: the regions that passed are the supplier's credentials from then on, with the limits each region had (a new region takes the limits given), and a region that failed or was left out is erased. Calls in flight end with the credential they hold. When it passes in none, nothing changes and the answer has the checks and no `supplier`. Only for `mode` `cloud`: 409 for another supplier. Changing a credential is a high-risk operation (docs/domains/operations.md); the audit entry names the regions, never the credential.
+         */
+        put: operations["replaceSupplierCloudCredential"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/groups/{group_id}/connection": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Connect a relay's group with a key made for it or pasted
+         * @description Selects a group that has no credential yet and gives it one, in one change. `make`: Axiom makes a dedicated key at the supplier now (the adapter's key making, named as the sync names its keys), reads its text and seals it; an adapter that cannot make keys is 422, and so is a group the account may not make keys for. `paste`: the person's key, which the supplier must list as a key of this group (`identifySupplierKey`); a key of another group, or one the supplier does not list, is 422 pointing at `/key`. Either way the credential starts `active` with 4 calls at once and no per-minute ceiling, and the group's endpoints wait for the quality check. A group that already has a credential is 409: it is paused and resumed with `selectSupplierGroup`, keeping its key.
+         */
+        post: operations["connectSupplierGroup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/key-identifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Find out which of a relay's groups a pasted key belongs to
+         * @description Asks the supplier which of its keys this is, through its management login, and says the group the supplier lists it under. It stores nothing and the key is never returned, only its last four characters. A key the supplier does not list answers 200 with no `group_id`. Only for `mode` `relay`: 409 for another supplier.
+         *
+         *     Limits: 10 a minute per session, because each is a request to a third party.
+         */
+        post: operations["identifySupplierKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/sync-runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What each sync of a supplier found changed
+         * @description The sync's commits that changed something, newest first, each with the differences it recorded against the one before (the supplier's sync events). A sync that found nothing new writes no event and is not listed; when each task last succeeded is `SupplierDetail.sync_tasks`. The texts are Axiom's names, values and fingerprints, never text the supplier wrote.
+         */
+        get: operations["listSupplierSyncRuns"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/sync-requests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Have a supplier synced now
+         * @description Makes every task of the supplier due now, as replacing its login does, without clearing a halted task or a backoff: the next scan, within 15 seconds, queues it. The answer is the tasks as scheduled; `listSupplierSyncRuns` shows what the run changed. A supplier that is not synced (`paused`, `needs_attention`, `removed`) is 409.
+         */
+        post: operations["requestSupplierSync"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/reconciliation": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What a supplier charged against what Axiom estimated, by day
+         * @description For each UTC day, newest first: what Axiom's cost plans put the day's attempts at, and what the supplier's own charge records of the day add up to, both in the supplier's unit, with the counts the per-charge matching reached. Only a supplier whose adapter reads charge records has days; one that has none answers an empty list.
+         */
+        get: operations["getSupplierReconciliation"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * A supplier's upstream model names, sorted into piles
+         * @description Every name the supplier's groups list, by group and name, in one of four piles: `review`, a name the catalog does not recognise and no alias covers (the supplier's part of `listPendingMappings`), with the closest model when one is close; `listed`, a name of a model on sale, which has or will get an endpoint; `known`, a name of a draft model, which the intake rule `known` takes; `outdated`, a name the intake leaves alone: a retired model's, a dated snapshot of a model that is not on sale, or a fine-tune (`ft:`). How many each pile has is `SupplierDetail.model_counts`.
+         */
+        get: operations["listSupplierModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/intake-rule": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Choose which of a supplier's models become endpoints
+         * @description The rule the sync's projection applies to the supplier's names, in place of the fixed choice: `listed` takes a name of a model on sale, as every supplier did before; `known` also takes a name of a draft model, whose endpoint waits until the model is listed; `names` takes a name of a model on sale that matches one of `include` and none of `exclude`. A group a person never chose is selected when the rule takes one of its names; a person's choice of a group is never changed. The change applies from the next catalog sync; endpoints the rule no longer takes become cost unknown and leave routing, as a delisted model's do. As of `rev`: 409 `stale_revision` when the rule changed since it was read.
+         */
+        put: operations["setSupplierIntakeRule"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/endpoints/{endpoint_id}/cost": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What an endpoint costs, as price lines with where each came from
+         * @description The endpoint's current cost plan, one line per metering item, condition and service tier, each with its price per unit in the supplier's own unit (a relay) and in the settlement currency, and the factors it was derived from, so the page can write out "model ratio × group ratio × unit value". `source` says where the plan came from. An endpoint the upstream charges per request while Axiom sells it by the token has a break-even. An endpoint whose cost is unknown has no lines.
+         */
+        get: operations["getSupplierEndpointCost"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add pasted keys to a supplier, checking each
+         * @description Checks each key with one request the supplier does not charge for and stores the ones that pass, each as its own credential with the limits given, sealed on arrival; the key texts are never returned, only their last four characters. A key repeated in the request or already stored is `duplicate`, and one whose check was inconclusive is not stored either, so it can be sent again. A relay's keys are for one group (`group_id`, required there): a key the supplier lists under another group fails with `wrong_group`. A direct API's keys are for its one line and take no `group_id`. Not for a cloud supplier, whose credential is replaced whole (409). At most 100 keys a request.
+         *
+         *     201 when at least one key was stored; 200 when none was, and nothing changed.
+         */
+        post: operations["addSupplierKeys"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check one credential against the supplier
+         * @description One request the supplier does not charge for, with this credential (for a cloud credential, in its region). `passed` puts a `rejected` credential back to `active`; `failed` with `credential_rejected` marks it `rejected`, and routing stops picking it; any other outcome changes nothing. A `disabled` or `erased` credential is not tested (409).
+         *
+         *     Limits: 10 a minute per session, shared with `testSupplierCredentials`.
+         */
+        post: operations["testSupplierCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/enabled": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Stop or resume picking one credential
+         * @description A person's switch: `false` makes the credential `disabled`, so routing stops picking it while calls in flight end with it; `true` makes it `active` again. The sync never sets or clears it. A `rejected` credential stays `rejected` when enabled, until a check passes; an `erased` one is 409. Already as asked: nothing changes and nothing is audited.
+         */
+        put: operations["setSupplierCredentialEnabled"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/removal": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Erase one credential
+         * @description Clears the sealed key and makes the credential `erased`, at once and for good; the row stays, because calls made with it point at it. Calls in flight end with the key they hold. Axiom does not revoke the key at the supplier. A key the sync made for a relay's group is made again by the next sync unless the group is unselected, so this is for pasted keys and cloud regions. Sending it again returns the credential as it is.
+         */
+        post: operations["removeSupplierCredential"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every supplier's credentials
+         * @description The credentials of all suppliers, newest first, with what the node that answered holds against each limit now (`in_flight`, `requests_last_minute`). The filters are exact.
+         */
+        get: operations["listSupplierCredentials"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-credentials/tests": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check every credential, of one supplier or of all
+         * @description `testSupplierCredential` for each credential that is not `disabled` or `erased`, of the supplier given or of every supplier, at most 200 in one request (more is 422: test them by supplier), with the same effect on each. The answer has one check per credential tested and how many were skipped as disabled.
+         *
+         *     Limits: counts as one test of the 10 a minute per session that `testSupplierCredential` has.
+         */
+        post: operations["testSupplierCredentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-credentials/invalid-removals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Erase the credentials a supplier refused
+         * @description `removeSupplierCredential` for each credential named that is still `rejected` when the change runs, in one transaction; one that is no longer `rejected` (a check passed since the page was read) is kept and listed in `kept`, so only what the person saw refused is erased. Unknown IDs are listed in `kept` too. At most 500.
+         */
+        post: operations["removeInvalidSupplierCredentials"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-inbox": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * What across the suppliers waits for a person's decision
+         * @description One queue across every supplier, most recently seen first: a balance that will not last, a group ratio that changed, a supplier charging more than Axiom estimated, a group that appeared, a model not on sale that users keep asking for and a supplier could serve, a key the supplier refused, and an upstream name no model matches. An item is made by what the sync, the reconciliation and the call log observe and stays while the condition does; it leaves the queue when the condition ends. An ignored item is hidden until a later observation finds the condition still there. `getSupplierInboxSummary` counts them.
+         */
+        get: operations["listSupplierInbox"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-inbox/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * How many items wait in the suppliers' queue, by kind
+         * @description The items `listSupplierInbox` lists without filters, counted. Ignored items are not counted.
+         */
+        get: operations["getSupplierInboxSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/supplier-inbox/{item_id}/ignore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Hide an item of the suppliers' queue until it is seen again
+         * @description Hides the item from the queue. The next observation that still finds the condition (the next sync, the next reconciliation, the next day of refused calls) shows it again, with `ignored_at` cleared; an item whose condition ended is gone either way. Ignoring an ignored item returns it as it is.
+         */
+        post: operations["ignoreSupplierInboxItem"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/admin/v1/authors": {
         parameters: {
             query?: never;
@@ -2297,6 +2773,66 @@ export interface paths {
          */
         put: operations["selectPriceSource"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/models/{model_id}/family": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Put a model in a family, or take it out
+         * @description The family groups the models a person lists together, such as an author's `gpt-6.1` or `claude-sonnet`: the supplier's `known` pile is sorted by it, and `putModelsOnSale` lists a family at once. It is a label of the catalog, never part of a name and never used to resolve one. null takes the model out of its family. As of `rev`.
+         */
+        put: operations["setModelFamily"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/models/listings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Put several draft models on sale at once
+         * @description `setModelStatus` to `listed` for each model named, as of the `rev` the page read, each in its own transaction through the same review gate: a model that passes is listed, one that changed since is `stale`, one that fails the gate is `not_ready` (`setModelStatus` on it says what is missing), and one that is not a draft is `not_draft`. One outcome per model, in the order sent. Sale prices follow the site's pricing rules, as for a model listed alone. At most 200.
+         */
+        post: operations["putModelsOnSale"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/models/imports": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Add the models a public price list has and the catalog does not
+         * @description Reads the dataset's current entries (the same read the daily dataset sync makes) and adds a draft model for each entry the catalog's internal recognition does not know: its standard ID and names as the entry gives them, its family from the entry's name, the dataset as its price source and the entry's price as its reference price. A draft is seen by the platform only, so a person reviews and corrects it before `setModelStatus` or `putModelsOnSale` lists it. An entry the catalog cannot use as it is (the reasons the dataset sync holds an entry for) is not added and is counted as held. Running it again adds only what is still missing.
+         */
+        post: operations["importModels"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2572,6 +3108,46 @@ export interface paths {
          * @description The account's subscriptions, newest first, each with its current window.
          */
         get: operations["listSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/subscriptions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Every account's subscriptions
+         * @description The subscriptions of every account on the platform, each with its current window, newest first or, with `sort=ends_at`, the soonest to end first. The filters are exact; `ends_before` keeps the ones ending before that instant. One account's subscriptions are also `listSubscriptions`.
+         */
+        get: operations["listPlatformSubscriptions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/admin/v1/subscriptions/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * The site's subscriptions counted, with what they sold for in a month
+         * @description Of the site the request was made on: how many subscriptions are active, how many of them end within 7 days, what subscriptions sold for in the UTC month (default: the current one) and in the month before, in the site's accounting currency, and for each plan how many active subscriptions it has and their share of all active ones.
+         */
+        get: operations["getSubscriptionSummary"];
         put?: never;
         post?: never;
         delete?: never;
@@ -2898,6 +3474,8 @@ export interface components {
             error_kind?: string;
             latency_ms?: number;
             price?: components["schemas"]["Money"];
+            /** @description The plugins the call used; absent when it used none. */
+            plugins?: components["schemas"]["AdminCallPlugin"][];
         };
         AdminCallList: {
             /** Format: date-time */
@@ -3720,6 +4298,23 @@ export interface components {
             /** @description (revenue - cost) / revenue in basis points, rounded half away from zero. Absent when the window has no settled revenue or when a call's supplier cost is unknown, because the cost total is then incomplete. */
             gross_margin?: number;
             retention?: components["schemas"]["OperationsRetention"];
+            tokens?: components["schemas"]["OverviewTokens"];
+            /**
+             * Format: int64
+             * @description Distinct accounts with a call in the window.
+             */
+            active_accounts?: number;
+            /**
+             * Format: int64
+             * @description Users who signed up in the window.
+             */
+            new_users?: number;
+            /** @description The median time to the first token of the window's calls. */
+            first_token_ms_p50?: number;
+            /** @description The accounts whose settled calls were charged the most in the window, most first. */
+            top_spenders?: components["schemas"]["OverviewSpender"][];
+            /** @description Each UTC day the window touches, oldest first, for the trend lines. */
+            days?: components["schemas"]["OverviewDay"][];
             cash?: components["schemas"]["CashAmount"][];
             top_accounts?: components["schemas"]["OverviewAccount"][];
             top_models?: components["schemas"]["OverviewModel"][];
@@ -3835,6 +4430,12 @@ export interface components {
             calls?: number;
             /** Format: int64 */
             errors?: number;
+            /**
+             * Format: int64
+             * @description Input, cached and output tokens the model's calls reported.
+             */
+            tokens?: number;
+            revenue?: components["schemas"]["Money"];
         };
         /** @description An exact cash amount in one payment currency. `amount` is a signed integer in decimal text, in billionths of one unit of the currency; `currency` is the currency the payment was made in, which is the site's when they are the same (docs/domains/billing.md「钱的表示」). It is text so a JSON number cannot round it, and a report's sum can be wider than 64 bits. */
         CashAmount: {
@@ -5261,6 +5862,13 @@ export interface components {
             low_balance_threshold?: components["schemas"]["Decimal"];
             unit_value?: components["schemas"]["Decimal"];
             unit_value_hint?: components["schemas"]["Decimal"];
+            /** @description Absent from a server of an earlier release, which had only `relay`. */
+            mode?: components["schemas"]["SupplierMode"];
+            /** @description The call format of a `compatible` direct API. */
+            api_format?: components["schemas"]["ApiFormat"];
+            cloud_account?: components["schemas"]["CloudAccount"];
+            /** @description About how many days the balance lasts at the mean spend of the last 7 days; absent for a supplier without a balance (direct, cloud) or without spend to go by. */
+            balance_days?: number;
         };
         SupplierList: {
             data: components["schemas"]["Supplier"][];
@@ -5342,6 +5950,22 @@ export interface components {
                 [key: string]: unknown;
             };
             pool?: components["schemas"]["SupplierPool"];
+            /** @description The models the supplier lists in the group. */
+            model_count?: number;
+            /** @description The supplier's own description of the group, as its adapter read it (new-api's `desc`). */
+            description?: string;
+            /** @description The ratio before the last change of it; absent when it never changed. */
+            previous_ratio?: components["schemas"]["Decimal"];
+            /**
+             * Format: date-time
+             * @description When the sync saw the ratio change last.
+             */
+            ratio_changed_at?: string;
+            /**
+             * Format: date-time
+             * @description When the sync first saw the group.
+             */
+            first_seen_at?: string;
         };
         /** @description What the management API of a pool last said of the group's accounts. Absent when the supplier is not a pool, or a read has not reported it yet. */
         SupplierPool: {
@@ -5371,8 +5995,7 @@ export interface components {
             id: components["schemas"]["Uuid"];
             group_id: components["schemas"]["Uuid"];
             upstream_key_ref: string;
-            /** @enum {string} */
-            status: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled" | "erased";
+            status: components["schemas"]["CredentialStatus"];
             /** Format: date-time */
             cooldown_until?: string;
             /** Format: date-time */
@@ -5380,6 +6003,22 @@ export interface components {
             max_concurrency: number;
             /** @description The upstream account's rolling-minute RPM ceiling for selecting this credential; absent when Axiom adds no ceiling. */
             requests_per_minute?: number;
+            supplier_id?: components["schemas"]["Uuid"];
+            /**
+             * @description Whether the sync made the key, a person bound one the supplier lists, or a person pasted its text.
+             * @enum {string}
+             */
+            key_source?: "made" | "bound" | "pasted";
+            /** @description The last four characters of a pasted key; never more of it. */
+            last4?: string;
+            region?: components["schemas"]["CloudRegion"];
+            /** Format: date-time */
+            created_at?: string;
+            /** @description The calls holding the credential now, as the node that answered counts them. */
+            in_flight?: number;
+            /** @description The upstream account's requests in the rolling minute, as the node that answered counted them: the count `requests_per_minute` is compared with. */
+            requests_last_minute?: number;
+            last_check?: components["schemas"]["CredentialCheck"];
         };
         CredentialLimits: {
             /** @description The calls the key has in flight at once. A new binding starts at 4. */
@@ -5432,6 +6071,9 @@ export interface components {
             credentials: components["schemas"]["SupplierCredential"][];
             endpoints: components["schemas"]["SupplierEndpoint"][];
             unbound_keys: components["schemas"]["UpstreamKey"][];
+            intake_rule?: components["schemas"]["SupplierIntakeRule"];
+            sync_tasks?: components["schemas"]["SupplierSyncTask"][];
+            model_counts?: components["schemas"]["SupplierModelCounts"];
         };
         BindKey: {
             group_id: components["schemas"]["Uuid"];
@@ -5655,6 +6297,9 @@ export interface components {
             price_source: components["schemas"]["PriceSource"];
             /** Format: int64 */
             rev: number;
+            family?: components["schemas"]["ModelFamily"];
+            /** @description The units the model's current reference prices charge in, from the items they price; derived, never stored. */
+            billing_units?: components["schemas"]["BillingUnit"][];
         };
         ModelList: {
             data: components["schemas"]["ModelSummary"][];
@@ -5673,6 +6318,9 @@ export interface components {
             spec: components["schemas"]["ModelSpec"];
             names: components["schemas"]["ModelName"][];
             prices: components["schemas"]["ReferencePrice"][];
+            family?: components["schemas"]["ModelFamily"];
+            /** @description The units the model's current reference prices charge in, from the items they price; derived, never stored. */
+            billing_units?: components["schemas"]["BillingUnit"][];
         };
         ModelCreate: {
             slug: components["schemas"]["ModelSlug"];
@@ -5898,6 +6546,789 @@ export interface components {
         PricingPreview: {
             data: components["schemas"]["PricingPreviewRow"][];
         };
+        /**
+         * @description How Axiom reaches the supplier. `relay`: a relay or a pool Axiom logs in to, whose groups are its lines. `direct`: a provider's own API, or a compatible one, reached with pasted keys; one line. `cloud`: a cloud platform's model service reached with its credential; one line, one credential per region.
+         * @enum {string}
+         */
+        SupplierMode: "relay" | "direct" | "cloud";
+        /**
+         * @description A direct API whose origin and call format are built in, or `compatible`, any other API at the origin and in the format given. It is the supplier's `kind`.
+         * @enum {string}
+         */
+        DirectProvider: "openai" | "anthropic" | "google" | "moonshot" | "compatible";
+        /**
+         * @description `vertex` Vertex AI, `bedrock` Amazon Bedrock, `azure` Azure OpenAI. It is the supplier's `kind`.
+         * @enum {string}
+         */
+        CloudProvider: "vertex" | "bedrock" | "azure";
+        /**
+         * @description The call format a `compatible` direct API speaks: OpenAI's Chat Completions and Responses, Anthropic's Messages, or Gemini's generateContent. The paths follow from it.
+         * @enum {string}
+         */
+        ApiFormat: "openai" | "anthropic" | "gemini";
+        /** @description What is not secret about a cloud supplier's credential; the credential itself is never returned. */
+        CloudAccount: {
+            /** @description Vertex AI: the project the service account belongs to. */
+            project_id?: string;
+            /** @description Vertex AI: the service account. */
+            client_email?: string;
+            /** @description Bedrock: the last four characters of the access key ID. */
+            access_key_last4?: string;
+            /** @description Azure OpenAI: the last four characters of the resource's key. */
+            key_last4?: string;
+        };
+        DirectSupplierCreate: {
+            provider: components["schemas"]["DirectProvider"];
+            name: string;
+            /** @description Only for `compatible`, where it is required: the scheme, host and port the API answers on, without a path. A built-in provider's origin is its own, so giving one is a 400. */
+            origin?: string;
+            /** @description Only for `compatible`, where it is required; a built-in provider's format is its own (400). */
+            format?: components["schemas"]["ApiFormat"];
+            /** @description The currency Axiom pays in, fixed once connected, under the rule `SupplierCreate.settlement_currency` states. Required for `compatible`; a built-in provider defaults to the currency of its official price list (USD, or CNY for `moonshot`). */
+            settlement_currency?: string;
+            /** @description The keys, one per item, sealed on arrival and never returned. */
+            keys: string[];
+            /** @description The calls each key has in flight at once. */
+            max_concurrency: number;
+            /** @description Each key's rolling-minute ceiling (`CredentialLimits.requests_per_minute`); absent for none. */
+            requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        /** @description The provider's credential, sealed on arrival and never returned: `vertex` takes `service_account_json`, `bedrock` `access_key_id` and `secret_access_key`, `azure` `api_key`. A member another provider takes is a 400. */
+        CloudCredentialInput: {
+            /** @description The text of the service account's JSON key file, with its `project_id`, `client_email` and `private_key`. */
+            service_account_json?: string;
+            access_key_id?: string;
+            secret_access_key?: string;
+            api_key?: string;
+        };
+        /** @description A region of the cloud platform, in its own spelling, such as us-east5, global or eu-central-1. */
+        CloudRegion: string;
+        CloudSupplierCreate: {
+            provider: components["schemas"]["CloudProvider"];
+            name: string;
+            /** @description Only for `azure`, where it is required: the resource's address, such as https://name.openai.azure.com. */
+            origin?: string;
+            credential: components["schemas"]["CloudCredentialInput"];
+            /** @description Required for `vertex` and `bedrock`, each checked and limited on its own; not for `azure` (400). */
+            regions?: components["schemas"]["CloudRegion"][];
+            /** @description The currency the platform bills in, fixed once connected; absent is USD. */
+            settlement_currency?: string;
+            /** @description The calls each region has in flight at once. */
+            max_concurrency: number;
+            /** @description Each region's rolling-minute ceiling; absent for none. */
+            requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        CloudCredentialReplace: {
+            credential: components["schemas"]["CloudCredentialInput"];
+            /** @description The regions to serve from now on; absent keeps the current ones. Not for `azure` (400). */
+            regions?: components["schemas"]["CloudRegion"][];
+            /** @description For a region added here; absent is 4. A region kept keeps its limits. */
+            max_concurrency?: number;
+            /** @description For a region added here; absent for none. */
+            requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        SupplierConnected: {
+            /** @description The supplier as connected or changed; absent when nothing passed and nothing was stored. */
+            supplier?: components["schemas"]["Supplier"];
+            /** @description One check per key sent or per region, in the order sent. */
+            checks: components["schemas"]["CredentialCheck"][];
+        };
+        /**
+         * @description `passed`: the supplier accepted the credential. `failed`: it refused it (`cause` says how); a stored credential refused as not valid (`credential_rejected`) becomes `rejected`. `inconclusive`: nothing to judge it by, such as a timeout, a rate limit or a 5xx; a stored credential keeps its status. `duplicate`: the key came earlier in the request or is already stored; it was not checked.
+         * @enum {string}
+         */
+        CredentialCheckOutcome: "passed" | "failed" | "inconclusive" | "duplicate";
+        /**
+         * @description Why a check did not pass. `credential_rejected`: refused as not valid (401); `not_permitted`: valid but not allowed (403), which is inconclusive, because it can be a region block; `quota_exhausted`: the key's own quota is used up; `wrong_group`: the relay lists the key under another group; `region_unavailable`: the region does not serve the account's models; the rest say nothing about the credential.
+         * @enum {string}
+         */
+        CredentialCheckCause: "credential_rejected" | "not_permitted" | "quota_exhausted" | "wrong_group" | "region_unavailable" | "rate_limited" | "timeout" | "transport" | "upstream_error" | "unknown";
+        CredentialCheck: {
+            /** @description The position of the key in the request's `keys`, for a pasted key. */
+            index?: number;
+            /** @description The credential the key was stored as, or the one tested; absent when nothing was stored. */
+            credential_id?: components["schemas"]["Uuid"];
+            /** @description The last four characters of the key; never more of it. */
+            last4?: string;
+            region?: components["schemas"]["CloudRegion"];
+            outcome: components["schemas"]["CredentialCheckOutcome"];
+            cause?: components["schemas"]["CredentialCheckCause"];
+            /** @description The supplier's HTTP status; 0 when it answered nothing. */
+            upstream_status?: number;
+            /** Format: date-time */
+            checked_at?: string;
+        };
+        CredentialCheckList: {
+            data: components["schemas"]["CredentialCheck"][];
+            /** @description `testSupplierCredentials`: the credentials left out as `disabled`. */
+            skipped?: number;
+        };
+        /**
+         * @description `SupplierCredential.status`: `rejected` is a credential the supplier refused as not valid, which routing never picks until a check passes; `disabled` a person stopped it.
+         * @enum {string}
+         */
+        CredentialStatus: "binding" | "active" | "upstream_disabled" | "quota_exhausted" | "expired" | "disabled" | "rejected" | "erased";
+        GroupConnection: {
+            /**
+             * @description `make`: Axiom makes a key for the group at the supplier; `paste`: `key` is one the person made there.
+             * @enum {string}
+             */
+            key_source: "make" | "paste";
+            /** @description Required with `paste`, refused with `make` (400); sealed on arrival and never returned. */
+            key?: string;
+            reason: components["schemas"]["Reason"];
+        };
+        GroupConnected: {
+            group: components["schemas"]["SupplierGroup"];
+            credential: components["schemas"]["SupplierCredential"];
+        };
+        KeyIdentificationRequest: {
+            key: string;
+        };
+        KeyIdentification: {
+            /** @description The last four characters of the key; never more of it. */
+            last4: string;
+            /** @description The group the supplier lists the key under; absent when it does not list the key. */
+            group_id?: components["schemas"]["Uuid"];
+            /** @description The supplier's own ID of the key. */
+            upstream_key_ref?: string;
+            /**
+             * @description The key's status at the supplier.
+             * @enum {string}
+             */
+            status?: "active" | "disabled" | "quota_exhausted" | "expired";
+            /** @description The credential Axiom already stores for this key, if any. */
+            credential_id?: components["schemas"]["Uuid"];
+        };
+        SupplierKeysAdd: {
+            /** @description Required for a relay, refused for a direct API (400). */
+            group_id?: components["schemas"]["Uuid"];
+            /** @description The keys, one per item, sealed on arrival and never returned. */
+            keys: string[];
+            /** @description The calls each key has in flight at once. */
+            max_concurrency: number;
+            /** @description Each key's rolling-minute ceiling; absent for none. */
+            requests_per_minute?: number;
+            reason: components["schemas"]["Reason"];
+        };
+        CredentialEnabledUpdate: {
+            enabled: boolean;
+            reason: components["schemas"]["Reason"];
+        };
+        CredentialTestsRequest: {
+            /** @description The supplier whose credentials to test; absent tests every supplier's. */
+            supplier_id?: components["schemas"]["Uuid"];
+            reason: components["schemas"]["Reason"];
+        };
+        InvalidCredentialsRemoval: {
+            /** @description The `rejected` credentials the person saw and confirmed. */
+            credential_ids: components["schemas"]["Uuid"][];
+            reason: components["schemas"]["Reason"];
+        };
+        InvalidCredentialsRemoved: {
+            /** @description The credentials erased. */
+            removed: components["schemas"]["Uuid"][];
+            /** @description The credentials named that were not `rejected` any more, or that do not exist. */
+            kept: components["schemas"]["Uuid"][];
+        };
+        SupplierCredentialList: {
+            data: components["schemas"]["SupplierCredential"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /**
+         * @description What a task reads: the balance and where it is drawn from; the groups, ratios, models and prices; the keys; the charge records.
+         * @enum {string}
+         */
+        SyncTask: "balance" | "catalog" | "keys" | "charges";
+        SupplierSyncTask: {
+            task: components["schemas"]["SyncTask"];
+            /**
+             * Format: date-time
+             * @description Not before this; absent when due now.
+             */
+            due_at?: string;
+            /**
+             * Format: date-time
+             * @description The last time it succeeded; absent when it never has.
+             */
+            last_ok_at?: string;
+            /** @description Failures in a row; the task backs off after them. */
+            failures: number;
+            /** @description True when the supplier's answer was not understood: only this task stopped, until a person acts. */
+            halted: boolean;
+        };
+        SupplierSyncTaskList: {
+            data: components["schemas"]["SupplierSyncTask"][];
+        };
+        /**
+         * @description What one difference is: a group or a model the supplier lists that appeared or left; a group's ratio, facts or formats; a model's formats or limits; a new cost plan of an endpoint; a key's status; the balance crossing the alert line or zero; where calls are paid from; the supplier needing a person; a task stopping.
+         * @enum {string}
+         */
+        SyncEventKind: "group_added" | "group_removed" | "ratio_changed" | "model_added" | "model_removed" | "plan_changed" | "key_changed" | "balance_low" | "needs_attention" | "task_halted" | "group_changed" | "model_changed" | "funding_changed" | "balance_crossed" | "balance_recovered";
+        SupplierSyncEvent: {
+            kind: components["schemas"]["SyncEventKind"];
+            /** @description What changed: a group's ref, `group/model` for a model or a cost plan, a key's ref; empty for the supplier itself. */
+            subject: string;
+            /** @description The group the subject is in, when Axiom still has it. */
+            group_id?: components["schemas"]["Uuid"];
+            /** @description The value before, as the sync recorded it: a ratio, a status, a fingerprint, a balance. */
+            old?: string;
+            /** @description The value after, in the same terms. */
+            new?: string;
+            /** @description A short reason of Axiom's, never the supplier's text. */
+            why?: string;
+        };
+        SupplierSyncRun: {
+            /**
+             * Format: int64
+             * @description The version of the supplier's sync state the run committed.
+             */
+            version: number;
+            /** Format: date-time */
+            at: string;
+            events: components["schemas"]["SupplierSyncEvent"][];
+        };
+        SupplierSyncRunList: {
+            data: components["schemas"]["SupplierSyncRun"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        SupplierReconciliationDay: {
+            /**
+             * Format: date
+             * @description The UTC day.
+             */
+            date: string;
+            /** @description What Axiom's cost plans put the day's attempts that reached the supplier at, in the supplier's unit. */
+            estimated_native: components["schemas"]["Decimal"];
+            /** @description What the supplier's charge records of the day add up to, in its unit. */
+            charged_native: components["schemas"]["Decimal"];
+            /** @description (charged − estimated) / estimated, in basis points, rounded half away from zero; absent when nothing was estimated. */
+            difference_bp?: number;
+            /**
+             * Format: int64
+             * @description The day's charge records.
+             */
+            charges: number;
+            /**
+             * Format: int64
+             * @description Charges matched to one attempt.
+             */
+            matched: number;
+            /**
+             * Format: int64
+             * @description Charges no attempt claimed within the grace, held for a person.
+             */
+            held: number;
+            /**
+             * Format: int64
+             * @description Matched charges above the estimate by more than the tolerance.
+             */
+            charged_above: number;
+            /**
+             * Format: int64
+             * @description Matched charges below the estimate by more than the tolerance.
+             */
+            charged_below: number;
+            /**
+             * Format: int64
+             * @description Attempts with a reconciliation key that no charge claimed within the grace.
+             */
+            unmatched_attempts?: number;
+        };
+        SupplierReconciliation: {
+            supplier_id: components["schemas"]["Uuid"];
+            /**
+             * @description The unit the amounts are in.
+             * @enum {string}
+             */
+            native_unit: "quota" | "usd";
+            /** @description What one unit is worth in the settlement currency now, for showing the amounts as money; absent until confirmed. */
+            unit_value?: components["schemas"]["Decimal"];
+            settlement_currency?: string;
+            days: components["schemas"]["SupplierReconciliationDay"][];
+        };
+        /**
+         * @description `low_balance`: the balance lasts fewer days than the alert line at the recent spend. `ratio_changed`: a selected group's ratio changed, and with it its endpoints' costs. `cost_mismatch`: a day's charges differ from the estimate by more than the tolerance (`getSupplierReconciliation`). `group_added`: the supplier lists a group no person has decided on. `unlisted_model_called`: users asked for a model that is not on sale and this supplier lists. `key_invalid`: the supplier refused a credential (`rejected`). `unknown_model`: an upstream name no model matches (`listPendingMappings`).
+         * @enum {string}
+         */
+        SupplierInboxKind: "low_balance" | "ratio_changed" | "cost_mismatch" | "group_added" | "unlisted_model_called" | "key_invalid" | "unknown_model";
+        /** @description One item; the members beyond the first are present for the kinds that have them. */
+        SupplierInboxItem: {
+            id: components["schemas"]["Uuid"];
+            kind: components["schemas"]["SupplierInboxKind"];
+            supplier_id: components["schemas"]["Uuid"];
+            /** Format: date-time */
+            first_seen_at: string;
+            /** Format: date-time */
+            last_seen_at: string;
+            /**
+             * Format: date-time
+             * @description When a person ignored it; absent while it shows.
+             */
+            ignored_at?: string;
+            group_id?: components["schemas"]["Uuid"];
+            credential_id?: components["schemas"]["Uuid"];
+            model_id?: components["schemas"]["Uuid"];
+            upstream_name?: string;
+            /** @description `low_balance`: the balance, in the supplier's unit. */
+            balance_native?: components["schemas"]["Decimal"];
+            /** @description `low_balance`: about how many days it lasts. */
+            balance_days?: number;
+            /** @description `ratio_changed`: the ratio before. */
+            previous_ratio?: components["schemas"]["Decimal"];
+            /** @description `ratio_changed`, `group_added`: the ratio now. */
+            ratio?: components["schemas"]["Decimal"];
+            /**
+             * Format: date
+             * @description `cost_mismatch`: the UTC day.
+             */
+            date?: string;
+            /** @description `cost_mismatch`: what Axiom estimated. */
+            estimated_native?: components["schemas"]["Decimal"];
+            /** @description `cost_mismatch`: what the supplier charged. */
+            charged_native?: components["schemas"]["Decimal"];
+            /**
+             * Format: int64
+             * @description `unlisted_model_called`: refused calls in the last 24 hours.
+             */
+            calls?: number;
+            /**
+             * Format: int64
+             * @description `unlisted_model_called`: the accounts they came from.
+             */
+            accounts?: number;
+        };
+        SupplierInboxList: {
+            data: components["schemas"]["SupplierInboxItem"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        SupplierInboxSummary: {
+            /** Format: int64 */
+            total: number;
+            /** @description The items of each kind; a kind with none is 0. */
+            kinds: {
+                /** Format: int64 */
+                low_balance: number;
+                /** Format: int64 */
+                ratio_changed: number;
+                /** Format: int64 */
+                cost_mismatch: number;
+                /** Format: int64 */
+                group_added: number;
+                /** Format: int64 */
+                unlisted_model_called: number;
+                /** Format: int64 */
+                key_invalid: number;
+                /** Format: int64 */
+                unknown_model: number;
+            };
+        };
+        /**
+         * @description See `setSupplierIntakeRule`.
+         * @enum {string}
+         */
+        SupplierIntakeMode: "listed" | "known" | "names";
+        /** @description An upstream model name where `*` stands for any run of characters; it matches the whole name, ignoring case. */
+        NamePattern: string;
+        SupplierIntakeRule: {
+            mode: components["schemas"]["SupplierIntakeMode"];
+            /** @description `names`: a name is taken when it matches one of these. Empty in the other modes. */
+            include: components["schemas"]["NamePattern"][];
+            /** @description `names`: a name matching one of these is never taken. Empty in the other modes. */
+            exclude: components["schemas"]["NamePattern"][];
+            /**
+             * Format: int64
+             * @description The revision a change must be decided against; 0 is the default rule `listed`, never written.
+             */
+            rev: number;
+        };
+        SupplierIntakeRuleUpdate: {
+            mode: components["schemas"]["SupplierIntakeMode"];
+            /** @description Required and not empty with `names`; refused with another mode (422). */
+            include?: components["schemas"]["NamePattern"][];
+            /** @description Only with `names` (422 with another mode); absent is empty. */
+            exclude?: components["schemas"]["NamePattern"][];
+            /** Format: int64 */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        /**
+         * @description See `listSupplierModels`.
+         * @enum {string}
+         */
+        SupplierModelPile: "review" | "listed" | "known" | "outdated";
+        SupplierModel: {
+            group_id: components["schemas"]["Uuid"];
+            upstream_name: string;
+            formats: components["schemas"]["ModelFormat"][];
+            pile: components["schemas"]["SupplierModelPile"];
+            /** Format: date-time */
+            first_seen_at: string;
+            /** @description The model the name resolves to; absent in `review`. */
+            model_id?: components["schemas"]["Uuid"];
+            model_slug?: components["schemas"]["ModelSlug"];
+            model_status?: components["schemas"]["ModelStatus"];
+            family?: components["schemas"]["ModelFamily"];
+            /** @description The endpoint made for the name, when there is one. */
+            endpoint_id?: components["schemas"]["Uuid"];
+            /** @description `review`: the model whose name is closest, as a suggestion for `mapSupplierModel`; absent when none is close. */
+            suggested_model_id?: components["schemas"]["Uuid"];
+            suggested_model_slug?: components["schemas"]["ModelSlug"];
+        };
+        SupplierModelList: {
+            data: components["schemas"]["SupplierModel"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        /** @description How many names each pile of `listSupplierModels` has. */
+        SupplierModelCounts: {
+            /** Format: int64 */
+            review: number;
+            /** Format: int64 */
+            listed: number;
+            /** Format: int64 */
+            known: number;
+            /** Format: int64 */
+            outdated: number;
+        };
+        /**
+         * @description A billing item of the catalog's table (docs/domains/catalog.md「计费项与用量」), each with one unit.
+         * @enum {string}
+         */
+        MeteringItem: "input" | "cache_read" | "cache_write" | "cache_write_1h" | "output" | "reasoning" | "audio_in" | "audio_out" | "image_in" | "image_out" | "image_in_piece" | "image_out_piece" | "audio_in_second" | "audio_out_second" | "character_in" | "request" | "web_search" | "code_execution" | "file_search" | "file_parse";
+        /**
+         * @description What one unit of an item is; follows from the item.
+         * @enum {string}
+         */
+        MeteringUnit: "token" | "image" | "second" | "character" | "request" | "use" | "page";
+        /**
+         * @description Where an endpoint's cost plan came from. `read`: the supplier's own prices and ratios, as the sync read them. `confirmed`: a base price a person confirmed, times the group's ratio, for a supplier that shows none. `price_list`: the catalog's official reference price, for a direct or cloud supplier. `bill`: the cloud platform's bill.
+         * @enum {string}
+         */
+        CostSource: "read" | "confirmed" | "price_list" | "bill";
+        /**
+         * @description One input a price line was derived from: a relay's model, completion, cache and cache-write ratios, the group's ratio, a declared adapter's scale, the unit value, a confirmed base price, the official price, or the exchange rate into the settlement currency.
+         * @enum {string}
+         */
+        CostFactorKind: "model_ratio" | "completion_ratio" | "cache_ratio" | "cache_write_ratio" | "group_ratio" | "scale" | "unit_value" | "base_price" | "official_price" | "exchange_rate";
+        CostFactor: {
+            kind: components["schemas"]["CostFactorKind"];
+            value: components["schemas"]["Decimal"];
+        };
+        /** @description One price of the plan. The line's price applies to its item under its condition and service tier. */
+        CostLine: {
+            item: components["schemas"]["MeteringItem"];
+            unit: components["schemas"]["MeteringUnit"];
+            service_tier?: components["schemas"]["ServiceTier"];
+            /**
+             * Format: int64
+             * @description The condition of a context tier, `ContextTier.above`; absent for the base price.
+             */
+            above?: number;
+            /** @description Per unit, in the supplier's own unit (`Supplier.native_unit`); absent for a supplier billed in money. */
+            native_price?: components["schemas"]["Decimal"];
+            /** @description Per unit, in the settlement currency; absent while the supplier's unit value is not confirmed. */
+            price?: components["schemas"]["Decimal"];
+            /** @description What the price is the product of, in order, so the page can write it out. */
+            factors: components["schemas"]["CostFactor"][];
+        };
+        /** @description For an endpoint the upstream charges per request while the model is sold by the token. */
+        CostBreakEven: {
+            /** @description What one request costs, in the settlement currency. */
+            request_price: components["schemas"]["Decimal"];
+            /**
+             * Format: int64
+             * @description The fewest tokens a request needs for the platform's sale price to cover `request_price`, at the input and output mix of the last 24 hours; a request with fewer loses money.
+             */
+            tokens: number;
+            /**
+             * Format: int64
+             * @description The mean tokens of a request in the last 24 hours.
+             */
+            mean_tokens_24h?: number;
+            /** Format: int64 */
+            requests_24h?: number;
+        };
+        EndpointCost: {
+            endpoint_id: components["schemas"]["Uuid"];
+            /** @enum {string} */
+            cost_state: "known" | "unknown" | "conflict";
+            source?: components["schemas"]["CostSource"];
+            settlement_currency: string;
+            /** @description The unit value the prices were converted with; absent for a supplier billed in money or not yet confirmed. */
+            unit_value?: components["schemas"]["Decimal"];
+            /** @description The version of the cost plan, which an attempt's cost row names. */
+            plan_id?: components["schemas"]["Uuid"];
+            lines: components["schemas"]["CostLine"][];
+            break_even?: components["schemas"]["CostBreakEven"];
+        };
+        /** @description A family of models within its author, such as gpt-6.1 or claude-sonnet. */
+        ModelFamily: string;
+        /** @enum {string} */
+        BillingUnit: "token" | "image" | "second" | "character" | "request" | "use" | "page";
+        ModelFamilyUpdate: {
+            /** @description The family; null takes the model out of its family. */
+            family: components["schemas"]["ModelFamily"] | null;
+            /** Format: int64 */
+            rev: number;
+            reason: components["schemas"]["Reason"];
+        };
+        ModelListingRequest: {
+            models: {
+                id: components["schemas"]["Uuid"];
+                /** Format: int64 */
+                rev: number;
+            }[];
+            reason: components["schemas"]["Reason"];
+        };
+        ModelListingResult: {
+            data: {
+                model_id: components["schemas"]["Uuid"];
+                /** @enum {string} */
+                outcome: "listed" | "stale" | "not_ready" | "not_draft";
+                /** @description The model as listed; present with `listed`. */
+                model?: components["schemas"]["ModelSummary"];
+            }[];
+        };
+        ModelImportRequest: {
+            /**
+             * @description The public price list to import from, one of the catalog's datasets.
+             * @enum {string}
+             */
+            source: "litellm" | "openrouter";
+            reason: components["schemas"]["Reason"];
+        };
+        ModelImport: {
+            /** @enum {string} */
+            source: "litellm" | "openrouter";
+            /** @description Draft models added; `listModels` with `status=draft` lists them. */
+            added: number;
+            /** @description Entries the catalog already knew, left as they are. */
+            known: number;
+            /** @description Entries not added because the catalog cannot use them as they are. */
+            held: number;
+            /** @description The names of the first held entries, for a person to add by hand. */
+            held_names?: string[];
+        };
+        /**
+         * @default 1h
+         * @enum {string}
+         */
+        MonitorWindow: "1h" | "24h";
+        /** @description Milliseconds; absent when no call in the window had the measure. */
+        MonitorPercentiles: {
+            p50?: number;
+            p90?: number;
+            p95?: number;
+            p99?: number;
+        };
+        MonitorBucket: {
+            /**
+             * Format: date-time
+             * @description The bucket's start.
+             */
+            at: string;
+            /** Format: int64 */
+            calls: number;
+            /** Format: int64 */
+            failures: number;
+            /**
+             * Format: int64
+             * @description Input, cached and output tokens the calls reported.
+             */
+            tokens: number;
+            first_token_ms_p50?: number;
+            first_token_ms_p95?: number;
+        };
+        MonitorFailureCause: {
+            /** @description The call log's `error_kind`, as `listAdminCalls` filters by it. */
+            error_kind: string;
+            /** @description True when the failure was the supplier's side: its endpoint, key, group or itself. */
+            upstream: boolean;
+            /** Format: int64 */
+            calls: number;
+        };
+        MonitorDurationBin: {
+            /** @description The bin's upper bound; absent for the last, open bin. */
+            below_ms?: number;
+            /** Format: int64 */
+            calls: number;
+        };
+        /** @description One line, a supplier's group, by the calls whose last attempt went to it. */
+        MonitorLine: {
+            supplier_id: components["schemas"]["Uuid"];
+            group_id: components["schemas"]["Uuid"];
+            /** Format: int64 */
+            calls: number;
+            /** Format: int64 */
+            failures: number;
+            first_token_ms_p50?: number;
+        };
+        OperationsMonitor: {
+            window: components["schemas"]["MonitorWindow"];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+            /** @enum {integer} */
+            bucket_seconds: 60 | 3600;
+            /** @description Every bucket of the window, oldest first, empty ones included. */
+            buckets: components["schemas"]["MonitorBucket"][];
+            /** Format: int64 */
+            calls: number;
+            /** Format: int64 */
+            failures: number;
+            /** Format: int64 */
+            tokens: number;
+            /**
+             * Format: int64
+             * @description Calls that moved to another endpoint after an attempt failed.
+             */
+            switched_calls: number;
+            first_token_ms: components["schemas"]["MonitorPercentiles"];
+            total_ms: components["schemas"]["MonitorPercentiles"];
+            /** @description How the completed calls' total times spread, by bin, shortest first. */
+            durations: components["schemas"]["MonitorDurationBin"][];
+            /** @description The failed calls by cause, most first. */
+            failure_causes: components["schemas"]["MonitorFailureCause"][];
+            lines: components["schemas"]["MonitorLine"][];
+        };
+        /** @description The tokens the window's calls reported, by kind; `input` excludes the cached ones. */
+        OverviewTokens: {
+            /** Format: int64 */
+            input: number;
+            /** Format: int64 */
+            cache_read: number;
+            /** Format: int64 */
+            cache_write: number;
+            /** Format: int64 */
+            output: number;
+        };
+        OverviewSpender: {
+            account_id: components["schemas"]["AccountId"];
+            /** @description What the account's settled calls of the window were charged. */
+            spend: components["schemas"]["Money"];
+        };
+        /** @description One UTC day of the window, with the measures the overview has for the whole of it. */
+        OverviewDay: {
+            /** Format: date */
+            date: string;
+            /** Format: int64 */
+            calls: number;
+            /** Format: int64 */
+            errors: number;
+            revenue: components["schemas"]["Money"];
+            cost: components["schemas"]["Money"];
+            tokens?: components["schemas"]["OverviewTokens"];
+            /** Format: int64 */
+            active_accounts?: number;
+            /** Format: int64 */
+            new_users?: number;
+            first_token_ms_p50?: number;
+        };
+        /**
+         * @description A plugin, by the ID a request names it with.
+         * @enum {string}
+         */
+        AdminPlugin: "web" | "file-parser";
+        AdminCallPlugin: {
+            plugin: components["schemas"]["AdminPlugin"];
+            /** @description False when the plugin's run failed and the call went on without it. */
+            ok: boolean;
+            /** @description The search engine's or parser's name in the settings. */
+            engine?: string;
+            /** @description Searches run, or pages parsed. */
+            uses?: number;
+            ms?: number;
+            /** @description What the call was charged for the plugin. */
+            price?: components["schemas"]["Money"];
+        };
+        PluginHour: {
+            /** Format: date-time */
+            at: string;
+            /** Format: int64 */
+            calls: number;
+        };
+        PluginStat: {
+            plugin: components["schemas"]["AdminPlugin"];
+            /**
+             * Format: int64
+             * @description Calls that used the plugin.
+             */
+            calls: number;
+            /** Format: int64 */
+            failures: number;
+            /**
+             * Format: int64
+             * @description Searches run, or pages parsed.
+             */
+            uses: number;
+            /** @description Absent when it never ran. */
+            mean_ms?: number;
+            /** @description What the calls were charged for the plugin. */
+            revenue?: components["schemas"]["Money"];
+            /** @description What the plugin's backends cost the platform, at the costs set in its settings. */
+            cost?: components["schemas"]["Money"];
+            /** @description Every hour of the window, oldest first. */
+            hours: components["schemas"]["PluginHour"][];
+        };
+        PluginStats: {
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+            plugins: components["schemas"]["PluginStat"][];
+        };
+        SubscriptionPage: {
+            data: components["schemas"]["Subscription"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
+        SubscriptionPlanShare: {
+            plan_id: components["schemas"]["Uuid"];
+            /** Format: int64 */
+            active: number;
+            /** @description Its share of all active subscriptions, in basis points. */
+            share_bp: number;
+        };
+        SubscriptionSummary: {
+            month: string;
+            /** Format: int64 */
+            active: number;
+            /** Format: int64 */
+            ending_within_7_days: number;
+            /** @description What the subscriptions sold in the month were paid, in the site's accounting currency; a gift is not revenue. */
+            revenue: components["schemas"]["Money"];
+            /** @description The same for the month before. */
+            previous_revenue: components["schemas"]["Money"];
+            plans: components["schemas"]["SubscriptionPlanShare"][];
+        };
+        /** @enum {string} */
+        AnnouncementState: "scheduled" | "showing" | "ended" | "withdrawn";
+        AdminAnnouncement: {
+            id: components["schemas"]["AnnouncementId"];
+            site_id: components["schemas"]["SiteId"];
+            title: string;
+            body: string;
+            /** Format: date-time */
+            starts_at: string;
+            /** Format: date-time */
+            ends_at: string;
+            state: components["schemas"]["AnnouncementState"];
+            /** Format: date-time */
+            withdrawn_at?: string;
+        };
+        AdminAnnouncementList: {
+            data: components["schemas"]["AdminAnnouncement"][];
+            /** @description Null on the last page. */
+            next_cursor: string | null;
+        };
     };
     responses: {
         /** @description The request is malformed or breaks a constraint of the contract (`invalid_request`), or names a routing preset it may not choose (`preset_not_selectable`). */
@@ -6009,6 +7440,8 @@ export interface operations {
                 model?: string;
                 status?: components["schemas"]["AdminCallStatus"];
                 site_id?: components["schemas"]["SiteId"];
+                /** @description Only calls that used this plugin. */
+                plugin?: components["schemas"]["AdminPlugin"];
             };
             header?: never;
             path?: never;
@@ -6190,6 +7623,59 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getOperationsMonitor: {
+        parameters: {
+            query?: {
+                window?: components["schemas"]["MonitorWindow"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The window. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationsMonitor"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getPluginStats: {
+        parameters: {
+            query?: {
+                since?: string;
+                until?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The plugins. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PluginStats"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };
@@ -7923,6 +9409,37 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listAdminAnnouncements: {
+        parameters: {
+            query?: {
+                site_id?: components["schemas"]["SiteId"];
+                state?: components["schemas"]["AnnouncementState"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of announcements. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminAnnouncementList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };
@@ -9664,6 +11181,7 @@ export interface operations {
         parameters: {
             query?: {
                 status?: components["schemas"]["SupplierStatus"];
+                mode?: components["schemas"]["SupplierMode"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
@@ -10214,6 +11732,746 @@ export interface operations {
             default: components["responses"]["Failure"];
         };
     };
+    createDirectSupplier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DirectSupplierCreate"];
+            };
+        };
+        responses: {
+            /** @description No key passed; nothing was stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierConnected"];
+                };
+            };
+            /** @description Connected, with the check of each key. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierConnected"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    createCloudSupplier: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudSupplierCreate"];
+            };
+        };
+        responses: {
+            /** @description The credential passed in no region; nothing was stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierConnected"];
+                };
+            };
+            /** @description Connected, with the check of each region. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierConnected"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    replaceSupplierCloudCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CloudCredentialReplace"];
+            };
+        };
+        responses: {
+            /** @description The supplier as changed with the check of each region, or only the checks when nothing changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierConnected"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    connectSupplierGroup: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                group_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GroupConnection"];
+            };
+        };
+        responses: {
+            /** @description Connected. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GroupConnected"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    identifySupplierKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["KeyIdentificationRequest"];
+            };
+        };
+        responses: {
+            /** @description What the supplier says of the key. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["KeyIdentification"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSupplierSyncRuns: {
+        parameters: {
+            query?: {
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of runs. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierSyncRunList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    requestSupplierSync: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description Due now. */
+            202: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierSyncTaskList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSupplierReconciliation: {
+        parameters: {
+            query?: {
+                /** @description How many days back from today, today included. */
+                days?: number;
+            };
+            header?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The days. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierReconciliation"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSupplierModels: {
+        parameters: {
+            query?: {
+                pile?: components["schemas"]["SupplierModelPile"];
+                group_id?: components["schemas"]["Uuid"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of names. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierModelList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierIntakeRule: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupplierIntakeRuleUpdate"];
+            };
+        };
+        responses: {
+            /** @description The rule as changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierIntakeRule"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSupplierEndpointCost: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                endpoint_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cost. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EndpointCost"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    addSupplierKeys: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SupplierKeysAdd"];
+            };
+        };
+        responses: {
+            /** @description No key was stored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialCheckList"];
+                };
+            };
+            /** @description The check of each key, in the order sent. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialCheckList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testSupplierCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description What the check found. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialCheck"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setSupplierCredentialEnabled: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialEnabledUpdate"];
+            };
+        };
+        responses: {
+            /** @description The credential as changed. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    removeSupplierCredential: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                supplier_id: components["schemas"]["Uuid"];
+                credential_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The credential, `erased`. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredential"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSupplierCredentials: {
+        parameters: {
+            query?: {
+                supplier_id?: components["schemas"]["Uuid"];
+                status?: components["schemas"]["CredentialStatus"];
+                mode?: components["schemas"]["SupplierMode"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of credentials. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierCredentialList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    testSupplierCredentials: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CredentialTestsRequest"];
+            };
+        };
+        responses: {
+            /** @description The check of each credential. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CredentialCheckList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            422: components["responses"]["Unprocessable"];
+            429: components["responses"]["TooManyRequests"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    removeInvalidSupplierCredentials: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InvalidCredentialsRemoval"];
+            };
+        };
+        responses: {
+            /** @description What was erased and what was kept. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InvalidCredentialsRemoved"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listSupplierInbox: {
+        parameters: {
+            query?: {
+                kind?: components["schemas"]["SupplierInboxKind"];
+                supplier_id?: components["schemas"]["Uuid"];
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of items. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierInboxList"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSupplierInboxSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierInboxSummary"];
+                };
+            };
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    ignoreSupplierInboxItem: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                item_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ReasonRequest"];
+            };
+        };
+        responses: {
+            /** @description The item, ignored. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SupplierInboxItem"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
     listAuthors: {
         parameters: {
             query?: never;
@@ -10278,6 +12536,7 @@ export interface operations {
                 status?: components["schemas"]["ModelStatus"];
                 author?: components["schemas"]["AuthorSlug"];
                 slug_prefix?: string;
+                family?: components["schemas"]["ModelFamily"];
                 /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
                 cursor?: components["parameters"]["Cursor"];
                 /** @description How many items a page holds at most. */
@@ -10545,6 +12804,108 @@ export interface operations {
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
             409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    setModelFamily: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path: {
+                model_id: components["schemas"]["Uuid"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelFamilyUpdate"];
+            };
+        };
+        responses: {
+            /** @description The model as changed */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Model"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["NotFound"];
+            409: components["responses"]["Conflict"];
+            422: components["responses"]["Unprocessable"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    putModelsOnSale: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelListingRequest"];
+            };
+        };
+        responses: {
+            /** @description The outcome for each model. */
+            200: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelListingResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    importModels: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description A UUID the caller chooses for one intended change. Sending the request again with the same key, after a lost response, returns the first result instead of doing it twice. */
+                "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelImportRequest"];
+            };
+        };
+        responses: {
+            /** @description What the import added. */
+            201: {
+                headers: {
+                    "Idempotency-Replayed": components["headers"]["IdempotencyReplayed"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelImport"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             422: components["responses"]["Unprocessable"];
             default: components["responses"]["Failure"];
         };
@@ -11091,6 +13452,66 @@ export interface operations {
             401: components["responses"]["Unauthenticated"];
             403: components["responses"]["Forbidden"];
             404: components["responses"]["NotFound"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    listPlatformSubscriptions: {
+        parameters: {
+            query?: {
+                state?: components["schemas"]["SubscriptionStanding"];
+                plan_id?: components["schemas"]["Uuid"];
+                account_id?: components["schemas"]["AccountId"];
+                ends_before?: string;
+                sort?: "created_at" | "ends_at";
+                /** @description Where the next page starts: the `next_cursor` of the previous page, unchanged. It is opaque, only valid for the same filters, and a malformed one is a 400. */
+                cursor?: components["parameters"]["Cursor"];
+                /** @description How many items a page holds at most. */
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of subscriptions. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionPage"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
+            default: components["responses"]["Failure"];
+        };
+    };
+    getSubscriptionSummary: {
+        parameters: {
+            query?: {
+                month?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The counts. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubscriptionSummary"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthenticated"];
+            403: components["responses"]["Forbidden"];
             default: components["responses"]["Failure"];
         };
     };

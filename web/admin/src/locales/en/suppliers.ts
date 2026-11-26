@@ -176,6 +176,7 @@ export default {
       quota_exhausted: "Quota used up",
       expired: "Expired",
       disabled: "Disabled",
+      rejected: "Refused upstream",
       erased: "Erased",
     },
     empty: {

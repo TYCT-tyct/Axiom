@@ -106,6 +106,7 @@ const credentialTones = {
   quota_exhausted: "warn",
   expired: "bad",
   disabled: "warn",
+  rejected: "bad",
   erased: "neutral",
 } as const satisfies Record<AdminSchemas["SupplierCredential"]["status"], "neutral" | "good" | "warn" | "bad">;
 

@@ -92,7 +92,7 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 
 func credentialBody(c suppliers.Credential) adminapi.SupplierCredential {
 	return adminapi.SupplierCredential{
-		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.SupplierCredentialStatus(c.Status),
+		Id: c.ID.String(), GroupId: c.Group.String(), UpstreamKeyRef: c.UpstreamKeyRef, Status: adminapi.CredentialStatus(c.Status),
 		CooldownUntil: c.CooldownUntil, ExpiresAt: c.ExpiresAt, MaxConcurrency: c.MaxConcurrency,
 		RequestsPerMinute: c.RequestsPerMinute,
 	}
