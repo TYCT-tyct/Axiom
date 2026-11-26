@@ -15,7 +15,7 @@ export default {
     disabled: "已停用",
     makeDefault: "设为默认",
     defaultTitle: "把“{{name}}”设为默认等级",
-    defaultIntro: "之后注册的账户进入这个等级，访客看到它的价格；已有账户的等级不变。",
+    defaultIntro: "之后注册的账户进入这个等级，未登录的人看到它的价格；已有账户的等级不变。",
     defaultDone: "“{{name}}”现在是默认等级。",
     disable: "停用",
     enable: "启用",
