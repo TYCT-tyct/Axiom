@@ -1,24 +1,44 @@
 import type { AdminSchemas } from "@axiom/api";
 import { LoadMore } from "@axiom/app";
-import { Card, DataState, EmptyState, Field, Mono, PageHead, Table, Td, Text, TextLink } from "@axiom/ui";
+import { Card, DataState, DataTable, EmptyState, Field, Id, Mono, PageHead, Text, Tooltip, useFormat } from "@axiom/ui";
 import { useInfiniteQuery } from "@tanstack/react-query";
-import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Code, FilterBar, Head, PageBody, Time, text, toInstant, toLocalInput } from "../parts";
+import { AuditDrawer } from "../audit-drawer";
+import { useEventLabel } from "../audit-events";
+import en from "../locales/en/audit";
+import enEvents from "../locales/en/audit-events";
+import zh from "../locales/zh/audit";
+import zhEvents from "../locales/zh/audit-events";
+import { usePanelSteps } from "../panel-steps";
+import { FilterBar, PageBody, text, toInstant, toLocalInput } from "../parts";
 import { adminAuditQuery } from "../queries";
 
-// The audit log is read-only and immutable: a search over exact fields, newest first, with the entry's detail on its own
-// page. It is a separate permission from calls, so support can answer a bill without reading every operator's changes.
+// The page's words, and the words for the actions, are loaded with it: they would otherwise weigh on the first screen.
+export const messages = {
+  zh: { audit: zh, auditEvents: zhEvents },
+  en: { audit: en, auditEvents: enEvents },
+};
+
+type Entry = AdminSchemas["AuditEntry"];
+
+// The audit log is read-only and immutable: a search over exact fields, newest first, with an entry's detail in a
+// drawer over the list. It is a separate permission from calls, so support can answer a bill without reading every
+// operator's changes.
 export default function Audit() {
   const { t } = useTranslation();
   const filters = useSearch({ from: "/app/audit" });
   const audit = useInfiniteQuery(adminAuditQuery(filters));
   const rows = audit.data?.pages.flatMap((page) => page.data ?? []) ?? [];
   const narrowed = Object.values(filters).some(Boolean);
+  const [selected, select] = useState<string>();
+  const open = rows.find((entry) => entry.id === selected);
+  const steps = usePanelSteps(rows, selected ?? "", (entry) => entry.id, select);
   return (
     <>
-      <PageHead title={t("nav.audit")} lede={t("audit.description")} />
       <PageBody>
+        <PageHead title={t("shell.nav.audit")} lede={t("audit.description")} />
         <Filters filters={filters} />
         <Card layout="flush">
           <DataState
@@ -30,11 +50,12 @@ export default function Audit() {
               </EmptyState>
             }
           >
-            {() => <AuditTable rows={rows} />}
+            {() => <AuditTable rows={rows} current={selected} onOpen={(entry) => select(entry.id)} />}
           </DataState>
           <LoadMore list={audit} />
         </Card>
       </PageBody>
+      {open ? <AuditDrawer entry={open} steps={steps} onClose={() => select(undefined)} /> : null}
     </>
   );
 }
@@ -108,55 +129,71 @@ function Filters({ filters }: { filters: FiltersValue }) {
   );
 }
 
-function AuditTable({ rows }: { rows: AdminSchemas["AuditEntry"][] }) {
-  const { t } = useTranslation();
+// The action in words; one the words do not know is a generic label with its own name under it, in mono.
+function Action({ entry }: { entry: Entry }) {
+  const label = useEventLabel()(entry.action);
   return (
-    <Table label={t("nav.audit")}>
-      <Head
-        cols={[
-          t("audit.col.at"),
-          [t("audit.col.action"), { main: true }],
-          t("audit.col.actor"),
-          t("audit.col.target"),
-          t("audit.col.request"),
-        ]}
-      />
-      <tbody>
-        {rows.map((entry, index) => (
-          <tr key={entry.id ?? index}>
-            <Td shrink>
-              {entry.id ? (
-                <TextLink>
-                  <Link to="/audit/$entryId" params={{ entryId: entry.id }}>
-                    <Time at={entry.at} />
-                  </Link>
-                </TextLink>
-              ) : (
-                <Time at={entry.at} />
-              )}
-            </Td>
-            <Td main>
-              <Code>{entry.action ?? "—"}</Code>
-              <Text as="div" size="sm" tone="faint">
-                {entry.module ?? ""}
-              </Text>
-            </Td>
-            <Td shrink>
-              {entry.actor_id ?? "—"}
-              <Text as="div" size="sm" tone="faint">
-                {entry.actor_kind}
-              </Text>
-            </Td>
-            <Td shrink>
-              {entry.target_id ?? "—"}
-              <Text as="div" size="sm" tone="faint">
-                {entry.target_kind}
-              </Text>
-            </Td>
-            <Td shrink>{entry.request_id ? <Mono>{entry.request_id}</Mono> : "—"}</Td>
-          </tr>
-        ))}
-      </tbody>
-    </Table>
+    <>
+      <b>{label.text}</b>
+      {label.raw ? (
+        <Text as="div" size="sm" tone="faint">
+          <Mono>{label.raw}</Mono>
+        </Text>
+      ) : null}
+    </>
+  );
+}
+
+function AuditTable({
+  rows,
+  current,
+  onOpen,
+}: {
+  rows: Entry[];
+  current: string | undefined;
+  onOpen: (entry: Entry) => void;
+}) {
+  const { t } = useTranslation();
+  const format = useFormat();
+  return (
+    <DataTable<Entry>
+      label={t("shell.nav.audit")}
+      rows={rows}
+      rowKey={(entry) => entry.id ?? ""}
+      onOpen={onOpen}
+      current={current}
+      columns={[
+        {
+          key: "at",
+          header: t("audit.col.at"),
+          cell: (entry) => (entry.at ? format.dateTime(new Date(entry.at)) : "—"),
+        },
+        { key: "action", header: t("audit.col.action"), cell: (entry) => <Action entry={entry} /> },
+        {
+          key: "actor",
+          header: t("audit.col.actor"),
+          from: "lg",
+          cell: (entry) => (entry.actor_id ? <Id value={entry.actor_id} /> : "—"),
+        },
+        {
+          key: "target",
+          header: t("audit.col.target"),
+          from: "md",
+          cell: (entry) =>
+            entry.target_id ? (
+              <Tooltip text={[entry.target_kind, entry.target_id].filter(Boolean).join(" ")} width={180} />
+            ) : (
+              "—"
+            ),
+        },
+        {
+          key: "reason",
+          header: t("audit.col.reason"),
+          from: "xl",
+          muted: true,
+          cell: (entry) => (entry.reason ? <Tooltip text={entry.reason} width={240} /> : "—"),
+        },
+      ]}
+    />
   );
 }

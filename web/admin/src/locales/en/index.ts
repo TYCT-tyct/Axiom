@@ -5,15 +5,18 @@ import alertEvents from "./alert-events";
 import announcements from "./announcements";
 import approvals from "./approvals";
 import audit from "./audit";
+import auditEvents from "./audit-events";
 import calls from "./calls";
 import exchangeRates from "./exchange-rates";
 import legalDocs from "./legal-documents";
 import mappings from "./mappings";
+import me from "./me";
 import models from "./models";
 import operations from "./operations";
 import orders from "./orders";
 import discrepancies from "./payment-discrepancies";
 import platformGrants from "./platform-grants";
+import plugins from "./plugins";
 import pricePolicy from "./price-policy";
 import pricing from "./pricing";
 import rateLimits from "./rate-limits";
@@ -58,8 +61,7 @@ export const initial = {
     rateLimits: "Rate limits",
   },
   shell,
-  calls,
-  audit,
+  drawerSteps: { previous: "Previous", next: "Next" },
   sourceClasses,
   routingPresets,
   signIn: { description: "The admin is for operators. After signing in you also complete two-step verification." },
@@ -265,6 +267,11 @@ export const initial = {
     | "legalDocs"
     | "rateLimits"
     | "logRetention"
+    | "plugins"
+    | "auditEvents"
+    | "calls"
+    | "audit"
+    | "me"
   >
 >;
 
@@ -284,4 +291,9 @@ export default /* @__PURE__ */ Object.assign({}, initial, {
   legalDocs,
   rateLimits,
   logRetention,
+  plugins,
+  me,
+  auditEvents,
+  calls,
+  audit,
 }) satisfies Messages<typeof zh>;

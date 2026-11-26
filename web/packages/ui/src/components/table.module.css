@@ -114,6 +114,52 @@
   opacity: 1;
 }
 
+/* The first cell's button is the cell's own text: no box, the link colour, a 44px target on a phone (with .sort's). */
+.opener {
+  position: relative;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accentT);
+  font: inherit;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.opener:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.opener:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--r4);
+}
+
+/* A row that opens its detail (the admin's tr[data-kind]): the hand, the board's hover wash, and the open row held in
+   the selected wash with the accent bar on its first cell. */
+.open {
+  cursor: pointer;
+  transition: background-color var(--dur) var(--ease);
+}
+
+.open:hover {
+  background: var(--hover);
+}
+
+.current,
+.current:hover {
+  background: var(--selected);
+}
+
+.current > td:first-child {
+  box-shadow:
+    inset 3px 0 0 var(--accentSolid),
+    inset 0 calc(var(--bw) * -1) 0 var(--line);
+}
+
 /* A row an edit just changed lights once in the accent's wash and fades (the admin's adRowFlash): a highlight that
    holds, then goes, so it runs the board's 1500ms rather than a transition's 250. */
 .flash > td {
@@ -143,7 +189,8 @@
     display: none;
   }
 
-  .sort::before {
+  .sort::before,
+  .opener::before {
     content: "";
     position: absolute;
     left: 50%;

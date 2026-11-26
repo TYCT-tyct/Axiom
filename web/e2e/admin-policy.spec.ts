@@ -72,9 +72,11 @@ test("alert settings replace the rules, test a channel, and rotate a write-only 
   );
 });
 
-test("the announcements list follows successful publishes and accepts a withdrawal by ID", async ({ page }) => {
+test("the announcements page lists every announcement with where it stands, previews what users see, and withdraws with no undo", async ({
+  page,
+}) => {
   const state = await open(page, "/announcements");
-  await expect(page.getByText(words("announcements.empty"))).toBeVisible();
+  await expect(page.getByText(words("announcements.empty.title"))).toBeVisible();
   await page.getByRole("button", { name: words("announcements.publish") }).click();
   await dialog(page).locator("[name=title]").fill("Planned maintenance");
   await dialog(page).locator("[name=body]").fill("The console stays open during maintenance.");
@@ -83,21 +85,23 @@ test("the announcements list follows successful publishes and accepts a withdraw
   await send(page, "notify customers");
   await expect(done(page)).toBeVisible();
   await close(page);
-  await expect(page.getByText("Planned maintenance")).toBeVisible();
 
-  await page.getByRole("link", { name: zhText("shell.nav.ops") }).click();
-  await page.getByRole("link", { name: words("shell.nav.announcements") }).click();
+  // It starts in 2030: the list says it waits, and what users see now has nothing in it.
   await expect(page.getByText("Planned maintenance")).toBeVisible();
-  await page.getByRole("button", { name: words("announcements.withdrawById") }).click();
-  await dialog(page).locator("[name=id]").fill("ann_00000000000000000000000001");
+  await expect(page.getByText(words("announcements.state.scheduled"))).toBeVisible();
+  await expect(page.getByText(words("announcements.preview.none"))).toBeVisible();
+  await expect(page.getByText(words("announcements.preview.waiting"))).toBeVisible();
+
+  await page.getByRole("button", { name: words("announcements.withdraw"), exact: true }).click();
+  await expect(dialog(page).getByText(words("announcements.withdrawWarn"))).toBeVisible();
   await send(page, "maintenance cancelled");
-  await expect(done(page)).toBeVisible();
-  await close(page);
-  await expect(page.getByText(words("announcements.withdrawn"))).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: words("announcements.withdrawnToast") })).toBeVisible();
+  await expect(page.getByRole("button", { name: zhText("change.undo") })).toHaveCount(0);
+  await expect(page.getByText(words("announcements.state.withdrawn"))).toBeVisible();
   await snapshot(page, "announcements");
   await expect(page.getByRole("button", { name: words("announcements.withdraw"), exact: true })).toHaveCount(0);
   expect(state.log).toContain("POST /announcements/ann_00000000000000000000000001/withdraw");
-  expect(state.log.some((entry) => entry.startsWith("GET /announcements"))).toBe(false);
+  expect(state.log.some((entry) => entry.startsWith("GET /announcements"))).toBe(true);
 });
 
 test("the legal page reads history and publishes a version in the chosen language", async ({ page }) => {

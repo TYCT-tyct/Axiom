@@ -19,11 +19,9 @@ export function SiteContentPage({
   const allowed = can(session, "sites.manage");
   const account = useQuery({ ...accountQuery(session.account), enabled: allowed });
   return (
-    <>
+    <PageBody>
       <PageHead title={title} lede={description} />
-      <PageBody>
-        {allowed ? <DataState query={account}>{(data) => children(data.site_id)}</DataState> : <ForbiddenState />}
-      </PageBody>
-    </>
+      {allowed ? <DataState query={account}>{(data) => children(data.site_id)}</DataState> : <ForbiddenState />}
+    </PageBody>
   );
 }

@@ -5,6 +5,7 @@ import { financeHandlers, startFinance } from "./admin-finance-api.ts";
 import { operationsHandlers, startOperations } from "./admin-operations.ts";
 import { opsControlHandlers, startOpsControl } from "./admin-ops-control-api.ts";
 import { listPaidBatches } from "./admin-paid-batches-api.ts";
+import { pluginHandlers, startPlugins } from "./admin-plugins-api.ts";
 import { policyHandlers, startPolicies } from "./admin-policies-api.ts";
 import { pricingHandlers } from "./admin-pricing.ts";
 import { base, type Ctx, changes, reads, route } from "./admin-route.ts";
@@ -85,13 +86,17 @@ function listCalls({ query, state }: Ctx<"/api/admin/v1/calls", "get">) {
   const site = query.get("site_id");
   const model = query.get("model");
   const status = query.get("status");
+  const plugin = query.get("plugin");
+  // A filter given narrows to the calls it holds true of.
+  const when = (value: string | null, holds: (value: string) => boolean) => !value || holds(value);
   const calls = state.calls.filter(
     (call) =>
-      (!account || call.account_id === account) &&
-      (!request || call.id === request) &&
-      (!site || site === state.siteId) &&
-      (!model || call.model === model) &&
-      (!status || (status === "error" ? Boolean(call.error_kind) : !call.error_kind)),
+      when(plugin, (name) => Boolean(call.plugins?.some((run) => run.plugin === name))) &&
+      when(account, (id) => call.account_id === id) &&
+      when(request, (id) => call.id === id) &&
+      when(site, (id) => id === state.siteId) &&
+      when(model, (name) => call.model === name) &&
+      when(status, (result) => (result === "error" ? Boolean(call.error_kind) : !call.error_kind)),
   );
   const page = paged(calls, query, ["since", "until"]);
   if (!page) {
@@ -512,6 +517,7 @@ const handlers: Handler<AdminState>[] = [
   ...operationsHandlers,
   ...opsControlHandlers,
   ...policyHandlers,
+  ...pluginHandlers,
 ];
 
 // mockAdmin answers the admin's API for a page. The returned state is live: a test reads what the page did to it
@@ -526,5 +532,6 @@ export async function mockAdmin(page: Page, data: MockData = "usual", over: Part
   startOpsControl(state, data);
   startSiteExtras(state);
   startPolicies(state, data);
+  startPlugins(state);
   return mockApi(page, base, handlers, state);
 }

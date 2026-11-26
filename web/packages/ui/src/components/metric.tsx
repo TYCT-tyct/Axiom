@@ -11,16 +11,19 @@ export function Metric({
   delta,
   deltaLabel,
   timeZone,
+  bare = false,
 }: {
   label: string;
   value: number | Money;
   delta?: number;
   deltaLabel?: string;
   timeZone?: string;
+  // bare draws no block of its own, for a figure that sits inside a card already.
+  bare?: boolean;
 }) {
   const format = useFormat(timeZone);
   return (
-    <div className={s.root}>
+    <div className={bare ? s.bare : s.root}>
       <span className={s.label}>{label}</span>
       <b className={s.value}>{typeof value === "number" ? format.number(value) : format.money(value)}</b>
       {delta === undefined ? null : (

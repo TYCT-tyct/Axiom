@@ -77,7 +77,16 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
           { to: "/subscription-plans", label: "subscriptionPlans" },
         ],
       },
-      // 插件 (plugins) has no page yet; F9 adds it.
+      {
+        key: "plugins",
+        to: "/plugins",
+        icon: "plugin",
+        permission: "sites.manage",
+        also: [
+          { to: "/plugins/web", label: "webSearch" },
+          { to: "/plugins/file", label: "fileParser" },
+        ],
+      },
     ],
   },
   {

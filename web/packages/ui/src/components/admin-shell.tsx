@@ -45,6 +45,7 @@ export type AdminShellText = {
   help: string;
   shortcuts: string;
   account: string;
+  myLogin: string;
   appearance: string;
   themes: Record<Theme, string>;
   signOut: string;
@@ -66,7 +67,8 @@ export type AdminShellProps = {
   tabs: readonly ShellEntry[];
   // The bell; absent when the session may not see alerts.
   alerts?: { items: readonly ShellAlert[]; count: number; allHref: string; rulesHref?: string };
-  account: { name: string; email: string };
+  // href is the page of the person's own sign-in (我的登录), first in the avatar's menu.
+  account: { name: string; email: string; href?: string };
   shortcuts: readonly Shortcut[];
   onSearch: () => void;
   onSignOut: () => void;
@@ -241,7 +243,7 @@ function Help({ text, shortcuts }: { text: AdminShellText; shortcuts: readonly S
   );
 }
 
-function Account({ account, text, onSignOut }: AdminShellProps) {
+function Account({ account, text, onSignOut, link: Link }: AdminShellProps) {
   const preferences = usePreferences();
   return (
     <Popover
@@ -263,6 +265,12 @@ function Account({ account, text, onSignOut }: AdminShellProps) {
             </span>
           </div>
           <i className={s.rule} />
+          {account.href ? (
+            <Link href={account.href} className={s.item} onClick={close}>
+              <Glyph name="security" />
+              {text.myLogin}
+            </Link>
+          ) : null}
           <button type="button" className={s.item} lang={preferences.other.locale} onClick={preferences.other.choose}>
             <Glyph name="link" />
             {preferences.other.name}

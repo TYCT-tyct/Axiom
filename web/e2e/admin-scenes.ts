@@ -41,6 +41,14 @@ const dialog = (name: string, path: string, ...buttons: string[]): Scene =>
     },
   );
 
+// A list whose first row is opened into its drawer.
+const rowDrawer = (name: string, path: string): Scene =>
+  scene(
+    name,
+    (p) => goto(p, path),
+    (p) => p.locator("tbody tr").first().locator("td").first().getByRole("button").click(),
+  );
+
 // The routing presets page with the platform's switch in a given state whatever the data set says (the worst set has it
 // on), so the suspended page and each of its two dialogs are in every width, scheme and language. The dialogs that
 // change presets open with it off: while it is on their buttons are disabled.
@@ -156,9 +164,13 @@ const scenes: Scene[] = [
   view("orders", "orders"),
   view("account", `accounts/${acct(1)}`),
   view("calls", "calls"),
-  view("call", `calls/${uuid(11, 1)}`),
+  rowDrawer("call", "calls"),
   view("audit", "audit"),
-  view("audit-entry", `audit/${uuid(12, 1)}`),
+  rowDrawer("audit-entry", "audit"),
+  view("plugins", "plugins"),
+  view("plugins-web", "plugins/web"),
+  view("plugins-file", "plugins/file"),
+  view("me", "me"),
   view("suppliers", "suppliers"),
   view("supplier", supplier(1)),
   view("supplier-setup", supplier(2)),

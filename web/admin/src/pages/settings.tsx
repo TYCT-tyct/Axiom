@@ -17,7 +17,6 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, type Problem } from "../change";
 import { useDuration } from "../durations";
-import { FileParserSettings } from "../file-parser-settings";
 import { KeyLimitsCard, KeyLimitsUnavailable } from "../key-limits";
 import { SiteLoginLimits } from "../login-limits";
 import { MailSettings } from "../mail-settings";
@@ -27,10 +26,8 @@ import { PaymentsSettings } from "../payments-settings";
 import { ProbeSettings } from "../probe-settings";
 import {
   accountQuery,
-  fileParserSettingsQuery,
   mailSettingsQuery,
   probeSettingsQuery,
-  searchSettingsQuery,
   segmentSettingsQuery,
   siteBrandQuery,
   siteKeyLimitsQuery,
@@ -43,7 +40,6 @@ import {
   systemSettingsQuery,
 } from "../queries";
 import { SiteRegistration } from "../registration";
-import { SearchSettings } from "../search-settings";
 import { SegmentSettings } from "../segment-settings";
 import { SiteSignIn } from "../sign-in";
 import { SiteBrand } from "../site-brand";
@@ -92,8 +88,6 @@ function Sections({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; curren
     useQuery(siteRegistrationQuery(siteId)),
     useQuery(siteSignInQuery(siteId)),
     useQuery(mailSettingsQuery),
-    useQuery(searchSettingsQuery),
-    useQuery(fileParserSettingsQuery),
     useQuery(segmentSettingsQuery),
     useQuery(probeSettingsQuery),
   ].map((query) => !query.isPending);
@@ -108,8 +102,6 @@ function Sections({ siteId, currency }: { siteId: AdminSchemas["SiteId"]; curren
     <SiteRegistration key="registration" siteId={siteId} />,
     <SiteSignIn key="sign-in" siteId={siteId} />,
     <MailSettings key="mail" />,
-    <SearchSettings key="search" />,
-    <FileParserSettings key="file-parser" />,
     <SegmentSettings key="segments" />,
     <ProbeSettings key="probes" />,
     <PaymentsSettings key="payments" siteId={siteId} currency={currency} />,

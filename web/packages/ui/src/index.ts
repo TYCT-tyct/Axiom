@@ -31,6 +31,7 @@ export { Dialog, type PanelSteps, SidePanel } from "./components/dialog";
 export { type DiffRow, DiffRows } from "./components/diff-rows";
 export { Disclosure } from "./components/disclosure";
 export { DocumentText, type TextBlock } from "./components/document-text";
+export { DrawerSection, FactList } from "./components/drawer-parts";
 export { Facts } from "./components/facts";
 export { Field, Select, TextArea } from "./components/field";
 export { Fieldset } from "./components/fieldset";
