@@ -89,9 +89,18 @@ export function Tr({
 }
 
 // RowButton is the text of a row's first cell as the button that opens the row, for a keyboard (the pointer has the row).
-export function RowButton({ onClick, children }: { onClick: () => void; children: ReactNode }) {
+// A row that opens in place says whether it is open (expanded).
+export function RowButton({
+  onClick,
+  expanded,
+  children,
+}: {
+  onClick: () => void;
+  expanded?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <button type="button" className={s.opener} onClick={onClick}>
+    <button type="button" className={s.opener} onClick={onClick} aria-expanded={expanded}>
       {children}
     </button>
   );

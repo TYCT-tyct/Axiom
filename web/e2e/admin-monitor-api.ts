@@ -145,7 +145,9 @@ function getMonitor({ query, state }: Ctx<"/api/admin/v1/reports/monitor", "get"
 
 function listCredentials({ query, state }: Ctx<"/api/admin/v1/supplier-credentials", "get">) {
   const wanted = query.get("status");
+  const supplier = query.get("supplier_id");
   const credentials = state.suppliers
+    .filter((detail) => !supplier || detail.supplier.id === supplier)
     .flatMap((detail) => detail.credentials.map((credential) => ({ ...credential, supplier_id: detail.supplier.id })))
     .filter((credential) => !wanted || credential.status === wanted)
     .map((credential, at) => ({ ...credential, in_flight: at === 0 ? credential.max_concurrency : 1 }));

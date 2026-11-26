@@ -1,11 +1,11 @@
-import type { AdminSchemas } from "@axiom/api";
+import { type AdminSchemas, ApiError } from "@axiom/api";
 import { can, useSession } from "@axiom/app";
 import { useFormat } from "@axiom/ui";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { discrepanciesQuery } from "./finance-queries";
 import type { Pending } from "./nav";
 import { alertEventsQuery } from "./policy-queries";
-import { accountQuery, approvalsQuery, paymentRefundsQuery, pendingMappingsQuery } from "./queries";
+import { accountQuery, approvalsQuery, inboxSummaryQuery, paymentRefundsQuery, pendingMappingsQuery } from "./queries";
 
 // What waits on the pages the sidebar marks with a count (adBadge in admin_core.js), read from the lists those pages
 // show, first page only: a count is the first page's, which no queue here outgrows. A count the session may not read,
@@ -39,15 +39,22 @@ export function usePending(): Partial<Record<Pending, number>> {
   const approvals = firstPage(
     useInfiniteQuery({ ...approvalsQuery("pending"), enabled: can(session, "operations.approve") }).data,
   );
-  const mappings = firstPage(
-    useInfiniteQuery({ ...pendingMappingsQuery(), enabled: can(session, "suppliers.view") }).data,
-  );
   return {
     alerts: alerts && unresolved(alerts).length,
     approvals: approvals?.length,
     payments: usePayments(session),
-    mappings: mappings?.length,
+    inbox: useInbox(session),
   };
+}
+
+// 上游's queue counted (getSupplierInboxSummary); a node of an earlier release has no queue, and counts the names no
+// model matches instead, which were the page's queue before.
+function useInbox(session: Session) {
+  const allowed = can(session, "suppliers.view");
+  const summary = useQuery({ ...inboxSummaryQuery, enabled: allowed });
+  const older = summary.isError && summary.error instanceof ApiError && [404, 501].includes(summary.error.status);
+  const mappings = firstPage(useInfiniteQuery({ ...pendingMappingsQuery(), enabled: allowed && older }).data);
+  return summary.data?.total ?? (older ? mappings?.length : undefined);
 }
 
 // The bell's alerts: the unresolved ones, newest first, the first four (adA_menu's bell); each opens on the alerts page.

@@ -10,7 +10,7 @@ import type { SettingsPage } from "./settings-registry";
 // no entry left is hidden. The server checks the permission again on every request.
 
 // What waits on a page, counted from the queries the shell already has (pending.ts).
-export type Pending = "alerts" | "approvals" | "payments" | "mappings";
+export type Pending = "alerts" | "approvals" | "payments" | "inbox";
 
 // label names the route in ⌘K (shell.also); a route without one is a detail page, found from its list.
 type Also = { to: string; label?: keyof typeof shell.also };
@@ -84,8 +84,12 @@ export const groups: readonly Group<keyof typeof shell.groups>[] = [
         to: "/suppliers",
         icon: "byok",
         permission: "suppliers.view",
-        pending: "mappings",
-        also: [{ to: "/mappings", label: "mappings" }],
+        pending: "inbox",
+        also: [
+          { to: "/suppliers?tab=models", label: "upstreamModels" },
+          { to: "/suppliers?tab=inbox", label: "inbox" },
+          { to: "/suppliers?tab=keys", label: "upstreamKeys" },
+        ],
       },
       {
         key: "models",

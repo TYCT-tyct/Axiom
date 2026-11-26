@@ -73,12 +73,7 @@ function todoOf(waiting: Waiting, { t, hour, number }: Words): Item[] {
   const rest: [Kind, number, Item["link"], string?][] = [
     ["refunds", waiting.refunds, <Link key="r" to="/orders" search={{}} />],
     ["differences", waiting.differences, <Link key="d" to="/payment-discrepancies" search={{ state: "open" }} />],
-    [
-      "mappings",
-      waiting.mappings,
-      <Link key="m" to="/mappings" search={{ supplier: undefined }} />,
-      t("todo.mappingsSub"),
-    ],
+    ["mappings", waiting.mappings, <Link key="m" to="/suppliers" search={{ tab: "inbox" }} />, t("todo.mappingsSub")],
     ["prices", waiting.unpublished, <Link key="p" to="/pricing" />],
   ];
   for (const [key, count, link, sub] of rest) {

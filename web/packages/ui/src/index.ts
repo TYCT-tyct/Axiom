@@ -23,6 +23,7 @@ export { Card } from "./components/card";
 export { CardLink } from "./components/card-link";
 export { BarChart, LineChart } from "./components/chart";
 export { ChipField } from "./components/chip-field";
+export { ChoiceCards } from "./components/choice-cards";
 export { CodeBlock } from "./components/code-block";
 export { CommandPalette, type PaletteItem, type PaletteSection } from "./components/command-palette";
 export { CopyButton } from "./components/copy-button";
@@ -103,6 +104,7 @@ export {
   PageFailedState,
 } from "./components/states";
 export { StatusDot } from "./components/status-dot";
+export { type ListedStep, StepList } from "./components/step-list";
 export { Switch } from "./components/switch";
 export { type SortOrder, Table, Td, Th, Tr } from "./components/table";
 export { TableToolbar } from "./components/table-toolbar";

@@ -3,7 +3,7 @@ import { readForm, useErrors } from "@axiom/app";
 import { ActionButton, Cluster, Dialog, Field, FormError, Stack, Text, TextLink } from "@axiom/ui";
 import { useMutation } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog, isProblem, type Problem } from "../change";
 import { Code } from "../parts";
@@ -13,20 +13,23 @@ type Detection = AdminSchemas["Detection"];
 
 // Connecting a supplier takes two steps. First the address: the server probes it, which stores nothing, and says what
 // system it runs and what login that kind needs. Then the account and the login, which is the change that connects.
-export function ConnectDialog({ onClose }: { onClose: () => void }) {
+// As the relay way of 添加上游账号, the cards that choose the way sit over the first step (header).
+export function ConnectDialog({ header, onClose }: { header?: ReactNode; onClose: () => void }) {
   const [detection, setDetection] = useState<Detection | null>(null);
   return detection?.kind ? (
     <CreateDialog detection={detection} onClose={onClose} />
   ) : (
-    <DetectDialog detection={detection} onDetected={setDetection} onClose={onClose} />
+    <DetectDialog header={header} detection={detection} onDetected={setDetection} onClose={onClose} />
   );
 }
 
 function DetectDialog({
+  header,
   detection,
   onDetected,
   onClose,
 }: {
+  header?: ReactNode;
   detection: Detection | null;
   onDetected: (detection: Detection) => void;
   onClose: () => void;
@@ -39,7 +42,7 @@ function DetectDialog({
     onSuccess: onDetected,
   });
   return (
-    <Dialog title={t("suppliers.connect.title")} onClose={onClose}>
+    <Dialog title={t("upstream.add")} onClose={onClose}>
       <form
         noValidate
         onSubmit={(event) => {
@@ -52,6 +55,7 @@ function DetectDialog({
         }}
       >
         <Stack>
+          {header}
           <Text tone="muted">{t("suppliers.connect.detectIntro")}</Text>
           {detect.isError || missing ? (
             <FormError>{missing ? t("suppliers.connect.originInvalid") : errors.message(detect.error)}</FormError>
@@ -101,7 +105,7 @@ function CreateDialog({ detection, onClose }: { detection: Detection; onClose: (
   return (
     <ChangeDialog
       operation={"supplier-connect"}
-      title={t("suppliers.connect.title")}
+      title={t("upstream.add")}
       intro={<DetectedIntro detection={detection} />}
       action={t("suppliers.connect.submit")}
       fields={(error) => (
