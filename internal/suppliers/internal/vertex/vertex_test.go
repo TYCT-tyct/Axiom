@@ -261,6 +261,7 @@ func TestSignBetas(t *testing.T) {
 		want   string
 	}{
 		{"kept and dropped", []string{"claude-code-20250219,context-1m-2025-08-07", "advisor-tool-2026-03-01, interleaved-thinking-2025-05-14, context-1m-2025-08-07"}, "context-1m-2025-08-07,interleaved-thinking-2025-05-14"},
+		{"computer use on Sonnet 4.6", []string{"computer-use-2025-11-24"}, "computer-use-2025-11-24"},
 		{"none left", []string{"claude-code-20250219, oauth-2025-04-20"}, ""},
 		{"none given", nil, ""},
 	} {

@@ -16,13 +16,21 @@ import (
 // model, which is in the path (https://docs.anthropic.com/en/api/claude-on-vertex-ai).
 var anthropicVersion = []byte(`"vertex-2023-10-16"`)
 
-// accepted is the beta features Vertex AI's Anthropic endpoints take (the client's name for a feature, Vertex's name for
-// it): the rest, Claude Code's own among them, fail the call.
+// accepted is the beta features Vertex AI's (Google managed) Anthropic endpoints take (the client's name for a feature,
+// Vertex's name for it): the rest, Claude Code's own among them, fail the call. The list is Anthropic's「Claude Models on
+// Google Cloud (Google managed)」feature list and the beta header each of those features documents (1M context,
+// context editing, interleaved thinking in manual mode, the computer use tool's two versions, fine-grained tool
+// streaming), with tool search, which Claude Code's「Google Cloud's Agent Platform」page turns on for Claude 4.5 and
+// later, read 2026-11-26.
 var accepted = map[string]string{
 	"context-1m-2025-08-07":                  "context-1m-2025-08-07",
 	"context-management-2025-06-27":          "context-management-2025-06-27",
 	"fine-grained-tool-streaming-2025-05-14": "fine-grained-tool-streaming-2025-05-14",
 	"interleaved-thinking-2025-05-14":        "interleaved-thinking-2025-05-14",
+	"computer-use-2025-01-24":                "computer-use-2025-01-24",
+	"computer-use-2025-11-24":                "computer-use-2025-11-24",
+	"tool-search-tool-2025-10-19":            "tool-search-tool-2025-10-19",
+	"advanced-tool-use-2025-11-20":           "tool-search-tool-2025-10-19", // Anthropic's tool search, by Vertex's name
 }
 
 type quirks struct {

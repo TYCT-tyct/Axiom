@@ -116,7 +116,8 @@ func TestBetas(t *testing.T) {
 		values []string
 		want   string
 	}{
-		{"kept and dropped", []string{"claude-code-20250219,context-1m-2025-08-07", "interleaved-thinking-2025-05-14, context-1m-2025-08-07"}, `["context-1m-2025-08-07"]`},
+		{"kept and dropped", []string{"claude-code-20250219,context-1m-2025-08-07", "interleaved-thinking-2025-05-14, context-1m-2025-08-07"}, `["context-1m-2025-08-07","interleaved-thinking-2025-05-14"]`},
+		{"interleaved thinking with a budget past max_tokens", []string{"interleaved-thinking-2025-05-14"}, `["interleaved-thinking-2025-05-14"]`},
 		{"tool search renamed, examples added", []string{"advanced-tool-use-2025-11-20"}, `["tool-search-tool-2025-10-19","tool-examples-2025-10-29"]`},
 		{"none left", []string{"claude-code-20250219, oauth-2025-04-20"}, ``},
 		{"none given", nil, ``},

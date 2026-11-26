@@ -60,12 +60,20 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 }
 
 // accepted is the beta features Bedrock's InvokeModel takes (the client's name for a feature, Bedrock's name for it):
-// the rest, interleaved-thinking and Claude Code's own among them, fail the call.
+// the rest, Claude Code's own among them, fail the call. The list is AWS's「Anthropic Claude Messages API: request and
+// response」(its anthropic_beta table) and「Anthropic Claude tool use」(the computer-use pairings and the legacy
+// fine-grained streaming header), read 2026-11-26; compaction's header is the one Bedrock passes through for the
+// compaction it serves. Tool search is GA there, so the earlier name still works and Anthropic's newer one maps to it.
 var accepted = map[string]string{
 	"computer-use-2025-01-24":                "computer-use-2025-01-24",
 	"computer-use-2025-11-24":                "computer-use-2025-11-24",
+	"token-efficient-tools-2025-02-19":       "token-efficient-tools-2025-02-19",
+	"interleaved-thinking-2025-05-14":        "interleaved-thinking-2025-05-14",
+	"output-128k-2025-02-19":                 "output-128k-2025-02-19",
+	"dev-full-thinking-2025-05-14":           "dev-full-thinking-2025-05-14",
 	"context-1m-2025-08-07":                  "context-1m-2025-08-07",
 	"context-management-2025-06-27":          "context-management-2025-06-27",
+	"effort-2025-11-24":                      "effort-2025-11-24",
 	"compact-2026-01-12":                     "compact-2026-01-12",
 	"fine-grained-tool-streaming-2025-05-14": "fine-grained-tool-streaming-2025-05-14",
 	"tool-search-tool-2025-10-19":            "tool-search-tool-2025-10-19",
