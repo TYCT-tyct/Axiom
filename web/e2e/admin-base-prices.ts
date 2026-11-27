@@ -23,6 +23,7 @@ function listSupplierModels({ params, query, state }: Ctx<"/api/admin/v1/supplie
     model_id: e.model_id,
     model_slug: state.models.find((m) => m.id === e.model_id)?.slug,
     endpoint_id: e.id,
+    cost_reason: e.cost_reason,
   }));
   const page = paged(rows, query);
   return page ? ({ status: 200, json: page } as const) : fail(400, "invalid_request");
@@ -58,8 +59,12 @@ function confirmBases({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{sup
     if (!endpoint || !price) {
       return fail(422, "unprocessable");
     }
+    if (item.model_id !== undefined && item.model_id !== endpoint.model_id) {
+      return fail(409, "stale_revision");
+    }
     basesOf(state).set(baseKey(item), price);
     endpoint.cost_state = "known";
+    delete endpoint.cost_reason;
     data.push({ group_id: item.group_id, upstream_name: item.upstream_name, base: { ...price, currency: "XXX" } });
   }
   return ok({ data });
@@ -77,6 +82,7 @@ function clearBases({ body, params, state }: Ctx<"/api/admin/v1/suppliers/{suppl
     if (base && endpoint) {
       basesOf(state).delete(baseKey(item));
       endpoint.cost_state = "unknown";
+      endpoint.cost_reason = "unpriced";
       data.push({ ...item, base: { ...base, currency: "XXX" } });
     }
   }

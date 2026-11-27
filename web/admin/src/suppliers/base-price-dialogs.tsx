@@ -66,7 +66,8 @@ export function ConfirmBaseDialog({
         )
       }
       explain={(error) =>
-        error instanceof ApiError && (error.code === "conflict" || error.code === "unprocessable")
+        error instanceof ApiError &&
+        (error.code === "conflict" || error.code === "unprocessable" || error.code === "stale_revision")
           ? t(`upstream.basePrice.refused.${error.code}`)
           : undefined
       }

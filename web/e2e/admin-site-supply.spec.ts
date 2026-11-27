@@ -148,6 +148,7 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     detail.supplier.unit_value = "1";
     detail.groups[0].ratio = "1.5";
     endpoint.model_id = uuid(5, 1);
+    endpoint.cost_reason = "unpriced";
     await page.goto(`/suppliers/${uuid(2, 2)}?tab=models`);
     await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
     const row = page.getByRole("row").filter({ hasText: "unpriced-model" });
@@ -172,6 +173,33 @@ test.describe("supplier endpoint toggle and credential limits", () => {
     await expect(done(page)).toBeVisible();
     await expect(dialog(page)).toContainText(zhText("upstream.basePrice.cleared"));
     expect(endpoint.cost_state).toBe("unknown");
+    await close(page);
+
+    // a new-api relay is offered a base where it publishes no price, not where its price cannot be expressed, and the
+    // dialog names the model it showed
+    const newapi = state.suppliers[0];
+    const unpriced = newapi?.endpoints.find((one) => one.upstream_name === "unpriced-model");
+    const unexpressible = newapi?.endpoints.find((one) => one.upstream_name === "rate-limited-model");
+    if (!newapi || !unpriced || !unexpressible) throw new Error("the usual data has supplier 1's endpoints");
+    newapi.supplier.unit_value = "1";
+    Object.assign(unpriced, { model_id: uuid(5, 1), cost_reason: "unpriced" });
+    Object.assign(unexpressible, { cost_state: "unknown", cost_reason: "unexpressible" });
+    await page.goto(`/suppliers/${uuid(2, 1)}?tab=models`);
+    await page.getByText(zhText("upstream.models.listed"), { exact: true }).click();
+    await expect(page.getByRole("row").filter({ hasText: "rate-limited-model" })).toContainText(
+      zhText("suppliers.endpoints.state.unknown"),
+    );
+    const offer = page.getByRole("button", { name: "确认 unpriced-model 的底价（分组 Maple）" });
+    await expect(offer).toBeVisible();
+    await expect(page.getByRole("button", { name: "确认 rate-limited-model 的底价（分组 Maple）" })).toHaveCount(0);
+    await offer.click();
+    const sent = page.waitForRequest((request) => request.url().endsWith("/base-prices"));
+    await send(page, "the new-api relay hides this price");
+    expect((await sent).postDataJSON().items).toEqual([
+      { group_id: unpriced.group_id, upstream_name: "unpriced-model", model_id: uuid(5, 1) },
+    ]);
+    await expect(done(page)).toBeVisible();
+    expect(unpriced.cost_state).toBe("known");
   });
 
   test("credential concurrency and RPM ceiling validate bounds, save and clear RPM", async ({ page }) => {

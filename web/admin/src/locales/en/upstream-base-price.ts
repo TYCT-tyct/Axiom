@@ -22,6 +22,8 @@ export default {
         "This supplier's unit value is not confirmed yet, or it is not a relay. Confirm the unit value in settings first.",
       unprocessable:
         "This base price cannot be stored: the name is not mapped to a catalog model yet, every price is 0, or a price is above the unit price limit after conversion.",
+      stale_revision:
+        "The name was mapped to another catalog model after this dialog opened, so the base price was not stored. Close and reopen it to confirm for the current model.",
     },
     done: "Base price confirmed, and the sync runs now. After its next round, open the endpoint's price lines: they show the cost calls are priced at.",
     clear: "Clear base price",
