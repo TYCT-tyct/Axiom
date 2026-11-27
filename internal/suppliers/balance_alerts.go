@@ -151,8 +151,10 @@ func readBalances(ctx context.Context, tx pg.Tx, lines LowBalanceLines) ([]balan
 		// Only the key's last characters, which the admin shows too, ever leave the credentials row.
 		// Every field is cut to what a signal holds (platform/alert: 512 bytes a value), so no reading can make Persist
 		// refuse it and roll back the whole pass; the supplier's ID names it whole.
-		r.fields = map[string]string{"supplier": clip(name, 200), "supplier_id": supplier.String(), "balance": clip(balance, 512),
-			"threshold": clip(threshold, 512), "unit": unit}
+		r.fields = map[string]string{
+			"supplier": clip(name, 200), "supplier_id": supplier.String(), "balance": clip(balance, 512),
+			"threshold": clip(threshold, 512), "unit": unit,
+		}
 		if hint != nil {
 			r.fields["key_hint"] = "…" + *hint
 		}

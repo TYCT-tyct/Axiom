@@ -57,8 +57,7 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 	type want struct {
 		key      string
 		resolved bool
-		fields   string // balance threshold unit [key hint], for a raise
-		name     string // the supplier field, when it is not the supplier's name as set
+		fields   string // supplier balance threshold unit [key hint]; none when the key is no longer read
 	}
 	steps := []struct {
 		name   string
@@ -67,38 +66,38 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 	}{
 		{"the first run clears what the earlier bridge raised for a relay that is no longer low", func() {
 			exec(`UPDATE suppliers.suppliers SET status='low_balance' WHERE id=$1`, w.supplier)
-		}, []want{{key: relayKey, resolved: true}}},
+		}, []want{{key: relayKey, resolved: true, fields: "s 100 50 quota"}}},
 		{"balances over their lines send nothing", func() {}, nil},
 		{"a relay falling under its line fires once", func() {
 			exec(`UPDATE suppliers.suppliers SET balance_native=40 WHERE id=$1`, w.supplier)
-		}, []want{{key: relayKey, fields: "40 50 quota"}}},
+		}, []want{{key: relayKey, fields: "s 40 50 quota"}}},
 		{"a relay still under its line does not fire again", func() {
 			exec(`UPDATE suppliers.suppliers SET balance_native=30 WHERE id=$1`, w.supplier)
 		}, nil},
 		{"a wallet in yuan is held to the default line in yuan", func() {
 			exec(`UPDATE suppliers.credentials SET balance_native=4.99 WHERE id=$1`, key)
-		}, []want{{key: walletAlert, fields: "4.99 5 CNY …wxyz"}}},
+		}, []want{{key: walletAlert, fields: "wallets 4.99 5 CNY …wxyz"}}},
 		{"a relay back at its line resolves", func() {
 			exec(`UPDATE suppliers.suppliers SET balance_native=50 WHERE id=$1`, w.supplier)
-		}, []want{{key: relayKey, resolved: true}}},
+		}, []want{{key: relayKey, resolved: true, fields: "s 50 50 quota"}}},
 		{"a relay without a line is held to 5 of its settlement currency, converted unrounded at its unit value", func() {
 			delete(lines, w.supplier)
 			exec(`INSERT INTO suppliers.unit_values (supplier_id, value, actor, reason) VALUES ($1, 6, 'test', 'rate')`, w.supplier)
 			exec(`UPDATE suppliers.suppliers SET balance_native=0.833333 WHERE id=$1`, w.supplier)
-		}, []want{{key: relayKey, fields: "4.999998 5 USD"}}},
+		}, []want{{key: relayKey, fields: "s 4.999998 5 USD"}}},
 		{"a line set in the wallet's currency moves the wallet above it", func() {
 			lines[wallet] = "4.5"
-		}, []want{{key: walletAlert, resolved: true}}},
+		}, []want{{key: walletAlert, resolved: true, fields: "wallets 4.99 4.5 CNY …wxyz"}}},
 		{"a line raised over the wallet fires again", func() {
 			lines[wallet] = "10"
-		}, []want{{key: walletAlert, fields: "4.99 10 CNY …wxyz"}}},
+		}, []want{{key: walletAlert, fields: "wallets 4.99 10 CNY …wxyz"}}},
 		{"a key that can no longer be called is no longer low", func() {
 			exec(`UPDATE suppliers.credentials SET status='disabled' WHERE id=$1`, key)
 		}, []want{{key: walletAlert, resolved: true}}},
 		{"a supplier name past what a signal holds is cut on a character boundary", func() {
 			exec(`UPDATE suppliers.suppliers SET name=repeat('余', 200) WHERE id=$1`, wallet)
 			exec(`UPDATE suppliers.credentials SET status='active' WHERE id=$1`, key)
-		}, []want{{key: walletAlert, fields: "4.99 10 CNY …wxyz", name: strings.Repeat("余", 66)}}},
+		}, []want{{key: walletAlert, fields: strings.Repeat("余", 66) + " 4.99 10 CNY …wxyz"}}},
 	}
 	for _, step := range steps {
 		step.change()
@@ -108,10 +107,8 @@ func TestLowBalanceAlertsFireOncePerCrossing(t *testing.T) {
 			t.Fatalf("%s: got %+v, want %+v", step.name, got, step.want)
 		}
 		for i, s := range got {
-			fields := strings.TrimSpace(strings.Join([]string{s.Fields["balance"], s.Fields["threshold"], s.Fields["unit"], s.Fields["key_hint"]}, " "))
-			if s.Kind != "suppliers.low_balance" || s.Key != step.want[i].key || s.Resolved != step.want[i].resolved ||
-				!s.Resolved && (fields != step.want[i].fields || s.Fields["supplier_id"] == "" || s.Fields["supplier"] == "" ||
-					step.want[i].name != "" && s.Fields["supplier"] != step.want[i].name) {
+			fields := strings.TrimSpace(strings.Join([]string{s.Fields["supplier"], s.Fields["balance"], s.Fields["threshold"], s.Fields["unit"], s.Fields["key_hint"]}, " "))
+			if s.Kind != "suppliers.low_balance" || s.Key != step.want[i].key || s.Resolved != step.want[i].resolved || fields != step.want[i].fields {
 				t.Errorf("%s: signal %d is %+v, want %+v", step.name, i, s, step.want[i])
 			}
 		}
