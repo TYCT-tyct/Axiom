@@ -111,7 +111,7 @@ func (s *session) try(ctx context.Context, i int) (step, ended) {
 		s.exclude(entry, routing.CoolingDown)
 		return nextEntry, ended{}
 	}
-	conn, err := s.x.Upstreams.Acquire(uuid.UUID(entry.Endpoint))
+	conn, err := s.x.Upstreams.AcquireWithin(uuid.UUID(entry.Endpoint), entry.Bound)
 	if err != nil {
 		s.skips.noSlot = s.skips.noSlot || errors.Is(err, suppliers.ErrNoSlot)
 		s.skips.noEndpoint = s.skips.noEndpoint || !errors.Is(err, suppliers.ErrNoSlot)
@@ -304,6 +304,7 @@ func (a *attempt) endRequest() {
 	receipt := a.s.done(a.conn)
 	a.conn = nil
 	a.obs.Credential = receipt.CredentialID()
+	a.s.tries[a.i].egress = receipt.Egress()
 	a.result(receipt)
 }
 

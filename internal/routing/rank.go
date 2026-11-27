@@ -8,6 +8,7 @@ import (
 
 	"axiom/internal/accounts"
 	"axiom/internal/billing"
+	"axiom/internal/platform"
 	"axiom/internal/protocol"
 )
 
@@ -29,6 +30,9 @@ type ranked struct {
 	byok      bool // the account's own key: it goes before the platform's endpoints at the same order
 	known     bool // BestQuality: the endpoint has counted evidence, so its score is not unknown
 	explore   bool // Fastest: the unmeasured endpoint this request puts first, so that it gets measured
+
+	// bound is the native cost its supplier's funds were held to (Entry.Bound).
+	bound platform.Exact
 }
 
 // stickyMinHealth is the health below which a session no longer sticks to an endpoint.
@@ -65,13 +69,14 @@ func (r *Router) rank(cands []*candidate, n *need, rec *Record) []ranked {
 			}
 			continue
 		}
-		reason, visible := check(c, n, price, noShared)
+		reason, bound, visible := check(c, n, price, noShared)
 		switch {
 		case !visible:
 		case reason != 0:
 			rec.Excluded = append(rec.Excluded, Excluded{c.ID, reason})
 		default:
 			s := r.score(c, n, strategy, price)
+			s.bound = bound
 			if c.LiveHealth != nil {
 				var limit int64
 				s.opened, limit = c.LiveHealth.Routing(n.now)

@@ -139,6 +139,8 @@ type fakeUpstreams struct {
 	// beforeAcquire acts when an attempt asks for a credential of the endpoint, before it gets one: a test's way to
 	// have the client leave between two attempts.
 	beforeAcquire func(id suppliers.EndpointID)
+	// bounds are the cost bounds the attempts asked for credentials within, in order.
+	bounds []platform.Exact
 }
 
 type fakeEndpoint struct {
@@ -170,12 +172,13 @@ func (u *fakeUpstreams) endpoint(n int) *fakeEndpoint {
 	return u.eps[uuid.UUID(ep(n))]
 }
 
-func (u *fakeUpstreams) Acquire(id suppliers.EndpointID) (Conn, error) {
+func (u *fakeUpstreams) AcquireWithin(id suppliers.EndpointID, bound platform.Exact) (Conn, error) {
 	if u.beforeAcquire != nil {
 		u.beforeAcquire(id)
 	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
+	u.bounds = append(u.bounds, bound)
 	e, ok := u.eps[id]
 	switch {
 	case !ok:

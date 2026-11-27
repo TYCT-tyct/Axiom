@@ -34,7 +34,7 @@
 | 4 | `Inspect`、预设/压缩/文件解析、解析模型名、`SessionKey` | — | 400 / 404 |
 | 5 | 预检：限流计数加一，读粘性；只计数不判定 | M2 1 C | 按本节点计数 |
 | 6 | 账户闸 → `accounts.AdmitBatch`：限流判定 → `routing.Plan` → `billing.ReserveMany` | 7 DB，按批摊薄 | 429 / 402 / 403 / 404 / 503 |
-| 7 | 缓存命中判断；尝试：`Acquire` → `Prepare` → `Bind` → `Send` | 上游 | 提交前换条目 |
+| 7 | 缓存命中判断；尝试：`AcquireWithin` → `Prepare` → `Bind` → `Send` | 上游 | 提交前换条目 |
 | 8 | 提交后边读边计量边转发，按段 `Extend` | 每段 9 DB（已覆盖时 6） | 截断 |
 | 9 | 结算提交 → `Relay.Finish` | 9 DB，按批摊薄 | 见下 |
 | 10 | 释放凭证和名额；记录、观测、粘性 | — | — |
@@ -62,11 +62,11 @@
 ## 尝试与转发
 
 - **开始前**依次查：客户端已走、`billing.Alive`（留 5s 余量）、单次最长、尝试数到 `min(Plan.MaxAttempts, platform.MaxAttempts)`、过了 `Plan.StartBy`（不读 `Config.StartBy`）。
-- `Acquire` 前再查 `Router.Blocked`；拿不到凭证、`*NotSupported`、重试预算用完都跳过，不算尝试。`Bind` 之后不论结果都算一次尝试；序号经 `session.begin` 分配，服务端循环的每次采样另占一个，合计至多 `platform.MaxAttemptSeq`。
+- `AcquireWithin` 前再查 `Router.Blocked`；凭证按条目的 `Bound` 取（钱包 key 要付得起，路由只按最富的 key 放行）；拿不到凭证、`*NotSupported`、重试预算用完都跳过，不算尝试。`Bind` 之后不论结果都算一次尝试；序号经 `session.begin` 分配，服务端循环的每次采样另占一个，合计至多 `platform.MaxAttemptSeq`。
 - 等响应头用计时器取消尝试的 context，而不是包住 `Send` 的短 context，那会在头到达后继续掐流。空闲计时只在有新内容时重置，完整但无内容的事件不算。
 - 上游一律以流调用；非流式客户端由 `RelayOptions.Aggregate` 聚合，计量、追加、截断、结算同一条路径。聚合的尝试有内容后失败仍可换条目，只留最后一次有内容的 `Relay`；截断、`ErrMemory`、单次最长、客户端已走不换。
 - `/responses/compact` 和直接格式（embeddings、rerank）走 `attempt.pass`：`readWhole` 至多 16 MiB，校验、结算再改写；改写缓冲在结算前申请；读失败时没写任何字节，可换条目。准入设 `NoSegments`（一次报足）；compact 与不可转换的格式设 `NativeOnly`。
-- 服务端搜索循环（`serverloop.go`）：每跳一次独立尝试，先结束上一跳再 `Acquire`；输出暂存在 `session.out`（扩容前记预算），只有最后一跳写出。
+- 服务端搜索循环（`serverloop.go`）：每跳一次独立尝试，先结束上一跳再 `AcquireWithin`；输出暂存在 `session.out`（扩容前记预算），只有最后一跳写出。
 - 供应商范围的失败由 `Router.Block` 暂停，本次跳过该供应商其余条目。上游原话只经 `Conn.Sanitize` 交出，只进响应。
 - **客户端断开**：三个 context。`clientCtx`；`attemptCtx`（`AttemptContext`）带单次最长，只对传递取消的端点跟随 `clientCtx`，空闲、等头、写失败各以自己的原因取消；`settleCtx`（`SettleContext`）不随取消、自带期限。不传递取消的端点读完不转发；写失败（`WriteTimeout`）按客户端已走处理。取消不直接动钱。
 

@@ -208,6 +208,7 @@ func TestClassifyRestsOnlyTheKeyItsProviderRefused(t *testing.T) {
 		{401, `{"error":{"code":"invalid_api_key"}}`, adapter.ScopeCredential, adapter.CredentialRejected{}},
 		{400, `[{"error":{"status":"INVALID_ARGUMENT","details":[{"reason":"API_KEY_INVALID"}]}}]`, adapter.ScopeCredential, adapter.CredentialRejected{}},
 		{429, `{"error":{"code":"insufficient_quota"}}`, adapter.ScopeCredential, adapter.CredentialQuotaExhausted{}},
+		{429, `{"error":{"message":"…","type":"exceeded_current_quota_error"}}`, adapter.ScopeCredential, adapter.CredentialQuotaExhausted{}},
 		{402, `{"error":{"message":"Insufficient Balance","type":"unknown_error"}}`, adapter.ScopeCredential, adapter.CredentialQuotaExhausted{}},
 		{429, `{"error":{"code":"rate_limit_exceeded"}}`, adapter.ScopeEndpoint, adapter.RateLimited{}},
 		{403, `{"error":{"code":"unsupported_country_region_territory"}}`, adapter.ScopeEndpoint, adapter.NotPermitted{}},

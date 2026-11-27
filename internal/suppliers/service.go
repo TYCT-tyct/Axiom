@@ -218,10 +218,10 @@ type credential struct {
 	// funds is what a key that is a wallet can pay, in the plan's terms: its balance as last read times the line's
 	// ratio, rounded down; zero for one never read. nil for any other credential.
 	funds *platform.Exact
-	// exit is the client its calls go through, the direct one unless proxied says it is its proxy's (exits.client).
-	exit    *egress.Client
-	proxied bool
-	rt      *credRuntime
+	// exit is the client its calls go through, the direct one unless proxy names the proxy it is (exits.client).
+	exit  *egress.Client
+	proxy string
+	rt    *credRuntime
 }
 
 // snapshot is the endpoints one Reload built. confirmed is when that Reload began reading the database, so the state it
@@ -312,7 +312,7 @@ func (s *Service) load(next *snapshot, schedules map[uuid.UUID]*catalog.Schedule
 	if err != nil {
 		return err
 	}
-	c.exit, c.proxied, err = exits.client(r.EgressID)
+	c.exit, c.proxy, err = exits.client(r.EgressID)
 	switch {
 	case errors.Is(err, errNoExit):
 		return nil

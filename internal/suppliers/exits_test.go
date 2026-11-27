@@ -22,7 +22,7 @@ import (
 
 // TestACredentialCallsThroughItsProxy: a credential naming a proxy calls through it, with the proxy's credentials, and
 // a hangup there is the egress's; while the proxy is disabled its calls go through the fallback; a proxy whose password
-// does not open leaves the supplier out of the snapshot rather than calling direct.
+// does not open leaves the supplier out of the snapshot rather than calling direct. Each receipt names the exit taken.
 func TestACredentialCallsThroughItsProxy(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 4)
@@ -43,9 +43,11 @@ func TestACredentialCallsThroughItsProxy(t *testing.T) {
 		_, err := admin.SetCredentialEgress(ctx, tx, who, w.supplier, w.credential, "primary", "r")
 		return err
 	})
+	w.pointAt(server.URL)
+	w.sendOK("direct", "direct")
 	w.reload()
 	w.pointAt(server.URL)
-	w.sendOK("through the proxy")
+	w.sendOK("through the proxy", "primary")
 	if n, auth := primary.seen(); n != 1 || auth != "Basic "+base64.StdEncoding.EncodeToString([]byte("operator:s3cret")) {
 		t.Fatalf("the proxy opened %d tunnels with %q", n, auth)
 	}
@@ -59,7 +61,7 @@ func TestACredentialCallsThroughItsProxy(t *testing.T) {
 	})
 	w.reload()
 	w.pointAt(server.URL)
-	w.sendOK("through the fallback")
+	w.sendOK("through the fallback", "backup")
 	if n, _ := fallback.seen(); n != 1 {
 		t.Fatalf("the fallback opened %d tunnels, want 1", n)
 	}
@@ -74,11 +76,11 @@ func TestACredentialCallsThroughItsProxy(t *testing.T) {
 	}
 }
 
-// sendOK sends a call the supplier answers, and fails the test unless it came back answered.
-func (w *world) sendOK(what string) {
+// sendOK sends a call the supplier answers, and fails the test unless it came back answered through egress.
+func (w *world) sendOK(what, egress string) {
 	w.t.Helper()
-	if status, f, _ := w.send(protocol.Chat, "ok"); f != nil || status != http.StatusOK {
-		w.t.Fatalf("%s: %d, %+v", what, status, f)
+	if status, f, receipt := w.send(protocol.Chat, "ok"); f != nil || status != http.StatusOK || receipt.Egress() != egress {
+		w.t.Fatalf("%s: %d, %+v, through %q", what, status, f, receipt.Egress())
 	}
 }
 

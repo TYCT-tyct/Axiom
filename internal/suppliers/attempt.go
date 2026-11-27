@@ -2,6 +2,7 @@ package suppliers
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"io"
 	"maps"
@@ -54,8 +55,8 @@ type Call struct {
 }
 
 // AttemptReceipt is what an attempt leaves for billing: which credential, endpoint and cost schedule it used, the unit
-// value it is costed at and the row that value came from, and the supplier's own id of the request once a response
-// header gave it. Billing passes it back unread; its fields are not for anyone else.
+// value it is costed at and the row that value came from, the exit it left by, and the supplier's own id of the request
+// once a response header gave it. Billing passes it back unread; its fields are not for anyone else.
 type AttemptReceipt struct {
 	exchange                                 platform.ExchangeRate
 	supplier, credential, endpoint, schedule uuid.UUID
@@ -65,10 +66,15 @@ type AttemptReceipt struct {
 	pricedAt                                 time.Time
 	currency                                 platform.Currency  // the supplier's settlement currency
 	unitValue                                platform.UnitPrice // of a unit of the supplier's balance, in currency
+	proxy                                    string             // the credential's exit when the attempt took it
 }
 
 // CredentialID identifies the selected key for independent health evidence.
 func (r AttemptReceipt) CredentialID() uuid.UUID { return r.credential }
+
+// Egress is the exit the attempt's requests left by, as the call log names it: the id of the proxy, its fallback's
+// while it was disabled, or "direct".
+func (r AttemptReceipt) Egress() string { return cmp.Or(r.proxy, directEgress) }
 
 // WithExchange attaches the reservation's basis, never the supplier snapshot's current rate.
 func (r AttemptReceipt) WithExchange(rate platform.ExchangeRate) AttemptReceipt {
@@ -288,6 +294,7 @@ func (a *Attempt) receipt() AttemptReceipt {
 	return AttemptReceipt{
 		supplier: a.ep.supplier, credential: a.cred.id, endpoint: a.ep.id, schedule: a.ep.schedule,
 		unitValueID: a.ep.unitValueID, ref: a.ref, pricedAt: a.priced, currency: a.ep.currency, unitValue: a.ep.unitValue, status: a.status,
+		proxy: a.cred.proxy,
 	}
 }
 
@@ -339,7 +346,7 @@ func (a *Attempt) send(ctx context.Context, call Call) (*http.Response, *Failure
 	trace := &httptrace.ClientTrace{WroteRequest: func(i httptrace.WroteRequestInfo) { wrote.Store(i.Err == nil) }}
 	resp, err := a.cred.exit.Do(req.WithContext(httptrace.WithClientTrace(ctx, trace)))
 	if err != nil {
-		return nil, transportFailure(wrote.Load(), a.cred.proxied)
+		return nil, transportFailure(wrote.Load(), a.cred.proxy != "")
 	}
 	a.noteResponse(resp.StatusCode, resp.Header)
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {

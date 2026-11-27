@@ -421,7 +421,7 @@ func TestTheSuppliersServiceIsUpstreams(t *testing.T) {
 		t.Fatal(err)
 	}
 	up := NewUpstreams(svc)
-	if conn, err := up.Acquire(uuid.New()); conn != nil || !errors.Is(err, suppliers.ErrNoEndpoint) {
+	if conn, err := up.AcquireWithin(uuid.New(), platform.Exact{}); conn != nil || !errors.Is(err, suppliers.ErrNoEndpoint) {
 		t.Errorf("an endpoint it does not have: %v, %v", conn, err)
 	}
 }

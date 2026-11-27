@@ -47,31 +47,32 @@ func readExits(ctx context.Context, tx pg.Tx, direct *egress.Client, keys *secre
 	return e, nil
 }
 
-// client is the exit for a credential naming egressID: the direct client for none, errNoExit when its proxy cannot be
-// used now, and an error for a proxy row a client cannot be built from (its password does not open), which leaves the
-// credential's supplier out rather than calling it another way.
-func (e *exits) client(egressID *string) (c *egress.Client, proxied bool, err error) {
+// client is the exit for a credential naming egressID, with the id of the proxy it goes through, the fallback's while
+// the named one is disabled: the direct client and no proxy for none, errNoExit when its proxy cannot be used now, and
+// an error for a proxy row a client cannot be built from (its password does not open), which leaves the credential's
+// supplier out rather than calling it another way.
+func (e *exits) client(egressID *string) (c *egress.Client, proxy string, err error) {
 	if egressID == nil {
-		return e.direct, false, nil
+		return e.direct, "", nil
 	}
 	row, ok := e.route(*egressID)
 	if !ok {
-		return nil, true, errNoExit
+		return nil, "", errNoExit
 	}
 	if c = e.byID[row.ID]; c != nil {
-		return c, true, nil
+		return c, row.ID, nil
 	}
 	p, err := e.open(row)
 	if err != nil {
-		return nil, true, err
+		return nil, "", err
 	}
 	if c = cmp.Or(e.built[p], e.earlier[p]); c == nil {
 		if c, err = e.direct.Via(p); err != nil {
-			return nil, true, fmt.Errorf("egress proxy %s: %w", row.ID, err)
+			return nil, "", fmt.Errorf("egress proxy %s: %w", row.ID, err)
 		}
 	}
 	e.byID[row.ID], e.built[p] = c, c
-	return c, true, nil
+	return c, row.ID, nil
 }
 
 // route is the proxy a credential naming id goes through: the proxy while it is active, else its fallback while that
@@ -116,6 +117,10 @@ func (e *exits) release() {
 func proxyAt(id string) secret.Location {
 	return secret.Location{Table: "suppliers.egress_proxies", RowID: id, Purpose: "password"}
 }
+
+// directEgress names the exit of a credential that goes through no proxy, as the call log's egress column does; no
+// proxy's id may be it.
+const directEgress = "direct"
 
 // proxyActive is the status of a proxy in use; the other is disabled.
 const proxyActive = "active"

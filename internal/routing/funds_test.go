@@ -75,9 +75,13 @@ func TestAffordabilityIncludesTierAndToolSampling(t *testing.T) {
 			in.Req.TextBytes, in.Req.MaxOutput = 1, 10
 			in.Req.Needs, in.Req.WebSearches = protocol.WebSearch, 1
 			in.Req.ServiceTiers = 1 << catalog.ServiceTierPriority
-			_, _, err = h.r.Plan(in)
+			plan, _, err := h.r.Plan(in)
 			if (err == nil) != tc.want {
 				t.Fatalf("affordability: %v, want admitted %v", err, tc.want)
+			}
+			// The cost the funds were held to goes with the entry, for the attempt to pick a key that pays it.
+			if tc.want && plan.Entries[0].Bound != balance {
+				t.Errorf("the entry's bound is %s, want the %s its funds were held to", plan.Entries[0].Bound.AppendDecimal(nil), tc.balance)
 			}
 		})
 	}
