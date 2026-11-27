@@ -23,13 +23,17 @@
 | 模型目录在代码里怎么加载、同步和发布快照：参考价、名字解析、价目表 | [internal/catalog/README.md](../internal/catalog/README.md) | 实现或调用 `catalog` 之前 |
 | 三种调用格式的转换与透传：解析、转换、流式读写、用量 | [internal/protocol/README.md](../internal/protocol/README.md) | 实现或调用 `protocol` 之前 |
 | 平台层：监听与接口约定、日志与遥测、数据库访问、加密、前端文件、配置 | [internal/platform/README.md](../internal/platform/README.md) | 改动 `platform`、`cmd/axiom` 的组装或任何跨模块的基础设施之前 |
-| PostgreSQL 行级安全：范围表达式、策略迁移、行数估计与分页计划的实测 | [internal/platform/pg/README.md](../internal/platform/pg/README.md) | 改写行级安全策略或排查范围过滤与查询计划之前 |
+| 凭证加密：密钥文件、信封加密、主密钥轮换与退役 | [internal/platform/secret/README.md](../internal/platform/secret/README.md) | 改动密钥加载、信封加密或加新的信封列之前 |
+| 出站 HTTP：地址策略、期限、代理、测试放行 | [internal/platform/egress/README.md](../internal/platform/egress/README.md) | 改动出站请求或加新的出站调用方之前 |
+| PostgreSQL：连接池、行级安全的范围表达式、策略迁移、行数估计与分页计划的实测、迁移执行与校验 | [internal/platform/pg/README.md](../internal/platform/pg/README.md) | 改写行级安全策略或排查范围过滤与查询计划之前 |
 | 对象存储：S3 客户端、配置、期限与重试、SeaweedFS 测试 | [internal/platform/objectstore/README.md](../internal/platform/objectstore/README.md) | 写归档、备份副本或对话正文之前 |
 | 多个核心节点共用的计数与粘性：Valkey 里放什么、客户端与连接、键、期限与熔断、每种用途的兜底与恢复、部署、测试、PR 拆分 | [internal/platform/kv/README.md](../internal/platform/kv/README.md) | 改动限流、登录防爆破、会话粘性，或部署 Valkey 之前 |
 | 前端工程：目录、开发命令、共享包、性能预算、测试 | [web/README.md](../web/README.md) | 改动 `web/` 之前 |
-| 供应商：适配器、接入流程、管理操作、调用面、供应商别名与待映射、凭证、同步、号池、各适配器、对账 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
+| 供应商：适配器、接入流程、管理操作、调用面、供应商别名与待映射、凭证、出口代理、同步、接入规则、待处理队列、对账 | [domains/suppliers.md](domains/suppliers.md) | 改动 `suppliers` 模块或接入新的供应商、中转系统之前 |
+| 中转站与号池：声明式适配器、号池、new-api、sub2api、CPA 各自的识别、登录、读取、成本计划、失败归类和扣费扫描 | [domains/suppliers-relay.md](domains/suppliers-relay.md) | 改动中转站或号池的适配器、写声明式适配器之前 |
 | 直连接口与云平台：官方 API 贴 key 直连、Vertex AI/Bedrock/Azure OpenAI 凭证、签名与成本 | [domains/suppliers-direct.md](domains/suppliers-direct.md) | 改动直连或云平台的接入、签名、凭证之前 |
-| 供应商的公开接口与不变量：表、调用面、并发与速率、检测、管理接口 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
+| 供应商的公开接口与不变量：调用面、并发与速率、检测、对账、管理接口 | [internal/suppliers/README.md](../internal/suppliers/README.md) | 实现或调用 `suppliers` 的调用面之前 |
+| 供应商的表：每张表的键与约束、行级安全、复合外键、授权、密钥列 | [internal/suppliers/internal/store/README.md](../internal/suppliers/internal/store/README.md) | 写 `suppliers` 的迁移或查询之前 |
 | 端点评估：检测、线上观测、外部评测、属性合并、熔断 | [domains/quality.md](domains/quality.md) | 改动 `quality` 模块或新增检测项之前 |
 | 端点评估在调用路径上的代码接口：判定表、`Observe`、健康度与实测的延迟和吞吐 | [internal/quality/README.md](../internal/quality/README.md) | 实现或调用 `quality` 之前，或改动尝试的结束路径之前 |
 | 路由：挂 key 的路由预设与默认链、候选与过滤、排序策略、会话粘性、回退与重试、容量感知 | [domains/routing.md](domains/routing.md) | 改动 `routing` 模块或调整路由策略之前 |

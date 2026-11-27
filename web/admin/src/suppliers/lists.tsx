@@ -2,6 +2,7 @@ import type { AdminSchemas } from "@axiom/api";
 import { ActionButton, Cluster, EmptyState, Table, Tag, Td } from "@axiom/ui";
 import { useTranslation } from "react-i18next";
 import { Code, Head, State } from "../parts";
+import type { BaseTarget } from "./base-price";
 import { endpointState, testFormats } from "./endpoint-test";
 import type { Open } from "./open";
 
@@ -74,11 +75,14 @@ const endpointTones = {
 export function Endpoints({
   endpoints,
   groups,
+  baseOf,
   onOpen,
   onShow,
 }: {
   endpoints: AdminSchemas["SupplierEndpoint"][] | undefined;
   groups: AdminSchemas["SupplierGroup"][];
+  // What a base price can be confirmed for from an endpoint's row, when one can (base-price.ts targetOf).
+  baseOf: (endpoint: AdminSchemas["SupplierEndpoint"]) => BaseTarget | undefined;
   onOpen: OnOpen;
   onShow: (endpoint: AdminSchemas["SupplierEndpoint"]) => void;
 }) {
@@ -107,6 +111,7 @@ export function Endpoints({
             key={endpoint.id}
             endpoint={endpoint}
             group={groupName(groups, endpoint.group_id)}
+            target={baseOf(endpoint)}
             onOpen={onOpen}
             onShow={() => onShow(endpoint)}
           />
@@ -119,11 +124,13 @@ export function Endpoints({
 function EndpointRow({
   endpoint,
   group,
+  target,
   onOpen,
   onShow,
 }: {
   endpoint: AdminSchemas["SupplierEndpoint"];
   group: string;
+  target: BaseTarget | undefined;
   onOpen: OnOpen;
   onShow: () => void;
 }) {
@@ -155,6 +162,15 @@ function EndpointRow({
           >
             {t("upstream.byModel.details")}
           </ActionButton>
+          {onOpen && target ? (
+            <ActionButton
+              size="sm"
+              aria-label={t("upstream.basePrice.openFor", { name: endpoint.upstream_name, group })}
+              onClick={() => onOpen({ kind: "basePrice", target })}
+            >
+              {t("upstream.basePrice.open")}
+            </ActionButton>
+          ) : null}
           {onOpen ? <EndpointChanges endpoint={endpoint} group={group} state={state} onOpen={onOpen} /> : null}
         </Cluster>
       </Td>

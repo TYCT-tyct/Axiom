@@ -116,7 +116,7 @@
 - **在途**：IP、账户、节点各一个 `Limiter`（到限即拒、不排队），先账户后节点。名额占到结算写进或交给清理，待结算数因此有界。
 - **429 的原因**：每个 429 按 `Refusal.Reason` 计入 `axiom.gateway.rate_limited`；新增会回 429 的限制必须有自己的原因，原因为空的计数说明有限制没分开。原因清单见[错误](../../docs/domains/gateway.md#错误)。
 - **内存**：每路 64 KiB 加节点预算 2 GiB，由 `protocol.Memory` 记账；请求体全额计入、不扣基数。准备阶段由 `protocol.PrepareBudgeted` 在分配之前申请，申请不到 `ErrMemory`（503）。
-- **连接池**：准入类许可至多 N−R、完成类至多 R，分别计数，物理隔离见 [platform 的连接池](../platform/README.md#连接池)。追加、结算、孤儿结算用 `pg.CompletionContext` 走完成池。`NewHandler` 要求 accounts 配了 `LookupSlot`。
+- **连接池**：准入类许可至多 N−R、完成类至多 R，分别计数，物理隔离见 [platform 的连接池](../platform/pg/README.md#连接池)。追加、结算、孤儿结算用 `pg.CompletionContext` 走完成池。`NewHandler` 要求 accounts 配了 `LookupSlot`。
 - **排队**：FIFO；`session.done` 先 `conn.Done()` 再 `Queue.Wake()`，被唤醒者看到已空出的位，用不上就 `Pass`；`Epoch` 记下"看负载与入队之间"无人可唤醒的释放，`Wait` 见到即返回；有人排队时的释放归队首。一次释放至多引起当时排队人数那么多次准入。
 - **粘性**：收费的那次尝试交付了内容、且端点不是预检取到的，才 `Stick`（`Plan.StickyTTL`）；在结尾之前写，异步写入晚到只损失命中。带 `x-claude-code-context-compacted` 时先 `Forget`。
 

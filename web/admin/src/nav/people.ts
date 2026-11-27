@@ -9,6 +9,7 @@ export const people: readonly NavEntry[] = [
     also: [
       { to: "/users/accounts", label: "accounts" },
       { to: "/users/roles", label: "roles" },
+      { to: "/users/tiers", label: "tiers" },
     ],
   },
   {

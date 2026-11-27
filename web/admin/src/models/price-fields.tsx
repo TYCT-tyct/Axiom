@@ -93,7 +93,8 @@ export function useInvalid(): Invalid {
 
 function readRate(item: keyof Rates, typed: string) {
   if (isPerUse(item)) {
-    return /^(0|[1-9]\d{0,2})(\.\d{1,15})?$/.test(typed) ? typed : null;
+    // api/admin.yaml UnitPrice: below 1000 with up to 15 decimals, or exactly 1000.
+    return /^(0|[1-9]\d{0,2})(\.\d{1,15})?$|^1000$/.test(typed) ? typed : null;
   }
   return perUnit(typed);
 }

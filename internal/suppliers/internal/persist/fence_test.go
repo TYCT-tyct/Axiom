@@ -32,7 +32,7 @@ func (c *cluster) heldUp(stall func(ctx context.Context, tx pg.Tx) error, write 
 		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 			var waiting int
 			err := watch.ReadTx(c.t.Context(), platform, func(tx pg.Tx) error {
-				return tx.QueryRow(c.t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE wait_event_type = 'Lock'").Scan(&waiting)
+				return tx.QueryRow(c.t.Context(), "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'").Scan(&waiting)
 			})
 			if err != nil {
 				return err

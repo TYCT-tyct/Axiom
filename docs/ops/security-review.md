@@ -12,8 +12,8 @@
 
 1. 支付回调：验签、重放、金额与币种绑定、幂等（[支付的「回调与到账」](../domains/payments.md#回调与到账)）。
 2. 会话与 OAuth、通行密钥：会话固定、CSRF、回调跳转（[账户的「登录与会话」](../domains/accounts.md#登录与会话)）。
-3. 主密钥分发与节点间 mTLS（[平台的「凭证加密」](../../internal/platform/README.md#凭证加密)、[nodetls](../../internal/platform/nodetls/README.md)）。
-4. 每一处出站请求：通知 Webhook、价格页抓取、供应商接口、对象存储（[平台的「出站 HTTP」](../../internal/platform/README.md#出站-http)）。
+3. 主密钥分发与节点间 mTLS（[平台的「凭证加密」](../../internal/platform/secret/README.md#凭证加密)、[nodetls](../../internal/platform/nodetls/README.md)）。
+4. 每一处出站请求：通知 Webhook、价格页抓取、供应商接口、对象存储（[平台的「出站 HTTP」](../../internal/platform/egress/README.md#出站-http)）。
 5. 出站邮件：头部注入（[mail](../../internal/platform/mail/README.md)）。
 
 ### 方法
@@ -48,7 +48,7 @@
 - 第一版给这条修复写的回归测试用另一个 goroutine 反复原子替换路径，靠 `time.Sleep` 和固定循环次数去撞那个窗口。撞不中时旧实现也能通过，这本身就违反 CONTRIBUTING「钱和并发」的"不靠睡眠、超时或重试"和"用显式同步控制两个操作的顺序做交错测试"。现在打开操作是 `readKeyFileWith` 的参数，测试传进去的打开器在检查之后、读取之前把 0644 的文件 `rename` 到路径上，交错只发生一次、顺序固定；同一个文件经生产用的打开器、不做替换时必须能读到，证明拒绝不是来自接缝一律拒绝。把顺序改回按路径检查，`TestKeyFileReplacedAtOpenIsRefused` 跑 10 次全部失败。
 - 第一版只加了 `Format` 和 `LogValue`，而 fmt 对 `%w` 用在非 error 上的坏格式诊断绕开 `Format`，把值按字段反射展开；把值放进另一个结构体的未导出字段也一样，`slog` 的文本处理同样走反射。两种输入都能打印出密钥 map。现在密钥材料在闭包里，反射只能看到函数地址；测试补了 `%w` 和未导出字段两种形状，并直接断言密钥的十进制、十六进制、base64 和原始字节不出现（对着改前的实现跑，27 个断言失败）。
 
-三条教训已经变成规则，写在[平台的「凭证加密」](../../internal/platform/README.md#凭证加密)：检查文件属性必须读打开后的描述符，密钥材料必须放在闭包后面、只加 `Format` 不算脱敏，并发和时序的测试要用显式同步，不靠睡眠和循环次数撞窗口。
+三条教训已经变成规则，写在[平台的「凭证加密」](../../internal/platform/secret/README.md#凭证加密)：检查文件属性必须读打开后的描述符，密钥材料必须放在闭包后面、只加 `Format` 不算脱敏，并发和时序的测试要用显式同步，不靠睡眠和循环次数撞窗口。
 
 ### 后续（#530）
 

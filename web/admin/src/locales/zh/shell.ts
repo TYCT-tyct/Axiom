@@ -37,6 +37,7 @@ export default {
     alerts: "告警",
     accounts: "账户",
     roles: "平台角色",
+    tiers: "等级",
     cash: "现金流水",
     batches: "额度批次",
     refunds: "退款",
