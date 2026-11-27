@@ -37,7 +37,7 @@ func TestAnUnknownCostSaysWhy(t *testing.T) {
 		c.snap.Name, c.snap.Formats = "gpt", []int{2}
 		st := syncer.State{Groups: []syncer.GroupSnap{{Ref: "g", Name: "g", Ratio: "1", Facts: "{}", Models: []syncer.ModelSnap{c.snap}}}}
 		if c.base != "" {
-			st.Confirmed = []syncer.ConfirmedBase{{BaseKey: syncer.BaseKey{GroupRef: "g", Model: "gpt"}, For: c.base, Base: confirmedBaseText}}
+			st.Confirmed = []syncer.ConfirmedBase{{GroupRef: "g", Model: "gpt", For: c.base, Base: confirmedBaseText}}
 		}
 		raw, err := jsonx.MarshalCanonical(st)
 		if err != nil {
