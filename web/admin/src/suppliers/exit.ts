@@ -4,3 +4,14 @@ export function chosenExit(listed: boolean, value: string | undefined): string |
   if (!listed) return undefined;
   return value || null;
 }
+
+// egressRead is the form's answer: the exit to send, or the problem of having none yet. Direct is the value null, so
+// only undefined (no choice offered) waits; a ?? there read direct as waiting and kept a key on its proxy.
+export function egressRead(
+  listed: boolean,
+  value: string | undefined,
+  waiting: string,
+): string | null | { problem: string } {
+  const exit = chosenExit(listed, value);
+  return exit === undefined ? { problem: waiting } : exit;
+}

@@ -6,7 +6,7 @@ import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { ChangeDialog } from "../change";
 import { retry } from "../monitor-queries";
-import { chosenExit } from "./exit";
+import { egressRead } from "./exit";
 
 type Credential = AdminSchemas["SupplierCredential"];
 type Supplier = AdminSchemas["Supplier"];
@@ -78,7 +78,7 @@ export function CredentialEgressDialog({
       intro={<p>{t("upstream.egress.body")}</p>}
       action={t("upstream.egress.action")}
       fields={() => <EgressSelect defaultValue={credential.egress_id ?? ""} />}
-      read={(values) => chosenExit(list.isSuccess, values.egress_id) ?? { problem: t("upstream.egress.waiting") }}
+      read={(values) => egressRead(list.isSuccess, values.egress_id, t("upstream.egress.waiting"))}
       send={(egress, { reason, key }) =>
         unwrapChange(
           adminApi.PUT("/api/admin/v1/suppliers/{supplier_id}/credentials/{credential_id}/egress", {
