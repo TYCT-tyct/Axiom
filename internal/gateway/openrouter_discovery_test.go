@@ -92,6 +92,7 @@ func TestOpenRouterRecordedContracts(t *testing.T) {
 				t.Fatalf("%d %s", resp.StatusCode, body)
 			}
 			actual := decode(t, body)
+			unstamp(t, actual)
 			if diff := cmp.Diff(fixture.Axiom, actual); diff != "" {
 				t.Error(diff)
 			}
@@ -121,6 +122,29 @@ func readORRecording(t *testing.T, name string) orRecording {
 		t.Fatal("missing recording provenance")
 	}
 	return fixture
+}
+
+// unstamp checks that every created in v is a time after the epoch, which is when the rig added the model, and writes 0
+// in its place, the value the recordings hold for it.
+func unstamp(t *testing.T, v any) {
+	t.Helper()
+	switch v := v.(type) {
+	case map[string]any:
+		for key, value := range v {
+			if created, ok := value.(float64); ok && key == "created" {
+				if created <= 0 {
+					t.Errorf("created %v, want when the model was added", created)
+				}
+				v[key] = float64(0)
+				continue
+			}
+			unstamp(t, value)
+		}
+	case []any:
+		for _, value := range v {
+			unstamp(t, value)
+		}
+	}
 }
 
 func checkRecordedTypes(t *testing.T, path string, recorded, actual any) {

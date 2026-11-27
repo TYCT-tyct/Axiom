@@ -22,6 +22,8 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 | `POST /api/v1/messages` | Anthropic Messages 格式 | api/anthropic-messages/create-a-message | 有| 有 | 有 | 无 |
 | Messages 的 `fallbacks` 参数（最多 3 项，只许 `model`，不能与非 null `models` 同用） | 映射到 `models` 路由 | docs/guides/routing/model-fallbacks | 有：读取到 `Request.Models`，由 gateway 交给同一冻结路线；Prepare 删除该成员 | 无 | 无 | 无 |
 | `POST /api/v1/messages/count_tokens` | OpenRouter 文档未列此路由 | （OpenAPI 路由表无） | 有 | 未启用（路由已注释掉） | 有 | Axiom 比 OpenRouter 多，非缺口 |
+| Gemini 原生 `POST /v1beta/models/{model}:generateContent`、`:streamGenerateContent?alt=sse`、`:countTokens` | OpenRouter 文档未列 | — | 有：入口换成 Chat 调用、出口写回 Gemini 的回复、用量和错误，key 收 `x-goog-api-key`、`?key=`、bearer（`docs/domains/gateway.md`）；`cachedContent`、Google 自带工具、多候选 400 | 有（不含 countTokens） | 无 | Axiom 比 OpenRouter 多，非缺口 |
+| 跨格式的工具：Codex 的 Responses `custom`、Claude Code 的服务端工具 | 各家原格式 | — | 部分：`custom` 转成单个 `input` 字符串的函数并还原成 `custom_tool_call`；Anthropic 服务端与带类型工具、OpenAI 托管工具无等价函数，按类型点名拒绝，只走原格式端点 | 部分 | 部分 | 与 CLIProxyAPI、sub2api 一致；服务端工具跨格式要本站代跑工具循环 |
 | `POST /api/v1/completions`（旧版补全） | OpenAPI 路由表没有该路径；Streaming 文档提到供应商设置“Serves `/completions`” | docs/api_reference/streaming；OpenAI《Create completion》 | 有：按 OpenAI 旧接口原生提供，只路由到 `formats` 含 `completions` 的端点，不与 Chat 互转 | 有 | 无 | 基线取 OpenAI 的旧接口；OpenRouter 的 `prompt`-on-chat 变体不采用（要改 Chat 的形状）；旧补全的 `logprobs`、`n`、`best_of` 没有 Chat 对应写法，所以不转格式（[决策](domains/gateway.md#决策与理由)） |
 | 流式 SSE，注释保活，`data: [DONE]` | 偶发 `: OPENROUTER PROCESSING` 注释；Chat 流最后带 usage 的一块 | docs/api_reference/streaming | 有：保活，Chat 最后一块带 usage（`docs/domains/gateway.md`） | 有（ping，见差分规则） | 有 | 无 |
 | 流式取消（断开连接即停止上游） | 断开连接立即停止模型处理和计费 | docs/api_reference/streaming | 有：用 `context.Cause` 区分客户端断开 | 有（relay 取消） | 有（`gateway_handler_cancellation_test.go`） | 无 |
@@ -37,16 +39,16 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
-| `GET /api/v1/models` 基本列表 | 返回 `data[]` 模型目录 | api/models/list-all-models-and-their-properties | 有：外壳是 OpenRouter 的 `data`/`links.next`/`total_count`；按 key 过滤，只列这把 key 能调用、路由快照里有公共端点且有售价的模型 | 有 | 有 | 模型 `pricing` 取实际可服务端点中主站售价最便宜的一个（标准服务等级、第一档），与路由快照同一次构建、一起发布：列表上的价格就是最便宜端点收费的价格，其他端点的价格见 endpoints 列表；`/v1/models` 保持 OpenAI+Anthropic 合并形，两种客户端各读各的 |
-| 模型字段 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` | 模型身份与元信息 | spec `Model` | 部分：`id`、`canonical_slug` 都是这个模型的公开标准 ID（目录名去掉内部版本后缀：`acme/claude@20250929` 按 `acme/claude` 列出，并要解析回这个模型，否则整个不列），`name` 是标准 ID 去掉作者的部分，`created` 恒为 0；`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` 不输出（目录没有这些数据） | 无（OpenAI 形） | 无 | 缺的是目录里没有的描述和日期；`created` 恒 0，按时间排序的选择器仍会失效（`sort=newest` 因此回 400）；内部 `@版本` 后缀不对客户端露出，它不是能调用的名字 |
+| `GET /api/v1/models` 基本列表 | 返回 `data[]` 模型目录 | api/models/list-all-models-and-their-properties | 有：外壳是 OpenRouter 的 `data`/`links.next`/`total_count`；同 OpenRouter 不带 key 可读：公开视图列同次构建里有公共端点且有售价的模型，按站点默认等级定价，站点不公开价格时省略 `pricing` 并拒绝按价过滤和排序；带 key 时只列这把 key 能调用的，带错 key 回 401 | 有 | 有 | 模型 `pricing` 取实际可服务端点中主站售价最便宜的一个（标准服务等级、第一档），与路由快照同一次构建、一起发布：列表上的价格就是最便宜端点收费的价格，其他端点的价格见 endpoints 列表；`/v1/models` 是 OpenAI+Anthropic 合并形，并带同一个 OpenRouter 模型对象的成员（`id` 是列出的名字，厂商原生名另列一条） |
+| 模型字段 `id`、`canonical_slug`、`name`、`created`、`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` | 模型身份与元信息 | spec `Model` | 部分：`id`、`canonical_slug` 都是这个模型的公开标准 ID（目录名去掉内部版本后缀：`acme/claude@20250929` 按 `acme/claude` 列出，并要解析回这个模型，否则整个不列），`name` 是标准 ID 去掉作者的部分，`created` 是模型加入目录的时刻（模型 ID 的 UUIDv7 时间，Unix 秒）；`description`、`hugging_face_id`、`knowledge_cutoff`、`expiration_date` 不输出（目录没有这些数据） | 无（OpenAI 形） | 无 | 缺的是目录里没有的描述和日期；`created` 是加入 Axiom 目录而非上游发布的时间；内部 `@版本` 后缀不对客户端露出，它不是能调用的名字 |
 | `context_length`、`top_provider{context_length,max_completion_tokens,is_moderated}`、`per_request_limits` | 上下文与输出上限 | spec `Model`、`TopProviderInfo` | 有：`context_length` 与 `top_provider{context_length,max_completion_tokens}` 取规格的 `context_length`/`max_output_tokens`，`is_moderated` 恒 false；`per_request_limits` 是 null（Axiom 没有按请求的上限） | 无 | 无 | 规格没声明上限、或售价填不出 `prompt`/`completion` 的模型整个不列：OpenRouter 的对象里没有 null 的位置 |
 | `pricing{prompt,completion,request,image,image_output,image_token,audio,audio_output,input_audio_cache,input_cache_read,input_cache_write,input_cache_write_1h,internal_reasoning,web_search,discount,overrides}` | 每 token/每次的价格（字符串，美元） | spec `PublicPricing` | 部分：取实际可服务端点中主站售价最便宜的一个的标准服务等级、第一档，给 `prompt`、`completion`、缓存读写、`audio`、`audio_output`、`web_search`（每次），能收图片、会推理的模型另给 `image_token`、`internal_reasoning`，有按张价时给 `image`、`image_output`，有按请求价时给 `request`；`input_audio_cache`、`discount`、`overrides` 省略（售价表没有这些单位）。后端搜索的价随引擎不同，只在控制台模型页按引擎列出（`pricing.search_engines`，Axiom 的扩展） | 有 | 无 | 没有的单位省略而不是写 0（0 会被读成免费）；明细见[接入](domains/gateway.md#模型发现接口基线投影与偏离) |
 | `architecture{modality,input_modalities,output_modalities,tokenizer,instruct_type}` | 模态 | spec `ModelArchitecture` | 部分：`modality`、`input_modalities`、`output_modalities` 取规格声明的能力（`text`；有 `images` 加 `image`，有 `documents` 加 `file`），输出恒 `text`；`tokenizer`、`instruct_type` 不输出 | 无 | 无 | 目录没有分词器和指令类型；音频、视频输入不是能力，不声称 |
 | `supported_parameters`、`default_parameters`、`reasoning{supported_efforts,default_effort,default_enabled,mandatory,supports_max_tokens}`、`supported_voices` | 支持的参数、默认采样值、推理选项 | spec `Model`、`ModelReasoning`、`DefaultParameters`；docs/guides/best-practices/reasoning-tokens | 部分：`supported_parameters` 按能力与方言推出；`reasoning` 在手动思考预算时给 `supports_max_tokens:true`，未知 `mandatory` 不输出（官方必填，有意偏离）；`default_parameters`、`supported_voices` 是 null | 无 | 无 | 规格没说的参数不声称（`seed`、`logprobs`、`verbosity`、`structured_outputs`、`web_search_options` 等） |
 | `alias_target`、`benchmarks`、`links.details` | 别名目标、基准分 | spec `Model` | 部分：`links.details` 指向本 API 的 `/api/v1/models/{id}/endpoints`；`alias_target`、`benchmarks` 不输出 | 无 | 无 | 别名见本表 `~author/family-latest` 一行；基准分 Axiom 不测 |
-| 查询参数 `category`、`supported_parameters`、`output_modalities`、`input_modalities`、`sort`、`q`、`context`、`min_price`、`max_price`、`offset`、`limit`（≤1000）、`use_rss` | 服务端过滤和排序 | api/models/list-all-models-and-their-properties（OpenAPI `/models` 的 parameters） | 部分：读 `offset`、`limit`、`q`、`context`、价格上下限（$/M token）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`；`sort` 只支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`；没有数据的官方参数（`category`、`arch`、`providers`、`zdr`、`region`、`use_rss`、age、intelligence index 等）按名字回 400 并说明缺什么 | 无 | 无 | 不静默忽略：丢掉的过滤客户端看不出来；文档之外的参数（缓存参数、`utm_*`）不报错 |
-| `GET /api/v1/models/{author}/{slug}`、`/model/{author}/{slug}` | 单个模型详情，后缀按变体规则解析 | api/models/get-a-model-by-its-slug | 部分：`GET /api/v1/models/{model}` 返回 `{data: 模型对象}`，名字按调用规则解析（`claude-live` 与 `anthropic/claude-live` 到同一个模型），`id` 是标准 ID，`links.details` 指向 endpoints 路径；`/v1/models/{model}` 仍是 OpenAI/Anthropic 形 | 有（`/v1/models/:model`，OpenAI 形） | 有 | OpenRouter 的 `/model/{author}/{slug}`（单数）没有；目录变体后缀见本表下一行 |
-| `GET /api/v1/models/count` | 模型总数 | api/models/get-total-count-of-available-models | 有：`data.count` 为同次发布中本 key 可见公共模型数，支持 `output_modalities`，非法/重复模态和损坏查询串回 400，不应用分页 | 无 | 无 | 响应数据来自内存投影，实时准入仍查库 |
+| 查询参数 `category`、`supported_parameters`、`output_modalities`、`input_modalities`、`sort`、`q`、`context`、`min_price`、`max_price`、`offset`、`limit`（≤1000）、`use_rss` | 服务端过滤和排序 | api/models/list-all-models-and-their-properties（OpenAPI `/models` 的 parameters） | 部分：读 `offset`、`limit`、`q`、`context`、价格上下限（$/M token）、`input_modalities`、`output_modalities`、`supported_parameters`、`model_authors`；`sort` 只支持 `pricing-low-to-high`、`pricing-high-to-low`、`context-high-to-low`、`newest`（按 `created`）；没有数据的官方参数（`category`、`arch`、`providers`、`zdr`、`region`、`use_rss`、`min_age_days`/`max_age_days`、intelligence index 等）按名字回 400 并说明缺什么 | 无 | 无 | 不静默忽略：丢掉的过滤客户端看不出来；文档之外的参数（缓存参数、`utm_*`）不报错 |
+| `GET /api/v1/models/{author}/{slug}`、`/model/{author}/{slug}` | 单个模型详情，后缀按变体规则解析 | api/models/get-a-model-by-its-slug | 部分：`GET /api/v1/models/{model}` 返回 `{data: 模型对象}`，名字按调用规则解析（`claude-live` 与 `anthropic/claude-live` 到同一个模型），`id` 是标准 ID，`links.details` 指向 endpoints 路径；`/v1/models/{model}` 是 OpenAI/Anthropic 形加 OpenRouter 成员；两者不带 key 同列表可读 | 有（`/v1/models/:model`，OpenAI 形） | 有 | OpenRouter 的 `/model/{author}/{slug}`（单数）没有；目录变体后缀见本表下一行 |
+| `GET /api/v1/models/count` | 模型总数 | api/models/get-total-count-of-available-models | 有：`data.count` 为同次发布中本 key（不带 key 时公开视图）可见公共模型数，支持 `output_modalities`，非法/重复模态和损坏查询串回 400，不应用分页 | 无 | 无 | 响应数据来自内存投影，实时准入仍查库 |
 | `GET /api/v1/models/{author}/{slug}/endpoints` | 每个供应商端点的名称、`tag`、量化、价格、上下文与输出上限、支持参数、可用率、延迟、吞吐、状态、服务等级 | api/endpoints/list-all-endpoints-for-a-model；spec `PublicEndpoint` | 部分：每个公共路由分组一个持久分组代号 `tag`（跨模型相同，也是 `provider.only`/`ignore` 的公开身份，不暴露内部 UUID），私有端点不进投影；当前都是中转分组，`provider_name` 为 Axiom，官方直连后用真名；价格取端点自己的已发布价 | 无 | 无 | 量化取管理员记录的级别，没有为 null；性能和窗口可用率为 null；未知能力和描述省略，不暴露货源；偏离清单见[接入](domains/gateway.md#模型发现接口基线投影与偏离) |
 | `GET /api/v1/models/user` | 按账户供应商偏好、隐私设置、护栏过滤后的模型 | api/models（OpenAPI `/models/user`） | 部分：复用列表的 key 可见性、过滤和分页，next 保留 user 路径 | 有（`/user/self/models`） | 无 | 缺供应商偏好、隐私和护栏数据，不伪称这些过滤已生效 |
 | `GET /api/v1/providers` | 供应商列表及隐私政策链接 | api/providers/list-all-providers | 部分：有可见模型时列 Axiom/axiom，政策链接、总部和机房为 null，无可见模型时为空 | 无 | 无 | 聚合供应商不暴露真实货源，缺失政策和地域不虚构 |
@@ -57,7 +59,7 @@ OpenRouter 一栏来自在线文档（openrouter.ai/docs 各页的 .md 版本）
 
 ## 3. 供应商路由参数 `provider`、模型备选 `models`、变体
 
-Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识的成员和暂不支持的取值一律 400 并指明成员名（不静默忽略）。
+Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，取值做不到的 400 并指明成员名；不认识的成员忽略，与 OpenRouter 放行扩展成员一致，免得带完整偏好对象的客户端整个请求失败。下表「没有」的成员都属忽略。
 
 | 能力 | OpenRouter 行为 | 来源 | Axiom 现状 | new-api | sub2api | 差距说明 |
 |---|---|---|---|---|---|---|
@@ -67,13 +69,13 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | `provider.require_parameters` | 只路由到支持请求里全部参数的端点 | 同上 | 部分：按端点公布的 `supported_parameters`（模型规格能力与方言，和 `/api/v1/models` 同一份）过滤；清单外参数 400 | 无 | 无 | 逐端点的采样/提供商参数清单仍缺（`seed`、`logprobs` 等 400）；需要供应商同步逐端点读出，见 gateway 领域文档 |
 | `provider.data_collection`（`allow`/`deny`） | 排除会存储数据的供应商 | 同上 | 有：`readDataCollection`，`deny` 映射到「不留存」政策 | 无 | 无 | 无 |
 | `provider.zdr` | 只走零数据保留端点 | 同上；docs/guides/features/zdr | 有：`readZDR`，与 `data_collection: deny` 同一个过滤 | 无 | 无 | 无 |
-| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：不在 `providerMembers`，由 `override` 拒绝 400 | 无 | 无 | 低优先；但 400 会让带此成员的客户端整体失败 |
+| `provider.enforce_distillable_text` | 只走允许文本蒸馏的模型 | 同上 | 没有：忽略，不过滤（目录不记录蒸馏许可） | 无 | 无 | 低优先；要过滤得先在目录记录许可 |
 | `provider.quantizations`（int4/int8/fp4/mxfp4/nvfp4/fp6/fp8/mxfp8/fp16/bf16/fp32/unknown） | 按量化级别过滤 | 同上 | 有：按端点精确匹配；空列表和 null 不限制 | 无 | 无 | 级别由管理员在端点管理接口和页面记录，不是供应商自报；没有记录不等同于 `unknown`，不匹配非空列表，偏离见 gateway 领域文档 |
 | `provider.sort` 字符串：`price` / `throughput` / `latency` | 关闭负载均衡，按该维度排序 | 同上 | 有：三种维度分别排序 | 无 | 无 | 未测量的按价格加权排在测量值之后 |
 | `provider.sort` 对象 `{by, partition}`（`partition: model/none`） | 多模型备选时是否跨模型统一排序 | 同上 | 有：默认 model；none 跨主模型和备选排序 | 无 | 无 | `by`、`partition` 之外的成员明确 400；OpenRouter 文档没有 `sort.percentile`，百分位截断属于下面的性能偏好 |
 | `provider.preferred_min_throughput` / `preferred_max_latency`（数字或 p50/p75/p90/p99 对象） | 偏好而非硬过滤，不满足的排后面 | 同上 | 有：数字按 EWMA，对象按滚动五分钟窗口的 p50/p75/p90/p99；写出的截断全满足才进偏好组，不满足的排后不排除 | 无 | 无 | 未测过的端点不判为不满足；窗口样本有界，内存每端点固定，偏离见 quality 与 gateway 领域文档 |
 | `provider.max_price{prompt,completion,request,image}` | 价格上限，过滤端点 | 同上 | prompt/completion 精确比较受众售价；request 按每个生成请求的售价精确比较；image 明确 400 | 无 | 无 | image 的按张项已有（`image_in_piece`、`image_out_piece`，#320），但上限管输入、生成还是按 token 计价的图未定，端点也不报按张用量；`image_in`/`image_out` 是按 token 价；非美元站点以站点记账货币为单位，偏离见 gateway 领域文档 |
-| `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：不在 `providerMembers`，会 400 | 无 | 无 | 低优先 |
+| `provider.options`（按供应商透传的选项，spec `ProviderOptions`） | 给特定供应商的原生参数 | spec `ProviderPreferences.options` | 没有：忽略，不透传（不开放自由的参数覆盖） | 无 | 无 | 有意不做 |
 | 默认价格加权负载均衡（按价格平方倒数、近 30 秒无故障优先） | 默认策略 | docs/guides/routing/provider-selection | 部分：默认是价格加权随机（`docs/domains/routing.md` 决策与理由），加权公式未核对是否一致 | 无（渠道权重） | 无 | 行为相近，公式可能不同 |
 | 失败后换端点 | 按序回退直到成功 | docs/guides/routing/provider-selection | 有（`MaxAttempts`） | 有（`RetryTimes`） | 有（failover） | 无 |
 | 工具调用请求的 Auto Exacto 重排 | 有 `tools` 时按工具调用成功率重排；错误分参数不是 JSON、工具名不存在、参数不符合 schema 三类，按请求统计（2026-11-04 核实） | docs/guides/routing/auto-exacto | 部分：按真实流量的工具调用错误率排序，只在「均衡」「质量优先」策略下生效；错误率只统计参数不是 JSON 的一类（`quality` 的 `ToolErrorRate`） | 无 | 无 | 工具名、schema 两类未测，见 docs/domains/quality.md「待定问题」；吞吐和基准评分另由「最快」、产品成绩提供 |
@@ -90,7 +92,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | 变体 `:thinking`（已弃用） | 目录变体 | docs/guides/routing/model-variants/thinking | 部分：请求自己已经要求推理时接受，按基础模型服务（本目录没有独立思考条目，后缀没有别的含义）；否则 400，提示改用 `reasoning` 参数 | 无 | 无 | 发现接口不执行请求级判断，按基础模型回 200 |
 | 变体 `:extended`（已弃用） | 目录变体 | docs/guides/routing/model-variants/extended | 没有：400，官方已下线且没有模型再提供 | 无 | 无 | 不补 |
 | 后缀叠加（任意顺序，最后一个排序变体生效） | 规则 | docs/guides/routing/model-variants/overview | 有（`TestParseModelName`） | 无 | 无 | 无 |
-| 提供者透传头 `x-anthropic-beta` | 透传 Anthropic beta 特性 | docs/guides/routing/provider-selection | 有：`anthropic-beta` 白名单转发，不筛选值（`docs/domains/gateway.md`） | 有 | 有 | 无 |
+| 提供者透传头 `x-anthropic-beta` | 透传 Anthropic beta 特性 | docs/guides/routing/provider-selection | 有：`anthropic-beta` 白名单转发，不筛选值；发往 Vertex AI、Bedrock 时只留各自接受的（`docs/domains/gateway.md`） | 有 | 有 | 无 |
 
 ## 4. 自动路由和其他路由器
 
@@ -213,7 +215,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 | 错误体外壳 `{"error":{"code":<数字>,"message","metadata"}}`，HTTP 状态码与 `error.code` 相同 | 数字 code | docs/api_reference/errors-and-debugging | 有：Chat/Responses 用 `{"error":{"message","type","param","code":<数字>,"metadata"}}`，状态码与 `error.code` 相同；Messages 用 Anthropic 外壳（[协议错误渲染](../internal/protocol/errors.go) 的 `appendOpenAIError`） | OpenAI 外壳 | OpenAI/Anthropic 外壳 | 多 `type`、`param` 两个 OpenAI 兼容字段，不影响读 `code`/`metadata` 的客户端 |
 | 状态码语义 400/401/402/403/408/429/502/503 | 见文档表 | 同上 | 部分：有 400/401/402/403/404/408/413/429/502/503（[协议错误词表](../internal/protocol/errors.go) 的 `errorTypes`）；有 403 `permission_denied`（含账户暂停）和 `content_policy_violation`，本地模型权限仍隐藏为 404 | 有 | 有 | 内容护栏本身尚未实现；能识别上游内容拒绝 |
 | `error_type` 类型化词表（约 30 个，如 `context_length_exceeded`、`authentication`、`permission_denied`、`payment_required`、`rate_limit_exceeded`、`provider_overloaded`、`invalid_request`、`content_policy_violation`、`invalid_image`、`timeout`…） | 稳定、可程序判断 | 同上（Typed error codes） | 部分：已有 `context_length_exceeded`、`permission_denied`、`content_policy_violation`、`payload_too_large` 等；HTTP 与 SSE、流式与聚合共用，原话脱敏后保留；`error.code` 只是状态码，分类读 `metadata.error_type` | 无 | 无 | 图片等其他细分类仍缺 |
-| `error_type` 的位置：Chat `error.metadata.error_type`；Messages `error.error_type`；Responses 顶层 | 三种外壳各自位置 | 同上 | 有：位置与 OpenRouter 一致（`docs/domains/gateway.md`） | 无 | 无 | 无 |
+| `error_type` 的位置：Chat `error.metadata.error_type`；Messages `error.error_type`；Responses 顶层 | 三种外壳各自位置 | 同上 | 有：位置与 OpenRouter 一致；Gemini 路径在 `details` 的 `ErrorInfo.reason`；Messages 错误体另带 `request_id`（`TestEveryFormatRefusesInItsOwnShape`） | 无 | 无 | 无 |
 | `error.metadata.provider_code`、`provider_name`、`raw`（上游原始错误） | 非 500 时给出上游错误码 | 同上 | 部分：上游 4xx 的原话和 `code` 交给客户端，`code` 放 `metadata.provider_code`，并去掉能指向供应商的内容；没有 `provider_name`、`raw`；上游 429/5xx 一律 502（`docs/domains/gateway.md` 的「错误」） | 原样 | 原样 | 供应商身份不暴露是有意；`provider_code` 已对齐 |
 | 审核错误 `error.metadata{reasons, flagged_input, provider_name, model_slug}` | 403 | 同上 | 没有 | 无 | 无 | 随内容护栏做 |
 | 预算错误：403，`metadata{limit_source: openrouter_guardrail_budget/workspace_budget/key_limit, scope, limit_usd, spend_usd, resets_at, remedy_hint}` | 预算耗尽 | 同上 | 部分：工作区预算和 key 上限返回 403，`limit_source` 为 `openrouter_workspace_budget`/`openrouter_key_limit`；余额不足是 402、`limit_source: balance`；套餐作为最后来源而不够时 402、`limit_source: subscription`（本站自有） | 无 | 无 | 状态码和 `limit_source` 已对齐；金额、scope 和 remedy_hint 仍缺 |
@@ -291,7 +293,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 2. 【服务端工具】`openrouter:*` 13 种在三种格式里逐个认名，只有 `openrouter:web_search` 可用，其余准入前 400；厂商原生搜索由 `engine:"native"` 打开。→ #311
 3. 【模型名后缀】`:nitro`、`:floor`、`:free`、`:exacto`、`:online`、`:thinking`、`~…-latest`、`@preset/…` 已支持，`:batch`、`:extended` 回 400；缺 `:nitro/:floor` 的层级准入。→ #311、#313
 4. 【`provider` 参数】`order/only/ignore`、回退开关、三种排序、`require_parameters`、`quantizations`、百分位对象和 `max_price` 已落地；`enforce_distillable_text`、`max_price.image` 和清单外的 `require_parameters` 因缺必要事实明确 400。→ #313
-5. 【模型元数据】`/models` 系列已是 OpenRouter 的模型对象；缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks`（目录没有这些数据，整个不输出），`created` 恒 0，`default_parameters`/`supported_voices`/`per_request_limits` 为 null。→ #311
+5. 【模型元数据】`/models` 系列已是 OpenRouter 的模型对象；缺 `description`、`knowledge_cutoff`、`hugging_face_id`、`expiration_date`、`alias_target`、`benchmarks`（目录没有这些数据，整个不输出），`default_parameters`/`supported_voices`/`per_request_limits` 为 null。→ #311
 6. 【预设】`@preset/…`、`preset` 字段与账户 CRUD 已实现；预设版本 API 没有。→ #313
 7. 【错误形态】错误类型、`error.code` 数字、`metadata.provider_code`、预算 403 与 `limit_source` 已对齐；图片类等细分仍缺。→ #311
 8. 【Chat 上游】三种格式两两转换，Chat 端点同格式转发；表达不了的成员按跨格式策略拒绝。→ #311
@@ -310,7 +312,7 @@ Axiom 对 `provider` 对象的处理：认识的成员读进覆盖，不认识�
 
 ## Axiom 比 OpenRouter 多的（不算缺口，只是行为不一致，迁移时要说明）
 
-- `POST /v1/messages/count_tokens`、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
+- `POST /v1/messages/count_tokens`、Gemini 原生路径、`POST /v1/responses/compact`、Responses 会话状态（`store`、`previous_response_id`）、`GET /v1/dashboard/billing/*`（给 new-api 当上游）。
 - `/key`、`/credits` 同时接受调用 key 和管理 key。OpenRouter 的 `/credits` 只收管理 key；本站保留调用 key，因为其他中转站常用调用 key 查余额和用量（决定见 [gateway](domains/gateway.md#决策与理由)）。
 - 响应总是带 `usage.cost`/`cost_currency`/`cost_estimated`，不需要 `usage.include`。
 - 推理文本同时写 `reasoning` 与 `reasoning_content`。

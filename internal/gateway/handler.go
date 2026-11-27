@@ -41,8 +41,10 @@ type Deps struct {
 	Limits   *Backpressure
 	Memory   *protocol.Memory // the node's budget for request bodies and streams
 	Run      Run
-	Logger   *slog.Logger
-	Meter    metric.Meter // where the handler's counters go; nil for none
+	// Upstreams are the credentials count_tokens asks, the Executor's own.
+	Upstreams Upstreams
+	Logger    *slog.Logger
+	Meter     metric.Meter // where the handler's counters go; nil for none
 	// Models is the model list in OpenRouter's shape, which the route builder fills with each snapshot it publishes: the
 	// handler serves it and reads no price of its own, so a client's estimate and a call's charge are one reading.
 	Models *ModelList
@@ -83,7 +85,7 @@ type Handler struct {
 // complete reports whether every dependency is there.
 func (d Deps) complete() bool {
 	return d.Accounts != nil && d.Catalog != nil && d.Router != nil && d.Billing != nil && d.Limits != nil && d.Memory != nil &&
-		d.Run != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
+		d.Run != nil && d.Upstreams != nil && d.Logger != nil && d.Models != nil && d.Outstanding != nil
 }
 
 // NewHandler checks the dependencies and builds the routes.
@@ -111,6 +113,7 @@ func NewHandler(d Deps) (*Handler, error) {
 		h.modelRoutes(prefix)
 		h.auxRoutes(prefix)
 	}
+	h.geminiRoutes()
 	return h, nil
 }
 
@@ -164,6 +167,11 @@ func (h *Handler) ipSlot(w http.ResponseWriter, r *http.Request, format protocol
 // slots, read the body, resolve the model, admit. On any failure the call's holds are given back; the one exception
 // is a lost admission, whose reservation may exist, so its settlement keeps them until it is done.
 func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol.Format, compact bool) (*Call, error) {
+	return h.acceptAs(w, r, format, compact, nil)
+}
+
+// acceptAs is accept for a call that came by a Gemini path, whose body is converted once read (gemini.go).
+func (h *Handler) acceptAs(w http.ResponseWriter, r *http.Request, format protocol.Format, compact bool, gemini *geminiInbound) (*Call, error) {
 	if r.Header.Get("Upgrade") != "" {
 		return nil, errUpgrade
 	}
@@ -175,7 +183,7 @@ func (h *Handler) accept(w http.ResponseWriter, r *http.Request, format protocol
 	if err != nil {
 		return nil, err
 	}
-	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r)}
+	c := &Call{ID: id, At: time.Now(), Format: format, Compact: compact, Header: forwardable(r.Header), site: site, caller: caller, host: r.Host, ip: h.clientIP(r), gemini: gemini}
 	if err := h.take(w, r, c); err != nil {
 		if !errors.Is(err, errCommitUnknown) {
 			c.Done()
@@ -222,18 +230,27 @@ func (h *Handler) currentCatalog() (*catalog.Snapshot, error) {
 // authenticate finds the site by the Host and the key by the headers; the body is not read. An unregistered host, a
 // host that is not an API domain and a key that is not known are all the same 401.
 func (h *Handler) authenticate(r *http.Request) (accounts.Site, accounts.Caller, error) {
-	site, surface, err := h.Accounts.SiteForHost(r.Host)
-	if errors.Is(err, accounts.ErrStale) {
+	site, err := h.apiSite(r)
+	if err != nil {
 		return accounts.Site{}, accounts.Caller{}, err
-	}
-	h.outage.recovered(depAccounts)
-	if err != nil || surface != accounts.API {
-		return accounts.Site{}, accounts.Caller{}, errUnauthorized
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), h.Limits.cfg.KeyLookup)
 	defer cancel()
 	caller, err := h.Accounts.AuthenticateKey(ctx, site.ID, apiKey(r))
 	return site, caller, err
+}
+
+// apiSite is the site whose API domain the Host is; any other host is the 401 a key that is not known gets.
+func (h *Handler) apiSite(r *http.Request) (accounts.Site, error) {
+	site, surface, err := h.Accounts.SiteForHost(r.Host)
+	if errors.Is(err, accounts.ErrStale) {
+		return accounts.Site{}, err
+	}
+	h.outage.recovered(depAccounts)
+	if err != nil || surface != accounts.API {
+		return accounts.Site{}, errUnauthorized
+	}
+	return site, nil
 }
 
 // apiKey is the key in Authorization: Bearer, or else in x-api-key.

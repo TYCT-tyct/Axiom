@@ -155,6 +155,9 @@ const (
 // anyway when the settlement says so.
 func (s *session) answer(ctx context.Context, e ended, fin *protocol.Final) {
 	status, body := protocol.RenderError(s.c.Format, e.err, fin)
+	if id := s.w.Header().Get("X-Request-ID"); id != "" && s.c.Format == protocol.Messages {
+		body = withRequestID(body, id) // as writeRefusal does for a refusal before the call
+	}
 	s.wmu.Lock()
 	defer s.wmu.Unlock()
 	if s.gone || s.started || s.req.Context().Err() != nil {
@@ -170,6 +173,13 @@ func (s *session) answer(ctx context.Context, e ended, fin *protocol.Final) {
 	}
 	s.w.WriteHeader(status)
 	s.put(body)
+}
+
+// withRequestID puts the request's ID first in an error body, as Anthropic's errors carry it.
+func withRequestID(body []byte, id string) []byte {
+	out := make([]byte, 0, len(body)+len(id)+16)
+	out = strconv.AppendQuote(append(out, `{"request_id":`...), id)
+	return append(append(out, ','), body[1:]...)
 }
 
 // setWriteFor sets the deadline of the writes from now on.

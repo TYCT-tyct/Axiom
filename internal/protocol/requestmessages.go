@@ -213,6 +213,9 @@ func (s *chatMessageBlocks) flush() {
 		return
 	}
 	msg := requestObject{"role": jsonValue(s.role), "content": jsonValue(s.parts)}
+	if len(s.parts) == 0 {
+		msg["content"] = jsonValue("") // Chat refuses an empty array of parts; a turn of calls or reasoning has no text
+	}
 	if len(s.calls) > 0 {
 		msg["tool_calls"] = jsonValue(s.calls)
 	}
@@ -260,8 +263,12 @@ func (s *chatMessageBlocks) toolCall(o requestObject) error {
 	if input.Kind() != '{' {
 		return shapeError("tool input must be an object")
 	}
-	call := requestObject{"id": o.take("id"), "type": jsonValue("function")}
+	id, signature := unsignedID(o.take("id"))
+	call := requestObject{"id": id, "type": jsonValue("function")}
 	call["function"] = jsonValue(requestObject{"name": o.take("name"), "arguments": jsonValue(string(input))})
+	if signature != "" {
+		call["extra_content"] = googleExtra(signature)
+	}
 	s.calls = append(s.calls, call)
 	return nil
 }
@@ -274,7 +281,8 @@ func (s *chatMessageBlocks) thinking(o requestObject) error {
 }
 
 func messagesToolResult(o requestObject) (requestObject, error) {
-	id, v := o.take("tool_use_id"), o.take("content")
+	id, _ := unsignedID(o.take("tool_use_id"))
+	v := o.take("content")
 	if isNull(v) || string(v) == "[]" {
 		v = jsonValue("") // Anthropic permits omitted content; Chat requires text.
 	}
