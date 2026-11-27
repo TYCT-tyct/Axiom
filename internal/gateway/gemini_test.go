@@ -39,6 +39,19 @@ func TestGeminiPaths(t *testing.T) {
 			[]string{`"candidates":[{"content":{"parts":[{"text":"Hello"}],"role":"model"},"finishReason":"STOP","index":0}]`, `"usageMetadata":{"candidatesTokenCount":`},
 		},
 		{"counted", "/v1beta/models/acme/beta:countTokens", a.key, body, nil, http.StatusOK, "application/json", []string{`{"totalTokens":`}},
+		{
+			"counted as the whole request it would be", "/v1beta/models/acme/beta:countTokens", a.key,
+			`{"generateContentRequest":{"model":"models/acme/beta","systemInstruction":{"parts":[{"text":"Rules"}]},"contents":[{"role":"user","parts":[{"text":"hello"}]}],` +
+				`"tools":[{"functionDeclarations":[{"name":"f","parametersJsonSchema":{"type":"object"}}]}]}}`,
+			nil, http.StatusOK, "application/json",
+			[]string{`{"totalTokens":`},
+		},
+		{
+			"counted twice over", "/v1beta/models/acme/beta:countTokens", a.key,
+			`{"contents":[{"parts":[{"text":"a"}]}],"generateContentRequest":{"model":"models/acme/beta","contents":[]}}`,
+			nil, http.StatusBadRequest, "application/json",
+			[]string{`"status":"INVALID_ARGUMENT"`, "generateContentRequest"},
+		},
 		{"no key", "/v1beta/models/acme/beta:generateContent", "", body, nil, http.StatusUnauthorized, "application/json", []string{`"code":401`, `"status":"UNAUTHENTICATED"`}},
 		{"a stream without alt=sse", "/v1beta/models/acme/beta:streamGenerateContent", a.key, body, nil, http.StatusBadRequest, "application/json", []string{`"status":"INVALID_ARGUMENT"`, "alt=sse"}},
 		{"a method not served", "/v1beta/models/acme/beta:embedContent", a.key, body, nil, http.StatusNotFound, "application/json", []string{`"status":"NOT_FOUND"`}},

@@ -151,6 +151,30 @@ func GeminiToChat(body []byte, model string, stream bool) ([]byte, GeminiOptions
 	return jsonValue(dst), opts, nil
 }
 
+// GeminiCountRequest is the generateContent body a countTokens body counts: its contents alone, or the whole request it
+// wraps in generateContentRequest, system instruction and tools included, less the model the path already names
+// (Google's CountTokensRequest). One body may not hold both.
+func GeminiCountRequest(body []byte) ([]byte, error) {
+	var c struct {
+		Wrapped *struct {
+			Model   jsonx.Raw            `json:"model"`
+			Request map[string]jsonx.Raw `json:",embed"`
+		} `json:"generateContentRequest"`
+		Contents jsonx.Raw            `json:"contents"`
+		Unknown  map[string]jsonx.Raw `json:",embed"`
+	}
+	if err := jsonx.Unmarshal(body, &c); err != nil {
+		return nil, invaliderr(err)
+	}
+	switch {
+	case c.Wrapped == nil:
+		return body, nil
+	case !isNull(c.Contents) || len(c.Unknown) > 0:
+		return nil, fmt.Errorf("%w: a countTokens request holds contents or a generateContentRequest, not both", ErrInvalid)
+	}
+	return jsonValue(c.Wrapped.Request), nil
+}
+
 func unknownMember(where string, members map[string]jsonx.Raw) error {
 	if len(members) == 0 {
 		return nil

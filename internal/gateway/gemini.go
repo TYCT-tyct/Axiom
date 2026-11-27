@@ -22,6 +22,7 @@ import (
 type geminiInbound struct {
 	model  string
 	stream bool
+	count  bool // countTokens, whose body may wrap the request it counts
 	opts   protocol.GeminiOptions
 }
 
@@ -47,6 +48,7 @@ func (h *Handler) gemini(w http.ResponseWriter, r *http.Request) {
 	}
 	in.model, action = action[:at], action[at+1:]
 	if action == "countTokens" {
+		in.count = true
 		h.geminiCount(gw, r, in)
 		return
 	}
@@ -99,6 +101,12 @@ func geminiKey(r *http.Request) {
 // geminiBody is the Chat request a Gemini call's body converts to, its memory held with the call's.
 func (h *Handler) geminiBody(c *Call, body []byte) ([]byte, error) {
 	in := c.gemini
+	var err error
+	if in.count {
+		if body, err = protocol.GeminiCountRequest(body); err != nil {
+			return nil, invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "))
+		}
+	}
 	chat, opts, err := protocol.GeminiToChat(body, in.model, in.stream)
 	if err != nil {
 		return nil, invalid(strings.TrimPrefix(err.Error(), protocol.ErrInvalid.Error()+": "))
