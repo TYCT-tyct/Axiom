@@ -87,7 +87,6 @@ export default {
     access_token: "Access token",
     refresh_token: "Refresh token",
     access_token_expires_at: "Access token expires",
-    user_id: "User ID (with a system access token)",
     open: "Replace login",
     title: "Replace the login at {{name}}",
     body: "The new login replaces the old one, and the next sync logs in with it. The address and the account ({{account}}) don’t change. Changing a credential is high-risk; the audit log records who and why, not the login.",

@@ -99,12 +99,6 @@ func (l *live) call(method, path, token string, body any) adaptertest.Answer {
 	if token != "" {
 		header = adaptertest.Bearer(token)
 	}
-	return l.callWith(method, path, header, body)
-}
-
-// callWith is call with the headers a login of another form is sent in.
-func (l *live) callWith(method, path string, header http.Header, body any) adaptertest.Answer {
-	l.t.Helper()
 	a := adaptertest.Send(l.t, method, l.base, path, header, body)
 	var env struct {
 		Success bool   `json:"success"`
@@ -208,28 +202,21 @@ func (l *live) record(name, method, path, token, label string) adaptertest.Answe
 	l.t.Helper()
 	var header http.Header
 	if token != "" {
-		header, label = adaptertest.Bearer(token), "Bearer "+label
+		header = adaptertest.Bearer(token)
 	}
-	return l.recordWith(name, method, path, header, label)
-}
-
-// recordWith is record with the headers a login of another form is sent in; auth is what the sample shows as its
-// Authorization header.
-func (l *live) recordWith(name, method, path string, header http.Header, auth string) adaptertest.Answer {
-	l.t.Helper()
 	a := adaptertest.Send(l.t, method, l.base, path, header, nil)
-	l.recorded[name] = l.sample(name, method, path, auth, a)
+	l.recorded[name] = l.sample(name, method, path, label, a)
 	return a
 }
 
 // sample is the text of a recorded exchange in the form of the other files of testdata/, with every secret and address
 // of this run scrubbed.
-func (l *live) sample(name, method, path, auth string, a adaptertest.Answer) string {
+func (l *live) sample(name, method, path, label string, a adaptertest.Answer) string {
 	l.t.Helper()
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n%s %s\n", name, method, l.scrub.Text(path))
-	if auth != "" {
-		fmt.Fprintf(&b, "> Authorization: %s\n", auth)
+	if label != "" {
+		fmt.Fprintf(&b, "> Authorization: Bearer %s\n", label)
 	}
 	fmt.Fprintf(&b, "< status: %d  (elapsed %.2fs)\n", a.Status, a.Elapsed.Seconds())
 	for _, h := range []string{"Content-Type", "Retry-After"} {

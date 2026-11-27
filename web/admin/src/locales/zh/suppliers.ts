@@ -83,7 +83,6 @@ export default {
     access_token: "访问令牌",
     refresh_token: "刷新令牌",
     access_token_expires_at: "访问令牌的过期时间",
-    user_id: "用户 ID（配合系统访问令牌）",
     open: "更换登录",
     title: "更换 {{name}} 的登录",
     body: "用新的登录替换旧的，之后同步会用它重新登录。地址和账号（{{account}}）不变。更换凭据是高风险操作，审计日志只记操作者和理由，不记登录内容。",

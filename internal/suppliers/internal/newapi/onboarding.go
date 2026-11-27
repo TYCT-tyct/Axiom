@@ -15,8 +15,7 @@ var _ adapter.KeyMaker = (*manager)(nil)
 
 // CreateKey implements adapter.KeyMaker: a token with no quota, expiry or model limit, in the group the sync names.
 // new-api answers with no id, so the key is found by the name the sync gave it; a lost answer is adopted by the same
-// name on the next complete listing instead of making a second key. one-api reads the same body without the members it
-// does not have (a key there follows the account's one group) and answers with the key made.
+// name on the next complete listing instead of making a second key.
 func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter.KeyRef, error) {
 	body, err := jsonx.MarshalCanonical(struct {
 		Name               string `json:"name"`
@@ -48,9 +47,6 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 		}
 		return "", refused
 	case resp.Status == http.StatusOK && parsed && env.Success:
-		if m.sys == oneAPI {
-			return oneAPIKeyCreated(resp)
-		}
 		return m.keyByName(ctx, name, groupRef)
 	case resp.Status == http.StatusOK && parsed:
 		// A token limit, a group the account cannot use, or another refusal the supplier states in its words. The

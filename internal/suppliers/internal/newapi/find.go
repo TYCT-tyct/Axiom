@@ -55,7 +55,7 @@ func (m *manager) masked(ctx context.Context, mask []byte) ([]adapter.KeyState, 
 				candidates = append(candidates, t.state)
 			}
 		}
-		if len(tokens) < m.keyPageSize() {
+		if len(tokens) < keyPageSize {
 			break
 		}
 	}

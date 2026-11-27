@@ -63,14 +63,10 @@ var scopeName = regexp.MustCompile(`^[a-z_]{1,32}:[a-z_]{1,32}$`)
 // errServer marks a 5xx: the supplier is temporarily unable to answer, so the task backs off instead of halting.
 var errServer = errors.New("new-api: the server failed")
 
-// errUnsuccessful is a handler's answer of 200 with success false: the request failed for a reason new-api states only
-// in words.
-var errUnsuccessful = fmt.Errorf("%w: the request failed", adapter.ErrUnrecognised)
-
-// api sends the management requests of one account, with the headers its login is sent in.
+// api sends the management requests of one account.
 type api struct {
 	c      adapter.Client
-	header http.Header
+	bearer string
 }
 
 // get sends a GET and reads the data of its answer into out (or, when out is nil, only checks the answer).
@@ -98,7 +94,7 @@ func read(resp adapter.Response, out any) error {
 	case resp.Status != http.StatusOK || !parsed:
 		return fmt.Errorf("%w: status %d", adapter.ErrUnrecognised, resp.Status)
 	case !env.Success:
-		return errUnsuccessful
+		return fmt.Errorf("%w: the request failed", adapter.ErrUnrecognised)
 	}
 	if out == nil {
 		return nil
@@ -112,8 +108,7 @@ func read(resp adapter.Response, out any) error {
 // send sends one request without reading the status: the caller classifies a status that is not a plain answer, because
 // a refused key operation means something different from a refused read.
 func (a *api) send(ctx context.Context, method, path string, buckets []string, body []byte) (adapter.Response, error) {
-	header := a.header.Clone()
-	header.Set("Accept", "application/json")
+	header := http.Header{"Authorization": {a.bearer}, "Accept": {"application/json"}}
 	if body != nil {
 		header.Set("Content-Type", "application/json")
 	}

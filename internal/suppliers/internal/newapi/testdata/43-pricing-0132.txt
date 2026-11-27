@@ -1,7 +1,0 @@
-# 43-pricing-0132
-GET /api/pricing
-> Authorization: <ALICE_ACCESS_TOKEN>
-< status: 200  (elapsed 0.02s)
-< Content-Type: application/json; charset=utf-8
-< X-Oneapi-Request-Id: sample-request-id
-< body: {"auto_groups":["default"],"data":[{"model_name":"gpt-6-astra","vendor_id":1,"quota_type":0,"model_ratio":2.5,"model_price":0,"owner_by":"","completion_ratio":4,"enable_groups":["premium","default"],"supported_endpoint_types":["openai"],"pricing_version":"5a90f2b86c08bd983a9a2e6d66c255f4eaef9c4bc934386d2b6ae84ef0ff1f1f"},{"model_name":"claude-opus-5-5","vendor_id":2,"quota_type":0,"model_ratio":5,"model_price":0,"owner_by":"","completion_ratio":5,"enable_groups":["premium"],"supported_endpoint_types":["anthropic","openai"]}],"group_ratio":{"default":1,"premium":1.5},"pricing_version":"a42d372ccf0b5dd13ecf71203521f9d2","success":true,"supported_endpoint":{"anthropic":{"path":"/v1/messages","method":"POST"},"openai":{"path":"/v1/chat/completions","method":"POST"}},"usable_group":{"default":"Default group","premium":"Premium group"},"vendors":[{"id":1,"name":"OpenAI","icon":"OpenAI"},{"id":2,"name":"Anthropic","icon":"Claude.Color"}]}

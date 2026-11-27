@@ -1,7 +1,0 @@
-# 28-read-key-oneapi0610
-GET /api/token/2
-> Authorization: <ALICE_ACCESS_TOKEN>
-< status: 200  (elapsed 0.00s)
-< Content-Type: application/json; charset=utf-8
-< X-Oneapi-Request-Id: sample-request-id
-< body: {"data":{"id":2,"user_id":2,"key":"<ALICE_KEY1_BARE>","status":1,"name":"axiom-live-default","created_time":1795749137,"accessed_time":1795749137,"expired_time":-1,"remain_quota":0,"unlimited_quota":true,"used_quota":0,"models":null,"subnet":""},"message":"","success":true}

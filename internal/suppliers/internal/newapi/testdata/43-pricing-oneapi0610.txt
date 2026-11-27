@@ -1,7 +1,0 @@
-# 43-pricing-oneapi0610
-GET /api/pricing
-> Authorization: <ALICE_ACCESS_TOKEN>
-< status: 404  (elapsed 0.00s)
-< Content-Type: application/json; charset=utf-8
-< X-Oneapi-Request-Id: sample-request-id
-< body: {"error":{"message":"Invalid URL (GET /api/pricing)","type":"invalid_request_error","param":"","code":""}}
