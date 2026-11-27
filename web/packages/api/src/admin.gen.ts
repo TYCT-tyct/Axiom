@@ -2447,8 +2447,8 @@ export interface paths {
         get?: never;
         put?: never;
         /**
-         * Confirm the base price of endpoints whose supplier shows no prices
-         * @description For a relay that does not publish its prices (new-api with pricing hidden, sub2api, CPA), a person's base price per endpoint, in US dollars as the relay prices: the model's official price in the catalog when `price` is absent, or the price given. It is kept in the supplier's own unit (a new-api quota is 1/500,000 dollar of its ratios) and the sync makes the endpoint's cost plan of it times the group's ratio, rounded up once, at its next catalog round, which this makes due now; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier publishes still wins. Confirming again replaces the base. A model with no official price in USD needs `price` (422), as does a price not in USD or charging nothing. Not for a direct or cloud supplier (409). At most 500 endpoints.
+         * Confirm the base price of models whose supplier shows no prices
+         * @description For a relay that states no price for a model (new-api with pricing hidden, sub2api, CPA), a person's base price of it, named by the group and the upstream name the group lists it under, so it can be given before the model has an endpoint. The price is in the supplier's settlement currency: the model's official price in the catalog in that currency when `price` is absent, or the price given. It is kept in the supplier's own unit, divided by the unit value in force and rounded up, and is for the model the name maps to now: a name mapped to another model later does not carry it over. At its next catalog round, which this makes due now, the sync makes the model's cost plan of it times the group's ratio, rounded up once, and the projection makes the endpoint; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier states always wins, and one it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name the group does not list is 404; one not mapped to a model yet, a model with no official price in the settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier whose unit value is not confirmed, or that is not a relay, is 409. At most 500 models.
          */
         post: operations["confirmSupplierBasePrices"];
         delete?: never;
@@ -2468,7 +2468,7 @@ export interface paths {
         put?: never;
         /**
          * Take confirmed base prices away
-         * @description Removes the confirmed base of each endpoint named; at the sync's next catalog round, made due now, an endpoint the supplier shows no price for has its cost unknown again and leaves routing. The answer is the bases removed; an endpoint that had none is left out, and if none had one nothing changes and nothing is recorded. At most 500.
+         * @description Removes the confirmed base of each model named; at the sync's next catalog round, made due now, a model the supplier states no price for has its cost unknown again and leaves routing, also when that round cannot read the group's models. The answer is the bases removed; a model that had none is left out, and if none had one nothing changes and nothing is recorded. At most 500.
          */
         post: operations["clearSupplierBasePrices"];
         delete?: never;
@@ -7193,24 +7193,27 @@ export interface components {
             lines: components["schemas"]["CostLine"][];
             break_even?: components["schemas"]["CostBreakEven"];
         };
+        /** @description A model of one of the supplier's groups, by the upstream name the group lists it under. */
+        BaseModel: {
+            group_id: components["schemas"]["Uuid"];
+            upstream_name: string;
+        };
         BasePriceConfirmation: {
-            items: {
-                endpoint_id: components["schemas"]["Uuid"];
-                /** @description The base in USD, per unit of each item; absent takes the model's official price. */
+            items: (components["schemas"]["BaseModel"] & {
+                /** @description The base in the settlement currency, per unit of each item; absent takes the model's official price. */
                 price?: components["schemas"]["PriceSchedule"];
-            }[];
+            })[];
             reason: components["schemas"]["Reason"];
         };
         BasePriceRemoval: {
-            endpoint_ids: components["schemas"]["Uuid"][];
+            items: components["schemas"]["BaseModel"][];
             reason: components["schemas"]["Reason"];
         };
         BasePriceList: {
-            data: {
-                endpoint_id: components["schemas"]["Uuid"];
+            data: (components["schemas"]["BaseModel"] & {
                 /** @description In the supplier's own unit (currency XXX), before the group's ratio. */
                 base: components["schemas"]["PriceSchedule"];
-            }[];
+            })[];
         };
         /** @description A family of models within its author, such as gpt-6.1 or claude-sonnet. */
         ModelFamily: string;

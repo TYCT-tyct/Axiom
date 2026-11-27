@@ -271,6 +271,9 @@ type Model struct {
 	UpstreamName string
 	Formats      []protocol.Format
 	Cost         *catalog.Schedule
+	// Published is whether the supplier states a price for the model, Cost nil when no schedule can express it (a
+	// price per call, an expression): a person's confirmed base prices a model only while its supplier states none.
+	Published bool
 	// Derivation is what each price of Cost is the product of, nil when the adapter does not say; it explains Cost and
 	// prices nothing.
 	Derivation Derivation

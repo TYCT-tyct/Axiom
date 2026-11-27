@@ -8,6 +8,9 @@
 package syncer
 
 import (
+	"cmp"
+	"slices"
+	"strings"
 	"time"
 	"uuid"
 
@@ -58,6 +61,25 @@ type ModelSnap struct {
 	Formats []int
 	Without protocol.Capabilities
 	Plan    string
+	// Confirmed is whether Plan was made of a person's base (State.Confirmed), which a kept model gives up once the
+	// base is cleared and the projection puts in force only for the model the base was confirmed for.
+	Confirmed bool `json:",omitzero"`
+}
+
+// BaseKey names a model of a group the way a confirmed base is kept: the group's ref and the model's upstream name, as
+// two members, so that no two pairs share a key.
+type BaseKey struct {
+	GroupRef, Model string
+}
+
+// ConfirmedBase is a person's base price of one model of a group: a schedule in the supplier's own unit (canonical
+// JSON) that the group's ratio scales into the model's cost plan while the supplier publishes no price for it. For is
+// the catalog model the name mapped to when it was confirmed; the base prices that model only, so a name mapped to
+// another since does not carry it over.
+type ConfirmedBase struct {
+	BaseKey
+	For  string
+	Base string
 }
 
 // GroupSnap is a group as last read.
@@ -92,10 +114,9 @@ type State struct {
 	Groups []GroupSnap // sorted by Ref
 	Keys   []adapter.KeyState
 	Plans  map[string]string // "group/model" -> fingerprint of the current cost plan
-	// Confirmed is a person's base price of an endpoint, by PlanKey: a schedule in the supplier's own unit (canonical
-	// JSON) that the group's ratio scales into the endpoint's cost plan when the supplier publishes no price of its own.
-	// Only the admin writes it (persist.ConfirmBases); the engine reads it.
-	Confirmed map[string]string
+	// Confirmed are the bases a person confirmed, sorted by key and one per key. Only the admin writes them
+	// (persist.ConfirmBases); the engine and the projection read them.
+	Confirmed []ConfirmedBase
 
 	// Pool is what the management API of a pool last said of each group's accounts and windows, sorted by group ref.
 	// It lives in the groups' own columns, not in the stored state (json:"-"): the state's format is what an older node
@@ -214,4 +235,18 @@ type KeyFailure struct {
 	GroupRef string
 	Reason   string
 	RetryAt  time.Time
+}
+
+// Base is the confirmed base of a model of a group, if there is one.
+func (s State) Base(k BaseKey) (ConfirmedBase, bool) {
+	i, found := slices.BinarySearchFunc(s.Confirmed, k, compareBase)
+	if !found {
+		return ConfirmedBase{}, false
+	}
+	return s.Confirmed[i], true
+}
+
+// compareBase orders confirmed bases by their key.
+func compareBase(b ConfirmedBase, k BaseKey) int {
+	return cmp.Or(strings.Compare(b.GroupRef, k.GroupRef), strings.Compare(b.Model, k.Model))
 }

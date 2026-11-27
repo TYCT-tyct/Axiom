@@ -58,11 +58,11 @@ func group(c *Commit, g adapter.Group, before GroupSnap, plans map[string]string
 		for i, f := range m.Formats {
 			reported[i] = int(f)
 		}
-		plan, err := plan(c, g, m, "", plans)
+		plan, confirmed, err := plan(c, g, m, ModelSnap{}, plans)
 		if err != nil {
 			return snap, err
 		}
-		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: plan})
+		snap.Models = append(snap.Models, ModelSnap{Name: m.UpstreamName, Formats: reported, Without: m.Without, Plan: plan, Confirmed: confirmed})
 	}
 	sort.Slice(snap.Models, func(i, j int) bool { return snap.Models[i].Name < snap.Models[j].Name })
 	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
@@ -80,46 +80,63 @@ func hasPlan(models []ModelSnap) bool {
 	return false
 }
 
-// keptGroup is the snapshot of a group whose models were not read: they stay as they were, and
-// only a confirmed base follows a changed ratio.
+// keptGroup is the snapshot of a group whose models were not read: they stay as they were, a confirmed base follows a
+// changed ratio, and a plan made of a base that has been cleared since is gone.
 func keptGroup(c *Commit, g adapter.Group, snap, before GroupSnap, plans map[string]string) (GroupSnap, error) {
 	for _, m := range before.Models {
-		plan, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m.Plan, plans)
+		plan, confirmed, err := plan(c, g, adapter.Model{UpstreamName: m.Name}, m, plans)
 		if err != nil {
 			return snap, err
 		}
-		snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan})
+		snap.Models = append(snap.Models, ModelSnap{Name: m.Name, Formats: m.Formats, Without: m.Without, Plan: plan, Confirmed: confirmed})
 	}
 	snap.KeyEligible = g.NeedsKey || hasPlan(snap.Models)
 	return snap, nil
 }
 
-// plan decides the cost plan of one endpoint and returns its fingerprint, or "" when the cost is unknown: a schedule
-// the supplier published, else a person's confirmed base scaled by the group's ratio, else nothing. kept is the
-// fingerprint to keep when nothing new can be worked out (a model that was not read this time).
-func plan(c *Commit, g adapter.Group, m adapter.Model, kept string, plans map[string]string) (string, error) {
+// plan decides the cost plan of one endpoint and returns its fingerprint, or "" when the cost is unknown, and whether the
+// plan is made of a confirmed base. A schedule the supplier published comes first. A model the supplier prices in a way
+// no schedule expresses (per call, say) has no plan: a confirmed base never stands in for a price the supplier states.
+// Only while it states none does a person's confirmed base, scaled by the group's ratio, price it; a base the ratio
+// takes past a unit price leaves this one endpoint unknown. Otherwise the model keeps the plan it had (kept: one not
+// read this time), unless that plan was made of a base that has been cleared.
+func plan(c *Commit, g adapter.Group, m adapter.Model, kept ModelSnap, plans map[string]string) (string, bool, error) {
 	key := PlanKey(g.Ref, m.UpstreamName)
-	var schedule catalog.Schedule
-	var derivation adapter.Derivation
-	var basis string
-	switch base, confirmed := c.State.Confirmed[key]; {
+	switch base, confirmed := c.State.Base(BaseKey{GroupRef: g.Ref, Model: m.UpstreamName}); {
 	case m.Cost != nil:
-		schedule, derivation, basis = *m.Cost, m.Derivation, "published"
+		fp, err := put(c, key, *m.Cost, m.Derivation, "published", plans)
+		return fp, false, err
+	case m.Published:
+		return "", false, nil
 	case confirmed:
-		parsed, err := catalog.ParseSchedule([]byte(base))
+		parsed, err := catalog.ParseSchedule([]byte(base.Base))
 		if err != nil {
-			return "", fmt.Errorf("syncer: the confirmed base of %s: %w", key, err)
+			return "", false, fmt.Errorf("syncer: the confirmed base of %s: %w", key, err)
 		}
-		if schedule, err = adapter.ScaleSchedule(parsed, g.Ratio); err != nil {
-			return "", err
+		schedule, ok := scaled(parsed, g.Ratio)
+		if !ok {
+			return "", false, nil
 		}
-		derivation, basis = adapter.ScaledDerivation(parsed, g.Ratio), "confirmed"
+		fp, err := put(c, key, schedule, adapter.ScaledDerivation(parsed, g.Ratio), "confirmed", plans)
+		return fp, true, err
+	case kept.Plan != "" && !kept.Confirmed:
+		plans[key] = kept.Plan
+		return kept.Plan, false, nil
 	default:
-		if kept != "" {
-			plans[key] = kept
-		}
-		return kept, nil
+		return "", false, nil
 	}
+}
+
+// scaled is a confirmed base at the group's ratio; not ok when a price comes out beyond what a unit price may be, which
+// leaves that one endpoint's cost unknown rather than the supplier's listing unread.
+func scaled(base catalog.Schedule, ratio adapter.Amount) (catalog.Schedule, bool) {
+	s, err := adapter.ScaleSchedule(base, ratio)
+	return s, err == nil
+}
+
+// put makes a plan of the schedule the endpoint's, a new version when it is not the one in force, and returns its
+// fingerprint.
+func put(c *Commit, key string, schedule catalog.Schedule, derivation adapter.Derivation, basis string, plans map[string]string) (string, error) {
 	b, err := schedule.MarshalJSON()
 	if err != nil {
 		return "", err

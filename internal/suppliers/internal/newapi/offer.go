@@ -211,6 +211,7 @@ func buildGroup(name, desc string, ratioText number, ratio *big.Rat, models []st
 		entry, priced := prices[upstream]
 		model := adapter.Model{UpstreamName: upstream, Formats: formatsOf(entry.Endpoints)}
 		if priced {
+			model.Published = true
 			model.Cost, model.Derivation = schedule(entry, ratio)
 			model.Without = unsupported(entry)
 			for _, e := range entry.Endpoints {

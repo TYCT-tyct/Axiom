@@ -3724,14 +3724,22 @@ type Balance struct {
 	SpentThisMonth Money `json:"spent_this_month"`
 }
 
+// BaseModel A model of one of the supplier's groups, by the upstream name the group lists it under.
+type BaseModel struct {
+	// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+	GroupId      Uuid   `json:"group_id"`
+	UpstreamName string `json:"upstream_name"`
+}
+
 // BasePriceConfirmation defines model for BasePriceConfirmation.
 type BasePriceConfirmation struct {
 	Items []struct {
-		// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
-		EndpointId Uuid `json:"endpoint_id"`
+		// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		GroupId Uuid `json:"group_id"`
 
-		// Price The base in USD, per unit of each item; absent takes the model's official price.
-		Price *PriceSchedule `json:"price,omitempty"`
+		// Price The base in the settlement currency, per unit of each item; absent takes the model's official price.
+		Price        *PriceSchedule `json:"price,omitempty"`
+		UpstreamName string         `json:"upstream_name"`
 	} `json:"items"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
@@ -3744,14 +3752,15 @@ type BasePriceList struct {
 		// Base In the supplier's own unit (currency XXX), before the group's ratio.
 		Base PriceSchedule `json:"base"`
 
-		// EndpointId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
-		EndpointId Uuid `json:"endpoint_id"`
+		// GroupId An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
+		GroupId      Uuid   `json:"group_id"`
+		UpstreamName string `json:"upstream_name"`
 	} `json:"data"`
 }
 
 // BasePriceRemoval defines model for BasePriceRemoval.
 type BasePriceRemoval struct {
-	EndpointIds []Uuid `json:"endpoint_ids"`
+	Items []BaseModel `json:"items"`
 
 	// Reason Why the person is doing this. It goes to the audit log.
 	Reason Reason `json:"reason"`

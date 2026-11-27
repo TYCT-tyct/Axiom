@@ -78,7 +78,7 @@ func onePlan(t *testing.T, model adapter.Model, confirmed bool) Plan {
 	m.offer = offerOf(model, "1.5")
 	e, st, _ := engine(m)
 	if confirmed {
-		st.state.Confirmed = map[string]string{"1/m1": confirmedBase}
+		st.state.Confirmed = []ConfirmedBase{{GroupRef: "1", Model: "m1", Base: confirmedBase}}
 	}
 	round(t, e)
 	if len(st.plans) != 1 {

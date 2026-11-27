@@ -550,7 +550,7 @@ type ServerInterface interface {
 	// ClearSupplierBasePrices Take confirmed base prices away
 	// (POST /api/admin/v1/suppliers/{supplier_id}/base-price-removals)
 	ClearSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ClearSupplierBasePricesParams)
-	// ConfirmSupplierBasePrices Confirm the base price of endpoints whose supplier shows no prices
+	// ConfirmSupplierBasePrices Confirm the base price of models whose supplier shows no prices
 	// (POST /api/admin/v1/suppliers/{supplier_id}/base-prices)
 	ConfirmSupplierBasePrices(w http.ResponseWriter, r *http.Request, supplierId Uuid, params ConfirmSupplierBasePricesParams)
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from
@@ -33714,7 +33714,7 @@ type StrictServerInterface interface {
 	// ClearSupplierBasePrices Take confirmed base prices away
 	// (POST /api/admin/v1/suppliers/{supplier_id}/base-price-removals)
 	ClearSupplierBasePrices(ctx context.Context, request ClearSupplierBasePricesRequestObject) (ClearSupplierBasePricesResponseObject, error)
-	// ConfirmSupplierBasePrices Confirm the base price of endpoints whose supplier shows no prices
+	// ConfirmSupplierBasePrices Confirm the base price of models whose supplier shows no prices
 	// (POST /api/admin/v1/suppliers/{supplier_id}/base-prices)
 	ConfirmSupplierBasePrices(ctx context.Context, request ConfirmSupplierBasePricesRequestObject) (ConfirmSupplierBasePricesResponseObject, error)
 	// ReplaceSupplierCloudCredential Replace a cloud supplier's credential, or the regions it serves from

@@ -308,10 +308,11 @@ func (p *projector) hasPricedEndpoint(g syncer.GroupSnap, group uuid.UUID, state
 		if m.Plan == "" || len(m.Formats) == 0 {
 			continue
 		}
-		if state := states[nameKey{group: group, name: m.Name}]; state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
+		state := states[nameKey{group: group, name: m.Name}]
+		if state.model == (catalog.ModelID{}) || state.why == syncer.NotTaken {
 			continue
 		}
-		if v, ok := p.plans[syncer.PlanKey(g.Ref, m.Name)]; ok && v.Fingerprint == m.Plan {
+		if _, ok := p.planOf(g.Ref, m, state.model); ok {
 			return true
 		}
 	}

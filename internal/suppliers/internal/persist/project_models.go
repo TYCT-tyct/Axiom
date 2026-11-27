@@ -169,10 +169,28 @@ func (p *projector) wanted(ref string, group uuid.UUID, m syncer.ModelSnap, stat
 		return modelKey{}, desiredEndpoint{}, false
 	}
 	d := desiredEndpoint{upstream: m.Name, formats: state.formats, exact: !state.unverified}
-	if m.Plan != "" {
-		if v, ok := p.plans[syncer.PlanKey(ref, m.Name)]; ok && v.Fingerprint == m.Plan {
-			d.plan = &v
-		}
+	if v, ok := p.planOf(ref, m, state.model); ok {
+		d.plan = &v
 	}
 	return modelKey{group: group, model: uuid.UUID(state.model)}, d, true
+}
+
+// planOf is the plan of a name of a group that the projection puts in force for the model the name maps to: the one the
+// state names, and, for a plan made of a confirmed base, only when the base was confirmed for that model. A name mapped
+// to another model since the base was confirmed does not carry its price over; the new model waits for its own.
+func (p *projector) planOf(ref string, m syncer.ModelSnap, model catalog.ModelID) (store.PlanVersion, bool) {
+	if m.Plan == "" {
+		return store.PlanVersion{}, false
+	}
+	v, ok := p.plans[syncer.PlanKey(ref, m.Name)]
+	if !ok || v.Fingerprint != m.Plan {
+		return store.PlanVersion{}, false
+	}
+	if m.Confirmed {
+		base, ok := p.st.Base(syncer.BaseKey{GroupRef: ref, Model: m.Name})
+		if !ok || base.For != uuid.UUID(model).String() {
+			return store.PlanVersion{}, false
+		}
+	}
+	return v, true
 }

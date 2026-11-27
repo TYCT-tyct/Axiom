@@ -10,6 +10,7 @@ import (
 	"axiom/internal/platform/audit"
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/platform/pg"
+	"axiom/internal/platform/pgtest"
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
 	"axiom/internal/suppliers/internal/store"
@@ -62,20 +63,23 @@ func (unpriced) Charges(context.Context, adapter.ScanState) (adapter.ChargePage,
 }
 
 // TestConfirmedBaseIsWhatACallIsCharged: the invariant of a confirmed base. A person confirms the model's official
-// price for a new-api endpoint (quota, 500,000 to the dollar); the sync's next catalog round makes the plan of it at the
-// group's ratio; and an attempt on the endpoint is charged its usage × base × ratio × unit value, rounded up to a
-// billionth once. The product is written out here apart from the code under test.
+// price, in the settlement currency; it is kept in the supplier's unit at the unit value in force (2 dollars a unit
+// here); the sync's next catalog round makes the plan of it at the group's ratio; and an attempt on the endpoint is
+// charged its usage × price × ratio, rounded up to a billionth once. The product is written out here apart from the
+// code under test.
 func TestConfirmedBaseIsWhatACallIsCharged(t *testing.T) {
 	t.Parallel()
-	w := newWorld(t, 1) // quota, a unit value of 2, the endpoint "gpt" of group "g"
+	w := newWorld(t, 1) // quota, a unit value of 2 dollars, the endpoint "gpt" of group "g"
 	model := w.endpointModel()
+	w.listModel("gpt", &model)
 	official := officialPrices{model: mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000003","output":"0.000015"}}`)}
 	var confirmed []BasePrice
 	w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
-		confirmed, err = w.adminOf().ConfirmBasePrices(ctx, tx, audit.User(uuid.NewV7()), w.supplier, []BasePriceItem{{Endpoint: w.endpoint}}, official, "the relay hides its prices")
+		item := BasePriceItem{Group: w.group, Name: "gpt"}
+		confirmed, err = w.adminOf().ConfirmBasePrices(ctx, tx, audit.User(uuid.NewV7()), w.supplier, []BasePriceItem{item}, official, "the relay hides its prices")
 		return err
 	})
-	same(t, "the base in quota", `{"currency":"XXX","rates":{"input":"1.5","output":"7.5"},"v":1}`, scheduleText(confirmed[0].Base))
+	same(t, "the base in units", `{"currency":"XXX","rates":{"input":"0.0000015","output":"0.0000075"},"v":1}`, scheduleText(confirmed[0].Base))
 
 	// The next round of the sync, over the state the confirmation left, reads the group at a ratio of 1.37.
 	st := &memState{state: w.syncState()}
@@ -90,9 +94,9 @@ func TestConfirmedBaseIsWhatACallIsCharged(t *testing.T) {
 	}
 	w.priceWith(st.plans[0])
 
-	// (1000 × 1.5 × 1.37 + 777 × 7.5 × 1.37) quota × 2 USD = (2055 + 7983.675) × 2 = 20077.35 USD, in billionths.
-	if got := w.charged(map[catalog.Item]int64{catalog.ItemInput: 1000, catalog.ItemOutput: 777}); got != 20_077_350_000_000 {
-		t.Errorf("charged %d billionths, want 20077350000000", got)
+	// (1000 × 0.000003 + 777 × 0.000015) dollars × 1.37 = (0.003 + 0.011655) × 1.37 = 0.02007735 dollars, in billionths.
+	if got := w.charged(map[catalog.Item]int64{catalog.ItemInput: 1000, catalog.ItemOutput: 777}); got != 20_077_350 {
+		t.Errorf("charged %d billionths, want 20077350", got)
 	}
 	cost := w.endpointCost()
 	for _, l := range cost.Lines {
@@ -102,59 +106,93 @@ func TestConfirmedBaseIsWhatACallIsCharged(t *testing.T) {
 	}
 }
 
-// TestBasePricesAreConfirmedAndCleared: what a confirmation stores and refuses, and that a clear takes it away. Each
-// change raises the configuration generation, so a round already in flight writes nothing, and is audited.
+// TestBasePricesAreConfirmedAndCleared: what a confirmation stores and refuses, and that a clear takes it away. A model
+// is named by its group and upstream name, so one with no endpoint yet takes a base; the base is for the model the name
+// maps to. Each change raises the configuration generation, so a round already in flight writes nothing, and is audited.
 func TestBasePricesAreConfirmedAndCleared(t *testing.T) {
 	t.Parallel()
 	w := newWorld(t, 1)
-	model := w.endpointModel()
-	usd := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000002"}}`)
-	official := officialPrices{model: usd}
+	model, fresh := w.endpointModel(), catalog.ModelID(uuid.NewV7())
+	w.listModel("gpt", &model)
+	w.listModel("fresh", &fresh) // listed and mapped, with no endpoint: its first price makes one
+	w.listModel("pending", nil)
+	official := officialPrices{
+		model: mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000002"}}`),
+		fresh: mustParse(t, `{"v":1,"currency":"USD","rates":{"output":"0.00001"}}`),
+	}
 	confirm := func(items ...BasePriceItem) error {
 		return w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
 			_, err := w.adminOf().ConfirmBasePrices(t.Context(), tx, audit.User(uuid.NewV7()), w.supplier, items, official, "r")
 			return err
 		})
 	}
+	of := func(name string, price *catalog.Schedule) BasePriceItem {
+		return BasePriceItem{Group: w.group, Name: name, Price: price}
+	}
 	entered := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0.000004","output":"0.00001"}}`)
 	cny := mustParse(t, `{"v":1,"currency":"CNY","rates":{"input":"0.00002"}}`)
 	free := mustParse(t, `{"v":1,"currency":"USD","rates":{"input":"0"}}`)
+	const official1, entered1 = `{"currency":"XXX","rates":{"input":"0.000001"},"v":1}`, `{"currency":"XXX","rates":{"input":"0.000002","output":"0.000005"},"v":1}`
 	for _, c := range []struct {
 		name  string
-		items []BasePriceItem
+		item  BasePriceItem
 		want  error
-		base  string // the stored base after the change; "" for none
+		model string // the name the stored base is checked of
+		base  string // its base after the change; "" for none
 	}{
-		{"the official price", []BasePriceItem{{Endpoint: w.endpoint}}, nil, `{"currency":"XXX","rates":{"input":"1"},"v":1}`},
-		{"an entered price replaces it", []BasePriceItem{{Endpoint: w.endpoint, Price: &entered}}, nil, `{"currency":"XXX","rates":{"input":"2","output":"5"},"v":1}`},
-		{"a price not in dollars", []BasePriceItem{{Endpoint: w.endpoint, Price: &cny}}, ErrBasePrice, `{"currency":"XXX","rates":{"input":"2","output":"5"},"v":1}`},
-		{"a price of nothing", []BasePriceItem{{Endpoint: w.endpoint, Price: &free}}, ErrBasePrice, `{"currency":"XXX","rates":{"input":"2","output":"5"},"v":1}`},
-		{"an endpoint of another supplier", []BasePriceItem{{Endpoint: uuid.NewV7()}}, ErrNoSupplierEndpoint, `{"currency":"XXX","rates":{"input":"2","output":"5"},"v":1}`},
+		{"the official price", of("gpt", nil), nil, "gpt", official1},
+		{"an entered price replaces it", of("gpt", &entered), nil, "gpt", entered1},
+		{"a price in another currency", of("gpt", &cny), ErrBasePrice, "gpt", entered1},
+		{"a price of nothing", of("gpt", &free), ErrBasePrice, "gpt", entered1},
+		{"a model with no endpoint yet", of("fresh", nil), nil, "fresh", `{"currency":"XXX","rates":{"output":"0.000005"},"v":1}`},
+		{"a name not mapped yet", of("pending", &entered), ErrNameNotMapped, "pending", ""},
+		{"a name the group does not list", of("unlisted", &entered), ErrNoModelName, "unlisted", ""},
 	} {
 		gen := w.configGen()
-		refuses(t, c.name, confirm(c.items...), c.want)
-		same(t, c.name+": the stored base", c.base, w.syncState().Confirmed["g/gpt"])
+		refuses(t, c.name, confirm(c.item), c.want)
+		base, _ := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: c.model})
+		same(t, c.name+": the stored base", c.base, base.Base)
 		same(t, c.name+": the generation raised", c.want == nil, w.configGen() > gen)
 	}
+	if base, _ := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: "fresh"}); base.For != uuid.UUID(fresh).String() {
+		t.Errorf("the base of fresh is for %q, want the model it maps to", base.For)
+	}
 	delete(official, model)
-	refuses(t, "a model without an official price", confirm(BasePriceItem{Endpoint: w.endpoint}), ErrNoOfficialPrice)
+	refuses(t, "a model without an official price", confirm(of("gpt", nil)), ErrNoOfficialPrice)
 
 	clear := func() (out []BasePrice) {
 		w.tx(func(ctx context.Context, tx pg.Tx) (err error) {
-			out, err = w.adminOf().ClearBasePrices(ctx, tx, audit.User(uuid.NewV7()), w.supplier, []uuid.UUID{w.endpoint, w.endpoint}, "r")
+			gpt := BaseModel{Group: w.group, Name: "gpt"}
+			out, err = w.adminOf().ClearBasePrices(ctx, tx, audit.User(uuid.NewV7()), w.supplier, []BaseModel{gpt, gpt}, "r")
 			return err
 		})
 		return out
 	}
-	if out := clear(); len(out) != 1 || out[0].Endpoint != w.endpoint {
-		t.Errorf("the clear answered %+v, want the endpoint's base once", out)
+	if out := clear(); len(out) != 1 || out[0].Name != "gpt" {
+		t.Errorf("the clear answered %+v, want the model's base once", out)
 	}
-	_, stored := w.syncState().Confirmed["g/gpt"]
+	_, stored := w.syncState().Base(syncer.BaseKey{GroupRef: "g", Model: "gpt"})
 	same(t, "a base after the clear", false, stored)
 	same(t, "a second clear", 0, len(clear()))
-	same(t, "the changes audited", "2 1", w.query(`SELECT
+	same(t, "the changes audited", "3 1", w.query(`SELECT
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_confirm')::text || ' ' ||
 		(SELECT count(*) FROM platform.audit_log WHERE action = 'supplier.base_price_clear')::text`))
+
+	if err := pgtest.Run(t.Context(), w.database.Superuser, "DELETE FROM suppliers.unit_values WHERE supplier_id = '"+w.supplier.String()+"'"); err != nil {
+		t.Fatal(err)
+	}
+	refuses(t, "a supplier whose unit value is not confirmed", confirm(of("gpt", &entered)), ErrNoUnitValue)
+}
+
+// listModel lists an upstream name in the world's group, as the sync's projection does, mapped to model (nil: waiting
+// to be mapped).
+func (w *world) listModel(name string, model *catalog.ModelID) {
+	w.t.Helper()
+	w.tx(func(ctx context.Context, tx pg.Tx) error {
+		_, err := tx.Exec(ctx, `INSERT INTO suppliers.supplier_models (supplier_id, supplier_group_id, upstream_name, model_id, formats)
+			VALUES ($1, $2, $3, $4, '{chat}')`, w.supplier, w.group, name, (*uuid.UUID)(model))
+		return err
+	})
 }
 
 // charged is what an attempt on the world's endpoint of these counts is charged, in billionths of its currency.

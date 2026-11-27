@@ -77,51 +77,6 @@ func (q *Queries) DeleteSupplierLogin(ctx context.Context, db DBTX, supplierID u
 	return err
 }
 
-const endpointKeysOf = `-- name: EndpointKeysOf :many
-SELECT e.id, e.model_id, e.upstream_name, g.upstream_ref
-FROM suppliers.endpoints e JOIN suppliers.supplier_groups g ON g.id = e.supplier_group_id
-WHERE e.supplier_id = $1 AND e.id = ANY($2::uuid[])
-`
-
-type EndpointKeysOfParams struct {
-	SupplierID uuid.UUID
-	Ids        []uuid.UUID
-}
-
-type EndpointKeysOfRow struct {
-	ID           uuid.UUID
-	ModelID      uuid.UUID
-	UpstreamName string
-	UpstreamRef  string
-}
-
-// The endpoints of a supplier among ids with what the sync names each by: the group's ref and the upstream name
-// (syncer.PlanKey), and the model a default base price is read from.
-func (q *Queries) EndpointKeysOf(ctx context.Context, db DBTX, arg EndpointKeysOfParams) ([]EndpointKeysOfRow, error) {
-	rows, err := db.Query(ctx, endpointKeysOf, arg.SupplierID, arg.Ids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []EndpointKeysOfRow
-	for rows.Next() {
-		var i EndpointKeysOfRow
-		if err := rows.Scan(
-			&i.ID,
-			&i.ModelID,
-			&i.UpstreamName,
-			&i.UpstreamRef,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const eraseCredentialsOf = `-- name: EraseCredentialsOf :exec
 UPDATE suppliers.credentials SET ciphertext = NULL, nonce = NULL, wrapped_dek = NULL, key_version = NULL, status = 'erased'
 WHERE supplier_id = $1
@@ -836,6 +791,53 @@ func (q *Queries) LockSupplierForChange(ctx context.Context, db DBTX, id uuid.UU
 			&i.Kind,
 			&i.Status,
 			&i.ConfigGen,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const modelNamesOf = `-- name: ModelNamesOf :many
+SELECT m.supplier_group_id, m.upstream_name, g.upstream_ref, m.model_id
+FROM suppliers.supplier_models m JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
+WHERE m.supplier_id = $1
+  AND (m.supplier_group_id, m.upstream_name) IN (SELECT unnest($2::uuid[]), unnest($3::text[]))
+`
+
+type ModelNamesOfParams struct {
+	SupplierID uuid.UUID
+	Groups     []uuid.UUID
+	Names      []string
+}
+
+type ModelNamesOfRow struct {
+	SupplierGroupID uuid.UUID
+	UpstreamName    string
+	UpstreamRef     string
+	ModelID         *uuid.UUID
+}
+
+// The models a supplier's groups list, among (group, name) pairs, with the group's ref the sync knows it by and the
+// catalog model the name maps to now (NULL while it waits to be mapped).
+func (q *Queries) ModelNamesOf(ctx context.Context, db DBTX, arg ModelNamesOfParams) ([]ModelNamesOfRow, error) {
+	rows, err := db.Query(ctx, modelNamesOf, arg.SupplierID, arg.Groups, arg.Names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ModelNamesOfRow
+	for rows.Next() {
+		var i ModelNamesOfRow
+		if err := rows.Scan(
+			&i.SupplierGroupID,
+			&i.UpstreamName,
+			&i.UpstreamRef,
+			&i.ModelID,
 		); err != nil {
 			return nil, err
 		}

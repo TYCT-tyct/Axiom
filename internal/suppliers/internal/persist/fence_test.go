@@ -180,7 +180,7 @@ func TestAStateSurvivesBeingStored(t *testing.T) {
 		}}},
 		Keys:      []adapter.KeyState{{Ref: "7", GroupRef: "1", Status: adapter.KeyQuotaExhausted, ResetAt: at}},
 		Plans:     map[string]string{"1/m": "ab12"},
-		Confirmed: map[string]string{"m": `{"v":1}`},
+		Confirmed: []syncer.ConfirmedBase{{GroupRef: "g", Model: "m", Base: `{"v":1}`}},
 		Scan:      adapter.ScanState([]byte{0, 255, 'x'}), ScanOpen: true,
 		Through: at,
 	}

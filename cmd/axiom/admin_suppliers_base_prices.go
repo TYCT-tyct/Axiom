@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"uuid"
 
 	"axiom/internal/catalog"
 	"axiom/internal/platform/adminapi"
@@ -12,7 +11,7 @@ import (
 	"axiom/internal/suppliers"
 )
 
-// ConfirmSupplierBasePrices confirms the base price of endpoints of a relay that shows no prices.
+// ConfirmSupplierBasePrices confirms the base price of models of a relay that shows no prices.
 func (a adminAPI) ConfirmSupplierBasePrices(ctx context.Context, request adminapi.ConfirmSupplierBasePricesRequestObject) (adminapi.ConfirmSupplierBasePricesResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -41,15 +40,15 @@ func (a adminAPI) ConfirmSupplierBasePrices(ctx context.Context, request adminap
 	return adminapi.ConfirmSupplierBasePrices200JSONResponse{Body: list, Headers: adminapi.ConfirmSupplierBasePrices200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
 }
 
-// basePriceItems is the request's endpoints, each with the price given for it in the catalog's form.
+// basePriceItems is the request's models, each with the price given for it in the catalog's form.
 func basePriceItems(b *adminapi.BasePriceConfirmation) ([]suppliers.BasePriceItem, error) {
 	items := make([]suppliers.BasePriceItem, len(b.Items))
 	for i, it := range b.Items {
-		id, err := idIn(fmt.Sprintf("/items/%d/endpoint_id", i), it.EndpointId)
+		model, err := baseModelOf(fmt.Sprintf("/items/%d", i), it.GroupId, it.UpstreamName)
 		if err != nil {
 			return nil, err
 		}
-		items[i].Endpoint = id
+		items[i].BaseModel = model
 		if it.Price == nil {
 			continue
 		}
@@ -66,6 +65,15 @@ func basePriceItems(b *adminapi.BasePriceConfirmation) ([]suppliers.BasePriceIte
 	return items, nil
 }
 
+// baseModelOf is a model of a group as the request names it at pointer.
+func baseModelOf(pointer, group, name string) (suppliers.BaseModel, error) {
+	id, err := idIn(pointer+"/group_id", group)
+	if err != nil {
+		return suppliers.BaseModel{}, err
+	}
+	return suppliers.BaseModel{Group: id, Name: name}, nil
+}
+
 // ClearSupplierBasePrices takes confirmed base prices away.
 func (a adminAPI) ClearSupplierBasePrices(ctx context.Context, request adminapi.ClearSupplierBasePricesRequestObject) (adminapi.ClearSupplierBasePricesResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
@@ -73,15 +81,15 @@ func (a adminAPI) ClearSupplierBasePrices(ctx context.Context, request adminapi.
 		return nil, err
 	}
 	b := request.Body
-	ids := make([]uuid.UUID, len(b.EndpointIds))
-	for i, s := range b.EndpointIds {
-		if ids[i], err = idIn(fmt.Sprintf("/endpoint_ids/%d", i), s); err != nil {
+	models := make([]suppliers.BaseModel, len(b.Items))
+	for i, it := range b.Items {
+		if models[i], err = baseModelOf(fmt.Sprintf("/items/%d", i), it.GroupId, it.UpstreamName); err != nil {
 			return nil, err
 		}
 	}
 	list, replayed, err := idempotently(ctx, a.db, "clearSupplierBasePrices", request.Params.IdempotencyKey, []any{request.SupplierId, b},
 		func(tx pg.Tx) (adminapi.BasePriceList, error) {
-			bases, err := a.suppliers.ClearBasePrices(ctx, tx, actor(ctx), supplier, ids, b.Reason)
+			bases, err := a.suppliers.ClearBasePrices(ctx, tx, actor(ctx), supplier, models, b.Reason)
 			if err != nil {
 				return adminapi.BasePriceList{}, err
 			}
@@ -96,12 +104,13 @@ func (a adminAPI) ClearSupplierBasePrices(ctx context.Context, request adminapi.
 // basePricesBody is the bases as the contract gives them.
 func basePricesBody(bases []suppliers.BasePrice) (adminapi.BasePriceList, error) {
 	type item struct {
-		EndpointID string           `json:"endpoint_id"`
-		Base       catalog.Schedule `json:"base"`
+		GroupID      string           `json:"group_id"`
+		UpstreamName string           `json:"upstream_name"`
+		Base         catalog.Schedule `json:"base"`
 	}
 	data := make([]item, len(bases))
 	for i, b := range bases {
-		data[i] = item{EndpointID: b.Endpoint.String(), Base: b.Base}
+		data[i] = item{GroupID: b.Group.String(), UpstreamName: b.Name, Base: b.Base}
 	}
 	return converted[adminapi.BasePriceList](struct {
 		Data []item `json:"data"`

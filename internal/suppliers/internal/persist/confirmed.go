@@ -1,9 +1,11 @@
 package persist
 
 import (
+	"cmp"
 	"context"
 	"fmt"
-	"maps"
+	"slices"
+	"strings"
 	"time"
 	"uuid"
 
@@ -13,13 +15,12 @@ import (
 	"axiom/internal/suppliers/internal/syncer"
 )
 
-// ConfirmBases writes a person's base prices into a supplier's state: set gives an endpoint (syncer.PlanKey) its base,
-// a schedule in the supplier's own unit as canonical JSON, and clear takes one away. It answers what each cleared key
-// held, or nothing for one that held none. The catalog task is brought forward to now, as RequestSync does, so the next
-// round works the endpoints' cost plans out from the bases; and the raised version fences out a round already in flight,
-// which would otherwise commit the bases it read over these. The caller locks the supplier after this, the order a step
-// takes the two rows in (LockSyncState).
-func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set map[string]string, clear []string, now time.Time) (map[string]string, error) {
+// ConfirmBases writes a person's base prices into a supplier's state: set gives a model of a group its base (replacing
+// one it had), and clear takes one away. It answers what each cleared key held; a key that held none is left out. The
+// catalog task is brought forward to now, as RequestSync does, so the next round works the cost plans out from the
+// bases; and the raised version fences out a round already in flight, which would otherwise commit the bases it read
+// over these. The caller locks the supplier after this, the order a step takes the two rows in (LockSyncState).
+func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set []syncer.ConfirmedBase, clear []syncer.BaseKey, now time.Time) ([]syncer.ConfirmedBase, error) {
 	q := store.New()
 	if err := q.EnsureSyncState(ctx, tx, store.EnsureSyncStateParams{SupplierID: id, Now: now}); err != nil {
 		return nil, fmt.Errorf("persist: make the state of supplier %s: %w", id, err)
@@ -49,18 +50,22 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set map[string]st
 	return cleared, nil
 }
 
-// changeBases takes the bases of clear out of the state and puts those of set in, answering what each cleared key held.
-func changeBases(st *syncer.State, set map[string]string, clear []string) map[string]string {
-	if st.Confirmed == nil {
-		st.Confirmed = map[string]string{}
-	}
-	cleared := map[string]string{}
-	for _, key := range clear {
-		if base, ok := st.Confirmed[key]; ok {
-			cleared[key] = base
-			delete(st.Confirmed, key)
+// changeBases takes the bases of clear out of the state and puts those of set in, keeping them sorted and one a key, and
+// answers the ones it took out.
+func changeBases(st *syncer.State, set []syncer.ConfirmedBase, clear []syncer.BaseKey) []syncer.ConfirmedBase {
+	var cleared []syncer.ConfirmedBase
+	for _, k := range clear {
+		if b, ok := st.Base(k); ok {
+			cleared = append(cleared, b)
+			st.Confirmed = slices.DeleteFunc(st.Confirmed, func(c syncer.ConfirmedBase) bool { return c.BaseKey == k })
 		}
 	}
-	maps.Copy(st.Confirmed, set)
+	for _, b := range set {
+		st.Confirmed = slices.DeleteFunc(st.Confirmed, func(c syncer.ConfirmedBase) bool { return c.BaseKey == b.BaseKey })
+		st.Confirmed = append(st.Confirmed, b)
+	}
+	slices.SortFunc(st.Confirmed, func(a, b syncer.ConfirmedBase) int {
+		return cmp.Or(strings.Compare(a.GroupRef, b.GroupRef), strings.Compare(a.Model, b.Model))
+	})
 	return cleared
 }

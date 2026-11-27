@@ -333,7 +333,7 @@ func TestSameAnswerTwiceChangesNothing(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	e, st, clk := engine(m)
-	st.state.Confirmed = map[string]string{"1/m1": confirmedBase}
+	st.state.Confirmed = []ConfirmedBase{{GroupRef: "1", Model: "m1", Base: confirmedBase}}
 	round(t, e)
 	events, plans := len(st.events), len(st.plans)
 	if plans != 1 || st.count(GroupAdded) != 1 || st.count(ModelAdded) != 2 {
@@ -352,7 +352,7 @@ func TestChangedRatioMakesOneEventAndOnePlan(t *testing.T) {
 	t.Parallel()
 	m := healthy()
 	e, st, clk := engine(m)
-	st.state.Confirmed = map[string]string{"1/m1": confirmedBase}
+	st.state.Confirmed = []ConfirmedBase{{GroupRef: "1", Model: "m1", Base: confirmedBase}}
 	round(t, e)
 	first := st.state.Plans["1/m1"]
 	m.offer = func(adapter.Listing) (adapter.Page[adapter.Group], error) {

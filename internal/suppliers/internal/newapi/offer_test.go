@@ -112,7 +112,7 @@ func checkNoCost(t *testing.T, name string, offer []adapter.Group) {
 	t.Helper()
 	for _, g := range offer {
 		for _, m := range g.Models {
-			if m.Cost != nil || m.Derivation != nil {
+			if m.Cost != nil || m.Derivation != nil || m.Published {
 				t.Errorf("%s: %s/%s has a cost %v, want none while the prices are hidden", name, g.Ref, m.UpstreamName, m.Cost)
 			}
 		}
@@ -174,9 +174,11 @@ func TestOfferLeavesWhatAScheduleeCannotSayUnknown(t *testing.T) {
 	for _, m := range offer[0].Models {
 		byName[m.UpstreamName] = m
 	}
-	for _, name := range []string{"percall", "expr", "huge", "unpriced"} {
-		if byName[name].Cost != nil {
-			t.Errorf("%s has a cost schedule", name)
+	// The three the supplier prices are published, so no confirmed base stands in for them; only the unpriced one waits
+	// for a base.
+	for name, published := range map[string]bool{"percall": true, "expr": true, "huge": true, "unpriced": false} {
+		if m := byName[name]; m.Cost != nil || m.Published != published {
+			t.Errorf("%s: cost %v, published %t; want no cost, published %t", name, m.Cost, m.Published, published)
 		}
 	}
 	for name, without := range map[string]protocol.Capabilities{"img": protocol.Images, "img1": 0, "claude": 0} {
