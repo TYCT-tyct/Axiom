@@ -39,32 +39,46 @@ func RefreshPrices(ctx context.Context, tx pg.Tx, site uuid.UUID, currency platf
 	if err != nil {
 		return nil, err
 	}
-	// Everyone's prices go first: a default multiplier scales the price for all as it is published after this refresh,
-	// so a tier moves with a published price for all in the same refresh, and never with one that waits.
-	everyone := Selector{Kind: "all"}
-	if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, everyone, grouped[everyone], nil, previous[everyone], rates); err != nil {
-		return nil, err
+	refresh := func(audience Selector, bases map[catalog.ModelID]scaledBase) error {
+		return refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, grouped[audience], bases, previous[audience], rates)
 	}
-	if rows, err = queries.ReadPublications(ctx, tx, site); err != nil {
+	if err := refreshEveryoneFirst(ctx, tx, site, policy, grouped, refresh); err != nil {
 		return nil, err
-	}
-	bases, err := publishedBases(rows, policy)
-	if err != nil {
-		return nil, err
-	}
-	// Reconcile previous selectors too: an edit may have moved the rule to a different audience.
-	for audience, rules := range grouped {
-		if audience == everyone {
-			continue
-		}
-		if err := refreshAudience(ctx, tx, site, currency, snap, byModel, defaults, policy, audience, rules, bases, previous[audience], rates); err != nil {
-			return nil, err
-		}
 	}
 	if err := queries.ConfirmPriceRefresh(ctx, tx, site); err != nil {
 		return nil, err
 	}
 	return PublishedPrices(ctx, tx, site)
+}
+
+// refreshEveryoneFirst refreshes the price for all accounts before the other audiences: a default multiplier scales the
+// price for all as it is published after that refresh, so a tier moves with a published price for all in the same
+// refresh, and never with one that waits for confirmation. Previous selectors are reconciled too: an edit may have
+// moved a rule to another audience.
+func refreshEveryoneFirst(ctx context.Context, tx pg.Tx, site uuid.UUID, policy PricePolicy, grouped map[Selector][]Rule,
+	refresh func(Selector, map[catalog.ModelID]scaledBase) error,
+) error {
+	everyone := Selector{Kind: "all"}
+	if err := refresh(everyone, nil); err != nil {
+		return err
+	}
+	rows, err := queries.ReadPublications(ctx, tx, site)
+	if err != nil {
+		return err
+	}
+	bases, err := publishedBases(rows, policy)
+	if err != nil {
+		return err
+	}
+	for audience := range grouped {
+		if audience == everyone {
+			continue
+		}
+		if err := refresh(audience, bases); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func publicationInputs(rules []Rule, rows []ReadPublicationsRow) (map[Selector][]Rule, map[Selector]map[catalog.ModelID]ReadPublicationsRow) {

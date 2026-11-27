@@ -50,14 +50,9 @@ func proposePrice(policy PricePolicy, rules []Rule, base *scaledBase, m catalog.
 	converted, envelope, costErr := modelPriceCost(costs, m, currency)
 	input, matched, ref, err := priceFromRules(rules, base, m, snap, converted, costErr, currency, rates)
 	p.matched = matched != nil
-	if matched != nil {
-		p.target = matched.Target
-		if matched.Method.Kind != "reference_multiplier" {
-			ref.ID = uuid.Nil()
-		}
-	}
-	if input.base != nil {
-		p.target, p.scaled = input.base.target, true
+	p.target, p.scaled = layerTarget(matched, input.base)
+	if matched != nil && matched.Method.Kind != "reference_multiplier" {
+		ref.ID = uuid.Nil()
 	}
 	if err != nil {
 		p.Problem = err.Error()
@@ -112,11 +107,7 @@ func priceFromRules(rules []Rule, base *scaledBase, m catalog.Model, snap *catal
 			continue
 		}
 		if r.Method.Kind == "default_multiplier" {
-			if base == nil {
-				return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
-			}
-			proposal, err := scaledPrice(r, base, m, converted, currency)
-			return proposal, &r, catalog.ReferencePrice{}, err
+			return scaledRule(r, base, m, converted, currency)
 		}
 		ref := saleReference(snap, m.ID, currency, r.Method)
 		if r.Method.Kind == "cost_plus" && r.Constraints == (Constraints{}) {
@@ -162,14 +153,33 @@ func publishedBases(rows []ReadPublicationsRow, policy PricePolicy) (map[catalog
 	return bases, nil
 }
 
+// layerTarget is the target the published layer takes, and whether it is a scaled price: a scaled price takes its
+// base's, any other its rule's.
+func layerTarget(matched *Rule, base *scaledBase) (Selector, bool) {
+	switch {
+	case base != nil:
+		return base.target, true
+	case matched != nil:
+		return matched.Target, false
+	}
+	return Selector{}, false
+}
+
+// scaledRule prices m by the default-multiplier rule r: no layer at all while all accounts cannot buy it, else the
+// published price for all scaled.
+func scaledRule(r Rule, base *scaledBase, m catalog.Model, converted EndpointPrices, currency platform.Currency) (saleProposal, *Rule, catalog.ReferencePrice, error) {
+	if base == nil {
+		return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
+	}
+	proposal, err := scaledPrice(r, base, m, converted, currency)
+	return proposal, &r, catalog.ReferencePrice{}, err
+}
+
 // scaledPrice is what a tier's or an account's default-multiplier rule r asks. Invariant: every item of it is the
 // published price for all accounts, the site floor and default prices already in it, times r's multiplier, for the
 // model-level price and every endpoint's alike, rounded up once more; only the floor can raise it further, for a
-// multiplier under 1. A model all accounts cannot buy now has no scaled price either.
+// multiplier under 1.
 func scaledPrice(r Rule, base *scaledBase, m catalog.Model, converted EndpointPrices, currency platform.Currency) (saleProposal, error) {
-	if base == nil {
-		return saleProposal{}, ErrUnpriced
-	}
 	scale := func(s catalog.Schedule) (catalog.Schedule, error) {
 		scaled, err := s.Scaled(*r.Method.Multiplier, currency)
 		if err != nil {
