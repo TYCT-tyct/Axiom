@@ -24,11 +24,13 @@ type Rotation struct {
 	Stores []EnvelopeStore
 }
 
-// KeyStatus contains only version identifiers, never key material or fingerprints.
+// KeyStatus contains only version identifiers and column names, never key material or fingerprints. Unregistered lists
+// the envelope columns this binary's stores do not cover (see ErrUnregistered); only Check and CheckRing fill it.
 type KeyStatus struct {
-	Active   uint32   `json:"active"`
-	Readable []uint32 `json:"readable"`
-	Retired  []uint32 `json:"retired"`
+	Active       uint32   `json:"active"`
+	Readable     []uint32 `json:"readable"`
+	Retired      []uint32 `json:"retired"`
+	Unregistered []string `json:"unregistered,omitempty"`
 }
 
 // transaction serializes lifecycle changes and each rewrap batch, and bounds lock waits and database work.
@@ -129,7 +131,7 @@ func (r Rotation) check(ctx context.Context, ring *Keyring) (*Keyring, KeyStatus
 		if snapshot, status, err = r.reconcile(ctx, tx, snapshot); err != nil {
 			return err
 		}
-		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
+		if status.Unregistered, err = r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
 		ring.install(snapshot.withActive(status.Active).withConfirmed(status.Readable))
@@ -365,7 +367,7 @@ func (r Rotation) Activate(ctx context.Context, version uint32) error {
 		if err := ensureReaders(ctx, tx, version); err != nil {
 			return err
 		}
-		if err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
+		if _, err := r.checkReferences(ctx, tx, snapshot, status); err != nil {
 			return err
 		}
 		if err := setActive(ctx, tx, version); err != nil {

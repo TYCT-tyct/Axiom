@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,13 +203,62 @@ func TestKeyringCheckKeepsReferencedRetiredMaterial(t *testing.T) {
 	}
 }
 
-func TestKeyringInventoryFailsClosed(t *testing.T) {
+// TestKeyringUnregisteredEnvelopeStore: during a rolling upgrade an older node runs against the newer schema, whose new
+// envelope table its registry lacks. It must keep serving, but it cannot see that table's references, so finishing a
+// rewrap, retiring a version and pruning a retired one must refuse, naming the table, until a binary that registers it
+// runs them. The first check is this tree's own: every migrated envelope column must be registered, so a forgotten
+// registration fails here in CI rather than going unnoticed.
+func TestKeyringUnregisteredEnvelopeStore(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	r := f.r
-	r.Stores = r.Stores[:2]
-	if _, _, err := r.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "not registered") {
-		t.Fatalf("omitted credential store was not detected: %v", err)
+	if _, status, err := f.r.Check(t.Context()); err != nil || len(status.Unregistered) != 0 {
+		t.Fatalf("migrated envelope columns missing from keyRotation: %v, %v", status.Unregistered, err)
+	}
+	const newer = "observability.content_keys.wrapped_key"
+	old := f.r
+	old.Stores = slices.DeleteFunc(slices.Clone(f.r.Stores), func(s secret.EnvelopeStore) bool { return s.Table == "content_keys" })
+	refused := func(step string, err error) {
+		t.Helper()
+		if !errors.Is(err, secret.ErrUnregistered) || !strings.Contains(err.Error(), newer) {
+			t.Fatalf("%s by a binary without %s: %v", step, newer, err)
+		}
+	}
+
+	_, status, err := old.Check(t.Context())
+	if err != nil || !slices.Equal(status.Unregistered, []string{newer}) {
+		t.Fatalf("the older node did not start and report the newer column: %+v, %v", status, err)
+	}
+	if err := old.Add(t.Context(), 2); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Activate(t.Context(), 2); err != nil {
+		t.Fatal(err)
+	}
+	var cursor secret.RewrapCursor
+	for {
+		count, next, err := old.RewrapBatch(t.Context(), cursor, 100)
+		if err != nil || count == 0 {
+			refused("completing the rewrap", err)
+			break
+		}
+		cursor = next
+	}
+	refused("retirement", old.Retire(t.Context(), 1))
+	both, err := os.ReadFile(f.path)
+	if err != nil || !bytes.Contains(both, []byte("1:")) {
+		t.Fatal("a refused retirement deleted version 1")
+	}
+
+	if err := f.r.Retire(t.Context(), 1); err != nil {
+		t.Fatalf("the binary that registers every store could not retire: %v", err)
+	}
+	// A retirement that stopped before pruning its file leaves version 1 there; only a binary that sees every store may
+	// delete it.
+	restoreKeyFile(t, f.path, both)
+	_, _, err = old.Check(t.Context())
+	refused("pruning a retired version", err)
+	if _, _, err := f.r.Check(t.Context()); err != nil {
+		t.Fatal(err)
 	}
 }
 
