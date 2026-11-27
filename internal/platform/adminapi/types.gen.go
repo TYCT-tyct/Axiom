@@ -7265,7 +7265,7 @@ type Session struct {
 	// Account An account's ID (TypeID).
 	Account AccountId `json:"account"`
 
-	// CallsPaused Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console, absent on the admin and on an older node.
+	// CallsPaused Whether an administrator or a chargeback paused the account's calls: every key is refused with 403 until it is lifted, while signing in, keys and payments still work (docs/domains/billing.md「风控状态」). The reason is the staff's audit note and is not shown. Sent by the console once every factor passed; absent on a `pending_mfa` session, on the admin and on an older node.
 	CallsPaused *bool `json:"calls_paused,omitempty"`
 
 	// Consent What the page must show before the session may do anything else. Optional so a page built before this field reads an older node that does not send it.
@@ -7275,7 +7275,7 @@ type Session struct {
 	// ExpiresAt When the session ends if it is not used again; the idle timeout moves it.
 	ExpiresAt time.Time `json:"expires_at"`
 
-	// LatestAnnouncementAt When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on the admin and on an older node.
+	// LatestAnnouncementAt When the newest announcement live on the account's site began, so the console can mark announcements it has not opened without reading them. Absent when none is live, on a `pending_mfa` session, on the admin and on an older node.
 	LatestAnnouncementAt *time.Time `json:"latest_announcement_at,omitempty"`
 
 	// Level What the session has proved: only the password, or two-step verification too (`mfa`). `pending_mfa` is a sign-in that waits for its second factor.

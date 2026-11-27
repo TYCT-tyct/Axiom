@@ -178,7 +178,9 @@ func TestTwoStepVerification(t *testing.T) {
 	pending := f.sessionOf(rec)
 	var info consoleapi.Session
 	decode(t, f.do(http.MethodGet, "/session", "", as(pending)), &info)
-	if info.Level != "pending_mfa" || len(info.Permissions) != 0 {
+	// Before the second factor the session says nothing of the account: not whether its calls are paused, nor whether
+	// its site has announcements.
+	if info.Level != "pending_mfa" || len(info.Permissions) != 0 || info.CallsPaused != nil || info.LatestAnnouncementAt != nil {
 		t.Errorf("the pending session: %+v", info)
 	}
 	expect(t, "a pending session listing keys", f.do(http.MethodGet, "/keys", "", as(pending)), http.StatusUnauthorized, consoleapi.ErrorCodeUnauthenticated)

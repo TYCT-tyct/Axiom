@@ -144,10 +144,14 @@ func (c consoleAPI) GetSession(ctx context.Context, _ consoleapi.GetSessionReque
 	session := consoleapi.Session{
 		Account: info.Account.TypeID(), CsrfToken: info.CSRFToken, ExpiresAt: info.ExpiresAt,
 		Level: consoleapi.SessionLevel(info.Level), MfaEnabled: info.MFAEnabled, TotpEnabled: &info.TOTP,
-		Permissions: info.Permissions, CallsPaused: &info.CallsPaused,
+		Permissions: info.Permissions,
 	}
-	if !info.LatestAnnouncement.IsZero() {
-		session.LatestAnnouncementAt = &info.LatestAnnouncement
+	// What the account is doing is for a session that passed every factor: a password alone learns nothing of it.
+	if !callOf(ctx).principal.Pending() {
+		session.CallsPaused = &info.CallsPaused
+		if !info.LatestAnnouncement.IsZero() {
+			session.LatestAnnouncementAt = &info.LatestAnnouncement
+		}
 	}
 	session.User.Id, session.User.Email, session.User.InviteCode = info.User.TypeID(), info.Email, info.InviteCode
 	pending, err := c.accounts.PendingLegalDocuments(ctx, callOf(ctx).principal)
