@@ -50,17 +50,22 @@ func ConfirmBases(ctx context.Context, tx pg.Tx, id uuid.UUID, set []syncer.Conf
 	return cleared, nil
 }
 
-// dropBasePlan takes away the plan a base made of the model of key, and the round's verdict on it: a base for another
+// forgetVerdict takes away the round's verdict on the old base of the model of key (over_limit): a new base is not
+// past the limit until a round finds it so. With plan, it also takes away the plan the old base made: a base for another
 // model replaces the whole plan, so no step that commits before the next catalog round can price the new model with
 // the old one's plan (projector.planOf matches the model only, not the plan).
-func dropBasePlan(st *syncer.State, key syncer.BaseKey) {
+func forgetVerdict(st *syncer.State, key syncer.BaseKey, plan bool) {
 	for gi, g := range st.Groups {
 		for mi, m := range g.Models {
 			if g.Ref != key.GroupRef || m.Name != key.Model || m.Published {
 				continue
 			}
-			st.Groups[gi].Models[mi].Plan, st.Groups[gi].Models[mi].Confirmed, st.Groups[gi].Models[mi].CostReason = "", false, ""
-			delete(st.Plans, key)
+			snap := &st.Groups[gi].Models[mi]
+			snap.CostReason = ""
+			if plan {
+				snap.Plan, snap.Confirmed = "", false
+				delete(st.Plans, key)
+			}
 		}
 	}
 }
@@ -76,14 +81,13 @@ func changeBases(st *syncer.State, set []syncer.ConfirmedBase, clear []syncer.Ba
 		}
 	}
 	for _, b := range set {
-		if old, ok := st.Base(b.BaseKey); !ok || old.For != b.For {
-			dropBasePlan(st, b.BaseKey)
-		}
+		old, ok := st.Base(b.BaseKey) // a binary search: the bases stay sorted after every change below
+		forgetVerdict(st, b.BaseKey, !ok || old.For != b.For)
 		st.Confirmed = slices.DeleteFunc(st.Confirmed, func(c syncer.ConfirmedBase) bool { return c.BaseKey == b.BaseKey })
 		st.Confirmed = append(st.Confirmed, b)
+		slices.SortFunc(st.Confirmed, func(a, b syncer.ConfirmedBase) int {
+			return cmp.Or(strings.Compare(a.GroupRef, b.GroupRef), strings.Compare(a.Model, b.Model))
+		})
 	}
-	slices.SortFunc(st.Confirmed, func(a, b syncer.ConfirmedBase) int {
-		return cmp.Or(strings.Compare(a.GroupRef, b.GroupRef), strings.Compare(a.Model, b.Model))
-	})
 	return cleared
 }
