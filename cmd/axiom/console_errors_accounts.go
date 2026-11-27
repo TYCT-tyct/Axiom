@@ -35,6 +35,7 @@ var accountsRefusals = []refusal{
 	{accounts.ErrBadCredentials, http.StatusUnauthorized, codeWrongLogin, "wrong email or password"},
 	{accounts.ErrNoSession, http.StatusUnauthorized, codeUnauthenticated, "not signed in"},
 	{accounts.ErrMFAExhausted, http.StatusUnauthorized, codeUnauthenticated, "the pending sign-in has used up its attempts; sign in again"},
+	{accounts.ErrCodeReused, http.StatusUnauthorized, codeCodeReused, "the code was already used; wait for the next one"},
 	{accounts.ErrBadCode, http.StatusUnauthorized, codeInvalidCode, "wrong code"},
 	{accounts.ErrBadOrigin, http.StatusForbidden, codeOriginRejected, "the origin, content type or CSRF token is not accepted"},
 	{accounts.ErrForbidden, http.StatusForbidden, codeForbidden, "this session may not do that"},
@@ -59,6 +60,7 @@ var accountsRefusals = []refusal{
 	{accounts.ErrDefaultWorkspace, http.StatusConflict, codeConflict, "the default workspace cannot be disabled; disable the account instead"},
 	{accounts.ErrKeyPreset, http.StatusBadRequest, codePresetNotSelectable, "a management key has no routing preset"},
 	{accounts.ErrTooManyAttempts, http.StatusTooManyRequests, codeRateLimited, "too many attempts"},
+	{accounts.ErrMailDisabled, http.StatusServiceUnavailable, codeEmailUnavailable, "this site sends no email, so this cannot be done here"},
 	{accounts.ErrBusy, http.StatusServiceUnavailable, codeUnavailable, "busy, try again shortly"},
 	{accounts.ErrStale, http.StatusServiceUnavailable, codeUnavailable, "temporarily unavailable"},
 }

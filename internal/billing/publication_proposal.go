@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"uuid"
@@ -13,8 +14,8 @@ import (
 	"axiom/internal/platform/pg"
 )
 
-func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
-	p, err := proposePrice(policy, rules, m, snap, currency, costs, defaults, rates...)
+func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, base *scaledBase, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
+	p, err := proposePrice(policy, rules, base, m, snap, currency, costs, defaults, rates...)
 	if err != nil {
 		return p, err
 	}
@@ -33,25 +34,30 @@ func proposeAudiencePrice(audience Selector, policy PricePolicy, rules []Rule, m
 }
 
 // saleProposal is what a rule asked for before the floor: the model-level price, and, when it prices each endpoint
-// from that endpoint's own cost, every endpoint's price and the converted cost it came from.
+// from that endpoint's own cost, every endpoint's price and the converted cost it came from. base is the published price
+// for all accounts a default multiplier scaled into this one, if one did.
 type saleProposal struct {
 	requested catalog.Schedule
 	endpoints EndpointPrices
 	costs     EndpointPrices
+	base      *scaledBase
 }
 
-func proposePrice(policy PricePolicy, rules []Rule, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
+// proposePrice prices m by rules, the rules of one audience; base is the published price for all accounts, which a
+// default-multiplier rule among them scales.
+func proposePrice(policy PricePolicy, rules []Rule, base *scaledBase, m catalog.Model, snap *catalog.Snapshot, currency platform.Currency, costs []PriceCost, defaults fallbacks, rates ...platform.ExchangeRate) (Publication, error) {
 	p := Publication{Model: m.ID, Status: "unpriced"}
 	converted, envelope, costErr := modelPriceCost(costs, m, currency)
-	input, matched, ref, err := priceFromRules(rules, m, snap, converted, costErr, currency, rates)
+	input, matched, ref, err := priceFromRules(rules, base, m, snap, converted, costErr, currency, rates)
 	p.matched = matched != nil
+	p.target, p.scaled = layerTarget(matched, input.base)
 	if matched != nil && matched.Method.Kind != "reference_multiplier" {
 		ref.ID = uuid.Nil()
 	}
 	if err != nil {
 		p.Problem = err.Error()
 	}
-	p.Basis, err = priceEvidence(policy, matched, ref.ID, costs, referenceExchange(ref, currency, rates))
+	p.Basis, err = priceEvidence(policy, matched, input.base, ref.ID, costs, referenceExchange(ref, currency, rates))
 	if err != nil {
 		return p, err
 	}
@@ -95,10 +101,13 @@ func modelPriceCost(costs []PriceCost, m catalog.Model, currency platform.Curren
 	return converted, envelope, nil
 }
 
-func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, converted EndpointPrices, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (saleProposal, *Rule, catalog.ReferencePrice, error) {
+func priceFromRules(rules []Rule, base *scaledBase, m catalog.Model, snap *catalog.Snapshot, converted EndpointPrices, costErr error, currency platform.Currency, rates []platform.ExchangeRate) (saleProposal, *Rule, catalog.ReferencePrice, error) {
 	for _, r := range rules {
 		if !r.Enabled || !pricesModel(r.Target, m) {
 			continue
+		}
+		if r.Method.Kind == "default_multiplier" {
+			return scaledRule(r, base, m, converted, currency)
 		}
 		ref := saleReference(snap, m.ID, currency, r.Method)
 		if r.Method.Kind == "cost_plus" && r.Constraints == (Constraints{}) {
@@ -115,6 +124,83 @@ func priceFromRules(rules []Rule, m catalog.Model, snap *catalog.Snapshot, conve
 		return saleProposal{requested: s}, &r, ref, err
 	}
 	return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
+}
+
+// scaledBase is the price for all accounts a default multiplier scales: the version that serves now, and the target of
+// the rule it came from, which the scaled layer takes so it is exactly as specific as the price it scales and wins the
+// tie with everyone's layer (AudiencePrices.Select).
+type scaledBase struct {
+	sold   Sold
+	target Selector
+}
+
+// publishedBases are the serving prices for all accounts, by model, read after their own refresh. A price for all that
+// waits for confirmation is not among them: until it is published, what all accounts pay is the version before it.
+func publishedBases(rows []ReadPublicationsRow, policy PricePolicy) (map[catalog.ModelID]scaledBase, error) {
+	bases := map[catalog.ModelID]scaledBase{}
+	for _, row := range rows {
+		if row.AudienceKind != "all" {
+			continue
+		}
+		layer, err := publishedLayer(row, policy)
+		if err != nil {
+			return nil, err
+		}
+		if layer.Target.Kind != "" && layer.Sold.Version != uuid.Nil() {
+			bases[catalog.ModelID(row.ModelID)] = scaledBase{sold: layer.Sold, target: layer.Target}
+		}
+	}
+	return bases, nil
+}
+
+// layerTarget is the target the published layer takes, and whether it is a scaled price: a scaled price takes its
+// base's, any other its rule's.
+func layerTarget(matched *Rule, base *scaledBase) (Selector, bool) {
+	switch {
+	case base != nil:
+		return base.target, true
+	case matched != nil:
+		return matched.Target, false
+	}
+	return Selector{}, false
+}
+
+// scaledRule prices m by the default-multiplier rule r: no layer at all while all accounts cannot buy it, else the
+// published price for all scaled.
+func scaledRule(r Rule, base *scaledBase, m catalog.Model, converted EndpointPrices, currency platform.Currency) (saleProposal, *Rule, catalog.ReferencePrice, error) {
+	if base == nil {
+		return saleProposal{}, nil, catalog.ReferencePrice{}, ErrUnpriced
+	}
+	proposal, err := scaledPrice(r, base, m, converted, currency)
+	return proposal, &r, catalog.ReferencePrice{}, err
+}
+
+// scaledPrice is what a tier's or an account's default-multiplier rule r asks. Invariant: every item of it is the
+// published price for all accounts, the site floor and default prices already in it, times r's multiplier, for the
+// model-level price and every endpoint's alike, rounded up once more; only the floor can raise it further, for a
+// multiplier under 1.
+func scaledPrice(r Rule, base *scaledBase, m catalog.Model, converted EndpointPrices, currency platform.Currency) (saleProposal, error) {
+	scale := func(s catalog.Schedule) (catalog.Schedule, error) {
+		scaled, err := s.Scaled(*r.Method.Multiplier, currency)
+		if err != nil {
+			return catalog.Schedule{}, fmt.Errorf("billing: scale %s by the rule %s: %w", m.Slug, r.ID, err)
+		}
+		return scaled, nil
+	}
+	requested, err := scale(base.sold.Schedule)
+	if err != nil {
+		return saleProposal{}, err
+	}
+	proposal := saleProposal{requested: requested, base: base}
+	if base.sold.Endpoints != nil {
+		proposal.endpoints, proposal.costs = make(EndpointPrices, len(base.sold.Endpoints)), converted
+		for endpoint, price := range base.sold.Endpoints {
+			if proposal.endpoints[endpoint], err = scale(price); err != nil {
+				return saleProposal{}, err
+			}
+		}
+	}
+	return proposal, nil
 }
 
 // costPlusPrice prices every converted endpoint from its own cost and returns the model-level envelope of the result.
@@ -174,14 +260,26 @@ func referenceExchange(ref catalog.ReferencePrice, currency platform.Currency, r
 	return nil
 }
 
-func priceEvidence(policy PricePolicy, rule *Rule, reference uuid.UUID, costs []PriceCost, exchange *platform.ExchangeRate) (jsonx.Raw, error) {
+// scaledEvidence names the published price for all accounts a scaled price came from: its version, and the target the
+// layer takes from it (publishedLayer).
+type scaledEvidence struct {
+	Version uuid.UUID `json:"version"`
+	Target  Selector  `json:"target"`
+}
+
+func priceEvidence(policy PricePolicy, rule *Rule, base *scaledBase, reference uuid.UUID, costs []PriceCost, exchange *platform.ExchangeRate) (jsonx.Raw, error) {
+	var scales *scaledEvidence
+	if base != nil {
+		scales = &scaledEvidence{Version: base.sold.Version, Target: base.target}
+	}
 	return jsonx.MarshalCanonical(struct {
 		Policy    PricePolicy            `json:"policy"`
 		Rule      *Rule                  `json:"rule"`
+		Scales    *scaledEvidence        `json:"scales,omitempty"`
 		Reference uuid.UUID              `json:"reference"`
 		Costs     []PriceCost            `json:"costs"`
 		Exchange  *platform.ExchangeRate `json:"reference_exchange,omitempty"`
-	}{policy, rule, reference, costs, exchange})
+	}{policy, rule, scales, reference, costs, exchange})
 }
 
 func (p *Publication) protectPrice(input saleProposal, envelope catalog.Schedule, costErr error, policy PricePolicy, defaults fallbacks, free bool) error {

@@ -247,7 +247,8 @@ func (x site) verify(t *testing.T, host string, pending accounts.Issued, code st
 }
 
 // TestTwoStepVerification: turning on TOTP ends every other session; sign-in then waits for a code, which a pending
-// session cannot skip; a TOTP step and a recovery code each work once.
+// session cannot skip; a TOTP step and a recovery code each work once, and a step used again is told apart from a wrong
+// code, so the page asks for the next code instead of calling a right one wrong.
 func TestTwoStepVerification(t *testing.T) {
 	t.Parallel()
 	x := newTestSite(t)
@@ -263,7 +264,7 @@ func TestTwoStepVerification(t *testing.T) {
 	if _, err := x.principal(t, console, pending); !pending.Pending || !errors.Is(err, accounts.ErrNoSession) {
 		t.Errorf("a pending session: %+v, %v", pending, err)
 	}
-	if _, err := x.verify(t, console, pending, accounts.TOTPCode(key, x.clock.Now())); !errors.Is(err, accounts.ErrBadCode) {
+	if _, err := x.verify(t, console, pending, accounts.TOTPCode(key, x.clock.Now())); !errors.Is(err, accounts.ErrCodeReused) {
 		t.Errorf("the step ConfirmTOTP used: %v", err)
 	}
 	x.clock.Advance(30 * time.Second)
@@ -271,7 +272,7 @@ func TestTwoStepVerification(t *testing.T) {
 		t.Errorf("a current code: %v", err)
 	}
 	again := x.signIn(t, console)
-	if _, err := x.verify(t, console, again, accounts.TOTPCode(key, x.clock.Now())); !errors.Is(err, accounts.ErrBadCode) {
+	if _, err := x.verify(t, console, again, accounts.TOTPCode(key, x.clock.Now())); !errors.Is(err, accounts.ErrCodeReused) {
 		t.Errorf("the same TOTP step again: %v", err)
 	}
 	if _, err := x.verify(t, console, again, codes[0]); err != nil {
@@ -291,7 +292,7 @@ func TestCodesRunOutAndRenew(t *testing.T) {
 	key, mfa, codes := x.enableTOTP(t, console, x.signIn(t, console))
 	tries := x.signIn(t, console)
 	for range 5 {
-		if _, err := x.verify(t, console, tries, "000000"); !errors.Is(err, accounts.ErrBadCode) {
+		if _, err := x.verify(t, console, tries, "000000"); !errors.Is(err, accounts.ErrBadCode) || errors.Is(err, accounts.ErrCodeReused) {
 			t.Errorf("a wrong code: %v", err)
 		}
 	}

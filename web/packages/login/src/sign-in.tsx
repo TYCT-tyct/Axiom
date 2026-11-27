@@ -235,6 +235,8 @@ function EmailStep({ flow }: { flow: Flow }) {
 function PasswordStep({ flow }: { flow: Flow }) {
   const { t } = useTranslation("login");
   const { next } = useLoginNavigation().search;
+  // A node that sends no mail cannot deliver a reset link, so the page does not offer one; an older node says nothing.
+  const mail = useQuery(siteQuery).data?.email_delivery ?? true;
   const busy = flow.attempt.kind !== null || !flow.ready;
   return (
     <>
@@ -257,7 +259,7 @@ function PasswordStep({ flow }: { flow: Flow }) {
         label={<span>{t("auth.signIn.submit", { ns: "common" })}</span>}
         values={{ disabled: busy, style: primaryLook(busy) }}
       />
-      <RouteNote to="/reset-password" label={t("auth.reset.forgot")} next={next} />
+      {mail ? <RouteNote to="/reset-password" label={t("auth.reset.forgot")} next={next} /> : null}
       <NoteAction label={t("auth.signIn.changeEmail")} onPress={flow.back} />
     </>
   );
