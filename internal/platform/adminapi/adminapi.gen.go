@@ -52,7 +52,7 @@ type ServerInterface interface {
 	// UpdateAccountWorkspaceLimit Set an account's own limit on its workspaces
 	// (PUT /api/admin/v1/accounts/{account_id}/workspace-limit)
 	UpdateAccountWorkspaceLimit(w http.ResponseWriter, r *http.Request, accountId AccountId, params UpdateAccountWorkspaceLimitParams)
-	// RotateAlertWebhookSecret Set or rotate a webhook signing secret
+	// RotateAlertWebhookSecret Set or rotate a channel secret
 	// (PUT /api/admin/v1/alerts/channels/{channel_id}/secret)
 	RotateAlertWebhookSecret(w http.ResponseWriter, r *http.Request, channelId string, params RotateAlertWebhookSecretParams)
 	// GetAlertConfiguration Read alert rules and notification channels
@@ -33216,7 +33216,7 @@ type StrictServerInterface interface {
 	// UpdateAccountWorkspaceLimit Set an account's own limit on its workspaces
 	// (PUT /api/admin/v1/accounts/{account_id}/workspace-limit)
 	UpdateAccountWorkspaceLimit(ctx context.Context, request UpdateAccountWorkspaceLimitRequestObject) (UpdateAccountWorkspaceLimitResponseObject, error)
-	// RotateAlertWebhookSecret Set or rotate a webhook signing secret
+	// RotateAlertWebhookSecret Set or rotate a channel secret
 	// (PUT /api/admin/v1/alerts/channels/{channel_id}/secret)
 	RotateAlertWebhookSecret(ctx context.Context, request RotateAlertWebhookSecretRequestObject) (RotateAlertWebhookSecretResponseObject, error)
 	// GetAlertConfiguration Read alert rules and notification channels

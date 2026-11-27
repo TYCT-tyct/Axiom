@@ -2076,6 +2076,35 @@ export interface components {
             verified: boolean;
             /** @description The endpoint's sale prices. Absent when this request is anonymous and the site keeps its prices to signed-in members, under the same rule as the model's `pricing`. */
             pricing?: components["schemas"]["ModelPricing"];
+            /** @description Where the endpoint's supply comes from, as its real responses' fingerprints classed it: the class, never the supplier. Absent from a node that does not publish it. */
+            source_class?: components["schemas"]["SourceClassName"];
+            /**
+             * Format: double
+             * @description The fixed benchmark's score against the official direct run, which scores 100. Absent while no run counts for the endpoint.
+             */
+            quality_score?: number;
+            uptime_last_5m?: components["schemas"]["EndpointUptime"];
+            uptime_last_30m?: components["schemas"]["EndpointUptime"];
+            uptime_last_1d?: components["schemas"]["EndpointUptime"];
+            /** @description Time to first token over the last 30 minutes, in milliseconds. Absent while too few answers came. */
+            latency_last_30m?: components["schemas"]["EndpointPercentiles"];
+            /** @description Output speed over the last 30 minutes, in tokens per second: pN is the speed N% of answers reached or exceeded, so p90 is the lower. Absent while too few answers came. */
+            throughput_last_30m?: components["schemas"]["EndpointPercentiles"];
+        };
+        /**
+         * Format: double
+         * @description The percentage of the endpoint's attempts over the window that succeeded, as OpenRouter's `uptime_last_*`; failures of the request itself and rate limits are not counted. Each node counts its own attempts. Absent while the window has fewer than five.
+         */
+        EndpointUptime: number;
+        EndpointPercentiles: {
+            /** Format: double */
+            p50: number;
+            /** Format: double */
+            p75: number;
+            /** Format: double */
+            p90: number;
+            /** Format: double */
+            p99: number;
         };
         /** @enum {string} */
         ModelAbility: "tools" | "images" | "documents" | "reasoning" | "prompt_cache" | "structured_output" | "web_search" | "code_execution" | "file_search";

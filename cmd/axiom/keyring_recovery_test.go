@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -201,13 +204,101 @@ func TestKeyringCheckKeepsReferencedRetiredMaterial(t *testing.T) {
 	}
 }
 
-func TestKeyringInventoryFailsClosed(t *testing.T) {
+// newerEnvelopeColumn is the column an older binary, modelled by leaving its store out of keyRotation, does not register.
+const newerEnvelopeColumn = "observability.content_keys.wrapped_key"
+
+// TestKeyringUnregisteredEnvelopeStore: during a rolling upgrade an older node runs against the newer schema, whose new
+// envelope table its registry lacks. It must keep serving, but it cannot see that table's references, so finishing a
+// rewrap and retiring a version must refuse, naming the table, until a binary that registers it runs them. The first
+// check is this tree's own: every migrated envelope column must be registered, so a forgotten registration fails here in
+// CI rather than going unnoticed.
+func TestKeyringUnregisteredEnvelopeStore(t *testing.T) {
 	t.Parallel()
 	f := newRotationFixture(t)
-	r := f.r
-	r.Stores = r.Stores[:2]
-	if _, _, err := r.Check(t.Context()); err == nil || !strings.Contains(err.Error(), "not registered") {
-		t.Fatalf("omitted credential store was not detected: %v", err)
+	if _, status, err := f.r.Check(t.Context()); err != nil || len(status.Unregistered) != 0 {
+		t.Fatalf("migrated envelope columns missing from keyRotation: %v, %v", status.Unregistered, err)
+	}
+	old := f.r
+	old.Stores = slices.DeleteFunc(slices.Clone(f.r.Stores), func(s secret.EnvelopeStore) bool { return s.Table == "content_keys" })
+	refused := func(step string, err error) {
+		t.Helper()
+		if !errors.Is(err, secret.ErrUnregistered) || !strings.Contains(err.Error(), newerEnvelopeColumn) {
+			t.Fatalf("%s by a binary without %s: %v", step, newerEnvelopeColumn, err)
+		}
+	}
+
+	_, status, err := old.Check(t.Context())
+	if err != nil || !slices.Equal(status.Unregistered, []string{newerEnvelopeColumn}) {
+		t.Fatalf("the older node did not start and report the newer column: %+v, %v", status, err)
+	}
+	// Adding and activating a version destroy nothing, so the older node still moves a rotation that far.
+	if err := errors.Join(old.Add(t.Context(), 2), old.Activate(t.Context(), 2)); err != nil {
+		t.Fatal(err)
+	}
+	refused("completing the rewrap", rewrapToEnd(t, old))
+	refused("retirement", old.Retire(t.Context(), 1))
+	both, err := os.ReadFile(f.path)
+	if err != nil || !bytes.Contains(both, []byte("1:")) {
+		t.Fatal("a refused retirement deleted version 1")
+	}
+	if err := f.r.Retire(t.Context(), 1); err != nil {
+		t.Fatalf("the binary that registers every store could not retire: %v", err)
+	}
+	wantOlderNodeKeepsRetiredKey(t, f, old, both)
+}
+
+// wantOlderNodeKeepsRetiredKey restarts the older node with version 1 back in its own file, as a node that kept its copy
+// while a newer node retired the version during the rollout. Only a binary that sees every store may delete the key; the
+// older one keeps it and starts on the versions the database describes.
+func wantOlderNodeKeepsRetiredKey(t *testing.T, f rotationFixture, old secret.Rotation, both []byte) {
+	t.Helper()
+	restoreKeyFile(t, f.path, both)
+	_, status, err := old.Check(t.Context())
+	want := secret.KeyStatus{Active: 2, Readable: []uint32{2}, Retired: []uint32{1}, Unregistered: []string{newerEnvelopeColumn}}
+	if err != nil || !reflect.DeepEqual(status, want) {
+		t.Fatalf("the older node did not start beside a retired version it may not delete: %+v, %v", status, err)
+	}
+	if kept, err := os.ReadFile(f.path); err != nil || !bytes.Equal(kept, both) {
+		t.Fatal("a binary without every store deleted a retired version")
+	}
+	if _, _, err := f.r.Check(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if pruned, err := os.ReadFile(f.path); err != nil || bytes.Contains(pruned, []byte("1:")) {
+		t.Fatal("the binary that registers every store did not delete the retired version")
+	}
+}
+
+// TestKeyringInventorySeesEveryEnvelopeColumn: the inventory is what keeps retirement from deleting a key an envelope
+// still needs, so a column must not escape it because the application role holds no privilege on it, or because its
+// prefix has no underscore before the suffix (EnvelopeStore builds names as Prefix + "wrapped_dek").
+func TestKeyringInventorySeesEveryEnvelopeColumn(t *testing.T) {
+	t.Parallel()
+	f := newRotationFixture(t)
+	if err := pgtest.Run(t.Context(), f.database.Superuser, `CREATE TABLE observability.unseen_envelopes
+		(id uuid PRIMARY KEY, wrapped_dek bytea, v2wrapped_dek bytea, v3_wrapped_key bytea, wrapped_dek_note text)`); err != nil {
+		t.Fatal(err)
+	}
+	_, status, err := f.r.Check(t.Context())
+	want := []string{
+		"observability.unseen_envelopes.v2wrapped_dek", "observability.unseen_envelopes.v3_wrapped_key",
+		"observability.unseen_envelopes.wrapped_dek",
+	}
+	if err != nil || !slices.Equal(status.Unregistered, want) {
+		t.Fatalf("unregistered = %v, want %v: %v", status.Unregistered, want, err)
+	}
+}
+
+// rewrapToEnd runs batches until one rewraps nothing and returns that last call's error.
+func rewrapToEnd(t *testing.T, r secret.Rotation) error {
+	t.Helper()
+	var cursor secret.RewrapCursor
+	for {
+		count, next, err := r.RewrapBatch(t.Context(), cursor, 100)
+		if err != nil || count == 0 {
+			return err
+		}
+		cursor = next
 	}
 }
 

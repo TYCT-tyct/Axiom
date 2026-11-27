@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"html"
+	"strings"
 	"time"
 	"uuid"
 
@@ -290,18 +291,23 @@ func pendingAlertDeliveries(ctx context.Context, tx pg.Tx, now time.Time) ([]ale
 
 func (a *alertWorker) dispatch(ctx context.Context, tx pg.Tx, now time.Time) error {
 	deliveries, err := pendingAlertDeliveries(ctx, tx, now)
+	if err != nil || len(deliveries) == 0 {
+		return err
+	}
+	c, err := readAlertConfiguration(ctx, tx, false)
 	if err != nil {
 		return err
 	}
 	for _, d := range deliveries {
-		if err = a.dispatchOne(ctx, tx, now, d); err != nil {
+		if err = a.dispatchOne(ctx, tx, now, d, c.AdminOrigin); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, d alertDelivery) error {
+// dispatchOne sends d, or holds it through its quiet hours. origin is the admin's, for the links its text carries.
+func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, d alertDelivery, origin string) error {
 	var err error
 
 	if wait := alertQuiet(now, d.start, d.end); wait > 0 {
@@ -310,15 +316,12 @@ func (a *alertWorker) dispatchOne(ctx context.Context, tx pg.Tx, now time.Time, 
 		}
 		return nil
 	}
-	if d.ch.WebhookURL != "" {
-		return a.dispatchWebhook(ctx, tx, d)
+	if posted(d.ch) {
+		return a.dispatchWebhook(ctx, tx, d, origin)
 	}
-	phase := "firing"
-	if d.seq == -1 {
-		phase = "resolved"
-	}
-	body := "Axiom alert " + phase + ": " + d.kind + " (" + d.key + ")\nSeverity: " + d.severity + "\nFields: " + string(d.fields) + "\nNotification: " + d.id.String()
-	msg := mail.Message{To: d.ch.Email, Subject: "Axiom alert " + phase, Text: body, HTML: "<pre>" + html.EscapeString(body) + "</pre>"}
+	body := noticeText(d, origin)
+	subject, _, _ := strings.Cut(body, "\n")
+	msg := mail.Message{To: d.ch.Email, Subject: subject, Text: body, HTML: "<pre>" + html.EscapeString(body) + "</pre>"}
 	if err = a.mail.EnqueueTracked(ctx, tx, mail.Tenant{}, msg, d.id); err != nil {
 		if !errors.Is(err, mail.ErrNotConfigured) && !errors.Is(err, mail.ErrInvalidMessage) {
 			return err
@@ -390,8 +393,18 @@ func (a *alertWorker) discarded(ctx context.Context, tx pg.Tx, kind string, args
 	return nil
 }
 
-func (a *alertWorker) dispatchWebhook(ctx context.Context, tx pg.Tx, d alertDelivery) error {
-	body, err := webhookPayload(d)
+// postedNotice is what d's post sends, frozen when it is queued so a retry sends the same: the webhook's event, or a
+// bot's text.
+func postedNotice(d alertDelivery, origin string) ([]byte, error) {
+	if d.ch.WebhookURL != "" {
+		return webhookPayload(d)
+	}
+	return jsonx.MarshalCanonical(map[string]string{"text": clip(noticeText(d, origin), botTextLimit)})
+}
+
+// dispatchWebhook freezes d's notice and queues its post.
+func (a *alertWorker) dispatchWebhook(ctx context.Context, tx pg.Tx, d alertDelivery, origin string) error {
+	body, err := postedNotice(d, origin)
 	if err != nil {
 		return err
 	}

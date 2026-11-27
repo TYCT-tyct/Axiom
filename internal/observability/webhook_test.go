@@ -281,25 +281,6 @@ func assertRotationSignature(t *testing.T, values []secret.Secret, at time.Time,
 	}
 }
 
-func TestWebhookRejectsInvalidChannelsAndSecrets(t *testing.T) {
-	for _, ch := range []AlertChannel{
-		{ID: "x", WebhookURL: "http://receiver.example/hook"},
-		{ID: "x", WebhookURL: "https://user@receiver.example/hook"},
-		{ID: "x", WebhookURL: "https://receiver.example/hook#fragment"},
-		{ID: "x", WebhookURL: "https://receiver.example/hook", Email: "ops@example.com"},
-	} {
-		if err := validateAlertChannel(ch); !errors.Is(err, ErrAlertConfiguration) {
-			t.Errorf("invalid channel accepted: %+v", ch)
-		}
-	}
-	for _, value := range []string{strings.Repeat("s", 31), strings.Repeat("s", 513), strings.Repeat("界", 256)} {
-		_, err := RotateAlertWebhookSecret(t.Context(), pg.Tx{}, nil, "hook", 1, secret.New(value), time.Time{})
-		if !errors.Is(err, ErrAlertConfiguration) {
-			t.Fatal("invalid byte length accepted")
-		}
-	}
-}
-
 func TestWebhookKeyCannotBeRelabelledToAnotherDestination(t *testing.T) {
 	db := openDB(t)
 	keys := webhookTestKeys(t)

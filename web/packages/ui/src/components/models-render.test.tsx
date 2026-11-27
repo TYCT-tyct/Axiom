@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { I18nextProvider } from "react-i18next";
 import { beforeAll, expect, it } from "vitest";
 import en from "../locales/en";
+import { EndpointSection } from "./model-endpoints";
 import { ModelCatalog, type PublicEndpoint, type PublicModel } from "./models";
 
 const i18n = createInstance();
@@ -123,4 +124,25 @@ it("shows an older node's prices per unit and no headline", () => {
   ]);
   expect(html).toContain("Prices unavailable");
   expect(html).not.toContain("$1.00");
+});
+
+// What real calls measured shows on the endpoint by its class's name, never the supplier's; a window not known yet is a
+// dash, not a zero.
+it("shows an endpoint's measured record and dashes what is not known", () => {
+  const measured: PublicEndpoint = {
+    ...endpoint,
+    source_class: { slug: "relay", name: "Relay", name_zh: "中转" },
+    quality_score: 92.5,
+    uptime_last_5m: 100,
+    uptime_last_1d: 99.5,
+    latency_last_30m: { p50: 850, p75: 900, p90: 1000, p99: 1200 },
+  };
+  const html = renderToStaticMarkup(
+    <I18nextProvider i18n={i18n}>
+      <EndpointSection model={{ ...model, endpoints: [measured] }} showPrices={false} />
+    </I18nextProvider>,
+  );
+  for (const text of ["Relay", "Score 92.5", "100% / — / 99.5%", "850 ms", "Speed p50 —"]) {
+    expect(html).toContain(text);
+  }
 });

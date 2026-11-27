@@ -1,0 +1,454 @@
+package observability
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"errors"
+	"io"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"uuid"
+
+	"github.com/riverqueue/river"
+	"github.com/riverqueue/river/rivertype"
+
+	"axiom/internal/platform/alert"
+	"axiom/internal/platform/egress"
+	"axiom/internal/platform/egresstest"
+	"axiom/internal/platform/jsonx"
+	"axiom/internal/platform/pg"
+	"axiom/internal/platform/secret"
+)
+
+var botHosts = []string{"open.feishu.cn", "qyapi.weixin.qq.com", "api.telegram.org"}
+
+const (
+	feishuSigning = "feishu-signing-secret"
+	telegramBot   = "123456:ABCdefGHIjklMNOpqrSTUvwxYZ012345678"
+	adminOrigin   = "https://admin.example"
+)
+
+// botPost is one request the fake bots took: where it went and what it said.
+type botPost struct {
+	host, path string
+	body       map[string]any
+}
+
+// fakeBots answers as the three bot APIs do, by their official names: a fake of each that accepts any message.
+type fakeBots struct {
+	server *httptest.Server
+	cert   *x509.Certificate
+	mu     sync.Mutex
+	posts  []botPost
+}
+
+func newFakeBots(t *testing.T) *fakeBots {
+	t.Helper()
+	f := &fakeBots{}
+	f.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body) //nolint:errcheck // a test server
+		var body map[string]any
+		if err := jsonx.Unmarshal(raw, &body); err != nil {
+			t.Error(err)
+		}
+		host, _, _ := strings.Cut(r.Host, ":")
+		f.mu.Lock()
+		f.posts = append(f.posts, botPost{host, r.URL.RequestURI(), body})
+		f.mu.Unlock()
+		answer := map[string]string{"open.feishu.cn": `{"code":0,"msg":"success"}`, "qyapi.weixin.qq.com": `{"errcode":0,"errmsg":"ok"}`}[host]
+		if answer == "" {
+			answer = `{"ok":true,"result":{}}`
+		}
+		_, _ = io.WriteString(w, answer) //nolint:errcheck // a test server
+	}))
+	var leaf tls.Certificate
+	leaf, f.cert = selfSigned(t, botHosts)
+	f.server.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}, MinVersion: tls.VersionTLS12}
+	f.server.StartTLS()
+	t.Cleanup(f.server.Close)
+	return f
+}
+
+// exit reaches the fake by the bots' names; refuse routes them to the same place under a policy that allows nothing.
+func (f *fakeBots) exit(t *testing.T, refuse bool) *egress.Client {
+	t.Helper()
+	at := netip.MustParseAddrPort(f.server.Listener.Addr().String())
+	policy := egresstest.Loopback(t, f.cert)
+	if refuse {
+		policy = egresstest.Policy{}
+	}
+	for _, h := range botHosts {
+		policy = policy.Route(h, at)
+	}
+	c := egress.NewForTesting(policy)
+	t.Cleanup(c.CloseIdleConnections)
+	return c
+}
+
+func (f *fakeBots) sent() []botPost {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]botPost(nil), f.posts...)
+}
+
+func selfSigned(t *testing.T, hosts []string) (tls.Certificate, *x509.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), DNSNames: hosts, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(24 * time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key, Leaf: leaf}, leaf
+}
+
+// configureBot makes ch the only channel, with a rule that tells it of pending approvals, and sets its secret.
+func configureBot(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel, value string, now time.Time) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels, c.AdminOrigin = []AlertChannel{ch}, adminOrigin
+		c.Rules = []AlertRule{{ID: "approvals", Kind: "operations.approval_pending", Channel: ch.ID, MinimumSeverity: "info", Threshold: 1}}
+		if err = SealAlertAddresses(t.Context(), tx, keys, &c); err != nil {
+			return err
+		}
+		if err = SetAlertConfiguration(t.Context(), tx, c); err != nil || value == "" {
+			return err
+		}
+		_, err = RotateAlertWebhookSecret(t.Context(), tx, keys, ch.ID, c.Rev+1, secret.New(value), now)
+		return err
+	})
+}
+
+var approvalNotice = map[string]string{"tool": "refund_create", "target": "order:ord_1", "expires_at": "2026-11-26T09:30:00Z"}
+
+// raiseNotices queues ch's self-test and raises a pending approval, then lets evaluation make their receipts.
+func raiseNotices(t *testing.T, db *pg.DB, ch string, approval uuid.UUID, now time.Time) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) error {
+		if _, err := SendAlertTest(t.Context(), tx, ch, now); err != nil {
+			return err
+		}
+		return alert.Persist(t.Context(), tx, uuid.NewV7(), alert.Signal{
+			Kind: "operations.approval_pending", Key: approval.String(),
+			Severity: "warning", Fields: approvalNotice,
+		})
+	})
+	alertCycle(t, db, now)
+}
+
+// freezePending freezes every pending notification as dispatch does, and returns their receipts.
+func freezePending(t *testing.T, db *pg.DB, now time.Time) []uuid.UUID {
+	t.Helper()
+	var ids []uuid.UUID
+	alertTx(t, db, func(tx pg.Tx) error {
+		deliveries, err := pendingAlertDeliveries(t.Context(), tx, now)
+		for _, d := range deliveries {
+			body, err := postedNotice(d, adminOrigin)
+			if err == nil {
+				_, err = tx.Exec(t.Context(), `UPDATE observability.alert_receipts SET state='queued',payload=$2 WHERE id=$1`, d.id, body)
+			}
+			if err != nil {
+				return err
+			}
+			ids = append(ids, d.id)
+		}
+		return err
+	})
+	return ids
+}
+
+// deliverAll works each pending notification's post at its last attempt, so a failure is recorded at once, and returns
+// the receipts' states by rule.
+func deliverAll(t *testing.T, db *pg.DB, worker *webhookWorker, now time.Time) map[string]string {
+	t.Helper()
+	for _, id := range freezePending(t, db, now) {
+		job := &river.Job[webhookArgs]{JobRow: &rivertype.JobRow{Attempt: 5, MaxAttempts: 5}, Args: webhookArgs{Receipt: id}}
+		if err := worker.work(t.Context(), job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	states := map[string]string{}
+	alertTx(t, db, func(tx pg.Tx) error {
+		rows, err := tx.Query(t.Context(), `SELECT rule_id,state FROM observability.alert_receipts`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var rule, state string
+			if err = rows.Scan(&rule, &state); err != nil {
+				return err
+			}
+			states[rule] = state
+		}
+		return rows.Err()
+	})
+	return states
+}
+
+// botText is the message text a post carried, wherever its API puts it.
+func botText(p botPost) string {
+	for _, path := range [][]string{{"content", "text"}, {"text", "content"}, {"text"}} {
+		var v any = p.body
+		for _, k := range path {
+			m, _ := v.(map[string]any)
+			v = m[k]
+		}
+		if s, ok := v.(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
+// botCase is one channel the bot test delivers on: its secret, whether egress refuses it, and what its API must take.
+type botCase struct {
+	name   string
+	ch     AlertChannel
+	secret string
+	refuse bool
+	check  func(t *testing.T, p botPost)
+}
+
+func feishuSigned(t *testing.T, p botPost) {
+	stamp, _ := p.body["timestamp"].(string)
+	mac := hmac.New(sha256.New, []byte(stamp+"\n"+feishuSigning))
+	if p.path != "/open-apis/bot/v2/hook/abc" || p.body["msg_type"] != "text" || stamp != "1795683600" ||
+		p.body["sign"] != base64.StdEncoding.EncodeToString(mac.Sum(nil)) {
+		t.Errorf("feishu post: %+v", p)
+	}
+}
+
+// TestBotChannelsDeliverTestsAndApprovals: each bot channel's self-test and an approval reach its API as that API
+// takes them (address, signature, token, chat), the approval with its request and the admin link that decides it; the
+// secret is never part of the configuration read back; and a target egress refuses fails the receipt, not the alert.
+func TestBotChannelsDeliverTestsAndApprovals(t *testing.T) {
+	wecom := AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=k1"}
+	feishu := AlertChannel{ID: "fs", FeishuURL: "https://open.feishu.cn/open-apis/bot/v2/hook/abc"}
+	for _, tc := range []botCase{
+		{"feishu signed", feishu, feishuSigning, false, feishuSigned},
+		{"feishu unsigned", feishu, "", false, func(t *testing.T, p botPost) {
+			if _, signed := p.body["sign"]; signed {
+				t.Errorf("signed without a secret: %+v", p)
+			}
+		}},
+		{"wecom", wecom, "", false, func(t *testing.T, p botPost) {
+			if p.path != "/cgi-bin/webhook/send?key=k1" || p.body["msgtype"] != "text" {
+				t.Errorf("wecom post: %+v", p)
+			}
+		}},
+		{"telegram", AlertChannel{ID: "tg", TelegramChatID: "-1001234"}, telegramBot, false, func(t *testing.T, p botPost) {
+			if p.path != "/bot"+telegramBot+"/sendMessage" || p.body["chat_id"] != "-1001234" {
+				t.Errorf("telegram post: %+v", p)
+			}
+		}},
+		{"refused", wecom, "", true, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) { deliverBotCase(t, tc) })
+	}
+}
+
+func deliverBotCase(t *testing.T, tc botCase) {
+	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	approval := uuid.NewV7()
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	bots := newFakeBots(t)
+	configureBot(t, db, keys, tc.ch, tc.secret, now)
+	raiseNotices(t, db, tc.ch.ID, approval, now)
+	worker := &webhookWorker{alertWorker: &alertWorker{db: db, scope: platformScope, now: func() time.Time { return now }}, keys: keys, exit: bots.exit(t, tc.refuse)}
+	states := deliverAll(t, db, worker, now)
+	want := map[bool]string{false: "delivered", true: "failed"}[tc.refuse]
+	if states["test"] != want || states["approvals"] != want {
+		t.Fatalf("receipts %v, want %s", states, want)
+	}
+	if tc.refuse {
+		if events := alertCycle(t, db, now); len(bots.sent()) != 0 || len(events) == 0 {
+			t.Fatalf("refused target: posts %v, events %v", bots.sent(), events)
+		}
+		return
+	}
+	assertBotPosts(t, bots.sent(), tc.check, approval)
+	assertSecretHidden(t, db, tc.secret)
+}
+
+// assertBotPosts checks the two posts, the self-test and the approval, against their API and their text.
+func assertBotPosts(t *testing.T, posts []botPost, check func(*testing.T, botPost), approval uuid.UUID) {
+	t.Helper()
+	if len(posts) != 2 {
+		t.Fatalf("posts: %+v", posts)
+	}
+	var texts []string
+	for _, p := range posts {
+		check(t, p)
+		texts = append(texts, botText(p))
+	}
+	all := strings.Join(texts, "\n")
+	for _, want := range []string{"Axiom alert test", "Tool: refund_create", "Target: order:ord_1", "Decide: " + adminOrigin + "/approvals/" + approval.String()} {
+		if !strings.Contains(all, want) {
+			t.Errorf("messages lack %q: %q", want, all)
+		}
+	}
+}
+
+func assertSecretHidden(t *testing.T, db *pg.DB, value string) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		raw, err := jsonx.MarshalCanonical(c)
+		if value != "" && strings.Contains(string(raw), value) {
+			t.Error("the configuration returned the secret")
+		}
+		return err
+	})
+}
+
+// TestChannelKindsRefuseInvalidDestinations: a channel names exactly one valid destination, the bots only their
+// official hosts.
+func TestChannelKindsRefuseInvalidDestinations(t *testing.T) {
+	for _, ch := range []AlertChannel{
+		{ID: "x"},
+		{ID: "x", WebhookURL: "http://receiver.example/hook"},
+		{ID: "x", WebhookURL: "https://user@receiver.example/hook"},
+		{ID: "x", WebhookURL: "https://receiver.example/hook#fragment"},
+		{ID: "x", WebhookURL: "https://receiver.example/hook", Email: "ops@example.com"},
+		{ID: "x", FeishuURL: "https://open.feishu.cn.evil.example/open-apis/bot/v2/hook/a"},
+		{ID: "x", FeishuURL: "https://open.feishu.cn:8443/open-apis/bot/v2/hook/a"},
+		{ID: "x", WeComURL: "http://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a"},
+		{ID: "x", TelegramChatID: "chat"},
+		{ID: "x", TelegramChatID: "123", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a"},
+	} {
+		if err := validateAlertChannel(ch); !errors.Is(err, ErrAlertConfiguration) {
+			t.Errorf("invalid channel accepted: %+v", ch)
+		}
+	}
+}
+
+// TestChannelKindsTakeOnlyTheirSecret: a webhook takes 32 to 512 bytes, a Telegram bot only a token's shape, and a
+// WeCom bot none at all.
+func TestChannelKindsTakeOnlyTheirSecret(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	now := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		ch    AlertChannel
+		value string
+	}{
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("s", 31)},
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("s", 513)},
+		{AlertChannel{ID: "hook", WebhookURL: "https://receiver.example/hook"}, strings.Repeat("界", 256)},
+		{AlertChannel{ID: "tg", TelegramChatID: "@axiom_ops"}, "not-a-token"},
+		{AlertChannel{ID: "tg", TelegramChatID: "@axiom_ops"}, strings.Repeat("s", 40)},
+		{AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=a"}, strings.Repeat("s", 40)},
+	} {
+		configureBot(t, db, keys, tc.ch, "", now)
+		if err := rotateSecret(t, db, keys, tc.ch.ID, tc.value, now); !errors.Is(err, ErrAlertConfiguration) {
+			t.Errorf("%s took the secret %q: %v", tc.ch.ID, tc.value, err)
+		}
+	}
+}
+
+func rotateSecret(t *testing.T, db *pg.DB, keys *secret.Keyring, channel, value string, now time.Time) error {
+	t.Helper()
+	return db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err == nil {
+			_, err = RotateAlertWebhookSecret(t.Context(), tx, keys, channel, c.Rev, secret.New(value), now)
+		}
+		return err
+	})
+}
+
+const wecomKey = "wecom-group-key-0123456789"
+
+func readAlertConfig(t *testing.T, db *pg.DB) (c AlertConfiguration) {
+	t.Helper()
+	alertTx(t, db, func(tx pg.Tx) (err error) { c, err = GetAlertConfiguration(t.Context(), tx); return err })
+	return c
+}
+
+// saveChannel replaces the channels with ch as an admin's save does: its addresses sealed first.
+func saveChannel(t *testing.T, db *pg.DB, keys *secret.Keyring, ch AlertChannel) error {
+	t.Helper()
+	return db.Tx(t.Context(), platformScope, func(tx pg.Tx) error {
+		c, err := GetAlertConfiguration(t.Context(), tx)
+		if err != nil {
+			return err
+		}
+		c.Channels, c.Rules = []AlertChannel{ch}, nil
+		if err = SealAlertAddresses(t.Context(), tx, keys, &c); err != nil {
+			return err
+		}
+		return SetAlertConfiguration(t.Context(), tx, c)
+	})
+}
+
+// TestBotAddressesAreWriteOnly: an address that is a bot's credential is read back only masked, a save that sends the
+// masked form keeps the sealed address, and a masked form is no address for a channel that has none.
+func TestBotAddressesAreWriteOnly(t *testing.T) {
+	db := openDB(t)
+	keys := webhookTestKeys(t)
+	configureBot(t, db, keys, AlertChannel{ID: "wc", WeComURL: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=" + wecomKey}, "", time.Now())
+	c := readAlertConfig(t, db)
+	raw, err := jsonx.MarshalCanonical(c)
+	if err != nil || strings.Contains(string(raw), wecomKey) || c.Channels[0].WeComURL != "https://qyapi.weixin.qq.com/…6789" {
+		t.Fatalf("configuration shows the address: %s %v", raw, err)
+	}
+	digest := c.Channels[0].AddressDigest
+	for _, tc := range []struct {
+		ch   AlertChannel
+		want error
+	}{
+		{AlertChannel{ID: "wc", WeComURL: c.Channels[0].WeComURL}, nil},
+		{AlertChannel{ID: "other", WeComURL: c.Channels[0].WeComURL}, ErrAlertConfiguration},
+	} {
+		if err := saveChannel(t, db, keys, tc.ch); !errors.Is(err, tc.want) {
+			t.Errorf("%s: %v, want %v", tc.ch.ID, err, tc.want)
+		}
+	}
+	if got := readAlertConfig(t, db).Channels[0].AddressDigest; got != digest {
+		t.Errorf("resaving the masked address changed it: %s, want %s", got, digest)
+	}
+}
+
+// TestTelegramTokenStaysOutOfErrors: a post that fails names its category, never the token in its path.
+func TestTelegramTokenStaysOutOfErrors(t *testing.T) {
+	bots := newFakeBots(t)
+	w := &webhookWorker{alertWorker: &alertWorker{now: time.Now}, exit: bots.exit(t, true)}
+	d := alertDelivery{ch: AlertChannel{ID: "tg", TelegramChatID: "-1001234"}, payload: []byte(`{"text":"hi"}`)}
+	k, _, _ := kindOf(d.ch)
+	err := w.sendBot(t.Context(), k, d, []secret.Secret{secret.New(telegramBot)})
+	if err == nil || strings.Contains(err.Error(), telegramBot) || strings.Contains(err.Error(), "api.telegram.org") {
+		t.Fatalf("refused post: %v", err)
+	}
+}
