@@ -1,4 +1,5 @@
 import type { AdminSchemas } from "@axiom/api";
+import type { BaseTarget } from "./base-price";
 
 // What a supplier page can open a dialog about.
 export type Open =
@@ -8,4 +9,5 @@ export type Open =
   | { kind: "credentialLimits"; credential: AdminSchemas["SupplierCredential"] }
   | { kind: "test"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
   | { kind: "endpointEnabled"; endpoint: AdminSchemas["SupplierEndpoint"]; group: string }
-  | { kind: "quantization"; endpoint: AdminSchemas["SupplierEndpoint"] };
+  | { kind: "quantization"; endpoint: AdminSchemas["SupplierEndpoint"] }
+  | { kind: "basePrice"; target: BaseTarget };

@@ -1,3 +1,4 @@
+import { basePriceHandlers } from "./admin-base-prices.ts";
 import type { AdminState, Schemas } from "./admin-data.ts";
 import { aSupplier, uuid } from "./admin-data.ts";
 import { base, type Ctx, changes, reads, route, safe } from "./admin-route.ts";
@@ -436,6 +437,7 @@ export const supplyHandlers: Handler<AdminState>[] = [
     setEndpointEnabled,
   ),
   route("post", `${base}/suppliers/endpoint-tests`, changes("suppliers.manage"), testEndpoint),
+  ...basePriceHandlers,
   route("get", `${base}/pending-mappings`, reads("suppliers.view"), listPending),
   route("post", `${base}/suppliers/{supplier_id}/model-mappings`, changes("suppliers.manage"), mapModel),
 ];

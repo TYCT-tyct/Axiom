@@ -28,6 +28,7 @@ import sourceClasses from "./source-classes";
 import subscriptions from "./subscriptions";
 import suppliers from "./suppliers";
 import upstream from "./upstream";
+import basePrice from "./upstream-base-price";
 import channel from "./upstream-channel";
 import users from "./users";
 
@@ -199,7 +200,7 @@ export default /* @__PURE__ */ Object.assign({}, initial, settingWords, {
   settings,
   subscriptions,
   suppliers,
-  upstream: /* @__PURE__ */ Object.assign({}, upstream, channel),
+  upstream: /* @__PURE__ */ Object.assign({}, upstream, channel, basePrice),
   sourceClasses,
   routingPresets,
   discrepancies,
