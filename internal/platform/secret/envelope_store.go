@@ -50,13 +50,19 @@ func envelopeSuffix(column string) (string, bool) {
 var ErrUnregistered = errors.New("keyring: envelope columns this binary does not register")
 
 // inventory lists the envelope columns no registered store matches, as schema.table.column. A registered store without
-// the retirement fence is this binary's own defect and fails closed instead.
+// the retirement fence is this binary's own defect and fails closed instead. It reads pg_catalog, not
+// information_schema: the latter hides columns the connecting role holds no privilege on, and a hidden column with the
+// last reference to a version would let retirement delete its key. The suffix match is envelopeSuffix's, since a prefix
+// need not end in an underscore. Partitions are left out because their parent carries the columns.
 //
 //nolint:cyclop // one scan plus one fence check is the whole startup invariant
 func (r Rotation) inventory(ctx context.Context, tx pg.Tx) ([]string, error) {
-	rows, err := tx.Query(ctx, `SELECT table_schema, table_name, column_name FROM information_schema.columns
-		WHERE column_name = 'wrapped_dek' OR column_name LIKE '%\_wrapped_dek' ESCAPE '\'
-		   OR column_name = 'wrapped_key' OR column_name LIKE '%\_wrapped_key' ESCAPE '\'
+	rows, err := tx.Query(ctx, `SELECT n.nspname::text, c.relname::text, a.attname::text FROM pg_catalog.pg_attribute a
+		JOIN pg_catalog.pg_class c ON c.oid = a.attrelid
+		JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+		WHERE a.attnum > 0 AND NOT a.attisdropped AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+		  AND n.nspname <> 'information_schema' AND n.nspname NOT LIKE 'pg\_%' ESCAPE '\'
+		  AND (a.attname LIKE '%wrapped\_dek' ESCAPE '\' OR a.attname LIKE '%wrapped\_key' ESCAPE '\')
 		ORDER BY 1, 2, 3`)
 	if err != nil {
 		return nil, fmt.Errorf("keyring: cannot inspect envelope inventory: %w", err)
@@ -177,6 +183,46 @@ func (r Rotation) unreferenced(ctx context.Context, tx pg.Tx, version uint32) er
 	return nil
 }
 
+// retiredVersions reads the tombstoned versions in order.
+func retiredVersions(ctx context.Context, tx pg.Tx) ([]uint32, error) {
+	rows, err := tx.Query(ctx, "SELECT version FROM platform.key_versions WHERE state = 'retired' ORDER BY version")
+	if err != nil {
+		return nil, fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	retired, err := pgx.CollectRows(rows, pgx.RowTo[uint32])
+	if err != nil {
+		return nil, fmt.Errorf("keyring: cannot read retired versions: %w", err)
+	}
+	return retired, nil
+}
+
+// pruneRetired removes tombstoned versions still present in the distribution file. It recovers the state a retirement
+// leaves when the process stops between its commit and its file edit. A version is deleted only after confirming that no
+// envelope references it: the tombstone is written by a retirement that checked the same thing, so a reference here
+// means the metadata and the stored data disagree and the key may still be the only way to read it.
+func (r Rotation) pruneRetired(ctx context.Context, tx pg.Tx, retired []uint32) error {
+	for _, version := range retired {
+		if err := r.unreferenced(ctx, tx, version); err != nil {
+			return fmt.Errorf("keyring: refusing to prune version %d: %w", version, err)
+		}
+		// A retired version always has a marker: the tombstone and the marker commit together, and migration
+		// 00023 backfilled the rows from before the fence. A missing marker means this state was edited by hand; deleting
+		// the key could then race a writer the fence never saw, so leave it in place.
+		var fenced bool
+		if err := tx.QueryRow(ctx, "SELECT EXISTS (SELECT FROM platform.key_retirements WHERE version = $1)",
+			int64(version)).Scan(&fenced); err != nil {
+			return fmt.Errorf("keyring: cannot read retirement fence: %w", err)
+		}
+		if !fenced {
+			return fmt.Errorf("keyring: refusing to prune version %d: no retirement fence", version)
+		}
+		if err := removeKey(r.Path, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RewrapCursor is where one run of batches stopped: the store it was rewrapping and the last row it committed there.
 // It lives only in that command's memory; a new run starts from the zero value, which is still correct because the
 // stored key_version is the checkpoint and the rows before it were committed.
@@ -200,7 +246,7 @@ func (r Rotation) RewrapBatch(ctx context.Context, cursor RewrapCursor, limit in
 		if err != nil {
 			return err
 		}
-		status, err := checkVersions(ctx, tx, snapshot, 0)
+		status, err := checkVersions(ctx, tx, snapshot, nil)
 		if err != nil {
 			return err
 		}

@@ -95,7 +95,7 @@ age 的两个收件人必须不同，脚本拒绝相同；备份侧仅持公钥�
 
 retire 先提交墓碑后删文件，中断可重复；启动、check、在线循环确认无信封引用后也清退役材料。有引用则报错并保留；缺可读/被引用版本或摘要不符均拒绝启动，只报版本。退役不可逆，旧版本号和材料都不可复用（指纹墓碑拦截），只能整套旧备份恢复。
 
-重包裹仅改[信封清单](../../internal/platform/README.md#凭证加密)的 wrapped DEK 与版本，不改密文、nonce、业务状态/revision；Webhook 签名材料与重叠期限不变。新的 wrapped_dek/wrapped_key 列必须登记 cmd/axiom 清单，`TestKeyringUnregisteredEnvelopeStore` 在 CI 拦住漏登记。滚动发布中旧节点遇到新版本的列照常服务，启动日志和 check 的 `unregistered` 列出它；旧节点上的退役、清理退役材料和重包裹收尾都报错点名，留给新节点完成。hash/identity 不属 master 轮换范围。
+重包裹仅改[信封清单](../../internal/platform/README.md#凭证加密)的 wrapped DEK 与版本，不改密文、nonce、业务状态/revision；Webhook 签名材料与重叠期限不变。新的 wrapped_dek/wrapped_key 列必须登记 cmd/axiom 清单，`TestKeyringUnregisteredEnvelopeStore` 在 CI 拦住漏登记。滚动发布中旧节点遇到新版本的列照常服务，启动日志和 check 的 `unregistered` 列出它；旧节点上的退役和重包裹收尾报错点名，本机文件里已退役的版本保留不删、不挡启动，都留给新节点完成。hash/identity 不属 master 轮换范围。
 
 登录键和邮件键由进程启动时最高版本派生、不随热加载；混合重启期间计数桶可能按版本分开，只影响限流分桶不影响认证，需要一致则轮换后滚动重启全节点。
 

@@ -484,7 +484,7 @@ func openCheckedDatabase(ctx context.Context, cfg nodeSettings, tel *telemetry.T
 	ring, status, err := keyRotation(db, cfg.masterKeyFile).CheckRing(ctx, master)
 	if err == nil {
 		if len(status.Unregistered) != 0 {
-			logger.Warn("keyring: envelope columns from a newer release; key retirement waits for a node that registers them",
+			logger.Warn("keyring: envelope columns from a newer release; retiring and deleting keys wait for a node that registers them",
 				"columns", status.Unregistered)
 		}
 		return db, ring, nil
