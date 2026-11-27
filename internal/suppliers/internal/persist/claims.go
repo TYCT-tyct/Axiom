@@ -15,7 +15,7 @@ import (
 )
 
 // ClaimHold is how long a claim may stay held, with nothing sent, before another may take it over: a holder only looks
-// the key up by its name (one request, at most 30 seconds) and records that it sends the create. A holder taken over
+// the key up (a few requests of at most 30 seconds each) and records that it sends the create. A holder taken over
 // cannot record that, so it never sends.
 const ClaimHold = 2 * time.Minute
 
@@ -45,7 +45,11 @@ func (st stateStore) Claims() syncer.Claims {
 func (c Claims) Claim(ctx context.Context, groupRef string) (syncer.Claim, error) {
 	var out syncer.Claim
 	err := c.db.Tx(ctx, c.scope, func(tx pg.Tx) error {
-		row, found, err := lockClaim(ctx, tx, c.supplier, nil, &groupRef)
+		q := store.New()
+		if _, err := q.LockSupplier(ctx, tx, c.supplier); err != nil {
+			return fmt.Errorf("lock the supplier: %w", err)
+		}
+		row, found, err := groupClaim(ctx, tx, store.LockGroupClaimParams{SupplierID: c.supplier, UpstreamRef: &groupRef})
 		switch {
 		case err != nil:
 			return err
@@ -59,33 +63,33 @@ func (c Claims) Claim(ctx context.Context, groupRef string) (syncer.Claim, error
 			return nil
 		}
 		id := uuid.NewV7()
-		if err := store.New().TakeKeyClaim(ctx, tx, store.TakeKeyClaimParams{ID: row.ID, ClaimID: &id, ClaimedAt: &now}); err != nil {
+		if err := q.TakeKeyClaim(ctx, tx, store.TakeKeyClaimParams{ID: row.ID, ClaimID: &id, ClaimedAt: &now}); err != nil {
 			return fmt.Errorf("claim the key of group %s: %w", groupRef, err)
 		}
-		out = syncer.Claim{Group: row.ID, ID: id, Mine: true, At: now}
+		out.ID, out.At, out.Mine = id, now, true
 		return nil
 	})
 	return out, err
 }
 
 // Send implements syncer.Claims.
-func (c Claims) Send(ctx context.Context, cl syncer.Claim) (bool, error) {
-	return c.changed(ctx, "record the create", func(q *store.Queries, tx pg.Tx) (int64, error) {
-		return q.SendKeyClaim(ctx, tx, store.SendKeyClaimParams{ID: cl.Group, ClaimID: &cl.ID, SentAt: new(c.now())})
+func (c Claims) Send(ctx context.Context, cl syncer.Claim) (syncer.Claim, bool, error) {
+	at := c.now()
+	sent, err := c.changed(ctx, "record the create", func(q *store.Queries, tx pg.Tx) (int64, error) {
+		return q.SendKeyClaim(ctx, tx, store.SendKeyClaimParams{ID: cl.Group, ClaimID: &cl.ID, SentAt: &at})
 	})
+	if sent {
+		cl.SentAt, cl.Listing = at, nil
+	}
+	return cl, sent, err
 }
 
-// Resend implements syncer.Claims: the new holder keeps the time of the first create, which the replay window counts
-// from.
-func (c Claims) Resend(ctx context.Context, cl syncer.Claim) (syncer.Claim, bool, error) {
-	next := syncer.Claim{Group: cl.Group, ID: uuid.NewV7(), Mine: true, At: c.now(), SentAt: cl.SentAt}
-	taken, err := c.changed(ctx, "take the create over", func(q *store.Queries, tx pg.Tx) (int64, error) {
-		return q.ResendKeyClaim(ctx, tx, store.ResendKeyClaimParams{ID: cl.Group, ClaimID: &cl.ID, NewID: &next.ID, ClaimedAt: &next.At})
+// Park implements syncer.Claims.
+func (c Claims) Park(ctx context.Context, cl syncer.Claim, at adapter.Listing) error {
+	_, err := c.changed(ctx, "keep where the search stopped", func(q *store.Queries, tx pg.Tx) (int64, error) {
+		return q.ParkKeyClaim(ctx, tx, store.ParkKeyClaimParams{ID: cl.Group, ClaimID: &cl.ID, Listing: at})
 	})
-	if !taken {
-		return cl, false, err
-	}
-	return next, true, err
+	return err
 }
 
 // Know implements syncer.Claims.
@@ -116,13 +120,9 @@ func (c Claims) changed(ctx context.Context, what string, f func(*store.Queries,
 	return n == 1, nil
 }
 
-// lockClaim locks the supplier's row, then the group's, by its id or its ref, with its claim.
-func lockClaim(ctx context.Context, tx pg.Tx, supplier uuid.UUID, group *uuid.UUID, groupRef *string) (store.LockGroupClaimRow, bool, error) {
-	q := store.New()
-	if _, err := q.LockSupplier(ctx, tx, supplier); err != nil {
-		return store.LockGroupClaimRow{}, false, fmt.Errorf("lock the supplier: %w", err)
-	}
-	rows, err := q.LockGroupClaim(ctx, tx, store.LockGroupClaimParams{SupplierID: supplier, ID: group, UpstreamRef: groupRef})
+// groupClaim locks the group's row, by its id or its ref, with its claim. The caller holds the supplier's row.
+func groupClaim(ctx context.Context, tx pg.Tx, by store.LockGroupClaimParams) (store.LockGroupClaimRow, bool, error) {
+	rows, err := store.New().LockGroupClaim(ctx, tx, by)
 	if err != nil {
 		return store.LockGroupClaimRow{}, false, fmt.Errorf("lock the group's claim: %w", err)
 	}
@@ -133,7 +133,10 @@ func lockClaim(ctx context.Context, tx pg.Tx, supplier uuid.UUID, group *uuid.UU
 }
 
 func claimOf(r store.LockGroupClaimRow) syncer.Claim {
-	c := syncer.Claim{Group: r.ID, Keyed: r.Keyed, Stored: adapter.KeyRef(r.MadeRef)}
+	c := syncer.Claim{Group: r.ID, Keyed: r.Keyed, Stored: adapter.KeyRef(r.MadeRef), Listing: r.KeyClaimListing}
+	for _, ref := range r.ErasedRefs {
+		c.Erased = append(c.Erased, adapter.KeyRef(ref))
+	}
 	if r.KeyClaimID != nil {
 		c.ID, c.At = *r.KeyClaimID, *r.KeyClaimedAt
 	}
@@ -146,21 +149,26 @@ func claimOf(r store.LockGroupClaimRow) syncer.Claim {
 	return c
 }
 
-// ErrClaimed is a credential written into a group whose claim may still lead to a key Axiom makes: the claim has to be
-// adopted, or released by a person, first.
-var ErrClaimed = errors.New("persist: the group's key is being made by Axiom")
+// The ways a write meets a group's claim.
+var (
+	// ErrClaimed is a credential written into a group whose claim may still lead to a key Axiom makes: the claim has to
+	// be adopted, or released by a person, first.
+	ErrClaimed = errors.New("persist: the group's key is being made by Axiom")
+	// ErrClaimLost is a made key whose claim is no longer the group's: another holder took it over, or a person
+	// released it, so the key is not stored.
+	ErrClaimLost = errors.New("persist: the claim the key was obtained under is no longer the group's")
+	// ErrKeyBound is a key stored already as a credential of another group.
+	ErrKeyBound = errors.New("persist: the key is stored for another group")
+)
 
 // GroupClaim is a group's claim as a write of a credential into the group finds it, under the supplier's row, which the
 // caller holds already, and the group's.
 func GroupClaim(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID) (syncer.Claim, error) {
-	rows, err := store.New().LockGroupClaim(ctx, tx, store.LockGroupClaimParams{SupplierID: supplier, ID: &group})
-	if err != nil {
-		return syncer.Claim{}, fmt.Errorf("read the group's claim: %w", err)
+	row, found, err := groupClaim(ctx, tx, store.LockGroupClaimParams{SupplierID: supplier, ID: &group})
+	if err != nil || !found {
+		return syncer.Claim{}, err
 	}
-	if len(rows) == 0 {
-		return syncer.Claim{}, nil
-	}
-	return claimOf(rows[0]), nil
+	return claimOf(row), nil
 }
 
 // Unclaimed lets a credential that is no key Axiom made into the group: ErrClaimed when a create was sent, its key is
@@ -175,26 +183,50 @@ func Unclaimed(ctx context.Context, tx pg.Tx, supplier, group uuid.UUID, now tim
 	case !c.SentAt.IsZero() || now.Before(c.At.Add(ClaimHold)):
 		return ErrClaimed
 	}
-	if _, err := store.New().DropKeyClaim(ctx, tx, store.DropKeyClaimParams{ID: group, ClaimID: &c.ID}); err != nil {
+	return dropClaim(ctx, tx, group, c.ID)
+}
+
+// DropClaim ends the group's claim if it is still claim, in the caller's transaction: ErrClaimLost when it is not.
+func DropClaim(ctx context.Context, tx pg.Tx, group, claim uuid.UUID) error {
+	n, err := store.New().DropKeyClaim(ctx, tx, store.DropKeyClaimParams{ID: group, ClaimID: &claim})
+	switch {
+	case err != nil:
+		return fmt.Errorf("end the group's claim: %w", err)
+	case n != 1:
+		return ErrClaimLost
+	}
+	return nil
+}
+
+func dropClaim(ctx context.Context, tx pg.Tx, group, claim uuid.UUID) error {
+	_, err := store.New().DropKeyClaim(ctx, tx, store.DropKeyClaimParams{ID: group, ClaimID: &claim})
+	if err != nil {
 		return fmt.Errorf("end the group's claim: %w", err)
 	}
 	return nil
 }
 
-// MadeKey is a key Axiom made or adopted by its marker name, to store as the credential of its group: Status is the
-// credential status it starts in, and Policy what the supplier lets it call (nil is every model, no expiry).
+// MadeKey is a key Axiom made or adopted, to store as the credential of its group: Status is the credential status it
+// starts in, Policy what the supplier lets it call (nil is every model, no expiry), and Claim the group's claim it was
+// obtained under (zero for one the sync's listing had, with no claim).
 type MadeKey struct {
 	Ref    string
 	Text   secret.Secret
 	Status string
 	Policy *adapter.KeyPolicy
+	Claim  uuid.UUID
 }
 
-// StoreMadeKey stores a made key as the group's credential, sealed to its row, and settles the group's claim, in the
-// caller's transaction under the supplier's row. A credential the key was stored as and erased is sealed again instead
-// of a second row inserted. stored is false when the key is a credential of the group already, which is left as it
-// is; a key stored under another group is ErrKeyBound.
+// StoreMadeKey stores a made key as the group's credential, sealed to its row, in the caller's transaction under the
+// supplier's row, and ends the claim it was obtained under. A key the group stores already is left as it is (stored
+// false), the other path having stored it first; one stored under another group is ErrKeyBound. Otherwise the key is
+// stored only while its claim is still the group's: ErrClaimLost when another holder or a person's release has replaced
+// it, because that holder's key is the group's now. A credential the key was erased from is sealed again in place.
 func StoreMadeKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, supplier, group uuid.UUID, k MadeKey) (id uuid.UUID, stored bool, err error) {
+	current, err := GroupClaim(ctx, tx, supplier, group)
+	if err != nil {
+		return uuid.Nil(), false, err
+	}
 	q := store.New()
 	rows, err := q.MadeCredentialByRef(ctx, tx, store.MadeCredentialByRefParams{SupplierID: supplier, UpstreamKeyRef: k.Ref})
 	if err != nil {
@@ -206,11 +238,30 @@ func StoreMadeKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, supplier,
 		case r.SupplierGroupID != group:
 			return uuid.Nil(), false, ErrKeyBound
 		case r.Status != "erased":
-			return r.ID, false, q.SettleKeyClaim(ctx, tx, store.SettleKeyClaimParams{ID: group, Ref: new(k.Ref)})
+			return r.ID, false, endClaim(ctx, tx, group, current.ID, k.Claim)
 		default:
 			id, revive = r.ID, true
 		}
 	}
+	if current.ID != k.Claim {
+		return uuid.Nil(), false, ErrClaimLost
+	}
+	if err := sealMade(ctx, tx, keys, supplier, group, id, revive, k); err != nil {
+		return uuid.Nil(), false, err
+	}
+	return id, true, endClaim(ctx, tx, group, current.ID, k.Claim)
+}
+
+// endClaim ends the claim a stored key was obtained under, and no other.
+func endClaim(ctx context.Context, tx pg.Tx, group, current, claim uuid.UUID) error {
+	if claim == uuid.Nil() || current != claim {
+		return nil
+	}
+	return DropClaim(ctx, tx, group, claim)
+}
+
+// sealMade writes the made key into a new credential, or into the erased one of the same key.
+func sealMade(ctx context.Context, tx pg.Tx, keys *secret.Keyring, supplier, group, id uuid.UUID, revive bool, k MadeKey) error {
 	sealed := keys.Seal(k.Text, secret.Location{Table: "suppliers.credentials", RowID: id.String(), Purpose: "key"})
 	version := int64(sealed.KeyVersion)
 	var models []string
@@ -218,6 +269,8 @@ func StoreMadeKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, supplier,
 	if k.Policy != nil {
 		models, expires = k.Policy.Models, k.Policy.ExpiresAt
 	}
+	q := store.New()
+	var err error
 	if revive {
 		_, err = q.ReviveCredential(ctx, tx, store.ReviveCredentialParams{
 			ID: id, SupplierID: supplier, Ciphertext: sealed.Ciphertext, Nonce: sealed.Nonce, WrappedDek: sealed.WrappedDEK,
@@ -231,10 +284,7 @@ func StoreMadeKey(ctx context.Context, tx pg.Tx, keys *secret.Keyring, supplier,
 		})
 	}
 	if err != nil {
-		return uuid.Nil(), false, fmt.Errorf("store key %s: %w", k.Ref, err)
+		return fmt.Errorf("store key %s: %w", k.Ref, err)
 	}
-	return id, true, q.SettleKeyClaim(ctx, tx, store.SettleKeyClaimParams{ID: group, Ref: new(k.Ref)})
+	return nil
 }
-
-// ErrKeyBound is a key stored already as a credential of another group.
-var ErrKeyBound = errors.New("persist: the key is stored for another group")

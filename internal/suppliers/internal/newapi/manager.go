@@ -157,17 +157,8 @@ func (m *manager) keyPage(ctx context.Context, page int) ([]token, int, error) {
 func (m *manager) tokens(ctx context.Context, path string) ([]token, int, error) {
 	var list struct {
 		Data *struct {
-			Total *int `json:"total"`
-			Items []struct {
-				ID            int64   `json:"id"`
-				Name          string  `json:"name"`
-				Key           string  `json:"key"`
-				Status        int     `json:"status"`
-				Group         string  `json:"group"`
-				Expires       *int64  `json:"expired_time"`
-				LimitsEnabled *bool   `json:"model_limits_enabled"`
-				Limits        *string `json:"model_limits"`
-			} `json:"items"`
+			Total *int        `json:"total"`
+			Items []tokenItem `json:"items"`
 		} `json:"data"`
 	}
 	if err := m.api.get(ctx, path, global, &list); err != nil {
@@ -178,19 +169,39 @@ func (m *manager) tokens(ctx context.Context, path string) ([]token, int, error)
 	}
 	keys := make([]token, 0, len(list.Data.Items))
 	for _, item := range list.Data.Items {
-		status, ok := keyStatus[item.Status]
-		if !ok || item.ID <= 0 {
-			return nil, 0, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
-		}
-		policy, err := keyPolicy(item.Expires, item.LimitsEnabled, item.Limits)
+		t, err := item.token()
 		if err != nil {
 			return nil, 0, err
 		}
-		keys = append(keys, token{state: adapter.KeyState{
-			Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Name: item.Name, Status: status, Policy: policy,
-		}, masked: item.Key})
+		keys = append(keys, t)
 	}
 	return keys, *list.Data.Total, nil
+}
+
+// tokenItem is one key as new-api's listing, its search and its read of one key show it.
+type tokenItem struct {
+	ID            int64   `json:"id"`
+	Name          string  `json:"name"`
+	Key           string  `json:"key"`
+	Status        int     `json:"status"`
+	Group         string  `json:"group"`
+	Expires       *int64  `json:"expired_time"`
+	LimitsEnabled *bool   `json:"model_limits_enabled"`
+	Limits        *string `json:"model_limits"`
+}
+
+func (item tokenItem) token() (token, error) {
+	status, ok := keyStatus[item.Status]
+	if !ok || item.ID <= 0 {
+		return token{}, fmt.Errorf("%w: a key with status %d", adapter.ErrUnrecognised, item.Status)
+	}
+	policy, err := keyPolicy(item.Expires, item.LimitsEnabled, item.Limits)
+	if err != nil {
+		return token{}, err
+	}
+	return token{state: adapter.KeyState{
+		Ref: adapter.KeyRef(strconv.FormatInt(item.ID, 10)), GroupRef: item.Group, Name: item.Name, Status: status, Policy: policy,
+	}, masked: item.Key}, nil
 }
 
 func keyPolicy(expires *int64, enabled *bool, limits *string) (*adapter.KeyPolicy, error) {
@@ -231,14 +242,7 @@ func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Sec
 			Key string `json:"key"`
 		} `json:"data"`
 	}
-	resp, err := m.api.send(ctx, http.MethodPost, "/api/token/"+string(ref)+"/key", globalCritical, nil)
-	if err != nil {
-		return secret.Secret{}, err
-	}
-	if missingRecord(resp) {
-		return secret.Secret{}, adapter.ErrKeyGone
-	}
-	if err := read(resp, &reveal); err != nil {
+	if err := m.api.do(ctx, http.MethodPost, "/api/token/"+string(ref)+"/key", globalCritical, &reveal); err != nil {
 		if scopeDenied(err) {
 			return secret.Secret{}, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}

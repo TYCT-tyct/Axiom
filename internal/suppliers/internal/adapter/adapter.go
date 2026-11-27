@@ -78,9 +78,6 @@ var (
 	// ErrKeyMade wraps a failure after the supplier accepted a create: the key exists there and its id is not known
 	// yet, so the failure is never a refusal of the create, whatever else it wraps.
 	ErrKeyMade = errors.New("adapter: the key was made and its id is not known")
-	// ErrKeyGone: the supplier answered, for certain, that it has no key with this id. A permission or a temporary
-	// failure is never this.
-	ErrKeyGone = errors.New("adapter: the supplier has no key with this id")
 )
 
 // ScopeDenied is an ErrAuthRejected whose cause is a login that is valid but lacks a permission a read needs (a
@@ -209,22 +206,25 @@ type UsageQueueManager interface {
 
 // KeyMaker is the optional half of a management side that can make a key of its own. An adapter that can serve a group
 // only through such a key implements it. Who may call CreateKey for a group is decided by the group's claim
-// (docs/domains/suppliers.md「一个分组只建一把」): never twice for one group, unless CreateReplay says the supplier
-// answers a repeated create with the first key.
+// (docs/domains/suppliers.md「一个分组只建一把」): never twice for one group while the first may have made a key.
 type KeyMaker interface {
 	// CreateKey makes a dedicated key for the group, named name, with no quota, expiry or model limit, and returns its
 	// id at the supplier. The text is read through KeySecret. Only a refusal of the create request itself is
-	// ErrKeyNotPermitted, ErrKeyGroupUnavailable or ErrKeyRefused; a failure after the supplier accepted it wraps
-	// ErrKeyMade; anything else may or may not have made the key.
+	// ErrKeyNotPermitted, ErrKeyGroupUnavailable or ErrKeyRefused, and only a create that never left wraps ErrNotSent;
+	// a failure after the supplier accepted it wraps ErrKeyMade; anything else may or may not have made the key.
 	CreateKey(ctx context.Context, groupRef, name string) (KeyRef, error)
 	// KeyNamed finds the key named name in the group, by exact name and group. found is false only when every key the
-	// supplier could list under that name was read; a search it could not finish is an error, never an absence. With
-	// two such keys, the oldest is the answer.
-	KeyNamed(ctx context.Context, groupRef, name string) (key KeyState, found bool, err error)
-	// CreateReplay is how long after a create the supplier answers the same create (same name, same group) with the
-	// key the first one made instead of a second one; zero when it never does.
-	CreateReplay() time.Duration
+	// supplier could list under that name was read; a search it could not finish is an error, never an absence. A
+	// search the supplier's limits stopped answers its error with the position to go on from in next, which the caller
+	// keeps and passes back as at (nil is the start). With two such keys, the oldest is the answer.
+	KeyNamed(ctx context.Context, groupRef, name string, at Listing) (key KeyState, found bool, next Listing, err error)
+	// KeyByRef reads the key with the supplier's id ref as the supplier lists it. found is false only when the
+	// supplier answers, for certain, that it has no such key; a permission or a temporary failure is an error.
+	KeyByRef(ctx context.Context, ref KeyRef) (key KeyState, found bool, err error)
 }
+
+// ErrNotSent wraps the failure of a request that never left: the rate buckets refused it before it was sent.
+var ErrNotSent = errors.New("adapter: the request was not sent")
 
 // KeyFinder is the optional half of a management side that can say which of the supplier's keys a text is: a key a
 // person pasted is stored under the id the supplier lists it by, in the group it lists it under, so its cost is the

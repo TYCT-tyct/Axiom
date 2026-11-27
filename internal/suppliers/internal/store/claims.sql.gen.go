@@ -14,7 +14,7 @@ import (
 
 const dropKeyClaim = `-- name: DropKeyClaim :execrows
 UPDATE suppliers.supplier_groups
-SET key_claim_id = NULL, key_claimed_at = NULL, key_claim_sent_at = NULL, key_claim_ref = NULL
+SET key_claim_id = NULL, key_claimed_at = NULL, key_claim_sent_at = NULL, key_claim_ref = NULL, key_claim_listing = NULL
 WHERE id = $1 AND key_claim_id = $2
 `
 
@@ -23,6 +23,7 @@ type DropKeyClaimParams struct {
 	ClaimID *uuid.UUID
 }
 
+// The claim ends: nothing was made, its key is gone, a person released it, or the key it led to is stored.
 func (q *Queries) DropKeyClaim(ctx context.Context, db DBTX, arg DropKeyClaimParams) (int64, error) {
 	result, err := db.Exec(ctx, dropKeyClaim, arg.ID, arg.ClaimID)
 	if err != nil {
@@ -55,9 +56,12 @@ func (q *Queries) KnowKeyClaim(ctx context.Context, db DBTX, arg KnowKeyClaimPar
 const lockGroupClaim = `-- name: LockGroupClaim :many
 
 SELECT g.id, g.upstream_ref, g.present, g.key_claim_id, g.key_claimed_at, g.key_claim_sent_at, g.key_claim_ref,
+    g.key_claim_listing,
     EXISTS (SELECT FROM suppliers.credentials c WHERE c.supplier_group_id = g.id AND c.status <> 'erased')::boolean AS keyed,
     COALESCE((SELECT c.upstream_key_ref FROM suppliers.credentials c
-        WHERE c.supplier_group_id = g.id AND c.status <> 'erased' AND c.source = 'made' ORDER BY c.id LIMIT 1), '')::text AS made_ref
+        WHERE c.supplier_group_id = g.id AND c.status <> 'erased' AND c.source = 'made' ORDER BY c.id LIMIT 1), '')::text AS made_ref,
+    COALESCE((SELECT array_agg(c.upstream_key_ref ORDER BY c.id) FROM suppliers.credentials c
+        WHERE c.supplier_group_id = g.id AND c.status = 'erased'), '{}')::text[] AS erased_refs
 FROM suppliers.supplier_groups g
 WHERE g.supplier_id = $1 AND (g.id = $2 OR g.upstream_ref = $3)
 FOR UPDATE OF g
@@ -70,21 +74,23 @@ type LockGroupClaimParams struct {
 }
 
 type LockGroupClaimRow struct {
-	ID             uuid.UUID
-	UpstreamRef    string
-	Present        bool
-	KeyClaimID     *uuid.UUID
-	KeyClaimedAt   *time.Time
-	KeyClaimSentAt *time.Time
-	KeyClaimRef    *string
-	Keyed          bool
-	MadeRef        string
+	ID              uuid.UUID
+	UpstreamRef     string
+	Present         bool
+	KeyClaimID      *uuid.UUID
+	KeyClaimedAt    *time.Time
+	KeyClaimSentAt  *time.Time
+	KeyClaimRef     *string
+	KeyClaimListing []byte
+	Keyed           bool
+	MadeRef         string
+	ErasedRefs      []string
 }
 
 // A group's claim on making its key at the supplier (docs/domains/suppliers.md「一个分组只建一把」). Every change but
 // taking a claim compares its id, so a holder that was taken over, or whose claim was released, writes nothing.
 // The group by its id or its supplier's ref, locked after its supplier, with its claim, whether it holds a credential,
-// and the key Axiom made that one of them is (empty when none is).
+// the key Axiom made that one of them is (empty when none is), and the keys of its erased credentials.
 func (q *Queries) LockGroupClaim(ctx context.Context, db DBTX, arg LockGroupClaimParams) ([]LockGroupClaimRow, error) {
 	rows, err := db.Query(ctx, lockGroupClaim, arg.SupplierID, arg.ID, arg.UpstreamRef)
 	if err != nil {
@@ -102,8 +108,10 @@ func (q *Queries) LockGroupClaim(ctx context.Context, db DBTX, arg LockGroupClai
 			&i.KeyClaimedAt,
 			&i.KeyClaimSentAt,
 			&i.KeyClaimRef,
+			&i.KeyClaimListing,
 			&i.Keyed,
 			&i.MadeRef,
+			&i.ErasedRefs,
 		); err != nil {
 			return nil, err
 		}
@@ -152,26 +160,20 @@ func (q *Queries) MadeCredentialByRef(ctx context.Context, db DBTX, arg MadeCred
 	return items, nil
 }
 
-const resendKeyClaim = `-- name: ResendKeyClaim :execrows
-UPDATE suppliers.supplier_groups SET key_claim_id = $1, key_claimed_at = $2
-WHERE id = $3 AND key_claim_id = $4 AND key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL
+const parkKeyClaim = `-- name: ParkKeyClaim :execrows
+UPDATE suppliers.supplier_groups SET key_claim_listing = $1
+WHERE id = $2 AND key_claim_id = $3 AND key_claim_sent_at IS NULL
 `
 
-type ResendKeyClaimParams struct {
-	NewID     *uuid.UUID
-	ClaimedAt *time.Time
-	ID        uuid.UUID
-	ClaimID   *uuid.UUID
+type ParkKeyClaimParams struct {
+	Listing []byte
+	ID      uuid.UUID
+	ClaimID *uuid.UUID
 }
 
-// The holder of a sent claim whose result is unknown, taking it over to send the create again.
-func (q *Queries) ResendKeyClaim(ctx context.Context, db DBTX, arg ResendKeyClaimParams) (int64, error) {
-	result, err := db.Exec(ctx, resendKeyClaim,
-		arg.NewID,
-		arg.ClaimedAt,
-		arg.ID,
-		arg.ClaimID,
-	)
+// Where a held claim's search by name stopped.
+func (q *Queries) ParkKeyClaim(ctx context.Context, db DBTX, arg ParkKeyClaimParams) (int64, error) {
+	result, err := db.Exec(ctx, parkKeyClaim, arg.Listing, arg.ID, arg.ClaimID)
 	if err != nil {
 		return 0, err
 	}
@@ -179,7 +181,7 @@ func (q *Queries) ResendKeyClaim(ctx context.Context, db DBTX, arg ResendKeyClai
 }
 
 const sendKeyClaim = `-- name: SendKeyClaim :execrows
-UPDATE suppliers.supplier_groups SET key_claim_sent_at = $1
+UPDATE suppliers.supplier_groups SET key_claim_sent_at = $1, key_claim_listing = NULL
 WHERE id = $2 AND key_claim_id = $3 AND key_claim_sent_at IS NULL
 `
 
@@ -198,43 +200,50 @@ func (q *Queries) SendKeyClaim(ctx context.Context, db DBTX, arg SendKeyClaimPar
 	return result.RowsAffected(), nil
 }
 
-const settleKeyClaim = `-- name: SettleKeyClaim :exec
-UPDATE suppliers.supplier_groups
-SET key_claim_id = NULL, key_claimed_at = NULL, key_claim_sent_at = NULL, key_claim_ref = NULL
-WHERE id = $1 AND key_claim_id IS NOT NULL AND (key_claim_ref IS NULL OR key_claim_ref = $2)
+const sentKeyClaimsOf = `-- name: SentKeyClaimsOf :many
+SELECT upstream_ref, key_claim_ref FROM suppliers.supplier_groups
+WHERE supplier_id = $1 AND key_claim_sent_at IS NOT NULL ORDER BY upstream_ref
 `
 
-type SettleKeyClaimParams struct {
-	ID  uuid.UUID
-	Ref *string
+type SentKeyClaimsOfRow struct {
+	UpstreamRef string
+	KeyClaimRef *string
 }
 
-// The group's key is stored: its claim is done, unless it names another key the supplier made.
-func (q *Queries) SettleKeyClaim(ctx context.Context, db DBTX, arg SettleKeyClaimParams) error {
-	_, err := db.Exec(ctx, settleKeyClaim, arg.ID, arg.Ref)
-	return err
+// The supplier's groups whose create was sent and whose key was never stored: the id of the key when it is known.
+func (q *Queries) SentKeyClaimsOf(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]SentKeyClaimsOfRow, error) {
+	rows, err := db.Query(ctx, sentKeyClaimsOf, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SentKeyClaimsOfRow
+	for rows.Next() {
+		var i SentKeyClaimsOfRow
+		if err := rows.Scan(&i.UpstreamRef, &i.KeyClaimRef); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const takeKeyClaim = `-- name: TakeKeyClaim :exec
-UPDATE suppliers.supplier_groups
-SET key_claim_id = $1, key_claimed_at = $2, key_claim_sent_at = $3, key_claim_ref = NULL
-WHERE id = $4
+UPDATE suppliers.supplier_groups SET key_claim_id = $1, key_claimed_at = $2
+WHERE id = $3 AND key_claim_sent_at IS NULL
 `
 
 type TakeKeyClaimParams struct {
 	ClaimID   *uuid.UUID
 	ClaimedAt *time.Time
-	SentAt    *time.Time
 	ID        uuid.UUID
 }
 
-// A new holder: nothing sent yet, unless it takes over a create the supplier replays (sent_at is the first one's).
+// A new holder, with nothing sent; a search by name a holder before it left stopped stays, to go on from.
 func (q *Queries) TakeKeyClaim(ctx context.Context, db DBTX, arg TakeKeyClaimParams) error {
-	_, err := db.Exec(ctx, takeKeyClaim,
-		arg.ClaimID,
-		arg.ClaimedAt,
-		arg.SentAt,
-		arg.ID,
-	)
+	_, err := db.Exec(ctx, takeKeyClaim, arg.ClaimID, arg.ClaimedAt, arg.ID)
 	return err
 }

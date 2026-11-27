@@ -267,6 +267,9 @@ type KeyMade struct {
 	GroupRef string
 	Status   adapter.KeyStatus
 	Secret   secret.Secret
+	// Claim is the group's claim the key was obtained under, zero for one the listing had: it is stored only while
+	// that is still the group's claim.
+	Claim uuid.UUID
 }
 
 // KeyBound is a key a person bound by reference, now with its text. ID is the credential row that is waiting for it.

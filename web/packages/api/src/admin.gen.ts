@@ -2324,7 +2324,7 @@ export interface paths {
         put?: never;
         /**
          * Let Axiom make a group's key afresh
-         * @description Axiom makes at most one key at the supplier for a group, under a claim the group holds until the key is stored. A key asked for whose answer was lost keeps the group `unconfirmed` until the supplier lists it under its name, and the group takes no other key meanwhile. Release the claim once the supplier is checked: no key named as Axiom names them is in the group, or one is and will be revoked there (the audit entry names its ID when Axiom knows it). The next `make` or sync then makes or finds the key afresh. A group with no claim is returned as it is, and nothing is recorded.
+         * @description Axiom makes at most one key at the supplier for a group, under a claim the group holds until the key is stored. A key asked for whose answer was lost keeps the group `unconfirmed` until the supplier lists it under its name, and the group takes no other key meanwhile. Release the claim once the supplier is checked: no key named as Axiom names them is in the group, or one is and will be revoked there (the audit entry names its ID when Axiom knows it). The next `make` or sync then makes or finds the key afresh. `claim_id` is the group's `key_claim_id` the person checked: when the group no longer has that claim (it was adopted, released or taken over since), the release is 409 and nothing changes, so it never ends a later attempt.
          */
         post: operations["releaseSupplierGroupKeyClaim"];
         delete?: never;
@@ -5272,6 +5272,11 @@ export interface components {
         ReasonRequest: {
             reason: components["schemas"]["Reason"];
         };
+        KeyClaimRelease: {
+            /** @description The group's `key_claim_id` as the person read it. */
+            claim_id: components["schemas"]["Uuid"];
+            reason: components["schemas"]["Reason"];
+        };
         TierRef: {
             id: components["schemas"]["TierId"];
             name: string;
@@ -6192,6 +6197,8 @@ export interface components {
              * @enum {string}
              */
             key_reason?: "not_permitted" | "group_unavailable" | "refused";
+            /** @description The group's claim on making its key, while Axiom is making it or a key was asked for whose answer was lost; absent otherwise. `releaseSupplierGroupKeyClaim` takes it. */
+            key_claim_id?: components["schemas"]["Uuid"];
             /** @description What the supplier says about the group, in its own terms, as the supplier kind's adapter read it: for example new-api's `desc` and `endpoint_types`, sub2api's `platform`, `status`, `subscription`, `peak` and `claude_code_only`, a declared supplier's `formats`. The members are the supplier kind's, not this contract's, so they are not typed here; show them as labelled values and decide nothing from them. What Axiom concluded from them is in the other fields: `ratio`, `key_state`, and the endpoints the group serves. */
             facts?: {
                 [key: string]: unknown;
@@ -12418,7 +12425,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["ReasonRequest"];
+                "application/json": components["schemas"]["KeyClaimRelease"];
             };
         };
         responses: {

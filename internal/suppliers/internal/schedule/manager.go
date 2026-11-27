@@ -3,7 +3,6 @@ package schedule
 import (
 	"context"
 	"errors"
-	"time"
 
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -97,25 +96,34 @@ func (o *openOnUse) CreateKey(ctx context.Context, groupRef, name string) (adapt
 }
 
 // KeyNamed forwards the name lookup to the adapter that makes keys; one that does not answers ErrNoKeyMaker.
-func (o *openOnUse) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
-	m, err := o.get()
+func (o *openOnUse) KeyNamed(ctx context.Context, groupRef, name string, at adapter.Listing) (adapter.KeyState, bool, adapter.Listing, error) {
+	maker, err := o.maker()
+	if err != nil {
+		return adapter.KeyState{}, false, nil, err
+	}
+	return maker.KeyNamed(ctx, groupRef, name, at)
+}
+
+// KeyByRef forwards the read of one key to the adapter that makes keys; one that does not answers ErrNoKeyMaker.
+func (o *openOnUse) KeyByRef(ctx context.Context, ref adapter.KeyRef) (adapter.KeyState, bool, error) {
+	maker, err := o.maker()
 	if err != nil {
 		return adapter.KeyState{}, false, err
 	}
-	maker, ok := m.(adapter.KeyMaker)
-	if !ok {
-		return adapter.KeyState{}, false, adapter.ErrNoKeyMaker
-	}
-	return maker.KeyNamed(ctx, groupRef, name)
+	return maker.KeyByRef(ctx, ref)
 }
 
-// CreateReplay forwards to the adapter that makes keys. It is asked only after a create was sent, so the manager is
-// open; one that failed to open, or makes no keys, never replays.
-func (o *openOnUse) CreateReplay() time.Duration {
-	if maker, ok := o.manager.(adapter.KeyMaker); ok && o.err == nil {
-		return maker.CreateReplay()
+// maker is the opened manager's key making half, ErrNoKeyMaker when it has none.
+func (o *openOnUse) maker() (adapter.KeyMaker, error) {
+	m, err := o.get()
+	if err != nil {
+		return nil, err
 	}
-	return 0
+	maker, ok := m.(adapter.KeyMaker)
+	if !ok {
+		return nil, adapter.ErrNoKeyMaker
+	}
+	return maker, nil
 }
 
 // Pool forwards the pool read to the adapter that has one. A relay's manager does not, and answers ErrNotPool; that is

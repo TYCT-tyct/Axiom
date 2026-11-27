@@ -19,15 +19,16 @@ import (
 
 // claimRelay is a relay's management side that makes keys the way new-api does, in memory: a key is made when the
 // create arrives, whatever its answer says. at, when set, receives each create as it arrives and holds it until the
-// test sends on release, so another path runs while it is in flight. hidden keys are made but not listed by name yet.
+// test sends on release, so another path runs while it is in flight. hidden keys are made but not listed by name yet;
+// a read by id finds them.
 type claimRelay struct {
 	mu        sync.Mutex
 	keys      map[adapter.KeyRef]adapter.KeyState
 	hidden    map[adapter.KeyRef]bool
 	creates   int // create requests received
 	made      int // keys made
-	replay    time.Duration
 	hide      bool
+	keepBack  int     // creates the rate buckets refuse before they leave, from the next
 	createErr error   // answered to every create, after the key is made
 	secretErr []error // answered to the next text reads, in order
 	at        chan struct{}
@@ -40,19 +41,16 @@ func newClaimRelay() *claimRelay {
 
 func (r *claimRelay) CreateKey(_ context.Context, groupRef, name string) (adapter.KeyRef, error) {
 	r.mu.Lock()
+	if r.keepBack > 0 {
+		r.keepBack--
+		r.mu.Unlock()
+		return "", fmt.Errorf("%w: %w", adapter.ErrNotSent, adapter.ErrBucketsFull)
+	}
 	r.creates++
-	var ref adapter.KeyRef
-	for k, s := range r.keys {
-		if r.replay > 0 && s.Name == name && s.GroupRef == groupRef {
-			ref = k // the supplier replays a create of the same name
-		}
-	}
-	if ref == "" {
-		r.made++
-		ref = adapter.KeyRef(strconv.Itoa(100 + r.made))
-		r.keys[ref] = adapter.KeyState{Ref: ref, GroupRef: groupRef, Name: name, Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}
-		r.hidden[ref] = r.hide
-	}
+	r.made++
+	ref := adapter.KeyRef(strconv.Itoa(100 + r.made))
+	r.keys[ref] = adapter.KeyState{Ref: ref, GroupRef: groupRef, Name: name, Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}
+	r.hidden[ref] = r.hide
 	err, at, release := r.createErr, r.at, r.release
 	r.mu.Unlock()
 	if at != nil {
@@ -65,18 +63,23 @@ func (r *claimRelay) CreateKey(_ context.Context, groupRef, name string) (adapte
 	return ref, nil
 }
 
-func (r *claimRelay) KeyNamed(_ context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+func (r *claimRelay) KeyNamed(_ context.Context, groupRef, name string, _ adapter.Listing) (adapter.KeyState, bool, adapter.Listing, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for ref, k := range r.keys {
 		if k.Name == name && k.GroupRef == groupRef && !r.hidden[ref] {
-			return k, true, nil
+			return k, true, nil, nil
 		}
 	}
-	return adapter.KeyState{}, false, nil
+	return adapter.KeyState{}, false, nil, nil
 }
 
-func (r *claimRelay) CreateReplay() time.Duration { return r.replay }
+func (r *claimRelay) KeyByRef(_ context.Context, ref adapter.KeyRef) (adapter.KeyState, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	k, ok := r.keys[ref]
+	return k, ok, nil
+}
 
 func (r *claimRelay) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Secret, error) {
 	r.mu.Lock()
@@ -85,9 +88,6 @@ func (r *claimRelay) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Se
 		err := r.secretErr[0]
 		r.secretErr = r.secretErr[1:]
 		return secret.Secret{}, err
-	}
-	if _, ok := r.keys[ref]; !ok {
-		return secret.Secret{}, adapter.ErrKeyGone
 	}
 	return secret.New("sk-text-" + string(ref)), nil
 }
@@ -185,6 +185,17 @@ func (w claimWorld) syncRound() error {
 	return syncer.New(s.Store(), w.relay, syncer.Defaults(), w.clock.now).Round(w.t.Context())
 }
 
+// syncStores stores the key as the sync's commit does, under the claim it obtained the key under (zero for none).
+func (w claimWorld) syncStores(ref string, claim uuid.UUID) (uuid.UUID, error) {
+	var id uuid.UUID
+	err := w.db.Tx(w.t.Context(), platformScope, func(tx pg.Tx) (err error) {
+		id, _, err = persist.StoreMadeKey(w.t.Context(), tx, w.keys, w.supplier, w.group,
+			persist.MadeKey{Ref: ref, Text: secret.New("sk-text-" + ref), Status: "active", Claim: claim})
+		return err
+	})
+	return id, err
+}
+
 // claim is the group's claim as the tables hold it: none, held, sent, or the key's id.
 func (w claimWorld) claim() string {
 	return w.text(`SELECT CASE WHEN key_claim_ref IS NOT NULL THEN 'known ' || key_claim_ref
@@ -192,10 +203,24 @@ func (w claimWorld) claim() string {
 		FROM suppliers.supplier_groups WHERE id = $1`, w.group)
 }
 
+// claimID is the group's claim, as a person reads it to release it.
+func (w claimWorld) claimID() uuid.UUID {
+	id, err := uuid.Parse(w.text(`SELECT key_claim_id::text FROM suppliers.supplier_groups WHERE id = $1`, w.group))
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return id
+}
+
 // credentials are the group's credentials that hold a key, by id, with their status.
 func (w claimWorld) credentials() string {
 	return w.text(`SELECT COALESCE(string_agg(upstream_key_ref || ' ' || status, ',' ORDER BY id), '')
 		FROM suppliers.credentials WHERE supplier_group_id = $1`, w.group)
+}
+
+// textFails makes the next read of a key's text fail, so the claim keeps the key's id.
+func (w claimWorld) textFails() {
+	w.relay.set(func(r *claimRelay) { r.secretErr = []error{errors.New("503")} })
 }
 
 // TestOneKeyPerGroupAcrossPaths: a person's make and the sync obtain one group's key at the same time; whichever
@@ -245,14 +270,15 @@ func TestOneKeyPerGroupAcrossPaths(t *testing.T) {
 }
 
 // TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain: a create whose answer was lost, or whose text could not be read,
-// leaves the claim, and nothing sends a second create: the id it knows is read again, a key the relay lists later is
-// adopted, and one it never lists waits for a person, unless the relay replays a create of the same name.
+// leaves the claim, and nothing sends a second create: the id it knows is read again, as the relay lists it now; a key
+// the relay lists later is adopted; one it never lists waits for a person. A create the rate buckets kept back sent
+// nothing, so it leaves no claim; a known id the relay answers it no longer has is made again.
 func TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain(t *testing.T) {
 	t.Parallel()
 	t.Run("made, then the text read fails", func(t *testing.T) {
 		t.Parallel()
 		w := newClaimWorld(t)
-		w.relay.set(func(r *claimRelay) { r.secretErr = []error{errors.New("503")} })
+		w.textFails()
 		_, err := w.makeKey()
 		refuses(t, "the first make", err, ErrSupplierUnanswered)
 		same(t, "the claim it leaves", "known 101", w.claim())
@@ -263,46 +289,44 @@ func TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain(t *testing.T) {
 		same(t, "the credential", "101 active", w.credentials())
 		same(t, "the claim", "none", w.claim())
 	})
-	for _, c := range []struct {
-		name   string
-		replay time.Duration
-		want   error
-		claim  string
-		sends  int
-	}{
-		{name: "the relay does not replay", want: ErrKeyInProgress, claim: "sent", sends: 1},
-		{name: "the relay replays a create of the name", replay: 23 * time.Hour, claim: "none", sends: 2},
-	} {
-		t.Run("the answer was lost: "+c.name, func(t *testing.T) {
-			t.Parallel()
-			w := newClaimWorld(t)
-			w.relay.set(func(r *claimRelay) { r.hide, r.replay, r.createErr = true, c.replay, errors.New("timeout") })
-			_, err := w.makeKey()
-			refuses(t, "the first make", err, ErrSupplierUnanswered)
-			w.clock.advance(time.Hour) // long past any time a create takes
-			w.relay.set(func(r *claimRelay) { r.createErr = nil })
-			_, err = w.makeKey()
-			refuses(t, "the make an hour later", err, c.want)
-			refuses(t, "a sync round", w.syncRound(), nil)
-			same(t, "the claim", c.claim, w.claim())
-			creates, made := w.relay.counts()
-			same(t, "creates sent and keys made", []int{c.sends, 1}, []int{creates, made})
-			if c.want == nil {
-				return
-			}
-			got, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) (Group, error) {
-				return w.admin.GroupOf(ctx, tx, w.supplier, w.group)
-			})
-			refuses(t, "reading the group", err, nil)
-			same(t, "the group's key state", "unconfirmed", got.KeyState)
-			w.relay.set(func(r *claimRelay) { clear(r.hidden) }) // the relay lists the key at last
-			_, err = w.makeKey()
-			refuses(t, "the make once it is listed", err, nil)
-			same(t, "the credential", "101 active", w.credentials())
-			creates, made = w.relay.counts()
-			same(t, "creates sent and keys made at the end", []int{1, 1}, []int{creates, made})
+	t.Run("the answer was lost", func(t *testing.T) {
+		t.Parallel()
+		w := newClaimWorld(t)
+		w.relay.set(func(r *claimRelay) { r.hide, r.createErr = true, errors.New("timeout") })
+		_, err := w.makeKey()
+		refuses(t, "the first make", err, ErrSupplierUnanswered)
+		w.clock.advance(24 * time.Hour) // long past any time a create takes, or a relay keeps its answer
+		w.relay.set(func(r *claimRelay) { r.createErr = nil })
+		_, err = w.makeKey()
+		refuses(t, "the make a day later", err, ErrKeyInProgress)
+		refuses(t, "a sync round", w.syncRound(), nil)
+		same(t, "the claim", "sent", w.claim())
+		creates, made := w.relay.counts()
+		same(t, "creates sent and keys made", []int{1, 1}, []int{creates, made})
+		got, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) (Group, error) {
+			return w.admin.GroupOf(ctx, tx, w.supplier, w.group)
 		})
-	}
+		refuses(t, "reading the group", err, nil)
+		same(t, "the group's key state", "unconfirmed", got.KeyState)
+		w.relay.set(func(r *claimRelay) { clear(r.hidden) }) // the relay lists the key at last
+		_, err = w.makeKey()
+		refuses(t, "the make once it is listed", err, nil)
+		same(t, "the credential", "101 active", w.credentials())
+		creates, made = w.relay.counts()
+		same(t, "creates sent and keys made at the end", []int{1, 1}, []int{creates, made})
+	})
+	t.Run("kept back by the rate buckets", func(t *testing.T) {
+		t.Parallel()
+		w := newClaimWorld(t)
+		w.relay.set(func(r *claimRelay) { r.keepBack = 1 })
+		_, err := w.makeKey()
+		refuses(t, "the make kept back", err, ErrSupplierUnanswered)
+		same(t, "the claim it leaves", "none", w.claim())
+		_, err = w.makeKey()
+		refuses(t, "the make once the buckets have room", err, nil)
+		creates, made := w.relay.counts()
+		same(t, "creates and keys", []int{1, 1}, []int{creates, made})
+	})
 	t.Run("a holder that stopped before sending", func(t *testing.T) {
 		t.Parallel()
 		w := newClaimWorld(t)
@@ -314,7 +338,7 @@ func TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain(t *testing.T) {
 		w.clock.advance(persist.ClaimHold)
 		_, err = w.makeKey()
 		refuses(t, "a make once the hold is over", err, nil)
-		sent, err := claims.Send(t.Context(), lost)
+		_, sent, err := claims.Send(t.Context(), lost)
 		refuses(t, "the lost holder sending", err, nil)
 		same(t, "whether the lost holder may send", false, sent)
 		creates, made := w.relay.counts()
@@ -323,7 +347,7 @@ func TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain(t *testing.T) {
 	t.Run("the known id is gone at the relay", func(t *testing.T) {
 		t.Parallel()
 		w := newClaimWorld(t)
-		w.relay.set(func(r *claimRelay) { r.secretErr = []error{errors.New("503")} })
+		w.textFails()
 		_, err := w.makeKey()
 		refuses(t, "the first make", err, ErrSupplierUnanswered)
 		w.relay.set(func(r *claimRelay) { delete(r.keys, "101") }) // a person deleted it there
@@ -331,115 +355,26 @@ func TestAKeyWhoseAnswerWasLostIsAdoptedNotMadeAgain(t *testing.T) {
 		refuses(t, "the make after", err, nil)
 		same(t, "the credential", "102 active", w.credentials())
 	})
-}
-
-// TestCredentialsOfAClaimedGroup: while a key Axiom made for a group may still be stored, no other credential enters
-// it; a released claim, or one held with nothing sent past its hold, lets one in.
-func TestCredentialsOfAClaimedGroup(t *testing.T) {
-	t.Parallel()
-	pasted := func(w claimWorld) error {
-		_, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) (Group, error) {
-			g, _, err := w.admin.ConnectGroup(ctx, tx, w.actor, w.supplier, w.group, GroupKey{Source: "pasted", Ref: "900", GroupRef: w.ref, Text: secret.New("sk-pasted")}, "paste")
-			return g, err
-		})
-		return err
-	}
-	added := func(w claimWorld) error {
-		_, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) ([]KeyCheck, error) {
-			return w.admin.AddKeys(ctx, tx, w.actor, w.supplier, w.group, []PastedKey{{Ref: "900", Text: secret.New("sk-pasted"), Check: KeyCheck{Outcome: CheckPassed}}},
-				Limits{MaxConcurrency: 4}, "paste")
-		})
-		return err
-	}
-	bound := func(w claimWorld) error {
-		w.sql(fmt.Sprintf(`UPDATE suppliers.supplier_groups SET selected = true, codename = 'gabcdefgh' WHERE id = '%s'`, w.group))
-		_, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) (Credential, error) {
-			return w.admin.BindKey(ctx, tx, w.actor, w.supplier, w.group, "900", "bind")
-		})
-		return err
-	}
-	for name, enter := range map[string]func(claimWorld) error{"paste": pasted, "add keys": added, "bind": bound} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			w := newClaimWorld(t)
-			w.relay.set(func(r *claimRelay) { r.secretErr = []error{errors.New("503")} })
-			_, err := w.makeKey()
-			refuses(t, "the make whose text was not read", err, ErrSupplierUnanswered)
-			refuses(t, "a credential while the made key may be stored", enter(w), ErrKeyInProgress)
-			g, err := inTx(w.admins, func(ctx context.Context, tx pg.Tx) (Group, error) {
-				return w.admin.ReleaseKeyClaim(ctx, tx, w.actor, w.supplier, w.group, "the relay's key 101 is revoked")
+	t.Run("the known id was disabled and limited at the relay", func(t *testing.T) {
+		t.Parallel()
+		w := newClaimWorld(t)
+		w.textFails()
+		_, err := w.makeKey()
+		refuses(t, "the first make", err, ErrSupplierUnanswered)
+		listedAs := func(status adapter.KeyStatus) {
+			w.relay.set(func(r *claimRelay) {
+				k := r.keys["101"]
+				k.Status, k.Policy = status, &adapter.KeyPolicy{Models: []string{"m1"}}
+				r.keys["101"] = k
 			})
-			refuses(t, "releasing the claim", err, nil)
-			same(t, "the claim after", []string{"none", "pending"}, []string{w.claim(), g.KeyState})
-			refuses(t, "a credential after the release", enter(w), nil)
-			same(t, "the audit of the release", "101", w.text(`SELECT detail->>'upstream_key_ref' FROM platform.audit_log
-				WHERE action = 'supplier_group.release_key_claim'`))
-		})
-	}
-	t.Run("a claim held past its hold", func(t *testing.T) {
-		t.Parallel()
-		w := newClaimWorld(t)
-		_, err := persist.NewClaims(w.db, platformScope, w.supplier, w.clock.now).Claim(t.Context(), w.ref)
-		refuses(t, "taking the claim", err, nil)
-		refuses(t, "a paste while it is held", pasted(w), ErrKeyInProgress)
-		w.clock.advance(persist.ClaimHold)
-		refuses(t, "a paste after", pasted(w), nil)
-	})
-}
-
-// TestAMadeKeyFoundByItsName: a key the relay lists under the group's marker name is adopted, never made again, with
-// what the relay lists for it: an erased credential of it is sealed again in place, a disabled one is refused, its model
-// limits are kept, and one the sync stored while the make asked for it completes the connection.
-func TestAMadeKeyFoundByItsName(t *testing.T) {
-	t.Parallel()
-	listed := func(w claimWorld, status adapter.KeyStatus, models []string) {
-		w.relay.set(func(r *claimRelay) {
-			r.keys["77"] = adapter.KeyState{Ref: "77", GroupRef: w.ref, Name: w.name(), Status: status, Policy: &adapter.KeyPolicy{Models: models}}
-		})
-	}
-	t.Run("an erased credential of it", func(t *testing.T) {
-		t.Parallel()
-		w := newClaimWorld(t)
-		listed(w, adapter.KeyActive, nil)
-		erased := uuid.NewV7()
-		w.sql(fmt.Sprintf(`INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency, source)
-			VALUES ('%s', '%s', '%s', '77', 'erased', 4, 'made')`, erased, w.supplier, w.group))
-		c, err := w.makeKey()
-		refuses(t, "the make", err, nil)
-		same(t, "the credential sealed again in place", []any{erased, "active"}, []any{c.ID, c.Status})
-	})
-	t.Run("disabled at the relay", func(t *testing.T) {
-		t.Parallel()
-		w := newClaimWorld(t)
-		listed(w, adapter.KeyDisabled, nil)
-		_, err := w.makeKey()
-		refuses(t, "the make", err, ErrKeyUnusable)
-		same(t, "the claim it leaves", "none", w.claim())
-	})
-	t.Run("limited to some models", func(t *testing.T) {
-		t.Parallel()
-		w := newClaimWorld(t)
-		listed(w, adapter.KeyActive, []string{"m1"})
-		_, err := w.makeKey()
-		refuses(t, "the make", err, nil)
-		same(t, "the models it may call", "{m1}", w.text(`SELECT allowed_models::text FROM suppliers.credentials WHERE upstream_key_ref = '77'`))
-	})
-	t.Run("stored by the sync meanwhile", func(t *testing.T) {
-		t.Parallel()
-		w := newClaimWorld(t)
-		made, err := w.admin.MakeKey(t.Context(), w.reach(), w.supplier, w.group)
-		refuses(t, "the make's key", err, nil)
-		var synced uuid.UUID
-		err = w.db.Tx(t.Context(), platformScope, func(tx pg.Tx) (err error) {
-			synced, _, err = persist.StoreMadeKey(t.Context(), tx, w.keys, w.supplier, w.group, persist.MadeKey{Ref: made.Ref, Text: made.Text, Status: "active"})
-			return err
-		})
-		refuses(t, "the sync storing it", err, nil)
-		c, err := w.connect(made)
-		refuses(t, "the connection", err, nil)
-		same(t, "the credential it completes with", synced, c.ID)
-		same(t, "whether the group is selected", "true", w.text(`SELECT selected::text FROM suppliers.supplier_groups WHERE id = $1`, w.group))
-		creates, made2 := w.relay.counts()
-		same(t, "creates and keys", []int{1, 1}, []int{creates, made2})
+		}
+		listedAs(adapter.KeyDisabled)
+		_, err = w.makeKey()
+		refuses(t, "a make while the relay lists it disabled", err, ErrKeyUnusable)
+		same(t, "the claim it keeps", "known 101", w.claim())
+		listedAs(adapter.KeyActive)
+		_, err = w.makeKey()
+		refuses(t, "a make once it is enabled", err, nil)
+		same(t, "the models it may call", "{m1}", w.text(`SELECT allowed_models::text FROM suppliers.credentials WHERE upstream_key_ref = '101'`))
 	})
 }

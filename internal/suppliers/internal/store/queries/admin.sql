@@ -28,13 +28,13 @@ FROM suppliers.suppliers s WHERE s.id = @id AND (@every_owner::boolean OR s.owne
 -- name: ListGroupsOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
-    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed
+    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed, key_claim_id
 FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id ORDER BY g.name, g.id;
 
 -- name: GetGroupOf :many
 SELECT id, upstream_ref, name, ratio::text AS ratio, facts, selected, codename, present, key_eligible, key_error,
     pool_accounts, pool_failed, pool_usable, pool_headroom, pool_capacity, COALESCE(pool_low, false) AS pool_low,
-    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed
+    pool_observed_at, (key_claim_sent_at IS NOT NULL AND key_claim_ref IS NULL)::boolean AS key_unconfirmed, key_claim_id
 FROM suppliers.supplier_groups g WHERE g.supplier_id = @supplier_id AND g.id = @id;
 
 -- name: ListCredentialsOf :many

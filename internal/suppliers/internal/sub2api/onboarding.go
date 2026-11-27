@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"axiom/internal/platform/jsonx"
 	"axiom/internal/suppliers/internal/adapter"
@@ -75,24 +74,38 @@ func createdKey(resp adapter.Response) (adapter.KeyRef, error) {
 }
 
 // KeyNamed implements adapter.KeyMaker with sub2api's key search, which matches part of a name: every page of it is
-// read and only the key whose name and group are the same whole counts. Of two, the oldest (lowest id) is the answer.
-func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+// read, and only the key whose name and group are the same whole counts. An empty page before the last that sub2api
+// counts is an error, not an absence. It is read in one go, so at and next are not used. Of two keys, the oldest
+// (lowest id) is the answer.
+func (m *manager) KeyNamed(ctx context.Context, groupRef, name string, _ adapter.Listing) (adapter.KeyState, bool, adapter.Listing, error) {
 	var named []adapter.KeyState
 	for p := 1; ; p++ {
 		items, pages, _, err := m.keysAt(ctx, p, name)
 		if err != nil {
-			return adapter.KeyState{}, false, err
+			return adapter.KeyState{}, false, nil, err
 		}
 		for _, k := range items {
 			if k.Name == name && string(k.GroupID) == groupRef {
 				named = append(named, keyState(k))
 			}
 		}
-		if p >= pages || len(items) == 0 {
+		if p >= pages {
 			key, found := oldest(named)
-			return key, found, nil
+			return key, found, nil, nil
+		}
+		if len(items) == 0 {
+			return adapter.KeyState{}, false, nil, fmt.Errorf("%w: page %d of %d of the keys named %s is empty", adapter.ErrUnrecognised, p, pages, name)
 		}
 	}
+}
+
+// KeyByRef implements adapter.KeyMaker with sub2api's read of one key.
+func (m *manager) KeyByRef(ctx context.Context, ref adapter.KeyRef) (adapter.KeyState, bool, error) {
+	k, found, err := m.keyAt(ctx, ref)
+	if err != nil || !found {
+		return adapter.KeyState{}, false, err
+	}
+	return keyState(k), true, nil
 }
 
 // oldest is the key of the lowest id: sub2api's ids are decimal numbers without leading zeros, so the shorter is the
@@ -105,10 +118,6 @@ func oldest(keys []adapter.KeyState) (adapter.KeyState, bool) {
 		return cmp.Or(cmp.Compare(len(a.Ref), len(b.Ref)), strings.Compare(string(a.Ref), string(b.Ref)))
 	}), true
 }
-
-// CreateReplay implements adapter.KeyMaker: sub2api keeps a create's answer under its idempotency key, the name, for 24
-// hours (service.DefaultIdempotencyConfig); an hour less leaves room for the two clocks.
-func (*manager) CreateReplay() time.Duration { return 23 * time.Hour }
 
 // idempotencyCodes are sub2api's answers to a create whose idempotency key, the name, it has seen before.
 var idempotencyCodes = map[string]bool{"IDEMPOTENCY_IN_PROGRESS": true, "IDEMPOTENCY_KEY_CONFLICT": true, "IDEMPOTENCY_RETRY_BACKOFF": true}

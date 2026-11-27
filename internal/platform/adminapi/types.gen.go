@@ -4721,6 +4721,15 @@ type InvalidCredentialsRemoved struct {
 	Removed []Uuid `json:"removed"`
 }
 
+// KeyClaimRelease defines model for KeyClaimRelease.
+type KeyClaimRelease struct {
+	// ClaimId The group's `key_claim_id` as the person read it.
+	ClaimId Uuid `json:"claim_id"`
+
+	// Reason Why the person is doing this. It goes to the audit log.
+	Reason Reason `json:"reason"`
+}
+
 // KeyIdentification defines model for KeyIdentification.
 type KeyIdentification struct {
 	// CredentialId The credential Axiom already stores for this key, if any.
@@ -8237,6 +8246,9 @@ type SupplierGroup struct {
 	// Id An ID of a supplier, group, model, price row or rule, in the usual lower-case UUID text.
 	Id Uuid `json:"id"`
 
+	// KeyClaimId The group's claim on making its key, while Axiom is making it or a key was asked for whose answer was lost; absent otherwise. `releaseSupplierGroupKeyClaim` takes it.
+	KeyClaimId *Uuid `json:"key_claim_id,omitempty"`
+
 	// KeyReason Why the last attempt to make a key failed: the login may not manage keys, the account may not use this group, or the supplier refused. Present only with `key_state` `failed`.
 	KeyReason *SupplierGroupKeyReason `json:"key_reason,omitempty"`
 
@@ -10479,7 +10491,7 @@ type SelectSupplierGroupJSONRequestBody = GroupSelection
 type ConnectSupplierGroupJSONRequestBody = GroupConnection
 
 // ReleaseSupplierGroupKeyClaimJSONRequestBody defines body for ReleaseSupplierGroupKeyClaim for application/json ContentType.
-type ReleaseSupplierGroupKeyClaimJSONRequestBody = ReasonRequest
+type ReleaseSupplierGroupKeyClaimJSONRequestBody = KeyClaimRelease
 
 // SetSupplierIntakeRuleJSONRequestBody defines body for SetSupplierIntakeRule for application/json ContentType.
 type SetSupplierIntakeRuleJSONRequestBody = SupplierIntakeRuleUpdate

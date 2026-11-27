@@ -50,22 +50,21 @@ func (m memClaims) held(c Claim) *Claim {
 	return nil
 }
 
-func (m memClaims) Send(_ context.Context, c Claim) (bool, error) {
+func (m memClaims) Send(_ context.Context, c Claim) (Claim, bool, error) {
 	h := m.held(c)
 	if h == nil || !h.SentAt.IsZero() {
-		return false, nil
-	}
-	h.SentAt, h.Mine = t0, false
-	return true, nil
-}
-
-func (m memClaims) Resend(_ context.Context, c Claim) (Claim, bool, error) {
-	h := m.held(c)
-	if h == nil || h.SentAt.IsZero() || h.Ref != "" {
 		return c, false, nil
 	}
-	h.ID = uuid.NewV7()
-	return *h, true, nil
+	h.SentAt, h.Mine = t0, false
+	c.SentAt = t0
+	return c, true, nil
+}
+
+func (m memClaims) Park(_ context.Context, c Claim, at adapter.Listing) error {
+	if h := m.held(c); h != nil {
+		h.Listing = at
+	}
+	return nil
 }
 
 func (m memClaims) Know(_ context.Context, c Claim, ref adapter.KeyRef) (bool, error) {
@@ -114,20 +113,23 @@ func (m *maker) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Secret,
 }
 
 // KeyNamed finds the key in the supplier's listing, as new-api's search would.
-func (m *maker) KeyNamed(_ context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
+func (m *maker) KeyNamed(_ context.Context, groupRef, name string, _ adapter.Listing) (adapter.KeyState, bool, adapter.Listing, error) {
 	page, err := m.keys(nil)
 	if err != nil {
-		return adapter.KeyState{}, false, err
+		return adapter.KeyState{}, false, nil, err
 	}
 	for _, k := range page.Items {
 		if k.Name == name && k.GroupRef == groupRef {
-			return k, true, nil
+			return k, true, nil, nil
 		}
 	}
-	return adapter.KeyState{}, false, nil
+	return adapter.KeyState{}, false, nil, nil
 }
 
-func (*maker) CreateReplay() time.Duration { return 0 }
+// KeyByRef is every key the supplier made or lists, active with no limit.
+func (*maker) KeyByRef(_ context.Context, ref adapter.KeyRef) (adapter.KeyState, bool, error) {
+	return adapter.KeyState{Ref: ref, Status: adapter.KeyActive, Policy: &adapter.KeyPolicy{}}, true, nil
+}
 
 func keyEngine(m adapter.Manager, st Store) *Engine {
 	return New(st, m, Defaults(), (&clock{t: t0}).now)

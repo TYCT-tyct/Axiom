@@ -116,7 +116,7 @@ func (*Admin) group(ctx context.Context, tx pg.Tx, supplier, id uuid.UUID) (Grou
 	g := rows[0]
 	return groupOf(groupFacts{
 		ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
-		Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed,
+		Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed, KeyClaim: g.KeyClaimID,
 		Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
 	})
 }

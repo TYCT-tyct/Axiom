@@ -157,26 +157,41 @@ func (k keyDTO) resetAt() (soonest time.Time) {
 
 // KeySecret reads one key's text by its id at the supplier.
 func (m *manager) KeySecret(ctx context.Context, ref adapter.KeyRef) (secret.Secret, error) {
+	k, found, err := m.keyAt(ctx, ref)
+	if err == nil && !found {
+		err = fmt.Errorf("sub2api: key %s: status %d", ref, http.StatusNotFound)
+	}
+	if err != nil {
+		return secret.Secret{}, err
+	}
+	if k.Key == "" {
+		return secret.Secret{}, fmt.Errorf("%w: a key answer without text", adapter.ErrUnrecognised)
+	}
+	return secret.New(k.Key), nil
+}
+
+// keyAt reads one key by its id at the supplier. found is false only for sub2api's answer that the account has no
+// such key (404 API_KEY_NOT_FOUND).
+func (m *manager) keyAt(ctx context.Context, ref adapter.KeyRef) (keyDTO, bool, error) {
 	id, err := pathID(string(ref))
 	if err != nil {
-		return secret.Secret{}, err
+		return keyDTO{}, false, err
 	}
 	resp, err := m.get(ctx, "/api/v1/keys/"+id, bucketPanel)
-	if err != nil {
-		return secret.Secret{}, err
-	}
-	if resp.Status == http.StatusNotFound && errorCode(resp.Body) == "API_KEY_NOT_FOUND" {
-		return secret.Secret{}, adapter.ErrKeyGone
-	}
-	if resp.Status != http.StatusOK {
-		return secret.Secret{}, statusError("key", resp)
+	switch {
+	case err != nil:
+		return keyDTO{}, false, err
+	case resp.Status == http.StatusNotFound && errorCode(resp.Body) == "API_KEY_NOT_FOUND":
+		return keyDTO{}, false, nil
+	case resp.Status != http.StatusOK:
+		return keyDTO{}, false, statusError("key", resp)
 	}
 	k, err := open[keyDTO](resp)
 	if err != nil {
-		return secret.Secret{}, err
+		return keyDTO{}, false, err
 	}
-	if k.Key == "" || string(k.ID) != id {
-		return secret.Secret{}, fmt.Errorf("%w: a key answer for another key or without text", adapter.ErrUnrecognised)
+	if string(k.ID) != id || k.Status == "" {
+		return keyDTO{}, false, fmt.Errorf("%w: a key answer for another key or without its status", adapter.ErrUnrecognised)
 	}
-	return secret.New(k.Key), nil
+	return k, true, nil
 }

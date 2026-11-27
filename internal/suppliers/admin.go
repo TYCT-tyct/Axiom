@@ -205,7 +205,7 @@ func (a *Admin) Supplier(ctx context.Context, tx pg.Tx, id uuid.UUID, owners Own
 	for _, g := range groups {
 		group, err := groupOf(groupFacts{
 			ID: g.ID, Ref: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Facts: g.Facts, Selected: g.Selected,
-			Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed,
+			Present: g.Present, KeyEligible: g.KeyEligible, Codename: g.Codename, KeyError: g.KeyError, KeyUnconfirmed: g.KeyUnconfirmed, KeyClaim: g.KeyClaimID,
 			Pool: poolOf(g.PoolAccounts, g.PoolFailed, g.PoolUsable, g.PoolHeadroom, g.PoolCapacity, g.PoolLow, g.PoolObservedAt),
 		})
 		if err != nil {
@@ -299,7 +299,9 @@ func (a *Admin) SetStatus(ctx context.Context, tx pg.Tx, actor audit.Actor, id u
 // `erased`. The credentials stay as rows, because attempts made with them point at the row. Calls in flight go on with
 // the key they hold in memory. Axiom never deletes keys at the supplier, including the ones it made, so the keys a person
 // has to revoke there stay listed on the erased credential rows (their upstream_key_ref), and the audit entry says how
-// many. A supplier removed already is returned as it is; a supplier a former version left in `removing` is removed now.
+// many. A key Axiom made that was never stored has no credential row: its id stays on its group's claim and the audit
+// names it, with the groups whose create was sent and whose key is not known. A supplier removed already is returned as
+// it is; a supplier a former version left in `removing` is removed now.
 func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid.UUID, reason string) (Supplier, error) {
 	row, err := a.locked(ctx, tx, id, Connecting, Active, LowBalance, NeedsAttention, Paused, Removing, Removed)
 	if err != nil {
@@ -313,6 +315,10 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 	if err != nil {
 		return Supplier{}, fmt.Errorf("read the credentials: %w", err)
 	}
+	claimed, unconfirmed, err := claimedKeys(ctx, tx, id)
+	if err != nil {
+		return Supplier{}, err
+	}
 	if err := q.SetSupplierStatusBumpingConfigGen(ctx, tx, store.SetSupplierStatusBumpingConfigGenParams{ID: id, Status: string(Removed)}); err != nil {
 		return Supplier{}, fmt.Errorf("set the status: %w", err)
 	}
@@ -322,7 +328,10 @@ func (a *Admin) Remove(ctx context.Context, tx pg.Tx, actor audit.Actor, id uuid
 	if err := q.EraseCredentialsOf(ctx, tx, id); err != nil {
 		return Supplier{}, fmt.Errorf("erase the keys: %w", err)
 	}
-	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{"from": row.Status, "keys_to_revoke_count": len(creds)}); err != nil {
+	if err := a.record(ctx, tx, actor, "supplier.remove", id, reason, map[string]any{
+		"from": row.Status, "keys_to_revoke_count": len(creds) + len(claimed), "claimed_keys_to_revoke": claimed,
+		"unconfirmed_key_groups": unconfirmed,
+	}); err != nil {
 		return Supplier{}, err
 	}
 	return a.view(ctx, tx, id, EveryOwner)
@@ -415,4 +424,22 @@ func lockedChild[T any](ctx context.Context, a *Admin, tx pg.Tx, supplier uuid.U
 		return zero, missing
 	}
 	return rows[0], nil
+}
+
+// claimedKeys are the keys Axiom made for the supplier's groups and never stored, by their id at the supplier, and the
+// groups whose create was sent with a result not known: the claims a removal leaves, which name what to revoke there.
+func claimedKeys(ctx context.Context, tx pg.Tx, supplier uuid.UUID) (refs, unconfirmed []string, err error) {
+	rows, err := store.New().SentKeyClaimsOf(ctx, tx, supplier)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read the groups' key claims: %w", err)
+	}
+	refs, unconfirmed = []string{}, []string{}
+	for _, r := range rows {
+		if r.KeyClaimRef != nil {
+			refs = append(refs, *r.KeyClaimRef)
+		} else {
+			unconfirmed = append(unconfirmed, r.UpstreamRef)
+		}
+	}
+	return refs, unconfirmed, nil
 }

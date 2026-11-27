@@ -339,27 +339,49 @@ func decodeKeys(from adapter.Listing, size int) *keysState {
 	return &st
 }
 
-// KeyNamed implements adapter.KeyMaker by reading the whole key listing in one go, which a declaration that makes keys
-// must answer with names and groups. A listing a limit stops is an error, not an absence; of two keys with the name in
-// the group, the first listed is the answer.
-func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
-	if m.a.keys.create == nil {
-		return adapter.KeyState{}, false, adapter.ErrNoKeyMaker
+// KeyNamed implements adapter.KeyMaker by reading the key listing, which a declaration that makes keys must answer with
+// names and groups. A listing a limit stops is an error, not an absence, with the position it reached in next: passed
+// back as at, the next search goes on from there and finishes. Of two keys with the name in the group, the first listed
+// is the answer.
+func (m *manager) KeyNamed(ctx context.Context, groupRef, name string, at adapter.Listing) (adapter.KeyState, bool, adapter.Listing, error) {
+	keys, next, err := m.wholeListing(ctx, at)
+	if err != nil {
+		return adapter.KeyState{}, false, next, err
 	}
-	page, err := m.keys(ctx, nil, false)
-	switch {
-	case err != nil:
-		return adapter.KeyState{}, false, err
-	case !page.Done:
-		return adapter.KeyState{}, false, adapter.Blocked{Until: page.Until}
-	}
-	for _, k := range page.Items {
+	for _, k := range keys {
 		if k.Name == name && k.GroupRef == groupRef {
+			return k, true, nil, nil
+		}
+	}
+	return adapter.KeyState{}, false, nil, nil
+}
+
+// KeyByRef implements adapter.KeyMaker by reading the whole key listing: a declaration has no read of one key, and a key
+// a complete listing does not have is gone.
+func (m *manager) KeyByRef(ctx context.Context, ref adapter.KeyRef) (adapter.KeyState, bool, error) {
+	keys, _, err := m.wholeListing(ctx, nil)
+	if err != nil {
+		return adapter.KeyState{}, false, err
+	}
+	for _, k := range keys {
+		if k.Ref == ref {
 			return k, true, nil
 		}
 	}
 	return adapter.KeyState{}, false, nil
 }
 
-// CreateReplay implements adapter.KeyMaker: a declaration says nothing of how the supplier answers a repeated create.
-func (*manager) CreateReplay() time.Duration { return 0 }
+// wholeListing reads the key listing from at to its end, or answers Blocked with the position it reached.
+func (m *manager) wholeListing(ctx context.Context, at adapter.Listing) ([]adapter.KeyState, adapter.Listing, error) {
+	if m.a.keys.create == nil {
+		return nil, nil, adapter.ErrNoKeyMaker
+	}
+	page, err := m.keys(ctx, at, false)
+	switch {
+	case err != nil:
+		return nil, nil, err
+	case !page.Done:
+		return nil, page.Next, adapter.Blocked{Until: page.Until}
+	}
+	return page.Items, nil, nil
+}

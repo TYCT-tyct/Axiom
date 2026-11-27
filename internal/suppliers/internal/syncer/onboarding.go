@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"uuid"
 
 	"axiom/internal/platform/secret"
 	"axiom/internal/suppliers/internal/adapter"
@@ -70,6 +71,7 @@ type keyOnboarding struct {
 func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
 	key, adopted := o.find(target)
 	var text secret.Secret
+	var claim uuid.UUID
 	var err error
 	if adopted {
 		text, err = o.e.mgr.KeySecret(ctx, key.Ref)
@@ -78,7 +80,7 @@ func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
 		if got, err = o.obtain(ctx, target); err != nil || got.Key.Ref == "" {
 			return err
 		}
-		key, text = got.Key, got.Text
+		key, text, claim = got.Key, got.Text, got.Claim.ID
 	}
 	if err != nil {
 		if reason, failed := keyFailure(err); failed {
@@ -91,7 +93,7 @@ func (o *keyOnboarding) makeKey(ctx context.Context, target KeyTarget) error {
 		*o.policies = append(*o.policies, key)
 		o.byRef[key.Ref] = true
 	}
-	o.c.KeyWrites.Made = append(o.c.KeyWrites.Made, KeyMade{Ref: key.Ref, GroupRef: target.GroupRef, Status: key.Status, Secret: text})
+	o.c.KeyWrites.Made = append(o.c.KeyWrites.Made, KeyMade{Ref: key.Ref, GroupRef: target.GroupRef, Status: key.Status, Secret: text, Claim: claim})
 	return nil
 }
 
@@ -112,7 +114,7 @@ func (o *keyOnboarding) obtain(ctx context.Context, target KeyTarget) (Obtained,
 	if !o.canMake {
 		return Obtained{}, nil
 	}
-	got, err := ObtainKey(ctx, o.claims, o.e.mgr, target, o.e.now())
+	got, err := ObtainKey(ctx, o.claims, o.e.mgr, target)
 	switch {
 	case err == nil:
 		return got, nil

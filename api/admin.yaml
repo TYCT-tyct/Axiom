@@ -4974,8 +4974,9 @@ paths:
         A key asked for whose answer was lost keeps the group `unconfirmed` until the supplier lists it under its
         name, and the group takes no other key meanwhile. Release the claim once the supplier is checked: no key named
         as Axiom names them is in the group, or one is and will be revoked there (the audit entry names its ID when
-        Axiom knows it). The next `make` or sync then makes or finds the key afresh. A group with no claim is returned
-        as it is, and nothing is recorded.
+        Axiom knows it). The next `make` or sync then makes or finds the key afresh. `claim_id` is the group's
+        `key_claim_id` the person checked: when the group no longer has that claim (it was adopted, released or taken
+        over since), the release is 409 and nothing changes, so it never ends a later attempt.
       security:
         - session: []
           csrf: []
@@ -4995,7 +4996,7 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/ReasonRequest"}
+            schema: {$ref: "#/components/schemas/KeyClaimRelease"}
       responses:
         "200":
           description: The group, its claim released.
@@ -9877,6 +9878,14 @@ components:
       required: [reason]
       properties:
         reason: {$ref: "#/components/schemas/Reason"}
+    KeyClaimRelease:
+      type: object
+      required: [claim_id, reason]
+      properties:
+        claim_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: The group's `key_claim_id` as the person read it.
+        reason: {$ref: "#/components/schemas/Reason"}
     TierRef:
       type: object
       required: [id, name]
@@ -11078,6 +11087,11 @@ components:
           description: >-
             Why the last attempt to make a key failed: the login may not manage keys, the account may not use this
             group, or the supplier refused. Present only with `key_state` `failed`.
+        key_claim_id:
+          allOf: [{$ref: "#/components/schemas/Uuid"}]
+          description: >-
+            The group's claim on making its key, while Axiom is making it or a key was asked for whose answer was lost;
+            absent otherwise. `releaseSupplierGroupKeyClaim` takes it.
         facts:
           type: object
           description: >-

@@ -2,9 +2,11 @@ package declared
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"axiom/internal/suppliers/internal/adapter"
 )
@@ -90,12 +92,19 @@ func TestKeysRestartsWhenTheTotalChanges(t *testing.T) {
 }
 
 type keyPages struct {
-	pages  [][]string
-	totals []int64
-	calls  int
+	pages   [][]string
+	totals  []int64
+	calls   int
+	blockAt int // the page whose first read the rate buckets refuse, 1-based; 0 is none
+	asked   int // every request, refused or not
 }
 
 func (c *keyPages) Do(context.Context, adapter.Request) (adapter.Response, error) {
+	c.asked++
+	if c.blockAt == c.calls+1 {
+		c.blockAt = 0
+		return adapter.Response{}, adapter.Blocked{Until: time.Date(2026, 11, 27, 12, 0, 0, 0, time.UTC)}
+	}
 	if c.calls >= len(c.pages) {
 		return adapter.Response{}, fmt.Errorf("unexpected request %d", c.calls)
 	}
@@ -109,4 +118,25 @@ func (c *keyPages) Do(context.Context, adapter.Request) (adapter.Response, error
 	}
 	c.calls++
 	return adapter.Response{Status: 200, Body: []byte(fmt.Sprintf(`{"data":{"total":%d,"items":[%s]}}`, total, strings.Join(rows, ",")))}, nil
+}
+
+// TestKeyNamedGoesOnWhereTheLimitsStoppedIt: a search by name the rate buckets stop is no answer, and comes back with
+// the position it reached; passed back, the next search reads only the rest and finishes, so an account with more pages
+// than a window allows is still searched to the end.
+func TestKeyNamedGoesOnWhereTheLimitsStoppedIt(t *testing.T) {
+	t.Parallel()
+	c := &keyPages{pages: [][]string{{"k1", "k2"}, {"k3"}}, blockAt: 2}
+	m := &manager{a: loadAcme(t), c: c}
+	_, found, next, err := m.KeyNamed(t.Context(), "g1", "n-k3", nil)
+	var blocked adapter.Blocked
+	if !errors.As(err, &blocked) || found || next == nil {
+		t.Fatalf("the first search = %v, %v, position %v; want blocked with where it stopped", found, err, next)
+	}
+	key, found, next, err := m.KeyNamed(t.Context(), "g1", "n-k3", next)
+	if err != nil || !found || key.Ref != "k3" || next != nil {
+		t.Fatalf("the search that goes on = %+v, %v, %v, %v", key, found, next, err)
+	}
+	if c.asked != 3 {
+		t.Errorf("%d requests, want the first page once, the refused second, and the second again", c.asked)
+	}
 }

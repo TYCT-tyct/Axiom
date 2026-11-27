@@ -40,6 +40,7 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrSupplierRefused, http.StatusUnprocessableEntity, codeUnprocessable, "the supplier refused Axiom's login; replace it"},
 	{suppliers.ErrSupplierUnanswered, http.StatusServiceUnavailable, codeUnavailable, "the supplier did not answer; try again shortly"},
 	{suppliers.ErrGroupHasKey, http.StatusConflict, codeConflict, "the group already has a key: pause or resume it by selecting it"},
+	{suppliers.ErrClaimChanged, http.StatusConflict, codeConflict, "the group's key claim changed since it was read: read the group again"},
 	{suppliers.ErrKeyInProgress, http.StatusConflict, codeConflict, "a key for the group is being made, or was asked for and the answer was lost: try again shortly, or release the group's key claim once the supplier is checked"},
 	{suppliers.ErrTooManyCredentials, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("more than %d credentials to test: test them by supplier", suppliers.MaxCredentialTests)},
 	{suppliers.ErrIntakeRule, http.StatusUnprocessableEntity, codeUnprocessable, "names takes include and exclude patterns, and only names does"},

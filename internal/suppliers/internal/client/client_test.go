@@ -101,7 +101,8 @@ func newClient(t *testing.T, server *httptest.Server) (*client.Client, *clock) {
 }
 
 // TestARefusalClosesTheBucketsTheRequestCounted: a 429 with an empty body closes every bucket the request named until
-// its Retry-After and sends nothing more meanwhile; afterwards requests flow again.
+// its Retry-After and sends nothing more meanwhile, refusing each such request before it leaves (ErrNotSent), which the
+// 429 itself is not; afterwards requests flow again.
 func TestARefusalClosesTheBucketsTheRequestCounted(t *testing.T) {
 	t.Parallel()
 	var hits atomic.Int32
@@ -119,12 +120,12 @@ func TestARefusalClosesTheBucketsTheRequestCounted(t *testing.T) {
 	cl, c := newClient(t, server)
 	req := adapter.Request{Method: "GET", Path: "/api/x?p=1", Header: http.Header{"Authorization": {"Bearer t"}}, Buckets: []string{"global", "critical"}}
 	_, err := cl.Do(t.Context(), req)
-	if until := blockedUntil(t, err); !until.Equal(c.t.Add(1200 * time.Second)) {
-		t.Errorf("blocked until %v, want Retry-After from now", until)
+	if until := blockedUntil(t, err); !until.Equal(c.t.Add(1200*time.Second)) || errors.Is(err, adapter.ErrNotSent) {
+		t.Errorf("blocked until %v (%v), want Retry-After from now, of a request that was sent", until, err)
 	}
 	req.Buckets = []string{"global"} // also closed: the refusal did not say which bucket was exceeded
-	if _, err := cl.Do(t.Context(), req); !errors.Is(err, adapter.ErrBucketsFull) {
-		t.Errorf("a request in the closed global bucket: %v", err)
+	if _, err := cl.Do(t.Context(), req); !errors.Is(err, adapter.ErrBucketsFull) || !errors.Is(err, adapter.ErrNotSent) {
+		t.Errorf("a request in the closed global bucket: %v, want refused before it was sent", err)
 	}
 	if hits.Load() != 1 {
 		t.Errorf("%d requests reached the server, want only the refused one", hits.Load())

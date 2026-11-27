@@ -50,7 +50,7 @@
 - **登录**：个人访问令牌加过期时间，需要 `profile:read`（账号、分组、模型）、`wallet:read`（订阅）、`usage:read`（扣费记录）、`api_key:read`、`api_key:write`，读原文还要 `api_key:reveal`。管理接口的 401/403 按固定的 `code` 清单报凭证被拒，错误里没有对方的文字；缺权限同样停掉轮询，但原因写明缺哪个权限，告警是「同步需处理」而不是登录失效。key 的 ID 只许数字。
 - **读取**：余额是整数 `quota`，单位提示是 `quota_per_unit`；有生效订阅即资金来源不支持。倍率写 `auto` 的分组不收，倍率缺失或不是数字是认不出。key 状态 1 到 4 对应正常、停用、过期、额度用尽，模型限制读 `model_limits_enabled`、`model_limits`，到期读 `expired_time`（-1 不到期），权限字段缺失时全拒。
 - **成本计划**（币种 `XXX`，单位是每 token 多少 quota）：输入 = `model_ratio × 分组倍率`，输出 = 输入 × `completion_ratio`，缓存读 × `cache_ratio`（缺省 1），缓存写 × `create_cache_ratio`（缺省 1.25），一小时缓存写 = 缓存写 × 1.6；精确分数计算，向上取整到 15 位小数，不低于对方的价。按次计费、`tiered_expr`、倍率缺失或超上限的没有成本计划；`image_ratio` 显式且不为 1 的不声明图片能力；推理按输出价。
-- **建 key**：响应不回 ID，按名字和分组找回最小 ID；找回失败或还没列出都算「已建、ID 不明」，占用留着，不再建（见[供应商的「一个分组只建一把」](suppliers.md#接入流程)）。`ACCESS_TOKEN_SCOPE_DENIED` 是无权限，200 `success:false` 是拒绝，只有这两种是建 key 本身被拒。按名字找用 `/api/token/search`：不带 `%`、`_` 时整段匹配，翻到对方报的总数为止，没翻完是「不知道」。读原文答 `success:false`、`record not found` 是这个 ID 没有了；new-api 对重复的建 key 不幂等。
+- **建 key**：响应不回 ID，按名字和分组找回最小 ID；找回失败或还没列出都算「已建、ID 不明」，占用留着，不再建（见[供应商的「一个分组只建一把」](suppliers.md#接入流程)）。`ACCESS_TOKEN_SCOPE_DENIED` 是无权限，200 `success:false` 是拒绝，只有这两种是建 key 本身被拒。回答里没有 `success` 说不清建没建，不算拒绝。按名字找用 `/api/token/search`：不带 `%`、`_` 时整段匹配，翻到对方报的总数为止，没翻完或同一个 ID 出现两次是「不知道」。按 ID 读 `/api/token/{id}`，答 `success:false`、`record not found` 是这个 ID 没有了；new-api 对重复的建 key 不幂等。
 - **报价**：一轮只读一次价格表，各组价格才一致；续读时重读分组列表，分组变了从头读。站点关掉定价模块时价格表对登录用户回 403（只有 root 能读），这时当作价格不公开：分组和模型照读，成本计划为空，等人确认底价；带登录被拒 `code` 的 403 仍是登录被拒。
 - **桶**：`global` 90 次/180 秒，`critical`（读原文）5 次/1200 秒，是对方默认的四分之一。
 - **失败归类**：只认 `type` 为 `new_api_error` 的错误（同样的码没有这个类型是渠道透传的）：403 `insufficient_user_quota` 供应商余额不足；401 且 `code` 为空凭证被拒；403 `pre_consume_token_quota_failed` 凭证额度用尽；503 `model_not_found` 端点过载；429 限流，`Retry-After` 接受秒数和 HTTP 日期（暂停上限 2 小时），执行状态不确定；400 请求格式错、执行状态不确定。对账键是 `X-Oneapi-Request-Id`；默认传递取消。
@@ -61,7 +61,7 @@
 - **登录**：邮箱密码或令牌，刷新令牌只能用一次。访问令牌剩四分之一寿命时刷新；只有对方说刷新令牌无效才用密码重登，结果不明时留给下一轮；写回比较版本，输了就用已存的。账号被撤销、停用、会话绑定变化、密码被拒或要二步验证是登录被拒，不再登录。调用中途令牌过期只续一次。
 - **桶**：登录 5/分、刷新 7/分（按 IP），面板 60/分、用量 15/分、号池 30/分（按账号），是对方默认的四分之一。
 - **读取**：有生效订阅即资金来源不是钱包；每个分组用一把可用的 key 读模型和含高峰的倍率，key 余额为 0 读不了时保留上次的模型。key 没有模型级限制，到期读 `expires_at`。普通用户读不到渠道把模型映射成什么、按哪个名字计费，公布的价不算数（见「决策与理由」），成本计划为空，直到人确认底价，按目录官方价乘分组倍率生成（与售价同一取整）。报文里的数字只接受 JSON 数字。
-- **建 key**：带 `Idempotency-Key: <name>`，对方 24 小时内对同名同分组的重复请求回第一次的结果（所以发出后 23 小时内可以重发）；403 `GROUP_NOT_ALLOWED` 是分组不可用，其他 403 是无权限，404 分组不在，400 和 409 拒绝，但 409 的 `IDEMPOTENCY_*` 说的是同名请求还在处理或另有一次，不算拒绝。按名字找用 `/api/v1/keys?search=`（名字或原文包含即中），本地按整段名字和分组筛、翻完所有页；读原文 404 `API_KEY_NOT_FOUND` 是这个 ID 没有了。
+- **建 key**：带 `Idempotency-Key: <name>`（期限由站点配置，Axiom 不靠它重发）；403 `GROUP_NOT_ALLOWED` 是分组不可用，其他 403 是无权限，404 分组不在，400 和 409 拒绝，但 409 的 `IDEMPOTENCY_*` 说的是同名请求还在处理或另有一次，不算拒绝。按名字找用 `/api/v1/keys?search=`（名字或原文包含即中），本地按整段名字和分组筛、翻完所有页，页数没到就空了是「不知道」；按 ID 读 `/api/v1/keys/{id}`，404 `API_KEY_NOT_FOUND` 是这个 ID 没有了。
 - **调用面**：按平台所走的网关定格式：`anthropic` 服务 Messages；OpenAI 网关的平台（`openai`、Kimi、GLM、Grok、DeepSeek、MiniMax 等）服务 Chat，`openai` 另加 Responses。不服务的：订阅分组（高峰倍率只能开在订阅分组上）、只许 Claude Code 客户端的（`claude_code_only`）、`typesafe`、`gemini`、`antigravity`、`composite` 和表外平台，后四种的原因在事实的 `unsold`。对账键是 `client:` 加 `X-Client-Request-Id`；不传递取消（对方读完上游并全额扣费）。
 - **扣费扫描**：同一套水位（重叠 5 分钟、滞后 30 秒、每天补扫 24 小时）；接口只认日期，所以按 key 逐把读，每页 200 条。只有记录写了的计费项算已报告；非 token 计费带未知用量；`billing_type` 不是 0 的不是钱包。
 

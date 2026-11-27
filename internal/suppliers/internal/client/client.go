@@ -59,7 +59,7 @@ func (c *Client) Do(ctx context.Context, r adapter.Request) (adapter.Response, e
 		return adapter.Response{}, fmt.Errorf("client: path %q must start with a single slash", r.Path)
 	}
 	if err := c.limiter.Take(ctx, r.Buckets); err != nil {
-		return adapter.Response{}, err
+		return adapter.Response{}, fmt.Errorf("%w: %w", adapter.ErrNotSent, err)
 	}
 	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()

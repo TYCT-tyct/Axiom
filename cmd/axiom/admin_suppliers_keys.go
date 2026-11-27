@@ -443,7 +443,8 @@ func (a adminAPI) checkOnePasted(ctx context.Context, supplier uuid.UUID, groupR
 	return check, found, nil
 }
 
-// ReleaseSupplierGroupKeyClaim ends a group's claim on making its key, so the next make or sync makes or finds it afresh.
+// ReleaseSupplierGroupKeyClaim ends the group's claim on making its key that the person read, so the next make or sync
+// makes or finds the key afresh.
 func (a adminAPI) ReleaseSupplierGroupKeyClaim(ctx context.Context, request adminapi.ReleaseSupplierGroupKeyClaimRequestObject) (adminapi.ReleaseSupplierGroupKeyClaimResponseObject, error) {
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
@@ -453,9 +454,13 @@ func (a adminAPI) ReleaseSupplierGroupKeyClaim(ctx context.Context, request admi
 	if err != nil {
 		return nil, suppliers.ErrNoGroup
 	}
+	claim, err := idIn("/claim_id", request.Body.ClaimId)
+	if err != nil {
+		return nil, err
+	}
 	released, replayed, err := idempotently(ctx, a.db, "releaseSupplierGroupKeyClaim", request.Params.IdempotencyKey, []any{request.SupplierId, request.GroupId, request.Body},
 		func(tx pg.Tx) (adminapi.SupplierGroup, error) {
-			g, err := a.suppliers.ReleaseKeyClaim(ctx, tx, actor(ctx), supplier, group, request.Body.Reason)
+			g, err := a.suppliers.ReleaseKeyClaim(ctx, tx, actor(ctx), supplier, group, claim, request.Body.Reason)
 			return groupBody(g), err
 		})
 	if err != nil {

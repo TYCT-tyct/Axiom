@@ -111,6 +111,16 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		r.models(w, strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer "))
 	case req.Header.Get("Authorization") != "Bearer pat-secret":
 		w.WriteHeader(http.StatusUnauthorized)
+	case strings.HasPrefix(req.URL.Path, "/api/token/"):
+		r.token(w, req)
+	default:
+		w.WriteHeader(http.StatusNotFound)
+	}
+}
+
+// token serves the management API of the tokens.
+func (r *fakeRelay) token(w http.ResponseWriter, req *http.Request) {
+	switch {
 	case req.Method == http.MethodPost && req.URL.Path == "/api/token/":
 		r.create(w, req)
 	case req.Method == http.MethodGet && req.URL.Path == "/api/token/":
@@ -119,6 +129,8 @@ func (r *fakeRelay) serve(w http.ResponseWriter, req *http.Request) {
 		r.search(w, req.URL.Query().Get("keyword"), req.URL.Query().Get("token"))
 	case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/key"):
 		r.reveal(w, strings.TrimSuffix(strings.TrimPrefix(req.URL.Path, "/api/token/"), "/key"))
+	case req.Method == http.MethodGet:
+		r.one(w, strings.TrimPrefix(req.URL.Path, "/api/token/"))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
@@ -189,6 +201,17 @@ func (r *fakeRelay) list(w http.ResponseWriter, page, size string) {
 // maskedToken is a key as new-api's listing shows it (model/token.go MaskTokenKey), for a key longer than eight.
 func maskedToken(key string) string {
 	return key[:4] + "**********" + key[len(key)-4:]
+}
+
+// one is new-api's read of one token, as its listing shows it.
+func (r *fakeRelay) one(w http.ResponseWriter, ref string) {
+	id, _ := strconv.ParseInt(ref, 10, 64) //nolint:errcheck // a ref that is no number is no token
+	t, ok := r.tokens[id]
+	if !ok {
+		_, _ = io.WriteString(w, `{"success":false,"message":"record not found"}`) //nolint:errcheck // a test server
+		return
+	}
+	_, _ = fmt.Fprintf(w, `{"success":true,"data":%s}`, tokenJSON(id, t)) //nolint:errcheck // a test server
 }
 
 func (r *fakeRelay) reveal(w http.ResponseWriter, ref string) {

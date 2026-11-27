@@ -87,6 +87,8 @@ type Group struct {
 	KeyState string
 	// KeyReason is the fixed reason a key could not be made: not_permitted, group_unavailable or refused.
 	KeyReason string
+	// KeyClaim is the group's claim on making its key, nil when it has none: what a person releases (ReleaseKeyClaim).
+	KeyClaim *uuid.UUID
 	// Pool is what the management API of a pool last said of the group's accounts; nil when this supplier is not one, or
 	// nothing has been read yet.
 	Pool *Pool
@@ -242,6 +244,7 @@ type groupFacts struct {
 	Facts                          []byte
 	Selected, Present, KeyEligible bool
 	KeyUnconfirmed                 bool
+	KeyClaim                       *uuid.UUID
 	Codename, KeyError             *string
 	Pool                           *Pool
 }
@@ -253,7 +256,7 @@ func groupOf(f groupFacts) (Group, error) {
 	}
 	g := Group{
 		ID: f.ID, UpstreamRef: f.Ref, Name: f.Name, Ratio: f.Ratio, Selected: f.Selected, Codename: deref(f.Codename),
-		Present: f.Present, KeyState: state, KeyReason: reason, Pool: f.Pool,
+		Present: f.Present, KeyState: state, KeyReason: reason, KeyClaim: f.KeyClaim, Pool: f.Pool,
 	}
 	if err := jsonx.Unmarshal(f.Facts, &g.Facts); err != nil {
 		return Group{}, fmt.Errorf("the facts of group %s: %w", f.ID, err)

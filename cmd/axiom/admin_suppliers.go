@@ -91,6 +91,9 @@ func groupBody(g suppliers.Group) adminapi.SupplierGroup {
 		Id: g.ID.String(), UpstreamRef: g.UpstreamRef, Name: g.Name, Ratio: g.Ratio, Selected: g.Selected, Present: g.Present,
 		Codename: text(g.Codename), KeyState: keyState(g.KeyState), KeyReason: keyReason(g.KeyReason),
 	}
+	if g.KeyClaim != nil {
+		body.KeyClaimId = new(g.KeyClaim.String())
+	}
 	if len(g.Facts) > 0 {
 		body.Facts = &g.Facts
 	}

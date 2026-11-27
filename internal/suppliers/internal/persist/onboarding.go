@@ -2,6 +2,7 @@ package persist
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"uuid"
 
@@ -63,16 +64,21 @@ func projectKeyFailures(ctx context.Context, tx pg.Tx, id uuid.UUID, failed []sy
 	return nil
 }
 
-// projectMadeKey stores the text of a key the sync made or adopted, and settles the group's claim (StoreMadeKey). A key
-// a person's make stored first is left as it is.
+// projectMadeKey stores the text of a key the sync made or adopted, and ends the claim it was obtained under
+// (StoreMadeKey). A key a person's make stored first is left as it is, and one whose claim another holder or a person's
+// release replaced is not stored: the group's key is that holder's now.
 func projectMadeKey(ctx context.Context, tx pg.Tx, id uuid.UUID, groups map[string]uuid.UUID, made syncer.KeyMade, keys *secret.Keyring) error {
 	group, ok := groups[made.GroupRef]
 	if !ok {
 		return fmt.Errorf("made a key for group %s, which is not in the tables", made.GroupRef)
 	}
-	if _, _, err := StoreMadeKey(ctx, tx, keys, id, group, MadeKey{
-		Ref: string(made.Ref), Text: made.Secret, Status: credentialStatus(made.Status),
-	}); err != nil {
+	_, _, err := StoreMadeKey(ctx, tx, keys, id, group, MadeKey{
+		Ref: string(made.Ref), Text: made.Secret, Status: credentialStatus(made.Status), Claim: made.Claim,
+	})
+	if errors.Is(err, ErrClaimLost) {
+		return nil
+	}
+	if err != nil {
 		return fmt.Errorf("keep the key of group %s: %w", made.GroupRef, err)
 	}
 	if err := store.New().ClearGroupKeyError(ctx, tx, store.ClearGroupKeyErrorParams{SupplierID: id, UpstreamRef: made.GroupRef}); err != nil {

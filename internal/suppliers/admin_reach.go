@@ -61,27 +61,30 @@ type Reach struct {
 	Scope pg.Scope
 }
 
-// MadeKey is the key a group is connected with when Axiom makes it: its ID there, the group's ref, and its text, which
-// is only sealed. Made is a key Axiom's create just made; any other was found at the supplier under the marker name,
-// with the status and policy the supplier lists for it. Claim is the group's claim the connection settles.
+// MadeKey is the key a group is connected with when Axiom makes it: its ID there, the group's ref, its text, which is
+// only sealed, and what the supplier lets it call as it lists the key. Claim is the group's claim the connection ends.
 type MadeKey struct {
 	Ref, GroupRef string
 	Text          secret.Secret
-	Status        string
 	Policy        KeyPolicy
-	Made          bool
 	Claim         uuid.UUID
 }
 
-// ErrKeyInProgress is a group whose key Axiom may be making for it: another request or the sync holds its claim, or a
-// create was sent and its result is not known yet (docs/domains/suppliers.md「一个分组只建一把」). The key is adopted
-// once the supplier lists it, or a person releases the claim (ReleaseKeyClaim).
-var ErrKeyInProgress = errors.New("suppliers: a key for the group is being made")
+// The ways a group's claim on making its key refuses a change (docs/domains/suppliers.md「一个分组只建一把」).
+var (
+	// ErrKeyInProgress is a group whose key Axiom may be making for it: another request or the sync holds its claim, or
+	// a create was sent and its result is not known yet. The key is adopted once the supplier lists it, or a person
+	// releases the claim (ReleaseKeyClaim).
+	ErrKeyInProgress = errors.New("suppliers: a key for the group is being made")
+	// ErrClaimChanged is a release of a claim that is no longer the group's: it was adopted, released, or taken over.
+	ErrClaimChanged = errors.New("suppliers: the group's key claim changed since it was read")
+)
 
-// MakeKey obtains the dedicated key of one of a relay's groups without ever making a second one: the key the group's
-// claim knows or the supplier lists under the marker name the sync gives, or one made now under the claim, and reads
-// its text. A key found by its name must be usable (ErrKeyUnusable), as a pasted one must; then the claim is ended,
-// because nothing was sent. A group the supplier no longer lists is ErrGroupGone, and one with a credential is
+// MakeKey obtains the dedicated key of one of a relay's groups without ever making a second one (syncer.ObtainKey): the
+// key the group's claim knows, one of its erased credentials the supplier still has, one it lists under the marker name
+// the sync gives, or one made now under the claim, and reads its text. Whichever it is, it is checked as a pasted key is,
+// as the supplier lists it: one disabled, expired or out of quota is ErrKeyUnusable, and a claim with nothing sent is
+// ended, while one whose create was sent keeps the key for a person to fix at the supplier or release. A group the supplier no longer lists is ErrGroupGone, and one with a credential is
 // ErrGroupHasKey. ConnectGroup checks the claim and the credentials again under the lock.
 func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (MadeKey, error) {
 	sup, err := a.supplierToReach(ctx, r, supplier)
@@ -101,22 +104,14 @@ func (a *Admin) MakeKey(ctx context.Context, r Reach, supplier, group uuid.UUID)
 		return MadeKey{}, err
 	}
 	claims := persist.NewClaims(r.DB, r.Scope, supplier, a.now)
-	got, err := syncer.ObtainKey(ctx, claims, m, syncer.KeyTarget{GroupRef: ref, Name: persist.KeyName(supplier, ref)}, a.now())
+	got, err := syncer.ObtainKey(ctx, claims, m, syncer.KeyTarget{GroupRef: ref, Name: persist.KeyName(supplier, ref)})
 	if err != nil {
 		return MadeKey{}, obtainError(err)
 	}
-	made := MadeKey{
-		Ref: string(got.Key.Ref), GroupRef: ref, Text: got.Text, Status: upstreamStatus(got.Key.Status),
-		Policy: policyOf(got.Key.Policy), Made: got.Made, Claim: got.Claim.ID,
-	}
-	if got.Made {
-		made.Policy = KeyPolicy{}
-		return made, nil
-	}
-	if made.Status != "active" {
+	if got.Key.Status != adapter.KeyActive {
 		return MadeKey{}, errors.Join(ErrKeyUnusable, syncer.Abandon(ctx, claims, got))
 	}
-	return made, nil
+	return MadeKey{Ref: string(got.Key.Ref), GroupRef: ref, Text: got.Text, Policy: policyOf(got.Key.Policy), Claim: got.Claim.ID}, nil
 }
 
 // obtainError is a failure to obtain a group's key as the admin names it.
