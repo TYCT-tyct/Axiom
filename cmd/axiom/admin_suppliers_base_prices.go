@@ -19,22 +19,9 @@ func (a adminAPI) ConfirmSupplierBasePrices(ctx context.Context, request adminap
 		return nil, err
 	}
 	b := request.Body
-	items := make([]suppliers.BasePriceItem, len(b.Items))
-	for i, it := range b.Items {
-		if items[i].Endpoint, err = idIn(fmt.Sprintf("/items/%d/endpoint_id", i), it.EndpointId); err != nil {
-			return nil, err
-		}
-		if it.Price != nil {
-			raw, err := jsonx.MarshalCanonical(it.Price)
-			if err != nil {
-				return nil, err
-			}
-			s, err := catalog.ParseSchedule(raw)
-			if err != nil {
-				return nil, invalidField(fmt.Sprintf("/items/%d/price", i), err.Error())
-			}
-			items[i].Price = &s
-		}
+	items, err := basePriceItems(b)
+	if err != nil {
+		return nil, err
 	}
 	snap, err := a.catalog.Current()
 	if err != nil {
@@ -52,6 +39,31 @@ func (a adminAPI) ConfirmSupplierBasePrices(ctx context.Context, request adminap
 		return nil, err
 	}
 	return adminapi.ConfirmSupplierBasePrices200JSONResponse{Body: list, Headers: adminapi.ConfirmSupplierBasePrices200ResponseHeaders{IdempotencyReplayed: replayedHeader(replayed)}}, nil
+}
+
+// basePriceItems is the request's endpoints, each with the price given for it in the catalog's form.
+func basePriceItems(b *adminapi.BasePriceConfirmation) ([]suppliers.BasePriceItem, error) {
+	items := make([]suppliers.BasePriceItem, len(b.Items))
+	for i, it := range b.Items {
+		id, err := idIn(fmt.Sprintf("/items/%d/endpoint_id", i), it.EndpointId)
+		if err != nil {
+			return nil, err
+		}
+		items[i].Endpoint = id
+		if it.Price == nil {
+			continue
+		}
+		raw, err := jsonx.MarshalCanonical(it.Price)
+		if err != nil {
+			return nil, err
+		}
+		s, err := catalog.ParseSchedule(raw)
+		if err != nil {
+			return nil, invalidField(fmt.Sprintf("/items/%d/price", i), err.Error())
+		}
+		items[i].Price = &s
+	}
+	return items, nil
 }
 
 // ClearSupplierBasePrices takes confirmed base prices away.
