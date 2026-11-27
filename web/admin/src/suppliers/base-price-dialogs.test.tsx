@@ -18,7 +18,7 @@ afterEach(async () => {
 it("sends exactly what is shown after switching back and forth", async () => {
   const { container, unmount } = await renderInDom(
     <form>
-      <BaseFields official={official} currency="USD" />
+      <BaseFields reference={{ schedule: official, source: "manual" }} currency="USD" />
     </form>,
   );
   mounted.push(unmount);

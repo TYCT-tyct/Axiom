@@ -2466,7 +2466,7 @@ export interface paths {
         put?: never;
         /**
          * Confirm the base price of models whose supplier shows no prices
-         * @description For a relay that states no price for a model (new-api with pricing hidden, sub2api, CPA), a person's base price of it, named by the group and the upstream name the group lists it under, so it can be given before the model has an endpoint. The price is in the supplier's settlement currency: the model's official price in the catalog in that currency when `price` is absent, or the price given. It is kept in the supplier's own unit, divided by the unit value in force and rounded up, and is for the model the name maps to now: a name mapped to another model later does not carry it over. At its next catalog round, which this makes due now, the sync makes the model's cost plan of it times the group's ratio, rounded up once, and the projection makes the endpoint; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier states always wins, and one it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name the group does not list is 404; one not mapped to a model yet, a model with no official price in the settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier whose unit value is not confirmed, or that is not a relay, is 409. At most 500 models.
+         * @description For a relay that states no price for a model (new-api with pricing hidden, sub2api, CPA), a person's base price of it, named by the group and the upstream name the group lists it under, so it can be given before the model has an endpoint. The price is in the supplier's settlement currency: the model's official price in the catalog in that currency when `price` is absent, or the price given. It is kept in the supplier's own unit, divided by the unit value in force and rounded up, and is for the model the name maps to now: a name mapped to another model later does not carry it over. At its next catalog round, which this makes due now, the sync makes the model's cost plan of it times the group's ratio, rounded up once, and the projection makes the endpoint; the plan's lines show both factors (`base_price`, `group_ratio`). A price the supplier states always wins, and one it states in a way no schedule can express leaves the cost unknown. Confirming again replaces the base. A name the group does not list is 404; one not mapped to a model yet, a model with no official price in the settlement currency and no `price`, and a price in another currency or charging nothing are 422; a supplier whose unit value is not confirmed, or that is not a relay, and a name the supplier now states a price for or the sync has not read, are 409 `conflict`; an item whose `model_id` is not the model its name maps to now, an alias at its current revision included, is 409 `stale_revision`. Both are checked against the sync's state as locked for the change. At most 500 models.
          */
         post: operations["confirmSupplierBasePrices"];
         delete?: never;
@@ -6275,6 +6275,7 @@ export interface components {
             formats: components["schemas"]["ModelFormat"][];
             /** @enum {string} */
             cost_state: "known" | "unknown" | "conflict";
+            cost_reason?: components["schemas"]["SupplierCostReason"];
             enabled: boolean;
             /**
              * @description The precision a person recorded for this endpoint. Absent or null when none is recorded, which is not the level `unknown`; a request that filters by quantization does not match an endpoint without one.
@@ -6282,6 +6283,11 @@ export interface components {
              */
             quantization?: "int4" | "int8" | "fp4" | "mxfp4" | "nvfp4" | "fp6" | "fp8" | "mxfp8" | "fp16" | "bf16" | "fp32" | "unknown" | null;
         };
+        /**
+         * @description Why the cost is unknown, as the sync's last catalog round decided it; absent when the cost is known or nothing says. `unpriced`: the supplier publishes no price for the model and no base is confirmed for the model the name maps to, the one case `confirmSupplierBasePrices` can price; `unexpressible`: it publishes a price the price table cannot express (per call, an expression), which a base never replaces; `over_limit`: a confirmed base times the group's ratio is beyond the unit price limit; `under_estimated`: reconciliation found the supplier charging more than the plan estimated and took the endpoint down until its price changes.
+         * @enum {string}
+         */
+        SupplierCostReason: "unpriced" | "unexpressible" | "over_limit" | "under_estimated";
         EndpointQuantizationUpdate: {
             /**
              * @description One of OpenRouter's levels, or null to clear the record.
@@ -7322,6 +7328,8 @@ export interface components {
             /** @description `review`: the model whose name is closest, as a suggestion for `mapSupplierModel`; absent when none is close. */
             suggested_model_id?: components["schemas"]["Uuid"];
             suggested_model_slug?: components["schemas"]["ModelSlug"];
+            /** @description `listed`: why the name's cost is unknown, with or without an endpoint; absent in the other piles. */
+            cost_reason?: components["schemas"]["SupplierCostReason"];
         };
         SupplierModelList: {
             data: components["schemas"]["SupplierModel"][];
@@ -7419,6 +7427,8 @@ export interface components {
             items: (components["schemas"]["BaseModel"] & {
                 /** @description The base in the settlement currency, per unit of each item; absent takes the model's official price. */
                 price?: components["schemas"]["PriceSchedule"];
+                /** @description The catalog model the person saw the name map to. When the name maps to another model now, or to none, the change is refused with 409 `stale_revision`; absent checks nothing. */
+                model_id?: components["schemas"]["Uuid"];
             })[];
             reason: components["schemas"]["Reason"];
         };

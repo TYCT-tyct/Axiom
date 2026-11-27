@@ -18,9 +18,11 @@ import (
 	"axiom/internal/suppliers/internal/syncer"
 )
 
-// format identifies the stored state shape. Format 2 keeps the plans by group and model (syncer.Plans), the confirmed
-// bases and whether a model's price was published; format 1 is read too (decodeFormat1).
-const format = 2
+// format identifies the stored state shape. Format 3 adds why a model's cost is unknown (syncer.ModelSnap.CostReason).
+// Format 2 keeps the plans by group and model (syncer.Plans), the confirmed bases and whether a model's price was
+// published; it is read as it is, its reasons empty until the next catalog round writes them. Format 1 is read too
+// (decodeFormat1).
+const format = 3
 
 // never is the next_due of a supplier no round is due for: one the engine does not poll.
 var never = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -90,7 +92,7 @@ func decode(version int64, storedFormat int16, raw []byte) (syncer.State, error)
 	var out syncer.State
 	var err error
 	switch storedFormat {
-	case format:
+	case format, 2:
 		err = jsonx.UnmarshalKnown(raw, &out)
 	case 1:
 		out, err = decodeFormat1(raw)

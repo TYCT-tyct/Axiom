@@ -22,14 +22,14 @@ export function useListed(supplierId: string, enabled: boolean) {
   return { names, rows, find };
 }
 
-// The names of models on sale that have no endpoint yet: at a relay that publishes no price, the projection makes an
-// endpoint only once a base is confirmed (docs/domains/suppliers.md「确认基础价」), so these are where a person starts.
-// A name with an endpoint whose cost is unknown is confirmed from the endpoint's row instead.
+// The names of models on sale with no endpoint yet because the supplier publishes no price for them (cost_reason
+// unpriced): the projection makes an endpoint only once a base is confirmed (docs/domains/suppliers.md「确认基础价」), so
+// these are where a person starts. A name with an endpoint whose cost is unknown is confirmed from the endpoint's row.
 export function Unpriced({ detail }: { detail: SupplierView }) {
   const { t } = useTranslation();
   const { names, rows } = useListed(detail.supplier.id, true);
   const [target, setTarget] = useState<BaseTarget | null>(null);
-  const waiting = rows.filter((row) => !row.endpoint_id);
+  const waiting = rows.filter((row) => !row.endpoint_id && row.cost_reason === "unpriced");
   const group = (id: string) => {
     const found = detail.groups.find((one) => one.id === id);
     return found?.codename ?? found?.name ?? id;

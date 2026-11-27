@@ -2,8 +2,9 @@
 
 -- name: ListSupplierNames :many
 -- Every name the supplier's groups list now, by group and name, with the model the projection mapped it to and the
--- endpoint made for the name, when there is one.
-SELECT m.supplier_group_id, m.upstream_name, m.formats, m.first_seen_at, m.model_id, e.id AS endpoint_id
+-- endpoint made for the name, when there is one, with its cost state; and the group's ref the sync knows it by.
+SELECT m.supplier_group_id, m.upstream_name, m.formats, m.first_seen_at, m.model_id, e.id AS endpoint_id,
+    e.cost_state AS endpoint_cost_state, e.cost_state_reason AS endpoint_cost_reason, g.upstream_ref
 FROM suppliers.supplier_models m
 JOIN suppliers.supplier_groups g ON g.id = m.supplier_group_id
 LEFT JOIN suppliers.endpoints e

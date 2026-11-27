@@ -145,4 +145,4 @@ func EndpointLines(ctx context.Context, tx pg.Tx, endpoints []uuid.UUID) (map[uu
 | `MakeKey`、`FindKey`、`CheckKey`、`CheckCredential`（经 `Reach`，不在调用方事务里） | `ErrCannotMakeKey`、`ErrCannotFindKey`、`*KeyRefusal`、`ErrSupplierRefused`、`ErrSupplierUnanswered`、`ErrStatusLocked` |
 | `ConnectGroup`、`AddKeys`、`RecordCheck`、`SetCredentialEnabled`、`RemoveCredential`、`RemoveInvalid` | `ErrWrongGroup`、`ErrGroupHasKey`、`ErrKeyBound`、`ErrStatusLocked` |
 | `*EgressProxy*`、`SetCredentialEgress` | `ErrEgress*`、`ErrNoEgressProxy`、`ErrUnknownEgress` |
-| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |
+| `RequestSync`、`SetIntakeRule`、`IgnoreInboxItem`、`*BasePrices` | `ErrStatusLocked`、`ErrNotSynced`、`ErrNoOfficialPrice`、`ErrBasePrice`、`ErrModelChanged`、`ErrNotUnpriced`、`ErrIntakeRule`、`ErrIntakeRevision`、`ErrNoInboxItem` |

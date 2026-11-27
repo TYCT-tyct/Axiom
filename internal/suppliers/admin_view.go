@@ -220,7 +220,9 @@ type Endpoint struct {
 	UpstreamName     string
 	Formats          []string
 	CostState        string
-	Enabled          bool
+	// CostReason is why the cost is unknown, empty when it is not or when nothing says (a model the listing left).
+	CostReason CostReason
+	Enabled    bool
 	// Quantization is the level an admin recorded, empty when none is. It is not the supplier's report: the sync cannot
 	// see it.
 	Quantization Quantization
