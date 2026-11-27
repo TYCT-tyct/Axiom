@@ -4918,7 +4918,7 @@ paths:
       description: >-
         Selects a group that has no credential yet and gives it one. `make`: selects the group and asks the sync for
         its key, which only the sync makes at a supplier: its next round adopts the key Axiom made for the group earlier
-        if the supplier lists one, or makes one, and seals its text. The request waits up to 8 seconds for that round:
+        if the supplier lists one, or makes one, and seals its text. The request answers within 8 seconds of arriving:
         201 when a key with its text is stored by then, otherwise 202 with the group, whose `key_state` (`getSupplier`)
         turns `ready` once it is stored, or `failed` with the reason; a replay answers how it stands without waiting.
         An adapter that cannot make keys is 422, and so is a group none of whose models Axiom can sell; a supplier the

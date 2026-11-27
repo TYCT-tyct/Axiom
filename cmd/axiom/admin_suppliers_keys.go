@@ -105,6 +105,7 @@ func last4(text string) string {
 
 // ConnectSupplierGroup selects a group that has no key yet and gives it one: made by the sync, or pasted.
 func (a adminAPI) ConnectSupplierGroup(ctx context.Context, request adminapi.ConnectSupplierGroupRequestObject) (adminapi.ConnectSupplierGroupResponseObject, error) {
+	arrived := time.Now()
 	supplier, err := supplierIDOf(request.SupplierId)
 	if err != nil {
 		return nil, err
@@ -124,7 +125,7 @@ func (a adminAPI) ConnectSupplierGroup(ctx context.Context, request adminapi.Con
 		return nil, err
 	}
 	if b.KeySource == adminapi.Make {
-		return a.requestGroupKey(ctx, claim, supplier, group, b.Reason)
+		return a.requestGroupKey(ctx, arrived.Add(keyWaitLimit), claim, supplier, group, b.Reason)
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), supplierRequestLimit)
 	defer cancel()
@@ -160,10 +161,10 @@ func connectionKey(b *adminapi.GroupConnection) (secret.Secret, string, error) {
 	return text, last4(*b.Key), err
 }
 
-// requestGroupKey connects a group with a key the sync makes: the change asks the sync for it, and the answer waits up to
-// keyWaitLimit for the round that stores it. A replay asks nothing again and does not wait: it answers how the key
-// stands now.
-func (a adminAPI) requestGroupKey(ctx context.Context, claim idem.Claim, supplier, group uuid.UUID, reason string) (adminapi.ConnectSupplierGroupResponseObject, error) {
+// requestGroupKey connects a group with a key the sync makes: the change asks the sync for it, and the answer waits until
+// the request's budget, which began when it arrived, so waiting for locks counts against it, for the round that stores
+// it. A replay asks nothing again and does not wait: it answers how the key stands now.
+func (a adminAPI) requestGroupKey(ctx context.Context, until time.Time, claim idem.Claim, supplier, group uuid.UUID, reason string) (adminapi.ConnectSupplierGroupResponseObject, error) {
 	_, replayed, err := idempotentlyClaimed(ctx, a.db, claim, func(tx pg.Tx) (adminapi.SupplierGroup, error) {
 		g, err := a.suppliers.RequestKey(ctx, tx, actor(ctx), supplier, group, reason)
 		return groupBody(g), err
@@ -171,13 +172,10 @@ func (a adminAPI) requestGroupKey(ctx context.Context, claim idem.Claim, supplie
 	if err != nil {
 		return nil, err
 	}
-	limit := keyWaitLimit
 	if replayed {
-		limit = 0
+		until = time.Now()
 	}
-	wait, cancel := context.WithTimeout(ctx, limit)
-	defer cancel()
-	g, c, err := a.suppliers.AwaitKey(wait, a.reach(ctx), supplier, group)
+	g, c, err := a.suppliers.AwaitKey(ctx, a.reach(ctx), supplier, group, until)
 	if err != nil {
 		return nil, err
 	}
@@ -192,8 +190,9 @@ func (a adminAPI) requestGroupKey(ctx context.Context, claim idem.Claim, supplie
 	}, nil
 }
 
-// keyWaitLimit is how long a make waits for the sync before it answers 202: it must answer before the admin page gives
-// up on the request, which is requestTimeout in web/packages/api/src/index.ts (10 seconds), so the page always learns
+// keyWaitLimit is how long a make may take, from the moment it arrives, before it answers 202: it must answer before
+// the admin page gives up on the request, which is requestTimeout in web/packages/api/src/index.ts (10 seconds), so the
+// page always learns
 // whether the group is connected or still waiting. A round that starts later is answered by the page's next read.
 const keyWaitLimit = 8 * time.Second
 

@@ -55,25 +55,25 @@ func makesKeys(a adapter.Adapter) bool {
 	return ok && src.MakesKeys()
 }
 
-// AwaitKey reads the group every keyPoll until it has a credential or ctx ends, and answers the group with the
-// credential, nil when it has none by then. It holds no connection between reads.
-func (a *Admin) AwaitKey(ctx context.Context, r Reach, supplier, group uuid.UUID) (Group, *Credential, error) {
-	read := context.WithoutCancel(ctx) // the last read is answered even when ctx ends while it runs
+// AwaitKey reads the group every keyPoll until it has a credential or the wall clock passes until, and answers the
+// group with the credential, nil when it has none by then; it reads once even when until has passed. Every read is the
+// request's, under ctx. It holds no connection between reads.
+func (a *Admin) AwaitKey(ctx context.Context, r Reach, supplier, group uuid.UUID, until time.Time) (Group, *Credential, error) {
 	tick := time.NewTicker(keyPoll)
 	defer tick.Stop()
 	for {
 		var g Group
 		var c *Credential
-		err := r.DB.ReadTx(read, r.Scope, func(tx pg.Tx) (err error) {
-			g, c, err = a.groupKey(read, tx, supplier, group)
+		err := r.DB.ReadTx(ctx, r.Scope, func(tx pg.Tx) (err error) {
+			g, c, err = a.groupKey(ctx, tx, supplier, group)
 			return err
 		})
-		if err != nil || c != nil {
+		if err != nil || c != nil || !time.Now().Before(until) {
 			return g, c, err
 		}
 		select {
 		case <-ctx.Done():
-			return g, nil, nil
+			return Group{}, nil, ctx.Err()
 		case <-tick.C:
 		}
 	}

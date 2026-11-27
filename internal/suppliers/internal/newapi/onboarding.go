@@ -84,21 +84,25 @@ func keyWritten(resp adapter.Response, what string) error {
 	}
 }
 
-// newKey is the key a create just made, of the ids the search finds under its name and group after it, the lowest of
-// those not there before: an older key of the name, disabled or a person's, is never taken for it.
+// newKey is the key a create just made: the one id the search finds under its name and group after it and not before,
+// so an older key of the name, disabled or a person's, is never taken for it. With none, or more than one when a person
+// made a key of the name meanwhile, the create names no key: the caller records nothing that could make a person's key
+// revocable, and the next complete listing adopts one by name.
 func newKey(before, after []int64) (adapter.KeyRef, error) {
-	ref := int64(0)
+	var made []int64
 	for _, id := range after {
-		if !slices.Contains(before, id) && (ref == 0 || id < ref) {
-			ref = id
+		if !slices.Contains(before, id) {
+			made = append(made, id)
 		}
 	}
-	if ref == 0 {
-		// The key may exist but not be visible yet. The next complete listing adopts it by name; a second create now
-		// would make a second key.
+	switch len(made) {
+	case 0:
+		// The key may exist but not be visible yet; a second create now would make a second key.
 		return "", fmt.Errorf("new-api: the key made is not listed yet")
+	case 1:
+		return adapter.KeyRef(strconv.FormatInt(made[0], 10)), nil
 	}
-	return adapter.KeyRef(strconv.FormatInt(ref, 10)), nil
+	return "", fmt.Errorf("new-api: %d keys of the name appeared with the one made, which cannot be told apart", len(made))
 }
 
 // keysNamed are the ids of the keys with the name in the group, as new-api's search finds them: the create answer has

@@ -127,9 +127,19 @@ func TestCreateKeyTakesTheKeyItMade(t *testing.T) {
 		answer(200, `{"success":true,"data":{"items":[{"id":5,"name":"axiom-1-2","group":"g","status":2}]}}`),
 		answer(200, `{"success":true,"data":{"items":[{"id":5,"name":"axiom-1-2","group":"g","status":2},{"id":9,"name":"axiom-1-2","group":"g","status":1}]}}`),
 	}
-	ref, err := open(t, f, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
+	m := open(t, f, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)).(adapter.KeyMaker)
+	ref, err := m.CreateKey(t.Context(), "g", "axiom-1-2")
 	if err != nil || ref != "9" {
 		t.Fatalf("CreateKey = %q, %v; want 9, the key the create made", ref, err)
+	}
+	// A person made a key of the same name between the two searches: which new one is ours cannot be told, so the
+	// create names none, and nothing is recorded that could make the person's key revocable.
+	f.turns["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = []adapter.Response{
+		answer(200, `{"success":true,"data":{"items":[]}}`),
+		answer(200, `{"success":true,"data":{"items":[{"id":41,"name":"axiom-1-2","group":"g"},{"id":42,"name":"axiom-1-2","group":"g"}]}}`),
+	}
+	if ref, err := m.CreateKey(t.Context(), "g", "axiom-1-2"); err == nil || ref != "" || errors.Is(err, adapter.ErrKeyRefused) {
+		t.Errorf("CreateKey with two new keys of the name = %q, %v; want no key and a task failure", ref, err)
 	}
 }
 
