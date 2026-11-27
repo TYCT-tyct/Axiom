@@ -115,7 +115,7 @@ func (m *maker) KeySecret(_ context.Context, ref adapter.KeyRef) (secret.Secret,
 
 // KeyNamed finds the key in the supplier's listing, as new-api's search would.
 func (m *maker) KeyNamed(_ context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
-	page, err := m.supplier.keys(nil)
+	page, err := m.keys(nil)
 	if err != nil {
 		return adapter.KeyState{}, false, err
 	}

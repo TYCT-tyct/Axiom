@@ -50,15 +50,7 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 		}
 		return "", refused
 	case resp.Status == http.StatusOK && parsed && env.Success:
-		key, found, err := m.KeyNamed(ctx, groupRef, name)
-		switch {
-		case err != nil:
-			return "", fmt.Errorf("%w: %w", adapter.ErrKeyMade, err)
-		case !found:
-			// The key may exist but not be visible yet. A second create now would make a second key.
-			return "", fmt.Errorf("%w: new-api does not list it yet", adapter.ErrKeyMade)
-		}
-		return key.Ref, nil
+		return m.madeRef(ctx, groupRef, name)
 	case resp.Status == http.StatusOK && parsed:
 		// A token limit, a group the account cannot use, or another refusal the supplier states in its words. The
 		// words are not kept: they may echo the request, and the class is all the page needs.
@@ -68,6 +60,19 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 	default:
 		return "", fmt.Errorf("%w: make the key: status %d", adapter.ErrUnrecognised, resp.Status)
 	}
+}
+
+// madeRef is the id of the key new-api just made, found by its name. A failure to find it wraps ErrKeyMade: the key
+// may exist but not be visible yet, and a second create now would make a second key.
+func (m *manager) madeRef(ctx context.Context, groupRef, name string) (adapter.KeyRef, error) {
+	key, found, err := m.KeyNamed(ctx, groupRef, name)
+	switch {
+	case err != nil:
+		return "", fmt.Errorf("%w: %w", adapter.ErrKeyMade, err)
+	case !found:
+		return "", fmt.Errorf("%w: new-api does not list it yet", adapter.ErrKeyMade)
+	}
+	return key.Ref, nil
 }
 
 // KeyNamed implements adapter.KeyMaker with new-api's search, which matches the name whole when it holds no % or _:
