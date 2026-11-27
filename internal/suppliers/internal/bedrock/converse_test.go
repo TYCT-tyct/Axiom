@@ -29,8 +29,9 @@ func canonical(t *testing.T, text string) string {
 // TestChatBecomesConverse: a Chat body is sent to Converse, or ConverseStream for a stream, as Converse's body: the
 // leading system messages the system prompt, text and inline images as blocks, the assistant's calls as tool uses and
 // their results as the user's tool results, a role's messages in a row one turn, the sampling as the inference
-// configuration and the functions as the tool configuration. What Converse cannot say is refused before anything is
-// sent.
+// configuration and the functions as the tool configuration. A member that changes no answer, or holds Chat's default,
+// is dropped, and a name goes before the message's text. What Converse cannot say is refused before anything is sent, as
+// the endpoint's failure.
 func TestChatBecomesConverse(t *testing.T) {
 	t.Parallel()
 	const base = "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.nova-pro-v1%3A0/"
@@ -67,31 +68,73 @@ func TestChatBecomesConverse(t *testing.T) {
 			{"toolSpec":{"name":"weather","description":"The weather","inputSchema":{"json":{"type":"object","properties":{"city":{"type":"string"}}}}}},
 			{"toolSpec":{"name":"time","inputSchema":{"json":{"type":"object","properties":{}}}}}],"toolChoice":{"tool":{"name":"weather"}}}}`,
 		},
+		{
+			"the members that change no answer, and the defaults",
+			`{"messages":[{"role":"user","content":"Hi"}],"seed":7,"store":true,"metadata":{"k":"v"},"top_logprobs":2,"n":1,"logprobs":false,
+			"frequency_penalty":0,"presence_penalty":0.0,"logit_bias":{ },"modalities":["text"],"service_tier":"auto","response_format":{"type":"text"},
+			"reasoning_effort":"high"}`,
+			base + "converse", `{"messages":[{"role":"user","content":[{"text":"Hi"}]}]}`,
+		},
+		{
+			"names",
+			`{"messages":[{"role":"system","name":"rules","content":"Be brief."},{"role":"user","name":"ann","content":[{"type":"text","text":"Hi"}]},
+			{"role":"assistant","name":"bot","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+			{"role":"tool","name":"f","tool_call_id":"c1","content":"ok"}]}`,
+			base + "converse",
+			`{"system":[{"text":"rules: Be brief."}],"messages":[{"role":"user","content":[{"text":"ann: Hi"}]},{"role":"assistant","content":[{"text":"bot: "},
+			{"toolUse":{"toolUseId":"c1","name":"f","input":{}}}]},{"role":"user","content":[{"toolResult":{"toolUseId":"c1","content":[{"text":"ok"}]}}]}]}`,
+		},
 		{"an image by address", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":{"url":"https://example.com/a.png"}}]}]}`, "", ""},
 		{"a system message mid-conversation", `{"messages":[{"role":"user","content":"Hi"},{"role":"system","content":"Now French."}]}`, "", ""},
-		{"a parameter Converse has no word for", `{"messages":[{"role":"user","content":"Hi"}],"n":2}`, "", ""},
-		{"a member of a message it has none for", `{"messages":[{"role":"user","name":"ann","content":"Hi"}]}`, "", ""},
+		{"several choices", `{"messages":[{"role":"user","content":"Hi"}],"n":2}`, "", ""},
+		{"token probabilities", `{"messages":[{"role":"user","content":"Hi"}],"logprobs":true}`, "", ""},
+		{"a penalty", `{"messages":[{"role":"user","content":"Hi"}],"frequency_penalty":0.5}`, "", ""},
+		{"a JSON reply", `{"messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_object"}}`, "", ""},
+		{"a reply schema", `{"messages":[{"role":"user","content":"Hi"}],"response_format":{"type":"json_schema","json_schema":{"name":"r","strict":true,"schema":{}}}}`, "", ""},
+		{"a member Chat does not define", `{"messages":[{"role":"user","content":"Hi"}],"top_k":5}`, "", ""},
+		{"a member of a message it has none for", `{"messages":[{"role":"user","audio":{"id":"a"},"content":"Hi"}]}`, "", ""},
 		{"no tool call allowed", `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f"}}],"tool_choice":"none"}`, "", ""},
 		{"a strict schema", `{"messages":[{"role":"user","content":"Hi"}],"tools":[{"type":"function","function":{"name":"f","strict":true}}]}`, "", ""},
 		{"one call at a time", `{"messages":[{"role":"user","content":"Hi"}],"parallel_tool_calls":false}`, "", ""},
 		{"an audio part", `{"messages":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"AAAA","format":"wav"}}]}]}`, "", ""},
 	} {
-		req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
-			Format: protocol.Chat, Region: "us-east-1", Model: "amazon.nova-pro-v1:0", Body: []byte(tc.body), Key: exampleAPIKey, At: time.Now(),
-		})
-		if tc.want == "" {
-			if f == nil || f.Cause != (adapter.BadRequest{}) || f.Executed != adapter.NotExecuted {
-				t.Errorf("%s: sent, or failed as %+v", tc.name, f)
-			}
-			continue
+		signsAs(t, tc.name, "amazon.nova-pro-v1:0", tc.body, tc.url, tc.want)
+	}
+	// Nova 2 Lite takes the effort as its extended thinking, the nearest level it has; its high effort beside an output
+	// cap, which Nova refuses, goes elsewhere.
+	const nova2 = "us.amazon.nova-2-lite-v1:0"
+	const lite = "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.amazon.nova-2-lite-v1%3A0/converse"
+	const hi = `{"role":"user","content":"Hi"}`
+	for _, tc := range []struct{ effort, want string }{
+		{"none", `{"messages":[` + `{"role":"user","content":[{"text":"Hi"}]}]}`},
+		{"minimal", `{"messages":[{"role":"user","content":[{"text":"Hi"}]}],"additionalModelRequestFields":{"reasoningConfig":{"type":"enabled","maxReasoningEffort":"low"}}}`},
+		{"medium", `{"messages":[{"role":"user","content":[{"text":"Hi"}]}],"additionalModelRequestFields":{"reasoningConfig":{"type":"enabled","maxReasoningEffort":"medium"}}}`},
+		{"xhigh", `{"messages":[{"role":"user","content":[{"text":"Hi"}]}],"additionalModelRequestFields":{"reasoningConfig":{"type":"enabled","maxReasoningEffort":"high"}}}`},
+	} {
+		signsAs(t, "effort "+tc.effort, nova2, `{"messages":[`+hi+`],"reasoning_effort":"`+tc.effort+`"}`, lite, tc.want)
+	}
+	signsAs(t, "high effort with a cap", nova2, `{"messages":[`+hi+`],"reasoning_effort":"high","max_tokens":64}`, "", "")
+}
+
+// signsAs checks what Sign makes of a Chat body for model: the call sent to url with the Converse body want, or, for
+// no want, the endpoint's failure before anything is sent, as the request is sound and another endpoint may take it.
+func signsAs(t *testing.T, name, model, chat, url, want string) {
+	t.Helper()
+	req, f := quirks{}.Sign(t.Context(), nil, adapter.SignedCall{
+		Format: protocol.Chat, Region: "us-east-1", Model: model, Body: []byte(chat), Key: exampleAPIKey, At: time.Now(),
+	})
+	if want == "" {
+		if f == nil || f.Scope != adapter.ScopeEndpoint || f.Executed != adapter.NotExecuted {
+			t.Errorf("%s: sent, or failed as %+v", name, f)
 		}
-		if f != nil {
-			t.Fatalf("%s: %+v", tc.name, f)
-		}
-		body, err := io.ReadAll(req.Body)
-		if err != nil || req.URL.String() != tc.url || string(body) != canonical(t, tc.want) || req.Header.Get("Authorization") != "Bearer "+testAPIKey {
-			t.Errorf("%s: sent %s %s (%v)", tc.name, req.URL, body, err)
-		}
+		return
+	}
+	if f != nil {
+		t.Fatalf("%s: %+v", name, f)
+	}
+	body, err := io.ReadAll(req.Body)
+	if err != nil || req.URL.String() != url || string(body) != canonical(t, want) || req.Header.Get("Authorization") != "Bearer "+testAPIKey {
+		t.Errorf("%s: sent %s %s (%v)", name, req.URL, body, err)
 	}
 }
 

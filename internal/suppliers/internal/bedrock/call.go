@@ -60,7 +60,9 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 		}
 		body, stream, err = cloud.Rewrite(c.Body, []string{"model", "stream"}, add...)
 	case protocol.Chat:
-		body, stream, err = converse(c.Body)
+		if body, stream, err = converse(c.Body, c.Model); err != nil {
+			return nil, unconvertible()
+		}
 	case protocol.Responses, protocol.Embeddings, protocol.Rerank, protocol.Completions:
 		return nil, cloud.BadBody()
 	}
@@ -77,6 +79,12 @@ func (quirks) Sign(ctx context.Context, _ adapter.Doer, c adapter.SignedCall) (*
 	}
 	k.authorize(req, body, c.Region, c.At)
 	return req, nil
+}
+
+// unconvertible is the failure of a Chat body Converse cannot say. The gateway has already read the body as sound
+// Chat, so what Converse lacks is the endpoint's, and another endpoint is tried rather than the client refused.
+func unconvertible() *adapter.Failure {
+	return &adapter.Failure{Executed: adapter.NotExecuted, Scope: adapter.ScopeEndpoint, Cause: adapter.BadRequest{}}
 }
 
 // accepted is the beta features Bedrock's InvokeModel takes (the client's name for a feature, Bedrock's name for it):
