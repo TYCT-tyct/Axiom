@@ -59,13 +59,15 @@ func TestCreateKey(t *testing.T) {
 		t.Parallel()
 		f := newFake()
 		f.routes["POST /api/token/"] = answer(200, `{"success":true,"message":""}`)
-		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(200,
-			`{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`)
+		f.turns["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = []adapter.Response{
+			answer(200, `{"success":true,"data":{"items":[]}}`),
+			answer(200, `{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`),
+		}
 		ref, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
 		if err != nil || ref != "12" {
 			t.Fatalf("CreateKey = %q, %v", ref, err)
 		}
-		made := f.sent[0]
+		made := f.sent[1]
 		if made.Method != http.MethodPost || made.Path != "/api/token/" || !strings.Contains(string(made.Body), `"unlimited_quota":true`) ||
 			!strings.Contains(string(made.Body), `"model_limits_enabled":false`) || !strings.Contains(string(made.Body), `"expired_time":-1`) {
 			t.Errorf("the create request: %+v", made)
@@ -74,6 +76,7 @@ func TestCreateKey(t *testing.T) {
 	t.Run("the login may not manage keys", func(t *testing.T) {
 		t.Parallel()
 		f := newFake()
+		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(200, `{"success":true,"data":{"items":[]}}`)
 		f.routes["POST /api/token/"] = answer(403,
 			`{"code":"ACCESS_TOKEN_SCOPE_DENIED","message_params":{"scope":"api_key:write"},"success":false}`)
 		_, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
@@ -95,6 +98,7 @@ func TestCreateKey(t *testing.T) {
 	t.Run("the supplier refuses", func(t *testing.T) {
 		t.Parallel()
 		f := newFake()
+		f.routes["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = answer(200, `{"success":true,"data":{"items":[]}}`)
 		f.routes["POST /api/token/"] = answer(200, `{"success":false,"message":"no"}`)
 		_, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
 		if !errors.Is(err, adapter.ErrKeyRefused) {
@@ -113,6 +117,22 @@ func TestCreateKey(t *testing.T) {
 	})
 }
 
+// TestCreateKeyTakesTheKeyItMade: the search after the create finds an older key of the same name too, disabled here;
+// the key made is the one the search before the create did not find, never the lowest id of the name.
+func TestCreateKeyTakesTheKeyItMade(t *testing.T) {
+	t.Parallel()
+	f := newFake()
+	f.routes["POST /api/token/"] = answer(200, `{"success":true}`)
+	f.turns["GET /api/token/search?keyword=axiom-1-2&page_size=100"] = []adapter.Response{
+		answer(200, `{"success":true,"data":{"items":[{"id":5,"name":"axiom-1-2","group":"g","status":2}]}}`),
+		answer(200, `{"success":true,"data":{"items":[{"id":5,"name":"axiom-1-2","group":"g","status":2},{"id":9,"name":"axiom-1-2","group":"g","status":1}]}}`),
+	}
+	ref, err := open(t, f, time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
+	if err != nil || ref != "9" {
+		t.Fatalf("CreateKey = %q, %v; want 9, the key the create made", ref, err)
+	}
+}
+
 // TestA5xxOnAKeyReadIsRetryable: a gateway error while searching for a just-created key or reading its text is a
 // temporary failure, not an unrecognised answer that would halt the key task for good.
 func TestA5xxOnAKeyReadIsRetryable(t *testing.T) {
@@ -127,7 +147,10 @@ func TestA5xxOnAKeyReadIsRetryable(t *testing.T) {
 		if _, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2"); !errors.Is(err, errServer) || errors.Is(err, adapter.ErrUnrecognised) {
 			t.Fatalf("search = %v, want a retryable server error", err)
 		}
-		f.routes[search] = answer(200, `{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`)
+		f.turns[search] = []adapter.Response{
+			answer(200, `{"success":true,"data":{"items":[]}}`),
+			answer(200, `{"success":true,"data":{"items":[{"id":12,"name":"axiom-1-2","group":"g"}]}}`),
+		}
 		ref, err := m.(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
 		if err != nil || ref != "12" {
 			t.Fatalf("after recovery CreateKey = %q, %v; want 12", ref, err)

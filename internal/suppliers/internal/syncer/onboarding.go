@@ -18,9 +18,9 @@ import (
 // adopt it instead of making a second one.
 //
 // The sync is the only writer of keys at a supplier, one node at a time under the supplier's lease, and this is its one
-// place that makes them. Its invariant: after a reconcile, a group Axiom uses or makes a key for has at most one live key
-// under its marker name, and when Axiom stores one, that is the one. A listing that is not complete never reaches here,
-// so a key it might not show is never made again.
+// place that makes them, recording each as it is made. Its invariant: after a reconcile, a group has at most one live
+// key on that record, and when Axiom stores one, that is the one; a key not on the record is never revoked. A listing
+// that is not complete never reaches here, so a key it might not show is never made again.
 //
 // policies is the key listing that will back the credentials' policies. A made key is added to it with an empty policy,
 // because that is how it was made; a bound key the listing does not have is left out, so its policy stays "nothing
@@ -98,15 +98,15 @@ func markedKeys(listed []adapter.KeyState) map[groupName][]adapter.KeyState {
 }
 
 // reconcile brings one group to its invariant. A group that needs a key adopts the oldest of its marked keys that the
-// supplier lists as active, as a pasted key must be, or makes one when none is; every other marked key no credential
-// holds is revoked. A stored key is never revoked.
+// supplier lists as active, as a pasted key must be, or makes one when none is; every other key on the record of those
+// Axiom made for it that the listing has is revoked. A name is enough to adopt a key, never to revoke one: a person can
+// name a key of their own the same. A stored key is never revoked.
 func (o *keyOnboarding) reconcile(ctx context.Context, g KeyGroup) error {
-	marked := o.marked[groupName{g.GroupRef, g.Name}]
-	keep, err := o.adopt(ctx, g, marked)
+	keep, err := o.adopt(ctx, g, o.marked[groupName{g.GroupRef, g.Name}])
 	if err != nil {
 		return err
 	}
-	if done, err := o.revokeAll(ctx, g, marked, keep); err != nil || !done {
+	if done, err := o.revokeAll(ctx, g, keep); err != nil || !done {
 		return err
 	}
 	if !g.Make || keep != "" {
@@ -132,14 +132,15 @@ func (o *keyOnboarding) adopt(ctx context.Context, g KeyGroup, marked []adapter.
 	return marked[i].Ref, o.keep(ctx, g, marked[i].Ref, false)
 }
 
-// revokeAll revokes every marked key but the one kept and those a credential holds. done is false when nothing more can
-// be revoked this step.
-func (o *keyOnboarding) revokeAll(ctx context.Context, g KeyGroup, marked []adapter.KeyState, keep adapter.KeyRef) (done bool, err error) {
-	for _, k := range marked {
-		if k.Ref == keep || o.stored[k.Ref] {
+// revokeAll revokes every key made for the group that the listing has, but the one kept and those a credential held when
+// the step began; the store checks the last again under the supplier's lock. A made key the complete listing does not
+// have is gone already. done is false when nothing more can be revoked this step.
+func (o *keyOnboarding) revokeAll(ctx context.Context, g KeyGroup, keep adapter.KeyRef) (done bool, err error) {
+	for _, ref := range g.Made {
+		if ref == keep || o.stored[ref] || !o.byRef[ref] {
 			continue
 		}
-		if done, err := o.revoke(ctx, g, k.Ref); err != nil || !done {
+		if done, err := o.revoke(ctx, g, ref); err != nil || !done {
 			return false, err
 		}
 	}
@@ -166,13 +167,14 @@ func (o *keyOnboarding) keep(ctx context.Context, g KeyGroup, ref adapter.KeyRef
 	return nil
 }
 
-// revoke deletes a key of ours the group does not store and records it. done is false when the adapter has no maker,
-// so nothing more is revoked this step; a key the supplier would not delete is left for the next reconcile.
+// revoke deletes a key Axiom made that no credential holds, through the store, which checks that under the supplier's
+// lock and records it. done is false when the adapter has no maker, so nothing more is revoked this step; a key the
+// supplier would not delete is left for the next reconcile.
 func (o *keyOnboarding) revoke(ctx context.Context, g KeyGroup, ref adapter.KeyRef) (done bool, err error) {
 	if !o.canMake {
 		return false, nil
 	}
-	err = o.maker.DeleteKey(ctx, ref)
+	_, err = o.store.Revoke(ctx, g.GroupRef, ref, func(ctx context.Context) error { return o.maker.DeleteKey(ctx, ref) })
 	if errors.Is(err, adapter.ErrNoKeyMaker) {
 		o.canMake = false
 		return false, nil
@@ -181,10 +183,7 @@ func (o *keyOnboarding) revoke(ctx context.Context, g KeyGroup, ref adapter.KeyR
 		return true, nil
 	}
 	if err != nil {
-		return false, err
-	}
-	if err := o.store.Revoked(ctx, g.GroupRef, ref); err != nil {
-		return false, fmt.Errorf("syncer: record the revocation of key %s: %w", ref, err)
+		return false, fmt.Errorf("syncer: revoke key %s: %w", ref, err)
 	}
 	return true, nil
 }
@@ -197,6 +196,9 @@ func (o *keyOnboarding) create(ctx context.Context, g KeyGroup) (ref adapter.Key
 	}
 	ref, err = o.maker.CreateKey(ctx, g.GroupRef, g.Name)
 	if err == nil {
+		if err := o.store.Made(ctx, g.GroupRef, ref); err != nil {
+			return "", false, fmt.Errorf("syncer: record the key made for group %s: %w", g.GroupRef, err)
+		}
 		return ref, true, nil
 	}
 	if errors.Is(err, adapter.ErrNoKeyMaker) {

@@ -11,16 +11,17 @@ import (
 	"axiom/internal/suppliers/internal/adapter"
 )
 
-// TestKeysTaskReconcilesTheKeysOfOurs: on a complete listing a group keeps at most one live key under its marker name.
-// A stored key is kept and never revoked; a group that needs one adopts the oldest active key of its name, or makes one
-// when none is usable; every other key of that name and group is revoked and recorded, and one the supplier will not
-// delete waits for the next reconcile. A key of the name in another group is not the group's. An incomplete listing
-// reconciles nothing.
+// TestKeysTaskReconcilesTheKeysOfOurs: on a complete listing a group keeps at most one live key that Axiom made. A
+// stored key is kept and never revoked; a group that needs one adopts the oldest active key of its marker name, or makes
+// one, recorded, when none is usable; every other key on the record of the keys Axiom made is revoked, also in a group
+// no longer in use, and one the supplier will not delete waits for the next reconcile. A key of the name that Axiom did
+// not make is never revoked, and one in another group is not the group's. An incomplete listing reconciles nothing.
 func TestKeysTaskReconcilesTheKeysOfOurs(t *testing.T) {
 	const name = "axiom-1-2"
 	key := func(ref adapter.KeyRef, group string, status adapter.KeyStatus) adapter.KeyState {
 		return adapter.KeyState{Ref: ref, GroupRef: group, Name: name, Status: status, Policy: &adapter.KeyPolicy{}}
 	}
+	refs := func(r ...adapter.KeyRef) []adapter.KeyRef { return r }
 	cases := []struct {
 		name    string
 		group   KeyGroup
@@ -32,44 +33,55 @@ func TestKeysTaskReconcilesTheKeysOfOurs(t *testing.T) {
 		creates int
 	}{
 		{
-			name:  "a stored key is kept and the others revoked",
-			group: KeyGroup{GroupRef: "1", Name: name, Stored: []adapter.KeyRef{"12"}},
+			name:  "a stored key is kept and the other made ones revoked",
+			group: KeyGroup{GroupRef: "1", Name: name, Stored: refs("12"), Made: refs("12", "30", "9")},
 			listed: []adapter.KeyState{
 				key("9", "1", adapter.KeyActive), key("12", "1", adapter.KeyActive), key("30", "1", adapter.KeyDisabled),
 			},
-			revoked: []adapter.KeyRef{"9", "30"},
+			revoked: refs("30", "9"),
+		},
+		{
+			name:   "a key of the name that Axiom did not make is never revoked",
+			group:  KeyGroup{GroupRef: "1", Name: name, Stored: refs("12"), Made: refs("12")},
+			listed: []adapter.KeyState{key("9", "1", adapter.KeyActive), key("12", "1", adapter.KeyActive)},
 		},
 		{
 			name:  "a group without a key adopts the oldest active one",
-			group: KeyGroup{GroupRef: "1", Name: name, Make: true},
+			group: KeyGroup{GroupRef: "1", Name: name, Make: true, Made: refs("12", "5", "9")},
 			listed: []adapter.KeyState{
 				key("12", "1", adapter.KeyActive), key("5", "1", adapter.KeyDisabled), key("9", "1", adapter.KeyActive),
 			},
-			stored: []adapter.KeyRef{"9"}, revoked: []adapter.KeyRef{"5", "12"},
+			stored: refs("9"), revoked: refs("12", "5"),
 		},
 		{
-			name:   "a group whose keys are all unusable revokes them and makes one",
-			group:  KeyGroup{GroupRef: "1", Name: name, Make: true},
-			listed: []adapter.KeyState{key("5", "1", adapter.KeyExpired)},
-			stored: []adapter.KeyRef{"40"}, revoked: []adapter.KeyRef{"5"}, creates: 1,
+			name:   "a group whose keys are all unusable revokes the made ones and makes one",
+			group:  KeyGroup{GroupRef: "1", Name: name, Make: true, Made: refs("5")},
+			listed: []adapter.KeyState{key("5", "1", adapter.KeyExpired), key("6", "1", adapter.KeyDisabled)},
+			stored: refs("40"), revoked: refs("5"), creates: 1,
+		},
+		{
+			name:    "a group no longer in use has its made keys revoked",
+			group:   KeyGroup{GroupRef: "1", Name: name, Made: refs("9")},
+			listed:  []adapter.KeyState{key("9", "1", adapter.KeyActive)},
+			revoked: refs("9"),
 		},
 		{
 			name:   "a key of the name in another group is left alone",
 			group:  KeyGroup{GroupRef: "1", Name: name, Make: true},
 			listed: []adapter.KeyState{key("5", "2", adapter.KeyActive)},
-			stored: []adapter.KeyRef{"40"}, creates: 1,
+			stored: refs("40"), creates: 1,
 		},
 		{
 			name:  "a key the supplier will not delete is left for the next reconcile",
-			group: KeyGroup{GroupRef: "1", Name: name, Stored: []adapter.KeyRef{"12"}},
+			group: KeyGroup{GroupRef: "1", Name: name, Stored: refs("12"), Made: refs("30", "9")},
 			listed: []adapter.KeyState{
 				key("9", "1", adapter.KeyActive), key("12", "1", adapter.KeyActive), key("30", "1", adapter.KeyActive),
 			},
-			refuse: "9", revoked: []adapter.KeyRef{"30"},
+			refuse: "9", revoked: refs("30"),
 		},
 		{
 			name:    "an incomplete listing does nothing",
-			group:   KeyGroup{GroupRef: "1", Name: name, Make: true},
+			group:   KeyGroup{GroupRef: "1", Name: name, Make: true, Made: refs("12")},
 			listed:  []adapter.KeyState{key("9", "1", adapter.KeyActive), key("12", "1", adapter.KeyActive)},
 			blocked: true,
 		},
@@ -77,8 +89,8 @@ func TestKeysTaskReconcilesTheKeysOfOurs(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			got := reconcileOnce(t, c.group, c.listed, c.refuse, c.blocked)
-			if !slices.Equal(got.stored, c.stored) || !slices.Equal(got.revoked, c.revoked) || got.creates != c.creates {
-				t.Errorf("stored %v, revoked %v, made %d; want %v, %v, %d", got.stored, got.revoked, got.creates, c.stored, c.revoked, c.creates)
+			if !slices.Equal(got.stored, c.stored) || !slices.Equal(got.revoked, c.revoked) || got.creates != c.creates || len(got.recorded) != c.creates {
+				t.Errorf("stored %v, revoked %v, made %d, recorded %v; want %v, %v, %d", got.stored, got.revoked, got.creates, got.recorded, c.stored, c.revoked, c.creates)
 			}
 			if c.blocked && (got.groupReads != 0 || got.deletes != 0) {
 				t.Errorf("an incomplete listing read the groups %d times and asked %d deletes", got.groupReads, got.deletes)
@@ -90,7 +102,7 @@ func TestKeysTaskReconcilesTheKeysOfOurs(t *testing.T) {
 // reconciled is what one keys step did: the refs whose text it stores, those it revoked and recorded, how many keys it
 // made, and how often it read the groups and asked for a delete.
 type reconciled struct {
-	stored, revoked              []adapter.KeyRef
+	stored, revoked, recorded    []adapter.KeyRef
 	creates, groupReads, deletes int
 }
 
@@ -116,7 +128,7 @@ func reconcileOnce(t *testing.T, g KeyGroup, listed []adapter.KeyState, refuse a
 	if err := keyEngine(asked, st).keys(t.Context(), &commit); blocked != errors.Is(err, adapter.ErrBucketsFull) || (!blocked && err != nil) {
 		t.Fatalf("keys = %v", err)
 	}
-	out := reconciled{revoked: st.revoked, creates: len(m.names), groupReads: st.askedGroups, deletes: len(asked.refs)}
+	out := reconciled{revoked: st.revoked, recorded: st.made, creates: len(m.names), groupReads: st.askedGroups, deletes: len(asked.refs)}
 	for _, k := range commit.KeyWrites.Made {
 		out.stored = append(out.stored, k.Ref)
 	}

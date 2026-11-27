@@ -17,7 +17,8 @@ type keyStore struct {
 	*memStore
 	bind        []BindTarget
 	targets     []KeyGroup
-	revoked     []adapter.KeyRef // as recorded
+	made        []adapter.KeyRef // recorded as made
+	revoked     []adapter.KeyRef // revoked and recorded
 	askedGroups int
 	askedBind   int
 }
@@ -32,9 +33,18 @@ func (s *keyStore) KeysToBind(context.Context, time.Time) ([]BindTarget, error) 
 	return s.bind, nil
 }
 
-func (s *keyStore) Revoked(_ context.Context, _ string, ref adapter.KeyRef) error {
-	s.revoked = append(s.revoked, ref)
+func (s *keyStore) Made(_ context.Context, _ string, ref adapter.KeyRef) error {
+	s.made = append(s.made, ref)
 	return nil
+}
+
+// Revoke revokes every key it is asked to: the tables' check that no credential holds it is the real store's.
+func (s *keyStore) Revoke(ctx context.Context, _ string, ref adapter.KeyRef, del func(context.Context) error) (bool, error) {
+	if err := del(ctx); err != nil {
+		return false, err
+	}
+	s.revoked = append(s.revoked, ref)
+	return true, nil
 }
 
 // maker is a supplier that can make keys too, and records what it was asked for. A delete is refused for the refs in

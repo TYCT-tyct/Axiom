@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 
 	"axiom/internal/platform/jsonx"
@@ -14,9 +15,13 @@ import (
 var _ adapter.KeyMaker = (*manager)(nil)
 
 // CreateKey implements adapter.KeyMaker: a token with no quota, expiry or model limit, in the group the sync names.
-// new-api answers with no id, so the key is found by the name the sync gave it; a lost answer is adopted by the same
-// name on the next complete listing instead of making a second key.
+// new-api answers with no id, so the key is the one the name's search finds after the create and did not before; a lost
+// answer is adopted by the same name on the next complete listing instead of making a second key.
 func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter.KeyRef, error) {
+	before, err := m.keysNamed(ctx, name, groupRef)
+	if err != nil {
+		return "", err
+	}
 	body, err := jsonx.MarshalCanonical(struct {
 		Name               string `json:"name"`
 		Group              string `json:"group"`
@@ -31,12 +36,14 @@ func (m *manager) CreateKey(ctx context.Context, groupRef, name string) (adapter
 	if err != nil {
 		return "", err
 	}
-	// Its successful answer has no id, so a made key is found by the name the sync gave it; a lost answer is adopted by
-	// that name on the next complete listing.
 	if err := keyWritten(resp, "make the key"); err != nil {
 		return "", err
 	}
-	return m.keyByName(ctx, name, groupRef)
+	after, err := m.keysNamed(ctx, name, groupRef)
+	if err != nil {
+		return "", err
+	}
+	return newKey(before, after)
 }
 
 // DeleteKey implements adapter.KeyMaker with new-api's delete of one of the account's tokens. A token new-api does not
@@ -77,8 +84,26 @@ func keyWritten(resp adapter.Response, what string) error {
 	}
 }
 
-// keyByName finds the key just made: the create answer has no id, and the search is the only read that names it.
-func (m *manager) keyByName(ctx context.Context, name, group string) (adapter.KeyRef, error) {
+// newKey is the key a create just made, of the ids the search finds under its name and group after it, the lowest of
+// those not there before: an older key of the name, disabled or a person's, is never taken for it.
+func newKey(before, after []int64) (adapter.KeyRef, error) {
+	ref := int64(0)
+	for _, id := range after {
+		if !slices.Contains(before, id) && (ref == 0 || id < ref) {
+			ref = id
+		}
+	}
+	if ref == 0 {
+		// The key may exist but not be visible yet. The next complete listing adopts it by name; a second create now
+		// would make a second key.
+		return "", fmt.Errorf("new-api: the key made is not listed yet")
+	}
+	return adapter.KeyRef(strconv.FormatInt(ref, 10)), nil
+}
+
+// keysNamed are the ids of the keys with the name in the group, as new-api's search finds them: the create answer has
+// no id, and the search is the only read that names a key.
+func (m *manager) keysNamed(ctx context.Context, name, group string) ([]int64, error) {
 	var found struct {
 		Data *struct {
 			Items []struct {
@@ -91,23 +116,18 @@ func (m *manager) keyByName(ctx context.Context, name, group string) (adapter.Ke
 	query := url.Values{"keyword": {name}, "page_size": {"100"}}
 	if err := m.api.get(ctx, "/api/token/search?"+query.Encode(), global, &found); err != nil {
 		if scopeDenied(err) {
-			return "", fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
+			return nil, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
 		}
-		return "", err
+		return nil, err
 	}
 	if found.Data == nil || found.Data.Items == nil {
-		return "", errMissing("keys named " + name)
+		return nil, errMissing("keys named " + name)
 	}
-	ref := int64(0)
+	var ids []int64
 	for _, item := range found.Data.Items {
-		if item.ID > 0 && item.Name == name && item.Group == group && (ref == 0 || item.ID < ref) {
-			ref = item.ID
+		if item.ID > 0 && item.Name == name && item.Group == group {
+			ids = append(ids, item.ID)
 		}
 	}
-	if ref == 0 {
-		// The key may exist but not be visible yet. The next complete listing adopts it by name; a second create now
-		// would make a second key.
-		return "", fmt.Errorf("new-api: the key made is not listed yet")
-	}
-	return adapter.KeyRef(strconv.FormatInt(ref, 10)), nil
+	return ids, nil
 }

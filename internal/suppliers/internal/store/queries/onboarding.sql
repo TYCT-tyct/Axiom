@@ -22,6 +22,29 @@ JOIN suppliers.supplier_groups g ON g.id = c.supplier_group_id
 WHERE c.supplier_id = @supplier_id AND c.status <> 'erased'
 ORDER BY g.upstream_ref, c.upstream_key_ref;
 
+-- name: MadeKeyRefs :many
+-- The keys the sync recorded as made, by group: the only keys it ever revokes.
+SELECT group_ref, upstream_key_ref FROM suppliers.made_keys
+WHERE supplier_id = @supplier_id
+ORDER BY group_ref, upstream_key_ref;
+
+-- name: RecordMadeKey :exec
+INSERT INTO suppliers.made_keys (supplier_id, upstream_key_ref, group_ref, made_at)
+VALUES (@supplier_id, @upstream_key_ref, @group_ref, @made_at)
+ON CONFLICT (supplier_id, upstream_key_ref) DO NOTHING;
+
+-- name: KeyRevocable :one
+-- Whether a key may be revoked now: the sync recorded it as made and no credential holds it or waits for it. Read under
+-- the supplier's lock, which every change of a credential takes first.
+SELECT (EXISTS (SELECT FROM suppliers.made_keys m WHERE m.supplier_id = @supplier_id AND m.upstream_key_ref = @upstream_key_ref)
+    AND NOT EXISTS (
+        SELECT FROM suppliers.credentials c
+        WHERE c.supplier_id = @supplier_id AND c.upstream_key_ref = @upstream_key_ref AND c.status <> 'erased'
+    ))::boolean;
+
+-- name: ForgetMadeKey :exec
+DELETE FROM suppliers.made_keys WHERE supplier_id = @supplier_id AND upstream_key_ref = @upstream_key_ref;
+
 -- name: GroupIDsOf :many
 SELECT id, upstream_ref FROM suppliers.supplier_groups WHERE supplier_id = @supplier_id;
 

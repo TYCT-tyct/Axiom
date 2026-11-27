@@ -41,6 +41,7 @@ var adminSuppliersRefusals = []refusal{
 	{suppliers.ErrSupplierUnanswered, http.StatusServiceUnavailable, codeUnavailable, "the supplier did not answer; try again shortly"},
 	{suppliers.ErrGroupHasKey, http.StatusConflict, codeConflict, "the group already has a key: pause or resume it by selecting it"},
 	{suppliers.ErrNoKeyNeeded, http.StatusUnprocessableEntity, codeUnprocessable, "no model of the group can be sold, so no key is made for it"},
+	{suppliers.ErrKeysHalted, http.StatusConflict, codeConflict, "the sync stopped reading this supplier's keys on an answer it does not know; replace the login to restart it"},
 	{suppliers.ErrTooManyCredentials, http.StatusUnprocessableEntity, codeUnprocessable, fmt.Sprintf("more than %d credentials to test: test them by supplier", suppliers.MaxCredentialTests)},
 	{suppliers.ErrIntakeRule, http.StatusUnprocessableEntity, codeUnprocessable, "names takes include and exclude patterns, and only names does"},
 	{suppliers.ErrIntakeRevision, http.StatusConflict, codeStaleRevision, "the intake rule changed since it was read"},

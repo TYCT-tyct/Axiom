@@ -192,8 +192,10 @@ func (a adminAPI) requestGroupKey(ctx context.Context, claim idem.Claim, supplie
 	}, nil
 }
 
-// keyWaitLimit is how long a make waits for the sync: one sweep (15 seconds) and a short round.
-const keyWaitLimit = 20 * time.Second
+// keyWaitLimit is how long a make waits for the sync before it answers 202: it must answer before the admin page gives
+// up on the request, which is requestTimeout in web/packages/api/src/index.ts (10 seconds), so the page always learns
+// whether the group is connected or still waiting. A round that starts later is answered by the page's next read.
+const keyWaitLimit = 8 * time.Second
 
 // pastedGroupKey asks the supplier which of its keys the pasted text is, which must be listed, usable, and is stored
 // with what the supplier lets it call.

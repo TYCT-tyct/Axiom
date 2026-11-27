@@ -23,14 +23,16 @@ import (
 
 // keyRelay is a relay's management side that makes keys in memory, as new-api does: a key exists from the moment the
 // create arrives. held, when set, receives each create once the key is made and holds it until release is closed, so a
-// person's change runs while it is in flight. Only its key listing is read; the balance and offer are limited for now.
+// person's change runs while it is in flight; onDelete, when set, runs after each key is deleted. Only its key listing is
+// read; the balance and offer are limited for now.
 type keyRelay struct {
-	mu      sync.Mutex
-	keys    map[adapter.KeyRef]adapter.KeyState
-	next    int
-	creates int
-	held    chan struct{}
-	release chan struct{}
+	mu       sync.Mutex
+	keys     map[adapter.KeyRef]adapter.KeyState
+	next     int
+	creates  int
+	held     chan struct{}
+	release  chan struct{}
+	onDelete func(adapter.KeyRef)
 }
 
 func (r *keyRelay) CreateKey(_ context.Context, groupRef, name string) (adapter.KeyRef, error) {
@@ -56,11 +58,16 @@ func (r *keyRelay) add(groupRef, name string) adapter.KeyRef {
 
 func (r *keyRelay) DeleteKey(_ context.Context, ref adapter.KeyRef) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.keys[ref]; !ok {
+	_, ok := r.keys[ref]
+	delete(r.keys, ref)
+	hook := r.onDelete
+	r.mu.Unlock()
+	if !ok {
 		return adapter.ErrKeyRefused
 	}
-	delete(r.keys, ref)
+	if hook != nil {
+		hook(ref)
+	}
 	return nil
 }
 
@@ -128,21 +135,71 @@ func TestOnlyTheSyncMakesAGroupsKey(t *testing.T) {
 	if w.relay.creates != 1 || stored.UpstreamKeyRef != "101" || !g.Selected || g.KeyState != "ready" {
 		t.Fatalf("%d creates, stored %s, group %+v; want the one key made, stored and ready", w.relay.creates, stored.UpstreamKeyRef, g)
 	}
+	same(t, "the keys recorded as made", w.c.column("made_keys", "group_ref || ' ' || upstream_key_ref", "upstream_key_ref"), []string{"g 101"})
+}
 
-	w.relay.mu.Lock()
-	w.relay.add("g", persist.KeyName(w.c.supplier, "g"))
-	w.relay.mu.Unlock()
-	w.c.clock.advance(syncer.Defaults().Interval[syncer.TaskKeys])
-	if err := w.round("third"); err != nil {
-		t.Fatalf("the reconciling round: %v", err)
+// TestOnlyKeysAxiomMadeAreRevoked: of the keys of a group's marker name, only those recorded as made by the sync are
+// revoked, and only while no credential holds them when the revocation runs: a key of the name a person made is kept,
+// and so is one a person stores while the round is already revoking. Each revocation is in the audit. Once the group is
+// no longer in use and its credentials are erased, the keys made for it are revoked too.
+func TestOnlyKeysAxiomMadeAreRevoked(t *testing.T) {
+	t.Parallel()
+	w := newKeyWorld(t)
+	w.makeDuringARound()
+	if err := w.round("second"); err != nil {
+		t.Fatalf("the round that stores the key: %v", err)
 	}
-	c, relay := w.c, w.relay
-	same(t, "the keys live at the relay", relay.live(), []string{"101"})
-	same(t, "the keys stored", c.column("credentials", "upstream_key_ref || ' ' || status", "id"), []string{"101 active"})
+	name := persist.KeyName(w.c.supplier, "g")
+	w.relay.mu.Lock()
+	lapsed, pasted := w.relay.add("g", name), w.relay.add("g", name) // made by a node whose lease ran out
+	w.relay.add("g", name)                                           // a person's, named like ours
+	w.relay.onDelete = func(ref adapter.KeyRef) {
+		if ref == lapsed { // the person stores the other one now, between the listing and its revocation
+			w.c.exec(fmt.Sprintf(`INSERT INTO suppliers.credentials (id, supplier_id, supplier_group_id, upstream_key_ref, status, max_concurrency, source)
+				VALUES ('%s', '%s', '%s', '%s', 'binding', 4, 'bound')`, uuid.NewV7(), w.c.supplier, w.group, pasted))
+		}
+	}
+	w.relay.mu.Unlock()
+	for _, ref := range []adapter.KeyRef{lapsed, pasted} {
+		w.c.exec(fmt.Sprintf(`INSERT INTO suppliers.made_keys (supplier_id, upstream_key_ref, group_ref, made_at) VALUES ('%s', '%s', 'g', now())`, w.c.supplier, ref))
+	}
+	w.nextRound("third")
+	same(t, "the keys live after the reconcile", w.relay.live(), []string{"101", "103", "104"})
+
+	w.unuse()
+	w.nextRound("fourth")
+	same(t, "the keys live once the group is no longer in use", w.relay.live(), []string{"104"})
 	var revoked string
-	c.value(&revoked, `SELECT string_agg(actor_id || ' ' || (detail->>'group_ref') || ' ' || (detail->>'upstream_key_ref'), ',')
+	w.c.value(&revoked, `SELECT string_agg(actor_id || ' ' || (detail->>'group_ref') || ' ' || (detail->>'upstream_key_ref'), ',' ORDER BY detail->>'upstream_key_ref')
 		FROM platform.audit_log WHERE action = 'supplier_key.revoke'`)
-	same(t, "what the audit says was revoked", []string{revoked}, []string{"suppliers.sync g 102"})
+	same(t, "what the audit says was revoked", []string{revoked}, []string{"suppliers.sync g 101,suppliers.sync g 102,suppliers.sync g 103"})
+	same(t, "the keys still recorded as made", w.c.column("made_keys", "upstream_key_ref", "upstream_key_ref"), nil)
+}
+
+// TestAMakeIsRefusedWhileTheKeysTaskIsHalted: a keys task stopped on an answer the adapter does not know runs no round,
+// so a make is refused with why, and the group is left as it was instead of waiting for a key that never comes.
+func TestAMakeIsRefusedWhileTheKeysTaskIsHalted(t *testing.T) {
+	t.Parallel()
+	w := newKeyWorld(t)
+	s := w.c.acquire(w.c.node("halter"))
+	st, err := s.Store().Load(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	halted := syncer.Commit{State: st}
+	halted.State.Version++
+	halted.State.Tasks[syncer.TaskKeys].Halted = true
+	if err := s.Store().Commit(t.Context(), st.Version, halted); err != nil {
+		t.Fatal(err)
+	}
+	err = w.c.open().Tx(t.Context(), platform, func(tx pg.Tx) error {
+		_, err := w.admin.RequestKey(t.Context(), tx, audit.User(uuid.NewV7()), w.c.supplier, w.group, "make the key")
+		return err
+	})
+	if !errors.Is(err, suppliers.ErrKeysHalted) {
+		t.Fatalf("a make while the keys task is halted = %v, want ErrKeysHalted", err)
+	}
+	same(t, "the groups selected", w.c.column("supplier_groups", "selected::text", "id"), []string{"false"})
 }
 
 // keyWorld is a relay with one listed group g, never chosen and one Axiom can sell, an admin whose adapter makes keys,
@@ -221,5 +278,34 @@ func (w keyWorld) expectPending(reach suppliers.Reach) {
 	stop()
 	if g, none, err := w.admin.AwaitKey(over, reach, w.c.supplier, w.group); err != nil || none != nil || !g.Selected || g.KeyState != "pending" {
 		w.t.Fatalf("a wait that ends with no key stored = %+v, %v, %v; want the selected group, pending", g, none, err)
+	}
+}
+
+// nextRound runs the round when the keys task is due again.
+func (w keyWorld) nextRound(holder string) {
+	w.t.Helper()
+	w.c.clock.advance(syncer.Defaults().Interval[syncer.TaskKeys])
+	if err := w.round(holder); err != nil {
+		w.t.Fatalf("round %s: %v", holder, err)
+	}
+}
+
+// unuse has a person stop using the group and erase each of its credentials.
+func (w keyWorld) unuse() {
+	w.t.Helper()
+	ids := w.c.column("credentials", "id::text", "id")
+	if err := w.c.open().Tx(w.t.Context(), platform, func(tx pg.Tx) error {
+		actor := audit.User(uuid.NewV7())
+		if _, err := w.admin.SelectGroup(w.t.Context(), tx, actor, w.c.supplier, w.group, false, "not needed"); err != nil {
+			return err
+		}
+		for _, id := range ids {
+			if _, err := w.admin.RemoveCredential(w.t.Context(), tx, actor, w.c.supplier, uuid.MustParse(id), "not needed"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		w.t.Fatalf("stop using the group: %v", err)
 	}
 }

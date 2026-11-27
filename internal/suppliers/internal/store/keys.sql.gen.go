@@ -209,7 +209,7 @@ func (q *Queries) EraseCredentialOf(ctx context.Context, db DBTX, arg EraseCrede
 
 const groupCredentialID = `-- name: GroupCredentialID :many
 SELECT id FROM suppliers.credentials
-WHERE supplier_id = $1 AND supplier_group_id = $2 AND status <> 'erased'
+WHERE supplier_id = $1 AND supplier_group_id = $2 AND status NOT IN ('erased', 'binding')
 ORDER BY id LIMIT 1
 `
 
@@ -218,7 +218,8 @@ type GroupCredentialIDParams struct {
 	GroupID    uuid.UUID
 }
 
-// The first credential of a group that holds a key or waits for one: what a person's make waits for the sync to store.
+// The first credential of a group that holds its key's text: what a person's make waits for the sync to store. One bound
+// by reference waits for its text, and is not ready yet.
 func (q *Queries) GroupCredentialID(ctx context.Context, db DBTX, arg GroupCredentialIDParams) ([]uuid.UUID, error) {
 	rows, err := db.Query(ctx, groupCredentialID, arg.SupplierID, arg.GroupID)
 	if err != nil {

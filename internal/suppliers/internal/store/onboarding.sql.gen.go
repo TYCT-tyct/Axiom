@@ -86,6 +86,20 @@ func (q *Queries) ErasedCredentialID(ctx context.Context, db DBTX, arg ErasedCre
 	return id, err
 }
 
+const forgetMadeKey = `-- name: ForgetMadeKey :exec
+DELETE FROM suppliers.made_keys WHERE supplier_id = $1 AND upstream_key_ref = $2
+`
+
+type ForgetMadeKeyParams struct {
+	SupplierID     uuid.UUID
+	UpstreamKeyRef string
+}
+
+func (q *Queries) ForgetMadeKey(ctx context.Context, db DBTX, arg ForgetMadeKeyParams) error {
+	_, err := db.Exec(ctx, forgetMadeKey, arg.SupplierID, arg.UpstreamKeyRef)
+	return err
+}
+
 const groupIDsOf = `-- name: GroupIDsOf :many
 SELECT id, upstream_ref FROM suppliers.supplier_groups WHERE supplier_id = $1
 `
@@ -201,6 +215,83 @@ func (q *Queries) GroupsToKey(ctx context.Context, db DBTX, arg GroupsToKeyParam
 		return nil, err
 	}
 	return items, nil
+}
+
+const keyRevocable = `-- name: KeyRevocable :one
+SELECT (EXISTS (SELECT FROM suppliers.made_keys m WHERE m.supplier_id = $1 AND m.upstream_key_ref = $2)
+    AND NOT EXISTS (
+        SELECT FROM suppliers.credentials c
+        WHERE c.supplier_id = $1 AND c.upstream_key_ref = $2 AND c.status <> 'erased'
+    ))::boolean
+`
+
+type KeyRevocableParams struct {
+	SupplierID     uuid.UUID
+	UpstreamKeyRef string
+}
+
+// Whether a key may be revoked now: the sync recorded it as made and no credential holds it or waits for it. Read under
+// the supplier's lock, which every change of a credential takes first.
+func (q *Queries) KeyRevocable(ctx context.Context, db DBTX, arg KeyRevocableParams) (bool, error) {
+	row := db.QueryRow(ctx, keyRevocable, arg.SupplierID, arg.UpstreamKeyRef)
+	var column_1 bool
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const madeKeyRefs = `-- name: MadeKeyRefs :many
+SELECT group_ref, upstream_key_ref FROM suppliers.made_keys
+WHERE supplier_id = $1
+ORDER BY group_ref, upstream_key_ref
+`
+
+type MadeKeyRefsRow struct {
+	GroupRef       string
+	UpstreamKeyRef string
+}
+
+// The keys the sync recorded as made, by group: the only keys it ever revokes.
+func (q *Queries) MadeKeyRefs(ctx context.Context, db DBTX, supplierID uuid.UUID) ([]MadeKeyRefsRow, error) {
+	rows, err := db.Query(ctx, madeKeyRefs, supplierID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []MadeKeyRefsRow
+	for rows.Next() {
+		var i MadeKeyRefsRow
+		if err := rows.Scan(&i.GroupRef, &i.UpstreamKeyRef); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const recordMadeKey = `-- name: RecordMadeKey :exec
+INSERT INTO suppliers.made_keys (supplier_id, upstream_key_ref, group_ref, made_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (supplier_id, upstream_key_ref) DO NOTHING
+`
+
+type RecordMadeKeyParams struct {
+	SupplierID     uuid.UUID
+	UpstreamKeyRef string
+	GroupRef       string
+	MadeAt         time.Time
+}
+
+func (q *Queries) RecordMadeKey(ctx context.Context, db DBTX, arg RecordMadeKeyParams) error {
+	_, err := db.Exec(ctx, recordMadeKey,
+		arg.SupplierID,
+		arg.UpstreamKeyRef,
+		arg.GroupRef,
+		arg.MadeAt,
+	)
+	return err
 }
 
 const reviveCredential = `-- name: ReviveCredential :execrows

@@ -28,6 +28,9 @@ var (
 	// ErrNoKeyNeeded is a group the sync makes no key for: none of its models has a cost plan, so no endpoint of it
 	// could be called with one.
 	ErrNoKeyNeeded = errors.New("suppliers: no model of the group can be sold, so no key is made for it")
+	// ErrKeysHalted is a supplier whose sync stopped reading its keys on an answer the adapter does not know: no round
+	// makes a key until a replaced login restarts it.
+	ErrKeysHalted = errors.New("suppliers: the sync stopped reading the supplier's keys")
 )
 
 // MaxCredentialTests is the most credentials one check of every key tests: each is a request to a third party, and the

@@ -81,9 +81,10 @@ VALUES (@id, @supplier_id, @supplier_group_id, @upstream_key_ref, @ciphertext, @
 SELECT EXISTS (SELECT FROM suppliers.credentials WHERE supplier_group_id = @group_id AND status <> 'erased')::boolean;
 
 -- name: GroupCredentialID :many
--- The first credential of a group that holds a key or waits for one: what a person's make waits for the sync to store.
+-- The first credential of a group that holds its key's text: what a person's make waits for the sync to store. One bound
+-- by reference waits for its text, and is not ready yet.
 SELECT id FROM suppliers.credentials
-WHERE supplier_id = @supplier_id AND supplier_group_id = @group_id AND status <> 'erased'
+WHERE supplier_id = @supplier_id AND supplier_group_id = @group_id AND status NOT IN ('erased', 'binding')
 ORDER BY id LIMIT 1;
 
 -- name: SetCredentialRejected :exec

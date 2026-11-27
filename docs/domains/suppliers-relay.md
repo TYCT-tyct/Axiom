@@ -50,7 +50,7 @@
 - **登录**：个人访问令牌加过期时间，需要 `profile:read`（账号、分组、模型）、`wallet:read`（订阅）、`usage:read`（扣费记录）、`api_key:read`、`api_key:write`，读原文还要 `api_key:reveal`。管理接口的 401/403 按固定的 `code` 清单报凭证被拒，错误里没有对方的文字；缺权限同样停掉轮询，但原因写明缺哪个权限，告警是「同步需处理」而不是登录失效。key 的 ID 只许数字。
 - **读取**：余额是整数 `quota`，单位提示是 `quota_per_unit`；有生效订阅即资金来源不支持。倍率写 `auto` 的分组不收，倍率缺失或不是数字是认不出。key 状态 1 到 4 对应正常、停用、过期、额度用尽，模型限制读 `model_limits_enabled`、`model_limits`，到期读 `expired_time`（-1 不到期），权限字段缺失时全拒。
 - **成本计划**（币种 `XXX`，单位是每 token 多少 quota）：输入 = `model_ratio × 分组倍率`，输出 = 输入 × `completion_ratio`，缓存读 × `cache_ratio`（缺省 1），缓存写 × `create_cache_ratio`（缺省 1.25），一小时缓存写 = 缓存写 × 1.6；精确分数计算，向上取整到 15 位小数，不低于对方的价。按次计费、`tiered_expr`、倍率缺失或超上限的没有成本计划；`image_ratio` 显式且不为 1 的不声明图片能力；推理按输出价。
-- **建 key**：响应不回 ID，按名字和分组找回最小 ID，还没列出就是任务失败、下一轮认领；`ACCESS_TOKEN_SCOPE_DENIED` 是无权限，200 `success:false` 是拒绝。吊销是 `DELETE /api/token/{id}`，判法相同，已不存在的也是拒绝。
+- **建 key**：响应不回 ID，建之前和之后各按名字搜一次，取之后才出现的 ID 里最小的（同名的旧 key，停用的或别人的，都不会被当成新的），还没列出就是任务失败、下一轮认领；`ACCESS_TOKEN_SCOPE_DENIED` 是无权限，200 `success:false` 是拒绝。吊销是 `DELETE /api/token/{id}`，判法相同，已不存在的也是拒绝。
 - **报价**：一轮只读一次价格表，各组价格才一致；续读时重读分组列表，分组变了从头读。站点关掉定价模块时价格表对登录用户回 403（只有 root 能读），这时当作价格不公开：分组和模型照读，成本计划为空，等人确认底价；带登录被拒 `code` 的 403 仍是登录被拒。
 - **桶**：`global` 90 次/180 秒，`critical`（读原文）5 次/1200 秒，是对方默认的四分之一。
 - **失败归类**：只认 `type` 为 `new_api_error` 的错误（同样的码没有这个类型是渠道透传的）：403 `insufficient_user_quota` 供应商余额不足；401 且 `code` 为空凭证被拒；403 `pre_consume_token_quota_failed` 凭证额度用尽；503 `model_not_found` 端点过载；429 限流，`Retry-After` 接受秒数和 HTTP 日期（暂停上限 2 小时），执行状态不确定；400 请求格式错、执行状态不确定。对账键是 `X-Oneapi-Request-Id`；默认传递取消。

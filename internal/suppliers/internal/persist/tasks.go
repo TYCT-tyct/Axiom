@@ -60,10 +60,13 @@ func RequestSync(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) ([]
 }
 
 // RequestKeys is RequestSync of the keys task alone: the round it brings forward is the one that makes or adopts the key
-// a person asked for.
-func RequestKeys(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) error {
-	_, err := requestTasks(ctx, tx, id, now, func(t syncer.Task) bool { return t == syncer.TaskKeys })
-	return err
+// a person asked for. halted says the task stopped on an answer the adapter does not know, so no round will run it.
+func RequestKeys(ctx context.Context, tx pg.Tx, id uuid.UUID, now time.Time) (halted bool, err error) {
+	tasks, err := requestTasks(ctx, tx, id, now, func(t syncer.Task) bool { return t == syncer.TaskKeys })
+	if err != nil {
+		return false, err
+	}
+	return tasks[syncer.TaskKeys].Halted, nil
 }
 
 // requestTasks brings the tasks of a supplier that ask says forward to now, as RequestSync describes.

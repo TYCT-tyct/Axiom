@@ -58,16 +58,18 @@ func answer(status int, body string) adapter.Response {
 	return adapter.Response{Status: status, Header: http.Header{requestIDHeader: {"202610150000000000000000test"}}, Body: []byte(body)}
 }
 
-// fakeClient answers requests from a table, by "METHOD path", and keeps what it was asked.
+// fakeClient answers requests from a table, by "METHOD path", and keeps what it was asked. A request with answers queued
+// in turns takes the first of them, until none is left.
 type fakeClient struct {
 	mu     sync.Mutex
 	routes map[string]adapter.Response
+	turns  map[string][]adapter.Response
 	errs   map[string]error
 	sent   []adapter.Request
 }
 
 func newFake() *fakeClient {
-	return &fakeClient{routes: map[string]adapter.Response{}, errs: map[string]error{}}
+	return &fakeClient{routes: map[string]adapter.Response{}, turns: map[string][]adapter.Response{}, errs: map[string]error{}}
 }
 
 func (f *fakeClient) Do(_ context.Context, r adapter.Request) (adapter.Response, error) {
@@ -77,6 +79,10 @@ func (f *fakeClient) Do(_ context.Context, r adapter.Request) (adapter.Response,
 	key := r.Method + " " + r.Path
 	if err, ok := f.errs[key]; ok {
 		return adapter.Response{}, err
+	}
+	if queued := f.turns[key]; len(queued) > 0 {
+		f.turns[key] = queued[1:]
+		return queued[0], nil
 	}
 	resp, ok := f.routes[key]
 	if !ok {

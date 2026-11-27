@@ -29,23 +29,28 @@ type Store interface {
 // keeps the keys a person bound, and makes none.
 type KeyStore interface {
 	// KeyGroups lists the groups whose keys of ours the keys step reconciles: each that needs a key of ours and has
-	// none, and each that has a credential.
+	// none, each that has a credential, and each that a key Axiom made is recorded for.
 	KeyGroups(ctx context.Context) ([]KeyGroup, error)
 	// KeysToBind lists the credentials a person bound by reference that the sync has not read the text of yet, and
 	// whose group is not waiting out a failure.
 	KeysToBind(ctx context.Context, now time.Time) ([]BindTarget, error)
-	// Revoked records that the sync revoked a key of the group at the supplier. It commits on its own: the key is gone
-	// whether or not the step that revoked it commits.
-	Revoked(ctx context.Context, groupRef string, ref adapter.KeyRef) error
+	// Made records that the sync made the key ref for the group. It commits on its own, as soon as the create answers:
+	// the key exists whether or not the step that made it commits, and only a recorded key is ever revoked.
+	Made(ctx context.Context, groupRef string, ref adapter.KeyRef) error
+	// Revoke revokes a recorded key with del, under the supplier's lock and only when no credential holds it then, and
+	// records the revocation. revoked is false when it was not revoked because it is stored or not on the record; del's
+	// error is returned as it is. It commits on its own: the key is gone whether or not the step commits.
+	Revoke(ctx context.Context, groupRef string, ref adapter.KeyRef, del func(context.Context) error) (revoked bool, err error)
 }
 
 // KeyGroup is a group as the keys step reconciles it: Name marks a key Axiom made for it, Stored are the supplier's
-// refs of its credentials that are not erased, and Make is set when it needs a key of ours and has none (so Stored is
-// empty).
+// refs of its credentials that are not erased, Made the refs of the keys recorded as made for it, and Make is set when
+// it needs a key of ours and has none (so Stored is empty).
 type KeyGroup struct {
 	GroupRef string
 	Name     string
 	Stored   []adapter.KeyRef
+	Made     []adapter.KeyRef
 	Make     bool
 }
 
