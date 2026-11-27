@@ -90,6 +90,7 @@ export default {
     markup: "成本加价 {{percent}}%",
     margin: "毛利率 {{percent}}%",
     reference: "参考价的 {{multiplier}} 倍",
+    tiered: "全部账户售价 × {{multiplier}}",
     fixed: "固定价（{{currency}}）",
   },
   rule: {

@@ -16,5 +16,8 @@ export function MethodSummary({ method }: { method: AdminSchemas["PricingMethod"
   if (method.kind === "reference_multiplier") {
     return <>{t("pricing.describe.reference", { multiplier: method.multiplier ? decimal(method.multiplier) : "—" })}</>;
   }
+  if (method.kind === "default_multiplier") {
+    return <>{t("pricing.describe.tiered", { multiplier: method.multiplier ? decimal(method.multiplier) : "—" })}</>;
+  }
   return <>{t("pricing.describe.fixed", { currency: method.schedule?.currency ?? "—" })}</>;
 }
