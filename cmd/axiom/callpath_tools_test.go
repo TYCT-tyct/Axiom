@@ -91,6 +91,13 @@ func TestToolCallsRoundTrip(t *testing.T) {
 				})
 			}
 		}
+		for _, streamed := range []bool{false, true} {
+			t.Run("gemini client of "+up.format+map[bool]string{true: " streamed"}[streamed], func(t *testing.T) {
+				sub := *w
+				sub.t = t
+				sub.checkGeminiToolCall(n, up, streamed)
+			})
+		}
 	}
 }
 
