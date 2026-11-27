@@ -18,7 +18,9 @@ func (p *Pool) waiters(c Class) int {
 }
 
 // lockKeys holds the key table locked from a superuser connection until the returned function is called, so that a
-// lookup of a key waits for the database where it can be counted. The returned count is the lookups waiting.
+// lookup of a key waits for the database where it can be counted. The returned count is the lookups waiting in this
+// rig's database: the cluster is shared by every test binary of a run, and pg_stat_activity shows the lookups other
+// tests hold at their own locks.
 func (r *rig) lockKeys() (waiting func() int, unlock func()) {
 	r.t.Helper()
 	admin, err := pg.Open(r.t.Context(), r.database.Superuser)
@@ -48,7 +50,7 @@ func (r *rig) lockKeys() (waiting func() int, unlock func()) {
 	waiting = func() (n int) {
 		if err := admin.Tx(r.t.Context(), pg.Scope{}, func(tx pg.Tx) error {
 			return tx.QueryRow(r.t.Context(), `SELECT count(*) FROM pg_stat_activity
-				WHERE wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`).Scan(&n)
+				WHERE datname = current_database() AND wait_event_type = 'Lock' AND query LIKE '%key_tenant%'`).Scan(&n)
 		}); err != nil {
 			r.t.Fatal(err)
 		}
