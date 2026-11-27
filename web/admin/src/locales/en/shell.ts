@@ -50,6 +50,7 @@ export default {
     alerts: "Alerts",
     accounts: "Accounts",
     roles: "Platform roles",
+    tiers: "Tiers",
     cash: "Cash movements",
     batches: "Credit batches",
     refunds: "Refunds",

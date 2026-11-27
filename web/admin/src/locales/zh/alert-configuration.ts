@@ -26,8 +26,8 @@ export default {
   kind: {
     email: "邮件",
     webhook: "Webhook",
-    feishu: "Feishu / Lark 机器人",
-    wecom: "WeCom 机器人",
+    feishu: "飞书机器人",
+    wecom: "企业微信机器人",
     telegram: "Telegram",
   },
   destination: {

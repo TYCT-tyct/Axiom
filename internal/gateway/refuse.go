@@ -234,6 +234,13 @@ var limitSources = map[billing.Source]string{
 	billing.SourceSubscription: "subscription",
 }
 
+// limitMessages tell the caller of a key's or workspace's own limit which limit it is and how to get past it, which
+// the balance's generic message cannot: the account may still have credit. Other sources keep messages[code].
+var limitMessages = map[billing.Source]string{
+	billing.SourceKey:       "This API key has reached its own spend limit. Raise or reset the key's limit, or use another key.",
+	billing.SourceWorkspace: "This workspace has reached its budget. Raise the workspace budget, or use a key of another workspace.",
+}
+
 // insufficient is the balance's 402, or a key's or workspace's 403, as OpenRouter answers a spent budget. Only a limit
 // that resets can pass later, so only that one says when to come back; billing does not say when the window ends, so a
 // client is told the longest wait it would honour (docs/domains/gateway.md「错误」).
@@ -242,7 +249,7 @@ func insufficient(e *billing.Insufficient) *Refusal {
 	if e.Source == billing.SourceWorkspace || e.Source == billing.SourceKey {
 		status = http.StatusForbidden
 	}
-	r := &Refusal{Status: status, Code: "credits_insufficient", Details: map[string]any{"limit_source": limitSources[e.Source]}}
+	r := &Refusal{Status: status, Code: "credits_insufficient", Message: limitMessages[e.Source], Details: map[string]any{"limit_source": limitSources[e.Source]}}
 	if e.Transient {
 		r.RetryAfter = maxRetryAfter
 	}
