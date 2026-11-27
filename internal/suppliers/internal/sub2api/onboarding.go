@@ -1,10 +1,13 @@
 package sub2api
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -74,26 +77,33 @@ func createdKey(resp adapter.Response) (adapter.KeyRef, error) {
 // KeyNamed implements adapter.KeyMaker with sub2api's key search, which matches part of a name: every page of it is
 // read and only the key whose name and group are the same whole counts. Of two, the oldest (lowest id) is the answer.
 func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
-	var best adapter.KeyState
-	bestID := int64(0)
+	var named []adapter.KeyState
 	for p := 1; ; p++ {
 		items, pages, _, err := m.keysAt(ctx, p, name)
 		if err != nil {
 			return adapter.KeyState{}, false, err
 		}
 		for _, k := range items {
-			id, err := k.ID.int64()
-			if err != nil {
-				return adapter.KeyState{}, false, err
-			}
-			if k.Name == name && string(k.GroupID) == groupRef && (bestID == 0 || id < bestID) {
-				best, bestID = keyState(k), id
+			if k.Name == name && string(k.GroupID) == groupRef {
+				named = append(named, keyState(k))
 			}
 		}
 		if p >= pages || len(items) == 0 {
-			return best, bestID != 0, nil
+			key, found := oldest(named)
+			return key, found, nil
 		}
 	}
+}
+
+// oldest is the key of the lowest id: sub2api's ids are decimal numbers without leading zeros, so the shorter is the
+// lower, and of two as long the first in order.
+func oldest(keys []adapter.KeyState) (adapter.KeyState, bool) {
+	if len(keys) == 0 {
+		return adapter.KeyState{}, false
+	}
+	return slices.MinFunc(keys, func(a, b adapter.KeyState) int {
+		return cmp.Or(cmp.Compare(len(a.Ref), len(b.Ref)), strings.Compare(string(a.Ref), string(b.Ref)))
+	}), true
 }
 
 // CreateReplay implements adapter.KeyMaker: sub2api keeps a create's answer under its idempotency key, the name, for 24

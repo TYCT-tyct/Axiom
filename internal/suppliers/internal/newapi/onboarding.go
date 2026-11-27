@@ -1,11 +1,14 @@
 package newapi
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"axiom/internal/platform/jsonx"
@@ -71,34 +74,48 @@ func (m *manager) keyCreated(ctx context.Context, name, groupRef string, resp ad
 // every page is read, to the total the search reports, and a search that stops short of it is an error, not an
 // absence. Of two keys with the name in the group, the oldest (lowest id) is the answer.
 func (m *manager) KeyNamed(ctx context.Context, groupRef, name string) (adapter.KeyState, bool, error) {
-	var best adapter.KeyState
-	bestID, read := int64(0), 0
-	for page := 1; ; page++ {
-		if page > maxPages {
-			return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d pages of keys named %s", adapter.ErrUnrecognised, maxPages, name)
-		}
-		query := url.Values{"keyword": {name}, "p": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(keyPageSize)}}
-		tokens, total, err := m.tokens(ctx, "/api/token/search?"+query.Encode())
+	var named []adapter.KeyState
+	read := 0
+	for page := 1; page <= maxPages; page++ {
+		tokens, total, err := m.namedPage(ctx, name, page)
 		if err != nil {
-			if scopeDenied(err) {
-				return adapter.KeyState{}, false, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
-			}
 			return adapter.KeyState{}, false, err
 		}
 		for _, t := range tokens {
-			id, _ := strconv.ParseInt(string(t.state.Ref), 10, 64) //nolint:errcheck // tokens made the ref from an int64
-			if t.state.Name == name && t.state.GroupRef == groupRef && (bestID == 0 || id < bestID) {
-				best, bestID = t.state, id
+			if t.state.Name == name && t.state.GroupRef == groupRef {
+				named = append(named, t.state)
 			}
 		}
-		read += len(tokens)
-		switch {
-		case read >= total:
-			return best, bestID != 0, nil
-		case len(tokens) == 0:
+		if read += len(tokens); read >= total {
+			key, found := oldest(named)
+			return key, found, nil
+		}
+		if len(tokens) == 0 {
 			return adapter.KeyState{}, false, fmt.Errorf("%w: the search of keys named %s ended before its total", adapter.ErrUnrecognised, name)
 		}
 	}
+	return adapter.KeyState{}, false, fmt.Errorf("%w: more than %d pages of keys named %s", adapter.ErrUnrecognised, maxPages, name)
+}
+
+// namedPage is one page of new-api's search of the keys named name.
+func (m *manager) namedPage(ctx context.Context, name string, page int) ([]token, int, error) {
+	query := url.Values{"keyword": {name}, "p": {strconv.Itoa(page)}, "page_size": {strconv.Itoa(keyPageSize)}}
+	tokens, total, err := m.tokens(ctx, "/api/token/search?"+query.Encode())
+	if scopeDenied(err) {
+		return nil, 0, fmt.Errorf("%w: %w", adapter.ErrKeyNotPermitted, err)
+	}
+	return tokens, total, err
+}
+
+// oldest is the key of the lowest id: new-api's ids are decimal numbers without leading zeros (keyID), so the shorter
+// is the lower, and of two as long the first in order.
+func oldest(keys []adapter.KeyState) (adapter.KeyState, bool) {
+	if len(keys) == 0 {
+		return adapter.KeyState{}, false
+	}
+	return slices.MinFunc(keys, func(a, b adapter.KeyState) int {
+		return cmp.Or(cmp.Compare(len(a.Ref), len(b.Ref)), strings.Compare(string(a.Ref), string(b.Ref)))
+	}), true
 }
 
 // CreateReplay implements adapter.KeyMaker: new-api makes a second key for a second create, whatever its name.

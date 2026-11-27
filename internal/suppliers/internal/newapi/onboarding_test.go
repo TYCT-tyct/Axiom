@@ -90,7 +90,7 @@ func TestCreateKey(t *testing.T) {
 		f.routes[searchFirst] = answer(403,
 			`{"code":"ACCESS_TOKEN_SCOPE_DENIED","message_params":{"scope":"api_key:read"},"success":false}`)
 		_, err := open(t, f, now).(adapter.KeyMaker).CreateKey(t.Context(), "g", "axiom-1-2")
-		if !errors.Is(err, adapter.ErrKeyNotPermitted) || !errors.Is(err, adapter.ErrKeyMade) {
+		if !madeBut(err, adapter.ErrKeyNotPermitted) {
 			t.Fatalf("CreateKey = %v, want not permitted to search a key that was made", err)
 		}
 	})
@@ -208,4 +208,9 @@ func TestKeySecretOfAKeyNewAPIDoesNotHave(t *testing.T) {
 			t.Errorf("KeySecret after %s = %v, want gone %v", body, err, gone)
 		}
 	}
+}
+
+// madeBut is a failure to find a key the supplier made, for the reason why.
+func madeBut(err, why error) bool {
+	return errors.Is(err, adapter.ErrKeyMade) && errors.Is(err, why)
 }
